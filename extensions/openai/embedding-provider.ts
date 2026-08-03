@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { OPENAI_DEFAULT_EMBEDDING_MODEL } from "./default-models.js";
+import { retryOpenAiEmbeddingTokenExpiredOnce } from "./embedding-auth-retry.js";
 
 export type OpenAiEmbeddingClient = {
   baseUrl: string;
@@ -18,6 +19,7 @@ export type OpenAiEmbeddingClient = {
   queryInputType?: string;
   documentInputType?: string;
   outputDimensionality?: number;
+  refreshClient?: (params?: { forceRefresh?: boolean }) => Promise<OpenAiEmbeddingClient>;
 };
 
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
@@ -49,7 +51,13 @@ export async function createOpenAiEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<{ provider: MemoryEmbeddingProvider; client: OpenAiEmbeddingClient }> {
   const client = await resolveOpenAiEmbeddingClient(options);
-  const url = `${client.baseUrl.replace(/\/$/, "")}/embeddings`;
+  client.refreshClient = async (params) => {
+    const refreshed = await resolveOpenAiEmbeddingClient(options, {
+      forceRefresh: params?.forceRefresh,
+    });
+    Object.assign(client, refreshed);
+    return client;
+  };
 
   const resolveInputType = (kind: "query" | "document"): string | undefined => {
     const explicit = kind === "query" ? client.queryInputType : client.documentInputType;
@@ -66,21 +74,26 @@ export async function createOpenAiEmbeddingProvider(
       return [];
     }
     const inputType = resolveInputType(kind);
-    return await fetchRemoteEmbeddingVectors({
-      url,
-      headers: client.headers,
-      ssrfPolicy: client.ssrfPolicy,
-      fetchImpl: client.fetchImpl,
-      signal,
-      body: {
-        model: client.model,
-        input,
-        ...(typeof client.outputDimensionality === "number"
-          ? { dimensions: client.outputDimensionality }
-          : {}),
-        ...(inputType ? { input_type: inputType } : {}),
-      },
-      errorPrefix: "openai embeddings failed",
+    return await retryOpenAiEmbeddingTokenExpiredOnce({
+      client,
+      run: async () =>
+        await fetchRemoteEmbeddingVectors({
+          // Re-read after a possible refresh: the client is mutated in place.
+          url: `${client.baseUrl.replace(/\/$/, "")}/embeddings`,
+          headers: client.headers,
+          ssrfPolicy: client.ssrfPolicy,
+          fetchImpl: client.fetchImpl,
+          signal,
+          body: {
+            model: client.model,
+            input,
+            ...(typeof client.outputDimensionality === "number"
+              ? { dimensions: client.outputDimensionality }
+              : {}),
+            ...(inputType ? { input_type: inputType } : {}),
+          },
+          errorPrefix: "openai embeddings failed",
+        }),
     });
   };
 
@@ -104,6 +117,7 @@ export async function createOpenAiEmbeddingProvider(
 
 async function resolveOpenAiEmbeddingClient(
   options: MemoryEmbeddingProviderCreateOptions,
+  runtimeOptions?: { forceRefresh?: boolean },
 ): Promise<OpenAiEmbeddingClient> {
   const originalModel = options.model;
   const client = await resolveRemoteEmbeddingClient({
@@ -111,6 +125,7 @@ async function resolveOpenAiEmbeddingClient(
     options,
     defaultBaseUrl: DEFAULT_OPENAI_BASE_URL,
     normalizeModel: normalizeOpenAiModel,
+    forceRefresh: runtimeOptions?.forceRefresh,
   });
   // Non-native OpenAI routers (e.g. Requesty) expect the provider-qualified
   // model name ("openai/text-embedding-3-small") in embedding requests.

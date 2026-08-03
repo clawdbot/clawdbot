@@ -61,11 +61,13 @@ export async function resolveRemoteEmbeddingClient(params: {
   options: EmbeddingProviderOptions;
   defaultBaseUrl: string;
   normalizeModel: (model: string) => string;
+  forceRefresh?: boolean;
 }): Promise<RemoteEmbeddingClient> {
   const { baseUrl, headers, ssrfPolicy } = await resolveRemoteEmbeddingBearerClient({
     provider: params.provider,
     options: params.options,
     defaultBaseUrl: params.defaultBaseUrl,
+    forceRefresh: params.forceRefresh,
   });
   const model = params.normalizeModel(params.options.model);
   return { baseUrl, headers, ssrfPolicy, model };

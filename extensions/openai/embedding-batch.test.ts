@@ -2,6 +2,7 @@
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runOpenAiEmbeddingBatches } from "./embedding-batch.js";
+import type { OpenAiEmbeddingClient } from "./embedding-provider.js";
 
 const jsonlEncoder = new TextEncoder();
 
@@ -440,6 +441,179 @@ describe("OpenAI embedding batch output", () => {
       ["2", [3]],
       ["3", [4]],
     ]);
+  });
+
+  it("refreshes and retries once on 401 token_expired during input-file upload", async () => {
+    const refreshClient = vi.fn(async () => {
+      openAi.headers = { Authorization: "Bearer fresh" };
+      return openAi;
+    });
+    const openAi: OpenAiEmbeddingClient = {
+      baseUrl: "https://openai-compatible.example/v1",
+      headers: { Authorization: "Bearer stale" },
+      model: "text-embedding-3-small",
+      refreshClient,
+    };
+    let uploadAttempts = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = fetchInputUrl(input);
+      if (url.endsWith("/files") && init?.method === "POST") {
+        uploadAttempts += 1;
+        if (uploadAttempts === 1) {
+          return jsonResponse({ error: { code: "token_expired", message: "expired token" } }, 401);
+        }
+        return jsonResponse({ id: "file-0" });
+      }
+      if (url.endsWith("/batches") && init?.method === "POST") {
+        return jsonResponse({ id: "batch-0", status: "completed", output_file_id: "output-0" });
+      }
+      if (url.endsWith("/files/output-0/content")) {
+        return new Response(
+          JSON.stringify({
+            custom_id: "0",
+            response: { status_code: 200, body: { data: [{ embedding: [1] }] } },
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response("unexpected request", { status: 500 });
+    });
+    openAi.fetchImpl = fetchImpl as unknown as typeof fetch;
+
+    const byCustomId = await runOpenAiEmbeddingBatches({
+      openAi,
+      agentId: "main",
+      requests: [
+        {
+          custom_id: "0",
+          method: "POST",
+          url: "/v1/embeddings",
+          body: { model: "text-embedding-3-small", input: "payload-0" },
+        },
+      ],
+      wait: true,
+      concurrency: 1,
+      pollIntervalMs: 1000,
+      timeoutMs: 60_000,
+    });
+
+    expect(refreshClient).toHaveBeenCalledWith({ forceRefresh: true });
+    expect(uploadAttempts).toBe(2);
+    expect([...byCustomId.entries()]).toEqual([["0", [1]]]);
+  });
+
+  it("retries only batch creation on 401 token_expired, reusing the uploaded input file", async () => {
+    // Real loopback HTTP so the recovery is observed at the transport boundary:
+    // a wider retry window would show a second POST /v1/files here.
+    const requestLog: Array<{
+      method: string;
+      path: string;
+      auth?: string;
+      inputFileId?: string;
+    }> = [];
+    let batchCreateAttempts = 0;
+    const server = createServer((req, res) => {
+      const path = req.url ?? "";
+      const auth =
+        typeof req.headers.authorization === "string" ? req.headers.authorization : undefined;
+      const method = req.method ?? "GET";
+      if (path === "/v1/files" && method === "POST") {
+        requestLog.push({ method, path, auth });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ id: "file-0" }));
+        return;
+      }
+      if (path === "/v1/batches" && method === "POST") {
+        const chunks: Buffer[] = [];
+        req.on("data", (chunk: Buffer) => chunks.push(chunk));
+        req.on("end", () => {
+          const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+            input_file_id?: string;
+          };
+          requestLog.push({ method, path, auth, inputFileId: body.input_file_id });
+          batchCreateAttempts += 1;
+          if (batchCreateAttempts === 1) {
+            res.writeHead(401, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: { code: "token_expired", message: "expired token" } }));
+            return;
+          }
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({ id: "batch-0", status: "completed", output_file_id: "output-0" }),
+          );
+        });
+        return;
+      }
+      if (path === "/v1/files/output-0/content") {
+        requestLog.push({ method, path, auth });
+        res.writeHead(200, { "Content-Type": "application/jsonl" });
+        res.end(
+          JSON.stringify({
+            custom_id: "0",
+            response: { status_code: 200, body: { data: [{ embedding: [1] }] } },
+          }),
+        );
+        return;
+      }
+      res.writeHead(500);
+      res.end("unexpected request");
+    });
+
+    const port = await listenLoopbackServer(server);
+    const realFetch = globalThis.fetch.bind(globalThis);
+    const refreshClient = vi.fn(async () => {
+      openAi.headers = { Authorization: "Bearer fresh" };
+      return openAi;
+    });
+    const openAi: OpenAiEmbeddingClient = {
+      baseUrl: "https://openai-compatible.example/v1",
+      headers: { Authorization: "Bearer stale" },
+      model: "text-embedding-3-small",
+      refreshClient,
+      // vi.fn matters: the SSRF guard only skips DNS resolution for a mocked
+      // fetch, and this suite points a fake hostname at the loopback server.
+      fetchImpl: vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const originalUrl = new URL(fetchInputUrl(input));
+        const loopbackUrl = new URL(
+          `${originalUrl.pathname}${originalUrl.search}`,
+          `http://127.0.0.1:${port}`,
+        );
+        return await realFetch(loopbackUrl, init);
+      }) as unknown as typeof fetch,
+    };
+
+    try {
+      const byCustomId = await runOpenAiEmbeddingBatches({
+        openAi,
+        agentId: "main",
+        requests: [
+          {
+            custom_id: "0",
+            method: "POST",
+            url: "/v1/embeddings",
+            body: { model: "text-embedding-3-small", input: "payload-0" },
+          },
+        ],
+        wait: true,
+        concurrency: 1,
+        pollIntervalMs: 1000,
+        timeoutMs: 60_000,
+      });
+      expect([...byCustomId.entries()]).toEqual([["0", [1]]]);
+    } finally {
+      await closeServer(server);
+    }
+
+    const uploads = requestLog.filter((entry) => entry.path === "/v1/files");
+    const creates = requestLog.filter((entry) => entry.path === "/v1/batches");
+    // The whole point: one upload, two creation attempts, same input file.
+    expect(uploads).toHaveLength(1);
+    expect(creates).toHaveLength(2);
+    expect(creates.map((entry) => entry.inputFileId)).toEqual(["file-0", "file-0"]);
+    expect(creates[0]?.auth).toBe("Bearer stale");
+    expect(creates[1]?.auth).toBe("Bearer fresh");
+    expect(refreshClient).toHaveBeenCalledTimes(1);
+    expect(refreshClient).toHaveBeenCalledWith({ forceRefresh: true });
   });
 
   it("bounds batch status success body via readProviderJsonResponse", async () => {

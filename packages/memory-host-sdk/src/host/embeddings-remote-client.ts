@@ -38,6 +38,7 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
   provider: RemoteEmbeddingProviderId;
   options: EmbeddingProviderOptions;
   defaultBaseUrl: string;
+  forceRefresh?: boolean;
 }): Promise<{ baseUrl: string; headers: Record<string, string>; ssrfPolicy?: SsrFPolicy }> {
   const remote = params.options.remote;
   const remoteApiKey = resolveMemorySecretInputString({
@@ -53,6 +54,7 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
           provider: params.provider,
           cfg: params.options.config,
           agentDir: params.options.agentDir,
+          forceRefresh: params.forceRefresh,
         }),
         params.provider,
       );

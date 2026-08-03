@@ -31,6 +31,7 @@ import {
   waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { retryOpenAiEmbeddingTokenExpiredOnce } from "./embedding-auth-retry.js";
 import type { OpenAiEmbeddingClient } from "./embedding-provider.js";
 
 type OpenAiBatchRequest = {
@@ -65,28 +66,43 @@ async function submitOpenAiBatch(params: {
   requests: OpenAiBatchRequest[];
   agentId: string;
 }): Promise<OpenAiBatchStatus> {
-  const baseUrl = normalizeBatchBaseUrl(params.openAi);
-  const inputFileId = await uploadBatchJsonlFile({
+  // Each remote call gets its own refresh-and-retry window. Wrapping both in
+  // one window would re-upload an input file that already landed whenever only
+  // `/batches` creation saw the expired token, leaking an unused remote file.
+  const inputFileId = await retryOpenAiEmbeddingTokenExpiredOnce({
     client: params.openAi,
-    requests: params.requests,
-    errorPrefix: "openai batch file upload failed",
+    run: async () =>
+      await uploadBatchJsonlFile({
+        client: params.openAi,
+        requests: params.requests,
+        errorPrefix: "openai batch file upload failed",
+      }),
   });
 
-  return await postJsonWithRetry<OpenAiBatchStatus>({
-    url: `${baseUrl}/batches`,
-    headers: buildBatchHeaders(params.openAi, { json: true }),
-    ssrfPolicy: params.openAi.ssrfPolicy,
-    fetchImpl: params.openAi.fetchImpl,
-    body: {
-      input_file_id: inputFileId,
-      endpoint: OPENAI_BATCH_ENDPOINT,
-      completion_window: OPENAI_BATCH_COMPLETION_WINDOW,
-      metadata: {
-        source: "openclaw-memory",
-        agent: params.agentId,
-      },
+  return await retryOpenAiEmbeddingTokenExpiredOnce({
+    client: params.openAi,
+    run: async () => {
+      // Resolved inside `run`: a forced refresh mutates the client in place, so
+      // the retry must read the refreshed base URL and headers, while reusing
+      // the input file the first attempt already uploaded.
+      const baseUrl = normalizeBatchBaseUrl(params.openAi);
+      return await postJsonWithRetry<OpenAiBatchStatus>({
+        url: `${baseUrl}/batches`,
+        headers: buildBatchHeaders(params.openAi, { json: true }),
+        ssrfPolicy: params.openAi.ssrfPolicy,
+        fetchImpl: params.openAi.fetchImpl,
+        body: {
+          input_file_id: inputFileId,
+          endpoint: OPENAI_BATCH_ENDPOINT,
+          completion_window: OPENAI_BATCH_COMPLETION_WINDOW,
+          metadata: {
+            source: "openclaw-memory",
+            agent: params.agentId,
+          },
+        },
+        errorPrefix: "openai batch create failed",
+      });
     },
-    errorPrefix: "openai batch create failed",
   });
 }
 
@@ -142,18 +158,23 @@ async function fetchOpenAiBatchResource<T>(params: {
   signal?: AbortSignal;
   parse: (res: Response) => Promise<T>;
 }): Promise<T> {
-  const baseUrl = normalizeBatchBaseUrl(params.openAi);
-  return await withRemoteHttpResponse({
-    url: `${baseUrl}${params.path}`,
-    ssrfPolicy: params.openAi.ssrfPolicy,
-    fetchImpl: params.openAi.fetchImpl,
-    signal: params.signal,
-    init: {
-      headers: buildBatchHeaders(params.openAi, { json: true }),
-    },
-    onResponse: async (res) => {
-      await assertOkOrThrowProviderError(res, params.label);
-      return await params.parse(res);
+  return await retryOpenAiEmbeddingTokenExpiredOnce({
+    client: params.openAi,
+    run: async () => {
+      const baseUrl = normalizeBatchBaseUrl(params.openAi);
+      return await withRemoteHttpResponse({
+        url: `${baseUrl}${params.path}`,
+        ssrfPolicy: params.openAi.ssrfPolicy,
+        fetchImpl: params.openAi.fetchImpl,
+        signal: params.signal,
+        init: {
+          headers: buildBatchHeaders(params.openAi, { json: true }),
+        },
+        onResponse: async (res) => {
+          await assertOkOrThrowProviderError(res, params.label);
+          return await params.parse(res);
+        },
+      });
     },
   });
 }

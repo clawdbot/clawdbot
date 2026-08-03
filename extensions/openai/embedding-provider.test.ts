@@ -123,6 +123,57 @@ describe("OpenAI embedding provider", () => {
     );
   });
 
+  it("refreshes and retries once on 401 token_expired", async () => {
+    mocks.resolveRemoteEmbeddingClient
+      .mockResolvedValueOnce({
+        baseUrl: "https://embeddings.example/v1",
+        headers: { Authorization: "Bearer stale" },
+        model: "text-embedding-3-small",
+      })
+      .mockResolvedValueOnce({
+        baseUrl: "https://embeddings.example/v1",
+        headers: { Authorization: "Bearer fresh" },
+        model: "text-embedding-3-small",
+      });
+    mocks.fetchRemoteEmbeddingVectors
+      .mockRejectedValueOnce(
+        Object.assign(
+          new Error('openai embeddings failed: 401 {"error":{"code":"token_expired"}}'),
+          { status: 401 },
+        ),
+      )
+      .mockResolvedValueOnce([[9, 8, 7]]);
+
+    const { provider } = await createOpenAiEmbeddingProvider(createOptions());
+
+    await expect(provider.embedQuery("hello")).resolves.toEqual([9, 8, 7]);
+
+    expect(mocks.resolveRemoteEmbeddingClient).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ forceRefresh: true }),
+    );
+    expect(mocks.fetchRemoteEmbeddingVectors).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ headers: { Authorization: "Bearer stale" } }),
+    );
+    expect(mocks.fetchRemoteEmbeddingVectors).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ headers: { Authorization: "Bearer fresh" } }),
+    );
+  });
+
+  it("does not retry non-auth failures", async () => {
+    mocks.fetchRemoteEmbeddingVectors.mockRejectedValueOnce(
+      Object.assign(new Error("openai embeddings failed: 500 upstream"), { status: 500 }),
+    );
+
+    const { provider } = await createOpenAiEmbeddingProvider(createOptions());
+
+    await expect(provider.embedQuery("hello")).rejects.toThrow(/500/);
+    expect(mocks.fetchRemoteEmbeddingVectors).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveRemoteEmbeddingClient).toHaveBeenCalledTimes(1);
+  });
+
   // --- openai/ prefix preservation ---
 
   it("strips openai/ prefix when using native OpenAI API base URL", async () => {
