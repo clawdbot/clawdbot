@@ -69,6 +69,27 @@ describe("provider failover hook structured signals", () => {
     ).toEqual({ kind: "reason", reason: "auth" });
   });
 
+  it("lets provider billing text override a leading 403 in assistant failures", () => {
+    providerRuntimeMocks.classifyProviderPluginError.mockImplementation((context) => {
+      return context.provider === "demo-provider" &&
+        context.errorMessage.includes("quota exhausted")
+        ? "billing"
+        : undefined;
+    });
+
+    const errorMessage = '403 {"error":"Account quota exhausted"}';
+    expect(
+      classifyAssistantFailoverReason(
+        makeAssistantMessageFixture({ provider: "demo-provider", errorMessage }),
+      ),
+    ).toBe("billing");
+    expect(
+      classifyAssistantFailoverReason(
+        makeAssistantMessageFixture({ provider: "other-provider", errorMessage }),
+      ),
+    ).toBe("auth");
+  });
+
   it("does not call the direct provider hook for unstructured classified messages", () => {
     // Plain message classifiers run first; provider hooks only see structured
     // descriptors where a plugin can make a reliable decision.

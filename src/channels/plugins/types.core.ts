@@ -254,7 +254,7 @@ export type ChannelGroupContext = {
 /** TTS voice delivery behavior advertised by a channel plugin. */
 /**
  * Container tokens (file-extension shape, no leading dot) that the host
- * speech-core pipeline knows how to pre-transcode synthesized audio into.
+ * TTS pipeline knows how to pre-transcode synthesized audio into.
  * Channels that benefit from a specific container — currently only
  * iMessage, which needs Apple's native voice-memo CAF descriptor — name
  * one here. Adding a new entry requires extending the host transcoder

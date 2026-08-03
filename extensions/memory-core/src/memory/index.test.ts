@@ -35,6 +35,7 @@ import {
   closeMemoryIndexManagersForAgent,
   MemoryIndexManager as RuntimeMemoryIndexManager,
 } from "./manager.js";
+import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
 
 // This suite performs real sqlite/media indexing and can exceed the global
 // timeout when it shares a packed CI extension shard.
@@ -417,7 +418,7 @@ describe("memory index", () => {
       temporalDecay?: { enabled: boolean };
     };
   }): TestCfg {
-    return {
+    return isolateMemoryManagerTestConfig({
       memory: {
         search: {
           ...(params.provider !== undefined ? { provider: params.provider } : {}),
@@ -449,7 +450,7 @@ describe("memory index", () => {
         list: [{ id: "main", default: true }],
       },
       models: params.providerAliases ? { providers: params.providerAliases } : undefined,
-    };
+    });
   }
 
   async function seedMemoryIndexSessionTranscript(params: {

@@ -2,8 +2,8 @@
 // Generates Swift constants for the host environment security policy.
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { loadHostEnvSecurityPolicy } from "../src/infra/host-env-security-policy.js";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
 const args = new Set(process.argv.slice(2));
 const checkOnly = args.has("--check");
@@ -14,8 +14,7 @@ if (checkOnly && args.has("--write")) {
   process.exit(1);
 }
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(here, "..");
+const repoRoot = resolveRepoRoot(import.meta.url);
 const policyPath = path.join(repoRoot, "src", "infra", "host-env-security-policy.json");
 const outputPath = path.join(
   repoRoot,

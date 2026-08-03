@@ -1,9 +1,9 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { TtsDirectiveOverrides } from "openclaw/plugin-sdk/speech-core";
+import type { OpenClawConfig } from "../config/types.js";
+import type { TtsDirectiveOverrides } from "./provider-types.js";
 import { assertSpeechRuntimeAvailable } from "./runtime-availability.js";
+import type { TtsStreamResult, TtsSynthesisStreamResult } from "./tts-runtime-types.js";
 import { executeTtsProviderAttempts, resolveTtsRequestSetup } from "./tts-synthesis-support.js";
 import { resolveTtsSynthesisTarget } from "./tts-synthesis.js";
-import type { TtsStreamResult, TtsSynthesisStreamResult } from "./tts-types.js";
 
 export async function streamSpeech(params: {
   text: string;

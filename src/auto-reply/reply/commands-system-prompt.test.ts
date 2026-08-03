@@ -71,6 +71,8 @@ vi.mock("../../agents/agent-tools.js", () => ({
 
 vi.mock("../../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
+  resolveModelOverridePolicy: vi.fn(),
+  setTtsMachinePrefsPathResolver: vi.fn(),
 }));
 
 function makeParams(): HandleCommandsParams {

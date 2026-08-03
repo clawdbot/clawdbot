@@ -454,4 +454,19 @@ describe("release Telegram QA workflow", () => {
         .status,
     ).not.toBe(0);
   });
+
+  it("shares only the isolated workspace with the trusted scenario host", () => {
+    const createSut = requireRun(
+      "run_telegram",
+      "Create isolated Telegram SUT identity and launcher",
+    );
+
+    expect(createSut).toContain('workspace="${temp_root}/workspace"');
+    expect(createSut).toContain('chown -R "$RUNNER_UID:$SUT_GID" "$workspace"');
+    expect(createSut).toContain('chmod -R u=rwX,g=rwX,o= "$workspace"');
+    expect(createSut).toContain('find "$workspace" -type d -exec chmod g+s {} +');
+    expect(createSut).not.toContain(
+      'for path in \\\n            "$temp_root/workspace" \\\n            "${OPENCLAW_HOME:?}"',
+    );
+  });
 });

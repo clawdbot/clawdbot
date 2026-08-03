@@ -9,9 +9,9 @@ import { pathToFileURL } from "node:url";
 import { resolveRepoToolBinPath } from "./lib/local-heavy-check-runtime.mjs";
 import { repairMintlifyAccordionIndentation } from "./lib/mintlify-accordion.mjs";
 import { outputTail } from "./lib/output-tail.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
-
-const ROOT = path.resolve(import.meta.dirname, "..");
+const ROOT = resolveRepoRoot(import.meta.url);
 const CHECK = process.argv.includes("--check");
 const DOCS_FORMAT_MAX_BUFFER_BYTES = 1024 * 1024 * 16;
 const DOCS_FORMAT_MAX_COMMAND_LINE_BYTES = 24 * 1024;

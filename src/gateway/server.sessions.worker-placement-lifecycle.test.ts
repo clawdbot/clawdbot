@@ -6,12 +6,12 @@ import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
   sessionStoreEntry,
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 import type { WorkerSessionPlacementReader } from "./worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-store.js";
 
-const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsHandlerTestHarness();
 let uninstallResetGuard: (() => void) | undefined;
 
 afterEach(() => {

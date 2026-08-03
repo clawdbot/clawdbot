@@ -10,6 +10,7 @@ import { resolveOAuthDir } from "./auth-store.runtime.js";
 import {
   assertWebCredsPathRegularFileOrMissing,
   hasWebCredsSync,
+  isWhatsAppBaileysAuthFileName,
   readWebCredsJsonRaw,
   readWebCredsJsonRawSync,
   resolveWebCredsBackupPath,
@@ -225,19 +226,6 @@ export async function readWebAuthSnapshotBestEffort(authDir: string = resolveDef
   } as const;
 }
 
-function isBaileysAuthFileName(name: string): boolean {
-  if (name === "oauth.json") {
-    return false;
-  }
-  if (name === "creds.json" || name === "creds.json.bak") {
-    return true;
-  }
-  if (!name.endsWith(".json")) {
-    return false;
-  }
-  return /^(app-state-sync|session|sender-key|pre-key)-/.test(name);
-}
-
 async function clearBaileysAuthFiles(
   authDir: string,
   beforeCredentialPersistence?: () => Promise<void>,
@@ -248,7 +236,7 @@ async function clearBaileysAuthFiles(
   }
   const entries = await fs.readdir(authDir, { withFileTypes: true });
   const credentialFiles = entries.filter(
-    (entry) => entry.isFile() && isBaileysAuthFileName(entry.name),
+    (entry) => entry.isFile() && isWhatsAppBaileysAuthFileName(entry.name),
   );
   if (credentialFiles.length === 0) {
     return;
@@ -273,7 +261,7 @@ async function shouldClearOnLogout(authDir: string, isLegacyAuthDir: boolean): P
         if (!entry.isFile()) {
           return false;
         }
-        return isBaileysAuthFileName(entry.name);
+        return isWhatsAppBaileysAuthFileName(entry.name);
       });
     }
     const credsStats = await fs.lstat(resolveWebCredsPath(authDir)).catch(() => null);

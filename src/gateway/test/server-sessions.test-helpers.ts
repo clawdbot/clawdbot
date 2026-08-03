@@ -5,27 +5,17 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import type { AssistantMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { afterAll, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
-import {
-  loadTranscriptEvents,
-  persistSessionTranscriptTurn,
-} from "../../config/sessions/session-accessor.js";
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
-import { startGatewayServerHarness, type GatewayServerHarness } from "../server.e2e-ws-harness.js";
-import {
-  connectOk,
-  embeddedRunMock,
-  installGatewayTestHooks,
-  agentDiscoveryMock,
-  testState,
-  writeSessionStore,
-} from "../test-helpers.js";
+import type { GatewayServerHarness } from "../server.e2e-ws-harness.js";
+import { embeddedRunMock, agentDiscoveryMock, testState } from "../test-helpers.runtime-state.js";
+import type { connectOk } from "../test-helpers.server.js";
+import { installGatewayTestHooks, writeSessionStore } from "../test-helpers.server.js";
 import { sessionHandlerTestSurface } from "./server-sessions-handlers.test-support.js";
 
 export const getSessionManagerModule = createLazyRuntimeModule(
@@ -34,6 +24,14 @@ export const getSessionManagerModule = createLazyRuntimeModule(
 
 export const getGatewayConfigModule = createLazyRuntimeModule(
   () => import("../../config/config.js"),
+);
+
+const getSessionAccessorModule = createLazyRuntimeModule(
+  () => import("../../config/sessions/session-accessor.js"),
+);
+
+const getGatewayServerHarnessModule = createLazyRuntimeModule(
+  () => import("../server.e2e-ws-harness.js"),
 );
 
 export async function getSessionsHandlers() {
@@ -54,6 +52,7 @@ export async function seedSessionTranscript(params: {
   sessionKey: string;
   storePath: string;
 }): Promise<void> {
+  const { persistSessionTranscriptTurn } = await getSessionAccessorModule();
   await persistSessionTranscriptTurn(
     {
       agentId: params.agentId,
@@ -101,6 +100,7 @@ export async function loadSeededTranscriptEvents(params: {
   sessionKey: string;
   storePath: string;
 }): Promise<unknown[]> {
+  const { loadTranscriptEvents } = await getSessionAccessorModule();
   return await loadTranscriptEvents({
     agentId: params.agentId,
     sessionId: params.sessionId,
@@ -310,7 +310,18 @@ vi.mock("../../agents/agent-bundle-mcp-tools.js", () => ({
   retireSessionMcpRuntime: bundleMcpRuntimeMocks.retireSessionMcpRuntime,
 }));
 
+export function setupGatewaySessionsHandlerTestHarness() {
+  const { getHarness, openClient, ...handlerFixture } = createGatewaySessionsTestHarness(false);
+  void getHarness;
+  void openClient;
+  return handlerFixture;
+}
+
 export function setupGatewaySessionsTestHarness() {
+  return createGatewaySessionsTestHarness(true);
+}
+
+function createGatewaySessionsTestHarness(startServer: boolean) {
   installGatewayTestHooks({ scope: "suite" });
 
   let harness: GatewayServerHarness | undefined;
@@ -318,7 +329,10 @@ export function setupGatewaySessionsTestHarness() {
   let sessionStoreCaseSeq = 0;
 
   beforeAll(async () => {
-    harness = await startGatewayServerHarness();
+    if (startServer) {
+      const { startGatewayServerHarness } = await getGatewayServerHarnessModule();
+      harness = await startGatewayServerHarness();
+    }
     sharedSessionStoreDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
   });
 
@@ -680,10 +694,11 @@ export async function directSessionReq<TPayload = unknown>(
   let result:
     | { ok: boolean; payload?: TPayload; error?: { code?: string; message?: string } }
     | undefined;
-  await expectDefined(
-    sessionsHandlers[method],
-    "sessions handlers entry at method",
-  )({
+  const handler = sessionsHandlers[method];
+  if (!handler) {
+    throw new Error(`missing sessions handler for ${method}`);
+  }
+  await handler({
     req: {} as never,
     params,
     respond: (ok, payload, error) => {

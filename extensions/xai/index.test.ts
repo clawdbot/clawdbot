@@ -471,6 +471,31 @@ describe("xai provider plugin", () => {
     ).toBeUndefined();
   });
 
+  it("classifies exhausted Grok credits and subscription requirements as billing", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(
+      provider.classifyFailoverReason?.({
+        errorMessage: '403 {"error":"You have run out of credits"}',
+      }),
+    ).toBe("billing");
+    expect(
+      provider.classifyFailoverReason?.({
+        errorMessage: '403 {"error":"You need a Grok subscription"}',
+      }),
+    ).toBe("billing");
+    expect(
+      provider.classifyFailoverReason?.({
+        errorMessage: "403 Forbidden",
+      }),
+    ).toBeUndefined();
+    expect(
+      provider.classifyFailoverReason?.({
+        errorMessage: "429 Too Many Requests",
+      }),
+    ).toBe("rate_limit");
+  });
+
   it("registers xAI speech providers for batch and streaming STT", async () => {
     const { mediaProviders, realtimeTranscriptionProviders } = await registerProviderPlugin({
       plugin,

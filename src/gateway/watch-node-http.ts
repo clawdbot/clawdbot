@@ -348,7 +348,8 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
   };
 
   const sendQueuedEvent = (res: ServerResponse, queued: QueuedNodeEvent): boolean => {
-    if (res.writableEnded) {
+    // The socket can be destroyed before its response receives the close event.
+    if (res.destroyed || res.socket?.destroyed || res.writableEnded) {
       return false;
     }
     try {

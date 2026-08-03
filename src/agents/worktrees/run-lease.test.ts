@@ -77,6 +77,7 @@ describe("worktree run lease", () => {
     const created = await service.create({
       repoRoot: repo,
       name: "run-lease-session",
+      baseRef: "HEAD",
       ownerKind: "session",
       ownerId: "agent:main:run-lease",
     });

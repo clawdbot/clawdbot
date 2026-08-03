@@ -1,4 +1,10 @@
-import { createServer, request as httpRequest, type ClientRequest, type Server } from "node:http";
+import {
+  createServer,
+  request as httpRequest,
+  type ClientRequest,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -108,6 +114,7 @@ async function startRuntime(
     abortConnectResponse?: boolean;
     config?: OpenClawConfig;
     now?: () => number;
+    onPollReady?: (response: ServerResponse) => void;
   },
 ) {
   const nodeRegistry = new NodeRegistry({
@@ -152,6 +159,9 @@ async function startRuntime(
         if (!handled && !res.writableEnded) {
           res.statusCode = 404;
           res.end();
+        }
+        if (req.url === "/api/nodes/watch/poll" && !res.writableEnded) {
+          options?.onPollReady?.(res);
         }
       })
       .finally(() => {
@@ -426,6 +436,82 @@ describe("watch node HTTP transport", () => {
     runtime.close();
     expect(disconnectedNodes).toHaveLength(1);
   });
+
+  it.each([
+    { destroyTarget: "socket", delivery: "event" },
+    { destroyTarget: "socket", delivery: "raw" },
+    { destroyTarget: "response", delivery: "event" },
+  ] as const)(
+    "rejects $delivery delivery when the active watch poll $destroyTarget is destroyed",
+    async ({ destroyTarget, delivery }) => {
+      let resolvePollReady: (response: ServerResponse) => void = () => undefined;
+      const pollReady = new Promise<ServerResponse>((resolve) => {
+        resolvePollReady = resolve;
+      });
+      const { identity, issued, nodeRegistry, disconnectedNodes, runtime, baseUrl } =
+        await createWatchNodeFixture("openclaw-watch-node-destroyed-poll-", {
+          onPollReady: resolvePollReady,
+        });
+      const connectResponse = await connectWatchNode({
+        baseUrl,
+        identity,
+        bootstrapToken: issued.token,
+      });
+      expect(connectResponse.status).toBe(200);
+      const { sessionToken } = await readJson(connectResponse);
+      const authorization = `Bearer ${String(sessionToken)}`;
+      const pollFailure = new Promise<string>((resolve, reject) => {
+        const request = httpRequest(
+          `${baseUrl}/poll`,
+          { method: "POST", headers: { authorization } },
+          (response) => {
+            response.resume();
+            reject(new Error(`unexpected poll response: ${response.statusCode}`));
+          },
+        );
+        request.once("error", (error: NodeJS.ErrnoException) => {
+          resolve(error.code ?? error.message);
+        });
+        request.end();
+      });
+      try {
+        const response = await pollReady;
+        const socket = response.socket;
+        expect(socket).not.toBeNull();
+        if (destroyTarget === "socket") {
+          socket!.destroy();
+          expect(response.destroyed).toBe(false);
+        } else {
+          response.destroy();
+          expect(response.destroyed).toBe(true);
+        }
+        expect(socket!.destroyed).toBe(true);
+        expect(response.writableEnded).toBe(false);
+
+        const payload = { id: "lost" };
+        const delivered =
+          delivery === "raw"
+            ? nodeRegistry.sendEventRaw(
+                identity.deviceId,
+                "node.invoke.request",
+                serializeEventPayload(payload),
+              )
+            : nodeRegistry.sendEvent(identity.deviceId, "node.invoke.request", payload);
+        expect(delivered).toBe(false);
+        expect(nodeRegistry.get(identity.deviceId)).toBeUndefined();
+        expect(disconnectedNodes).toEqual([
+          { nodeId: identity.deviceId, reason: "event delivery failed" },
+        ]);
+        await expect(pollFailure).resolves.toBe("ECONNRESET");
+        expect(nodeRegistry.sendEvent(identity.deviceId, "node.invoke.request", payload)).toBe(
+          false,
+        );
+      } finally {
+        runtime.close();
+      }
+      expect(disconnectedNodes).toHaveLength(1);
+    },
+  );
 
   it("rejects an HTTP node session after an external reapproval changes its generation", async () => {
     const { baseDir, identity, issued, nodeRegistry, disconnectedNodes, runtime, baseUrl } =

@@ -1,33 +1,23 @@
+import { clampTimerTimeoutMs } from "../../packages/normalization-core/src/number-coercion.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../packages/normalization-core/src/string-coerce.js";
 import type {
   OpenClawConfig,
   ResolvedTtsPersona,
   TtsConfig,
   TtsProvider,
-} from "openclaw/plugin-sdk/config-contracts";
-import { clampTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+} from "../config/types.js";
+import type { SpeechProviderPlugin } from "../plugins/types.js";
 import {
   canonicalizeSpeechProviderId,
   getSpeechProvider,
   listSpeechProviders,
   normalizeSpeechProviderId,
-  type SpeechProviderConfig,
-  type SpeechProviderPlugin,
-} from "openclaw/plugin-sdk/speech-core";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
-import { withSpeakerSelectionCompat } from "../speaker.js";
-import {
-  resolvePrimaryVoiceProviderCandidate,
-  resolveSupportedVoiceModelRefs,
-  resolveVoiceModelRefs,
-  resolveVoiceProviderCandidates,
-  voiceProviderSupportsModel,
-  type VoiceModelProvider,
-  type VoiceModelRef,
-  type VoiceProviderCandidate,
-} from "../voice-models.js";
+} from "./provider-registry.js";
+import type { SpeechProviderConfig } from "./provider-types.js";
+import { withSpeakerSelectionCompat } from "./speaker.js";
 import {
   DEFAULT_TTS_TIMEOUT_MS,
   asProviderConfig,
@@ -39,6 +29,16 @@ import {
   resolveTtsRuntimeConfig,
   type ResolvedTtsConfig,
 } from "./tts-settings.js";
+import {
+  resolvePrimaryVoiceProviderCandidate,
+  resolveSupportedVoiceModelRefs,
+  resolveVoiceModelRefs,
+  resolveVoiceProviderCandidates,
+  voiceProviderSupportsModel,
+  type VoiceModelProvider,
+  type VoiceModelRef,
+  type VoiceProviderCandidate,
+} from "./voice-models.js";
 
 function resolvePositiveTimeoutMs(timeoutMs: number | undefined): number | undefined {
   return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0

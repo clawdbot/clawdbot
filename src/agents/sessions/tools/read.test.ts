@@ -119,6 +119,17 @@ describe("read tool", () => {
     );
   });
 
+  it("explains that directory paths must be listed before reading a file", async () => {
+    const tempDir = tempDirs.make("openclaw-read-directory-");
+    const tool = createReadToolDefinition(tempDir);
+
+    await expect(
+      tool.execute("call-directory", { path: "." }, undefined, undefined, {} as never),
+    ).rejects.toThrow(
+      "Read requires a file path, but . is a directory. List the directory, then read a specific file.",
+    );
+  });
+
   it("shell-quotes the long-first-line fallback path", async () => {
     // The fallback command is shown to the model; quote the path so suggested
     // follow-up commands cannot execute path text as shell syntax.

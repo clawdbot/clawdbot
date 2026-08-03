@@ -88,6 +88,7 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
       }),
     ).resolves.toEqual({
       authMethod: "trusted-proxy",
+      user: "operator",
       trustDeclaredOperatorScopes: true,
     });
   });

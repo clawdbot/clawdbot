@@ -3,12 +3,12 @@ import type { GatewaySessionRow } from "./session-utils.types.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 import type { WorkerSessionPlacementReader } from "./worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-store.js";
 
-const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
 function activePlacementRecord(): WorkerSessionPlacementRecord {
   return {

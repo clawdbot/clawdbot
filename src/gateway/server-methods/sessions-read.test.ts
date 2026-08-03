@@ -15,12 +15,12 @@ import {
   getGatewayConfigModule,
   directSessionReq,
   seedLinearSessionTranscript,
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
 } from "../test/server-sessions.test-helpers.js";
 import { agentsHandlers } from "./agents.js";
 import type { GatewayRequestContext } from "./types.js";
 
-setupGatewaySessionsTestHarness();
+setupGatewaySessionsHandlerTestHarness();
 
 const UNKNOWN_AGENT_ID = "ghost";
 const UNKNOWN_SESSION_KEY = `agent:${UNKNOWN_AGENT_ID}:zzz`;
