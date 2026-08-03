@@ -7,11 +7,11 @@
  * re-derived per surface. Pure and browser-safe: the Control UI imports it
  * directly.
  */
-const REDACTED_TOOL_ARGUMENT_SUMMARIES: Record<string, string> = {
-  delegate_artifacts_publish: "artifact paths redacted",
-};
+const REDACTED_TOOL_ARGUMENT_SUMMARIES = new Map<string, string>([
+  ["delegate_artifacts_publish", "artifact paths redacted"],
+]);
 
 /** Replacement text for a tool whose arguments are redacted, if any. */
 export function resolveRedactedToolArgumentSummary(toolName: string): string | undefined {
-  return REDACTED_TOOL_ARGUMENT_SUMMARIES[toolName.trim().toLowerCase()];
+  return REDACTED_TOOL_ARGUMENT_SUMMARIES.get(toolName.trim().toLowerCase());
 }

@@ -78,13 +78,11 @@ function mergeOptionalUpperBound(
     : Math.max(existing, incoming);
 }
 
-// A caller that leaves an optional hedge field unset must not erase what an
-// earlier arm already supplied. Dropping undefined-valued keys keeps a merged
-// hedge that still claims `applyDelegateChainTokensFold` bound to the
-// `persistChainState`/`loadFreshChainState` pair that makes the fold durable:
-// without them `dispatchToolDelegates` reads `foldWithoutPersist`, force-claims
-// not-yet-due delegates, and loses the folded chain cost. The two cutoffs below
-// are merged explicitly and are unaffected.
+// An unset incoming field must not erase what an earlier arm supplied: a merged
+// hedge that still claims `applyDelegateChainTokensFold` without its
+// persist/load callbacks reads as `foldWithoutPersist` in dispatch, which
+// force-claims not-yet-due delegates and loses the folded chain cost. The two
+// cutoffs below are merged explicitly and stay unaffected.
 function definedEntriesOnly(params: DelegateDispatchHedgeParams): DelegateDispatchHedgeParams {
   return Object.fromEntries(
     Object.entries(params).filter(([, value]) => value !== undefined),

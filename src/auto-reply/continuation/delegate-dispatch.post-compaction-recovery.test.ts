@@ -14,11 +14,11 @@ const recoveryStoreByPath = new Map<string, Record<string, unknown>>();
 const spawnSubagentDirectMock = vi.fn();
 const {
   assertDelegateArtifactPolicyPreparedMock,
-  hasTerminalDelegateArtifactPolicyForProducerMock,
+  hasRecordedDelegateArtifactCompletionForProducerMock,
   removeUnacceptedDelegateArtifactPolicyMock,
 } = vi.hoisted(() => ({
   assertDelegateArtifactPolicyPreparedMock: vi.fn(),
-  hasTerminalDelegateArtifactPolicyForProducerMock: vi.fn(() => false),
+  hasRecordedDelegateArtifactCompletionForProducerMock: vi.fn(() => false),
   removeUnacceptedDelegateArtifactPolicyMock: vi.fn(),
 }));
 let flowIdCounter = 0;
@@ -46,7 +46,8 @@ vi.mock("../../agents/subagent-spawn.js", () => ({
 vi.mock("../../agents/delegate-artifacts.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/delegate-artifacts.js")>()),
   assertDelegateArtifactPolicyPrepared: assertDelegateArtifactPolicyPreparedMock,
-  hasTerminalDelegateArtifactPolicyForProducer: hasTerminalDelegateArtifactPolicyForProducerMock,
+  hasRecordedDelegateArtifactCompletionForProducer:
+    hasRecordedDelegateArtifactCompletionForProducerMock,
   removeUnacceptedDelegateArtifactPolicy: removeUnacceptedDelegateArtifactPolicyMock,
 }));
 
@@ -314,7 +315,7 @@ beforeEach(() => {
   loggerRecords.length = 0;
   spawnSubagentDirectMock.mockReset().mockResolvedValue({ status: "accepted" });
   assertDelegateArtifactPolicyPreparedMock.mockClear();
-  hasTerminalDelegateArtifactPolicyForProducerMock.mockClear().mockReturnValue(false);
+  hasRecordedDelegateArtifactCompletionForProducerMock.mockClear().mockReturnValue(false);
   removeUnacceptedDelegateArtifactPolicyMock.mockClear();
   loadSessionStoreForRecoveryMock.mockReset().mockReturnValue({});
   flowIdCounter = 0;
@@ -672,7 +673,7 @@ describe("recoverAndReleaseStagedPostCompactionDelegates", () => {
     const claimed = claimStagedPostCompactionTaskFlowDelegates(sessionKey);
     const flowId = claimed[0]?.flowId;
     expect(flowId).toBeDefined();
-    hasTerminalDelegateArtifactPolicyForProducerMock.mockReturnValue(true);
+    hasRecordedDelegateArtifactCompletionForProducerMock.mockReturnValue(true);
 
     const result = await recoverAndReleaseStagedPostCompactionDelegates({
       runningUpdatedAtOrBefore: Date.now(),

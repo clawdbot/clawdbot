@@ -20,7 +20,7 @@ export {
 export {
   assertDelegateArtifactPolicyPrepared,
   createDelegateArtifactPolicy,
-  hasTerminalDelegateArtifactPolicyForProducer,
+  hasRecordedDelegateArtifactCompletionForProducer,
   isDelegateArtifactReturnConfigured,
   MissingDelegateArtifactPolicyError,
   purgeExpiredDelegateArtifacts,

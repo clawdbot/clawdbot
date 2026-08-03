@@ -14,11 +14,11 @@ const recoveryStoreByPath = new Map<string, Record<string, unknown>>();
 const spawnSubagentDirectMock = vi.fn();
 const {
   assertDelegateArtifactPolicyPreparedMock,
-  hasTerminalDelegateArtifactPolicyForProducerMock,
+  hasRecordedDelegateArtifactCompletionForProducerMock,
   removeUnacceptedDelegateArtifactPolicyMock,
 } = vi.hoisted(() => ({
   assertDelegateArtifactPolicyPreparedMock: vi.fn(),
-  hasTerminalDelegateArtifactPolicyForProducerMock: vi.fn(
+  hasRecordedDelegateArtifactCompletionForProducerMock: vi.fn(
     (_params: { flowId: string; producerSessionKey: string }) => false,
   ),
   removeUnacceptedDelegateArtifactPolicyMock: vi.fn(),
@@ -48,7 +48,8 @@ vi.mock("../../agents/subagent-spawn.js", () => ({
 vi.mock("../../agents/delegate-artifacts.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/delegate-artifacts.js")>()),
   assertDelegateArtifactPolicyPrepared: assertDelegateArtifactPolicyPreparedMock,
-  hasTerminalDelegateArtifactPolicyForProducer: hasTerminalDelegateArtifactPolicyForProducerMock,
+  hasRecordedDelegateArtifactCompletionForProducer:
+    hasRecordedDelegateArtifactCompletionForProducerMock,
   removeUnacceptedDelegateArtifactPolicy: removeUnacceptedDelegateArtifactPolicyMock,
 }));
 
@@ -313,7 +314,7 @@ beforeEach(() => {
   loggerRecords.length = 0;
   spawnSubagentDirectMock.mockReset().mockResolvedValue({ status: "accepted" });
   assertDelegateArtifactPolicyPreparedMock.mockReset();
-  hasTerminalDelegateArtifactPolicyForProducerMock.mockClear().mockReturnValue(false);
+  hasRecordedDelegateArtifactCompletionForProducerMock.mockClear().mockReturnValue(false);
   removeUnacceptedDelegateArtifactPolicyMock.mockClear();
   loadSessionStoreForRecoveryMock.mockReset().mockReturnValue({});
   flowIdCounter = 0;
@@ -389,7 +390,7 @@ describe("recoverPendingContinuationDelegates", () => {
       task: "produce completed report",
       returnOptions: { artifacts: "required" },
     });
-    hasTerminalDelegateArtifactPolicyForProducerMock.mockReturnValue(true);
+    hasRecordedDelegateArtifactCompletionForProducerMock.mockReturnValue(true);
     setRuntimeConfigSnapshot({
       agents: { defaults: { continuation: { enabled: true } } },
     });
@@ -406,7 +407,7 @@ describe("recoverPendingContinuationDelegates", () => {
       config: continuationConfig({ enabled: true, crossSessionTargeting: "enabled" }),
     });
 
-    expect(hasTerminalDelegateArtifactPolicyForProducerMock).toHaveBeenCalledWith(
+    expect(hasRecordedDelegateArtifactCompletionForProducerMock).toHaveBeenCalledWith(
       expect.objectContaining({ flowId: delegate?.flowId }),
     );
     expect(result).toMatchObject({ rejected: 0 });

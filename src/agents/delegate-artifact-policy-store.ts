@@ -154,13 +154,16 @@ export function assertDelegateArtifactPolicyPrepared(
 }
 
 /**
- * Whether the managed child bound to this flow already reached a terminal
- * artifact policy under the expected producer session. A live subagent registry
- * cannot answer this once the child has ended (or the process restarted), so
- * this durable binding is the acceptance evidence that keeps a re-drive from
- * reporting a genuinely completed child as a spawn failure.
+ * Whether a completion has been recorded for the managed child bound to this
+ * flow under the expected producer session. A live subagent registry cannot
+ * answer this once the child has ended (or the process restarted), so this
+ * durable binding is the acceptance evidence that keeps a re-drive from
+ * reporting a genuinely completed child as a spawn failure. `completed_at` is
+ * written by the same statement that leaves a policy `completed`, `failed`, or
+ * (finalization deferred by a runtime disable) `staged`, so it covers every
+ * post-completion state without enumerating them; an `active` policy has none.
  */
-export function hasTerminalDelegateArtifactPolicyForProducer(
+export function hasRecordedDelegateArtifactCompletionForProducer(
   params: { flowId: string; producerSessionKey: string },
   options: OpenClawStateDatabaseOptions = {},
 ): boolean {
@@ -170,13 +173,10 @@ export function hasTerminalDelegateArtifactPolicyForProducer(
     db,
     artifactDb(db)
       .selectFrom("delegate_artifact_policies")
-      .select(["status", "producer_session_key"])
+      .select(["completed_at", "producer_session_key"])
       .where("flow_id", "=", params.flowId),
   );
-  return (
-    (policy?.status === "completed" || policy?.status === "failed") &&
-    policy.producer_session_key === params.producerSessionKey
-  );
+  return policy?.completed_at != null && policy.producer_session_key === params.producerSessionKey;
 }
 
 export function removeUnacceptedDelegateArtifactPolicy(

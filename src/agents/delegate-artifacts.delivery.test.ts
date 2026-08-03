@@ -6,6 +6,7 @@ import {
 import {
   DELEGATE_ARTIFACT_RETENTION_MS,
   createDelegateArtifactPolicy,
+  hasRecordedDelegateArtifactCompletionForProducer,
   inspectDelegateArtifactForRecipient,
   listDelegateArtifactsForRecipient,
   prepareDelegateArtifactDelivery,
@@ -225,6 +226,52 @@ describe("managed delegate artifact claims", () => {
         options,
       }),
     ).toMatchObject({ outcome: "available", artifacts: [{ id: projection.artifacts[0]!.id }] });
+  });
+
+  it("reports a recorded completion for the producer across every post-completion policy state", () => {
+    const producerSessionKey = "agent:main:subagent:continuation-child";
+    const recorded = (options: ReturnType<typeof stateOptions>) =>
+      hasRecordedDelegateArtifactCompletionForProducer(
+        { flowId: "flow-1", producerSessionKey },
+        options,
+      );
+
+    // Accepted but not yet completed: the child may still need driving.
+    const activeOptions = stateOptions();
+    createDelegateArtifactPolicy(policy(), activeOptions);
+    publish(activeOptions);
+    expect(recorded(activeOptions)).toBe(false);
+
+    // Runtime disabled between child completion and finalization leaves the
+    // policy `staged`. The child still ran, so a re-drive must not respawn it
+    // or report a spawn failure.
+    const stagedOptions = stateOptions();
+    createDelegateArtifactPolicy(policy(), stagedOptions);
+    publish(stagedOptions);
+    expect(finalize(stagedOptions, { runtimeEnabled: false })).toEqual({ status: "deferred" });
+    expect(recorded(stagedOptions)).toBe(true);
+
+    // Ordinary finalization.
+    const completedOptions = stateOptions();
+    createDelegateArtifactPolicy(policy(), completedOptions);
+    publish(completedOptions);
+    finalize(completedOptions);
+    expect(recorded(completedOptions)).toBe(true);
+
+    // A completion recorded for a different producer is not evidence for this one.
+    expect(
+      hasRecordedDelegateArtifactCompletionForProducer(
+        { flowId: "flow-1", producerSessionKey: "agent:main:subagent:someone-else" },
+        completedOptions,
+      ),
+    ).toBe(false);
+    // An unknown flow has no evidence at all.
+    expect(
+      hasRecordedDelegateArtifactCompletionForProducer(
+        { flowId: "flow-absent", producerSessionKey },
+        completedOptions,
+      ),
+    ).toBe(false);
   });
 
   it("stages while disabled and resumes the same completion without exposing claims", () => {

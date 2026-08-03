@@ -1,4 +1,4 @@
-import { hasTerminalDelegateArtifactPolicyForProducer } from "../../agents/delegate-artifacts.js";
+import { hasRecordedDelegateArtifactCompletionForProducer } from "../../agents/delegate-artifacts.js";
 import { deriveContinuationDelegateChildSessionKeyFromParent } from "../../agents/subagent-continuation-ids.js";
 import {
   getSubagentRunByChildSessionKey,
@@ -39,11 +39,10 @@ export function partitionKnownAcceptedDelegateChildren<
       hasLiveContinuationDelegateChildRun({ childSessionKey, flowId: delegate.flowId }) ||
       // The registry only knows live runs, so an accepted child that finished
       // before its acceptance commit was re-driven (or before a restart) would
-      // otherwise be re-spawned or reported as a spawn failure. Its terminal
-      // artifact policy, bound to this exact producer, is the durable proof
-      // that the child genuinely ran.
+      // otherwise be re-spawned or reported as a spawn failure. A recorded
+      // completion bound to this exact producer is the durable proof it ran.
       (managedArtifacts &&
-        hasTerminalDelegateArtifactPolicyForProducer({
+        hasRecordedDelegateArtifactCompletionForProducer({
           flowId: delegate.flowId,
           producerSessionKey: childSessionKey,
         }));
