@@ -1,6 +1,7 @@
 // Real Gateway WebSocket proof for agent delivery fallback, response ordering, and idempotency.
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
-import type { WebSocket } from "ws";
+import type { RawData, WebSocket } from "ws";
+import { rawDataToString } from "../infra/ws.js";
 import { createDeferred } from "../shared/deferred.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { agentCommand, installGatewayTestHooks, onceMessage } from "./test-helpers.js";
@@ -62,6 +63,14 @@ describe("gateway agent RPC contracts", () => {
 
     const idempotencyKey = "gateway-agent-rpc-contract";
     const first = await harness.openClient();
+    const orderedResponses: AgentResponse[] = [];
+    const recordResponse = (data: RawData) => {
+      const frame = JSON.parse(rawDataToString(data)) as AgentResponse;
+      if (frame.type === "res" && frame.id === "agent-contract") {
+        orderedResponses.push(frame);
+      }
+    };
+    first.ws.on("message", recordResponse);
     const acceptedPromise = onceMessage<AgentResponse>(
       first.ws,
       (frame) =>
@@ -84,7 +93,7 @@ describe("gateway agent RPC contracts", () => {
       message: "prove the gateway agent RPC contract",
     });
 
-    const accepted = await acceptedPromise;
+    await acceptedPromise;
     await vi.waitFor(() => expect(agentCommand).toHaveBeenCalledTimes(1));
     expect(vi.mocked(agentCommand).mock.calls[0]?.[0]).toMatchObject({
       runId: idempotencyKey,
@@ -96,6 +105,9 @@ describe("gateway agent RPC contracts", () => {
 
     runCompletion.resolve();
     const terminal = await terminalPromise;
+    first.ws.off("message", recordResponse);
+    expect(orderedResponses.map((frame) => frame.payload?.status)).toEqual(["accepted", "ok"]);
+    const accepted = orderedResponses[0];
     expect(accepted).toMatchObject({
       type: "res",
       id: "agent-contract",
