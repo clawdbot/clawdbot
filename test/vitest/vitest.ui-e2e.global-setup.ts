@@ -1,7 +1,4 @@
 // Vitest global setup builds and serves the shipped UI once per serial E2E shard.
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { chromium } from "playwright";
 import type { TestProject } from "vitest/node";
 import {
@@ -9,6 +6,7 @@ import {
   resolvePlaywrightChromiumExecutablePath,
   startBundledControlUiE2eServer,
 } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import { createTempDirTracker } from "../helpers/temp-dir.ts";
 
 declare module "vitest" {
   export interface ProvidedContext {
@@ -25,9 +23,12 @@ export default async function setup(project: TestProject) {
 
   // Local full-suite runs can fan shards into separate processes in one checkout.
   // Keep every build out of canonical dist so those processes cannot clobber it.
-  const outDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-ui-e2e-"));
+  const tempDirs = createTempDirTracker();
+  const outDir = tempDirs.make("openclaw-ui-e2e-");
   const server = await startBundledControlUiE2eServer(outDir).catch(async (error) => {
-    await rm(outDir, { force: true, recursive: true }).catch(() => {});
+    try {
+      tempDirs.cleanup();
+    } catch {}
     throw error;
   });
   try {
@@ -36,12 +37,14 @@ export default async function setup(project: TestProject) {
       try {
         await server.close();
       } finally {
-        await rm(outDir, { force: true, recursive: true });
+        tempDirs.cleanup();
       }
     };
   } catch (error) {
     await server.close().catch(() => {});
-    await rm(outDir, { force: true, recursive: true }).catch(() => {});
+    try {
+      tempDirs.cleanup();
+    } catch {}
     throw error;
   }
 }

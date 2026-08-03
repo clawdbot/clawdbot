@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import type { Locator, Page } from "playwright";
-import type { Plugin, PreviewServer, ViteDevServer } from "vite";
+import type { InlineConfig, Plugin, PreviewServer, ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import type { ControlUiBuildInfo } from "../build-info.ts";
@@ -443,15 +443,11 @@ export async function startBundledControlUiE2eServer(outDir: string): Promise<Co
     import("../../vite.config.ts"),
   ]);
   const port = await resolveAvailableLoopbackPort();
-  const config = controlUiViteConfig();
+  const config = controlUiViteConfig({ outDir });
   const uiRoot = path.join(resolveRepoRoot(), "ui");
-  const sharedConfig = {
+  const sharedConfig: InlineConfig = {
     ...config,
     base: "/",
-    build: {
-      ...config.build,
-      outDir,
-    },
     configFile: false,
     define: {
       ...config.define,
