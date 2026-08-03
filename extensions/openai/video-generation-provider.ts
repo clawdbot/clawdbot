@@ -297,10 +297,10 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
     label: "OpenAI",
     defaultModel: DEFAULT_OPENAI_VIDEO_MODEL,
     models: [DEFAULT_OPENAI_VIDEO_MODEL, "sora-2-pro"],
-    isConfigured: ({ agentDir }) =>
+    isConfigured: (ctx) =>
       isProviderApiKeyConfigured({
         provider: "openai",
-        agentDir,
+        ...ctx,
         profileTypes: ["api_key"],
       }),
     capabilities: {

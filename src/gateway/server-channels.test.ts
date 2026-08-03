@@ -30,6 +30,7 @@ import {
   setActiveDegradedSecretOwners,
 } from "../secrets/runtime-degraded-state.js";
 import { evaluateChannelHealth } from "./channel-health-policy.js";
+import { channelReadyPatch, createTransportActivityStatusPatch } from "./channel-status-patches.js";
 import { createChannelManager, type ChannelManager } from "./server-channels.js";
 
 const hoisted = vi.hoisted(() => {
@@ -925,6 +926,140 @@ describe("server-channels auto restart", () => {
     await vi.advanceTimersByTimeAsync(200);
     expect(startAccount).toHaveBeenCalledTimes(2);
     expect(lifecycleAtHandoff).toEqual(["starting", "starting"]);
+  });
+
+  it("accepts explicit channel-authored ready recovery within the same task", async () => {
+    let publishReady: (() => void) | undefined;
+    let publishStopped: (() => void) | undefined;
+    let blockedLastStartAt: number | null | undefined;
+    const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
+      ctx.setStatus({
+        accountId: ctx.accountId,
+        terminalDisconnect: true,
+        lifecycle: "blocked",
+        lastError: "relink required",
+      });
+      blockedLastStartAt = ctx.getStatus().lastStartAt;
+      publishReady = () => ctx.setStatus(channelReadyPatch({ accountId: ctx.accountId }));
+      publishStopped = () =>
+        ctx.setStatus({
+          accountId: ctx.accountId,
+          running: false,
+          connected: false,
+          lifecycle: "stopped",
+        });
+      await new Promise<void>((resolve) => {
+        ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    await vi.waitFor(() => expect(publishReady).toBeDefined());
+    expect(healthOf(manager.getRuntimeSnapshot().channelAccounts.discord?.default).reason).toBe(
+      "blocked",
+    );
+
+    publishReady?.();
+
+    const recovered = manager.getRuntimeSnapshot().channelAccounts.discord?.default;
+    expect(startAccount).toHaveBeenCalledOnce();
+    expect(recovered).toMatchObject({
+      running: true,
+      connected: true,
+      lifecycle: "ready",
+      terminalDisconnect: undefined,
+      lastError: null,
+      lastStartAt: blockedLastStartAt,
+    });
+    expect(healthOf(recovered)).toEqual({ healthy: true, reason: "healthy" });
+
+    publishStopped?.();
+
+    const stopped = manager.getRuntimeSnapshot().channelAccounts.discord?.default;
+    expect(stopped).toMatchObject({
+      running: false,
+      connected: false,
+      lifecycle: "stopped",
+      terminalDisconnect: undefined,
+    });
+    expect(healthOf(stopped)).toEqual({ healthy: false, reason: "not-running" });
+  });
+
+  it.each([
+    {
+      name: "ready lifecycle without terminal clear",
+      patch: { accountId: DEFAULT_ACCOUNT_ID, lifecycle: "ready" } as ChannelAccountSnapshot,
+    },
+    {
+      name: "terminal clear without ready lifecycle",
+      patch: {
+        accountId: DEFAULT_ACCOUNT_ID,
+        terminalDisconnect: undefined,
+      } as ChannelAccountSnapshot,
+    },
+  ])("keeps terminal diagnosis sticky for $name", async ({ patch }) => {
+    let publishIncompleteRecovery: (() => void) | undefined;
+    const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
+      ctx.setStatus({
+        accountId: ctx.accountId,
+        terminalDisconnect: true,
+        lifecycle: "blocked",
+        lastError: "relink required",
+      });
+      publishIncompleteRecovery = () => ctx.setStatus(patch);
+      await new Promise<void>((resolve) => {
+        ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    await vi.waitFor(() => expect(publishIncompleteRecovery).toBeDefined());
+    publishIncompleteRecovery?.();
+
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.default).toMatchObject({
+      lifecycle: "blocked",
+      lastError: "relink required",
+    });
+  });
+
+  it("keeps terminal diagnosis sticky across activity and connected backfill patches", async () => {
+    let publishDerivedSignals: (() => void) | undefined;
+    const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
+      ctx.setStatus({
+        accountId: ctx.accountId,
+        terminalDisconnect: true,
+        lifecycle: "blocked",
+        lastError: "relink required",
+      });
+      publishDerivedSignals = () => {
+        ctx.setStatus({
+          accountId: ctx.accountId,
+          ...createTransportActivityStatusPatch(),
+        });
+        ctx.setStatus({ accountId: ctx.accountId, connected: true });
+      };
+      await new Promise<void>((resolve) => {
+        ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    await vi.waitFor(() => expect(publishDerivedSignals).toBeDefined());
+    publishDerivedSignals?.();
+
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.default).toMatchObject({
+      connected: true,
+      lifecycle: "blocked",
+      terminalDisconnect: true,
+      lastError: "relink required",
+      lastTransportActivityAt: expect.any(Number),
+    });
   });
 
   it("recovers a manually restarted channel from a transient failure after terminal disconnect", async () => {

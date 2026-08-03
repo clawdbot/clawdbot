@@ -389,12 +389,18 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   ): ChannelAccountSnapshot => {
     const store = getStore(channelId);
     const current = getRuntime(channelId, accountId);
-    // Terminal channel diagnosis survives task cleanup and late status patches.
-    // Only the gateway-owned start transition proves a new lifecycle began.
+    const hasExplicitReadyRecovery =
+      Object.hasOwn(patch, "lifecycle") &&
+      patch.lifecycle === "ready" &&
+      Object.hasOwn(patch, "terminalDisconnect") &&
+      patch.terminalDisconnect === undefined;
+    // Weaker/derived signals never clear a terminal diagnosis. Gateway-owned starting still
+    // begins a new lifecycle; a channel-authored explicit ready + terminal clear proves recovery.
     const lifecycle =
       current.lifecycle === "blocked" &&
       current.terminalDisconnect === true &&
-      patch.lifecycle !== "starting"
+      patch.lifecycle !== "starting" &&
+      !hasExplicitReadyRecovery
         ? "blocked"
         : (patch.lifecycle ??
           (patch.restartPending === true

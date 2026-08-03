@@ -189,6 +189,7 @@ async function runOllamaWebSearch(params: {
   config?: OpenClawConfig;
   query: string;
   count?: number;
+  signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
   const query = params.query.trim();
   if (!query) {
@@ -209,6 +210,7 @@ async function runOllamaWebSearch(params: {
   let payload: OllamaWebSearchResponse | undefined;
   let lastError: Error | undefined;
   for (const attempt of attempts) {
+    params.signal?.throwIfAborted();
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (attempt.apiKey) {
       headers.Authorization = `Bearer ${attempt.apiKey}`;
@@ -222,6 +224,7 @@ async function runOllamaWebSearch(params: {
       },
       // Guard-owned timeoutMs also bounds DNS/proxy preflight; init.signal does not.
       timeoutMs: DEFAULT_OLLAMA_WEB_SEARCH_TIMEOUT_MS,
+      ...(params.signal ? { signal: params.signal } : {}),
       policy: buildOllamaBaseUrlSsrFPolicy(attempt.baseUrl),
       auditContext: "ollama-web-search.search",
     });
@@ -246,6 +249,7 @@ async function runOllamaWebSearch(params: {
         throw new Error(message);
       }
       payload = await readOllamaWebSearchResponse(response);
+      params.signal?.throwIfAborted();
       break;
     } catch (error) {
       if (error instanceof Error) {
@@ -358,15 +362,18 @@ export function createOllamaWebSearchProvider(): WebSearchProviderPlugin {
       description:
         "Search the web using Ollama's web search API. Returns titles, URLs, and snippets from the configured Ollama host.",
       parameters: OLLAMA_WEB_SEARCH_SCHEMA,
-      execute: async (args) =>
-        await runOllamaWebSearch({
+      execute: async (args, context) => {
+        context?.signal?.throwIfAborted();
+        return await runOllamaWebSearch({
           config: ctx.config,
           query: readStringParam(args, "query", { required: true }),
           count: readPositiveIntegerParam(args, "count", {
             max: 10,
             message: "count must be an integer from 1 to 10.",
           }),
-        }),
+          signal: context?.signal,
+        });
+      },
     }),
   };
 }

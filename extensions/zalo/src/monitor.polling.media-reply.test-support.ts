@@ -555,6 +555,7 @@ describe("Zalo polling media replies", () => {
           hostedMediaRoutes[0],
           "active Zalo hosted-media route",
         );
+        expect(hostedMediaRoute).toBe(firstHostedMediaRoute);
 
         await writeHostedZaloMediaFixture({
           id: "abc123abc123abc123abc123",
