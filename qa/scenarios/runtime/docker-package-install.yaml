@@ -5,8 +5,9 @@ scenario:
   surface: containers
   category: containers.image-release-and-validation
   coverage:
-    secondary:
+    primary:
       - containers.docker-e2e-package-artifact-generation
+    secondary:
       - cli.package-manager-installs
   objective: Build the real OpenClaw package artifact, install and execute it in the scheduler-selected bare container image, and record exact package, image, and container identities.
   successCriteria:
