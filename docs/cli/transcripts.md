@@ -113,12 +113,12 @@ or run the `transcripts` tool's `summarize` action to regenerate the Markdown
 summary.
 
 Sessions created before account ownership was recorded retain their stored
-agent ownership. Older rows with no agent attribution cannot be claimed by a
-channel account while its account-binding provider is available. A host
-operator can recover one by running a local main-agent turn:
+agent ownership. A row with no stored account cannot be safely claimed from a
+channel: recover an agent-owned row with a local turn for that agent. Older rows
+with no agent attribution require a local main-agent turn:
 
 ```bash
-openclaw agent --agent main --local --message \
+openclaw agent --agent <owning-agent-or-main> --local --message \
   "Use transcripts summarize for session <session>."
 ```
 

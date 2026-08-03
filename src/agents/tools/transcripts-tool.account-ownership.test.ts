@@ -477,6 +477,43 @@ describe("transcripts tool account ownership", () => {
     ).rejects.toThrow(`transcripts session not found: ${legacySession.sessionId}`);
   });
 
+  it("recovers shipped agent-owned account-less sessions only off-channel", async () => {
+    const stateDir = await makeStateDir();
+    const store = storeFor(stateDir);
+    getTranscriptSourceProviderMock.mockReturnValue({
+      id: "discord-voice",
+      accountBindingChannels: ["discord"],
+      name: "Discord Voice",
+      sourceKinds: ["live-audio"],
+    });
+    const session = {
+      sessionId: "beta-main-no-account",
+      source: { providerId: "discord-voice" },
+      startedAt: "2026-07-03T12:00:00.000Z",
+      stoppedAt: "2026-07-03T12:05:00.000Z",
+      metadata: { agentId: "main" },
+    };
+    await store.writeSession(session);
+    await store.appendUtteranceForSession(session, { text: "account-less shipped notes" });
+
+    await expect(
+      createTool(stateDir, "main", { channel: "discord", accountId: "account-a" }).execute(
+        "call-channel",
+        { action: "summarize", sessionId: session.sessionId },
+        undefined,
+        vi.fn(),
+      ),
+    ).rejects.toThrow(`transcripts session not found: ${session.sessionId}`);
+    await expect(
+      createTool(stateDir, "main").execute(
+        "call-local",
+        { action: "summarize", sessionId: session.sessionId },
+        undefined,
+        vi.fn(),
+      ),
+    ).resolves.toMatchObject({ details: { sessionId: session.sessionId } });
+  });
+
   it("keeps named-agent ownership authoritative for non-binding sources", async () => {
     const stateDir = await makeStateDir();
     const store = storeFor(stateDir);
