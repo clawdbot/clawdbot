@@ -104,7 +104,9 @@ function parseJsonFrame(data: RawData): Record<string, unknown> | null {
   try {
     const text = Array.isArray(data)
       ? Buffer.concat(data).toString("utf8")
-      : Buffer.from(data).toString("utf8");
+      : data instanceof ArrayBuffer
+        ? Buffer.from(data).toString("utf8")
+        : data.toString("utf8");
     return asRecord(JSON.parse(text));
   } catch {
     return null;
