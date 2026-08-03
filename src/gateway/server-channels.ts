@@ -1106,7 +1106,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 recoveryStopTimedOut.delete(rKey);
                 if (!recoveryStartRequested.delete(rKey)) {
                   restartDeferredToCaller.delete(rKey);
-                  knownAccountDeferredToCaller.delete(rKey);
+                  // A private include-known handoff must survive this inverse ordering:
+                  // the stale task can settle after a timed-out stop but before the
+                  // paired reload start has had a chance to union known accounts.
                   setRuntime(channelId, id, {
                     accountId: id,
                     restartPending: false,

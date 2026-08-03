@@ -1452,6 +1452,59 @@ describe("server-channels auto restart", () => {
     expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
   });
 
+  it("retains timed-out private handoffs until the paired include-known restart", async () => {
+    let accountIds = [DEFAULT_ACCOUNT_ID];
+    const releaseFirstTask = createDeferred();
+    let startCount = 0;
+    let firstTaskSettled = false;
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      startCount += 1;
+      abortSignal.addEventListener("abort", () => {}, { once: true });
+      if (startCount === 1) {
+        await releaseFirstTask.promise;
+        firstTaskSettled = true;
+        return;
+      }
+      await new Promise<void>(() => {});
+    });
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannels();
+    accountIds = [];
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+      restartPending: false,
+      preserveKnownAccount: true,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopTask;
+
+    releaseFirstTask.resolve();
+    await waitForMicrotaskCondition(
+      () => firstTaskSettled,
+      "expected stale private handoff task to settle before paired restart",
+    );
+    expect(startAccount).toHaveBeenCalledTimes(1);
+
+    await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === 2,
+      "expected include-known restart to retain the omitted private handoff account",
+    );
+
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
+    expect(account?.restartPending).toBe(false);
+    expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
+  });
+
   it("records timed-out caller-owned reload stops for the paired restart", async () => {
     const releaseFirstTask = createDeferred();
     const startAccount = vi.fn(
