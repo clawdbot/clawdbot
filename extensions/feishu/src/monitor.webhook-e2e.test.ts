@@ -78,6 +78,35 @@ async function postSignedPayload(url: string, payload: Record<string, unknown>) 
   });
 }
 
+async function sendRawSignedFeishuRequest(params: {
+  port: number;
+  target: string;
+  method?: string;
+  rawBody: string;
+  headers: Record<string, string>;
+}): Promise<string> {
+  const rawHeaders = Object.entries(params.headers)
+    .map(([name, value]) => `${name}: ${value}`)
+    .join("\r\n");
+
+  return await new Promise<string>((resolve, reject) => {
+    let response = "";
+    const socket = createConnection({ host: "127.0.0.1", port: params.port }, () => {
+      socket.end(
+        `${params.method ?? "POST"} ${params.target} HTTP/1.1\r\nHost: localhost\r\n` +
+          `${rawHeaders}\r\nContent-Length: ${Buffer.byteLength(params.rawBody)}\r\n` +
+          `Connection: close\r\n\r\n${params.rawBody}`,
+      );
+    });
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      response += chunk.toString();
+    });
+    socket.on("end", () => resolve(response));
+    socket.on("error", reject);
+  });
+}
+
 afterEach(() => {
   cleanupFeishuMonitorStateForTests();
 });
@@ -461,29 +490,17 @@ describe("Feishu webhook signed-request e2e", () => {
         { label: "query fragment", target: `${path}?delivery=ok#fragment` },
         { label: "invalid percent escape", target: `${path}%ZZ` },
       ];
-      const rawHeaders = Object.entries(headers)
-        .map(([name, value]) => `${name}: ${value}`)
-        .join("\r\n");
       const observedRawTargets = [];
 
       for (const rawTarget of rawTargets) {
         const initialDispatches = handler.mock.calls.length;
         const initialActivity = statusSink.mock.calls.length;
         malformedTargetError = undefined;
-        const rawResponse = await new Promise<string>((resolve, reject) => {
-          let response = "";
-          const socket = createConnection({ host: "127.0.0.1", port }, () => {
-            socket.end(
-              `POST ${rawTarget.target} HTTP/1.1\r\nHost: localhost\r\n${rawHeaders}\r\n` +
-                `Content-Length: ${Buffer.byteLength(rawBody)}\r\nConnection: close\r\n\r\n${rawBody}`,
-            );
-          });
-          socket.setEncoding("utf8");
-          socket.on("data", (chunk) => {
-            response += chunk.toString();
-          });
-          socket.on("end", () => resolve(response));
-          socket.on("error", reject);
+        const rawResponse = await sendRawSignedFeishuRequest({
+          port,
+          target: rawTarget.target,
+          rawBody,
+          headers,
         });
         observedRawTargets.push({
           label: rawTarget.label,
@@ -528,6 +545,113 @@ describe("Feishu webhook signed-request e2e", () => {
         requests.map((request) => ({
           label: request.label,
           status: request.status,
+          allow: request.status === 405 ? "POST" : null,
+          dispatched: request.status === 200,
+          publishedActivity: request.status === 200,
+        })),
+      );
+    } finally {
+      abortController.abort();
+      await monitorPromise;
+    }
+  });
+
+  it("matches an explicitly configured webhook query exactly", async () => {
+    const accountId = "signed-configured-query-boundary";
+    const route = "/hook-e2e-configured-query";
+    const configuredPath = `${route}?tenant=alpha&mode=exact`;
+    const port = await getFreePort();
+    const encryptKey = "encrypt_key";
+    const handler = vi.fn(async () => ({ accepted: true }));
+    const eventDispatcher = new Lark.EventDispatcher({
+      encryptKey,
+      verificationToken: "verify_token",
+    });
+    eventDispatcher.register({ "test.query_route_boundary": handler });
+    const statusSink = vi.fn();
+    const abortController = new AbortController();
+    const monitorPromise = monitorWebhook({
+      account: {
+        accountId,
+        encryptKey,
+        config: {
+          enabled: true,
+          connectionMode: "webhook",
+          webhookHost: "127.0.0.1",
+          webhookPort: port,
+          webhookPath: configuredPath,
+        },
+      } as ResolvedFeishuAccount,
+      accountId,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      abortSignal: abortController.signal,
+      eventDispatcher,
+      statusSink,
+    });
+    const rawBody = JSON.stringify({
+      schema: "2.0",
+      header: { event_type: "test.query_route_boundary" },
+      event: { marker: "configured-query-boundary" },
+    });
+    const headers = signFeishuPayload({ encryptKey, rawBody });
+    const requests = [
+      { label: "missing query", target: route, method: "POST", status: 404 },
+      {
+        label: "different query",
+        target: `${route}?tenant=other&mode=exact`,
+        method: "POST",
+        status: 404,
+      },
+      {
+        label: "reordered query",
+        target: `${route}?mode=exact&tenant=alpha`,
+        method: "POST",
+        status: 404,
+      },
+      {
+        label: "additional query",
+        target: `${configuredPath}&extra=value`,
+        method: "POST",
+        status: 404,
+      },
+      { label: "wrong method", target: configuredPath, method: "PUT", status: 405 },
+      { label: "exact configured query", target: configuredPath, method: "POST", status: 200 },
+    ];
+
+    try {
+      await waitUntilServerReady(`http://127.0.0.1:${port}${configuredPath}`);
+      statusSink.mockClear();
+      const observed = [];
+
+      for (const request of requests) {
+        const initialDispatches = handler.mock.calls.length;
+        const initialActivity = statusSink.mock.calls.length;
+        const rawResponse = await sendRawSignedFeishuRequest({
+          port,
+          target: request.target,
+          method: request.method,
+          rawBody,
+          headers,
+        });
+        observed.push({
+          label: request.label,
+          statusLine: rawResponse.split("\r\n", 1)[0],
+          allow: rawResponse.match(/\r\nallow:\s*([^\r\n]+)/i)?.[1] ?? null,
+          dispatched: handler.mock.calls.length > initialDispatches,
+          publishedActivity: statusSink.mock.calls.length > initialActivity,
+        });
+      }
+
+      expect(observed).toEqual(
+        requests.map((request) => ({
+          label: request.label,
+          statusLine: `HTTP/1.1 ${request.status} ${
+            request.status === 200
+              ? "OK"
+              : request.status === 405
+                ? "Method Not Allowed"
+                : "Not Found"
+          }`,
           allow: request.status === 405 ? "POST" : null,
           dispatched: request.status === 200,
           publishedActivity: request.status === 200,

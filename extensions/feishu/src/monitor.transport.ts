@@ -382,7 +382,10 @@ export async function monitorWebhook({
   server.on("request", (req, res) => {
     const requestUrl = req.url ?? "/";
     const requestPath = requestUrl.split("?", 1)[0];
-    if (!requestPath?.startsWith("/") || requestUrl.includes("#") || requestPath !== path) {
+    // Explicit query routes retain Lark's exact raw-target contract; path-only
+    // routes accept queries without normalizing attacker-controlled targets.
+    const requestRoute = path.includes("?") ? requestUrl : requestPath;
+    if (!requestPath?.startsWith("/") || requestUrl.includes("#") || requestRoute !== path) {
       respondText(res, 404, "Not Found");
       return;
     }
