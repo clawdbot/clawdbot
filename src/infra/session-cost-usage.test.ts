@@ -778,14 +778,14 @@ describe("session cost usage", () => {
     });
   });
 
-  it("counts token usage for a configured all-zero model as missing because pricing is still unknown", async () => {
+  it("counts token usage for a configured unmarked all-zero model as a confirmed $0", async () => {
     const root = await makeSessionCostRoot("cost-configured-zero-unknown");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
 
-    // Same shape of turn, with a configured all-zero cost block. After config defaults,
-    // omitted cost and explicit all-zero cost are indistinguishable, so a zero-rate
-    // token-burning turn is still safer to report as missing than as complete $0 spend.
+    // Same shape of turn, with a configured all-zero cost block. Without the
+    // pricingUnavailable marker this is a confirmed free model (e.g. Ollama's
+    // explicit zeros), so the turn reports a known $0 instead of missing cost.
     const entry = {
       type: "message",
       timestamp: new Date().toISOString(),
@@ -831,7 +831,9 @@ describe("session cost usage", () => {
       const summary = await loadCostUsageSummary({ config });
       expect(summary.totals.totalTokens).toBe(23287);
       expect(summary.totals.totalCost).toBe(0);
-      expect(summary.totals.missingCostEntries).toBe(1);
+      // Unmarked all-zero pricing is a confirmed free model, not unknown:
+      // it must not be surfaced as missing cost.
+      expect(summary.totals.missingCostEntries).toBe(0);
     });
   });
 
