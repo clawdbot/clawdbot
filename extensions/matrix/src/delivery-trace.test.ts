@@ -84,6 +84,7 @@ function createRecordingMatrixClient(recorder: WireRecorder): Partial<MatrixClie
   };
   const client: Partial<MatrixClient> = {
     getUserId: async () => BOT_USER_ID,
+    prepareRoomForMessageSend: async () => "m.room.message",
     sendMessage: async (roomId: string, content: Record<string, unknown>) => {
       const eventId = mintEventId();
       // Snapshot before recording: edit flows reuse content structures, and the
