@@ -350,6 +350,7 @@ export function prepareEmbeddedAttemptStream(input: {
       // Settlement persists every queued projection. Validate the final result
       // first so a rejected hidden-tool value never enters session history.
       const acceptedResult = await toolParams.acceptResultBeforeProjection(result);
+      const isError = isToolResultError(acceptedResult);
       input.toolSearchTargetTranscriptProjections.push({
         parentToolCallId: toolParams.parentToolCallId,
         toolCallId: toolParams.toolCallId,
@@ -358,7 +359,7 @@ export function prepareEmbeddedAttemptStream(input: {
         result: acceptedResult,
         // Fulfilled tools can still carry a canonical failure result (for example MCP isError).
         // Preserve that fact before the hidden target call is projected into session history.
-        ...(isToolResultError(acceptedResult) ? { isError: true } : {}),
+        isError,
         timestamp: Date.now(),
       });
       notifyToolActivity(attempt.runId);

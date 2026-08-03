@@ -1688,7 +1688,7 @@ describe("createCopilotToolBridge tool conversion", () => {
     const result = await runSdkTool(sdkTool, {});
     await flushAsync();
 
-    expect(result).toMatchObject({ resultType: "success" });
+    expect(result).toMatchObject({ resultType: "failure" });
     expect(onAgentToolResult).toHaveBeenCalledWith({
       toolName: "tool-a",
       result: sourceResult,

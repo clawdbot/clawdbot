@@ -2079,6 +2079,7 @@ describe("Tool Search", () => {
         toolName: "fake_target",
         input: { value: "ok" },
         result: jsonResult({ ok: true }),
+        isError: false,
         timestamp: 123,
       },
     ]);

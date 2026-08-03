@@ -65,8 +65,8 @@ export type ToolSearchTargetTranscriptProjection = {
   toolCallId: string;
   toolName: string;
   input: unknown;
-  result?: unknown;
-  isError?: boolean;
+  result: AgentToolResult<unknown>;
+  isError: boolean;
   timestamp?: number;
 };
 
