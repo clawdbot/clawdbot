@@ -2153,13 +2153,18 @@ describe("resolvePluginTools optional tools", () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it("caches plugin tool descriptors and uses the runtime only on execution", async () => {
+  it("caches plugin tool descriptors without dropping execution metadata", async () => {
     const outputSchema = { type: "object", properties: { ok: { type: "boolean" } } };
     const factory = vi.fn((rawCtx: unknown) => {
       const ctx = rawCtx as { sessionId?: string };
       return {
         ...makeTool("cached_tool"),
         outputSchema,
+        canYield: true,
+        executionMode: "sequential" as const,
+        catalogMode: "direct-only" as const,
+        hideFromChannelProgress: true,
+        resultContentSource: "network" as const,
         async execute() {
           return { content: [{ type: "text", text: ctx.sessionId ?? "missing" }] };
         },
@@ -2192,6 +2197,13 @@ describe("resolvePluginTools optional tools", () => {
     expect(second[0]).not.toBe(first[0]);
     expect(first[0]?.outputSchema).toBe(outputSchema);
     expect(second[0]?.outputSchema).toBe(outputSchema);
+    expect(second[0]).toMatchObject({
+      canYield: true,
+      executionMode: "sequential",
+      catalogMode: "direct-only",
+      hideFromChannelProgress: true,
+      resultContentSource: "network",
+    });
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
 
     await expect(second[0]?.execute("call", {}, undefined)).resolves.toEqual({

@@ -7,6 +7,7 @@ import { Type } from "typebox";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createCapturedPluginRegistration } from "../plugins/captured-registration.js";
 import { defineToolPlugin, getToolPluginMetadata } from "./tool-plugin.js";
+import { yieldToolResult } from "./tool-results.js";
 
 describe("defineToolPlugin", () => {
   it("registers declared tools and wraps plain object results", async () => {
@@ -92,6 +93,43 @@ describe("defineToolPlugin", () => {
     expect(result).toEqual({
       content: [{ type: "text", text: "hello" }],
       details: "hello",
+    });
+  });
+
+  it("registers yielding static tools without losing result control", async () => {
+    const entry = defineToolPlugin({
+      id: "approval",
+      name: "Approval",
+      description: "Wait for an external approval.",
+      tools: (tool) => [
+        tool({
+          name: "request_approval",
+          description: "Request approval and pause the turn.",
+          parameters: Type.Object({}),
+          canYield: true,
+          executionMode: "sequential",
+          execute: () =>
+            yieldToolResult({
+              message: "Waiting for approval",
+              text: "Approval requested.",
+              details: { pending: true },
+            }),
+        }),
+      ],
+    });
+    const captured = createCapturedPluginRegistration({ id: "approval" });
+
+    entry.register(captured.api);
+
+    const runtimeTool = expectDefined(captured.tools[0], "captured.tools[0] test invariant");
+    expect(runtimeTool).toMatchObject({
+      canYield: true,
+      executionMode: "sequential",
+    });
+    await expect(runtimeTool.execute("call-1", {})).resolves.toEqual({
+      content: [{ type: "text", text: "Approval requested." }],
+      details: { pending: true },
+      control: { type: "yield", message: "Waiting for approval" },
     });
   });
 
