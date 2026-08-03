@@ -1,11 +1,8 @@
 // Performs lightweight safe-regex checks for user-supplied patterns.
 import { expectDefined } from "@openclaw/normalization-core";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import {
-  alternativesOverlap,
-  readEscapedLiteral,
-  readLegacyOctalEscape,
-} from "./safe-regex-atom-overlap.js";
+import { alternativesOverlap, readLegacyOctalEscape } from "./safe-regex-atom-overlap.js";
+import { vSetHasAmbiguousStrings } from "./safe-regex-v-set.js";
 
 type QuantifierRead = {
   consumed: number;
@@ -189,51 +186,6 @@ function readQuantifier(source: string, index: number): QuantifierRead | null {
   }
 
   return { consumed: i - index, minRepeat, maxRepeat };
-}
-
-function vSetHasAmbiguousStrings(source: string): boolean {
-  const stringMatches = Array.from(source.matchAll(/\\q\{([^}]*)\}/g));
-  const strings = stringMatches.flatMap((match) => (match[1] ?? "").split("|"));
-  if (strings.length === 0) {
-    return false;
-  }
-  for (let leftIndex = 0; leftIndex < strings.length; leftIndex += 1) {
-    const left = expectDefined(strings[leftIndex], "UnicodeSets string member");
-    for (let rightIndex = leftIndex + 1; rightIndex < strings.length; rightIndex += 1) {
-      const right = expectDefined(strings[rightIndex], "UnicodeSets string member");
-      if (left.startsWith(right) || right.startsWith(left)) {
-        return true;
-      }
-    }
-  }
-
-  let characterSource = source;
-  for (const match of stringMatches) {
-    characterSource = characterSource.replace(match[0], "");
-  }
-  const characters = new Set<string>();
-  for (let index = 1; index < characterSource.length - 1;) {
-    const ch = characterSource[index];
-    if (ch === "\\") {
-      const escaped = readEscapedLiteral(characterSource, index);
-      if (!escaped) {
-        return true;
-      }
-      characters.add(escaped.value);
-      index = escaped.next;
-      continue;
-    }
-    const value = String.fromCodePoint(
-      expectDefined(characterSource.codePointAt(index), "UnicodeSets character"),
-    );
-    index += value.length;
-    if (value !== "[" && value !== "]" && value !== "&" && value !== "-") {
-      characters.add(value);
-    }
-  }
-  return strings.some(
-    (value) => value.length > 1 && Array.from(value).every((ch) => characters.has(ch)),
-  );
 }
 
 function vPropertyMayContainStrings(source: string): boolean {

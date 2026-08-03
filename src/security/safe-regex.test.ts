@@ -53,6 +53,8 @@ const REGEX_CASES: Array<[pattern: string, expected: RegExpConstructor | null, f
   ["(?:\\p{RGI_Emoji}|😀)+!", null, "v"],
   ["^[\\q{a|aa}]+!$", null, "v"],
   ["^[\\q{aa}a]+!$", null, "v"],
+  ["^[\\q{bc|abc}a]+!$", null, "v"],
+  ["^[\\q{a|\\x61a}]+!$", null, "v"],
   ["^[[\\q{a|aa}]]+!$", null, "v"],
   ["^(?:\\07|\\x07)+!$", null],
   ["^(?:\\cA|\\x01)+!$", null],
