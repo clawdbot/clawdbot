@@ -34,16 +34,17 @@ const hoisted = vi.hoisted(() => ({
   startGoogleChatMonitor: vi.fn(),
 }));
 
-vi.mock("./channel.runtime.js", () => ({
-  googleChatChannelRuntime: {
-    resolveGoogleChatWebhookPath: ({
-      account,
-    }: {
-      account: { config: { webhookPath?: string } };
-    }) => account.config.webhookPath ?? "/googlechat",
-    startGoogleChatMonitor: hoisted.startGoogleChatMonitor,
-  },
-}));
+// The path resolver stays real so the status assertions below cover the whole chain
+// from configured webhookUrl to published snapshot; only the monitor is stubbed.
+vi.mock("./channel.runtime.js", async () => {
+  const monitor = await vi.importActual<typeof import("./monitor.js")>("./monitor.js");
+  return {
+    googleChatChannelRuntime: {
+      resolveGoogleChatWebhookPath: monitor.resolveGoogleChatWebhookPath,
+      startGoogleChatMonitor: hoisted.startGoogleChatMonitor,
+    },
+  };
+});
 
 const googlechatSetupPlugin = {
   id: "googlechat",
@@ -362,6 +363,101 @@ describe("googlechat setup", () => {
     });
     expectLifecyclePatch(patches, { running: true });
     expectLifecyclePatch(patches, { running: false });
+  });
+
+  it("publishes the bound webhook path when the account resolves one", async () => {
+    hoisted.startGoogleChatMonitor.mockResolvedValue(vi.fn());
+
+    const { abort, patches, task, isSettled } = startAccountAndTrackLifecycle({
+      startAccount: startGoogleChatGatewayAccount,
+      account: buildAccount(),
+    });
+    await expectPendingUntilAbort({
+      waitForStarted: waitForGoogleChatMonitorStarted,
+      isSettled,
+      abort,
+      task,
+    });
+
+    expectLifecyclePatch(patches, {
+      running: true,
+      webhookPath: "/googlechat",
+      lifecycle: "starting",
+    });
+    expect(patches.some((patch) => patch.lifecycle === "blocked")).toBe(false);
+  });
+
+  it("reports a blocked lifecycle when the configured webhookUrl resolves to no path", async () => {
+    hoisted.startGoogleChatMonitor.mockResolvedValue(vi.fn());
+    const account = buildAccount();
+
+    const { abort, patches, task, isSettled } = startAccountAndTrackLifecycle({
+      startAccount: startGoogleChatGatewayAccount,
+      account: {
+        ...account,
+        config: {
+          ...account.config,
+          webhookPath: undefined,
+          webhookUrl: "chat.example.com/googlechat",
+        },
+      },
+    });
+    await expectPendingUntilAbort({
+      waitForStarted: waitForGoogleChatMonitorStarted,
+      isSettled,
+      abort,
+      task,
+    });
+
+    const startPatch = patches.find((patch) => patch.running === true);
+    expect(startPatch).toBeDefined();
+    expect(startPatch?.lifecycle).toBe("blocked");
+    expect(startPatch?.lastError).toContain("webhookUrl");
+    // The account must not advertise a route the monitor never registered.
+    expect(startPatch?.webhookPath).toBeUndefined();
+  });
+
+  it("clears a previously published webhook path when a restart resolves none", async () => {
+    hoisted.startGoogleChatMonitor.mockResolvedValue(vi.fn());
+    const account = buildAccount();
+    const resolvable = {
+      ...account,
+      config: {
+        ...account.config,
+        webhookPath: undefined,
+        webhookUrl: "https://chat.example.com/gc-inbound",
+      },
+    };
+    const firstAbort = new AbortController();
+    // One context, so both starts write through the same status snapshot the way
+    // the gateway's runtime store patch-merges successive plugin patches.
+    const ctx = createStartAccountContext({
+      account: resolvable,
+      abortSignal: firstAbort.signal,
+    });
+    const firstRun = startGoogleChatGatewayAccount(ctx);
+    await waitForGoogleChatMonitorStarted();
+    expect(ctx.getStatus().webhookPath).toBe("/gc-inbound");
+    firstAbort.abort();
+    await firstRun;
+
+    hoisted.startGoogleChatMonitor.mockClear();
+    const secondAbort = new AbortController();
+    const secondRun = startGoogleChatGatewayAccount({
+      ...ctx,
+      account: {
+        ...resolvable,
+        config: { ...resolvable.config, webhookUrl: "chat.example.com/gc-inbound" },
+      },
+      abortSignal: secondAbort.signal,
+    });
+    await waitForGoogleChatMonitorStarted();
+
+    const restarted = ctx.getStatus();
+    expect(restarted.lifecycle).toBe("blocked");
+    expect(restarted.webhookPath).toBeUndefined();
+    secondAbort.abort();
+    await secondRun;
   });
 
   it("clears running status when monitor startup fails", async () => {

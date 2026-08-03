@@ -1987,6 +1987,7 @@ const EXACT_TOOLING_TARGETS = new Map([
   ],
   ["scripts/run-vitest.mjs", ["run-vitest", "test-projects", "vitest-local-scheduling"]],
   ["scripts/run-oxlint-shards.mjs", ["run-oxlint"]],
+  ["scripts/lib/failed-trailer.mjs", ["run-oxlint", "run-tsgo", "run-vitest", "changed-lanes"]],
   ["scripts/docker-e2e-rerun.mjs", ["docker-e2e-helper-cli"]],
   ["scripts/openclaw-postpack.mjs", [TOOLING_VITEST_CONFIG]],
   ["scripts/openclaw-npm-prepublish-verify.ts", ["test/openclaw-npm-prepublish-verify.test.ts"]],

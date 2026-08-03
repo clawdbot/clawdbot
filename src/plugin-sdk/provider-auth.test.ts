@@ -3,8 +3,14 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import {
+  COPILOT_INTEGRATION_ID,
+  deriveCopilotApiBaseUrlFromToken,
+  normalizeGithubCopilotDomain,
+  resolveCopilotApiToken,
+} from "./provider-auth.js";
 
 const TEST_GITHUB_TOKEN = ["github", "token"].join("-");
 const TEST_CACHED_COPILOT_TOKEN = [
@@ -114,6 +120,9 @@ describe("provider auth profile helpers", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  afterAll(() => {
     vi.doUnmock("../agents/agent-scope-config.js");
     vi.doUnmock("../agents/auth-profiles/external-cli-discovery.js");
     vi.doUnmock("../agents/auth-profiles/oauth.js");
@@ -293,8 +302,6 @@ describe("provider auth profile helpers", () => {
   });
 
   it("accepts plus-signed Copilot token expiry strings", async () => {
-    vi.resetModules();
-
     const saved: unknown[] = [];
     const fetchImpl = vi.fn(
       async () =>
@@ -306,8 +313,6 @@ describe("provider auth profile helpers", () => {
           { status: 200, headers: { "content-type": "application/json" } },
         ),
     );
-
-    const { resolveCopilotApiToken } = await import("./provider-auth.js");
 
     const result = await resolveCopilotApiToken({
       githubToken: "github-token",
@@ -336,11 +341,7 @@ describe("provider auth profile helpers", () => {
     expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 
-  it("rejects malformed Copilot proxy hints", async () => {
-    vi.resetModules();
-
-    const { deriveCopilotApiBaseUrlFromToken } = await import("./provider-auth.js");
-
+  it("rejects malformed Copilot proxy hints", () => {
     expect(
       deriveCopilotApiBaseUrlFromToken("copilot-token;proxy-ep=javascript:alert(1);"),
     ).toBeNull();
@@ -351,8 +352,6 @@ describe("provider auth profile helpers", () => {
   });
 
   it("rejects Copilot token expiry values outside the supported date range", async () => {
-    vi.resetModules();
-
     const fetchImpl = vi.fn(
       async () =>
         new Response(
@@ -363,8 +362,6 @@ describe("provider auth profile helpers", () => {
           { status: 200, headers: { "content-type": "application/json" } },
         ),
     );
-
-    const { resolveCopilotApiToken } = await import("./provider-auth.js");
 
     await expect(
       resolveCopilotApiToken({
@@ -380,13 +377,9 @@ describe("provider auth profile helpers", () => {
   });
 
   it("cancels Copilot token exchange error bodies", async () => {
-    vi.resetModules();
-
     const response = new Response("bad credentials", { status: 401 });
     const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
     const fetchImpl = vi.fn(async () => response);
-
-    const { resolveCopilotApiToken } = await import("./provider-auth.js");
 
     await expect(
       resolveCopilotApiToken({
@@ -404,8 +397,6 @@ describe("provider auth profile helpers", () => {
   });
 
   it("bounds oversized Copilot token success body and cancels the stream", async () => {
-    vi.resetModules();
-
     const chunk = new Uint8Array(1024 * 1024); // 1 MiB chunk
     let readCount = 0;
     let canceled = false;
@@ -429,8 +420,6 @@ describe("provider auth profile helpers", () => {
     });
     const fetchImpl = vi.fn(async () => response);
 
-    const { resolveCopilotApiToken } = await import("./provider-auth.js");
-
     await expect(
       resolveCopilotApiToken({
         githubToken: "github-token",
@@ -449,8 +438,6 @@ describe("provider auth profile helpers", () => {
   });
 
   it("bounds oversized Copilot token success body over HTTP transport", async () => {
-    vi.resetModules();
-
     const http = await import("node:http");
     const { once } = await import("node:events");
     const MiB = 1024 * 1024;
@@ -494,8 +481,6 @@ describe("provider auth profile helpers", () => {
       const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) =>
         fetch(`http://127.0.0.1:${address.port}/token`, init),
       );
-      const { resolveCopilotApiToken } = await import("./provider-auth.js");
-
       await expect(
         resolveCopilotApiToken({
           githubToken: "github-token",
@@ -517,8 +502,6 @@ describe("provider auth profile helpers", () => {
   });
 
   it("accepts a normal Copilot token success body over HTTP transport", async () => {
-    vi.resetModules();
-
     const http = await import("node:http");
     const { once } = await import("node:events");
     const body = JSON.stringify({
@@ -546,8 +529,6 @@ describe("provider auth profile helpers", () => {
       const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) =>
         fetch(`http://127.0.0.1:${address.port}/token`, init),
       );
-      const { resolveCopilotApiToken } = await import("./provider-auth.js");
-
       const result = await resolveCopilotApiToken({
         githubToken: "github-token",
         fetchImpl: fetchImpl as typeof fetch,
@@ -568,8 +549,6 @@ describe("provider auth profile helpers", () => {
   });
 
   it("refreshes cached Copilot tokens with out-of-range expiry values", async () => {
-    vi.resetModules();
-
     const saved: unknown[] = [];
     const fetchImpl = vi.fn(
       async () =>
@@ -581,8 +560,6 @@ describe("provider auth profile helpers", () => {
           { status: 200, headers: { "content-type": "application/json" } },
         ),
     );
-
-    const { COPILOT_INTEGRATION_ID, resolveCopilotApiToken } = await import("./provider-auth.js");
 
     const result = await resolveCopilotApiToken({
       githubToken: "github-token",
@@ -610,8 +587,6 @@ describe("provider auth profile helpers", () => {
   });
 
   it("aborts hung Copilot token exchange instead of waiting forever", async () => {
-    vi.resetModules();
-
     vi.spyOn(AbortSignal, "timeout").mockImplementation((timeoutMs) => {
       expect(timeoutMs).toBe(30_000);
       const controller = new AbortController();
@@ -643,8 +618,6 @@ describe("provider auth profile helpers", () => {
       });
     });
 
-    const { resolveCopilotApiToken } = await import("./provider-auth.js");
-
     await expect(
       resolveCopilotApiToken({
         githubToken: "github-token",
@@ -662,15 +635,11 @@ describe("provider auth profile helpers", () => {
   });
 
   it("preserves the owned timeout reason as the normalized error cause", async () => {
-    vi.resetModules();
-
     const ownedReason = new DOMException("owned deadline", "TimeoutError");
     vi.spyOn(AbortSignal, "timeout").mockReturnValue(AbortSignal.abort(ownedReason));
     const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
       throw init?.signal?.reason;
     });
-    const { resolveCopilotApiToken } = await import("./provider-auth.js");
-
     await expect(
       resolveCopilotApiToken({
         githubToken: TEST_GITHUB_TOKEN,
@@ -686,8 +655,6 @@ describe("provider auth profile helpers", () => {
   });
 
   it("aborts hung Copilot token exchange over HTTP transport", async () => {
-    vi.resetModules();
-
     const http = await import("node:http");
     const { once } = await import("node:events");
     let connections = 0;
@@ -716,7 +683,6 @@ describe("provider auth profile helpers", () => {
         expect(init?.signal).toBeInstanceOf(AbortSignal);
         return await fetch(`http://127.0.0.1:${address.port}/token`, init);
       });
-      const { resolveCopilotApiToken } = await import("./provider-auth.js");
       const startedAt = Date.now();
 
       await expect(
@@ -745,16 +711,12 @@ describe("provider auth profile helpers", () => {
 
   for (const errorName of ["AbortError", "TimeoutError"] as const) {
     it(`preserves a foreign ${errorName} by identity`, async () => {
-      vi.resetModules();
-
       const ownedReason = new DOMException("owned deadline", "TimeoutError");
       vi.spyOn(AbortSignal, "timeout").mockReturnValue(AbortSignal.abort(ownedReason));
       const foreignError = new DOMException("foreign failure", errorName);
       const fetchImpl = vi.fn(async () => {
         throw foreignError;
       });
-      const { resolveCopilotApiToken } = await import("./provider-auth.js");
-
       await expect(
         resolveCopilotApiToken({
           githubToken: TEST_GITHUB_TOKEN,
@@ -768,11 +730,8 @@ describe("provider auth profile helpers", () => {
   }
 
   it("returns a valid cached token without creating a deadline or fetching", async () => {
-    vi.resetModules();
-
     const timeout = vi.spyOn(AbortSignal, "timeout");
     const fetchImpl = vi.fn();
-    const { COPILOT_INTEGRATION_ID, resolveCopilotApiToken } = await import("./provider-auth.js");
     const cachedValue = TEST_CACHED_COPILOT_TOKEN;
 
     const result = await resolveCopilotApiToken({
@@ -795,8 +754,6 @@ describe("provider auth profile helpers", () => {
   });
 
   it("does not reuse a cached Copilot token from another GitHub credential", async () => {
-    vi.resetModules();
-
     const saved: unknown[] = [];
     const fetchImpl = vi.fn(
       async () =>
@@ -808,8 +765,6 @@ describe("provider auth profile helpers", () => {
           { status: 200, headers: { "content-type": "application/json" } },
         ),
     );
-    const { COPILOT_INTEGRATION_ID, resolveCopilotApiToken } = await import("./provider-auth.js");
-
     const result = await resolveCopilotApiToken({
       githubToken: TEST_GITHUB_TOKEN,
       fetchImpl: fetchImpl as typeof fetch,
@@ -835,8 +790,6 @@ describe("provider auth profile helpers", () => {
   });
 
   it("retains valid Copilot exchanges across A to B to A profile rotation", async () => {
-    vi.resetModules();
-
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-copilot-cache-"));
     try {
       const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
@@ -856,7 +809,6 @@ describe("provider auth profile helpers", () => {
           { status: 200, headers: { "content-type": "application/json" } },
         );
       });
-      const { resolveCopilotApiToken } = await import("./provider-auth.js");
       const env = { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv;
 
       const firstA = await resolveCopilotApiToken({
@@ -889,8 +841,6 @@ describe("provider auth profile helpers", () => {
   });
 
   it("times out while reading a stalled HTTP response body", async () => {
-    vi.resetModules();
-
     const realTimeout = AbortSignal.timeout.bind(AbortSignal);
     vi.spyOn(AbortSignal, "timeout").mockImplementation((timeoutMs) => {
       expect(timeoutMs).toBe(30_000);
@@ -901,7 +851,6 @@ describe("provider auth profile helpers", () => {
       const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
         return await fetch(`http://127.0.0.1:${port}/token`, init);
       });
-      const { resolveCopilotApiToken } = await import("./provider-auth.js");
       let rejection: unknown;
 
       try {
@@ -940,7 +889,8 @@ describe("Copilot data-residency domain resolution", () => {
       const actual = await vi.importActual<typeof import("../logger.js")>("../logger.js");
       return { ...actual, logWarn };
     });
-    const { resolveCopilotApiToken } = await import("./provider-auth.js");
+    const { resolveCopilotApiToken: resolveCopilotApiTokenWithLoggerMock } =
+      await import("./provider-auth.js");
 
     const fetchImpl = vi.fn(
       async () =>
@@ -954,7 +904,7 @@ describe("Copilot data-residency domain resolution", () => {
         models: { providers: { "github-copilot": { params: { githubDomain } } } },
       }) as never;
     const resolveWithConfigDomain = (githubDomain: string) =>
-      resolveCopilotApiToken({
+      resolveCopilotApiTokenWithLoggerMock({
         githubToken: "github-token",
         env: {},
         config: withDomain(githubDomain),
@@ -978,20 +928,14 @@ describe("Copilot data-residency domain resolution", () => {
     vi.doUnmock("../logger.js");
   });
 
-  it("rejects unsafe hostnames and falls back to github.com", async () => {
-    vi.resetModules();
-    const { normalizeGithubCopilotDomain } = await import("./provider-auth.js");
-
+  it("rejects unsafe hostnames and falls back to github.com", () => {
     expect(normalizeGithubCopilotDomain("https://evil.com/login")).toBe("github.com");
     expect(normalizeGithubCopilotDomain("user@host")).toBe("github.com");
     expect(normalizeGithubCopilotDomain("acme.ghe.com")).toBe("acme.ghe.com");
     expect(normalizeGithubCopilotDomain("  ACME.GHE.COM  ")).toBe("acme.ghe.com");
   });
 
-  it("locks the host allowlist to github.com and single-label *.ghe.com tenant roots", async () => {
-    vi.resetModules();
-    const { normalizeGithubCopilotDomain } = await import("./provider-auth.js");
-
+  it("locks the host allowlist to github.com and single-label *.ghe.com tenant roots", () => {
     // Allowed: public host and single-label data-residency tenant roots.
     expect(normalizeGithubCopilotDomain("github.com")).toBe("github.com");
     expect(normalizeGithubCopilotDomain("acme.ghe.com")).toBe("acme.ghe.com");
@@ -1012,8 +956,6 @@ describe("Copilot data-residency domain resolution", () => {
   });
 
   it("targets the tenant token endpoint and copilot-api fallback for a GHE domain", async () => {
-    vi.resetModules();
-
     const fetchImpl = vi.fn(
       async () =>
         // GHE data-residency tokens carry a stamp but no proxy-ep hint.
@@ -1022,8 +964,6 @@ describe("Copilot data-residency domain resolution", () => {
           headers: { "content-type": "application/json" },
         }),
     );
-
-    const { resolveCopilotApiToken } = await import("./provider-auth.js");
 
     const result = await resolveCopilotApiToken({
       githubToken: "github-token",
@@ -1042,8 +982,6 @@ describe("Copilot data-residency domain resolution", () => {
   });
 
   it("lets COPILOT_GITHUB_DOMAIN override the caller-provided domain", async () => {
-    vi.resetModules();
-
     const fetchImpl = vi.fn(
       async () =>
         new Response(JSON.stringify({ token: "ghe;st=prod-sdc-01", expires_at: "+2000000000" }), {
@@ -1051,8 +989,6 @@ describe("Copilot data-residency domain resolution", () => {
           headers: { "content-type": "application/json" },
         }),
     );
-
-    const { resolveCopilotApiToken } = await import("./provider-auth.js");
 
     const result = await resolveCopilotApiToken({
       githubToken: "github-token",
@@ -1070,8 +1006,6 @@ describe("Copilot data-residency domain resolution", () => {
   });
 
   it("does not reuse a cached token minted for a different domain", async () => {
-    vi.resetModules();
-
     const saved: unknown[] = [];
     const fetchImpl = vi.fn(
       async () =>
@@ -1080,8 +1014,6 @@ describe("Copilot data-residency domain resolution", () => {
           headers: { "content-type": "application/json" },
         }),
     );
-
-    const { COPILOT_INTEGRATION_ID, resolveCopilotApiToken } = await import("./provider-auth.js");
 
     // A valid, unexpired public-github.com token sits in the cache, but the
     // request targets a GHE tenant, so it must be re-exchanged rather than
@@ -1108,8 +1040,6 @@ describe("Copilot data-residency domain resolution", () => {
   });
 
   it("re-exchanges legacy cache entries without a source credential fingerprint", async () => {
-    vi.resetModules();
-
     const saved: unknown[] = [];
     const fetchImpl = vi.fn(
       async () =>
@@ -1121,8 +1051,6 @@ describe("Copilot data-residency domain resolution", () => {
           { status: 200, headers: { "content-type": "application/json" } },
         ),
     );
-    const { COPILOT_INTEGRATION_ID, resolveCopilotApiToken } = await import("./provider-auth.js");
-
     const result = await resolveCopilotApiToken({
       githubToken: "github-token",
       env: {},
@@ -1149,8 +1077,6 @@ describe("Copilot data-residency domain resolution", () => {
   });
 
   it("does not reuse a legacy pre-domain cache entry for a tenant domain", async () => {
-    vi.resetModules();
-
     const saved: unknown[] = [];
     const fetchImpl = vi.fn(
       async () =>
@@ -1159,8 +1085,6 @@ describe("Copilot data-residency domain resolution", () => {
           headers: { "content-type": "application/json" },
         }),
     );
-
-    const { COPILOT_INTEGRATION_ID, resolveCopilotApiToken } = await import("./provider-auth.js");
 
     const result = await resolveCopilotApiToken({
       githubToken: "github-token",
@@ -1184,11 +1108,7 @@ describe("Copilot data-residency domain resolution", () => {
   });
 
   it("reuses a cached token minted for the same domain", async () => {
-    vi.resetModules();
-
     const fetchImpl = vi.fn();
-    const { COPILOT_INTEGRATION_ID, resolveCopilotApiToken } = await import("./provider-auth.js");
-
     const result = await resolveCopilotApiToken({
       githubToken: "github-token",
       env: {},

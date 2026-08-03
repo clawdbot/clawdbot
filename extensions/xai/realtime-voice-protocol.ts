@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
   RealtimeVoiceAudioFormat,
   RealtimeVoiceBargeInOptions,
+  RealtimeVoiceSessionConnection,
   RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ } from "openclaw/plugin-sdk/realtime-voice";
@@ -16,7 +17,6 @@ import {
   type XaiRealtimeSessionUpdate,
   type XaiRealtimeVoiceBridgeConfig,
 } from "./realtime-voice-config.js";
-import type { XaiRealtimeVoiceConnection } from "./realtime-voice-lifecycle.js";
 
 export abstract class XaiRealtimeVoiceProtocol {
   protected readonly audioFormat: RealtimeVoiceAudioFormat;
@@ -326,6 +326,6 @@ export abstract class XaiRealtimeVoiceProtocol {
   protected abstract resetInputTranscripts(): void;
   protected abstract handleEvent(
     event: XaiRealtimeEvent,
-    connection: XaiRealtimeVoiceConnection,
+    connection: RealtimeVoiceSessionConnection,
   ): void;
 }

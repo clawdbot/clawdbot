@@ -176,6 +176,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
         },
         cfg as CoreConfig,
         {
+          ...(action === "send" && ctx.mediaAccess ? { mediaAccess: ctx.mediaAccess } : {}),
           mediaLocalRoots,
           readContext: {
             accountId,

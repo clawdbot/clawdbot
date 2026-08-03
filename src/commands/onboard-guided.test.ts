@@ -125,6 +125,7 @@ function setupDeps(params: {
   persistRiskAcknowledgement?: GuidedOnboardingDeps["persistRiskAcknowledgement"];
   runSetupMemoryImportStep?: GuidedOnboardingDeps["runSetupMemoryImportStep"];
   runAppRecommendations?: GuidedOnboardingDeps["runAppRecommendations"];
+  ensureControlUiAssetsBuilt?: GuidedOnboardingDeps["ensureControlUiAssetsBuilt"];
   runBrowserHandoff?: GuidedOnboardingDeps["runBrowserHandoff"];
   probeBrowserHandoffGateway?: GuidedOnboardingDeps["probeBrowserHandoffGateway"];
   applySetup?: GuidedOnboardingDeps["applySetup"];
@@ -161,6 +162,8 @@ function setupDeps(params: {
     runSetupMemoryImportStep,
     runAppRecommendations:
       params.runAppRecommendations ?? vi.fn(async ({ config }) => recommendationOutcome(config)),
+    ensureControlUiAssetsBuilt:
+      params.ensureControlUiAssetsBuilt ?? vi.fn(async () => ({ ok: true, built: false })),
     runBrowserHandoff:
       params.runBrowserHandoff ??
       (vi.fn(async () => ({
@@ -212,10 +215,17 @@ describe("runGuidedOnboarding", () => {
     );
     const probeBrowserHandoffGateway = vi.fn(async () => ({ ok: true }));
     const runBrowserHandoff = vi.fn(async () => ({ handedOff: true as const }));
+    const ensureControlUiAssetsBuilt = vi.fn<
+      NonNullable<GuidedOnboardingDeps["ensureControlUiAssetsBuilt"]>
+    >(async (_runtime, options) => {
+      options?.onBuildStart?.();
+      return { ok: true, built: true };
+    });
     const deps = setupDeps({
       prompter,
       applySetup,
       runAppRecommendations,
+      ensureControlUiAssetsBuilt,
       probeBrowserHandoffGateway,
       runBrowserHandoff,
       platform: "linux",
@@ -224,6 +234,14 @@ describe("runGuidedOnboarding", () => {
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
 
     expect(runBrowserHandoff).toHaveBeenCalledWith({ config: {}, prompter });
+    expect(ensureControlUiAssetsBuilt).toHaveBeenCalledOnce();
+    expect(ensureControlUiAssetsBuilt.mock.invocationCallOrder[0]).toBeLessThan(
+      applySetup.mock.invocationCallOrder[0]!,
+    );
+    expect(prompter.progress).toHaveBeenCalledWith("Preparing the Control UI…");
+    expect(
+      (prompter.progress as ReturnType<typeof vi.fn>).mock.results[0]?.value.stop,
+    ).toHaveBeenCalledOnce();
     expect(applySetup.mock.invocationCallOrder[0]).toBeLessThan(
       runAppRecommendations.mock.invocationCallOrder[0]!,
     );
@@ -254,7 +272,34 @@ describe("runGuidedOnboarding", () => {
     expect(prompter.outro).toHaveBeenCalledWith("Hatching your agent now…");
   });
 
-  it("uses --tui to skip browser probing and keep the terminal hatch", async () => {
+  it("does not open a blank dashboard when the Control UI build fails", async () => {
+    const prompter = createWizardPrompter();
+    const runtime = makeRuntime();
+    const probeBrowserHandoffGateway = vi.fn(async () => ({ ok: true }));
+    const runBrowserHandoff = vi.fn(async () => ({ handedOff: true as const }));
+    const deps = setupDeps({
+      prompter,
+      ensureControlUiAssetsBuilt: vi.fn(async () => ({
+        ok: false,
+        built: false,
+        message: "Control UI build failed.",
+      })),
+      probeBrowserHandoffGateway,
+      runBrowserHandoff,
+    });
+
+    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
+
+    expect(runtime.error).toHaveBeenCalledWith("Control UI build failed.");
+    expect(probeBrowserHandoffGateway).not.toHaveBeenCalled();
+    expect(runBrowserHandoff).not.toHaveBeenCalled();
+    expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
+  });
+
+  it.each([
+    { flag: "--tui", opts: { tui: true } },
+    { flag: "--skip-ui", opts: { skipUi: true } },
+  ])("uses $flag to skip browser probing and keep the terminal hatch", async ({ opts }) => {
     const prompter = createWizardPrompter();
     const probeBrowserHandoffGateway = vi.fn(async () => ({ ok: true }));
     const runBrowserHandoff = vi.fn(async () => ({ handedOff: true as const }));
@@ -266,13 +311,14 @@ describe("runGuidedOnboarding", () => {
     });
 
     await runGuidedOnboarding(
-      { acceptRisk: true, workspace: "/tmp/work", tui: true },
+      { acceptRisk: true, workspace: "/tmp/work", ...opts },
       makeRuntime(),
       deps,
     );
 
     expect(probeBrowserHandoffGateway).not.toHaveBeenCalled();
     expect(runBrowserHandoff).not.toHaveBeenCalled();
+    expect(deps.ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
     expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
   });
 
@@ -292,6 +338,7 @@ describe("runGuidedOnboarding", () => {
 
     expect(probeBrowserHandoffGateway).not.toHaveBeenCalled();
     expect(runBrowserHandoff).not.toHaveBeenCalled();
+    expect(deps.ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
     expect(deps.runSystemAgentChat).toHaveBeenCalledOnce();
     expect(deps.launchHatchTui).not.toHaveBeenCalled();
   });

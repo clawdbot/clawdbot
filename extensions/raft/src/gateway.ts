@@ -380,6 +380,7 @@ export async function startRaftGatewayAccount(
     ctx.setStatus({
       accountId: ctx.accountId,
       running: true,
+      lifecycle: "ready",
       connected: true,
       lastStartAt: Date.now(),
       lastError: null,

@@ -34,6 +34,7 @@ export type LoadPreparedModelCatalogParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   providerDiscoveryProviderIds?: readonly string[];
+  allowGatewaySubagentBinding?: boolean;
 };
 
 type PreparedModelCatalogConfigPolicy = "exact" | "published";
@@ -96,6 +97,7 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
     ...(params.env ? { env: params.env } : {}),
     inheritedAuthDir: resolveDefaultAgentDir(config, params.env),
     ...(explicitWorkspaceDir ? { workspaceDir: explicitWorkspaceDir } : {}),
+    ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
   };
   const exact = params.readOnly ? { ...full, readOnly: true } : full;
   const activationFull = activationWorkspaceDir

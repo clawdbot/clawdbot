@@ -47,6 +47,34 @@ const OPENAI_COMPATIBLE_CLI_USAGE_CASES = [
     },
     normalized: { input: 15, output: 7, cacheRead: 4, cacheWrite: undefined, total: 26 },
   },
+  {
+    name: "flat Codex cached input is included in input_tokens",
+    raw: {
+      input_tokens: 15,
+      output_tokens: 4,
+      cached_input_tokens: 6,
+    },
+    normalized: { input: 9, output: 4, cacheRead: 6, cacheWrite: undefined, total: undefined },
+  },
+  {
+    name: "flat Codex input includes both cached reads and cache writes",
+    raw: {
+      input_tokens: 100,
+      output_tokens: 10,
+      cached_input_tokens: 40,
+      cache_write_input_tokens: 60,
+    },
+    normalized: { input: 0, output: 10, cacheRead: 40, cacheWrite: 60, total: undefined },
+  },
+  {
+    name: "nested Codex input includes both cached reads and cache writes",
+    raw: {
+      input_tokens: 100,
+      output_tokens: 10,
+      input_tokens_details: { cached_tokens: 40, cache_write_tokens: 60 },
+    },
+    normalized: { input: 0, output: 10, cacheRead: 40, cacheWrite: 60, total: undefined },
+  },
 ] as const;
 
 function parseCliJson(raw: string, backend: ParseCliOutputParams["backend"], providerId = "") {

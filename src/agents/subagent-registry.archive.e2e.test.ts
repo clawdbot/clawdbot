@@ -58,10 +58,12 @@ vi.mock("../tasks/task-status-access.js", () => ({
 
 vi.mock("../infra/agent-events.js", () => ({
   getAgentEventLifecycleGeneration: () => "test-generation",
-  getAgentRunContext: vi.fn(() => undefined),
   isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
   onAgentEvent: vi.fn((_handler: unknown) => noop),
   registerAgentEventLifecycleRotationHandler: vi.fn(),
+}));
+vi.mock("../infra/agent-run-registry.js", () => ({
+  getAgentRunContext: vi.fn(() => undefined),
 }));
 
 vi.mock("../config/config.js", async () => {
@@ -98,7 +100,7 @@ describe("subagent registry archive behavior", () => {
     mod.testing.setDepsForTest({
       callGateway,
       getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
-      ensureRuntimePluginsLoaded: vi.fn(),
+      loadAgentRuntimePluginRegistryHandle: vi.fn(),
       maybeWakeRequesterAfterAllChildrenSettled: vi.fn(async (params) => {
         params.completeBatch([params.settledEntry.runId]);
         return false;
@@ -230,7 +232,6 @@ describe("subagent registry archive behavior", () => {
     });
     setRegistryTestDeps({
       ensureContextEnginesInitialized: vi.fn(),
-      ensureRuntimePluginsLoaded: vi.fn(),
       resolveContextEngine: vi.fn(async () => ({ onSubagentEnded }) as never),
     });
 
@@ -668,7 +669,7 @@ describe("subagent registry archive behavior", () => {
   it("continues killed cleanup when ended hook loading fails", async () => {
     const now = Date.now();
     setRegistryTestDeps({
-      ensureRuntimePluginsLoaded: vi.fn(() => {
+      loadAgentRuntimePluginRegistryHandle: vi.fn(() => {
         throw new Error("plugin load failed");
       }),
     });

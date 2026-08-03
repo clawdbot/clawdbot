@@ -16,6 +16,7 @@ import type {
   OAuthLoginCallbacks,
   OAuthProviderId,
 } from "../../llm/utils/oauth/types.js";
+import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { AUTH_STORE_VERSION, OAUTH_REFRESH_LOCK_OPTIONS } from "../auth-profiles/constants.js";
 import {
@@ -39,7 +40,11 @@ import {
 } from "../auth-profiles/store.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { getAgentDir } from "../config.js";
-import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
+import {
+  getAuthStorageOAuthProviderRegistry,
+  loginAuthStorageOAuthProvider,
+  resolveAuthStoragePluginOAuthCredential,
+} from "./auth-storage-oauth-registry.js";
 import { resolveConfigValue } from "./resolve-config-value.js";
 
 export type ApiKeyCredential = {
@@ -60,6 +65,7 @@ export type TokenCredential = {
 export type AuthCredential = ApiKeyCredential | OAuthCredential | TokenCredential;
 
 export type AuthStorageData = Record<string, AuthCredential>;
+export { OAuthProviderConfiguredUnavailableError };
 export const AUTH_STORAGE_CREATE_DEPRECATION_CODE = "AUTH_STORAGE_CREATE_DEPRECATED" as const;
 export const FILE_AUTH_STORAGE_BACKEND_DEPRECATION_CODE =
   "FILE_AUTH_STORAGE_BACKEND_DEPRECATED" as const;
@@ -674,12 +680,7 @@ export class AuthStorage {
    * Login to an OAuth provider.
    */
   async login(providerId: OAuthProviderId, callbacks: OAuthLoginCallbacks): Promise<void> {
-    const provider = getAuthStorageOAuthProviderRegistry(this).get(providerId);
-    if (!provider) {
-      throw new Error(`Unknown OAuth provider: ${providerId}`);
-    }
-
-    const credentials = await provider.login(callbacks);
+    const credentials = await loginAuthStorageOAuthProvider(this, providerId, callbacks);
     this.set(providerId, { type: "oauth", ...credentials });
   }
 
@@ -698,9 +699,6 @@ export class AuthStorage {
     providerId: OAuthProviderId,
   ): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
     const provider = getAuthStorageOAuthProviderRegistry(this).get(providerId);
-    if (!provider) {
-      return null;
-    }
 
     const refresh = async () =>
       await this.storage.withLockAsync(async (current) => {
@@ -714,7 +712,10 @@ export class AuthStorage {
         }
 
         if (Date.now() < cred.expires) {
-          return { result: { apiKey: provider.getApiKey(cred), newCredentials: cred } };
+          if (provider) {
+            return { result: { apiKey: provider.getApiKey(cred), newCredentials: cred } };
+          }
+          return { result: await resolveAuthStoragePluginOAuthCredential(providerId, cred, false) };
         }
 
         const oauthCreds: Record<string, OAuthCredentials> = {};
@@ -724,10 +725,9 @@ export class AuthStorage {
           }
         }
 
-        const refreshed = await getAuthStorageOAuthProviderRegistry(this).getApiKey(
-          providerId,
-          oauthCreds,
-        );
+        const refreshed = provider
+          ? await getAuthStorageOAuthProviderRegistry(this).getApiKey(providerId, oauthCreds)
+          : await resolveAuthStoragePluginOAuthCredential(providerId, cred, true);
         if (!refreshed) {
           return { result: null };
         }
@@ -800,10 +800,6 @@ export class AuthStorage {
 
     if (cred?.type === "oauth") {
       const provider = getAuthStorageOAuthProviderRegistry(this).get(providerId);
-      if (!provider) {
-        // Unknown OAuth provider, can't get API key
-        return undefined;
-      }
 
       // Check if token needs refresh
       const needsRefresh = Date.now() >= cred.expires;
@@ -816,6 +812,9 @@ export class AuthStorage {
             return result.apiKey;
           }
         } catch (error) {
+          if (error instanceof OAuthProviderConfiguredUnavailableError) {
+            throw error;
+          }
           this.recordError(error);
           // Refresh failed - re-read file to check if another instance succeeded
           this.reload();
@@ -831,7 +830,11 @@ export class AuthStorage {
 
           if (updatedCred?.type === "oauth" && Date.now() < updatedCred.expires) {
             // Another instance refreshed successfully, use those credentials
-            return provider.getApiKey(updatedCred);
+            if (provider) {
+              return provider.getApiKey(updatedCred);
+            }
+            return (await resolveAuthStoragePluginOAuthCredential(providerId, updatedCred, false))
+              ?.apiKey;
           }
 
           // Refresh truly failed - return undefined so model discovery skips this provider
@@ -839,8 +842,10 @@ export class AuthStorage {
           return undefined;
         }
       } else {
-        // Token not expired, use current access token
-        return provider.getApiKey(cred);
+        if (provider) {
+          return provider.getApiKey(cred);
+        }
+        return (await resolveAuthStoragePluginOAuthCredential(providerId, cred, false))?.apiKey;
       }
     }
 

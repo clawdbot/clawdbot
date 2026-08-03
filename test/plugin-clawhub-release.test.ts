@@ -475,7 +475,9 @@ describe("collectPluginClawHubReleasePlan", () => {
       activeRequests += 1;
       maxActiveRequests = Math.max(maxActiveRequests, activeRequests);
       try {
-        await new Promise((resolve) => setTimeout(resolve, 5));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 5);
+        });
         return await baseFetch(...args);
       } finally {
         activeRequests -= 1;

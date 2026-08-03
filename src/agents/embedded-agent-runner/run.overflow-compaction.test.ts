@@ -11,13 +11,12 @@ import {
   rollbackAgentHarnessSessionEntryLifecycle,
 } from "../../config/sessions/session-accessor.js";
 import {
-  claimAgentRunContext,
   getAgentEventLifecycleGeneration,
-  getAgentRunContext,
   resetAgentEventsForTest,
   rotateAgentEventLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { claimAgentRunContext, getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
 import type { AgentHarness } from "../harness/types.js";
 import type { AgentInternalEvent } from "../internal-events.js";

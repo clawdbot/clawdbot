@@ -52,6 +52,7 @@ export async function connectGatewayClient(params: {
   onEvent?: (evt: { event?: string; payload?: unknown }) => void;
   onHelloOk?: (hello: HelloOk) => void;
   connectChallengeTimeoutMs?: number;
+  preauthHandshakeTimeoutMs?: number;
   requestTimeoutMs?: number;
   timeoutMs?: number;
   timeoutMessage?: string;
@@ -97,6 +98,7 @@ export async function connectGatewayClient(params: {
       ...(params.connectChallengeTimeoutMs !== undefined
         ? { connectChallengeTimeoutMs: params.connectChallengeTimeoutMs }
         : {}),
+      preauthHandshakeTimeoutMs: params.preauthHandshakeTimeoutMs ?? params.timeoutMs,
       ...(params.requestTimeoutMs !== undefined
         ? { requestTimeoutMs: params.requestTimeoutMs }
         : {}),

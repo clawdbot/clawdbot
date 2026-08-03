@@ -1535,7 +1535,7 @@ describe("RealtimeCallHandler path routing", () => {
         expect(JSON.stringify(args)).not.toContain("consultPolicy");
         expect(JSON.stringify(args)).not.toContain("openclaw_agent_consult");
         expect(callId).toBe("call-1");
-        expect(context).toEqual({});
+        expect(context).toEqual({ abortSignal: expect.any(AbortSignal) });
         await waitForRealtimeTest(() => {
           expect(sendUserMessage).toHaveBeenCalledTimes(1);
           expect(requireFirstMockCall(sendUserMessage.mock.calls, "user message")).toEqual([
@@ -1634,7 +1634,7 @@ describe("RealtimeCallHandler path routing", () => {
     }
   });
 
-  it("does not deliver a forced consult after its realtime session closes", async () => {
+  it("aborts a forced consult when its realtime session closes", async () => {
     let callbacks:
       | {
           onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
@@ -1658,8 +1658,20 @@ describe("RealtimeCallHandler path routing", () => {
         realtimeProvider: makeRealtimeProvider(createBridge),
       },
     );
-    const consultResult = createDeferred<{ text: string }>();
-    const consult = vi.fn(() => consultResult.promise);
+    let consultSignal: AbortSignal | undefined;
+    const consult = vi.fn(
+      async (_args: unknown, _callId: string, context: { abortSignal?: AbortSignal }) => {
+        consultSignal = context.abortSignal;
+        return await new Promise<{ text: string }>((_resolve, reject) => {
+          context.abortSignal?.addEventListener(
+            "abort",
+            () =>
+              reject(new Error("forced consult aborted", { cause: context.abortSignal?.reason })),
+            { once: true },
+          );
+        });
+      },
+    );
     handler.registerToolHandler("openclaw_agent_consult", consult);
     const clearAudio = vi.spyOn(RealtimeAudioPacer.prototype, "clearAudio");
     const server = await startRealtimeServer(handler);
@@ -1689,7 +1701,7 @@ describe("RealtimeCallHandler path routing", () => {
         expect(closeBridge).toHaveBeenCalledTimes(1);
       });
 
-      consultResult.resolve({ text: "The deployment is healthy." });
+      expect(consultSignal?.aborted).toBe(true);
       await new Promise<void>((resolve) => {
         setTimeout(resolve, 0);
       });
@@ -1869,7 +1881,7 @@ describe("RealtimeCallHandler path routing", () => {
     }
   });
 
-  it("ignores late continuity reset and close from a replaced bridge", async () => {
+  it("isolates replacement transcripts and late old bridge events", async () => {
     const callbacks: RealtimeBridgeRequest[] = [];
     const oldCloseBridge = vi.fn();
     const replacementCloseBridge = vi.fn();
@@ -1882,6 +1894,9 @@ describe("RealtimeCallHandler path routing", () => {
       const bridge = bridges[callbacks.length - 1];
       if (!bridge) {
         throw new Error("unexpected replacement bridge");
+      }
+      if (callbacks.length === 2) {
+        request.onTranscript?.("user", "Fresh ", false);
       }
       return bridge;
     });
@@ -1912,6 +1927,7 @@ describe("RealtimeCallHandler path routing", () => {
       await waitForRealtimeTest(() => {
         expect(callbacks).toHaveLength(1);
       });
+      callbacks[0]?.onTranscript?.("user", "Old ", false);
 
       replacementServer = await startRealtimeServer(handler);
       const replacementWs = await connectWs(replacementServer.url);
@@ -1929,7 +1945,6 @@ describe("RealtimeCallHandler path routing", () => {
           expect(callbacks).toHaveLength(2);
         });
 
-        callbacks[1]?.onTranscript?.("user", "Fresh ", false);
         callbacks[0]?.onTranscript?.("user", "stale partial", false);
         callbacks[0]?.onTranscript?.("user", "stale final", true);
         callbacks[0]?.onTranscript?.("assistant", "stale assistant", true);
@@ -1944,7 +1959,9 @@ describe("RealtimeCallHandler path routing", () => {
         const oldClosed = waitForClose(oldWs);
         callbacks[0]?.onClose?.("error");
         await oldClosed;
-        expect(oldCloseBridge).toHaveBeenCalledOnce();
+        await waitForRealtimeTest(() => {
+          expect(oldCloseBridge).toHaveBeenCalledOnce();
+        });
         expect(replacementCloseBridge).not.toHaveBeenCalled();
         expect(hangupCall).not.toHaveBeenCalled();
         expect(
@@ -1985,6 +2002,193 @@ describe("RealtimeCallHandler path routing", () => {
       }
       await replacementServer?.close();
       await oldServer.close();
+    }
+  });
+
+  it("preserves the predecessor when replacement closes with error during creation", async () => {
+    const callbacks: RealtimeBridgeRequest[] = [];
+    const oldTriggerGreeting = vi.fn();
+    const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
+      callbacks.push(request);
+      if (callbacks.length === 1) {
+        return makeBridge({ triggerGreeting: oldTriggerGreeting });
+      }
+      request.onTranscript?.("user", "Failed ", false);
+      request.onClose?.("error");
+      throw new Error("replacement bridge failed");
+    });
+    const processEvent = vi.fn();
+    const hangupCall = vi.fn(async () => {});
+    const sharedCallSid = "CA-transcript-rollback";
+    const call = makeCallRecord(sharedCallSid);
+    const handler = makeHandler(undefined, {
+      manager: {
+        getCallByProviderCallId: vi.fn(() => call),
+        processEvent,
+      },
+      provider: { hangupCall },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    const oldServer = await startRealtimeServer(handler);
+    let replacementServer: Awaited<ReturnType<typeof startRealtimeServer>> | undefined;
+    let oldWs: WebSocket | undefined;
+
+    try {
+      oldWs = await connectWs(oldServer.url);
+      oldWs.send(
+        JSON.stringify({
+          event: "start",
+          start: { streamSid: "MZ-transcript-rollback-old", callSid: sharedCallSid },
+        }),
+      );
+      await waitForRealtimeTest(() => {
+        expect(callbacks).toHaveLength(1);
+      });
+      callbacks[0]?.onTranscript?.("user", "Old ", false);
+
+      replacementServer = await startRealtimeServer(handler);
+      const replacementWs = await connectWs(replacementServer.url);
+      try {
+        replacementWs.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-transcript-rollback-new", callSid: sharedCallSid },
+          }),
+        );
+        await waitForRealtimeTest(() => {
+          expect(createBridge).toHaveBeenCalledTimes(2);
+        });
+
+        expect(handler.speak(call.callId, "Continue the existing call.")).toEqual({
+          success: true,
+        });
+        expect(oldTriggerGreeting).toHaveBeenCalledWith("Continue the existing call.");
+        expect(hangupCall).not.toHaveBeenCalled();
+        expect(
+          processEvent.mock.calls
+            .map(([event]) => event as NormalizedEvent)
+            .filter((event) => event.type === "call.ended"),
+        ).toHaveLength(0);
+
+        callbacks[0]?.onTranscript?.("user", "caller", true);
+        await waitForRealtimeTest(() => {
+          expect(
+            processEvent.mock.calls
+              .map(([event]) => event as NormalizedEvent)
+              .filter((event) => event.type === "call.speech")
+              .map((event) => (event.type === "call.speech" ? event.transcript : undefined)),
+          ).toEqual(["Old caller"]);
+        });
+      } finally {
+        if (
+          replacementWs.readyState !== WebSocket.CLOSED &&
+          replacementWs.readyState !== WebSocket.CLOSING
+        ) {
+          replacementWs.close();
+        }
+      }
+    } finally {
+      if (
+        oldWs &&
+        oldWs.readyState !== WebSocket.CLOSED &&
+        oldWs.readyState !== WebSocket.CLOSING
+      ) {
+        oldWs.close();
+      }
+      await replacementServer?.close();
+      await oldServer.close();
+    }
+  });
+
+  it("cleans provisional transcript state when initial bridge creation fails", async () => {
+    const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
+      request.onTranscript?.("user", "orphaned", false);
+      throw new Error("initial bridge failed");
+    });
+    const call = makeCallRecord("CA-transcript-initial-failure");
+    const handler = makeHandler(undefined, {
+      manager: {
+        getCallByProviderCallId: vi.fn(() => call),
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    const server = await startRealtimeServer(handler);
+    const ws = await connectWs(server.url);
+
+    try {
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          start: {
+            streamSid: "MZ-transcript-initial-failure",
+            callSid: "CA-transcript-initial-failure",
+          },
+        }),
+      );
+      await waitForRealtimeTest(() => {
+        expect(createBridge).toHaveBeenCalledOnce();
+      });
+      expect(
+        (
+          handler as unknown as {
+            userTranscriptStatesByCallId: Map<string, unknown>;
+          }
+        ).userTranscriptStatesByCallId.size,
+      ).toBe(0);
+    } finally {
+      if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+        ws.close();
+      }
+      await server.close();
+    }
+  });
+
+  it("keeps provisional transcript ownership across synchronous provider close", async () => {
+    let callbacks: RealtimeBridgeRequest | undefined;
+    const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
+      callbacks = request;
+      request.onClose?.("completed");
+      return makeBridge();
+    });
+    const processEvent = vi.fn();
+    const call = makeCallRecord("CA-transcript-synchronous-close");
+    const handler = makeHandler(undefined, {
+      manager: {
+        getCallByProviderCallId: vi.fn(() => call),
+        processEvent,
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    const server = await startRealtimeServer(handler);
+    const ws = await connectWs(server.url);
+
+    try {
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          start: {
+            streamSid: "MZ-transcript-synchronous-close",
+            callSid: "CA-transcript-synchronous-close",
+          },
+        }),
+      );
+      await waitForRealtimeTest(() => {
+        expect(createBridge).toHaveBeenCalledOnce();
+      });
+      callbacks?.onTranscript?.("user", "Still listening", true);
+      await waitForRealtimeTest(() => {
+        expect(processEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            transcript: "Still listening",
+            type: "call.speech",
+          }),
+        );
+      });
+    } finally {
+      if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+        ws.close();
+      }
+      await server.close();
     }
   });
 
@@ -2274,7 +2478,10 @@ describe("RealtimeCallHandler path routing", () => {
           "Realtime provider supplied a shorter consult question: message",
         );
         expect(callId).toBe("call-1");
-        expect(context).toEqual({ partialUserTranscript: "Send a Discord message." });
+        expect(context).toEqual({
+          partialUserTranscript: "Send a Discord message.",
+          abortSignal: expect.any(AbortSignal),
+        });
         await waitForRealtimeTest(() => {
           expect(submitToolResult).toHaveBeenLastCalledWith(
             "consult-call",

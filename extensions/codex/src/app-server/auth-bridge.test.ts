@@ -374,7 +374,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
         agentDir: "/tmp/openclaw-codex-computer-use-failed",
         pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
       }),
-    ).rejects.toMatchObject({ name: "AgentHarnessPreflightError" });
+    ).rejects.toMatchObject({ name: "AgentHarnessPreflightError", scope: "harness" });
   });
 
   it("uses the native user Codex home for coexistence mode", async () => {

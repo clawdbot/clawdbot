@@ -205,12 +205,8 @@ export function buildUsageAgentMetaFields(params: {
   usageAccumulator: UsageAccumulator;
   lastAssistantUsage?: UsageSnapshot | null;
   lastRunPromptUsage: UsageSnapshot | undefined;
-  lastTurnTotal?: number;
 }): Pick<EmbeddedAgentMeta, "usage" | "lastCallUsage" | "promptTokens"> {
   const usage = toNormalizedUsage(params.usageAccumulator);
-  if (usage && params.lastTurnTotal && params.lastTurnTotal > 0) {
-    usage.total = params.lastTurnTotal;
-  }
   const lastAssistantUsage = normalizeUsage(params.lastAssistantUsage as never);
   const lastCallUsage = hasNonzeroUsage(lastAssistantUsage)
     ? lastAssistantUsage
@@ -242,13 +238,11 @@ export function buildErrorAgentMeta(params: {
   usageAccumulator: UsageAccumulator;
   lastRunPromptUsage: UsageSnapshot | undefined;
   lastAssistant?: { usage?: unknown } | null;
-  lastTurnTotal?: number;
 }): EmbeddedAgentMeta {
   const usageMeta = buildUsageAgentMetaFields({
     usageAccumulator: params.usageAccumulator,
     lastAssistantUsage: params.lastAssistant?.usage as UsageSnapshot | undefined,
     lastRunPromptUsage: params.lastRunPromptUsage,
-    lastTurnTotal: params.lastTurnTotal,
   });
   return {
     sessionId: params.sessionId,

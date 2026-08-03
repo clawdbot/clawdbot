@@ -52,10 +52,6 @@ const cronAuthProfileRuntimeLoader = createLazyImportLoader(
 const cronModelPreflightRuntimeLoader = createLazyImportLoader(
   () => import("./model-preflight.runtime.js"),
 );
-const runtimePluginsLoader = createLazyImportLoader(
-  () => import("../../plugins/runtime-plugins.runtime.js"),
-);
-
 export async function loadSessionAccessorRuntime() {
   return await sessionAccessorRuntimeLoader.load();
 }
@@ -70,10 +66,6 @@ export async function loadCronAuthProfileRuntime() {
 
 export async function loadCronModelPreflightRuntime() {
   return await cronModelPreflightRuntimeLoader.load();
-}
-
-export async function loadRuntimePlugins() {
-  return await runtimePluginsLoader.load();
 }
 
 export function hasConfiguredAuthProfiles(cfg: OpenClawConfig): boolean {

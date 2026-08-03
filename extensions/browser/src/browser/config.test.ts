@@ -851,11 +851,15 @@ describe("browser config", () => {
     const resolved = resolveBrowserConfig({
       ssrfPolicy: {
         allowPrivateNetwork: true,
+        allowRfc2544BenchmarkRange: true,
+        allowIpv6UniqueLocalRange: true,
         allowedHostnames: [" localhost ", " *.trusted.example ", ""],
       },
     } as unknown as BrowserConfig);
     expect(resolved.ssrfPolicy).toEqual({
       dangerouslyAllowPrivateNetwork: true,
+      allowRfc2544BenchmarkRange: true,
+      allowIpv6UniqueLocalRange: true,
       allowedHostnames: ["localhost", "*.trusted.example"],
     });
   });

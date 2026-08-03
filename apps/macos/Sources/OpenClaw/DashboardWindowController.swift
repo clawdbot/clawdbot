@@ -1221,11 +1221,12 @@ extension DashboardWindowController {
     private func evaluateNativeNavigation(_ navigation: DashboardNativeNavigation) {
         let generation = self.navigationGeneration
         let sourceURL = self.currentURL
+        let searchLiteral = navigation.search.map(Self.jsStringLiteral) ?? "undefined"
         let script =
             """
             (() => !window.dispatchEvent(new CustomEvent('openclaw:native-navigate', {
               cancelable: true,
-              detail: {path: \(Self.jsStringLiteral(navigation.path))}
+              detail: {path: \(Self.jsStringLiteral(navigation.path)), search: \(searchLiteral)}
             })))()
             """
         Task { @MainActor [weak self] in

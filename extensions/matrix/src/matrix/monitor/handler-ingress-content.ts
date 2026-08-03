@@ -1,6 +1,6 @@
 import { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { buildInboundHistoryFromEntries } from "openclaw/plugin-sdk/reply-history";
-import { formatMatrixErrorMessage } from "../errors.js";
 import { isMatrixMediaSizeLimitError } from "../media-errors.js";
 import { isLikelyBareFilename } from "../media-text.js";
 import { fetchMatrixPollSnapshot, type MatrixPollSnapshot } from "../poll-summary.js";
@@ -218,7 +218,7 @@ export async function resolveMatrixIngressContent(config: {
       if (isMatrixMediaSizeLimitError(err)) {
         preflightMediaSizeLimitExceeded = true;
       }
-      const errorText = formatMatrixErrorMessage(err);
+      const errorText = formatErrorMessage(err);
       logVerboseMessage(
         `matrix: media download failed room=${roomId} id=${event.event_id ?? "unknown"} type=${content.msgtype} error=${errorText}`,
       );
@@ -413,7 +413,7 @@ export async function resolveMatrixIngressContent(config: {
       if (isMatrixMediaSizeLimitError(err)) {
         mediaSizeLimitExceeded = true;
       }
-      const errorText = formatMatrixErrorMessage(err);
+      const errorText = formatErrorMessage(err);
       logVerboseMessage(
         `matrix: media download failed room=${roomId} id=${event.event_id ?? "unknown"} type=${content.msgtype} error=${errorText}`,
       );

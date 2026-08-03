@@ -1,8 +1,8 @@
 // Control UI tests cover canonical and legacy thinking-level normalization.
 import { describe, expect, it } from "vitest";
+import { normalizeThinkLevel } from "../../../../src/auto-reply/thinking.shared.js";
 import {
   formatThinkingOverrideLabel,
-  normalizeThinkLevel,
   resolveChatThinkingSelectState,
   resolveThinkingLevelInput,
 } from "./thinking.ts";

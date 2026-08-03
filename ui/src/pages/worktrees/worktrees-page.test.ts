@@ -2,9 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorktreeRecord } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { SESSION_FACE_PREFERENCE_PARAM } from "../../lib/sessions/route-navigation.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import "./worktrees-page.ts";
+
+vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 
 type WorktreesPageTestElement = HTMLElement & {
   context: ApplicationContext;
@@ -109,6 +112,7 @@ function contextWithGateway(gateway: ApplicationContext["gateway"]): Application
 
 afterEach(() => {
   document.body.replaceChildren();
+  vi.mocked(showConfirmDialog).mockReset();
   vi.restoreAllMocks();
 });
 
@@ -193,16 +197,16 @@ describe("WorktreesPage lifecycle", () => {
 
     const deleteButton = page.querySelector<HTMLButtonElement>("button.danger");
     expect(deleteButton?.disabled).toBe(true);
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
     await page.removeWorktree(record);
-    expect(confirm).not.toHaveBeenCalled();
+    expect(showConfirmDialog).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalledWith("worktrees.remove", { id: record.id });
 
     pendingList.resolve({ worktrees: [record] });
     await refreshing;
 
     await page.removeWorktree(record);
-    expect(confirm).toHaveBeenCalledOnce();
+    expect(showConfirmDialog).toHaveBeenCalledOnce();
     expect(request).toHaveBeenCalledWith("worktrees.remove", { id: record.id });
     expect(listRequests).toBe(3);
     expect(page.records).toEqual([removedRecord]);
@@ -281,7 +285,7 @@ describe("WorktreesPage lifecycle", () => {
     page.context = contextWithGateway(
       gatewayWithClient({ request: firstRequest } as unknown as GatewayBrowserClient),
     );
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
     document.body.append(page);
     await waitForFast(() =>
       expect(firstRequest).toHaveBeenCalledWith(
@@ -304,13 +308,39 @@ describe("WorktreesPage lifecycle", () => {
     pendingRemove.reject(new Error("snapshot failed: stale gateway"));
     await removing;
 
-    expect(confirm).toHaveBeenCalledOnce();
+    expect(showConfirmDialog).toHaveBeenCalledOnce();
     expect(secondRequest).not.toHaveBeenCalledWith("worktrees.remove", {
       id: "worktree-1",
       force: true,
     });
     expect(page.error).toBeNull();
     expect(page.busyId).toBeNull();
+  });
+
+  it("does not remove through a replacement gateway after confirmation", async () => {
+    const confirmation = deferred<boolean>();
+    vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
+    const firstRequest = vi.fn(async () => ({ worktrees: [] }));
+    const secondRequest = vi.fn(async () => ({ worktrees: [] }));
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = contextWithGateway(
+      gatewayWithClient({ request: firstRequest } as unknown as GatewayBrowserClient),
+    );
+    document.body.append(page);
+    await waitForFast(() => expect(firstRequest).toHaveBeenCalledOnce());
+
+    const removing = page.removeWorktree(worktree());
+    await waitForFast(() => expect(showConfirmDialog).toHaveBeenCalledOnce());
+    page.context = contextWithGateway(
+      gatewayWithClient({ request: secondRequest } as unknown as GatewayBrowserClient),
+    );
+    page.requestUpdate();
+    await page.updateComplete;
+    confirmation.resolve(true);
+    await removing;
+
+    expect(firstRequest).not.toHaveBeenCalledWith("worktrees.remove", { id: "worktree-1" });
+    expect(secondRequest).not.toHaveBeenCalledWith("worktrees.remove", { id: "worktree-1" });
   });
 
   it("offers force removal when the gateway reports a snapshot failure", async () => {
@@ -326,7 +356,7 @@ describe("WorktreesPage lifecycle", () => {
     page.context = contextWithGateway(
       gatewayWithClient({ request } as unknown as GatewayBrowserClient),
     );
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
     document.body.append(page);
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith(
@@ -340,7 +370,7 @@ describe("WorktreesPage lifecycle", () => {
 
     expect(request).toHaveBeenCalledWith("worktrees.remove", { id: "worktree-1" });
     expect(request).toHaveBeenCalledWith("worktrees.remove", { id: "worktree-1", force: true });
-    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(showConfirmDialog).toHaveBeenCalledTimes(2);
     expect(page.error).toBeNull();
   });
 

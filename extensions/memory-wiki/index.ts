@@ -202,6 +202,7 @@ export default definePluginEntry({
           agentId: resolved.config.agentId ?? ctx.agentId,
           agentSessionKey: ctx.sessionKey,
           sandboxed: ctx.sandboxed,
+          conversationRecall: ctx.conversationRecall,
         });
       },
       { name: "wiki_search" },

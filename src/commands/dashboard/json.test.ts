@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   copyToClipboard: vi.fn(),
   ensureGatewayReadyForOperation: vi.fn(),
   inspectPortUsage: vi.fn(),
+  issueDeviceBootstrapToken: vi.fn(),
   loadGatewayTlsRuntime: vi.fn(),
   openUrl: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
@@ -37,6 +38,10 @@ vi.mock("../onboard-helpers.js", () => ({
 
 vi.mock("../../infra/clipboard.js", () => ({
   copyToClipboard: mocks.copyToClipboard,
+}));
+
+vi.mock("../../infra/device-bootstrap.js", () => ({
+  issueDeviceBootstrapToken: mocks.issueDeviceBootstrapToken,
 }));
 
 vi.mock("../../infra/ports-inspect.js", () => ({
@@ -113,6 +118,10 @@ describe("dashboardCommand --json", () => {
       token: fakeToken,
     });
     mocks.resolveGatewayAuth.mockReturnValue({ mode: "token", token: fakeToken });
+    mocks.issueDeviceBootstrapToken.mockResolvedValue({
+      token: "browser-bootstrap",
+      expiresAtMs: 123_456,
+    });
     mocks.loadGatewayTlsRuntime.mockResolvedValue({ enabled: false, required: false });
   });
 
@@ -128,6 +137,8 @@ describe("dashboardCommand --json", () => {
         wsUrl: "ws://127.0.0.1:18789",
         port: 18789,
         tokenIncluded: true,
+        browserUrl: "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap",
+        browserBootstrapExpiresAtMs: 123_456,
       },
       0,
     );
@@ -137,6 +148,19 @@ describe("dashboardCommand --json", () => {
     expect(mocks.inspectPortUsage).toHaveBeenCalledWith(18789);
     expect(mocks.openUrl).not.toHaveBeenCalled();
     expect(mocks.loadGatewayTlsRuntime).not.toHaveBeenCalled();
+    expect(mocks.issueDeviceBootstrapToken).toHaveBeenCalledWith({
+      profile: {
+        roles: ["operator"],
+        scopes: [
+          "operator.approvals",
+          "operator.questions",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
+        purpose: "control-ui",
+      },
+    });
   });
 
   it("adds the canonical certificate fingerprint for a TLS Gateway", async () => {
@@ -218,6 +242,7 @@ describe("dashboardCommand --json", () => {
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(runtime.log).not.toHaveBeenCalled();
+    expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
   });
 
   it("keeps SecretRef-managed tokens out of the URL", async () => {
@@ -236,5 +261,17 @@ describe("dashboardCommand --json", () => {
       }),
       0,
     );
+  });
+
+  it("fails closed when the browser bootstrap cannot be issued", async () => {
+    mocks.issueDeviceBootstrapToken.mockRejectedValue(new Error("state store unavailable"));
+
+    await dashboardCommand(runtime, { json: true });
+
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      { ok: false, reason: "state store unavailable" },
+      0,
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });

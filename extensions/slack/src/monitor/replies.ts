@@ -19,8 +19,9 @@ import {
 import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { buildSlackBlocksFallbackText } from "../blocks-fallback.js";
+import { SLACK_MAX_BLOCKS } from "../blocks-input.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
-import { SLACK_TEXT_LIMIT } from "../limits.js";
+import { SLACK_MESSAGE_TEXT_HARD_LIMIT, SLACK_TEXT_LIMIT } from "../limits.js";
 import { emitSlackMessageSentHooks } from "../message-sent-hook.js";
 import {
   buildSlackNativeDataAccessibilityText,
@@ -45,6 +46,51 @@ import {
   type SlackResponseUrlBudget as ResponseUrlBudget,
 } from "./response-url-budget.js";
 import { sendMessageSlack, type SlackSendIdentity, type SlackSendResult } from "./send.runtime.js";
+
+// Receipt-tracked Web API fallbacks stay at 4k, but response_url gets only five calls.
+// Repack its complete fallback parts up to Slack's hard text and block limits.
+function compactSlackResponseUrlFallback(
+  messages: readonly SlackFormattingDisabledMessage[],
+): SlackFormattingDisabledMessage[] {
+  if (messages.length <= 1) {
+    return [...messages];
+  }
+  if (messages.every((message) => !message.blocks?.length)) {
+    return chunkSlackTextAtHardLimit(messages.map((message) => message.text).join("")).map(
+      (text) => ({ text, mrkdwn: false }),
+    );
+  }
+
+  const compacted: SlackFormattingDisabledMessage[] = [];
+  let pending: SlackFormattingDisabledMessage | undefined;
+  const flush = () => {
+    if (pending) {
+      compacted.push(pending);
+      pending = undefined;
+    }
+  };
+  for (const message of messages) {
+    if (!message.blocks?.length) {
+      flush();
+      compacted.push(message);
+      continue;
+    }
+    if (!pending?.blocks?.length) {
+      pending = { ...message, blocks: [...message.blocks] };
+      continue;
+    }
+    const text = `${pending.text}\n\n${message.text}`;
+    const blocks = [...pending.blocks, ...message.blocks];
+    if (text.length > SLACK_MESSAGE_TEXT_HARD_LIMIT || blocks.length > SLACK_MAX_BLOCKS) {
+      flush();
+      pending = { ...message, blocks: [...message.blocks] };
+      continue;
+    }
+    pending = { text, blocks, mrkdwn: false };
+  }
+  flush();
+  return compacted;
+}
 
 export function readSlackReplyBlocks(payload: ReplyPayload) {
   return resolveSlackReplyBlocks(payload);
@@ -407,13 +453,17 @@ export async function deliverSlackSlashReplies(params: {
       blocks: input.blocks,
       baseText: input.baseText,
     });
+    const nativeFallback =
+      responseBudget.remaining() === undefined
+        ? plan.fallbackMessages
+        : compactSlackResponseUrlFallback(plan.fallbackMessages);
     return {
       message: {
         text: plan.accessibilityText,
         blocks: input.blocks,
         mrkdwn: false,
       },
-      nativeFallback: plan.fallbackMessages,
+      nativeFallback,
       ...(plan.skipOriginalBlocks ? { skipOriginalBlocks: true as const } : {}),
     };
   };

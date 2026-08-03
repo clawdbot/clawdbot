@@ -34,6 +34,7 @@ struct PrivacyAccessSectionView: View {
     @State private var remindersStatus: EKAuthorizationStatus = EKEventStore.authorizationStatus(for: .reminder)
     @State private var photosStatus = PhotoLibraryAccess.authorizationStatus()
     @State private var requestingIdentifiers: Set<String> = []
+    @State private var eventKitPermissions = EventKitPermissionRequester()
 
     @Environment(\.scenePhase) private var scenePhase
 
@@ -255,30 +256,15 @@ struct PrivacyAccessSectionView: View {
     }
 
     private func requestCalendarWriteOnly() async -> Bool {
-        await PermissionRequestBridge.awaitRequest { completion in
-            let store = EKEventStore()
-            store.requestWriteOnlyAccessToEvents { granted, _ in
-                completion(granted)
-            }
-        }
+        await self.eventKitPermissions.requestWriteOnlyAccessToEvents()
     }
 
     private func requestCalendarFull() async -> Bool {
-        await PermissionRequestBridge.awaitRequest { completion in
-            let store = EKEventStore()
-            store.requestFullAccessToEvents { granted, _ in
-                completion(granted)
-            }
-        }
+        await self.eventKitPermissions.requestFullAccessToEvents()
     }
 
     private func requestRemindersFull() async -> Bool {
-        await PermissionRequestBridge.awaitRequest { completion in
-            let store = EKEventStore()
-            store.requestFullAccessToReminders { granted, _ in
-                completion(granted)
-            }
-        }
+        await self.eventKitPermissions.requestFullAccessToReminders()
     }
 
     private func openSettings() {

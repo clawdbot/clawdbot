@@ -10,6 +10,7 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
@@ -36,13 +37,13 @@ import {
   type ExecApprovalsFile,
   type ExecApprovalsSnapshot,
   type ExecApprovalsTarget,
+  type InventoryRemovalRequest,
   type NodesPageDataState,
 } from "../../lib/nodes/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderNodes } from "./view.ts";
-import type { InventoryRemovalPrompt } from "./view.types.ts";
 
 const NODES_DOCS_URL = "https://docs.openclaw.ai/nodes";
 
@@ -54,6 +55,10 @@ export type NodesRouteData = {
 };
 
 const NODES_ACTIVE_POLL_INTERVAL_MS = 30_000;
+
+type InventoryRemovalPrompt =
+  | { kind: "entry"; entry: InventoryRemovalRequest }
+  | { kind: "stale"; entries: InventoryRemovalRequest[] };
 
 function readPresence(value: unknown): PresenceEntry[] | null {
   const presence =
@@ -98,7 +103,7 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
   @state() execApprovalsSelectedAgent: string | null = null;
   @state() private execApprovalsTarget: "gateway" | "node" = "gateway";
   @state() private execApprovalsTargetNodeId: string | null = null;
-  @state() private inventoryRemovalPrompt: InventoryRemovalPrompt | null = null;
+  private inventoryRemovalConfirmation: AbortController | null = null;
 
   private routeDataInitialized = false;
   private hasBoundGateway = false;
@@ -203,6 +208,7 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
   }
 
   override disconnectedCallback() {
+    this.cancelInventoryRemovalConfirmation();
     this.connectionLifecycle.transition({ client: null, phase: "stopped" });
     this.subscriptions.clear();
     void this.presenceTask.run([null, null]);
@@ -210,7 +216,6 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
     this.connected = false;
     this.presence = [];
     this.canPairDevice = false;
-    this.inventoryRemovalPrompt = null;
     super.disconnectedCallback();
   }
 
@@ -294,10 +299,7 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
   }
 
   private resetServerState(snapshot: ApplicationGatewaySnapshot) {
-    // The removal prompt targets entries on the gateway it was opened against.
-    // Drop it on client change/disconnect so a confirm can never fire removal
-    // RPCs at a different gateway that reuses the same device ids.
-    this.inventoryRemovalPrompt = null;
+    this.cancelInventoryRemovalConfirmation();
     const next = createInitialNodesState({
       client: snapshot.client,
       connected: snapshot.phase === "connected",
@@ -355,10 +357,53 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
     return this.presenceTask.run([this.context.gateway, client]);
   }
 
-  private confirmInventoryRemoval() {
-    const prompt = this.inventoryRemovalPrompt;
-    this.inventoryRemovalPrompt = null;
-    if (!prompt) {
+  private cancelInventoryRemovalConfirmation() {
+    this.inventoryRemovalConfirmation?.abort();
+    this.inventoryRemovalConfirmation = null;
+  }
+
+  private async confirmInventoryRemoval(prompt: InventoryRemovalPrompt) {
+    if (this.inventoryRemovalConfirmation) {
+      return;
+    }
+    const controller = new AbortController();
+    this.inventoryRemovalConfirmation = controller;
+    const generation = this.requestGeneration;
+    const client = this.client;
+    const title =
+      prompt.kind === "entry"
+        ? t("nodes.inventory.removePromptTitle", { name: prompt.entry.name })
+        : t(
+            prompt.entries.length === 1
+              ? "nodes.inventory.removeStalePromptTitleOne"
+              : "nodes.inventory.removeStalePromptTitle",
+            { count: String(prompt.entries.length) },
+          );
+    const confirmed = await showConfirmDialog({
+      title,
+      message: t(
+        prompt.kind === "entry"
+          ? "nodes.inventory.removePromptBody"
+          : "nodes.inventory.removeStalePromptBody",
+      ),
+      details:
+        prompt.kind === "entry"
+          ? t("nodes.inventory.deviceId", { id: prompt.entry.id })
+          : undefined,
+      confirmLabel: t("nodes.inventory.remove"),
+      danger: true,
+      signal: controller.signal,
+    });
+    if (this.inventoryRemovalConfirmation === controller) {
+      this.inventoryRemovalConfirmation = null;
+    }
+    if (
+      !confirmed ||
+      controller.signal.aborted ||
+      generation !== this.requestGeneration ||
+      client !== this.client ||
+      !this.connected
+    ) {
       return;
     }
     if (prompt.kind === "entry") {
@@ -419,18 +464,11 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
           onDeviceReject: (requestId) => void rejectDevicePairing(this, requestId),
           onNodeApprove: (requestId) => void approveNodePairingRequest(this, requestId),
           onNodeReject: (requestId) => void rejectNodePairingRequest(this, requestId),
-          inventoryRemovalPrompt: this.inventoryRemovalPrompt,
-          onInventoryRemove: (entry) => {
-            this.inventoryRemovalPrompt = { kind: "entry", entry };
-          },
+          onInventoryRemove: (entry) => void this.confirmInventoryRemoval({ kind: "entry", entry }),
           onInventoryCleanup: (entries) => {
             if (entries.length > 0) {
-              this.inventoryRemovalPrompt = { kind: "stale", entries };
+              void this.confirmInventoryRemoval({ kind: "stale", entries });
             }
-          },
-          onInventoryRemovalConfirm: () => this.confirmInventoryRemoval(),
-          onInventoryRemovalCancel: () => {
-            this.inventoryRemovalPrompt = null;
           },
           onDeviceRotate: (deviceId, role, scopes) =>
             void rotateDeviceToken(this, {

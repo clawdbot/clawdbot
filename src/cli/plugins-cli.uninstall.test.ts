@@ -1,5 +1,5 @@
 import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Plugins CLI uninstall tests cover plugin removal selection and uninstall output.
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { persistClawPackageRef } from "../claws/provenance.js";
@@ -702,6 +702,77 @@ describe("plugins cli uninstall", () => {
     });
     expect(runtimeErrors).not.toContain("Plugin not found: alpha");
     expect(runtimeLogs.at(-2)).toContain('Uninstalled plugin "alpha"');
+  });
+
+  it.each([
+    {
+      label: "a disabled channel plugin",
+      status: "disabled",
+      channelIds: ["custom-channel", "custom-channel-backup"],
+    },
+    { label: "a loaded channel plugin", status: "loaded", channelIds: ["custom-channel"] },
+    { label: "a disabled non-channel plugin", status: "disabled", channelIds: [] },
+  ])("preserves manifest channel ownership for $label", async ({ status, channelIds }) => {
+    const pluginId = "custom-plugin";
+    const installRecords = {
+      [pluginId]: {
+        source: "npm",
+        spec: "@acme/custom-plugin@1.0.0",
+        installPath: installedPluginRoot(CLI_STATE_ROOT, pluginId),
+      },
+    } as const;
+    const channels = {
+      [pluginId]: { enabled: true },
+      "custom-channel": { enabled: true },
+      "custom-channel-backup": { enabled: true },
+      discord: { enabled: true },
+    };
+    const baseConfig = {
+      plugins: {
+        entries: {
+          [pluginId]: { enabled: status === "loaded" },
+        },
+        installs: installRecords,
+      },
+      channels,
+    } as OpenClawConfig;
+
+    loadConfig.mockReturnValue(baseConfig);
+    setInstalledPluginIndexInstallRecords(installRecords);
+    buildPluginSnapshotReport.mockReturnValue({
+      plugins: [
+        { id: pluginId, name: pluginId, status, channelIds },
+        {
+          id: "shared-channel-owner",
+          name: "shared-channel-owner",
+          status: "loaded",
+          channelIds: [pluginId],
+        },
+      ],
+      diagnostics: [],
+    });
+    const actualUninstall =
+      await vi.importActual<typeof import("../plugins/uninstall.js")>("../plugins/uninstall.js");
+    planPluginUninstall.mockImplementation((params) =>
+      actualUninstall.planPluginUninstall(
+        params as Parameters<typeof actualUninstall.planPluginUninstall>[0],
+      ),
+    );
+
+    await runPluginsCommand(["plugins", "uninstall", pluginId, "--force", "--keep-files"]);
+
+    expectLatestUninstallPlanParams({ pluginId, channelIds, deleteFiles: false });
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({});
+    expect(writeConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channels: Object.fromEntries(
+          Object.entries(channels).filter(([channelId]) => !channelIds.includes(channelId)),
+        ),
+      }),
+    );
+    for (const channelId of channelIds) {
+      expectRuntimeLogIncludes(`channel config (channels.${channelId})`);
+    }
   });
 
   it("removes installed channel config when plugin code is absent from the current registry", async () => {

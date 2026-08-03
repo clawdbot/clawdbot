@@ -2,6 +2,7 @@
 // persistence, registry registration, and lifecycle event emission.
 import os from "node:os";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
   createSubagentSpawnTestConfig,
@@ -790,6 +791,149 @@ describe("spawnSubagentDirect seam flow", () => {
       "tools.swarm.maxChildrenPerGroup",
     );
     expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("enforces ordinary child caps while accepted gateway dispatches are still pending", async () => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          subagents: { maxChildrenPerAgent: 2 },
+        },
+        list: [{ id: "main", workspace: "/tmp/workspace-main" }],
+      },
+    });
+    hoisted.countActiveRunsForSessionMock.mockImplementation(
+      () => hoisted.registerSubagentRunMock.mock.calls.length,
+    );
+    let releasePendingDispatches!: () => void;
+    const pendingDispatches = new Promise<void>((resolve) => {
+      releasePendingDispatches = resolve;
+    });
+    let dispatchedRuns = 0;
+    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method !== "agent") {
+        return request.method?.startsWith("sessions.") ? { ok: true } : {};
+      }
+      const runNumber = ++dispatchedRuns;
+      if (runNumber <= 2) {
+        await pendingDispatches;
+      }
+      return { runId: `run-${runNumber}` };
+    });
+    const controllerSessionKey = "agent:main:telegram:default:direct:456";
+    const spawnContext = {
+      agentSessionKey: controllerSessionKey,
+      completionOwnerKey: "agent:main:main",
+    };
+
+    const first = spawnSubagentDirect({ task: "first pending child" }, spawnContext);
+    const second = spawnSubagentDirect({ task: "second pending child" }, spawnContext);
+    await vi.waitFor(() => expect(dispatchedRuns).toBe(2));
+    const rejected = await spawnSubagentDirect({ task: "third over-cap child" }, spawnContext);
+    releasePendingDispatches();
+    const accepted = await Promise.all([first, second]);
+
+    expect(rejected).toMatchObject({
+      status: "forbidden",
+      error: expect.stringContaining("max active children for this session (2/2"),
+    });
+    expect(accepted.map((result) => result.status)).toEqual(["accepted", "accepted"]);
+    expect(dispatchedRuns).toBe(2);
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(2);
+    expect(hoisted.countActiveRunsForSessionMock).toHaveBeenCalledWith(controllerSessionKey, {
+      collect: false,
+    });
+  });
+
+  it("returns ordinary child capacity after gateway dispatch fails", async () => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          subagents: { maxChildrenPerAgent: 1 },
+        },
+        list: [{ id: "main", workspace: "/tmp/workspace-main" }],
+      },
+    });
+    let dispatchAttempts = 0;
+    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent") {
+        if (++dispatchAttempts === 1) {
+          throw new Error("gateway dispatch failed");
+        }
+        return { runId: "replacement-run" };
+      }
+      return request.method?.startsWith("sessions.") ? { ok: true } : {};
+    });
+    const context = { agentSessionKey: "agent:main:main" };
+
+    const failed = await spawnSubagentDirect({ task: "failing child" }, context);
+    const replacement = await spawnSubagentDirect({ task: "replacement child" }, context);
+
+    expect(failed).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("gateway dispatch failed"),
+    });
+    expect(replacement).toMatchObject({ status: "accepted", runId: "replacement-run" });
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares pending child capacity between native and visible spawn paths", async () => {
+    const { maybeSpawnVisibleSession } = await import("./tools/sessions-spawn-visible.js");
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          subagents: { maxChildrenPerAgent: 1 },
+        },
+        list: [{ id: "main", workspace: "/tmp/workspace-main" }],
+      },
+    });
+    let releaseNativeDispatch!: () => void;
+    const pendingNativeDispatch = new Promise<void>((resolve) => {
+      releaseNativeDispatch = resolve;
+    });
+    let nativeDispatchStarted = false;
+    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent") {
+        nativeDispatchStarted = true;
+        await pendingNativeDispatch;
+        return { runId: "native-run" };
+      }
+      return request.method?.startsWith("sessions.") ? { ok: true } : {};
+    });
+    const controllerSessionKey = "agent:main:telegram:default:direct:456";
+    const native = spawnSubagentDirect(
+      { task: "pending native child" },
+      { agentSessionKey: controllerSessionKey, completionOwnerKey: "agent:main:main" },
+    );
+    await vi.waitFor(() => expect(nativeDispatchStarted).toBe(true));
+    const visibleGateway = vi.fn();
+
+    const rejected = await maybeSpawnVisibleSession({
+      raw: { visible: true },
+      task: "visible over-cap child",
+      label: "",
+      runtime: "subagent",
+      sandbox: "inherit",
+      options: {
+        agentSessionKey: controllerSessionKey,
+        completionOwnerKey: "agent:main:main",
+        config: hoisted.configOverride as OpenClawConfig,
+        callGateway: visibleGateway,
+        countActiveRuns: hoisted.countActiveRunsForSessionMock,
+      },
+    });
+    releaseNativeDispatch();
+    const accepted = await native;
+
+    expect(rejected).toMatchObject({
+      status: "forbidden",
+      error: expect.stringContaining("max active children for this session (1/1"),
+    });
+    expect(accepted).toMatchObject({ status: "accepted", runId: "native-run" });
+    expect(visibleGateway).not.toHaveBeenCalled();
   });
 
   it("admits a sixth live collector under the swarm group cap", async () => {

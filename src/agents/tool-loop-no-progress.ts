@@ -5,6 +5,21 @@ export function getNoProgressStreak(
   toolName: string,
   argsHash: string,
 ): { count: number; latestResultHash?: string } {
+  const repeatedArguments = countNoProgressStreak(history, toolName, argsHash, false);
+  if (toolName !== "exec") {
+    return repeatedArguments;
+  }
+  // Real terminal failures may repeat across fresh args; only a contiguous typed tail qualifies.
+  const terminalFailures = countNoProgressStreak(history, toolName, argsHash, true);
+  return terminalFailures.count > repeatedArguments.count ? terminalFailures : repeatedArguments;
+}
+
+function countNoProgressStreak(
+  history: readonly ToolCallRecord[],
+  toolName: string,
+  argsHash: string,
+  terminalExecFailuresOnly: boolean,
+): { count: number; latestResultHash?: string } {
   let streak = 0;
   let latestResultHash: string | undefined;
   // Vetoes are provisional until an older concrete outcome anchors them; a newer
@@ -13,7 +28,16 @@ export function getNoProgressStreak(
 
   for (let i = history.length - 1; i >= 0; i -= 1) {
     const record = history[i];
-    if (!record || record.toolName !== toolName || record.argsHash !== argsHash) {
+    if (!record) {
+      continue;
+    }
+    if (record.toolName !== toolName) {
+      if (terminalExecFailuresOnly) {
+        break;
+      }
+      continue;
+    }
+    if (!terminalExecFailuresOnly && record.argsHash !== argsHash) {
       continue;
     }
     if (record.outcomeKind === "tool-loop-veto") {
@@ -22,6 +46,9 @@ export function getNoProgressStreak(
     }
     if (typeof record.resultHash !== "string" || !record.resultHash) {
       continue;
+    }
+    if (terminalExecFailuresOnly && record.outcomeKind !== "terminal-exec-failure") {
+      break;
     }
     if (!latestResultHash) {
       latestResultHash = record.resultHash;
@@ -37,7 +64,7 @@ export function getNoProgressStreak(
   }
 
   return {
-    count: latestResultHash ? streak : pendingLoopVetoes,
+    count: latestResultHash ? streak : terminalExecFailuresOnly ? 0 : pendingLoopVetoes,
     latestResultHash,
   };
 }

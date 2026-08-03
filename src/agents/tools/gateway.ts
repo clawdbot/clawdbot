@@ -32,6 +32,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPositiveIntegerParam, readStringParam } from "./common.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import { getGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
 
 /** Optional gateway connection overrides accepted by agent tools. */
 export type GatewayCallOptions = {
@@ -366,7 +367,11 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
     throw new Error("agent gateway calls require the trusted local gateway context");
   }
   try {
-    return await mintAgentRuntimeIdentityToken(identity);
+    const sessionSpawnContext = getGatewaySessionSpawnContext();
+    return await mintAgentRuntimeIdentityToken({
+      ...identity,
+      ...(sessionSpawnContext ? { sessionSpawnContext } : {}),
+    });
   } catch (error) {
     if (optionalLocalIdentity && !params.required) {
       return undefined;
