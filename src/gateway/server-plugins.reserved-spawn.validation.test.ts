@@ -1,5 +1,7 @@
 // Reserved-spawn validation tests keep option/cancellation guards out of the large seam suite.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../config/sessions/types.js";
+import type { ReservedSubagentRequesterOwnershipEvidence } from "../plugins/runtime/gateway-request-scope.js";
 import {
   withPluginRuntimeGatewayRequestScope,
   withPluginRuntimePluginIdScope,
@@ -46,14 +48,50 @@ const reservation = {
 function withReservedPluginScope<T>(
   run: () => T,
   dedupe: GatewayRequestContext["dedupe"] = new Map(),
+  requesterOwnership?: ReservedSubagentRequesterOwnershipEvidence,
 ): T {
   return withPluginRuntimeGatewayRequestScope(
     {
       context: { dedupe } as GatewayRequestContext,
       isWebchatConnect: () => false,
+      ...(requesterOwnership ? { reservedSubagentRequesterOwnership: requesterOwnership } : {}),
     },
     () => withPluginRuntimePluginIdScope("agentic-os", run),
   );
+}
+
+function requesterLoadResult(params: { lifecycleRevisionPresent: boolean; value?: string }) {
+  const entry: SessionEntry = {
+    pluginOwnerId: "agentic-os",
+    sessionId: "requester-session",
+    createdAt: 1,
+    ...(params.lifecycleRevisionPresent ? { lifecycleRevision: params.value } : {}),
+  };
+  return {
+    cfg: {
+      agents: {
+        defaults: { subagents: { allowAgents: ["worker"] } },
+        entries: { main: {}, worker: {} },
+      },
+    },
+    storePath: "/tmp/openclaw-main-sessions.json",
+    entry,
+  };
+}
+
+function requesterOwnershipEvidence(params: {
+  lifecycleRevisionPresent: boolean;
+  value?: string;
+}): ReservedSubagentRequesterOwnershipEvidence {
+  return {
+    ownerPluginId: "agentic-os",
+    sessionKey: reservation.requesterSessionKey,
+    sessionId: "requester-session",
+    lifecycleRevisionPresent: params.lifecycleRevisionPresent,
+    ...(params.lifecycleRevisionPresent ? { lifecycleRevision: params.value } : {}),
+    createdAt: 1,
+    resolveCurrentOwnerPluginId: ({ entry }) => entry.pluginOwnerId ?? "<none>",
+  };
 }
 
 describe("createGatewaySubagentRuntime.spawnReserved validation", () => {
@@ -221,5 +259,77 @@ describe("createGatewaySubagentRuntime.spawnReserved validation", () => {
       },
       expect.any(Function),
     );
+  });
+
+  it.each([
+    {
+      name: "keeps unchanged present revision",
+      initial: { lifecycleRevisionPresent: true, value: "1" },
+      current: { lifecycleRevisionPresent: true, value: "1" },
+      accepted: true,
+    },
+    {
+      name: "keeps unchanged absent revision",
+      initial: { lifecycleRevisionPresent: false },
+      current: { lifecycleRevisionPresent: false },
+      accepted: true,
+    },
+    {
+      name: "rejects absent-to-present revision",
+      initial: { lifecycleRevisionPresent: false },
+      current: { lifecycleRevisionPresent: true, value: "replacement" },
+      accepted: false,
+    },
+    {
+      name: "rejects present-to-absent revision",
+      initial: { lifecycleRevisionPresent: true, value: "1" },
+      current: { lifecycleRevisionPresent: false },
+      accepted: false,
+    },
+    {
+      name: "rejects revision value change",
+      initial: { lifecycleRevisionPresent: true, value: "1" },
+      current: { lifecycleRevisionPresent: true, value: "2" },
+      accepted: false,
+    },
+  ])("$name for wrapper-validated requester evidence", async ({ initial, current, accepted }) => {
+    const scopedReservation = {
+      ...reservation,
+      childSessionKey: `agent:worker:subagent:${initial.lifecycleRevisionPresent ? "present" : "absent"}-${
+        current.lifecycleRevisionPresent ? (current.value ?? "present") : "absent"
+      }-child`,
+      runId: `reserved-lifecycle-${initial.lifecycleRevisionPresent ? "present" : "absent"}-${
+        current.lifecycleRevisionPresent ? (current.value ?? "present") : "absent"
+      }-run`,
+    };
+    loadSessionEntryReadOnly
+      .mockReturnValueOnce(requesterLoadResult(initial))
+      .mockReturnValueOnce(requesterLoadResult(current));
+    if (accepted) {
+      spawnSubagentDirect.mockResolvedValueOnce({
+        status: "accepted",
+        childSessionKey: scopedReservation.childSessionKey,
+        runId: scopedReservation.runId,
+        mode: "run",
+      });
+    }
+
+    const result = expect(
+      withReservedPluginScope(
+        () => createGatewaySubagentRuntime().spawnReserved(scopedReservation),
+        new Map(),
+        requesterOwnershipEvidence(initial),
+      ),
+    );
+    if (accepted) {
+      await result.resolves.toMatchObject({
+        childSessionKey: scopedReservation.childSessionKey,
+        runId: scopedReservation.runId,
+      });
+      expect(spawnSubagentDirect).toHaveBeenCalledTimes(1);
+    } else {
+      await result.rejects.toThrow("changed while starting reserved subagent work");
+      expect(spawnSubagentDirect).not.toHaveBeenCalled();
+    }
   });
 });

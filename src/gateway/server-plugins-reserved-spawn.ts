@@ -374,11 +374,12 @@ function assertReservedSubagentRequesterOwned(params: {
         }", not "${params.pluginId}".`,
       );
     }
+    const currentLifecycleRevisionPresent = Object.hasOwn(entry, "lifecycleRevision");
     const identityChanged =
       (requesterOwnership.sessionId !== undefined &&
         entry.sessionId !== requesterOwnership.sessionId) ||
-      (requesterOwnership.lifecycleRevision !== undefined &&
-        entry.lifecycleRevision !== requesterOwnership.lifecycleRevision) ||
+      currentLifecycleRevisionPresent !== requesterOwnership.lifecycleRevisionPresent ||
+      entry.lifecycleRevision !== requesterOwnership.lifecycleRevision ||
       (requesterOwnership.createdAt !== undefined &&
         entry.createdAt !== requesterOwnership.createdAt);
     if (identityChanged) {

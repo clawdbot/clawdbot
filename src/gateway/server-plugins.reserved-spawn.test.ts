@@ -52,6 +52,7 @@ type RequesterOwnershipEvidence = {
   ownerPluginId: string;
   sessionKey: string;
   sessionId?: string;
+  lifecycleRevisionPresent: boolean;
   lifecycleRevision?: string;
   createdAt?: number;
   resolveCurrentOwnerPluginId: (params: { entry: SessionEntry; sessionKey: string }) => string;
@@ -105,16 +106,17 @@ function lockedHarnessRequesterOwnership(params: {
   registry: Pick<PluginRegistry, "agentHarnesses">;
   sessionKey: string;
   sessionId: string;
-  lifecycleRevision: string;
+  lifecycleRevision?: string;
+  lifecycleRevisionPresent?: boolean;
   createdAt: number;
   pluginId?: string;
 }): RequesterOwnershipEvidence {
   const pluginId = params.pluginId ?? "agentic-os";
-  return {
+  const evidence: RequesterOwnershipEvidence = {
     ownerPluginId: pluginId,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
-    lifecycleRevision: params.lifecycleRevision,
+    lifecycleRevisionPresent: params.lifecycleRevisionPresent ?? true,
     createdAt: params.createdAt,
     resolveCurrentOwnerPluginId: ({ entry, sessionKey }) =>
       resolveReservedSpawnRequesterOwnerPluginId({
@@ -124,6 +126,10 @@ function lockedHarnessRequesterOwnership(params: {
         sessionKey,
       }),
   };
+  if (params.lifecycleRevision !== undefined) {
+    evidence.lifecycleRevision = params.lifecycleRevision;
+  }
+  return evidence;
 }
 
 describe("createGatewaySubagentRuntime.spawnReserved", () => {

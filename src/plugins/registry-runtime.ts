@@ -847,6 +847,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                   ownerPluginId: pluginId,
                   sessionKey: params.requesterSessionKey,
                   ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
+                  lifecycleRevisionPresent: Object.hasOwn(entry, "lifecycleRevision"),
                   ...(typeof entry.lifecycleRevision === "string"
                     ? { lifecycleRevision: entry.lifecycleRevision }
                     : {}),

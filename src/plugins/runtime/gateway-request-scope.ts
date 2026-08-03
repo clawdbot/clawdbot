@@ -13,6 +13,7 @@ export type ReservedSubagentRequesterOwnershipEvidence = {
   ownerPluginId: string;
   sessionKey: string;
   sessionId?: string;
+  lifecycleRevisionPresent: boolean;
   lifecycleRevision?: string;
   createdAt?: number;
   resolveCurrentOwnerPluginId: (params: { entry: SessionEntry; sessionKey: string }) => string;
