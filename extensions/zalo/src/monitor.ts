@@ -11,6 +11,7 @@ import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   createLazyRuntimeModule,
   createLazyRuntimeNamedExport,
@@ -298,13 +299,7 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
         return undefined;
       }
       if (response.ok) {
-        statusSink?.({
-          connected: true,
-          lifecycle: "ready",
-          terminalDisconnect: undefined,
-          lastConnectedAt: Date.now(),
-          lastError: null,
-        });
+        statusSink?.(channelReadyPatch());
       }
       if (response.ok && response.result) {
         statusSink?.({ lastInboundAt: Date.now() });
@@ -1021,13 +1016,7 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
         { url: effectiveWebhookUrl, secret_token: webhookSecret }, // pragma: allowlist secret
         fetcher,
       );
-      statusSink?.({
-        connected: true,
-        lifecycle: "ready",
-        terminalDisconnect: undefined,
-        lastConnectedAt: Date.now(),
-        lastError: null,
-      });
+      statusSink?.(channelReadyPatch());
       let webhookCleanupPromise: Promise<void> | undefined;
       cleanupWebhook = async () => {
         if (!webhookCleanupPromise) {

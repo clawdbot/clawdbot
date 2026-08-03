@@ -142,6 +142,7 @@ describe("monitorZaloProvider lifecycle", () => {
 
     await vi.waitFor(() =>
       expect(statusSink).toHaveBeenCalledWith({
+        running: true,
         connected: true,
         lifecycle: "ready",
         terminalDisconnect: undefined,
@@ -277,6 +278,7 @@ describe("monitorZaloProvider lifecycle", () => {
     await setWebhookCalled;
     await settleLifecycleWork();
     expect(statusSink).toHaveBeenCalledWith({
+      running: true,
       connected: true,
       lifecycle: "ready",
       terminalDisconnect: undefined,
