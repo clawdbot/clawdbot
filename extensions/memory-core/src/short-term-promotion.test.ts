@@ -3711,6 +3711,77 @@ describe("short-term promotion", () => {
     });
   });
 
+  describe("unparseable lastRecalledAt timestamps", () => {
+    it("does not grant recency boost to entries with malformed timestamps", async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        await writeDailyMemoryNote(workspaceDir, "2026-04-01", ["Valid timestamp note."]);
+        await writeDailyMemoryNote(workspaceDir, "2026-04-02", ["Malformed timestamp note."]);
+        const recentIso = "2026-04-04T00:00:00.000Z";
+        await testing.writeRawRecallStore(workspaceDir, {
+          version: 1,
+          updatedAt: recentIso,
+          entries: {
+            valid: {
+              key: "valid",
+              path: "memory/2026-04-01.md",
+              startLine: 1,
+              endLine: 1,
+              source: "memory",
+              snippet: "Valid timestamp note.",
+              recallCount: 2,
+              dailyCount: 0,
+              groundedCount: 0,
+              totalScore: 1.8,
+              maxScore: 0.9,
+              firstRecalledAt: "2026-04-01T00:00:00.000Z",
+              lastRecalledAt: "2026-04-03T00:00:00.000Z",
+              queryHashes: ["a", "b"],
+              recallDays: ["2026-04-03"],
+              conceptTags: [],
+            },
+            malformed: {
+              key: "malformed",
+              path: "memory/2026-04-02.md",
+              startLine: 1,
+              endLine: 1,
+              source: "memory",
+              snippet: "Malformed timestamp note.",
+              recallCount: 2,
+              dailyCount: 0,
+              groundedCount: 0,
+              totalScore: 1.8,
+              maxScore: 0.9,
+              firstRecalledAt: "2026-04-02T00:00:00.000Z",
+              lastRecalledAt: "not-a-valid-date",
+              queryHashes: ["a", "b"],
+              recallDays: ["2026-04-03"],
+              conceptTags: [],
+            },
+          },
+        });
+
+        const ranked = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+          nowMs: Date.parse(recentIso),
+        });
+
+        const valid = ranked.find((entry) => entry.key === "valid");
+        const malformed = ranked.find((entry) => entry.key === "malformed");
+        expect(valid).toBeDefined();
+        expect(malformed).toBeDefined();
+        // The valid entry earns a recency component; the malformed one gets 0
+        // instead of the previous ageDays=0 fallback that silently granted a
+        // maximum recency boost to broken timestamps.
+        expect(valid?.components.recency).toBeGreaterThan(0);
+        expect(malformed?.components.recency).toBe(0);
+        expect(valid?.score).toBeGreaterThan(malformed?.score ?? 0);
+      });
+    });
+  });
+
   describe("MEMORY.md budget compaction (#73691)", () => {
     it("preserves mixed marker-backed user text during a real promotion write", async () => {
       await withTempWorkspace(async (workspaceDir) => {
