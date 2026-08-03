@@ -52,3 +52,13 @@ export function isBrowserProxyNodeInvokeCommand(command: unknown): boolean {
 
 export const NODE_MCP_TOOL_CALL_TIMEOUT_MS = 120_000;
 export const NODE_MCP_TOOL_CALL_GATEWAY_TIMEOUT_MS = NODE_MCP_TOOL_CALL_TIMEOUT_MS + 5_000;
+
+// Plain node plugin tool calls used to send no budget, so the Gateway armed no
+// invocation deadline over pairing, wake, and policy work and the node registry fell
+// back to its own 30s pending timer that only starts at dispatch. The caller's default
+// 30s wait starts earlier, so it always expired first and the agent saw a generic
+// client-side gateway timeout instead of the Gateway answer that carries the
+// nodeCommandDispatched retry-safety provenance. Keep the same node budget, but send
+// it explicitly and give the caller the +5s grace the MCP path already uses.
+export const NODE_PLUGIN_TOOL_CALL_TIMEOUT_MS = 30_000;
+export const NODE_PLUGIN_TOOL_CALL_GATEWAY_TIMEOUT_MS = NODE_PLUGIN_TOOL_CALL_TIMEOUT_MS + 5_000;

@@ -5,6 +5,8 @@ import {
   NODE_MCP_TOOL_CALL_GATEWAY_TIMEOUT_MS,
   NODE_MCP_TOOL_CALL_TIMEOUT_MS,
   NODE_MCP_TOOLS_CALL_COMMAND,
+  NODE_PLUGIN_TOOL_CALL_GATEWAY_TIMEOUT_MS,
+  NODE_PLUGIN_TOOL_CALL_TIMEOUT_MS,
 } from "../infra/node-commands.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { sanitizeServerName } from "./agent-bundle-mcp-names.js";
@@ -231,7 +233,11 @@ export function createNodePluginTools(params: {
       execute: async (toolCallId, toolParams, signal) => {
         const raw = await callGatewayTool(
           "node.invoke",
-          mcpTool ? { timeoutMs: NODE_MCP_TOOL_CALL_GATEWAY_TIMEOUT_MS } : {},
+          {
+            timeoutMs: mcpTool
+              ? NODE_MCP_TOOL_CALL_GATEWAY_TIMEOUT_MS
+              : NODE_PLUGIN_TOOL_CALL_GATEWAY_TIMEOUT_MS,
+          },
           {
             nodeId: entry.nodeId,
             command: entry.command,
@@ -242,7 +248,7 @@ export function createNodePluginTools(params: {
                   arguments: toolParams,
                 }
               : toolParams,
-            ...(mcpTool ? { timeoutMs: NODE_MCP_TOOL_CALL_TIMEOUT_MS } : {}),
+            timeoutMs: mcpTool ? NODE_MCP_TOOL_CALL_TIMEOUT_MS : NODE_PLUGIN_TOOL_CALL_TIMEOUT_MS,
             idempotencyKey: toolCallId,
             ...(params.agentSessionKey ? { sessionKey: params.agentSessionKey } : {}),
           },

@@ -8,6 +8,10 @@ import {
   removeConnectedNodePluginTools,
   replaceConnectedNodePluginTools,
 } from "../gateway/node-plugin-tool-snapshot.js";
+import {
+  NODE_PLUGIN_TOOL_CALL_GATEWAY_TIMEOUT_MS,
+  NODE_PLUGIN_TOOL_CALL_TIMEOUT_MS,
+} from "../infra/node-commands.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tools.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import { testing } from "./code-mode.test-support.js";
@@ -153,17 +157,57 @@ describe("createNodePluginTools", () => {
     });
     expect(callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      {},
+      { timeoutMs: 35_000 },
       {
         nodeId: "node-1",
         command: "remote.echo",
         params: { text: "ping" },
+        timeoutMs: 30_000,
         idempotencyKey: "call-1",
         sessionKey: "agent:main:canvas",
       },
       { scopes: ["operator.write"] },
     );
     expect(result.content).toEqual([{ type: "text", text: "pong" }]);
+  });
+
+  it("gives plain node tool calls a gateway deadline the caller wait outlasts", async () => {
+    replaceNodePluginTools({
+      nodeId: "node-1",
+      displayName: "Studio Node",
+      tools: [
+        {
+          pluginId: "remote-demo",
+          name: "remote_echo",
+          description: "Echo through a remote node",
+          parameters: { type: "object", properties: { text: { type: "string" } } },
+          command: "remote.echo",
+        },
+      ],
+    });
+    vi.mocked(callGatewayTool).mockResolvedValueOnce({ payload: { ok: true } });
+
+    const tool = expectDefined(
+      createNodePluginTools({})[0],
+      "createNodePluginTools({})[0] test invariant",
+    );
+    await tool.execute("call-1", { text: "ping" });
+
+    const call = expectDefined(
+      vi.mocked(callGatewayTool).mock.calls[0],
+      "callGatewayTool call test invariant",
+    );
+    const callerWaitMs = (call[1] as { timeoutMs?: number }).timeoutMs;
+    const invokeDeadlineMs = (call[2] as { timeoutMs?: number }).timeoutMs;
+
+    // The Gateway only arms an invocation deadline when the payload carries a
+    // positive top-level timeout; without one the node registry falls back to its
+    // own 30s pending timer, which starts too late to beat the caller's wait.
+    expect(invokeDeadlineMs).toBe(NODE_PLUGIN_TOOL_CALL_TIMEOUT_MS);
+    // The caller must outlast that deadline so the deadline answer wins the race
+    // instead of the caller abandoning a still-running node command.
+    expect(callerWaitMs).toBe(NODE_PLUGIN_TOOL_CALL_GATEWAY_TIMEOUT_MS);
+    expect(callerWaitMs as number).toBeGreaterThan(invokeDeadlineMs as number);
   });
 
   it("forwards the caller abort signal to node gateway invocations", async () => {
@@ -189,11 +233,12 @@ describe("createNodePluginTools", () => {
 
     expect(callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      {},
+      { timeoutMs: 35_000 },
       {
         nodeId: "node-1",
         command: "remote.echo",
         params: { text: "ping" },
+        timeoutMs: 30_000,
         idempotencyKey: "call-cancellable",
       },
       { scopes: ["operator.write"], signal: controller.signal },
@@ -229,11 +274,12 @@ describe("createNodePluginTools", () => {
     );
     expect(callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      {},
+      { timeoutMs: 35_000 },
       {
         nodeId: "node-1",
         command: "remote.echo",
         params: { text: "ping" },
+        timeoutMs: 30_000,
         idempotencyKey: "call-aborted",
       },
       { scopes: ["operator.write"], signal: controller.signal },
@@ -498,11 +544,12 @@ describe("createNodePluginTools", () => {
     expect(tools.map((tool) => tool.name)).toEqual(["node_a_remote_echo", "node_b_remote_echo"]);
     expect(callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      {},
+      { timeoutMs: 35_000 },
       {
         nodeId: "node-b",
         command: "remote.echo",
         params: { text: "ping" },
+        timeoutMs: 30_000,
         idempotencyKey: "call-2",
       },
       { scopes: ["operator.write"] },
