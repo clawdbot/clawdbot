@@ -1,6 +1,7 @@
 // Feishu tests cover monitor.webhook e2e plugin behavior.
 import crypto from "node:crypto";
 import type { Server } from "node:http";
+import { createConnection } from "node:net";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -372,6 +373,170 @@ describe("Feishu webhook signed-request e2e", () => {
         expect(await response.text()).toContain("no unknown.event event handle");
       },
     );
+  });
+
+  it("admits signed requests only on the configured POST webhook route", async () => {
+    const accountId = "signed-route-boundary";
+    const path = "/hook-e2e-signed-route-boundary";
+    const port = await getFreePort();
+    const encryptKey = "encrypt_key";
+    const handler = vi.fn(async () => ({ accepted: true }));
+    const eventDispatcher = new Lark.EventDispatcher({
+      encryptKey,
+      verificationToken: "verify_token",
+    });
+    eventDispatcher.register({ "test.route_boundary": handler });
+    const statusSink = vi.fn();
+    const abortController = new AbortController();
+    const monitorPromise = monitorWebhook({
+      account: {
+        accountId,
+        encryptKey,
+        config: {
+          enabled: true,
+          connectionMode: "webhook",
+          webhookHost: "127.0.0.1",
+          webhookPort: port,
+          webhookPath: path,
+        },
+      } as ResolvedFeishuAccount,
+      accountId,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      abortSignal: abortController.signal,
+      eventDispatcher,
+      statusSink,
+    });
+    const url = `http://127.0.0.1:${port}${path}`;
+    const rawBody = JSON.stringify({
+      schema: "2.0",
+      header: { event_type: "test.route_boundary" },
+      event: { marker: "signed-route-boundary" },
+    });
+    const headers = signFeishuPayload({ encryptKey, rawBody });
+    const requests = [
+      { label: "different route", route: "/hook-e2e-other", method: "POST", status: 404 },
+      { label: "route prefix", route: `${path}/nested`, method: "POST", status: 404 },
+      { label: "trailing slash", route: `${path}/`, method: "POST", status: 404 },
+      { label: "PUT method", route: path, method: "PUT", status: 405 },
+      { label: "DELETE method", route: path, method: "DELETE", status: 405 },
+      { label: "configured route", route: path, method: "POST", status: 200 },
+      {
+        label: "configured route with query",
+        route: `${path}?delivery=validated`,
+        method: "POST",
+        status: 200,
+      },
+    ];
+
+    try {
+      await waitUntilServerReady(url);
+      statusSink.mockClear();
+      const server = httpServers.get(accountId);
+      const requestListener = server?.listeners("request")[0];
+      if (!server || !requestListener) {
+        throw new Error("expected Feishu webhook request listener");
+      }
+      let malformedTargetError: unknown;
+      server.removeListener("request", requestListener);
+      server.on("request", (request, response) => {
+        try {
+          requestListener.call(server, request, response);
+        } catch (error) {
+          malformedTargetError = error;
+          response.statusCode = 500;
+          response.end("Webhook request handler threw");
+        }
+      });
+
+      const rawTargets = [
+        { label: "malformed authority", target: "//[" },
+        { label: "foreign authority", target: `//attacker${path}` },
+        { label: "duplicate-slash authority", target: `//localhost${path}` },
+        { label: "dot-segment traversal", target: `/other/..${path}` },
+        { label: "encoded dot-segment traversal", target: `/other/%2e%2e${path}` },
+        { label: "backslash authority", target: `/\\attacker${path}` },
+        { label: "backslash traversal", target: `/other\\..${path}` },
+        { label: "encoded separator", target: `${path}%2Fextra` },
+        { label: "raw fragment", target: `${path}#fragment` },
+        { label: "query fragment", target: `${path}?delivery=ok#fragment` },
+        { label: "invalid percent escape", target: `${path}%ZZ` },
+      ];
+      const rawHeaders = Object.entries(headers)
+        .map(([name, value]) => `${name}: ${value}`)
+        .join("\r\n");
+      const observedRawTargets = [];
+
+      for (const rawTarget of rawTargets) {
+        const initialDispatches = handler.mock.calls.length;
+        const initialActivity = statusSink.mock.calls.length;
+        malformedTargetError = undefined;
+        const rawResponse = await new Promise<string>((resolve, reject) => {
+          let response = "";
+          const socket = createConnection({ host: "127.0.0.1", port }, () => {
+            socket.end(
+              `POST ${rawTarget.target} HTTP/1.1\r\nHost: localhost\r\n${rawHeaders}\r\n` +
+                `Content-Length: ${Buffer.byteLength(rawBody)}\r\nConnection: close\r\n\r\n${rawBody}`,
+            );
+          });
+          socket.setEncoding("utf8");
+          socket.on("data", (chunk) => {
+            response += chunk.toString();
+          });
+          socket.on("end", () => resolve(response));
+          socket.on("error", reject);
+        });
+        observedRawTargets.push({
+          label: rawTarget.label,
+          statusLine: rawResponse.split("\r\n", 1)[0],
+          error: malformedTargetError instanceof Error ? malformedTargetError.message : undefined,
+          dispatched: handler.mock.calls.length > initialDispatches,
+          publishedActivity: statusSink.mock.calls.length > initialActivity,
+        });
+      }
+
+      expect(observedRawTargets).toEqual(
+        rawTargets.map((rawTarget) => ({
+          label: rawTarget.label,
+          statusLine: "HTTP/1.1 404 Not Found",
+          error: undefined,
+          dispatched: false,
+          publishedActivity: false,
+        })),
+      );
+
+      const observed = [];
+
+      for (const request of requests) {
+        const initialDispatches = handler.mock.calls.length;
+        const initialActivity = statusSink.mock.calls.length;
+        const response = await fetch(new URL(request.route, url), {
+          method: request.method,
+          headers,
+          body: rawBody,
+        });
+        await response.text();
+        observed.push({
+          label: request.label,
+          status: response.status,
+          allow: response.headers.get("allow"),
+          dispatched: handler.mock.calls.length > initialDispatches,
+          publishedActivity: statusSink.mock.calls.length > initialActivity,
+        });
+      }
+
+      expect(observed).toEqual(
+        requests.map((request) => ({
+          label: request.label,
+          status: request.status,
+          allow: request.status === 405 ? "POST" : null,
+          dispatched: request.status === 200,
+          publishedActivity: request.status === 200,
+        })),
+      );
+    } finally {
+      abortController.abort();
+      await monitorPromise;
+    }
   });
 
   it("marks durably admitted message acks with the delivery-accepted header", async () => {

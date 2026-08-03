@@ -380,6 +380,13 @@ export async function monitorWebhook({
   const server = http.createServer();
 
   server.on("request", (req, res) => {
+    const requestUrl = req.url ?? "/";
+    const requestPath = requestUrl.split("?", 1)[0];
+    if (!requestPath?.startsWith("/") || requestUrl.includes("#") || requestPath !== path) {
+      respondText(res, 404, "Not Found");
+      return;
+    }
+
     res.on("finish", () => {
       recordWebhookStatus(runtime, accountId, path, res.statusCode);
       // Refresh lastEventAt / lastTransportActivityAt on every successful 2xx
@@ -404,6 +411,7 @@ export async function monitorWebhook({
       !applyBasicWebhookRequestGuards({
         req,
         res,
+        allowMethods: ["POST"],
         rateLimiter: feishuWebhookRateLimiter,
         rateLimitKey,
         nowMs: Date.now(),
