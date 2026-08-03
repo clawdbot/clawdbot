@@ -1013,14 +1013,22 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         // invalidates commands queued for the document that never arrived.
         self.pendingNativeCommands = []
         self.pendingNativeNavigation = nil
+        let failingURL =
+            (nsError.userInfo[NSURLErrorFailingURLErrorKey] as? URL) ??
+            (nsError.userInfo[NSURLErrorFailingURLStringErrorKey] as? String)
+                .flatMap { URL(string: $0) }
+        let knownURLs = [self.currentURL] + (failingURL.map { [$0] } ?? [])
+        let failureMessage = DashboardFailurePage.redactingURLFragments(
+            in: error.localizedDescription,
+            knownURLs: knownURLs)
         dashboardWindowLogger.error(
             """
             dashboard load failed url=\(dashboardLogString(for: self.currentURL), privacy: .public) \
-            error=\(error.localizedDescription, privacy: .public)
+            error=\(failureMessage, privacy: .public)
             """)
         let html = DashboardFailurePage.html(
             title: "Dashboard unavailable",
-            message: error.localizedDescription,
+            message: failureMessage,
             detail: "The dashboard window is open, but the web UI could not load from this endpoint.",
             url: self.currentURL)
         self.webView.loadHTMLString(html, baseURL: nil)

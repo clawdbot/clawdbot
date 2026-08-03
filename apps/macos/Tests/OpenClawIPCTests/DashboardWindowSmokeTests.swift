@@ -859,6 +859,31 @@ struct DashboardWindowSmokeTests {
         #expect(dashboardLogString(for: url) == "http://127.0.0.1:18789/control/")
     }
 
+    @Test func `dashboard failure page strips URL fragments from every rendered field`() throws {
+        let shownURL = try #require(
+            URL(string: "http://127.0.0.1:18789/control/#token=url-token")) // pragma: allowlist secret
+        let titleURL = try #require(
+            URL(string: "http://127.0.0.1:18789/control/#token=title-token")) // pragma: allowlist secret
+        let messageURL = try #require(
+            URL(string: "http://127.0.0.1:18789/control/#token=message-token")) // pragma: allowlist secret
+        let detailURL = try #require(
+            URL(string: "http://127.0.0.1:18789/control/#token=detail-token")) // pragma: allowlist secret
+
+        let html = DashboardFailurePage.html(
+            title: "Failed to load \(titleURL.absoluteString)",
+            message: "WebKit rejected \(messageURL.absoluteString)",
+            detail: "Retry \(detailURL.absoluteString)",
+            url: shownURL)
+
+        for fragment in ["url-token", "title-token", "message-token", "detail-token"] {
+            #expect(!html.contains(fragment))
+        }
+        #expect(html.contains("http://127.0.0.1:18789/control/"))
+        #expect(DashboardFailurePage.redactingURLFragments(
+            in: "Failed to load \(messageURL.absoluteString)") ==
+            "Failed to load http://127.0.0.1:18789/control/")
+    }
+
     @Test func `dashboard native chrome clears both desktop sidebars`() throws {
         let url = try #require(URL(string: "http://127.0.0.1:18789/control/"))
         let controller = DashboardWindowController(

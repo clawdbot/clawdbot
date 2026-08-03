@@ -5,8 +5,16 @@ import Foundation
 /// so the controller stays focused on window/navigation behavior.
 enum DashboardFailurePage {
     static func html(title: String, message: String, detail: String?, url: URL?) -> String {
-        let detailHTML = detail.map { "<p class=\"detail\">\(self.htmlEscape($0))</p>" } ?? ""
-        let urlHTML = url.map { "<code>\(self.htmlEscape($0.absoluteString))</code>" } ?? ""
+        let knownURLs = url.map { [$0] } ?? []
+        let safeTitle = self.redactingURLFragments(in: title, knownURLs: knownURLs)
+        let safeMessage = self.redactingURLFragments(in: message, knownURLs: knownURLs)
+        let safeDetail = detail.map {
+            self.redactingURLFragments(in: $0, knownURLs: knownURLs)
+        }
+        let detailHTML = safeDetail.map { "<p class=\"detail\">\(self.htmlEscape($0))</p>" } ?? ""
+        let urlHTML = url.map {
+            "<code>\(self.htmlEscape(dashboardLogString(for: $0)))</code>"
+        } ?? ""
         return """
         <!doctype html>
         <html>
@@ -93,14 +101,47 @@ enum DashboardFailurePage {
         <body>
           <main>
             <div class="badge">!</div>
-            <h1>\(self.htmlEscape(title))</h1>
-            <p>\(self.htmlEscape(message))</p>
+            <h1>\(self.htmlEscape(safeTitle))</h1>
+            <p>\(self.htmlEscape(safeMessage))</p>
             \(detailHTML)
             \(urlHTML)
           </main>
         </body>
         </html>
         """
+    }
+
+    static func redactingURLFragments(
+        in value: String,
+        knownURLs: [URL] = []) -> String
+    {
+        let knownRedacted = knownURLs.reduce(value) { result, url in
+            result.replacingOccurrences(
+                of: url.absoluteString,
+                with: dashboardLogString(for: url))
+        }
+        guard let detector = try? NSDataDetector(
+            types: NSTextCheckingResult.CheckingType.link.rawValue)
+        else {
+            return knownRedacted
+        }
+
+        let detectorRange = NSRange(
+            knownRedacted.startIndex..<knownRedacted.endIndex,
+            in: knownRedacted)
+        return detector.matches(in: knownRedacted, options: [], range: detectorRange)
+            .reversed()
+            .reduce(knownRedacted) { result, match in
+                guard let url = match.url,
+                      url.fragment != nil,
+                      let range = Range(match.range, in: result)
+                else {
+                    return result
+                }
+                return result.replacingCharacters(
+                    in: range,
+                    with: dashboardLogString(for: url))
+            }
     }
 
     private static func htmlEscape(_ value: String) -> String {
