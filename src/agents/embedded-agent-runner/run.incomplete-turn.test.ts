@@ -1148,6 +1148,192 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expectWarnMessageWith("settled post-tool turn lacked a final answer");
   });
 
+  it.each([
+    { label: "interactive user", trigger: "user" as const },
+    {
+      label: "required isolated cron",
+      trigger: "cron" as const,
+      terminalReplyExpectation: "required" as const,
+    },
+  ])("finalizes a settled failed tool once for a $label turn (#118274)", async (runPolicy) => {
+    const toolUseAssistant = {
+      role: "assistant",
+      stopReason: "toolUse",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "toolCall", id: "tool_1", name: "exec", arguments: {} }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    const failureText = "The exec tool failed: post-processing error.";
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
+      markUserMessagePersisted(attemptParams);
+      return makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [
+          { toolName: "read", isError: true, replaySafe: true },
+          { toolName: "exec", isError: true, replaySafe: false },
+        ],
+        itemLifecycle: { startedCount: 3, completedCount: 3, activeCount: 0 },
+        messagesSnapshot: [
+          toolUseAssistant,
+          {
+            role: "toolResult",
+            toolCallId: "tool_1",
+            toolName: "exec",
+            isError: true,
+            content: [{ type: "text", text: "post-processing error" }],
+          },
+          {
+            role: "assistant",
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "tool_search_code:tool_1:read:1",
+                name: "read",
+                arguments: {},
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "tool_search_code:tool_1:read:1",
+            toolName: "read",
+            isError: true,
+            content: [{ type: "text", text: "post-processing error" }],
+          },
+        ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+        lastAssistant: toolUseAssistant,
+        currentAttemptAssistant: toolUseAssistant,
+        lastToolError: { toolName: "exec", error: "post-processing error" },
+      });
+    });
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: failureText }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [failureText],
+        lastAssistant: finalAssistant,
+        currentAttemptAssistant: finalAssistant,
+        currentAttemptCompletedAssistant: finalAssistant,
+      }),
+    );
+    mockedBuildEmbeddedRunPayloads
+      .mockReturnValueOnce([{ text: "⚠️ 🛠️ Exec failed", isError: true }])
+      .mockReturnValueOnce([{ text: failureText }]);
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      ...runPolicy,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: `run-settled-failed-tool-${runPolicy.trigger}`,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads?.[0]?.text).toBe(failureText);
+    const finalizationCall = runAttemptCall(1);
+    expect(finalizationCall.operation).toBe("settled-tool-finalization");
+    expect(finalizationCall.disableTools).toBe(true);
+    expect(finalizationCall.prompt).toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+    expect(finalizationCall.prompt).toContain(
+      "If any tool failed, state that failure plainly and do not claim it succeeded.",
+    );
+  });
+
+  it("preserves a structured visible failed-tool payload without finalizing (#118274)", async () => {
+    const toolUseAssistant = {
+      role: "assistant",
+      stopReason: "toolUse",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "toolCall", id: "tool_1", name: "exec", arguments: {} }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    const visibleError = {
+      text: "Review the failed operation.",
+      isError: true,
+      channelData: { structuredError: true },
+    };
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "exec", isError: true }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        messagesSnapshot: [
+          toolUseAssistant,
+          { role: "toolResult", toolCallId: "tool_1", toolName: "exec", isError: true },
+        ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+        lastAssistant: toolUseAssistant,
+        currentAttemptAssistant: toolUseAssistant,
+        lastToolError: { toolName: "exec", error: "post-processing error" },
+      }),
+    );
+    mockedBuildEmbeddedRunPayloads.mockReturnValueOnce([visibleError]);
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-structured-failed-tool-payload",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+    expect(result.payloads?.[0]).toMatchObject(visibleError);
+    expectNoWarnMessageWith("settled post-tool turn lacked a final answer");
+  });
+
+  it("keeps the original failed-tool warning if finalization fails (#118274)", async () => {
+    const toolUseAssistant = {
+      role: "assistant",
+      stopReason: "toolUse",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "toolCall", id: "tool_1", name: "exec", arguments: {} }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    const warning = { text: "⚠️ 🛠️ Exec failed", isError: true };
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: [],
+          toolMetas: [{ toolName: "exec", isError: true }],
+          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+          messagesSnapshot: [
+            toolUseAssistant,
+            { role: "toolResult", toolCallId: "tool_1", toolName: "exec", isError: true },
+          ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+          lastAssistant: toolUseAssistant,
+          currentAttemptAssistant: toolUseAssistant,
+          lastToolError: { toolName: "exec", error: "post-processing error" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: [],
+          promptError: new Error("finalizer provider failure"),
+          promptErrorSource: "prompt",
+        }),
+      );
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([warning]);
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-failed-tool-finalization-fallback",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads?.[0]).toEqual(warning);
+    expectWarnMessageWith("settled-turn finalization failed closed");
+  });
+
   it("preserves the incomplete-turn failure when the selected harness cannot finalize safely", async () => {
     registerAgentHarness({
       id: "legacy",
@@ -2488,6 +2674,195 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
         lastAssistant: toolUseAssistant,
         currentAttemptAssistant: toolUseAssistant,
+      }),
+    });
+
+    expect(instruction).toBeNull();
+  });
+
+  it.each([
+    {
+      label: "a matching failure summary",
+      lastToolError: { toolName: "exec", error: "post-processing error" },
+    },
+    { label: "no remaining failure summary", lastToolError: undefined },
+  ])(
+    "recognizes successful and failed current-batch tools with $label (#118274)",
+    ({ lastToolError }) => {
+      const toolUseAssistant = {
+        role: "assistant",
+        stopReason: "toolUse",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [
+          { type: "toolCall", id: "tool_ok", name: "read", arguments: {} },
+          { type: "toolCall", id: "tool_failed", name: "exec", arguments: {} },
+        ],
+      } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+      const instruction = resolveSettledToolTerminalContinuationInstruction({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        modelApi: "openai-chatgpt-responses",
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          toolMetas: [{ toolName: "read" }, { toolName: "exec", isError: true }],
+          itemLifecycle: { startedCount: 2, completedCount: 2, activeCount: 0 },
+          messagesSnapshot: [
+            toolUseAssistant,
+            { role: "toolResult", toolCallId: "tool_ok", toolName: "read", isError: false },
+            { role: "toolResult", toolCallId: "tool_failed", toolName: "exec", isError: true },
+          ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+          lastAssistant: toolUseAssistant,
+          currentAttemptAssistant: toolUseAssistant,
+          lastToolError,
+        }),
+      });
+
+      expect(instruction).toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+      expect(instruction).toContain(
+        "If any tool failed, state that failure plainly and do not claim it succeeded.",
+      );
+    },
+  );
+
+  it.each([
+    {
+      label: "an unrelated current-batch failure summary",
+      resultToolName: "exec",
+      lastErrorToolName: "read",
+    },
+    {
+      label: "a failed result with the wrong tool identity",
+      resultToolName: "read",
+      lastErrorToolName: "exec",
+    },
+  ])("does not finalize $label (#118274)", ({ resultToolName, lastErrorToolName }) => {
+    const toolUseAssistant = {
+      role: "assistant",
+      stopReason: "toolUse",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "toolCall", id: "tool_1", name: "exec", arguments: {} }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    const instruction = resolveSettledToolTerminalContinuationInstruction({
+      provider: "openai",
+      modelId: "gpt-5.5",
+      modelApi: "openai-chatgpt-responses",
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: resultToolName, isError: true }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        messagesSnapshot: [
+          toolUseAssistant,
+          {
+            role: "toolResult",
+            toolCallId: "tool_1",
+            toolName: resultToolName,
+            isError: true,
+          },
+        ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+        lastAssistant: toolUseAssistant,
+        currentAttemptAssistant: toolUseAssistant,
+        lastToolError: { toolName: lastErrorToolName, error: "post-processing error" },
+      }),
+    });
+
+    expect(instruction).toBeNull();
+  });
+
+  it("does not settle same-name terminal calls from one failed result (#118274)", () => {
+    const toolUseAssistant = {
+      role: "assistant",
+      stopReason: "toolUse",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [
+        { type: "toolCall", id: "tool_1", name: "exec", arguments: {} },
+        { type: "toolCall", id: "tool_2", name: "exec", arguments: {} },
+      ],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    const instruction = resolveSettledToolTerminalContinuationInstruction({
+      provider: "openai",
+      modelId: "gpt-5.5",
+      modelApi: "openai-chatgpt-responses",
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "exec", isError: true }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        messagesSnapshot: [
+          toolUseAssistant,
+          { role: "toolResult", toolCallId: "tool_1", toolName: "exec", isError: true },
+        ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+        lastAssistant: toolUseAssistant,
+        currentAttemptAssistant: toolUseAssistant,
+        lastToolError: { toolName: "exec", error: "post-processing error" },
+      }),
+    });
+
+    expect(instruction).toBeNull();
+  });
+
+  it.each([
+    {
+      label: "an async tool is still running",
+      attemptOverrides: { toolMetas: [{ toolName: "exec", isError: true, asyncStarted: true }] },
+    },
+    {
+      label: "an accepted child session owns the response",
+      attemptOverrides: {
+        acceptedSessionSpawns: [
+          { runId: "run-child", childSessionKey: "agent:main:subagent:child" },
+        ],
+      },
+    },
+    {
+      label: "a client tool remains pending",
+      attemptOverrides: { clientToolCalls: [{ name: "pending", params: {} }] },
+    },
+    {
+      label: "the turn yielded",
+      attemptOverrides: { yieldDetected: true },
+    },
+    {
+      label: "an approval prompt was already delivered",
+      attemptOverrides: { didSendDeterministicApprovalPrompt: true },
+    },
+  ])("does not finalize a failed terminal tool when $label (#118274)", ({ attemptOverrides }) => {
+    const toolUseAssistant = {
+      role: "assistant",
+      stopReason: "toolUse",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "toolCall", id: "tool_1", name: "exec", arguments: {} }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    const instruction = resolveSettledToolTerminalContinuationInstruction({
+      provider: "openai",
+      modelId: "gpt-5.5",
+      modelApi: "openai-chatgpt-responses",
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "exec", isError: true }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        messagesSnapshot: [
+          toolUseAssistant,
+          { role: "toolResult", toolCallId: "tool_1", toolName: "exec", isError: true },
+        ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+        lastAssistant: toolUseAssistant,
+        currentAttemptAssistant: toolUseAssistant,
+        lastToolError: { toolName: "exec", error: "post-processing error" },
+        ...attemptOverrides,
       }),
     });
 

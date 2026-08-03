@@ -793,15 +793,20 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
       attempt: params.attempt,
     }),
   );
-  // Idle is not proof of completion: a toolUse terminal whose requested tools never
-  // (or only partially) dispatched must keep the incomplete-turn error, or the model
-  // could claim skipped side effects succeeded. Lifecycle counts are attempt-cumulative
-  // and alias across batches, so completion is proven per tool-call id: every toolCall
-  // in the terminal assistant needs a non-error toolResult in the message snapshot.
-  const requestedToolCallIds = Array.isArray(assistant?.content)
+  // Idle is not proof of settlement: skipped or partially dispatched tools must
+  // never be described as completed. Match each terminal call's id and owner to
+  // its own current-batch result; a reported failure is settled, not successful.
+  const requestedToolCalls = Array.isArray(assistant?.content)
     ? assistant.content.flatMap((item) => {
-        const block = item as { type?: unknown; id?: unknown } | null;
-        return block?.type === "toolCall" ? [typeof block.id === "string" ? block.id : null] : [];
+        const block = item as { type?: unknown; id?: unknown; name?: unknown } | null;
+        return block?.type === "toolCall"
+          ? [
+              {
+                id: typeof block.id === "string" ? block.id : null,
+                name: typeof block.name === "string" ? block.name : null,
+              },
+            ]
+          : [];
       })
     : [];
   // Scan only results AFTER the terminal assistant: the snapshot spans the whole
@@ -810,28 +815,58 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   // the snapshot fails closed to the existing incomplete-turn error.
   const snapshot = params.attempt.messagesSnapshot ?? [];
   const assistantIndex = assistant ? snapshot.indexOf(assistant) : -1;
-  const completedToolCallIds = new Set(
+  const settledToolResults = new Map(
     (assistantIndex >= 0 ? snapshot.slice(assistantIndex + 1) : []).flatMap((message) => {
-      const result = message as { role?: unknown; toolCallId?: unknown; isError?: unknown };
+      const result = message as {
+        role?: unknown;
+        toolCallId?: unknown;
+        toolName?: unknown;
+        isError?: unknown;
+      };
       return result.role === "toolResult" &&
-        result.isError !== true &&
-        typeof result.toolCallId === "string"
-        ? [result.toolCallId]
+        typeof result.toolCallId === "string" &&
+        typeof result.toolName === "string"
+        ? [
+            [
+              result.toolCallId,
+              { toolName: result.toolName, isError: result.isError === true },
+            ] as const,
+          ]
         : [];
     }),
   );
-  const allToolsProvenComplete =
+  const allToolsProvenSettled =
     params.attempt.itemLifecycle?.activeCount === 0 &&
-    requestedToolCallIds.length > 0 &&
-    requestedToolCallIds.every((id) => id !== null && completedToolCallIds.has(id));
+    requestedToolCalls.length > 0 &&
+    requestedToolCalls.every(
+      ({ id, name }) =>
+        id !== null && name !== null && settledToolResults.get(id)?.toolName === name,
+    );
+  const failedTerminalToolNames = new Set(
+    requestedToolCalls.flatMap(({ id, name }) =>
+      id !== null && name !== null && settledToolResults.get(id)?.isError === true ? [name] : [],
+    ),
+  );
+  const hasSettledTerminalToolFailure = allToolsProvenSettled && failedTerminalToolNames.size > 0;
+  // ToolErrorSummary has no call id: its owner must match a failed result in the
+  // proven terminal batch, or a stale/unrelated error could authorize finalization.
+  const hasUnsettledToolError = Boolean(
+    params.attempt.lastToolError &&
+    (assistant?.stopReason !== "toolUse" ||
+      !hasSettledTerminalToolFailure ||
+      !failedTerminalToolNames.has(params.attempt.lastToolError.toolName)),
+  );
   if (
     params.payloadCount !== 0 ||
     params.hasTerminalToolPresentation ||
     params.aborted ||
     params.promptError != null ||
     params.timedOut ||
-    (assistant?.stopReason === "toolUse" ? !allToolsProvenComplete : !emptyStopAfterSettledTools) ||
-    params.attempt.lastToolError ||
+    (assistant?.stopReason === "toolUse" ? !allToolsProvenSettled : !emptyStopAfterSettledTools) ||
+    hasUnsettledToolError ||
+    (hasSettledTerminalToolFailure &&
+      (hasAsyncStartedToolActivity(params.attempt.toolMetas) ||
+        hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns))) ||
     params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt
@@ -851,7 +886,9 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   ) {
     return null;
   }
-  return SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION;
+  return hasSettledTerminalToolFailure
+    ? `${SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION} If any tool failed, state that failure plainly and do not claim it succeeded.`
+    : SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION;
 }
 
 /**
