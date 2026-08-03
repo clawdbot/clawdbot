@@ -493,6 +493,19 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    const cfg = context.getRuntimeConfig();
+    if (isAgentMainSessionKey(cfg, key)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Cannot reset the main session directly. Use /new in a conversation instead.`,
+        ),
+      );
+      return;
+    }
+
     const reason = p.reason === "new" ? "new" : "reset";
     const { performGatewaySessionReset } = await loadSessionsRuntimeModule();
     const result = await performGatewaySessionReset({

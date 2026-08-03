@@ -563,34 +563,10 @@ test("lists and patches session store via sessions.* RPC", async () => {
     }),
   ).resolves.toEqual([]);
 
-  const reset = await directSessionReq<{
-    ok: true;
-    key: string;
-    entry: {
-      sessionId: string;
-      modelProvider?: string;
-      model?: string;
-      delivery?: import("../config/sessions/types.js").SessionDeliveryState;
-    };
-  }>("sessions.reset", { key: "agent:main:main" });
-  expect(reset.ok).toBe(true);
-  expect(reset.payload?.key).toBe("agent:main:main");
-  expect(reset.payload?.entry.sessionId).toBe("sess-main");
-  expect(reset.payload?.entry.modelProvider).toBe("openai");
-  expect(reset.payload?.entry.model).toBe("gpt-test-a");
-  expect(deliveryContextFromSession(reset.payload?.entry)?.accountId).toBe("work");
-  expect(deliveryContextFromSession(reset.payload?.entry)?.threadId).toBe("1737500000.123456");
-  const entryAfterReset = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
-  expect(deliveryContextFromSession(entryAfterReset)?.accountId).toBe("work");
-  expect(deliveryContextFromSession(entryAfterReset)?.threadId).toBe("1737500000.123456");
-  // Retained history stays in the same SQLite transcript behind the reset boundary.
-  const resetTranscript = await loadTranscriptRows({
-    sessionId: "sess-main",
-    sessionKey: "agent:main:main",
-    storePath,
-  });
-  expect(resetTranscript).toHaveLength(4);
-  expect(resetTranscript.at(-1)).toMatchObject({ type: "reset", reason: "reset" });
+  // Guard: sessions.reset rejects the protected main session alias
+  const resetMainSession = await directSessionReq("sessions.reset", { key: "agent:main:main" });
+  expect(resetMainSession.ok).toBe(false);
+  expect(resetMainSession.error?.code).toBe("INVALID_REQUEST");
 
   const badThinking = await directSessionReq("sessions.patch", {
     key: "agent:main:main",
