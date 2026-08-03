@@ -85,6 +85,23 @@ RUN_ONBOARD=0
 SET_NPM_PREFIX=0
 PNPM_CMD=()
 
+# SECURITY: refuse any path-like value that starts with `-`. Several git
+# subcommands (`clone`, `-C`, `--git-dir`) treat a leading-dash second
+# positional argument as a flag (`--upload-pack`, `--exec`, etc.). A user
+# passing `--git-dir "--upload-pack=touch /tmp/pwned"` to `install-cli.sh`
+# otherwise lets the installer run arbitrary commands during `git clone`.
+assert_safe_path_value() {
+  local label="$1"
+  local value="$2"
+  if [[ -z "$value" ]]; then
+    return 0
+  fi
+  if [[ "$value" == -* ]]; then
+    fail "Invalid value for ${label}: must not start with '-'"
+  fi
+  return 0
+}
+
 print_usage() {
   cat <<EOF
 Usage: install-cli.sh [options]
@@ -279,6 +296,11 @@ parse_args() {
         if [[ $# -lt 2 || "${2:-}" == --* ]]; then
           fail "Missing value for $1"
         fi
+        # SECURITY: reject leading-dash values to avoid git option injection
+        # when the path is later passed to `git clone` / `git -C`.
+        if [[ "${2:-}" == -* ]]; then
+          fail "Invalid value for $1: must not start with '-'"
+        fi
         PREFIX="$2"
         shift 2
         ;;
@@ -315,6 +337,13 @@ parse_args() {
       --git-dir|--dir)
         if [[ $# -lt 2 || "${2:-}" == --* ]]; then
           fail "Missing value for $1"
+        fi
+        # SECURITY: reject leading-dash values to prevent git option injection
+        # (`git clone <url> <dir>` treats `-foo` as a flag; this gives the caller
+        # the ability to pass e.g. `--upload-pack=...` and execute arbitrary
+        # commands during the install).
+        if [[ "${2:-}" == -* ]]; then
+          fail "Invalid value for $1: must not start with '-'"
         fi
         GIT_DIR="$2"
         shift 2
@@ -1169,11 +1198,19 @@ install_openclaw_from_git() {
   if [[ -z "$repo_dir" ]]; then
     fail "Git install dir cannot be empty"
   fi
+  # SECURITY: reject leading-dash repo_dir so it can't be parsed by git as
+  # a flag (`git clone <url> --upload-pack=...` etc.). parse_args already
+  # blocks this for `--git-dir`, but OPENCLAW_GIT_DIR / function callers
+  # bypass that, so we re-check here at the actual sink.
+  assert_safe_path_value "git install dir" "$repo_dir"
   if [[ "$repo_dir" != /* ]]; then
     repo_dir="$(pwd)/$repo_dir"
   fi
   mkdir -p "$(dirname "$repo_dir")"
   repo_dir="$(cd "$(dirname "$repo_dir")" && pwd)/$(basename "$repo_dir")"
+  # After path normalization `repo_dir` is always absolute, so re-check it
+  # before we hand it to git.
+  assert_safe_path_value "resolved git install dir" "$repo_dir"
 
   emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"start\",\"method\":\"git\",\"repo\":\"${repo_url//\"/\\\"}\"}"
   if [[ -d "$repo_dir/.git" ]]; then
@@ -1195,12 +1232,15 @@ install_openclaw_from_git() {
     :
   elif [[ -d "$repo_dir" ]]; then
     if [[ -z "$(ls -A "$repo_dir" 2>/dev/null || true)" ]]; then
-      git clone "$repo_url" "$repo_dir"
+      # `--` tells git everything after the url is positional (the destination
+      # directory), so even if a future regression lets a leading-dash value
+      # reach this point it would still be treated as a path, not a flag.
+      git clone -- "$repo_url" "$repo_dir"
     else
       fail "Git install dir exists but is not a git repo: ${repo_dir}"
     fi
   else
-    git clone "$repo_url" "$repo_dir"
+    git clone -- "$repo_url" "$repo_dir"
   fi
 
   local git_ref
