@@ -1,5 +1,4 @@
-import { mkdir } from "node:fs/promises";
-// Control UI tests prove prefixed shell routing and explicit development Gateway selection.
+import { mkdir, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
@@ -153,6 +152,9 @@ describeControlUiE2e("Control UI shell routing E2E", () => {
         basePath,
       );
 
+      // main.ts rewrites the root-absolute HTML links from the injected base path.
+      // Assert final DOM hrefs and observed requests so the proxy cannot bypass
+      // the production rewrite owner this test is intended to prove.
       const assetResults = await page.evaluate(async () => {
         const links = Array.from(
           document.querySelectorAll<HTMLLinkElement>(
@@ -165,7 +167,9 @@ describeControlUiE2e("Control UI shell routing E2E", () => {
             return {
               contentType: response.headers.get("content-type") ?? "",
               pathname: new URL(link.href).pathname,
+              rel: link.rel,
               status: response.status,
+              type: link.type,
             };
           }),
         );
@@ -175,11 +179,27 @@ describeControlUiE2e("Control UI shell routing E2E", () => {
           expect.objectContaining({
             contentType: expect.stringContaining("image/svg+xml"),
             pathname: `${basePath}/favicon.svg`,
+            rel: "icon",
+            status: 200,
+            type: "image/svg+xml",
+          }),
+          expect.objectContaining({
+            contentType: expect.stringContaining("image/png"),
+            pathname: `${basePath}/favicon-32.png`,
+            rel: "icon",
+            status: 200,
+            type: "image/png",
+          }),
+          expect.objectContaining({
+            contentType: expect.stringContaining("image/png"),
+            pathname: `${basePath}/apple-touch-icon.png`,
+            rel: "apple-touch-icon",
             status: 200,
           }),
           expect.objectContaining({
             contentType: expect.stringContaining("application/manifest+json"),
             pathname: `${basePath}/manifest.webmanifest`,
+            rel: "manifest",
             status: 200,
           }),
         ]),
@@ -188,6 +208,8 @@ describeControlUiE2e("Control UI shell routing E2E", () => {
         expect.arrayContaining([
           `${basePath}/chat`,
           `${basePath}/favicon.svg`,
+          `${basePath}/favicon-32.png`,
+          `${basePath}/apple-touch-icon.png`,
           `${basePath}/manifest.webmanifest`,
         ]),
       );
@@ -196,6 +218,25 @@ describeControlUiE2e("Control UI shell routing E2E", () => {
         fullPage: true,
         path: path.join(artifactDir, "connected-shell.png"),
       });
+      await writeFile(
+        path.join(artifactDir, "behavior-summary.json"),
+        `${JSON.stringify(
+          {
+            basePath,
+            finalPathname: new URL(page.url()).pathname,
+            gatewayUrl: explicitGatewayUrl,
+            publicAssetLinks: assetResults,
+            proxyRequestPaths: [
+              ...new Set(
+                proxy.requests.filter((requestPath) => requestPath.startsWith(`${basePath}/`)),
+              ),
+            ].sort(),
+            schemaVersion: 1,
+          },
+          null,
+          2,
+        )}\n`,
+      );
     } finally {
       await context.close();
     }
