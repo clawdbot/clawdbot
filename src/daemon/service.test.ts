@@ -16,16 +16,26 @@ import {
 } from "./service.js";
 import { createMockGatewayService } from "./service.test-helpers.js";
 
+const mocks = vi.hoisted(() => ({
+  restartSystemdService: vi.fn(async () => ({ outcome: "completed" as const })),
+}));
+
 vi.mock("../config/paths.js", async () => {
   const actual = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
   return { ...actual, isDefaultInstallIdentity: () => true };
 });
+
+vi.mock("./systemd.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./systemd.js")>()),
+  restartSystemdService: mocks.restartSystemdService,
+}));
 
 function setPlatform(value: NodeJS.Platform) {
   mockProcessPlatform(value);
 }
 
 afterEach(() => {
+  vi.clearAllMocks();
   vi.restoreAllMocks();
 });
 
@@ -124,13 +134,17 @@ describe("resolveGatewayService", () => {
       await expect(service.restart({ env: process.env, stdout: process.stdout })).rejects.toThrow(
         "Refusing to restart the gateway service",
       );
+      expect(mocks.restartSystemdService).not.toHaveBeenCalled();
 
       const allowEnv = {
         ...process.env,
         OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "1",
       };
-      await expect(service.restart({ env: allowEnv, stdout: process.stdout })).rejects.not.toThrow(
-        "Refusing to restart the gateway service",
+      await expect(
+        service.restart({ env: allowEnv, stdout: process.stdout }),
+      ).resolves.toMatchObject({ outcome: "completed" });
+      expect(mocks.restartSystemdService).toHaveBeenCalledWith(
+        expect.objectContaining({ env: allowEnv }),
       );
     } finally {
       envSnapshot.restore();
