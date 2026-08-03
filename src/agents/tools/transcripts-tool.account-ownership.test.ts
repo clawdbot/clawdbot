@@ -25,13 +25,14 @@ async function makeStateDir(): Promise<string> {
 function createTool(
   stateDir: string,
   agentId: string,
-  origin?: { channel: string; accountId: string },
+  origin?: { channel: string; accountId?: string },
 ) {
   return createTranscriptsTool({
     config: { transcripts: { enabled: true } },
     stateDir,
     agentId,
-    ...(origin ? { agentChannel: origin.channel, agentAccountId: origin.accountId } : {}),
+    ...(origin ? { agentChannel: origin.channel } : {}),
+    ...(origin?.accountId ? { agentAccountId: origin.accountId } : {}),
   });
 }
 
@@ -164,6 +165,64 @@ describe("transcripts tool account ownership", () => {
         }),
       }),
     );
+  });
+
+  it("rejects channel starts without the provider's trusted account context", async () => {
+    const stateDir = await makeStateDir();
+    const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
+    getTranscriptSourceProviderMock.mockReturnValue({
+      id: "discord-voice",
+      aliases: ["discord"],
+      accountBindingChannels: ["discord"],
+      name: "Discord Voice",
+      sourceKinds: ["live-audio"],
+      start,
+    });
+    const startParams = {
+      action: "start",
+      providerId: "discord-voice",
+      accountId: "account-a",
+      guildId: "guild-a",
+      channelId: "voice-a",
+    };
+    const expectedError =
+      "transcripts provider discord-voice requires trusted account context from discord; retry from that channel or the host-local main agent";
+
+    await expect(
+      createTool(stateDir, "main", { channel: "webchat", accountId: "operator" }).execute(
+        "call-webchat",
+        { ...startParams, sessionId: "webchat-start" },
+        undefined,
+        vi.fn(),
+      ),
+    ).rejects.toThrow(expectedError);
+    await expect(
+      createTool(stateDir, "main", { channel: "discord" }).execute(
+        "call-missing-account",
+        { ...startParams, sessionId: "missing-account" },
+        undefined,
+        vi.fn(),
+      ),
+    ).rejects.toThrow(expectedError);
+    await expect(
+      createTool(stateDir, "research").execute(
+        "call-unchanneled-non-main",
+        { ...startParams, sessionId: "unchanneled-non-main" },
+        undefined,
+        vi.fn(),
+      ),
+    ).rejects.toThrow(expectedError);
+    expect(start).not.toHaveBeenCalled();
+
+    await expect(
+      createTool(stateDir, "main").execute(
+        "call-local",
+        { ...startParams, sessionId: "local-start" },
+        undefined,
+        vi.fn(),
+      ),
+    ).resolves.toMatchObject({ details: { sessionId: "local-start" } });
+    expect(start).toHaveBeenCalledOnce();
   });
 
   it("does not treat provider lookup aliases as account binding channels", async () => {

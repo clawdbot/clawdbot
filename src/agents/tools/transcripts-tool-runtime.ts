@@ -122,14 +122,21 @@ function bindSourceToTurnAccount(params: {
 } {
   const channel = params.ctx.agentChannel?.trim().toLowerCase();
   const accountId = params.ctx.agentAccountId?.trim();
-  if (!channel || !accountId) {
+  const providerChannels = (params.provider.accountBindingChannels ?? [])
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+  if (providerChannels.length === 0) {
     return { source: params.source };
   }
-  const providerChannels = (params.provider.accountBindingChannels ?? []).map((entry) =>
-    entry.trim().toLowerCase(),
-  );
-  if (!providerChannels.includes(channel)) {
+  const isTrustedUnchanneledOwner =
+    !channel && (!params.ctx.agentId || params.ctx.agentId === "main");
+  if (isTrustedUnchanneledOwner) {
     return { source: params.source };
+  }
+  if (!providerChannels.includes(channel) || !accountId) {
+    throw new Error(
+      `transcripts provider ${params.provider.id} requires trusted account context from ${providerChannels.join(", ")}; retry from that channel or the host-local main agent`,
+    );
   }
   // Same-channel capture stays on the trusted inbound account; model input
   // cannot redirect or later control another configured channel account.
