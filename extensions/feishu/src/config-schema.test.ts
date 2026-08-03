@@ -74,14 +74,27 @@ describe("FeishuConfigSchema webhook validation", () => {
     ["/legacy%ZZ", "/legacy%ZZ"],
     ["", "/feishu/events"],
     ["   ", "/feishu/events"],
-  ])("canonicalizes root and account webhook path %j to %j", (webhookPath, expectedPath) => {
-    const result = FeishuConfigSchema.parse({
-      webhookPath,
-      accounts: { main: { webhookPath } },
-    });
+  ])("accepts only canonical root and account webhook path %j", (webhookPath, canonicalPath) => {
+    if (webhookPath === canonicalPath) {
+      const result = FeishuConfigSchema.parse({
+        webhookPath,
+        accounts: { main: { webhookPath } },
+      });
+      expect(result.webhookPath).toBe(webhookPath);
+      expect(result.accounts?.main?.webhookPath).toBe(webhookPath);
+      return;
+    }
 
-    expect(result.webhookPath).toBe(expectedPath);
-    expect(result.accounts?.main?.webhookPath).toBe(expectedPath);
+    for (const [input, issuePath] of [
+      [{ webhookPath }, "webhookPath"],
+      [{ accounts: { main: { webhookPath } } }, "accounts.main.webhookPath"],
+    ] as const) {
+      const result = FeishuConfigSchema.safeParse(input);
+      expectSchemaIssue(result, issuePath);
+      if (!result.success) {
+        expect(result.error.issues[0]?.message).toContain("openclaw doctor --fix");
+      }
+    }
   });
 
   it.each([
@@ -98,11 +111,14 @@ describe("FeishuConfigSchema webhook validation", () => {
     );
   });
 
-  it("canonicalizes accepted webhook input through the exported runtime parser", () => {
+  it("rejects legacy webhook input while preserving the exported canonical default", () => {
     expect(
       FeishuChannelConfigSchema.runtime?.safeParse({
         webhookPath: "https://example.com/hook/?tenant=alpha#fragment",
       }),
+    ).toMatchObject({ success: false });
+    expect(
+      FeishuChannelConfigSchema.runtime?.safeParse({ webhookPath: "/hook/?tenant=alpha" }),
     ).toMatchObject({ success: true, data: { webhookPath: "/hook/?tenant=alpha" } });
     expect(FeishuChannelConfigSchema.schema).toMatchObject({
       properties: {

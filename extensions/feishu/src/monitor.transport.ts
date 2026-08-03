@@ -27,7 +27,7 @@ import {
   wsClients,
 } from "./monitor.state.js";
 import type { ResolvedFeishuAccount } from "./types.js";
-import { normalizeFeishuWebhookPath } from "./webhook-path.js";
+import { DEFAULT_FEISHU_WEBHOOK_PATH, normalizeFeishuWebhookPath } from "./webhook-path.js";
 
 type MonitorTransportParams = {
   account: ResolvedFeishuAccount;
@@ -373,10 +373,10 @@ export async function monitorWebhook({
   }
 
   const port = account.config.webhookPort ?? 3000;
-  const path = normalizeFeishuWebhookPath(account.config.webhookPath);
-  if (path === null) {
+  const path = account.config.webhookPath ?? DEFAULT_FEISHU_WEBHOOK_PATH;
+  if (normalizeFeishuWebhookPath(path) !== path) {
     throw new Error(
-      `Feishu account "${accountId}" webhookPath must be a valid HTTP(S) URL or route path; ` +
+      `Feishu account "${accountId}" webhookPath must be a canonical HTTP request path; ` +
         'run "openclaw doctor --fix" to repair it',
     );
   }

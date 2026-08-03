@@ -6,6 +6,7 @@ import * as Lark from "@larksuiteoapi/node-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import { normalizeCompatibilityConfig } from "./doctor-contract.js";
 import { createFeishuRuntimeMockModule } from "./monitor.test-mocks.js";
 import {
   buildWebhookConfig,
@@ -596,7 +597,7 @@ describe("Feishu webhook signed-request e2e", () => {
     ["empty root", "root", "", "/feishu/events"],
     ["whitespace account", "account", "   ", "/feishu/events"],
   ])(
-    "canonicalizes the configured %s before raw webhook admission",
+    "requires Doctor to canonicalize the configured %s before raw webhook admission",
     async (_label, scope, configuredPath, acceptedTarget) => {
       const accountId = `legacy-route-${scope}`;
       const port = await getFreePort();
@@ -619,11 +620,11 @@ describe("Feishu webhook signed-request e2e", () => {
           },
         },
       };
-      const account = resolveFeishuRuntimeAccount(
+      const unmigratedAccount = resolveFeishuRuntimeAccount(
         { cfg: config, accountId },
         { requireEventSecrets: true },
       );
-      expect(account.config.webhookPath).toBe(configuredPath);
+      expect(unmigratedAccount.config.webhookPath).toBe(configuredPath);
 
       const handler = vi.fn(async () => ({ accepted: true }));
       const eventDispatcher = new Lark.EventDispatcher({
@@ -633,14 +634,31 @@ describe("Feishu webhook signed-request e2e", () => {
       eventDispatcher.register({ "test.legacy_route_boundary": handler });
       const statusSink = vi.fn();
       const abortController = new AbortController();
-      const monitorPromise = monitorWebhook({
-        account,
+      const monitorParams = {
+        account: unmigratedAccount,
         accountId,
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
         abortSignal: abortController.signal,
         eventDispatcher,
         statusSink,
-      });
+      };
+      const needsMigration = configuredPath !== acceptedTarget;
+      if (needsMigration) {
+        await expect(monitorWebhook(monitorParams)).rejects.toThrow("openclaw doctor --fix");
+        expect(httpServers.has(accountId)).toBe(false);
+        expect(handler).not.toHaveBeenCalled();
+        expect(statusSink).not.toHaveBeenCalled();
+      }
+      const migrated = normalizeCompatibilityConfig({ cfg: config });
+      expect(migrated.changes.some((change) => change.includes(".webhookPath"))).toBe(
+        needsMigration,
+      );
+      const account = resolveFeishuRuntimeAccount(
+        { cfg: migrated.config, accountId },
+        { requireEventSecrets: true },
+      );
+      expect(account.config.webhookPath).toBe(acceptedTarget);
+      const monitorPromise = monitorWebhook({ ...monitorParams, account });
       const rawBody = JSON.stringify({
         schema: "2.0",
         header: { event_type: "test.legacy_route_boundary" },
