@@ -1,5 +1,6 @@
 // Cron schedule tests cover schedule parsing and next-run calculations.
-import { beforeEach, describe, expect, it } from "vitest";
+import { Cron } from "croner";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   coerceFiniteScheduleNumber,
   computeNextRunAtMs,
@@ -270,6 +271,57 @@ describe("cron schedule", () => {
 
       expect(computeNextRunAtMs(schedule, nowMs)).toBeUndefined();
       expect(computePreviousRunAtMs(schedule, nowMs)).toBe(Date.parse("2026-11-01T05:30:00.000Z"));
+    });
+
+    it.each([
+      {
+        label: "next-second retry rejects a real spring-forward gap",
+        timezone: "America/New_York",
+        expression: "30 2 * * *",
+        now: "2027-03-14T06:45:00.000Z",
+        prior: "2027-03-13T07:30:00.000Z",
+        forcedPastCalls: 1,
+        expected: "2027-03-15T06:30:00.000Z",
+      },
+      {
+        label: "next-second retry selects the first real half-hour fold",
+        timezone: "Australia/Lord_Howe",
+        expression: "45 1 * * *",
+        now: "2026-04-04T14:40:00.000Z",
+        prior: "2026-04-03T14:45:00.000Z",
+        forcedPastCalls: 1,
+        expected: "2026-04-04T14:45:00.000Z",
+      },
+      {
+        label: "tomorrow retry rejects a real spring-forward gap",
+        timezone: "America/New_York",
+        expression: "30 2 * * *",
+        now: "2027-03-13T23:45:00.000Z",
+        prior: "2027-03-13T07:30:00.000Z",
+        forcedPastCalls: 2,
+        expected: "2027-03-15T06:30:00.000Z",
+      },
+      {
+        label: "tomorrow retry selects the first real half-hour fold",
+        timezone: "Australia/Lord_Howe",
+        expression: "45 1 * * *",
+        now: "2026-04-03T23:45:00.000Z",
+        prior: "2026-04-03T14:45:00.000Z",
+        forcedPastCalls: 2,
+        expected: "2026-04-04T14:45:00.000Z",
+      },
+    ])("$label", ({ timezone, expression, now, prior, forcedPastCalls, expected }) => {
+      const spy = vi.spyOn(Cron.prototype, "nextRun");
+      for (let count = 0; count < forcedPastCalls; count += 1) {
+        spy.mockImplementationOnce(() => new Date(prior));
+      }
+      try {
+        expect(
+          computeNextRunAtMs({ kind: "cron", expr: expression, tz: timezone }, Date.parse(now)),
+        ).toBe(Date.parse(expected));
+      } finally {
+        spy.mockRestore();
+      }
     });
   });
 

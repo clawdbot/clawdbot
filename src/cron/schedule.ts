@@ -196,6 +196,19 @@ function resolveNextCronOccurrenceMs(
   return resolveCronRunAtTransitionMs(cron, transitionMs + overlapMs, timezone);
 }
 
+function resolveValidatedNextCronOccurrenceMs(
+  cron: Cron,
+  nowMs: number,
+  candidateMs: number,
+  timezone: string,
+): number | undefined {
+  if (candidateMs > nowMs && !hasNearbyCronTimezoneTransition(cron, timezone, nowMs, candidateMs)) {
+    return candidateMs;
+  }
+  const normalizedMs = resolveNextCronOccurrenceMs(cron, nowMs, candidateMs, timezone);
+  return normalizedMs !== undefined && normalizedMs > nowMs ? normalizedMs : undefined;
+}
+
 /** Computes the next scheduled run timestamp after now for at/every/cron schedules. */
 export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): number | undefined {
   if (schedule.kind === "at") {
@@ -238,11 +251,8 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
   }
 
   const timezone = resolveCronTimezone(schedule.tz);
-  if (nextMs > nowMs && !hasNearbyCronTimezoneTransition(cron, timezone, nowMs, nextMs)) {
-    return nextMs;
-  }
-  const normalizedNextMs = resolveNextCronOccurrenceMs(cron, nowMs, nextMs, timezone);
-  if (normalizedNextMs !== undefined && normalizedNextMs > nowMs) {
+  const normalizedNextMs = resolveValidatedNextCronOccurrenceMs(cron, nowMs, nextMs, timezone);
+  if (normalizedNextMs !== undefined) {
     return normalizedNextMs;
   }
   if (nextMs > nowMs) {
@@ -255,13 +265,18 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
   // future.
   const nextSecondMs = Math.floor(nowMs / 1000) * 1000 + 1000;
   const retryMs = cron.nextRun(new Date(nextSecondMs))?.getTime();
-  if (retryMs !== undefined && retryMs > nowMs) {
-    return retryMs;
+  if (retryMs !== undefined) {
+    const normalizedRetryMs = resolveValidatedNextCronOccurrenceMs(cron, nowMs, retryMs, timezone);
+    if (normalizedRetryMs !== undefined) {
+      return normalizedRetryMs;
+    }
   }
   // Still in the past — try from start of tomorrow (UTC) as a broader reset.
   const tomorrowMs = new Date(nowMs).setUTCHours(24, 0, 0, 0);
   const retry2Ms = cron.nextRun(new Date(tomorrowMs))?.getTime();
-  return retry2Ms !== undefined && retry2Ms > nowMs ? retry2Ms : undefined;
+  return retry2Ms !== undefined
+    ? resolveValidatedNextCronOccurrenceMs(cron, nowMs, retry2Ms, timezone)
+    : undefined;
 }
 
 /** Computes the previous cron-expression run timestamp before now. */
