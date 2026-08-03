@@ -128,7 +128,7 @@ export const SessionRowSchema = Type.Object(
     model: Type.Optional(Type.String()),
     modelProvider: Type.Optional(Type.String()),
     toolOverrides: Type.Optional(SessionToolOverridesSchema),
-    /** Resolved reasoning visibility after session and agent defaults are applied. */
+    /** Resolved reasoning visibility after session, config, and model-default precedence. */
     effectiveReasoningLevel: Type.Optional(NonEmptyString),
   },
   { additionalProperties: true },

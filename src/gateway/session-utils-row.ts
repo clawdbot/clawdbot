@@ -4,7 +4,9 @@ import { resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import { loadManifestModelCatalog, type ModelCatalogEntry } from "../agents/model-catalog.js";
+import { buildConfiguredModelCatalog, resolveReasoningDefault } from "../agents/model-selection.js";
+import { resolveConfiguredThinkingDefault } from "../agents/model-thinking-default.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import {
   getSessionDisplaySubagentRunByChildSessionKey,
@@ -397,11 +399,31 @@ export function buildGatewaySessionRow(params: {
           }
         : undefined,
   });
-  const effectiveReasoningLevel =
+  const agentConfig = resolveAgentConfig(cfg, sessionAgentId);
+  const configuredReasoningLevel =
     entry?.reasoningLevel ??
-    resolveAgentConfig(cfg, sessionAgentId)?.reasoningDefault ??
-    cfg.agents?.defaults?.reasoningDefault ??
-    "off";
+    agentConfig?.reasoningDefault ??
+    cfg.agents?.defaults?.reasoningDefault;
+  const hasConfiguredThinkingDefault =
+    thinkingProjection.thinkingLevel !== undefined ||
+    agentConfig?.thinkingDefault !== undefined ||
+    resolveConfiguredThinkingDefault({
+      cfg,
+      provider: thinkingProvider,
+      model: thinkingModel,
+    }) !== undefined;
+  const effectiveReasoningLevel =
+    configuredReasoningLevel ??
+    (!hasConfiguredThinkingDefault && thinkingProjection.effectiveThinkingLevel === "off"
+      ? resolveReasoningDefault({
+          provider: thinkingProvider,
+          model: thinkingModel,
+          catalog: params.modelCatalog ?? [
+            ...buildConfiguredModelCatalog({ cfg }),
+            ...loadManifestModelCatalog({ config: cfg, fallbackToMetadataScan: false }),
+          ],
+        })
+      : "off");
   const pluginExtensions =
     !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
 

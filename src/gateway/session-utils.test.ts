@@ -1728,6 +1728,73 @@ describe("gateway session utils", () => {
     expect(globalDefault.effectiveReasoningLevel).toBe("on");
   });
 
+  test("uses model reasoning only without explicit thinking or reasoning defaults", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({
+      pluginId: "reasoner",
+      source: "test",
+      provider: {
+        id: "reasoner",
+        label: "Reasoner",
+        auth: [],
+        resolveThinkingProfile: () => ({
+          levels: [{ id: "off" }],
+          defaultLevel: "off",
+        }),
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const modelCatalog = [
+      { provider: "reasoner", id: "default-on", name: "Default on", reasoning: true },
+    ];
+    const cfg = {
+      agents: {
+        defaults: { model: { primary: "reasoner/default-on" } },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+    const row = (entry?: SessionEntry, config = cfg) =>
+      buildGatewaySessionRow({
+        cfg: config,
+        storePath: "",
+        store: {},
+        key: "agent:main:main",
+        entry,
+        modelCatalog,
+      });
+
+    expect(row().effectiveReasoningLevel).toBe("on");
+    expect(row({ thinkingLevel: "off" } as SessionEntry).effectiveReasoningLevel).toBe("off");
+    expect(
+      row(undefined, {
+        ...cfg,
+        agents: {
+          ...cfg.agents,
+          defaults: { ...cfg.agents?.defaults, thinkingDefault: "off" },
+        },
+      } as OpenClawConfig).effectiveReasoningLevel,
+    ).toBe("off");
+    const staticCatalogCfg = {
+      ...cfg,
+      models: {
+        providers: {
+          reasoner: {
+            models: [{ id: "default-on", name: "Default on", reasoning: true }],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    expect(
+      buildGatewaySessionRow({
+        cfg: staticCatalogCfg,
+        storePath: "",
+        store: {},
+        key: "agent:main:main",
+      }).effectiveReasoningLevel,
+    ).toBe("on");
+  });
+
   test("buildGatewaySessionRow effectiveResponseUsage respects a per-channel responseUsage map", () => {
     const cfg = {
       agents: { list: [{ id: "main", default: true }] },
