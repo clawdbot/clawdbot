@@ -13,6 +13,7 @@ import {
   adjustTextareaHeight,
   disconnectTextareaOverflowObserver,
   observeTextareaOverflow,
+  preserveComposerFocusOnPrimaryAction,
   restoreHistoryCaret,
   scheduleTextareaHeightAdjustment,
 } from "./chat-composer-dom.ts";
@@ -499,6 +500,8 @@ export function renderChatComposer(props: ChatComposerProps) {
     if (!canSubmitDraft(draft)) {
       return;
     }
+    state.composerComposing = false;
+    state.composingDraft = null;
     commitComposerDraft(props, draft);
     props.onTypingChange?.(false);
     props.onSend();
@@ -664,6 +667,8 @@ export function renderChatComposer(props: ChatComposerProps) {
     microphonePicker,
     dictation,
     onDictationPointerDown: handleDictationPointerDown,
+    onPrimaryActionPointerDown: (event) =>
+      preserveComposerFocusOnPrimaryAction(event, state.composerTextarea),
   };
   const cameraFacingMode = props.realtimeTalkVideoStream
     ?.getVideoTracks?.()[0]

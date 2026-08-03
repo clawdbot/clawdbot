@@ -323,6 +323,9 @@ export async function prepareGatewayRuntimeState(params: {
     deferStartupAccountStartsUntil: startupAccountStartsReady,
     getNativeApprovalRuntime: () => gatewayInstanceRuntimeRef.current?.nativeApprovals,
     ambientAutostartSuppressedChannelIds,
+    ...(opts.tryRecoverChannelAutostartSuppression
+      ? { tryRecoverAutostartSuppression: opts.tryRecoverChannelAutostartSuppression }
+      : {}),
   });
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
   const sidecarStartup = opts.sidecarStartup ?? "start";

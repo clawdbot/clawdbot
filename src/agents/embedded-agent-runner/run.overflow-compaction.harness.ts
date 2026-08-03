@@ -201,7 +201,7 @@ export const mockedAcquireAgentRunPreparedModelRuntime = vi.fn(
     };
   },
 );
-export const mockedRunPostCompactionSideEffects = vi.fn(async () => {});
+const mockedRunPostCompactionSideEffects = vi.fn(async () => {});
 export const mockedSleepWithAbort = vi.fn(
   async (_ms: number, _abortSignal?: AbortSignal) => undefined,
 );

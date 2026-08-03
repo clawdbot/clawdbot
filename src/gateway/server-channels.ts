@@ -221,6 +221,7 @@ type ChannelManagerOptions = {
   deferStartupAccountStartsUntil?: Promise<void>;
   getNativeApprovalRuntime?: () => GatewayNativeApprovalRuntime | undefined;
   ambientAutostartSuppressedChannelIds?: ReadonlySet<string>;
+  tryRecoverAutostartSuppression?: () => boolean;
 };
 
 type StopChannelOptions = {
@@ -259,6 +260,7 @@ export type ChannelManager = {
   stopChannel: (channel: ChannelId, accountId?: string, opts?: StopChannelOptions) => Promise<void>;
   setAutostartSuppression: (suppression: ChannelAutostartSuppression | null) => void;
   getAutostartSuppression: () => ChannelAutostartSuppression | null;
+  recoverAutostartSuppression: () => Promise<boolean>;
   setAmbientAutostartSuppressedChannelIds: (channelIds: ReadonlySet<string>) => void;
   isAmbientAutostartSuppressed: (channelId: string) => boolean;
   markChannelLoggedOut: (channelId: ChannelId, cleared: boolean, accountId?: string) => void;
@@ -1179,7 +1181,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     }
   };
 
-  const startChannels = async () => {
+  const startChannelsWithOptions = async (startOptions: StartChannelOptions = {}) => {
     let releaseAccountStarts: (() => void) | undefined;
     const deferAccountStartUntil =
       opts.deferStartupAccountStartsUntil ??
@@ -1197,11 +1199,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         tasks: [...listChannelPlugins()].map((plugin) => async () => {
           try {
             await measureStartup(`channels.${plugin.id}.start`, () =>
-              startChannelInternal(
-                plugin.id,
-                undefined,
-                deferAccountStartUntil ? { deferAccountStartUntil } : {},
-              ),
+              startChannelInternal(plugin.id, undefined, {
+                ...startOptions,
+                ...(deferAccountStartUntil ? { deferAccountStartUntil } : {}),
+              }),
             );
           } catch (err) {
             ensureChannelLog(plugin.id).error?.(
@@ -1213,6 +1214,19 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     } finally {
       releaseAccountStarts?.();
     }
+  };
+
+  const startChannels = async () => await startChannelsWithOptions();
+
+  const recoverAutostartSuppression = async (): Promise<boolean> => {
+    if (!autostartSuppression || !opts.tryRecoverAutostartSuppression?.()) {
+      return false;
+    }
+    autostartSuppression = null;
+    // Recovery resumes the autostart attempt that safe mode deferred. Preserve
+    // explicit operator stops while still covering health-monitor opt-outs.
+    await startChannelsWithOptions({ preserveManualStop: true });
+    return true;
   };
 
   const markChannelLoggedOut = (channelId: ChannelId, cleared: boolean, accountId?: string) => {
@@ -1305,6 +1319,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       autostartSuppression = suppression;
     },
     getAutostartSuppression: () => autostartSuppression,
+    recoverAutostartSuppression,
     setAmbientAutostartSuppressedChannelIds: (channelIds) => {
       ambientAutostartSuppressedChannelIds = new Set(channelIds);
     },

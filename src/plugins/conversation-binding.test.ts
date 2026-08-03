@@ -6,6 +6,7 @@ import type {
   SessionBindingAdapter,
   SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import * as openClawStateDb from "../state/openclaw-state-db.js";
 import {
@@ -13,10 +14,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import {
-  resetPluginConversationBindingCachesForTest,
-  seedPluginConversationBindingApprovalForTest,
-} from "./conversation-binding.test-fixtures.js";
+import { seedPluginConversationBindingApprovalForTest } from "./conversation-binding.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -118,7 +116,6 @@ vi.mock("./runtime.js", async () => {
 });
 
 let buildPluginBindingApprovalCustomId: typeof import("./conversation-binding.js").buildPluginBindingApprovalCustomId;
-let clearPluginBindingPendingRequests: typeof import("./conversation-binding.js").clearPluginBindingPendingRequests;
 let bindPluginSessionConversation: typeof import("./session-conversation-binding.js").bindPluginSessionConversation;
 let detachPluginConversationBinding: typeof import("./conversation-binding.js").detachPluginConversationBinding;
 let getCurrentPluginConversationBinding: typeof import("./conversation-binding.js").getCurrentPluginConversationBinding;
@@ -176,7 +173,6 @@ afterAll(() => {
 beforeAll(async () => {
   ({
     buildPluginBindingApprovalCustomId,
-    clearPluginBindingPendingRequests,
     detachPluginConversationBinding,
     getCurrentPluginConversationBinding,
     parsePluginBindingApprovalCustomId,
@@ -189,8 +185,8 @@ beforeAll(async () => {
   ({ setActivePluginRegistry } = await import("./runtime.js"));
 });
 
-afterEach(() => {
-  clearPluginBindingPendingRequests();
+afterEach(async () => {
+  await drainGlobalSingletonLifecycleState();
   vi.useRealTimers();
 });
 
@@ -294,7 +290,7 @@ async function approveBindingRequest(
 async function importDuplicateConversationBindingModules() {
   const first = await importConversationBindingModule(`first-${Date.now()}`);
   const second = await importConversationBindingModule(`second-${Date.now()}`);
-  resetPluginConversationBindingCachesForTest();
+  await drainGlobalSingletonLifecycleState();
   return { first, second };
 }
 
@@ -464,12 +460,11 @@ function insertPluginBindingApprovalRow(params: {
 }
 
 describe("plugin conversation binding approvals", () => {
-  beforeEach(() => {
-    clearPluginBindingPendingRequests();
+  beforeEach(async () => {
+    await drainGlobalSingletonLifecycleState();
     process.env.OPENCLAW_STATE_DIR = tempRoot;
     clearPluginBindingApprovalRows();
     sessionBindingState.reset();
-    resetPluginConversationBindingCachesForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "default" });
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "work" });
@@ -811,7 +806,7 @@ describe("plugin conversation binding approvals", () => {
 
     expect(rebound.status).toBe("bound");
 
-    resetPluginConversationBindingCachesForTest();
+    await drainGlobalSingletonLifecycleState();
     clearPluginBindingApprovalRows();
   });
 
@@ -824,7 +819,7 @@ describe("plugin conversation binding approvals", () => {
       ),
     );
 
-    clearPluginBindingPendingRequests();
+    await drainGlobalSingletonLifecycleState();
 
     await expect(approveBindingRequest(request.approvalId, "allow-once")).resolves.toEqual({
       status: "expired",

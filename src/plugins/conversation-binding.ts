@@ -12,7 +12,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -123,7 +123,15 @@ type PluginBindingResolveResult =
 // Chat approvals get the exec-style 30-minute decision window, with abandoned payloads capped.
 const PENDING_PLUGIN_BINDING_REQUEST_TTL_MS = 30 * 60_000;
 const MAX_PENDING_PLUGIN_BINDING_REQUESTS = 512;
-const pendingRequests = new Map<string, PendingPluginBindingRequestEntry>();
+const pendingRequests = resolveGlobalMap<string, PendingPluginBindingRequestEntry>(
+  Symbol.for("openclaw.pluginBindingPendingRequests"),
+  (requests) => {
+    for (const entry of requests.values()) {
+      clearTimeout(entry.timeoutId);
+    }
+    requests.clear();
+  },
+);
 
 function takePendingPluginBindingRequest(
   approvalId: string,
@@ -160,13 +168,6 @@ function addPendingPluginBindingRequest(request: PendingPluginBindingRequest): v
   }
 }
 
-export function clearPluginBindingPendingRequests(): void {
-  for (const entry of pendingRequests.values()) {
-    clearTimeout(entry.timeoutId);
-  }
-  pendingRequests.clear();
-}
-
 type PluginBindingGlobalState = {
   fallbackNoticeBindingIds: Set<string>;
   approvalsCache: PluginBindingApprovalsState | null;
@@ -199,6 +200,11 @@ const pluginBindingGlobalState = resolveGlobalSingleton<PluginBindingGlobalState
     approvalsLoaded: false,
     approvalsSaveChain: Promise.resolve(),
   }),
+  (state) => {
+    state.fallbackNoticeBindingIds.clear();
+    state.approvalsCache = null;
+    state.approvalsLoaded = false;
+  },
 );
 
 function getPluginBindingGlobalState(): PluginBindingGlobalState {

@@ -1,19 +1,11 @@
 // Memory Wiki plugin module implements query behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { filterMemorySearchHitsBySessionVisibility } from "@openclaw/memory-core/api.js";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { resolveDefaultAgentId, resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
 import { getActiveMemorySearchManager } from "openclaw/plugin-sdk/memory-host-search";
-import {
-  extractTranscriptIdentityFromSessionsMemoryHit,
-  loadCombinedSessionStoreForGateway,
-  resolveTranscriptStemToSessionKeys,
-} from "openclaw/plugin-sdk/session-transcript-hit";
-import {
-  createAgentToAgentPolicy,
-  createSessionVisibilityGuard,
-  resolveEffectiveSessionToolsVisibility,
-} from "openclaw/plugin-sdk/session-visibility";
+import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   normalizeLowercaseStringOrEmpty,
   uniqueStrings,
@@ -170,6 +162,8 @@ type QuerySearchOverrides = {
   searchBackend?: WikiSearchBackend;
   searchCorpus?: WikiSearchCorpus;
 };
+
+type ConversationRecallContext = NonNullable<OpenClawPluginToolContext["conversationRecall"]>;
 
 function sortWikiSearchResults(results: WikiSearchResult[]): WikiSearchResult[] {
   return results.toSorted((left, right) => {
@@ -1194,184 +1188,6 @@ function toMemoryWikiSearchResult(
   };
 }
 
-async function filterMemoryWikiSearchHitsBySessionVisibility(params: {
-  cfg: OpenClawConfig;
-  agentId: string | undefined;
-  requesterSessionKey: string | undefined;
-  sandboxed: boolean;
-  hits: MemorySearchResult[];
-}): Promise<MemorySearchResult[]> {
-  if (!params.hits.some((hit) => hit.source === "sessions")) {
-    return params.hits;
-  }
-
-  const canReadSessionPath = await createSessionMemoryPathVisibilityChecker({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    requesterSessionKey: params.requesterSessionKey,
-    sandboxed: params.sandboxed,
-  });
-  return filterMemoryWikiSearchHitsWithSessionVisibility({
-    canReadSessionPath,
-    hits: params.hits,
-  });
-}
-
-type SessionMemoryPathVisibilityChecker = (relPath: string) => boolean;
-
-function filterSessionKeysByScopedAgent(params: {
-  cfg: OpenClawConfig;
-  keys: string[];
-  scopedAgentId: string | undefined;
-}): string[] {
-  const scopedAgentId = normalizeLowercaseStringOrEmpty(params.scopedAgentId);
-  if (!scopedAgentId) {
-    return params.keys;
-  }
-  return params.keys.filter((key) => {
-    if (params.cfg.session?.scope === "global" && key.trim().toLowerCase() === "global") {
-      return true;
-    }
-    const ownerAgentId = resolveSessionAgentId({
-      sessionKey: key,
-      config: params.cfg,
-    });
-    return normalizeLowercaseStringOrEmpty(ownerAgentId) === scopedAgentId;
-  });
-}
-
-async function createSessionMemoryPathVisibilityChecker(params: {
-  cfg: OpenClawConfig;
-  agentId: string | undefined;
-  requesterSessionKey: string | undefined;
-  sandboxed: boolean;
-}): Promise<SessionMemoryPathVisibilityChecker> {
-  const visibility = resolveEffectiveSessionToolsVisibility({
-    cfg: params.cfg,
-    sandboxed: params.sandboxed,
-  });
-  const a2aPolicy = createAgentToAgentPolicy(params.cfg);
-  const requesterAgentId = params.requesterSessionKey
-    ? resolveSessionAgentId({
-        sessionKey: params.requesterSessionKey,
-        config: params.cfg,
-      })
-    : undefined;
-  const scopedAgentId = params.agentId?.trim() || requesterAgentId;
-  const guard = params.requesterSessionKey
-    ? await createSessionVisibilityGuard({
-        action: "history",
-        requesterSessionKey: params.requesterSessionKey,
-        visibility,
-        a2aPolicy,
-      })
-    : null;
-
-  const { store: combinedSessionStore } = loadCombinedSessionStoreForGateway(
-    params.cfg,
-    scopedAgentId ? { agentId: scopedAgentId } : {},
-  );
-  return (relPath) => {
-    const identity = extractTranscriptIdentityFromSessionsMemoryHit(relPath);
-    if (!identity) {
-      return false;
-    }
-    const isQmdSessionPath = relPath.replace(/\\/g, "/").startsWith("qmd/");
-    const normalizedScopedAgentId = normalizeLowercaseStringOrEmpty(scopedAgentId);
-    const normalizedOwnerAgentId = normalizeLowercaseStringOrEmpty(identity.ownerAgentId);
-    if (
-      normalizedScopedAgentId &&
-      normalizedOwnerAgentId &&
-      normalizedOwnerAgentId !== normalizedScopedAgentId
-    ) {
-      return false;
-    }
-    const sameAgentLiveOwnerId =
-      !identity.archived &&
-      normalizedScopedAgentId &&
-      normalizedOwnerAgentId === normalizedScopedAgentId
-        ? normalizedOwnerAgentId
-        : undefined;
-    const archivedOwnerMatchesScope = Boolean(
-      identity.archived &&
-      ((identity.ownerAgentId &&
-        (!normalizedScopedAgentId || normalizedOwnerAgentId === normalizedScopedAgentId)) ||
-        (isQmdSessionPath && scopedAgentId)),
-    );
-    const archivedOwnerAgentId = archivedOwnerMatchesScope
-      ? (identity.ownerAgentId ?? scopedAgentId)
-      : undefined;
-    const liveKeys = identity.liveStem
-      ? resolveTranscriptStemToSessionKeys({
-          store: combinedSessionStore,
-          stem: identity.liveStem,
-          allowQmdSlugFallback: false,
-        })
-      : [];
-    const resolvedKeys =
-      liveKeys.length > 0
-        ? liveKeys
-        : resolveTranscriptStemToSessionKeys({
-            store: combinedSessionStore,
-            stem: identity.stem,
-            allowQmdSlugFallback: isQmdSessionPath && !identity.archived,
-            ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
-          });
-    const keys = filterSessionKeysByScopedAgent({
-      cfg: params.cfg,
-      scopedAgentId,
-      keys: resolvedKeys,
-    });
-    if (keys.length === 0) {
-      const agentWideVisibility = visibility === "agent" || visibility === "all";
-      return Boolean(sameAgentLiveOwnerId && agentWideVisibility);
-    }
-    if (!guard) {
-      return Boolean(scopedAgentId);
-    }
-    return keys.some((key) => guard.check(key).allowed);
-  };
-}
-
-function filterMemoryWikiSearchHitsWithSessionVisibility(params: {
-  canReadSessionPath: SessionMemoryPathVisibilityChecker;
-  hits: MemorySearchResult[];
-}): MemorySearchResult[] {
-  const next: MemorySearchResult[] = [];
-  for (const hit of params.hits) {
-    if (hit.source !== "sessions") {
-      next.push(hit);
-      continue;
-    }
-
-    if (params.canReadSessionPath(hit.path)) {
-      next.push(hit);
-    }
-  }
-  return next;
-}
-
-function canReadSessionMemoryPath(params: {
-  canReadSessionPath: SessionMemoryPathVisibilityChecker;
-  relPath: string;
-}): boolean {
-  // Reuses the search filter with a synthetic hit; update this if the filter needs more than path/source.
-  const filtered = filterMemoryWikiSearchHitsWithSessionVisibility({
-    canReadSessionPath: params.canReadSessionPath,
-    hits: [
-      {
-        path: params.relPath,
-        startLine: 1,
-        endLine: 1,
-        score: 0,
-        snippet: "",
-        source: "sessions",
-      },
-    ],
-  });
-  return filtered.length > 0;
-}
-
 async function searchWikiCorpus(params: {
   config: ResolvedMemoryWikiConfig;
   query: string;
@@ -1449,6 +1265,7 @@ export async function searchMemoryWiki(params: {
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  conversationRecall?: ConversationRecallContext;
   query: string;
   maxResults?: number;
   searchBackend?: WikiSearchBackend;
@@ -1496,12 +1313,14 @@ export async function searchMemoryWiki(params: {
     shouldEnforceSessionVisibility(params) &&
     rawMemoryResults.some((hit) => hit.source === "sessions")
   ) {
-    rawMemoryResults = await filterMemoryWikiSearchHitsBySessionVisibility({
+    rawMemoryResults = await filterMemorySearchHitsBySessionVisibility({
       cfg: params.appConfig,
       agentId: params.agentId,
       requesterSessionKey: params.agentSessionKey,
       sandboxed: params.sandboxed === true,
       hits: rawMemoryResults,
+      conversationRecall: params.conversationRecall,
+      trustedAgentScope: !params.agentSessionKey && Boolean(params.agentId?.trim()),
     });
   }
   const memoryResults = rawMemoryResults.map((result) => toMemoryWikiSearchResult(result, mode));
@@ -1591,27 +1410,35 @@ export async function getMemoryWikiPage(params: {
   }
 
   const lookupCandidates = buildLookupCandidates(params.lookup);
-  const canReadSessionPath =
+  const visibleSessionPaths =
     params.appConfig &&
     shouldEnforceSessionVisibility(params) &&
     lookupCandidates.some((relPath) => isSessionMemoryPath(relPath))
-      ? await createSessionMemoryPathVisibilityChecker({
-          cfg: params.appConfig,
-          agentId: params.agentId,
-          requesterSessionKey: params.agentSessionKey,
-          sandboxed: params.sandboxed === true,
-        })
+      ? new Set(
+          (
+            await filterMemorySearchHitsBySessionVisibility({
+              cfg: params.appConfig,
+              agentId: params.agentId,
+              requesterSessionKey: params.agentSessionKey,
+              sandboxed: params.sandboxed === true,
+              trustedAgentScope: !params.agentSessionKey && Boolean(params.agentId?.trim()),
+              hits: lookupCandidates
+                .filter((relPath) => isSessionMemoryPath(relPath))
+                .map((relPath) => ({
+                  path: relPath,
+                  startLine: 1,
+                  endLine: 1,
+                  score: 0,
+                  snippet: "",
+                  source: "sessions" as const,
+                })),
+            })
+          ).map((hit) => hit.path),
+        )
       : null;
 
   for (const relPath of lookupCandidates) {
-    if (
-      canReadSessionPath &&
-      isSessionMemoryPath(relPath) &&
-      !canReadSessionMemoryPath({
-        canReadSessionPath,
-        relPath,
-      })
-    ) {
+    if (visibleSessionPaths && isSessionMemoryPath(relPath) && !visibleSessionPaths.has(relPath)) {
       continue;
     }
 

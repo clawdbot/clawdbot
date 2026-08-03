@@ -1,24 +1,22 @@
-// Coverage for handing replay-safe plugin-harness prompt timeouts to model fallback.
+// Full-entry coverage for handing replay-safe prompt timeouts to model fallback.
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { makeModelFallbackCfg } from "../test-helpers/model-fallback-config-fixture.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
-  loadRunOverflowCompactionHarness,
   MockedFailoverError,
   mockedClassifyFailoverReason,
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
   useOpenAIPlatformAuthFixture,
-  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
+import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 
 describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
   beforeAll(async () => {
-    ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
-    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
+    runEmbeddedAgent = await loadSharedRunIntegrationHarness();
   });
 
   beforeEach(() => {

@@ -1,3 +1,5 @@
+import { resolveGlobalMap } from "../shared/global-singleton.js";
+
 export type ChildAdmissionCap =
   | "subagents.maxSpawnDepth"
   | "subagents.maxChildrenPerAgent"
@@ -16,7 +18,10 @@ type ChildAdmissionParams = {
 } & ({ collect: false } | { collect: true; totalChildren: number; maxTotalChildren: number });
 
 /** ACP child keys deduplicate task rows; symbols keep anonymous starts distinct. */
-const pendingChildAdmissions = new Map<string, Set<string | symbol>>();
+const pendingChildAdmissions = resolveGlobalMap<string, Set<string | symbol>>(
+  Symbol.for("openclaw.pendingChildAdmissions"),
+  "close-only",
+);
 
 type ReservableChildAdmission = { ok: true } | { ok: false };
 

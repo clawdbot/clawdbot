@@ -27747,7 +27747,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 48,
+      "line": 49,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Privacy & Access",
       "surface": "apple",
@@ -27755,7 +27755,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 65,
+      "line": 66,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Search and add contacts from the assistant.",
       "surface": "apple",
@@ -27763,7 +27763,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 80,
+      "line": 81,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Read photos you select for the assistant.",
       "surface": "apple",
@@ -27771,7 +27771,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 81,
+      "line": 82,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Read recent photos for the assistant.",
       "surface": "apple",
@@ -27779,7 +27779,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 83,
+      "line": 84,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Limited",
       "surface": "apple",
@@ -27787,7 +27787,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 96,
+      "line": 97,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Calendar (Add Events)",
       "surface": "apple",
@@ -27795,7 +27795,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 97,
+      "line": 98,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Add events with least privilege.",
       "surface": "apple",
@@ -27803,7 +27803,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 111,
+      "line": 112,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "List and read calendar events.",
       "surface": "apple",
@@ -27811,7 +27811,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 126,
+      "line": 127,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "List, add, and complete reminders.",
       "surface": "apple",
@@ -27819,7 +27819,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 128,
+      "line": 129,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Add-Only",
       "surface": "apple",
@@ -27827,7 +27827,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 168,
+      "line": 169,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Allow",
       "surface": "apple",
@@ -27835,7 +27835,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 170,
+      "line": 171,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Open Settings",
       "surface": "apple",

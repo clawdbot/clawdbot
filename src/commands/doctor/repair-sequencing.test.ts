@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
   isInstalledPluginEnabled: vi.fn(),
   loadInstalledPluginIndex: vi.fn(),
   maybeRepairGroupAllowFromFallback: vi.fn(),
-  maybeRepairManagedNpmOpenClawPeerLinks: vi.fn(),
+  maybeRepairPluginOpenClawHostLinks: vi.fn(),
   maybeRepairLegacyOAuthSidecarProfiles: vi.fn(),
   migrateLegacyOnboardingRecommendationsScope: vi.fn(),
   maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn(),
@@ -35,8 +35,11 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
   materializePluginAutoEnableCandidates: mocks.materializePluginAutoEnableCandidates,
 }));
 
+vi.mock("../doctor-plugin-host-links.js", () => ({
+  maybeRepairPluginOpenClawHostLinks: mocks.maybeRepairPluginOpenClawHostLinks,
+}));
+
 vi.mock("../doctor-plugin-registry.js", () => ({
-  maybeRepairManagedNpmOpenClawPeerLinks: mocks.maybeRepairManagedNpmOpenClawPeerLinks,
   maybeRepairStaleManagedNpmBundledPlugins: mocks.maybeRepairStaleManagedNpmBundledPlugins,
 }));
 
@@ -246,7 +249,7 @@ describe("doctor repair sequencing", () => {
       config: cfg,
       changes: [],
     }));
-    mocks.maybeRepairManagedNpmOpenClawPeerLinks.mockResolvedValue(false);
+    mocks.maybeRepairPluginOpenClawHostLinks.mockResolvedValue(false);
     mocks.maybeRepairLegacyOAuthSidecarProfiles.mockResolvedValue({
       detected: [],
       changes: [],
@@ -485,7 +488,7 @@ describe("doctor repair sequencing", () => {
       events.push("bundled-shadow-cleanup");
       return true;
     });
-    mocks.maybeRepairManagedNpmOpenClawPeerLinks.mockImplementation(async () => {
+    mocks.maybeRepairPluginOpenClawHostLinks.mockImplementation(async () => {
       events.push("openclaw-peer-links");
       return true;
     });
@@ -521,9 +524,8 @@ describe("doctor repair sequencing", () => {
     const cleanupCall = mocks.maybeRepairStaleManagedNpmBundledPlugins.mock.calls[0]?.[0];
     expect(cleanupCall?.config.plugins?.entries?.["google-meet"]).toEqual({ enabled: true });
     expect(cleanupCall?.prompter).toEqual({ shouldRepair: true });
-    expect(mocks.maybeRepairManagedNpmOpenClawPeerLinks).toHaveBeenCalledOnce();
-    const peerLinkCall = mocks.maybeRepairManagedNpmOpenClawPeerLinks.mock.calls[0]?.[0];
-    expect(peerLinkCall?.config.plugins?.entries?.["google-meet"]).toEqual({ enabled: true });
+    expect(mocks.maybeRepairPluginOpenClawHostLinks).toHaveBeenCalledOnce();
+    const peerLinkCall = mocks.maybeRepairPluginOpenClawHostLinks.mock.calls[0]?.[0];
     expect(peerLinkCall?.prompter).toEqual({ shouldRepair: true });
     expect(peerLinkCall?.env).toBe(process.env);
   });

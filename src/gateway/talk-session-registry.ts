@@ -2,6 +2,7 @@
  * Process-local registry that lets Talk protocol methods resolve opaque
  * `sessionId` values to the concrete relay or managed-room backend.
  */
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 export type UnifiedTalkSessionRecord =
   | {
       kind: "realtime-relay";
@@ -20,7 +21,10 @@ export type UnifiedTalkSessionRecord =
       roomId: string;
     };
 
-const unifiedTalkSessions = new Map<string, UnifiedTalkSessionRecord>();
+const unifiedTalkSessions = resolveGlobalMap<string, UnifiedTalkSessionRecord>(
+  Symbol.for("openclaw.unifiedTalkSessions"),
+  "close-and-restart",
+);
 
 /** Associates a public Talk session id with its concrete gateway backend. */
 export function rememberUnifiedTalkSession(
