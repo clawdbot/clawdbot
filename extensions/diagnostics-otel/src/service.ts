@@ -231,6 +231,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
         sdk = new NodeSDK({
           resource,
+          // Explicit empty arrays keep NodeSDK from restoring disabled exporters
+          // from ambient OTEL_* settings; OpenClaw owns every signal exporter.
           ...(spanProcessors
             ? { spanProcessors }
             : traceExporter

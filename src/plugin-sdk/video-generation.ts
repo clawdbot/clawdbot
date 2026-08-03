@@ -266,6 +266,11 @@ export type DashscopeVideoGenerationProviderOptions = {
   defaultBaseUrl: string;
   resolveRequestBaseUrl?: (configuredBaseUrl: string | undefined) => string;
   resolveAigcBaseUrl?: (baseUrl: string) => string;
+  credentialPolicy?: {
+    acceptsApiKey: (apiKey: string) => boolean;
+    acceptsBaseUrl?: (configuredBaseUrl: string | undefined) => boolean;
+    unsupportedMessage: string;
+  };
 };
 
 /** Builds one provider descriptor for the shared DashScope async video task protocol. */
@@ -283,10 +288,24 @@ export function buildDashscopeVideoGenerationProvider(
     label: options.label,
     defaultModel: DEFAULT_DASHSCOPE_WAN_VIDEO_MODEL,
     models: [...DASHSCOPE_WAN_VIDEO_MODELS],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({ provider: options.providerId, agentDir }),
+    isConfigured: (ctx) => {
+      const baseUrl = ctx.cfg?.models?.providers?.[options.providerId]?.baseUrl;
+      if (options.credentialPolicy?.acceptsBaseUrl?.(baseUrl) === false) {
+        return false;
+      }
+      return isProviderApiKeyConfigured({
+        provider: options.providerId,
+        ...ctx,
+        profileTypes: options.credentialPolicy ? ["api_key"] : undefined,
+        acceptsApiKey: options.credentialPolicy?.acceptsApiKey,
+      });
+    },
     capabilities: DASHSCOPE_WAN_VIDEO_CAPABILITIES,
     async generateVideo(req): Promise<VideoGenerationResult> {
+      const providerConfig = req.cfg?.models?.providers?.[options.providerId];
+      if (options.credentialPolicy?.acceptsBaseUrl?.(providerConfig?.baseUrl) === false) {
+        throw new Error(options.credentialPolicy.unsupportedMessage);
+      }
       const auth = await resolveApiKeyForProvider({
         provider: options.providerId,
         cfg: req.cfg,
@@ -296,8 +315,10 @@ export function buildDashscopeVideoGenerationProvider(
       if (!auth.apiKey) {
         throw new Error(`${options.apiKeyLabel ?? options.label} API key missing`);
       }
+      if (options.credentialPolicy?.acceptsApiKey(auth.apiKey) === false) {
+        throw new Error(options.credentialPolicy.unsupportedMessage);
+      }
 
-      const providerConfig = req.cfg?.models?.providers?.[options.providerId];
       const requestBaseUrl = resolveRequestBaseUrl(providerConfig?.baseUrl);
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
