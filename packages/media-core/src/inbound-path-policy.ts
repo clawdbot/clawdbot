@@ -53,13 +53,12 @@ function resolveRootPatternMatch(params: {
     return undefined;
   }
   const resolvedSegments: string[] = [];
-  for (let idx = 0; idx < rootSegments.length; idx += 1) {
-    const expected = rootSegments[idx];
+  for (const [idx, expected] of rootSegments.entries()) {
     const actual = candidateSegments[idx];
+    if (!actual) {
+      return undefined;
+    }
     if (expected === WILDCARD_SEGMENT) {
-      if (!actual) {
-        return undefined;
-      }
       resolvedSegments.push(actual);
       continue;
     }
