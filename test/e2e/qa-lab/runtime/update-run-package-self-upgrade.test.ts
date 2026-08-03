@@ -90,6 +90,7 @@ describe("update.run package self-upgrade producer", () => {
     expect(script).toContain(
       'gateway_call wizard.next "$wizard_next_params" "$WIZARD_NEXT_JSON" "$WIZARD_NEXT_ERR"',
     );
+    expect(script).toContain("runningStatusRetained: true");
     expect(script).toContain('grep -Fq "wizard already running" "$WIZARD_DUPLICATE_ERR"');
     expect(script).toContain(
       'gateway_call wizard.cancel "$wizard_session_params" "$WIZARD_CANCEL_JSON" "$WIZARD_CANCEL_ERR"',
@@ -121,7 +122,16 @@ describe("update.run package self-upgrade producer", () => {
     expect(script).toContain(
       'gateway_call wizard.cancel "$target_active_session_params" \\\n  "$TARGET_WIZARD_CANCEL_JSON" "$TARGET_WIZARD_CANCEL_ERR"',
     );
+    expect(script).toContain('while [ "$SECONDS" -lt "$target_cancel_deadline" ]');
+    expect(script).toContain(
+      '"$TARGET_WIZARD_REPLACEMENT_START_JSON" "$TARGET_WIZARD_REPLACEMENT_START_ERR"',
+    );
     expect(script).toContain('grep -Fq "wizard not found" "$TARGET_WIZARD_PURGED_STATUS_ERR"');
+    expect(script.indexOf('while [ "$SECONDS" -lt "$target_cancel_deadline" ]')).toBeLessThan(
+      script.indexOf(
+        'gateway_call wizard.status "$target_active_session_params" \\\n  "$TARGET_WIZARD_PURGED_STATUS_JSON"',
+      ),
+    );
     expect(script.indexOf("Invoking authenticated Gateway RPC update.run")).toBeLessThan(
       script.indexOf("Exercising current target Gateway wizard RPC lifecycle"),
     );
@@ -142,13 +152,21 @@ describe("update.run package self-upgrade producer", () => {
     expect(script).toContain(
       '! git -C "$source_repo" cat-file -e "$SOURCE_TAG^{commit}" 2>/dev/null',
     );
-    expect(script).toContain('tar -C "$checkout_root" -cf "$QA_CHANNEL_FIXTURE_ARCHIVE" dist');
+    expect(script).toContain('tar -C "$checkout_root" -cf "$HISTORICAL_DIST_ARCHIVE" dist');
     expect(script).toContain(
-      "tar --no-same-owner -xf /tmp/openclaw-update-run-historical-dist.tar -C /tmp/openclaw-update-run-build",
+      'npm install \\\n  --prefix "$historical_install_root" \\\n  --omit=dev',
     );
+    expect(script).toContain(
+      'tar --no-same-owner \\\n  -xf /tmp/openclaw-update-run-historical-dist.tar \\\n  -C "$historical_package_root"',
+    );
+    expect(script).toContain(
+      'ln -s "$historical_package_root/dist/extensions/qa-channel" "$qa_plugin_link"',
+    );
+    expect(script).toContain("await import(pathToFileURL(pluginEntry).href)");
     expect(script).not.toContain(
       '-v "$QA_CHANNEL_FIXTURE_ROOT/checkout:/tmp/openclaw-update-run-build:ro"',
     );
+    expect(script).not.toContain("NODE_PATH");
   });
 
   it("formats the proven version transition and sentinel", () => {
@@ -161,6 +179,7 @@ describe("update.run package self-upgrade producer", () => {
           authenticated: true,
           cancelledSessionPurged: true,
           duplicateStartRejected: true,
+          runningStatusRetained: true,
           status: "passed",
         },
         targetWizardFlow: {
@@ -178,7 +197,7 @@ describe("update.run package self-upgrade producer", () => {
         },
       }),
     ).toBe(
-      "wizard=passed:authenticated:exclusive:purged; target-wizard=passed:authenticated:terminal-status:exclusive:purged; source=2026.4.26; target=latest:2026.7.2; installed=2026.7.2; sentinel=ok:QA-UPDATE-RUN-PACKAGE-SELF-UPGRADE",
+      "wizard=passed:authenticated:status-retained:exclusive:purged; target-wizard=passed:authenticated:terminal-status:exclusive:purged; source=2026.4.26; target=latest:2026.7.2; installed=2026.7.2; sentinel=ok:QA-UPDATE-RUN-PACKAGE-SELF-UPGRADE",
     );
   });
 });

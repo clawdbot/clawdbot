@@ -27,6 +27,7 @@ type UpdateRunSelfUpgradeSummary = {
     authenticated?: boolean;
     duplicateStartRejected?: boolean;
     cancelledSessionPurged?: boolean;
+    runningStatusRetained?: boolean;
     status?: string;
   };
   targetWizardFlow?: {
@@ -78,7 +79,7 @@ export function resolveUpdateRunSelfUpgradePermission(
 
 export function formatUpdateRunSelfUpgradeDetails(summary: UpdateRunSelfUpgradeSummary) {
   return [
-    `wizard=${summary.wizardFlow?.status ?? "unknown"}:${summary.wizardFlow?.authenticated === true ? "authenticated" : "unauthenticated"}:${summary.wizardFlow?.duplicateStartRejected === true ? "exclusive" : "overlap-unknown"}:${summary.wizardFlow?.cancelledSessionPurged === true ? "purged" : "cleanup-unknown"}`,
+    `wizard=${summary.wizardFlow?.status ?? "unknown"}:${summary.wizardFlow?.authenticated === true ? "authenticated" : "unauthenticated"}:${summary.wizardFlow?.runningStatusRetained === true ? "status-retained" : "status-unknown"}:${summary.wizardFlow?.duplicateStartRejected === true ? "exclusive" : "overlap-unknown"}:${summary.wizardFlow?.cancelledSessionPurged === true ? "purged" : "cleanup-unknown"}`,
     `target-wizard=${summary.targetWizardFlow?.status ?? "unknown"}:${summary.targetWizardFlow?.authenticated === true ? "authenticated" : "unauthenticated"}:${summary.targetWizardFlow?.terminalStatus?.purged === true ? "terminal-status" : "status-unknown"}:${summary.targetWizardFlow?.activeSession?.duplicateStartRejected === true ? "exclusive" : "overlap-unknown"}:${summary.targetWizardFlow?.activeSession?.purged === true ? "purged" : "cleanup-unknown"}`,
     `source=${summary.source?.version ?? "unknown"}`,
     `target=${summary.target?.tag ?? "unknown"}:${summary.target?.resolvedVersion ?? "unknown"}`,
@@ -189,6 +190,11 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
         { kind: "summary", filePath: path.join("lane", "source-plugin-inspect.json") },
         { kind: "summary", filePath: path.join("lane", "target-plugin-index.json") },
         { kind: "log", filePath: path.join("lane", "historical-qa-channel-build.log") },
+        { kind: "log", filePath: path.join("lane", "historical-package-install.log") },
+        {
+          kind: "summary",
+          filePath: path.join("lane", "historical-package-preflight.json"),
+        },
         {
           kind: "summary",
           filePath: path.join("lane", "qa-channel-fixture-provenance.json"),
