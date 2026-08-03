@@ -13,7 +13,7 @@ type PreparedPluginRegistry = PluginRegistry & {
   [preparedPluginRuntimeLoadContext]?: PluginRuntimeLoadContext;
 };
 
-export function setPreparedPluginRuntimeLoadContext(
+function setPreparedPluginRuntimeLoadContext(
   registry: PluginRegistry,
   context: PluginRuntimeLoadContext,
 ): void {

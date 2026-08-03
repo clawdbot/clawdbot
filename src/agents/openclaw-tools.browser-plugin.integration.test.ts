@@ -8,7 +8,7 @@ import { activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } from "../
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "./auth-profiles/runtime-snapshots.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
-import { setPreparedPluginRuntimeLoadContext } from "./prepared-model-runtime.plugin-context.js";
+import { preparePluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 
 const hoisted = vi.hoisted(() => ({
   resolvePluginTools: vi.fn(),
@@ -160,18 +160,13 @@ describe("createOpenClawTools browser plugin integration", () => {
   it("forwards lifecycle-prepared plugin facts to plugin resolution", () => {
     hoisted.resolvePluginTools.mockReturnValue([]);
     const config = { plugins: { enabled: true } } as OpenClawConfig;
-    const metadataSnapshot = { plugins: [], index: {} } as never;
     const pluginRegistry = { tools: [] } as never;
-    const loadContext = {
-      rawConfig: config,
-      config,
-      activationSourceConfig: config,
-      autoEnabledReasons: {},
-      workspaceDir: "/tmp",
-      env: process.env,
-      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    };
-    setPreparedPluginRuntimeLoadContext(pluginRegistry, loadContext);
+    const loadContext = preparePluginLoadContext(
+      { agentDir: "/tmp/agent", config, workspaceDir: "/tmp" },
+      process.env,
+      pluginRegistry,
+    );
+    const { metadataSnapshot } = loadContext;
 
     resolveOpenClawPluginToolsForOptions({
       options: {
