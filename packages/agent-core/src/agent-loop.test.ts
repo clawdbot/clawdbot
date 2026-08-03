@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { agentLoop, agentLoopContinue, runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
 import { Agent } from "./agent.js";
 import { TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE, TranscriptNotContinuableError } from "./errors.js";
+import { setInternalBeforeToolBatch } from "./internal-hooks.js";
 import {
   type AssistantMessage,
   createAssistantMessageEventStream,
@@ -1213,6 +1214,89 @@ describe("agentLoop tool termination", () => {
       });
     },
   );
+
+  it("preserves the recovery budget across continue retries and resets it for a new prompt", async () => {
+    let phase: "initial" | "retry" | "new-prompt" = "initial";
+    let phaseCalls = 0;
+    const streamFn: StreamFn = () => {
+      phaseCalls += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message =
+          phase === "initial" && phaseCalls === 2
+            ? {
+                ...makeAssistantMessage([]),
+                stopReason: "error" as const,
+                errorMessage: "retryable provider failure",
+              }
+            : phase === "new-prompt" && phaseCalls === 2
+              ? makeAssistantMessage([{ type: "text", text: "recovered on the new run" }])
+              : makeAssistantMessage([
+                  {
+                    type: "toolCall",
+                    id: `${phase}-${phaseCalls}`,
+                    name: "read",
+                    arguments: {},
+                  },
+                ]);
+        if (message.stopReason === "error") {
+          stream.push({ type: "error", reason: "error", error: message });
+        } else {
+          stream.push({
+            type: "done",
+            reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+            message,
+          });
+        }
+        stream.end();
+      });
+      return stream;
+    };
+    const agent = new Agent({
+      initialState: { model, systemPrompt: "", tools: [makeTool("read", [])] },
+      streamFn,
+    });
+    setInternalBeforeToolBatch(agent, async ({ calls }) => {
+      const first = calls[0];
+      return first ? { intervention: criticalLoopFor(first.toolCall) } : undefined;
+    });
+
+    await agent.prompt("run");
+    expect(phaseCalls).toBe(2);
+    expect(agent.state.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "retryable provider failure",
+    });
+
+    agent.state.messages = agent.state.messages.slice(0, -1);
+    phase = "retry";
+    phaseCalls = 0;
+    await agent.continue();
+
+    expect(phaseCalls).toBe(1);
+    expect(agent.state.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      stopReason: "error",
+      content: [
+        {
+          type: "text",
+          text: expect.stringContaining("tool-loop recovery encountered another critical loop"),
+        },
+      ],
+    });
+
+    phase = "new-prompt";
+    phaseCalls = 0;
+    await agent.prompt("new run");
+
+    expect(phaseCalls).toBe(2);
+    expect(agent.state.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      stopReason: "stop",
+      content: [{ type: "text", text: "recovered on the new run" }],
+    });
+  });
 
   it.each([
     { source: "network" as const, tainted: true },

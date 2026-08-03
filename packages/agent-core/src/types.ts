@@ -195,6 +195,11 @@ export interface AgentLoopTurnUpdate {
 
 export interface PrepareNextTurnContext extends ShouldStopAfterTurnContext {}
 
+/** @internal Mutable one-shot budget shared by prompt retries in one Agent run. */
+export type ToolLoopRecoveryState = {
+  criticalToolLoopSeen: boolean;
+};
+
 export interface AgentLoopConfig extends SimpleStreamOptions {
   model: Model;
   /** Logical thinking level retained across model changes before provider mapping. */
@@ -334,6 +339,9 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
     context: InternalBeforeToolBatchContext,
     signal?: AbortSignal,
   ) => Promise<InternalBeforeToolBatchResult | undefined>;
+
+  /** @internal Preserves the one-shot recovery budget across Agent.continue() retries. */
+  toolLoopRecoveryState?: ToolLoopRecoveryState;
 
   /**
    * Hydrates an already-authorized tool that was deferred out of the current

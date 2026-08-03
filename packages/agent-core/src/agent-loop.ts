@@ -286,7 +286,9 @@ async function runLoop(
   let firstTurn = true;
   let turnOpen = true;
   let turnTainted = isActiveTurnTainted(initialContext.messages);
-  let criticalToolLoopSeen = false;
+  const toolLoopRecoveryState = initialConfig.toolLoopRecoveryState ?? {
+    criticalToolLoopSeen: false,
+  };
   // Check for steering messages at start (user may have typed while waiting)
   let pendingMessages: AgentMessage[] = (await config.getSteeringMessages?.()) || [];
   const stopIfAborted = async (): Promise<boolean> => {
@@ -387,13 +389,13 @@ async function runLoop(
           config,
           signal,
           emit,
-          criticalToolLoopSeen,
+          toolLoopRecoveryState.criticalToolLoopSeen,
         );
         toolResults.push(...executedToolBatch.messages);
         turnTainted ||= toolResults.some(toolResultTaintsTurn);
         hasMoreToolCalls = !executedToolBatch.terminate;
         if (executedToolBatch.intervention) {
-          criticalToolLoopSeen = true;
+          toolLoopRecoveryState.criticalToolLoopSeen = true;
         }
         terminateRun = executedToolBatch.terminateRun;
 
