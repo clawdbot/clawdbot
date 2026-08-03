@@ -54,10 +54,19 @@ function wrapDerivedMentionPattern(parts: DerivedNameParts): string {
   // Edge decoration is optional, so each assertion has to reach across it:
   // checked next to the tokens instead, the class matches nothing and the
   // decoration itself satisfies the boundary, letting the name match while
-  // glued to another word.
+  // glued to another word. What the assertion looks for on the far side is a
+  // word character the name does not carry -- a decoration that is itself a
+  // word character, such as the variation selector in an emoji or a joiner,
+  // would otherwise report the name as glued to its own decoration.
   const leading = parts.leading ? `[${parts.leading}]*` : "";
   const trailing = parts.trailing ? `[${parts.trailing}]*` : "";
-  return `(?:@|(?<!${UNICODE_WORD_CHAR}${leading}))${leading}${parts.core}(?!${trailing}${UNICODE_WORD_CHAR})${trailing}`;
+  const wordBefore = parts.leading
+    ? `(?![${parts.leading}])${UNICODE_WORD_CHAR}`
+    : UNICODE_WORD_CHAR;
+  const wordAfter = parts.trailing
+    ? `(?![${parts.trailing}])${UNICODE_WORD_CHAR}`
+    : UNICODE_WORD_CHAR;
+  return `(?:@|(?<!${wordBefore}${leading}))${leading}${parts.core}(?!${trailing}${wordAfter})${trailing}`;
 }
 
 function escapeJoinerTolerantLiteral(literal: string): string {

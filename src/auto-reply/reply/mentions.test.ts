@@ -265,6 +265,30 @@ describe("derived mention matching with decorated identity names", () => {
     expect(matchesMentionPatterns("clawd status", regexes)).toBe(true);
   });
 
+  // Decoration is not one shape: a single code point, a pair carrying a
+  // variation selector, a joined sequence, and a modifier pair each compose
+  // differently against the token and boundary rules.
+  it.each([
+    ["single code point", "🦋"],
+    ["variation selector", "❤️"],
+    ["enclosed letter", "🅰️"],
+    ["keycap", "#️⃣"],
+    ["joined sequence", "👩‍👧"],
+    ["skin tone modifier", "👍🏽"],
+    ["regional indicator pair", "🇹🇼"],
+  ])("handles trailing decoration built from a %s", (_label, decoration) => {
+    const cfg = configForName(`小蝶${decoration}`);
+    const regexes = buildMentionRegexes(cfg, "decorated-agent");
+
+    expect(matchesMentionPatterns(`小蝶${decoration} 幫我查一下`, regexes)).toBe(true);
+    expect(matchesMentionPatterns("小蝶 幫我查一下", regexes)).toBe(true);
+    expect(matchesMentionPatterns(`小蝶${decoration}後續`, regexes)).toBe(false);
+    expect(matchesMentionPatterns("前小蝶後", regexes)).toBe(false);
+    expect(
+      stripMentions(`小蝶${decoration} 查天氣`, {} as MsgContext, cfg, "decorated-agent"),
+    ).toBe("查天氣");
+  });
+
   it("binds a mark to the character before it, not the token after it", () => {
     // The selector in "❤️" modifies the heart, so it is part of the decoration
     // and stays omissible; absorbed into the following token it would be
