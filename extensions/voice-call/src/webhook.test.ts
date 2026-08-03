@@ -1,13 +1,17 @@
 // Voice Call tests cover webhook plugin behavior.
+import crypto from "node:crypto";
 import { request, type IncomingMessage } from "node:http";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema, resolveVoiceCallConfig, type VoiceCallConfig } from "./config.js";
 import type { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
+import { MockProvider } from "./providers/mock.js";
 import { PlivoProvider } from "./providers/plivo.js";
 import { TwilioProvider } from "./providers/twilio.js";
 import type { CallRecord, NormalizedEvent } from "./types.js";
+import { createWebhookReplayCache, reserveWebhookReplay } from "./webhook-replay.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 
@@ -249,6 +253,33 @@ async function expectTwilioReplayTwiML(response: Response) {
   expect(response.status).toBe(200);
   expect(response.headers.get("content-type")).toContain("text/xml");
   expect(await response.text()).toBe('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
+}
+
+async function postSignedTwilioWebhook(params: {
+  server: VoiceCallWebhookServer;
+  baseUrl: string;
+  authToken: string;
+  body: string;
+}): Promise<Response> {
+  const url = requireBoundRequestUrl(params.server, params.baseUrl);
+  let signedMaterial = url.toString();
+  for (const [key, value] of [...new URLSearchParams(params.body)].toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    signedMaterial += key + value;
+  }
+  const signature = crypto
+    .createHmac("sha1", params.authToken)
+    .update(signedMaterial)
+    .digest("base64");
+  return await fetch(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      "x-twilio-signature": signature,
+    },
+    body: params.body,
+  });
 }
 
 function createTwilioVerificationProvider(
@@ -964,6 +995,245 @@ describe("VoiceCallWebhookServer path matching", () => {
 });
 
 describe("VoiceCallWebhookServer replay handling", () => {
+  it("never lets a stale owner release a newer same-key replay reservation", () => {
+    const cache = createWebhookReplayCache();
+    const firstOwner = reserveWebhookReplay(cache, "signed-generation-key");
+    expect(reserveWebhookReplay(cache, "signed-generation-key")).toMatchObject({ isReplay: true });
+
+    firstOwner.releaseReplay?.();
+    expect(reserveWebhookReplay(cache, "signed-generation-key")).toMatchObject({ isReplay: false });
+    firstOwner.releaseReplay?.();
+    expect(reserveWebhookReplay(cache, "signed-generation-key")).toMatchObject({ isReplay: true });
+  });
+
+  it("keeps retryable provider errors replayable through the actual webhook owner", async () => {
+    const mockProvider = new MockProvider();
+    const { manager, processEvent } = createManager([]);
+    processEvent.mockReturnValue({ kind: "processed", replayable: true });
+    const server = new VoiceCallWebhookServer(
+      createConfig({ provider: "mock" }),
+      manager,
+      mockProvider,
+    );
+
+    try {
+      const baseUrl = await server.start();
+      const url = requireBoundRequestUrl(server, baseUrl);
+      const body = JSON.stringify({
+        event: {
+          type: "call.error",
+          callId: "call-retryable-owner",
+          error: "temporary upstream failure",
+          retryable: true,
+        },
+      });
+      const send = () =>
+        fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body });
+
+      expect((await send()).status).toBe(200);
+      expect((await send()).status).toBe(200);
+      expect(processEvent).toHaveBeenCalledTimes(2);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("redelivers an identical signed Twilio callback after its unknown call is registered", async () => {
+    const authToken = "signed-late-registration-token";
+    const providerCallId = "CA-signed-late-registration";
+    const twilioProvider = new TwilioProvider({ accountSid: "AC123", authToken });
+    const registeredCalls: CallRecord[] = [];
+    const { manager, processEvent } = createManager(registeredCalls);
+    processEvent.mockImplementation((event) =>
+      registeredCalls.some((call) => call.providerCallId === event.providerCallId)
+        ? { kind: "processed" }
+        : { kind: "ignored", replayable: true },
+    );
+    const server = new VoiceCallWebhookServer(
+      createConfig({ provider: "twilio", twilio: { accountSid: "AC123", authToken } }),
+      manager,
+      twilioProvider,
+    );
+
+    try {
+      const baseUrl = await server.start();
+      twilioProvider.setPublicUrl(requireBoundRequestUrl(server, baseUrl).toString());
+      const signedRequest = {
+        server,
+        baseUrl,
+        authToken,
+        body: `CallSid=${providerCallId}&CallStatus=in-progress&Direction=outbound-api`,
+      };
+
+      expect((await postSignedTwilioWebhook(signedRequest)).status).toBe(200);
+      registeredCalls.push({ ...createCall(Date.now()), provider: "twilio", providerCallId });
+      expect((await postSignedTwilioWebhook(signedRequest)).status).toBe(200);
+      expect(processEvent).toHaveBeenCalledTimes(2);
+      await expectTwilioReplayTwiML(await postSignedTwilioWebhook(signedRequest));
+      expect(processEvent).toHaveBeenCalledTimes(2);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("retries an identical signed Twilio callback after event processing fails", async () => {
+    const authToken = "signed-retry-auth-token";
+    const twilioProvider = new TwilioProvider({ accountSid: "AC123", authToken });
+    const { manager, processEvent } = createManager([]);
+    processEvent.mockImplementationOnce(() => {
+      throw new Error("synthetic SQLite persistence failure");
+    });
+    const config = createConfig({
+      provider: "twilio",
+      twilio: { accountSid: "AC123", authToken },
+    });
+    const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
+
+    try {
+      const baseUrl = await server.start();
+      twilioProvider.setPublicUrl(requireBoundRequestUrl(server, baseUrl).toString());
+      const signedRequest = {
+        server,
+        baseUrl,
+        authToken,
+        body: "CallSid=CA-signed-retry-owner&CallStatus=in-progress&Direction=outbound-api",
+      };
+
+      expect((await postSignedTwilioWebhook(signedRequest)).status).toBe(500);
+      expect((await postSignedTwilioWebhook(signedRequest)).status).toBe(200);
+      expect(processEvent).toHaveBeenCalledTimes(2);
+
+      await expectTwilioReplayTwiML(await postSignedTwilioWebhook(signedRequest));
+      expect(processEvent).toHaveBeenCalledTimes(2);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it.each(["success", "failure"] as const)(
+    "shares pending signed Twilio callbacks without leaking one-time stream tokens (%s)",
+    async (outcome) => {
+      const authToken = `signed-concurrent-${outcome}-token`;
+      const twilioProvider = new TwilioProvider({ accountSid: "AC123", authToken });
+      const verification = vi.spyOn(twilioProvider, "verifyWebhook");
+      const { manager, processEvent } = createManager([]);
+      const config = createConfig({
+        provider: "twilio",
+        inboundPolicy: "open",
+        twilio: { accountSid: "AC123", authToken },
+        realtime: {
+          enabled: true,
+          streamPath: "/voice/stream/realtime",
+          instructions: "Be helpful.",
+          toolPolicy: "safe-read-only",
+          tools: [],
+          providers: {},
+        },
+      });
+      const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
+      const firstOwner = createDeferred<ReturnType<RealtimeCallHandler["buildTwiMLPayload"]>>();
+      const oneTimeResponse = {
+        statusCode: 200,
+        headers: { "Content-Type": "text/xml" },
+        body: '<Response><Connect><Stream url="wss://example.test/one-time-secret" /></Connect></Response>',
+      };
+      const buildTwiMLPayload = vi.fn(
+        () => firstOwner.promise as unknown as ReturnType<RealtimeCallHandler["buildTwiMLPayload"]>,
+      );
+      server.setRealtimeHandler({
+        buildTwiMLPayload,
+        close: async () => {},
+        getStreamPathPattern: () => "/voice/stream/realtime",
+        handleWebSocketUpgrade: () => {},
+        registerToolHandler: () => {},
+        setPublicUrl: () => {},
+      } as unknown as RealtimeCallHandler);
+
+      try {
+        const baseUrl = await server.start();
+        twilioProvider.setPublicUrl(requireBoundRequestUrl(server, baseUrl).toString());
+        const signedRequest = {
+          server,
+          baseUrl,
+          authToken,
+          body: `CallSid=CA-concurrent-${outcome}&Direction=inbound&CallStatus=ringing`,
+        };
+        const owner = postSignedTwilioWebhook(signedRequest);
+        await vi.waitFor(() => expect(buildTwiMLPayload).toHaveBeenCalledOnce());
+        const duplicate = postSignedTwilioWebhook(signedRequest);
+        let duplicateSettled = false;
+        void duplicate.then(() => {
+          duplicateSettled = true;
+        });
+        await vi.waitFor(() => expect(verification).toHaveBeenCalledTimes(2));
+        expect(duplicateSettled).toBe(false);
+
+        if (outcome === "failure") {
+          firstOwner.reject(new Error("synthetic realtime setup failure"));
+          const responses = await Promise.all([owner, duplicate]);
+          expect(responses.map((response) => response.status)).toEqual([500, 500]);
+          buildTwiMLPayload.mockImplementation(() => oneTimeResponse);
+          const retry = await postSignedTwilioWebhook(signedRequest);
+          expect(await retry.text()).toContain("one-time-secret");
+        } else {
+          firstOwner.resolve(oneTimeResponse);
+          const [ownerResponse, duplicateResponse] = await Promise.all([owner, duplicate]);
+          expect(await ownerResponse.text()).toContain("one-time-secret");
+          await expectTwilioReplayTwiML(duplicateResponse);
+        }
+
+        await expectTwilioReplayTwiML(await postSignedTwilioWebhook(signedRequest));
+        expect(buildTwiMLPayload).toHaveBeenCalledTimes(outcome === "failure" ? 2 : 1);
+        expect(processEvent).not.toHaveBeenCalled();
+      } finally {
+        verification.mockRestore();
+        await server.stop();
+      }
+    },
+  );
+
+  it("retries a failed Plivo callback and preserves its successful XML for later duplicates", async () => {
+    const plivoProvider = new PlivoProvider(
+      { authId: "MA000000000000000000", authToken: "plivo-retry-token" },
+      { skipVerification: true },
+    );
+    const { manager, processEvent } = createManager([]);
+    processEvent.mockImplementationOnce(() => {
+      throw new Error("synthetic SQLite persistence failure");
+    });
+    const config = createConfig({
+      provider: "plivo",
+      skipSignatureVerification: true,
+      plivo: { authId: "MA000000000000000000", authToken: "plivo-retry-token" },
+    });
+    const server = new VoiceCallWebhookServer(config, manager, plivoProvider);
+
+    try {
+      const baseUrl = await server.start();
+      const url = requireBoundRequestUrl(server, baseUrl);
+      url.searchParams.set("provider", "plivo");
+      url.searchParams.set("flow", "answer");
+      const body =
+        "CallUUID=plivo-failed-owner&CallStatus=in-progress&Direction=outbound&Event=StartApp";
+      const postCallback = () =>
+        fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body,
+        });
+
+      expect((await postCallback()).status).toBe(500);
+      const accepted = await postCallback();
+      expect(accepted.status).toBe(200);
+      const expectedBody = await accepted.text();
+      expect(expectedBody).toContain("<Wait");
+      expect(await (await postCallback()).text()).toBe(expectedBody);
+      expect(processEvent).toHaveBeenCalledTimes(2);
+    } finally {
+      await server.stop();
+    }
+  });
+
   it("releases Twilio provider state through a terminal webhook before replay ack", async () => {
     const callId = "call-webhook-terminal-twilio";
     const providerCallId = "CA-webhook-terminal-twilio";
