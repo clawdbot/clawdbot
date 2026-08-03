@@ -29,7 +29,8 @@ function hardenPrivatePath(target: string): void {
 }
 
 export type PreMigrationBackupResult =
-  | { status: "created"; backupPath: string }
+  /** `reused` marks a copy an earlier attempt at this same migration left behind. */
+  | { status: "created"; backupPath: string; reused: boolean }
   | { status: "skipped"; reason: string }
   | { status: "failed"; reason: string };
 
@@ -95,6 +96,19 @@ function pruneBackupDir(backupDir: string, keep: number): string[] {
     }
   }
   return removed;
+}
+
+/**
+ * The operator-facing line for a snapshot that exists, worded for how it got
+ * there. Reusing a copy an earlier attempt left is not the same event as taking
+ * one, and reporting both as "backed up" would claim work that did not happen.
+ */
+export function describePreMigrationSnapshot(
+  backup: Extract<PreMigrationBackupResult, { status: "created" }>,
+): string {
+  return backup.reused
+    ? `Reused the pre-migration backup an earlier attempt left → ${backup.backupPath}`
+    : `Backed up shared state database before schema migration → ${backup.backupPath}`;
 }
 
 /**
@@ -167,6 +181,22 @@ export function createPreMigrationStateBackup(
     // what keeps a full copy of shared state unreadable for the window between
     // the two.
     hardenPrivatePath(backupDir);
+    // A migration that does not commit leaves the database exactly as this
+    // snapshot found it, so a second copy of the same pending upgrade records
+    // nothing new. Reuse it. Without this, a database that keeps failing to
+    // migrate — a crash-looping gateway, a repeatedly retried repair — writes one
+    // full copy of shared state per attempt, and retention cannot save it because
+    // pruning only runs after a migration commits. Measured at 11,715 snapshots
+    // and 19 GB in six minutes before this check existed.
+    const pending = `${BACKUP_FILE_PREFIX}${fromVersion}-to-v${toVersion}-`;
+    const existing = fs
+      .readdirSync(backupDir)
+      .filter((name) => name.startsWith(pending) && name.endsWith(BACKUP_FILE_SUFFIX))
+      .toSorted();
+    const reusable = existing.at(-1);
+    if (reusable !== undefined) {
+      return { status: "created", backupPath: path.join(backupDir, reusable), reused: true };
+    }
     const stamp = new Date(now).toISOString().replace(/[:.]/g, "-");
     backupPath = path.join(
       backupDir,
@@ -176,7 +206,7 @@ export function createPreMigrationStateBackup(
     // name unique. Escape single quotes for the SQL string literal.
     db.exec(`VACUUM INTO '${backupPath.replace(/'/g, "''")}';`); // sqlite-allow-raw -- Offline snapshot maintenance boundary; VACUUM INTO has no Kysely form.
     hardenPrivatePath(backupPath);
-    return { status: "created", backupPath };
+    return { status: "created", backupPath, reused: false };
   } catch (error) {
     // A snapshot we could not protect is worse than no snapshot: it is a full
     // copy of shared state sitting at whatever permissions it was born with.

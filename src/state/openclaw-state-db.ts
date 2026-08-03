@@ -76,6 +76,7 @@ import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migrat
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   createPreMigrationStateBackup,
+  describePreMigrationSnapshot,
   PRE_MIGRATION_BACKUP_RETENTION,
   type PreMigrationBackupResult,
   prunePreMigrationStateBackups,
@@ -345,7 +346,7 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
     const preMigrationChanges =
       preMigrationBackup.status === "created"
         ? [
-            `Backed up shared state database before schema migration → ${preMigrationBackup.backupPath}`,
+            describePreMigrationSnapshot(preMigrationBackup),
             // Deleting a recovery copy is worth saying out loud, so an operator
             // looking for an older snapshot knows why it is not there.
             ...(prunedPaths.length > 0
@@ -535,7 +536,7 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
     if (preMigrationBackup.status === "created") {
       const prunedPaths = prunePreMigrationStateBackups(pathname);
       stateDbLog.info(
-        `Backed up shared state database before schema migration → ${preMigrationBackup.backupPath}` +
+        describePreMigrationSnapshot(preMigrationBackup) +
           (prunedPaths.length > 0
             ? `; pruned ${prunedPaths.length} older pre-migration backup(s), keeping the newest ${PRE_MIGRATION_BACKUP_RETENTION}`
             : ""),

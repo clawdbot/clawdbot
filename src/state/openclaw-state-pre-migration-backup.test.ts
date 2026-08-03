@@ -115,6 +115,34 @@ describe("createPreMigrationStateBackup", () => {
     }
   });
 
+  it("reuses the existing copy when the same migration is attempted again", () => {
+    const dir = makeStateDir();
+    const dbPath = path.join(dir, "openclaw.sqlite");
+    seedStateDb(dbPath, 5);
+    const db = new DatabaseSync(dbPath);
+    try {
+      const base = Date.parse("2026-07-25T09:00:00Z");
+      const first = createPreMigrationStateBackup(db, dbPath, 5, 6, base);
+      expect(first).toMatchObject({ status: "created", reused: false });
+      if (first.status !== "created") {
+        return;
+      }
+
+      // A migration that never commits leaves the database as this copy found
+      // it, so retrying must not write a second one. Retention cannot bound this:
+      // pruning runs only after a migration commits, and this one never does.
+      for (let i = 1; i <= 50; i += 1) {
+        const retry = createPreMigrationStateBackup(db, dbPath, 5, 6, base + i * 60_000);
+        expect(retry).toMatchObject({ status: "created", backupPath: first.backupPath });
+        expect(retry.status === "created" && retry.reused).toBe(true);
+      }
+      const backupDir = path.join(dir, PRE_MIGRATION_BACKUP_DIRNAME);
+      expect(fs.readdirSync(backupDir)).toHaveLength(1);
+    } finally {
+      db.close();
+    }
+  });
+
   it("reports a failure instead of aborting when the directory cannot be made", () => {
     const dir = makeStateDir();
     const dbPath = path.join(dir, "openclaw.sqlite");
@@ -140,13 +168,15 @@ describe("createPreMigrationStateBackup", () => {
     seedStateDb(dbPath, 5);
     const db = new DatabaseSync(dbPath);
     try {
-      // One migration per minute, so the timestamps (and therefore the pruning
-      // order) are distinct and predictable.
+      // Successive upgrades, one per minute: v1→v2, v2→v3, and so on. Distinct
+      // version pairs because that is what a real upgrade history looks like,
+      // and because repeating one pair is now deliberately reused rather than
+      // recopied.
       const base = Date.parse("2026-07-25T09:00:00Z");
       const created: string[] = [];
       const total = PRE_MIGRATION_BACKUP_RETENTION + 2;
       for (let i = 0; i < total; i += 1) {
-        const result = createPreMigrationStateBackup(db, dbPath, 5, 6, base + i * 60_000);
+        const result = createPreMigrationStateBackup(db, dbPath, i + 1, i + 2, base + i * 60_000);
         expect(result.status).toBe("created");
         if (result.status !== "created") {
           return;
@@ -183,7 +213,7 @@ describe("createPreMigrationStateBackup", () => {
       const base = Date.parse("2026-07-25T09:00:00Z");
       const settled: string[] = [];
       for (let i = 0; i < PRE_MIGRATION_BACKUP_RETENTION; i += 1) {
-        const result = createPreMigrationStateBackup(db, dbPath, 5, 6, base + i * 60_000);
+        const result = createPreMigrationStateBackup(db, dbPath, i + 1, i + 2, base + i * 60_000);
         if (result.status !== "created") {
           throw new Error(`expected a snapshot, got ${result.status}`);
         }
@@ -219,9 +249,9 @@ describe("createPreMigrationStateBackup", () => {
     try {
       const base = Date.parse("2026-07-25T09:00:00Z");
       for (let i = 0; i < PRE_MIGRATION_BACKUP_RETENTION + 2; i += 1) {
-        expect(createPreMigrationStateBackup(db, dbPath, 5, 6, base + i * 60_000).status).toBe(
-          "created",
-        );
+        expect(
+          createPreMigrationStateBackup(db, dbPath, i + 1, i + 2, base + i * 60_000).status,
+        ).toBe("created");
         prunePreMigrationStateBackups(dbPath);
       }
       // Pruning only ever considers files this module wrote.

@@ -62,6 +62,15 @@ const BACKED_UP_BEFORE_MIGRATION = expect.stringMatching(
   /^Backed up shared state database before schema migration → .+pre-migration-backups.+\.sqlite$/,
 );
 
+/**
+ * Reported instead when an earlier attempt at this same migration already left a
+ * copy. A failed open snapshots before its transaction throws, so a repair that
+ * follows one reuses that copy rather than writing a second of identical state.
+ */
+const REUSED_BEFORE_MIGRATION = expect.stringMatching(
+  /^Reused the pre-migration backup an earlier attempt left → .+pre-migration-backups.+\.sqlite$/,
+);
+
 function createTempStateDir(): string {
   return makeTempDir(stateDbTempDirs, "openclaw-state-db-");
 }
@@ -2076,9 +2085,11 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       pathname: databasePath,
     });
 
+    // The open above snapshotted before its transaction threw, so this repair
+    // reuses that copy: the database is byte-for-byte what it found.
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [
-        BACKED_UP_BEFORE_MIGRATION,
+        REUSED_BEFORE_MIGRATION,
         "Migrated shared state audit event ledger → versioned message lifecycle schema",
         "Migrated shared state tables to SQLite STRICT typing (3)",
       ],
