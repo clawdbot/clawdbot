@@ -3,16 +3,15 @@
 // Verifies plugin SDK subpath exports and generated entrypoint metadata.
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { normalizeRepoPath, visitModuleSpecifiers } from "./lib/guard-inventory-utils.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectTypeScriptFilesFromRoots,
   resolveSourceRoots,
   toLine,
 } from "./lib/ts-guard-utils.mjs";
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = resolveRepoRoot(import.meta.url);
 const scanRoots = resolveSourceRoots(repoRoot, [
   "src",
   "packages",

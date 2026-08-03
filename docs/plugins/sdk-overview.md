@@ -635,6 +635,14 @@ For an end-to-end authoring guide, see
   artifacts still use `listActiveMemoryPublicArtifacts(...)` from the retained
   `openclaw/plugin-sdk/memory-host-core` facade until a focused public consumer
   API exists; they must not reach into another plugin's private layout.
+- A memory runtime that can return session-transcript hits should implement
+  `runtime.authorizeSearchHits(...)`. The host calls this hook before raw search
+  hits reach caller-visible surfaces and supplies the requesting agent, session
+  key, and sandbox state. Return only hits the requester may observe. If the hook
+  is absent, OpenClaw fails closed by withholding session-source hits while
+  retaining ordinary memory hits. Keep transcript identity and visibility
+  policy in the owning memory plugin; callers must not infer authorization from
+  paths or duplicate plugin-specific rules.
 - `MemoryFlushPlan.model` can pin the flush turn to an exact `provider/model`
   reference, such as `ollama/qwen3:8b`, without inheriting the active fallback
   chain.

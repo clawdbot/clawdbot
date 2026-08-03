@@ -97,6 +97,7 @@ describe("QA Lab UI evidence render", () => {
             { accountId: "account-b", id: "shared", kind: "channel" },
             { accountId: "account-a", id: "shared", kind: "direct" },
           ],
+          cursor: 0,
           events: [],
           messages: [
             {
@@ -134,12 +135,16 @@ describe("QA Lab UI evidence render", () => {
             {
               accountId: "account-a",
               conversationId: "shared",
+              createdAt: 0,
+              createdBy: "openclaw",
               id: "selected-thread",
               title: "Selected thread",
             },
             {
               accountId: "account-b",
               conversationId: "shared",
+              createdAt: 0,
+              createdBy: "openclaw",
               id: "foreign-thread",
               title: "Foreign thread",
             },
@@ -167,6 +172,7 @@ describe("QA Lab UI evidence render", () => {
             { accountId: "account-a", id: "shared", kind: "group" },
             { accountId: "account-b", id: "shared", kind: "channel" },
           ],
+          cursor: 0,
           events: [],
           messages: [],
           threads: [],
@@ -197,6 +203,7 @@ describe("QA Lab UI evidence render", () => {
             { accountId: "account-a", id: "shared", kind: "channel" },
             { accountId: "account-a", id: "shared", kind: "direct" },
           ],
+          cursor: 0,
           events: [],
           messages: [
             {
@@ -251,6 +258,7 @@ describe("QA Lab UI evidence render", () => {
     const selectedConversationKey = JSON.stringify(["default", "channel", "qa-room"]);
     const snapshot: NonNullable<UiState["snapshot"]> = {
       conversations: [{ accountId: "default", id: "qa-room", kind: "channel" }],
+      cursor: 0,
       events: [],
       messages: [
         {
@@ -290,6 +298,8 @@ describe("QA Lab UI evidence render", () => {
         {
           accountId: "default",
           conversationId: "qa-room",
+          createdAt: 0,
+          createdBy: "openclaw",
           id: "owned-thread",
           title: "Owned thread",
         },

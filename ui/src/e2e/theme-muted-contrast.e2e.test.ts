@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiBundledGatewayUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -53,9 +53,12 @@ type RenderedColor = {
 
 function parseRenderedColor(color: string): RenderedColor {
   const trimmed = color.trim();
-  const hex = /^#([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/iu.exec(trimmed);
+  const shortHex = /^#([a-f\d])([a-f\d])([a-f\d])$/iu.exec(trimmed);
+  const hex = shortHex ?? /^#([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/iu.exec(trimmed);
   if (hex) {
-    const channels = hex.slice(1).map((channel) => Number.parseInt(channel, 16));
+    const channels = hex
+      .slice(1)
+      .map((channel) => Number.parseInt(shortHex ? channel.repeat(2) : channel, 16));
     const [red, green, blue] = channels;
     if (red !== undefined && green !== undefined && blue !== undefined) {
       return { alpha: 1, blue, green, red };
@@ -81,7 +84,7 @@ function parseRenderedColor(color: string): RenderedColor {
     }
   }
 
-  throw new Error(`Expected a browser-rendered RGB or six-digit theme color, received ${color}`);
+  throw new Error(`Expected a browser-rendered RGB or theme hex color, received ${color}`);
 }
 
 function compositeColor(foreground: RenderedColor, background: RenderedColor): RenderedColor {
@@ -139,14 +142,17 @@ suite.define(() => {
       });
       const initialFamily = family === "claw" ? "knot" : "claw";
       await context.addInitScript(
-        ({ initialMode, initialTheme }) => {
-          const gatewayUrl = "ws://127.0.0.1:18789";
+        ({ gatewayUrl, initialMode, initialTheme }) => {
           localStorage.setItem(
             `openclaw.control.settings.v1:${gatewayUrl}`,
             JSON.stringify({ gatewayUrl, theme: initialTheme, themeMode: initialMode }),
           );
         },
-        { initialMode: mode, initialTheme: initialFamily },
+        {
+          gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl),
+          initialMode: mode,
+          initialTheme: initialFamily,
+        },
       );
 
       const page = await context.newPage();

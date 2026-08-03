@@ -368,32 +368,40 @@ describe("node host MCP manager", () => {
   });
 
   it("isolates an oversized multi-page catalog at the accumulated byte ceiling", async () => {
-    const largeTool = {
-      ...tool("large"),
-      inputSchema: { type: "object" as const, description: "x".repeat(6 * 1024 * 1024) },
-    };
-    const oversized = createClient({
-      list: async (params) =>
-        params?.cursor ? { tools: [largeTool] } : { tools: [largeTool], nextCursor: "next" },
-    });
-    const healthy = createClient({ tools: [tool("search")] });
-    const warn = vi.fn();
-    const manager = await startNodeHostMcpManager(
-      { oversized: { command: "oversized" }, healthy: { command: "healthy" } },
-      {
-        createClient: (serverName) => (serverName === "oversized" ? oversized : healthy),
-        resolveTransport: () => transport,
-        warn,
-      },
-    );
+    // Large-page byte counting must not spend this unrelated wall-clock deadline;
+    // the preceding case separately proves strict catalog timeout enforcement.
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    try {
+      const largeTool = {
+        ...tool("large"),
+        inputSchema: { type: "object" as const, description: "x".repeat(6 * 1024 * 1024) },
+      };
+      const oversized = createClient({
+        list: async (params) =>
+          params?.cursor ? { tools: [largeTool] } : { tools: [largeTool], nextCursor: "next" },
+      });
+      const healthy = createClient({ tools: [tool("search")] });
+      const warn = vi.fn();
+      const manager = await startNodeHostMcpManager(
+        { oversized: { command: "oversized" }, healthy: { command: "healthy" } },
+        {
+          createClient: (serverName) => (serverName === "oversized" ? oversized : healthy),
+          resolveTransport: () => transport,
+          warn,
+        },
+      );
 
-    expect(oversized.listTools).toHaveBeenCalledTimes(2);
-    expect(oversized.close).toHaveBeenCalledOnce();
-    expect(warn).toHaveBeenCalledOnce();
-    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/listing exceeded \d+ bytes/u));
-    expect(manager.descriptors.map((descriptor) => descriptor.name)).toEqual(["healthy_search"]);
+      expect(oversized.listTools).toHaveBeenCalledTimes(2);
+      expect(oversized.close).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/listing exceeded \d+ bytes/u));
+      expect(manager.descriptors.map((descriptor) => descriptor.name)).toEqual(["healthy_search"]);
 
-    await manager.close();
+      await manager.close();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("isolates a listing that exceeds the retained candidate ceiling", async () => {

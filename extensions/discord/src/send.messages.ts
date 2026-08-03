@@ -17,6 +17,7 @@ import {
   searchGuildMessages,
   unpinChannelMessage,
 } from "./internal/discord.js";
+import { parseDiscordRetryAfterBodySeconds } from "./retry-after.js";
 import { resolveDiscordRest } from "./send.shared.js";
 import type {
   DiscordMessageEdit,
@@ -248,8 +249,22 @@ export async function searchMessagesDiscord(query: DiscordSearchQuery, opts: Dis
     const limit = Math.min(Math.max(Math.floor(query.limit), 1), 25);
     params.set("limit", String(limit));
   }
-  return assertDiscordResponseObject(
+  const result = assertDiscordResponseObject(
     await searchGuildMessages(rest, query.guildId, params),
     "message search",
   );
+  // Discord returns HTTP 202 with code 110000 while the guild search index is warming.
+  if (result.code === 110000) {
+    const message =
+      typeof result.message === "string" && result.message.trim()
+        ? result.message.trim()
+        : "Discord search index is not yet available";
+    const retryAfter = parseDiscordRetryAfterBodySeconds(result.retry_after);
+    const retryHint = retryAfter === undefined ? "" : ` (retry after ${retryAfter}s)`;
+    throw new Error(`Discord message search unavailable: ${message}${retryHint}`);
+  }
+  if (!Array.isArray(result.messages)) {
+    throw new Error("Unexpected Discord response for message search: expected messages array.");
+  }
+  return result;
 }

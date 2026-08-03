@@ -9297,6 +9297,7 @@ public struct ConfigSchemaLookupResult: Codable, Sendable {
 public struct SystemAgentChatParams: Codable, Sendable {
     public let sessionid: String
     public let message: String?
+    public let wizardanswer: [String: AnyCodable]?
     public let welcomevariant: AnyCodable?
     public let reset: Bool?
     public let context: [String: AnyCodable]?
@@ -9305,6 +9306,7 @@ public struct SystemAgentChatParams: Codable, Sendable {
     public init(
         sessionid: String,
         message: String? = nil,
+        wizardanswer: [String: AnyCodable]? = nil,
         welcomevariant: AnyCodable? = nil,
         reset: Bool? = nil,
         context: [String: AnyCodable]? = nil,
@@ -9312,6 +9314,7 @@ public struct SystemAgentChatParams: Codable, Sendable {
     {
         self.sessionid = sessionid
         self.message = message
+        self.wizardanswer = wizardanswer
         self.welcomevariant = welcomevariant
         self.reset = reset
         self.context = context
@@ -9321,6 +9324,7 @@ public struct SystemAgentChatParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case sessionid = "sessionId"
         case message
+        case wizardanswer = "wizardAnswer"
         case welcomevariant = "welcomeVariant"
         case reset
         case context
@@ -9339,6 +9343,7 @@ public struct SystemAgentChatResult: Codable, Sendable {
     public let needsapproval: Bool?
     public let proposalid: String?
     public let question: [String: AnyCodable]?
+    public let step: WizardStep?
 
     public init(
         sessionid: String,
@@ -9350,7 +9355,8 @@ public struct SystemAgentChatResult: Codable, Sendable {
         agentid: String? = nil,
         needsapproval: Bool? = nil,
         proposalid: String? = nil,
-        question: [String: AnyCodable]? = nil)
+        question: [String: AnyCodable]? = nil,
+        step: WizardStep? = nil)
     {
         self.sessionid = sessionid
         self.reply = reply
@@ -9362,6 +9368,7 @@ public struct SystemAgentChatResult: Codable, Sendable {
         self.needsapproval = needsapproval
         self.proposalid = proposalid
         self.question = question
+        self.step = step
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -9375,6 +9382,7 @@ public struct SystemAgentChatResult: Codable, Sendable {
         case needsapproval = "needsApproval"
         case proposalid = "proposalId"
         case question
+        case step
     }
 }
 
