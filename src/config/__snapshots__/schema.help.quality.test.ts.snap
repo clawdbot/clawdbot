@@ -569,6 +569,8 @@ exports[`config tier coverage > keeps the curated common leaf set reviewable 1`]
   "tools.web.fetch.readability",
   "tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange",
   "tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange",
+  "tools.web.fetch.ssrfPolicy.allowedHostnames.*",
+  "tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork",
   "tools.web.fetch.useTrustedEnvProxy",
   "tools.web.fetch.userAgent",
   "tools.web.search.*",

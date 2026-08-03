@@ -14689,6 +14689,142 @@
         }
       }
     },
+    "Authenticate with your Gateway": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Authenticate with your Gateway"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用您的 Gateway 进行身份验证"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用您的 Gateway 進行驗證"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autentique-se com seu Gateway"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mit Ihrem Gateway authentifizieren"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autentícate con tu Gateway"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gatewayで認証"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway로 인증"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Authentifiez-vous avec votre Gateway"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "अपने Gateway से प्रमाणित करें"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "المصادقة باستخدام Gateway الخاص بك"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autenticati con il tuo Gateway"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway ile kimlik doğrulaması yapın"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Автентифікуйтеся через свій Gateway"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autentikasi dengan Gateway Anda"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uwierzytelnij się w Gateway"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ยืนยันตัวตนด้วย Gateway ของคุณ"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Xác thực với Gateway của bạn"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifieer met je Gateway"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "احراز هویت با Gateway خود"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аутентификация через Gateway"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autentisera med din Gateway"
+          }
+        }
+      }
+    },
     "Auto": {
       "localizations": {
         "en": {
@@ -16997,142 +17133,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Grenar"
-          }
-        }
-      }
-    },
-    "Bring your memories along": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bring your memories along"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "带上你的记忆"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "帶上你的記憶"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Leve suas memórias com você"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nehmen Sie Ihre Erinnerungen mit"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Llévate tus recuerdos"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "思い出を引き継ぐ"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "추억을 함께 가져오세요"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Emportez vos souvenirs"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "अपनी यादें साथ लाएँ"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "اصطحب ذكرياتك معك"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Porta con te i tuoi ricordi"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anılarınızı yanınızda getirin"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Перенесіть свої спогади"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bawa serta memori Anda"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Zabierz swoje wspomnienia ze sobą"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "นำความทรงจำของคุณมาด้วย"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mang theo những ký ức của bạn"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Neem je herinneringen mee"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "خاطراتتان را همراه بیاورید"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Перенесите свои воспоминания"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ta med dina minnen"
           }
         }
       }
@@ -23121,142 +23121,6 @@
         }
       }
     },
-    "Checking supported AI tools on this Mac.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Checking supported AI tools on this Mac."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "正在检查此 Mac 上支持的 AI 工具。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "正在檢查這台 Mac 上支援的 AI 工具。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Verificando as ferramentas de IA compatíveis neste Mac."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Unterstützte KI-Tools auf diesem Mac werden überprüft."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Comprobando las herramientas de IA compatibles en este Mac."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "この Mac でサポートされている AI ツールを確認しています。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "이 Mac에서 지원되는 AI 도구를 확인하는 중입니다."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Vérification des outils d’IA pris en charge sur ce Mac."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "इस Mac पर समर्थित AI टूल्स की जाँच की जा रही है।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "جارٍ التحقق من أدوات الذكاء الاصطناعي المدعومة على جهاز Mac هذا."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Verifica degli strumenti di IA supportati su questo Mac."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bu Mac'te desteklenen yapay zekâ araçları kontrol ediliyor."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Перевірка підтримуваних інструментів ШІ на цьому Mac."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Memeriksa alat AI yang didukung di Mac ini."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sprawdzanie obsługiwanych narzędzi AI na tym Macu."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "กำลังตรวจสอบเครื่องมือ AI ที่รองรับบน Mac เครื่องนี้"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Đang kiểm tra các công cụ AI được hỗ trợ trên máy Mac này."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ondersteunde AI-tools op deze Mac controleren."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "در حال بررسی ابزارهای هوش مصنوعی پشتیبانی‌شده در این Mac."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Проверка поддерживаемых инструментов ИИ на этом Mac."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kontrollerar AI-verktyg som stöds på denna Mac."
-          }
-        }
-      }
-    },
     "Checking the Mac app and Gateway…": {
       "localizations": {
         "en": {
@@ -23661,6 +23525,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Välj mediafil"
+          }
+        }
+      }
+    },
+    "Choose a different AI…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a different AI…"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "选择其他 AI…"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "選擇其他 AI…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Escolher uma IA diferente…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Andere KI auswählen…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Elegir una IA diferente…"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "別のAIを選択…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다른 AI 선택…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choisir une autre IA…"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "कोई दूसरा AI चुनें…"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "اختر ذكاءً اصطناعيًا مختلفًا…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scegli un'altra IA…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Farklı bir yapay zeka seç…"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Виберіть інший ШІ…"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pilih AI lain…"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wybierz inną AI…"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "เลือก AI อื่น…"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chọn AI khác…"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kies een andere AI…"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "انتخاب یک هوش مصنوعی دیگر…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбрать другой ИИ…"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Välj en annan AI…"
           }
         }
       }
@@ -35901,142 +35901,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Det gick inte att starta dikteringen."
-          }
-        }
-      }
-    },
-    "Couldn’t check for memories": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn’t check for memories"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "无法检查记忆"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "無法檢查記憶"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Não foi possível verificar se há memórias"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Erinnerungen konnten nicht überprüft werden"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No se pudo comprobar si hay recuerdos"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "思い出を確認できませんでした"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "추억을 확인할 수 없습니다"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Impossible de rechercher des souvenirs"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "यादों की जाँच नहीं की जा सकी"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "تعذّر التحقق من وجود ذكريات"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Impossibile verificare la presenza di ricordi"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anılar kontrol edilemedi"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Не вдалося перевірити наявність спогадів"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tidak dapat memeriksa memori"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nie udało się sprawdzić wspomnień"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ไม่สามารถตรวจสอบความทรงจำได้"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Không thể kiểm tra ký ức"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kan niet controleren op herinneringen"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "بررسی خاطرات امکان‌پذیر نبود"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Не удалось проверить наличие воспоминаний"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Det gick inte att söka efter minnen"
           }
         }
       }
@@ -60521,142 +60385,6 @@
         }
       }
     },
-    "Import memories": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Import memories"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "导入记忆"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "匯入記憶"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Importar memórias"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Erinnerungen importieren"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Importar recuerdos"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "思い出をインポート"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "추억 가져오기"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Importer des souvenirs"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "यादें आयात करें"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "استيراد الذكريات"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Importa ricordi"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anıları içe aktar"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Імпортувати спогади"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Impor memori"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Importuj wspomnienia"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "นำเข้าความทรงจำ"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nhập ký ức"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Herinneringen importeren"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "وارد کردن خاطرات"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Импортировать воспоминания"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Importera minnen"
-          }
-        }
-      }
-    },
     "Importing browser cookies…": {
       "localizations": {
         "en": {
@@ -60789,142 +60517,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Importerar webbläsarcookies…"
-          }
-        }
-      }
-    },
-    "Importing memories…": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Importing memories…"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "正在导入记忆…"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "正在匯入記憶…"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Importando memórias…"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Erinnerungen werden importiert…"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Importando recuerdos…"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "思い出をインポート中…"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "추억을 가져오는 중…"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Importation des souvenirs…"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "यादें आयात की जा रही हैं…"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "جارٍ استيراد الذكريات…"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Importazione dei ricordi…"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anılar içe aktarılıyor…"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Імпортування спогадів…"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mengimpor memori…"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Importowanie wspomnień…"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "กำลังนำเข้าความทรงจำ…"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Đang nhập ký ức…"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Herinneringen importeren…"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "در حال وارد کردن خاطرات…"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Импорт воспоминаний…"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Importerar minnen…"
           }
         }
       }
@@ -70037,142 +69629,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Letar efter AI du redan använder…"
-          }
-        }
-      }
-    },
-    "Looking for memories…": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Looking for memories…"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "正在查找记忆…"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "正在尋找記憶…"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Procurando memórias…"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Erinnerungen werden gesucht…"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Buscando recuerdos…"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "思い出を検索中…"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "추억을 찾는 중…"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Recherche de souvenirs…"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "यादें खोजी जा रही हैं…"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "جارٍ البحث عن ذكريات…"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ricerca dei ricordi…"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anılar aranıyor…"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Пошук спогадів…"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mencari memori…"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Wyszukiwanie wspomnień…"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "กำลังค้นหาความทรงจำ…"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Đang tìm ký ức…"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Zoeken naar herinneringen…"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "در حال جست‌وجوی خاطرات…"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Поиск воспоминаний…"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Söker efter minnen…"
           }
         }
       }
@@ -79697,142 +79153,6 @@
         }
       }
     },
-    "No memories to import": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No memories to import"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "没有可导入的记忆"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "沒有可匯入的記憶"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nenhuma memória para importar"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Keine Erinnerungen zum Importieren"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No hay recuerdos que importar"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "インポートする思い出はありません"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "가져올 추억이 없습니다"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aucun souvenir à importer"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "आयात करने के लिए कोई यादें नहीं हैं"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "لا توجد ذكريات لاستيرادها"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nessun ricordo da importare"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "İçe aktarılacak anı yok"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Немає спогадів для імпорту"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tidak ada memori untuk diimpor"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Brak wspomnień do zaimportowania"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ไม่มีความทรงจำให้นำเข้า"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Không có ký ức để nhập"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Geen herinneringen om te importeren"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "خاطره‌ای برای وارد کردن وجود ندارد"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Нет воспоминаний для импорта"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Inga minnen att importera"
-          }
-        }
-      }
-    },
     "No quick settings for this channel.": {
       "localizations": {
         "en": {
@@ -88805,142 +88125,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "OpenClaw aktiv"
-          }
-        }
-      }
-    },
-    "OpenClaw can bring useful context from AI tools you already use into your new assistant.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OpenClaw can bring useful context from AI tools you already use into your new assistant."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OpenClaw 可以将你已在使用的 AI 工具中的有用上下文导入新助手。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OpenClaw 可以將你已在使用的 AI 工具中的實用脈絡帶入新助理。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O OpenClaw pode trazer para seu novo assistente contextos úteis de ferramentas de IA que você já usa."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OpenClaw kann nützlichen Kontext aus bereits verwendeten KI-Tools in Ihren neuen Assistenten übernehmen."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OpenClaw puede incorporar contexto útil de las herramientas de IA que ya utilizas a tu nuevo asistente."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OpenClaw では、すでに使用している AI ツールから役立つコンテキストを新しいアシスタントに引き継ぐことができます。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OpenClaw는 이미 사용 중인 AI 도구에서 유용한 컨텍스트를 새 어시스턴트로 가져올 수 있습니다."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OpenClaw peut intégrer à votre nouvel assistant du contexte utile provenant des outils d’IA que vous utilisez déjà."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OpenClaw आपके पहले से उपयोग किए जा रहे AI टूल्स से उपयोगी संदर्भ आपके नए सहायक में ला सकता है।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "يمكن لـ OpenClaw نقل سياق مفيد من أدوات الذكاء الاصطناعي التي تستخدمها بالفعل إلى مساعدك الجديد."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OpenClaw può importare nel tuo nuovo assistente informazioni contestuali utili dagli strumenti di IA che già utilizzi."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OpenClaw, hâlihazırda kullandığınız yapay zekâ araçlarındaki yararlı bağlamı yeni asistanınıza aktarabilir."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OpenClaw може перенести корисний контекст з інструментів ШІ, якими ви вже користуєтеся, до вашого нового асистента."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OpenClaw dapat membawa konteks berguna dari alat AI yang sudah Anda gunakan ke asisten baru Anda."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OpenClaw może przenieść do nowego asystenta przydatny kontekst z narzędzi AI, których już używasz."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OpenClaw สามารถนำบริบทที่เป็นประโยชน์จากเครื่องมือ AI ที่คุณใช้อยู่มาไว้ในผู้ช่วยใหม่ของคุณได้"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OpenClaw có thể đưa ngữ cảnh hữu ích từ các công cụ AI mà bạn đang sử dụng vào trợ lý mới."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OpenClaw kan nuttige context uit AI-tools die je al gebruikt meenemen naar je nieuwe assistent."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OpenClaw می‌تواند زمینه مفیدی را از ابزارهای هوش مصنوعی که از قبل استفاده می‌کنید، به دستیار جدیدتان منتقل کند."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OpenClaw может перенести полезный контекст из уже используемых вами инструментов ИИ в нового помощника."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OpenClaw kan överföra användbar kontext från AI-verktyg som du redan använder till din nya assistent."
           }
         }
       }
@@ -104993,142 +104177,6 @@
         }
       }
     },
-    "Refresh plan": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Refresh plan"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "刷新计划"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "重新整理計畫"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Atualizar plano"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Plan aktualisieren"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Actualizar plan"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "プランを更新"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "계획 새로 고침"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Actualiser le plan"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "योजना रीफ़्रेश करें"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "تحديث الخطة"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aggiorna piano"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Planı yenile"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Оновити план"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Segarkan rencana"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Odśwież plan"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "รีเฟรชแผน"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Làm mới kế hoạch"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Plan vernieuwen"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "تازه‌سازی طرح"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Обновить план"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Uppdatera planen"
-          }
-        }
-      }
-    },
     "Refresh status": {
       "localizations": {
         "en": {
@@ -113285,142 +112333,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Försök igen nu"
-          }
-        }
-      }
-    },
-    "Retry pending imports before refreshing the plan.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Retry pending imports before refreshing the plan."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "刷新计划前，请重试待处理的导入。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "請先重試待處理的匯入，再重新整理計畫。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tente novamente as importações pendentes antes de atualizar o plano."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Wiederholen Sie ausstehende Importe, bevor Sie den Plan aktualisieren."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Reintenta las importaciones pendientes antes de actualizar el plan."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "プランを更新する前に、保留中のインポートを再試行してください。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "계획을 새로 고치기 전에 보류 중인 가져오기를 다시 시도하세요."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Réessayez les importations en attente avant d’actualiser le plan."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "योजना रीफ़्रेश करने से पहले लंबित आयातों का फिर से प्रयास करें।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "أعِد محاولة عمليات الاستيراد المعلّقة قبل تحديث الخطة."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Riprova le importazioni in sospeso prima di aggiornare il piano."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Planı yenilemeden önce bekleyen içe aktarma işlemlerini yeniden deneyin."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Повторіть імпорт елементів, що очікують, перш ніж оновлювати план."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Coba lagi impor yang tertunda sebelum menyegarkan rencana."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Przed odświeżeniem planu ponów oczekujące importy."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ลองนำเข้ารายการที่รอดำเนินการอีกครั้งก่อนรีเฟรชแผน"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Hãy thử lại các lượt nhập đang chờ trước khi làm mới kế hoạch."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Probeer importbewerkingen die nog in behandeling zijn opnieuw voordat je het plan vernieuwt."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "پیش از تازه‌سازی طرح، وارد کردن‌های در انتظار را دوباره امتحان کنید."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Перед обновлением плана повторите попытку незавершённого импорта."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Försök importera väntande objekt igen innan du uppdaterar planen."
           }
         }
       }
@@ -139129,142 +138041,6 @@
         }
       }
     },
-    "The Gateway did not return a usable import plan. Try planning again.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The Gateway did not return a usable import plan. Try planning again."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway 未返回可用的导入计划。请尝试重新规划。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway 未傳回可用的匯入計畫。請重新規劃。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O Gateway não retornou um plano de importação utilizável. Tente planejar novamente."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Das Gateway hat keinen verwendbaren Importplan zurückgegeben. Versuchen Sie die Planung erneut."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "El Gateway no devolvió un plan de importación válido. Intenta planificar de nuevo."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway から使用可能なインポートプランが返されませんでした。もう一度プランを作成してください。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway에서 사용할 수 있는 가져오기 계획을 반환하지 않았습니다. 다시 계획해 보세요."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Le Gateway n’a pas renvoyé de plan d’importation utilisable. Essayez de planifier à nouveau."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway ने उपयोग योग्य आयात योजना नहीं लौटाई। फिर से योजना बनाने की कोशिश करें।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "لم يُعِد Gateway خطة استيراد قابلة للاستخدام. حاول التخطيط مجددًا."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Il Gateway non ha restituito un piano di importazione utilizzabile. Prova a pianificare di nuovo."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway kullanılabilir bir içe aktarma planı döndürmedi. Yeniden planlamayı deneyin."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway не повернув придатний план імпорту. Спробуйте створити план ще раз."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway tidak mengembalikan rencana impor yang dapat digunakan. Coba buat rencana lagi."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway nie zwrócił użytecznego planu importu. Spróbuj zaplanować ponownie."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway ไม่ได้ส่งคืนแผนการนำเข้าที่ใช้งานได้ โปรดลองวางแผนอีกครั้ง"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway không trả về kế hoạch nhập có thể sử dụng. Hãy thử lập kế hoạch lại."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "De Gateway heeft geen bruikbaar importplan geretourneerd. Probeer opnieuw een plan te maken."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway طرح وارد کردن قابل‌استفاده‌ای برنگرداند. دوباره برنامه‌ریزی کنید."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway не вернул пригодный план импорта. Попробуйте составить план ещё раз."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway returnerade ingen användbar importplan. Försök planera igen."
-          }
-        }
-      }
-    },
     "The Gateway did not start.": {
       "localizations": {
         "en": {
@@ -139669,142 +138445,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Gateway är fortfarande pausad, så OpenClaw väckte inte din agent."
-          }
-        }
-      }
-    },
-    "The Gateway returned an inconsistent provider plan. Try planning again.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The Gateway returned an inconsistent provider plan. Try planning again."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway 返回的提供商计划不一致。请尝试重新规划。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway 傳回的供應商計畫不一致。請重新規劃。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O Gateway retornou um plano de provedor inconsistente. Tente planejar novamente."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Das Gateway hat einen inkonsistenten Anbieterplan zurückgegeben. Versuchen Sie die Planung erneut."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "El Gateway devolvió un plan de proveedor incoherente. Intenta planificar de nuevo."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway から一貫性のないプロバイダープランが返されました。もう一度プランを作成してください。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway에서 일관되지 않은 제공업체 계획을 반환했습니다. 다시 계획해 보세요."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Le Gateway a renvoyé un plan de fournisseur incohérent. Essayez de planifier à nouveau."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway ने एक असंगत प्रदाता योजना लौटाई। फिर से योजना बनाने की कोशिश करें।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "أعاد Gateway خطة موفّر غير متسقة. حاول التخطيط مجددًا."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Il Gateway ha restituito un piano del provider incoerente. Prova a pianificare di nuovo."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway tutarsız bir sağlayıcı planı döndürdü. Yeniden planlamayı deneyin."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway повернув неузгоджений план постачальника. Спробуйте створити план ще раз."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway mengembalikan rencana penyedia yang tidak konsisten. Coba buat rencana lagi."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway zwrócił niespójny plan dostawcy. Spróbuj zaplanować ponownie."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway ส่งคืนแผนของผู้ให้บริการที่ไม่สอดคล้องกัน โปรดลองวางแผนอีกครั้ง"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway đã trả về một kế hoạch nhà cung cấp không nhất quán. Hãy thử lập kế hoạch lại."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "De Gateway heeft een inconsistent providerplan geretourneerd. Probeer opnieuw een plan te maken."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway یک طرح ارائه‌دهنده ناسازگار برگرداند. دوباره برنامه‌ریزی کنید."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway вернул несогласованный план провайдера. Попробуйте составить план ещё раз."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway returnerade en inkonsekvent leverantörsplan. Försök planera igen."
           }
         }
       }
@@ -163473,550 +162113,6 @@
         }
       }
     },
-    "You can do this later from the dashboard’s Memory import page.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "You can do this later from the dashboard’s Memory import page."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "你可以稍后从仪表板的记忆导入页面执行此操作。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "你稍後可以從儀表板的「記憶匯入」頁面執行此操作。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Você pode fazer isso mais tarde pela página de importação de memórias do painel."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sie können dies später über die Seite „Erinnerungen importieren“ im Dashboard erledigen."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Puedes hacerlo más tarde desde la página de importación de recuerdos del panel."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "後でダッシュボードの「思い出のインポート」ページから実行できます。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "나중에 대시보드의 추억 가져오기 페이지에서 이 작업을 수행할 수 있습니다."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Vous pourrez le faire plus tard depuis la page d’importation des souvenirs du tableau de bord."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "आप यह बाद में डैशबोर्ड के यादें आयात करें पेज से कर सकते हैं।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "يمكنك إجراء ذلك لاحقًا من صفحة استيراد الذكريات في لوحة المعلومات."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Puoi farlo in seguito dalla pagina di importazione dei ricordi della dashboard."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bunu daha sonra kontrol panelindeki Anı içe aktarma sayfasından yapabilirsiniz."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Це можна зробити пізніше на сторінці імпорту пам’яті в панелі керування."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anda dapat melakukannya nanti dari halaman Impor memori di dasbor."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Możesz zrobić to później na stronie Import pamięci w panelu."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "คุณสามารถดำเนินการนี้ภายหลังได้จากหน้าการนำเข้าความทรงจำของแดชบอร์ด"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bạn có thể thực hiện việc này sau từ trang Nhập ký ức trên bảng điều khiển."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Je kunt dit later doen via de pagina Geheugenimport in het dashboard."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "می‌توانید این کار را بعداً از صفحه وارد کردن خاطرات در داشبورد انجام دهید."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Это можно сделать позже на странице «Импорт воспоминаний» панели управления."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Du kan göra detta senare från sidan Minnesimport på kontrollpanelen."
-          }
-        }
-      }
-    },
-    "You can import memories later from the dashboard.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "You can import memories later from the dashboard."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "你可以稍后从仪表板导入记忆。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "你稍後可以從儀表板匯入記憶。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Você pode importar memórias mais tarde pelo painel."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sie können Erinnerungen später über das Dashboard importieren."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Puedes importar recuerdos más tarde desde el panel."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "思い出は後でダッシュボードからインポートできます。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "나중에 대시보드에서 추억을 가져올 수 있습니다."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Vous pourrez importer des souvenirs plus tard depuis le tableau de bord."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "आप बाद में डैशबोर्ड से यादें आयात कर सकते हैं।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "يمكنك استيراد الذكريات لاحقًا من لوحة المعلومات."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Puoi importare i ricordi in seguito dalla dashboard."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anıları daha sonra kontrol panelinden içe aktarabilirsiniz."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ви зможете імпортувати спогади пізніше з панелі керування."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anda dapat mengimpor memori nanti dari dasbor."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Wspomnienia możesz zaimportować później z panelu."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "คุณสามารถนำเข้าความทรงจำภายหลังได้จากแดชบอร์ด"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bạn có thể nhập ký ức sau từ bảng điều khiển."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Je kunt herinneringen later importeren via het dashboard."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "می‌توانید بعداً خاطرات را از داشبورد وارد کنید."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Воспоминания можно импортировать позже с панели управления."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Du kan importera minnen senare från kontrollpanelen."
-          }
-        }
-      }
-    },
-    "You can manage imported memories anytime from the dashboard.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "You can manage imported memories anytime from the dashboard."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "你可以随时从仪表板管理已导入的记忆。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "你隨時可以從儀表板管理已匯入的記憶。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Você pode gerenciar as memórias importadas a qualquer momento pelo painel."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Du kannst importierte Erinnerungen jederzeit über das Dashboard verwalten."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Puedes gestionar los recuerdos importados en cualquier momento desde el panel."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "インポートしたメモリは、ダッシュボードからいつでも管理できます。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "가져온 메모리는 언제든지 대시보드에서 관리할 수 있습니다."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Vous pouvez gérer les souvenirs importés à tout moment depuis le tableau de bord."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "आप आयात की गई यादों को डैशबोर्ड से कभी भी प्रबंधित कर सकते हैं।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "يمكنك إدارة الذكريات المستوردة في أي وقت من لوحة المعلومات."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Puoi gestire i ricordi importati in qualsiasi momento dalla dashboard."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "İçe aktarılan anıları istediğiniz zaman kontrol panelinden yönetebilirsiniz."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ви можете будь-коли керувати імпортованими спогадами на панелі керування."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anda dapat mengelola memori yang diimpor kapan saja dari dasbor."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Zaimportowanymi wspomnieniami możesz w każdej chwili zarządzać z poziomu panelu."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "คุณสามารถจัดการความทรงจำที่นำเข้าได้ทุกเมื่อจากแดชบอร์ด"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bạn có thể quản lý các ký ức đã nhập bất cứ lúc nào từ bảng điều khiển."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Je kunt geïmporteerde herinneringen op elk moment beheren via het dashboard."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "می‌توانید خاطرات واردشده را هر زمان از داشبورد مدیریت کنید."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Импортированными воспоминаниями можно управлять в любое время на панели управления."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Du kan när som helst hantera importerade minnen från instrumentpanelen."
-          }
-        }
-      }
-    },
-    "You can skip this and import later from the dashboard’s Memory import page.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "You can skip this and import later from the dashboard’s Memory import page."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "你可以跳过此步骤，稍后从仪表板的记忆导入页面进行导入。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "你可以略過此步驟，稍後再從儀表板的「記憶匯入」頁面匯入。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Você pode pular esta etapa e importar mais tarde pela página de importação de memórias do painel."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sie können diesen Schritt überspringen und den Import später über die Seite „Erinnerungen importieren“ im Dashboard durchführen."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Puedes omitir este paso e importar más tarde desde la página de importación de recuerdos del panel."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ここではスキップして、後でダッシュボードの「思い出のインポート」ページからインポートできます。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "이 단계를 건너뛰고 나중에 대시보드의 추억 가져오기 페이지에서 가져올 수 있습니다."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Vous pouvez ignorer cette étape et effectuer l’importation plus tard depuis la page d’importation des souvenirs du tableau de bord."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "आप इसे छोड़ सकते हैं और बाद में डैशबोर्ड के यादें आयात करें पेज से आयात कर सकते हैं।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "يمكنك تخطي هذه الخطوة والاستيراد لاحقًا من صفحة استيراد الذكريات في لوحة المعلومات."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Puoi saltare questo passaggio e importare in seguito dalla pagina di importazione dei ricordi della dashboard."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bu adımı atlayabilir ve daha sonra kontrol panelindeki Anı içe aktarma sayfasından içe aktarabilirsiniz."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Цей крок можна пропустити й імпортувати спогади пізніше на сторінці імпорту пам’яті в панелі керування."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anda dapat melewati langkah ini dan mengimpor nanti dari halaman Impor memori di dasbor."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Możesz pominąć ten krok i zaimportować wspomnienia później na stronie Import pamięci w panelu."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "คุณสามารถข้ามขั้นตอนนี้และนำเข้าในภายหลังได้จากหน้าการนำเข้าความทรงจำของแดชบอร์ด"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bạn có thể bỏ qua bước này và nhập sau từ trang Nhập ký ức trên bảng điều khiển."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Je kunt dit overslaan en later importeren via de pagina Geheugenimport in het dashboard."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "می‌توانید از این مرحله بگذرید و بعداً از صفحه وارد کردن خاطرات در داشبورد، آن‌ها را وارد کنید."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Этот шаг можно пропустить и выполнить импорт позже на странице «Импорт воспоминаний» панели управления."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Du kan hoppa över detta och importera senare från sidan Minnesimport på kontrollpanelen."
-          }
-        }
-      }
-    },
     "Your AI is ready": {
       "localizations": {
         "en": {
@@ -164421,142 +162517,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Din agent kunde inte meddelas ännu. OpenClaw försöker igen nästa gång appen startas."
-          }
-        }
-      }
-    },
-    "Your memories are ready": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Your memories are ready"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "你的记忆已准备就绪"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "你的記憶已準備就緒"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Suas memórias estão prontas"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Deine Erinnerungen sind bereit"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tus recuerdos están listos"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "メモリの準備ができました"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "메모리가 준비되었습니다"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Vos souvenirs sont prêts"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "आपकी यादें तैयार हैं"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ذكرياتك جاهزة"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "I tuoi ricordi sono pronti"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anılarınız hazır"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ваші спогади готові"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Memori Anda sudah siap"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Twoje wspomnienia są gotowe"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ความทรงจำของคุณพร้อมแล้ว"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ký ức của bạn đã sẵn sàng"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Je herinneringen zijn klaar"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "خاطرات شما آماده‌اند"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ваши воспоминания готовы"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Dina minnen är klara"
           }
         }
       }

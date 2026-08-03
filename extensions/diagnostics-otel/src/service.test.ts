@@ -705,6 +705,49 @@ describe("diagnostics-otel service", () => {
     }
   });
 
+  test.each([
+    {
+      metricNamePrefix: undefined,
+      expectedTokenName: "openclaw.tokens",
+      expectedDurationName: "openclaw.run.duration_ms",
+    },
+    {
+      metricNamePrefix: "acme.",
+      expectedTokenName: "acme.tokens",
+      expectedDurationName: "acme.run.duration_ms",
+    },
+    {
+      metricNamePrefix: "",
+      expectedTokenName: "tokens",
+      expectedDurationName: "run.duration_ms",
+    },
+    {
+      metricNamePrefix: "acme.openclaw.",
+      expectedTokenName: "acme.openclaw.tokens",
+      expectedDurationName: "acme.openclaw.run.duration_ms",
+    },
+  ])(
+    "replaces the default OpenClaw metric prefix with $metricNamePrefix",
+    async ({ metricNamePrefix, expectedTokenName, expectedDurationName }) => {
+      await startOtelService({
+        metrics: true,
+        configure: (ctx) => {
+          if (metricNamePrefix !== undefined) {
+            ctx.config.diagnostics!.otel!.metricNamePrefix = metricNamePrefix;
+          }
+        },
+      });
+
+      expect(telemetryState.counters.has(expectedTokenName)).toBe(true);
+      expect(telemetryState.histograms.has(expectedDurationName)).toBe(true);
+      expect(telemetryState.histograms.has("gen_ai.client.token.usage")).toBe(true);
+      expect(telemetryState.histograms.has("gen_ai.client.operation.duration")).toBe(true);
+      expect(telemetryState.counters.has("openclaw.tokens")).toBe(
+        expectedTokenName === "openclaw.tokens",
+      );
+    },
+  );
+
   test("records message-flow metrics and spans", async () => {
     await startOtelService({ traces: true, metrics: true, logs: true });
 

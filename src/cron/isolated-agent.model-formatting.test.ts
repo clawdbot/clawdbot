@@ -358,7 +358,7 @@ describe("cron model formatting and precedence edge cases", () => {
       expect(loadModelCatalogMock).toHaveBeenCalledOnce();
       expect(loadModelCatalogMock).toHaveBeenCalledWith({
         config: callerConfig,
-        readOnly: true,
+        allowGatewaySubagentBinding: true,
       });
       expect(resolveConfiguredModelRefMock).toHaveBeenCalledWith(
         expect.objectContaining({ cfg: expect.objectContaining(ownerConfig) }),

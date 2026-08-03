@@ -207,7 +207,6 @@ function createVideoProviderSnapshot(params: {
           startup: {
             sidecar: false,
             memory: false,
-            deferConfiguredChannelFullLoadUntilAfterListen: false,
             agentHarnesses: [],
           },
           compat: [],

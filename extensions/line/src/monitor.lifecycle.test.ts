@@ -169,7 +169,7 @@ describe("monitorLineProvider lifecycle", () => {
     createLineBotMock.mockImplementation(() => ({
       account: { accountId: "default" },
       handleWebhook: vi.fn<LineHandleWebhook>(),
-      stop: vi.fn(),
+      stop: vi.fn(async () => undefined),
     }));
     // Clear call history only; the implementation was wired to the actual
     // helper once in the module mock factory.
@@ -221,6 +221,7 @@ describe("monitorLineProvider lifecycle", () => {
 
   it("waits for abort before resolving", async () => {
     const abort = new AbortController();
+    const statusSink = vi.fn();
     let resolved = false;
 
     const task = monitorLineProvider({
@@ -229,6 +230,7 @@ describe("monitorLineProvider lifecycle", () => {
       config: {} as OpenClawConfig,
       runtime: {} as RuntimeEnv,
       abortSignal: abort.signal,
+      statusSink,
     }).then((monitor) => {
       resolved = true;
       return monitor;
@@ -236,11 +238,17 @@ describe("monitorLineProvider lifecycle", () => {
 
     expect(registerWebhookTargetWithPluginRouteMock).toHaveBeenCalledTimes(1);
     expect(requireWebhookRegistration().route.auth).toBe("plugin");
+    expect(statusSink).toHaveBeenCalledWith(
+      expect.objectContaining({ lifecycle: "ready", connected: true }),
+    );
     expect(resolved).toBe(false);
 
     abort.abort();
     await task;
     expect(unregisterHttpMock).toHaveBeenCalledTimes(1);
+    expect(statusSink).toHaveBeenLastCalledWith(
+      expect.objectContaining({ lifecycle: "stopped", running: false }),
+    );
   });
 
   it("registers an account target without replacing existing route ownership", async () => {

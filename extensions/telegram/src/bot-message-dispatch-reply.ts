@@ -21,7 +21,11 @@ import type { TelegramProgressController } from "./bot-message-dispatch-progress
 import { deduplicateBlockSentMedia } from "./bot-message-dispatch.media-dedup.js";
 import type { TelegramDispatchTurnState } from "./bot-message-dispatch.types.js";
 import type { TelegramStreamMode } from "./bot/types.js";
-import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "./button-types.js";
+import {
+  resolveTelegramInlineButtons,
+  resolveTelegramQuestionOptionIndices,
+  type TelegramInlineButtons,
+} from "./button-types.js";
 import {
   buildTelegramErrorScopeKey,
   isSilentErrorPolicy,
@@ -70,11 +74,14 @@ function resolvePayloadTelegramInlineButtons(
   const telegramData = payload.channelData?.telegram as
     | { buttons?: TelegramInlineButtons }
     | undefined;
-  return resolveTelegramInlineButtons({
-    buttons: telegramData?.buttons,
-    presentation: normalizeMessagePresentation(payload.presentation),
-    interactive: payload.interactive,
-  });
+  return resolveTelegramInlineButtons(
+    {
+      buttons: telegramData?.buttons,
+      presentation: normalizeMessagePresentation(payload.presentation),
+      interactive: payload.interactive,
+    },
+    { questionOptionIndices: resolveTelegramQuestionOptionIndices(payload) },
+  );
 }
 
 function hasExecApprovalPayload(payload: ReplyPayload): boolean {
@@ -329,10 +336,17 @@ export function createTelegramReplyDelivery(params: {
         !params.draft.isAnswerToolProgressOnly() &&
         !ownedByQueuedRotation &&
         segment.update.text.trimEnd() === params.draft.answerLane.lastPartialText.trimEnd();
+      const isDurableProgressCommentary =
+        params.streamMode === "progress" &&
+        info.kind === "block" &&
+        effectivePayload.isCommentary === true;
+      // CLI finals exclude separately classified commentary. Send that block outside
+      // the disposable progress stream or its collapse summary erases the text.
       const suppressProgressAnswerBlock =
         params.streamMode === "progress" &&
         info.kind === "block" &&
         segment.lane === "answer" &&
+        !isDurableProgressCommentary &&
         !reply.hasMedia &&
         !hasExecApprovalPayload(effectivePayload) &&
         telegramButtons === undefined;
@@ -374,6 +388,7 @@ export function createTelegramReplyDelivery(params: {
               payload: lanePayload,
               infoKind: info.kind,
               buttons: telegramButtons,
+              allowStream: !isDurableProgressCommentary,
             });
       if (
         segment.lane === "answer" &&

@@ -12,6 +12,7 @@ import {
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
 import {
+  createAccountStatusSink,
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -21,6 +22,10 @@ import {
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk/channel-setup";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
+import {
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import {
@@ -328,24 +333,32 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount, SmsProbe> = createChat
           ctx.log?.warn?.("SMS channel runtime is not available; webhook route not started");
           return;
         }
+        const statusSink = createAccountStatusSink({
+          accountId: ctx.account.accountId,
+          setStatus: ctx.setStatus,
+        });
         return await startSmsGatewayAccount({
           cfg: ctx.cfg,
           account: ctx.account,
           channelRuntime: ctx.channelRuntime as unknown as SmsChannelRuntime,
           abortSignal: ctx.abortSignal,
           log: ctx.log,
+          statusSink,
         });
       },
     },
-    status: {
-      buildAccountSnapshot: ({ account }) => {
+    status: createComputedAccountStatusAdapter<ResolvedSmsAccount, SmsProbe>({
+      defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
+      resolveAccountSnapshot: ({ account }) => {
         const configured = isSmsAccountConfigured(account);
         return {
           accountId: account.accountId,
           name: account.fromNumber || account.messagingServiceSid || "SMS",
           enabled: account.enabled,
           configured,
-          statusState: !account.enabled ? "disabled" : configured ? "configured" : "unconfigured",
+          extra: {
+            statusState: !account.enabled ? "disabled" : configured ? "configured" : "unconfigured",
+          },
         };
       },
       probeAccount: async ({ account, timeoutMs }) => await probeSmsAccount({ account, timeoutMs }),
@@ -353,7 +366,7 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount, SmsProbe> = createChat
       buildCapabilitiesDiagnostics: async ({ account }) => ({
         lines: collectSmsStartupWarnings(account).map((text) => ({ text, tone: "warn" })),
       }),
-    },
+    }),
     secrets: {
       secretTargetRegistryEntries,
       collectRuntimeConfigAssignments,

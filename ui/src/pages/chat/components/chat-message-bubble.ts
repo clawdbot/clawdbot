@@ -41,9 +41,11 @@ import { renderMessageImages, resolveRenderableMessageImages } from "./chat-mess
 import {
   detectJson,
   jsonSummaryLabel,
+  renderAssistantMessageMarkdown,
   renderMarkdownText,
   renderUserMessageMarkdown,
   resolveNormalizedMessageMarkdown,
+  type AssistantMessageDisclosure,
 } from "./chat-message-markdown.ts";
 import {
   extractImages,
@@ -170,6 +172,8 @@ export function renderGroupedMessage(
     onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
     isUserMessageExpanded?: (messageId: string) => boolean;
     onToggleUserMessageExpanded?: (messageId: string) => void;
+    assistantMessageDisclosure?: AssistantMessageDisclosure;
+    actionMarkdown?: string;
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string) => void;
     onRequestUpdate?: () => void;
@@ -220,6 +224,7 @@ export function renderGroupedMessage(
   const hasPairingQrExpiryNotices = pairingQrExpiryNotices.length > 0;
 
   const extractedText = resolveNormalizedMessageMarkdown(normalizedMessage);
+  const actionText = opts.actionMarkdown ?? extractedText;
   const assistantAttachments = normalizedMessage.content.filter(
     (item): item is AttachmentItem => item.type === "attachment",
   );
@@ -343,7 +348,7 @@ export function renderGroupedMessage(
         class="${bubbleClasses}"
         data-message-id=${messageKey}
         data-entry-id=${opts.entryId || nothing}
-        data-message-text=${extractedText || nothing}
+        data-message-text=${actionText || nothing}
       >
         ${renderReplyPill(normalizedMessage.replyTarget)}
         ${renderInlineToolCards(toolCards, {
@@ -378,7 +383,7 @@ export function renderGroupedMessage(
       class="${bubbleClasses}"
       data-message-id=${messageKey}
       data-entry-id=${opts.entryId || nothing}
-      data-message-text=${extractedText || nothing}
+      data-message-text=${actionText || nothing}
     >
       ${renderReplyPill(normalizedMessage.replyTarget)}
       ${isStandaloneToolMessage
@@ -508,7 +513,14 @@ export function renderGroupedMessage(
               : markdown
                 ? normalizedRole === "user"
                   ? renderUserMessageMarkdown(markdown, messageKey, opts, markdownRenderOptions)
-                  : renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
+                  : normalizedRole === "assistant"
+                    ? renderAssistantMessageMarkdown(
+                        markdown,
+                        opts.isStreaming,
+                        opts.assistantMessageDisclosure,
+                        markdownRenderOptions,
+                      )
+                    : renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
                 : nothing}
             ${hasToolCards
               ? renderInlineToolCards(toolCards, {

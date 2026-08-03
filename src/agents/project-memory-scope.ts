@@ -1,10 +1,10 @@
-import { execFile } from "node:child_process";
 import path from "node:path";
-import { promisify } from "node:util";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { parseGitUrl } from "./utils/git.js";
 
-const execFileAsync = promisify(execFile);
 const MAX_PROJECT_KEY_CACHE_ENTRIES = 128;
+// Cheap git reads elsewhere bound at 4s (see detectGitRoot in infra/update-check.ts).
+const GIT_CONFIG_TIMEOUT_MS = 4_000;
 
 const projectKeyByRepoRoot = new Map<string, Promise<string>>();
 
@@ -32,20 +32,21 @@ function setBounded<K, V>(map: Map<K, V>, key: K, value: V, limit: number): void
 
 async function resolveUncachedProjectKey(repoRoot: string): Promise<string> {
   try {
-    const { stdout } = await execFileAsync(
-      "git",
-      ["-C", repoRoot, "config", "--get", "remote.origin.url"],
-      { encoding: "utf8" },
+    const result = await runCommandWithTimeout(
+      ["git", "-C", repoRoot, "config", "--get", "remote.origin.url"],
+      { timeoutMs: GIT_CONFIG_TIMEOUT_MS },
     );
-    const source = parseGitUrl(`git:${stdout.trim()}`);
-    if (source) {
-      // Userinfo is deliberately folded out so SSH and HTTPS clones converge.
-      // This accepts a rare same-host, same-path collision across distinct SSH
-      // accounts; the tradeoff is relevance bleed within one operator's store.
-      // Preserve remote path case so case-sensitive hosts fail closed. Providers
-      // with case-insensitive slugs may miss boosts/digests across casing variants,
-      // but folding paths could cross-inject memory between distinct repositories.
-      return escapeProjectKeyForAnnotation(`${source.host.toLowerCase()}/${source.path}`);
+    if (result.code === 0) {
+      const source = parseGitUrl(`git:${result.stdout.trim()}`);
+      if (source) {
+        // Userinfo is deliberately folded out so SSH and HTTPS clones converge.
+        // This accepts a rare same-host, same-path collision across distinct SSH
+        // accounts; the tradeoff is relevance bleed within one operator's store.
+        // Preserve remote path case so case-sensitive hosts fail closed. Providers
+        // with case-insensitive slugs may miss boosts/digests across casing variants,
+        // but folding paths could cross-inject memory between distinct repositories.
+        return escapeProjectKeyForAnnotation(`${source.host.toLowerCase()}/${source.path}`);
+      }
     }
   } catch {
     // Repositories without an origin intentionally use their canonical local root.

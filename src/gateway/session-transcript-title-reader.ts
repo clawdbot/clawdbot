@@ -2,6 +2,7 @@
 // cache so list rendering never rescans transcripts that have not changed.
 import {
   readSessionTranscriptMessageEventPage,
+  readSessionTranscriptTitleProbeBatch,
   readSessionTranscriptWatermark,
   type SessionTranscriptMessageEvent,
   type SessionTranscriptReadScope,
@@ -32,7 +33,8 @@ type SqliteTitleFieldCacheEntry = ReturnType<typeof readSessionTranscriptWaterma
 };
 
 // Appends advance maxSeq while rewind, fork, and compaction rotate generation. Both tokens must
-// match or stale titles can survive transcript replacement; keep only a few list pages in memory.
+// match or stale titles can survive transcript replacement. Actively streaming sessions therefore
+// miss by design; the store-batched probe bounds that load while this LRU still serves idle rows.
 const sqliteTitleFieldCache = new Map<string, SqliteTitleFieldCacheEntry>();
 
 function sqliteTitleFieldCacheKey(target: ResolvedTranscriptReadTarget): string {
@@ -155,6 +157,90 @@ function readSqliteTitleFields(
   fieldsByVariant[variant] = fields;
   setSqliteTitleFieldCache(cacheKey, { ...watermark, fields: fieldsByVariant });
   return { ...fields };
+}
+
+/** Batch-hydrates list title fields once per store, with canonical widening only for misses. */
+export function readSessionTitleFieldsFromTranscriptBatch(
+  scopes: readonly SessionTranscriptReadScope[],
+  opts?: { includeInterSession?: boolean },
+): SessionTitleFields[] {
+  const targets: ResolvedTranscriptReadTarget[] = [];
+  const variant = opts?.includeInterSession === true ? "includeInterSession" : "default";
+  const results = new Map<number, SessionTitleFields>();
+  const misses: Array<{
+    cacheKey: string;
+    index: number;
+    scope: SessionTranscriptReadScope;
+    target: ResolvedTranscriptReadTarget;
+  }> = [];
+
+  for (const [index, scope] of scopes.entries()) {
+    const target = resolveTranscriptReadTarget(scope);
+    targets.push(target);
+    const cacheKey = sqliteTitleFieldCacheKey(target);
+    const cached = sqliteTitleFieldCache.get(cacheKey);
+    const cachedFields = cached?.fields[variant];
+    if (cached && cachedFields) {
+      // Keep the single-row generation/maxSeq validity contract, but validate only warm rows;
+      // cold or changed rows still collapse into the one store-batched probe below.
+      const watermark = readSessionTranscriptWatermark(scope);
+      if (cached.generation === watermark.generation && cached.maxSeq === watermark.maxSeq) {
+        setSqliteTitleFieldCache(cacheKey, cached);
+        results.set(index, { ...cachedFields });
+        continue;
+      }
+    }
+    misses.push({ cacheKey, index, scope, target });
+  }
+
+  const probes =
+    misses.length > 0 ? readSessionTranscriptTitleProbeBatch(misses.map((miss) => miss.scope)) : [];
+  for (const [probeIndex, miss] of misses.entries()) {
+    const probe = probes[probeIndex];
+    if (!probe) {
+      results.set(miss.index, readSqliteTitleFields(miss.target, opts));
+      continue;
+    }
+    const cached = sqliteTitleFieldCache.get(miss.cacheKey);
+    const cachedFields =
+      cached?.generation === probe.generation && cached.maxSeq === probe.maxSeq
+        ? cached.fields[variant]
+        : undefined;
+    if (cached && cachedFields) {
+      setSqliteTitleFieldCache(miss.cacheKey, cached);
+      results.set(miss.index, { ...cachedFields });
+      continue;
+    }
+    const firstUser = findFirstTitleUserMessage(probe.head, opts?.includeInterSession === true);
+    const lastText = findLastMessageText(probe.tail);
+    if (probe.totalMessages > SQLITE_TITLE_PROBE_INITIAL_MESSAGES && (!firstUser || !lastText)) {
+      results.set(miss.index, readSqliteTitleFields(miss.target, opts));
+      continue;
+    }
+    const fields = {
+      firstUserMessage: firstUser ? extractMessageText(firstUser) : null,
+      lastMessagePreview: lastText,
+    };
+    const fieldsByVariant =
+      cached?.generation === probe.generation && cached.maxSeq === probe.maxSeq
+        ? cached.fields
+        : {};
+    fieldsByVariant[variant] = fields;
+    setSqliteTitleFieldCache(miss.cacheKey, {
+      generation: probe.generation,
+      maxSeq: probe.maxSeq,
+      fields: fieldsByVariant,
+    });
+    results.set(miss.index, { ...fields });
+  }
+
+  return targets.map((target, index) => {
+    const fields = results.get(index);
+    if (!fields) {
+      throw new Error(`Missing batched title fields for session ${target.sessionId}`);
+    }
+    return fields;
+  });
 }
 
 /** Reads title and preview text from a transcript through the reader seam. */

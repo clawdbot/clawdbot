@@ -302,6 +302,33 @@ describe("chat pane board shell", () => {
     expect(sessions.create).not.toHaveBeenCalled();
   });
 
+  it("rechecks reset scope after board confirmation", async () => {
+    const reset = vi.fn(async () => "completed" as const);
+    const sessions = {
+      create: vi.fn(async () => "agent:main:new"),
+      reset,
+    } as unknown as SessionCapability;
+    const pane = createTestPane(sessions);
+    pane.context.gateway.snapshot.hello = {
+      auth: { role: "operator", scopes: ["operator.admin"] },
+      features: { methods: ["sessions.reset"] },
+    } as ApplicationContext["gateway"]["snapshot"]["hello"];
+    pane.boardProvider = mockBoardProvider("agent:main:current");
+
+    const pending = pane.createSession();
+    await Promise.resolve();
+    pane.context.gateway.snapshot.hello = {
+      auth: { role: "operator", scopes: ["operator.write"] },
+      features: { methods: ["sessions.reset"] },
+    } as ApplicationContext["gateway"]["snapshot"]["hello"];
+    pane.settleResetConfirmation(true);
+
+    await expect(pending).resolves.toBe(false);
+    expect(reset).not.toHaveBeenCalled();
+    expect(pane.state.lastError).toContain("operator.admin");
+    expect(pane.state.chatError).toBe(pane.state.lastError);
+  });
+
   it("does not reset when a run starts during confirmation", async () => {
     const reset = vi.fn(async () => "completed" as const);
     const sessions = {

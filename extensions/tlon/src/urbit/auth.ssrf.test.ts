@@ -96,4 +96,38 @@ describe("tlon urbit auth ssrf", () => {
     ).rejects.toMatchObject({ code: "auth_failed" });
     expect(canceled).toBe(true);
   });
+
+  it("rejects failed logins promptly when a response clone keeps cancellation pending", async () => {
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("login failed"));
+        },
+      }),
+      { status: 401 },
+    );
+    const clone = response.clone();
+    const mockFetch = vi.fn().mockResolvedValue(response);
+    const pending = authenticate("http://127.0.0.1:8080", "bad-code", {
+      ssrfPolicy: { allowPrivateNetwork: true },
+      lookupFn: privateLookupFn,
+      fetchImpl: mockFetch as typeof fetch,
+    });
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+
+    try {
+      await expect(
+        Promise.race([
+          pending,
+          new Promise<never>((_resolve, reject) => {
+            timeout = setTimeout(() => reject(new Error("login cancellation stalled")), 1_000);
+          }),
+        ]),
+      ).rejects.toMatchObject({ code: "auth_failed" });
+    } finally {
+      clearTimeout(timeout);
+      void clone.body?.cancel().catch(() => undefined);
+      await pending.catch(() => undefined);
+    }
+  });
 });

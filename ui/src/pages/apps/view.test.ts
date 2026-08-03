@@ -19,6 +19,7 @@ const EXPECTED_EXTERNAL_HREFS = [
   "https://github.com/openclaw/openclaw/releases",
   "https://docs.openclaw.ai/platforms/linux",
   "https://docs.openclaw.ai/tools/chrome-extension",
+  "https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig",
   "https://clawhub.ai",
   "https://discord.gg/clawd",
   "https://docs.openclaw.ai",
@@ -91,12 +92,16 @@ describe("renderApps", () => {
     expect(onPairDevice).toHaveBeenCalledOnce();
   });
 
-  it("badges the watch apps as bundled with their phone apps", () => {
+  it("badges the watch apps as bundled and the extension as coming to the store", () => {
     const container = renderIntoContainer();
     const badges = Array.from(container.querySelectorAll(".apps-card__badge")).map(
       (badge) => badge.textContent?.trim(),
     );
-    expect(badges).toEqual(["Included with the iOS app", "Included with the Android app"]);
+    expect(badges).toEqual([
+      "Included with the iOS app",
+      "Included with the Android app",
+      "Chrome Web Store · coming soon",
+    ]);
   });
 
   it("renders decorative lazy card art with a per-theme variant for every card", () => {

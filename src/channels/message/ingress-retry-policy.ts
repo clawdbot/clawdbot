@@ -3,6 +3,7 @@
  *
  * Channel-specific non-retryable classification stays out of core; pass it in.
  */
+import { computeBackoff } from "../../infra/backoff.js";
 
 export const DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS = 8;
 export const DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS = 24 * 60 * 60 * 1000;
@@ -66,8 +67,10 @@ export function resolveIngressRetryDelayMs(
   if (!event.lastError || event.lastAttemptAt === undefined || attempts <= 0) {
     return 0;
   }
-  const exponent = Math.min(attempts - 1, 8);
-  const delayMs = Math.min(maxMs, baseMs * 2 ** exponent);
+  const delayMs = computeBackoff(
+    { initialMs: baseMs, maxMs, factor: 2, jitter: 0 },
+    Math.min(attempts, 9),
+  );
   return Math.max(0, event.lastAttemptAt + delayMs - now);
 }
 

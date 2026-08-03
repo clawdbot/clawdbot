@@ -13,11 +13,7 @@ import {
 } from "../infra/plugin-approvals.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import {
-  pinActivePluginChannelRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { OpenClawPluginNodeInvokePolicyContext } from "../plugins/types.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
@@ -186,11 +182,6 @@ function setDangerousDemoCommandRegistry(policies: NodeInvokePolicyRegistration[
   setActivePluginRegistry(registry);
 }
 
-function createPolicyRegistry(handle: NodeInvokePolicyHandler): PluginRegistry {
-  const registry = createEmptyPluginRegistry();
-  registry.nodeInvokePolicies.push(createDemoPolicy(handle));
-  return registry;
-}
 async function invokeDemoPolicy(
   context: GatewayRequestContext,
   client: GatewayClient | null = null,
@@ -520,25 +511,6 @@ describe("applyPluginNodeInvokePolicy", () => {
       ok: false,
       details: { nodeCommandDispatched: true },
     });
-    expect(invoke).toHaveBeenCalledOnce();
-  });
-
-  it("uses a matching policy from the pinned Gateway registry after an active swap", async () => {
-    const gatewayRegistry = createPolicyRegistry((ctx) => ctx.invokeNode());
-    setActivePluginRegistry(gatewayRegistry);
-    pinActivePluginChannelRegistry(gatewayRegistry);
-    setActivePluginRegistry(
-      createPolicyRegistry(async () => ({
-        ok: false,
-        code: "TRANSIENT_POLICY",
-        message: "agent-scoped policy must not shadow Gateway policy",
-      })),
-    );
-    const { context, invoke } = createContext();
-
-    const result = await invokeDemoPolicy(context);
-
-    expect(result).toStrictEqual({ ok: true, payload: { ok: true, value: 1 }, payloadJSON: null });
     expect(invoke).toHaveBeenCalledOnce();
   });
 

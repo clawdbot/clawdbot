@@ -62,7 +62,6 @@ import {
 } from "./steer-lifecycle.ts";
 
 type ChatSendOptions = {
-  confirmReset?: boolean;
   restoreDraft?: boolean;
   skillWorkshopRevision?: ChatQueueSkillWorkshopRevision;
   /** Lets request-scoped UI actions recover from rejected local commands. */
@@ -203,16 +202,6 @@ export async function handleSendChat(
   const skillWorkshopRevision = opts?.skillWorkshopRevision;
 
   if (!message && !hasAttachments) {
-    return;
-  }
-
-  if (
-    messageOverride != null &&
-    opts?.confirmReset &&
-    isChatResetCommand(message) &&
-    (typeof globalThis.confirm !== "function" ||
-      !globalThis.confirm("Start a new thread? This will reset the current chat."))
-  ) {
     return;
   }
 

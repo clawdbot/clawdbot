@@ -133,14 +133,19 @@ export function buildToolCallEventsWithArgs(
   ];
 }
 
-export function buildCustomToolCallEventsWithInput(name: string, input: string): StreamEvent[] {
-  const call = buildMockFunctionCall(name, { input });
+export function buildCustomToolCallEventsWithInput(
+  name: string,
+  input: string,
+  namespace?: string,
+): StreamEvent[] {
+  const call = buildMockFunctionCall(name, { input }, namespace);
   const itemId = call.itemId.replace(/^fc_/, "ctc_");
   const item = {
     type: "custom_tool_call",
     id: itemId,
     call_id: call.callId,
     name,
+    ...(namespace ? { namespace } : {}),
     input,
     status: "completed",
   };

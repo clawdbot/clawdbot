@@ -1,5 +1,6 @@
 // Doctor config preflight tests cover state migration preflight behavior before config repair.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import {
   listActiveDegradedPlugins,
   setActiveDegradedPlugins,
@@ -197,8 +198,7 @@ vi.mock("../config/io.js", () => ({
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
-const { mapStartupPluginQuarantineRefresh, runDoctorConfigPreflight } =
-  await import("./doctor-config-preflight.js");
+const { runDoctorConfigPreflight } = await import("./doctor-config-preflight.js");
 
 describe("runDoctorConfigPreflight state migration", () => {
   beforeEach(() => {
@@ -241,6 +241,71 @@ describe("runDoctorConfigPreflight state migration", () => {
     });
     collectCronCodexRuntimePolicyTargetsReadOnly.mockReset();
     collectCronCodexRuntimePolicyTargetsReadOnly.mockResolvedValue({ targets: [], warnings: [] });
+  });
+
+  it("forwards config snapshot phase measurement", async () => {
+    const measure: ConfigSnapshotReadMeasure = async (_name, run) => await run();
+
+    await runDoctorConfigPreflight({
+      migrateState: false,
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+      measure,
+    });
+
+    expect(readConfigFileSnapshot).toHaveBeenCalledWith(expect.objectContaining({ measure }));
+  });
+
+  it("measures doctor-owned migration stages", async () => {
+    const measuredStages: string[] = [];
+    const measure: ConfigSnapshotReadMeasure = async (name, run) => {
+      measuredStages.push(name);
+      return await run();
+    };
+
+    await runDoctorConfigPreflight({
+      migrateState: true,
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+      measure,
+    });
+
+    expect(measuredStages).toEqual([
+      "doctor.config-preflight.state-migrations-import",
+      "doctor.config-preflight.state-dir-migrations",
+      "doctor.config-preflight.config-snapshot",
+      "doctor.config-preflight.cron-repair-import",
+      "doctor.config-preflight.cron-repair",
+      "doctor.config-preflight.legacy-state-migrations",
+    ]);
+  });
+
+  it("measures current-checkpoint plugin verification stages", async () => {
+    const measuredStages: string[] = [];
+    const measure: ConfigSnapshotReadMeasure = async (name, run) => {
+      measuredStages.push(name);
+      return await run();
+    };
+    needsStartupMigrationCheckpoint.mockReturnValue(false);
+
+    await runDoctorConfigPreflight({
+      migrateState: true,
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+      requireStartupMigrationCheckpoint: true,
+      measure,
+    });
+
+    expect(measuredStages).toEqual([
+      "doctor.config-preflight.startup-checkpoint-import",
+      "doctor.config-preflight.pristine-state-plan-import",
+      "doctor.config-preflight.pristine-state-plan",
+      "doctor.config-preflight.config-snapshot",
+      "doctor.config-preflight.plugin-plan-import",
+      "doctor.config-preflight.plugin-plan",
+      "doctor.config-preflight.plugin-payload-verification-import",
+      "doctor.config-preflight.plugin-payload-verification",
+    ]);
   });
 
   it("runs the startup guard immediately before the first state mutation", async () => {
@@ -510,53 +575,6 @@ describe("runDoctorConfigPreflight state migration", () => {
     );
     expect(recordSuccessfulStartupMigrations).toHaveBeenCalledOnce();
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
-  });
-
-  it("maps active payload failures into refreshed plugin quarantine", () => {
-    const result = mapStartupPluginQuarantineRefresh({
-      cfg: {
-        gateway: { mode: "local", port: 19091 },
-        plugins: { entries: { discord: { enabled: true } } },
-      },
-      failures: [
-        {
-          pluginId: "discord",
-          installPath: "/plugins/discord",
-          reason: "missing-main-entry",
-          detail: "index.js",
-        },
-      ],
-    });
-
-    expect(result.blockingDiagnostic).toBeNull();
-    expect(result.quarantinedPlugins).toMatchObject([
-      {
-        pluginId: "discord",
-        state: "configured-unavailable",
-        diagnostic: { reason: "missing-main-entry" },
-      },
-    ]);
-  });
-
-  it("maps active ownerless payload failures into blocking diagnostics", () => {
-    const result = mapStartupPluginQuarantineRefresh({
-      cfg: {
-        gateway: { mode: "local", port: 19091 },
-        plugins: { entries: { discord: { enabled: true } } },
-      },
-      failures: [
-        {
-          pluginId: "discord",
-          reason: "missing-install-path",
-          detail: "Install path is missing from the plugin install record.",
-        },
-      ],
-    });
-
-    expect(result.quarantinedPlugins).toEqual([]);
-    expect(result.blockingDiagnostic?.messages).toEqual([
-      expect.stringContaining("Install path is missing from the plugin install record."),
-    ]);
   });
 
   it("clears stale plugin quarantine through the current-checkpoint preflight", async () => {

@@ -20,6 +20,7 @@ import {
 import type { BoardFace } from "../lib/board/settings.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
+import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
@@ -235,11 +236,20 @@ export class ShellChromeOwner {
       host.pendingNativeNewSession = true;
       return;
     }
+    if (
+      !readSessionMethodAccess(context.gateway.snapshot, {
+        method: "sessions.create",
+        params: {},
+      }).allowed
+    ) {
+      return;
+    }
     host.openNewSession(context.agentSelection.state.selectedId ?? "");
   };
 
   readonly handleNativeNavigate = (event: Event): void => {
-    const path = (event as CustomEvent<{ path?: unknown }>).detail?.path;
+    const detail = (event as CustomEvent<{ path?: unknown; search?: unknown }>).detail;
+    const path = detail?.path;
     const schemeCandidate = typeof path === "string" ? path.slice(1) : "";
     if (
       typeof path !== "string" ||
@@ -255,6 +265,13 @@ export class ShellChromeOwner {
       return;
     }
     event.preventDefault();
+    // Native callers may request route chrome via a query (e.g. the macOS
+    // onboarding handoff lands on /custodian?onboarding=1).
+    const search = detail?.search;
+    if (typeof search === "string" && search.startsWith("?") && !search.includes("#")) {
+      this.host.navigate(routeId, { search });
+      return;
+    }
     this.host.navigate(routeId);
   };
 

@@ -483,6 +483,24 @@ describe("diagnostics.otel.captureContent", () => {
   });
 });
 
+describe("diagnostics.otel.metricNamePrefix", () => {
+  it("accepts valid metric name fragments and rejects invalid values", () => {
+    for (const metricNamePrefix of ["", "acme.", "Acme/team-1_"]) {
+      const result = OpenClawSchema.safeParse({
+        diagnostics: { otel: { metricNamePrefix } },
+      });
+      expect(result.success).toBe(true);
+    }
+
+    for (const metricNamePrefix of [42, " ", ".acme", "acme metrics.", "é.", "a".repeat(129)]) {
+      const result = OpenClawSchema.safeParse({
+        diagnostics: { otel: { metricNamePrefix } },
+      });
+      expect(result.success).toBe(false);
+    }
+  });
+});
+
 describe("ui.seamColor", () => {
   it("accepts hex colors", () => {
     const res = validateConfigObject({ ui: { seamColor: "#FF4500" } });
@@ -994,6 +1012,37 @@ describe("cron webhook schema", () => {
     });
 
     expect(res.success).toBe(true);
+  });
+
+  it("accepts the shared cron webhook SSRF policy", () => {
+    const res = OpenClawSchema.safeParse({
+      cron: {
+        webhookSsrfPolicy: {
+          dangerouslyAllowPrivateNetwork: true,
+          allowedHostnames: ["127.0.0.1", "internal.example"],
+          allowRfc2544BenchmarkRange: true,
+          allowIpv6UniqueLocalRange: true,
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.cron?.webhookSsrfPolicy).toEqual({
+        dangerouslyAllowPrivateNetwork: true,
+        allowedHostnames: ["127.0.0.1", "internal.example"],
+        allowRfc2544BenchmarkRange: true,
+        allowIpv6UniqueLocalRange: true,
+      });
+    }
+  });
+
+  it("rejects unknown cron webhook SSRF policy fields", () => {
+    const res = OpenClawSchema.safeParse({
+      cron: { webhookSsrfPolicy: { allowEverything: true } },
+    });
+
+    expect(res.success).toBe(false);
   });
 });
 

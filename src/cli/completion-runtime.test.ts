@@ -17,6 +17,26 @@ import {
   usesSlowDynamicCompletion,
 } from "./completion-runtime.js";
 
+type PublishOutputFileAtomically =
+  typeof import("./output-file.runtime.js").publishOutputFileAtomically;
+
+const outputFileMocks = vi.hoisted(() => ({
+  publishOutputFileAtomically: vi.fn<PublishOutputFileAtomically>(),
+}));
+
+vi.mock("./output-file.runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./output-file.runtime.js")>(
+    "./output-file.runtime.js",
+  );
+  outputFileMocks.publishOutputFileAtomically.mockImplementation(
+    actual.publishOutputFileAtomically,
+  );
+  return {
+    ...actual,
+    publishOutputFileAtomically: outputFileMocks.publishOutputFileAtomically,
+  };
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function withBashCompletionHome(
@@ -303,8 +323,9 @@ describe("completion-runtime", () => {
     await withBashCompletionHome(async ({ homeDir }) => {
       const cachePath = resolveCompletionCachePath("zsh", "openclaw");
       await fs.mkdir(path.dirname(cachePath), { recursive: true });
-      await fs.writeFile(cachePath, "OPENCLAW_COMPLETION_LOADED=ready\n", "utf8");
+      await fs.writeFile(cachePath, "# completion\n", "utf8");
       await fs.writeFile(path.join(homeDir, ".zshrc"), "", "utf8");
+      await fs.chmod(path.join(homeDir, ".zshrc"), 0o640);
       const log = vi.spyOn(console, "log").mockImplementation(() => {});
 
       try {
@@ -312,11 +333,92 @@ describe("completion-runtime", () => {
         expect(log).toHaveBeenCalledWith(
           "Completion installed. Restart your shell or run: source ~/.zshrc",
         );
+        if (process.platform !== "win32") {
+          expect((await fs.stat(path.join(homeDir, ".zshrc"))).mode & 0o777).toBe(0o640);
+        }
       } finally {
         log.mockRestore();
       }
     });
   });
+
+  it("preserves an existing profile when atomic publication fails", async () => {
+    await withBashCompletionHome(async ({ homeDir }) => {
+      const cachePath = resolveCompletionCachePath("zsh", "openclaw");
+      const profilePath = path.join(homeDir, ".zshrc");
+      await fs.mkdir(path.dirname(cachePath), { recursive: true });
+      await fs.writeFile(cachePath, "# completion\n", "utf8");
+      await fs.writeFile(profilePath, "export IMPORTANT=keep\n", "utf8");
+      await fs.chmod(profilePath, 0o640);
+      const actual = await vi.importActual<typeof import("./output-file.runtime.js")>(
+        "./output-file.runtime.js",
+      );
+      outputFileMocks.publishOutputFileAtomically.mockImplementationOnce(async (params) => {
+        return await actual.publishOutputFileAtomically({
+          ...params,
+          writeTemp: async (tempPath) => {
+            await params.writeTemp(tempPath);
+            await fs.truncate(tempPath, 1);
+            throw new Error("injected completion profile write failure");
+          },
+        });
+      });
+
+      await expect(installCompletion("zsh", true, "openclaw")).rejects.toThrow(
+        "Failed to install completion: injected completion profile write failure",
+      );
+
+      await expect(fs.readFile(profilePath, "utf8")).resolves.toBe("export IMPORTANT=keep\n");
+      if (process.platform !== "win32") {
+        expect((await fs.stat(profilePath)).mode & 0o777).toBe(0o640);
+      }
+      expect(await fs.readdir(homeDir)).toEqual([".zshrc"]);
+    });
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "preserves a symlinked profile while replacing its target atomically",
+    async () => {
+      await withBashCompletionHome(async ({ homeDir }) => {
+        const cachePath = resolveCompletionCachePath("zsh", "openclaw");
+        const targetDir = tempDirs.make("openclaw-completion-profile-target-");
+        const targetPath = path.join(targetDir, "zshrc");
+        const profilePath = path.join(homeDir, ".zshrc");
+        await fs.mkdir(path.dirname(cachePath), { recursive: true });
+        await fs.writeFile(cachePath, "# completion\n", "utf8");
+        await fs.writeFile(targetPath, "export IMPORTANT=keep\n", "utf8");
+        await fs.symlink(targetPath, profilePath);
+
+        await installCompletion("zsh", true, "openclaw");
+
+        expect((await fs.lstat(profilePath)).isSymbolicLink()).toBe(true);
+        await expect(fs.readFile(targetPath, "utf8")).resolves.toContain("export IMPORTANT=keep\n");
+        await expect(fs.readFile(targetPath, "utf8")).resolves.toContain(cachePath);
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "preserves a dangling relative profile symlink while creating its target",
+    async () => {
+      await withBashCompletionHome(async ({ homeDir }) => {
+        const cachePath = resolveCompletionCachePath("zsh", "openclaw");
+        const managedDir = path.join(homeDir, "managed");
+        const targetPath = path.join(managedDir, "zshrc");
+        const profilePath = path.join(homeDir, ".zshrc");
+        await fs.mkdir(path.dirname(cachePath), { recursive: true });
+        await fs.mkdir(managedDir, { recursive: true });
+        await fs.writeFile(cachePath, "# completion\n", "utf8");
+        await fs.symlink(path.join("managed", "zshrc"), profilePath);
+
+        await installCompletion("zsh", true, "openclaw");
+
+        expect((await fs.lstat(profilePath)).isSymbolicLink()).toBe(true);
+        expect(await fs.readlink(profilePath)).toBe(path.join("managed", "zshrc"));
+        await expect(fs.readFile(targetPath, "utf8")).resolves.toContain("# OpenClaw Completion");
+      });
+    },
+  );
 
   it("detects slow dynamic Bash completion in the login profile", async () => {
     await withBashCompletionHome(async ({ homeDir }) => {

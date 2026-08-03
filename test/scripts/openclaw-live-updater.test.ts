@@ -194,7 +194,7 @@ function fakeCommands(mirror: string) {
   const calls: string[] = [];
   return {
     calls,
-    runCommand(command: string, args: string[]) {
+    runCommand: (command: string, args: string[]) => {
       calls.push([command, ...args].join(" "));
       if (command === "pnpm" && args[0] === "install") {
         mkdirSync(path.join(mirror, "node_modules"), { recursive: true });

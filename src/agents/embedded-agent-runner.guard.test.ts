@@ -1,6 +1,7 @@
 // Covers session-manager guard behavior for tool-result pairing and transcript
 // redaction.
 import { readFileSync } from "node:fs";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
@@ -8,7 +9,7 @@ import {
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFileBackedSessionManagerForTest } from "../../test/helpers/session-manager-file-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -18,6 +19,8 @@ import {
   type PersistedUserTurnMessage,
 } from "../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../sessions/user-turn-transcript.test-support.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+import { flushPendingToolResultsAfterIdle } from "./embedded-agent-runner/wait-for-idle-before-flush.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
@@ -29,11 +32,19 @@ function assistantToolCall(id: string): AgentMessage {
   } as AgentMessage;
 }
 
+function getMessages(sm: ReturnType<typeof guardSessionManager>): AgentMessage[] {
+  return sm
+    .getEntries()
+    .filter((entry) => entry.type === "message")
+    .map((entry) => (entry as { message: AgentMessage }).message);
+}
+
 describe("guardSessionManager integration", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   afterEach(() => {
     resetGlobalHookRunner();
+    vi.useRealTimers();
   });
 
   it("persists synthetic toolResult before subsequent assistant message", () => {
@@ -48,10 +59,7 @@ describe("guardSessionManager integration", () => {
       content: [{ type: "text", text: "followup" }],
     } as AgentMessage);
 
-    const messages = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
+    const messages = getMessages(sm);
 
     expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult", "assistant"]);
     expect((messages[1] as { toolCallId?: string }).toolCallId).toBe("call_1");
@@ -83,10 +91,7 @@ describe("guardSessionManager integration", () => {
       isError: false,
     } as AgentMessage);
 
-    const messages = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
+    const messages = getMessages(sm);
 
     expect(messages.map((m) => m.role)).toEqual(["assistant", "assistant", "toolResult"]);
     expect((messages[1] as { model?: string }).model).toBe("delivery-mirror");
@@ -111,10 +116,7 @@ describe("guardSessionManager integration", () => {
       timestamp: Date.now(),
     } as AgentMessage);
 
-    const messages = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
+    const messages = getMessages(sm);
 
     expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult", "user"]);
     expect((messages[1] as { toolCallId?: string }).toolCallId).toBe("call_responses_1");
@@ -145,10 +147,7 @@ describe("guardSessionManager integration", () => {
     } as AgentMessage);
     appendMessage({ role: "user", content: "follow-up" } as AgentMessage);
 
-    const messages = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
+    const messages = getMessages(sm);
 
     expect(messages[0]).toMatchObject({
       role: "user",
@@ -351,10 +350,7 @@ describe("guardSessionManager integration", () => {
     } as AgentMessage);
     appendMessage({ role: "user", content: "runtime prompt" } as AgentMessage);
 
-    const messages = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
+    const messages = getMessages(sm);
 
     expect(messages[0]).toMatchObject({
       role: "user",
@@ -398,10 +394,7 @@ describe("guardSessionManager integration", () => {
       isError: false,
     } as AgentMessage);
 
-    const messages = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
+    const messages = getMessages(sm);
 
     const serialized = JSON.stringify(messages);
 
@@ -450,5 +443,177 @@ describe("guardSessionManager integration", () => {
         content: [{ type: "text", text: "contact peter@d***.io" }],
       },
     });
+  });
+});
+
+function idleToolCall(id: string): AgentMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "toolCall", id, name: "exec", arguments: {} }],
+    stopReason: "toolUse",
+  } as AgentMessage;
+}
+
+function toolResult(id: string, text: string): AgentMessage {
+  return {
+    role: "toolResult",
+    toolCallId: id,
+    content: [{ type: "text", text }],
+    isError: false,
+  } as AgentMessage;
+}
+
+function deferred<T>() {
+  // Tests control when waitForIdle resolves so real tool results can race the
+  // synthetic flush path deterministically.
+  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  if (!resolve) {
+    throw new Error("Expected wait-for-idle deferred resolver to be initialized");
+  }
+  return { promise, resolve };
+}
+
+describe("flushPendingToolResultsAfterIdle", () => {
+  it("waits for idle so real tool results can land before flush", async () => {
+    // Waiting gives the tool runner a chance to persist its real output before
+    // the guard synthesizes a missing result.
+    const sm = guardSessionManager(SessionManager.inMemory());
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    const idle = deferred<void>();
+    const agent = { waitForIdle: () => idle.promise };
+
+    appendMessage(idleToolCall("call_retry_1"));
+    const flushPromise = flushPendingToolResultsAfterIdle({
+      agent,
+      sessionManager: sm,
+      timeoutMs: 1_000,
+    });
+
+    await Promise.resolve();
+    expect(getMessages(sm).map((message) => message.role)).toEqual(["assistant"]);
+
+    appendMessage(toolResult("call_retry_1", "command output here"));
+    idle.resolve();
+    await flushPromise;
+
+    const messages = getMessages(sm);
+    expect(messages.map((message) => message.role)).toEqual(["assistant", "toolResult"]);
+    expect((messages[1] as { isError?: boolean }).isError).not.toBe(true);
+    expect((messages[1] as { content?: Array<{ text?: string }> }).content?.[0]?.text).toBe(
+      "command output here",
+    );
+  });
+
+  it("flushes pending tool call after timeout when idle never resolves", async () => {
+    const sm = guardSessionManager(SessionManager.inMemory());
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    vi.useFakeTimers();
+
+    appendMessage(idleToolCall("call_orphan_1"));
+    const flushPromise = flushPendingToolResultsAfterIdle({
+      agent: { waitForIdle: () => new Promise<void>(() => {}) },
+      sessionManager: sm,
+      timeoutMs: 30,
+    });
+    await vi.advanceTimersByTimeAsync(30);
+    await flushPromise;
+
+    const messages = getMessages(sm);
+    expect(messages.length).toBe(2);
+    expect(expectDefined(messages[1], "messages[1] test invariant").role).toBe("toolResult");
+    expect((messages[1] as { isError?: boolean }).isError).toBe(true);
+    expect((messages[1] as { content?: Array<{ text?: string }> }).content?.[0]?.text).toContain(
+      "missing tool result",
+    );
+  });
+
+  it("flushes pending on cleanup timeout instead of leaving orphaned tool calls", async () => {
+    const sm = guardSessionManager(SessionManager.inMemory());
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    vi.useFakeTimers();
+
+    appendMessage(idleToolCall("call_orphan_2"));
+    const flushPromise = flushPendingToolResultsAfterIdle({
+      agent: { waitForIdle: () => new Promise<void>(() => {}) },
+      sessionManager: sm,
+      timeoutMs: 30,
+    });
+    await vi.advanceTimersByTimeAsync(30);
+    await flushPromise;
+
+    const messages = getMessages(sm);
+    expect(messages.map((message) => message.role)).toEqual(["assistant", "toolResult"]);
+    expect((messages[1] as { toolCallId?: string }).toolCallId).toBe("call_orphan_2");
+    expect((messages[1] as { isError?: boolean }).isError).toBe(true);
+
+    appendMessage({
+      role: "user",
+      content: "still there?",
+      timestamp: Date.now(),
+    } as AgentMessage);
+    expect(getMessages(sm).map((message) => message.role)).toEqual([
+      "assistant",
+      "toolResult",
+      "user",
+    ]);
+  });
+
+  it("clears timeout handle when waitForIdle resolves first", async () => {
+    vi.useFakeTimers();
+    await flushPendingToolResultsAfterIdle({
+      agent: { waitForIdle: async () => {} },
+      sessionManager: guardSessionManager(SessionManager.inMemory()),
+      timeoutMs: 30_000,
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("clamps oversized idle wait timeouts before scheduling", async () => {
+    // JavaScript timers overflow above the platform max; clamp to keep huge
+    // configs from firing immediately.
+    const idle = deferred<void>();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const flushPromise = flushPendingToolResultsAfterIdle({
+        agent: { waitForIdle: () => idle.promise },
+        sessionManager: guardSessionManager(SessionManager.inMemory()),
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      });
+      idle.resolve();
+      await flushPromise;
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("immediately flushes pending tool results without waiting when timeoutMs is 0 or less", async () => {
+    // Non-positive timeouts are an explicit "do not wait" policy.
+    const sm = guardSessionManager(SessionManager.inMemory());
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    const idle = deferred<void>();
+    const waitForIdleSpy = vi.fn(() => idle.promise);
+    const agent = { waitForIdle: waitForIdleSpy };
+
+    appendMessage(idleToolCall("call_orphan_immediate"));
+    await flushPendingToolResultsAfterIdle({ agent, sessionManager: sm, timeoutMs: 0 });
+
+    expect(waitForIdleSpy).not.toHaveBeenCalled();
+    expect(getMessages(sm).map((message) => message.role)).toEqual(["assistant", "toolResult"]);
+
+    appendMessage(idleToolCall("call_orphan_negative"));
+    await flushPendingToolResultsAfterIdle({ agent, sessionManager: sm, timeoutMs: -100 });
+
+    expect(waitForIdleSpy).not.toHaveBeenCalled();
+    expect(getMessages(sm).map((message) => message.role)).toEqual([
+      "assistant",
+      "toolResult",
+      "assistant",
+      "toolResult",
+    ]);
   });
 });

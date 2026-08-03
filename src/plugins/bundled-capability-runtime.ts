@@ -111,7 +111,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       cache: false,
       activate: false,
       // Channel setup entries cannot register providers; keep their runtime entry in discovery mode.
-      forceFullRuntimeForChannelPlugins: true,
+      channelPluginLoadIntent: "full",
       preferBuiltPluginArtifacts: useVitestShims,
       manifestRegistry: scopedManifestRegistry,
       logger: {

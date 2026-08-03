@@ -178,6 +178,30 @@ describe("ClickClack gateway", () => {
     await run;
   });
 
+  it("publishes ready only after the realtime socket opens", async () => {
+    const socket = new FakeSocket();
+    mocks.client.websocket.mockReturnValue(socket);
+    const abort = new AbortController();
+    const ctx = createGatewayContext(abort.signal);
+    const run = startClickClackGatewayAccount(ctx);
+
+    await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+    expect(ctx.setStatus).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
+
+    socket.emit("open");
+    expect(ctx.setStatus).toHaveBeenCalledWith({
+      accountId: "default",
+      connected: true,
+      lifecycle: "ready",
+      lastConnectedAt: expect.any(Number),
+      lastError: null,
+      terminalDisconnect: undefined,
+    });
+
+    abort.abort();
+    await run;
+  });
+
   it.each([
     { label: "unset", commandMenu: undefined },
     { label: "enabled", commandMenu: true },
@@ -254,6 +278,7 @@ describe("ClickClack gateway", () => {
     expect(ctx.setStatus).toHaveBeenCalledWith({
       accountId: "default",
       running: true,
+      lifecycle: "starting",
       configured: true,
       enabled: true,
       baseUrl: "https://clickclack.example",
@@ -603,6 +628,12 @@ describe("ClickClack gateway", () => {
     expect(ctx.log?.warn).toHaveBeenCalledWith(
       "[default] ClickClack websocket error; reconnecting: gateway dropped",
     );
+    expect(ctx.setStatus).toHaveBeenCalledWith({
+      accountId: "default",
+      connected: false,
+      lifecycle: "recovering",
+      lastError: "gateway dropped",
+    });
     abort.abort();
     await run;
   });
@@ -623,6 +654,11 @@ describe("ClickClack gateway", () => {
       firstSocket.emit("close");
       await vi.advanceTimersByTimeAsync(0);
       expect(vi.getTimerCount()).toBe(1);
+      expect(ctx.setStatus).toHaveBeenCalledWith({
+        accountId: "default",
+        connected: false,
+        lifecycle: "recovering",
+      });
 
       abort.abort();
       await run;
@@ -632,6 +668,8 @@ describe("ClickClack gateway", () => {
       expect(ctx.setStatus).toHaveBeenLastCalledWith({
         accountId: "default",
         running: false,
+        connected: false,
+        lifecycle: "stopped",
       });
     } finally {
       vi.useRealTimers();
@@ -667,6 +705,7 @@ describe("ClickClack gateway", () => {
     expect(ctx.setStatus).toHaveBeenCalledWith({
       accountId: "default",
       running: true,
+      lifecycle: "starting",
       configured: true,
       enabled: true,
       baseUrl: "https://clickclack.example",
@@ -674,6 +713,8 @@ describe("ClickClack gateway", () => {
     expect(ctx.setStatus).toHaveBeenLastCalledWith({
       accountId: "default",
       running: false,
+      connected: false,
+      lifecycle: "stopped",
     });
   });
 

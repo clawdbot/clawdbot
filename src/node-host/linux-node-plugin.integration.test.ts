@@ -4,8 +4,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { reconcileNodePairingOnConnect } from "../gateway/node-connect-reconcile.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
-import { testing as runtimeRegistryLoaderTesting } from "../plugins/runtime/runtime-registry-loader.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { listRegisteredNodeHostCapsAndCommands } from "./plugin-node-host.js";
+import {
+  getNodeHostPluginRegistry,
+  resetNodeHostPluginRegistry,
+} from "./plugin-node-host.test-support.js";
 import { prepareNodeHostRuntime } from "./runtime.js";
 
 const LINUX_NODE_COMMANDS = [
@@ -18,7 +22,7 @@ const LINUX_NODE_COMMANDS = [
 
 function resetPluginState(): void {
   resetPluginLoaderTestStateForTest();
-  runtimeRegistryLoaderTesting.resetPluginRegistryLoadedForTests();
+  resetNodeHostPluginRegistry();
 }
 
 afterEach(() => {
@@ -80,6 +84,7 @@ describe("linux-node node-host integration", () => {
       expect(prepared.manifest.commands).toEqual(expect.arrayContaining([...LINUX_NODE_COMMANDS]));
 
       const requestPairing = vi.fn();
+      setActivePluginRegistry(getNodeHostPluginRegistry()!);
       const reconciliation = await reconcileNodePairingOnConnect({
         cfg: config,
         connectParams: {

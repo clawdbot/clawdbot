@@ -298,6 +298,7 @@ jobs:
           if (-not [Environment]::UserInteractive) {
             throw "Native Scheduled Task proof requires an interactive Windows runner session."
           }
+          exit 0
 
       - name: Run native Scheduled Task lifecycle proof
         id: native_schtasks

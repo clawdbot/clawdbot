@@ -191,7 +191,7 @@ describe("scripts/e2e/openwebui-probe.mjs", () => {
 
     expect(script).toContain("run(controller.signal, timeoutPromise)");
     expect(script).toMatch(
-      /readBoundedResponseTextWithLimit\(\s*response,\s*label,\s*responseBodyMaxBytes,\s*timeoutPromise,/u,
+      /readBoundedResponseTextWithLimit\(\s*response,\s*label,\s*responseBodyMaxBytes,\s*\{\s*createTooLargeError: createBoundedResponseTooLargeError,\s*timeoutPromise,\s*\}\s*\)/u,
     );
     expect(script.match(/async \(signal, timeoutPromise\)/gu)).toHaveLength(3);
   });
@@ -221,7 +221,7 @@ describe("scripts/e2e/openwebui-probe.mjs", () => {
   });
 
   it("redacts admin credentials from sign-in error bodies", async () => {
-    const adminEmail = "openwebui-e2e" + "@example.com";
+    const adminEmail = "openwebui-e2e@example.com";
     const server = createServer((request, response) => {
       if (request.url === "/api/v1/auths/signin") {
         response.writeHead(401, { "content-type": "application/json" });
@@ -400,33 +400,35 @@ describe("scripts/e2e/openwebui-probe.mjs", () => {
 
   it("runs chat mode through Open WebUI chat completions and validates the nonce", async () => {
     const chatRequests: unknown[] = [];
-    const server = createServer(async (request, response) => {
-      if (request.url === "/api/v1/auths/signin") {
-        response.writeHead(200, {
-          "content-type": "application/json",
-          "set-cookie": "openwebui-session=test; Path=/",
-        });
-        response.end(JSON.stringify({ token: "test-token" }));
-        return;
-      }
-      if (request.url === "/api/models") {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ data: [{ id: "openclaw/default" }] }));
-        return;
-      }
-      if (request.url === "/api/chat/completions") {
-        expect(request.headers.authorization).toBe("Bearer test-token");
-        expect(request.headers.cookie).toContain("openwebui-session=test");
-        chatRequests.push(JSON.parse(await readRequestBody(request)));
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(
-          JSON.stringify({
-            choices: [{ message: { content: "OpenClaw replied with nonce-123" } }],
-          }),
-        );
-        return;
-      }
-      response.writeHead(404).end();
+    const server = createServer((request, response) => {
+      void (async () => {
+        if (request.url === "/api/v1/auths/signin") {
+          response.writeHead(200, {
+            "content-type": "application/json",
+            "set-cookie": "openwebui-session=test; Path=/",
+          });
+          response.end(JSON.stringify({ token: "test-token" }));
+          return;
+        }
+        if (request.url === "/api/models") {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify({ data: [{ id: "openclaw/default" }] }));
+          return;
+        }
+        if (request.url === "/api/chat/completions") {
+          expect(request.headers.authorization).toBe("Bearer test-token");
+          expect(request.headers.cookie).toContain("openwebui-session=test");
+          chatRequests.push(JSON.parse(await readRequestBody(request)));
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(
+            JSON.stringify({
+              choices: [{ message: { content: "OpenClaw replied with nonce-123" } }],
+            }),
+          );
+          return;
+        }
+        response.writeHead(404).end();
+      })();
     });
     const baseUrl = await listen(server);
     try {

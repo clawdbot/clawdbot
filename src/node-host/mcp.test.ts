@@ -305,7 +305,9 @@ describe("node host MCP manager", () => {
       { endless: { command: "endless" }, healthy: { command: "healthy" } },
       {
         createClient: (serverName) => (serverName === "endless" ? endless : healthy),
-        resolveTransport: () => transport,
+        // Prove the page ceiling without loaded CI accidentally hitting the
+        // catalog deadline; timeout behavior has its own dedicated coverage.
+        resolveTransport: () => ({ ...transport, requestTimeoutMs: 1_000 }),
         warn,
       },
     );

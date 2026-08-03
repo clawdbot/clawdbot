@@ -441,6 +441,52 @@ describe("sendMessageMatrix durable delivery", () => {
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
 
+  it("dispatches fractional BMP and astral limits through the real send path", async () => {
+    chunkMarkdownTextWithModeMock.mockImplementation((text) => Array.from(text));
+
+    resolveTextChunkLimitMock.mockReturnValue(0.5);
+    const bmp = makeClient();
+    await sendMessageMatrix("room:!room:example", "ABCD", {
+      client: bmp.client,
+      cfg: {} as never,
+    });
+    expect(bmp.sendMessage).toHaveBeenCalledTimes(4);
+    expect(
+      bmp.sendMessage.mock.calls.map((call) => requireRecord(call[1], "BMP content").body),
+    ).toEqual(["A", "B", "C", "D"]);
+
+    resolveTextChunkLimitMock.mockReturnValue(1.5);
+    const astral = makeClient();
+    await sendMessageMatrix("room:!room:example", "😀😀", {
+      client: astral.client,
+      cfg: {} as never,
+    });
+    expect(astral.sendMessage).toHaveBeenCalledTimes(2);
+    expect(
+      astral.sendMessage.mock.calls.map((call) => requireRecord(call[1], "astral content").body),
+    ).toEqual(["😀", "😀"]);
+
+    resolveTextChunkLimitMock.mockReturnValue(1.5);
+    const mixed = makeClient();
+    await sendMessageMatrix("room:!room:example", "😀AB", {
+      client: mixed.client,
+      cfg: {} as never,
+    });
+    expect(
+      mixed.sendMessage.mock.calls.map((call) => requireRecord(call[1], "mixed content").body),
+    ).toEqual(["😀", "A", "B"]);
+
+    resolveTextChunkLimitMock.mockReturnValue(1);
+    const integer = makeClient();
+    await sendMessageMatrix("room:!room:example", "😀AB", {
+      client: integer.client,
+      cfg: {} as never,
+    });
+    expect(
+      integer.sendMessage.mock.calls.map((call) => requireRecord(call[1], "integer content").body),
+    ).toEqual(["😀", "A", "B"]);
+  });
+
   it("persists the complete event plan before the first provider dispatch", async () => {
     const { client, sendMessage } = makeClient();
     const deliveryIdentity = resolveMatrixDurableDeliveryIdentity({
@@ -510,15 +556,32 @@ describe("sendMessageMatrix media", () => {
 
   it("uploads media with url payloads", async () => {
     const { client, sendMessage, uploadContent } = makeClient();
+    const mediaAccess = {
+      localRoots: ["/tmp/openclaw"],
+      workspaceDir: "/tmp/openclaw",
+    };
 
     await sendMessageMatrix("room:!room:example", "caption", {
       client,
       cfg: {} as never,
-      mediaUrl: "file:///tmp/photo.png",
+      mediaUrl: "chart.png",
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
     });
+
+    expect(mockCallArg(loadOutboundMediaFromUrlMock, "loadOutboundMediaFromUrl", 0)).toBe(
+      "chart.png",
+    );
+    const mediaOptions = requireRecord(
+      mockCallArg(loadOutboundMediaFromUrlMock, "loadOutboundMediaFromUrl", 1),
+      "outbound media options",
+    );
+    expect(mediaOptions.mediaAccess).toBe(mediaAccess);
+    expect(mediaOptions.mediaLocalRoots).toBe(mediaAccess.localRoots);
 
     const uploadArg = mockCallArg(uploadContent, "uploadContent", 0);
     expect(Buffer.isBuffer(uploadArg)).toBe(true);
+    expect(uploadArg).toEqual(Buffer.from("media"));
 
     const content = sentContent(sendMessage) as {
       url?: string;
@@ -530,6 +593,44 @@ describe("sendMessageMatrix media", () => {
     expect(content.format).toBe("org.matrix.custom.html");
     expect(content.formatted_body).toContain("caption");
     expect(content.url).toBe("mxc://example/file");
+  });
+
+  it("records each media and overflow event with its actual kind and reply relation", async () => {
+    const { client, sendMessage } = makeClient();
+    resolveTextChunkLimitMock.mockReturnValue(6);
+    chunkMarkdownTextWithModeMock.mockImplementation((text: string) => text.split("|"));
+    sendMessage.mockReset().mockResolvedValueOnce("$image").mockResolvedValueOnce("$overflow");
+    const onDeliveryResult = vi.fn();
+
+    const result = await sendMessageMatrix("room:!room:example", "first|second", {
+      client,
+      cfg: {} as never,
+      mediaUrl: "file:///tmp/photo.png",
+      replyToId: "$reply",
+      onDeliveryResult,
+    });
+
+    expect(sentContent(sendMessage, 0)).toMatchObject({
+      msgtype: "m.image",
+      "m.relates_to": { "m.in_reply_to": { event_id: "$reply" } },
+    });
+    expect(sentContent(sendMessage, 1)).toMatchObject({ msgtype: "m.text" });
+    expect(sentContent(sendMessage, 1)).not.toHaveProperty("m.relates_to");
+    expect(result.messageId).toBe("$overflow");
+    expect(result.primaryMessageId).toBe("$image");
+    expect(result.receipt.platformMessageIds).toEqual(["$image", "$overflow"]);
+    expect(result.receipt.parts).toMatchObject([
+      { platformMessageId: "$image", kind: "media", index: 0, replyToId: "$reply" },
+      { platformMessageId: "$overflow", kind: "text", index: 1 },
+    ]);
+    expect(result.receipt.parts[1]).not.toHaveProperty("replyToId");
+    expect(
+      onDeliveryResult.mock.calls.map(([progress]) => progress.receipt.parts[0]),
+    ).toMatchObject([
+      { platformMessageId: "$image", kind: "media", replyToId: "$reply" },
+      { platformMessageId: "$overflow", kind: "text" },
+    ]);
+    expect(onDeliveryResult.mock.calls[1]?.[0]?.receipt.parts[0]).not.toHaveProperty("replyToId");
   });
 
   it("uploads encrypted media with file payloads", async () => {
@@ -605,6 +706,7 @@ describe("sendMessageMatrix media", () => {
 
   it("keeps reply context on voice transcript follow-ups outside threads", async () => {
     const { client, sendMessage } = makeClient();
+    sendMessage.mockReset().mockResolvedValueOnce("$voice").mockResolvedValueOnce("$transcript");
     mediaKindFromMimeMock.mockReturnValue("audio");
     isVoiceCompatibleAudioMock.mockReturnValue(true);
     loadWebMediaMock.mockResolvedValueOnce({
@@ -614,7 +716,7 @@ describe("sendMessageMatrix media", () => {
       kind: "audio",
     });
 
-    await sendMessageMatrix("room:!room:example", "voice caption", {
+    const result = await sendMessageMatrix("room:!room:example", "voice caption", {
       client,
       cfg: {} as never,
       mediaUrl: "file:///tmp/clip.mp3",
@@ -628,6 +730,10 @@ describe("sendMessageMatrix media", () => {
     expect(requireRecord(transcriptContent["m.relates_to"], "relation")["m.in_reply_to"]).toEqual({
       event_id: "$reply",
     });
+    expect(result.receipt.parts).toMatchObject([
+      { platformMessageId: "$voice", kind: "voice", index: 0, replyToId: "$reply" },
+      { platformMessageId: "$transcript", kind: "text", index: 1, replyToId: "$reply" },
+    ]);
   });
 
   it("keeps regular audio payload when audioAsVoice media is incompatible", async () => {

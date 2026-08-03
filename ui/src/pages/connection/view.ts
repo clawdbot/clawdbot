@@ -47,7 +47,10 @@ function renderSecretRow(params: {
   onToggle: () => void;
 }) {
   const { label, ...secret } = params;
-  return renderSettingsRow({ title: label, control: renderSettingsSecretInput(secret) });
+  return renderSettingsRow({
+    title: label,
+    control: renderSettingsSecretInput({ ...secret, ariaLabel: label }),
+  });
 }
 
 export function renderConnection(props: ConnectionProps) {
@@ -68,6 +71,7 @@ export function renderConnection(props: ConnectionProps) {
       control: html`
         <input
           class="settings-input"
+          aria-label=${t("connection.access.wsUrl")}
           .value=${props.settings.gatewayUrl}
           @input=${(e: Event) => {
             const settings = props.settings;
@@ -112,6 +116,7 @@ export function renderConnection(props: ConnectionProps) {
       control: html`
         <input
           class="settings-input"
+          aria-label=${t("connection.access.sessionKey")}
           .value=${props.settings.sessionKey}
           @input=${(e: Event) => props.onSessionKeyChange((e.target as HTMLInputElement).value)}
         />

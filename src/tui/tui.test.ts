@@ -338,6 +338,18 @@ describe("resolveGatewayDisconnectState", () => {
 });
 
 describe("createBackspaceDeduper", () => {
+  function withLegacyBackspaceEnv<T>(fn: () => T): T {
+    return withEnv(
+      {
+        WT_SESSION: undefined,
+        SSH_CONNECTION: undefined,
+        SSH_CLIENT: undefined,
+        SSH_TTY: undefined,
+      },
+      fn,
+    );
+  }
+
   function createTimedDedupe(start = 1000) {
     let now = start;
     const dedupe = createBackspaceDeduper({
@@ -353,27 +365,114 @@ describe("createBackspaceDeduper", () => {
   }
 
   it("suppresses duplicate backspace events within the dedupe window", () => {
-    const { dedupe, advance } = createTimedDedupe();
+    withLegacyBackspaceEnv(() => {
+      const { dedupe, advance } = createTimedDedupe();
 
-    expect(dedupe("\x7f")).toBe("\x7f");
-    advance(1);
-    expect(dedupe("\x08")).toBe("");
+      expect(dedupe("\x7f")).toBe("\x7f");
+      advance(1);
+      expect(dedupe("\x08")).toBe("");
+    });
   });
 
   it("preserves backspace events outside the dedupe window", () => {
-    const { dedupe, advance } = createTimedDedupe();
+    withLegacyBackspaceEnv(() => {
+      const { dedupe, advance } = createTimedDedupe();
 
-    expect(dedupe("\x7f")).toBe("\x7f");
-    advance(10);
-    expect(dedupe("\x7f")).toBe("\x7f");
+      expect(dedupe("\x7f")).toBe("\x7f");
+      advance(10);
+      expect(dedupe("\x7f")).toBe("\x7f");
+    });
   });
 
   it("treats ASCII BS as backspace when it is the first event", () => {
-    const { dedupe, advance } = createTimedDedupe();
+    withLegacyBackspaceEnv(() => {
+      const { dedupe, advance } = createTimedDedupe();
 
-    expect(dedupe("\x08")).toBe("\x08");
-    advance(1);
-    expect(dedupe("\x7f")).toBe("");
+      expect(dedupe("\x08")).toBe("\x08");
+      advance(1);
+      expect(dedupe("\x7f")).toBe("");
+    });
+  });
+
+  it.each([
+    {
+      name: "consecutive DEL events",
+      input: ["\x7f", "\x7f"],
+      expected: ["\x7f", "\x7f"],
+    },
+    {
+      name: "consecutive ASCII BS events",
+      input: ["\x08", "\x08"],
+      expected: ["\x08", "\x08"],
+    },
+    {
+      name: "an intervening printable key",
+      input: ["\x7f", "a", "\x08"],
+      expected: ["\x7f", "a", "\x08"],
+    },
+    {
+      name: "Kitty backspace press, repeat, and release events",
+      input: ["\x1b[127;1u", "\x1b[127;1:2u", "\x1b[127;1:3u"],
+      expected: ["\x1b[127;1u", "\x1b[127;1:2u", "\x1b[127;1:3u"],
+    },
+    {
+      name: "bracketed paste between legacy backspaces",
+      input: ["\x7f", "\x1b[200~\x08\x1b[201~", "\x08"],
+      expected: ["\x7f", "\x1b[200~\x08\x1b[201~", "\x08"],
+    },
+    {
+      name: "independently repeated complementary legacy pairs",
+      input: ["\x7f", "\x08", "\x7f", "\x08"],
+      expected: ["\x7f", "", "\x7f", ""],
+    },
+  ])("handles $name", ({ input, expected }) => {
+    withLegacyBackspaceEnv(() => {
+      const { dedupe } = createTimedDedupe();
+
+      expect(input.map(dedupe)).toEqual(expected);
+    });
+  });
+
+  it("preserves complementary legacy events outside the dedupe window", () => {
+    withLegacyBackspaceEnv(() => {
+      const { dedupe, advance } = createTimedDedupe();
+
+      expect(dedupe("\x7f")).toBe("\x7f");
+      advance(10);
+      expect(dedupe("\x08")).toBe("\x08");
+    });
+  });
+
+  it("preserves Ctrl+Backspace in Windows Terminal", () => {
+    withEnv(
+      {
+        WT_SESSION: "openclaw-tui-test",
+        SSH_CONNECTION: undefined,
+        SSH_CLIENT: undefined,
+        SSH_TTY: undefined,
+      },
+      () => {
+        const { dedupe } = createTimedDedupe();
+
+        expect(["\x7f", "\x08", "\x7f"].map(dedupe)).toEqual(["\x7f", "\x08", "\x7f"]);
+      },
+    );
+  });
+
+  it("still deduplicates legacy backspace through an SSH session in Windows Terminal", () => {
+    withEnv(
+      {
+        WT_SESSION: "openclaw-tui-test",
+        SSH_CONNECTION: "192.0.2.10 12345 192.0.2.20 22",
+        SSH_CLIENT: undefined,
+        SSH_TTY: undefined,
+      },
+      () => {
+        const { dedupe } = createTimedDedupe();
+
+        expect(["\x7f", "\x08"].map(dedupe)).toEqual(["\x7f", ""]);
+      },
+    );
   });
 
   it("never suppresses non-backspace keys", () => {

@@ -623,6 +623,32 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     ]);
   });
 
+  it("returns browser expiry in the epoch milliseconds required by the Talk gateway", async () => {
+    vi.useFakeTimers();
+    const nowMs = Date.UTC(2026, 7, 1, 12, 34, 56, 789);
+    vi.setSystemTime(nowMs);
+    const provider = buildGoogleRealtimeVoiceProvider();
+
+    const sessionLocal = await provider.createBrowserSession?.({
+      providerConfig: { apiKey: "gemini-key" },
+    });
+
+    const tokenConfig = requireFirstMockArg(createTokenMock, "Google Live auth token config") as {
+      config?: {
+        expireTime?: string;
+        newSessionExpireTime?: string;
+      };
+    };
+    expect(tokenConfig.config?.expireTime).toBe(new Date(nowMs + 30 * 60 * 1000).toISOString());
+    expect(tokenConfig.config?.newSessionExpireTime).toBe(
+      new Date(nowMs + 60 * 1000).toISOString(),
+    );
+    expect(sessionLocal?.expiresAt).toBeGreaterThan(nowMs + 5_000);
+    vi.advanceTimersByTime(60_001);
+    expect(sessionLocal?.expiresAt).toBeLessThanOrEqual(Date.now() + 5_000);
+    expect(sessionLocal?.expiresAt).toBe(nowMs + 60 * 1000);
+  });
+
   it("constrains default browser sessions to Gemini 3.1 capabilities", async () => {
     const provider = buildGoogleRealtimeVoiceProvider();
 
@@ -831,6 +857,172 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([
       ["user", "Before after", true],
     ]);
+  });
+
+  it("preserves tool ownership while reusing a resumption handle", async () => {
+    vi.useFakeTimers();
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onToolCall = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onToolCall,
+    });
+
+    await bridge.connect();
+    const firstSession = lastConnectParams().callbacks;
+    firstSession.onmessage({
+      sessionResumptionUpdate: { resumable: true, newHandle: "resume-1" },
+      toolCall: {
+        functionCalls: [{ id: "call-1", name: "lookup", args: { query: "before" } }],
+      },
+    });
+    firstSession.onclose({ code: 1011, reason: "temporary" });
+    void bridge.submitToolResult("call-1", { result: "ok" });
+    expect(session.sendToolResponse).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(250);
+
+    const resumedSession = lastConnectParams().callbacks;
+    resumedSession.onmessage({
+      toolCall: {
+        functionCalls: [{ id: "call-1", name: "different", args: { query: "replay" } }],
+      },
+    });
+    resumedSession.onopen();
+    resumedSession.onmessage({ setupComplete: {} });
+
+    expect(lastConnectParams().config.sessionResumption).toEqual({ handle: "resume-1" });
+    expect(onToolCall).toHaveBeenCalledOnce();
+    expect(session.sendToolResponse).toHaveBeenCalledWith({
+      functionResponses: [
+        {
+          id: "call-1",
+          name: "lookup",
+          response: { result: "ok" },
+        },
+      ],
+    });
+  });
+
+  it("fails closed when resumable tool responses exceed the reconnect buffer", async () => {
+    vi.useFakeTimers();
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onError = vi.fn();
+    const onClose = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onToolCall: vi.fn(),
+      onError,
+      onClose,
+    });
+
+    await bridge.connect();
+    const firstSession = lastConnectParams().callbacks;
+    firstSession.onmessage({
+      sessionResumptionUpdate: { resumable: true, newHandle: "resume-1" },
+      toolCall: {
+        functionCalls: [{ id: "call-1", name: "lookup", args: {} }],
+      },
+    });
+    firstSession.onclose({ code: 1011, reason: "temporary" });
+    onError.mockClear();
+
+    void bridge.submitToolResult("call-1", { result: "x".repeat(1024 * 1024) });
+
+    expect(requireFirstError(onError).message).toBe(
+      "Google Live reconnect tool-response buffer limit exceeded",
+    );
+    expect(onClose).toHaveBeenCalledWith("error");
+    expect(session.sendToolResponse).not.toHaveBeenCalled();
+  });
+
+  it("drops queued reconnect responses when the resumed session cancels their call", async () => {
+    vi.useFakeTimers();
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onEvent = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onToolCall: vi.fn(),
+      onEvent,
+    });
+
+    await bridge.connect();
+    const firstSession = lastConnectParams().callbacks;
+    firstSession.onmessage({
+      sessionResumptionUpdate: { resumable: true, newHandle: "resume-1" },
+      toolCall: {
+        functionCalls: [{ id: "call-1", name: "lookup", args: {} }],
+      },
+    });
+    firstSession.onclose({ code: 1011, reason: "temporary" });
+    await vi.advanceTimersByTimeAsync(250);
+
+    const resumedSession = lastConnectParams().callbacks;
+    void bridge.submitToolResult("call-1", { result: "stale" });
+    expect(session.sendToolResponse).not.toHaveBeenCalled();
+    resumedSession.onopen();
+    resumedSession.onmessage({
+      setupComplete: {},
+      toolCallCancellation: { ids: ["call-1"] },
+    });
+
+    expect(session.sendToolResponse).not.toHaveBeenCalled();
+    expect(onEvent).toHaveBeenCalledWith({
+      direction: "server",
+      type: "tool.call.cancelled",
+      itemId: "call-1",
+    });
+  });
+
+  it("resets tool ownership before a fresh automatic reconnect", async () => {
+    vi.useFakeTimers();
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onToolCall = vi.fn();
+    const onEvent = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onToolCall,
+      onEvent,
+    });
+
+    await bridge.connect();
+    const firstSession = lastConnectParams().callbacks;
+    firstSession.onmessage({
+      toolCall: {
+        functionCalls: [{ id: "call-1", name: "old_lookup", args: {} }],
+      },
+    });
+    firstSession.onclose({ code: 1011, reason: "temporary" });
+    await vi.advanceTimersByTimeAsync(250);
+
+    lastConnectParams().callbacks.onmessage({
+      toolCall: {
+        functionCalls: [{ id: "call-1", name: "new_lookup", args: {} }],
+      },
+    });
+    void bridge.submitToolResult("call-1", { result: "ok" });
+
+    expect(onEvent).toHaveBeenCalledWith({
+      direction: "client",
+      type: "session.continuity.reset",
+    });
+    expect(onToolCall).toHaveBeenCalledTimes(2);
+    expect(session.sendToolResponse).toHaveBeenCalledWith({
+      functionResponses: [
+        {
+          id: "call-1",
+          name: "new_lookup",
+          response: { result: "ok" },
+        },
+      ],
+    });
   });
 
   it("preserves continuity when resumability recovers before reconnect", async () => {
@@ -1924,6 +2116,114 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
         },
       ],
     });
+  });
+
+  it("deduplicates replayed Google Live tool calls by call id", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onToolCall = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onToolCall,
+    });
+
+    await bridge.connect();
+    const callbacks = lastConnectParams().callbacks;
+    callbacks.onmessage({
+      toolCall: {
+        functionCalls: [{ id: "call-1", name: "lookup", args: { query: "first" } }],
+      },
+    });
+    callbacks.onmessage({
+      toolCall: {
+        functionCalls: [{ id: "call-1", name: "different", args: { query: "replay" } }],
+      },
+    });
+
+    expect(onToolCall).toHaveBeenCalledOnce();
+    void bridge.submitToolResult("call-1", { result: "ok" });
+    expect(session.sendToolResponse).toHaveBeenCalledWith({
+      functionResponses: [
+        {
+          id: "call-1",
+          name: "lookup",
+          response: { result: "ok" },
+        },
+      ],
+    });
+    callbacks.onmessage({
+      toolCall: {
+        functionCalls: [{ id: "call-1", name: "lookup", args: { query: "late replay" } }],
+      },
+    });
+    expect(onToolCall).toHaveBeenCalledOnce();
+  });
+
+  it("ignores late results after Google cancels a tool call", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onEvent = vi.fn();
+    const onError = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onToolCall: vi.fn(),
+      onEvent,
+      onError,
+    });
+
+    await bridge.connect();
+    const callbacks = lastConnectParams().callbacks;
+    callbacks.onmessage({
+      toolCall: {
+        functionCalls: [{ id: "call-1", name: "lookup", args: { query: "hi" } }],
+      },
+    });
+    callbacks.onmessage({
+      toolCallCancellation: { ids: ["call-1"] },
+    });
+
+    void bridge.submitToolResult("call-1", { result: "late" });
+
+    expect(session.sendToolResponse).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    expect(onEvent).toHaveBeenCalledWith({
+      direction: "server",
+      type: "tool.call.cancelled",
+      itemId: "call-1",
+    });
+  });
+
+  it("fails closed when Google exceeds the tool-call session limit", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onToolCall = vi.fn();
+    const onError = vi.fn();
+    const onClose = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onToolCall,
+      onError,
+      onClose,
+    });
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onmessage({
+      toolCall: {
+        functionCalls: Array.from({ length: 1_025 }, (_, index) => ({
+          id: `call-${index}`,
+          name: "lookup",
+          args: {},
+        })),
+      },
+    });
+
+    expect(onToolCall).toHaveBeenCalledTimes(1_024);
+    expect(requireFirstError(onError).message).toBe("Google Live tool-call session limit exceeded");
+    expect(session.close).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledWith("error");
   });
 
   it("keeps Google Live consult calls open after continuing tool responses", async () => {

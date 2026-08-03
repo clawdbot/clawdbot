@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { runWithFailedTrailer } from "../../scripts/lib/failed-trailer.mjs";
 import {
   createOxlintShards,
   filterOxlintShards,
@@ -20,7 +21,6 @@ import {
 } from "../../scripts/run-oxlint-shards.mjs";
 import {
   filterSparseMissingOxlintTargets,
-  runOxlintCliEntry,
   shouldPrepareExtensionPackageBoundaryArtifacts,
 } from "../../scripts/run-oxlint.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
@@ -55,7 +55,8 @@ describe("run-oxlint", () => {
     const lines: unknown[] = [];
     try {
       process.exitCode = 0;
-      await runOxlintCliEntry(
+      await runWithFailedTrailer(
+        "oxlint",
         async () => {
           process.exitCode = 2;
         },
@@ -74,7 +75,8 @@ describe("run-oxlint", () => {
     const lines: unknown[] = [];
     try {
       process.exitCode = 0;
-      await runOxlintCliEntry(
+      await runWithFailedTrailer(
+        "oxlint",
         async () => {
           throw new Error("artifact prep failed");
         },
@@ -94,7 +96,8 @@ describe("run-oxlint", () => {
     const lines: unknown[] = [];
     try {
       process.exitCode = 0;
-      await runOxlintCliEntry(
+      await runWithFailedTrailer(
+        "oxlint",
         async () => {},
         (line: unknown) => lines.push(line),
       );

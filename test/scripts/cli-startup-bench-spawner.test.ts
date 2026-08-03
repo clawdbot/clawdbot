@@ -51,6 +51,7 @@ describe("CLI startup benchmark script spawners", () => {
 
       const runCase = (caseId: string) => {
         fs.rmSync(homeLogPath, { force: true });
+        const reportPath = path.join(tmpDir, `${caseId}.json`);
         execFileSync(
           process.execPath,
           [
@@ -65,6 +66,8 @@ describe("CLI startup benchmark script spawners", () => {
             "2",
             "--warmup",
             "1",
+            "--output",
+            reportPath,
           ],
           {
             cwd: process.cwd(),
@@ -75,16 +78,28 @@ describe("CLI startup benchmark script spawners", () => {
             stdio: "pipe",
           },
         );
-        return fs.readFileSync(homeLogPath, "utf8").trim().split("\n");
+        return {
+          homes: fs.readFileSync(homeLogPath, "utf8").trim().split("\n"),
+          report: JSON.parse(fs.readFileSync(reportPath, "utf8")),
+        };
       };
 
-      const warmedHomes = runCase("gatewayHealthJsonConnected");
+      const warmed = runCase("gatewayHealthJsonConnected");
+      const warmedHomes = warmed.homes;
       expect(warmedHomes).toHaveLength(3);
       expect(new Set(warmedHomes).size).toBe(1);
       expect(warmedHomes.every((home) => !fs.existsSync(home))).toBe(true);
+      const warmedCase = warmed.report.primary.cases[0];
+      expect(warmedCase.warmupSamples).toHaveLength(1);
+      expect(warmedCase.samples).toHaveLength(2);
+      for (const sample of [...warmedCase.warmupSamples, ...warmedCase.samples]) {
+        expect(new Date(sample.startedAt).toISOString()).toBe(sample.startedAt);
+        expect(new Date(sample.endedAt).toISOString()).toBe(sample.endedAt);
+        expect(Date.parse(sample.endedAt)).toBeGreaterThanOrEqual(Date.parse(sample.startedAt));
+      }
 
       for (const caseId of ["gatewayHealthJson", "gatewayHealthJsonFirstDevice"]) {
-        const sampleHomes = runCase(caseId);
+        const sampleHomes = runCase(caseId).homes;
         expect(sampleHomes).toHaveLength(3);
         expect(new Set(sampleHomes).size).toBe(3);
         expect(sampleHomes.every((home) => !fs.existsSync(home))).toBe(true);

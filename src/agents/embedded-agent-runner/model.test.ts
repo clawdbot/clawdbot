@@ -154,6 +154,8 @@ vi.mock("../model-suppression.js", () => {
 vi.mock("../prepared-model-runtime.js", async () => {
   const discovery = await import("../agent-model-discovery.js");
   const discoveryContext = await import("../model-discovery-context.js");
+  const { PreparedModelRuntimeOwnerNotPublishedError } =
+    await import("../prepared-model-runtime.errors.js");
   const createSnapshot = (input: {
     agentId?: string;
     agentDir: string;
@@ -187,6 +189,7 @@ vi.mock("../prepared-model-runtime.js", async () => {
     return snapshot;
   };
   return {
+    PreparedModelRuntimeOwnerNotPublishedError,
     getPreparedModelRuntimeSnapshot: (input: Parameters<typeof createSnapshot>[0]) => {
       preparedSnapshotState.getInputs.push(input);
       return preparedSnapshotState.enabled ? createSnapshot(input) : undefined;
@@ -906,6 +909,7 @@ describe("resolveModel", () => {
     const preparedModelRuntime = {
       agentDir: "/tmp/agent",
       activeProjectKeys: [],
+      allowGatewaySubagentBinding: false,
       config: cfg,
       metadataSnapshot: { plugins: [] } as never,
       modelCatalog: { entries: [], routeVariants: [] },

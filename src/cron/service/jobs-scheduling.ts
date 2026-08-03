@@ -11,9 +11,10 @@ import {
 import { resolveCronStaggerMs } from "../stagger.js";
 import { createCronStreamSourceIdentity, resolveCronStreamBatching } from "../stream-schedule.js";
 import type { CronJob, CronSchedule } from "../types.js";
+import { autoDisableCronJob } from "./auto-disable.js";
 import { normalizePayloadToSystemText } from "./normalize.js";
 import { isQueuedCronRun, isQueuedForceCronRun } from "./run-admission.js";
-import type { CronServiceState } from "./state.js";
+import type { CronServiceState, DeferredCronNotifications } from "./state.js";
 
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 const STAGGER_OFFSET_CACHE_MAX = 4096;
@@ -341,15 +342,6 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
   return isFiniteTimestamp(next) ? next : undefined;
 }
 
-/** Computes the previous effective cron timestamp, including per-job staggering. */
-export function computeJobPreviousRunAtMs(job: CronJob, nowMs: number): number | undefined {
-  if (!isJobEnabled(job) || job.schedule.kind !== "cron") {
-    return undefined;
-  }
-  const previous = computeStaggeredCronPreviousRunAtMs(job, nowMs);
-  return isFiniteTimestamp(previous) ? previous : undefined;
-}
-
 /** Computes the latest effective cron timestamp at or before the supplied time. */
 export function computeJobPreviousRunAtOrBeforeMs(job: CronJob, nowMs: number): number | undefined {
   if (!isJobEnabled(job) || job.schedule.kind !== "cron") {
@@ -367,7 +359,7 @@ export function recordScheduleComputeError(params: {
   state: CronServiceState;
   job: CronJob;
   err: unknown;
-  deferredAutoDisableNotifications?: Array<() => void>;
+  deferredNotifications?: DeferredCronNotifications;
 }): boolean {
   const { state, job, err } = params;
   const errorCount = (job.state.scheduleErrorCount ?? 0) + 1;
@@ -378,33 +370,19 @@ export function recordScheduleComputeError(params: {
   job.state.lastError = `schedule error: ${errText}`;
 
   if (errorCount >= MAX_SCHEDULE_ERRORS) {
-    job.enabled = false;
+    autoDisableCronJob({
+      state,
+      job,
+      reason: "schedule-errors",
+      atMs: state.deps.nowMs(),
+      consecutiveErrors: errorCount,
+      error: errText,
+      deferredNotifications: params.deferredNotifications,
+    });
     state.deps.log.error(
       { jobId: job.id, name: job.name, errorCount, err: errText },
       "cron: auto-disabled job after repeated schedule errors",
     );
-
-    const notifyText = `⚠️ Automation "${job.name}" has been auto-disabled after ${errorCount} consecutive schedule errors. Last error: ${errText}`;
-    const notify = () => {
-      state.deps.enqueueSystemEvent(notifyText, {
-        agentId: job.agentId,
-        sessionKey: job.sessionKey,
-        contextKey: `cron:${job.id}:auto-disabled`,
-      });
-      state.deps.requestHeartbeat({
-        source: "cron",
-        intent: "event",
-        reason: `cron:${job.id}:auto-disabled`,
-        agentId: job.agentId,
-        sessionKey: job.sessionKey,
-      });
-    };
-    if (params.deferredAutoDisableNotifications) {
-      params.deferredAutoDisableNotifications.push(notify);
-    } else {
-      // Notify the user so the auto-disable is not silent (#28861).
-      notify();
-    }
   } else {
     state.deps.log.warn(
       { jobId: job.id, name: job.name, errorCount, err: errText },
@@ -561,7 +539,7 @@ function recomputeJobNextRunAtMs(params: {
   state: CronServiceState;
   job: CronJob;
   nowMs: number;
-  deferredAutoDisableNotifications?: Array<() => void>;
+  deferredNotifications?: DeferredCronNotifications;
 }) {
   let changed = false;
   try {
@@ -594,7 +572,7 @@ function recomputeJobNextRunAtMs(params: {
         state: params.state,
         job: params.job,
         err,
-        deferredAutoDisableNotifications: params.deferredAutoDisableNotifications,
+        deferredNotifications: params.deferredNotifications,
       })
     ) {
       changed = true;
@@ -637,7 +615,7 @@ export function recomputeNextRunsForMaintenance(
     nowMs?: number;
     repairFutureCronNextRunAtMs?: boolean;
     preserveExpiredPacedNextRunJobId?: string;
-    deferredAutoDisableNotifications?: Array<() => void>;
+    deferredNotifications?: DeferredCronNotifications;
   },
 ): boolean {
   const recomputeExpired = opts?.recomputeExpired ?? false;
@@ -647,7 +625,7 @@ export function recomputeNextRunsForMaintenance(
       state,
       job,
       nowMs,
-      deferredAutoDisableNotifications: opts?.deferredAutoDisableNotifications,
+      deferredNotifications: opts?.deferredNotifications,
     });
   return walkSchedulableJobs(
     state,

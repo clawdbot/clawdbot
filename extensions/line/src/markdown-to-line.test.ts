@@ -224,6 +224,32 @@ That's it.`;
     expect(result.text).not.toContain("```");
   });
 
+  it.each([
+    {
+      name: "space-indented code",
+      source: "    first()\n    second()",
+      expected: "    first()\n    second()",
+    },
+    {
+      name: "tab-indented Unicode code",
+      source: "\t😀 first()\n\t界 second()",
+      expected: "\t😀 first()\n\t界 second()",
+    },
+    {
+      name: "existing terminal-newline behavior",
+      source: "    first()\n\n",
+      expected: "    first()",
+    },
+  ])("preserves $name in code cards", ({ source, expected }) => {
+    const result = processLineMessage(`\`\`\`python\n${source}\n\`\`\``);
+    const bubble = requireEntry(result.flexMessages, 0, "code flex message").contents as {
+      body: { contents: Array<{ contents?: Array<{ text: string }> }> };
+    };
+    const codeContent = requireEntry(bubble.body.contents, 1, "code flex body content");
+
+    expect(requireEntry(codeContent.contents ?? [], 0, "code flex text").text).toBe(expected);
+  });
+
   it("handles mixed content", () => {
     const text = `# Summary
 
@@ -321,6 +347,81 @@ print("done")
     ).toBeLessThanOrEqual(30_000);
     expect(result.text).toBe("");
     expect(result.segments).toBeUndefined();
+  });
+
+  it("downgrades a generic table with more than 10 rows to ordered bullet text", () => {
+    const rows = Array.from({ length: 13 }, (_, i) => `| Row${i + 1} | Val${i + 1} |`).join("\n");
+    const result = processLineMessage(
+      `Before\n\n| Name | Value | Extra |\n|---|---|---|\n${rows}\n\nAfter`,
+    );
+
+    expect(result.flexMessages).toHaveLength(0);
+    expect(result.text).toContain("Row1");
+    expect(result.text).toContain("Row13");
+    expect(result.text.indexOf("Before")).toBeLessThan(result.text.indexOf("Row1"));
+    expect(result.text.indexOf("Row13")).toBeLessThan(result.text.indexOf("After"));
+    expect(result.segments).toBeDefined();
+    expect(result.segments!.length).toBeGreaterThanOrEqual(1);
+    const textSegment = result.segments!.find((s) => s.type === "text");
+    expect(textSegment?.type).toBe("text");
+    expect(textSegment?.text).toContain("Row13");
+  });
+
+  it("downgrades a two-column receipt table with more than 12 rows to ordered bullet text", () => {
+    const rows = Array.from({ length: 14 }, (_, i) => `| Item${i + 1} | $${i + 1}.00 |`).join("\n");
+    const result = processLineMessage(`Before\n\n| Name | Price |\n|---|---|\n${rows}\n\nAfter`);
+
+    expect(result.flexMessages).toHaveLength(0);
+    expect(result.text).toContain("Item1");
+    expect(result.text).toContain("Item14");
+    expect(result.text.indexOf("Before")).toBeLessThan(result.text.indexOf("Item1"));
+    expect(result.text.indexOf("Item14")).toBeLessThan(result.text.indexOf("After"));
+    expect(result.segments).toBeDefined();
+  });
+
+  it("keeps a two-column table with 12 rows as a receipt Flex bubble", () => {
+    const rows = Array.from({ length: 12 }, (_, i) => `| Item${i + 1} | $${i + 1}.00 |`).join("\n");
+    const result = processLineMessage(`| Name | Price |\n|---|---|\n${rows}`);
+
+    expect(result.flexMessages).toHaveLength(1);
+    expect(result.segments).toBeUndefined();
+  });
+
+  it("keeps a generic table with exactly 10 rows as a Flex bubble", () => {
+    const rows = Array.from({ length: 10 }, (_, i) => `| Row${i + 1} | Val${i + 1} | Extra |`).join(
+      "\n",
+    );
+    const result = processLineMessage(`| Name | Value | Extra |\n|---|---|---|\n${rows}`);
+
+    expect(result.flexMessages).toHaveLength(1);
+    expect(result.segments).toBeUndefined();
+  });
+
+  it("downgrades a two-column table with inline markup and more than 10 rows using the renderer's layout decision", () => {
+    const rows = Array.from({ length: 11 }, (_, i) =>
+      i === 0 ? "| `\\<u>literal\\</u>` <u>real</u> | Val |" : `| Item${i + 1} | $${i + 1}.00 |`,
+    ).join("\n");
+    const result = processLineMessage(`| Name | Price |\n|---|---|\n${rows}`);
+
+    expect(result.flexMessages).toHaveLength(0);
+    expect(result.text).toContain("Item11");
+    expect(result.segments).toBeDefined();
+  });
+
+  it("preserves all rows in ordered segments when a row-overflow table is downgraded", () => {
+    const rows = Array.from({ length: 15 }, (_, i) => `| R${i + 1} | V${i + 1} |`).join("\n");
+    const result = processLineMessage(`Header\n\n| Name | Value |\n|---|---|\n${rows}\n\nFooter`);
+
+    expect(result.flexMessages).toHaveLength(0);
+    expect(result.segments).toBeDefined();
+    const segmentTexts = result.segments!.filter((s) => s.type === "text").map((s) => s.text);
+    const combined = segmentTexts.join(" ");
+    expect(combined).toContain("R1");
+    expect(combined).toContain("R15");
+    expect(combined).toContain("Header");
+    expect(combined).toContain("Footer");
+    expect(combined.indexOf("Header")).toBeLessThan(combined.indexOf("R1"));
+    expect(combined.indexOf("R15")).toBeLessThan(combined.indexOf("Footer"));
   });
 
   it("handles plain text unchanged", () => {
