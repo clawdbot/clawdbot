@@ -273,7 +273,6 @@ describe("policy doctor metadata", () => {
         "policy/sandbox-container-unconfined-profile",
         "policy/sandbox-mode-unapproved",
         "policy/secrets-denied-provider-source",
-        "policy/secrets-insecure-provider",
         "policy/tools-also-allow-missing",
         "policy/tools-also-allow-unexpected",
         "policy/tools-exec-ask-unapproved",

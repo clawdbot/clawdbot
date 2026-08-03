@@ -1011,7 +1011,6 @@ describe("registerPolicyDoctorChecks", () => {
       secrets: {
         requireManagedProviders: "yes",
         denySources: "exec",
-        allowInsecureProviders: "false",
       },
     });
 
@@ -1026,10 +1025,6 @@ describe("registerPolicyDoctorChecks", () => {
         expect.objectContaining({
           checkId: "policy/policy-jsonc-invalid",
           target: "oc://policy.jsonc/secrets/denySources",
-        }),
-        expect.objectContaining({
-          checkId: "policy/policy-jsonc-invalid",
-          target: "oc://policy.jsonc/secrets/allowInsecureProviders",
         }),
       ]),
     );

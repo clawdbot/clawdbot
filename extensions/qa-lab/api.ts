@@ -53,9 +53,7 @@ export {
   buildQaGatewayConfig,
   DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS,
   mergeQaControlUiAllowedOrigins,
-  normalizeQaThinkingLevel,
   QA_BASE_RUNTIME_PLUGIN_IDS,
-  type QaThinkingLevel,
 } from "./src/qa-gateway-config.js";
 export { renderQaMarkdownReport, type QaReportCheck, type QaReportScenario } from "./src/report.js";
 export {

@@ -195,7 +195,6 @@ export type PolicySecretEvidence = {
   readonly refSource?: "env" | "file" | "exec";
   readonly refProvider?: string;
   readonly providerSource?: string;
-  readonly insecure?: readonly string[];
 };
 
 export type PolicyAuthProfileEvidence = {

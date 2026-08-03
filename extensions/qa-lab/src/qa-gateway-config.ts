@@ -3,6 +3,7 @@ import { OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { ThinkLevel } from "openclaw/plugin-sdk/thinking-level";
 import {
   defaultQaModelForMode,
   normalizeQaProviderMode,
@@ -11,11 +12,8 @@ import {
 } from "./model-selection.js";
 import { getQaProvider } from "./providers/index.js";
 import { DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
-import type { QaThinkingLevel } from "./qa-thinking.js";
 import type { QaTransportGatewayConfig } from "./qa-transport.js";
 import type { RuntimeId } from "./runtime-parity.js";
-
-export { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-thinking.js";
 
 export const DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS = Object.freeze([
   "http://127.0.0.1:18789",
@@ -69,7 +67,7 @@ export function buildQaGatewayConfig(params: {
   transportConfig?: QaTransportGatewayConfig;
   liveProviderConfigs?: Record<string, ModelProviderConfig>;
   fastMode?: boolean;
-  thinkingDefault?: QaThinkingLevel;
+  thinkingDefault?: ThinkLevel;
   forcedRuntime?: RuntimeId;
 }): OpenClawConfig {
   const providerBaseUrl = params.providerBaseUrl ?? "http://127.0.0.1:44080/v1";

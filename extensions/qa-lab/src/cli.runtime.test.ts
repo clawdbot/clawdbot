@@ -896,7 +896,7 @@ describe("qa cli runtime", () => {
       alternateModel: "anthropic/claude-sonnet-4-6",
       fastMode: true,
       failFast: true,
-      thinking: "medium",
+      thinking: "ultra",
       scenarioIds: ["approval-turn-tool-followthrough"],
     });
 
@@ -911,7 +911,7 @@ describe("qa cli runtime", () => {
       alternateModel: "anthropic/claude-sonnet-4-6",
       fastMode: true,
       failFast: true,
-      thinkingDefault: "medium",
+      thinkingDefault: "ultra",
       scenarioIds: ["approval-turn-tool-followthrough"],
     });
   });

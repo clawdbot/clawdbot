@@ -1,9 +1,9 @@
 import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
+import type { ThinkLevel } from "openclaw/plugin-sdk/thinking-level";
 import type { QaEvidenceTiming, QaEvidenceSummaryJson } from "./evidence-summary.js";
 import type { QaCliBackendAuthMode, QaGatewayChildCommand } from "./gateway-child.js";
 import type { QaLabServerHandle, QaLabServerStartParams } from "./lab-server.types.js";
 import type { QaProviderMode } from "./model-selection.js";
-import type { QaThinkingLevel } from "./qa-gateway-config.js";
 import type {
   QaTransportAdapterFactory,
   QaTransportFactoryContext,
@@ -47,7 +47,7 @@ export type QaSuiteRunParams = {
   alternateModel?: string;
   fastMode?: boolean;
   failFast?: boolean;
-  thinkingDefault?: QaThinkingLevel;
+  thinkingDefault?: ThinkLevel;
   claudeCliAuthMode?: QaCliBackendAuthMode;
   scenarioIds?: string[];
   lab?: QaLabServerHandle;

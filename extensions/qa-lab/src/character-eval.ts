@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { ThinkLevel } from "openclaw/plugin-sdk/thinking-level";
 import pMap from "p-map";
 import prettyMilliseconds from "pretty-ms";
 import { createQaArtifactRunId } from "./artifact-run-id.js";
@@ -13,19 +14,18 @@ import {
   QA_FRONTIER_CHARACTER_JUDGE_MODELS,
   QA_FRONTIER_CHARACTER_THINKING_BY_MODEL,
 } from "./providers/live-frontier/character-eval.js";
-import type { QaThinkingLevel } from "./qa-gateway-config.js";
 import { extractQaVisibleReplyLeakText } from "./reply-failure.js";
 import { readQaSuiteFailedScenarioCountFromFile } from "./suite-summary.js";
 import type { QaSuiteResult } from "./suite.js";
 
 const DEFAULT_CHARACTER_SCENARIO_ID = "character-vibes-gollum";
 const DEFAULT_CHARACTER_EVAL_MODELS = QA_FRONTIER_CHARACTER_EVAL_MODELS;
-const DEFAULT_CHARACTER_THINKING: QaThinkingLevel = "high";
+const DEFAULT_CHARACTER_THINKING: ThinkLevel = "high";
 const DEFAULT_CHARACTER_EVAL_CONCURRENCY = 16;
-const DEFAULT_CHARACTER_THINKING_BY_MODEL: Readonly<Record<string, QaThinkingLevel>> =
+const DEFAULT_CHARACTER_THINKING_BY_MODEL: Readonly<Record<string, ThinkLevel>> =
   QA_FRONTIER_CHARACTER_THINKING_BY_MODEL;
 const DEFAULT_JUDGE_MODELS = QA_FRONTIER_CHARACTER_JUDGE_MODELS;
-const DEFAULT_JUDGE_THINKING: QaThinkingLevel = "xhigh";
+const DEFAULT_JUDGE_THINKING: ThinkLevel = "xhigh";
 const DEFAULT_JUDGE_TIMEOUT_MS = 300_000;
 const DEFAULT_JUDGE_MODEL_OPTIONS: Readonly<Record<string, QaCharacterModelOptions>> =
   QA_FRONTIER_CHARACTER_JUDGE_MODEL_OPTIONS;
@@ -33,7 +33,7 @@ const DEFAULT_JUDGE_MODEL_OPTIONS: Readonly<Record<string, QaCharacterModelOptio
 type QaCharacterRunStatus = "pass" | "fail";
 
 export type QaCharacterModelOptions = {
-  thinkingDefault?: QaThinkingLevel;
+  thinkingDefault?: ThinkLevel;
   fastMode?: boolean;
 };
 
@@ -42,7 +42,7 @@ type QaCharacterEvalRun = {
   status: QaCharacterRunStatus;
   durationMs: number;
   outputDir: string;
-  thinkingDefault: QaThinkingLevel;
+  thinkingDefault: ThinkLevel;
   fastMode: boolean;
   reportPath?: string;
   summaryPath?: string;
@@ -75,7 +75,7 @@ type QaCharacterEvalResult = {
 
 type QaCharacterEvalJudgeResult = {
   model: string;
-  thinkingDefault: QaThinkingLevel;
+  thinkingDefault: ThinkLevel;
   fastMode: boolean;
   blindModels: boolean;
   timeoutMs: number;
@@ -93,14 +93,14 @@ type RunSuiteFn = (params: {
   primaryModel: string;
   alternateModel: string;
   fastMode?: boolean;
-  thinkingDefault?: QaThinkingLevel;
+  thinkingDefault?: ThinkLevel;
   scenarioIds: string[];
 }) => Promise<QaSuiteResult>;
 
 type RunJudgeFn = (params: {
   repoRoot: string;
   judgeModel: string;
-  judgeThinkingDefault: QaThinkingLevel;
+  judgeThinkingDefault: ThinkLevel;
   judgeFastMode: boolean;
   prompt: string;
   timeoutMs: number;
@@ -112,12 +112,12 @@ type QaCharacterEvalParams = {
   models: string[];
   scenarioId?: string;
   candidateFastMode?: boolean;
-  candidateThinkingDefault?: QaThinkingLevel;
-  candidateThinkingByModel?: Record<string, QaThinkingLevel>;
+  candidateThinkingDefault?: ThinkLevel;
+  candidateThinkingByModel?: Record<string, ThinkLevel>;
   candidateModelOptions?: Record<string, QaCharacterModelOptions>;
   judgeModel?: string;
   judgeModels?: string[];
-  judgeThinkingDefault?: QaThinkingLevel;
+  judgeThinkingDefault?: ThinkLevel;
   judgeModelOptions?: Record<string, QaCharacterModelOptions>;
   judgeTimeoutMs?: number;
   judgeBlindModels?: boolean;
@@ -134,8 +134,8 @@ function normalizeModelRefs(models: readonly string[]) {
 
 function resolveCandidateThinkingDefault(params: {
   model: string;
-  candidateThinkingDefault?: QaThinkingLevel;
-  candidateThinkingByModel?: Record<string, QaThinkingLevel>;
+  candidateThinkingDefault?: ThinkLevel;
+  candidateThinkingByModel?: Record<string, ThinkLevel>;
   candidateModelOptions?: Record<string, QaCharacterModelOptions>;
 }) {
   return (
@@ -161,7 +161,7 @@ function resolveCandidateFastMode(params: {
 
 function resolveJudgeOptions(params: {
   model: string;
-  judgeThinkingDefault?: QaThinkingLevel;
+  judgeThinkingDefault?: ThinkLevel;
   judgeModelOptions?: Record<string, QaCharacterModelOptions>;
 }) {
   const modelDefaults = DEFAULT_JUDGE_MODEL_OPTIONS[params.model];
@@ -390,7 +390,7 @@ function parseJudgeReply(reply: string | null, allowedModels: Set<string>) {
 async function defaultRunJudge(params: {
   repoRoot: string;
   judgeModel: string;
-  judgeThinkingDefault: QaThinkingLevel;
+  judgeThinkingDefault: ThinkLevel;
   judgeFastMode: boolean;
   prompt: string;
   timeoutMs: number;

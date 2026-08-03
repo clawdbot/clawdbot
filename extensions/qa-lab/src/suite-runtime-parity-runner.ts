@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
+import type { ThinkLevel } from "openclaw/plugin-sdk/thinking-level";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import type {
   QaLabLatestReport,
@@ -8,7 +9,6 @@ import type {
 } from "./lab-server.types.js";
 import type { QaProviderMode } from "./model-selection.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
-import type { QaThinkingLevel } from "./qa-gateway-config.js";
 import type { QaTransportAdapterFactory, QaTransportId } from "./qa-transport-registry.js";
 import {
   runRuntimeParityScenario,
@@ -53,7 +53,7 @@ export async function runQaRuntimeParitySuite(params: {
   primaryModel: string;
   alternateModel: string;
   fastMode: boolean;
-  thinkingDefault?: QaThinkingLevel;
+  thinkingDefault?: ThinkLevel;
   claudeCliAuthMode?: QaCliBackendAuthMode;
   enabledPluginIds?: string[];
   channelDriver?: QaScorecardChannelDriver | null;

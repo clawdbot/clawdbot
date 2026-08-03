@@ -163,6 +163,8 @@ two-party event loops that do not go through the shared inbound reply runner.
 
     `normalizeThinkingLevel(...)` converts user text such as `on`, `x-high`, or `extra high` to the canonical stored level before checking it against the resolved policy.
 
+    Code that parses config or standalone CLI input before a plugin runtime is available can import `THINKING_LEVELS`, `ThinkLevel`, and `normalizeThinkLevel` from `openclaw/plugin-sdk/thinking-level`. Model-specific support still comes from `resolveThinkingPolicy(...)`; the static helper only normalizes the shared value vocabulary.
+
     **Session store helpers** are under `api.runtime.agent.session`:
 
     ```typescript

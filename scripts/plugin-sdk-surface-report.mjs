@@ -160,7 +160,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: pinned secret reads and first-writer-wins creation.
       // +2: restore the documented session-catalog and tool-results plugin contracts.
       // +1: focused inbound-event delivery correlation for channel plugins.
-      149,
+      // +1: canonical thinking-level values and normalization for plugins.
+      150,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -210,7 +211,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +45: restore typed session-catalog and tool-results exports promised to plugins.
       // +1: forwarding-routed approver-restricted native approval capability factory.
       // +1: shared inbound-event delivery correlation factory for channel plugins.
-      4822,
+      // +3: canonical thinking-level values, type, and normalizer.
+      4825,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -252,7 +254,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +14: restore callable session-catalog and tool-results helpers promised to plugins.
       // +1: forwarding-routed approver-restricted native approval capability factory.
       // +1: shared inbound-event delivery correlation factory for channel plugins.
-      2899,
+      // +1: canonical thinking-level normalizer.
+      2900,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

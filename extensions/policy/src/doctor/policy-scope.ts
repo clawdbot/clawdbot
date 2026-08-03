@@ -96,9 +96,7 @@ export function policyHasSecretRules(policy: unknown): boolean {
     return false;
   }
   return (
-    policy.secrets.requireManagedProviders !== undefined ||
-    policy.secrets.denySources !== undefined ||
-    policy.secrets.allowInsecureProviders !== undefined
+    policy.secrets.requireManagedProviders !== undefined || policy.secrets.denySources !== undefined
   );
 }
 

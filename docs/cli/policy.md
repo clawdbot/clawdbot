@@ -146,7 +146,6 @@ example covering every supported section:
   "secrets": {
     "requireManagedProviders": true,
     "denySources": ["exec"],
-    "allowInsecureProviders": false,
   },
   "auth": {
     "profiles": {
@@ -431,7 +430,12 @@ allowlist such as `["all"]`.
 | --------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------- |
 | `secrets.requireManagedProviders` | Config SecretRefs and `secrets.providers.*` declarations | Set to `true` to require SecretRefs to point at declared providers.     |
 | `secrets.denySources`             | Secret provider sources and SecretRef sources            | Deny sources such as `exec`, `file`, or another configured source name. |
-| `secrets.allowInsecureProviders`  | Insecure secret-provider posture flags                   | Set to `false` to reject providers that opt into insecure posture.      |
+
+The retired `secrets.allowInsecureProviders` rule could not produce evidence
+after its underlying provider flags were removed. Existing policy files that
+contain it fail closed as unsupported until an operator removes the rule.
+OpenClaw does not remove it automatically because that would silently change
+the authored policy intent and attestation hash.
 
 #### Exec approvals
 
@@ -754,7 +758,7 @@ Example JSON output:
       }
     ]
   },
-  "checksRun": 30,
+  "checksRun": 67,
   "checksSkipped": 0,
   "findings": []
 }
@@ -861,7 +865,6 @@ the interval.
 | `policy/data-handling-session-transcript-memory-enabled` | Session transcript memory indexing is enabled when policy denies it.              |
 | `policy/secrets-unmanaged-provider`                      | A config SecretRef references a provider not declared under `secrets.providers`.  |
 | `policy/secrets-denied-provider-source`                  | A config secret provider or SecretRef uses a source denied by policy.             |
-| `policy/secrets-insecure-provider`                       | A secret provider opts into insecure posture when policy denies it.               |
 | `policy/auth-profile-invalid-metadata`                   | A config auth profile is missing valid provider or mode metadata.                 |
 | `policy/auth-profile-unapproved-mode`                    | A config auth profile mode is outside the policy allowlist.                       |
 | `policy/exec-approvals-missing`                          | Policy requires the SQLite exec approvals document, but its row is missing.       |

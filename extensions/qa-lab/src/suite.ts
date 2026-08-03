@@ -6,6 +6,7 @@ import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline"
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import type { ThinkLevel } from "openclaw/plugin-sdk/thinking-level";
 import type { QaEvidenceTiming, QaEvidenceSummaryJson } from "./evidence-summary.js";
 import type { QaCliBackendAuthMode, QaGatewayChildCommand } from "./gateway-child.js";
 import { startQaGatewayChild } from "./gateway-child.js";
@@ -17,7 +18,6 @@ import {
   parseQaProgressBooleanEnv as parseQaSuiteBooleanEnv,
   sanitizeQaProgressValue as sanitizeQaSuiteProgressValue,
 } from "./progress-format.js";
-import type { QaThinkingLevel } from "./qa-gateway-config.js";
 import {
   createQaTransportAdapter,
   type QaTransportAdapterFactory,
@@ -142,7 +142,7 @@ export type QaSuiteRunParams = {
   alternateModel?: string;
   fastMode?: boolean;
   failFast?: boolean;
-  thinkingDefault?: QaThinkingLevel;
+  thinkingDefault?: ThinkLevel;
   claudeCliAuthMode?: QaCliBackendAuthMode;
   scenarioIds?: string[];
   lab?: QaLabServerHandle;

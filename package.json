@@ -1379,6 +1379,10 @@
     "./plugin-sdk/text-utility-runtime": {
       "default": "./dist/plugin-sdk/text-utility-runtime.js"
     },
+    "./plugin-sdk/thinking-level": {
+      "types": "./dist/plugin-sdk/thinking-level.d.ts",
+      "default": "./dist/plugin-sdk/thinking-level.js"
+    },
     "./plugin-sdk/widget-html": {
       "types": "./dist/plugin-sdk/widget-html.d.ts",
       "default": "./dist/plugin-sdk/widget-html.js"

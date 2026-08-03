@@ -2,12 +2,12 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { ThinkLevel } from "openclaw/plugin-sdk/thinking-level";
 import { startQaGatewayChild } from "./gateway-child.js";
 import { startQaLabServer } from "./lab-server.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import type { QaProviderMode } from "./model-selection.js";
 import { startQaProviderServer } from "./providers/server-runtime.js";
-import type { QaThinkingLevel } from "./qa-gateway-config.js";
 import { createQaTransportAdapter, type QaTransportId } from "./qa-transport-registry.js";
 import { resolveQaGatewayTimeoutWithGraceMs } from "./timer-timeouts.js";
 
@@ -18,7 +18,7 @@ type QaManualLaneParams = {
   primaryModel: string;
   alternateModel: string;
   fastMode?: boolean;
-  thinkingDefault?: QaThinkingLevel;
+  thinkingDefault?: ThinkLevel;
   message: string;
   timeoutMs?: number;
   replySettleMs?: number;

@@ -4,12 +4,13 @@ import {
   type JsonSchemaObject,
   validateJsonSchemaValue,
 } from "openclaw/plugin-sdk/json-schema-runtime";
+import { THINKING_LEVELS } from "openclaw/plugin-sdk/thinking-level";
 import { describe, expect, it } from "vitest";
 import { normalizePluginConfig } from "./config.js";
 
 const manifest = JSON.parse(
   fs.readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf-8"),
-) as { configSchema: JsonSchemaObject };
+) as { configSchema: JsonSchemaObject & { properties?: Record<string, unknown> } };
 
 describe("active-memory manifest config schema", () => {
   it.each(["escalate", "always", "off"])("accepts mode=%s", (mode) => {
@@ -138,18 +139,25 @@ describe("active-memory manifest config schema", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("accepts max thinking overrides", () => {
+  it("keeps the manifest aligned with canonical thinking levels", () => {
+    expect(manifest.configSchema.properties?.thinking).toMatchObject({
+      enum: [...THINKING_LEVELS],
+    });
+  });
+
+  it("accepts and normalizes ultra thinking overrides", () => {
     const result = validateJsonSchemaValue({
       schema: manifest.configSchema,
-      cacheKey: "active-memory.manifest.thinking.max",
+      cacheKey: "active-memory.manifest.thinking.ultra",
       value: {
         enabled: true,
         agents: ["main"],
-        thinking: "max",
+        thinking: "ultra",
       },
     });
 
     expect(result.ok).toBe(true);
+    expect(normalizePluginConfig({ thinking: "Ultra" }).thinking).toBe("ultra");
   });
 
   it("rejects timeoutMs values above the runtime ceiling", () => {

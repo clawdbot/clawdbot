@@ -637,6 +637,22 @@ describe("policy commands", () => {
     );
   });
 
+  it("rejects the retired insecure-provider rule in policy compare", async () => {
+    const { exitCode, parsed } = await runPolicyCompareFixture(
+      { secrets: { allowInsecureProviders: false } },
+      {},
+    );
+
+    expect(exitCode).toBe(1);
+    expect(parsed).toMatchObject({ ok: false, rulesChecked: 0 });
+    expect(parsed.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/policy-conformance-invalid",
+        target: "oc://baseline.policy.jsonc/secrets/allowInsecureProviders",
+      }),
+    ]);
+  });
+
   it("reports missing and weaker policy file conformance rules", async () => {
     await writeFixture(join(workspaceDir, "baseline.policy.jsonc"), {
       channels: { denyRules: [{ when: { provider: "telegram" } }] },

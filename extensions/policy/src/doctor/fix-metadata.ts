@@ -374,12 +374,6 @@ const POLICY_FIX_METADATA = [
     { policyPath: ["secrets", "denySources"], configTargets: ["secrets"] },
   ),
   m(
-    CHECK_IDS.policySecretsInsecureProvider,
-    "reviewRequired",
-    "Remove insecure provider overrides.",
-    { policyPath: ["secrets", "allowInsecureProviders"], configTargets: ["secrets"] },
-  ),
-  m(
     CHECK_IDS.policyAuthProfileInvalidMetadata,
     "manual",
     "Add required provider and mode metadata to auth profiles.",

@@ -1,5 +1,6 @@
 // Defines Zod schema fragments for agent default configuration.
 import { z } from "zod";
+import { THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import {
   HeartbeatSchema,
@@ -31,17 +32,7 @@ const OptionalBootstrapFileNameSchema = z.enum([
   "IDENTITY.md",
 ]);
 
-const AgentThinkingLevelSchema = z.enum([
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "adaptive",
-  "max",
-  "ultra",
-]);
+const AgentThinkingLevelSchema = z.enum(THINKING_LEVELS);
 
 const EmbeddedAgentConfigSchema = z
   .object({

@@ -1,4 +1,5 @@
 // Defines gateway runtime and networking configuration types.
+import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { SecretInput } from "./types.secrets.js";
 
 /** Gateway bind-address policy for local server startup. */
@@ -97,16 +98,7 @@ export type TalkConfig = {
   /** Realtime Talk provider, model, voice, mode, transport, and brain config. */
   realtime?: TalkRealtimeConfig;
   /** Optional thinking level override for the agent run behind Talk realtime consults. */
-  consultThinkingLevel?:
-    | "off"
-    | "minimal"
-    | "low"
-    | "medium"
-    | "high"
-    | "xhigh"
-    | "adaptive"
-    | "max"
-    | "ultra";
+  consultThinkingLevel?: ThinkLevel;
   /** Optional fast mode override for the agent run behind Talk realtime consults. */
   consultFastMode?: boolean;
   /** BCP 47 locale id used for Talk speech recognition on device nodes and the iOS system-voice fallback. */

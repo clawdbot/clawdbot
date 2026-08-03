@@ -287,13 +287,11 @@ function scanPolicySecretProviders(cfg: Record<string, unknown>): readonly Polic
   const secrets = isRecord(cfg.secrets) ? cfg.secrets : {};
   const providers = isRecord(secrets.providers) ? secrets.providers : {};
   return Object.entries(providers).map(([id, value]) => {
-    const insecure = secretProviderInsecureFlags(value);
     const entry: {
       id: string;
       kind: "provider";
       source: string;
       providerSource?: string;
-      insecure?: readonly string[];
     } = {
       id,
       kind: "provider",
@@ -301,9 +299,6 @@ function scanPolicySecretProviders(cfg: Record<string, unknown>): readonly Polic
     };
     if (isRecord(value) && typeof value.source === "string") {
       entry.providerSource = value.source;
-    }
-    if (insecure.length > 0) {
-      entry.insecure = insecure;
     }
     return entry;
   });
@@ -522,11 +517,6 @@ function secretRefEvidence(
 ): SecretRefEvidence | undefined {
   const ref = coerceSecretRef(value, defaults);
   return ref === null ? undefined : { source: ref.source, provider: ref.provider, id: ref.id };
-}
-
-function secretProviderInsecureFlags(value: unknown): readonly string[] {
-  void value;
-  return [];
 }
 
 function isValidAuthProfileMetadata(value: unknown): boolean {

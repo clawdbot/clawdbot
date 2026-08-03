@@ -34,10 +34,6 @@ export function createPolicyDataAuthChecks(deps: PolicyDoctorCheckDeps): readonl
       "OpenClaw config secret providers and SecretRefs do not use sources denied by policy.",
     ],
     [
-      CHECK_IDS.policySecretsInsecureProvider,
-      "Configured secret providers do not opt into insecure posture unless policy allows it.",
-    ],
-    [
       CHECK_IDS.policyAuthProfileInvalidMetadata,
       "OpenClaw config auth profiles declare required provider and mode metadata.",
     ],

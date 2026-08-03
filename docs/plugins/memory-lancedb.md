@@ -95,8 +95,12 @@ Two request paths exist:
   and any other bundled provider with embedding support.
 - **Direct OpenAI-compatible client path**: leave `embedding.provider` unset
   (or `"openai"`) and set `embedding.apiKey` plus `embedding.baseUrl`. Use this
-  for a raw OpenAI-compatible embeddings endpoint that has no bundled provider
-  adapter.
+  for a public OpenAI-compatible embeddings endpoint that has no bundled
+  provider adapter. Direct overrides reject literal private and link-local
+  targets. Direct and `NO_PROXY` routes also reject hostnames that resolve to
+  those ranges; when an environment proxy is configured, that trusted proxy
+  owns destination DNS and network policy. Use a registered provider adapter
+  such as `ollama` for local endpoints.
 
 OpenAI Codex / ChatGPT OAuth is not an OpenAI Platform embeddings credential.
 For OpenAI embeddings use an OpenAI API key auth profile, `OPENAI_API_KEY`, or

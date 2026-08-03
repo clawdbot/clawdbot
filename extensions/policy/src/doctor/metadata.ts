@@ -387,13 +387,6 @@ export const POLICY_RULE_METADATA = [
     checkIds: [CHECK_IDS.policySecretsDeniedProviderSource],
   },
   {
-    policyPath: ["secrets", "allowInsecureProviders"],
-    strictness: "requires-false",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policySecretsInsecureProvider],
-  },
-
-  {
     policyPath: ["execApprovals", "requireFile"],
     strictness: "requires-true",
     valueType: "boolean",

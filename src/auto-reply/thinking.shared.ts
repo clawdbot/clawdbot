@@ -10,16 +10,18 @@ export { normalizeFastMode };
 export type { FastMode };
 
 /** Canonical thinking level values accepted by chat commands and session state. */
-export type ThinkLevel =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "adaptive"
-  | "max"
-  | "ultra";
+export const THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "adaptive",
+  "max",
+  "ultra",
+] as const;
+export type ThinkLevel = (typeof THINKING_LEVELS)[number];
 export type VerboseLevel = "off" | "on" | "full";
 export type TraceLevel = "off" | "on" | "raw";
 export type ElevatedLevel = "off" | "on" | "ask" | "full";
@@ -38,19 +40,7 @@ export type ThinkingCatalogEntry = {
   } | null;
 };
 
-/** Complete canonical level set accepted by user-facing thinking controls. */
-const ALL_THINKING_LEVELS: readonly ThinkLevel[] = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "adaptive",
-  "max",
-  "ultra",
-];
-export const THINKING_LEVELS_HELP = ALL_THINKING_LEVELS.join("|");
+export const THINKING_LEVELS_HELP = THINKING_LEVELS.join("|");
 export const BASE_THINKING_LEVELS: ThinkLevel[] = ["off", "minimal", "low", "medium", "high"];
 export const THINKING_LEVEL_RANKS: Record<ThinkLevel, number> = {
   off: 0,

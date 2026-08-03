@@ -27,6 +27,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { ThinkLevel } from "openclaw/plugin-sdk/thinking-level";
 import {
   createQaBundledPluginsDir,
   resolveQaBundledPluginSourceDir,
@@ -72,7 +73,7 @@ import {
 import { stageQaMockAuthProfiles } from "./providers/shared/mock-auth.js";
 import { listMockCodexModelInfos } from "./providers/shared/mock-model-config.js";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
-import { buildQaGatewayConfig, type QaThinkingLevel } from "./qa-gateway-config.js";
+import { buildQaGatewayConfig } from "./qa-gateway-config.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import type { RuntimeId } from "./runtime-parity.js";
 import { resolveQaWindowsSystem32ExePath } from "./windows-system-tools.js";
@@ -1058,7 +1059,7 @@ export async function startQaGatewayChild(params: {
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
-  thinkingDefault?: QaThinkingLevel;
+  thinkingDefault?: ThinkLevel;
   forcedRuntime?: RuntimeId;
   claudeCliAuthMode?: QaCliBackendAuthMode;
   controlUiEnabled?: boolean;

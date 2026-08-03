@@ -1,5 +1,6 @@
 // Qa Lab plugin module implements live gateway behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ThinkLevel } from "openclaw/plugin-sdk/thinking-level";
 import {
   startQaGatewayChild,
   type QaCliBackendAuthMode,
@@ -7,7 +8,6 @@ import {
 } from "../../gateway-child.js";
 import type { QaProviderMode } from "../../model-selection.js";
 import { startQaProviderServer } from "../../providers/server-runtime.js";
-import type { QaThinkingLevel } from "../../qa-gateway-config.js";
 import type { RuntimeId } from "../../runtime-parity.js";
 import { appendQaLiveLaneIssue as appendLiveLaneIssue } from "./live-artifacts.js";
 
@@ -92,7 +92,7 @@ export async function startQaLiveLaneGateway(params: {
   alternateModel: string;
   fastMode?: boolean;
   forcedRuntime?: RuntimeId;
-  thinkingDefault?: QaThinkingLevel;
+  thinkingDefault?: ThinkLevel;
   claudeCliAuthMode?: QaCliBackendAuthMode;
   controlUiEnabled?: boolean;
   mockAuthAgentIds?: readonly string[];

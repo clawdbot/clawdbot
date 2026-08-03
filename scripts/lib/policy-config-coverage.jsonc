@@ -39,7 +39,6 @@
     "session.dmScope",
     "session.maintenance.mode",
     "secrets.defaults.provider",
-    "secrets.providers.*.allowInsecureTransport",
     "secrets.providers.*.source",
     "tools.allow.*",
     "tools.alsoAllow.*",
@@ -485,14 +484,6 @@
       "area": "secrets",
       "policy": "secrets.denySources",
       "reason": "Policy observes configured secret provider source type.",
-    },
-    {
-      "pattern": "secrets.providers.*.allowInsecureTransport",
-      "status": "observed",
-      "area": "secrets",
-      "policy": "secrets.allowInsecureProviders",
-      "reason": "Policy observes insecure secret-provider transport posture.",
-      "allowNoSchemaPath": true,
     },
     {
       "pattern": "tools.profile",

@@ -13,6 +13,7 @@ import {
   type SessionScope,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-core";
+import { THINKING_LEVELS } from "openclaw/plugin-sdk/thinking-level";
 import { normalizeWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import { z } from "zod";
 import { TtsConfigSchema } from "../api.js";
@@ -287,17 +288,7 @@ const VoiceCallRealtimeAgentContextConfigSchema = z
     files: ["SOUL.md", "IDENTITY.md", "USER.md"],
   });
 
-const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "adaptive",
-  "max",
-  "ultra",
-]);
+const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum(THINKING_LEVELS);
 
 const VoiceCallStreamingProvidersConfigSchema = z
   .record(z.string(), z.record(z.string(), z.unknown()))

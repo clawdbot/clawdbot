@@ -1,5 +1,6 @@
 // Defines agent default configuration types shared by runtime schemas.
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { SilentReplyPolicyShape } from "../shared/silent-reply-policy.js";
 import type {
   AgentModelConfig,
@@ -28,18 +29,6 @@ export type EmbeddedAgentExecutionContract = "default" | "strict-agentic";
 export type SubagentDelegationMode = "suggest" | "prefer";
 /** Image compression/detail preference used before sending image inputs to models. */
 export type AgentImageQualityPreference = "auto" | "efficient" | "balanced" | "high";
-/** Canonical thinking levels accepted by agent defaults and compaction overrides. */
-export type AgentThinkingLevel =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "adaptive"
-  | "max"
-  | "ultra";
-
 export type AgentModelEntryConfig = {
   /** Optional display/lookup alias for this provider/model entry. */
   alias?: string;
@@ -228,7 +217,7 @@ export type AgentDefaultsConfig = {
     executionContract?: EmbeddedAgentExecutionContract;
   };
   /** Default thinking level when no /think directive is present. */
-  thinkingDefault?: AgentThinkingLevel;
+  thinkingDefault?: ThinkLevel;
   /** Default fast-mode policy inherited by agent entries that omit it. */
   fastModeDefault?: FastMode;
   /** Default verbose level when no /verbose directive is present. */
@@ -379,7 +368,7 @@ export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
   /** Override the session thinking level for embedded OpenClaw compaction summaries. */
-  thinkingLevel?: AgentThinkingLevel;
+  thinkingLevel?: ThinkLevel;
   /** Embedded OpenClaw keepRecentTokens budget used for cut-point selection. */
   keepRecentTokens?: number;
   /** Preserve this many most-recent user/assistant turns verbatim in compaction summary context. */

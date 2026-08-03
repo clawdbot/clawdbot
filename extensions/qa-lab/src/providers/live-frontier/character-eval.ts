@@ -1,8 +1,8 @@
 // Qa Lab plugin module implements character eval behavior.
-import type { QaThinkingLevel } from "../../qa-thinking.js";
+import type { ThinkLevel } from "openclaw/plugin-sdk/thinking-level";
 
 type QaFrontierCharacterModelOptions = {
-  thinkingDefault?: QaThinkingLevel;
+  thinkingDefault?: ThinkLevel;
   fastMode?: boolean;
 };
 
@@ -17,7 +17,7 @@ export const QA_FRONTIER_CHARACTER_EVAL_MODELS = Object.freeze([
   "google/gemini-3.1-pro-preview",
 ]);
 
-export const QA_FRONTIER_CHARACTER_THINKING_BY_MODEL: Readonly<Record<string, QaThinkingLevel>> =
+export const QA_FRONTIER_CHARACTER_THINKING_BY_MODEL: Readonly<Record<string, ThinkLevel>> =
   Object.freeze({
     "openai/gpt-5.6-luna": "medium",
     "openai/gpt-5.2": "xhigh",

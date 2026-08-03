@@ -75,6 +75,39 @@ function invokeEmbeddingCreate(mock: ReturnType<typeof vi.fn>, body: unknown) {
   return (mock as unknown as (body: unknown) => unknown)(body);
 }
 
+type MockOpenAiEmbeddingPost = (
+  path: string,
+  options: { body?: unknown; timeout?: number },
+) => unknown;
+
+function installMockOpenAiEmbeddingTransport(params: {
+  post: MockOpenAiEmbeddingPost;
+  onRequest?: () => void;
+}): void {
+  vi.doMock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
+    fetchWithSsrFGuard: async (request: { init?: RequestInit; timeoutMs?: number }) => {
+      params.onRequest?.();
+      if (typeof request.init?.body !== "string") {
+        throw new Error("expected serialized embedding request body");
+      }
+      const body = JSON.parse(request.init.body) as unknown;
+      const payload = await params.post("/embeddings", { body, timeout: request.timeoutMs });
+      return {
+        response:
+          payload instanceof Response
+            ? payload
+            : new Response(JSON.stringify(payload), {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              }),
+        finalUrl: "https://api.openai.com/v1/embeddings",
+        release: async () => {},
+      };
+    },
+  }));
+}
+
 function createRuntimeLoader(
   overrides: {
     importBundled?: () => Promise<LanceDbModule>;
@@ -195,7 +228,7 @@ function firstAddedMemory(add: ReturnType<typeof vi.fn>) {
 }
 
 async function withMockedOpenAiMemoryPlugin<T>(params: {
-  ensureGlobalUndiciEnvProxyDispatcher: ReturnType<typeof vi.fn>;
+  onEmbeddingRequest: ReturnType<typeof vi.fn>;
   embeddingsCreate?: ReturnType<typeof vi.fn>;
   openAiPost?: ReturnType<typeof vi.fn>;
   loadLanceDbModule: ReturnType<typeof vi.fn>;
@@ -211,14 +244,10 @@ async function withMockedOpenAiMemoryPlugin<T>(params: {
     });
 
   vi.resetModules();
-  vi.doMock("openclaw/plugin-sdk/runtime-env", () => ({
-    ensureGlobalUndiciEnvProxyDispatcher: params.ensureGlobalUndiciEnvProxyDispatcher,
-  }));
-  vi.doMock("openai", () => ({
-    default: class MockOpenAI {
-      post = post;
-    },
-  }));
+  installMockOpenAiEmbeddingTransport({
+    post: post as unknown as MockOpenAiEmbeddingPost,
+    onRequest: params.onEmbeddingRequest as unknown as () => void,
+  });
   vi.doMock("./lancedb-runtime.js", () => ({
     loadLanceDbModule: params.loadLanceDbModule,
   }));
@@ -227,8 +256,7 @@ async function withMockedOpenAiMemoryPlugin<T>(params: {
     const { default: dynamicMemoryPlugin } = await import("./index.js");
     return await params.run(dynamicMemoryPlugin);
   } finally {
-    vi.doUnmock("openclaw/plugin-sdk/runtime-env");
-    vi.doUnmock("openai");
+    vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
     vi.doUnmock("./lancedb-runtime.js");
     vi.resetModules();
   }
@@ -578,11 +606,6 @@ describe("memory plugin e2e", () => {
     vi.doMock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => ({
       getMemoryEmbeddingProvider,
     }));
-    vi.doMock("openai", () => ({
-      default: function UnexpectedOpenAI() {
-        throw new Error("direct OpenAI client should not be constructed");
-      },
-    }));
     vi.doMock("./lancedb-runtime.js", () => ({
       loadLanceDbModule,
     }));
@@ -682,7 +705,6 @@ describe("memory plugin e2e", () => {
       await (replacementService.stop as () => Promise<void>)();
     } finally {
       vi.doUnmock("openclaw/plugin-sdk/memory-core-host-engine-embeddings");
-      vi.doUnmock("openai");
       vi.doUnmock("./lancedb-runtime.js");
       vi.resetModules();
     }
@@ -692,7 +714,7 @@ describe("memory plugin e2e", () => {
     const embeddingsCreate = vi.fn(async () => ({
       data: [{ embedding: [0.1, 0.2, 0.3] }],
     }));
-    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const onEmbeddingRequest = vi.fn();
     const toArray = vi.fn(async () => []);
     const limit = vi.fn(() => ({ toArray }));
     const vectorSearch = vi.fn(() => createAgentScopedVectorQuery(limit));
@@ -710,7 +732,7 @@ describe("memory plugin e2e", () => {
     }));
 
     await withMockedOpenAiMemoryPlugin({
-      ensureGlobalUndiciEnvProxyDispatcher,
+      onEmbeddingRequest,
       embeddingsCreate,
       loadLanceDbModule,
       run: async (dynamicMemoryPlugin) => {
@@ -749,7 +771,7 @@ describe("memory plugin e2e", () => {
     const embeddingsCreate = vi.fn(async () => ({
       data: [{ embedding: [0.1, 0.2, 0.3] }],
     }));
-    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const onEmbeddingRequest = vi.fn();
     const toArray = vi.fn(async () => [
       {
         id: "memory-stale-media",
@@ -786,7 +808,7 @@ describe("memory plugin e2e", () => {
     }));
 
     await withMockedOpenAiMemoryPlugin({
-      ensureGlobalUndiciEnvProxyDispatcher,
+      onEmbeddingRequest,
       embeddingsCreate,
       loadLanceDbModule,
       run: async (dynamicMemoryPlugin) => {
@@ -843,7 +865,7 @@ describe("memory plugin e2e", () => {
 
   test("returns unavailable when memory_recall embedding does not settle", async () => {
     vi.useFakeTimers();
-    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const onEmbeddingRequest = vi.fn();
     const post = vi.fn(() => new Promise(() => {}));
     const loadLanceDbModule = vi.fn(async () => ({
       connect: vi.fn(async () => ({
@@ -860,7 +882,7 @@ describe("memory plugin e2e", () => {
 
     try {
       await withMockedOpenAiMemoryPlugin({
-        ensureGlobalUndiciEnvProxyDispatcher,
+        onEmbeddingRequest,
         openAiPost: post,
         loadLanceDbModule,
         run: async (dynamicMemoryPlugin) => {
@@ -920,7 +942,7 @@ describe("memory plugin e2e", () => {
   });
 
   test("normalizes signed decimal CLI limits through the shared parser", async () => {
-    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const onEmbeddingRequest = vi.fn();
     const toArray = vi.fn(async () => []);
     const limit = vi.fn(() => ({ toArray }));
     const select = vi.fn(() => ({ limit, toArray }));
@@ -939,7 +961,7 @@ describe("memory plugin e2e", () => {
     }));
 
     await withMockedOpenAiMemoryPlugin({
-      ensureGlobalUndiciEnvProxyDispatcher,
+      onEmbeddingRequest,
       loadLanceDbModule,
       run: async (dynamicMemoryPlugin) => {
         const registerCli = vi.fn();
@@ -1028,7 +1050,7 @@ describe("memory plugin e2e", () => {
     const embeddingsCreate = vi.fn(async () => ({
       data: [{ embedding: [0.1, 0.2, 0.3] }],
     }));
-    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const onEmbeddingRequest = vi.fn();
     const toArray = vi.fn(async () => [
       {
         id: "memory-1",
@@ -1057,7 +1079,7 @@ describe("memory plugin e2e", () => {
     }));
 
     await withMockedOpenAiMemoryPlugin({
-      ensureGlobalUndiciEnvProxyDispatcher,
+      onEmbeddingRequest,
       embeddingsCreate,
       loadLanceDbModule,
       run: async (dynamicMemoryPlugin) => {
@@ -1108,7 +1130,7 @@ describe("memory plugin e2e", () => {
         );
 
         expect(loadLanceDbModule).toHaveBeenCalledTimes(1);
-        expect(ensureGlobalUndiciEnvProxyDispatcher).toHaveBeenCalledOnce();
+        expect(onEmbeddingRequest).toHaveBeenCalledOnce();
         expect(embeddingsCreate).toHaveBeenCalledWith({
           model: "text-embedding-3-small",
           input: expectedRecallQuery,
@@ -1142,7 +1164,7 @@ describe("memory plugin e2e", () => {
           );
         }),
     );
-    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const onEmbeddingRequest = vi.fn();
     const toArray = vi.fn(() => new Promise(() => {}));
     const limit = vi.fn(() => ({ toArray }));
     const loadLanceDbModule = vi.fn(async () => ({
@@ -1160,7 +1182,7 @@ describe("memory plugin e2e", () => {
 
     try {
       await withMockedOpenAiMemoryPlugin({
-        ensureGlobalUndiciEnvProxyDispatcher,
+        onEmbeddingRequest,
         openAiPost: post,
         loadLanceDbModule,
         run: async (dynamicMemoryPlugin) => {
@@ -1201,10 +1223,9 @@ describe("memory plugin e2e", () => {
           await vi.advanceTimersByTimeAsync(15_000);
 
           await expect(resultPromise).resolves.toBeUndefined();
-          expect(ensureGlobalUndiciEnvProxyDispatcher).toHaveBeenCalledOnce();
+          expect(onEmbeddingRequest).toHaveBeenCalledOnce();
           expect(firstMockArg(post as unknown as MockCallSource, "post path")).toBe("/embeddings");
           const postOptions = firstObjectArg(post as unknown as MockCallSource, "post options", 1);
-          expect(postOptions.maxRetries).toBe(0);
           expect(postOptions.timeout).toBe(15_000);
           expect(loadLanceDbModule).not.toHaveBeenCalled();
           expect(logger.warn).toHaveBeenCalledWith(
@@ -1362,7 +1383,7 @@ describe("memory plugin e2e", () => {
     const embeddingsCreate = vi.fn(async () => ({
       data: [{ embedding: [0.1, 0.2, 0.3] }],
     }));
-    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const onEmbeddingRequest = vi.fn();
     const toArray = vi.fn(async () => [
       {
         id: "memory-1",
@@ -1408,16 +1429,10 @@ describe("memory plugin e2e", () => {
     };
 
     vi.resetModules();
-    vi.doMock("openclaw/plugin-sdk/runtime-env", () => ({
-      ensureGlobalUndiciEnvProxyDispatcher,
-    }));
-    vi.doMock("openai", () => ({
-      default: class MockOpenAI {
-        post = vi.fn((_path: string, opts: { body?: unknown }) =>
-          invokeEmbeddingCreate(embeddingsCreate, opts.body),
-        );
-      },
-    }));
+    installMockOpenAiEmbeddingTransport({
+      post: (_path, opts) => invokeEmbeddingCreate(embeddingsCreate, opts.body),
+      onRequest: onEmbeddingRequest,
+    });
     vi.doMock("./lancedb-runtime.js", () => ({
       loadLanceDbModule,
     }));
@@ -1479,8 +1494,7 @@ describe("memory plugin e2e", () => {
       expect(result?.prependContext).toContain("I prefer Helix for editing code.");
       expect(logger.info).toHaveBeenCalledWith("memory-lancedb: injecting 1 memories into context");
     } finally {
-      vi.doUnmock("openclaw/plugin-sdk/runtime-env");
-      vi.doUnmock("openai");
+      vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
       vi.doUnmock("./lancedb-runtime.js");
       vi.resetModules();
     }
@@ -1490,7 +1504,7 @@ describe("memory plugin e2e", () => {
     const embeddingsCreate = vi.fn(async () => ({
       data: [{ embedding: [0.1, 0.2, 0.3] }],
     }));
-    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const onEmbeddingRequest = vi.fn();
     const loadLanceDbModule = vi.fn(async () => ({
       connect: vi.fn(async () => ({
         tableNames: vi.fn(async () => ["memories"]),
@@ -1524,16 +1538,10 @@ describe("memory plugin e2e", () => {
     };
 
     vi.resetModules();
-    vi.doMock("openclaw/plugin-sdk/runtime-env", () => ({
-      ensureGlobalUndiciEnvProxyDispatcher,
-    }));
-    vi.doMock("openai", () => ({
-      default: class MockOpenAI {
-        post = vi.fn((_path: string, opts: { body?: unknown }) =>
-          invokeEmbeddingCreate(embeddingsCreate, opts.body),
-        );
-      },
-    }));
+    installMockOpenAiEmbeddingTransport({
+      post: (_path, opts) => invokeEmbeddingCreate(embeddingsCreate, opts.body),
+      onRequest: onEmbeddingRequest,
+    });
     vi.doMock("./lancedb-runtime.js", () => ({
       loadLanceDbModule,
     }));
@@ -1593,8 +1601,7 @@ describe("memory plugin e2e", () => {
       expect(embeddingsCreate).not.toHaveBeenCalled();
       expect(loadLanceDbModule).not.toHaveBeenCalled();
     } finally {
-      vi.doUnmock("openclaw/plugin-sdk/runtime-env");
-      vi.doUnmock("openai");
+      vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
       vi.doUnmock("./lancedb-runtime.js");
       vi.resetModules();
     }
@@ -1604,7 +1611,7 @@ describe("memory plugin e2e", () => {
     const embeddingsCreate = vi.fn(async () => ({
       data: [{ embedding: [0.1, 0.2, 0.3] }],
     }));
-    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const onEmbeddingRequest = vi.fn();
     const add = vi.fn(async () => undefined);
     const loadLanceDbModule = vi.fn(async () => ({
       connect: vi.fn(async () => ({
@@ -1639,16 +1646,10 @@ describe("memory plugin e2e", () => {
     };
 
     vi.resetModules();
-    vi.doMock("openclaw/plugin-sdk/runtime-env", () => ({
-      ensureGlobalUndiciEnvProxyDispatcher,
-    }));
-    vi.doMock("openai", () => ({
-      default: class MockOpenAI {
-        post = vi.fn((_path: string, opts: { body?: unknown }) =>
-          invokeEmbeddingCreate(embeddingsCreate, opts.body),
-        );
-      },
-    }));
+    installMockOpenAiEmbeddingTransport({
+      post: (_path, opts) => invokeEmbeddingCreate(embeddingsCreate, opts.body),
+      onRequest: onEmbeddingRequest,
+    });
     vi.doMock("./lancedb-runtime.js", () => ({
       loadLanceDbModule,
     }));
@@ -1753,8 +1754,7 @@ describe("memory plugin e2e", () => {
       expect(recallDefaultDisabled).toBeUndefined();
       expect(embeddingsCreate).not.toHaveBeenCalled();
     } finally {
-      vi.doUnmock("openclaw/plugin-sdk/runtime-env");
-      vi.doUnmock("openai");
+      vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
       vi.doUnmock("./lancedb-runtime.js");
       vi.resetModules();
     }
@@ -1764,7 +1764,7 @@ describe("memory plugin e2e", () => {
     const embeddingsCreate = vi.fn(async () => ({
       data: [{ embedding: [0.1, 0.2, 0.3] }],
     }));
-    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const onEmbeddingRequest = vi.fn();
     const loadLanceDbModule = vi.fn(async () => ({
       connect: vi.fn(async () => ({
         tableNames: vi.fn(async () => ["memories"]),
@@ -1798,16 +1798,10 @@ describe("memory plugin e2e", () => {
     };
 
     vi.resetModules();
-    vi.doMock("openclaw/plugin-sdk/runtime-env", () => ({
-      ensureGlobalUndiciEnvProxyDispatcher,
-    }));
-    vi.doMock("openai", () => ({
-      default: class MockOpenAI {
-        post = vi.fn((_path: string, opts: { body?: unknown }) =>
-          invokeEmbeddingCreate(embeddingsCreate, opts.body),
-        );
-      },
-    }));
+    installMockOpenAiEmbeddingTransport({
+      post: (_path, opts) => invokeEmbeddingCreate(embeddingsCreate, opts.body),
+      onRequest: onEmbeddingRequest,
+    });
     vi.doMock("./lancedb-runtime.js", () => ({
       loadLanceDbModule,
     }));
@@ -1855,8 +1849,7 @@ describe("memory plugin e2e", () => {
       expect(embeddingsCreate).not.toHaveBeenCalled();
       expect(loadLanceDbModule).not.toHaveBeenCalled();
     } finally {
-      vi.doUnmock("openclaw/plugin-sdk/runtime-env");
-      vi.doUnmock("openai");
+      vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
       vi.doUnmock("./lancedb-runtime.js");
       vi.resetModules();
     }
@@ -1866,7 +1859,7 @@ describe("memory plugin e2e", () => {
     const embeddingsCreate = vi.fn(async () => ({
       data: [{ embedding: [0.1, 0.2, 0.3] }],
     }));
-    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const onEmbeddingRequest = vi.fn();
     const add = vi.fn(async () => undefined);
     const toArray = vi.fn(async () => []);
     const limit = vi.fn(() => ({ toArray }));
@@ -1886,16 +1879,10 @@ describe("memory plugin e2e", () => {
     }));
 
     vi.resetModules();
-    vi.doMock("openclaw/plugin-sdk/runtime-env", () => ({
-      ensureGlobalUndiciEnvProxyDispatcher,
-    }));
-    vi.doMock("openai", () => ({
-      default: class MockOpenAI {
-        post = vi.fn((_path: string, opts: { body?: unknown }) =>
-          invokeEmbeddingCreate(embeddingsCreate, opts.body),
-        );
-      },
-    }));
+    installMockOpenAiEmbeddingTransport({
+      post: (_path, opts) => invokeEmbeddingCreate(embeddingsCreate, opts.body),
+      onRequest: onEmbeddingRequest,
+    });
     vi.doMock("./lancedb-runtime.js", () => ({
       loadLanceDbModule,
     }));
@@ -1948,7 +1935,7 @@ describe("memory plugin e2e", () => {
       );
 
       expect(loadLanceDbModule).toHaveBeenCalledTimes(1);
-      expect(ensureGlobalUndiciEnvProxyDispatcher).toHaveBeenCalledOnce();
+      expect(onEmbeddingRequest).toHaveBeenCalledOnce();
       expect(embeddingsCreate).toHaveBeenCalledTimes(1);
       expect(embeddingsCreate).toHaveBeenCalledWith({
         model: "text-embedding-3-small",
@@ -1962,8 +1949,7 @@ describe("memory plugin e2e", () => {
       expect(memory.importance).toBe(0.7);
       expect(memory.category).toBe("preference");
     } finally {
-      vi.doUnmock("openclaw/plugin-sdk/runtime-env");
-      vi.doUnmock("openai");
+      vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
       vi.doUnmock("./lancedb-runtime.js");
       vi.resetModules();
     }
@@ -1973,7 +1959,7 @@ describe("memory plugin e2e", () => {
     const embeddingsCreate = vi.fn(async () => ({
       data: [{ embedding: [0.1, 0.2, 0.3] }],
     }));
-    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const onEmbeddingRequest = vi.fn();
     const add = vi.fn(async () => undefined);
     const toArray = vi.fn(async () => []);
     const limit = vi.fn(() => ({ toArray }));
@@ -2010,16 +1996,10 @@ describe("memory plugin e2e", () => {
     };
 
     vi.resetModules();
-    vi.doMock("openclaw/plugin-sdk/runtime-env", () => ({
-      ensureGlobalUndiciEnvProxyDispatcher,
-    }));
-    vi.doMock("openai", () => ({
-      default: class MockOpenAI {
-        post = vi.fn((_path: string, opts: { body?: unknown }) =>
-          invokeEmbeddingCreate(embeddingsCreate, opts.body),
-        );
-      },
-    }));
+    installMockOpenAiEmbeddingTransport({
+      post: (_path, opts) => invokeEmbeddingCreate(embeddingsCreate, opts.body),
+      onRequest: onEmbeddingRequest,
+    });
     vi.doMock("./lancedb-runtime.js", () => ({
       loadLanceDbModule,
     }));
@@ -2078,8 +2058,7 @@ describe("memory plugin e2e", () => {
       expect(memory.importance).toBe(0.7);
       expect(memory.category).toBe("preference");
     } finally {
-      vi.doUnmock("openclaw/plugin-sdk/runtime-env");
-      vi.doUnmock("openai");
+      vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
       vi.doUnmock("./lancedb-runtime.js");
       vi.resetModules();
     }
@@ -2089,7 +2068,7 @@ describe("memory plugin e2e", () => {
     const embeddingsCreate = vi.fn(async () => ({
       data: [{ embedding: [0.1, 0.2, 0.3] }],
     }));
-    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const onEmbeddingRequest = vi.fn();
     const add = vi.fn(async () => undefined);
     const loadLanceDbModule = vi.fn(async () => ({
       connect: vi.fn(async () => ({
@@ -2124,16 +2103,10 @@ describe("memory plugin e2e", () => {
     };
 
     vi.resetModules();
-    vi.doMock("openclaw/plugin-sdk/runtime-env", () => ({
-      ensureGlobalUndiciEnvProxyDispatcher,
-    }));
-    vi.doMock("openai", () => ({
-      default: class MockOpenAI {
-        post = vi.fn((_path: string, opts: { body?: unknown }) =>
-          invokeEmbeddingCreate(embeddingsCreate, opts.body),
-        );
-      },
-    }));
+    installMockOpenAiEmbeddingTransport({
+      post: (_path, opts) => invokeEmbeddingCreate(embeddingsCreate, opts.body),
+      onRequest: onEmbeddingRequest,
+    });
     vi.doMock("./lancedb-runtime.js", () => ({
       loadLanceDbModule,
     }));
@@ -2194,8 +2167,7 @@ describe("memory plugin e2e", () => {
       expect(loadLanceDbModule).not.toHaveBeenCalled();
       expect(add).not.toHaveBeenCalled();
     } finally {
-      vi.doUnmock("openclaw/plugin-sdk/runtime-env");
-      vi.doUnmock("openai");
+      vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
       vi.doUnmock("./lancedb-runtime.js");
       vi.resetModules();
     }
@@ -2205,7 +2177,7 @@ describe("memory plugin e2e", () => {
     const embeddingsCreate = vi.fn(async () => ({
       data: [{ embedding: [0.1, 0.2, 0.3] }],
     }));
-    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const onEmbeddingRequest = vi.fn();
     const add = vi.fn(async () => undefined);
     const loadLanceDbModule = vi.fn(async () => ({
       connect: vi.fn(async () => ({
@@ -2240,16 +2212,10 @@ describe("memory plugin e2e", () => {
     };
 
     vi.resetModules();
-    vi.doMock("openclaw/plugin-sdk/runtime-env", () => ({
-      ensureGlobalUndiciEnvProxyDispatcher,
-    }));
-    vi.doMock("openai", () => ({
-      default: class MockOpenAI {
-        post = vi.fn((_path: string, opts: { body?: unknown }) =>
-          invokeEmbeddingCreate(embeddingsCreate, opts.body),
-        );
-      },
-    }));
+    installMockOpenAiEmbeddingTransport({
+      post: (_path, opts) => invokeEmbeddingCreate(embeddingsCreate, opts.body),
+      onRequest: onEmbeddingRequest,
+    });
     vi.doMock("./lancedb-runtime.js", () => ({
       loadLanceDbModule,
     }));
@@ -2298,8 +2264,7 @@ describe("memory plugin e2e", () => {
       expect(loadLanceDbModule).not.toHaveBeenCalled();
       expect(add).not.toHaveBeenCalled();
     } finally {
-      vi.doUnmock("openclaw/plugin-sdk/runtime-env");
-      vi.doUnmock("openai");
+      vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
       vi.doUnmock("./lancedb-runtime.js");
       vi.resetModules();
     }
@@ -2314,7 +2279,7 @@ describe("memory plugin e2e", () => {
       vi.fn(async () => ({
         data: [{ embedding: [0.1, 0.2, 0.3] }],
       }));
-    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const onEmbeddingRequest = vi.fn();
     const add = vi.fn(async () => undefined);
     const toArray = vi.fn(async () => overrides?.searchResults ?? []);
     const limit = vi.fn(() => ({ toArray }));
@@ -2334,16 +2299,10 @@ describe("memory plugin e2e", () => {
     }));
 
     vi.resetModules();
-    vi.doMock("openclaw/plugin-sdk/runtime-env", () => ({
-      ensureGlobalUndiciEnvProxyDispatcher,
-    }));
-    vi.doMock("openai", () => ({
-      default: class MockOpenAI {
-        post = vi.fn((_path: string, opts: { body?: unknown }) =>
-          invokeEmbeddingCreate(embeddingsCreate, opts.body),
-        );
-      },
-    }));
+    installMockOpenAiEmbeddingTransport({
+      post: (_path, opts) => invokeEmbeddingCreate(embeddingsCreate, opts.body),
+      onRequest: onEmbeddingRequest,
+    });
     vi.doMock("./lancedb-runtime.js", () => ({
       loadLanceDbModule,
     }));
@@ -2381,7 +2340,7 @@ describe("memory plugin e2e", () => {
       add,
       agentEnd,
       embeddingsCreate,
-      ensureGlobalUndiciEnvProxyDispatcher,
+      onEmbeddingRequest,
       loadLanceDbModule,
       logger,
       sessionEnd,
@@ -2389,8 +2348,7 @@ describe("memory plugin e2e", () => {
   }
 
   async function cleanupAutoCaptureCursorHarness() {
-    vi.doUnmock("openclaw/plugin-sdk/runtime-env");
-    vi.doUnmock("openai");
+    vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
     vi.doUnmock("./lancedb-runtime.js");
     vi.resetModules();
   }
@@ -2667,7 +2625,7 @@ describe("memory plugin e2e", () => {
       }
       return { data: [{ embedding: [3, 4, ...Array.from({ length: 1023 }, () => 0)] }] };
     });
-    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const onEmbeddingRequest = vi.fn();
     const toArray = vi.fn(async () => []);
     const limit = vi.fn(() => ({ toArray }));
     const vectorSearch = vi.fn((_vector?: number[]) => createAgentScopedVectorQuery(limit));
@@ -2685,17 +2643,21 @@ describe("memory plugin e2e", () => {
     }));
 
     vi.resetModules();
-    vi.doMock("openclaw/plugin-sdk/runtime-env", () => ({
-      ensureGlobalUndiciEnvProxyDispatcher,
-    }));
-    const post = vi.fn((_path: string, opts: { body?: unknown }) =>
-      invokeEmbeddingCreate(embeddingsCreate, opts.body),
-    );
-    vi.doMock("openai", () => ({
-      default: class MockOpenAI {
-        post = post;
-      },
-    }));
+    const post = vi.fn(async (_path: string, opts: { body?: unknown }) => {
+      try {
+        return await invokeEmbeddingCreate(embeddingsCreate, opts.body);
+      } catch (error) {
+        expect(error).toBe(rejectedDimensions);
+        return new Response(JSON.stringify({ error: rejectedDimensions.error }), {
+          status: rejectedDimensions.status,
+          headers: { "content-type": "application/json" },
+        });
+      }
+    });
+    installMockOpenAiEmbeddingTransport({
+      post,
+      onRequest: onEmbeddingRequest,
+    });
     vi.doMock("./lancedb-runtime.js", () => ({
       loadLanceDbModule,
     }));
@@ -2729,11 +2691,11 @@ describe("memory plugin e2e", () => {
       await recallTool.execute("test-call-dims", { query: "hello dimensions" });
 
       expect(loadLanceDbModule).toHaveBeenCalledTimes(1);
-      expect(ensureGlobalUndiciEnvProxyDispatcher).toHaveBeenCalledTimes(2);
+      expect(onEmbeddingRequest).toHaveBeenCalledTimes(2);
       expect(
         expectDefined(
-          ensureGlobalUndiciEnvProxyDispatcher.mock.invocationCallOrder[0],
-          "LanceDB proxy dispatcher invocation",
+          onEmbeddingRequest.mock.invocationCallOrder[0],
+          "LanceDB embedding request invocation",
         ),
       ).toBeLessThan(
         expectDefined(embeddingsCreate.mock.invocationCallOrder[0], "LanceDB embedding invocation"),
@@ -2757,8 +2719,7 @@ describe("memory plugin e2e", () => {
       expect(truncatedVector.slice(0, 2)).toEqual([0.6, 0.8]);
     } finally {
       dateNow.mockRestore();
-      vi.doUnmock("openclaw/plugin-sdk/runtime-env");
-      vi.doUnmock("openai");
+      vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
       vi.doUnmock("./lancedb-runtime.js");
       vi.resetModules();
     }
@@ -2768,7 +2729,7 @@ describe("memory plugin e2e", () => {
     const embeddingsCreate = vi.fn(async () => ({
       data: [{ embedding: [0.1, 0.2, 0.3] }],
     }));
-    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const onEmbeddingRequest = vi.fn();
     const toArray = vi.fn(async () => []);
     const limit = vi.fn(() => ({ toArray }));
     const vectorSearch = vi.fn(() => createAgentScopedVectorQuery(limit));
@@ -2789,16 +2750,10 @@ describe("memory plugin e2e", () => {
       });
 
     vi.resetModules();
-    vi.doMock("openclaw/plugin-sdk/runtime-env", () => ({
-      ensureGlobalUndiciEnvProxyDispatcher,
-    }));
-    vi.doMock("openai", () => ({
-      default: class MockOpenAI {
-        post = vi.fn((_path: string, opts: { body?: unknown }) =>
-          invokeEmbeddingCreate(embeddingsCreate, opts.body),
-        );
-      },
-    }));
+    installMockOpenAiEmbeddingTransport({
+      post: (_path, opts) => invokeEmbeddingCreate(embeddingsCreate, opts.body),
+      onRequest: onEmbeddingRequest,
+    });
     vi.doMock("./lancedb-runtime.js", () => ({
       loadLanceDbModule,
     }));
@@ -2829,8 +2784,7 @@ describe("memory plugin e2e", () => {
       expect(loadLanceDbModule).toHaveBeenCalledTimes(2);
       expect(embeddingsCreate).toHaveBeenCalledTimes(2);
     } finally {
-      vi.doUnmock("openclaw/plugin-sdk/runtime-env");
-      vi.doUnmock("openai");
+      vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
       vi.doUnmock("./lancedb-runtime.js");
       vi.resetModules();
     }
@@ -3005,6 +2959,11 @@ describe("memory plugin e2e", () => {
     expect(() => normalizeEmbeddingVector([0.1, Number.NaN])).toThrow(
       "Embedding response contains non-numeric values",
     );
+    const nonFiniteBase64 = Buffer.alloc(Float32Array.BYTES_PER_ELEMENT);
+    nonFiniteBase64.writeFloatLE(Number.NaN);
+    expect(() => normalizeEmbeddingVector(nonFiniteBase64.toString("base64"))).toThrow(
+      "Embedding response contains non-numeric values",
+    );
     expect(() => normalizeEmbeddingVector("abc")).toThrow(
       "Base64 embedding response has invalid byte length",
     );
@@ -3149,7 +3108,7 @@ describe("memory plugin e2e", () => {
     const embeddingsCreate = vi.fn(async () => ({
       data: [{ embedding: [0.1, 0.2, 0.3] }],
     }));
-    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const onEmbeddingRequest = vi.fn();
     const add = vi.fn(async () => undefined);
     const toArray = vi.fn(async () => []);
     const limit = vi.fn(() => ({ toArray }));
@@ -3169,7 +3128,7 @@ describe("memory plugin e2e", () => {
     }));
 
     await withMockedOpenAiMemoryPlugin({
-      ensureGlobalUndiciEnvProxyDispatcher,
+      onEmbeddingRequest,
       embeddingsCreate,
       loadLanceDbModule,
       run: async (dynamicMemoryPlugin) => {
@@ -3236,7 +3195,7 @@ describe("memory plugin e2e", () => {
         });
 
         expect(stored.details?.action).toBe("created");
-        expect(ensureGlobalUndiciEnvProxyDispatcher).toHaveBeenCalledOnce();
+        expect(onEmbeddingRequest).toHaveBeenCalledOnce();
         expect(embeddingsCreate).toHaveBeenCalledWith({
           model: "text-embedding-3-small",
           input: "The user prefers concise replies",
@@ -3289,11 +3248,9 @@ describe("memory plugin e2e", () => {
     const vectorSearch = vi.fn(() => createAgentScopedVectorQuery(limitFn));
 
     vi.resetModules();
-    vi.doMock("openai", () => ({
-      default: class MockOpenAI {
-        post = vi.fn(async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }));
-      },
-    }));
+    installMockOpenAiEmbeddingTransport({
+      post: async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }),
+    });
     vi.doMock("./lancedb-runtime.js", () => ({
       loadLanceDbModule: vi.fn(async () => ({
         connect: vi.fn(async () => ({
@@ -3339,7 +3296,7 @@ describe("memory plugin e2e", () => {
       expect(text).not.toMatch(/\[890e1fae\]/);
       expect(text).not.toMatch(/\[a1b2c3d4\]/);
     } finally {
-      vi.doUnmock("openai");
+      vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
       vi.doUnmock("./lancedb-runtime.js");
       vi.resetModules();
     }

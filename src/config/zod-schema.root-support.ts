@@ -1,6 +1,7 @@
 import { isHttpsUrl, isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
+import { THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import type { GatewayRemoteConfig } from "./types.gateway.js";
 import { MemorySearchSchema } from "./zod-schema.agent-runtime.js";
 import { SecretInputSchema } from "./zod-schema.core.js";
@@ -251,9 +252,7 @@ export const TalkSchema = z
     provider: z.string().optional(),
     providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
     realtime: TalkRealtimeSchema.optional(),
-    consultThinkingLevel: z
-      .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra"])
-      .optional(),
+    consultThinkingLevel: z.enum(THINKING_LEVELS).optional(),
     consultFastMode: z.boolean().optional(),
     speechLocale: z.string().optional(),
     interruptOnSpeech: z.boolean().optional(),

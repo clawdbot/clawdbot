@@ -10,6 +10,11 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  normalizeThinkLevel,
+  THINKING_LEVELS,
+  type ThinkLevel,
+} from "openclaw/plugin-sdk/thinking-level";
+import {
   buildQaAgenticParityComparison,
   buildQaRuntimeParityReport,
   renderQaAgenticParityMarkdownReport,
@@ -65,7 +70,6 @@ import {
   removeQaCredentialSet,
   type QaCredentialRecord,
 } from "./qa-credentials-admin.runtime.js";
-import { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-gateway-config.js";
 import { normalizeQaTransportId, type QaTransportId } from "./qa-transport-registry.js";
 import {
   defaultQaModelForMode,
@@ -201,24 +205,19 @@ function resolveQaManualLaneModels(opts: {
   };
 }
 
-function parseQaThinkingLevel(
-  label: string,
-  value: string | undefined,
-): QaThinkingLevel | undefined {
+function parseQaThinkingLevel(label: string, value: string | undefined): ThinkLevel | undefined {
   if (value === undefined) {
     return undefined;
   }
-  const normalized = normalizeQaThinkingLevel(value);
+  const normalized = normalizeThinkLevel(value);
   if (!normalized) {
-    throw new Error(
-      `${label} must be one of off, minimal, low, medium, high, xhigh, adaptive, max`,
-    );
+    throw new Error(`${label} must be one of ${THINKING_LEVELS.join(", ")}`);
   }
   return normalized;
 }
 
 function parseQaModelThinkingOverrides(entries: readonly string[] | undefined) {
-  const overrides: Record<string, QaThinkingLevel> = {};
+  const overrides: Record<string, ThinkLevel> = {};
   for (const entry of entries ?? []) {
     const separatorIndex = entry.lastIndexOf("=");
     if (separatorIndex <= 0 || separatorIndex === entry.length - 1) {
@@ -470,9 +469,7 @@ function parseQaModelSpecs(label: string, entries: readonly string[] | undefined
         case "thinking": {
           const thinkingDefault = parseQaThinkingLevel(`${label} thinking`, value);
           if (!thinkingDefault) {
-            throw new Error(
-              `${label} thinking must be one of off, minimal, low, medium, high, xhigh, adaptive, max`,
-            );
+            throw new Error(`${label} thinking must be one of ${THINKING_LEVELS.join(", ")}`);
           }
           options.thinkingDefault = thinkingDefault;
           break;

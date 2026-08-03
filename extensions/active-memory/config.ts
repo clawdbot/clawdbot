@@ -8,6 +8,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeThinkLevel, type ThinkLevel } from "openclaw/plugin-sdk/thinking-level";
 import {
   ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW,
   DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW,
@@ -35,7 +36,6 @@ import {
   type ActiveMemoryFastMode,
   type ActiveMemoryPromptStyle,
   type ActiveMemoryQmdSearchMode,
-  type ActiveMemoryThinkingLevel,
   type ActiveRecallPluginConfig,
   type ResolvedActiveRecallPluginConfig,
 } from "./types.js";
@@ -338,20 +338,8 @@ function resolveActiveMemoryCleanupConfig(api: OpenClawPluginApi): OpenClawConfi
   }
 }
 
-function resolveThinkingLevel(thinking: unknown): ActiveMemoryThinkingLevel {
-  if (
-    thinking === "off" ||
-    thinking === "minimal" ||
-    thinking === "low" ||
-    thinking === "medium" ||
-    thinking === "high" ||
-    thinking === "xhigh" ||
-    thinking === "adaptive" ||
-    thinking === "max"
-  ) {
-    return thinking;
-  }
-  return "off";
+function resolveThinkingLevel(thinking: unknown): ThinkLevel {
+  return normalizeThinkLevel(typeof thinking === "string" ? thinking : undefined) ?? "off";
 }
 
 function normalizeActiveMemoryFastMode(fastMode: unknown): ActiveMemoryFastMode | undefined {

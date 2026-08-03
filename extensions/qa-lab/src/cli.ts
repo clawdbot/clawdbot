@@ -2,6 +2,7 @@
 import type { Command } from "commander";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { THINKING_LEVELS } from "openclaw/plugin-sdk/thinking-level";
 import { collectString } from "./cli-options.js";
 import type {
   QaLabSelfCheckCommandOptions,
@@ -498,10 +499,7 @@ export function registerQaLabCli(program: Command) {
     )
     .option("--fail-fast", "Stop after the first failed QA scenario")
     .option("--fast", "Enable provider fast mode where supported", false)
-    .option(
-      "--thinking <level>",
-      "Suite thinking default: off|minimal|low|medium|high|xhigh|adaptive|max",
-    )
+    .option("--thinking <level>", `Suite thinking default: ${THINKING_LEVELS.join("|")}`)
     .option("--image <alias>", "Multipass image alias")
     .option("--cpus <count>", "Multipass vCPU count", (value: string) =>
       parseQaCliPositiveIntegerOption(value, "--cpus"),
@@ -682,10 +680,7 @@ export function registerQaLabCli(program: Command) {
     )
     .option("--scenario <id>", "Character scenario id", "character-vibes-gollum")
     .option("--fast", "Enable provider fast mode for all candidate runs")
-    .option(
-      "--thinking <level>",
-      "Candidate thinking default: off|minimal|low|medium|high|xhigh|adaptive|max",
-    )
+    .option("--thinking <level>", `Candidate thinking default: ${THINKING_LEVELS.join("|")}`)
     .option(
       "--model-thinking <ref=level>",
       "Deprecated: candidate thinking override for one model ref (repeatable)",

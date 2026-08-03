@@ -239,7 +239,6 @@ export function policyContainerShapeFindings(
   }
   if (isRecord(policy.secrets)) {
     const unsupportedSecretsKey = unsupportedPolicyKey(policy.secrets, [
-      "allowInsecureProviders",
       "denySources",
       "requireManagedProviders",
     ]);

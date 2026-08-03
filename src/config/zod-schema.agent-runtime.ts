@@ -9,6 +9,7 @@ import { z } from "zod";
 import { splitSandboxBindSpec } from "../agents/sandbox/bind-spec.js";
 import { isSandboxHostPathAbsolute } from "../agents/sandbox/host-paths.js";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
+import { THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS } from "./web-search-legacy-provider-keys.js";
@@ -903,9 +904,7 @@ export const AgentEntrySchema = z
     utilityModel: z.string().optional(),
     models: z.record(z.string(), AgentModelRuntimeEntrySchema).optional(),
     modelPolicy: AgentModelPolicySchema.optional(),
-    thinkingDefault: z
-      .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra"])
-      .optional(),
+    thinkingDefault: z.enum(THINKING_LEVELS).optional(),
     verboseDefault: z.enum(["off", "on", "full"]).optional(),
     toolProgressDetail: z.enum(["explain", "raw"]).optional(),
     reasoningDefault: z.enum(["on", "off", "stream"]).optional(),

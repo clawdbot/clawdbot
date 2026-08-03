@@ -9,6 +9,7 @@ import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import type { ThinkLevel } from "openclaw/plugin-sdk/thinking-level";
 import type { QaProviderMode } from "./model-selection.js";
 import { resolveQaForwardedLiveEnv, resolveQaLiveProviderConfigPath } from "./providers/env.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
@@ -78,7 +79,7 @@ type QaMultipassPlan = {
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
-  thinkingDefault?: string;
+  thinkingDefault?: ThinkLevel;
   runtimePair?: [RuntimeId, RuntimeId];
   channelDriverSelection?: OpenClawCrablineChannelDriverSelection;
   enabledPluginIds?: string[];
@@ -240,7 +241,7 @@ function createQaMultipassPlan(params: {
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
-  thinkingDefault?: string;
+  thinkingDefault?: ThinkLevel;
   allowFailures?: boolean;
   failFast?: boolean;
   scenarioIds?: string[];
@@ -573,6 +574,7 @@ export async function runQaMultipass(params: {
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
+  thinkingDefault?: ThinkLevel;
   allowFailures?: boolean;
   failFast?: boolean;
   scenarioIds?: string[];

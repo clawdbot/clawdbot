@@ -1,5 +1,6 @@
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { SessionTranscriptTargetParams } from "openclaw/plugin-sdk/session-transcript-runtime";
+import type { ThinkLevel } from "openclaw/plugin-sdk/thinking-level";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 // CLI-runtime recalls dispatch through a fresh CLI process (spawn + MCP
@@ -139,7 +140,7 @@ type ActiveRecallPluginConfig = {
   allowedChatTypes?: Array<"direct" | "group" | "channel" | "explicit">;
   allowedChatIds?: string[];
   deniedChatIds?: string[];
-  thinking?: ActiveMemoryThinkingLevel;
+  thinking?: ThinkLevel;
   fastMode?: ActiveMemoryFastMode;
   promptStyle?:
     | "balanced"
@@ -182,7 +183,7 @@ type ResolvedActiveRecallPluginConfig = {
   allowedChatTypes: Array<"direct" | "group" | "channel" | "explicit">;
   allowedChatIds: string[];
   deniedChatIds: string[];
-  thinking: ActiveMemoryThinkingLevel;
+  thinking: ThinkLevel;
   fastMode?: ActiveMemoryFastMode;
   promptStyle:
     | "balanced"
@@ -313,15 +314,6 @@ type ActiveMemoryToggleEntry = {
   disabled: true;
   updatedAt: number;
 };
-type ActiveMemoryThinkingLevel =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "adaptive"
-  | "max";
 type ActiveMemoryFastMode = boolean | "auto";
 type ConversationRecallContext = NonNullable<OpenClawPluginToolContext["conversationRecall"]>;
 type ActiveMemoryPromptStyle =
@@ -401,7 +393,6 @@ export type {
   ActiveMemoryPromptStyle,
   ActiveMemoryQmdSearchMode,
   ActiveMemorySearchDebug,
-  ActiveMemoryThinkingLevel,
   ActiveMemoryToggleEntry,
   ActiveMemoryTranscriptSource,
   ActiveRecallPluginConfig,

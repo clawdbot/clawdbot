@@ -1,6 +1,6 @@
 // Qa Lab type declarations define plugin contracts.
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import type { QaThinkingLevel } from "../../qa-thinking.js";
+import type { ThinkLevel } from "openclaw/plugin-sdk/thinking-level";
 
 export type QaProviderMode = "mock-openai" | "aimock" | "live-frontier";
 export type QaProviderModeInput = QaProviderMode;
@@ -13,7 +13,7 @@ export type QaMockProviderServer = {
 type QaProviderModelParamsInput = {
   modelRef: string;
   fastMode?: boolean;
-  thinkingDefault?: QaThinkingLevel;
+  thinkingDefault?: ThinkLevel;
 };
 
 type QaProviderGatewayModelsInput = {

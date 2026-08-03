@@ -213,17 +213,16 @@ export function secretPolicyShapeFindings(
     return [];
   }
   const findings: HealthFinding[] = [];
-  for (const key of ["requireManagedProviders", "allowInsecureProviders"] as const) {
-    if (policy.secrets[key] !== undefined && typeof policy.secrets[key] !== "boolean") {
-      findings.push(
-        policyShapeFinding(
-          policyPath,
-          `oc://${policyDocName}/secrets/${key}`,
-          `${policyPath} secrets.${key} must be a boolean.`,
-          `Set secrets.${key} to true or false.`,
-        ),
-      );
-    }
+  const requireManagedProviders = policy.secrets.requireManagedProviders;
+  if (requireManagedProviders !== undefined && typeof requireManagedProviders !== "boolean") {
+    findings.push(
+      policyShapeFinding(
+        policyPath,
+        `oc://${policyDocName}/secrets/requireManagedProviders`,
+        `${policyPath} secrets.requireManagedProviders must be a boolean.`,
+        "Set secrets.requireManagedProviders to true or false.",
+      ),
+    );
   }
   if (policy.secrets.denySources !== undefined && !Array.isArray(policy.secrets.denySources)) {
     findings.push(

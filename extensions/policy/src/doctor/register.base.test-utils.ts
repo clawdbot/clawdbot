@@ -244,7 +244,6 @@ describe("registerPolicyDoctorChecks", () => {
       "policy/data-handling-session-transcript-memory-enabled",
       "policy/secrets-unmanaged-provider",
       "policy/secrets-denied-provider-source",
-      "policy/secrets-insecure-provider",
       "policy/auth-profile-invalid-metadata",
       "policy/auth-profile-unapproved-mode",
       "policy/exec-approvals-missing",
@@ -827,6 +826,11 @@ describe("registerPolicyDoctorChecks", () => {
         label: "secrets",
         policy: { secrets: { requireVault: true } },
         target: "oc://policy.jsonc/secrets/requireVault",
+      },
+      {
+        label: "retired insecure-provider rule",
+        policy: { secrets: { allowInsecureProviders: false } },
+        target: "oc://policy.jsonc/secrets/allowInsecureProviders",
       },
       {
         label: "auth",
