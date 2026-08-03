@@ -472,9 +472,7 @@ describe("post-compaction delegate dispatch extraction", () => {
       await deliverQueuedPostCompactionDelegate({ entry }, deps);
       expect(spawnSubagentDirect).toHaveBeenCalledTimes(1);
       expect(markPendingDelegateSpawnAccepted).toHaveBeenCalledTimes(1);
-      expect(expectDefined(readSessionEntry(storePath), "main").continuationChainCount).toBe(
-        1,
-      );
+      expect(expectDefined(readSessionEntry(storePath), "main").continuationChainCount).toBe(1);
     });
   });
 

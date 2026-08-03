@@ -342,9 +342,7 @@ describe("post-compaction delivery: continuation depth follows accepted children
         expect.objectContaining({ expectedRevision: 8 }),
         childSessionKey,
       );
-      expect(expectDefined(readSessionEntry(storePath), "main").continuationChainCount).toBe(
-        2,
-      );
+      expect(expectDefined(readSessionEntry(storePath), "main").continuationChainCount).toBe(2);
     });
   });
 
@@ -371,9 +369,7 @@ describe("post-compaction delivery: continuation depth follows accepted children
       // Under the old persist-then-spawn ordering the first failure would have
       // pushed the count to 4 and every later retry would have been rejected by
       // the cap without ever reaching a child.
-      expect(expectDefined(readSessionEntry(storePath), "main").continuationChainCount).toBe(
-        3,
-      );
+      expect(expectDefined(readSessionEntry(storePath), "main").continuationChainCount).toBe(3);
 
       const accepting = createDeliveryDeps({
         storePath,
@@ -384,9 +380,7 @@ describe("post-compaction delivery: continuation depth follows accepted children
         accepting.deps,
       );
       expect(accepting.spawnSubagentDirect).toHaveBeenCalledTimes(1);
-      expect(expectDefined(readSessionEntry(storePath), "main").continuationChainCount).toBe(
-        4,
-      );
+      expect(expectDefined(readSessionEntry(storePath), "main").continuationChainCount).toBe(4);
     });
   });
 
