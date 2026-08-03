@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { collectExcludedPackagedExtensionDirs } from "./lib/packaged-extension-dirs.mjs";
 import { resolvePluginSurface } from "./lib/plugin-inventory-doc.mjs";
 
 const DOC_PATH = "docs/plugins/plugin-inventory.md";
@@ -66,20 +67,6 @@ function readJsonPath(filePath) {
 
 function fileExists(relativePath) {
   return fs.existsSync(path.join(ROOT, relativePath));
-}
-
-function collectExcludedPackagedExtensionDirs(rootPackageJson) {
-  const excluded = new Set();
-  for (const entry of rootPackageJson.files ?? []) {
-    if (typeof entry !== "string") {
-      continue;
-    }
-    const match = /^!dist\/extensions\/([^/]+)\/\*\*$/u.exec(entry);
-    if (match?.[1]) {
-      excluded.add(match[1]);
-    }
-  }
-  return excluded;
 }
 
 function normalizeDocPath(value) {

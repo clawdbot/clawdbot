@@ -927,6 +927,81 @@ describe("server-channels auto restart", () => {
     expect(lifecycleAtHandoff).toEqual(["starting", "starting"]);
   });
 
+  it("recovers a manually restarted channel from a transient failure after terminal disconnect", async () => {
+    const handoffStates: ChannelAccountSnapshot[] = [];
+    const handoffSignals: AbortSignal[] = [];
+    const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
+      handoffStates.push({ ...ctx.getStatus() });
+      handoffSignals.push(ctx.abortSignal);
+      if (handoffStates.length === 1) {
+        ctx.setStatus({
+          accountId: ctx.accountId,
+          terminalDisconnect: true,
+          lifecycle: "blocked",
+          lastError: "relink required",
+        });
+        return;
+      }
+      if (handoffStates.length === 2) {
+        throw new Error("transient reconnect failure");
+      }
+      ctx.setStatus({ accountId: ctx.accountId, connected: true });
+      await new Promise<void>((resolve) => {
+        ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+    const readAccount = () =>
+      manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+
+    await manager.startChannels();
+    await vi.advanceTimersByTimeAsync(20);
+
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    expect(readAccount()).toMatchObject({
+      terminalDisconnect: true,
+      running: false,
+      lifecycle: "blocked",
+      lastError: "relink required",
+      restartPending: false,
+    });
+    expect(healthOf(readAccount()).reason).toBe("terminal-disconnect");
+    expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID, { manual: true });
+    await advanceTimersUntil(
+      () => startAccount.mock.calls.length === 3,
+      "expected a transient failure after manual restart to recover automatically",
+      { stepMs: 10, maxMs: 100 },
+    );
+    await flushMicrotasks();
+
+    expect(handoffStates.map(({ lifecycle }) => lifecycle)).toEqual([
+      "starting",
+      "starting",
+      "starting",
+    ]);
+    expect(handoffStates[1]?.terminalDisconnect).toBeUndefined();
+    expect(handoffStates[2]?.terminalDisconnect).toBeUndefined();
+    expect(handoffSignals[0]?.aborted).toBe(true);
+    expect(handoffSignals[1]?.aborted).toBe(true);
+    expect(handoffSignals[2]?.aborted).toBe(false);
+    expect(hoisted.sleepWithAbort).toHaveBeenCalledTimes(1);
+    expect(hoisted.sleepWithAbort.mock.calls[0]?.[0]).toBe(10);
+    expect(manager.isManuallyStopped("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
+    expect(readAccount()).toMatchObject({
+      connected: true,
+      running: true,
+      lifecycle: "ready",
+      restartPending: false,
+      lastError: null,
+      reconnectAttempts: 1,
+    });
+    expect(readAccount()?.terminalDisconnect).toBeUndefined();
+    expect(healthOf(readAccount()).reason).not.toBe("terminal-disconnect");
+  });
+
   it("consumes rejected stop tasks during manual abort", async () => {
     const unhandledRejection = vi.fn();
     process.on("unhandledRejection", unhandledRejection);

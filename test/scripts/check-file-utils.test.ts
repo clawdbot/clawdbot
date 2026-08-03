@@ -1,14 +1,22 @@
 // Check File Utils tests cover check file utils script behavior.
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectFilesSync,
   isCodeFile,
+  listRepoFilesSync,
   relativeToCwd,
   toPosixPath,
 } from "../../scripts/check-file-utils.js";
 import { createScriptTestHarness } from "./test-helpers.js";
+
+const execFileSyncMock = vi.hoisted(() => vi.fn(() => ""));
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const original = (await importOriginal()) as typeof import("node:child_process");
+  return { ...original, execFileSync: execFileSyncMock };
+});
 
 const { createTempDir } = createScriptTestHarness();
 
@@ -62,5 +70,47 @@ describe("scripts/check-file-utils relativeToCwd", () => {
     expect(relativeToCwd(path.join(process.cwd(), "scripts", "check-file-utils.ts"))).toBe(
       "scripts/check-file-utils.ts",
     );
+  });
+});
+
+describe("scripts/check-file-utils listRepoFilesSync", () => {
+  afterEach(() => {
+    execFileSyncMock.mockReset();
+  });
+
+  it("bounds git ls-files with a timeout and kill signal", () => {
+    execFileSyncMock.mockReturnValue("src/keep.ts\nsrc/skip.d.ts\n");
+
+    expect(
+      listRepoFilesSync("/fake/repo", {
+        includeFile: (filePath) => isCodeFile(filePath),
+      }),
+    ).toEqual(["src/keep.ts"]);
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      "git",
+      expect.arrayContaining(["-C", "/fake/repo", "ls-files", "--"]),
+      expect.objectContaining({
+        timeout: 30_000,
+        killSignal: "SIGKILL",
+      }),
+    );
+  });
+
+  it("falls back to filesystem traversal when git ls-files times out", () => {
+    const error: NodeJS.ErrnoException & { signal?: string } = new Error("Command timed out");
+    error.code = "ETIMEDOUT";
+    error.signal = "SIGKILL";
+    execFileSyncMock.mockImplementation(() => {
+      throw error;
+    });
+    const rootDir = createTempDir("openclaw-check-file-utils-fallback-");
+    fs.mkdirSync(path.join(rootDir, "src"), { recursive: true });
+    fs.writeFileSync(path.join(rootDir, "src", "keep.ts"), "");
+
+    expect(
+      listRepoFilesSync(rootDir, {
+        includeFile: (filePath) => filePath.endsWith(".ts"),
+      }),
+    ).toEqual(["src/keep.ts"]);
   });
 });

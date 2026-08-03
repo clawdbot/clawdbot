@@ -431,7 +431,7 @@ describeControlUiE2e("Control UI standalone approval page", () => {
     const appUrl = new URL(server?.baseUrl ?? "http://127.0.0.1/");
     const pageGatewayScope = `ws://${appUrl.host}`;
     const selectionKey = `openclaw.control.currentGateway.v1:${pageGatewayScope}`;
-    const pageGateway = `ws://${appUrl.hostname}:18789`;
+    const pageGateway = pageGatewayScope;
     const pageSettingsKey = `openclaw.control.settings.v1:${pageGateway}`;
     const pageSettings = JSON.stringify({
       gatewayUrl: pageGateway,

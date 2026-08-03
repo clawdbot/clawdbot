@@ -175,9 +175,9 @@ Config sample:
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "main",
+    entries: {
+      main: {
+        default: true,
         identity: {
           name: "OpenClaw",
           theme: "space lobster",
@@ -185,7 +185,7 @@ Config sample:
           avatar: "avatars/openclaw.png",
         },
       },
-    ],
+    },
   },
 }
 ```

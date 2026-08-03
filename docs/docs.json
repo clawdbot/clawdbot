@@ -1154,6 +1154,7 @@
                   "channels/discord",
                   "channels/discord-activities",
                   "channels/slack",
+                  "channels/sms",
                   "channels/telegram",
                   "channels/whatsapp",
                   "channels/signal",
@@ -1170,6 +1171,8 @@
               {
                 "group": "Developer and self-hosted",
                 "pages": [
+                  "channels/buzz",
+                  "channels/clickclack",
                   "channels/irc",
                   "channels/mattermost",
                   "channels/nextcloud-talk",
@@ -1186,6 +1189,7 @@
                 "pages": [
                   "channels/line",
                   "channels/wechat",
+                  "channels/wecom",
                   "channels/qqbot",
                   "channels/feishu",
                   "channels/yuanbao",
@@ -1205,8 +1209,7 @@
                   "channels/broadcast-groups",
                   "channels/channel-routing",
                   "channels/location",
-                  "channels/troubleshooting",
-                  "channels/qa-channel"
+                  "channels/troubleshooting"
                 ]
               }
             ]

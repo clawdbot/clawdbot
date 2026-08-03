@@ -41,17 +41,6 @@ function normalizeWhatsAppIngressPhone(value: string): string | null {
   return normalizeE164(trimmed);
 }
 
-function maybeSamePhoneDmAllowFrom(params: {
-  isGroup: boolean;
-  policy: ResolvedWhatsAppInboundPolicy;
-  dmSenderId?: string | null;
-}): string[] {
-  if (params.isGroup || !params.dmSenderId || !params.policy.isSamePhone(params.dmSenderId)) {
-    return [];
-  }
-  return [params.dmSenderId];
-}
-
 function buildResolvedWhatsAppGroupConfig(params: {
   groupPolicy: GroupPolicy;
   groups: ResolvedWhatsAppAccount["groups"];
@@ -131,15 +120,8 @@ export async function resolveWhatsAppIngressAccess(params: {
   isGroup: boolean;
   conversationId: string;
   senderId?: string | null;
-  dmSenderId?: string | null;
   includeCommand?: boolean;
 }) {
-  const samePhoneDmAllowFrom = maybeSamePhoneDmAllowFrom({
-    isGroup: params.isGroup,
-    policy: params.policy,
-    dmSenderId: params.dmSenderId,
-  });
-  const dmAllowFrom = [...params.policy.dmAllowFrom, ...samePhoneDmAllowFrom];
   return await resolveStableChannelMessageIngress({
     channelId: "whatsapp",
     accountId: params.policy.account.accountId,
@@ -163,7 +145,14 @@ export async function resolveWhatsAppIngressAccess(params: {
       groupAllowFromFallbackToAllowFrom: false,
     },
     providerMissingFallbackApplied: params.policy.providerMissingFallbackApplied,
-    allowFrom: dmAllowFrom,
+    // Keep implicit self access direct-only; groups reuse this list for command ownership.
+    allowFrom:
+      !params.isGroup &&
+      params.policy.account.selfChatMode !== false &&
+      params.senderId &&
+      params.policy.isSamePhone(params.senderId)
+        ? [...params.policy.dmAllowFrom, params.senderId]
+        : params.policy.dmAllowFrom,
     groupAllowFrom: params.policy.groupAllowFrom,
     command: params.includeCommand === true ? {} : undefined,
   });
@@ -203,7 +192,6 @@ export async function resolveWhatsAppCommandAuthorized(params: {
     isGroup,
     conversationId: admission.conversation.id,
     senderId: isGroup ? groupSender : dmSender,
-    dmSenderId: dmSender,
     includeCommand: true,
   });
   return access.commandAccess.authorized;
