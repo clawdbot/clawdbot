@@ -21,8 +21,8 @@ scenario:
   codeRefs:
     - packages/sdk/src/index.ts
     - packages/sdk/src/client.ts
-    - packages/sdk/src/package.e2e.test.ts
+    - packages/sdk/src/app-sdk-external-boundary.e2e.test.ts
   execution:
     kind: vitest
-    path: packages/sdk/src/package.e2e.test.ts
+    path: packages/sdk/src/app-sdk-external-boundary.e2e.test.ts
     summary: Pack the source-internal preview SDK graph, install it in a clean consumer, and execute exported operations through an injected transport.
