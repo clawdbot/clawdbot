@@ -31,6 +31,7 @@ const writer = createQaScriptEvidenceWriter({
 const requiredMarkers = [
   "Testing tgz install flow...",
   "Testing install from local folder (plugins.load.paths)...",
+  "Testing install from npm spec (file:)...",
   "Testing install and update from npm registry...",
   "Testing install from git repo and plugin CLI execution...",
   "Testing marketplace install and update flows...",
