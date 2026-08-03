@@ -1,9 +1,20 @@
 import { ReefAutonomySchema } from "./friend-types.js";
 import { getActiveReef } from "./runtime.js";
 
-export async function handleReefCommand({ args }: { args?: string }): Promise<{ text: string }> {
-  const active = getActiveReef();
+export async function handleReefCommand({
+  args,
+  senderIsOwner,
+}: {
+  args?: string;
+  senderIsOwner?: boolean;
+}): Promise<{ text: string }> {
   const words = (args ?? "").trim().split(/\s+/).filter(Boolean);
+  const changesAutonomy = words[0] === "friend" && words[1] === "autonomy";
+  const decidesReview = words[0] === "review" && /^(approve|deny)$/.test(words[1] ?? "");
+  if ((changesAutonomy || decidesReview) && senderIsOwner !== true) {
+    return { text: "Only an owner can change Reef autonomy or decide reviews." };
+  }
+  const active = getActiveReef();
   if (words[0] === "friend" && words[1] === "code") {
     const minted = await active.friends.mintCode();
     return {

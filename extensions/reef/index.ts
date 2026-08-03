@@ -15,9 +15,6 @@ function registerReefFullRuntime(api: OpenClawPluginApi): void {
     requireAuth: true,
     exposeSenderIsOwner: true,
     handler: async (params) => {
-      if (params.senderIsOwner !== true) {
-        return { text: "Only an owner can manage Reef friends and reviews." };
-      }
       const { handleReefCommand } = await loadReefCommandsRuntime();
       return await handleReefCommand(params);
     },

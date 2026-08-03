@@ -76,12 +76,13 @@ describe("Reef configuration boundary", () => {
     const flowSend = vi.fn();
     const setAutonomy = vi.fn();
     const decide = vi.fn().mockResolvedValue(true);
+    const listFriends = vi.fn().mockResolvedValue([]);
     setActiveReef({
       flow: { send: flowSend },
       friends: {
         mintCode: vi.fn(),
         request: vi.fn(),
-        list: vi.fn(),
+        list: listFriends,
         remove: vi.fn(),
         setAutonomy,
       },
@@ -89,12 +90,17 @@ describe("Reef configuration boundary", () => {
     } as never);
     await expect(
       command.handler({ args: "friend autonomy peer extended", senderIsOwner: false }),
-    ).resolves.toEqual({ text: "Only an owner can manage Reef friends and reviews." });
+    ).resolves.toEqual({ text: "Only an owner can change Reef autonomy or decide reviews." });
     await expect(
       command.handler({ args: `review approve ${"a".repeat(64)}`, senderIsOwner: false }),
-    ).resolves.toEqual({ text: "Only an owner can manage Reef friends and reviews." });
+    ).resolves.toEqual({ text: "Only an owner can change Reef autonomy or decide reviews." });
     expect(setAutonomy).not.toHaveBeenCalled();
     expect(decide).not.toHaveBeenCalled();
+
+    await expect(command.handler({ args: "friend list", senderIsOwner: false })).resolves.toEqual({
+      text: "No Reef friends.",
+    });
+    expect(listFriends).toHaveBeenCalledOnce();
 
     await expect(
       command.handler({ args: "friend autonomy peer extended", senderIsOwner: true }),
