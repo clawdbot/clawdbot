@@ -17,6 +17,21 @@ const knownHostsLockPath = path.join(
   ".ssh",
   ".openclaw-qa-known-hosts.lock",
 );
+const producerReadyMarker = "OPENCLAW_QA_PRODUCER_READY";
+const producerChildSource = `
+import { pathToFileURL } from "node:url";
+const producerPath = process.env.OPENCLAW_QA_PRODUCER_PATH;
+const artifactBase = process.env.OPENCLAW_QA_ARTIFACT_BASE;
+if (!producerPath || !artifactBase) {
+  throw new Error("missing producer child paths");
+}
+const { runGatewaySshTunnels } = await import(pathToFileURL(producerPath).href);
+const startSignal = new Promise((resolve) => process.stdin.once("data", resolve));
+process.stdout.write("${producerReadyMarker}\\n");
+await startSignal;
+const evidence = await runGatewaySshTunnels({ artifactBase, repoRoot: process.cwd() });
+process.exitCode = evidence.entries[0]?.result.status === "pass" ? 0 : 1;
+`;
 
 async function terminateChild(child: ChildProcessWithoutNullStreams) {
   if (child.exitCode !== null || child.signalCode !== null) {
@@ -34,41 +49,61 @@ afterEach(async () => {
 function startProducer(artifactBase: string) {
   const child = spawn(
     process.execPath,
-    ["--import", "tsx", producerPath, "--artifact-base", artifactBase],
+    ["--import", "tsx", "--input-type=module", "--eval", producerChildSource],
     {
       cwd: process.cwd(),
-      env: process.env,
+      env: {
+        ...process.env,
+        OPENCLAW_QA_ARTIFACT_BASE: artifactBase,
+        OPENCLAW_QA_PRODUCER_PATH: producerPath,
+      },
       stdio: ["pipe", "pipe", "pipe"],
     },
   );
   activeChildren.add(child);
-  child.stdin.end();
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
   let stdout = "";
   let stderr = "";
+  let resolveReady: () => void;
+  let rejectReady: (error: Error) => void;
+  const ready = new Promise<void>((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
   child.stdout.on("data", (chunk) => {
     stdout += String(chunk);
+    if (stdout.includes(producerReadyMarker)) {
+      resolveReady();
+    }
   });
   child.stderr.on("data", (chunk) => {
     stderr += String(chunk);
   });
   const completion = new Promise<void>((resolve, reject) => {
-    child.once("error", reject);
+    child.once("error", (error) => {
+      rejectReady(error);
+      reject(error);
+    });
     child.once("close", (code, signal) => {
       activeChildren.delete(child);
       if (code === 0) {
         resolve();
         return;
       }
-      reject(
-        new Error(
-          `Gateway SSH tunnel producer exited ${code ?? "null"}/${signal ?? "none"}\nstdout:\n${stdout}\nstderr:\n${stderr}`,
-        ),
+      const error = new Error(
+        `Gateway SSH tunnel producer exited ${code ?? "null"}/${signal ?? "none"}\nstdout:\n${stdout}\nstderr:\n${stderr}`,
       );
+      rejectReady(error);
+      reject(error);
     });
   });
-  return { completion };
+  void completion.catch(() => {});
+  return {
+    completion,
+    ready,
+    start: () => child.stdin.end("start\n"),
+  };
 }
 
 async function readSummary(artifactBase: string) {
@@ -108,13 +143,11 @@ describeOnTestbox("Gateway SSH tunnel QA producer", () => {
     const firstArtifactBase = tempDirs.make("openclaw-gateway-ssh-overlap-first-");
     const secondArtifactBase = tempDirs.make("openclaw-gateway-ssh-overlap-second-");
     const first = startProducer(firstArtifactBase);
-    await Promise.race([
-      waitForFile(knownHostsLockPath, 10_000),
-      first.completion.then(() => {
-        throw new Error("first producer exited before its shared SSH-state lock was observed");
-      }),
-    ]);
     const second = startProducer(secondArtifactBase);
+    await Promise.all([first.ready, second.ready]);
+    first.start();
+    await waitForFile(knownHostsLockPath, 10_000);
+    second.start();
 
     await Promise.all([first.completion, second.completion]);
     const summaries = await Promise.all([
