@@ -20,8 +20,8 @@ scenario:
     - src/media-understanding/runner.ts
     - src/auto-reply/media-note.ts
     - src/auto-reply/reply/current-turn-images.ts
-    - test/e2e/qa-lab/media/vision-routing-core.product.test.ts
+    - test/e2e/qa-lab/media/vision-routing-core.e2e.test.ts
   execution:
     kind: vitest
-    path: test/e2e/qa-lab/media/vision-routing-core.product.test.ts
+    path: test/e2e/qa-lab/media/vision-routing-core.e2e.test.ts
     summary: Exercise native vision bypass and ordered provider fallback through apply, summary projection, and current-turn image resolution.

@@ -22,8 +22,8 @@ scenario:
     - src/media/fetch.ts
     - src/media/store.ts
     - packages/media-core/src/mime.ts
-    - test/e2e/qa-lab/media/media-reference-intake.product.test.ts
+    - test/e2e/qa-lab/media/media-reference-intake.e2e.test.ts
   execution:
     kind: vitest
-    path: test/e2e/qa-lab/media/media-reference-intake.product.test.ts
+    path: test/e2e/qa-lab/media/media-reference-intake.e2e.test.ts
     summary: Load plain-path, file URL, guarded loopback HTTP, and media-store references and verify byte-sniffed MIME and kind.

@@ -23,11 +23,11 @@ scenario:
     - src/media-understanding/attachments.cache.ts
     - src/infra/net/proxy-fetch.ts
     - extensions/openai/media-understanding-provider.ts
-    - test/e2e/qa-lab/media/audio-proxy-and-limit-handling.product.test.ts
+    - test/e2e/qa-lab/media/audio-proxy-and-limit-handling.e2e.test.ts
   regressionRefs:
     - https://github.com/openclaw/openclaw/pull/73817
     - https://github.com/openclaw/openclaw/pull/97280
   execution:
     kind: vitest
-    path: test/e2e/qa-lab/media/audio-proxy-and-limit-handling.product.test.ts
+    path: test/e2e/qa-lab/media/audio-proxy-and-limit-handling.e2e.test.ts
     summary: Run the apply-to-provider audio path against loopback proxy and provider servers, then prove maxBytes rejection performs no network IO.

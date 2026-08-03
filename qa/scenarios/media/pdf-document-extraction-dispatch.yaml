@@ -21,8 +21,8 @@ scenario:
     - src/media/document-extractors.runtime.ts
     - src/plugins/document-extractors.runtime.ts
     - extensions/document-extract/document-extractor.ts
-    - test/e2e/qa-lab/media/pdf-document-extraction-dispatch.product.test.ts
+    - test/e2e/qa-lab/media/pdf-document-extraction-dispatch.e2e.test.ts
   execution:
     kind: vitest
-    path: test/e2e/qa-lab/media/pdf-document-extraction-dispatch.product.test.ts
+    path: test/e2e/qa-lab/media/pdf-document-extraction-dispatch.e2e.test.ts
     summary: Run a parseable inline PDF through bundled extractor discovery, real clawpdf extraction, and the disabled-plugin failure path.
