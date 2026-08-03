@@ -36,7 +36,7 @@ describe("whole-batch tool-loop admission", () => {
     resetAdjustedParamsByToolCallIdForTests();
   });
 
-  it("returns a typed critical intervention without recording any batch sibling", async () => {
+  it("returns a typed critical intervention and records only veto evidence", async () => {
     const state = getDiagnosticSessionState({
       sessionKey: ctx.sessionKey,
       sessionId: ctx.sessionId,
@@ -72,7 +72,11 @@ describe("whole-batch tool-loop admission", () => {
       detector: "known_poll_no_progress",
       count: 20,
     });
-    expect(state.toolCallHistory).toHaveLength(20);
+    expect(state.toolCallHistory).toHaveLength(22);
+    expect(state.toolCallHistory?.slice(-2).map((record) => record.outcomeKind)).toEqual([
+      "tool-loop-veto",
+      "tool-loop-veto",
+    ]);
     expect(consumeBatchAdmittedToolCall("safe-sibling", ctx.runId)).toBe(false);
   });
 
@@ -111,8 +115,15 @@ describe("whole-batch tool-loop admission", () => {
       detector: "known_poll_no_progress",
       count: 20,
     });
-    expect(state.toolCallHistory).toHaveLength(19);
+    expect(state.toolCallHistory).toHaveLength(21);
     expect(consumeBatchAdmittedToolCall("candidate-20", ctx.runId)).toBe(false);
+    await expect(
+      admitToolCallBatch([call("recovery-repeat", "process", pollArgs)], ctx),
+    ).resolves.toMatchObject({
+      kind: "critical-tool-loop",
+      toolCallId: "recovery-repeat",
+      detector: "known_poll_no_progress",
+    });
   });
 
   it("records an admitted call once and skips only its duplicate single-call loop policy", async () => {

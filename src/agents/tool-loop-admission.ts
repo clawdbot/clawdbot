@@ -132,6 +132,20 @@ export async function admitToolCallBatch(
     ...sessionState,
     toolCallHistory: [...(sessionState.toolCallHistory ?? [])],
   };
+  const recordLoopVeto = (state: SessionState, call: InternalToolBatchCall) => {
+    recordToolCall(
+      state,
+      normalizeToolName(call.toolCall.name || "tool"),
+      call.args,
+      call.toolCall.id,
+      ctx.loopDetection,
+      ctx.runId ? { runId: ctx.runId } : undefined,
+    );
+    const projectedCall = state.toolCallHistory?.at(-1);
+    if (projectedCall) {
+      projectedCall.outcomeKind = "tool-loop-veto";
+    }
+  };
   for (const call of calls) {
     const toolName = normalizeToolName(call.toolCall.name || "tool");
     const intervention = await evaluateToolLoopCall(
@@ -144,22 +158,15 @@ export async function admitToolCallBatch(
       projectedState,
     );
     if (intervention) {
+      // Preserve only denial evidence. No call in this batch executed, but a
+      // recovery retry must still see the threshold crossed by its siblings.
+      for (const rejectedCall of calls) {
+        recordLoopVeto(sessionState, rejectedCall);
+      }
       return intervention;
     }
-    recordToolCall(
-      projectedState,
-      toolName,
-      call.args,
-      call.toolCall.id,
-      ctx.loopDetection,
-      ctx.runId ? { runId: ctx.runId } : undefined,
-    );
-    const projectedCall = projectedState.toolCallHistory?.at(-1);
-    if (projectedCall) {
-      // A later sibling must assume this candidate makes no progress. The
-      // projection is discarded unless the whole batch passes admission.
-      projectedCall.outcomeKind = "tool-loop-veto";
-    }
+    // A later sibling must assume this candidate makes no progress.
+    recordLoopVeto(projectedState, call);
   }
   for (const call of calls) {
     await recordToolLoopCall(
