@@ -168,6 +168,13 @@ export type ModelDefinitionConfig = {
     output: number;
     cacheRead: number;
     cacheWrite: number;
+    /**
+     * Pricing provenance marker: `true` means the provider exposes no real
+     * price and the rates above are placeholder zeros (unknown), not a
+     * confirmed free/$0 price. Consumers must not treat such entries as
+     * known-zero pricing.
+     */
+    pricingUnavailable?: boolean;
     /** Optional tiered pricing.  When present, cost calculation uses
      *  per-tier rates instead of the flat rates above.  Prices are
      *  USD / million tokens; ranges are half-open `[start, end)` on the

@@ -409,6 +409,7 @@ const ModelDefinitionSchema = z
         output: z.number().optional(),
         cacheRead: z.number().optional(),
         cacheWrite: z.number().optional(),
+        pricingUnavailable: z.boolean().optional(),
         tieredPricing: z
           .array(
             z

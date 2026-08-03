@@ -239,19 +239,16 @@ function readExplicitCostUsd(raw: unknown): number | undefined {
   );
 }
 
-// An all-zero cost config is indistinguishable from "pricing unknown": some
-// providers (e.g. codex) ship cost {input:0,output:0,...} in the generated
-// models.json because the backend exposes no per-token price. Treating such a
-// config as a real $0 makes runtime usage report confident zero spend, silently
-// blinding budget/spike safeguards. Mirror session-cost-usage's isModelPricingKnown.
+// Pricing provenance for runtime usage cost. Unknown pricing (no cost config
+// at all, or a placeholder-zero config marked pricingUnavailable at the
+// catalog boundary — e.g. codex models whose backend exposes no price) must
+// omit costUsd: reporting a confident $0 would silently blind budget/spike
+// safeguards. All-zero rates WITHOUT the marker (e.g. Ollama's explicit free
+// pricing, or user-configured zeros) are a known $0 and keep the established
+// costUsd: 0 signal. Mirror session-cost-usage's isModelPricingKnown, which
+// additionally treats unmarked all-zero as unknown for its own surface.
 function isModelPricingKnown(cost: ReturnType<typeof resolveModelCostConfig>): boolean {
-  if (!cost) {
-    return false;
-  }
-  if (cost.tieredPricing && cost.tieredPricing.length > 0) {
-    return true;
-  }
-  return cost.input > 0 || cost.output > 0 || cost.cacheRead > 0 || cost.cacheWrite > 0;
+  return cost !== undefined && cost !== null && cost.pricingUnavailable !== true;
 }
 
 function buildUsage(params: {

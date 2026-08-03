@@ -713,18 +713,14 @@ describe("runtime.llm.complete", () => {
     expectFields(requireRecord(logPayload.usage, "log usage"), { costUsd: 0.0042 });
   });
 
-  it("omits costUsd when model pricing is all-zero (unknown)", async () => {
-    hoisted.prepareSimpleCompletionModelForAgent.mockResolvedValue({
-      ...createPreparedModel(),
-      model: {
-        ...createPreparedModel().model,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      },
-    });
+  it("omits costUsd when model pricing is unavailable", async () => {
+    hoisted.prepareSimpleCompletionModelForAgent.mockResolvedValue(
+      createPreparedModel("unpriced-model"),
+    );
     hoisted.resolveSimpleCompletionSelectionForAgent.mockImplementation(
       (params: { modelRef?: string; agentId: string }) => ({
         provider: "openai",
-        modelId: "gpt-5.5",
+        modelId: "unpriced-model",
         agentDir: `/tmp/${params.agentId}`,
       }),
     );
@@ -760,6 +756,114 @@ describe("runtime.llm.complete", () => {
       cacheWriteTokens: 2,
       totalTokens: 25,
     });
+  });
+
+  it("omits costUsd for placeholder-zero pricing marked pricingUnavailable", async () => {
+    const cfgWithUnknownPricing = {
+      ...cfg,
+      models: {
+        providers: {
+          codex: {
+            models: [
+              {
+                id: "gpt-unknown",
+                cost: {
+                  input: 0,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  pricingUnavailable: true,
+                },
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const unknownPrepared = createPreparedModel("gpt-unknown");
+    hoisted.prepareSimpleCompletionModelForAgent.mockResolvedValue({
+      ...unknownPrepared,
+      selection: { ...unknownPrepared.selection, provider: "codex" },
+    });
+    hoisted.resolveSimpleCompletionSelectionForAgent.mockImplementation(
+      (params: { modelRef?: string; agentId: string }) => ({
+        provider: "codex",
+        modelId: "gpt-unknown",
+        agentDir: `/tmp/${params.agentId}`,
+      }),
+    );
+    hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+      content: [{ type: "text", text: "done" }],
+      usage: {
+        input: 11,
+        output: 7,
+        cacheRead: 5,
+        cacheWrite: 2,
+        total: 25,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    });
+
+    const llm = createRuntimeLlm({
+      getConfig: () => cfgWithUnknownPricing,
+      authority: { allowComplete: true },
+    });
+    const result = await llm.complete({
+      messages: [{ role: "user", content: "Ping" }],
+      purpose: "test-purpose",
+    });
+
+    expect(requireRecord(result.usage, "completion usage").costUsd).toBeUndefined();
+  });
+
+  it("keeps costUsd 0 for confirmed zero-priced models", async () => {
+    const cfgWithFreeModel = {
+      ...cfg,
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                id: "free-model",
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    hoisted.prepareSimpleCompletionModelForAgent.mockResolvedValue(
+      createPreparedModel("free-model"),
+    );
+    hoisted.resolveSimpleCompletionSelectionForAgent.mockImplementation(
+      (params: { modelRef?: string; agentId: string }) => ({
+        provider: "openai",
+        modelId: "free-model",
+        agentDir: `/tmp/${params.agentId}`,
+      }),
+    );
+    hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+      content: [{ type: "text", text: "done" }],
+      usage: {
+        input: 11,
+        output: 7,
+        cacheRead: 5,
+        cacheWrite: 2,
+        total: 25,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    });
+
+    const llm = createRuntimeLlm({
+      getConfig: () => cfgWithFreeModel,
+      authority: { allowComplete: true },
+    });
+    const result = await llm.complete({
+      messages: [{ role: "user", content: "Ping" }],
+      purpose: "test-purpose",
+    });
+
+    expect(requireRecord(result.usage, "completion usage").costUsd).toBe(0);
   });
 
   it("preserves the completion options shape when reasoning is omitted", async () => {

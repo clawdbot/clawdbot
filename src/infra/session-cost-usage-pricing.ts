@@ -168,9 +168,11 @@ export const applyCostTotal = (
 // from "pricing unknown": e.g. codex models ship cost {input:0,output:0,...} in the
 // generated models.json because the Codex backend exposes no per-token price. Treating
 // such a config as a real $0 makes usage-cost report confident zero spend, which
-// silently blinds every budget/spike safeguard that keys off totalCost.
+// silently blinds every budget/spike safeguard that keys off totalCost. The
+// pricingUnavailable marker (set at the catalog boundary) is authoritative regardless
+// of rates.
 const isModelPricingKnown = (cost: ReturnType<typeof resolveModelCostConfig>): boolean => {
-  if (!cost) {
+  if (!cost || cost.pricingUnavailable === true) {
     return false;
   }
   if (cost.tieredPricing && cost.tieredPricing.length > 0) {
