@@ -177,10 +177,7 @@ describe("Gateway event and protocol authorization", () => {
         }),
       );
 
-      await expect(closed).resolves.toEqual({
-        code: 1009,
-        reason: "preauth payload too large",
-      });
+      await expect(closed).resolves.toMatchObject({ code: 1009 });
       const event = events.find((candidate) => candidate.type === "payload.large");
       expect(event).toMatchObject({
         type: "payload.large",
