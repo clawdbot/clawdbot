@@ -10,7 +10,12 @@ import {
   resolveTimestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
 import { z } from "zod";
-import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
+import {
+  resolveConfigPath,
+  resolveGatewayLockDir,
+  resolveLegacyGatewayLockDir,
+  resolveStateDir,
+} from "../config/paths.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import { sha256HexPrefix } from "./crypto-digest.js";
@@ -91,6 +96,8 @@ export type GatewayLockOptions = {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   lockDir?: string;
+  /** Test seam for the previous release's temporary lock root. */
+  legacyLockDir?: string;
   role?: GatewayLockRole;
   /** Override process command-line reader (testing seam). */
   readProcessCmdline?: (pid: number) => string[] | null;
@@ -293,7 +300,11 @@ function canonicalizeStateDir(stateDir: string): string {
   }
 }
 
-function resolveGatewayLockPaths(env: NodeJS.ProcessEnv, lockDir = resolveGatewayLockDir(env)) {
+function resolveGatewayLockPaths(
+  env: NodeJS.ProcessEnv,
+  lockDir = resolveGatewayLockDir(env),
+  legacyLockDir = resolveLegacyGatewayLockDir(),
+) {
   const resolvedStateDir = resolveStateDir(env);
   const stateDir = canonicalizeStateDir(resolvedStateDir);
   const configPath = resolveConfigPath(env, resolvedStateDir);
@@ -302,9 +313,58 @@ function resolveGatewayLockPaths(env: NodeJS.ProcessEnv, lockDir = resolveGatewa
   return {
     configLockPath: path.join(lockDir, `gateway.${configHash}.lock`),
     configPath,
+    legacyStateLockPath: path.join(legacyLockDir, `gateway.state.${stateHash}.lock`),
     stateDir,
     stateLockPath: path.join(lockDir, `gateway.state.${stateHash}.lock`),
   };
+}
+
+async function assertLegacyGatewayLockIsNotActive(params: {
+  legacyStateLockPath: string;
+  stateLockPath: string;
+  staleMs: number;
+  now: () => number;
+  platform: NodeJS.Platform;
+  readProcessCmdline?: (pid: number) => string[] | null;
+  readProcessStartTime?: (pid: number) => number | null;
+}): Promise<void> {
+  if (params.legacyStateLockPath === params.stateLockPath) {
+    return;
+  }
+  let stat: fsSync.Stats;
+  try {
+    stat = await fs.stat(params.legacyStateLockPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return;
+    }
+    throw new GatewayLockError(
+      `failed to inspect legacy gateway lock at ${params.legacyStateLockPath}`,
+      error,
+    );
+  }
+
+  const payload = await readLockPayload(params.legacyStateLockPath);
+  if (payload?.pid) {
+    const ownerStatus = await resolveGatewayOwnerStatus(
+      payload.pid,
+      payload,
+      params.platform,
+      params.readProcessCmdline,
+      params.readProcessStartTime,
+    );
+    if (ownerStatus === "dead") {
+      return;
+    }
+    throw new GatewayLockError(
+      `gateway already running (pid ${payload.pid}); legacy lock remains active during state-lock upgrade`,
+    );
+  }
+  if (params.now() - stat.mtimeMs <= params.staleMs) {
+    throw new GatewayLockError(
+      `gateway already running; legacy lock remains active during state-lock upgrade`,
+    );
+  }
 }
 
 export async function readActiveGatewayLockPort(
@@ -366,7 +426,20 @@ export async function acquireGatewayLock(
   }
   const role = opts.role ?? "gateway";
   const ownerId = randomUUID();
-  const paths = resolveGatewayLockPaths(env, opts.lockDir);
+  const paths = resolveGatewayLockPaths(
+    env,
+    opts.lockDir,
+    opts.legacyLockDir ?? (opts.lockDir ? opts.lockDir : undefined),
+  );
+  await assertLegacyGatewayLockIsNotActive({
+    legacyStateLockPath: paths.legacyStateLockPath,
+    stateLockPath: paths.stateLockPath,
+    staleMs: resolveTimerTimeoutMs(opts.staleMs, DEFAULT_STALE_MS, 0),
+    now: opts.now ?? Date.now,
+    platform: opts.platform ?? process.platform,
+    readProcessCmdline: opts.readProcessCmdline,
+    readProcessStartTime: opts.readProcessStartTime,
+  });
   const stateLock = await acquireLockFile({
     ...opts,
     configPath: paths.configPath,

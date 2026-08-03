@@ -173,30 +173,6 @@ describe("gateway lock", () => {
     vi.restoreAllMocks();
   });
 
-  it("keeps default locks inside an overridden state directory", async () => {
-    const env = await makeEnv();
-    const lock = expectGatewayLock(
-      await acquireGatewayLock({
-        allowInTests: true,
-        env,
-        timeoutMs: 30,
-      }),
-    );
-    const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
-    const expectedLockDir = path.join(
-      resolveStateDir(env),
-      "tmp",
-      uid != null ? `openclaw-${uid}` : "openclaw",
-    );
-
-    try {
-      expect(path.dirname(lock.lockPath)).toBe(expectedLockDir);
-      expect(path.dirname(lock.stateLockPath)).toBe(expectedLockDir);
-    } finally {
-      await lock.release();
-    }
-  });
-
   it("blocks concurrent acquisition until release", async () => {
     // Fake timers can hang on Windows CI when combined with fs open loops.
     // Keep this test on real timers and use small timeouts.

@@ -401,15 +401,22 @@ export function resolveDefaultConfigCandidates(
 
 export const DEFAULT_GATEWAY_PORT = 18789;
 
+function resolveGatewayLockDirName(): string {
+  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  return uid != null ? `openclaw-${uid}` : "openclaw";
+}
+
+/** Lock directory used by releases before locks moved under the configured state directory. */
+export function resolveLegacyGatewayLockDir(tmpdir: () => string = os.tmpdir): string {
+  return path.join(tmpdir(), resolveGatewayLockDirName());
+}
+
 /**
  * Gateway lock directory (ephemeral).
  * Default: <state-dir>/tmp/openclaw-<uid> (uid suffix when available).
  */
 export function resolveGatewayLockDir(env: NodeJS.ProcessEnv = process.env): string {
-  const base = path.join(resolveStateDir(env), "tmp");
-  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
-  const suffix = uid != null ? `openclaw-${uid}` : "openclaw";
-  return path.join(base, suffix);
+  return path.join(resolveStateDir(env), "tmp", resolveGatewayLockDirName());
 }
 
 /**
