@@ -59,7 +59,7 @@ function findFish(): string | null {
 }
 
 const fishPath = findFish();
-export const itWithFish = fishPath ? it : it.skip;
+export const itWithFish: typeof it = fishPath ? it : it.skip;
 
 export function runGeneratedFishCompletion(program: Command, commandLine: string): string[] {
   if (!fishPath) {
@@ -102,7 +102,7 @@ function findPowerShell(): string | null {
 }
 
 const powerShellPath = findPowerShell();
-export const itWithPowerShell = powerShellPath ? it : it.skip;
+export const itWithPowerShell: typeof it = powerShellPath ? it : it.skip;
 
 type PowerShellCompletionResponse =
   | { version: 1; id: string; ok: true; completions: string[] }
