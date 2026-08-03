@@ -177,6 +177,9 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "@openclaw/media-core/read-byte-stream-with-limit": [
     "../dist/plugin-sdk/packages/media-core/src/read-byte-stream-with-limit.d.ts",
   ],
+  "@openclaw/media-core/stored-file-name": [
+    "../dist/plugin-sdk/packages/media-core/src/stored-file-name.d.ts",
+  ],
   "@openclaw/media-core/*": ["../dist/plugin-sdk/packages/media-core/src/*.d.ts"],
   "@openclaw/normalization-core/record-coerce": [
     "../dist/plugin-sdk/packages/normalization-core/src/record-coerce.d.ts",

@@ -6,6 +6,7 @@ import {
   extractText,
   extractTextCached,
   extractThinkingCached,
+  readTranscriptMediaEntries,
 } from "./message-extract.ts";
 
 describe("extractTextCached", () => {
@@ -153,5 +154,29 @@ describe("nullish messages", () => {
       expect(extractRawText(message)).toBeNull();
       expect(extractThinkingCached(message)).toBeNull();
     }
+  });
+});
+
+describe("readTranscriptMediaEntries", () => {
+  it("preserves the authoritative persisted filename", () => {
+    expect(
+      readTranscriptMediaEntries({
+        __openclaw: {
+          media: [
+            {
+              path: "media://inbound/report---a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf",
+              contentType: "application/pdf",
+              fileName: "report.pdf",
+            },
+          ],
+        },
+      }),
+    ).toEqual([
+      {
+        path: "media://inbound/report---a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf",
+        mediaType: "application/pdf",
+        fileName: "report.pdf",
+      },
+    ]);
   });
 });

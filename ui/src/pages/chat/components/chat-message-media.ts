@@ -1,3 +1,4 @@
+import { extractOriginalFilename } from "@openclaw/media-core/stored-file-name";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { t } from "../../../i18n/index.ts";
 import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
@@ -6,6 +7,7 @@ import {
   getMediaFileExtension,
   hasVideoMediaFileExtension,
 } from "../../../lib/media-file-extension.ts";
+import { isCanonicalInboundMediaSource } from "./chat-message-local-media.ts";
 
 export type PairingQrExpiryNotice = {
   title: string;
@@ -368,7 +370,8 @@ function labelForMediaPath(mediaPath: string): string {
       return parsed.pathname.split("/").pop()?.trim() || parsed.hostname || trimmed;
     }
   } catch {}
-  return trimmed.split(/[\\/]/).pop()?.trim() || trimmed;
+  const label = trimmed.split(/[\\/]/).pop()?.trim() || trimmed;
+  return isCanonicalInboundMediaSource(trimmed) ? extractOriginalFilename(label) : label;
 }
 
 export function extractImages(message: unknown): ImageBlock[] {
@@ -556,7 +559,7 @@ export function schedulePairingQrExpiryRefresh(
 
 export function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
   const attachments: AttachmentItem[] = [];
-  for (const { path: mediaPath, mediaType } of readTranscriptMediaEntries(message)) {
+  for (const { path: mediaPath, mediaType, fileName } of readTranscriptMediaEntries(message)) {
     if (isImageTranscriptMediaPath(mediaPath, mediaType)) {
       continue;
     }
@@ -570,7 +573,7 @@ export function extractTranscriptAttachments(message: unknown): AttachmentItem[]
       attachment: {
         url: mediaPath,
         kind,
-        label: labelForMediaPath(mediaPath),
+        label: fileName?.trim() || labelForMediaPath(mediaPath),
         ...(typeof mediaType === "string" ? { mimeType: mediaType } : {}),
       },
     });

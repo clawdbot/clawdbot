@@ -574,6 +574,7 @@ const config = {
         "src/media-source-url.ts!",
         "src/mime.ts!",
         "src/read-byte-stream-with-limit.ts!",
+        "src/stored-file-name.ts!",
       ],
       project: ["src/**/*.ts!"],
     },

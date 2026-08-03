@@ -122,6 +122,9 @@
       "@openclaw/media-core/read-byte-stream-with-limit": [
         "./packages/media-core/src/read-byte-stream-with-limit.ts"
       ],
+      "@openclaw/media-core/stored-file-name": [
+        "./packages/media-core/src/stored-file-name.ts"
+      ],
       "@openclaw/media-core/*": ["./packages/media-core/src/*"],
       "@openclaw/media-understanding-common/*": [
         "./packages/media-understanding-common/src/*"

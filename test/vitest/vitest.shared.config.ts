@@ -542,6 +542,7 @@ export const sharedVitestConfig = {
       sourcePackageAlias("media-core", "media-source-url"),
       sourcePackageAlias("media-core", "mime"),
       sourcePackageAlias("media-core", "read-byte-stream-with-limit"),
+      sourcePackageAlias("media-core", "stored-file-name"),
       sourcePackageAlias("media-core"),
       sourcePackageAlias("retry"),
       sourcePackageAlias("session-url-contract", "parse"),

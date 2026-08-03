@@ -530,6 +530,7 @@ const WORKSPACE_PACKAGE_ALIAS_SUBPATHS = [
       "media-source-url",
       "mime",
       "read-byte-stream-with-limit",
+      "stored-file-name",
     ],
   ],
   ["retry", [""]],
