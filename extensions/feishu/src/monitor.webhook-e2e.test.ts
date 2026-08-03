@@ -38,6 +38,24 @@ import { httpServers } from "./monitor.state.js";
 import { monitorWebhook } from "./monitor.transport.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
+function createFeishuWebhookTestAccount(
+  accountId: string,
+  port: number,
+  webhookPath: string,
+): ResolvedFeishuAccount {
+  return {
+    accountId,
+    encryptKey: "encrypt_key",
+    config: {
+      enabled: true,
+      connectionMode: "webhook",
+      webhookHost: "127.0.0.1",
+      webhookPort: port,
+      webhookPath,
+    },
+  } as ResolvedFeishuAccount;
+}
+
 beforeAll(async () => {
   await import("./monitor.account.js");
 });
@@ -420,17 +438,7 @@ describe("Feishu webhook signed-request e2e", () => {
     const statusSink = vi.fn();
     const abortController = new AbortController();
     const monitorPromise = monitorWebhook({
-      account: {
-        accountId,
-        encryptKey,
-        config: {
-          enabled: true,
-          connectionMode: "webhook",
-          webhookHost: "127.0.0.1",
-          webhookPort: port,
-          webhookPath: path,
-        },
-      } as ResolvedFeishuAccount,
+      account: createFeishuWebhookTestAccount(accountId, port, path),
       accountId,
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       abortSignal: abortController.signal,
@@ -730,17 +738,7 @@ describe("Feishu webhook signed-request e2e", () => {
     const statusSink = vi.fn();
     const abortController = new AbortController();
     const monitorPromise = monitorWebhook({
-      account: {
-        accountId,
-        encryptKey,
-        config: {
-          enabled: true,
-          connectionMode: "webhook",
-          webhookHost: "127.0.0.1",
-          webhookPort: port,
-          webhookPath: configuredPath,
-        },
-      } as ResolvedFeishuAccount,
+      account: createFeishuWebhookTestAccount(accountId, port, configuredPath),
       accountId,
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       abortSignal: abortController.signal,
@@ -860,17 +858,7 @@ describe("Feishu webhook signed-request e2e", () => {
         }),
     );
     const monitorPromise = monitorWebhook({
-      account: {
-        accountId,
-        encryptKey: "encrypt_key",
-        config: {
-          enabled: true,
-          connectionMode: "webhook",
-          webhookHost: "127.0.0.1",
-          webhookPort: port,
-          webhookPath: path,
-        },
-      } as ResolvedFeishuAccount,
+      account: createFeishuWebhookTestAccount(accountId, port, path),
       accountId,
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       abortSignal: abortController.signal,
@@ -923,17 +911,7 @@ describe("Feishu webhook signed-request e2e", () => {
       throw new Error("admission failed");
     });
     const monitorPromise = monitorWebhook({
-      account: {
-        accountId,
-        encryptKey: "encrypt_key",
-        config: {
-          enabled: true,
-          connectionMode: "webhook",
-          webhookHost: "127.0.0.1",
-          webhookPort: port,
-          webhookPath: path,
-        },
-      } as ResolvedFeishuAccount,
+      account: createFeishuWebhookTestAccount(accountId, port, path),
       accountId,
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       abortSignal: abortController.signal,
