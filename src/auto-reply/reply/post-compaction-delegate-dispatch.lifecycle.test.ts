@@ -413,7 +413,9 @@ describe("post-compaction delivery: continuation depth follows accepted children
       expect(spawnSubagentDirect).toHaveBeenCalledTimes(1);
       // No durable marker exists for a source-less row, so the replay reclaims
       // the delivery without risking a second charge for the same accepted hop.
-      expect(readSessionEntry(storePath)?.continuationChainCount ?? 0).toBe(0);
+      expect(
+        expectDefined(readSessionEntry(storePath), "main entry").continuationChainCount ?? 0,
+      ).toBe(0);
     });
   });
 });
@@ -462,7 +464,9 @@ describe("post-compaction delivery: RFC §4.4 stale work dies before materializa
       expect(emitted).toContain("[continuation:post-compaction-delivery-stale]");
       expect(harness.log.mock.calls.flat().join("\n")).not.toContain(SECRET_TASK);
       expect(harness.enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(readSessionEntry(storePath)?.continuationChainCount ?? 0).toBe(0);
+      expect(
+        expectDefined(readSessionEntry(storePath), "main entry").continuationChainCount ?? 0,
+      ).toBe(0);
     });
   });
 
