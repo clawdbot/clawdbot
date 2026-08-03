@@ -14,11 +14,7 @@ import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import { resolvePluginInstallDir } from "./install.js";
 import { resolvePackageExtensionEntries, type PackageManifest } from "./manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
-import {
-  auditDeclaredOpenClawHostDependency,
-  reconcileRegisteredOpenClawHostLinks,
-  relinkDeclaredOpenClawHostDependency,
-} from "./plugin-peer-link.js";
+import { reconcileRegisteredOpenClawHostLinks } from "./plugin-peer-link.js";
 import { resetPluginSlotsToDefaults } from "./slots.js";
 import { setPluginEnabledInConfig } from "./toggle-config.js";
 import type { PluginUpdateLogger } from "./update-source.js";
@@ -413,49 +409,16 @@ export async function repairOpenClawPeerLinksForNpmInstalls(params: {
   config: OpenClawConfig;
   logger: PluginUpdateLogger;
 }): Promise<boolean> {
-  let repaired = false;
-  for (const [pluginId, record] of Object.entries(params.config.plugins?.installs ?? {})) {
-    if (record.source !== "npm") {
-      continue;
-    }
-
-    let installPath: string;
-    try {
-      installPath = resolveUserPath(
-        record.installPath?.trim() || resolvePluginInstallDir(pluginId),
-      );
-    } catch (err) {
+  const result = await reconcileRegisteredOpenClawHostLinks({
+    installRecords: params.config.plugins?.installs ?? {},
+    extensionsDir: resolveDefaultPluginExtensionsDir(),
+    mode: "repair",
+    logger: params.logger,
+    onPackageReadError: (error, packageDir) => {
       params.logger.warn?.(
-        `Could not repair openclaw peer link for "${pluginId}" due to invalid install path: ${String(err)}`,
+        `Could not repair openclaw peer link at ${packageDir}: ${String(error)}`,
       );
-      continue;
-    }
-
-    try {
-      if (!(await auditDeclaredOpenClawHostDependency({ packageDir: installPath }))) {
-        continue;
-      }
-      const warnings: string[] = [];
-      const peerLinkRepair = await relinkDeclaredOpenClawHostDependency({
-        packageDir: installPath,
-        logger: {
-          info: (message) => params.logger.info?.(message),
-          warn: (message) => warnings.push(message),
-        },
-      });
-      if (peerLinkRepair.skipped > 0) {
-        params.logger.warn?.(
-          `Could not repair openclaw peer link for "${pluginId}" at ${installPath}: ${warnings.join("; ") || "peer link repair was skipped"}`,
-        );
-        continue;
-      }
-      repaired =
-        !(await auditDeclaredOpenClawHostDependency({ packageDir: installPath })) || repaired;
-    } catch (err) {
-      params.logger.warn?.(
-        `Could not repair openclaw peer link for "${pluginId}" at ${installPath}: ${String(err)}`,
-      );
-    }
-  }
-  return repaired;
+    },
+  });
+  return result.repaired > 0;
 }

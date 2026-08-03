@@ -1,10 +1,10 @@
 // Links plugin peer packages for local development installs.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { hasErrnoCode } from "../infra/errors.js";
 import { resolveUserPath } from "../infra/home-dir.js";
+import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolvePluginInstallDir } from "./install-paths.js";
@@ -386,19 +386,6 @@ export async function linkOpenClawPeerDependencies(params: {
     }
   }
   return { repaired, skipped };
-}
-
-/** Relink the host named by the installed package, regardless of declaration kind. */
-export async function relinkDeclaredOpenClawHostDependency(params: {
-  packageDir: string;
-  logger: PluginPeerLinkLogger;
-}): Promise<{ repaired: number; skipped: number }> {
-  const dependencies = await readPackageOpenClawLinkDependencies(params.packageDir);
-  return await linkOpenClawPeerDependencies({
-    installedDir: params.packageDir,
-    peerDependencies: dependencies,
-    logger: params.logger,
-  });
 }
 
 /**
