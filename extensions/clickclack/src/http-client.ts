@@ -67,7 +67,7 @@ const CLICKCLACK_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const CLICKCLACK_CORRELATION_ID_MAX_LENGTH = 128;
 const CLICKCLACK_CORRELATION_ID_PATTERN = /^[A-Za-z0-9._:-]+$/u;
 const CLICKCLACK_CORRELATION_ID_HEADER = "X-Correlation-ID";
-// Bound retry-safe reads and audited small control-plane writes before response
+// Bound retry-safe reads and audited owner-recoverable writes before response
 // headers. Ambiguous or potentially large writes retain transport/proxy policy.
 const CLICKCLACK_RESPONSE_HEADERS_TIMEOUT_MS = 30_000;
 // Keep REST and websocket JSON under the same bounded response budget. ClickClack
@@ -280,7 +280,6 @@ export function createClickClackClient(options: ClientOptions) {
       const data = await request<{ channel: ClickClackChannel }>(
         `/api/channels/${encodeURIComponent(channelId)}`,
         { method: "PATCH", body: JSON.stringify(patch) },
-        { responseHeaderTimeoutSafe: true },
       );
       return data.channel;
     },

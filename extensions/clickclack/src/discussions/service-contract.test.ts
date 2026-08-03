@@ -484,16 +484,14 @@ describe("ClickClack discussion service contracts", () => {
     expect(await harness.service.info(sessionKey)).toEqual({ state: "available" });
   });
 
-  it("retains a stale binding when archival response headers time out", async () => {
+  it("retains a stale binding for retry when archival fails", async () => {
     const harness = createHarness({ label: "Retry cleanup" });
     const sessionKey = "agent:main:cleanup-retry";
     await harness.service.open(sessionKey);
     harness.config.channels!.clickclack!.discussions!.workspace = "other-team";
-    vi.mocked(harness.updateChannel).mockRejectedValueOnce(
-      Object.assign(new Error("request timed out"), { name: "TimeoutError" }),
-    );
+    vi.mocked(harness.updateChannel).mockRejectedValueOnce(new Error("temporary outage"));
 
-    await expect(harness.service.open(sessionKey)).rejects.toThrow("request timed out");
+    await expect(harness.service.open(sessionKey)).rejects.toThrow("temporary outage");
     expect(harness.createChannel).toHaveBeenCalledTimes(1);
     harness.config.channels!.clickclack!.discussions!.workspace = "team";
     expect(await harness.service.info(sessionKey)).toMatchObject({ state: "open" });
