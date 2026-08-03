@@ -2072,7 +2072,7 @@ describe("handleControlUiHttpRequest", () => {
               const sendBootstrap = async (token: string) =>
                 await runBootstrapConfigRequest({
                   rootPath: tmp,
-                  auth: { mode: "token", token: "shared-token", allowTailscale: false },
+                  auth: { mode: "token", token: "shared", allowTailscale: false },
                   headers: {
                     authorization: `Bearer ${token}`,
                     forwarded: "for=203.0.113.10",
@@ -2109,7 +2109,7 @@ describe("handleControlUiHttpRequest", () => {
               const sendBootstrap = async () =>
                 await runBootstrapConfigRequest({
                   rootPath: tmp,
-                  auth: { mode: "token", token: "shared-token", allowTailscale: false },
+                  auth: { mode: "token", token: "shared", allowTailscale: false },
                   headers: {
                     authorization: "Bearer wrong-token",
                     forwarded: "for=203.0.113.10",
@@ -2118,7 +2118,9 @@ describe("handleControlUiHttpRequest", () => {
                 });
 
               const results = await Promise.all([sendBootstrap(), sendBootstrap()]);
-              expect(results.map(({ res }) => res.statusCode).toSorted()).toEqual([401, 429]);
+              expect(results.map(({ res }) => res.statusCode).toSorted((a, b) => a - b)).toEqual([
+                401, 429,
+              ]);
             },
           });
         },

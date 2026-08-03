@@ -139,9 +139,10 @@ export async function resolveConnectAuthState(params: {
   const bootstrapTokenCandidate = params.hasDeviceIdentity
     ? normalizeOptionalString(params.connectAuth?.bootstrapToken)
     : undefined;
-  const { token: deviceTokenCandidate, source: deviceTokenCandidateSource } =
-    params.hasDeviceIdentity ? resolveDeviceTokenCandidate(params.connectAuth) : {};
-  const deferRateLimitFailure = Boolean(deviceTokenCandidate);
+  const { token: deviceCredential, source: deviceCredentialSource } = params.hasDeviceIdentity
+    ? resolveDeviceTokenCandidate(params.connectAuth)
+    : {};
+  const deferRateLimitFailure = Boolean(deviceCredential);
 
   const authResult: GatewayAuthResult = await authorizeWsControlUiGatewayConnect({
     auth: params.resolvedAuth,
@@ -187,8 +188,8 @@ export async function resolveConnectAuthState(params: {
     sharedAuthProvided,
     pendingSharedAuthFailure,
     bootstrapTokenCandidate,
-    deviceTokenCandidate,
-    deviceTokenCandidateSource,
+    deviceTokenCandidate: deviceCredential,
+    deviceTokenCandidateSource: deviceCredentialSource,
   };
 }
 

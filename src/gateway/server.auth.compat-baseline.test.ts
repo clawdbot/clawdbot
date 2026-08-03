@@ -139,10 +139,10 @@ describe("gateway auth compatibility baseline", () => {
   describe("token mode", () => {
     let server: Awaited<ReturnType<typeof startGatewayServer>>;
     let port = 0;
-    let prevToken: string | undefined;
+    let previousCredential: string | undefined;
 
     beforeAll(async () => {
-      prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+      previousCredential = process.env.OPENCLAW_GATEWAY_TOKEN;
       testState.gatewayAuth = { mode: "token", token: "secret" };
       process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
       port = await getFreePort();
@@ -151,7 +151,7 @@ describe("gateway auth compatibility baseline", () => {
 
     afterAll(async () => {
       await server.close();
-      restoreGatewayToken(prevToken);
+      restoreGatewayToken(previousCredential);
     });
 
     test("keeps valid shared-token connect behavior unchanged", async () => {

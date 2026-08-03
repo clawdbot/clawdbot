@@ -314,9 +314,8 @@ async function authorizeControlUiReadRequest(
   }
   const authOpts = { ...opts, auth: opts.auth };
 
-  const token = resolveControlUiReadAuthToken(req, {
-    allowQueryToken: opts.allowQueryToken,
-  });
+  const queryTokenPolicy = opts.allowQueryToken;
+  const token = resolveControlUiReadAuthToken(req, { allowQueryToken: queryTokenPolicy });
   const resolvedClientIp =
     resolveRequestClientIp(req, opts.trustedProxies, opts.allowRealIpFallback === true) ??
     req.socket?.remoteAddress;

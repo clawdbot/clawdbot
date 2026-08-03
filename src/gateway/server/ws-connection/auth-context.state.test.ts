@@ -165,7 +165,7 @@ describe("resolveConnectAuthDecision", () => {
     try {
       for (let attempt = 0; attempt < 3; attempt += 1) {
         const state = await resolveTokenAuthState({
-          connectAuth: { token: "device-token", deviceToken: "device-token" },
+          connectAuth: { token: "device", deviceToken: "device" },
           hasDeviceIdentity: true,
           rateLimiter: limiter,
         });
