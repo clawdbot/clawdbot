@@ -1077,6 +1077,8 @@ export async function getReplyFromConfig(
     }
   }
 
+  let hostWorkspaceStagingDir: string | undefined;
+  let cleanupEmptyHostWorkspaceStagingDir: ((stagingDir?: string) => Promise<void>) | undefined;
   // Already-staged facts or SDK projections must remain a single-stage contract.
   if (
     !useFastTestBootstrap &&
@@ -1085,8 +1087,9 @@ export async function getReplyFromConfig(
     !hasStagedMediaFacts(ctx.media) &&
     hasInboundMedia(ctx)
   ) {
-    const { stageSandboxMedia } = await loadStageSandboxMediaRuntime();
-    await traceGetReplyPhase("reply.stage_media", () =>
+    const { cleanupEmptyHostWorkspaceStagingDir: cleanupStagingDir, stageSandboxMedia } =
+      await loadStageSandboxMediaRuntime();
+    const stageResult = await traceGetReplyPhase("reply.stage_media", () =>
       stageSandboxMedia({
         ctx,
         sessionCtx,
@@ -1095,63 +1098,72 @@ export async function getReplyFromConfig(
         workspaceDir,
       }),
     );
+    hostWorkspaceStagingDir = stageResult.hostWorkspaceStagingDir;
+    cleanupEmptyHostWorkspaceStagingDir = cleanupStagingDir;
   }
 
   logResolverTiming("milestone", "before_run_prepared_reply");
-  const replyResult = await traceGetReplyPhase("reply.run_prepared_reply", () =>
-    runPreparedReply({
-      ctx,
-      sessionCtx,
-      cfg,
-      agentId,
-      agentDir,
-      agentCfg,
-      sessionCfg,
-      commandAuthorized,
-      command,
-      commandSource,
-      allowTextCommands,
-      directives,
-      defaultActivation,
-      resolvedThinkLevel,
-      resolvedFastMode,
-      resolvedFastModeAutoOnSeconds,
-      resolvedFastModeOverride,
-      resolvedFastModeAutoOnSecondsOverride,
-      resolvedVerboseLevel,
-      resolvedReasoningLevel,
-      resolvedElevatedLevel,
-      execOverrides,
-      elevatedEnabled,
-      elevatedAllowed,
-      blockStreamingEnabled,
-      blockReplyChunking,
-      resolvedBlockStreamingBreak,
-      modelState: runModelState,
-      provider: runProvider,
-      model: runModel,
-      requestedRouteResolution: runAutoFallbackPrimaryProbe
-        ? runModelState.requestedRouteResolution
-        : requestedRouteResolution,
-      perMessageQueueMode,
-      perMessageQueueOptions,
-      typing,
-      opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
-      defaultModel,
-      timeoutMs,
-      isNewSession,
-      resetTriggered,
-      systemSent,
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      sessionId,
-      storePath,
-      workspaceDir,
-      abortedLastRun,
-      autoFallbackPrimaryProbe: runAutoFallbackPrimaryProbe,
-    }),
-  );
+  let replyResult: ReplyPayload | ReplyPayload[] | undefined;
+  try {
+    replyResult = await traceGetReplyPhase("reply.run_prepared_reply", () =>
+      runPreparedReply({
+        ctx,
+        sessionCtx,
+        cfg,
+        agentId,
+        agentDir,
+        agentCfg,
+        sessionCfg,
+        commandAuthorized,
+        command,
+        commandSource,
+        allowTextCommands,
+        directives,
+        defaultActivation,
+        resolvedThinkLevel,
+        resolvedFastMode,
+        resolvedFastModeAutoOnSeconds,
+        resolvedFastModeOverride,
+        resolvedFastModeAutoOnSecondsOverride,
+        resolvedVerboseLevel,
+        resolvedReasoningLevel,
+        resolvedElevatedLevel,
+        execOverrides,
+        elevatedEnabled,
+        elevatedAllowed,
+        blockStreamingEnabled,
+        blockReplyChunking,
+        resolvedBlockStreamingBreak,
+        modelState: runModelState,
+        provider: runProvider,
+        model: runModel,
+        requestedRouteResolution: runAutoFallbackPrimaryProbe
+          ? runModelState.requestedRouteResolution
+          : requestedRouteResolution,
+        perMessageQueueMode,
+        perMessageQueueOptions,
+        typing,
+        opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
+        defaultModel,
+        timeoutMs,
+        isNewSession,
+        resetTriggered,
+        systemSent,
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        sessionId,
+        storePath,
+        workspaceDir,
+        abortedLastRun,
+        autoFallbackPrimaryProbe: runAutoFallbackPrimaryProbe,
+      }),
+    );
+  } finally {
+    if (hostWorkspaceStagingDir) {
+      await cleanupEmptyHostWorkspaceStagingDir?.(hostWorkspaceStagingDir);
+    }
+  }
   logResolverTiming("completed", "prepared_reply");
   return replyResult;
 }

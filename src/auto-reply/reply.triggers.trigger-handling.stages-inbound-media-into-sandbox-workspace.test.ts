@@ -4,7 +4,10 @@ import path, { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MEDIA_MAX_BYTES } from "../media/store.js";
-import { stageSandboxMedia } from "./reply/stage-sandbox-media.js";
+import {
+  cleanupEmptyHostWorkspaceStagingDir,
+  stageSandboxMedia,
+} from "./reply/stage-sandbox-media.js";
 import {
   createSandboxMediaContexts,
   createSandboxMediaStageConfig,
@@ -224,15 +227,27 @@ describe("stageSandboxMedia", () => {
 
       const stagedPath = ctx.media?.[0]?.path ?? "";
       const stagedRelativePath = path.relative(workspaceDir, stagedPath);
+      const hostWorkspaceStagingDir = result.hostWorkspaceStagingDir;
       expect(stagedRelativePath).toMatch(
         new RegExp(`^media/inbound/openclaw-staged-[0-9a-f-]+/${fileName}$`),
       );
       expect(result.staged.get(0)).toBe(stagedPath);
+      expect(hostWorkspaceStagingDir).toBe(dirname(stagedPath));
+      if (!hostWorkspaceStagingDir) {
+        throw new Error("expected host workspace staging directory");
+      }
       expect(sessionCtx.media?.[0]?.path).toBe(stagedPath);
       expect(ctx.media?.[0]).toMatchObject({ path: stagedPath, workspaceDir });
       expect(sessionCtx.media?.[0]).toMatchObject({ path: stagedPath, workspaceDir });
       await expect(fs.readFile(stagedPath, "utf8")).resolves.toBe("host-image-bytes");
       await expect(fs.readFile(existingProjectFile, "utf8")).resolves.toBe("project-file");
+      await cleanupEmptyHostWorkspaceStagingDir(hostWorkspaceStagingDir);
+      await expect(fs.readFile(stagedPath, "utf8")).resolves.toBe("host-image-bytes");
+      await fs.unlink(stagedPath);
+      await cleanupEmptyHostWorkspaceStagingDir(hostWorkspaceStagingDir);
+      await expect(fs.lstat(hostWorkspaceStagingDir)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
 
       const blockedPath = join(home, "blocked-host.png");
       await fs.writeFile(blockedPath, "blocked");

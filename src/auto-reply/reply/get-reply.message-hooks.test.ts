@@ -54,6 +54,7 @@ registerGetReplyRuntimeOverrides(mocks);
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
 let resolveDefaultModelMock: typeof import("./directive-handling.defaults.js").resolveDefaultModel;
 let runPreparedReplyMock: typeof import("./get-reply-run.js").runPreparedReply;
+let cleanupEmptyHostWorkspaceStagingDirMock: typeof import("./stage-sandbox-media.runtime.js").cleanupEmptyHostWorkspaceStagingDir;
 let stageSandboxMediaMock: typeof import("./stage-sandbox-media.runtime.js").stageSandboxMedia;
 
 async function loadGetReplyRuntimeForTest() {
@@ -61,7 +62,10 @@ async function loadGetReplyRuntimeForTest() {
   ({ resolveDefaultModel: resolveDefaultModelMock } =
     await import("./directive-handling.defaults.js"));
   ({ runPreparedReply: runPreparedReplyMock } = await import("./get-reply-run.js"));
-  ({ stageSandboxMedia: stageSandboxMediaMock } = await import("./stage-sandbox-media.runtime.js"));
+  ({
+    cleanupEmptyHostWorkspaceStagingDir: cleanupEmptyHostWorkspaceStagingDirMock,
+    stageSandboxMedia: stageSandboxMediaMock,
+  } = await import("./stage-sandbox-media.runtime.js"));
 }
 
 function emptyAliasIndex() {
@@ -131,6 +135,7 @@ async function resetMessageHookTestState() {
   mocks.resolveReplySessionPreprocessingState.mockReset();
   vi.mocked(resolveDefaultModelMock).mockReset();
   vi.mocked(runPreparedReplyMock).mockReset();
+  vi.mocked(cleanupEmptyHostWorkspaceStagingDirMock).mockReset();
   vi.mocked(stageSandboxMediaMock).mockReset();
   vi.mocked(logVerbose).mockReset();
 
@@ -172,6 +177,7 @@ async function resetMessageHookTestState() {
     aliasIndex: emptyAliasIndex(),
   });
   vi.mocked(runPreparedReplyMock).mockResolvedValue({ text: "ok" });
+  vi.mocked(cleanupEmptyHostWorkspaceStagingDirMock).mockResolvedValue(undefined);
   vi.mocked(stageSandboxMediaMock).mockResolvedValue({ staged: new Map() });
   mocks.resolveReplySessionPreprocessingState.mockReturnValue({
     sessionEntry: undefined,
@@ -704,6 +710,45 @@ describe("getReplyFromConfig message hooks", () => {
         workspaceDir: "/tmp/workspace",
       }),
     );
+  });
+
+  it("cleans an empty host staging directory after the prepared reply settles", async () => {
+    const hostWorkspaceStagingDir = "/tmp/openclaw-staged-media";
+    const order: string[] = [];
+    mocks.resolveReplyDirectives.mockResolvedValueOnce(
+      createGetReplyContinueDirectivesResult({
+        body: "voice transcript",
+        abortKey: "telegram:-100123",
+        from: "telegram:user:42",
+        to: "telegram:-100123",
+        senderId: "telegram:user:42",
+        commandSource: "text",
+        senderIsOwner: true,
+        resetHookTriggered: false,
+      }),
+    );
+    vi.mocked(stageSandboxMediaMock).mockImplementationOnce(async () => {
+      order.push("stage");
+      return {
+        staged: new Map([[0, `${hostWorkspaceStagingDir}/voice.ogg`]]),
+        hostWorkspaceStagingDir,
+      };
+    });
+    vi.mocked(runPreparedReplyMock).mockImplementationOnce(async () => {
+      order.push("run");
+      return { text: "ok" };
+    });
+    vi.mocked(cleanupEmptyHostWorkspaceStagingDirMock).mockImplementationOnce(async (dir) => {
+      order.push(`cleanup:${dir}`);
+    });
+
+    await expect(
+      getReplyFromConfig(buildCtx(), undefined, withFastReplyConfig({})),
+    ).resolves.toEqual({
+      text: "ok",
+    });
+
+    expect(order).toEqual(["stage", "run", `cleanup:${hostWorkspaceStagingDir}`]);
   });
 
   it("emits only preprocessed when no transcript is produced", async () => {
