@@ -46,10 +46,7 @@ vi.mock("../../agents/subagent-spawn.js", () => ({
 vi.mock("../../agents/delegate-artifacts.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/delegate-artifacts.js")>()),
   assertDelegateArtifactPolicyPrepared: assertDelegateArtifactPolicyPreparedMock,
-  hasTerminalDelegateArtifactPolicyForProducer: (params: unknown) =>
-    hasTerminalDelegateArtifactPolicyForProducerMock(
-      params as { flowId: string; producerSessionKey: string },
-    ),
+  hasTerminalDelegateArtifactPolicyForProducer: hasTerminalDelegateArtifactPolicyForProducerMock,
   removeUnacceptedDelegateArtifactPolicy: removeUnacceptedDelegateArtifactPolicyMock,
 }));
 

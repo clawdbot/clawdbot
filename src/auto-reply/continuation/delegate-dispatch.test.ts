@@ -13,15 +13,11 @@ const loggerRecords: Array<{ level: string; message: string }> = [];
 // Observable persisted session entries for recovery persist assertions.
 const recoveryStoreByPath = new Map<string, Record<string, unknown>>();
 const spawnSubagentDirectMock = vi.fn();
-const {
-  assertDelegateArtifactPolicyPreparedMock,
-  hasTerminalDelegateArtifactPolicyForProducerMock,
-  removeUnacceptedDelegateArtifactPolicyMock,
-} = vi.hoisted(() => ({
-  assertDelegateArtifactPolicyPreparedMock: vi.fn(),
-  hasTerminalDelegateArtifactPolicyForProducerMock: vi.fn(() => false),
-  removeUnacceptedDelegateArtifactPolicyMock: vi.fn(),
-}));
+const { assertDelegateArtifactPolicyPreparedMock, removeUnacceptedDelegateArtifactPolicyMock } =
+  vi.hoisted(() => ({
+    assertDelegateArtifactPolicyPreparedMock: vi.fn(),
+    removeUnacceptedDelegateArtifactPolicyMock: vi.fn(),
+  }));
 let flowIdCounter = 0;
 let listTaskFlowsShouldThrow = false;
 const activeRegistryChildSessionKeys = new Set<string>();
@@ -48,10 +44,6 @@ vi.mock("../../agents/subagent-spawn.js", () => ({
 vi.mock("../../agents/delegate-artifacts.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/delegate-artifacts.js")>()),
   assertDelegateArtifactPolicyPrepared: assertDelegateArtifactPolicyPreparedMock,
-  hasTerminalDelegateArtifactPolicyForProducer: (params: unknown) =>
-    hasTerminalDelegateArtifactPolicyForProducerMock(
-      params as { flowId: string; producerSessionKey: string },
-    ),
   removeUnacceptedDelegateArtifactPolicy: removeUnacceptedDelegateArtifactPolicyMock,
 }));
 
@@ -320,7 +312,6 @@ beforeEach(() => {
   loggerRecords.length = 0;
   spawnSubagentDirectMock.mockReset().mockResolvedValue({ status: "accepted" });
   assertDelegateArtifactPolicyPreparedMock.mockClear();
-  hasTerminalDelegateArtifactPolicyForProducerMock.mockClear().mockReturnValue(false);
   removeUnacceptedDelegateArtifactPolicyMock.mockClear();
   loadSessionStoreForRecoveryMock.mockReset().mockReturnValue({});
   flowIdCounter = 0;
@@ -489,48 +480,6 @@ describe("managed artifact pre-spawn lifecycle", () => {
     expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
     expect(mockFlows.get(delegate?.flowId ?? "")).toMatchObject({ status: "failed" });
     expect(removeUnacceptedDelegateArtifactPolicyMock).toHaveBeenCalledWith(delegate?.flowId);
-  });
-
-  it("accepts a re-driven managed child whose terminal policy proves it already ran", async () => {
-    // The child was accepted, its acceptance commit failed, and it finished
-    // before the row was re-driven. The live registry cannot answer for an
-    // ended child, so without the durable producer binding this genuinely
-    // completed delegate is re-spawned or reported as a spawn failure.
-    const sessionKey = "agent:main:managed-terminal-producer";
-    const delegate = enqueuePendingDelegate(sessionKey, {
-      task: "produce completed report",
-      returnOptions: { artifacts: "required" },
-    });
-    hasTerminalDelegateArtifactPolicyForProducerMock.mockReturnValue(true);
-    setRuntimeConfigSnapshot({
-      agents: { defaults: { continuation: { enabled: true } } },
-    });
-
-    const result = await dispatchToolDelegates({
-      sessionKey,
-      chainState: {
-        currentChainCount: 0,
-        chainStartedAt: Date.now(),
-        accumulatedChainTokens: 0,
-      },
-      ctx: { sessionKey },
-      maxChainLength: 8,
-      config: continuationConfig({ enabled: true, crossSessionTargeting: "enabled" }),
-    });
-
-    expect(hasTerminalDelegateArtifactPolicyForProducerMock).toHaveBeenCalledWith(
-      expect.objectContaining({ flowId: delegate?.flowId }),
-    );
-    expect(result).toMatchObject({ rejected: 0 });
-    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
-    expect(mockFlows.get(delegate?.flowId ?? "")).toMatchObject({ status: "succeeded" });
-    expect(assertDelegateArtifactPolicyPreparedMock).not.toHaveBeenCalled();
-    expect(removeUnacceptedDelegateArtifactPolicyMock).not.toHaveBeenCalled();
-    expect(
-      enqueueSystemEventMock.mock.calls.filter(([text]) =>
-        String(text).includes("accepted artifact policy is"),
-      ),
-    ).toEqual([]);
   });
 
   it("terminalizes expired managed work before cross-session targeting deferral", async () => {

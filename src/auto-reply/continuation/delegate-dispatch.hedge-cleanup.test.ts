@@ -888,7 +888,7 @@ describe("hedge timer ref/handle cleanup", () => {
 
     const spawnedByTask = new Map(
       spawnSubagentDirectMock.mock.calls.map(([request]) => [
-        String((request as { task: string }).task),
+        (request as { task: string }).task,
         request as Record<string, unknown>,
       ]),
     );
