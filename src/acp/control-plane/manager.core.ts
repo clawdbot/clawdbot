@@ -162,6 +162,8 @@ export class AcpSessionManager {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
     await this.evictIdleRuntimeHandles();
+    const actorKey = normalizeActorKey(sessionKey);
+    const actorEpoch = this.actorQueue.getEpoch(actorKey);
     return await this.withSessionActor(sessionKey, async () => {
       return await runManagerInitializeSession({
         input,
@@ -170,6 +172,7 @@ export class AcpSessionManager {
         runtimeHandles: this.runtimeHandles,
         enforceConcurrentSessionLimit: this.enforceConcurrentSessionLimit.bind(this),
         writeSessionMeta: this.writeSessionMeta.bind(this),
+        isCurrentActor: () => this.actorQueue.isCurrentEpoch(actorKey, actorEpoch),
       });
     });
   }

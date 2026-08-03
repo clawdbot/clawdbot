@@ -123,11 +123,12 @@ export async function ensureManagerRuntimeHandle(params: {
       fallbackMessage: "Could not initialize ACP session runtime.",
     });
     if (!isCurrentActor()) {
-      await discardSupersededRuntimeHandle({
+      await closeSupersededRuntimeHandle({
         runtime,
         handle: ensured,
         sessionKey: params.sessionKey,
       });
+      throw createSupersededActorError(params.sessionKey);
     }
     return ensured;
   };
@@ -241,11 +242,12 @@ export async function ensureManagerRuntimeHandle(params: {
     });
   }
   if (!isCurrentActor()) {
-    await discardSupersededRuntimeHandle({
+    await closeSupersededRuntimeHandle({
       runtime,
       handle: nextHandle,
       sessionKey: params.sessionKey,
     });
+    throw createSupersededActorError(params.sessionKey);
   }
   params.runtimeHandles.set(params.sessionKey, {
     runtime,
@@ -274,11 +276,11 @@ export function createSupersededActorError(sessionKey: string): AcpRuntimeError 
   );
 }
 
-async function discardSupersededRuntimeHandle(params: {
+export async function closeSupersededRuntimeHandle(params: {
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
   sessionKey: string;
-}): Promise<never> {
+}): Promise<void> {
   await params.runtime
     .close({
       handle: params.handle,
@@ -290,5 +292,4 @@ async function discardSupersededRuntimeHandle(params: {
         `acp-manager: failed discarding superseded runtime for ${params.sessionKey}: ${String(error)}`,
       );
     });
-  throw createSupersededActorError(params.sessionKey);
 }
