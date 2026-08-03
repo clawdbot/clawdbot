@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import nodePath from "node:path";
+import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
-import { lowCardinalityAttr } from "./service-attributes.js";
 import {
   OTEL_EXPORTER_OTLP_CERTIFICATE_ENV,
   OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE_ENV,
@@ -153,9 +153,9 @@ export function formatError(err: unknown): string {
 export function errorCategory(err: unknown): string {
   try {
     if (err instanceof Error && typeof err.name === "string" && err.name.trim()) {
-      return lowCardinalityAttr(err.name, "Error");
+      return normalizeDiagnosticValue(err.name, "Error");
     }
-    return lowCardinalityAttr(typeof err, "unknown");
+    return normalizeDiagnosticValue(typeof err, "unknown");
   } catch {
     return "unknown";
   }
