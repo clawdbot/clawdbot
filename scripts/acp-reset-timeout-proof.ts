@@ -44,11 +44,13 @@ type RuntimeIdentity = {
 };
 
 type ScenarioName = "close-timeout" | "cancel-timeout" | "late-turn" | "runtime-option-timeout";
+type ResetCommand = "/new" | "/reset";
 type GatewayProcess = ChildProcessByStdio<null, Readable, Readable>;
 type ChatFinalEvent = Extract<ChatEvent, { state: "final" }>;
 
 type ScenarioResult = {
   scenario: ScenarioName;
+  resetCommand: ResetCommand;
   gatewayPid: number;
   gatewayPidAfterReset: number;
   gatewayPidAfterLateCompletion: number;
@@ -306,9 +308,11 @@ async function sendResetCommand(params: {
   gatewayEvents: EventFrame[];
   scenarioDir: string;
   acpSessionKey: string;
+  command: ResetCommand;
 }): Promise<string> {
-  const runId = await sendChat(params.client, "/reset");
+  const runId = await sendChat(params.client, params.command);
   await logDriverEvent(params.scenarioDir, "reset_command_requested", {
+    command: params.command,
     sourceSessionKey: CONTROL_SESSION_KEY,
     acpSessionKey: params.acpSessionKey,
     runId,
@@ -346,12 +350,14 @@ async function sendResetCommand(params: {
       (text) => text?.includes("ACP session reset in place") || text?.includes("Session reset"),
     ) ?? "";
   await logDriverEvent(params.scenarioDir, "reset_command_observed", {
+    command: params.command,
     runId,
     eventResponse,
     historyResponse,
   });
-  assert(resetResponse, "the /reset command did not return its reset acknowledgement");
+  assert(resetResponse, `${params.command} did not return its reset acknowledgement`);
   await logDriverEvent(params.scenarioDir, "reset_command_completed", {
+    command: params.command,
     sourceSessionKey: CONTROL_SESSION_KEY,
     acpSessionKey: params.acpSessionKey,
     runId,
@@ -758,11 +764,13 @@ async function runScenario(params: {
     const cleanupStartedMs = Date.now();
     const cleanupStartedAt = new Date(cleanupStartedMs).toISOString();
     const cleanupDeadlineAt = new Date(cleanupStartedMs + RESET_CLEANUP_DEADLINE_MS).toISOString();
+    const resetCommand = resolveResetCommand(params.scenario);
     const resetResponse = await sendResetCommand({
       client,
       gatewayEvents,
       scenarioDir,
       acpSessionKey,
+      command: resetCommand,
     });
     const resetCompletedMs = Date.now();
     const resetElapsedMs = resetCompletedMs - cleanupStartedMs;
@@ -958,6 +966,7 @@ async function runScenario(params: {
     );
     const result: ScenarioResult = {
       scenario: params.scenario,
+      resetCommand,
       gatewayPid,
       gatewayPidAfterReset,
       gatewayPidAfterLateCompletion,
@@ -974,6 +983,7 @@ async function runScenario(params: {
       gatewayStayedAlive: true,
       assertions: [
         `reset exceeded the ${RESET_CLEANUP_DEADLINE_MS}ms production cleanup deadline`,
+        `bound ${resetCommand} completed the ACP reset path`,
         "Gateway child PID remained unchanged",
         "the first post-reset turn used a fresh ACP session ID",
         "the late old operation completed after the fresh turn",
@@ -1066,6 +1076,10 @@ function resolveOutputRoot(repoRoot: string): string {
   return path.join(repoRoot, "tmp", `acp-reset-timeout-proof-${stamp}`);
 }
 
+export function resolveResetCommand(scenario: ScenarioName): ResetCommand {
+  return scenario === "late-turn" ? "/new" : "/reset";
+}
+
 function resolveScenarios(): ScenarioName[] {
   const scenarioIndex = process.argv.indexOf("--scenario");
   const configured = scenarioIndex >= 0 ? process.argv[scenarioIndex + 1]?.trim() : "";
@@ -1133,6 +1147,7 @@ async function main(): Promise<void> {
     limitations: [
       "The backend is a deterministic ACP protocol adapter, not a commercial third-party model backend.",
       "Reset removes the dynamic conversation binding, so post-reset proof turns target the same ACP session key directly through Gateway chat.send.",
+      "The bound /new command path is exercised by the late-turn scenario; the bound /reset path is exercised by the close, cancel, and runtime-option timeout scenarios.",
       "The proof covers one old runtime and one fresh runtime per timeout mode; it does not exhaustively fuzz arbitrary reset concurrency.",
       "Process and ACP session identity are observed at the adapter boundary; actor epochs remain an internal implementation detail covered by focused tests and the reset-overlap runtime-option scenario.",
     ],

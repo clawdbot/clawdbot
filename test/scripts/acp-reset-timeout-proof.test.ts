@@ -4,6 +4,7 @@ import {
   identityFromTurn,
   parseAdapterEvents,
   readAcpSessionIdFromRow,
+  resolveResetCommand,
   sameAcpSession,
 } from "../../scripts/acp-reset-timeout-proof.js";
 
@@ -64,6 +65,13 @@ describe("ACP reset timeout proof helpers", () => {
         },
       ]),
     ).toBe("agent:main:acp:session-1");
+  });
+
+  it("covers both bound ACP reset command routes in the real proof", () => {
+    expect(resolveResetCommand("late-turn")).toBe("/new");
+    expect(resolveResetCommand("close-timeout")).toBe("/reset");
+    expect(resolveResetCommand("cancel-timeout")).toBe("/reset");
+    expect(resolveResetCommand("runtime-option-timeout")).toBe("/reset");
   });
 
   it("rejects turn events without an ACP session identity", () => {
