@@ -56,7 +56,7 @@ describe("OpenRouter usage", () => {
   });
 
   it("keeps custom provider credentials on the configured usage origin", async () => {
-    const fetchFn = vi.fn(async () => Response.json({ data: { usage: 1 } }));
+    const fetchFn = vi.fn<typeof fetch>(async () => Response.json({ data: { usage: 1 } }));
 
     await fetchOpenRouterUsage({
       token: "synthetic-private-proxy-key",
@@ -77,7 +77,7 @@ describe("OpenRouter usage", () => {
   });
 
   it("preserves configured request headers and custom auth for both proxy usage endpoints", async () => {
-    const fetchFn = vi.fn(async () => Response.json({ data: { usage: 1 } }));
+    const fetchFn = vi.fn<typeof fetch>(async () => Response.json({ data: { usage: 1 } }));
 
     await fetchOpenRouterUsage({
       token: "synthetic-original-key",
@@ -123,7 +123,7 @@ describe("OpenRouter usage", () => {
   });
 
   it("preserves explicitly allowed private-origin usage requests", async () => {
-    const fetchFn = vi.fn(async () => Response.json({ data: { usage: 1 } }));
+    const fetchFn = vi.fn<typeof fetch>(async () => Response.json({ data: { usage: 1 } }));
 
     await fetchOpenRouterUsage({
       token: "synthetic-private-key",
@@ -140,7 +140,7 @@ describe("OpenRouter usage", () => {
   });
 
   it("trusts only the operator-configured private origin when no deny policy is set", async () => {
-    const fetchFn = vi.fn(async () => Response.json({ data: { usage: 1 } }));
+    const fetchFn = vi.fn<typeof fetch>(async () => Response.json({ data: { usage: 1 } }));
 
     await fetchOpenRouterUsage({
       token: "synthetic-private-key",
@@ -234,7 +234,7 @@ describe("OpenRouter usage", () => {
   );
 
   it("surfaces blocked usage redirects without replaying private credentials", async () => {
-    const fetchFn = vi.fn(
+    const fetchFn = vi.fn<typeof fetch>(
       async () =>
         new Response(null, {
           status: 302,

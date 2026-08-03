@@ -329,7 +329,7 @@ describe("openrouter provider hooks", () => {
 
   it("forwards configured proxy destination and headers to both usage requests", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
-    const fetchFn = vi.fn(async () => Response.json({ data: { usage: 1 } }));
+    const fetchFn = vi.fn<typeof fetch>(async () => Response.json({ data: { usage: 1 } }));
 
     await provider.fetchUsageSnapshot?.({
       config: {
