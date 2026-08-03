@@ -429,11 +429,7 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
         modes: ["imageToVideo"],
       },
     },
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: "xai",
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "xai", ...ctx }),
     capabilities: {
       generate: {
         maxVideos: 1,

@@ -644,11 +644,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       FAL_KREA_2_MEDIUM_MODEL,
       FAL_KREA_2_LARGE_MODEL,
     ],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: "fal",
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "fal", ...ctx }),
     capabilities: {
       generate: {
         maxCount: 4,

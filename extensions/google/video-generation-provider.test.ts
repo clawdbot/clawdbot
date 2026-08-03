@@ -159,6 +159,24 @@ describe("google video generation provider", () => {
     expect(provider.capabilities.videoToVideo?.supportsAudio).toBe(false);
   });
 
+  it("advertises Gemini video generation with a config-only Google API key", () => {
+    expect(
+      buildGoogleVideoGenerationProvider().isConfigured?.({
+        cfg: {
+          models: {
+            providers: {
+              google: {
+                apiKey: "google-config-only-key",
+                baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+                models: [],
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("submits generation and returns inline video bytes", async () => {
     vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "google-key",

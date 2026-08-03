@@ -79,6 +79,27 @@ describe("minimax image-generation provider", () => {
     };
   }
 
+  it.each([
+    ["minimax", buildMinimaxImageGenerationProvider],
+    ["minimax-portal", buildMinimaxPortalImageGenerationProvider],
+  ])("advertises %s image generation using its own config-only credential", (providerId, build) => {
+    expect(
+      build().isConfigured?.({
+        cfg: {
+          models: {
+            providers: {
+              [providerId]: {
+                apiKey: "minimax-config-only-key",
+                baseUrl: "https://api.minimax.io/v1",
+                models: [],
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("generates PNG buffers through the shared provider HTTP path", async () => {
     mockMinimaxApiKey();
     const fetchMock = mockSuccessfulMinimaxImageResponse();
