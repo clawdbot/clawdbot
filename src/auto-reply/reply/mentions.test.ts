@@ -240,6 +240,31 @@ describe("derived mention matching with decorated identity names", () => {
     expect(matchesMentionPatterns("hello there", regexes)).toBe(false);
   });
 
+  it("matches an emoji-only ZWJ identity that normalization splits apart", () => {
+    // Matching sees the joiner stripped, stripping sees the raw text: an
+    // identity with no word token at all has to answer to both forms.
+    const regexes = buildMentionRegexes(configForName("👩‍👧"), "decorated-agent");
+
+    expect(matchesMentionPatterns("👩‍👧 幫我查一下", regexes)).toBe(true);
+    expect(matchesMentionPatterns("👩👧 幫我查一下", regexes)).toBe(true);
+    expect(matchesMentionPatterns("👩 幫我查一下", regexes)).toBe(false);
+    expect(
+      stripMentions("👩‍👧 /status", {} as MsgContext, configForName("👩‍👧"), "decorated-agent"),
+    ).toBe("/status");
+  });
+
+  it("matches a configured identity emoji that carries a joiner", () => {
+    const cfg = {
+      agents: {
+        list: [{ id: "decorated-agent", identity: { name: "Clawd", emoji: "👩‍👧" } }],
+      },
+    } satisfies OpenClawConfig;
+    const regexes = buildMentionRegexes(cfg, "decorated-agent");
+
+    expect(matchesMentionPatterns("👩‍👧 status", regexes)).toBe(true);
+    expect(matchesMentionPatterns("clawd status", regexes)).toBe(true);
+  });
+
   it("never requires a bare variation selector as the identity token", () => {
     // "❤️" is U+2764 plus the selector: the selector is a mark, but on its own it
     // is presentation. Deriving it as the required token would match every

@@ -31,7 +31,9 @@ type ResolvedMentionPatterns = {
 // require them.
 const NAME_IDENTITY_CHARS = String.raw`\p{L}\p{N}\p{Pc}`;
 const NAME_TOKEN_CHARS = String.raw`${NAME_IDENTITY_CHARS}\p{M}`;
-const UNICODE_WORD_CHAR = String.raw`[${NAME_TOKEN_CHARS}\u200C\u200D]`;
+const JOINER_CHARS = String.raw`\u200C\u200D`;
+const UNICODE_WORD_CHAR = String.raw`[${NAME_TOKEN_CHARS}${JOINER_CHARS}]`;
+const JOINER_RUN = /[\u200C\u200D]+/u;
 // Decoration between word runs (emoji, flags, symbols, punctuation) may be
 // typed as shown, replaced by whitespace, or omitted. Only code points the
 // name itself carries are accepted, so matching and stripping never consume
@@ -70,6 +72,14 @@ function wrapDerivedMentionPattern(parts: DerivedNameParts): string {
   return `(?:@|${before})${leading}${parts.core}${after}${trailing}`;
 }
 
+function escapeJoinerTolerantLiteral(literal: string): string {
+  // Matching runs on normalized text, which has joiners stripped, while
+  // stripping runs on the raw text that still carries them. A literal has to
+  // accept both forms or an identity built only from a ZWJ sequence can be
+  // stripped but never matched.
+  return literal.split(JOINER_RUN).map(escapeRegExp).join(`[${JOINER_CHARS}]*`);
+}
+
 function decorationClassBody(gap: string): string {
   const bodies = new Set<string>();
   for (const char of gap) {
@@ -88,7 +98,7 @@ function deriveNameParts(name: string): DerivedNameParts {
   const tokens = segments.filter((_, index) => index % 2 === 1);
   if (tokens.length === 0) {
     // Decoration-only name (e.g. a bare emoji): match it literally.
-    return { leading: "", core: escapeRegExp(name), trailing: "" };
+    return { leading: "", core: escapeJoinerTolerantLiteral(name), trailing: "" };
   }
   let core = "";
   for (const [index, token] of tokens.entries()) {
@@ -117,7 +127,7 @@ function deriveMentionPatterns(identity?: { name?: string; emoji?: string }) {
   }
   const emoji = normalizeOptionalString(identity?.emoji);
   if (emoji) {
-    patterns.push(escapeRegExp(emoji));
+    patterns.push(escapeJoinerTolerantLiteral(emoji));
   }
   return patterns;
 }
