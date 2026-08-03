@@ -67,7 +67,11 @@ export async function resolveStandaloneProviderCredentials<
     if (!selection.hasConfiguredSecretRef(value, selection.defaults)) {
       continue;
     }
-    const path = selection.inactivePathsForProvider(provider)[0] ?? "";
+    const paths = selection.inactivePathsForProvider(provider);
+    if (paths.length === 0) {
+      continue;
+    }
+    const path = paths[0] ?? "";
     const contractDigest = digestRuntimeWebOwnerContract({ ...selection, providerId: provider.id });
     const resolution = await selection.resolveSecretInput({
       providerId: provider.id,
@@ -77,11 +81,13 @@ export async function resolveStandaloneProviderCredentials<
       contractDigest,
     });
     if (resolution.value) {
-      setResolvedCredentialPath({
-        resolvedConfig: selection.resolvedConfig,
-        path,
-        value: resolution.value,
-      });
+      for (const inactivePath of paths) {
+        setResolvedCredentialPath({
+          resolvedConfig: selection.resolvedConfig,
+          path: inactivePath,
+          value: resolution.value,
+        });
+      }
       selection.setResolvedCredential({
         resolvedConfig: selection.resolvedConfig,
         provider,
@@ -91,20 +97,22 @@ export async function resolveStandaloneProviderCredentials<
       const ref = resolution.secretRef;
       const refKey = resolution.secretRefKey;
       if (ref && refKey) {
-        unavailableProviders.push({
-          providerId: provider.id,
-          path,
-          ref,
-          refKey,
-          reason: resolution.unresolvedRefReason,
-          contractDigest,
-          restoreResolvedValue: (resolvedValue) =>
-            selection.setResolvedCredential({
-              resolvedConfig: selection.resolvedConfig,
-              provider,
-              value: resolvedValue,
-            }),
-        });
+        for (const inactivePath of paths) {
+          unavailableProviders.push({
+            providerId: provider.id,
+            path: inactivePath,
+            ref,
+            refKey,
+            reason: resolution.unresolvedRefReason,
+            contractDigest,
+            restoreResolvedValue: (resolvedValue) =>
+              selection.setResolvedCredential({
+                resolvedConfig: selection.resolvedConfig,
+                provider,
+                value: resolvedValue,
+              }),
+          });
+        }
       }
     }
   }

@@ -5,6 +5,7 @@ import { createResolverContext } from "./runtime-shared.js";
 import type {
   RuntimeWebProviderMetadataBase,
   RuntimeWebProviderSelectionParams,
+  RuntimeWebUnavailableProvider,
   SecretResolutionResult,
 } from "./runtime-web-tools-selection.types.js";
 import {
@@ -17,6 +18,7 @@ type TestProvider = {
   pluginId: string;
   requiresCredential?: boolean;
   credentialPath: string;
+  inactivePaths?: string[];
   envVar: string;
 };
 
@@ -109,7 +111,7 @@ function buildSelection(params: {
       config.webSearch = webSearch;
       webSearch.apiKey = value;
     },
-    inactivePathsForProvider: (provider) => [provider.credentialPath],
+    inactivePathsForProvider: (provider) => provider.inactivePaths ?? [provider.credentialPath],
     hasConfiguredSecretRef,
   };
 }
@@ -205,6 +207,142 @@ describe("runtime-web-tools-standalone", () => {
         }
       ).plugins?.entries?.xai?.config?.webSearch?.apiKey,
     ).toBeUndefined();
+  });
+
+  it("resolves every inactive credential path for an enabled standalone-tool provider", async () => {
+    const provider: TestProvider = {
+      id: "perplexity",
+      pluginId: "perplexity",
+      credentialPath: "plugins.entries.perplexity.config.webSearch.apiKey",
+      inactivePaths: [
+        "plugins.entries.perplexity.config.webSearch.apiKey",
+        "plugins.entries.perplexity.config.webSearch.legacyApiKey",
+      ],
+      envVar: "PERPLEXITY_API_KEY",
+    };
+    const resolvedConfig = asConfig({
+      plugins: {
+        entries: {
+          perplexity: {
+            config: {
+              webSearch: {
+                apiKey: "placeholder",
+                legacyApiKey: "placeholder",
+              },
+            },
+          },
+        },
+      },
+    });
+    const sourceConfig = asConfig({
+      plugins: {
+        entries: {
+          perplexity: {
+            config: {
+              webSearch: {
+                apiKey: { source: "env", provider: "default", id: "PERPLEXITY_API_KEY" },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const selection = buildSelection({
+      providers: [provider],
+      configuredProvider: "brave",
+      standaloneToolProviderIds: new Set(["perplexity"]),
+      resolvedConfig,
+      sourceConfig,
+    });
+
+    await resolveStandaloneProviderCredentials({
+      selection,
+      selectedProvider: "brave",
+      unavailableProviders: [],
+    });
+
+    expect(
+      (
+        resolvedConfig as {
+          plugins?: {
+            entries?: { perplexity?: { config?: { webSearch?: { apiKey?: unknown } } } };
+          };
+        }
+      ).plugins?.entries?.perplexity?.config?.webSearch?.apiKey,
+    ).toBe("perplexity-resolved");
+    expect(
+      (
+        resolvedConfig as {
+          plugins?: {
+            entries?: { perplexity?: { config?: { webSearch?: { legacyApiKey?: unknown } } } };
+          };
+        }
+      ).plugins?.entries?.perplexity?.config?.webSearch?.legacyApiKey,
+    ).toBe("perplexity-resolved");
+  });
+
+  it("records every inactive path as unavailable when a standalone provider SecretRef cannot be resolved", async () => {
+    const provider: TestProvider = {
+      id: "perplexity",
+      pluginId: "perplexity",
+      credentialPath: "plugins.entries.perplexity.config.webSearch.apiKey",
+      inactivePaths: [
+        "plugins.entries.perplexity.config.webSearch.apiKey",
+        "plugins.entries.perplexity.config.webSearch.legacyApiKey",
+      ],
+      envVar: "PERPLEXITY_API_KEY",
+    };
+    const resolvedConfig = asConfig({});
+    const sourceConfig = asConfig({
+      plugins: {
+        entries: {
+          perplexity: {
+            config: {
+              webSearch: {
+                apiKey: { source: "env", provider: "default", id: "PERPLEXITY_API_KEY" },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const baseSelection = buildSelection({
+      providers: [provider],
+      configuredProvider: "brave",
+      standaloneToolProviderIds: new Set(["perplexity"]),
+      resolvedConfig,
+      sourceConfig,
+    });
+    const selection = {
+      ...baseSelection,
+      resolveSecretInput: async (): Promise<SecretResolutionResult<TestSource>> => ({
+        source: "env",
+        secretRefConfigured: true,
+        value: undefined,
+        unresolvedRefReason: "secret reference was not found",
+        secretRef: { source: "env", provider: "default", id: "PERPLEXITY_API_KEY" },
+        secretRefKey: "env:PERPLEXITY_API_KEY",
+      }),
+    };
+
+    const unavailableProviders: RuntimeWebUnavailableProvider[] = [];
+    await resolveStandaloneProviderCredentials({
+      selection,
+      selectedProvider: "brave",
+      unavailableProviders,
+    });
+
+    expect(unavailableProviders).toHaveLength(2);
+    expect(unavailableProviders[0]?.path).toBe(
+      "plugins.entries.perplexity.config.webSearch.apiKey",
+    );
+    expect(unavailableProviders[1]?.path).toBe(
+      "plugins.entries.perplexity.config.webSearch.legacyApiKey",
+    );
+    expect(unavailableProviders.every((p) => p.providerId === "perplexity")).toBe(true);
+    expect(new Set(unavailableProviders.map((p) => p.refKey)).size).toBe(1);
   });
 
   it("resolveMissingStandaloneProviderCredentials loads only the requested plugin's providers", async () => {
