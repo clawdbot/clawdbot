@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertPublishedProtocolSchema,
   buildCanonicalProtocolSchema,
+  buildInstalledProtocolInspectionScript,
   buildPortableSwiftAnyCodableSource,
   buildSwiftProtocolCompatibilityHarness,
   parseGatewayProtocolArtifactOptions,
@@ -67,6 +68,15 @@ describe("Gateway protocol artifact producer", () => {
         },
       }),
     ).toThrow("published protocol.schema.json differs");
+  });
+
+  it("loads installed artifacts through their public package specifiers", () => {
+    const script = buildInstalledProtocolInspectionScript();
+
+    expect(script).toContain('from "@openclaw/gateway-protocol"');
+    expect(script).toContain('from "@openclaw/gateway-protocol/schema"');
+    expect(script).not.toContain("dist/index.mjs");
+    expect(script).not.toContain("dist/schema.mjs");
   });
 
   it("builds a standalone Swift compatibility harness for the generated model artifact", () => {

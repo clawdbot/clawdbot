@@ -27,19 +27,6 @@ type ProducerOptions = {
   repoRoot: string;
 };
 
-type ProtocolValidator = ((value: unknown) => boolean) & {
-  errors: unknown[] | null;
-};
-
-type PackedProtocolModule = {
-  validateConnectParams: ProtocolValidator;
-  validateRequestFrame: ProtocolValidator;
-};
-
-type PackedSchemaModule = {
-  ProtocolSchemas: Record<string, unknown>;
-};
-
 type ProtocolSchemaDocument = {
   definitions: Record<string, unknown>;
   discriminator: {
@@ -51,6 +38,11 @@ type ProtocolSchemaDocument = {
 };
 
 type ProtocolArtifactSummary = {
+  consumer: {
+    installed: boolean;
+    packageSpecifier: string;
+    schemaSpecifier: string;
+  };
   definitions: string[];
   package: {
     name: string;
@@ -63,6 +55,63 @@ type ProtocolArtifactSummary = {
     request: boolean;
   };
 };
+
+type InstalledProtocolInspection = {
+  schemas: Record<string, unknown>;
+  validators: {
+    connect: {
+      errors: unknown[] | null;
+      valid: boolean;
+    };
+    request: {
+      errors: unknown[] | null;
+      valid: boolean;
+    };
+  };
+};
+
+export function buildInstalledProtocolInspectionScript() {
+  return `import fs from "node:fs/promises";
+import {
+  validateConnectParams,
+  validateRequestFrame,
+} from "@openclaw/gateway-protocol";
+import { ProtocolSchemas } from "@openclaw/gateway-protocol/schema";
+
+const requestValid = validateRequestFrame({
+  type: "req",
+  id: "artifact-request",
+  method: "health",
+});
+const connectValid = validateConnectParams({
+  minProtocol: 4,
+  maxProtocol: 4,
+  client: {
+    id: "test",
+    version: "artifact-proof",
+    platform: process.platform,
+    mode: "test",
+  },
+});
+await fs.writeFile(
+  process.argv[2],
+  JSON.stringify({
+    schemas: ProtocolSchemas,
+    validators: {
+      connect: {
+        errors: validateConnectParams.errors,
+        valid: connectValid,
+      },
+      request: {
+        errors: validateRequestFrame.errors,
+        valid: requestValid,
+      },
+    },
+  }),
+  "utf8",
+);
+`;
+}
 
 export function buildSwiftProtocolCompatibilityHarness() {
   return `import Foundation
@@ -336,47 +385,70 @@ async function packAndInspectProtocol(params: {
   assert.equal(packageJson.name, "@openclaw/gateway-protocol");
   assert.ok(packageJson.version, "packed protocol package version is missing");
 
-  const packedProtocol = (await import(
-    pathToFileURL(path.join(unpackedRoot, "dist", "index.mjs")).href
-  )) as PackedProtocolModule;
-  const packedSchema = (await import(
-    pathToFileURL(path.join(unpackedRoot, "dist", "schema.mjs")).href
-  )) as PackedSchemaModule;
   const published = JSON.parse(
     await fs.readFile(path.join(unpackedRoot, "protocol.schema.json"), "utf8"),
   ) as ProtocolSchemaDocument;
+  const consumerRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-gateway-protocol-consumer-"),
+  );
+  const consumerInspectionPath = path.join(consumerRoot, "inspection.json");
+  const inspection = await (async () => {
+    try {
+      await fs.writeFile(
+        path.join(consumerRoot, "package.json"),
+        `${JSON.stringify({
+          name: "openclaw-gateway-protocol-artifact-consumer",
+          private: true,
+          type: "module",
+        })}\n`,
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(consumerRoot, "inspect.mjs"),
+        buildInstalledProtocolInspectionScript(),
+        "utf8",
+      );
+      await runCommand({
+        args: ["--dir", consumerRoot, "add", "--ignore-scripts", "--lockfile=false", tarballPath],
+        appendLog: params.appendLog,
+        command: "pnpm",
+        cwd: params.repoRoot,
+      });
+      await runCommand({
+        args: ["inspect.mjs", consumerInspectionPath],
+        appendLog: params.appendLog,
+        command: "node",
+        cwd: consumerRoot,
+      });
+      return JSON.parse(
+        await fs.readFile(consumerInspectionPath, "utf8"),
+      ) as InstalledProtocolInspection;
+    } finally {
+      await fs.rm(consumerRoot, { force: true, recursive: true });
+    }
+  })();
   const canonical = buildCanonicalProtocolSchema();
   assertPublishedProtocolSchema({
-    builtSchemas: packedSchema.ProtocolSchemas,
+    builtSchemas: inspection.schemas,
     canonical,
     published,
   });
 
-  const requestValid = packedProtocol.validateRequestFrame({
-    type: "req",
-    id: "artifact-request",
-    method: "health",
-  });
   assert.ok(
-    requestValid,
-    `packed request validator rejected a minimal frame: ${JSON.stringify(packedProtocol.validateRequestFrame.errors)}`,
+    inspection.validators.request.valid,
+    `installed request validator rejected a minimal frame: ${JSON.stringify(inspection.validators.request.errors)}`,
   );
-  const connectValid = packedProtocol.validateConnectParams({
-    minProtocol: 4,
-    maxProtocol: 4,
-    client: {
-      id: "test",
-      version: "artifact-proof",
-      platform: process.platform,
-      mode: "test",
-    },
-  });
   assert.ok(
-    connectValid,
-    `packed connect validator rejected a minimal payload: ${JSON.stringify(packedProtocol.validateConnectParams.errors)}`,
+    inspection.validators.connect.valid,
+    `installed connect validator rejected a minimal payload: ${JSON.stringify(inspection.validators.connect.errors)}`,
   );
 
   return {
+    consumer: {
+      installed: true,
+      packageSpecifier: "@openclaw/gateway-protocol",
+      schemaSpecifier: "@openclaw/gateway-protocol/schema",
+    },
     definitions: REQUIRED_DEFINITIONS.filter((definition) =>
       Object.hasOwn(published.definitions, definition),
     ),
@@ -387,8 +459,8 @@ async function packAndInspectProtocol(params: {
       version: packageJson.version,
     },
     validators: {
-      connect: connectValid,
-      request: requestValid,
+      connect: inspection.validators.connect.valid,
+      request: inspection.validators.request.valid,
     },
   };
 }
@@ -487,6 +559,7 @@ async function runGatewayProtocolArtifactsProducer(
       details: [
         `package=${summary.package.name}@${summary.package.version}`,
         `sha256=${summary.package.sha256}`,
+        `consumer-install=${summary.consumer.installed ? "pass" : "fail"}`,
         `definitions=${summary.definitions.join(",")}`,
         "protocol-check=pass",
         "swift-generated-model-compile=pass",
