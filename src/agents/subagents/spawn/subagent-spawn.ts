@@ -495,7 +495,7 @@ export async function spawnSubagentDirect(
       admissionReservation,
       progressOrigin,
       progressSessionKey: requesterInternalKey,
-      captureExpectedRequesterLifecycle: () =>
+      stampRequesterLifecycle: () =>
         loadRequesterLifecycleRevision(ownership.completionRequesterSessionKey),
       buildRegistration: (_state, runId, expectedRequesterLifecycleRevision) => {
         if (params.collect) {

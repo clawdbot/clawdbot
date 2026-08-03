@@ -42,7 +42,7 @@ describe("runSpawnPipeline requester lifecycle capture", () => {
     await runSpawnPipeline({
       adapter: capturingAdapter(events),
       progressSessionKey: "agent:main:main",
-      captureExpectedRequesterLifecycle: () => {
+      stampRequesterLifecycle: () => {
         events.push("capture");
         return "revision-1";
       },
@@ -72,7 +72,7 @@ describe("runSpawnPipeline requester lifecycle capture", () => {
     await runSpawnPipeline({
       adapter,
       progressSessionKey: "agent:main:main",
-      captureExpectedRequesterLifecycle: () => requesterRevision.value,
+      stampRequesterLifecycle: () => requesterRevision.value,
       buildRegistration: (_state, runId, expectedRequesterLifecycleRevision) => {
         registeredRevision = expectedRequesterLifecycleRevision;
         return minimalRegistration(runId, expectedRequesterLifecycleRevision);
@@ -98,7 +98,7 @@ describe("runSpawnPipeline requester lifecycle capture", () => {
         cleanupOnFailure: async () => {},
       },
       progressSessionKey: "agent:main:main",
-      captureExpectedRequesterLifecycle: () => requesterRevision.value,
+      stampRequesterLifecycle: () => requesterRevision.value,
       buildRegistration: (_state, runId, expectedRequesterLifecycleRevision) => {
         registeredRevision = expectedRequesterLifecycleRevision;
         return minimalRegistration(runId, expectedRequesterLifecycleRevision);

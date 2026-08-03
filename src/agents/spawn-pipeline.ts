@@ -54,7 +54,7 @@ type SpawnPipelineParams<TState> = {
   progressSessionKey: string;
   /** Captured before async child dispatch so a requester reset cannot re-tag
       the admission with the replacement lifecycle's revision. */
-  captureExpectedRequesterLifecycle?: () => string | undefined;
+  stampRequesterLifecycle?: () => string | undefined;
 };
 
 export async function runSpawnPipeline<TState>(
@@ -73,7 +73,7 @@ async function executeSpawnPipeline<TState>(
   // Record the accepting lifecycle before any interleaving await. Reading it
   // during registration would let a reset between child acceptance and
   // registration stamp the stale completion with the replacement revision.
-  const expectedRequesterLifecycleRevision = params.captureExpectedRequesterLifecycle?.();
+  const expectedRequesterLifecycleRevision = params.stampRequesterLifecycle?.();
   let state: TState;
   try {
     state = await params.adapter.initialize();
