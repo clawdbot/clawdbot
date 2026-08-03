@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
@@ -22,6 +22,54 @@ function logLine(message: string): string {
     subsystem: "qa-remote-logs",
     message,
   })}\n`;
+}
+
+function hasExited(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+function waitForClose(child: ChildProcess, timeoutMs: number): Promise<void> {
+  if (hasExited(child)) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    const onClose = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      child.off("close", onClose);
+      reject(new Error("follow child did not close before timeout"));
+    }, timeoutMs);
+    child.once("close", onClose);
+  });
+}
+
+async function stopFollowChild(child: ChildProcess): Promise<void> {
+  if (hasExited(child)) {
+    return;
+  }
+  child.kill("SIGINT");
+  try {
+    await waitForClose(child, 5_000);
+  } catch {
+    if (hasExited(child)) {
+      return;
+    }
+    child.kill("SIGKILL");
+    await waitForClose(child, 5_000);
+  }
+}
+
+export async function withOwnedFollowChild<T>(
+  child: ChildProcess,
+  operation: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await operation();
+  } finally {
+    await stopFollowChild(child);
+  }
 }
 
 export async function runRemoteLogTailing(repoRoot: string, outputRoot: string) {
@@ -127,32 +175,23 @@ export async function runRemoteLogTailing(repoRoot: string, outputRoot: string) 
     child.stderr.on("data", (chunk) => {
       stderr += String(chunk);
     });
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 250);
-    });
-    await appendFile(logPath, logLine("qa-follow-line"));
-    const deadline = Date.now() + 10_000;
-    while (!stdout.includes("qa-follow-line") && Date.now() < deadline) {
+    const followOutput = await withOwnedFollowChild(child, async () => {
       await new Promise<void>((resolve) => {
-        setTimeout(resolve, 50);
+        setTimeout(resolve, 250);
       });
-    }
-    if (!stdout.includes("qa-follow-line")) {
-      child.kill("SIGINT");
-      throw new Error(`follow did not receive appended record: ${stderr}`);
-    }
-    child.kill("SIGINT");
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(
-        () => reject(new Error("follow child did not exit after SIGINT")),
-        5000,
-      );
-      child.once("close", () => {
-        clearTimeout(timer);
-        resolve();
-      });
+      await appendFile(logPath, logLine("qa-follow-line"));
+      const deadline = Date.now() + 10_000;
+      while (!stdout.includes("qa-follow-line") && Date.now() < deadline) {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 50);
+        });
+      }
+      if (!stdout.includes("qa-follow-line")) {
+        throw new Error(`follow did not receive appended record: ${stderr}`);
+      }
+      return stdout;
     });
-    return { first, bounded, cursorTail, cliRecords, followOutput: stdout };
+    return { first, bounded, cursorTail, cliRecords, followOutput };
   } finally {
     await gateway.stop();
   }
