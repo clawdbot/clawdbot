@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/src/gateway-child.js";
+import { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
