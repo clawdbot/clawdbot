@@ -638,7 +638,7 @@ export function signalProcessGroup(
   } = {},
 ) {
   signalChildProcessTree(child, signal, {
-    killProcess: process.kill,
+    killProcess: (pid, childSignal) => process.kill(pid, childSignal),
     platform,
     runTaskkill,
     useProcessGroup,
