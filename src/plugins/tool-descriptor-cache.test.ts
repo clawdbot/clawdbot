@@ -140,12 +140,24 @@ describe("plugin tool descriptor cache keys", () => {
         parameters: { type: "object", properties: {} },
         outputSchema,
         requiredClientCaps: ["inline-widgets"],
+        canYield: true,
+        executionMode: "sequential",
+        catalogMode: "never",
+        hideFromChannelProgress: true,
+        resultContentSource: "details",
         execute: async () => ({ content: [], details: {} }),
       },
     });
 
     expect(cached.requiredClientCaps).toEqual(["inline-widgets"]);
     expect(cached.descriptor.outputSchema).toBe(outputSchema);
+    expect(cached.runtimeMetadata).toEqual({
+      canYield: true,
+      executionMode: "sequential",
+      catalogMode: "never",
+      hideFromChannelProgress: true,
+      resultContentSource: "details",
+    });
   });
 
   it("isolates descriptor caches by declared gateway client capabilities", () => {

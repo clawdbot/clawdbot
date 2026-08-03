@@ -1,4 +1,5 @@
 // Tool plugin contracts describe plugin-provided tools, schemas, and invocation hooks.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type, type Static, type TSchema } from "typebox";
 import type { AgentToolResult, AgentToolUpdateCallback } from "../agents/runtime/index.js";
 import { jsonResult, textResult } from "../agents/tools/common.js";
@@ -69,7 +70,11 @@ export type ToolPluginToolDefinition<
     | {
         /** Optional schema for the JSON value returned in `AgentToolResult.details`. */
         outputSchema?: TSchema;
-        /** Execute one concrete tool call and return either plain text or JSON-serializable data. */
+        /** Allow a successful result to hand the turn back to the session runtime. */
+        canYield?: AnyAgentTool["canYield"];
+        /** Scheduling mode applied before the tool starts. */
+        executionMode?: AnyAgentTool["executionMode"];
+        /** Execute one call and return plain data or a complete `AgentToolResult`. */
         execute: (
           params: Static<TParamsSchema>,
           config: TConfig,
@@ -85,6 +90,9 @@ export type ToolPluginToolDefinition<
         execute?: never;
         /** Factory tools declare output schemas on their returned `AnyAgentTool` objects. */
         outputSchema?: never;
+        /** Factory tools declare runtime metadata on their returned `AnyAgentTool` objects. */
+        canYield?: never;
+        executionMode?: never;
       }
   );
 
@@ -94,6 +102,8 @@ type DefinedToolPluginTool = {
   description: string;
   parameters: TSchema;
   outputSchema?: TSchema;
+  canYield?: AnyAgentTool["canYield"];
+  executionMode?: AnyAgentTool["executionMode"];
   optional: boolean;
   execute?: (params: unknown, config: unknown, context: ToolPluginExecutionContext) => unknown;
   factory?: (
@@ -144,9 +154,12 @@ export type DefinedToolPluginEntry = ReturnType<typeof definePluginEntry> & {
   [toolPluginMetadataSymbol]: ToolPluginMetadata;
 };
 
-function wrapToolPluginResult(result: unknown): AgentToolResult<unknown> {
+function normalizeToolPluginResult(result: unknown): AgentToolResult<unknown> {
   if (typeof result === "string") {
     return textResult(result, result);
+  }
+  if (isRecord(result) && Array.isArray(result.content) && Object.hasOwn(result, "details")) {
+    return result as AgentToolResult<unknown>;
   }
   return jsonResult(result);
 }
@@ -158,6 +171,8 @@ function createToolPluginToolFactory<TConfig>(): ToolPluginToolFactory<TConfig> 
     description: definition.description,
     parameters: definition.parameters,
     outputSchema: definition.outputSchema,
+    canYield: definition.canYield,
+    executionMode: definition.executionMode,
     optional: definition.optional === true,
     execute: definition.execute as DefinedToolPluginTool["execute"],
     factory: definition.factory as DefinedToolPluginTool["factory"],
@@ -227,8 +242,10 @@ export function defineToolPlugin<TConfigSchema extends TSchema | undefined = und
             description: tool.description,
             parameters: tool.parameters,
             ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
+            ...(tool.canYield === true ? { canYield: true } : {}),
+            ...(tool.executionMode ? { executionMode: tool.executionMode } : {}),
             execute: async (toolCallId, params, signal, onUpdate) =>
-              wrapToolPluginResult(
+              normalizeToolPluginResult(
                 await execute(params, config, {
                   api,
                   signal,

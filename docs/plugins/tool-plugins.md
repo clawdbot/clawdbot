@@ -190,8 +190,30 @@ tool({
 });
 ```
 
-Use a factory tool when you need a custom `AgentToolResult` or want to reuse an
-existing `api.registerTool` implementation.
+Static tools may also return a complete `AgentToolResult`; OpenClaw preserves it
+instead of wrapping it as JSON. For a tool that pauses the turn, declare the
+runtime contract and return `yieldToolResult(...)`:
+
+```typescript
+import { yieldToolResult } from "openclaw/plugin-sdk/tool-results";
+
+tool({
+  name: "request_approval",
+  description: "Request approval and wait for the response.",
+  parameters: Type.Object({ requestId: Type.String() }),
+  canYield: true,
+  executionMode: "sequential",
+  execute: ({ requestId }) =>
+    yieldToolResult({
+      text: "Approval requested.",
+      details: { requestId, status: "pending" },
+      message: `Waiting for approval ${requestId}`,
+    }),
+});
+```
+
+Use a factory tool when you want to reuse an existing `api.registerTool`
+implementation or need runtime-specific tool definitions.
 
 ## Output contracts
 

@@ -133,6 +133,29 @@ describe("defineToolPlugin", () => {
     });
   });
 
+  it("keeps ordinary JSON payloads with content fields wrapped as details", async () => {
+    const entry = defineToolPlugin({
+      id: "payload",
+      name: "Payload",
+      description: "Return a JSON payload.",
+      tools: (tool) => [
+        tool({
+          name: "content_payload",
+          description: "Return JSON whose domain shape contains content.",
+          parameters: Type.Object({}),
+          execute: () => ({ content: ["value"] }),
+        }),
+      ],
+    });
+    const captured = createCapturedPluginRegistration({ id: "payload" });
+
+    entry.register(captured.api);
+
+    await expect(
+      expectDefined(captured.tools[0], "captured.tools[0] test invariant").execute("call-1", {}),
+    ).resolves.toMatchObject({ details: { content: ["value"] } });
+  });
+
   it("passes optional tools through to runtime registration and metadata", () => {
     const entry = defineToolPlugin({
       id: "optional-tools",

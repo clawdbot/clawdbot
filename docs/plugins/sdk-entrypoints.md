@@ -95,14 +95,16 @@ export default defineToolPlugin({
 
 - `configSchema` is optional; omitting it uses a strict empty object schema
   (the generated manifest still includes `configSchema`).
-- `execute` returns a plain string or JSON-serializable value; the helper
-  wraps it as a text tool result with `details` set to the original
-  (unstringified) return value.
+- `execute` returns a plain string, JSON-serializable value, or complete
+  `AgentToolResult`. The helper wraps plain values with `details` set to the
+  original (unstringified) return value and preserves complete results.
 - `outputSchema` optionally describes that original `details` value for Code
   Mode and Tool Search. Catalog calls reject an invalid schema before execution
   and validate the final value before returning it.
 - For custom tool results, `openclaw/plugin-sdk/tool-results` exports
-  `textResult`, `jsonResult`, and `yieldToolResult`.
+  `textResult`, `jsonResult`, and `yieldToolResult`. A static tool using
+  `yieldToolResult` must declare `canYield: true` and
+  `executionMode: "sequential"`.
 - Tool names are static, so `openclaw plugins build` derives
   `contracts.tools` from the declared tools without hand-duplicated names.
 - Runtime loading stays strict: installed plugins still need
