@@ -119,6 +119,20 @@ describe("transcripts tool account ownership", () => {
     ).rejects.toThrow("transcripts session not found: account-bound");
     expect(stop).not.toHaveBeenCalled();
 
+    getTranscriptSourceProviderMock.mockReturnValue(undefined);
+    await expect(
+      createTool(stateDir, "main", { channel: "webchat", accountId: "operator" }).execute(
+        "call-provider-missing-webchat",
+        { action: "status" },
+        undefined,
+        vi.fn(),
+      ),
+    ).resolves.toMatchObject({ details: { active: [] } });
+    await expect(
+      ownerTool.execute("call-provider-missing-owner", { action: "status" }, undefined, vi.fn()),
+    ).resolves.toMatchObject({
+      details: { active: [expect.objectContaining({ sessionId: "account-bound" })] },
+    });
     await expect(
       createTool(stateDir, "main").execute(
         "call-local-operator-status",

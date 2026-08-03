@@ -133,7 +133,7 @@ function bindSourceToTurnAccount(params: {
   if (isTrustedUnchanneledOwner) {
     return { source: params.source };
   }
-  if (!providerChannels.includes(channel) || !accountId) {
+  if (!channel || !providerChannels.includes(channel) || !accountId) {
     throw new Error(
       `transcripts provider ${params.provider.id} requires trusted account context from ${providerChannels.join(", ")}; retry from that channel or the host-local main agent`,
     );

@@ -54,22 +54,28 @@ function ownsTranscriptSession(
   const providerUsesAccountOwnership = Boolean(
     provider?.accountBindingChannels?.some((entry) => entry.trim()),
   );
+  const ownerAgentId = session.metadata?.agentId;
+  const ownerChannel = session.metadata?.ownerChannel;
+  const ownerAccountId = session.metadata?.ownerAccountId;
+  const hasOwnerChannel = typeof ownerChannel === "string";
+  const hasOwnerAccount = typeof ownerAccountId === "string";
+  if (hasOwnerChannel || hasOwnerAccount) {
+    if (typeof ownerAgentId === "string" && ownerAgentId !== ctx.agentId) {
+      return false;
+    }
+    if (hasOwnerChannel && hasOwnerAccount && channel === ownerChannel) {
+      return ctx.agentAccountId?.trim() === ownerAccountId;
+    }
+    // Persisted ingress ownership remains authoritative if provider discovery
+    // later changes; only the channel-less local main agent may recover it.
+    return isLocalMainOperator;
+  }
   if (!ctx.agentId) {
     return !providerUsesAccountOwnership;
   }
-  const ownerAgentId = session.metadata?.agentId;
   if (typeof ownerAgentId === "string") {
     if (ownerAgentId !== ctx.agentId) {
       return false;
-    }
-    const ownerChannel = session.metadata?.ownerChannel;
-    const ownerAccountId = session.metadata?.ownerAccountId;
-    if (
-      typeof ownerChannel === "string" &&
-      typeof ownerAccountId === "string" &&
-      channel === ownerChannel
-    ) {
-      return ctx.agentAccountId?.trim() === ownerAccountId;
     }
     if (providerUsesAccountOwnership) {
       // Account-binding providers require trusted owner facts recorded at ingress.
