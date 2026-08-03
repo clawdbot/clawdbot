@@ -1004,6 +1004,7 @@ describe("noteMemorySearchHealth", () => {
       expect(note).not.toHaveBeenCalled();
     }
     if (contains) {
+      expect(note).toHaveBeenCalledTimes(1);
       expectFirstNoteContains(...contains);
     }
     if (noApiKeyLookup) {
