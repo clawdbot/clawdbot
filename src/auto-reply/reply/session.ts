@@ -576,8 +576,7 @@ async function initSessionStateAttemptLocked(
     resetCommand.matchedResetTriggerLower !== undefined &&
     DEFAULT_RESET_TRIGGERS.some(
       (defaultTrigger) =>
-        normalizeOptionalLowercaseString(defaultTrigger) ===
-        resetCommand.matchedResetTriggerLower,
+        normalizeOptionalLowercaseString(defaultTrigger) === resetCommand.matchedResetTriggerLower,
     );
   const matchedResetTriggerLower = shouldDeferResetToBoundAcpCommand
     ? undefined
