@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertPublishedProtocolSchema,
   buildCanonicalProtocolSchema,
+  buildPortableSwiftAnyCodableSource,
   buildSwiftProtocolCompatibilityHarness,
   parseGatewayProtocolArtifactOptions,
 } from "./gateway-protocol-artifacts.js";
@@ -75,5 +76,14 @@ describe("Gateway protocol artifact producer", () => {
     expect(harness).toContain("GatewayFrame.self");
     expect(harness).toContain("ConnectParams.self");
     expect(harness).toContain('"futureField":true');
+  });
+
+  it("makes the AnyCodable dependency portable for standalone Linux compilation", () => {
+    expect(buildPortableSwiftAnyCodableSource("import Foundation\n")).toBe(
+      "import CoreFoundation\nimport Foundation\n",
+    );
+    expect(buildPortableSwiftAnyCodableSource("import CoreFoundation\n")).toBe(
+      "import CoreFoundation\n",
+    );
   });
 });

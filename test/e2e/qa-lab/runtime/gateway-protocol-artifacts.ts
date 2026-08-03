@@ -134,6 +134,10 @@ struct GatewayProtocolArtifactHarness {
 `;
 }
 
+export function buildPortableSwiftAnyCodableSource(source: string) {
+  return source.includes("import CoreFoundation") ? source : `import CoreFoundation\n${source}`;
+}
+
 function formatErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
@@ -395,13 +399,21 @@ async function compileAndRunSwiftProtocolModels(params: {
   repoRoot: string;
 }) {
   const swiftArtifactDir = path.join(params.artifactBase, "swift");
+  const anyCodablePath = path.join(swiftArtifactDir, "AnyCodable.swift");
   const harnessPath = path.join(swiftArtifactDir, "GatewayProtocolArtifactHarness.swift");
   const executablePath = path.join(swiftArtifactDir, "gateway-protocol-artifact-harness");
   await fs.rm(swiftArtifactDir, { force: true, recursive: true });
   await fs.mkdir(swiftArtifactDir, { recursive: true });
+  const anyCodableSource = await fs.readFile(
+    path.join(params.repoRoot, "apps/shared/OpenClawKit/Sources/OpenClawProtocol/AnyCodable.swift"),
+    "utf8",
+  );
+  // Linux Foundation does not re-export the CoreFoundation type-ID helpers.
+  await fs.writeFile(anyCodablePath, buildPortableSwiftAnyCodableSource(anyCodableSource), "utf8");
   await fs.writeFile(harnessPath, buildSwiftProtocolCompatibilityHarness(), "utf8");
   await runCommand({
     args: [
+      anyCodablePath,
       path.join(
         params.repoRoot,
         "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
