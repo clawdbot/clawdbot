@@ -5508,7 +5508,7 @@ describe("subagent registry seam flow", () => {
     });
   });
 
-  it("retries completion delete runs during resume regardless of prior attempt count", async () => {
+  it("retries and retires completion delete runs regardless of prior attempt count", async () => {
     const endedHookRunner = {
       hasHooks: (hookName: string) => hookName === "subagent_ended",
       runSubagentEnded: mocks.runSubagentEnded,
@@ -5543,10 +5543,10 @@ describe("subagent registry seam flow", () => {
     await Promise.resolve();
 
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-    expect(findRequesterRun("run-resume-delete")).toBeDefined();
+    expect(findRequesterRun("run-resume-delete")).toBeUndefined();
   });
 
-  it("retries successful keep-mode completions during resume regardless of prior attempt count", async () => {
+  it("retries and settles keep-mode completions regardless of prior attempt count", async () => {
     mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
       runs: Map<string, unknown>;
       mergeOnly?: boolean;
@@ -5587,8 +5587,8 @@ describe("subagent registry seam flow", () => {
 
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
     const run = findRequesterRun("run-resume-keep");
-    expect(run?.delivery?.status).not.toBe("suspended");
-    expect(run?.cleanupCompletedAt).toBeUndefined();
+    expect(run?.delivery?.status).toBe("delivered");
+    expect(run?.cleanupCompletedAt).toBeTypeOf("number");
     expect(run?.completion?.resultText).toBe("child completed successfully");
   });
 
