@@ -53,6 +53,7 @@ export type IMessagePayload = {
   reply_to_guid?: string | null;
   reply_to_text?: string | null;
   reply_to_sender?: string | null;
+  thread_originator_guid?: string | null;
   created_at?: string | null;
   is_reaction?: boolean | null;
   is_tapback?: boolean | null;
