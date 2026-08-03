@@ -349,14 +349,16 @@ extension CritterStatusLabel {
             connectionMode: self.connectionMode,
             controlState: self.controlChannelState,
             gatewayStatus: self.gatewayStatus,
-            isPaused: self.isPaused)
+            isPaused: self.isPaused,
+            isSleeping: self.isSleeping)
     }
 
     static func needsAttention(
         connectionMode: AppState.ConnectionMode,
         controlState: ControlChannel.ConnectionState,
         gatewayStatus: GatewayProcessManager.Status,
-        isPaused: Bool) -> Bool
+        isPaused: Bool,
+        isSleeping: Bool) -> Bool
     {
         guard !isPaused else { return false }
         switch connectionMode {
@@ -365,6 +367,7 @@ extension CritterStatusLabel {
         case .remote:
             return GatewayConnectionPresentation(state: controlState).needsAttention
         case .local:
+            guard !isSleeping else { return false }
             switch gatewayStatus {
             case .failed, .stopped:
                 return true

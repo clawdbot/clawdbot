@@ -90,12 +90,14 @@ struct CritterStatusBeatsTests {
             connectionMode: .remote,
             controlState: .degraded(authFailure),
             gatewayStatus: gatewayStatus,
-            isPaused: false))
+            isPaused: false,
+            isSleeping: true))
         #expect(!CritterStatusLabel.needsAttention(
             connectionMode: .remote,
             controlState: .connected,
             gatewayStatus: gatewayStatus,
-            isPaused: false))
+            isPaused: false,
+            isSleeping: false))
     }
 
     @Test func `attention follows the configured owner`() {
@@ -103,16 +105,25 @@ struct CritterStatusBeatsTests {
             connectionMode: .local,
             controlState: .connected,
             gatewayStatus: .failed("boom"),
-            isPaused: false))
+            isPaused: false,
+            isSleeping: false))
+        #expect(!CritterStatusLabel.needsAttention(
+            connectionMode: .local,
+            controlState: .connected,
+            gatewayStatus: .stopped,
+            isPaused: false,
+            isSleeping: true))
         #expect(!CritterStatusLabel.needsAttention(
             connectionMode: .unconfigured,
             controlState: .degraded("ignored"),
             gatewayStatus: .stopped,
-            isPaused: false))
+            isPaused: false,
+            isSleeping: false))
         #expect(!CritterStatusLabel.needsAttention(
             connectionMode: .remote,
             controlState: .degraded("auth failed"),
             gatewayStatus: .stopped,
-            isPaused: true))
+            isPaused: true,
+            isSleeping: true))
     }
 }
