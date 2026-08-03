@@ -1,6 +1,14 @@
 // Covers Slack question delivery capture and Block Kit final edit.
+import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import type { OutboundDeliveryResult } from "openclaw/plugin-sdk/channel-send-result";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createOutboundTestPlugin,
+  createTestRegistry,
+  resetGlobalHookRunner,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSlackSendTestClient } from "./blocks.test-helpers.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -39,6 +47,11 @@ describe("Slack question finalization", () => {
   beforeEach(() => {
     hoisted.update.mockReset();
     hoisted.registration = undefined;
+  });
+
+  afterEach(() => {
+    resetGlobalHookRunner();
+    resetPluginRuntimeStateForTest();
   });
 
   it("removes action blocks and appends terminal context", async () => {
@@ -270,5 +283,123 @@ describe("Slack question finalization", () => {
         messageTs: questionDelivery?.messageId,
       }),
     );
+  });
+
+  it("keeps the actual fallback question card through durable result reconciliation", async () => {
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    const cfg = { channels: { slack: { botToken: "xoxb-test" } } };
+    const payload = {
+      text: "Pick one",
+      channelData: { askUser: { questionId } },
+      presentation: {
+        blocks: [
+          {
+            type: "table" as const,
+            caption: "Choices",
+            headers: ["Label"],
+            rows: [["A useful answer"]],
+          },
+          {
+            type: "buttons" as const,
+            buttons: [
+              {
+                label: "One",
+                action: { type: "question" as const, questionId, optionValue: "One" },
+              },
+            ],
+          },
+          {
+            type: "text" as const,
+            text: "Trailing context intentionally arrives after the question card.",
+          },
+        ],
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          plugin: createOutboundTestPlugin({ id: "slack", outbound: slackOutbound }),
+          source: "test",
+        },
+      ]),
+    );
+
+    const client = createSlackSendTestClient();
+    let messageCount = 0;
+    let questionMessageId: string | undefined;
+    let trailingMessageId: string | undefined;
+    client.chat.postMessage = vi.fn(async (request: unknown) => {
+      const blocks = (request as { blocks?: Array<{ elements?: unknown[]; type?: string }> })
+        .blocks;
+      if (blocks?.some((block) => block.type === "data_table")) {
+        throw Object.assign(new Error("invalid_blocks"), { data: { error: "invalid_blocks" } });
+      }
+      const ts = `171234.${String(++messageCount).padStart(3, "0")}`;
+      const hasQuestion = blocks?.some(
+        (block) =>
+          block.type === "actions" &&
+          block.elements?.some((element) =>
+            String((element as { action_id?: string }).action_id).startsWith(
+              "openclaw:question_button",
+            ),
+          ),
+      );
+      if (hasQuestion) {
+        questionMessageId = ts;
+      } else if (questionMessageId) {
+        trailingMessageId = ts;
+      }
+      return { ok: true, channel: "C123", ts };
+    });
+    const sendSlack: typeof sendMessageSlack = async (to, text, options) =>
+      await sendMessageSlack(to, text, {
+        ...options,
+        cfg,
+        token: "xoxb-test",
+        client,
+        textLimit: 72,
+      });
+
+    const batch = await sendDurableMessageBatch({
+      cfg,
+      channel: "slack",
+      to: "C123",
+      accountId: "default",
+      payloads: [payload],
+      deps: { sendSlack },
+    });
+
+    if (batch.status !== "sent") {
+      throw batch.status === "failed"
+        ? batch.error
+        : new Error("Expected the Slack question fallback to be delivered");
+    }
+    expect(questionMessageId).toBeDefined();
+    expect(trailingMessageId).toBeDefined();
+    expect(trailingMessageId).not.toBe(questionMessageId);
+    expect(batch.results).toHaveLength(1);
+    expect(batch.results[0]).toMatchObject({
+      messageId: trailingMessageId,
+      meta: {
+        slackQuestionActionIds: ["openclaw:question_button:1:1"],
+        slackQuestionMessageId: questionMessageId,
+      },
+    });
+    expect(hoisted.registration?.deliveryId).toBe(`slack:default:C123:${questionMessageId}`);
+
+    await hoisted.registration?.finalize("Answered: One");
+
+    expect(hoisted.update).toHaveBeenCalledWith(
+      expect.objectContaining({ channelId: "C123", messageTs: questionMessageId }),
+    );
+    expect(
+      client.chat.postMessage.mock.calls.filter(([request]) =>
+        (request as { blocks?: Array<{ elements?: Array<{ action_id?: string }> }> }).blocks?.some(
+          (block) =>
+            block.elements?.some((element) => element.action_id?.startsWith("openclaw:question_")),
+        ),
+      ),
+    ).toHaveLength(2);
   });
 });

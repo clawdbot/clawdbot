@@ -408,14 +408,20 @@ describe("sendMessageSlack blocks", () => {
 
   it("marks only the fallback card that actually contains the question controls", async () => {
     const client = createSlackSendTestClient();
+    let messageCount = 0;
+    client.chat.postMessage = vi.fn(async () => ({
+      ok: true,
+      ts: `171234.${String(++messageCount).padStart(3, "0")}`,
+    }));
     client.chat.postMessage.mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
     const questionActionId = "openclaw:question_button:2:1";
     const blocks = interleavedNativeDataBlocks();
     const actionBlock = blocks.at(-1) as { elements: Array<{ action_id: string }> };
     actionBlock.elements[0]!.action_id = questionActionId;
+    blocks.push({ type: "section", text: { type: "mrkdwn", text: "After question" } });
     const onDeliveryResult = vi.fn();
 
-    await sendMessageSlack("channel:C123", "Outside", {
+    const aggregateResult = await sendMessageSlack("channel:C123", "Outside", {
       token: "xoxb-test",
       cfg: SLACK_TEST_CFG,
       client,
@@ -433,6 +439,12 @@ describe("sendMessageSlack blocks", () => {
     expect(
       delivered.some((result) => result.receipt.parts[0]?.kind === "card" && !result.meta),
     ).toBe(true);
+    const questionDelivery = delivered.find((delivery) => delivery.meta);
+    expect(questionDelivery?.messageId).not.toBe(aggregateResult.messageId);
+    expect(aggregateResult.meta).toEqual({
+      slackQuestionActionIds: [questionActionId],
+      slackQuestionMessageId: questionDelivery?.messageId,
+    });
   });
 
   it("includes sibling block text in top-level fallback for raw block sends", async () => {

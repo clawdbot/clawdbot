@@ -262,7 +262,7 @@ export type SlackSendResult = {
   channelId: string;
   receipt: MessageReceipt;
   threadTs?: string;
-  meta?: { slackQuestionActionIds: string[] };
+  meta?: { slackQuestionActionIds: string[]; slackQuestionMessageId?: string };
 };
 
 export async function updateMessageSlack(params: {
@@ -1257,6 +1257,7 @@ async function sendMessageSlackQueuedInner(params: {
     }
     if (pendingBlockFallback) {
       const fallbackMessages = pendingBlockFallback.fallbackMessages;
+      let questionDelivery: SlackSendResult | undefined;
       for (const [partIndex, fallback] of fallbackMessages.entries()) {
         const metadata = withSlackDeliveryMetadata(partIndex === 0 ? opts.metadata : undefined, {
           queueId: opts.deliveryQueueId,
@@ -1298,7 +1299,7 @@ async function sendMessageSlackQueuedInner(params: {
         sentMessageIds.push(response.ts);
         const deliveredThreadTs =
           resolvePostedMessageThreadTs(response) ?? normalizeSlackThreadTsCandidate(opts.threadTs);
-        await reportDelivery(
+        const fallbackDelivery = await reportDelivery(
           {
             messageId: response.ts,
             channelId: deliveredChannelId,
@@ -1312,6 +1313,9 @@ async function sendMessageSlackQueuedInner(params: {
           },
           fallback.blocks,
         );
+        if (fallbackDelivery.meta?.slackQuestionActionIds.length) {
+          questionDelivery = fallbackDelivery;
+        }
       }
       const messageId = lastMessageId || "unknown";
       const deliveredThreadTs =
@@ -1320,6 +1324,16 @@ async function sendMessageSlackQueuedInner(params: {
         messageId,
         channelId: deliveredChannelId,
         threadTs: deliveredThreadTs,
+        // Core replaces per-card progress with this aggregate; retain the
+        // actual question-card identity even when a later fallback part wins.
+        ...(questionDelivery?.meta
+          ? {
+              meta: {
+                ...questionDelivery.meta,
+                slackQuestionMessageId: questionDelivery.messageId,
+              },
+            }
+          : {}),
         receipt: createSlackSendReceipt({
           platformMessageIds: sentMessageIds.length ? sentMessageIds : [messageId],
           channelId: deliveredChannelId,

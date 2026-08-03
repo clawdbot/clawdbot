@@ -379,9 +379,15 @@ export const slackOutbound: ChannelOutboundAdapter = {
     if (!channelId) {
       return;
     }
+    // Aggregate fallback receipts retain their last platform id separately
+    // from the actual card whose question controls need finalization.
+    const questionMessageId =
+      typeof result.meta?.slackQuestionMessageId === "string"
+        ? result.meta.slackQuestionMessageId
+        : result.messageId;
     questionGatewayRuntime.registerChannelDelivery({
       questionId,
-      deliveryId: `slack:${target.accountId ?? "default"}:${channelId}:${result.messageId}`,
+      deliveryId: `slack:${target.accountId ?? "default"}:${channelId}:${questionMessageId}`,
       finalize: async (statusLine) => {
         const { updateMessageSlack } = await loadSlackSendRuntime();
         const escapedStatusLine = escapeSlackMrkdwn(statusLine);
@@ -393,7 +399,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
           cfg,
           accountId: target.accountId ?? undefined,
           channelId,
-          messageTs: result.messageId,
+          messageTs: questionMessageId,
           text: `${deliveryMessage.text}\n\n${escapedStatusLine}`,
           blocks,
         });
