@@ -399,4 +399,84 @@ describe("AcpSessionManager cancelSession", () => {
       discardPersistentState: true,
     });
   });
+
+  it("does not register a turn after reset supersedes runtime controls", async () => {
+    const runtimeState = createRuntime();
+    const releaseControls = createDeferred();
+    let ensureCount = 0;
+    runtimeState.ensureSession.mockImplementation(async (input) => {
+      const callNumber = ++ensureCount;
+      return {
+        sessionKey: input.sessionKey,
+        backend: "acpx",
+        runtimeSessionName: `runtime-${callNumber}`,
+        backendSessionId: `backend-${callNumber}`,
+      };
+    });
+    runtimeState.getCapabilities.mockImplementationOnce(async () => {
+      await releaseControls.promise;
+      return {
+        controls: ["session/set_mode", "session/set_config_option", "session/status"],
+      };
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    const sessionKey = "agent:codex:acp:child-1";
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey,
+      storeSessionKey: sessionKey,
+      entry: { sessionId: "child-1", updatedAt: Date.now() },
+      acp: readySessionMeta({ runtimeOptions: { runtimeMode: "plan" } }),
+    });
+
+    const manager = new AcpSessionManager();
+    const staleTurn = manager.runTurn({
+      provenance: "system",
+      cfg: baseCfg,
+      sessionKey,
+      text: "old turn",
+      mode: "prompt",
+      requestId: "old-turn",
+    });
+    await vi.waitFor(() => {
+      expect(runtimeState.getCapabilities).toHaveBeenCalledTimes(1);
+    });
+
+    await manager.forceDiscardSessionRuntime({
+      cfg: baseCfg,
+      sessionKey,
+      reason: "session-reset",
+    });
+    const upsertsBeforeStaleControlsSettle = hoisted.upsertAcpSessionMetaMock.mock.calls.length;
+
+    await manager.runTurn({
+      provenance: "system",
+      cfg: baseCfg,
+      sessionKey,
+      text: "fresh turn",
+      mode: "prompt",
+      requestId: "fresh-turn",
+    });
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+    expectRecordFields(mockCallArg(runtimeState.runTurn), {
+      handle: expect.objectContaining({ runtimeSessionName: "runtime-2" }),
+    });
+
+    releaseControls.resolve();
+    await expect(staleTurn).rejects.toMatchObject({
+      code: "ACP_SESSION_INIT_FAILED",
+      detailCode: "SESSION_ACTOR_SUPERSEDED",
+    });
+    expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
+    expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalledTimes(
+      upsertsBeforeStaleControlsSettle + 3,
+    );
+    expectRecordFields(mockCallArg(runtimeState.close), {
+      handle: expect.objectContaining({ runtimeSessionName: "runtime-1" }),
+      reason: "session-reset",
+      discardPersistentState: true,
+    });
+  });
 });

@@ -63,6 +63,7 @@ export async function runManagerCancelSession(params: {
         sessionKey: params.sessionKey,
         state: "idle",
         clearLastError: true,
+        isCurrentActor: params.isCurrentActor,
       });
     } catch (error) {
       const acpError = normalizeCancelError(error);
@@ -74,6 +75,7 @@ export async function runManagerCancelSession(params: {
         sessionKey: params.sessionKey,
         state: "error",
         lastError: acpError.message,
+        isCurrentActor: params.isCurrentActor,
       });
       throw acpError;
     }

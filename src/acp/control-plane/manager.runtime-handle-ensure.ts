@@ -266,7 +266,7 @@ export async function ensureManagerRuntimeHandle(params: {
 
 const SESSION_ACTOR_SUPERSEDED_DETAIL_CODE = "SESSION_ACTOR_SUPERSEDED";
 
-function createSupersededActorError(sessionKey: string): AcpRuntimeError {
+export function createSupersededActorError(sessionKey: string): AcpRuntimeError {
   return new AcpRuntimeError(
     "ACP_SESSION_INIT_FAILED",
     `ACP session actor was superseded during runtime initialization for ${sessionKey}.`,

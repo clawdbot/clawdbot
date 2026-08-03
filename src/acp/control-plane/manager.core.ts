@@ -501,6 +501,7 @@ export class AcpSessionManager {
     runtime: AcpRuntime;
     handle: AcpRuntimeHandle;
     meta: SessionAcpMeta;
+    isCurrentActor?: () => boolean;
   }): Promise<void> {
     await applyManagerRuntimeControls({
       ...params,
@@ -514,6 +515,7 @@ export class AcpSessionManager {
     state: SessionAcpMeta["state"];
     lastError?: string;
     clearLastError?: boolean;
+    isCurrentActor?: () => boolean;
   }): Promise<void> {
     await this.writeSessionMeta({
       cfg: params.cfg,
@@ -521,6 +523,9 @@ export class AcpSessionManager {
       skipMaintenance: true,
       takeCacheOwnership: true,
       mutate: (current, entry) => {
+        if (params.isCurrentActor && !params.isCurrentActor()) {
+          return undefined;
+        }
         if (!entry) {
           return null;
         }

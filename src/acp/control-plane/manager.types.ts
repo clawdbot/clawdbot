@@ -201,6 +201,7 @@ export type SetManagerSessionState = (params: {
   state: SessionAcpMeta["state"];
   lastError?: string;
   clearLastError?: boolean;
+  isCurrentActor?: () => boolean;
 }) => Promise<void>;
 
 export type WithManagerSessionActor = <T>(sessionKey: string, op: () => Promise<T>) => Promise<T>;

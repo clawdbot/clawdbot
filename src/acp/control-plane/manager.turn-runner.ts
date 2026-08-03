@@ -24,6 +24,7 @@ import {
   resolveBackgroundTaskTerminalResult,
 } from "./manager.background-task.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
+import { createSupersededActorError } from "./manager.runtime-handle-ensure.js";
 import { prepareFreshManagerRuntimeHandleRetry } from "./manager.runtime-resume-state.js";
 import { consumeAcpTurnStream } from "./manager.turn-stream.js";
 import {
@@ -51,6 +52,7 @@ type ApplyRuntimeControls = (params: {
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
   meta: SessionAcpMeta;
+  isCurrentActor: () => boolean;
 }) => Promise<void>;
 
 /** Executes one ACP prompt turn against the selected backend and records terminal state. */
@@ -155,6 +157,7 @@ export async function runManagerTurn(params: {
         sessionKey,
         state: "error",
         lastError: formatAcpErrorChain(errorToRecord),
+        isCurrentActor: params.isCurrentActor,
       });
     }
     throw errorToRecord;
@@ -218,19 +221,30 @@ export async function runManagerTurn(params: {
           runtime = ensured.runtime;
           handle = ensured.handle;
           meta = ensured.meta;
+          if (!params.isCurrentActor()) {
+            throw createSupersededActorError(sessionKey);
+          }
           await params.applyRuntimeControls({
             sessionKey,
             runtime,
             handle,
             meta,
+            isCurrentActor: params.isCurrentActor,
           });
+          if (!params.isCurrentActor()) {
+            throw createSupersededActorError(sessionKey);
+          }
 
           await params.setSessionState({
             cfg: input.cfg,
             sessionKey,
             state: "running",
             clearLastError: true,
+            isCurrentActor: params.isCurrentActor,
           });
+          if (!params.isCurrentActor()) {
+            throw createSupersededActorError(sessionKey);
+          }
 
           internalAbortController = new AbortController();
           onCallerAbort = () => {
@@ -352,6 +366,7 @@ export async function runManagerTurn(params: {
               sessionKey,
               state: "idle",
               clearLastError: true,
+              isCurrentActor: params.isCurrentActor,
             });
           }
           return;
@@ -363,6 +378,9 @@ export async function runManagerTurn(params: {
               ? "ACP turn failed before completion."
               : "Could not initialize ACP session runtime.",
           });
+          if (!params.isCurrentActor()) {
+            throw createSupersededActorError(sessionKey);
+          }
           retryFreshHandle = await prepareFreshManagerRuntimeHandleRetry({
             attempt,
             cfg: input.cfg,
@@ -373,7 +391,11 @@ export async function runManagerTurn(params: {
             meta,
             runtimeHandles: params.runtimeHandles,
             writeSessionMeta: params.writeSessionMeta,
+            isCurrentActor: params.isCurrentActor,
           });
+          if (!params.isCurrentActor()) {
+            throw createSupersededActorError(sessionKey);
+          }
           if (retryFreshHandle) {
             continue;
           }
