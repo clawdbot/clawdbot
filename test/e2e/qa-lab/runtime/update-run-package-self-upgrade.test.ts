@@ -116,18 +116,31 @@ describe("update.run package self-upgrade producer", () => {
       'gateway_call wizard.status "$target_status_session_params" \\\n  "$TARGET_WIZARD_STATUS_JSON" "$TARGET_WIZARD_STATUS_ERR"',
     );
     expect(script).toContain(
+      'gateway_call wizard.status "$target_status_session_params" \\\n  "$TARGET_WIZARD_STATUS_RETAINED_JSON" "$TARGET_WIZARD_STATUS_RETAINED_ERR"',
+    );
+    expect(script).toContain(
+      'gateway_call wizard.cancel "$target_status_session_params" \\\n  "$TARGET_WIZARD_STATUS_CANCEL_JSON" "$TARGET_WIZARD_STATUS_CANCEL_ERR"',
+    );
+    expect(script).toContain(
       'gateway_call wizard.next "$target_active_next_params" \\\n  "$TARGET_WIZARD_NEXT_JSON" "$TARGET_WIZARD_NEXT_ERR"',
     );
     expect(script).toContain('grep -Fq "wizard already running" "$TARGET_WIZARD_DUPLICATE_ERR"');
     expect(script).toContain(
       'gateway_call wizard.cancel "$target_active_session_params" \\\n  "$TARGET_WIZARD_CANCEL_JSON" "$TARGET_WIZARD_CANCEL_ERR"',
     );
-    expect(script).toContain('while [ "$SECONDS" -lt "$target_cancel_deadline" ]');
+    expect(script).toContain("wait_for_target_wizard_start()");
+    expect(script).toContain("target_status_settlement_polls");
+    expect(script).toContain("target_cancel_settlement_polls");
     expect(script).toContain(
-      '"$TARGET_WIZARD_REPLACEMENT_START_JSON" "$TARGET_WIZARD_REPLACEMENT_START_ERR"',
+      '"$TARGET_WIZARD_REPLACEMENT_START_JSON" \\\n    "$TARGET_WIZARD_REPLACEMENT_START_ERR"',
+    );
+    expect(script.indexOf("target_active_start_result=")).toBeLessThan(
+      script.indexOf(
+        'gateway_call wizard.status "$target_status_session_params" \\\n  "$TARGET_WIZARD_STATUS_PURGED_JSON"',
+      ),
     );
     expect(script).toContain('grep -Fq "wizard not found" "$TARGET_WIZARD_PURGED_STATUS_ERR"');
-    expect(script.indexOf('while [ "$SECONDS" -lt "$target_cancel_deadline" ]')).toBeLessThan(
+    expect(script.indexOf("target_replacement_start_result=")).toBeLessThan(
       script.indexOf(
         'gateway_call wizard.status "$target_active_session_params" \\\n  "$TARGET_WIZARD_PURGED_STATUS_JSON"',
       ),
@@ -189,7 +202,10 @@ describe("update.run package self-upgrade producer", () => {
           },
           authenticated: true,
           status: "passed",
-          terminalStatus: { purged: true },
+          statusSession: {
+            purged: true,
+            runningStatusRetained: true,
+          },
         },
         restartSentinel: {
           message: "QA-UPDATE-RUN-PACKAGE-SELF-UPGRADE",
@@ -197,7 +213,7 @@ describe("update.run package self-upgrade producer", () => {
         },
       }),
     ).toBe(
-      "wizard=passed:authenticated:status-retained:exclusive:purged; target-wizard=passed:authenticated:terminal-status:exclusive:purged; source=2026.4.26; target=latest:2026.7.2; installed=2026.7.2; sentinel=ok:QA-UPDATE-RUN-PACKAGE-SELF-UPGRADE",
+      "wizard=passed:authenticated:status-retained:exclusive:purged; target-wizard=passed:authenticated:status-retained:status-purged:exclusive:purged; source=2026.4.26; target=latest:2026.7.2; installed=2026.7.2; sentinel=ok:QA-UPDATE-RUN-PACKAGE-SELF-UPGRADE",
     );
   });
 });

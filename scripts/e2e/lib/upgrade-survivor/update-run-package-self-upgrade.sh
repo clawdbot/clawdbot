@@ -80,6 +80,10 @@ TARGET_WIZARD_STATUS_START_JSON="$ARTIFACT_DIR/target-wizard-status-start.json"
 TARGET_WIZARD_STATUS_START_ERR="$ARTIFACT_DIR/target-wizard-status-start.err"
 TARGET_WIZARD_STATUS_JSON="$ARTIFACT_DIR/target-wizard-status.json"
 TARGET_WIZARD_STATUS_ERR="$ARTIFACT_DIR/target-wizard-status.err"
+TARGET_WIZARD_STATUS_RETAINED_JSON="$ARTIFACT_DIR/target-wizard-status-retained.json"
+TARGET_WIZARD_STATUS_RETAINED_ERR="$ARTIFACT_DIR/target-wizard-status-retained.err"
+TARGET_WIZARD_STATUS_CANCEL_JSON="$ARTIFACT_DIR/target-wizard-status-cancel.json"
+TARGET_WIZARD_STATUS_CANCEL_ERR="$ARTIFACT_DIR/target-wizard-status-cancel.err"
 TARGET_WIZARD_STATUS_PURGED_JSON="$ARTIFACT_DIR/target-wizard-status-purged.json"
 TARGET_WIZARD_STATUS_PURGED_ERR="$ARTIFACT_DIR/target-wizard-status-purged.err"
 TARGET_WIZARD_ACTIVE_START_JSON="$ARTIFACT_DIR/target-wizard-active-start.json"
@@ -661,6 +665,49 @@ if [ ! -f "$UPDATE_STATUS_JSON" ]; then
 fi
 
 echo "Exercising current target Gateway wizard RPC lifecycle"
+wait_for_target_wizard_start() {
+  local output="$1"
+  local error_output="$2"
+  local label="$3"
+  local deadline=$((SECONDS + 30))
+  local polls=0
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    polls=$((polls + 1))
+    if gateway_call wizard.start '{"mode":"local"}' "$output" "$error_output"; then
+      local session_id
+      session_id="$(
+        TARGET_START_LABEL="$label" node -e '
+          const fs = require("node:fs");
+          const payload = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+          if (
+            typeof payload?.sessionId !== "string" ||
+            !payload.sessionId ||
+            payload.done !== false ||
+            payload.status !== "running" ||
+            typeof payload.step?.id !== "string"
+          ) {
+            throw new Error(
+              `unexpected ${process.env.TARGET_START_LABEL}: ${JSON.stringify(payload)}`,
+            );
+          }
+          process.stdout.write(payload.sessionId);
+        ' "$output"
+      )"
+      printf '%s\t%s\n' "$session_id" "$polls"
+      return 0
+    fi
+    if ! grep -Fq "wizard already running" "$error_output"; then
+      echo "$label failed without the expected settlement result" >&2
+      openclaw_e2e_print_log "$error_output" >&2
+      return 1
+    fi
+    sleep 0.2
+  done
+  echo "timed out waiting for $label" >&2
+  openclaw_e2e_print_log "$error_output" >&2
+  return 1
+}
+
 gateway_call wizard.start '{"mode":"local"}' \
   "$TARGET_WIZARD_STATUS_START_JSON" "$TARGET_WIZARD_STATUS_START_ERR"
 target_status_session_id="$(
@@ -686,35 +733,31 @@ target_status_session_params="$(
 )"
 gateway_call wizard.status "$target_status_session_params" \
   "$TARGET_WIZARD_STATUS_JSON" "$TARGET_WIZARD_STATUS_ERR"
+gateway_call wizard.status "$target_status_session_params" \
+  "$TARGET_WIZARD_STATUS_RETAINED_JSON" "$TARGET_WIZARD_STATUS_RETAINED_ERR"
+gateway_call wizard.cancel "$target_status_session_params" \
+  "$TARGET_WIZARD_STATUS_CANCEL_JSON" "$TARGET_WIZARD_STATUS_CANCEL_ERR"
+
+target_active_start_result="$(
+  wait_for_target_wizard_start \
+    "$TARGET_WIZARD_ACTIVE_START_JSON" \
+    "$TARGET_WIZARD_ACTIVE_START_ERR" \
+    "target status cancellation settlement"
+)"
+IFS=$'\t' read -r target_active_session_id target_status_settlement_polls \
+  <<<"$target_active_start_result"
+
 if gateway_call wizard.status "$target_status_session_params" \
   "$TARGET_WIZARD_STATUS_PURGED_JSON" "$TARGET_WIZARD_STATUS_PURGED_ERR"; then
-  echo "target wizard.status did not terminate and purge its session" >&2
+  echo "target cancelled status-session wizard remained reachable after settlement" >&2
   exit 1
 fi
 if ! grep -Fq "wizard not found" "$TARGET_WIZARD_STATUS_PURGED_ERR"; then
-  echo "target terminal wizard.status failed without the expected not-found result" >&2
+  echo "target cancelled status-session cleanup lacked the expected not-found result" >&2
   openclaw_e2e_print_log "$TARGET_WIZARD_STATUS_PURGED_ERR" >&2
   exit 1
 fi
 
-gateway_call wizard.start '{"mode":"local"}' \
-  "$TARGET_WIZARD_ACTIVE_START_JSON" "$TARGET_WIZARD_ACTIVE_START_ERR"
-target_active_session_id="$(
-  node -e '
-    const fs = require("node:fs");
-    const payload = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-    if (
-      typeof payload?.sessionId !== "string" ||
-      !payload.sessionId ||
-      payload.done !== false ||
-      payload.status !== "running" ||
-      typeof payload.step?.id !== "string"
-    ) {
-      throw new Error(`unexpected target active wizard.start result: ${JSON.stringify(payload)}`);
-    }
-    process.stdout.write(payload.sessionId);
-  ' "$TARGET_WIZARD_ACTIVE_START_JSON"
-)"
 target_active_step_id="$(
   node -e '
     const fs = require("node:fs");
@@ -752,43 +795,14 @@ fi
 
 gateway_call wizard.cancel "$target_active_session_params" \
   "$TARGET_WIZARD_CANCEL_JSON" "$TARGET_WIZARD_CANCEL_ERR"
-target_replacement_session_id=""
-target_cancel_settlement_polls=0
-target_cancel_deadline=$((SECONDS + 30))
-while [ "$SECONDS" -lt "$target_cancel_deadline" ]; do
-  target_cancel_settlement_polls=$((target_cancel_settlement_polls + 1))
-  if gateway_call wizard.start '{"mode":"local"}' \
-    "$TARGET_WIZARD_REPLACEMENT_START_JSON" "$TARGET_WIZARD_REPLACEMENT_START_ERR"; then
-    target_replacement_session_id="$(
-      node -e '
-        const fs = require("node:fs");
-        const payload = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-        if (
-          typeof payload?.sessionId !== "string" ||
-          !payload.sessionId ||
-          payload.done !== false ||
-          payload.status !== "running" ||
-          typeof payload.step?.id !== "string"
-        ) {
-          throw new Error(`unexpected target replacement wizard.start: ${JSON.stringify(payload)}`);
-        }
-        process.stdout.write(payload.sessionId);
-      ' "$TARGET_WIZARD_REPLACEMENT_START_JSON"
-    )"
-    break
-  fi
-  if ! grep -Fq "wizard already running" "$TARGET_WIZARD_REPLACEMENT_START_ERR"; then
-    echo "target replacement wizard.start failed without the expected settlement result" >&2
-    openclaw_e2e_print_log "$TARGET_WIZARD_REPLACEMENT_START_ERR" >&2
-    exit 1
-  fi
-  sleep 0.2
-done
-if [ -z "$target_replacement_session_id" ]; then
-  echo "timed out waiting for target cancelled wizard settlement" >&2
-  openclaw_e2e_print_log "$TARGET_WIZARD_REPLACEMENT_START_ERR" >&2
-  exit 1
-fi
+target_replacement_start_result="$(
+  wait_for_target_wizard_start \
+    "$TARGET_WIZARD_REPLACEMENT_START_JSON" \
+    "$TARGET_WIZARD_REPLACEMENT_START_ERR" \
+    "target active cancellation settlement"
+)"
+IFS=$'\t' read -r target_replacement_session_id target_cancel_settlement_polls \
+  <<<"$target_replacement_start_result"
 
 if gateway_call wizard.status "$target_active_session_params" \
   "$TARGET_WIZARD_PURGED_STATUS_JSON" "$TARGET_WIZARD_PURGED_STATUS_ERR"; then
@@ -811,11 +825,14 @@ gateway_call wizard.cancel "$target_replacement_session_params" \
 
 TARGET_WIZARD_STATUS_START_JSON="$TARGET_WIZARD_STATUS_START_JSON" \
   TARGET_WIZARD_STATUS_JSON="$TARGET_WIZARD_STATUS_JSON" \
+  TARGET_WIZARD_STATUS_RETAINED_JSON="$TARGET_WIZARD_STATUS_RETAINED_JSON" \
+  TARGET_WIZARD_STATUS_CANCEL_JSON="$TARGET_WIZARD_STATUS_CANCEL_JSON" \
   TARGET_WIZARD_ACTIVE_START_JSON="$TARGET_WIZARD_ACTIVE_START_JSON" \
   TARGET_WIZARD_NEXT_JSON="$TARGET_WIZARD_NEXT_JSON" \
   TARGET_WIZARD_CANCEL_JSON="$TARGET_WIZARD_CANCEL_JSON" \
   TARGET_WIZARD_REPLACEMENT_START_JSON="$TARGET_WIZARD_REPLACEMENT_START_JSON" \
   TARGET_WIZARD_REPLACEMENT_CANCEL_JSON="$TARGET_WIZARD_REPLACEMENT_CANCEL_JSON" \
+  TARGET_STATUS_SETTLEMENT_POLLS="$target_status_settlement_polls" \
   TARGET_CANCEL_SETTLEMENT_POLLS="$target_cancel_settlement_polls" \
   TARGET_WIZARD_FLOW_JSON="$TARGET_WIZARD_FLOW_JSON" \
   node -e '
@@ -863,19 +880,30 @@ TARGET_WIZARD_STATUS_START_JSON="$TARGET_WIZARD_STATUS_START_JSON" \
     };
     const statusStart = readJson(process.env.TARGET_WIZARD_STATUS_START_JSON);
     const status = readJson(process.env.TARGET_WIZARD_STATUS_JSON);
+    const retainedStatus = readJson(process.env.TARGET_WIZARD_STATUS_RETAINED_JSON);
+    const statusCancel = readJson(process.env.TARGET_WIZARD_STATUS_CANCEL_JSON);
     const activeStart = readJson(process.env.TARGET_WIZARD_ACTIVE_START_JSON);
     const next = readJson(process.env.TARGET_WIZARD_NEXT_JSON);
     const cancel = readJson(process.env.TARGET_WIZARD_CANCEL_JSON);
     const replacementStart = readJson(process.env.TARGET_WIZARD_REPLACEMENT_START_JSON);
     const replacementCancel = readJson(process.env.TARGET_WIZARD_REPLACEMENT_CANCEL_JSON);
-    if (status.status !== "running") {
-      throw new Error(`target wizard.status was not running: ${JSON.stringify(status)}`);
+    if (status.status !== "running" || retainedStatus.status !== "running") {
+      throw new Error(
+        `target wizard.status did not retain its running session: ${JSON.stringify({
+          status,
+          retainedStatus,
+        })}`,
+      );
     }
     if (next.done !== false || next.status !== "running") {
       throw new Error(`target wizard.next did not advance a running session: ${JSON.stringify(next)}`);
     }
-    if (cancel.status !== "cancelled" || replacementCancel.status !== "cancelled") {
-      throw new Error("target wizard.cancel did not cancel both sessions");
+    if (
+      statusCancel.status !== "cancelled" ||
+      cancel.status !== "cancelled" ||
+      replacementCancel.status !== "cancelled"
+    ) {
+      throw new Error("target wizard.cancel did not cancel every target session");
     }
     fs.writeFileSync(
       process.env.TARGET_WIZARD_FLOW_JSON,
@@ -884,12 +912,15 @@ TARGET_WIZARD_STATUS_START_JSON="$TARGET_WIZARD_STATUS_START_JSON" \
           status: "passed",
           authenticated: true,
           packagePhase: "target",
-          terminalStatus: {
+          statusSession: {
             start: {
               status: statusStart.status,
               step: sanitizeStep(statusStart.step, "target status wizard.start"),
             },
-            observedStatus: status.status,
+            observedStatuses: [status.status, retainedStatus.status],
+            runningStatusRetained: true,
+            cancelStatus: statusCancel.status,
+            settlementPolls: Number(process.env.TARGET_STATUS_SETTLEMENT_POLLS),
             purged: true,
           },
           activeSession: {
