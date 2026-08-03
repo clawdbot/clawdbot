@@ -1121,6 +1121,23 @@ describe("agentLoop tool termination", () => {
     );
     expect(toolEnds.map((event) => event.executionStarted)).toEqual([false, true, false]);
     expect(toolEnds.at(-1)?.result).toMatchObject({ terminate: true });
+    expect(
+      events.find(
+        (event) =>
+          event.type === "message_end" &&
+          event.message.role === "assistant" &&
+          event.message.stopReason === "error",
+      ),
+    ).toMatchObject({
+      message: {
+        content: [
+          {
+            type: "text",
+            text: expect.stringContaining("tool-loop recovery encountered another critical loop"),
+          },
+        ],
+      },
+    });
   });
 
   it.each(["parallel", "sequential"] as const)(
@@ -1181,6 +1198,19 @@ describe("agentLoop tool termination", () => {
           )
           .map((event) => event.executionStarted),
       ).toEqual([false, false, false]);
+      expect(events.at(-2)).toMatchObject({
+        type: "turn_end",
+        message: {
+          role: "assistant",
+          stopReason: "error",
+          content: [
+            {
+              type: "text",
+              text: expect.stringContaining("tool-loop recovery encountered another critical loop"),
+            },
+          ],
+        },
+      });
     },
   );
 

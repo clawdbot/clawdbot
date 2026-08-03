@@ -59,6 +59,9 @@ type AssistantMessageUpdateEvent = Extract<
   }
 >;
 
+const TOOL_LOOP_RECOVERY_TERMINATED_MESSAGE =
+  "OpenClaw stopped this run because tool-loop recovery encountered another critical loop. No blocked tool action was executed.";
+
 function appendTextDeltaToAssistantMessage(
   message: AssistantMessage,
   contentIndex: number,
@@ -406,6 +409,22 @@ async function runLoop(
         return;
       }
       if (terminateRun) {
+        const terminalMessage = {
+          ...createFailureMessage(
+            config.model,
+            new Error(TOOL_LOOP_RECOVERY_TERMINATED_MESSAGE),
+            false,
+          ),
+          content: [{ type: "text" as const, text: TOOL_LOOP_RECOVERY_TERMINATED_MESSAGE }],
+        };
+        currentContext.messages.push(terminalMessage);
+        newMessages.push(terminalMessage);
+        await emit({ type: "turn_start" });
+        turnOpen = true;
+        await emit({ type: "message_start", message: terminalMessage });
+        await emit({ type: "message_end", message: terminalMessage });
+        await emit({ type: "turn_end", message: terminalMessage, toolResults: [] });
+        turnOpen = false;
         await emit({ type: "agent_end", messages: newMessages });
         return;
       }
