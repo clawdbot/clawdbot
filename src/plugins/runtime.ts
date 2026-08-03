@@ -1,6 +1,7 @@
 // Coordinates active plugin runtime registries and event hooks.
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import {
   clearPluginHostRuntimeState,
   dispatchPluginAgentEventSubscriptions,
@@ -373,8 +374,16 @@ function clearActivePluginRegistryState(): PluginRegistry | null {
 
 export async function clearActivePluginRegistry(): Promise<void> {
   const previousRegistry = clearActivePluginRegistryState();
-  if (registryHasPluginHostCleanupWork(previousRegistry)) {
-    await cleanupPreviousPluginHostRegistry({ previousRegistry: previousRegistry! });
+  try {
+    if (registryHasPluginHostCleanupWork(previousRegistry)) {
+      await cleanupPreviousPluginHostRegistry({ previousRegistry: previousRegistry! });
+    }
+  } finally {
+    try {
+      await drainGlobalSingletonLifecycleState("plugin-registry");
+    } finally {
+      clearPluginHostRuntimeState();
+    }
   }
 }
 
@@ -382,10 +391,8 @@ export function resetPluginRuntimeStateForTest(): void {
   state.registrationContext = undefined;
   clearActivePluginRegistryState();
   state.importedPluginIds.clear();
-  // Also clear the plugin host-hook runtime singleton (run context map,
-  // scheduler-job records, pending agent-event handlers, closedRunIds set).
-  // Otherwise per-test bleed-over of those globals can cause flaky behavior
-  // since this helper is widely used across plugin/agent tests.
+  void drainGlobalSingletonLifecycleState("plugin-registry");
+  // Keep the synchronous test reset aligned with clearActivePluginRegistry.
   clearPluginHostRuntimeState();
   clearPluginMetadataLifecycleCaches();
 }

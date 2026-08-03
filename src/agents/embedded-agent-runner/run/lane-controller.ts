@@ -3,7 +3,11 @@ import {
   getAgentEventLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../../../infra/agent-events.js";
-import { claimAgentRunContext, getAgentRunContext } from "../../../infra/agent-run-registry.js";
+import {
+  claimAgentRunContext,
+  getAgentRunContext,
+  retainQueuedAgentRunContext,
+} from "../../../infra/agent-run-registry.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../../process/command-queue.js";
 import type { CommandQueueEnqueueOptions } from "../../../process/command-queue.types.js";
 import { withSessionPlacementTurnAdmission } from "../../session-placement-admission.js";
@@ -40,6 +44,17 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
   const laneTaskAbortController = new AbortController();
   const laneTaskReleaseController = new AbortController();
   let laneTaskProgressAtMs = Date.now();
+  let releaseQueuedRunContext: ReturnType<typeof retainQueuedAgentRunContext>;
+  let queuedRunAbortSignal: AbortSignal | undefined;
+
+  const releaseQueuedContext = (outcome: "admitted" | "abandoned") => {
+    queuedRunAbortSignal?.removeEventListener("abort", abandonQueuedContext);
+    queuedRunAbortSignal = undefined;
+    releaseQueuedRunContext?.(outcome);
+  };
+  const abandonQueuedContext = () => {
+    releaseQueuedContext("abandoned");
+  };
 
   const noteLaneTaskProgress = () => {
     laneTaskProgressAtMs = Date.now();
@@ -147,14 +162,19 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
             runId: params.runId,
           },
           params,
+          task,
           () => {
+            throwIfAborted();
+            assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+            releaseQueuedContext("admitted");
+            // Queue-stage rotation may rebind, but placement admitted into a retired runtime must fail.
             claimAgentRunContext(params.runId, {
               ...existingContext,
               sessionKey: params.sessionKey ?? existingContext?.sessionKey,
               sessionId: params.sessionId ?? existingContext?.sessionId,
               lifecycleGeneration,
+              lastActiveAt: Date.now(),
             });
-            return task();
           },
         ),
       );
@@ -177,15 +197,38 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       return task();
     };
     const params = options.getParams();
-    if (params.enqueue) {
-      return params.enqueue(taskWithLaneAdmission, withRunLaneWait(sessionOpts));
-    }
-    noteLaneWaitIfBusy(options.sessionLane);
-    return enqueueCommandInLane(
-      options.sessionLane,
-      taskWithLaneAdmission,
-      withRunLaneWait(sessionOpts),
+    // Session admission, deferred maintenance, and global admission share one queue owner.
+    releaseQueuedRunContext = retainQueuedAgentRunContext(
+      params.runId,
+      options.getLifecycleGeneration(),
     );
+    if (releaseQueuedRunContext && params.abortSignal) {
+      if (params.abortSignal.aborted) {
+        releaseQueuedContext("abandoned");
+      } else {
+        queuedRunAbortSignal = params.abortSignal;
+        queuedRunAbortSignal.addEventListener("abort", abandonQueuedContext, { once: true });
+      }
+    }
+    let queuedRun: Promise<T>;
+    try {
+      if (params.enqueue) {
+        queuedRun = params.enqueue(taskWithLaneAdmission, withRunLaneWait(sessionOpts));
+      } else {
+        noteLaneWaitIfBusy(options.sessionLane);
+        queuedRun = enqueueCommandInLane(
+          options.sessionLane,
+          taskWithLaneAdmission,
+          withRunLaneWait(sessionOpts),
+        );
+      }
+    } catch (error) {
+      releaseQueuedContext("abandoned");
+      throw error;
+    }
+    return queuedRun.finally(() => {
+      releaseQueuedContext("abandoned");
+    });
   };
 
   return {

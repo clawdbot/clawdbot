@@ -57,6 +57,7 @@ async function settleLifecycleWork(): Promise<void> {
 
 async function startLifecycleMonitor(
   options: {
+    statusSink?: (patch: Record<string, unknown>) => void;
     useWebhook?: boolean;
     webhookSecret?: string;
     webhookUrl?: string;
@@ -132,6 +133,26 @@ describe("monitorZaloProvider lifecycle", () => {
     expect(runtime.log).toHaveBeenCalledWith("[default] Zalo provider stopped mode=polling");
   });
 
+  it("publishes ready after the first successful polling response", async () => {
+    getUpdatesMock
+      .mockResolvedValueOnce({ ok: true, result: undefined })
+      .mockImplementation(() => new Promise(() => {}));
+    const statusSink = vi.fn();
+    const { abort, run } = await startLifecycleMonitor({ statusSink });
+
+    await vi.waitFor(() =>
+      expect(statusSink).toHaveBeenCalledWith({
+        connected: true,
+        lifecycle: "ready",
+        terminalDisconnect: undefined,
+        lastConnectedAt: expect.any(Number),
+        lastError: null,
+      }),
+    );
+    abort.abort();
+    await run;
+  });
+
   it("clears poll error backoff on abort without retrying", async () => {
     vi.useFakeTimers();
     let abort: AbortController | undefined;
@@ -139,8 +160,9 @@ describe("monitorZaloProvider lifecycle", () => {
     try {
       getUpdatesMock.mockReset();
       getUpdatesMock.mockRejectedValue(new Error("zalo poll transport failed"));
+      const statusSink = vi.fn();
 
-      const started = await startLifecycleMonitor();
+      const started = await startLifecycleMonitor({ statusSink });
       abort = started.abort;
       run = started.run;
 
@@ -148,6 +170,11 @@ describe("monitorZaloProvider lifecycle", () => {
       expect(started.runtime.error).toHaveBeenCalledWith(
         expect.stringContaining("zalo poll transport failed"),
       );
+      expect(statusSink).toHaveBeenCalledWith({
+        connected: false,
+        lifecycle: "recovering",
+        lastError: expect.stringContaining("zalo poll transport failed"),
+      });
       expect(getUpdatesMock).toHaveBeenCalledTimes(1);
       expect(vi.getTimerCount()).toBe(1);
 
@@ -236,7 +263,9 @@ describe("monitorZaloProvider lifecycle", () => {
     );
 
     let settled = false;
+    const statusSink = vi.fn();
     const { abort, runtime, run } = await startLifecycleMonitor({
+      statusSink,
       useWebhook: true,
       webhookUrl: "https://example.com/hooks/zalo",
       webhookSecret: "supersecret", // pragma: allowlist secret
@@ -246,6 +275,14 @@ describe("monitorZaloProvider lifecycle", () => {
     });
 
     await setWebhookCalled;
+    await settleLifecycleWork();
+    expect(statusSink).toHaveBeenCalledWith({
+      connected: true,
+      lifecycle: "ready",
+      terminalDisconnect: undefined,
+      lastConnectedAt: expect.any(Number),
+      lastError: null,
+    });
     await settleLifecycleWork();
     expect(setWebhookMock).toHaveBeenCalledTimes(1);
     expect(registry.httpRoutes).toHaveLength(2);

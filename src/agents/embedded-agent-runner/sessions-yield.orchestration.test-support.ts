@@ -1,5 +1,5 @@
 /**
- * Integration test proving that sessions_yield produces a clean end_turn exit
+ * Full-entry coverage proving that sessions_yield produces a clean end_turn exit
  * with no pending tool calls, so the parent session is idle when subagent
  * results arrive.
  */
@@ -7,21 +7,19 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
-  loadRunOverflowCompactionHarness,
   mockedGlobalHookRunner,
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
-  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
+import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 import { isEmbeddedAgentRunActive, queueEmbeddedAgentMessageWithOutcome } from "./runs.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 
 describe("sessions_yield orchestration", () => {
   beforeAll(async () => {
-    ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
-    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
+    runEmbeddedAgent = await loadSharedRunIntegrationHarness();
   });
 
   beforeEach(() => {

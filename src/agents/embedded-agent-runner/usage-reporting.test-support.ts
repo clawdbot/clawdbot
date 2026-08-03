@@ -1,16 +1,15 @@
-// Usage reporting tests cover run-level metadata attribution, runtime plugin
+// Full-entry usage reporting coverage spans metadata attribution, runtime plugin
 // bootstrap inputs, and forwarding fields into embedded attempts.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
-  loadRunOverflowCompactionHarness,
   mockedAcquireAgentRunPreparedModelRuntime,
   mockedResolveModelAsync,
   mockedRunEmbeddedAttempt,
   resetRunOverflowCompactionHarnessMocks,
-  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
+import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
@@ -45,8 +44,7 @@ function firstAttemptInput(): Record<string, unknown> {
 
 describe("runEmbeddedAgent usage reporting", () => {
   beforeAll(async () => {
-    ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
-    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
+    runEmbeddedAgent = await loadSharedRunIntegrationHarness();
   });
 
   beforeEach(() => {

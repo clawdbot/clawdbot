@@ -379,7 +379,11 @@ describe("googlechat setup", () => {
       task,
     });
 
-    expectLifecyclePatch(patches, { running: true, webhookPath: "/googlechat" });
+    expectLifecyclePatch(patches, {
+      running: true,
+      webhookPath: "/googlechat",
+      lifecycle: "starting",
+    });
     expect(patches.some((patch) => patch.lifecycle === "blocked")).toBe(false);
   });
 

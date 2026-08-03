@@ -1,10 +1,9 @@
-// Coverage for retrying empty errored assistant turns in runEmbeddedAgent.
+// Full-entry coverage for retrying empty errored assistant turns.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { classifyAssistantFailoverReason as realClassifyAssistantFailoverReason } from "../embedded-agent-helpers/errors.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
-  loadRunOverflowCompactionHarness,
   mockedBuildEmbeddedRunPayloads,
   mockedClassifyAssistantFailoverReason,
   mockedClassifyFailoverReason,
@@ -12,8 +11,8 @@ import {
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
-  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
+import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 import { buildEmbeddedRunPayloads as realBuildEmbeddedRunPayloads } from "./run/payloads.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
@@ -64,8 +63,7 @@ function successAttempt(provider: string, model: string): EmbeddedRunAttemptResu
 
 describe("runEmbeddedAgent silent-error retry", () => {
   beforeAll(async () => {
-    ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
-    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
+    runEmbeddedAgent = await loadSharedRunIntegrationHarness();
   });
 
   beforeEach(() => {

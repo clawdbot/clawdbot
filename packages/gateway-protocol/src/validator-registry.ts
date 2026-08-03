@@ -11,6 +11,7 @@ import {
   GatewaySuspendPrepareParamsSchema,
   GatewaySuspendStatusParamsSchema,
   GatewaySuspendResumeParamsSchema,
+  HooksStatusParamsSchema,
   RequestFrameSchema,
   MessageActionParamsSchema,
   SendParamsSchema,
@@ -605,6 +606,7 @@ export const validateModelsAuthLogoutParams = lazyCompile(ModelsAuthLogoutParams
 export const validateModelsAuthStatusParams = lazyCompile(ModelsAuthStatusParamsSchema);
 export const validateModelsListParams = lazyCompile(ModelsListParamsSchema);
 export const validateSkillsStatusParams = lazyCompile(SkillsStatusParamsSchema);
+export const validateHooksStatusParams = lazyCompile(HooksStatusParamsSchema);
 export const validateToolsCatalogParams = lazyCompile(ToolsCatalogParamsSchema);
 export const validateToolsEffectiveParams = lazyCompile(ToolsEffectiveParamsSchema);
 export const validateToolsInvokeParams = lazyCompile(ToolsInvokeParamsSchema);

@@ -393,7 +393,6 @@ src/agents/embedded-agent-runner/model.test.ts
 src/agents/embedded-agent-runner/replay-history.ts
 src/agents/embedded-agent-runner/run.incomplete-turn.test.ts
 src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts
-src/agents/embedded-agent-runner/run.overflow-compaction.test.ts
 src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.test.ts
 src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.ts
 src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts
@@ -533,7 +532,6 @@ src/auto-reply/reply/session.ts
 src/auto-reply/status.test.ts
 src/channels/message/ingress-queue.ts
 src/channels/plugins/bundled.shape-guard.test.ts
-src/channels/plugins/bundled.ts
 src/channels/plugins/message-actions.security.test.ts
 src/channels/plugins/outbound/interactive.test.ts
 src/channels/plugins/read-only.test.ts

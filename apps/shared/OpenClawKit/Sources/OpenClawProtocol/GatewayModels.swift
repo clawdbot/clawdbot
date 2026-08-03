@@ -15912,6 +15912,8 @@ public struct QuestionListResult: Codable, Sendable {
     }
 }
 
+public struct HooksStatusParams: Codable, Sendable {}
+
 public struct PluginApprovalRequestParams: Codable, Sendable {
     public let pluginid: String?
     public let title: String

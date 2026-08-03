@@ -568,6 +568,29 @@ describe("mattermost inbound user posts", () => {
     });
   });
 
+  it("publishes recovering while API authentication retries, including 401", async () => {
+    const abortController = new AbortController();
+    const statusSink = vi.fn();
+    mockState.fetchMattermostMe.mockRejectedValue(new Error("HTTP 401 Unauthorized"));
+
+    const monitor = monitorMattermostProvider({
+      config: testConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      statusSink,
+    });
+
+    await vi.waitFor(() => {
+      expect(statusSink).toHaveBeenCalledWith({
+        connected: false,
+        lifecycle: "recovering",
+        lastError: "Error: HTTP 401 Unauthorized",
+      });
+    });
+    abortController.abort();
+    await monitor;
+  });
+
   it("does not enqueue regular user posts as system events", async () => {
     const socket = new FakeWebSocket();
     const abortController = new AbortController();

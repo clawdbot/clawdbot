@@ -27,6 +27,7 @@ export {
   resolveConfigValidationMetadataPluginIds,
   resolveGatewayStartupMetadataPluginIds,
   loadGatewayStartupPluginPlan,
+  loadGatewayStartupPluginPlanWithMetadata,
   resolveGatewayStartupPluginIds,
   resolveGatewayStartupPluginPlanFromRegistry,
   resolveGatewayStartupPluginIdsFromRegistry,

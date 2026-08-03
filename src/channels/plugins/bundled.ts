@@ -8,6 +8,7 @@ import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { extractErrorCode, formatErrorMessage } from "../../infra/errors.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
@@ -113,23 +114,6 @@ const bundledChannelLoadContextsByRoot = new Map<string, BundledChannelLoadConte
 const bundledChannelBoundaryRoots = new Map<string, string>();
 const sourceBundledEntryLoaderCache: PluginModuleLoaderCache = new Map();
 
-function rememberBoundedBundledChannelValue<TKey, TValue>(
-  cache: Map<TKey, TValue>,
-  key: TKey,
-  value: TValue,
-  maxSize: number,
-): TValue {
-  cache.delete(key);
-  cache.set(key, value);
-  if (cache.size > maxSize) {
-    const oldestKey = cache.keys().next().value;
-    if (oldestKey !== undefined) {
-      cache.delete(oldestKey);
-    }
-  }
-  return value;
-}
-
 function isSourceModulePath(modulePath: string): boolean {
   return /\.(?:c|m)?tsx?$/iu.test(modulePath);
 }
@@ -201,12 +185,10 @@ function resolveBundledChannelBoundaryRoot(params: {
   ].join("\0");
   const cached = bundledChannelBoundaryRoots.get(cacheKey);
   if (cached) {
-    return rememberBoundedBundledChannelValue(
-      bundledChannelBoundaryRoots,
-      cacheKey,
-      cached,
-      MAX_BUNDLED_CHANNEL_BOUNDARY_ROOTS,
-    );
+    bundledChannelBoundaryRoots.delete(cacheKey);
+    bundledChannelBoundaryRoots.set(cacheKey, cached);
+    pruneMapToMaxSize(bundledChannelBoundaryRoots, MAX_BUNDLED_CHANNEL_BOUNDARY_ROOTS);
+    return cached;
   }
   const canonicalModulePath = resolveCanonicalPathOrAbsolute(params.modulePath);
   const sourceRoot = path.resolve(params.packageRoot, "extensions", params.metadata.dirName);
@@ -222,12 +204,9 @@ function resolveBundledChannelBoundaryRoot(params: {
       .map(resolveCanonicalPathOrAbsolute)
       .find((root) => isPathInside(root, canonicalModulePath)) ??
     resolveCanonicalPathOrAbsolute(sourceRoot);
-  return rememberBoundedBundledChannelValue(
-    bundledChannelBoundaryRoots,
-    cacheKey,
-    boundaryRoot,
-    MAX_BUNDLED_CHANNEL_BOUNDARY_ROOTS,
-  );
+  bundledChannelBoundaryRoots.set(cacheKey, boundaryRoot);
+  pruneMapToMaxSize(bundledChannelBoundaryRoots, MAX_BUNDLED_CHANNEL_BOUNDARY_ROOTS);
+  return boundaryRoot;
 }
 
 function resolveGeneratedBundledChannelModulePath(params: {
@@ -406,12 +385,11 @@ function resolveActiveBundledChannelLoadScope(env: NodeJS.ProcessEnv = process.e
   loadContext: BundledChannelLoadContext;
 } {
   const rootScope = resolveBundledChannelRootScope(env);
-  const loadContext = rememberBoundedBundledChannelValue(
-    bundledChannelLoadContextsByRoot,
-    rootScope.cacheKey,
-    bundledChannelLoadContextsByRoot.get(rootScope.cacheKey) ?? createBundledChannelLoadContext(),
-    MAX_BUNDLED_CHANNEL_LOAD_CONTEXTS,
-  );
+  const loadContext =
+    bundledChannelLoadContextsByRoot.get(rootScope.cacheKey) ?? createBundledChannelLoadContext();
+  bundledChannelLoadContextsByRoot.delete(rootScope.cacheKey);
+  bundledChannelLoadContextsByRoot.set(rootScope.cacheKey, loadContext);
+  pruneMapToMaxSize(bundledChannelLoadContextsByRoot, MAX_BUNDLED_CHANNEL_LOAD_CONTEXTS);
   return {
     rootScope,
     loadContext,
@@ -779,4 +757,3 @@ export function setBundledChannelRuntime(id: ChannelId, runtime: PluginRuntime):
   }
   setter(runtime);
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

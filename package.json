@@ -1836,7 +1836,7 @@
     "test:force": "node --import tsx scripts/test-force.ts",
     "test:gateway": "node scripts/run-with-env.mjs OPENCLAW_GATEWAY_PROJECT_SHARDS=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts",
     "test:gateway:cpu-scenarios": "node scripts/check-gateway-cpu-scenarios.mjs",
-    "test:gateway:concurrency": "node --import tsx scripts/bench-gateway-concurrency.ts",
+    "test:gateway:concurrency": "node scripts/bench-gateway-concurrency.ts",
     "test:gateway:memory-fd-repro": "node scripts/check-memory-fd-repro.mjs",
     "test:gateway:watch-regression": "node scripts/check-gateway-watch-regression.mjs",
     "test:install:e2e": "bash scripts/test-install-sh-e2e-docker.sh",

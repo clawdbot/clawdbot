@@ -350,13 +350,16 @@ function createAccount(params: { token: string; secret: string }): ResolvedLineA
 
 function startLineAccount(params: { account: ResolvedLineAccount; abortSignal?: AbortSignal }) {
   const { runtime, monitorLineProvider } = createRuntime();
+  const statusEvents: unknown[] = [];
   setLineRuntime(runtime);
   return {
     monitorLineProvider,
+    statusEvents,
     task: lineGatewayAdapter.startAccount!(
       createStartAccountContext({
         account: params.account,
         abortSignal: params.abortSignal,
+        statusPatchSink: (patch) => statusEvents.push(patch),
       }),
     ),
   };
@@ -387,7 +390,7 @@ describe("linePlugin gateway.startAccount", () => {
 
   it("starts provider when token and secret are present", async () => {
     const abort = new AbortController();
-    const { monitorLineProvider, task } = startLineAccount({
+    const { monitorLineProvider, statusEvents, task } = startLineAccount({
       account: createAccount({ token: "token", secret: "secret" }),
       abortSignal: abort.signal,
     });
@@ -401,6 +404,10 @@ describe("linePlugin gateway.startAccount", () => {
     expect(startupParams?.channelAccessToken).toBe("token");
     expect(startupParams?.channelSecret).toBe("secret");
     expect(startupParams?.accountId).toBe("default");
+    expect(statusEvents).toContainEqual(
+      expect.objectContaining({ accountId: "default", lifecycle: "starting" }),
+    );
+    expect(startupParams).toEqual(expect.objectContaining({ statusSink: expect.any(Function) }));
 
     abort.abort();
     await task;

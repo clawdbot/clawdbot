@@ -1,10 +1,9 @@
-// Coverage for preserving current-attempt error context across model fallback.
+// Full-entry coverage for current-attempt error context across model fallback.
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { makeModelFallbackCfg } from "../test-helpers/model-fallback-config-fixture.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
-  loadRunOverflowCompactionHarness,
   MockedFailoverError,
   mockedClassifyFailoverReason,
   mockedEnsureAuthProfileStore,
@@ -19,6 +18,7 @@ import {
   resetRunOverflowCompactionHarnessMocks,
   warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
+import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
@@ -96,12 +96,12 @@ function useCrossProviderAuthFixture() {
       "anthropic:test": {
         type: "api_key" as const,
         provider: "anthropic",
-        key: "anthropic-test-key",
+        key: "fixture",
       },
       "deepseek:test": {
         type: "api_key" as const,
         provider: "deepseek",
-        key: "deepseek-test-key",
+        key: "fixture",
       },
     },
   };
@@ -162,7 +162,7 @@ async function expectDeepseekFallbackError(
 
 describe("runEmbeddedAgent cross-provider fallback error handling", () => {
   beforeAll(async () => {
-    ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
+    runEmbeddedAgent = await loadSharedRunIntegrationHarness();
     await warmRunOverflowCompactionHarness(runEmbeddedAgent, {
       config: makeCrossProviderFallbackConfig(),
       agentHarnessRuntimeOverride: "openclaw",

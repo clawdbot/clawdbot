@@ -532,7 +532,12 @@ function findNotesHumanBlock(page: string): { start: number; end: number } | nul
   const start = page.indexOf(HUMAN_START_MARKER, searchFrom);
   const endMarker = page.lastIndexOf(HUMAN_END_MARKER);
   if (start === -1 && endMarker < searchFrom) {
-    return null;
+    const notesSection = /(?:^|\r?\n)## Notes[\t ]*(?:\r?\n|$)([\s\S]*)/u.exec(
+      page.slice(searchFrom),
+    );
+    if (!notesSection?.[1]?.trim()) {
+      return null;
+    }
   }
   if (start === -1 || endMarker < start) {
     const missingMarker = start === -1 ? HUMAN_START_MARKER : HUMAN_END_MARKER;

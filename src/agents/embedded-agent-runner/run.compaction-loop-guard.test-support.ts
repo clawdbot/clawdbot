@@ -1,4 +1,4 @@
-// Coverage for wiring the post-compaction loop guard into embedded runs.
+// Full-entry coverage for wiring the post-compaction loop guard into embedded runs.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   diagnosticSessionStates as DiagnosticSessionStatesType,
@@ -21,17 +21,16 @@ import {
 } from "./run.overflow-compaction.fixture.js";
 import {
   overflowBaseRunParams as baseParams,
-  loadRunOverflowCompactionHarness,
   mockedCompactDirect,
   mockedIsCompactionFailureError,
   mockedIsLikelyContextOverflowError,
   mockedRunEmbeddedAttempt,
   resetRunOverflowCompactionHarnessMocks,
-  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
+import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
-// Import after loadRunOverflowCompactionHarness so these references point at the
+// Import after the shared harness loads so these references point at the
 // same module instances as the re-imported runner graph.
 let diagnosticSessionStates: typeof DiagnosticSessionStatesType;
 let getDiagnosticSessionState: typeof GetDiagnosticSessionStateType;
@@ -99,8 +98,7 @@ async function executeWrappedToolOutcome(
 
 describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
   beforeAll(async () => {
-    ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
-    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
+    runEmbeddedAgent = await loadSharedRunIntegrationHarness();
     // Re-import after the harness reset so we share module instances with
     // the runner. The runner imports both modules through its own graph.
     ({ diagnosticSessionStates, getDiagnosticSessionState } =

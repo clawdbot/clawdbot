@@ -3,6 +3,7 @@
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { normalizeToolName } from "../agents/tool-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { DirectoryCache } from "../infra/outbound/directory-cache.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
 import {
@@ -22,10 +23,12 @@ const NATIVE_TOOL_EXCLUDE = new Set(["read", "write", "edit", "apply_patch", "ex
 
 type CachedScopedTools = {
   agentId: string | undefined;
+  // Tool policy resolves the workspace root (grant value, else the agent's
+  // configured workspace). Hook context must carry the same one the tools were
+  // built with, or before-tool-call policy resolves state against a different root.
+  workspaceDir: string | undefined;
   tools: McpLoopbackTool[];
   toolSchema: McpToolSchemaEntry[];
-  configRef: OpenClawConfig;
-  time: number;
 };
 
 type McpLoopbackScopeParams = Omit<McpLoopbackRequestContext, "senderIsOwner"> & {
@@ -67,6 +70,7 @@ function resolveMcpLoopbackTools(
   mode: LoopbackToolsAllowMode,
 ): {
   agentId: string | undefined;
+  workspaceDir?: string;
   tools: McpLoopbackTool[];
 } {
   const excludeToolNames = new Set(NATIVE_TOOL_EXCLUDE);
@@ -91,6 +95,7 @@ function resolveMcpLoopbackTools(
   });
   return {
     agentId: scoped.agentId,
+    workspaceDir: scoped.workspaceDir,
     tools:
       mode === "exact"
         ? applyGrantToolsAllow(scoped.tools, params.toolsAllow)
@@ -101,6 +106,7 @@ function resolveMcpLoopbackTools(
 /** Resolves loopback-visible tools from the exact names carried by a minted grant. */
 export function resolveMcpLoopbackScopedTools(params: McpLoopbackScopeParams): {
   agentId: string | undefined;
+  workspaceDir?: string;
   tools: McpLoopbackTool[];
 } {
   return resolveMcpLoopbackTools(params, "exact");
@@ -154,7 +160,7 @@ function applyPolicyToolsAllow(
 
 /** Short-lived cache for loopback tool lists keyed by session/channel context. */
 export class McpLoopbackToolCache {
-  #entries = new Map<string, CachedScopedTools>();
+  #entries = new DirectoryCache<CachedScopedTools>(TOOL_CACHE_TTL_MS, TOOL_CACHE_MAX_ENTRIES);
 
   resolve(params: McpLoopbackScopeParams): CachedScopedTools {
     // Callers differing only in capabilities must not share cached tool lists.
@@ -222,35 +228,19 @@ export class McpLoopbackToolCache {
           ? "non-owner"
           : "unknown-owner",
     ].join("\u0000");
-    const now = Date.now();
-    for (const [key, entry] of this.#entries) {
-      if (now - entry.time >= TOOL_CACHE_TTL_MS) {
-        this.#entries.delete(key);
-      }
-    }
-    const cached = this.#entries.get(cacheKey);
-    // Config object identity is part of the cache contract so explicit gateway
-    // reloads invalidate tool scope and schema without filesystem polling.
-    if (cached && cached.configRef === params.cfg && now - cached.time < TOOL_CACHE_TTL_MS) {
+    const cached = this.#entries.get(cacheKey, params.cfg);
+    if (cached) {
       return cached;
     }
 
     const next = resolveMcpLoopbackScopedTools(params);
     const nextEntry: CachedScopedTools = {
       agentId: next.agentId,
+      workspaceDir: next.workspaceDir,
       tools: next.tools,
       toolSchema: buildMcpToolSchema(next.tools),
-      configRef: params.cfg,
-      time: now,
     };
-    this.#entries.set(cacheKey, nextEntry);
-    while (this.#entries.size > TOOL_CACHE_MAX_ENTRIES) {
-      const oldestKey = this.#entries.keys().next().value;
-      if (oldestKey === undefined) {
-        break;
-      }
-      this.#entries.delete(oldestKey);
-    }
+    this.#entries.set(cacheKey, nextEntry, params.cfg);
     return nextEntry;
   }
 }
