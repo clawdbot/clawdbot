@@ -105,6 +105,8 @@ type ReasoningProgressPayload = {
 type ProgressCallbackResult = false | void;
 
 /** Reply generation options shared by auto-reply, webchat, channels, and tests. */
+import type { CronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
+
 export type GetReplyOptions = {
   /** Override run id for agent events (defaults to random UUID). */
   runId?: string;
@@ -157,6 +159,8 @@ export type GetReplyOptions = {
   disableTools?: boolean;
   /** Runtime tool allow-list for this turn. Empty means no tools. */
   toolsAllow?: string[];
+  /** Server-stamped scheduled run policy authority for trusted scheduled runs. */
+  scheduledToolPolicy?: CronScheduledToolPolicy | undefined;
   /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
   enableHeartbeatTool?: boolean;
   /** If true, keep the heartbeat response tool available even under narrow tool profiles. */

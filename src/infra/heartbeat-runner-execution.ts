@@ -40,6 +40,7 @@ import {
   type CronActiveJobMarker,
 } from "../cron/active-jobs.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
+import { createTrustedCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
 import { writeCronJobScratch } from "../cron/scratch-store.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import {
@@ -666,6 +667,9 @@ export async function invokeHeartbeatAgentRun(
     ...(usesHeartbeatResponseTool ? { sourceReplyDeliveryMode: "message_tool_only" as const } : {}),
     ...(hasDueCommitments ? { disableTools: true, skillFilter: [] } : {}),
     ...(heartbeatWakeAbortSignal ? { abortSignal: heartbeatWakeAbortSignal } : {}),
+    // Treat heartbeat runs as trusted scheduled runs so sender-based wildcard
+    // requester policies do not strip tools intended for an internal run.
+    scheduledToolPolicy: createTrustedCronScheduledToolPolicy(),
     // Heartbeat timeout is a per-run override so user turns keep the global default.
     timeoutOverrideSeconds: resolveHeartbeatTimeoutOverrideSeconds(cfg, heartbeat),
     bootstrapContextMode: heartbeat?.lightContext === true ? ("lightweight" as const) : undefined,
