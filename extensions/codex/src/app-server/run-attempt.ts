@@ -62,6 +62,7 @@ export async function runCodexAppServerAttempt(
     lifecycle,
     notifications,
     turnStart.turn,
+    turnRequest,
   );
 
   try {

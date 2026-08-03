@@ -876,7 +876,9 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
     async (_, item, toolName) => {
       const diagnosticEvents: DiagnosticEventPayload[] = [];
       const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
-      const projector = await createProjector();
+      const onToolStarted = vi.fn();
+      const onToolCompleted = vi.fn();
+      const projector = await createProjector(undefined, { onToolStarted, onToolCompleted });
 
       try {
         await projector.handleNotification(
@@ -902,6 +904,8 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
         { type: "tool.execution.completed", toolName },
       ]);
       expect(JSON.stringify(diagnosticEvents)).not.toContain("sensitive");
+      expect(onToolStarted).toHaveBeenCalledWith(item.id, 1_750_000_000_000);
+      expect(onToolCompleted).toHaveBeenCalledWith(item.id, 1_750_000_000_042);
     },
   );
 

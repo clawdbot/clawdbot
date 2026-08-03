@@ -37,6 +37,8 @@ type CodexNativeToolLifecycleContext = Pick<
 
 type CodexNativeToolLifecycleProjectorOptions = {
   runAbortSignal?: AbortSignal;
+  onToolStarted?: (toolCallId: string, startedAtMs: number) => void;
+  onToolCompleted?: (toolCallId: string, completedAtMs: number) => void;
 };
 
 type CodexNativePreToolUseFailureRecord = {
@@ -229,6 +231,7 @@ export class CodexNativeToolLifecycleProjector {
     const startedAt = this.startedAtByItem.get(toolCallId);
     this.startedAtByItem.delete(toolCallId);
     const endedAt = options.sourceTimestampMs ?? Date.now();
+    this.options.onToolCompleted?.(toolCallId, endedAt);
     const durationMs =
       options.itemDurationMs ?? (startedAt === undefined ? 0 : Math.max(0, endedAt - startedAt));
     if (preToolUseFailure) {
@@ -355,8 +358,10 @@ export class CodexNativeToolLifecycleProjector {
     if (this.activeItems.has(toolCallId)) {
       return;
     }
-    this.startedAtByItem.set(toolCallId, sourceTimestampMs ?? Date.now());
+    const startedAt = sourceTimestampMs ?? Date.now();
+    this.startedAtByItem.set(toolCallId, startedAt);
     this.activeItems.set(toolCallId, { toolName, unfinishedStatus });
+    this.options.onToolStarted?.(toolCallId, startedAt);
     emitTrustedDiagnosticEvent({
       type: "tool.execution.started",
       ...this.buildBase(toolCallId, toolName),

@@ -105,6 +105,17 @@ function createClientFactory(
     terminalStatus?: "completed" | "interrupted";
     assistantDelta?: string;
     completeTurn?: boolean;
+    responseUsages?: Array<{
+      responseId: string;
+      usage: {
+        totalTokens: number;
+        inputTokens: number;
+        cachedInputTokens: number;
+        cacheWriteInputTokens: number;
+        outputTokens: number;
+        reasoningOutputTokens: number;
+      };
+    }>;
   } = {},
 ) {
   const methods: string[] = [];
@@ -174,11 +185,8 @@ function createClientFactory(
               },
             });
           }
-          handler({
-            method: "rawResponse/completed",
-            params: {
-              threadId: "thread-finalizer",
-              turnId: "turn-finalizer",
+          const responseUsages = options.responseUsages ?? [
+            {
               responseId: "response-finalizer",
               usage: {
                 totalTokens: 12,
@@ -189,7 +197,17 @@ function createClientFactory(
                 reasoningOutputTokens: 0,
               },
             },
-          });
+          ];
+          for (const response of responseUsages) {
+            handler({
+              method: "rawResponse/completed",
+              params: {
+                threadId: "thread-finalizer",
+                turnId: "turn-finalizer",
+                ...response,
+              },
+            });
+          }
           handler({
             method: "turn/completed",
             params: {
@@ -374,7 +392,32 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
   });
 
   it("attests ring-zero and injects frozen history before starting the final turn", async () => {
-    const fake = createClientFactory();
+    const fake = createClientFactory({
+      responseUsages: [
+        {
+          responseId: "response-finalizer-1",
+          usage: {
+            totalTokens: 12,
+            inputTokens: 8,
+            cachedInputTokens: 2,
+            cacheWriteInputTokens: 1,
+            outputTokens: 4,
+            reasoningOutputTokens: 1,
+          },
+        },
+        {
+          responseId: "response-finalizer-2",
+          usage: {
+            totalTokens: 20,
+            inputTokens: 15,
+            cachedInputTokens: 3,
+            cacheWriteInputTokens: 2,
+            outputTokens: 5,
+            reasoningOutputTokens: 2,
+          },
+        },
+      ],
+    });
     const historyItems: JsonValue[] = [
       { type: "function_call", call_id: "call-1", name: "message", arguments: "{}" },
       { type: "function_call_output", call_id: "call-1", output: "sent" },
@@ -397,11 +440,12 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
       text: "The message was sent successfully.",
       model: "gpt-5.4",
       usage: {
-        input: 5,
-        output: 4,
-        cacheRead: 2,
-        cacheWrite: 1,
-        total: 12,
+        input: 15,
+        output: 9,
+        cacheRead: 5,
+        cacheWrite: 3,
+        reasoningTokens: 3,
+        total: 32,
       },
     });
 

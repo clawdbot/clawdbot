@@ -135,16 +135,17 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
     assignModelCallPromptStatsAttrs(spanAttrs, evt);
     assignModelCallUsageAttrs(spanAttrs, evt);
     assignOtelModelContentAttributes(spanAttrs, modelContent, contentCapturePolicy);
+    const completedAtMs = positiveFiniteNumber(evt.sourceTimestampMs) ?? evt.ts;
     const span =
       takeTrackedTrustedSpan(evt, metadata) ??
       spanWithDuration(modelCallSpanName(evt), spanAttrs, evt.durationMs, {
         kind: modelCallSpanKind(),
         parentContext: activeTrustedParentContext(evt, metadata),
-        endTimeMs: evt.ts,
+        endTimeMs: completedAtMs,
       });
     setSpanAttrs(span, spanAttrs);
     addUpstreamRequestIdSpanEvent(span, evt.upstreamRequestIdHash);
-    span.end(evt.ts);
+    span.end(completedAtMs);
   };
 
   const recordModelCallError = (

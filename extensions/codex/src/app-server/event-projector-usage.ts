@@ -1,5 +1,5 @@
 import { normalizeUsage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { readNonNegativeInteger, readNumber, readString } from "./event-projector-values.js";
+import { readNonNegativeInteger, readNumber } from "./event-projector-values.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
 
 function readTokenCount(record: JsonObject, key: string): number | undefined {
@@ -57,6 +57,7 @@ export function normalizeCodexThreadTokenUsage(
     input,
     output: readNumber(record, "outputTokens"),
     cacheRead,
+    reasoningTokens: readNumber(record, "reasoningOutputTokens"),
     total: readNumber(record, "totalTokens"),
   });
   return usage ? { ...usage, contextUsage: { state: "unavailable" } } : undefined;
@@ -93,14 +94,15 @@ export function normalizeCodexResponseTokenUsage(
     output,
     cacheRead,
     cacheWrite,
+    reasoningTokens: reasoningOutput,
     total: totalTokens,
   });
   if (!usage) {
     return undefined;
   }
 
-  // `rawResponse/completed` is exact for one provider response. The projector
-  // replaces this snapshot on every response so the final one owns freshness.
+  // `rawResponse/completed` is exact for one provider response. Its context
+  // snapshot belongs to that response even when accounting sums several calls.
   return {
     ...usage,
     contextUsage: {
@@ -111,27 +113,23 @@ export function normalizeCodexResponseTokenUsage(
   };
 }
 
-export class CodexResponseCompletionProjection {
-  // Replayed notifications keep one upstream response equal to one model iteration.
-  private readonly responseIds = new Set<string>();
-  usage: ReturnType<typeof normalizeUsage>;
-
-  get modelIterations(): number {
-    return this.responseIds.size;
+export function accumulateCodexResponseTokenUsage(
+  current: ReturnType<typeof normalizeUsage>,
+  next: NonNullable<ReturnType<typeof normalizeUsage>>,
+): ReturnType<typeof normalizeUsage> {
+  const usage = normalizeUsage({
+    input: (current?.input ?? 0) + (next.input ?? 0),
+    output: (current?.output ?? 0) + (next.output ?? 0),
+    cacheRead: (current?.cacheRead ?? 0) + (next.cacheRead ?? 0),
+    cacheWrite: (current?.cacheWrite ?? 0) + (next.cacheWrite ?? 0),
+    reasoningTokens: (current?.reasoningTokens ?? 0) + (next.reasoningTokens ?? 0),
+    total: (current?.total ?? 0) + (next.total ?? 0),
+  });
+  if (!usage) {
+    return undefined;
   }
-
-  clear(): void {
-    this.usage = undefined;
-  }
-
-  record(params: JsonObject): void {
-    const responseId = readString(params, "responseId");
-    if (responseId) {
-      this.responseIds.add(responseId);
-    }
-    const usage = isJsonObject(params.usage) ? params.usage : undefined;
-    // Every provider completion replaces the prior response snapshot. A final
-    // response with missing or malformed usage must leave freshness unknown.
-    this.usage = usage ? normalizeCodexResponseTokenUsage(usage) : undefined;
-  }
+  return {
+    ...usage,
+    ...(next.contextUsage ? { contextUsage: { ...next.contextUsage } } : {}),
+  };
 }

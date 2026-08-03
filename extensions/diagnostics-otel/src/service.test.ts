@@ -2972,6 +2972,23 @@ describe("diagnostics-otel service", () => {
     );
   });
 
+  test("backdates completed-only model call spans to the source completion time", async () => {
+    await startOtelService({ traces: true, metrics: true });
+
+    await emitTrustedAndFlush({
+      type: "model.call.completed",
+      ...MODEL_CALL_FIXTURE,
+      durationMs: 250,
+      sourceTimestampMs: 5_000,
+      trace: createTestTrace(MODEL_CALL_SPAN_ID, CHILD_SPAN_ID),
+    });
+
+    const modelCallOptions = startedSpanOptions("openclaw.model.call");
+    expect(modelCallOptions?.startTime).toBe(4_750);
+    const span = telemetryState.spans.find((candidate) => candidate.name === "openclaw.model.call");
+    expect(span?.end).toHaveBeenCalledWith(5_000);
+  });
+
   test("exports trusted context assembly spans without prompt content", async () => {
     await startOtelService({ traces: true, metrics: true });
 

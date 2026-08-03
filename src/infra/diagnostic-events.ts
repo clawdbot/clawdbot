@@ -644,6 +644,8 @@ export type DiagnosticModelCallStartedEvent = DiagnosticModelCallBaseEvent & {
 export type DiagnosticModelCallCompletedEvent = DiagnosticModelCallBaseEvent & {
   type: "model.call.completed";
   durationMs: number;
+  /** Authoritative completion time when a historical request span is emitted later. */
+  sourceTimestampMs?: number;
   requestPayloadBytes?: number;
   responseStreamBytes?: number;
   timeToFirstByteMs?: number;

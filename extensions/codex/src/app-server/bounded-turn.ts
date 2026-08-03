@@ -15,6 +15,7 @@ import {
 } from "./attempt-notifications.js";
 import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { CodexResponseUsageProjection } from "./event-projector-response-usage.js";
 import { normalizeCodexResponseTokenUsage } from "./event-projector-usage.js";
 import { readModelListResult } from "./models.js";
 import { readCodexNotificationTurnId } from "./notification-correlation.js";
@@ -480,7 +481,7 @@ function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
   let turnId: string | undefined;
   let completedTurn: CodexTurn | undefined;
   let promptError: string | undefined;
-  let responseUsage: ReturnType<typeof normalizeCodexResponseTokenUsage>;
+  const responseUsageProjection = new CodexResponseUsageProjection();
   const pending: CodexServerNotification[] = [];
   const completedItems = new Map<string, CodexThreadItem>();
   const assistantTextByItem = new Map<string, string>();
@@ -529,9 +530,7 @@ function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
       return;
     }
     if (notification.method === "rawResponse/completed") {
-      const usage = isJsonObject(params.usage) ? params.usage : undefined;
-      // Exact per-response usage replaces any earlier response in this turn.
-      responseUsage = usage ? normalizeCodexResponseTokenUsage(usage) : undefined;
+      responseUsageProjection.handleCompleted(params);
       return;
     }
     if (notification.method === "turn/completed") {
@@ -542,8 +541,10 @@ function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
     }
     if (notification.method === "error") {
       if (isRetryableErrorNotification(notification.params)) {
+        responseUsageProjection.markRetryableError();
         return;
       }
+      responseUsageProjection.invalidate();
       promptError =
         readCodexErrorNotification(notification.params)?.error.message ??
         `codex app-server ${taskLabel} turn failed`;
@@ -596,6 +597,10 @@ function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
       if (!text) {
         throw new Error(`Codex app-server ${taskLabel} turn returned no text.`);
       }
+      const responseUsage = responseUsageProjection.project({
+        aborted: false,
+        fallback: undefined,
+      }).attemptUsage;
       return { text, items, ...(responseUsage ? { usage: responseUsage } : {}) };
     },
   };
