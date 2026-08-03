@@ -23,6 +23,8 @@ import type { ResolvedSmsAccount } from "./types.js";
 
 const INVALID_REQUEST_MAX_REQUESTS = 300;
 const INBOUND_DISPATCH_MAX_REQUESTS = 30;
+const DELIVERY_CALLBACK_MAX_REQUESTS = 3_000;
+const DELIVERY_CALLBACK_WINDOW_MS = 60_000;
 const SMS_WEBHOOK_ACCEPTED_HEADER = "x-openclaw-delivery-accepted";
 const SMS_WEBHOOK_ACCEPTED_VALUE = "durable";
 
@@ -102,6 +104,14 @@ function rejectInvalidRequestRateLimit(params: {
 // Each account route owns one durable ingress adapter.
 export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
   let deliveryRecorder = params.delivery;
+  // Status persistence gets a separate route-level safety fuse. It stays much
+  // looser than inbound quotas; overflow gets a visible 5xx instead of a false ack.
+  const deliveryCallbackRateLimiter = createFixedWindowRateLimiter({
+    maxRequests: DELIVERY_CALLBACK_MAX_REQUESTS,
+    windowMs: DELIVERY_CALLBACK_WINDOW_MS,
+    maxTrackedKeys: 1,
+  });
+  const deliveryCallbackKey = accountRouteRateLimitKey(params.account);
   return async (req: IncomingMessage, res: ServerResponse) => {
     if (req.method !== "POST") {
       respondTwiml(res, 405, "Method not allowed");
@@ -147,9 +157,8 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
       return rejectInvalidRequestRateLimit({ key: clientAddressKey, log: params.log, res });
     }
 
-    // Signed delivery callbacks bypass inbound dispatch quotas because Twilio does not
-    // retry HTTP errors by default. Bounded keyed state owns durable admission, and the
-    // generated StatusCallback opts into 5xx retries when that commit fails.
+    // Provider delivery transitions use a separate route quota from inbound messages.
+    // The generated StatusCallback opts into 5xx retries for commit or fuse failures.
     if (isTwilioDeliveryStatusForm(form)) {
       if (
         params.account.dangerouslyDisableSignatureValidation &&
@@ -170,6 +179,11 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
           `SMS delivery callback ignored missing or mismatched account for message ${messageSid}`,
         );
         respondTwiml(res, 200);
+        return true;
+      }
+      if (deliveryCallbackRateLimiter.isRateLimited(deliveryCallbackKey)) {
+        params.log?.warn?.("SMS delivery callback rate limit exceeded");
+        respondTwiml(res, 503, "Service unavailable");
         return true;
       }
       deliveryRecorder ??= createSmsDeliveryRecorder();

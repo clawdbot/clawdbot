@@ -1065,33 +1065,4 @@ describe("createSmsWebhookHandler", () => {
     expect(otherAddressRes.statusCode).toBe(200);
     expect(delivery.record).toHaveBeenCalledTimes(31);
   });
-
-  it("persists signed delivery callbacks beyond the previous fixed-window ceiling", async () => {
-    const account = createAccount();
-    const delivery = createDeliveryRecorder();
-    const handler = createSmsWebhookHandler({
-      cfg: {},
-      account,
-      ingress: createIngress(),
-      delivery,
-    });
-
-    for (let i = 0; i < 3_001; i += 1) {
-      const payload = createSignedDeliveryPayload({
-        account,
-        messageSid: createMessageSid(1_400 + i),
-        status: "sent",
-      });
-      const res = createResponse();
-      await handler(
-        createRequest(payload.body, payload.signature, {
-          remoteAddress: "203.0.113.50",
-        }),
-        res,
-      );
-      expect(res.statusCode).toBe(200);
-    }
-
-    expect(delivery.record).toHaveBeenCalledTimes(3_001);
-  });
 });
