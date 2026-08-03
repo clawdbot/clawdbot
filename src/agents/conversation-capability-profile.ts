@@ -251,7 +251,7 @@ export function resolveConversationCapabilityProfile(
   });
   // The signed projection already includes source sender/group policy. Keep
   // target-owned subagent/inherited restrictions, but never select wildcards.
-  const groupPolicy = sessionHandoffPolicy ? undefined : resolvedRequesterPolicies.groupPolicy;
+  const groupPolicy = resolvedRequesterPolicies.groupPolicy;
   const senderPolicy = sessionHandoffPolicy ? undefined : resolvedRequesterPolicies.senderPolicy;
   const { subagentPolicy, inheritedToolPolicy } = resolvedRequesterPolicies;
   const profilePolicy = resolveToolProfilePolicy(effective.profile);

@@ -363,6 +363,25 @@ describe("resolveConversationCapabilityProfile", () => {
     expect(profile.policy.explicitToolAllowlist).toContain("read");
   });
 
+  it("layers the target group policy onto a trusted sessions_send projection", () => {
+    const profile = resolveConversationCapabilityProfile({
+      config: {
+        channels: {
+          whatsapp: { groups: { team: { tools: { deny: ["exec"] } } } },
+        },
+      },
+      sessionKey: "agent:main:whatsapp:group:team",
+      messageProvider: "whatsapp",
+      runtimeToolAllowlist: ["exec", "read", "sessions_send"],
+      trustedSessionHandoff: true,
+      inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
+    });
+
+    expect(profile.policy.senderPolicy).toBeUndefined();
+    expect(profile.policy.groupPolicy).toEqual({ deny: ["exec"] });
+    expect(profile.policy.explicitToolDenylist).toContain("exec");
+  });
+
   it("does not classify the conversation as shared from a dropped caller group id", () => {
     // Non-group session key cannot vouch for the caller-supplied group facts:
     // the trust check drops them, so scope must stay unknown instead of
