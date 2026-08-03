@@ -369,6 +369,72 @@ describe("sendMessageSlack blocks", () => {
     expect((receiptPart?.raw as Record<string, unknown> | undefined)?.channelId).toBe("C123");
   });
 
+  it("records question action identities on the exact delivered Block Kit card", async () => {
+    const client = createSlackSendTestClient();
+    const onDeliveryResult = vi.fn();
+    const questionActionId = "openclaw:question_button:2:1";
+    const result = await sendMessageSlack("channel:C123", "Pick one", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      onDeliveryResult,
+      blocks: [
+        {
+          type: "actions",
+          elements: [
+            {
+              type: "button",
+              action_id: "openclaw:reply_button:1:1",
+              text: { type: "plain_text", text: "Reply" },
+            },
+            {
+              type: "button",
+              action_id: questionActionId,
+              text: { type: "plain_text", text: "Answer" },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(result.meta).toEqual({ slackQuestionActionIds: [questionActionId] });
+    expect(onDeliveryResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "171234.567",
+        meta: { slackQuestionActionIds: [questionActionId] },
+      }),
+    );
+  });
+
+  it("marks only the fallback card that actually contains the question controls", async () => {
+    const client = createSlackSendTestClient();
+    client.chat.postMessage.mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
+    const questionActionId = "openclaw:question_button:2:1";
+    const blocks = interleavedNativeDataBlocks();
+    const actionBlock = blocks.at(-1) as { elements: Array<{ action_id: string }> };
+    actionBlock.elements[0]!.action_id = questionActionId;
+    const onDeliveryResult = vi.fn();
+
+    await sendMessageSlack("channel:C123", "Outside", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      blocks: blocks as never,
+      nativeDataFallbackBaseText: "Outside",
+      textLimit: 25,
+      onDeliveryResult,
+    });
+
+    const delivered = onDeliveryResult.mock.calls.map(([result]) => result);
+    expect(delivered.length).toBeGreaterThan(1);
+    expect(delivered.filter((result) => result.meta)).toEqual([
+      expect.objectContaining({ meta: { slackQuestionActionIds: [questionActionId] } }),
+    ]);
+    expect(
+      delivered.some((result) => result.receipt.parts[0]?.kind === "card" && !result.meta),
+    ).toBe(true);
+  });
+
   it("includes sibling block text in top-level fallback for raw block sends", async () => {
     const client = createSlackSendTestClient();
 

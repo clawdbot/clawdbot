@@ -27,6 +27,7 @@ import {
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 import { SLACK_PRESENTATION_CAPABILITIES } from "./presentation.js";
+import { resolveSlackQuestionActionIds } from "./reply-action-ids.js";
 import {
   parseSlackReplyBlockSegments,
   resolveSlackReplyBlockResolution,
@@ -358,12 +359,18 @@ export const slackOutbound: ChannelOutboundAdapter = {
       segments: resolution.segments,
       text: payload.text,
     });
-    const blockMessageIndex = deliveryMessages.findIndex((message) =>
-      message.blocks?.some((block) => block.type === "actions"),
+    const deliveryMessage = deliveryMessages.find(
+      (message) => resolveSlackQuestionActionIds(message.blocks).length > 0,
     );
-    const deliveryMessage = deliveryMessages[blockMessageIndex];
-    const result =
-      results[blockMessageIndex] ?? results.find((candidate) => candidate.channel === "slack");
+    const questionActionIds = resolveSlackQuestionActionIds(deliveryMessage?.blocks);
+    const result = results.find(
+      ({ channel, meta }) =>
+        channel === "slack" &&
+        Array.isArray(meta?.slackQuestionActionIds) &&
+        meta.slackQuestionActionIds.some(
+          (actionId) => typeof actionId === "string" && questionActionIds.includes(actionId),
+        ),
+    );
     const deliveryBlocks = deliveryMessage?.blocks;
     if (!deliveryMessage || !deliveryBlocks || !result?.messageId) {
       return;

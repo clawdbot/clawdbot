@@ -1,4 +1,6 @@
 // Slack plugin module implements reply action ids behavior.
+import type { Block, KnownBlock } from "@slack/web-api";
+
 export const SLACK_REPLY_BUTTON_ACTION_ID = "openclaw:reply_button";
 export const SLACK_REPLY_LINK_ACTION_ID = "openclaw:reply_link";
 export const SLACK_REPLY_SELECT_ACTION_ID = "openclaw:reply_select";
@@ -13,6 +15,19 @@ export function isSlackQuestionActionId(actionId: string): boolean {
     actionId === SLACK_QUESTION_BUTTON_ACTION_ID ||
     actionId.startsWith(`${SLACK_QUESTION_BUTTON_ACTION_ID}:`)
   );
+}
+
+/** Read only question control identities from the blocks actually sent to Slack. */
+export function resolveSlackQuestionActionIds(blocks?: readonly (Block | KnownBlock)[]): string[] {
+  return (blocks ?? []).flatMap((block) => {
+    if (block.type !== "actions") {
+      return [];
+    }
+    const elements = (block as { elements?: readonly { action_id?: string }[] }).elements ?? [];
+    return elements.flatMap(({ action_id }) =>
+      action_id && isSlackQuestionActionId(action_id) ? [action_id] : [],
+    );
+  });
 }
 
 export function isSlackApprovalActionId(actionId: string): boolean {

@@ -49,6 +49,7 @@ import {
   isSlackInvalidBlocksError,
 } from "./native-data-blocks.js";
 import { buildSlackNativeDataDeliveryPlan } from "./native-data-fallback.js";
+import { resolveSlackQuestionActionIds } from "./reply-action-ids.js";
 import { recordSlackThreadParticipation } from "./sent-thread-cache.js";
 import { canonicalizeSlackApiTargetId, parseSlackTarget } from "./target-parsing.js";
 import { normalizeSlackThreadTsCandidate, resolveSlackThreadTsValue } from "./thread-ts.js";
@@ -261,6 +262,7 @@ export type SlackSendResult = {
   channelId: string;
   receipt: MessageReceipt;
   threadTs?: string;
+  meta?: { slackQuestionActionIds: string[] };
 };
 
 export async function updateMessageSlack(params: {
@@ -1111,9 +1113,18 @@ async function sendMessageSlackQueuedInner(params: {
         accountId: account.accountId,
         token,
       });
-  const reportDelivery = async (result: SlackSendResult) => {
-    await opts.onDeliveryResult?.(result);
-    return result;
+  const reportDelivery = async (
+    result: SlackSendResult,
+    deliveredBlocks?: (Block | KnownBlock)[],
+  ) => {
+    // Fallback can split blocks across several sends; identify controls on the
+    // actual posted card so uploads and text chunks cannot steal finalization.
+    const slackQuestionActionIds = resolveSlackQuestionActionIds(deliveredBlocks);
+    const deliveryResult = slackQuestionActionIds.length
+      ? { ...result, meta: { ...result.meta, slackQuestionActionIds } }
+      : result;
+    await opts.onDeliveryResult?.(deliveryResult);
+    return deliveryResult;
   };
   let didDispatch = false;
   const dispatchOnce = async () => {
@@ -1222,17 +1233,20 @@ async function sendMessageSlackQueuedInner(params: {
         deliveredChannelId = resolvePostedMessageChannelId(response, channelId);
         const deliveredThreadTs =
           resolvePostedMessageThreadTs(response) ?? normalizeSlackThreadTsCandidate(opts.threadTs);
-        return await reportDelivery({
-          messageId,
-          channelId: deliveredChannelId,
-          threadTs: deliveredThreadTs,
-          receipt: createSlackSendReceipt({
-            platformMessageIds: [messageId],
+        return await reportDelivery(
+          {
+            messageId,
             channelId: deliveredChannelId,
-            kind: "card",
             threadTs: deliveredThreadTs,
-          }),
-        });
+            receipt: createSlackSendReceipt({
+              platformMessageIds: [messageId],
+              channelId: deliveredChannelId,
+              kind: "card",
+              threadTs: deliveredThreadTs,
+            }),
+          },
+          blocks,
+        );
       } catch (error) {
         if (!hasNativeData || !isSlackInvalidBlocksError(error)) {
           throw error;
@@ -1284,17 +1298,20 @@ async function sendMessageSlackQueuedInner(params: {
         sentMessageIds.push(response.ts);
         const deliveredThreadTs =
           resolvePostedMessageThreadTs(response) ?? normalizeSlackThreadTsCandidate(opts.threadTs);
-        await reportDelivery({
-          messageId: response.ts,
-          channelId: deliveredChannelId,
-          threadTs: deliveredThreadTs,
-          receipt: createSlackSendReceipt({
-            platformMessageIds: [response.ts],
+        await reportDelivery(
+          {
+            messageId: response.ts,
             channelId: deliveredChannelId,
-            kind: fallback.blocks ? "card" : "text",
             threadTs: deliveredThreadTs,
-          }),
-        });
+            receipt: createSlackSendReceipt({
+              platformMessageIds: [response.ts],
+              channelId: deliveredChannelId,
+              kind: fallback.blocks ? "card" : "text",
+              threadTs: deliveredThreadTs,
+            }),
+          },
+          fallback.blocks,
+        );
       }
       const messageId = lastMessageId || "unknown";
       const deliveredThreadTs =
