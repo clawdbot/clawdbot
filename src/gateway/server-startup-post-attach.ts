@@ -27,6 +27,7 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
+import type { GatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
 import { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
@@ -1047,6 +1048,7 @@ export async function startGatewayPostAttachRuntime(
     serviceName?: string;
     preserveFunnel: boolean;
     controlUiBasePath: string;
+    controlUiRootLifecycle?: GatewayControlUiRootLifecycle;
     logTailscale: {
       info: (msg: string) => void;
       warn: (msg: string) => void;
@@ -1097,6 +1099,23 @@ export async function startGatewayPostAttachRuntime(
   },
   runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
 ) {
+  const controlUiRootLifecycle = params.controlUiRootLifecycle;
+  const controlUiAssetsSidecar =
+    !params.minimalTestGateway && controlUiRootLifecycle?.state?.kind === "preparing"
+      ? schedulePostReadySidecarTask({
+          name: "sidecars.control-ui-assets",
+          startupTrace: params.startupTrace,
+          log: params.log,
+          run: controlUiRootLifecycle.start,
+          stop: controlUiRootLifecycle.stop,
+        })
+      : undefined;
+  if (controlUiAssetsSidecar) {
+    // Publish before the first await: slow CA/plugin startup must not strand
+    // the dashboard or hide its running builder from Gateway shutdown.
+    params.onGatewayLifetimeSidecars?.([controlUiAssetsSidecar]);
+  }
+
   if (!params.minimalTestGateway) {
     // The HTTP server is already attached, so keep health probes responsive while the worker
     // resolves Node's effective default CA set before any plugin or worker provider can use TLS.
@@ -1298,6 +1317,7 @@ export async function startGatewayPostAttachRuntime(
         }
         const postReadySidecars = [...result.postReadySidecars];
         const gatewayLifetimeSidecars = [
+          ...(controlUiAssetsSidecar ? [controlUiAssetsSidecar] : []),
           scheduleContextCachePrewarm(params),
           scheduleGatewayHandlerPrewarm(params),
           ...(mainSessionRecoverySidecar ? [mainSessionRecoverySidecar] : []),

@@ -603,7 +603,18 @@ async function fetchWithSsrFGuardInternal(
             resolvedAddresses: pinned.addresses,
           })
             ? createPinnedDispatcher(pinned, dispatcherPolicy, policyForUrl, timeoutMs)
-            : createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
+            : createHttp1EnvHttpProxyAgent(
+                {
+                  // An explicitly proxied loopback must not fall back to Undici's NO_PROXY agent.
+                  noProxy: "",
+                  // Target certificate trust belongs to the tunneled endpoint,
+                  // never to the separately authenticated managed proxy.
+                  ...(dispatcherPolicy?.mode === "direct" && dispatcherPolicy.connect
+                    ? { requestTls: { ...dispatcherPolicy.connect } }
+                    : {}),
+                },
+                timeoutMs,
+              );
         } else {
           dispatcher = createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
         }
