@@ -24,16 +24,6 @@ private final class DashboardWindow: NSWindow {
     }
 }
 
-private final class DashboardWindowDragRegionView: NSView {
-    override var mouseDownCanMoveWindow: Bool {
-        true
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        window?.performDrag(with: event)
-    }
-}
-
 private final class DashboardLinkSplitView: NSSplitView {
     var onDividerDragEnded: (() -> Void)?
 
@@ -597,7 +587,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         else {
             return
         }
-        window.performDrag(with: event)
+        DashboardWindowDragGesture.handle(event, in: window)
     }
 
     static func isWindowDragRequest(_ body: Any) -> Bool {

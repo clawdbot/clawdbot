@@ -20,6 +20,8 @@ type StartSessionDeliveryRuntime =
   typeof import("../infra/session-delivery-queue-runtime.js").startSessionDeliveryRuntime;
 type DrainPendingDeliveries =
   typeof import("../infra/outbound/delivery-queue.js").drainPendingDeliveries;
+type RecoverPendingDeliveries =
+  typeof import("../infra/outbound/delivery-queue.js").recoverPendingDeliveries;
 
 const hoisted = vi.hoisted(() => {
   const heartbeatRunner = {
@@ -43,7 +45,7 @@ const hoisted = vi.hoisted(() => {
     ),
     schedulePendingSessionDeliveries: vi.fn(async () => undefined),
     startSessionUpstreamMonitor: vi.fn(() => ({ stop: stopSessionUpstreamMonitor })),
-    recoverPendingDeliveries: vi.fn(async () => ({
+    recoverPendingDeliveries: vi.fn<RecoverPendingDeliveries>(async () => ({
       recovered: 0,
       failed: 0,
       skippedMaxRetries: 0,
@@ -125,7 +127,13 @@ describe("server-runtime-services", () => {
     hoisted.stopSessionDeliveryRuntime.mockClear();
     hoisted.startSessionDeliveryRuntime.mockClear();
     hoisted.schedulePendingSessionDeliveries.mockClear();
-    hoisted.recoverPendingDeliveries.mockClear();
+    hoisted.recoverPendingDeliveries.mockReset();
+    hoisted.recoverPendingDeliveries.mockResolvedValue({
+      recovered: 0,
+      failed: 0,
+      skippedMaxRetries: 0,
+      deferredBackoff: 0,
+    });
     hoisted.drainPendingDeliveries.mockReset();
     hoisted.drainPendingDeliveries.mockResolvedValue(undefined);
     hoisted.recoverPendingRestartContinuationDeliveries.mockClear();
@@ -377,6 +385,95 @@ describe("server-runtime-services", () => {
       "recovered",
     );
     expect(hoisted.schedulePendingSessionDeliveries).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for active startup recovery before its stop handle settles", async () => {
+    vi.useFakeTimers();
+    let resolveRecovery: (() => void) | undefined;
+    hoisted.recoverPendingDeliveries.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        resolveRecovery = resolve;
+      });
+      return {
+        recovered: 0,
+        failed: 0,
+        skippedMaxRetries: 0,
+        deferredBackoff: 0,
+      };
+    });
+
+    const { services } = activateScheduledServicesForTest();
+    await vi.dynamicImportSettled();
+    expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledOnce();
+    expect(hoisted.drainPendingDeliveries).not.toHaveBeenCalled();
+
+    let stopped = false;
+    const stopPromise = services.stopOutboundDeliveryRecovery().then(() => {
+      stopped = true;
+    });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+
+    if (!resolveRecovery) {
+      throw new Error("Expected outbound startup recovery resolver to be initialized");
+    }
+    resolveRecovery();
+    await stopPromise;
+    expect(stopped).toBe(true);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+    services.heartbeatRunner.stop();
+  });
+
+  it("warns but holds shutdown until outbound recovery settles", async () => {
+    vi.useFakeTimers();
+    let resolveDrain: (() => void) | undefined;
+    hoisted.drainPendingDeliveries.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveDrain = resolve;
+        }),
+    );
+    const log = createLog();
+    const { services } = activateScheduledServicesForTest({ log });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledOnce();
+    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
+
+    let firstStopped = false;
+    let secondStopped = false;
+    const firstStop = services.stopOutboundDeliveryRecovery().then(() => {
+      firstStopped = true;
+    });
+    const secondStop = services.stopOutboundDeliveryRecovery().then(() => {
+      secondStopped = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(firstStopped).toBe(false);
+    expect(secondStopped).toBe(false);
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+    expect(log.child.mock.results[0]?.value.warn).toHaveBeenCalledOnce();
+    expect(log.child.mock.results[0]?.value.warn).toHaveBeenCalledWith(
+      "delivery recovery is still pending after 5000ms; waiting before runtime teardown",
+    );
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledOnce();
+    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
+    expect(firstStopped).toBe(false);
+    expect(secondStopped).toBe(false);
+    expect(log.child.mock.results[0]?.value.warn).toHaveBeenCalledOnce();
+
+    if (!resolveDrain) {
+      throw new Error("Expected outbound retry drain resolver to be initialized");
+    }
+    resolveDrain();
+    await Promise.all([firstStop, secondStop]);
+    expect(firstStopped).toBe(true);
+    expect(secondStopped).toBe(true);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+    services.heartbeatRunner.stop();
   });
 
   it("schedules pending session deliveries when startup recovery fails", async () => {
@@ -818,9 +915,10 @@ function activateScheduledServicesForTest(
   const cronState = createTestCronState(cron);
   const cronStart = cron.start;
   const log = overrides.log ?? createLog();
+  const cfgAtStart = overrides.cfgAtStart ?? ({} as never);
   const services = activateGatewayScheduledServices({
     minimalTestGateway: false,
-    cfgAtStart: {} as never,
+    cfgAtStart,
     deps: {} as never,
     sessionDeliveryRecoveryMaxEnqueuedAt: 123,
     cronReconciliation: createTestCronReconciliation(),

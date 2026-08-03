@@ -284,6 +284,35 @@ describe("createGatewayPluginRequestHandler", () => {
     expect(prefixGatewayHandler).not.toHaveBeenCalled();
   });
 
+  it("keeps hosted-media bearer query strings out of route-auth logs", async () => {
+    const warn = vi.fn();
+    const log = { warn } as unknown as PluginHandlerLog;
+    const handler = createGatewayPluginRequestHandler({
+      registry: createTestRegistry({
+        httpRoutes: [createRoute({ path: "/webhooks/sms", auth: "gateway" })],
+      }),
+      log,
+    });
+    const tokenParam = `__openclaw_mms_token_${"a".repeat(24)}`;
+    const { res } = makeMockHttpResponse();
+
+    const handled = await handler(
+      {
+        url: `/webhooks/sms?upstream-token=proxy-secret&${tokenParam}=media-secret`,
+      } as IncomingMessage,
+      res,
+      undefined,
+      { gatewayAuthSatisfied: false },
+    );
+
+    expect(handled).toBe(false);
+    expect(warn).toHaveBeenCalledWith(
+      "plugin http route blocked without gateway auth (/webhooks/sms)",
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("proxy-secret");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("media-secret");
+  });
+
   it("allows gateway route fallthrough only after gateway auth succeeds", async () => {
     const { handled, exactPluginHandler, prefixGatewayHandler } = await invokeSecureGatewayRoute({
       gatewayAuthSatisfied: true,

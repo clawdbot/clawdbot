@@ -17,7 +17,7 @@ import { uniqueValues } from "@openclaw/normalization-core/string-normalization"
 import { resolveCanvasHttpPathToLocalPath } from "../canvas/documents.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { FsSafeError, readLocalFileSafely } from "../infra/fs-safe.js";
+import { FsSafeError } from "../infra/fs-safe.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -42,6 +42,7 @@ import {
   assertLocalMediaAllowed,
   getDefaultLocalRoots,
   LocalMediaAccessError,
+  readLocalMediaFile,
   type LocalMediaAccessErrorCode,
 } from "./local-media-access.js";
 import { MediaReferenceError, resolveInboundMediaReference } from "./media-reference.js";
@@ -1185,7 +1186,7 @@ async function loadWebMediaInternal(
   }
 
   // Guard local reads against allowed directory roots to prevent file exfiltration.
-  if (!(sandboxValidated || localRoots === "any")) {
+  if (readFileOverride && !(sandboxValidated || localRoots === "any")) {
     await assertLocalMediaAllowed(mediaUrl, localRoots, { inboundRoots });
   }
 
@@ -1206,12 +1207,10 @@ async function loadWebMediaInternal(
     data = await readOutboundMediaFile(readFileOverride, mediaUrl, { maxBytes: sourceReadCap });
   } else {
     try {
-      data = (
-        await readLocalFileSafely({
-          filePath: mediaUrl,
-          maxBytes: sourceReadCap,
-        })
-      ).buffer;
+      data = await readLocalMediaFile(mediaUrl, localRoots, {
+        ...(inboundRoots ? { inboundRoots } : {}),
+        maxBytes: sourceReadCap,
+      });
     } catch (err) {
       if (err instanceof FsSafeError) {
         if (err.code === "too-large") {
