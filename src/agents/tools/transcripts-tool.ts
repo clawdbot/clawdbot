@@ -52,7 +52,7 @@ function ownsTranscriptSession(
   const isLocalMainOperator = ctx.agentId === "main" && !channel;
   const provider = resolveSourceProvider(session.source.providerId, ctx);
   const providerUsesAccountOwnership = Boolean(
-    provider?.accountBindingChannels?.some((entry) => entry.trim()),
+    !provider || provider.accountBindingChannels?.some((entry) => entry.trim()),
   );
   const ownerAgentId = session.metadata?.agentId;
   const ownerChannel = session.metadata?.ownerChannel;
@@ -70,6 +70,11 @@ function ownsTranscriptSession(
     // later changes; only the channel-less local main agent may recover it.
     return isLocalMainOperator;
   }
+  if (isLocalMainOperator) {
+    // Legacy rows can name an agent but cannot prove channel/account ownership.
+    // Host-local main recovery must work regardless of that historical agent id.
+    return true;
+  }
   if (!ctx.agentId) {
     return !providerUsesAccountOwnership;
   }
@@ -79,15 +84,15 @@ function ownsTranscriptSession(
     }
     if (providerUsesAccountOwnership) {
       // Account-binding providers require trusted owner facts recorded at ingress.
-      // Only a channel-less local main-agent turn can recover older rows; treating
-      // any other channel as trusted would recreate the cross-account boundary.
-      return isLocalMainOperator;
+      // Treat an unavailable provider as restricted too: without its current
+      // contract, a channel turn cannot prove that legacy access is safe.
+      return false;
     }
     return true;
   }
   // Shipped rows predate agent attribution. Treat them as operator-owned legacy
   // state: main can curate them off-channel, but no channel account can claim them.
-  return ctx.agentId === "main" && (!providerUsesAccountOwnership || isLocalMainOperator);
+  return ctx.agentId === "main" && !providerUsesAccountOwnership;
 }
 
 const TranscriptsSchema = Type.Object(

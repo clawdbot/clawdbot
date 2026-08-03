@@ -300,6 +300,13 @@ describe("transcripts tool account ownership", () => {
         stoppedAt: "2026-07-02T12:05:00.000Z",
         metadata: { agentId: "main" },
       },
+      {
+        sessionId: "beta-named-agent",
+        source: { providerId: "discord-voice", accountId: "account-a" },
+        startedAt: "2026-07-03T12:00:00.000Z",
+        stoppedAt: "2026-07-03T12:05:00.000Z",
+        metadata: { agentId: "research" },
+      },
     ];
     for (const session of sessions) {
       await store.writeSession(session);
@@ -335,6 +342,24 @@ describe("transcripts tool account ownership", () => {
         ),
       ).resolves.toMatchObject({ details: { sessionId: session.sessionId } });
     }
+
+    getTranscriptSourceProviderMock.mockReturnValue(undefined);
+    await expect(
+      webchatTool.execute(
+        "call-provider-missing-legacy",
+        { action: "summarize", sessionId: "stable-ownerless" },
+        undefined,
+        vi.fn(),
+      ),
+    ).rejects.toThrow("transcripts session not found: stable-ownerless");
+    await expect(
+      localMainTool.execute(
+        "call-provider-missing-local",
+        { action: "summarize", sessionId: "stable-ownerless" },
+        undefined,
+        vi.fn(),
+      ),
+    ).resolves.toMatchObject({ details: { sessionId: "stable-ownerless" } });
   });
 
   it("preserves main-agent access to ownerless non-binding sessions", async () => {
