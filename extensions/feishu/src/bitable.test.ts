@@ -1,5 +1,6 @@
 // Feishu tests cover bitable plugin behavior.
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import type { AgentToolResult } from "openclaw/plugin-sdk/tool-results";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
@@ -164,7 +165,11 @@ describe("feishu bitable create app cleanup", () => {
       table_id: "tbl_main",
       page_size: "25",
     });
-    const text = (result as { content: Array<{ text: string }> }).content[0]?.text;
+    const content = (result as AgentToolResult<typeof result.details>).content[0];
+    if (content?.type !== "text") {
+      throw new Error("Expected a model-visible text result from the Bitable tool");
+    }
+    const text = content.text;
     expect(result.details).toMatchObject({ records: [{ fields: { Name: hostile } }] });
     expect(text).toContain("EXTERNAL_UNTRUSTED_CONTENT");
     expect(text).not.toContain("<|im_start|>");
