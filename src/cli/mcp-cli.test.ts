@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as mcpRuntime from "../agents/agent-bundle-mcp-runtime.js";
 import * as mcpHttpFetch from "../agents/mcp-http-fetch.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
 import { createDeferred } from "../shared/deferred.js";
@@ -336,42 +337,53 @@ describe("mcp cli", () => {
     },
   );
 
-  it(
-    "bounds initialize with a five-second probe timeout when no flag is supplied",
-    { timeout: 8_000 },
-    async () => {
-      await withTempHome("openclaw-cli-mcp-home-", async (home) => {
-        const workspaceDir = await createWorkspace();
-        const serverPath = path.join(workspaceDir, "probe-server.mjs");
-        const configPath = path.join(home, ".openclaw", "openclaw.json");
-        await writeProbeMcpServer(serverPath);
-        vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-
-        const startedAt = performance.now();
-        await expect(
-          runMcpCommand([
-            "mcp",
-            "add",
-            "hung-default",
-            "--command",
-            process.execPath,
-            "--arg",
-            serverPath,
-            "--env",
-            "MCP_MODE=hang-start",
-          ]),
-        ).rejects.toThrow("__exit__:1");
-        const elapsedMs = performance.now() - startedAt;
-
-        expect(elapsedMs).toBeGreaterThanOrEqual(4_500);
-        expect(elapsedMs).toBeLessThan(6_500);
-        expect(lastErrorLine()).toContain(
-          'MCP server "hung-default" timed out: did not complete initialize within 5s',
-        );
-        await expect(fs.readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  it("passes a five-second default initialize timeout to the probe runtime", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
+      const workspaceDir = await createWorkspace();
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      let probeTimeoutMs: unknown;
+      vi.spyOn(mcpRuntime, "createSessionMcpRuntime").mockImplementation((params) => {
+        probeTimeoutMs = params.cfg?.mcp?.servers?.["hung-default"]?.connectionTimeoutMs;
+        return {
+          sessionId: params.sessionId,
+          workspaceDir: params.workspaceDir,
+          configFingerprint: "cli-probe-test",
+          createdAt: 0,
+          lastUsedAt: 0,
+          getCatalog: async () => ({
+            version: 1,
+            generatedAt: Date.now(),
+            servers: {},
+            tools: [],
+            diagnostics: [
+              {
+                serverName: "hung-default",
+                safeServerName: "hung-default",
+                launchSummary: process.execPath,
+                message:
+                  'MCP server "hung-default" timed out: did not complete initialize within 5s',
+              },
+            ],
+          }),
+          peekCatalog: () => null,
+          markUsed: () => {},
+          callTool: async () => ({ content: [] }),
+          dispose: async () => {},
+        };
       });
-    },
-  );
+
+      await expect(
+        runMcpCommand(["mcp", "add", "hung-default", "--command", process.execPath]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(probeTimeoutMs).toBe(5_000);
+      expect(lastErrorLine()).toContain(
+        'MCP server "hung-default" timed out: did not complete initialize within 5s',
+      );
+      await expect(fs.readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
 
   it("labels listed MCP servers as OpenClaw-managed", async () => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
