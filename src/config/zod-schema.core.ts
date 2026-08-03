@@ -370,6 +370,29 @@ const modelCompatSchemaContract: [
   AssertAssignable<z.infer<typeof ModelCompatSchema>, ModelCompatConfig | undefined>,
   AssertAssignable<ModelCompatConfig | undefined, z.infer<typeof ModelCompatSchema>>,
 ] = [] as never;
+
+// The assignability contract above cannot see a key that the schema is *missing*:
+// TypeScript's structural assignability lets a type with extra optional properties
+// be assigned to one without them (excess-property checking only applies to object
+// literals), so both directions hold even while the schema drops keys the type
+// declares. Compare key sets instead — this fails to compile the moment either side
+// gains a key the other lacks.
+type AssertNever<_T extends never> = true;
+const modelCompatKeyContract: [
+  AssertNever<
+    Exclude<
+      keyof NonNullable<ModelCompatConfig>,
+      keyof NonNullable<z.infer<typeof ModelCompatSchema>>
+    >
+  >,
+  AssertNever<
+    Exclude<
+      keyof NonNullable<z.infer<typeof ModelCompatSchema>>,
+      keyof NonNullable<ModelCompatConfig>
+    >
+  >,
+] = [] as never;
+void modelCompatKeyContract;
 void modelCompatSchemaContract;
 const ConfiguredProviderRequestTlsSchema = z
   .object({
