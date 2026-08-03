@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createClickClackClient } from "./http-client.js";
+import { createClickClackClient, isClickClackTimeoutError } from "./http-client.js";
 
 describe("ClickClack HTTP client timeouts", () => {
   it("aborts a REST request that stalls before response headers", async () => {
@@ -147,6 +147,63 @@ describe("ClickClack HTTP client timeouts", () => {
       expect(fetchMock.mock.calls[0]?.[0]).toBe(`https://clickclack.example${path}`);
       expect(fetchMock.mock.calls[0]?.[1]?.method).toBe(method);
       expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    {
+      operation: "managed-channel update",
+      invoke: (client: ReturnType<typeof createClickClackClient>) =>
+        client.updateChannel("channel-1", { archived: true }),
+    },
+    {
+      operation: "activity row creation",
+      invoke: (client: ReturnType<typeof createClickClackClient>) =>
+        client.createActivityMessage({
+          channelId: "activity-channel",
+          body: "working",
+          kind: "agent_commentary",
+        }),
+    },
+  ])("classifies an audited $operation body stall as an ambiguous timeout", async ({ invoke }) => {
+    vi.useFakeTimers();
+    try {
+      let bodyCanceled = false;
+      const fetchMock = vi.fn(async () => {
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"message":'));
+          },
+          cancel() {
+            bodyCanceled = true;
+          },
+        });
+        return new Response(body, {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      });
+      const client = createClickClackClient({
+        baseUrl: "https://clickclack.example",
+        token: "fake",
+        fetch: fetchMock as unknown as typeof fetch,
+      });
+
+      const failure = invoke(client).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      const error = await failure;
+      expect(error).toMatchObject({
+        name: "TimeoutError",
+        message: "ClickClack response body stalled for 30000ms",
+      });
+      expect(isClickClackTimeoutError(error)).toBe(true);
+      expect(bodyCanceled).toBe(true);
     } finally {
       vi.useRealTimers();
     }

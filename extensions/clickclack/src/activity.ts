@@ -128,8 +128,6 @@ type CommentarySegment = {
   messageId?: string;
   body: string;
   dirty: boolean;
-  /** A failed create may have committed remotely; never POST this segment again. */
-  createAbandoned?: boolean;
   timer?: ReturnType<typeof setTimeout>;
 };
 
@@ -169,11 +167,32 @@ export function createClickClackActivityPublisher(params: {
   let provenance: ClickClackMessageProvenance | undefined;
   // Single promise chain so POST/PATCH ordering matches frame arrival order.
   let chain: Promise<void> = Promise.resolve();
+  let activityAbandoned = false;
 
   const enqueue = (work: () => Promise<void>): Promise<void> => {
-    chain = chain.then(work).catch((error: unknown) => {
-      params.onError?.(error);
-    });
+    if (activityAbandoned) {
+      return chain;
+    }
+    chain = chain
+      .then(async () => {
+        // A previous write may have committed before timing out. Stop the whole
+        // best-effort publisher so queued rows cannot add duplicate or serial waits.
+        if (!activityAbandoned) {
+          await work();
+        }
+      })
+      .catch((error: unknown) => {
+        if (isClickClackTimeoutError(error)) {
+          activityAbandoned = true;
+          for (const segment of commentaryByItem.values()) {
+            if (segment.timer) {
+              clearTimeout(segment.timer);
+              segment.timer = undefined;
+            }
+          }
+        }
+        params.onError?.(error);
+      });
     return chain;
   };
 
@@ -196,34 +215,18 @@ export function createClickClackActivityPublisher(params: {
       clearTimeout(segment.timer);
       segment.timer = undefined;
     }
-    if (segment.createAbandoned || !segment.dirty || !segment.body.trim()) {
+    if (activityAbandoned || !segment.dirty || !segment.body.trim()) {
       return Promise.resolve();
     }
     segment.dirty = false;
     const body = segment.body;
     return enqueue(async () => {
-      // A newer snapshot may have queued this work while the first create was
-      // still in flight. Recheck abandonment at execution time so that queued
-      // callbacks cannot duplicate an ambiguously committed row.
-      if (segment.createAbandoned) {
-        return;
-      }
       if (segment.messageId) {
         await params.client.updateMessageBody(segment.messageId, body);
         return;
       }
-      try {
-        const posted = await postRow("agent_commentary", body);
-        segment.messageId = posted.id;
-      } catch (error) {
-        // The response-header deadline can fire after the POST committed. Only
-        // that known ambiguous result abandons the segment; definitive failures
-        // remain eligible for a later, longer cumulative snapshot to retry.
-        if (isClickClackTimeoutError(error)) {
-          segment.createAbandoned = true;
-        }
-        throw error;
-      }
+      const posted = await postRow("agent_commentary", body);
+      segment.messageId = posted.id;
     });
   };
 
@@ -233,6 +236,9 @@ export function createClickClackActivityPublisher(params: {
   };
 
   const handleCommentary = (payload: ClickClackItemEventPayload): void => {
+    if (activityAbandoned) {
+      return;
+    }
     const body = commentaryBody(payload);
     if (!body.trim()) {
       return;
@@ -242,9 +248,6 @@ export function createClickClackActivityPublisher(params: {
     if (!segment) {
       segment = { body: "", dirty: false };
       commentaryByItem.set(key, segment);
-    }
-    if (segment.createAbandoned) {
-      return;
     }
     // Snapshots are cumulative per item; never shrink the row body on a
     // shorter (stale or whitespace-normalized) frame, and skip identical
@@ -277,6 +280,9 @@ export function createClickClackActivityPublisher(params: {
   };
 
   const handleDiscreteItem = (payload: ClickClackItemEventPayload): void => {
+    if (activityAbandoned) {
+      return;
+    }
     const body = activityBody(payload);
     if (!body) {
       return;

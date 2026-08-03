@@ -266,66 +266,45 @@ describe("createClickClackActivityPublisher", () => {
     expect(onError).toHaveBeenCalledTimes(1);
   });
 
-  it("abandons a commentary segment after an ambiguous create timeout", async () => {
-    const onError = vi.fn();
-    const timeout = Object.assign(new Error("request timed out"), { name: "TimeoutError" });
-    const createActivityMessage = vi.fn().mockRejectedValueOnce(timeout);
-    const updateMessageBody = vi.fn(async () => ({}) as ClickClackMessage);
-    const publisher = createClickClackActivityPublisher({
-      client: { createActivityMessage, updateMessageBody } as ActivityClient,
-      target: { channelId: "chn_1" },
-      turnId: "msg_turn",
-      flushMs: 10,
-      onError,
-    });
-
-    publisher.onItemEvent({ itemId: "c1", kind: "preamble", progressText: "First" });
-    await publisher.finalize();
-    publisher.onItemEvent({
-      itemId: "c1",
-      kind: "preamble",
-      progressText: "First and second",
-    });
-    await publisher.finalize();
-
-    expect(createActivityMessage).toHaveBeenCalledTimes(1);
-    expect(updateMessageBody).not.toHaveBeenCalled();
-    expect(onError).toHaveBeenCalledTimes(1);
-  });
-
-  it("drops commentary flushes queued behind an ambiguous create timeout", async () => {
+  it("abandons queued and later activity after the first ambiguous timeout", async () => {
     const onError = vi.fn();
     const timeout = Object.assign(new Error("request timed out"), { name: "TimeoutError" });
     let rejectCreate: (error: Error) => void = () => {
       throw new Error("create rejection was not initialized");
     };
-    const createActivityMessage = vi.fn(
-      async () =>
-        await new Promise<ClickClackMessage>((_resolve, reject) => {
-          rejectCreate = reject;
-        }),
-    );
+    const createActivityMessage = vi
+      .fn()
+      .mockImplementationOnce(
+        async () =>
+          await new Promise<ClickClackMessage>((_resolve, reject) => {
+            rejectCreate = reject;
+          }),
+      )
+      .mockResolvedValue({ id: "unexpected" } as ClickClackMessage);
     const updateMessageBody = vi.fn(async () => ({}) as ClickClackMessage);
     const publisher = createClickClackActivityPublisher({
       client: { createActivityMessage, updateMessageBody } as ActivityClient,
       target: { channelId: "chn_1" },
       turnId: "msg_turn",
-      flushMs: 10,
       onError,
     });
 
-    publisher.onItemEvent({ itemId: "c1", kind: "preamble", progressText: "First" });
-    await vi.advanceTimersByTimeAsync(20);
+    publisher.onItemEvent({ toolCallId: "tool_1", kind: "tool", name: "first" });
+    publisher.onItemEvent({ toolCallId: "tool_2", kind: "tool", name: "second" });
+    publisher.onItemEvent({ itemId: "plan_3", kind: "plan", summary: "third" });
+    const finalized = publisher.finalize();
+    await vi.advanceTimersByTimeAsync(0);
     expect(createActivityMessage).toHaveBeenCalledTimes(1);
 
-    publisher.onItemEvent({
-      itemId: "c1",
-      kind: "preamble",
-      progressText: "First and second",
-    });
-    await vi.advanceTimersByTimeAsync(20);
+    publisher.onItemEvent({ itemId: "c4", kind: "preamble", progressText: "pending prose" });
+    expect(vi.getTimerCount()).toBe(1);
     rejectCreate(timeout);
-    await publisher.finalize();
+    await expect(finalized).resolves.toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
+
+    publisher.onItemEvent({ toolCallId: "tool_4", kind: "tool", name: "later" });
+    publisher.onItemEvent({ itemId: "c5", kind: "preamble", progressText: "later prose" });
+    await expect(publisher.finalize()).resolves.toBeUndefined();
 
     expect(createActivityMessage).toHaveBeenCalledTimes(1);
     expect(updateMessageBody).not.toHaveBeenCalled();

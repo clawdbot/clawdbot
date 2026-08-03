@@ -60,7 +60,7 @@ type ClientOptions = {
 };
 
 type RequestPolicy = {
-  responseHeaderTimeoutSafe?: true;
+  timeoutRecoverySafe?: true;
 };
 
 const CLICKCLACK_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
@@ -84,6 +84,12 @@ const CLICKCLACK_DISCUSSION_THREAD_REQUEST_LIMIT = 24;
 
 export function isClickClackTimeoutError(error: unknown): boolean {
   return error instanceof Error && error.name === "TimeoutError";
+}
+
+function createClickClackTimeoutError(message: string): Error {
+  const error = new Error(message);
+  error.name = "TimeoutError";
+  return error;
 }
 
 type ClickClackMessagePage = {
@@ -174,9 +180,9 @@ export function createClickClackClient(options: ClientOptions) {
     // whether its request body is still making progress. Reads and explicitly
     // audited retry-safe writes use the fixed pre-header deadline; multipart
     // uploads retain the existing transport/proxy policy.
+    const timeoutRecoverySafe = !isUpload && policy.timeoutRecoverySafe === true;
     const useResponseHeaderDeadline =
-      !isUpload &&
-      (method === "GET" || method === "HEAD" || policy.responseHeaderTimeoutSafe === true);
+      !isUpload && (method === "GET" || method === "HEAD" || timeoutRecoverySafe);
     const response = useResponseHeaderDeadline
       ? await fetchWithTimeout(url, requestInit, CLICKCLACK_RESPONSE_HEADERS_TIMEOUT_MS, fetcher)
       : await fetcher(url, requestInit);
@@ -192,6 +198,12 @@ export function createClickClackClient(options: ClientOptions) {
     }
     return await readProviderJsonResponse<T>(response, "ClickClack response", {
       maxBytes: CLICKCLACK_INBOUND_JSON_LIMIT_BYTES,
+      // A recoverable write may have committed before its successful response
+      // body stalls. Preserve that ambiguity for the owner reconciliation path.
+      onIdleTimeout: timeoutRecoverySafe
+        ? ({ chunkTimeoutMs }) =>
+            createClickClackTimeoutError(`ClickClack response body stalled for ${chunkTimeoutMs}ms`)
+        : undefined,
     });
   }
 
@@ -236,7 +248,7 @@ export function createClickClackClient(options: ClientOptions) {
           method: "PUT",
           body: JSON.stringify({ commands }),
         },
-        { responseHeaderTimeoutSafe: true },
+        { timeoutRecoverySafe: true },
       );
       return data.bot_commands;
     },
@@ -265,7 +277,7 @@ export function createClickClackClient(options: ClientOptions) {
       const data = await request<{ channel: ClickClackChannel }>(
         `/api/workspaces/${encodeURIComponent(workspaceId)}/channels`,
         { method: "POST", body: JSON.stringify(channel) },
-        { responseHeaderTimeoutSafe: true },
+        { timeoutRecoverySafe: true },
       );
       return data.channel;
     },
@@ -284,7 +296,7 @@ export function createClickClackClient(options: ClientOptions) {
       const data = await request<{ channel: ClickClackChannel }>(
         `/api/channels/${encodeURIComponent(channelId)}`,
         { method: "PATCH", body: JSON.stringify(patch) },
-        { responseHeaderTimeoutSafe: true },
+        { timeoutRecoverySafe: true },
       );
       return data.channel;
     },
@@ -439,7 +451,7 @@ export function createClickClackClient(options: ClientOptions) {
             ...provenanceFields(opts?.provenance),
           }),
         },
-        opts?.nonce ? { responseHeaderTimeoutSafe: true } : undefined,
+        opts?.nonce ? { timeoutRecoverySafe: true } : undefined,
       );
       return data.message;
     },
@@ -458,7 +470,7 @@ export function createClickClackClient(options: ClientOptions) {
             ...provenanceFields(opts?.provenance),
           }),
         },
-        opts?.nonce ? { responseHeaderTimeoutSafe: true } : undefined,
+        opts?.nonce ? { timeoutRecoverySafe: true } : undefined,
       );
       return data.message;
     },
@@ -474,7 +486,7 @@ export function createClickClackClient(options: ClientOptions) {
           method: "POST",
           body: JSON.stringify({ workspace_id: workspaceId, member_ids: memberIds }),
         },
-        { responseHeaderTimeoutSafe: true },
+        { timeoutRecoverySafe: true },
       );
       return data.conversation;
     },
@@ -530,7 +542,7 @@ export function createClickClackClient(options: ClientOptions) {
           method: "POST",
           body: JSON.stringify({ upload_id: uploadId }),
         },
-        { responseHeaderTimeoutSafe: true },
+        { timeoutRecoverySafe: true },
       );
     },
     /**
@@ -563,7 +575,7 @@ export function createClickClackClient(options: ClientOptions) {
             ...provenanceFields(params.provenance),
           }),
         },
-        { responseHeaderTimeoutSafe: true },
+        { timeoutRecoverySafe: true },
       );
       return data.message;
     },
@@ -572,7 +584,7 @@ export function createClickClackClient(options: ClientOptions) {
       const data = await request<{ message: ClickClackMessage }>(
         `/api/messages/${encodeURIComponent(messageId)}`,
         { method: "PATCH", body: JSON.stringify({ body }) },
-        { responseHeaderTimeoutSafe: true },
+        { timeoutRecoverySafe: true },
       );
       return data.message;
     },
@@ -591,7 +603,7 @@ export function createClickClackClient(options: ClientOptions) {
             ...(opts?.nonce ? { nonce: opts.nonce } : {}),
           }),
         },
-        opts?.nonce ? { responseHeaderTimeoutSafe: true } : undefined,
+        opts?.nonce ? { timeoutRecoverySafe: true } : undefined,
       );
       return data.message;
     },
