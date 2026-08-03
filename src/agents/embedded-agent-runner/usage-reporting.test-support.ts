@@ -7,7 +7,7 @@ import {
   mockedAcquireAgentRunPreparedModelRuntime,
   mockedResolveModelAsync,
   mockedRunEmbeddedAttempt,
-  resetRunOverflowCompactionHarnessMocks,
+  resetSharedRunIntegrationHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
@@ -48,7 +48,7 @@ describe("runEmbeddedAgent usage reporting", () => {
   });
 
   beforeEach(() => {
-    resetRunOverflowCompactionHarnessMocks();
+    resetSharedRunIntegrationHarnessMocks();
   });
 
   it("bootstraps runtime plugins with the resolved workspace before running", async () => {
