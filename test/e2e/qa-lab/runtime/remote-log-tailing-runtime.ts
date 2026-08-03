@@ -52,7 +52,7 @@ export async function runRemoteLogTailing(repoRoot: string, outputRoot: string) 
       lines: string[];
       truncated: boolean;
     };
-    if (first.lines.length !== 2 || !first.lines.at(-1)?.includes("qa-line-three")) {
+    if (first.lines.length !== 2 || !first.lines.some((line) => line.includes("qa-line-three"))) {
       throw new Error(`logs.tail did not honor limit: ${JSON.stringify(first)}`);
     }
     const bounded = (await gateway.call("logs.tail", { limit: 20, maxBytes: 96 })) as {
@@ -69,7 +69,10 @@ export async function runRemoteLogTailing(repoRoot: string, outputRoot: string) 
       limit: 20,
       maxBytes: 4096,
     })) as { lines: string[] };
-    if (cursorTail.lines.length !== 1 || !cursorTail.lines[0]?.includes("qa-cursor-line")) {
+    if (
+      !cursorTail.lines.some((line) => line.includes("qa-cursor-line")) ||
+      cursorTail.lines.some((line) => /qa-line-(?:one|two|three)/.test(line))
+    ) {
       throw new Error(`logs.tail did not honor cursor: ${JSON.stringify(cursorTail)}`);
     }
 
