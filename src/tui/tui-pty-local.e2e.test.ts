@@ -496,12 +496,14 @@ async function cleanupLocalModeResources(params: {
 async function startLocalModeTui(
   registerCleanup: CleanupRegistrar,
   opts: {
+    cliArgs?: string[];
     invalidEditLoop?: boolean;
     holdFirstResponse?: boolean;
     followupReplyText?: string;
+    replyText?: string;
   } = {},
 ) {
-  const replyText = "LOCAL_PTY_RESPONSE";
+  const replyText = opts.replyText ?? "LOCAL_PTY_RESPONSE";
   const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-local-"));
   const workspaceDir = path.join(tempDir, "workspace");
   const homeDir = path.join(tempDir, "home");
@@ -532,7 +534,7 @@ async function startLocalModeTui(
       writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8"),
     ]);
 
-    run = startPty(process.execPath, buildTuiProcessArgs(["tui", "--local"]), {
+    run = startPty(process.execPath, buildTuiProcessArgs(opts.cliArgs ?? ["tui", "--local"]), {
       cwd: process.cwd(),
       env: {
         HOME: homeDir,
@@ -846,6 +848,94 @@ async function startGatewayModeTui(
 // Gateway cases share one real server and PTY but keep isolated models and sessions.
 // Per-case abort cleanup and serial order prevent active-run or queue state leaks.
 describe("TUI PTY real backends", () => {
+  for (const alias of ["chat", "terminal"] as const) {
+    it(
+      `launches openclaw ${alias} as local mode through a real PTY`,
+      async ({ onTestFinished }) => {
+        const replyText = `${alias.toUpperCase()}_ALIAS_RESPONSE`;
+        const prompt = `message through ${alias} alias`;
+        const fixture = await startLocalModeTui(onTestFinished, {
+          cliArgs: [alias],
+          replyText,
+        });
+        try {
+          await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
+          await fixture.run.write(`${prompt}\r`);
+          await waitFor({
+            timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+            read: () => (fixture.mockModel.requests().length === 1 ? true : null),
+            onTimeout: () =>
+              new Error(`${alias} alias did not reach the model\n${fixture.run.output()}`),
+          });
+          expect(JSON.stringify(fixture.mockModel.requests()[0]?.body)).toContain(prompt);
+          await fixture.run.waitForOutput(replyText, LOCAL_OUTPUT_TIMEOUT_MS);
+          await fixture.run.write("/exit\r", { delay: false });
+          expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+        } finally {
+          await fixture.cleanup();
+        }
+      },
+      LOCAL_TEST_TIMEOUT_MS,
+    );
+  }
+
+  it(
+    "sends the initial message supplied to openclaw tui through a real local PTY",
+    async ({ onTestFinished }) => {
+      const initialMessage = "initial message from CLI launch";
+      const replyText = "INITIAL_MESSAGE_RESPONSE";
+      const fixture = await startLocalModeTui(onTestFinished, {
+        cliArgs: ["tui", "--local", "--message", initialMessage],
+        replyText,
+      });
+      try {
+        await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (fixture.mockModel.requests().length === 1 ? true : null),
+          onTimeout: () =>
+            new Error(`initial message did not reach the model\n${fixture.run.output()}`),
+        });
+        expect(JSON.stringify(fixture.mockModel.requests()[0]?.body)).toContain(initialMessage);
+        await fixture.run.waitForOutput(replyText, LOCAL_OUTPUT_TIMEOUT_MS);
+        await fixture.run.write("/exit\r", { delay: false });
+        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "rejects Gateway options on a local TUI alias through a real PTY",
+    async ({ onTestFinished }) => {
+      const run = startPty(
+        process.execPath,
+        buildTuiProcessArgs(["chat", "--url", "ws://127.0.0.1:1"]),
+        {
+          cwd: process.cwd(),
+          env: {
+            OPENCLAW_THEME: "dark",
+            NO_COLOR: undefined,
+          },
+          exitTimeoutMs: LOCAL_EXIT_TIMEOUT_MS,
+          outputTimeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+        },
+      );
+      onTestFinished(async () => {
+        await run.dispose();
+      });
+
+      await run.waitForOutput(
+        "--local cannot be combined with --url, --token, --password, or --tls-fingerprint",
+        LOCAL_STARTUP_TIMEOUT_MS,
+      );
+      expect((await run.waitForExit()).exitCode).toBe(1);
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
   it(
     "drives and steers the real local backend with a mocked model endpoint",
     async ({ onTestFinished }) => {
@@ -1417,6 +1507,11 @@ describe("TUI PTY real backends", () => {
       sharedGatewayFixtureStartup = undefined;
       await cleanupStartedFixture(startup);
     }, LOCAL_TEST_TIMEOUT_MS);
+
+    it("launches openclaw tui against a real Gateway through a real PTY", async () => {
+      const fixture = await requireSharedGatewayFixture();
+      expect(fixture.run.visibleOutput()).toContain("gateway connected");
+    });
 
     for (const register of gatewayTestRegistrations) {
       register();
