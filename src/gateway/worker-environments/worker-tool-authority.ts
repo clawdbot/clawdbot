@@ -93,7 +93,7 @@ export function resolveWorkerToolAuthority(params: {
   if (!projected.includes("exec") && !projected.includes("process")) {
     return { allowedToolNames: projected };
   }
-  const { effectiveHost, security, ask } = resolveExecDefaults({
+  const { executionDisposition } = resolveExecDefaults({
     cfg: turn.config,
     agentId: turn.agentId,
     sessionKey: sandboxSessionKey,
@@ -103,7 +103,10 @@ export function resolveWorkerToolAuthority(params: {
   });
   // Node exec combines Gateway policy with node-owned approval state. A cloud worker
   // cannot honor that route, so only Gateway/sandbox-local unconditional exec transfers.
-  if (effectiveHost !== "node" && security === "full" && ask === "off") {
+  if (
+    executionDisposition.kind === "sandbox-local" ||
+    (executionDisposition.kind === "host-unconditional" && executionDisposition.host !== "node")
+  ) {
     return { allowedToolNames: projected };
   }
   // Worker-local exec has no Gateway approval or allowlist authority.

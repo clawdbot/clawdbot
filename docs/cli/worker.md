@@ -40,9 +40,10 @@ The process runs the normal embedded agent loop with a restricted backend:
 
 - The `read`, `write`, `edit`, `apply_patch`, `exec`, and `process` coding tools
   run locally in the worker workspace when present in the Gateway-issued turn
-  authority. The Gateway includes `exec` and `process` only when its resolved
-  policy allows commands without an allowlist or approval and does not target a
-  paired node; otherwise both tools are unavailable in the worker. An empty
+  authority. The Gateway includes `exec` and `process` for sandbox-local
+  execution or when its resolved host policy allows commands without an
+  allowlist or approval and does not target a paired node; otherwise both tools
+  are unavailable in the worker. An empty
   authority runs the model with no tools.
 - Model calls use the gateway inference proxy. No local model auth profile is
   loaded.

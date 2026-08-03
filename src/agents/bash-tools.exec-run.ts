@@ -59,6 +59,7 @@ import type { ExecToolDefaults, ExecToolDetails } from "./bash-tools.exec-types.
 import { formatUnavailableWorkdirFailure, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { clampWithDefault, readEnvInt, truncateMiddle } from "./bash-tools.shared.js";
 import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
+import { resolveExecExecutionDisposition } from "./exec-defaults.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AgentToolWithMeta } from "./tools/common.js";
@@ -272,10 +273,14 @@ export function createExecTool(
         modePolicy.security,
         approvalPolicy?.security ?? modePolicy.security,
       );
-      if (
-        security === "deny" &&
-        (host !== "sandbox" || defaults?.mode === "deny" || explicitSecurity === "deny")
-      ) {
+      const executionDisposition = resolveExecExecutionDisposition({
+        effectiveHost: host,
+        security,
+        ask: modePolicy.ask,
+        configuredMode: defaults?.mode,
+        explicitSecurity,
+      });
+      if (executionDisposition.kind === "denied") {
         throw new Error(`exec denied: host=${host} security=deny`);
       }
       const hostPolicyAllowsFullBypass =

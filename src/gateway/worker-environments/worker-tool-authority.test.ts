@@ -100,7 +100,7 @@ describe("resolveWorkerToolAuthority", () => {
         sessionKey: "agent:main:worker-sandboxed",
         config: { agents: { defaults: { sandbox: { mode: "all" } } } },
       }),
-    ).toEqual(["read", "write", "edit", "apply_patch"]);
+    ).toEqual(["read", "write", "edit", "apply_patch", "exec", "process"]);
     expect(
       authority({
         sessionKey: "agent:main:worker-sandboxed",
@@ -120,6 +120,36 @@ describe("resolveWorkerToolAuthority", () => {
       }),
     ).toEqual(["read", "write", "edit", "apply_patch", "exec", "process"]);
   });
+
+  it.each([
+    ["mode", { mode: "deny" as const }],
+    ["security", { security: "deny" as const }],
+  ])("gates sandbox shell tools for explicit %s denial", (_label, exec) => {
+    expect(
+      authority({
+        sessionKey: "agent:main:worker-sandboxed-denied",
+        config: {
+          agents: { defaults: { sandbox: { mode: "all" } } },
+          tools: { exec },
+        },
+      }),
+    ).toEqual(["read", "write", "edit", "apply_patch"]);
+  });
+
+  it.each(["auto", "ask", "allowlist"] as const)(
+    "keeps sandbox-local shell authority for mode %s",
+    (mode) => {
+      expect(
+        authority({
+          sessionKey: "agent:main:worker-sandboxed-local",
+          config: {
+            agents: { defaults: { sandbox: { mode: "all" } } },
+            tools: { exec: { mode } },
+          },
+        }),
+      ).toEqual(["read", "write", "edit", "apply_patch", "exec", "process"]);
+    },
+  );
 
   it.each(["on", "ask", "full"] as const)(
     "applies the host approval floor for sandboxed default elevation: %s",
