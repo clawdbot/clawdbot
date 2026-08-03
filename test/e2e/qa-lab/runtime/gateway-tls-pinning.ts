@@ -146,8 +146,18 @@ function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
   });
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+}
+
 async function connectWithExactPin(url: string, tlsFingerprint: string): Promise<boolean> {
-  const hello = Promise.withResolvers<void>();
+  const hello = createDeferred<void>();
   const client = new GatewayClient({
     url,
     tlsFingerprint,
@@ -168,7 +178,7 @@ async function connectWithWrongPin(
   url: string,
   tlsFingerprint: string,
 ): Promise<{ error: string; helloObserved: boolean }> {
-  const failure = Promise.withResolvers<Error>();
+  const failure = createDeferred<Error>();
   let helloObserved = false;
   const client = new GatewayClient({
     url,
@@ -197,7 +207,7 @@ async function connectWithWrongPin(
 }
 
 async function proveCleartextMismatch(port: number, tlsFingerprint: string): Promise<string> {
-  const failure = Promise.withResolvers<Error>();
+  const failure = createDeferred<Error>();
   const client = new GatewayClient({
     url: `ws://127.0.0.1:${port}`,
     tlsFingerprint,
@@ -273,7 +283,7 @@ export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProo
       auth: { mode: "none" },
       bind: "loopback",
       controlUiEnabled: false,
-      sidecarStartup: "skip",
+      sidecarStartup: "defer",
     });
     const url = `wss://127.0.0.1:${port}`;
     const peerFingerprint = await waitForPeerFingerprint(port);
