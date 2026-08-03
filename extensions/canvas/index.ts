@@ -41,6 +41,7 @@ function createLazyCanvasTool(params: {
   return {
     label: "Canvas",
     name: "canvas",
+    resultContentSource: "network",
     description:
       "Control node canvases (present/hide/navigate/eval/snapshot/A2UI). Use snapshot to capture the rendered UI.",
     parameters: CanvasToolSchema,

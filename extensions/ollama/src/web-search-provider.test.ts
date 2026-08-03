@@ -116,6 +116,7 @@ async function runOllamaWebSearch(
 
 type GuardedRequest = {
   url: string;
+  signal?: AbortSignal;
   init: {
     method: string;
     headers: Record<string, string>;
@@ -225,6 +226,35 @@ describe("ollama web search provider", () => {
     mockSuccessfulSearchResponse();
     await runOllamaWebSearch(createOllamaConfig());
     expect(fetchRequest().url).toBe("http://ollama.local:11434/api/experimental/web_search");
+  });
+
+  it("passes caller cancellation to the guard without replacing its owned timeout", async () => {
+    mockSuccessfulSearchResponse();
+    const tool = createOllamaWebSearchProvider().createTool({ config: createOllamaConfig() });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    const controller = new AbortController();
+
+    await tool.execute({ query: "ollama active cancellation" }, { signal: controller.signal });
+
+    expect(fetchRequest().signal).toBe(controller.signal);
+    expect(fetchRequest().init.signal).toBeUndefined();
+  });
+
+  it("does not start fallback attempts after caller cancellation", async () => {
+    mockSuccessfulSearchResponse();
+    const tool = createOllamaWebSearchProvider().createTool({ config: createOllamaConfig() });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    const controller = new AbortController();
+    controller.abort(new Error("Ollama caller canceled"));
+
+    await expect(
+      tool.execute({ query: "ollama pre-canceled" }, { signal: controller.signal }),
+    ).rejects.toThrow("Ollama caller canceled");
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
   it.each<[string, () => OpenClawConfig, string]>([

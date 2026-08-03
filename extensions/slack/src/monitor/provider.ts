@@ -1,5 +1,6 @@
 // Slack provider module implements model/runtime integration.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { type FetchFunction, WebClient } from "@slack/web-api";
 import {
   addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
@@ -33,7 +34,11 @@ import {
   resolveSlackAccountDmPolicy,
 } from "../accounts.js";
 import { isSlackAnyNativeApprovalClientEnabled } from "../approval-native-gates.js";
-import { resolveSlackProxyDispatcher, resolveSlackWebClientOptions } from "../client-options.js";
+import {
+  resolveSlackLookupClientOptions,
+  resolveSlackProxyDispatcher,
+  resolveSlackWebClientOptions,
+} from "../client-options.js";
 import { createSlackStartupAuthClient } from "../client.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
@@ -66,7 +71,11 @@ import { registerSlackMonitorEvents } from "./events.js";
 import { createSlackDurableIngress } from "./ingress.js";
 import { createSlackMessageHandler } from "./message-handler.js";
 import { openSlackPresenceCooldownStore } from "./presence-cooldown-store.js";
-import { createSlackPresenceMonitor, hasSlackPresenceEventsEnabled } from "./presence-monitor.js";
+import {
+  createSlackPresenceMonitor,
+  hasSlackPresenceEventsEnabled,
+  SLACK_PRESENCE_REQUEST_TIMEOUT_MS,
+} from "./presence-monitor.js";
 import {
   createSlackBoltApp,
   formatSlackChannelResolved,
@@ -91,6 +100,17 @@ import { registerSlackMonitorSlashCommands } from "./slash.js";
 import type { MonitorSlackOpts } from "./types.js";
 
 let slackBoltInterop: SlackBoltResolvedExports | undefined;
+
+function withSlackPresenceLifecycleSignal(
+  fetchImpl: FetchFunction,
+  lifecycleSignal: AbortSignal,
+): FetchFunction {
+  return async (input, init) =>
+    await fetchImpl(input, {
+      ...init,
+      signal: init?.signal ? AbortSignal.any([init.signal, lifecycleSignal]) : lifecycleSignal,
+    });
+}
 
 async function getSlackBoltInterop(): Promise<SlackBoltResolvedExports> {
   if (!slackBoltInterop) {
@@ -614,17 +634,34 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     account: slackCfg.presenceEvents,
     channels: slackCfg.channels,
   });
-  const presenceMonitor =
+  const presenceRequestAbort =
     installationIdentity.kind !== "enterprise" && presenceEventsEnabled
-      ? createSlackPresenceMonitor({
-          accountId: account.accountId,
-          accountConfig: slackCfg.presenceEvents,
-          client: app.client.users,
-          cooldownStore: openSlackPresenceCooldownStore(),
-          log: runtime.log,
-          error: runtime.error,
-        })
+      ? new AbortController()
       : undefined;
+  const presenceClient =
+    presenceRequestAbort === undefined
+      ? undefined
+      : (() => {
+          const options = resolveSlackLookupClientOptions(
+            { ...clientOptions, timeout: SLACK_PRESENCE_REQUEST_TIMEOUT_MS },
+            slackDispatcher,
+          );
+          options.fetch = withSlackPresenceLifecycleSignal(
+            options.fetch ?? globalThis.fetch,
+            presenceRequestAbort.signal,
+          );
+          return new WebClient(token, options).users;
+        })();
+  const presenceMonitor = presenceClient
+    ? createSlackPresenceMonitor({
+        accountId: account.accountId,
+        accountConfig: slackCfg.presenceEvents,
+        client: presenceClient,
+        cooldownStore: openSlackPresenceCooldownStore(),
+        log: runtime.log,
+        error: runtime.error,
+      })
+    : undefined;
   if (installationIdentity.kind === "enterprise" && presenceEventsEnabled) {
     runtime.log?.(warn("slack presence events are unavailable for Enterprise Grid org installs"));
   }
@@ -945,6 +982,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       }
     }
   } finally {
+    presenceRequestAbort?.abort();
     await presenceMonitor?.stop();
     if (slackMode === "relay") {
       setSlackDefaultSendIdentity(account.accountId, undefined);

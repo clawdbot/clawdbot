@@ -208,7 +208,6 @@ type PluginReportParams = {
   env?: NodeJS.ProcessEnv;
   logger?: PluginLogger;
   metadataSnapshot?: PluginMetadataSnapshot;
-  resolvedConfig?: OpenClawConfig;
 };
 
 function buildPluginReport(
@@ -268,6 +267,7 @@ function buildPluginReport(
           config: rawConfig,
           workspaceDir,
           env: params?.env ?? process.env,
+          metadataSnapshot,
         })
       : params?.onlyPluginIds === undefined
         ? undefined
