@@ -276,26 +276,24 @@ class TasksPage extends OpenClawLightDomElement {
   }
 
   private async recoverTask(taskId: string, action: "retry" | "dismiss") {
-    const client = this.client;
-    const gateway = this.gatewaySource;
+    const scope = this.gateway.capture();
+    const gateway = this.gateway.gateway;
     if (
+      !scope ||
       !gateway ||
       this.context.gateway !== gateway ||
-      !this.connected ||
-      !client ||
       this.cancellingTaskIds.has(taskId)
     ) {
       return;
     }
-    const epoch = this.operationEpoch;
     this.cancellingTaskIds = new Set([...this.cancellingTaskIds, taskId]);
     this.error = null;
     try {
       const payload =
         action === "retry"
-          ? await client.request("tasks.retry", { taskIds: [taskId] })
-          : await client.request("tasks.dismiss", { taskIds: [taskId] });
-      if (!this.isCancelScopeCurrent(gateway, client, epoch)) {
+          ? await scope.client.request("tasks.retry", { taskIds: [taskId] })
+          : await scope.client.request("tasks.dismiss", { taskIds: [taskId] });
+      if (!this.gateway.isCurrent(scope)) {
         return;
       }
       const result = normalizeTasksRecoveryResult(payload)?.results[0];
@@ -310,11 +308,11 @@ class TasksPage extends OpenClawLightDomElement {
         }).tasks;
       }
     } catch (error) {
-      if (this.isCancelScopeCurrent(gateway, client, epoch)) {
+      if (this.gateway.isCurrent(scope)) {
         this.error = formatTaskError(error, t("tasksPage.recoveryFailed"));
       }
     } finally {
-      if (this.isCancelScopeCurrent(gateway, client, epoch)) {
+      if (this.gateway.isCurrent(scope)) {
         const next = new Set(this.cancellingTaskIds);
         next.delete(taskId);
         this.cancellingTaskIds = next;
@@ -323,12 +321,16 @@ class TasksPage extends OpenClawLightDomElement {
   }
 
   private async copyTaskResult(taskId: string) {
-    const client = this.client;
-    if (!client || !this.connected) {
+    const scope = this.gateway.capture();
+    const gateway = this.gateway.gateway;
+    if (!scope || !gateway || this.context.gateway !== gateway) {
       return;
     }
     try {
-      const detail = normalizeTasksGetResult(await client.request("tasks.get", { taskId }));
+      const detail = normalizeTasksGetResult(await scope.client.request("tasks.get", { taskId }));
+      if (!this.gateway.isCurrent(scope)) {
+        return;
+      }
       const result = detail?.result ?? detail?.progressSummary;
       if (!result) {
         this.error = t("tasksPage.recoveryFailed");
@@ -336,7 +338,9 @@ class TasksPage extends OpenClawLightDomElement {
       }
       await navigator.clipboard.writeText(result);
     } catch (error) {
-      this.error = formatTaskError(error, t("tasksPage.recoveryFailed"));
+      if (this.gateway.isCurrent(scope)) {
+        this.error = formatTaskError(error, t("tasksPage.recoveryFailed"));
+      }
     }
   }
 

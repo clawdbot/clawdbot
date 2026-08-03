@@ -423,6 +423,48 @@ describe("TasksPage cancellation lifecycle", () => {
     });
   });
 
+  it("discards a recovery response across a same-client reconnect", async () => {
+    const blocked = createTask("task-recovery-reconnect", "completed", {
+      deliveryStatus: "failed",
+      terminalOutcome: "blocked",
+    });
+    const pendingRecovery = deferred<{
+      results: Array<{ taskId: string; ok: true; task: TaskSummary }>;
+    }>();
+    const request = vi.fn((method: string) => {
+      if (method === "tasks.retry") {
+        return pendingRecovery.promise;
+      }
+      return Promise.resolve({ tasks: [blocked] });
+    });
+    const source = createGateway({ request } as unknown as GatewayBrowserClient);
+    const page = document.createElement("openclaw-tasks-page") as TasksPageTestElement;
+    page.context = createContext(source.gateway);
+    document.body.append(page);
+    await vi.waitFor(() => expect(page.tasks).toHaveLength(1));
+
+    const recovery = page.recoverTask(blocked.taskId, "retry");
+    await vi.waitFor(() => expect(page.cancellingTaskIds.has(blocked.taskId)).toBe(true));
+    source.emitConnected(false);
+    source.emitConnected(true);
+    pendingRecovery.resolve({
+      results: [
+        {
+          taskId: blocked.taskId,
+          ok: true,
+          task: { ...blocked, deliveryStatus: "session_queued", terminalOutcome: "succeeded" },
+        },
+      ],
+    });
+    await recovery;
+
+    expect(page.tasks[0]).toMatchObject({
+      deliveryStatus: "failed",
+      terminalOutcome: "blocked",
+    });
+    expect(page.cancellingTaskIds.size).toBe(0);
+  });
+
   it("keeps a dismissed completion result copyable without offering another recovery", async () => {
     const dismissed = createTask("task-dismissed", "completed", {
       deliveryStatus: "dismissed",
