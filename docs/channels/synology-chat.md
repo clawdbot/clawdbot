@@ -112,7 +112,7 @@ openclaw message send --channel synology-chat --target synology-chat:123456 --me
 openclaw message send --channel synology-chat --target synology:123456 --message "Short prefix"
 ```
 
-Outbound text is chunked at 2000 characters. Media sends post an `http` or `https` URL as a clickable link. OpenClaw does not ask the NAS to download and attach the remote file because that later NAS-side fetch cannot retain OpenClaw's network-destination checks.
+Outbound text is chunked at 2000 characters. By default, media sends omit the remote URL and post a visible safety notice instead. OpenClaw cannot safely ask the NAS to download the file because both Synology's attachment fetch and optional URL previews resolve the destination outside OpenClaw's network controls.
 
 If you require the previous automatic-attachment behavior, set `dangerouslyAllowFileUrlFetch: true`. This sends the URL through Synology Chat's `file_url` field, causing the NAS to resolve and download it outside OpenClaw's network controls. Use this only when every media URL is trusted by the NAS operator.
 

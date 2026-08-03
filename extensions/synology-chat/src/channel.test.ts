@@ -482,7 +482,7 @@ describe("createSynologyChatPlugin", () => {
       expect(hints).toContain("**Links**: Use `<URL|display text>` to create clickable links.");
       expect(hints).toContain("- No buttons, cards, or interactive elements");
       expect(hints).toContain(
-        "  OpenClaw sends the URL as a clickable link; the NAS does not download it automatically.",
+        "  OpenClaw omits remote media URLs and sends this notice instead: Remote media omitted: Synology Chat cannot safely fetch remote URLs.",
       );
     });
 

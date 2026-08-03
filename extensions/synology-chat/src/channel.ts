@@ -46,7 +46,12 @@ import {
 } from "openclaw/plugin-sdk/text-chunking";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { synologyChatApprovalAuth } from "./approval-auth.js";
-import { SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT, sendFileReference, sendMessage } from "./client.js";
+import {
+  SYNOLOGY_CHAT_REMOTE_MEDIA_NOTICE,
+  SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT,
+  sendFileReference,
+  sendMessage,
+} from "./client.js";
 import { SynologyChatChannelConfigSchema } from "./config-schema.js";
 import {
   collectSynologyGatewayRoutingWarnings,
@@ -471,7 +476,7 @@ function createSynologyChatPlugin(): SynologyChatPlugin {
             "**File sharing**: Include an HTTP or HTTPS URL to share files or images.",
             account.dangerouslyAllowFileUrlFetch
               ? "  The NAS is configured to download the URL automatically. Only send URLs the operator trusts the NAS to fetch."
-              : "  OpenClaw sends the URL as a clickable link; the NAS does not download it automatically.",
+              : `  OpenClaw omits remote media URLs and sends this notice instead: ${SYNOLOGY_CHAT_REMOTE_MEDIA_NOTICE}`,
             "",
             "**Limitations**:",
             "- No markdown, bold, italic, or code blocks",

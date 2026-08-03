@@ -19,6 +19,8 @@ import { z } from "zod";
 
 const MIN_SEND_INTERVAL_MS = 500;
 export const SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT = 2_000;
+export const SYNOLOGY_CHAT_REMOTE_MEDIA_NOTICE =
+  "Remote media omitted: Synology Chat cannot safely fetch remote URLs.";
 /** user_list JSON can be larger than inbound webhook pre-auth payloads. */
 const USER_LIST_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 /** Wall-clock budget for user_list fetch including response body. */
@@ -144,11 +146,12 @@ async function sendMessageChunk(
 }
 
 /**
- * Send a file URL to Synology Chat as a visible link by default.
+ * Send a safe omission notice by default, or opt into NAS-side URL fetching.
  *
  * Synology's file_url field makes the NAS resolve and download the URL after
  * OpenClaw returns, so OpenClaw cannot keep that request on a validated DNS
- * destination. A text link leaves the fetch under the recipient's control.
+ * destination. Raw text URLs are also unsafe because URL previews can fetch
+ * them automatically.
  */
 export async function sendFileReference(
   incomingUrl: string,
@@ -162,7 +165,9 @@ export async function sendFileReference(
       ? await assertSafeWebhookFileUrl(fileUrl)
       : normalizeWebhookFileLink(fileUrl);
     const body = buildWebhookBody(
-      dangerouslyAllowFileUrlFetch ? { file_url: safeFileUrl } : { text: safeFileUrl },
+      dangerouslyAllowFileUrlFetch
+        ? { file_url: safeFileUrl }
+        : { text: SYNOLOGY_CHAT_REMOTE_MEDIA_NOTICE },
       userId,
     );
 

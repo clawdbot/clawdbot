@@ -104,9 +104,15 @@ describe("Synology Chat user_list loopback", () => {
 
     expect(receivedPayloads).toEqual([
       { text: "native outbound text", user_ids: [42] },
-      { text: mediaUrl, user_ids: [42] },
+      {
+        text: "Remote media omitted: Synology Chat cannot safely fetch remote URLs.",
+        user_ids: [42],
+      },
       { text: "durable adapter text", user_ids: [42] },
-      { text: mediaUrl, user_ids: [42] },
+      {
+        text: "Remote media omitted: Synology Chat cannot safely fetch remote URLs.",
+        user_ids: [42],
+      },
     ]);
     expect(durableText).toBeDefined();
     expect(durableMedia).toBeDefined();
@@ -234,7 +240,12 @@ describe("Synology Chat user_list loopback", () => {
       synologyChatPlugin.outbound.sendMedia({ cfg, mediaUrl, to: "42" }),
     ).resolves.toMatchObject({ channel: "synology-chat", chatId: "42" });
     expect(webhookRequests).toBe(1);
-    expect(receivedPayloads).toEqual([{ text: mediaUrl, user_ids: [42] }]);
+    expect(receivedPayloads).toEqual([
+      {
+        text: "Remote media omitted: Synology Chat cannot safely fetch remote URLs.",
+        user_ids: [42],
+      },
+    ]);
   });
 
   it("aborts a streamed overflow and returns the stale cached identity", async () => {

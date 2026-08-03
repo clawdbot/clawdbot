@@ -329,7 +329,7 @@ describe("sendFileReference", () => {
     expect(vi.mocked(https.request)).not.toHaveBeenCalled();
   });
 
-  it("sends remote media as text without asking Synology to fetch it", async () => {
+  it("omits the remote URL so neither file fetches nor URL previews can retrieve it", async () => {
     mockSuccessResponse();
     const result = await settleTimers(
       sendFileReference(
@@ -348,7 +348,7 @@ describe("sendFileReference", () => {
       throw new Error("expected Synology Chat webhook body");
     }
     expect(JSON.parse(decodeURIComponent(body.replace(/^payload=/, "")))).toEqual({
-      text: "https://mutable.example/file.png",
+      text: "Remote media omitted: Synology Chat cannot safely fetch remote URLs.",
       user_ids: [42],
     });
     expect(ssrfMocks.resolvePinnedHostnameWithPolicy).not.toHaveBeenCalled();
