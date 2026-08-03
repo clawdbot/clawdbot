@@ -2958,6 +2958,12 @@ describe("spawnAcpDirect", () => {
       resultText: "NO_REPLY",
     },
     {
+      name: "punctuation-wrapped-silent",
+      chunks: ["NO_REPLY:"],
+      expected: { disposition: "silent" } as const,
+      resultText: "NO_REPLY",
+    },
+    {
       name: "empty",
       chunks: [] as string[],
       expected: { disposition: "empty" } as const,

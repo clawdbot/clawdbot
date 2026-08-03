@@ -389,6 +389,11 @@ describe("runEmbeddedAgentEntry", () => {
       expected: { disposition: "silent" },
     },
     {
+      name: "CLI punctuation-wrapped silence",
+      meta: { finalAssistantVisibleText: "NO_REPLY...", finalAssistantRawText: "NO_REPLY..." },
+      expected: { disposition: "silent" },
+    },
+    {
       name: "clean empty reply",
       meta: {},
       expected: { disposition: "empty" },

@@ -23,7 +23,7 @@ import {
   readClaudeCliFallbackSeed,
 } from "../../gateway/cli-session-history.js";
 import {
-  sanitizeAgentRunTerminalReplyText,
+  buildAgentRunTerminalReplySnapshot,
   type AgentRunTerminalReplySnapshot,
 } from "../agent-run-terminal-reply.js";
 import { cliBackendLog } from "../cli-runner/log.js";
@@ -500,7 +500,7 @@ export function createAcpVisibleTextAccumulator() {
         const leadCandidate = resolveNextCandidate(pendingSilentPrefix, chunk);
         const trimmedLeadCandidate = leadCandidate.trim();
         if (
-          trimmedLeadCandidate.toUpperCase() === SILENT_REPLY_TOKEN ||
+          isSilentReplyText(trimmedLeadCandidate, SILENT_REPLY_TOKEN) ||
           isSilentReplyPrefixText(trimmedLeadCandidate, SILENT_REPLY_TOKEN)
         ) {
           pendingSilentPrefix = leadCandidate;
@@ -543,15 +543,10 @@ export function createAcpVisibleTextAccumulator() {
       return visibleText;
     },
     finalizeReplySnapshot(): AgentRunTerminalReplySnapshot {
-      const text = sanitizeAgentRunTerminalReplyText(visibleText);
-      if (text) {
-        return { disposition: "visible", text };
-      }
-      // ACP owns this distinction only until finalization; preserve it before
-      // the buffered exact control token is otherwise indistinguishable from no output.
-      return pendingSilentPrefix.trim().toUpperCase() === SILENT_REPLY_TOKEN
-        ? { disposition: "silent" }
-        : { disposition: "empty" };
+      return buildAgentRunTerminalReplySnapshot({
+        visibleText,
+        rawText: pendingSilentPrefix,
+      });
     },
   };
 }

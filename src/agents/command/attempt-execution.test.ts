@@ -1164,6 +1164,10 @@ describe("createAcpVisibleTextAccumulator", () => {
     });
 
     expect(acc.finalize()).toBe("NO_REPLY: explanation");
+    expect(acc.finalizeReplySnapshot()).toEqual({
+      disposition: "visible",
+      text: "NO_REPLY: explanation",
+    });
   });
 
   it("buffers chunked NO_REPLY prefixes before emitting visible text", () => {
@@ -1189,9 +1193,19 @@ describe("createAcpVisibleTextAccumulator", () => {
     { name: "clean empty output", chunks: [], expected: { disposition: "empty" } },
     { name: "partial control prefix", chunks: ["NO_RE"], expected: { disposition: "empty" } },
     {
-      name: "punctuation-attached control text",
+      name: "punctuation-wrapped silence",
       chunks: ["NO_REPLY:"],
-      expected: { disposition: "visible", text: "NO_REPLY:" },
+      expected: { disposition: "silent" },
+    },
+    {
+      name: "ellipsis-wrapped silence",
+      chunks: ["NO_REPLY..."],
+      expected: { disposition: "silent" },
+    },
+    {
+      name: "chunked punctuation-wrapped silence",
+      chunks: ["NO_REPLY", ":"],
+      expected: { disposition: "silent" },
     },
     {
       name: "glued visible continuation",

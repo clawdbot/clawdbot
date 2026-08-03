@@ -1,6 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { stripInternalMetadataForDisplay } from "../auto-reply/reply/display-text-sanitize.js";
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 
 const AGENT_RUN_TERMINAL_REPLY_MAX_CHARS = 4_096;
 
@@ -8,10 +8,6 @@ export type AgentRunTerminalReplySnapshot =
   | { disposition: "visible"; text: string }
   | { disposition: "silent" }
   | { disposition: "empty" };
-
-function isExactSilentReply(text: string | undefined): boolean {
-  return text?.trim().toUpperCase() === SILENT_REPLY_TOKEN;
-}
 
 /** Sanitizes and caps producer-owned text before it enters lifecycle or durable state. */
 export function sanitizeAgentRunTerminalReplyText(text: string): string {
@@ -28,7 +24,10 @@ export function buildAgentRunTerminalReplySnapshot(params: {
   rawText?: string;
   terminalReplyKind?: "silent-empty";
 }): AgentRunTerminalReplySnapshot {
-  if (params.terminalReplyKind === "silent-empty" || isExactSilentReply(params.rawText)) {
+  if (
+    params.terminalReplyKind === "silent-empty" ||
+    isSilentReplyText(params.rawText, SILENT_REPLY_TOKEN)
+  ) {
     return { disposition: "silent" };
   }
   const text = sanitizeAgentRunTerminalReplyText(params.visibleText ?? "");
