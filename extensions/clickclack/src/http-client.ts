@@ -82,6 +82,10 @@ const CLICKCLACK_MESSAGE_PAGE_LIMIT = 200;
 const CLICKCLACK_DISCUSSION_ROOT_PAGE_LIMIT = 8;
 const CLICKCLACK_DISCUSSION_THREAD_REQUEST_LIMIT = 24;
 
+export function isClickClackTimeoutError(error: unknown): boolean {
+  return error instanceof Error && error.name === "TimeoutError";
+}
+
 type ClickClackMessagePage = {
   messages: ClickClackMessage[];
   oldest_seq: number;
@@ -462,10 +466,16 @@ export function createClickClackClient(options: ClientOptions) {
       workspaceId: string,
       memberIds: string[],
     ): Promise<{ id: string }> => {
-      const data = await request<{ conversation: { id: string } }>("/api/dms", {
-        method: "POST",
-        body: JSON.stringify({ workspace_id: workspaceId, member_ids: memberIds }),
-      });
+      // The endpoint is create-or-reuse for a stable workspace/member set, so
+      // an unknown result can be retried without creating a second conversation.
+      const data = await request<{ conversation: { id: string } }>(
+        "/api/dms",
+        {
+          method: "POST",
+          body: JSON.stringify({ workspace_id: workspaceId, member_ids: memberIds }),
+        },
+        { responseHeaderTimeoutSafe: true },
+      );
       return data.conversation;
     },
     createUpload: async (params: {

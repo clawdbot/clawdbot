@@ -4,6 +4,7 @@ import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   ClickClackHttpError,
   isClickClackChannelNameConflict,
+  isClickClackTimeoutError,
   type ClickClackClient,
 } from "../http-client.js";
 import type { CoreConfig, ResolvedClickClackAccount } from "../types.js";
@@ -125,10 +126,6 @@ export function assertChannelPatch(
   }
 }
 
-function isResponseHeaderTimeout(error: unknown): boolean {
-  return error instanceof Error && error.name === "TimeoutError";
-}
-
 /**
  * Applies a setter-style managed-channel patch with bounded ambiguous-result
  * recovery. A timed-out request is verified by authoritative relist; one retry
@@ -146,7 +143,7 @@ export async function updateChannelWithReconciliation(params: {
   try {
     return await applyPatch();
   } catch (error) {
-    if (!isResponseHeaderTimeout(error)) {
+    if (!isClickClackTimeoutError(error)) {
       throw error;
     }
     timeoutError = error;
@@ -170,7 +167,7 @@ export async function updateChannelWithReconciliation(params: {
     try {
       return await applyPatch();
     } catch (error) {
-      if (!isResponseHeaderTimeout(error)) {
+      if (!isClickClackTimeoutError(error)) {
         throw error;
       }
       timeoutError = error;

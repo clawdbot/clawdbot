@@ -154,6 +154,27 @@ describe("sendClickClackText routing", () => {
     expect(createThreadReply).not.toHaveBeenCalled();
   });
 
+  it("stops a durable DM send when create-or-reuse conversation times out", async () => {
+    const timeout = Object.assign(new Error("request timed out"), { name: "TimeoutError" });
+    const onPlatformSendDispatch = vi.fn(async () => undefined);
+    createDirectConversation.mockRejectedValueOnce(timeout);
+
+    await expect(
+      sendClickClackText({
+        cfg,
+        to: "dm:usr_1",
+        text: "durable",
+        deliveryQueueId: "queue-dm",
+        deliveryPartIndex: 0,
+        onPlatformSendDispatch,
+      }),
+    ).rejects.toBe(timeout);
+
+    expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+    expect(createDirectConversation).toHaveBeenCalledWith("wsp_1", ["usr_1"]);
+    expect(createDirectMessage).not.toHaveBeenCalled();
+  });
+
   it("suppresses replies containing only internal scaffolding", async () => {
     await expect(
       sendClickClackText({

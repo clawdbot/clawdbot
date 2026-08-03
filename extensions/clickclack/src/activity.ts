@@ -16,6 +16,7 @@
  *   frame, and PATCH it when a later frame carries a strictly longer body.
  */
 import { buildChannelProgressDraftLine } from "openclaw/plugin-sdk/channel-outbound";
+import { isClickClackTimeoutError } from "./http-client.js";
 import type { ClickClackMessage, ClickClackMessageProvenance } from "./types.js";
 
 /** Debounce window for PATCHing streaming commentary snapshots. */
@@ -201,6 +202,12 @@ export function createClickClackActivityPublisher(params: {
     segment.dirty = false;
     const body = segment.body;
     return enqueue(async () => {
+      // A newer snapshot may have queued this work while the first create was
+      // still in flight. Recheck abandonment at execution time so that queued
+      // callbacks cannot duplicate an ambiguously committed row.
+      if (segment.createAbandoned) {
+        return;
+      }
       if (segment.messageId) {
         await params.client.updateMessageBody(segment.messageId, body);
         return;
@@ -209,9 +216,12 @@ export function createClickClackActivityPublisher(params: {
         const posted = await postRow("agent_commentary", body);
         segment.messageId = posted.id;
       } catch (error) {
-        // Activity is best-effort. A failed POST may already exist remotely, so
-        // abandon this logical segment instead of duplicating it on a later frame.
-        segment.createAbandoned = true;
+        // The response-header deadline can fire after the POST committed. Only
+        // that known ambiguous result abandons the segment; definitive failures
+        // remain eligible for a later, longer cumulative snapshot to retry.
+        if (isClickClackTimeoutError(error)) {
+          segment.createAbandoned = true;
+        }
         throw error;
       }
     });

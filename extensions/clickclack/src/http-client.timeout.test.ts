@@ -77,6 +77,13 @@ describe("ClickClack HTTP client timeouts", () => {
         client.createThreadReply("message-1", "reply", { nonce: "message-nonce" }),
     },
     {
+      operation: "create-or-reuse direct conversation",
+      method: "POST",
+      path: "/api/dms",
+      invoke: (client: ReturnType<typeof createClickClackClient>) =>
+        client.createDirectConversation("workspace-1", ["user-1"]),
+    },
+    {
       operation: "nonce-keyed direct message",
       method: "POST",
       path: "/api/dms/conversation-1/messages",
