@@ -50,4 +50,4 @@ export {
   type TtsSynthesisStreamResult,
   type TtsStreamResult,
   type TtsTelephonyResult,
-} from "../tts/tts.js";
+} from "../tts/runtime-api.js";
