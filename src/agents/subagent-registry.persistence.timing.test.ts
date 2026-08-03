@@ -9,8 +9,10 @@ import { callGateway } from "../gateway/call.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import {
+  createCanonicalSubagentRunFixture,
   createSubagentRegistryTestDeps,
   readSubagentSessionStore,
   writeSubagentSessionEntry,
@@ -100,20 +102,22 @@ describe("subagent registry persistence timing", () => {
       sessionId: "sess-timing",
       updatedAt: startedAt - 1,
     });
-    await persistSubagentSessionTiming({
-      runId: "run-session-timing",
-      childSessionKey: "agent:main:subagent:timing",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "persist timing",
-      cleanup: "keep",
-      createdAt: startedAt,
-      startedAt,
-      sessionStartedAt: startedAt,
-      accumulatedRuntimeMs: 0,
-      endedAt,
-      outcome: { status: "ok" },
-    } as never);
+    await persistSubagentSessionTiming(
+      createCanonicalSubagentRunFixture({
+        runId: "run-session-timing",
+        childSessionKey: "agent:main:subagent:timing",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "persist timing",
+        cleanup: "keep",
+        createdAt: startedAt,
+        startedAt,
+        sessionStartedAt: startedAt,
+        accumulatedRuntimeMs: 0,
+        endedAt,
+        outcome: { status: "ok" },
+      }),
+    );
 
     const store = await readSubagentSessionStore(storePath);
     const persisted = store["agent:main:subagent:timing"];
@@ -172,7 +176,7 @@ describe("subagent registry persistence timing", () => {
       updatedAt: startedAt - 1,
     });
     await persistSubagentSessionTiming(
-      {
+      createCanonicalSubagentRunFixture({
         runId: "run-stale-timing",
         childSessionKey: "agent:main:subagent:stale-timing",
         requesterSessionKey: "agent:main:main",
@@ -183,7 +187,7 @@ describe("subagent registry persistence timing", () => {
         startedAt,
         endedAt: startedAt + 500,
         outcome: { status: "ok" },
-      } as never,
+      }),
       { isCurrentGeneration: () => false },
     );
 
@@ -220,19 +224,21 @@ describe("subagent registry persistence timing", () => {
       abortedLastRun: true,
     } as SessionEntry);
 
-    await persistSubagentSessionTiming({
-      runId: "run-kill-race",
-      childSessionKey: "agent:main:subagent:kill-race",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "preserve completion",
-      cleanup: "keep",
-      createdAt: startedAt,
-      startedAt,
-      endedAt: completedAt + 1,
-      endedReason: "subagent-killed",
-      outcome: { status: "error", error: "manual kill" },
-    } as never);
+    await persistSubagentSessionTiming(
+      createCanonicalSubagentRunFixture({
+        runId: "run-kill-race",
+        childSessionKey: "agent:main:subagent:kill-race",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "preserve completion",
+        cleanup: "keep",
+        createdAt: startedAt,
+        startedAt,
+        endedAt: completedAt + 1,
+        endedReason: SUBAGENT_ENDED_REASON_KILLED,
+        outcome: { status: "error", error: "manual kill" },
+      }),
+    );
 
     const persisted = (await readSubagentSessionStore(storePath))["agent:main:subagent:kill-race"];
     expect(persisted).toMatchObject({

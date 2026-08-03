@@ -2120,28 +2120,33 @@ export function handleMessageEnd(
             !finalDirectives.audioAsVoice
               ? finalAssistantText
               : "";
+          const correctionPayload = hasReplyDirectiveMetadataResult(finalDirectives.result)
+            ? {
+                ...finalDirectives.result,
+                text: finalTextCorrection || metadataOnlyText,
+              }
+            : textEndDeliveredText != null
+              ? {
+                  ...parseReplyDirectives(finalAssistantText),
+                  text: finalTextCorrection,
+                }
+              : ctx.consumeReplyDirectives(finalAssistantText, { final: true });
+          // A correction is canonical text minus what text_end delivered, so it
+          // already carries the tail splitTrailingDirective is still holding.
+          // Drain that residue here or finishMessageEndDelivery releases it a
+          // second time and the channel sees the tail twice.
+          if (finalTextCorrection) {
+            ctx.consumeReplyDirectives("", { final: true });
+          }
           ctx.state.lastBlockReplyText = finalAssistantText;
           ctx.state.toolExecutionSinceLastBlockReply = false;
-          emitSplitResultAsBlockReply(
-            hasReplyDirectiveMetadataResult(finalDirectives.result)
-              ? {
-                  ...finalDirectives.result,
-                  text: finalTextCorrection || metadataOnlyText,
-                }
-              : textEndDeliveredText != null
-                ? {
-                    ...parseReplyDirectives(finalAssistantText),
-                    text: finalTextCorrection,
-                  }
-                : ctx.consumeReplyDirectives(finalAssistantText, { final: true }),
-            () => {
-              ctx.state.lastDeliveredBlockReplyText = finalAssistantText;
-              if (finalAssistantText) {
-                ctx.state.deliveredBlockReplyTexts = [finalAssistantText];
-                ctx.state.attemptedBlockReplyTexts = [finalAssistantText];
-              }
-            },
-          );
+          emitSplitResultAsBlockReply(correctionPayload, () => {
+            ctx.state.lastDeliveredBlockReplyText = finalAssistantText;
+            if (finalAssistantText) {
+              ctx.state.deliveredBlockReplyTexts = [finalAssistantText];
+              ctx.state.attemptedBlockReplyTexts = [finalAssistantText];
+            }
+          });
         }
       }
     }
