@@ -81,13 +81,6 @@ function withProfile(
   return { ...root, profiles: { [name]: { color: "#FF4500", ...profile } } };
 }
 
-// Keep Basic-auth normalization inputs visibly synthetic and reusable.
-function syntheticBasicAuthCdpUrl(protocol: "http" | "https", endpoint: string): string {
-  const credentials = ["user", "pass"].join(":");
-  return `${protocol}://${credentials}@${endpoint}`;
-}
-const SYNTHETIC_REMOTE_CDP_ENDPOINT = "remote-browser.example.com:443/json/version?token=abc#frag";
-
 describe("browser config", () => {
   it("defaults to enabled with loopback defaults and lobster-orange color", () => {
     const resolved = resolveBrowserConfig(undefined);
@@ -516,51 +509,6 @@ describe("browser config", () => {
       expected: { cdpPort: 80, cdpUrl: "http://127.0.0.1:80" },
     },
     {
-      name: "URL with explicit default port preserves normalized HTTPS URL details",
-      config: withProfile("secure", {
-        cdpPort: 18800,
-        cdpUrl: syntheticBasicAuthCdpUrl("https", SYNTHETIC_REMOTE_CDP_ENDPOINT),
-      }),
-      profileName: "secure",
-      expected: {
-        cdpPort: 443,
-        cdpUrl: syntheticBasicAuthCdpUrl("https", SYNTHETIC_REMOTE_CDP_ENDPOINT),
-      },
-    },
-    {
-      name: "URL with explicit default port preserves normalized WSS URL details",
-      config: withProfile("websocket", {
-        cdpPort: 18800,
-        cdpUrl: "wss://remote-browser.example.com:443/json/version?token=abc",
-      }),
-      profileName: "websocket",
-      expected: {
-        cdpPort: 443,
-        cdpUrl: "wss://remote-browser.example.com:443/json/version?token=abc",
-      },
-    },
-    {
-      name: "URL with explicit default port preserves normalized IPv6 URL details",
-      config: withProfile("ipv6", {
-        cdpPort: 18800,
-        cdpUrl: "http://[::1]:80/json/version?token=abc",
-      }),
-      profileName: "ipv6",
-      expected: { cdpPort: 80, cdpUrl: "http://[::1]:80/json/version?token=abc" },
-    },
-    {
-      name: "userinfo colons without a URL port defer to cdpPort",
-      config: withProfile("openclaw", {
-        cdpPort: 18800,
-        cdpUrl: syntheticBasicAuthCdpUrl("http", "127.0.0.1/json/version"),
-      }),
-      profileName: "openclaw",
-      expected: {
-        cdpPort: 18800,
-        cdpUrl: syntheticBasicAuthCdpUrl("http", "127.0.0.1:18800/json/version"),
-      },
-    },
-    {
       name: "URL without port defers to cdpPort",
       config: withProfile("openclaw", { cdpPort: 18800, cdpUrl: "http://127.0.0.1" }),
       profileName: "openclaw",
@@ -628,6 +576,63 @@ describe("browser config", () => {
     },
   ])("$name", ({ config, profileName, expected }) => {
     expect(resolveRequiredProfile(config, profileName)).toMatchObject(expected);
+  });
+
+  describe("cdpPort vs cdpUrl port precedence", () => {
+    it("URL with explicit default port preserves normalized URL details", () => {
+      const resolved = resolveBrowserConfig({
+        profiles: {
+          secure: {
+            cdpPort: 18800,
+            cdpUrl: "https://user:pass@remote-browser.example.com:443/json/version?token=abc#frag",
+            color: "#0066CC",
+            driver: "openclaw",
+          },
+          websocket: {
+            cdpPort: 18800,
+            cdpUrl: "wss://remote-browser.example.com:443/json/version?token=abc",
+            color: "#0066CC",
+            driver: "openclaw",
+          },
+          ipv6: {
+            cdpPort: 18800,
+            cdpUrl: "http://[::1]:80/json/version?token=abc",
+            color: "#0066CC",
+            driver: "openclaw",
+          },
+        },
+      });
+
+      const secure = resolveProfile(resolved, "secure");
+      expect(secure?.cdpPort).toBe(443);
+      expect(secure?.cdpUrl).toBe(
+        "https://user:pass@remote-browser.example.com:443/json/version?token=abc#frag",
+      );
+
+      const websocket = resolveProfile(resolved, "websocket");
+      expect(websocket?.cdpPort).toBe(443);
+      expect(websocket?.cdpUrl).toBe("wss://remote-browser.example.com:443/json/version?token=abc");
+
+      const ipv6 = resolveProfile(resolved, "ipv6");
+      expect(ipv6?.cdpPort).toBe(80);
+      expect(ipv6?.cdpUrl).toBe("http://[::1]:80/json/version?token=abc");
+    });
+
+    it("userinfo colons without a URL port defer to cdpPort", () => {
+      const resolved = resolveBrowserConfig({
+        profiles: {
+          openclaw: {
+            cdpPort: 18800,
+            cdpUrl: "http://user:pass@127.0.0.1/json/version",
+            color: "#FF4500",
+            driver: "openclaw",
+          },
+        },
+      });
+      const profile = resolveProfile(resolved, "openclaw");
+      expect(profile?.cdpPort).toBe(18800);
+      expect(profile?.cdpUrl).toBe("http://user:pass@127.0.0.1:18800/json/version");
+    });
   });
 
   it("rejects openclaw profiles without cdpPort or cdpUrl", () => {
