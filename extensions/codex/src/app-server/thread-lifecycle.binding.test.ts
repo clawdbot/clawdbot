@@ -3771,7 +3771,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       // Seed session store entry (reclaimCurrentCodexSessionGeneration verifies against it).
       await upsertSessionEntry({
         agentId: identity.agentId,
-        sessionKey: identity.sessionKey,
+        sessionKey: identity.sessionKey!,
         storePath,
         entry: { sessionId: identity.sessionId, updatedAt: 1 },
       });
