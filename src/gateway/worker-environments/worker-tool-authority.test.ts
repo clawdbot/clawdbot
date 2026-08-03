@@ -75,6 +75,16 @@ describe("resolveWorkerToolAuthority", () => {
     ]);
   });
 
+  it.each([
+    ["config", { config: { tools: { exec: { host: "node" as const, mode: "full" as const } } } }],
+    [
+      "session override",
+      { execOverrides: { host: "node" as const, security: "full" as const, ask: "off" as const } },
+    ],
+  ])("gates worker shell tools for node-targeted exec from %s", (_label, overrides) => {
+    expect(authority(overrides)).toEqual(["read", "write", "edit", "apply_patch"]);
+  });
+
   it("uses the source sandbox state when resolving worker exec authority", () => {
     expect(
       authority({
@@ -88,6 +98,15 @@ describe("resolveWorkerToolAuthority", () => {
         config: {
           agents: { defaults: { sandbox: { mode: "all" } } },
           tools: { exec: { host: "gateway", mode: "full" } },
+        },
+      }),
+    ).toEqual(["read", "write", "edit", "apply_patch", "exec", "process"]);
+    expect(
+      authority({
+        sessionKey: "agent:main:worker-sandboxed",
+        config: {
+          agents: { defaults: { sandbox: { mode: "all" } } },
+          tools: { exec: { host: "sandbox", mode: "full" } },
         },
       }),
     ).toEqual(["read", "write", "edit", "apply_patch", "exec", "process"]);
