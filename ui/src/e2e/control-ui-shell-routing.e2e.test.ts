@@ -24,6 +24,12 @@ const forwardedHeaderBlocklist = new Set([
   "content-length",
   "transfer-encoding",
 ]);
+const publicAssetPaths = new Set([
+  "/apple-touch-icon.png",
+  "/favicon-32.png",
+  "/favicon.svg",
+  "/manifest.webmanifest",
+]);
 
 type BasePathProxy = {
   baseUrl: string;
@@ -55,7 +61,13 @@ async function startBasePathProxy(upstreamBaseUrl: string): Promise<BasePathProx
     void (async () => {
       const incomingUrl = new URL(request.url ?? "/", "http://control-ui.invalid");
       requests.push(incomingUrl.pathname);
-      const upstreamPath = incomingUrl.pathname.startsWith(`${basePath}/`)
+      const hasBasePath = incomingUrl.pathname.startsWith(`${basePath}/`);
+      if (!hasBasePath && publicAssetPaths.has(incomingUrl.pathname)) {
+        response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+        response.end("Public assets require the configured Control UI base path");
+        return;
+      }
+      const upstreamPath = hasBasePath
         ? incomingUrl.pathname.slice(basePath.length)
         : incomingUrl.pathname;
       const upstreamUrl = new URL(`${upstreamPath}${incomingUrl.search}`, upstreamBaseUrl);
@@ -152,9 +164,8 @@ describeControlUiE2e("Control UI shell routing E2E", () => {
         basePath,
       );
 
-      // main.ts rewrites the root-absolute HTML links from the injected base path.
-      // Assert final DOM hrefs and observed requests so the proxy cannot bypass
-      // the production rewrite owner this test is intended to prove.
+      // The proxy rejects root asset fallbacks. Assert the rewritten DOM and
+      // request paths so only main.ts can make these links load under the base path.
       const assetResults = await page.evaluate(async () => {
         const links = Array.from(
           document.querySelectorAll<HTMLLinkElement>(
@@ -213,6 +224,10 @@ describeControlUiE2e("Control UI shell routing E2E", () => {
           `${basePath}/manifest.webmanifest`,
         ]),
       );
+      const unprefixedPublicAssetRequests = proxy.requests.filter((requestPath) =>
+        publicAssetPaths.has(requestPath),
+      );
+      expect(unprefixedPublicAssetRequests).toEqual([]);
 
       await page.screenshot({
         fullPage: true,
@@ -232,6 +247,7 @@ describeControlUiE2e("Control UI shell routing E2E", () => {
               ),
             ].toSorted(),
             schemaVersion: 1,
+            unprefixedPublicAssetRequests,
           },
           null,
           2,
