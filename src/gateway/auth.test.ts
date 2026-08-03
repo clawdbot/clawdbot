@@ -1,3 +1,4 @@
+import type { IncomingMessage } from "node:http";
 // Gateway auth tests cover shared-secret, Tailscale, loopback, forwarded-header,
 // control-UI, and HTTP/WebSocket authorization decisions.
 import os from "node:os";
@@ -7,6 +8,7 @@ import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.j
 import {
   assertGatewayAuthConfigured,
   authorizeHttpGatewayConnect,
+  authorizeUserProfileAvatarHttpGatewayConnect,
   hasForwardedRequestHeaders,
   isLocalDirectRequest,
   resolveEffectiveSharedGatewayAuth,
@@ -40,7 +42,12 @@ function createLimiterSpy(): AuthRateLimiter & {
   };
 }
 
-function createTailscaleForwardedReq(): never {
+type TailscaleForwardedRequest = IncomingMessage & {
+  socket: IncomingMessage["socket"] & { remoteAddress?: string };
+  headers: IncomingMessage["headers"] & Record<string, string | undefined>;
+};
+
+function createTailscaleForwardedReq(): TailscaleForwardedRequest {
   return {
     socket: { remoteAddress: "127.0.0.1" },
     headers: {
@@ -51,7 +58,7 @@ function createTailscaleForwardedReq(): never {
       "tailscale-user-login": "peter",
       "tailscale-user-name": "Peter",
     },
-  } as never;
+  } as unknown as TailscaleForwardedRequest;
 }
 
 function createTailscaleWhois() {
@@ -81,7 +88,10 @@ describe("gateway auth", () => {
   }
 
   async function expectTailscaleHeaderAuthResult(params: {
-    authorize: typeof authorizeHttpGatewayConnect | typeof authorizeWsControlUiGatewayConnect;
+    authorize:
+      | typeof authorizeHttpGatewayConnect
+      | typeof authorizeUserProfileAvatarHttpGatewayConnect
+      | typeof authorizeWsControlUiGatewayConnect;
     expected: { ok: false; reason: string } | { ok: true; method: string; user: string };
   }) {
     const res = await params.authorize({
@@ -477,6 +487,79 @@ describe("gateway auth", () => {
     expect(res.user).toBe("peter");
   });
 
+  it("allows verified tailscale identity on the profile avatar HTTP surface", async () => {
+    const limiter = createLimiterSpy();
+    const res = await authorizeUserProfileAvatarHttpGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: true },
+      connectAuth: null,
+      tailscaleWhois: createTailscaleWhois(),
+      req: createTailscaleForwardedReq(),
+      rateLimiter: limiter,
+    });
+
+    expect(res).toMatchObject({ ok: true, method: "tailscale", user: "peter" });
+    expect(limiter.check).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
+    expect(limiter.reset).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
+  });
+
+  it.each([
+    {
+      name: "missing identity",
+      mutate: (req: ReturnType<typeof createTailscaleForwardedReq>) => {
+        delete req.headers["tailscale-user-login"];
+      },
+      whois: createTailscaleWhois(),
+    },
+    {
+      name: "mismatched identity",
+      mutate: () => {},
+      whois: async () => ({ login: "mallory", name: "Mallory" }),
+    },
+    {
+      name: "non-loopback source",
+      mutate: (req: ReturnType<typeof createTailscaleForwardedReq>) => {
+        req.socket.remoteAddress = "192.0.2.10";
+      },
+      whois: createTailscaleWhois(),
+    },
+    {
+      name: "incomplete forwarded headers",
+      mutate: (req: ReturnType<typeof createTailscaleForwardedReq>) => {
+        delete req.headers["x-forwarded-host"];
+      },
+      whois: createTailscaleWhois(),
+    },
+  ])("rejects $name on the profile avatar HTTP surface", async ({ mutate, whois }) => {
+    const req = createTailscaleForwardedReq();
+    mutate(req);
+
+    const res = await authorizeUserProfileAvatarHttpGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: true },
+      connectAuth: null,
+      tailscaleWhois: whois,
+      req,
+    });
+
+    expect(res).toMatchObject({ ok: false, reason: "token_missing" });
+  });
+
+  it.each([
+    {
+      auth: { mode: "token" as const, token: "secret", allowTailscale: true },
+      connectAuth: { token: "secret" },
+      method: "token",
+    },
+    {
+      auth: { mode: "password" as const, password: "secret", allowTailscale: true },
+      connectAuth: { password: "secret" },
+      method: "password",
+    },
+  ])("keeps $method auth on the profile avatar HTTP surface", async (testCase) => {
+    const res = await authorizeUserProfileAvatarHttpGatewayConnect(testCase);
+
+    expect(res).toMatchObject({ ok: true, method: testCase.method });
+  });
+
   it("serializes async auth attempts per rate-limit key", async () => {
     const limiter = createAuthRateLimiter({
       maxAttempts: 1,
@@ -524,6 +607,13 @@ describe("gateway auth", () => {
     await expectTailscaleHeaderAuthResult({
       authorize: authorizeHttpGatewayConnect,
       expected: { ok: false, reason: "token_missing" },
+    });
+  });
+
+  it("enables tailscale header auth on the profile avatar HTTP wrapper", async () => {
+    await expectTailscaleHeaderAuthResult({
+      authorize: authorizeUserProfileAvatarHttpGatewayConnect,
+      expected: { ok: true, method: "tailscale", user: "peter" },
     });
   });
 

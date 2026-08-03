@@ -58,7 +58,7 @@ type ConnectAuth = {
   password?: string;
 };
 
-type GatewayAuthSurface = "http" | "ws-control-ui";
+type GatewayAuthSurface = "http" | "http-user-profile-avatar" | "ws-control-ui";
 
 /** Inputs needed to authorize one HTTP or websocket gateway connection. */
 type AuthorizeGatewayConnectParams = {
@@ -324,7 +324,7 @@ function authorizeTrustedProxy(params: {
 }
 
 function shouldAllowTailscaleHeaderAuth(authSurface: GatewayAuthSurface): boolean {
-  return authSurface === "ws-control-ui";
+  return authSurface === "ws-control-ui" || authSurface === "http-user-profile-avatar";
 }
 
 function authorizeHttpBrowserOrigin(params: {
@@ -333,7 +333,7 @@ function authorizeHttpBrowserOrigin(params: {
   isLocalClient: boolean;
   reason: string;
 }): { ok: false; reason: string } | null {
-  if (params.authSurface !== "http") {
+  if (params.authSurface === "ws-control-ui") {
     return null;
   }
 
@@ -579,6 +579,16 @@ export async function authorizeHttpGatewayConnect(
   return authorizeGatewayConnect({
     ...params,
     authSurface: "http",
+  });
+}
+
+/** Authorize the read-only profile avatar route, including verified Tailscale identity. */
+export async function authorizeUserProfileAvatarHttpGatewayConnect(
+  params: Omit<AuthorizeGatewayConnectParams, "authSurface">,
+): Promise<GatewayAuthResult> {
+  return authorizeGatewayConnect({
+    ...params,
+    authSurface: "http-user-profile-avatar",
   });
 }
 
