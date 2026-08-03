@@ -313,6 +313,7 @@
   "tool-payload",
   "tool-results",
   "tool-send",
+  "tool-yield-runtime",
   "webhook-ingress",
   "webhook-targets",
   "webhook-request-guards",

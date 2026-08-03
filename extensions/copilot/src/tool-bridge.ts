@@ -31,6 +31,10 @@ type AgentHarnessToolSurfaceRuntime = ReturnType<typeof createAgentHarnessToolSu
 type CatalogExecuteParams = Parameters<
   NonNullable<AgentHarnessToolSurfaceRuntime["toolSearchCatalogExecutor"]>
 >[0];
+type ScheduleToolExecution = <T>(
+  executionMode: AnyAgentTool["executionMode"],
+  run: () => Promise<T>,
+) => Promise<T>;
 
 /**
  * Mutable holder populated by `attempt.ts` *after* `client.createSession()`
@@ -158,6 +162,32 @@ const SUPPORTED_TOOL_PROVIDERS: ReadonlySet<string> = new Set(["github-copilot"]
 const BASE_COPILOT_CODING_TOOL_NAMES = new Set(["edit", "read", "write"]);
 const SHELL_COPILOT_CODING_TOOL_NAMES = new Set(["apply_patch", "exec", "process"]);
 
+function createToolExecutionScheduler(): ScheduleToolExecution {
+  let sequentialBarrier = Promise.resolve();
+  const activeParallel = new Set<Promise<void>>();
+  return async (executionMode, run) => {
+    const start =
+      executionMode === "sequential"
+        ? activeParallel.size === 0
+          ? sequentialBarrier
+          : Promise.all([sequentialBarrier, ...activeParallel])
+        : sequentialBarrier;
+    const queued = start.then(run, run);
+    const settled = queued.then(
+      () => undefined,
+      () => undefined,
+    );
+    if (executionMode === "sequential") {
+      // Exclusive calls wait for prior parallel work and block every later call.
+      sequentialBarrier = settled;
+    } else {
+      activeParallel.add(settled);
+      void settled.then(() => activeParallel.delete(settled));
+    }
+    return await queued;
+  };
+}
+
 function supportsModelTools(modelProvider: string): boolean {
   return SUPPORTED_TOOL_PROVIDERS.has(modelProvider);
 }
@@ -197,12 +227,15 @@ export async function createCopilotToolBridge(
   const createOpenClawCodingTools =
     input.createOpenClawCodingTools ??
     (await import("openclaw/plugin-sdk/agent-harness")).createOpenClawCodingTools;
+  const scheduleToolExecution = createToolExecutionScheduler();
 
   const toolSurfaceRuntime = createAgentHarnessToolSurfaceRuntime({
     abortSignal: input.abortSignal,
     agentId: input.agentId,
     config: attemptParams.config,
     disableTools: attemptParams.disableTools,
+    // Catalog dispatchers already own the enclosing tool call. Yield-capable tools are
+    // direct-only, so nesting this scheduler here would wait on the dispatcher itself.
     executeTool: (toolParams) => executeCatalogTool(input, toolParams),
     forceMessageTool: shouldForceCopilotMessageTool(attemptParams),
     isRawModelRun: isCopilotRawModelRun(attemptParams),
@@ -285,6 +318,7 @@ export async function createCopilotToolBridge(
         onAgentToolResult: input.attemptParams?.onAgentToolResult,
         onToolCompleted: input.onToolCompleted,
         observeToolTerminal: input.attemptParams?.observeToolTerminal,
+        scheduleToolExecution,
       }),
     ),
     sourceTools: filteredTools,
@@ -446,7 +480,7 @@ function buildOpenClawCodingToolsOptions(
     // recordToolPrepStage intentionally omitted: copilot does not
     // surface attempt-stage telemetry yet. Codex omits this too.
     onToolOutcome: a.onToolOutcome,
-    onYield: (message) => {
+    onYield: async (message) => {
       // Notify the caller first so the final attempt result can carry
       // yieldDetected even if the abort below races a concurrent
       // settle path. Errors thrown by the caller's handler must not
@@ -466,7 +500,9 @@ function buildOpenClawCodingToolsOptions(
       // the SDK session is up, so a missing `current` is a no-op by
       // design (e.g. early aborts handled by the abortSignal path).
       const target = input.sessionRef?.current;
-      void target?.abort?.();
+      // Await the SDK cancellation acknowledgement when the session is bound; a
+      // rejected abort must remain visible to the tool instead of becoming a false success.
+      await target?.abort?.();
     },
   };
 }
@@ -479,6 +515,7 @@ function convertOpenClawToolToSdkTool(
     onAgentToolResult?: CopilotToolAttemptParams["onAgentToolResult"];
     onToolCompleted?: CopilotToolBridgeInput["onToolCompleted"];
     observeToolTerminal?: CopilotToolTerminalObserver;
+    scheduleToolExecution: ScheduleToolExecution;
   },
 ): SdkTool {
   if (typeof sourceTool.name !== "string" || sourceTool.name.trim().length === 0) {
@@ -491,7 +528,6 @@ function convertOpenClawToolToSdkTool(
     );
   }
 
-  let sequentialLock = Promise.resolve();
   const notifyToolResult = (result: unknown, isError: boolean) => {
     try {
       ctx.onAgentToolResult?.({ toolName: sourceTool.name, result, isError });
@@ -629,20 +665,8 @@ function convertOpenClawToolToSdkTool(
     return sdkResult;
   };
 
-  const handler =
-    sourceTool.executionMode === "sequential"
-      ? (args: unknown, invocation: ToolInvocation) => {
-          const run = sequentialLock.then(
-            () => executeOnce(args, invocation),
-            () => executeOnce(args, invocation),
-          );
-          sequentialLock = run.then(
-            () => undefined,
-            () => undefined,
-          );
-          return run;
-        }
-      : executeOnce;
+  const handler = (args: unknown, invocation: ToolInvocation) =>
+    ctx.scheduleToolExecution(sourceTool.executionMode, () => executeOnce(args, invocation));
 
   return {
     description: sourceTool.description,

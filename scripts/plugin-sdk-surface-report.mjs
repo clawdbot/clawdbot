@@ -160,7 +160,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: pinned secret reads and first-writer-wins creation.
       // +2: restore the documented session-catalog and tool-results plugin contracts.
       // +1: focused inbound-event delivery correlation for channel plugins.
-      149,
+      // +1: execution-scoped turn-yield runtime for plugin tools.
+      150,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -210,7 +211,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +45: restore typed session-catalog and tool-results exports promised to plugins.
       // +1: forwarding-routed approver-restricted native approval capability factory.
       // +1: shared inbound-event delivery correlation factory for channel plugins.
-      4822,
+      // +2: turn-yield availability probe and request helper.
+      4824,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -252,7 +254,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +14: restore callable session-catalog and tool-results helpers promised to plugins.
       // +1: forwarding-routed approver-restricted native approval capability factory.
       // +1: shared inbound-event delivery correlation factory for channel plugins.
-      2899,
+      // +2: turn-yield availability probe and request helper.
+      2901,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

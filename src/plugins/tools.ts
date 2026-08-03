@@ -33,6 +33,7 @@ import {
   buildPluginRuntimeLoadOptions,
   resolvePluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
+import { runPluginToolBodyWithTurnYieldLease } from "./runtime/tool-yield-context.js";
 import { findUndeclaredPluginToolNames } from "./tool-contracts.js";
 import {
   buildPluginToolDescriptorCacheKey,
@@ -173,13 +174,13 @@ function wrapPluginToolCallbacks(
     signal?: AbortSignal,
     onUpdate?: unknown,
   ) =>
-    runWithPluginToolScope(
-      entry,
-      pluginRegistry,
-      () =>
-        Reflect.apply(tool.execute, tool, [toolCallId, params, signal, onUpdate]) as ReturnType<
-          AnyAgentTool["execute"]
-        >,
+    runWithPluginToolScope(entry, pluginRegistry, () =>
+      runPluginToolBodyWithTurnYieldLease({
+        run: () =>
+          Reflect.apply(tool.execute, tool, [toolCallId, params, signal, onUpdate]) as ReturnType<
+            AnyAgentTool["execute"]
+          >,
+      }),
     );
   const wrapped = new Proxy<AnyAgentTool>(tool, {
     get(target, prop) {
@@ -807,6 +808,8 @@ function createCachedDescriptorPluginTool(params: {
     description: descriptor.description,
     parameters: descriptor.inputSchema as never,
     ...(descriptor.outputSchema ? { outputSchema: descriptor.outputSchema as never } : {}),
+    ...(params.descriptor.executionMode ? { executionMode: params.descriptor.executionMode } : {}),
+    ...(params.descriptor.catalogMode ? { catalogMode: params.descriptor.catalogMode } : {}),
     ...(params.descriptor.requiredClientCaps
       ? { requiredClientCaps: [...params.descriptor.requiredClientCaps] }
       : {}),

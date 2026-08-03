@@ -159,6 +159,39 @@ Factories still declare a fixed tool name up front. Use `definePluginEntry`
 directly when the plugin computes tool names dynamically or combines tools
 with hooks, services, providers, or commands.
 
+## Yield after an external interaction
+
+Tools that send a correlated approval, form, or other asynchronous interaction
+can request a clean turn handoff through
+`openclaw/plugin-sdk/tool-yield-runtime`. The same execution contract works in
+`defineToolPlugin` declarations:
+
+```typescript
+import { isTurnYieldAvailable, requestTurnYield } from "openclaw/plugin-sdk/tool-yield-runtime";
+
+tool({
+  name: "approval_prompt",
+  description: "Send an external approval prompt.",
+  parameters: Type.Object({ question: Type.String() }),
+  executionMode: "sequential",
+  catalogMode: "direct-only",
+  async execute({ question }) {
+    if (!isTurnYieldAvailable()) {
+      throw new Error("This runtime cannot pause for an external approval.");
+    }
+    const prompt = await sendApprovalPrompt(question);
+    requestTurnYield("Waiting for the approval response");
+    return { status: "pending", promptId: prompt.id };
+  },
+});
+```
+
+Check availability before sending the external interaction. The request is
+applied only after the tool returns a non-error result. The sequential and
+direct-only declarations are both required so later sibling calls cannot race
+the handoff and catalog bridges cannot hide the scheduling contract. See the
+[full runtime contract](/plugins/building-plugins#yield-after-starting-an-external-interaction).
+
 ## Return values
 
 `defineToolPlugin` wraps plain return values into the OpenClaw tool-result

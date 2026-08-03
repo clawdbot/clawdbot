@@ -5,6 +5,8 @@
  */
 import { vi } from "vitest";
 
+const pluginToolMeta = vi.hoisted(() => new WeakMap<object, unknown>());
+
 type StubTool = {
   name: string;
   description: string;
@@ -40,7 +42,15 @@ vi.mock("../tools/web-tools.js", () => ({
 vi.mock("../../plugins/tools.js", () => ({
   buildPluginToolMetadataKey: (pluginId: string, toolName: string) =>
     JSON.stringify([pluginId, toolName]),
-  copyPluginToolMeta: (_from: unknown, to: unknown) => to,
-  getPluginToolMeta: () => undefined,
+  copyPluginToolMeta: (from: object, to: object) => {
+    const meta = pluginToolMeta.get(from);
+    if (meta) {
+      pluginToolMeta.set(to, meta);
+    }
+  },
+  getPluginToolMeta: (tool: object) => pluginToolMeta.get(tool),
   resolvePluginTools: () => [],
+  setPluginToolMeta: (tool: object, meta: unknown) => {
+    pluginToolMeta.set(tool, meta);
+  },
 }));

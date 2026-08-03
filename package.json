@@ -1398,6 +1398,10 @@
       "types": "./dist/plugin-sdk/tool-send.d.ts",
       "default": "./dist/plugin-sdk/tool-send.js"
     },
+    "./plugin-sdk/tool-yield-runtime": {
+      "types": "./dist/plugin-sdk/tool-yield-runtime.d.ts",
+      "default": "./dist/plugin-sdk/tool-yield-runtime.js"
+    },
     "./plugin-sdk/webhook-ingress": {
       "types": "./dist/plugin-sdk/webhook-ingress.d.ts",
       "default": "./dist/plugin-sdk/webhook-ingress.js"

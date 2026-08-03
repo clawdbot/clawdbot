@@ -30,7 +30,9 @@ import {
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
+import { runPluginToolBodyWithTurnYieldLease } from "../plugins/runtime/tool-yield-context.js";
 import { isPluginToolAllowed } from "../plugins/tool-grant-allowlist.js";
+import { setPluginToolMeta } from "../plugins/tools.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { filterToolsByMessageProvider } from "./agent-tools.message-provider-policy.js";
@@ -1088,6 +1090,70 @@ describe("createOpenClawCodingTools", () => {
       expect(pluginToolOptions?.nativeChannelId).toBe("oc_native_chat");
       expect(pluginToolOptions?.clientCaps).toEqual(["inline-widgets"]);
       expect(pluginToolOptions?.preparedModelRuntime).toBe(preparedModelRuntime);
+    } finally {
+      resolvePluginToolsSpy.mockRestore();
+    }
+  });
+
+  it("commits plugin-only turn yield outside the abort wrapper", async () => {
+    const abortController = new AbortController();
+    const result = {
+      content: [{ type: "text" as const, text: "Approval sent." }],
+      details: { status: "pending", promptId: "prompt-1" },
+    };
+    const pluginTool: OpenClawCodingTool = {
+      name: "approval_prompt",
+      label: "Approval prompt",
+      description: "Send an external approval prompt.",
+      parameters: Type.Object({}),
+      executionMode: "sequential",
+      catalogMode: "direct-only",
+      execute: async () =>
+        await runPluginToolBodyWithTurnYieldLease({
+          run: async () => {
+            const { requestTurnYield } = await import("../plugin-sdk/tool-yield-runtime.js");
+            requestTurnYield("Waiting for approval");
+            return result;
+          },
+        }),
+    };
+    setPluginToolMeta(pluginTool, {
+      pluginId: "approval-prompt",
+      optional: false,
+      replaySafe: false,
+      trustedLocalMedia: false,
+    });
+    const resolvePluginToolsSpy = vi
+      .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
+      .mockReturnValue([pluginTool]);
+    const onYield = vi.fn((message: string) => {
+      abortController.abort({ code: "sessions_yield", message });
+    });
+
+    try {
+      const tools = createOpenClawCodingTools({
+        config: testConfig,
+        includeCoreTools: false,
+        runtimeToolAllowlist: ["approval_prompt"],
+        sessionId: "session-1",
+        abortSignal: abortController.signal,
+        onYield,
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: false,
+          includePluginTools: true,
+        },
+      });
+      const tool = tools.find((candidate) => candidate.name === "approval_prompt");
+
+      await expect(tool?.execute("call-1", {})).resolves.toEqual({
+        ...result,
+        terminate: true,
+      });
+      expect(onYield).toHaveBeenCalledWith("Waiting for approval");
+      expect(abortController.signal.aborted).toBe(true);
     } finally {
       resolvePluginToolsSpy.mockRestore();
     }

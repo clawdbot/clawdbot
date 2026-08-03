@@ -818,12 +818,12 @@ describe("createCopilotToolBridge", () => {
         sessionRef,
       });
 
-      const onYield = getOpts().onYield as (msg?: string) => void;
+      const onYield = getOpts().onYield as (msg?: string) => Promise<void>;
       // No session bound yet: onYield must no-op the abort path
       // without throwing, but the onYieldDetected notification fires
       // regardless so a yield before session-bind is still surfaced
       // to the final attempt result.
-      expect(() => onYield("early yield")).not.toThrow();
+      await expect(onYield("early yield")).resolves.toBeUndefined();
       expect(abort).toHaveBeenCalledTimes(0);
       expect(onYieldDetected).toHaveBeenCalledTimes(1);
       expect(onYieldDetected).toHaveBeenCalledWith("early yield");
@@ -832,7 +832,7 @@ describe("createCopilotToolBridge", () => {
       // createSession/resumeSession resolves) and verify subsequent
       // yields abort it and continue to notify.
       sessionRef.current = { abort };
-      onYield("now yield");
+      await onYield("now yield");
       expect(abort).toHaveBeenCalledTimes(1);
       expect(onYieldDetected).toHaveBeenCalledTimes(2);
       expect(onYieldDetected).toHaveBeenLastCalledWith("now yield");
@@ -858,10 +858,31 @@ describe("createCopilotToolBridge", () => {
         sessionRef,
       });
 
-      const onYield = getOpts().onYield as (msg?: string) => void;
-      expect(() => onYield("handler-fails-but-abort-must-fire")).not.toThrow();
+      const onYield = getOpts().onYield as (msg?: string) => Promise<void>;
+      await expect(onYield("handler-fails-but-abort-must-fire")).resolves.toBeUndefined();
       expect(abort).toHaveBeenCalledTimes(1);
       warn.mockRestore();
+    });
+
+    it("onYield propagates a live session abort failure", async () => {
+      const { createOpenClawCodingTools, getOpts } = captureCall();
+      const failure = new Error("SDK abort failed");
+      const abort = vi.fn(async () => {
+        throw failure;
+      });
+
+      await createCopilotToolBridge({
+        agentId: "agent-1",
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+        sessionRef: { current: { abort } },
+      });
+
+      const onYield = getOpts().onYield as (msg?: string) => Promise<void>;
+      await expect(onYield("wait")).rejects.toBe(failure);
+      expect(abort).toHaveBeenCalledOnce();
     });
 
     it("requireExplicitMessageTarget defaults to isSubagentSessionKey(sessionKey) when undefined", async () => {
@@ -1897,6 +1918,79 @@ describe("createCopilotToolBridge tool conversion", () => {
       { resultType: "success", textResultForLlm: "one" },
       { resultType: "success", textResultForLlm: "two" },
     ]);
+  });
+
+  it("runs sequential tools exclusively across sibling tool handlers", async () => {
+    const first = createDeferred<{
+      content: Array<{ text: string; type: "text" }>;
+      details: null;
+    }>();
+    const sequential = createDeferred<{
+      content: Array<{ text: string; type: "text" }>;
+      details: null;
+    }>();
+    const last = createDeferred<{
+      content: Array<{ text: string; type: "text" }>;
+      details: null;
+    }>();
+    const firstExecute = vi.fn(async () => first.promise);
+    const sequentialExecute = vi.fn(async () => sequential.promise);
+    const lastExecute = vi.fn(async () => last.promise);
+    const bridge = await createCopilotToolBridge({
+      agentId: "agent-1",
+      allowModelTools: true,
+      createOpenClawCodingTools: async () => [
+        makeTool({ name: "parallel_before", execute: firstExecute }),
+        makeTool({
+          name: "exclusive",
+          execute: sequentialExecute,
+          executionMode: "sequential",
+        }),
+        makeTool({ name: "parallel_after", execute: lastExecute }),
+      ],
+      modelId: "gpt-test",
+      modelProvider: "github-copilot",
+      sessionId: "session-1",
+    });
+    const [parallelBefore, exclusive, parallelAfter] = bridge.sdkTools;
+
+    const firstRun = runSdkTool(
+      expectDefined(parallelBefore, "parallel-before tool"),
+      {},
+      makeInvocation({ toolCallId: "call-before", toolName: "parallel_before" }),
+    );
+    const sequentialRun = runSdkTool(
+      expectDefined(exclusive, "exclusive tool"),
+      {},
+      makeInvocation({ toolCallId: "call-exclusive", toolName: "exclusive" }),
+    );
+    const lastRun = runSdkTool(
+      expectDefined(parallelAfter, "parallel-after tool"),
+      {},
+      makeInvocation({ toolCallId: "call-after", toolName: "parallel_after" }),
+    );
+    await flushAsync();
+
+    expect(firstExecute).toHaveBeenCalledOnce();
+    expect(sequentialExecute).not.toHaveBeenCalled();
+    expect(lastExecute).not.toHaveBeenCalled();
+
+    first.resolve({ content: [{ text: "first", type: "text" }], details: null });
+    await firstRun;
+    await flushAsync();
+    expect(sequentialExecute).toHaveBeenCalledOnce();
+    expect(lastExecute).not.toHaveBeenCalled();
+
+    sequential.resolve({ content: [{ text: "sequential", type: "text" }], details: null });
+    await sequentialRun;
+    await flushAsync();
+    expect(lastExecute).toHaveBeenCalledOnce();
+
+    last.resolve({ content: [{ text: "last", type: "text" }], details: null });
+    await expect(lastRun).resolves.toEqual({
+      resultType: "success",
+      textResultForLlm: "last",
+    });
   });
 
   it("returns a failure result when execute observes an abort after start", async () => {

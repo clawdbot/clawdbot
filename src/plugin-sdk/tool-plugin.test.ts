@@ -124,6 +124,33 @@ describe("defineToolPlugin", () => {
     ]);
   });
 
+  it("forwards direct sequential execution contracts for ambient turn yield", () => {
+    const entry = defineToolPlugin({
+      id: "external-prompt",
+      name: "External prompt",
+      description: "Start external interactions.",
+      tools: (tool) => [
+        tool({
+          name: "external_prompt",
+          description: "Start an external interaction.",
+          parameters: Type.Object({}),
+          executionMode: "sequential",
+          catalogMode: "direct-only",
+          execute: () => ({ status: "pending" }),
+        }),
+      ],
+    });
+    const captured = createCapturedPluginRegistration({ id: "external-prompt" });
+
+    entry.register(captured.api);
+
+    expect(captured.tools[0]).toMatchObject({
+      name: "external_prompt",
+      executionMode: "sequential",
+      catalogMode: "direct-only",
+    });
+  });
+
   it("supports context factories while keeping static tool metadata", () => {
     const entry = defineToolPlugin({
       id: "factory-tools",

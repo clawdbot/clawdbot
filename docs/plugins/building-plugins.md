@@ -275,6 +275,50 @@ calls reject invalid schemas before execution and validate the final value after
 tool hooks. Omit it for tools without a stable JSON result. See
 [Tool plugins](/plugins/tool-plugins#output-contracts) for the full contract.
 
+### Yield after starting an external interaction
+
+A plugin tool that successfully sends an approval, form, or other correlated
+interaction can ask OpenClaw to end the active turn while preserving the tool
+result. Import the execution-scoped helpers from
+`openclaw/plugin-sdk/tool-yield-runtime`:
+
+```typescript
+import { isTurnYieldAvailable, requestTurnYield } from "openclaw/plugin-sdk/tool-yield-runtime";
+
+api.registerTool({
+  name: "approval_prompt",
+  description: "Send an approval prompt",
+  parameters: Type.Object({ question: Type.String() }),
+  executionMode: "sequential",
+  catalogMode: "direct-only",
+  async execute(_id, params) {
+    if (!isTurnYieldAvailable()) {
+      throw new Error("This runtime cannot pause for an external approval.");
+    }
+    const prompt = await sendApprovalPrompt(params.question);
+    requestTurnYield("Waiting for the approval response");
+    return {
+      content: [{ type: "text", text: "Approval prompt sent." }],
+      details: { status: "pending", promptId: prompt.id },
+    };
+  },
+});
+```
+
+Both declarations are required. Sequential execution prevents a sibling tool
+from starting after the handoff, and `direct-only` keeps the tool out of
+catalog bridges that cannot preserve that scheduling identity. Check
+`isTurnYieldAvailable()` before the external side effect. `requestTurnYield()`
+records one request for the active execution; OpenClaw commits it only after the
+tool returns a non-error result. The first request wins and repeated calls are
+idempotent. Handoff messages are trimmed and limited to 1,000 characters. Calls
+outside the active execution and unsupported runtimes fail explicitly. A later
+correlated inbound event starts the next turn in the same OpenClaw session.
+
+Embedded runs and the bundled Codex and Copilot harnesses support this handoff
+when the tool has session context. Standalone plugin-tool MCP execution and
+remote node-hosted tools do not; `isTurnYieldAvailable()` returns `false` there.
+
 Every tool registered with `api.registerTool(...)` must also be declared in the
 plugin manifest:
 

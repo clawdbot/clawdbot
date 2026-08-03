@@ -88,6 +88,7 @@ import { createMemoryWriteProvenanceObserver } from "./memory-write-provenance.j
 import type { ModelAuthMode } from "./model-auth.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { createOpenClawTools, filterToolsByClientCaps } from "./openclaw-tools.js";
+import { applyPluginToolTurnYieldRuntime } from "./plugin-tool-yield.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 import type { SandboxContext } from "./sandbox.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
@@ -125,6 +126,7 @@ import {
   type CronCreatorToolAllowlistEntry,
 } from "./tools/cron-tool.js";
 import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-context.js";
+import { createTurnYieldController } from "./turn-yield-controller.js";
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
@@ -476,6 +478,12 @@ type OpenClawCodingToolsOptions = {
 };
 
 function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions): AnyAgentTool[] {
+  const turnYieldController = createTurnYieldController({
+    sessionId: options?.sessionId,
+    requesterSessionKey: options?.runSessionKey?.trim() || options?.sessionKey,
+    requesterTurnRunId: options?.runId,
+    onYield: options?.onYield,
+  });
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
   const isMemoryFlushRun = options?.trigger === "memory";
@@ -1064,6 +1072,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             onYield: options?.onYield,
             allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
             recordToolPrepStage: options?.recordToolPrepStage,
+            preparedTurnYieldController: turnYieldController,
           }),
         )
       : pluginToolsOnly),
@@ -1247,7 +1256,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   // NOTE: Keep canonical (lowercase) tool names here.
   // shared model runtime's Anthropic OAuth transport remaps tool names to Claude Code-style names
   // on the wire and maps them back for tool dispatch.
-  return withDeferredFollowupDescriptions;
+  return applyPluginToolTurnYieldRuntime(withDeferredFollowupDescriptions, turnYieldController);
 }
 
 /** Build the runtime tool list exposed through the public agent harness SDK. */

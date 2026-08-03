@@ -148,6 +148,25 @@ describe("plugin tool descriptor cache keys", () => {
     expect(cached.descriptor.outputSchema).toBe(outputSchema);
   });
 
+  it("preserves execution and catalog contracts in cached descriptors", () => {
+    const cached = capturePluginToolDescriptor({
+      pluginId: "demo",
+      optional: false,
+      tool: {
+        name: "external_prompt",
+        label: "External prompt",
+        description: "Start an external interaction",
+        parameters: { type: "object", properties: {} },
+        executionMode: "sequential",
+        catalogMode: "direct-only",
+        execute: async () => ({ content: [], details: {} }),
+      },
+    });
+
+    expect(cached.executionMode).toBe("sequential");
+    expect(cached.catalogMode).toBe("direct-only");
+  });
+
   it("isolates descriptor caches by declared gateway client capabilities", () => {
     const base = {
       pluginId: "demo",

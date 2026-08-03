@@ -94,6 +94,7 @@ import { createTtsTool } from "./tools/tts-tool.js";
 import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
 import { createVideoGenerateTool } from "./tools/video-generate-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
+import { createTurnYieldController, type TurnYieldController } from "./turn-yield-controller.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 const mediaGenerationYieldLog = createSubsystemLogger("agents/tools/media-generation-yield");
@@ -219,6 +220,8 @@ export function createOpenClawTools(
     onYield?: (message: string) => Promise<void> | void;
     /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
     allowGatewaySubagentBinding?: boolean;
+    /** Prepared run-scoped controller shared by native and plugin yield tools. */
+    preparedTurnYieldController?: TurnYieldController;
   } & SpawnedToolContext &
     ModelAwareToolContext,
 ): AnyAgentTool[] {
@@ -298,6 +301,14 @@ export function createOpenClawTools(
   const taskKey = normalizeOptionalString(options?.runSessionKey ?? options?.agentSessionKey);
   const requesterSessionKey = trimmedRunSessionKey || options?.agentSessionKey;
   const requesterTurnRunId = options?.runId;
+  const turnYieldController =
+    options?.preparedTurnYieldController ??
+    createTurnYieldController({
+      sessionId: options?.sessionId,
+      requesterSessionKey,
+      requesterTurnRunId,
+      onYield: options?.onYield,
+    });
   const imageTool =
     options?.agentDir &&
     resolveImageToolFactoryAvailable({
@@ -686,14 +697,9 @@ export function createOpenClawTools(
     ...swarmToolGroups.agentsWait,
     createSessionsYieldTool({
       sessionId: options?.sessionId,
-      onBeforeYield:
-        requesterSessionKey && requesterTurnRunId
-          ? async () => {
-              const { markRequesterTurnYielded } = await import("./subagent-registry.js");
-              markRequesterTurnYielded({ requesterSessionKey, requesterTurnRunId });
-            }
-          : undefined,
-      onYield: options?.onYield,
+      onYield: turnYieldController.supported
+        ? async (message) => await turnYieldController.commit(message)
+        : undefined,
     }),
     createSubagentsTool({
       agentSessionKey: options?.agentSessionKey,

@@ -103,6 +103,11 @@ export default defineToolPlugin({
   and validate the final value before returning it.
 - For custom tool results, `openclaw/plugin-sdk/tool-results` exports
   `textResult` and `jsonResult`.
+- For tools that start a correlated external interaction,
+  `openclaw/plugin-sdk/tool-yield-runtime` exports `isTurnYieldAvailable` and
+  `requestTurnYield`. Yielding tools must declare sequential execution and
+  direct catalog visibility; see
+  [Registering tools](/plugins/building-plugins#yield-after-starting-an-external-interaction).
 - Tool names are static, so `openclaw plugins build` derives
   `contracts.tools` from the declared tools without hand-duplicated names.
 - Runtime loading stays strict: installed plugins still need

@@ -4,8 +4,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "../agents/tool-policy.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
+import { isTurnYieldAvailable, requestTurnYield } from "../plugin-sdk/tool-yield-runtime.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { runWithPluginToolTurnYieldInvocation } from "./runtime/tool-yield-context.js";
 import { appendRuntimePluginToolGrant } from "./tool-grant-allowlist.js";
 
 type MockRegistryToolEntry = {
@@ -2764,6 +2766,85 @@ describe("resolvePluginTools optional tools", () => {
     expect(getActivePluginRegistry?.()?.tools.map((entry) => entry.pluginId)).toContain(
       "unrelated-live",
     );
+  });
+
+  it("restores execution and catalog contracts from warm descriptors", () => {
+    const factory = vi.fn(() => ({
+      ...makeTool("external_prompt"),
+      executionMode: "sequential" as const,
+      catalogMode: "direct-only" as const,
+    }));
+    setRegistry([
+      {
+        pluginId: "external-prompt",
+        optional: false,
+        source: "/tmp/external-prompt.js",
+        names: ["external_prompt"],
+        factory,
+      },
+    ]);
+
+    const first = resolvePluginTools(createResolveToolsParams());
+    const second = resolvePluginTools(createResolveToolsParams());
+
+    expect(first[0]).toMatchObject({
+      name: "external_prompt",
+      executionMode: "sequential",
+      catalogMode: "direct-only",
+    });
+    expect(second[0]).toMatchObject({
+      name: "external_prompt",
+      executionMode: "sequential",
+      catalogMode: "direct-only",
+    });
+    expect(factory).toHaveBeenCalledOnce();
+  });
+
+  it("uses the dispatched descriptor contract around cold and warm plugin bodies", async () => {
+    let factoryCalls = 0;
+    const factory = vi.fn(() => {
+      factoryCalls += 1;
+      expect(isTurnYieldAvailable()).toBe(false);
+      return {
+        ...makeTool("external_prompt"),
+        executionMode: factoryCalls === 1 ? ("sequential" as const) : ("parallel" as const),
+        ...(factoryCalls === 1 ? { catalogMode: "direct-only" as const } : {}),
+        execute: async () => {
+          expect(isTurnYieldAvailable()).toBe(true);
+          requestTurnYield("Waiting for approval");
+          return { content: [{ type: "text", text: "sent" }], details: { status: "pending" } };
+        },
+      };
+    });
+    setRegistry([
+      {
+        pluginId: "external-prompt",
+        optional: false,
+        source: "/tmp/external-prompt.js",
+        names: ["external_prompt"],
+        factory,
+      },
+    ]);
+    const [coldTool] = resolvePluginTools(createResolveToolsParams());
+    const executeInTurn = async (tool: NonNullable<typeof coldTool>, toolCallId: string) =>
+      await runWithPluginToolTurnYieldInvocation({
+        catalogMode: tool.catalogMode,
+        committer: { supported: true, commit: vi.fn(async () => undefined) },
+        executionMode: tool.executionMode,
+        run: async () => await tool.execute(toolCallId, {}),
+      });
+
+    await expect(
+      executeInTurn(expectDefined(coldTool, "cold plugin tool"), "call-cold"),
+    ).resolves.toMatchObject({ requestedMessage: "Waiting for approval" });
+
+    const [warmTool] = resolvePluginTools(createResolveToolsParams());
+    await expect(
+      executeInTurn(expectDefined(warmTool, "warm plugin tool"), "call-warm"),
+    ).resolves.toMatchObject({ requestedMessage: "Waiting for approval" });
+
+    expect(factory).toHaveBeenCalledTimes(2);
+    expect(isTurnYieldAvailable()).toBe(false);
   });
 
   it("does not reuse cached plugin tool descriptors across sandbox context changes", () => {

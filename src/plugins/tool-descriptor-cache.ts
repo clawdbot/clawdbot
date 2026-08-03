@@ -15,6 +15,8 @@ const PLUGIN_TOOL_DESCRIPTOR_CACHE_LIMIT = 256;
 export type CachedPluginToolDescriptor = {
   descriptor: ToolDescriptor;
   displaySummary?: string;
+  executionMode?: AnyAgentTool["executionMode"];
+  catalogMode?: AnyAgentTool["catalogMode"];
   requiredClientCaps?: string[];
   optional: boolean;
 };
@@ -157,6 +159,8 @@ export function capturePluginToolDescriptor(params: {
   const title = typeof label === "string" && label.trim() ? label.trim() : undefined;
   return {
     ...(params.tool.displaySummary ? { displaySummary: params.tool.displaySummary } : {}),
+    ...(params.tool.executionMode ? { executionMode: params.tool.executionMode } : {}),
+    ...(params.tool.catalogMode ? { catalogMode: params.tool.catalogMode } : {}),
     ...(params.tool.requiredClientCaps
       ? { requiredClientCaps: [...params.tool.requiredClientCaps] }
       : {}),
