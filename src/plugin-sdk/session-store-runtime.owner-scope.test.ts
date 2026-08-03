@@ -200,8 +200,12 @@ describe("session-store-runtime plugin owner scope", () => {
           if (!projectedSessionKey) {
             throw new Error("expected seeded session entry");
           }
+          const projectedEntry = store[projectedSessionKey];
+          if (!projectedEntry) {
+            throw new Error("expected projected session entry");
+          }
           store[projectedSessionKey] = {
-            ...store[projectedSessionKey],
+            ...projectedEntry,
             label: "claimed",
             pluginOwnerId: "memory-core",
           };
