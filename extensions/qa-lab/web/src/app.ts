@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { QaBusStateSnapshot } from "openclaw/plugin-sdk/qa-channel-protocol";
 // Qa Lab plugin module implements app behavior.
 import { defaultQaModelForMode, isQaFastModeEnabled } from "../../model-selection.js";
 import { normalizeCaptureSavedView, normalizeCaptureSavedViews } from "./capture-saved-view.js";
@@ -11,7 +12,6 @@ import {
   type ReportEnvelope,
   type RunnerResolvedPlan,
   type RunnerSelection,
-  type Snapshot,
   type TabId,
   type CaptureEventsEnvelope,
   type CaptureCoverageEnvelope,
@@ -342,7 +342,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
     try {
       const [bootstrap, snapshot, report, outcomes] = await Promise.all([
         getJson<Bootstrap>("/api/bootstrap"),
-        getJson<Snapshot>("/api/state"),
+        getJson<QaBusStateSnapshot>("/api/state"),
         getJson<ReportEnvelope>("/api/report"),
         getJson<OutcomesEnvelope>("/api/outcomes"),
       ]);

@@ -6,12 +6,13 @@ scenario:
   coverage:
     primary:
       - agent-runtime.hosted-tool-use
-    secondary:
       - plugins.plugin-tools
+    secondary:
       - plugins.tool-plugin-invocation
   objective: Verify the Tool Search gateway QA Lab flow keeps a large plugin-owned tool catalog behind the compact bridge while still invoking the selected plugin tool.
   successCriteria:
     - Direct mode exposes the fake plugin tool schemas and calls the selected plugin tool.
+    - Both lanes report the selected tool through tools.effective with source=plugin and pluginId=tool-search-e2e-fixture.
     - Tool Search code mode exposes only the compact bridge to the provider.
     - Tool Search code mode automatically advertises the selected tool in its bounded system-prompt directory.
     - The compact bridge calls the same selected plugin tool and records bridge plus target tool mentions in session logs.
@@ -94,4 +95,6 @@ flow:
           compactPlannedTools: codeLane.providerPlannedTools,
           directMentions: normalLane.sessionLogToolMentions,
           compactMentions: codeLane.sessionLogToolMentions,
+          directEffectiveTool: normalLane.targetToolIdentity,
+          compactEffectiveTool: codeLane.targetToolIdentity,
         })

@@ -2229,6 +2229,46 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
+  it("warns and records the full duration for persistent idle event-loop degradation", () => {
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+    const events: DiagnosticEventPayload[] = [];
+    const unsubscribe = onDiagnosticEvent((event) => events.push(event));
+
+    try {
+      startDiagnosticHeartbeat(
+        { diagnostics: { enabled: true } },
+        {
+          emitMemorySample: createEmitMemorySampleMock(),
+          sampleLiveness: () => ({
+            reasons: ["event_loop_delay"],
+            intervalMs: 30_000,
+            degradedSinceMs: 60_000,
+            eventLoopDelayP99Ms: 1_200,
+            eventLoopDelayMaxMs: 1_500,
+          }),
+        },
+      );
+
+      vi.advanceTimersByTime(30_000);
+    } finally {
+      unsubscribe();
+    }
+
+    expectLoggerMessageContaining(warnSpy, "degradedFor=60s");
+    expect(events.findLast((event) => event.type === "diagnostic.liveness.warning")).toMatchObject({
+      degradedSinceMs: 60_000,
+    });
+    requireMatchingRecord(
+      getDiagnosticStabilitySnapshot({ limit: 10 }).events,
+      {
+        type: "diagnostic.liveness.warning",
+        level: "warning",
+        durationMs: 60_000,
+      },
+      "persistent liveness stability event",
+    );
+  });
+
   it("suppresses liveness warnings during startupGraceMs while still sampling", () => {
     const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
     const events: string[] = [];
@@ -2530,6 +2570,7 @@ describe("stuck session diagnostics threshold", () => {
           sampleLiveness: () => ({
             reasons: ["event_loop_delay"],
             intervalMs: 30_000,
+            degradedSinceMs: 60_000,
             eventLoopDelayP99Ms: 1_500,
             eventLoopDelayMaxMs: 2_000,
           }),

@@ -10,6 +10,7 @@ import {
 } from "../channels/plugins/setup-contract.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { PluginCandidate } from "./discovery.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
@@ -104,19 +105,9 @@ function rememberInstalledPackageMetadata(
 ): InstalledPackageMetadata {
   if (key) {
     installedPackageMetadataCache.set(key, metadata);
-    trimBoundedCache(installedPackageMetadataCache, MAX_INSTALLED_PACKAGE_METADATA_CACHE_ENTRIES);
+    pruneMapToMaxSize(installedPackageMetadataCache, MAX_INSTALLED_PACKAGE_METADATA_CACHE_ENTRIES);
   }
   return metadata;
-}
-
-function trimBoundedCache<Value>(cache: Map<string, Value>, maxEntries: number): void {
-  while (cache.size > maxEntries) {
-    const oldest = cache.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    cache.delete(oldest);
-  }
 }
 
 function buildInstalledPackageMetadataCacheKey(

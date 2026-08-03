@@ -2,7 +2,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import {
-  installedPackageNeedsOpenClawPeerLinkRepair,
   readInstalledPackageManifest,
   readInstalledPackageVersion,
 } from "../infra/package-update-utils.js";
@@ -23,6 +22,7 @@ import {
   resolveTrustedSourceLinkedOfficialClawHubSpec,
   resolveTrustedSourceLinkedOfficialNpmSpec,
 } from "./official-external-install-records.js";
+import { auditDeclaredOpenClawHostDependency } from "./plugin-peer-link.js";
 import {
   buildClawHubTrustSkippedOutcome,
   buildDryRunPluginUpdateOutcome,
@@ -51,6 +51,7 @@ import {
   hasRunnableInstalledNpmPayload,
   migratePluginConfigId,
   repairOpenClawPeerLinksForNpmInstalls,
+  repairRegisteredOpenClawHostLink,
   resolveRecordedExtensionsDir,
   withoutPluginInstallRecord,
 } from "./update-config.js";
@@ -276,20 +277,11 @@ export async function updateNpmInstalledPlugins(params: {
       return fallbackExpectedIntegrity;
     };
 
-    if (record.source === "npm" && !effectiveSpec) {
+    if ((record.source === "npm" || record.source === "git") && !effectiveSpec) {
       outcomes.push({
         pluginId,
         status: "skipped",
-        message: `Skipping "${pluginId}" (missing npm spec).`,
-      });
-      continue;
-    }
-
-    if (record.source === "git" && !effectiveSpec) {
-      outcomes.push({
-        pluginId,
-        status: "skipped",
-        message: `Skipping "${pluginId}" (missing git spec).`,
+        message: `Skipping "${pluginId}" (missing ${record.source} spec).`,
       });
       continue;
     }
@@ -358,6 +350,9 @@ export async function updateNpmInstalledPlugins(params: {
       );
       continue;
     }
+    if (!params.dryRun && record.source === "npm" && currentVersion) {
+      changed = (await repairRegisteredOpenClawHostLink({ pluginId, record, logger })) || changed;
+    }
     // Payload validation is filesystem work needed only to preserve state after metadata failures.
     // Every failure path below ends this plugin iteration, so the result cannot be reused.
     const hasRunnableInstalledPayloadForFailure = async (code?: string): Promise<boolean> => {
@@ -423,7 +418,10 @@ export async function updateNpmInstalledPlugins(params: {
           currentVersion &&
           !bypassTrustedOfficialUnchangedNpmCheck &&
           isNpmMetadataCompatibleWithCurrentHost(metadataResult.metadata) &&
-          !installedPackageNeedsOpenClawPeerLinkRepair(installPath) &&
+          !(await auditDeclaredOpenClawHostDependency({
+            packageDir: installPath,
+            packageName: pluginId,
+          })) &&
           shouldSkipUnchangedNpmInstall({
             currentVersion,
             record,

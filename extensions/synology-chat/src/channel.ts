@@ -10,7 +10,10 @@ import {
   createHybridChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
+import type {
+  ChannelAccountSnapshot,
+  ChannelOutboundAdapter,
+} from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import {
@@ -26,7 +29,16 @@ import {
   projectAccountWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
+import {
+  channelBlockedPatch,
+  channelReadyPatch,
+  channelStoppedPatch,
+} from "openclaw/plugin-sdk/gateway-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntriesLower,
@@ -69,6 +81,7 @@ type SynologyChannelGatewayContext = {
   cfg: OpenClawConfig;
   accountId: string;
   abortSignal: AbortSignal;
+  setStatus?: (patch: ChannelAccountSnapshot) => void;
   log?: {
     info: (message: string) => void;
     warn: (message: string) => void;
@@ -371,11 +384,29 @@ function createSynologyChatPlugin(): SynologyChatPlugin {
         },
       },
       directory: createEmptyChannelDirectoryAdapter(),
+      status: createComputedAccountStatusAdapter<ResolvedSynologyChatAccount>({
+        defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
+        buildChannelSummary: ({ snapshot }) => ({
+          webhookPath: snapshot.webhookPath ?? null,
+        }),
+        resolveAccountSnapshot: ({ account }) => ({
+          accountId: account.accountId,
+          enabled: account.enabled,
+          configured: Boolean(account.token && account.incomingUrl),
+          extra: { webhookPath: account.webhookPath },
+        }),
+      }),
       gateway: {
         startAccount: async (ctx: SynologyChannelGatewayContext) => {
           const { cfg, accountId, log, abortSignal } = ctx;
           const account = resolveAccount(cfg, accountId);
           if (!validateSynologyGatewayAccountStartup({ cfg, account, accountId, log }).ok) {
+            ctx.setStatus?.(
+              channelBlockedPatch("Synology Chat account failed startup validation", {
+                accountId,
+                running: true,
+              }),
+            );
             return waitUntilAbort(abortSignal);
           }
 
@@ -391,6 +422,7 @@ function createSynologyChatPlugin(): SynologyChatPlugin {
           });
 
           log?.info?.(`Registered HTTP route: ${account.webhookPath} for Synology Chat`);
+          ctx.setStatus?.(channelReadyPatch({ accountId }));
 
           // Keep alive until abort signal fires.
           // The gateway expects a Promise that stays pending while the channel is running.
@@ -398,6 +430,7 @@ function createSynologyChatPlugin(): SynologyChatPlugin {
           return waitUntilAbort(abortSignal, async () => {
             log?.info?.(`Stopping Synology Chat channel (account: ${accountId})`);
             await cleanup();
+            ctx.setStatus?.(channelStoppedPatch({ accountId }));
           });
         },
 

@@ -28,6 +28,7 @@ import {
 } from "../channels/plugins/native-approval-prompt.js";
 import type { SubagentDelegationMode } from "../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
   buildMemoryPromptSection,
   type PreparedMemoryPromptSection,
@@ -35,6 +36,7 @@ import {
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
+import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import type { BootstrapMode } from "./bootstrap-mode.js";
 import {
@@ -46,6 +48,7 @@ import type {
   EmbeddedFullAccessBlockedReason,
   EmbeddedSandboxInfo,
 } from "./embedded-agent-runner/types.js";
+import { MAX_OWNER_PROMPT_CONTENT_BYTES, resolveOwnerPromptNumbers } from "./owner-display.js";
 import { filterProjectScopedCuratedContextFiles } from "./project-memory-bootstrap.js";
 import { buildPromisedWorkPromptSection } from "./promised-work-prompt.js";
 import {
@@ -157,13 +160,7 @@ function cacheStablePromptPrefix(key: string, build: () => string): string {
 
   const value = build();
   stablePromptPrefixCache.set(key, { value });
-  while (stablePromptPrefixCache.size > SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT) {
-    const oldestKey = stablePromptPrefixCache.keys().next().value;
-    if (oldestKey === undefined) {
-      break;
-    }
-    stablePromptPrefixCache.delete(oldestKey);
-  }
+  pruneMapToMaxSize(stablePromptPrefixCache, SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT);
   return value;
 }
 
@@ -414,20 +411,59 @@ function formatOwnerDisplayId(ownerId: string, ownerDisplaySecret?: string) {
   return digest.slice(0, 12);
 }
 
+const MAX_OWNER_PROMPT_LINE_BYTES = 1_024;
+const OWNER_PROMPT_PREFIX = "Allowlisted senders: ";
+const OWNER_PROMPT_SUFFIX = ". Allowlisted != owner.";
+
+function formatRawOwnerDisplayId(ownerId: string, maxBytes: number): string {
+  const sanitized = sanitizeForPromptLiteral(ownerId);
+  if (Buffer.byteLength(sanitized, "utf8") <= maxBytes) {
+    return sanitized;
+  }
+  if (maxBytes <= 3) {
+    return "";
+  }
+  return `${truncateUtf8Prefix(sanitized, maxBytes - 3)}...`;
+}
+
 function buildOwnerIdentityLine(
   ownerNumbers: string[],
   ownerDisplay: OwnerIdDisplay,
   ownerDisplaySecret?: string,
 ) {
-  const normalized = normalizeStringEntries(ownerNumbers);
+  const normalized = normalizeStringEntries(resolveOwnerPromptNumbers({ ownerNumbers }));
   if (normalized.length === 0) {
     return undefined;
   }
-  const displayOwnerNumbers =
-    ownerDisplay === "hash"
-      ? normalized.map((ownerId) => formatOwnerDisplayId(ownerId, ownerDisplaySecret))
-      : normalized;
-  return `Allowlisted senders: ${displayOwnerNumbers.join(", ")}. Allowlisted != owner.`;
+  const displayOwnerNumbers: string[] = [];
+  let remainingBytes = Math.min(
+    MAX_OWNER_PROMPT_CONTENT_BYTES,
+    MAX_OWNER_PROMPT_LINE_BYTES - Buffer.byteLength(OWNER_PROMPT_PREFIX + OWNER_PROMPT_SUFFIX),
+  );
+  for (const ownerId of normalized) {
+    const separatorBytes = displayOwnerNumbers.length > 0 ? 2 : 0;
+    const availableBytes = remainingBytes - separatorBytes;
+    if (availableBytes <= 0) {
+      break;
+    }
+    const displayOwnerId =
+      ownerDisplay === "hash"
+        ? formatOwnerDisplayId(ownerId, ownerDisplaySecret)
+        : formatRawOwnerDisplayId(ownerId, availableBytes);
+    if (!displayOwnerId) {
+      continue;
+    }
+    const nextBytes = Buffer.byteLength(displayOwnerId, "utf8") + separatorBytes;
+    if (nextBytes > remainingBytes) {
+      break;
+    }
+    displayOwnerNumbers.push(displayOwnerId);
+    remainingBytes -= nextBytes;
+  }
+  if (displayOwnerNumbers.length === 0) {
+    return undefined;
+  }
+  return `${OWNER_PROMPT_PREFIX}${displayOwnerNumbers.join(", ")}${OWNER_PROMPT_SUFFIX}`;
 }
 
 function buildTemporalContextSection(params: {
@@ -1002,12 +1038,12 @@ export function buildAgentSystemPrompt(params: {
       ])
       .filter(([, value]) => Boolean(value)),
   ) as Partial<Record<ProviderSystemPromptSectionId, string>>;
+  const promptMode = params.promptMode ?? "full";
+  const isMinimal = promptMode === "minimal" || promptMode === "none";
   const ownerDisplay = params.ownerDisplay === "hash" ? "hash" : "raw";
-  const ownerLine = buildOwnerIdentityLine(
-    params.ownerNumbers ?? [],
-    ownerDisplay,
-    params.ownerDisplaySecret,
-  );
+  const ownerLine = isMinimal
+    ? undefined
+    : buildOwnerIdentityLine(params.ownerNumbers ?? [], ownerDisplay, params.ownerDisplaySecret);
   const reasoningHint = params.reasoningTagHint
     ? [
         "Internal reasoning ONLY inside <think>...</think>.",
@@ -1032,8 +1068,6 @@ export function buildAgentSystemPrompt(params: {
   const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
   const collapsibleDetailsSupported = runtimeCapabilitiesLower.has("markdowndetails");
   const threadBoundAcpSpawnEnabled = runtimeCapabilitiesLower.has("threadbound-acp-spawn");
-  const promptMode = params.promptMode ?? "full";
-  const isMinimal = promptMode === "minimal" || promptMode === "none";
   const subagentDelegationMode = normalizeSubagentDelegationMode(params.subagentDelegationMode);
   const proactiveSubagentOrchestration = params.proactiveSubagentOrchestration === true;
   const sourceMessageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
@@ -1288,7 +1322,7 @@ export function buildAgentSystemPrompt(params: {
         ? "## Model Aliases"
         : "",
       params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
-        ? "Model override: prefer alias; provider/model also accepted."
+        ? "Model override: aliases are shortcuts for unqualified model requests. Use explicit provider/model references verbatim; do not substitute an alias or another provider."
         : "",
       params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
         ? params.modelAliasLines.join("\n")

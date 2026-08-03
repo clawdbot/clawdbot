@@ -213,6 +213,13 @@ resolved config unchanged, stopping one account settles only that account's
 monitor and drain, and a fresh monitor recovers that account's rows exactly
 once. If any guarantee cannot be proved, omit the flag.
 
+### Runtime lifecycle status
+
+For channel-authored runtime state, `ChannelAccountSnapshot.lifecycle` is the
+successor to `healthState`. Existing plugins may keep publishing `healthState`
+during adoption, and core-derived policy writes remain supported. There is no
+removal date; removal waits for external channel-plugin adoption.
+
 ### Typing indicators
 
 If your channel supports typing indicators outside inbound replies, expose

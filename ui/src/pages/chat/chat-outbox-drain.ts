@@ -5,8 +5,11 @@ import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { isUiGlobalSessionKey } from "../../lib/sessions/session-key.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import {
+  captureChatCommandTarget,
   confirmConversationResetForCurrentSession,
   dispatchChatSlashCommand,
+  readChatResetTargetAccess,
+  type ChatCommandTarget,
   type ChatCommandResetOptions,
 } from "./chat-commands.ts";
 import { loadChatHistory, type ChatHistoryResult, type ChatState } from "./chat-history.ts";
@@ -43,6 +46,7 @@ export type QueuedChatSendOptions = {
   restoreDraft?: boolean;
   routingSessionKey?: string;
   storageMode?: QueuedChatStorageMode;
+  target?: ChatCommandTarget;
 };
 
 export type ChatOutboxDrainDependencies = {
@@ -301,25 +305,27 @@ async function drainStoredChatOutbox(
       }
       syncVisibleChatQueueProjection(host);
       if (item.localCommandName === "reset") {
-        const resetText = item.localCommandArgs ? `/reset ${item.localCommandArgs}` : "/reset";
-        const convertResetToMessage = (sendState?: ChatQueueItem["sendState"]) =>
-          updateQueuedMessageForSession(host, outbox.sessionKey, item.id, (entry) => ({
-            ...entry,
-            localCommandArgs: undefined,
-            localCommandName: undefined,
-            refreshSessions: true,
-            text: resetText,
-            ...(sendState ? { sendState } : {}),
-          }));
+        if ((item.sendAttempts ?? 0) > 0 || item.sendRequestStartedAtMs !== undefined) {
+          setCommandState("unconfirmed", UNCONFIRMED_CHAT_SEND_ERROR);
+          return "blocked";
+        }
+        const resetTarget = captureChatCommandTarget(host);
+        if (!resetTarget) {
+          setCommandState("failed", "The Gateway connection changed. Retry the command.");
+          return "blocked";
+        }
+        const initialAccess = readChatResetTargetAccess(host, resetTarget);
+        if (!initialAccess.allowed) {
+          setCommandState("failed", initialAccess.reason);
+          dependencies.setChatError(host, initialAccess.reason);
+          return "blocked";
+        }
         const confirmation = await confirmConversationResetForCurrentSession(host, {
           sessionKey: outbox.sessionKey,
           ...(outbox.agentId ? { agentId: outbox.agentId } : {}),
         });
         if (confirmation === "deferred") {
-          const approvedDuringRun =
-            visibleSessionMatches(host, outbox.sessionKey, outbox.agentId) && host.chatRunId;
-          const deferCommand = approvedDuringRun ? convertResetToMessage : setCommandState;
-          deferCommand("waiting-idle");
+          setCommandState("waiting-idle");
           return "blocked";
         }
         if (confirmation === "cancelled") {
@@ -328,7 +334,25 @@ async function drainStoredChatOutbox(
           }
           continue;
         }
-        if (!convertResetToMessage()) {
+        const currentAccess = readChatResetTargetAccess(host, resetTarget);
+        if (!currentAccess.allowed) {
+          setCommandState("failed", currentAccess.reason);
+          dependencies.setChatError(host, currentAccess.reason);
+          return "blocked";
+        }
+        lane.pendingOptions.set(item.id, {
+          ...lane.pendingOptions.get(item.id),
+          target: resetTarget,
+        });
+        const result = await dependencies.sendQueuedChatMessage(
+          host,
+          item.id,
+          lane.pendingOptions.get(item.id),
+          outbox.sessionKey,
+        );
+        lane.outcomes.set(item.id, result);
+        lane.pendingOptions.delete(item.id);
+        if (result !== "sent") {
           return "blocked";
         }
         continue;

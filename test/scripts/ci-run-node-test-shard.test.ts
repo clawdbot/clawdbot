@@ -203,7 +203,9 @@ describe("scripts/ci-run-node-test-shard.mjs", () => {
           }
           activeCaches.add(cache);
           seenCaches.add(cache);
-          await new Promise((resolve) => setTimeout(resolve, 10));
+          await new Promise((resolve) => {
+            setTimeout(resolve, 10);
+          });
           activeCaches.delete(cache);
           return 0;
         },

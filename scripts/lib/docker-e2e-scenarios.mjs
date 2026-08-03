@@ -314,6 +314,15 @@ export const mainLanes = [
     weight: 3,
   }),
   npmLane(
+    "cli-installer-distribution",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:cli-installer-distribution",
+    {
+      stateScenario: "empty",
+      timeoutMs: 30 * 60 * 1000,
+      weight: 3,
+    },
+  ),
+  npmLane(
     "docker-package-install",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:package-install",
     {

@@ -105,18 +105,14 @@ async function handleChatMetadataRequest({
     );
     return;
   }
-  try {
-    respond(
-      true,
-      await buildChatMetadataResult({
-        cfg,
-        context,
-        agentId: requestedAgentId,
-      }),
-    );
-  } catch (err) {
-    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
-  }
+  respond(
+    true,
+    await buildChatMetadataResult({
+      cfg,
+      context,
+      agentId: requestedAgentId,
+    }),
+  );
 }
 
 async function buildChatMetadataResult(params: {

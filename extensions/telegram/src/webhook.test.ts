@@ -617,6 +617,7 @@ describe("startTelegramWebhook", () => {
         expect(connectedStatus.connected).toBe(true);
         expect(typeof connectedStatus.lastConnectedAt).toBe("number");
         expect(typeof connectedStatus.lastEventAt).toBe("number");
+        expect(connectedStatus.lifecycle).toBe("ready");
         expect(connectedStatus.lastError).toBeNull();
       },
     );
@@ -687,6 +688,7 @@ describe("startTelegramWebhook", () => {
         expect(setStatus).toHaveBeenCalledWith({
           mode: "webhook",
           connected: false,
+          lifecycle: "recovering",
           lastError: "fetch failed",
         });
         expectStatusCall(setStatus, { mode: "webhook", connected: true, lastError: null });
@@ -696,6 +698,7 @@ describe("startTelegramWebhook", () => {
 
   it("fails startup when setWebhook has a non-recoverable rejection", async () => {
     const runtimeError = vi.fn();
+    const setStatus = vi.fn();
     const error = Object.assign(new Error("unauthorized"), { error_code: 401 });
     setWebhookSpy.mockRejectedValueOnce(error);
 
@@ -706,12 +709,37 @@ describe("startTelegramWebhook", () => {
         secret: TELEGRAM_SECRET,
         path: TELEGRAM_WEBHOOK_PATH,
         runtime: { log: vi.fn(), error: runtimeError, exit: vi.fn() },
+        setStatus,
       }),
     ).rejects.toThrow("unauthorized");
 
     expect(stopSpy).toHaveBeenCalledTimes(1);
     expect(transportCloseSpies[0]).toHaveBeenCalledTimes(1);
     expectMockMessageContains(runtimeError, "telegram setWebhook failed: unauthorized");
+    expectStatusCall(setStatus, {
+      lifecycle: "blocked",
+      lastError: "unauthorized",
+    });
+  });
+
+  it("does not mark a non-auth setWebhook rejection as blocked", async () => {
+    const setStatus = vi.fn();
+    const error = Object.assign(new Error("bad webhook URL"), { error_code: 400 });
+    setWebhookSpy.mockRejectedValueOnce(error);
+
+    await expect(
+      startTelegramWebhook({
+        token: TELEGRAM_TOKEN,
+        port: 0,
+        secret: TELEGRAM_SECRET,
+        path: TELEGRAM_WEBHOOK_PATH,
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        setStatus,
+      }),
+    ).rejects.toThrow("bad webhook URL");
+
+    const failedStatus = expectStatusCall(setStatus, { lastError: "bad webhook URL" });
+    expect(failedStatus.lifecycle).toBeUndefined();
   });
 
   it("stops local listener and bot when retry loop encounters a non-recoverable error", async () => {
@@ -744,6 +772,10 @@ describe("startTelegramWebhook", () => {
         expect(stopSpy).toHaveBeenCalledTimes(1);
         expect(transportCloseSpies[0]).toHaveBeenCalledTimes(1);
       });
+      expectStatusCall(setStatus, {
+        lifecycle: "blocked",
+        lastError: "unauthorized",
+      });
       expect(setStatus).toHaveBeenLastCalledWith({ mode: "webhook", connected: false });
       expectMockMessageContains(
         runtimeError,
@@ -760,6 +792,7 @@ describe("startTelegramWebhook", () => {
 
   it("retries transient getMe startup init failures before starting the account", async () => {
     const runtimeLog = vi.fn();
+    const setStatus = vi.fn();
     initSpy.mockRejectedValueOnce(new TypeError("fetch failed")).mockResolvedValueOnce(undefined);
 
     await withStartedWebhook(
@@ -767,6 +800,7 @@ describe("startTelegramWebhook", () => {
         secret: TELEGRAM_SECRET,
         path: TELEGRAM_WEBHOOK_PATH,
         runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() },
+        setStatus,
         webhookRegistrationRetryPolicy: {
           initialMs: 0,
           maxMs: 0,
@@ -782,11 +816,13 @@ describe("startTelegramWebhook", () => {
 
     expect(initSpy).toHaveBeenCalledTimes(2);
     expect(runtimeLog).toHaveBeenCalledWith("telegram getMe retry 1 scheduled in 0ms");
+    expectStatusCall(setStatus, { lifecycle: "recovering" });
     expect(setWebhookSpy).toHaveBeenCalledTimes(1);
   });
 
   it("fails startup on non-recoverable getMe errors", async () => {
     const runtimeError = vi.fn();
+    const setStatus = vi.fn();
     const error = Object.assign(new Error("unauthorized"), { error_code: 401 });
     initSpy.mockRejectedValueOnce(error);
 
@@ -798,6 +834,7 @@ describe("startTelegramWebhook", () => {
         path: TELEGRAM_WEBHOOK_PATH,
         spoolDir: requireWebhookSpoolDir(),
         runtime: { log: vi.fn(), error: runtimeError, exit: vi.fn() },
+        setStatus,
       }),
     ).rejects.toThrow("unauthorized");
 
@@ -805,6 +842,10 @@ describe("startTelegramWebhook", () => {
     expect(stopSpy).toHaveBeenCalledTimes(1);
     expect(transportCloseSpies[0]).toHaveBeenCalledTimes(1);
     expectMockMessageContains(runtimeError, "telegram getMe failed: unauthorized");
+    expectStatusCall(setStatus, {
+      lifecycle: "blocked",
+      lastError: "unauthorized",
+    });
   });
 
   it("registers webhook with certificate when webhookCertPath is provided", async () => {

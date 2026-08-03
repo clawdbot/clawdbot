@@ -31,6 +31,7 @@ import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
   formatGeneratedAttachmentLines,
+  sanitizeGeneratedMediaDisplayText,
   type AgentGeneratedAttachment,
 } from "../generated-attachments.js";
 import {
@@ -483,9 +484,16 @@ async function executeMusicGenerationJob(params: {
     (!ignoredOverrideKeys.has("durationSeconds") && typeof params.durationSeconds === "number"
       ? params.durationSeconds
       : undefined);
+  const displayProvider = sanitizeGeneratedMediaDisplayText(result.provider);
+  const displayModel = sanitizeGeneratedMediaDisplayText(result.model);
   const warning =
     ignoredOverrides.length > 0
-      ? `Ignored unsupported overrides for ${result.provider}/${result.model}: ${ignoredOverrides.map((entry) => `${entry.key}=${String(entry.value)}`).join(", ")}.`
+      ? `Ignored unsupported overrides for ${displayProvider}/${displayModel}: ${ignoredOverrides
+          .map(
+            (entry) =>
+              `${sanitizeGeneratedMediaDisplayText(entry.key)}=${sanitizeGeneratedMediaDisplayText(String(entry.value))}`,
+          )
+          .join(", ")}.`
       : undefined;
   const savedTrackMetadata = await probeMediaFilesWithinBudget(
     savedTracks.map((track) => ({ filePath: track.path, kind: "audio" })),
@@ -507,7 +515,7 @@ async function executeMusicGenerationJob(params: {
     ...savedTrackMetadata[index],
   }));
   const lines = [
-    `Generated ${savedTracks.length} track${savedTracks.length === 1 ? "" : "s"} with ${result.provider}/${result.model}.`,
+    `Generated ${savedTracks.length} track${savedTracks.length === 1 ? "" : "s"} with ${displayProvider}/${displayModel}.`,
     ...(warning ? [`Warning: ${warning}`] : []),
     ...(params.timeoutNormalization
       ? [
@@ -519,7 +527,22 @@ async function executeMusicGenerationJob(params: {
     requestedDurationSeconds !== appliedDurationSeconds
       ? `Duration normalized: requested ${requestedDurationSeconds}s; used ${appliedDurationSeconds}s.`
       : null,
-    ...(result.lyrics?.length ? ["Lyrics returned.", ...result.lyrics] : []),
+    ...(result.lyrics?.length
+      ? [
+          "Lyrics returned.",
+          ...result.lyrics.flatMap((lyric) =>
+            lyric
+              .replace(/\r\n?|[\u2028\u2029]/gu, "\n")
+              .split("\n")
+              .map((line) =>
+                sanitizeGeneratedMediaDisplayText(line)
+                  .replace(/^(\s*)(media):/iu, "$1$2：")
+                  // An open provider fence would swallow the trusted attachment lines appended below.
+                  .replace(/^( {0,3})(`{3,}|~{3,})/u, "$1\\$2"),
+              ),
+          ),
+        ]
+      : []),
     ...formatGeneratedAttachmentLines(attachments),
   ].filter((entry): entry is string => Boolean(entry));
   return {

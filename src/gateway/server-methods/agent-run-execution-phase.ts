@@ -431,6 +431,7 @@ export function startAgentRunExecution(params: {
           cleanupBundleMcpOnRunEnd: params.request.cleanupBundleMcpOnRunEnd,
           abortSignal: prepared.activeRunAbort.controller.signal,
           lifecycleGeneration: params.lifecycleGeneration,
+          onExecutionStarted: () => prepared.activeRunAbort.markExecutionStarted(),
           onActiveModelSelected: createAgentRunModelSelectionHandler({
             context: params.context,
             runId: params.runId,

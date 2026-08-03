@@ -74,6 +74,20 @@ describe("command-path-policy", () => {
     });
   });
 
+  it("keeps RPC-only nodes reads off the config guard", () => {
+    expectResolvedPolicy(["nodes", "status"], {
+      configGuard: "skip",
+      networkProxy: "bypass",
+    });
+    expectResolvedPolicy(["nodes", "list"], {
+      configGuard: "skip",
+      networkProxy: "bypass",
+    });
+    // Bare `openclaw nodes` still resolves plugin subcommands from validated config.
+    expectResolvedPolicy(["nodes"], { networkProxy: "bypass" });
+    expectResolvedPolicy(["nodes", "pair"], { networkProxy: "bypass" });
+  });
+
   it("applies exact overrides after broader channel plugin rules", () => {
     expectResolvedPolicy(["channels", "send"], {
       loadPlugins: "always",
@@ -350,7 +364,13 @@ describe("command-path-policy", () => {
       loadPlugins: "never",
       networkProxy: "bypass",
     });
-    for (const commandPath of [["hooks"], ["skills", "info"]]) {
+    for (const commandPath of [
+      ["hooks"],
+      ["hooks", "list"],
+      ["hooks", "info"],
+      ["hooks", "check"],
+      ["skills", "info"],
+    ]) {
       expectResolvedPolicy(commandPath, {
         configGuard: "skip",
         loadPlugins: "never",

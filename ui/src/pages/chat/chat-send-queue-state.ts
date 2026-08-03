@@ -74,6 +74,18 @@ export function reconnectSafeQueuedSendState(
   return host.connected && host.client ? "waiting-idle" : "waiting-reconnect";
 }
 
+export function captureChatConnectionOwner(
+  host: Pick<ChatHost, "client" | "connected" | "connectionEpoch">,
+  requireConnected = true,
+): () => boolean {
+  const client = host.client;
+  const connectionEpoch = host.connectionEpoch;
+  return () =>
+    (!requireConnected || host.connected) &&
+    host.client === client &&
+    host.connectionEpoch === connectionEpoch;
+}
+
 export function updateQueuedSendItem(
   host: ChatHost,
   storageMode: QueuedChatStorageMode,
@@ -84,6 +96,20 @@ export function updateQueuedSendItem(
   return storageMode === "memory"
     ? updateVolatileQueuedMessage(host, id, update, { retryable: true })
     : updateQueuedMessageForSession(host, sessionKey, id, update);
+}
+
+export function deliveryStateWriter(
+  host: ChatHost,
+  storageMode: QueuedChatStorageMode,
+  sessionKey: string,
+  id: string,
+) {
+  return (sendState: ChatQueueItem["sendState"], sendError?: string) =>
+    updateQueuedSendItem(host, storageMode, sessionKey, id, (item) => ({
+      ...item,
+      sendError,
+      sendState,
+    }));
 }
 
 export function canSendVolatileQueueItem(

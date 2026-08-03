@@ -78,8 +78,10 @@ import {
   buildDefaultOllamaCloudModelDefinition,
   capLocalOllamaModelContext,
   capLocalOllamaProviderContext,
+  fetchLoadedOllamaModelNames,
   isOllamaCloudModel,
 } from "./src/provider-models.js";
+import { findAvailableOllamaModelName } from "./src/setup-model-selection.js";
 import {
   OLLAMA_INCOMPLETE_STREAM_ERROR,
   createConfiguredOllamaCompatStreamWrapper,
@@ -238,7 +240,9 @@ async function resolveAppGuidedOllamaConnection(ctx: ProviderAppGuidedSetupConte
     existing,
     accessValue,
     discoveryAccess,
-    baseUrl: readProviderBaseUrl(existing) ?? resolveOllamaSetupDefaultBaseUrl(ctx.env),
+    baseUrl: resolveOllamaApiBase(
+      readProviderBaseUrl(existing) ?? resolveOllamaSetupDefaultBaseUrl(ctx.env),
+    ),
   };
 }
 
@@ -261,12 +265,25 @@ async function discoverAppGuidedOllamaModel(ctx: ProviderAppGuidedSetupContext) 
   if (!connection) {
     return null;
   }
+  // App-guided setup must not turn an installed-but-idle model into a surprise
+  // memory allocation. Only /api/ps owns the currently resident model set.
+  const loaded = await fetchLoadedOllamaModelNames(connection.baseUrl, {
+    ...connection.discoveryAccess,
+    ...(ctx.signal ? { signal: ctx.signal } : {}),
+  });
+  if (!loaded.reachable || loaded.models.length === 0) {
+    return null;
+  }
   const provider = await buildOllamaProvider(connection.baseUrl, {
     quiet: true,
     ...connection.discoveryAccess,
   });
   const toolModels =
-    provider.models?.filter((candidate) => candidate.compat?.supportsTools === true) ?? [];
+    provider.models?.filter(
+      (candidate) =>
+        candidate.compat?.supportsTools === true &&
+        findAvailableOllamaModelName(candidate.id, loaded.models) !== undefined,
+    ) ?? [];
   // Automatic setup needs measured /api/show facts. The catalog fallback is
   // intentionally optimistic for manual use and must not qualify a weak route.
   let model: ModelDefinitionConfig | undefined;

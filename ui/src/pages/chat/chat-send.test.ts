@@ -8,6 +8,7 @@ import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import { SLASH_COMMANDS } from "../../lib/chat/commands.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
+import { createResolvedModelPatch } from "../../test-helpers/chat-model.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
@@ -743,6 +744,44 @@ describe("refreshChat", () => {
     expect(requestUpdate).toHaveBeenCalled();
   });
 
+  it("keeps an active run adopted from history over newer stale catalog metadata", async () => {
+    const runId = "run-restored";
+    const host = makeHost({
+      requestHandlers: {
+        "chat.history": {
+          messages: [],
+          inFlightRun: { runId, text: "Still working after navigation." },
+          sessionInfo: row("main", {
+            activeRunIds: [runId],
+            hasActiveRun: true,
+            status: "running",
+            updatedAt: 1,
+          }),
+        },
+      },
+      sessionKey: "main",
+      sessionsResult: createSessionsResult([
+        row("main", { hasActiveRun: false, status: "done", updatedAt: 10 }),
+      ]),
+    });
+
+    await refreshPageChat(asChatPageHost(host), {
+      awaitHistory: true,
+      scheduleScroll: false,
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(host.chatRunId).toBe(runId);
+    expect(host.chatStream).toBe("Still working after navigation.");
+    expect(host.sessionsResult?.sessions[0]).toMatchObject({
+      hasActiveRun: false,
+      status: "done",
+      updatedAt: 10,
+    });
+  });
+
   it.each([
     {
       name: "drains a restored queue after history proves the selected session is idle",
@@ -1152,69 +1191,7 @@ describe("handleSendChat", () => {
     vi.unstubAllGlobals();
   });
 
-  it("cancels button-triggered /new resets when confirmation is declined", async () => {
-    const confirm = vi.fn(() => false);
-    vi.stubGlobal("confirm", confirm);
-
-    const host = makeHost({
-      requestHandlers: {},
-      chatMessage: "keep this draft",
-      sessionKey: "agent:main",
-    });
-
-    await handleSendChat(host, "/new", { confirmReset: true, restoreDraft: true });
-
-    expect(confirm).toHaveBeenCalledWith("Start a new thread? This will reset the current chat.");
-    expect(host.request).not.toHaveBeenCalled();
-    expect(host.chatMessage).toBe("keep this draft");
-    expect(host.chatMessages).toStrictEqual([]);
-    expect(host.chatRunId).toBeNull();
-    expect(host.refreshSessionsAfterChat.size).toBe(0);
-  });
-
-  it("cancels button-triggered /new resets when confirmation is unavailable", async () => {
-    vi.stubGlobal("confirm", undefined);
-
-    const host = makeHost({
-      requestHandlers: {},
-      chatMessage: "keep this draft",
-      sessionKey: "agent:main",
-    });
-
-    await handleSendChat(host, "/new", { confirmReset: true, restoreDraft: true });
-
-    expect(host.request).not.toHaveBeenCalled();
-    expect(host.chatMessage).toBe("keep this draft");
-    expect(host.chatMessages).toStrictEqual([]);
-    expect(host.chatRunId).toBeNull();
-    expect(host.refreshSessionsAfterChat.size).toBe(0);
-  });
-
-  it("runs the fresh-session action for confirmed /new overrides", async () => {
-    const confirm = vi.fn(() => true);
-    vi.stubGlobal("confirm", confirm);
-
-    const createChatSession = vi.fn(async () => true);
-    const host = makeHost({
-      requestHandlers: {},
-      chatMessage: "restore me",
-      sessionKey: "agent:main",
-      createChatSession,
-    });
-
-    await handleSendChat(host, "/new", { confirmReset: true, restoreDraft: true });
-
-    expect(confirm).toHaveBeenCalledTimes(1);
-    expect(host.request).not.toHaveBeenCalled();
-    expect(createChatSession).toHaveBeenCalledTimes(1);
-    expect(host.chatMessage).toBe("restore me");
-    expect(host.refreshSessionsAfterChat.size).toBe(0);
-  });
-
   it("routes typed /new through the fresh-session action without confirmation", async () => {
-    const confirm = vi.fn(() => false);
-    vi.stubGlobal("confirm", confirm);
-
     const createChatSession = vi.fn(async () => true);
     const host = makeHost({
       requestHandlers: {},
@@ -1225,7 +1202,6 @@ describe("handleSendChat", () => {
 
     await handleSendChat(host);
 
-    expect(confirm).not.toHaveBeenCalled();
     expect(host.request).not.toHaveBeenCalled();
     expect(createChatSession).toHaveBeenCalledTimes(1);
     expect(host.chatMessage).toBe("");
@@ -1264,9 +1240,6 @@ describe("handleSendChat", () => {
   });
 
   it("preserves typed /reset command dispatch without confirmation", async () => {
-    const confirm = vi.fn(() => false);
-    vi.stubGlobal("confirm", confirm);
-
     const host = makeHost({
       requestHandlers: {
         "chat.send": { status: "started" },
@@ -1277,7 +1250,6 @@ describe("handleSendChat", () => {
 
     await handleSendChat(host);
 
-    expect(confirm).not.toHaveBeenCalled();
     const payload = findRequestPayload(
       host.request as unknown as MockCallSource,
       "chat.send",
@@ -1404,9 +1376,6 @@ describe("handleSendChat", () => {
       expected: "/reset soft please reload system prompt",
     },
   ])("preserves $input args and skips confirmation dialog", async ({ input, expected }) => {
-    const confirm = vi.fn(() => false);
-    vi.stubGlobal("confirm", confirm);
-
     const host = makeHost({
       requestHandlers: {
         "chat.send": { status: "started" },
@@ -1417,7 +1386,6 @@ describe("handleSendChat", () => {
 
     await handleSendChat(host);
 
-    expect(confirm).not.toHaveBeenCalled();
     const payload = findRequestPayload(
       host.request as unknown as MockCallSource,
       "chat.send",
@@ -1426,31 +1394,6 @@ describe("handleSendChat", () => {
     expect(payload.sessionKey).toBe("agent:main");
     expect(payload.message).toBe(expected);
     expect(host.chatMessage).toBe("");
-  });
-
-  it.each([
-    "/reset softish please archive",
-    "/reset\tsoftish please archive",
-    "/reset\nsoftish please archive",
-    "/reset: softish please archive",
-  ])("keeps %s on the hard-reset confirmation path", async (message) => {
-    const confirm = vi.fn(() => false);
-    vi.stubGlobal("confirm", confirm);
-
-    const host = makeHost({
-      requestHandlers: {},
-      chatMessage: "keep this draft",
-      sessionKey: "agent:main",
-    });
-
-    await handleSendChat(host, message, {
-      confirmReset: true,
-      restoreDraft: true,
-    });
-
-    expect(confirm).toHaveBeenCalledTimes(1);
-    expect(host.request).not.toHaveBeenCalled();
-    expect(host.chatMessage).toBe("keep this draft");
   });
 
   it("does not seed refreshSessionsAfterChat for a terminal timeout ack on a refreshing send", async () => {
@@ -1860,6 +1803,75 @@ describe("handleSendChat", () => {
     expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
     expect(host.chatMessage).toBe(queuedText);
     expect(host.chatQueue).toStrictEqual([]);
+  });
+
+  it("keeps a resolved model reconciliation inside the canonical settings queue", async () => {
+    const reconcile = createDeferred<void>();
+    let patchCount = 0;
+    const host = makeHost({
+      requestHandlers: {
+        "sessions.patch": () => {
+          patchCount += 1;
+          return createResolvedModelPatch(patchCount === 1 ? "gpt-5-mini" : "gpt-5", "openai");
+        },
+      },
+    });
+
+    const first = patchChatSessionSettings(
+      host,
+      host.sessionKey,
+      { model: "openai/gpt-5-mini" },
+      { reconcile: async () => await reconcile.promise },
+    );
+    await waitForFast(() => expect(patchCount).toBe(1));
+    const second = patchChatSessionSettings(host, host.sessionKey, {
+      model: "openai/gpt-5",
+    });
+    await Promise.resolve();
+
+    expect(patchCount).toBe(1);
+    reconcile.resolve();
+    await Promise.all([first, second]);
+    expect(patchCount).toBe(2);
+  });
+
+  it("rolls a failed queued picker back to the preceding slash model value", async () => {
+    const firstPatch = createDeferred<unknown>();
+    let patchCount = 0;
+    const host = makeHost({
+      requestHandlers: {
+        "sessions.patch": () => {
+          patchCount += 1;
+          if (patchCount === 1) {
+            return firstPatch.promise;
+          }
+          throw new Error("picker rejected");
+        },
+      },
+    });
+    host.sessions.setModelOverride(host.sessionKey, "openai/gpt-old");
+
+    const slash = patchChatSessionSettings(
+      host,
+      host.sessionKey,
+      { model: "openai/gpt-5-mini" },
+      {
+        deferModelOverride: true,
+        reconcile: () => {
+          host.sessions.setModelOverride(host.sessionKey, "openai/gpt-5-mini");
+        },
+      },
+    );
+    await waitForFast(() => expect(patchCount).toBe(1));
+    const picker = patchChatSessionSettings(host, host.sessionKey, {
+      model: "openai/gpt-5",
+    });
+
+    expect(host.sessions.state.modelOverrides[host.sessionKey]).toBe("openai/gpt-old");
+    firstPatch.resolve(createResolvedModelPatch("gpt-5-mini", "openai"));
+    await expect(slash).resolves.toBeTruthy();
+    await expect(picker).rejects.toThrow("picker rejected");
+    expect(host.sessions.state.modelOverrides[host.sessionKey]).toBe("openai/gpt-5-mini");
   });
 
   it("keeps waiting when a late picker barrier cannot be persisted", async () => {
@@ -4375,16 +4387,16 @@ describe("handleSendChat", () => {
     expect(approvedReset).toEqual(
       expect.objectContaining({
         id: item.id,
+        localCommandName: "reset",
         sendState: "waiting-idle",
         text: "/reset",
       }),
     );
-    expect(approvedReset).not.toHaveProperty("localCommandName");
 
     host.chatRunId = null;
     await retryReconnectableQueuedChatSends(host);
 
-    expect(confirmConversationReset).toHaveBeenCalledOnce();
+    expect(confirmConversationReset).toHaveBeenCalledTimes(2);
     expect(sendPayloads.map((payload) => payload.message)).toEqual(["/reset"]);
     expect(listStoredChatOutboxes(host)).toStrictEqual([]);
   });
@@ -4419,6 +4431,155 @@ describe("handleSendChat", () => {
         queue: [expect.objectContaining({ id: item.id, sendState: "waiting-idle" })],
       }),
     ]);
+  });
+
+  it("does not convert a queued reset after the Gateway connection changes", async () => {
+    const confirmation = createDeferred<boolean>();
+    const replacementRequest = makeRequestMock({
+      "chat.send": () => ({ status: "ok" }),
+    });
+    const item = createQueuedLocalCommand("queued-reset-reconnect", "/reset");
+    const host = makeHost({
+      requestHandlers: {
+        "chat.history": () => idleChatHistory(),
+        "chat.send": () => ({ status: "ok" }),
+      },
+      chatQueue: [item],
+      connectionEpoch: 1,
+      confirmConversationReset: vi.fn(async () => await confirmation.promise),
+      hello: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        features: { methods: ["chat.send"] },
+      },
+    });
+    admitHostQueueItems(host);
+
+    const draining = retryReconnectableQueuedChatSends(host);
+    await waitForFast(() => expect(host.confirmConversationReset).toHaveBeenCalledOnce());
+    host.client = clientWithRequest(replacementRequest);
+    host.connectionEpoch = 2;
+    confirmation.resolve(true);
+    await draining;
+
+    expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(replacementRequest).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(listStoredChatOutboxes(host)[0]?.queue[0]).toEqual(
+      expect.objectContaining({
+        id: item.id,
+        localCommandName: "reset",
+        sendState: "failed",
+      }),
+    );
+  });
+
+  it("does not apply a queued reset acknowledgement from a replaced Gateway", async () => {
+    const ack = createDeferred<{ runId: string; status: "ok" }>();
+    const replacementRequest = makeRequestMock();
+    const item = createQueuedLocalCommand("queued-reset-ack-reconnect", "/reset");
+    const host = makeHost({
+      requestHandlers: {
+        "chat.history": () => idleChatHistory(),
+        "chat.send": () => ack.promise,
+      },
+      chatQueue: [item],
+      connectionEpoch: 1,
+      confirmConversationReset: vi.fn(async () => true),
+      hello: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        features: { methods: ["chat.send"] },
+      },
+    });
+    const refreshSessions = vi.spyOn(host.sessions, "refresh");
+    admitHostQueueItems(host);
+
+    const draining = retryReconnectableQueuedChatSends(host);
+    await waitForFast(() =>
+      expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1),
+    );
+
+    host.client = clientWithRequest(replacementRequest);
+    host.connectionEpoch = 2;
+    markQueuedChatSendsWaitingForReconnect(host);
+    host.chatMessages = [{ role: "assistant", content: "Replacement Gateway transcript" }];
+    host.chatRunId = "replacement-run";
+    host.chatStream = "Replacement Gateway stream";
+    host.chatSending = true;
+    host.chatSendingScopeKey = storedChatOutboxScopeKey({
+      sessionKey: item.sessionKey,
+    });
+    host.lastError = "Replacement Gateway error";
+    host.chatError = "Replacement Gateway error";
+    const replacementMessages = host.chatMessages;
+
+    ack.resolve({ runId: "old-gateway-reset-run", status: "ok" });
+    await draining;
+
+    expect(listStoredChatOutboxes(host)[0]?.queue[0]).toEqual(
+      expect.objectContaining({
+        id: item.id,
+        localCommandName: "reset",
+        sendState: "waiting-reconnect",
+      }),
+    );
+    expect(host.chatMessages).toBe(replacementMessages);
+    expect(host.chatRunId).toBe("replacement-run");
+    expect(host.chatStream).toBe("Replacement Gateway stream");
+    expect(host.chatSending).toBe(true);
+    expect(host.chatSendingScopeKey).toBe(
+      storedChatOutboxScopeKey({
+        sessionKey: item.sessionKey,
+      }),
+    );
+    expect(host.lastError).toBe("Replacement Gateway error");
+    expect(host.chatError).toBe("Replacement Gateway error");
+    expect(host.refreshSessionsAfterChat).toEqual(new Map());
+    expect(refreshSessions).not.toHaveBeenCalled();
+    expect(replacementRequest).not.toHaveBeenCalled();
+  });
+
+  it("retries an explicitly approved unconfirmed reset with the same run id", async () => {
+    const runId = "unconfirmed-reset-run";
+    const item = {
+      ...createQueuedLocalCommand("unconfirmed-reset-retry", "/reset"),
+      sendAttempts: 1,
+      sendError: "Delivery could not be confirmed after reconnect.",
+      sendRequestStartedAtMs: 10,
+      sendRunId: runId,
+      sendState: "unconfirmed" as const,
+    };
+    const host = makeHost({
+      requestHandlers: {
+        "chat.send": (params: unknown) => {
+          const payload = requireRecord(params, "retried reset payload");
+          return { runId: payload.idempotencyKey, status: "ok" };
+        },
+      },
+      chatQueue: [item],
+      confirmConversationReset: vi.fn(async () => true),
+      hello: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        features: { methods: ["chat.send"] },
+      },
+    });
+    admitHostQueueItems(host);
+
+    await retryQueuedChatMessage(host, item.id);
+
+    expect(host.confirmConversationReset).toHaveBeenCalledOnce();
+    expect(host.request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        idempotencyKey: runId,
+        message: "/reset",
+      }),
+    );
+    expect(listStoredChatOutboxes(host)).toStrictEqual([]);
   });
 
   it("retires a queued local command without applying its late result after a route switch", async () => {
@@ -4466,10 +4627,89 @@ describe("handleSendChat", () => {
     expect(host.chatRunId).toBeNull();
     expect(host.lastError).toBe("Second session error");
     expect(host.chatError).toBe("Second session error");
-    expect(host.sessions.state.modelOverrides[item.sessionKey]).toBe("openai/gpt-5-mini");
+    expect(host.sessions.state.modelOverrides[item.sessionKey]).toBeUndefined();
     expect(refreshCurrentSessionTools).not.toHaveBeenCalled();
     expect(refreshCurrentChat).not.toHaveBeenCalled();
   });
+
+  it("does not apply a late model result after the Gateway connection changes", async () => {
+    const command = createDeferred<Awaited<ReturnType<ExecuteSlashCommand>>>();
+    executeSlashCommandMock.mockImplementationOnce(() => command.promise);
+
+    const item = createQueuedLocalCommand("reconnected-model-command", "/model gpt-5-mini", {
+      sessionKey: "agent:main:first",
+    });
+    const host = makeHost({
+      requestHandlers: {
+        "chat.history": () => idleChatHistory(item.sessionKey),
+      },
+      connectionEpoch: 1,
+      chatQueue: [item],
+      sessionKey: item.sessionKey,
+    });
+    const setModelOverride = vi.spyOn(host.sessions, "setModelOverride");
+    expect(admitQueuedMessageForSession(host, item.sessionKey, item)).toBe(true);
+
+    const draining = retryReconnectableQueuedChatSends(host);
+    await waitForFast(() => expect(executeSlashCommandMock).toHaveBeenCalledTimes(1));
+
+    host.client = clientWithRequest(makeRequestMock());
+    host.connectionEpoch = 2;
+    command.resolve({
+      action: "refresh",
+      content: "Model set to `gpt-5-mini`.",
+      sessionPatch: {
+        modelOverride: { kind: "qualified", value: "openai/gpt-5-mini" },
+      },
+    });
+    await draining;
+
+    expect(setModelOverride).not.toHaveBeenCalled();
+    expect(host.sessions.state.modelOverrides[item.sessionKey]).toBeUndefined();
+  });
+
+  it.each([
+    { sessionKey: "global", mainKey: "main" },
+    { sessionKey: "agent:work:main", mainKey: "main" },
+    { sessionKey: "agent:work:home", mainKey: "home" },
+  ])(
+    "does not apply a late selected-global model result after the selected agent changes for $sessionKey",
+    async ({ sessionKey, mainKey }) => {
+      const command = createDeferred<Awaited<ReturnType<ExecuteSlashCommand>>>();
+      executeSlashCommandMock.mockImplementationOnce(() => command.promise);
+
+      const item = createQueuedLocalCommand("switched-global-model-command", "/model gpt-5-mini", {
+        sessionKey,
+      });
+      const host = makeHost({
+        requestHandlers: {
+          "chat.history": () => idleChatHistory(item.sessionKey),
+        },
+        assistantAgentId: "work",
+        agentsList: { defaultId: "main", mainKey },
+        chatQueue: [item],
+        sessionKey: item.sessionKey,
+      });
+      const setModelOverride = vi.spyOn(host.sessions, "setModelOverride");
+      expect(admitQueuedMessageForSession(host, item.sessionKey, item)).toBe(true);
+
+      const draining = retryReconnectableQueuedChatSends(host);
+      await waitForFast(() => expect(executeSlashCommandMock).toHaveBeenCalledTimes(1));
+
+      host.assistantAgentId = "main";
+      command.resolve({
+        action: "refresh",
+        content: "Model set to `gpt-5-mini`.",
+        sessionPatch: {
+          modelOverride: { kind: "qualified", value: "openai/gpt-5-mini" },
+        },
+      });
+      await draining;
+
+      expect(setModelOverride).not.toHaveBeenCalled();
+      expect(host.sessions.state.modelOverrides[item.sessionKey]).toBeUndefined();
+    },
+  );
 
   it("does not borrow a replacement connection error for a stale queued command", async () => {
     const command = createDeferred<Awaited<ReturnType<ExecuteSlashCommand>>>();
@@ -7095,9 +7335,18 @@ describe("handleSendChat", () => {
     const host = makeHost({
       requestHandlers: {
         "sessions.reset": { ok: true },
-        "chat.history": { messages: [], thinkingLevel: null },
+        "chat.history": {
+          messages: [],
+          thinkingLevel: null,
+          sessionInfo: { activeLeafEntryId: null },
+        },
+        "chat.send": (params: unknown) => {
+          const payload = requireRecord(params, "post-clear send payload");
+          return { runId: payload.idempotencyKey, status: "started" };
+        },
       },
       sessionKey: "main",
+      chatDisplayedLeafEntryId: "leaf-before-clear",
       chatMessage: "/clear",
       chatMessages: [{ role: "user", content: "hello", timestamp: 1 }],
       chatRunError: { summary: "Error: previous run failed" },
@@ -7110,6 +7359,100 @@ describe("handleSendChat", () => {
     expect(host.chatRunError).toBeNull();
     expect(host.chatRunId).toBeNull();
     expect(host.chatStream).toBeNull();
+    expect(host.chatDisplayedLeafEntryId).toBeUndefined();
+
+    host.chatMessage = "after clear";
+    await handleSendChat(host);
+
+    expect(
+      findRequestPayload(host.request as unknown as MockCallSource, "chat.send", "post-clear send"),
+    ).not.toHaveProperty("expectedLeafEntryId");
+  });
+
+  it("preserves the replacement route leaf when post-clear history resolves late", async () => {
+    const history = createDeferred<unknown>();
+    const sourceSessionKey = "agent:main:source";
+    const replacementSessionKey = "agent:main:replacement";
+    const host = makeHost({
+      requestHandlers: {
+        "sessions.reset": { ok: true },
+        "chat.history": () => history.promise,
+      },
+      sessionKey: sourceSessionKey,
+      chatDisplayedLeafEntryId: "source-leaf",
+      chatMessage: "/clear",
+      chatMessages: [{ role: "user", content: "source history" }],
+    });
+
+    const clearing = handleSendChat(host);
+    await waitForFast(() =>
+      expect(host.request).toHaveBeenCalledWith("chat.history", {
+        sessionKey: sourceSessionKey,
+        limit: 100,
+      }),
+    );
+    host.sessionKey = replacementSessionKey;
+    host.chatDisplayedLeafEntryId = "replacement-leaf";
+    history.resolve({
+      messages: [],
+      sessionInfo: { activeLeafEntryId: null },
+      thinkingLevel: null,
+    });
+    await clearing;
+
+    expect(host.chatDisplayedLeafEntryId).toBe("replacement-leaf");
+  });
+
+  it("preserves the replacement connection leaf when post-clear history resolves late", async () => {
+    const history = createDeferred<unknown>();
+    const host = makeHost({
+      requestHandlers: {
+        "sessions.reset": { ok: true },
+        "chat.history": () => history.promise,
+      },
+      connectionEpoch: 1,
+      chatDisplayedLeafEntryId: "source-leaf",
+      chatMessage: "/clear",
+      chatMessages: [{ role: "user", content: "source history" }],
+    });
+
+    const clearing = handleSendChat(host);
+    await waitForFast(() =>
+      expect(host.request).toHaveBeenCalledWith("chat.history", {
+        sessionKey: "agent:main",
+        limit: 100,
+      }),
+    );
+    host.client = clientWithRequest(makeRequestMock());
+    host.connectionEpoch = 2;
+    host.chatDisplayedLeafEntryId = "replacement-leaf";
+    history.resolve({
+      messages: [],
+      sessionInfo: { activeLeafEntryId: null },
+      thinkingLevel: null,
+    });
+    await clearing;
+
+    expect(host.chatDisplayedLeafEntryId).toBe("replacement-leaf");
+  });
+
+  it("keeps the prior branch precondition when post-clear history cannot verify reset state", async () => {
+    const host = makeHost({
+      requestHandlers: {
+        "sessions.reset": { ok: true },
+        "chat.history": () => {
+          throw new Error("history unavailable");
+        },
+      },
+      chatDisplayedLeafEntryId: "leaf-before-clear",
+      chatMessage: "/clear",
+      chatMessages: [{ role: "user", content: "source history" }],
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatDisplayedLeafEntryId).toBe("leaf-before-clear");
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(1);
   });
 
   it("scopes /clear resets for selected-agent global sessions", async () => {
@@ -7196,7 +7539,7 @@ describe("handleSendChat", () => {
     expect(listStoredChatOutboxes(host)).toStrictEqual([]);
   });
 
-  it("invalidates the captured session cache when a rejected clear switches routes", async () => {
+  it("invalidates the captured session cache without replacing the visible route error", async () => {
     const reset = createDeferred<unknown>();
 
     const sourceSessionKey = "agent:main:source";
@@ -7226,6 +7569,8 @@ describe("handleSendChat", () => {
     host.sessionKey = visibleSessionKey;
     syncVisibleChatQueueProjection(host);
     host.chatMessages = [{ role: "user", content: "visible history" }];
+    host.lastError = "Visible session error";
+    host.chatError = "Visible session error";
     reset.reject(new Error("post-commit lifecycle failed"));
     await clearing;
 
@@ -7236,8 +7581,8 @@ describe("handleSendChat", () => {
       }),
     ).toEqual([{ role: "user", content: "cached visible history" }]);
     expect(host.chatMessages).toEqual([{ role: "user", content: "visible history" }]);
-    expect(host.lastError).toContain("clear request may have completed");
-    expect(host.lastError).toContain("could not be refreshed");
+    expect(host.lastError).toBe("Visible session error");
+    expect(host.chatError).toBe("Visible session error");
     expect(listStoredChatOutboxes(host)).toStrictEqual([]);
   });
 
@@ -7289,6 +7634,57 @@ describe("handleSendChat", () => {
       replacementRequest.mock.calls.filter(([method]) => method === "sessions.reset"),
     ).toHaveLength(0);
   });
+
+  it.each(["route", "connection"] as const)(
+    "does not apply uncertain clear feedback after a %s change during history refresh",
+    async (change) => {
+      const reset = createDeferred<unknown>();
+      const history = createDeferred<unknown>();
+      const sourceSessionKey = "agent:main:source";
+      const replacementRequest = makeRequestMock({
+        "chat.history": () => history.promise,
+      });
+      const host = makeHost({
+        requestHandlers: {
+          "sessions.reset": () => reset.promise,
+        },
+        connectionEpoch: 1,
+        chatMessage: "/clear",
+        chatMessages: [{ role: "user", content: "source history" }],
+        sessionKey: sourceSessionKey,
+      });
+
+      const clearing = handleSendChat(host);
+      await waitForFast(() =>
+        expect(host.request).toHaveBeenCalledWith("sessions.reset", { key: sourceSessionKey }),
+      );
+      host.client = clientWithRequest(replacementRequest);
+      host.connectionEpoch = 2;
+      reset.resolve({ ok: true });
+      await waitForFast(() =>
+        expect(replacementRequest).toHaveBeenCalledWith("chat.history", {
+          sessionKey: sourceSessionKey,
+          limit: 100,
+        }),
+      );
+      const scrollGeneration = host.chatScrollGeneration;
+
+      if (change === "route") {
+        host.sessionKey = "agent:main:replacement";
+      } else {
+        host.client = clientWithRequest(makeRequestMock());
+        host.connectionEpoch = 3;
+      }
+      host.lastError = "Replacement session error";
+      host.chatError = "Replacement session error";
+      history.resolve({ messages: [], thinkingLevel: null });
+      await clearing;
+
+      expect(host.lastError).toBe("Replacement session error");
+      expect(host.chatError).toBe("Replacement session error");
+      expect(host.chatScrollGeneration).toBe(scrollGeneration);
+    },
+  );
 
   it("clears a canonically equivalent alias that becomes visible while reset is pending", async () => {
     const reset = createDeferred<unknown>();
@@ -8601,6 +8997,52 @@ describe("handleAbortChat", () => {
       expect(host.chatMessage).toBe("");
     },
   );
+
+  it("blocks a typed stop before aborting when the operator lacks write scope", async () => {
+    const host = makeHost({
+      requestHandlers: {},
+      chatRunId: "run-main",
+      chatMessage: "/stop",
+      hello: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: ["operator.read"] },
+        features: { methods: ["chat.abort"] },
+      },
+      sessionKey: "agent:main",
+      chatRunError: { summary: "Previous run failed" },
+    });
+
+    await handleSendChat(host);
+
+    expect(host.request).not.toHaveBeenCalled();
+    expect(host.lastError).toBeTruthy();
+    expect(host.chatError).toBe(host.lastError);
+    expect(host.chatMessage).toBe("/stop");
+    expect(host.chatRunError).toEqual({ summary: "Previous run failed" });
+  });
+
+  it("queues a typed exact-run stop while disconnected", async () => {
+    const request = vi.fn();
+    const client = { request } as unknown as NonNullable<ChatHost["client"]>;
+    const host = makeHost({
+      client,
+      connected: false,
+      chatRunId: "run-main",
+      chatMessage: "/stop",
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host);
+
+    expect(host.pendingAbort).toEqual({
+      sourceClient: client,
+      runId: "run-main",
+      sessionKey: "agent:main",
+    });
+    expect(host.chatMessage).toBe("");
+    expect(request).not.toHaveBeenCalled();
+  });
 
   it("queues the active run abort while disconnected", async () => {
     const client = { request: vi.fn() } as unknown as NonNullable<ChatHost["client"]>;

@@ -205,6 +205,18 @@ describe("SMS account config", () => {
     });
   });
 
+  it.each(["0", "00", " 0 ", "-1", "1.5", "unlimited", " "])(
+    "keeps the default text chunk limit when SMS_TEXT_CHUNK_LIMIT is %j",
+    (raw) => {
+      process.env.TWILIO_ACCOUNT_SID = "AC-env";
+      process.env.TWILIO_AUTH_TOKEN = "env-token";
+      process.env.TWILIO_PHONE_NUMBER = "+15550001111";
+      process.env.SMS_TEXT_CHUNK_LIMIT = raw;
+
+      expect(resolveSmsAccount({}).textChunkLimit).toBe(1500);
+    },
+  );
+
   it("coerces numeric allowFrom entries accepted by the config schema", () => {
     const parsed = parseSmsConfig({
       accountSid: "AC123",

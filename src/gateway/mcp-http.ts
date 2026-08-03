@@ -360,6 +360,7 @@ async function startMcpLoopbackServer(port = 0): Promise<{
               hookContext: {
                 agentId: scopedTools.agentId,
                 config: cfg,
+                ...(scopedTools.workspaceDir ? { workspaceDir: scopedTools.workspaceDir } : {}),
                 sessionKey: requestContext.sessionKey,
                 sessionId: requestContext.sessionId,
                 runId: requestContext.runId,

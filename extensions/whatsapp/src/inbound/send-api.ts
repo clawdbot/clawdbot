@@ -5,8 +5,6 @@ import type {
   WAMessage,
   WAPresence,
 } from "baileys";
-import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
-import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveWhatsAppDocumentFileName } from "../document-filename.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
 import { isWhatsAppNewsletterJid } from "../normalize.js";
@@ -18,8 +16,9 @@ import {
 } from "./outbound-mentions.js";
 import {
   combineWhatsAppSendResults,
-  listWhatsAppSendResultMessageIds,
+  mergeWhatsAppAcceptedSendError,
   normalizeWhatsAppSendResult,
+  rememberWhatsAppAcceptedSend,
   type WhatsAppSendKind,
   type WhatsAppSendResult,
 } from "./send-result.js";
@@ -40,14 +39,6 @@ type StructuredLocationSend = {
 type StructuredStickerSendOptions = {
   mimetype?: string;
 };
-
-function recordWhatsAppOutbound(accountId: string) {
-  recordChannelActivity({
-    channel: "whatsapp",
-    accountId,
-    direction: "outbound",
-  });
-}
 
 function supportsForcedDocumentMediaType(mediaType: string): boolean {
   return mediaType.startsWith("image/") || mediaType.startsWith("video/");
@@ -95,21 +86,15 @@ export function createWebSendApi(params: {
     try {
       // Baileys resolves only after relay acceptance; capture that fact before any later work.
       await send((result, sendKind) => {
-        results.push(normalizeWhatsAppSendResult(result, sendKind));
+        rememberWhatsAppAcceptedSend({
+          accountId,
+          result: normalizeWhatsAppSendResult(result, sendKind),
+          results,
+        });
       });
-      recordWhatsAppOutbound(accountId);
       return combineWhatsAppSendResults(kind, results);
     } catch (error) {
-      const accepted = results.filter((result) => result.providerAccepted);
-      if (accepted.length === 0) {
-        throw error;
-      }
-      const delivered = combineWhatsAppSendResults(kind, accepted);
-      throw createChannelPartialDeliveryError(error, {
-        messageIds: listWhatsAppSendResultMessageIds(delivered),
-        receipt: delivered.receipt,
-        visibleReplySent: true,
-      });
+      throw mergeWhatsAppAcceptedSendError({ error, kind, results });
     }
   };
   const sendStructuredMessage = async (
@@ -192,6 +177,9 @@ export function createWebSendApi(params: {
         remoteJid: sendOptions?.quotedMessageKey?.remoteJid,
         fromMe: sendOptions?.quotedMessageKey?.fromMe,
         participant: sendOptions?.quotedMessageKey?.participant,
+        destinationJid: jid,
+        requestedJid: toWhatsappJid(to),
+        lookupTargetJid: sendOptions?.quotedMessageKey?.lookupTargetJid,
         messageText: sendOptions?.quotedMessageKey?.messageText,
         media: sendOptions?.quotedMessageKey?.media,
       });

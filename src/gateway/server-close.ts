@@ -1,6 +1,7 @@
 // Gateway shutdown and restart close orchestration.
 // Coordinates hooks, drains, sockets, sidecars, plugins, and runtime cleanup.
 import type { Server as HttpServer } from "node:http";
+import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { WebSocketServer } from "ws";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
@@ -14,6 +15,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { closePluginStateDatabase } from "../plugin-state/plugin-state-store.js";
 import { clearActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import {
   abortTrackedChatRunById,
   type ChatAbortControllerEntry,
@@ -32,6 +34,7 @@ import {
   type ChatRunEntry,
   type ChatRunState,
 } from "./server-chat-state.js";
+import { clearSessionTypingState } from "./server-methods/session-typing-state.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
@@ -879,6 +882,7 @@ export function createGatewayCloseHandler(
         warnings,
       );
       await shutdownStep("agent-harnesses", () => disposeRegisteredAgentHarnesses(), warnings);
+      await shutdownStep("ai-session-resources", () => cleanupSessionResources(), warnings);
       await measureCloseStep("bundle-runtimes", async () => {
         await Promise.all([
           disposeRuntimeWithShutdownGrace({
@@ -995,6 +999,7 @@ export function createGatewayCloseHandler(
           await Promise.race([closePromise, websocketForceTimeout.promise]);
           websocketForceTimeout.clear();
         }
+        clearSessionTypingState();
       });
       await measureCloseStep("http-server", async () => {
         const servers =
@@ -1054,6 +1059,13 @@ export function createGatewayCloseHandler(
       });
     } finally {
       await shutdownStep("plugin-host-registry", clearActivePluginRegistry, warnings);
+      // Rent: plugin cleanup may still read ambient slots, so drain their shared
+      // lifecycle only after the registry owner has finished retiring plugins.
+      await shutdownStep(
+        "ambient-runtime-state",
+        () => drainGlobalSingletonLifecycleState(restartExpectedMs === null ? "close" : "restart"),
+        warnings,
+      );
       // Channel and plugin teardown still resolve account credentials. Keep the
       // active snapshot until every teardown owner is done, then always scrub it.
       try {

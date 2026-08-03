@@ -151,11 +151,6 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
   },
   {
-    commandPath: ["config", "models"],
-    exact: true,
-    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
-  },
-  {
     commandPath: ["migrate"],
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
   },
@@ -201,7 +196,6 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["gateway", "call"], exact: true, policy: { networkProxy: "bypass" } },
   { commandPath: ["gateway", "diagnostics"], exact: true, policy: { networkProxy: "bypass" } },
   { commandPath: ["gateway", "discover"], exact: true, policy: { networkProxy: "bypass" } },
-  { commandPath: ["gateway", "export"], exact: true, policy: { networkProxy: "bypass" } },
   {
     commandPath: ["gateway", "health"],
     exact: true,
@@ -331,10 +325,14 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     route: { id: "tasks-list" },
   },
   {
+    // This unregistered root is reserved so plugin registration cannot claim it;
+    // the catalog entry preserves its startup policy.
     commandPath: ["tool"],
     policy: { loadPlugins: "never", ensureCliPath: false, networkProxy: "bypass" },
   },
   {
+    // This unregistered root is reserved so plugin registration cannot claim it;
+    // the catalog entry preserves its startup policy.
     commandPath: ["tools"],
     policy: { loadPlugins: "never", ensureCliPath: false, networkProxy: "bypass" },
   },
@@ -388,6 +386,21 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
   },
+  {
+    commandPath: ["hooks", "list"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
+    commandPath: ["hooks", "info"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
+    commandPath: ["hooks", "check"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
   { commandPath: ["logs"], policy: { networkProxy: "bypass" } },
   { commandPath: ["mcp"], policy: { networkProxy: "bypass" } },
   {
@@ -426,6 +439,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     },
   },
   { commandPath: ["nodes"], policy: { networkProxy: "bypass" } },
+  // Both bodies are pure gateway RPC reads, so they skip the config guard like
+  // `channels status`. Bare `openclaw nodes` keeps it because it still resolves
+  // plugin-provided node subcommands from validated config.
+  { commandPath: ["nodes", "status"], exact: true, policy: { configGuard: "skip" } },
+  { commandPath: ["nodes", "list"], exact: true, policy: { configGuard: "skip" } },
   { commandPath: ["pairing"], policy: { networkProxy: "bypass" } },
   { commandPath: ["proxy"], policy: { networkProxy: "bypass" } },
   { commandPath: ["qr"], policy: { networkProxy: "bypass" } },

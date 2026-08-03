@@ -25,6 +25,7 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -118,13 +119,7 @@ export function rememberPendingTerminalPresentation(params: {
     toolParams: structuredClone(params.toolParams),
     toolCallOrdinal: params.toolCallOrdinal,
   });
-  while (pendingTerminalPresentationByToolCall.size > MAX_PENDING_TERMINAL_PRESENTATIONS) {
-    const oldestKey = pendingTerminalPresentationByToolCall.keys().next().value;
-    if (!oldestKey) {
-      break;
-    }
-    pendingTerminalPresentationByToolCall.delete(oldestKey);
-  }
+  pruneMapToMaxSize(pendingTerminalPresentationByToolCall, MAX_PENDING_TERMINAL_PRESENTATIONS);
 }
 
 /** Finalizes a trusted terminal summary after harness result middleware. */
@@ -581,12 +576,7 @@ export function shouldEmitLoopWarning(
     return false;
   }
   state.toolLoopWarningBuckets.set(warningKey, bucket);
-  if (state.toolLoopWarningBuckets.size > MAX_LOOP_WARNING_KEYS) {
-    const oldest = state.toolLoopWarningBuckets.keys().next().value;
-    if (oldest) {
-      state.toolLoopWarningBuckets.delete(oldest);
-    }
-  }
+  pruneMapToMaxSize(state.toolLoopWarningBuckets, MAX_LOOP_WARNING_KEYS);
   return true;
 }
 

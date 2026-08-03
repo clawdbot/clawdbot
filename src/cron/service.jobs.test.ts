@@ -558,6 +558,108 @@ function createMockState(
   } as unknown as CronServiceState;
 }
 
+describe("announce delivery channel validation", () => {
+  const now = Date.parse("2026-08-02T12:00:00.000Z");
+  const configuredChannels = ["reef", "discord"];
+  const input = (delivery: CronJob["delivery"], overrides?: { sessionKey?: string }) => ({
+    name: "multi-channel announce",
+    enabled: true,
+    schedule: { kind: "every" as const, everyMs: 60_000 },
+    sessionTarget: "isolated" as const,
+    wakeMode: "now" as const,
+    payload: { kind: "agentTurn" as const, message: "report" },
+    delivery,
+    ...overrides,
+  });
+
+  it("rejects creation when an isolated announce has no deterministic channel", () => {
+    expect(() =>
+      createJob(createMockState(now), input({ mode: "announce", channel: "last" }), {
+        configuredChannels,
+      }),
+    ).toThrow(
+      "cron announce delivery requires an explicit channel when multiple channels are configured (discord, reef): set --channel <id> or use --best-effort-deliver",
+    );
+  });
+
+  it("accepts creation with an explicit channel", () => {
+    expect(() =>
+      createJob(createMockState(now), input({ mode: "announce", channel: "discord" }), {
+        configuredChannels,
+      }),
+    ).not.toThrow();
+  });
+
+  it("accepts creation when best-effort delivery is explicit", () => {
+    expect(() =>
+      createJob(
+        createMockState(now),
+        input({ mode: "announce", channel: "last", bestEffort: true }),
+        { configuredChannels },
+      ),
+    ).not.toThrow();
+  });
+
+  it("accepts creation when only one channel is configured", () => {
+    expect(() =>
+      createJob(createMockState(now), input({ mode: "announce", channel: "last" }), {
+        configuredChannels: ["discord"],
+      }),
+    ).not.toThrow();
+  });
+
+  it.each([
+    [
+      "a preserved session route",
+      input(
+        { mode: "announce", channel: "last" },
+        { sessionKey: "agent:main:discord:channel:ops" },
+      ),
+    ],
+    [
+      "a provider-prefixed target",
+      input({ mode: "announce", channel: "last", to: "telegram:123" }),
+    ],
+  ])("accepts creation with %s", (_name, jobInput) => {
+    expect(() => createJob(createMockState(now), jobInput, { configuredChannels })).not.toThrow();
+  });
+
+  it("keeps enabled-only patches working for stored ambiguous jobs", () => {
+    const job = createJob(createMockState(now), input({ mode: "announce", channel: "discord" }), {
+      configuredChannels,
+    });
+    // Simulate a job persisted before service-level ambiguity validation shipped.
+    job.delivery = { mode: "announce", channel: "last" };
+
+    expect(() => applyJobPatch(job, { enabled: false }, { configuredChannels })).not.toThrow();
+    expect(job.enabled).toBe(false);
+  });
+
+  it("revalidates patches that change delivery resolution", () => {
+    const job = createJob(createMockState(now), input({ mode: "announce", channel: "discord" }), {
+      configuredChannels,
+    });
+
+    expect(() =>
+      applyJobPatch(job, { delivery: { channel: "last" } }, { configuredChannels }),
+    ).toThrow("cron announce delivery requires an explicit channel");
+  });
+
+  it("rejects ambiguous declarative convergence", () => {
+    const job = createJob(createMockState(now), input({ mode: "announce", channel: "discord" }), {
+      configuredChannels,
+    });
+
+    expect(() =>
+      applyDeclarativeJobSpec(job, input({ mode: "announce", channel: "last" }), {
+        enabledExplicit: true,
+        nowMs: now,
+        configuredChannels,
+      }),
+    ).toThrow("cron announce delivery requires an explicit channel");
+  });
+});
+
 describe("cron tool authority defaults", () => {
   const now = Date.parse("2026-07-21T12:00:00.000Z");
 
@@ -697,7 +799,10 @@ describe("cron tool authority defaults", () => {
 
 describe("script payload validation", () => {
   const now = Date.parse("2026-07-18T12:00:00.000Z");
-  const input = (sessionTarget: CronJob["sessionTarget"] = "isolated") => ({
+  const input = (
+    sessionTarget: CronJob["sessionTarget"] = "isolated",
+    script = "return { state: { count: 1 } }",
+  ) => ({
     name: "script-job",
     enabled: true,
     schedule: { kind: "every" as const, everyMs: 60_000 },
@@ -705,7 +810,7 @@ describe("script payload validation", () => {
     wakeMode: "now" as const,
     payload: {
       kind: "script" as const,
-      script: "return { state: { count: 1 } }",
+      script,
       timeoutSeconds: 4_000,
       toolBudget: 4_000,
     },
@@ -715,6 +820,47 @@ describe("script payload validation", () => {
     expect(() =>
       createJob(createMockState(now, { scriptPayloadsEnabled: false }), input()),
     ).toThrow("cron.triggers.enabled=true");
+  });
+
+  it("rejects malformed scripts on creation with a user-relative location", () => {
+    expect(() =>
+      createJob(
+        createMockState(now, { scriptPayloadsEnabled: true }),
+        input("isolated", "const x = ;"),
+      ),
+    ).toThrow("cron script payload has a syntax error: Unexpected token (line 1, column 10)");
+  });
+
+  it("rejects malformed scripts on patch", () => {
+    const job = createJob(createMockState(now, { scriptPayloadsEnabled: true }), input());
+
+    expect(() =>
+      applyJobPatch(
+        job,
+        { payload: { kind: "script", script: "const x = ;" } },
+        { cronConfig: { triggers: { enabled: true } } },
+      ),
+    ).toThrow("cron script payload has a syntax error");
+  });
+
+  it("still allows disabling a job stored with a malformed script", () => {
+    const job = createJob(createMockState(now, { scriptPayloadsEnabled: true }), input());
+    // Simulate a job persisted before syntax validation shipped.
+    job.payload = { ...job.payload, kind: "script", script: "const x = ;" };
+
+    expect(() =>
+      applyJobPatch(job, { enabled: false }, { cronConfig: { triggers: { enabled: true } } }),
+    ).not.toThrow();
+    expect(job.enabled).toBe(false);
+  });
+
+  it.each([
+    ["top-level await", "await tools.wait(1); return 1"],
+    ["top-level return", "return 1"],
+  ])("accepts %s", (_name, script) => {
+    expect(() =>
+      createJob(createMockState(now, { scriptPayloadsEnabled: true }), input("isolated", script)),
+    ).not.toThrow();
   });
 
   it.each(["current", "session:reporting"] as const)(

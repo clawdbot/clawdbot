@@ -2,11 +2,9 @@
 // abort fanout, history snapshots, and cleanup of buffered streaming state.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
-import {
-  clearAgentRunContext,
-  onAgentEvent,
-  registerAgentRunContext,
-} from "../infra/agent-events.js";
+import { onAgentEvent } from "../infra/agent-events.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
+import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
   abortChatRunById,
   abortChatRunsForProvider,
@@ -219,6 +217,114 @@ describe("registerChatAbortController", () => {
       kind: "agent",
     });
     expect(chatAbortControllers.get("run-internal-agent")?.controlUiVisible).toBe(false);
+  });
+
+  it("re-arms agent expiry from execution admission exactly once", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_800_000_000_000);
+    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+    const registration = registerChatAbortController({
+      chatAbortControllers,
+      runId: "run-queued-agent",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      timeoutMs: 120_000,
+      kind: "agent",
+    });
+    const startedAtMs = registration.entry?.startedAtMs;
+
+    vi.advanceTimersByTime(90_000);
+    registration.markExecutionStarted();
+    const executionExpiresAtMs = resolveAgentRunExpiresAtMs({
+      now: Date.now(),
+      timeoutMs: 120_000,
+    });
+
+    expect(registration.entry?.startedAtMs).toBe(startedAtMs);
+    expect(registration.entry?.expiresAtMs).toBe(executionExpiresAtMs);
+
+    vi.advanceTimersByTime(30_000);
+    registration.markExecutionStarted();
+    expect(registration.entry?.expiresAtMs).toBe(executionExpiresAtMs);
+  });
+
+  it("does not re-arm an agent after its unswept queue deadline", () => {
+    vi.useFakeTimers();
+    for (const [runId, offsetMs] of [
+      ["run-agent-at-queue-deadline", 0],
+      ["run-agent-after-queue-deadline", 1],
+    ] as const) {
+      vi.setSystemTime(1_800_000_000_000);
+      const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+      const registration = registerChatAbortController({
+        chatAbortControllers,
+        runId,
+        sessionId: "sess-1",
+        sessionKey: "main",
+        timeoutMs: 120_000,
+        kind: "agent",
+      });
+      const queueExpiresAtMs = registration.entry?.expiresAtMs;
+      const startedAtMs = registration.entry?.startedAtMs;
+      expect(queueExpiresAtMs).toBeTypeOf("number");
+
+      vi.setSystemTime((queueExpiresAtMs as number) + offsetMs);
+      registration.markExecutionStarted();
+      registration.markExecutionStarted();
+
+      expect(registration.entry?.startedAtMs).toBe(startedAtMs);
+      expect(registration.entry?.expiresAtMs).toBe(queueExpiresAtMs);
+      expect(registration.controller.signal.aborted).toBe(false);
+    }
+  });
+
+  it("does not re-arm stale, aborted, or non-agent registrations", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_800_000_000_000);
+
+    const staleControllers = new Map<string, ChatAbortControllerEntry>();
+    const stale = registerChatAbortController({
+      chatAbortControllers: staleControllers,
+      runId: "run-stale",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      timeoutMs: 60_000,
+      kind: "agent",
+    });
+    const staleExpiry = stale.entry?.expiresAtMs;
+    staleControllers.delete("run-stale");
+
+    const abortedControllers = new Map<string, ChatAbortControllerEntry>();
+    const aborted = registerChatAbortController({
+      chatAbortControllers: abortedControllers,
+      runId: "run-aborted",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      timeoutMs: 60_000,
+      kind: "agent",
+    });
+    const abortedExpiry = aborted.entry?.expiresAtMs;
+    aborted.controller.abort();
+
+    const chatControllers = new Map<string, ChatAbortControllerEntry>();
+    const chat = registerChatAbortController({
+      chatAbortControllers: chatControllers,
+      runId: "run-chat",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      timeoutMs: 60_000,
+      kind: "chat-send",
+    });
+    const chatExpiry = chat.entry?.expiresAtMs;
+
+    vi.advanceTimersByTime(30_000);
+    stale.markExecutionStarted();
+    aborted.markExecutionStarted();
+    chat.markExecutionStarted();
+
+    expect(stale.entry?.expiresAtMs).toBe(staleExpiry);
+    expect(aborted.entry?.expiresAtMs).toBe(abortedExpiry);
+    expect(chat.entry?.expiresAtMs).toBe(chatExpiry);
   });
 
   it("retains completed registrations until terminal persistence succeeds", async () => {
@@ -952,5 +1058,41 @@ describe("resolveInFlightRunSnapshot", () => {
         maxBytes: 200,
       }),
     ).toEqual({ runId: "run-1", text: "short answer", plan: { steps: [] } });
+  });
+
+  it("prioritizes active progress and explicitly clears budget-dropped projections", () => {
+    const event = {
+      runId: "run-1",
+      seq: 2,
+      stream: "tool" as const,
+      ts: 1_000,
+      data: { phase: "start", name: "read", toolCallId: "tool-1", args: {} },
+    };
+    const expected = {
+      runId: "run-1",
+      text: "",
+      events: [event],
+      plan: { steps: [] },
+    };
+    expect(
+      boundInFlightRunSnapshotForChatHistory({
+        snapshot: {
+          runId: "run-1",
+          text: "x".repeat(1_000),
+          events: [event],
+          plan: { steps: [{ step: "y".repeat(1_000), status: "in_progress" }] },
+        },
+        messages: [],
+        maxBytes: jsonUtf8Bytes([]) + jsonUtf8Bytes(expected),
+      }),
+    ).toEqual(expected);
+
+    expect(
+      boundInFlightRunSnapshotForChatHistory({
+        snapshot: { runId: "run-1", text: "", events: [event] },
+        messages: [],
+        maxBytes: jsonUtf8Bytes([]) + jsonUtf8Bytes({ runId: "run-1", text: "", events: [] }),
+      }),
+    ).toEqual({ runId: "run-1", text: "", events: [] });
   });
 });

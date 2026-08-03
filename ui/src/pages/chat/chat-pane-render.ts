@@ -23,6 +23,11 @@ import { resolveChatMessageAccess } from "./chat-message-access.ts";
 import { createChatModelSetupBanner, requiresChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneHeader } from "./chat-pane-header.ts";
 import {
+  createChatPaneSessionActionCallbacks,
+  readChatPaneMutationAccess,
+  renderChatPaneComposerControls,
+} from "./chat-pane-session-controls.ts";
+import {
   SESSION_RAIL_DOCK_MIN_WIDTH,
   WORKSPACE_RAIL_MAX_WIDTH,
   WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH,
@@ -39,7 +44,6 @@ import {
 } from "./chat-pane-state.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
 import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
-import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
 import { refreshChatCommands, refreshPageChat } from "./chat-state-refresh.ts";
 import {
   resolveChatAgentId,
@@ -48,7 +52,6 @@ import {
 } from "./chat-state-route.ts";
 import { renderChat, type ChatProps } from "./chat-view.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
-import { renderChatControls } from "./components/chat-controls.ts";
 import { renderChatImageLightbox } from "./components/chat-image-lightbox.ts";
 import { chatPullRequestId, createPullRequestBranch } from "./components/chat-pull-requests.ts";
 import {
@@ -79,6 +82,10 @@ export class ChatPane extends ChatPaneHeader {
       return html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
     }
     const selectedSession = selectedChatSessionRow(state);
+    const mutationAccess = readChatPaneMutationAccess(
+      this.context.gateway.snapshot,
+      state.sessionKey,
+    );
     const projectedObserverDigest = projectSessionObserverDigest(
       selectedSession?.key ?? state.sessionKey,
       selectedSession?.observerDigest,
@@ -233,6 +240,17 @@ export class ChatPane extends ChatPaneHeader {
     });
     const attachmentReads = this.chatState.attachmentReads;
     const attachmentReadSignal = attachmentReads.readSignal;
+    const sessionActionCallbacks = createChatPaneSessionActionCallbacks({
+      getSnapshot: () => this.context.gateway.snapshot,
+      hasLocalRun: () => Boolean(state.chatRunId),
+      sessionParticipationBlocked,
+      onDenied: (reason) => this.publishHeaderError(reason),
+      onCompact: () => void state.handleSendChat("/compact"),
+      onAbort: () => void state.handleAbortChat({ preserveDraft: true }),
+      onRewind: (entryId) => this.rewindToMessage(entryId),
+      onFork: (entryId) => this.forkFromMessage(entryId),
+      onReset: () => void clearChatHistory(state),
+    });
     const props: ChatProps = {
       transcript: this.transcript,
       paneId: this.paneId,
@@ -263,8 +281,7 @@ export class ChatPane extends ChatPaneHeader {
       sessionRailCompanion: catalogKey
         ? undefined
         : this.sessionCompanionThreads.view(state.sessionKey),
-      sessionRailOpenRequest:
-        this.sessionRailOpenSessionKey === state.sessionKey ? this.sessionRailOpenRequest : 0,
+      ...this.sessionRailOpenRequestProps(state.sessionKey),
       sessionRailMode: selectedSessionRailMode,
       sessionRailDocked: !catalogKey && chatMainWidth >= SESSION_RAIL_DOCK_MIN_WIDTH,
       onSessionRailSubmit: (question) => void this.submitSessionCompanionQuestion(question),
@@ -336,7 +353,14 @@ export class ChatPane extends ChatPaneHeader {
               kind: "composer-replacement",
               text: t("chat.archivedSessionDisabled"),
               actionLabel: t("common.unarchive"),
-              onAction: () => void this.restoreArchivedSession(state.sessionKey),
+              disabledReason: mutationAccess.unarchive.allowed
+                ? undefined
+                : mutationAccess.unarchive.reason,
+              onAction: () => {
+                if (mutationAccess.unarchive.allowed) {
+                  void this.restoreArchivedSession(state.sessionKey);
+                }
+              },
             }
           : modelSetupRequired
             ? createChatModelSetupBanner(() => this.context.navigate("model-setup"))
@@ -381,39 +405,12 @@ export class ChatPane extends ChatPaneHeader {
       },
       composerControls: catalogKey
         ? nothing
-        : renderChatControls({
+        : renderChatPaneComposerControls({
             paneId: this.paneId,
-            model: {
-              activeRunId: state.chatRunId,
-              agentDefaultModel,
-              connected: state.connected,
-              gatewayAvailable: Boolean(state.client),
-              loading: state.chatLoading,
-              modelCatalog: state.chatModelCatalog,
-              modelOverrides: state.sessions.state.modelOverrides,
-              modelSelectionLocked: selectedSession?.modelSelectionLocked === true,
-              modelSelectionRuntimeId: selectedSession?.agentRuntime?.id,
-              modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
-              modelsLoading: state.chatModelsLoading,
-              sending: state.chatSending,
-              sessionKey: state.sessionKey,
-              sessionsResult: state.sessionsResult,
-              stream: state.chatStream,
-              onRequestUpdate: () => state.requestUpdate?.(),
-              onFastModeSelect: (next, targetSessionKey) =>
-                switchChatFastMode(state, next, targetSessionKey),
-              onModelSelect: (next, targetSessionKey) =>
-                switchChatModel(state, next, targetSessionKey),
-              onThinkingSelect: (next, targetSessionKey) =>
-                switchChatThinkingLevel(state, next, targetSessionKey),
-            },
-            onboarding: state.onboarding,
-            settings: state.settings,
-            viewMenuOpen: state.chatViewMenuOpen,
-            onSettingsChange: state.applySettings,
-            onViewMenuOpenChange: (open, options) => {
-              state.setChatViewMenuOpen(open, options);
-            },
+            state,
+            selectedSession,
+            agentDefaultModel,
+            mutationAccess: mutationAccess.runtimePatch,
           }),
       sessionWorkspace: catalogKey ? undefined : sessionWorkspace,
       backgroundTasks: catalogKey ? undefined : backgroundTasks,
@@ -490,7 +487,7 @@ export class ChatPane extends ChatPaneHeader {
           : suggestionViewer
             ? void this.addCurrentSessionSuggestion()
             : void state.handleSendChat(),
-      onCompact: () => void state.handleSendChat("/compact"),
+      onCompact: sessionActionCallbacks.onCompact,
       onOpenSessionCheckpoints: () => {
         const search = new URLSearchParams({ session: state.sessionKey });
         if (selectedSessionArchived) {
@@ -514,9 +511,7 @@ export class ChatPane extends ChatPaneHeader {
         state.chatError = message;
         state.requestUpdate?.();
       },
-      onAbort: sessionParticipationBlocked
-        ? undefined
-        : () => void state.handleAbortChat({ preserveDraft: true }),
+      onAbort: sessionActionCallbacks.onAbort,
       onQueueRemove: state.removeQueuedMessage,
       onQueueRetry: (id) => void state.retryQueuedChatMessage(id),
       onQueueSteer: sessionParticipationBlocked
@@ -534,10 +529,10 @@ export class ChatPane extends ChatPaneHeader {
         state.chatReplyTarget = target;
         state.requestUpdate?.();
       },
-      onRewindMessage: (entryId) => this.rewindToMessage(entryId),
-      onForkMessage: (entryId) => this.forkFromMessage(entryId),
+      onRewindMessage: sessionActionCallbacks.onRewindMessage,
+      onForkMessage: sessionActionCallbacks.onForkMessage,
       onNewSession: () => void this.createSession(),
-      onClearHistory: () => void clearChatHistory(state),
+      onClearHistory: sessionActionCallbacks.onClearHistory,
       agentsList: state.agentsList,
       currentAgentId,
       ...chatProps,

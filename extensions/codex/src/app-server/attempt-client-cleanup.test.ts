@@ -1,13 +1,37 @@
 // Codex tests cover attempt client cleanup plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
+  closeCodexStartupClientBestEffort,
   interruptCodexTurnAndWaitBestEffort,
+  retireUnsafeCodexTurnClientBestEffort,
   retireCodexAppServerClientAfterTimedOutTurn,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import { createClientHarness } from "./test-support.js";
 
 describe("Codex app-server attempt client cleanup", () => {
+  it("keeps strict startup retirement failures visible to lifecycle owners", async () => {
+    const closeAndWait = vi.fn(async () => {
+      throw new Error("strict client retirement failed");
+    });
+
+    await expect(closeCodexStartupClientBestEffort({ closeAndWait } as never)).rejects.toThrow(
+      "strict client retirement failed",
+    );
+  });
+
+  it("preserves the primary failure when unsafe turn retirement rejects", async () => {
+    const close = vi.fn();
+    const closeAndWait = vi.fn(async () => {
+      throw new Error("unsafe client retirement failed");
+    });
+
+    await expect(
+      retireUnsafeCodexTurnClientBestEffort({ close, closeAndWait } as never, "startup interrupt"),
+    ).resolves.toBeUndefined();
+    expect(close).toHaveBeenCalledOnce();
+  });
+
   it("waits for the matching terminal after an interrupt is acknowledged", async () => {
     const harness = createClientHarness();
     const completion = interruptCodexTurnAndWaitBestEffort(harness.client, {

@@ -34,8 +34,13 @@ async function assertConfiguredAnnounceChannel(params: {
   if (params.channel === "last") {
     return;
   }
-  const configuredChannels = (await listConfiguredMessageChannels(params.cfg)).toSorted();
   const normalizedChannel = normalizeMessageChannel(params.channel);
+  if (!normalizedChannel && params.field === "delivery.channel") {
+    // Primary implicit routing is service-owned because session-backed and
+    // best-effort jobs must remain valid even on multi-channel hosts.
+    return;
+  }
+  const configuredChannels = (await listConfiguredMessageChannels(params.cfg)).toSorted();
   if (!normalizedChannel) {
     if (configuredChannels.length <= 1) {
       return;

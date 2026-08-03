@@ -1013,6 +1013,37 @@ describe("cron webhook schema", () => {
 
     expect(res.success).toBe(true);
   });
+
+  it("accepts the shared cron webhook SSRF policy", () => {
+    const res = OpenClawSchema.safeParse({
+      cron: {
+        webhookSsrfPolicy: {
+          dangerouslyAllowPrivateNetwork: true,
+          allowedHostnames: ["127.0.0.1", "internal.example"],
+          allowRfc2544BenchmarkRange: true,
+          allowIpv6UniqueLocalRange: true,
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.cron?.webhookSsrfPolicy).toEqual({
+        dangerouslyAllowPrivateNetwork: true,
+        allowedHostnames: ["127.0.0.1", "internal.example"],
+        allowRfc2544BenchmarkRange: true,
+        allowIpv6UniqueLocalRange: true,
+      });
+    }
+  });
+
+  it("rejects unknown cron webhook SSRF policy fields", () => {
+    const res = OpenClawSchema.safeParse({
+      cron: { webhookSsrfPolicy: { allowEverything: true } },
+    });
+
+    expect(res.success).toBe(false);
+  });
 });
 
 describe("broadcast", () => {

@@ -21,6 +21,8 @@ type DoctorConfigResult = {
   shouldRepairCronCodexModelRefsAfterConfigWrite?: boolean;
   retiredPhoneControlStateCleanupPending?: boolean;
   blockedCodexModelIdentities?: readonly string[];
+  /** Ephemeral doctor-only auth rename plan; never part of persisted config. */
+  openAICodexAuthProfileIdMap?: ReadonlyMap<string, string>;
 };
 
 export type DoctorHealthFlowContext = {

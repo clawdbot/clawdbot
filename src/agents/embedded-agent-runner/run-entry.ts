@@ -1,6 +1,10 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { buildAgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
+import {
+  buildAgentRunTerminalReplySnapshot,
+  normalizeAgentRunTerminalReplySnapshot,
+} from "../agent-run-terminal-reply.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import type { ModelFallbackStepFields } from "../model-fallback-observation.js";
@@ -155,6 +159,13 @@ function buildTerminal(params: {
     providerStarted: meta.providerStarted,
   });
   const metadata: Record<string, unknown> = {};
+  metadata.terminalReply =
+    normalizeAgentRunTerminalReplySnapshot(meta.terminalReply) ??
+    buildAgentRunTerminalReplySnapshot({
+      visibleText: meta.finalAssistantVisibleText,
+      rawText: meta.finalAssistantRawText,
+      terminalReplyKind: meta.terminalReplyKind,
+    });
   if (params.behavior.kind === "channel-delivery" || params.behavior.kind === "followup-delivery") {
     for (const key of [
       "stopReason",

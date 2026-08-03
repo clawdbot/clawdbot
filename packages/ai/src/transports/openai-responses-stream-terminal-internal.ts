@@ -80,12 +80,15 @@ export function resolveResponsesToolCallId(
   return resolvedItemId ? `${generated}|${resolvedItemId}` : generated;
 }
 
-export function resolveCompletedToolCallName(
-  toolCall: { block: { name: string } } | undefined,
-  value: unknown,
-): string {
-  const streamedName = toolCall?.block.name.trim() || undefined;
-  const completedName = typeof value === "string" ? value.trim() || undefined : undefined;
+export function resolveCompletedResponsesToolCall(
+  item: Extract<ResponseOutputItem, { type: "function_call" }>,
+  streamed?: { name?: string; arguments?: string },
+): Pick<ToolCall, "name" | "arguments"> {
+  if (item.status && item.status !== "completed") {
+    throw new Error("Responses stream completed with an incomplete terminal tool call");
+  }
+  const streamedName = streamed?.name?.trim() || undefined;
+  const completedName = typeof item.name === "string" ? item.name.trim() || undefined : undefined;
   if (streamedName && completedName && streamedName !== completedName) {
     throw new Error(
       `Responses stream changed tool-call function name from ${streamedName} to ${completedName}`,
@@ -95,7 +98,13 @@ export function resolveCompletedToolCallName(
   if (!name) {
     throw new Error("Responses stream completed tool call without a function name");
   }
-  return name;
+  const argumentsValue = parseJsonObjectPreservingUnsafeIntegers(
+    streamed?.arguments ?? item.arguments,
+  );
+  if (!argumentsValue) {
+    throw new Error("Responses stream completed tool call with invalid JSON arguments");
+  }
+  return { name, arguments: argumentsValue };
 }
 
 export function createResponsesTerminalController(params: {
@@ -195,21 +204,8 @@ export function createResponsesTerminalController(params: {
     stream.push({ type: "text_start", contentIndex: index, partial: output as never });
     stream.push({ type: "text_end", contentIndex: index, content: text, partial: output as never });
   };
-  const validateCompletedToolCall = (
-    item: Extract<ResponseOutputItem, { type: "function_call" }>,
-  ) => {
-    if (item.status && item.status !== "completed") {
-      throw new Error("Responses stream completed with an incomplete terminal tool call");
-    }
-    const name = resolveCompletedToolCallName(undefined, item.name);
-    const argumentsValue = parseJsonObjectPreservingUnsafeIntegers(item.arguments);
-    if (!argumentsValue) {
-      throw new Error("Responses stream completed tool call with invalid JSON arguments");
-    }
-    return { name, arguments: argumentsValue };
-  };
   const appendToolCall = (item: Extract<ResponseOutputItem, { type: "function_call" }>) => {
-    const validated = validateCompletedToolCall(item);
+    const validated = resolveCompletedResponsesToolCall(item);
     const toolCall: ToolCall = {
       type: "toolCall",
       id: resolveResponsesToolCallId(item),
@@ -249,7 +245,7 @@ export function createResponsesTerminalController(params: {
         throw new Error("Responses stream omitted an output item before completed output");
       }
       if (item.type === "function_call") {
-        validateCompletedToolCall(item);
+        resolveCompletedResponsesToolCall(item);
       }
     }
     for (const item of items) {

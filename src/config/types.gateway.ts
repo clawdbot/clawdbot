@@ -267,9 +267,9 @@ export type GatewayTailscaleConfig = {
 export type GatewayRemoteConfig = {
   /** Remote Gateway WebSocket URL (ws:// or wss://). */
   url?: string;
-  /** Transport for macOS remote connections (ssh tunnel or direct WS). */
+  /** macOS app-only transport (SSH tunnel or direct WS); core validates/preserves but does not read it. */
   transport?: "ssh" | "direct";
-  /** Gateway port on the remote SSH host. Defaults to 18789. */
+  /** macOS app-only remote SSH port (default 18789); core validates/preserves but does not read it. */
   remotePort?: number;
   /** Token for remote auth (when the gateway requires token auth). */
   token?: SecretInput;
@@ -281,7 +281,7 @@ export type GatewayRemoteConfig = {
   sshTarget?: string;
   /** SSH identity file path for tunneling remote Gateway. */
   sshIdentity?: string;
-  /** macOS SSH host-key policy. Defaults to strict; openssh delegates to effective SSH config. */
+  /** macOS app-only; core validates/preserves but does not read it. Defaults to strict; see docs/platforms/mac/remote.md. */
   sshHostKeyPolicy?: "strict" | "openssh";
 };
 

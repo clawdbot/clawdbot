@@ -12,7 +12,7 @@ import {
   buildProjectedAgentRunIndex,
   clearAgentRunContext,
   registerAgentRunContext,
-} from "../../infra/agent-events.js";
+} from "../../infra/agent-run-registry.js";
 import {
   collectTrackedActiveSessionRuns,
   hasTrackedActiveSessionRun,

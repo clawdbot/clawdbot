@@ -6,7 +6,9 @@ import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 const mocks = vi.hoisted(() => ({
+  callGateway: vi.fn(),
   buildWorkspaceHookStatus: vi.fn(),
+  getRuntimeConfig: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
   replaceConfigFile: vi.fn(),
   requestExitAfterOneShotOutput: vi.fn(),
@@ -20,9 +22,13 @@ vi.mock("../agents/agent-scope.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: () => sourceConfig,
+  getRuntimeConfig: mocks.getRuntimeConfig,
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
   replaceConfigFile: mocks.replaceConfigFile,
+}));
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: mocks.callGateway,
 }));
 
 vi.mock("../hooks/hooks-status.js", () => ({
@@ -39,6 +45,13 @@ vi.mock("../hooks/workspace.js", () => ({
 
 vi.mock("../plugins/status.js", () => ({
   buildPluginDiagnosticsReport: () => ({ hooks: [] }),
+}));
+
+vi.mock("../plugins/channel-plugin-ids.js", () => ({
+  loadGatewayStartupPluginPlanWithMetadata: () => ({
+    plan: { channelPluginIds: [], pluginIds: [] },
+    metadataSnapshot: {},
+  }),
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -110,7 +123,9 @@ describe("hooks CLI metadata config keys", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     capture.resetRuntimeCapture();
+    mocks.callGateway.mockRejectedValue(new Error("gateway unavailable"));
     mocks.buildWorkspaceHookStatus.mockReturnValue(report);
+    mocks.getRuntimeConfig.mockReturnValue(sourceConfig);
     mocks.readConfigFileSnapshot.mockResolvedValue({ sourceConfig, hash: "config-hash" });
     mocks.replaceConfigFile.mockResolvedValue(undefined);
   });
@@ -143,6 +158,7 @@ describe("hooks CLI metadata config keys", () => {
     });
     expect(capture.runtimeLogs.at(-1)).toContain("display-name");
     expect(mocks.requestExitAfterOneShotOutput).toHaveBeenCalledWith(capture.defaultRuntime, 0);
+    expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
   it.each(["key-first", "name-first"])(
@@ -241,5 +257,29 @@ describe("hooks CLI metadata config keys", () => {
     expect(payload.hooks).toEqual([expect.objectContaining({ name: "display-name" })]);
     expect(capture.runtimeLogs).toHaveLength(1);
     expect(mocks.requestExitAfterOneShotOutput).toHaveBeenCalledWith(capture.defaultRuntime, 0);
+    expect(mocks.callGateway).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["default", ["hooks", "--json"]],
+    ["list", ["hooks", "list", "--json"]],
+    ["info", ["hooks", "info", "display-name", "--json"]],
+    ["check", ["hooks", "check", "--json"]],
+  ])("uses hooks.status for the %s read command", async (_label, argv) => {
+    mocks.callGateway.mockResolvedValue({ ...report, workspaceDir: "/gateway/workspace" });
+    mocks.buildWorkspaceHookStatus.mockClear();
+
+    await createHooksProgram().parseAsync(argv, { from: "user" });
+
+    expect(mocks.getRuntimeConfig).toHaveBeenCalledWith({ skipPluginValidation: true });
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      config: sourceConfig,
+      method: "hooks.status",
+      params: {},
+      timeoutMs: 1_500,
+      clientName: "cli",
+      mode: "cli",
+    });
+    expect(mocks.buildWorkspaceHookStatus).not.toHaveBeenCalled();
   });
 });

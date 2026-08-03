@@ -91,7 +91,7 @@ function parseManifest(manifestPath) {
   try {
     return JSON.parse(readFileSync(manifestPath, "utf8"));
   } catch (error) {
-    throw new Error(`could not read ${manifestPath}: ${error.message}`);
+    throw new Error(`could not read ${manifestPath}: ${error.message}`, { cause: error });
   }
 }
 
@@ -201,9 +201,13 @@ function verifyImporters(workspace, manifestPath) {
         if (!expectedResolution) {
           continue;
         }
-        const manifestPath = findInstalledManifest({ dependencyName, projectPath, workspace });
+        const resolvedManifestPath = findInstalledManifest({
+          dependencyName,
+          projectPath,
+          workspace,
+        });
         const importerDisplay = relativeDisplayPath(workspace, projectPath);
-        if (!manifestPath) {
+        if (!resolvedManifestPath) {
           if (field.optional) {
             continue;
           }
@@ -214,7 +218,7 @@ function verifyImporters(workspace, manifestPath) {
         }
         checked += 1;
         const installedLocation = normalizeLocation(
-          relativeDisplayPath(workspace, path.dirname(manifestPath)),
+          relativeDisplayPath(workspace, path.dirname(resolvedManifestPath)),
         );
         const expectedLocation = normalizeLocation(
           path.join(
@@ -232,20 +236,22 @@ function verifyImporters(workspace, manifestPath) {
         // says this importer owns the lockfile snapshot in its local slot.
         if (exactImporterSlot && !installedSnapshotKeys?.has(expectedResolution.snapshotKey)) {
           const actualKeys = installedSnapshotKeys
-            ? [...installedSnapshotKeys].toSorted().join(", ")
+            ? [...installedSnapshotKeys]
+                .toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0))
+                .join(", ")
             : "<missing metadata>";
           mismatches.push(
             `${importerDisplay}: ${dependencyName} expected pnpm snapshot ${expectedResolution.snapshotKey}, resolved ${actualKeys} from ${installedLocation}`,
           );
         }
-        const actual = parseManifest(manifestPath);
+        const actual = parseManifest(resolvedManifestPath);
         if (
           actual.name !== expectedResolution.packageName ||
           actual.version !== expectedResolution.version
         ) {
           const resolvedFrom = relativeDisplayPath(
             workspace,
-            realpathSync(path.dirname(manifestPath)),
+            realpathSync(path.dirname(resolvedManifestPath)),
           );
           mismatches.push(
             `${importerDisplay}: ${dependencyName} expected ${expectedResolution.packageName}@${expectedResolution.version}, resolved ${actual.name ?? "<missing>"}@${actual.version ?? "<missing>"} from ${resolvedFrom}`,

@@ -2,6 +2,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { fileTypeFromBuffer } from "file-type";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { readRemoteMediaBuffer } from "../media/fetch.js";
 import {
   createImageProcessor,
@@ -130,13 +131,7 @@ function rememberIcon(
 ): PluginIconCacheEntry {
   cache.delete(cacheKey);
   cache.set(cacheKey, entry);
-  while (cache.size > PLUGIN_ICON_CACHE_MAX_ENTRIES) {
-    const oldest = cache.keys().next();
-    if (oldest.done) {
-      break;
-    }
-    cache.delete(oldest.value);
-  }
+  pruneMapToMaxSize(cache, PLUGIN_ICON_CACHE_MAX_ENTRIES);
   return entry;
 }
 

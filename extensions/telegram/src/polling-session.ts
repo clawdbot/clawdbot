@@ -9,7 +9,10 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
 import type { TelegramTransport } from "./fetch.js";
-import { isRecoverableTelegramNetworkError } from "./network-errors.js";
+import {
+  isRecoverableTelegramNetworkError,
+  isTelegramAuthenticationError,
+} from "./network-errors.js";
 import { TelegramPollingLivenessTracker } from "./polling-liveness.js";
 import {
   createTelegramRestartBackoffState,
@@ -206,6 +209,7 @@ export class TelegramPollingSession {
     );
     const delay = formatDurationPrecise(delayMs);
     this.opts.log(`${buildLine(delay)}${stopTimeoutSuffix}`);
+    this.#status.notePollingRecovery();
     try {
       await sleepWithAbort(delayMs, this.opts.abortSignal);
     } catch (sleepErr) {
@@ -616,7 +620,7 @@ export class TelegramPollingSession {
       this.#transportState.markDirty();
       stalledRestart = true;
       this.opts.log(`[telegram] ${stall.message}`);
-      this.#status.notePollingError(stall.message);
+      this.#status.notePollingError(stall.message, "recovering");
       requestStopForRestart();
     }, POLL_WATCHDOG_INTERVAL_MS);
     watchdog.unref?.();
@@ -642,14 +646,17 @@ export class TelegramPollingSession {
           pollState.error &&
           !isRecoverableTelegramNetworkError(new Error(pollState.error), { context: "polling" })
         ) {
-          this.#status.notePollingError(pollState.error);
+          this.#status.notePollingError(
+            pollState.error,
+            pollState.errorCode === 401 || pollState.errorCode === 404 ? "blocked" : undefined,
+          );
           throw new Error(pollState.error, { cause: err });
         }
         const message = isConflict
           ? `Telegram getUpdates conflict: ${pollState.error}.${TELEGRAM_GET_UPDATES_CONFLICT_HINT}`
           : formatErrorMessage(err);
         this.opts.log(`[telegram][diag] isolated polling ingress failed: ${message}`);
-        this.#status.notePollingError(message);
+        this.#status.notePollingError(message, "recovering");
         clearForceCycleTimer();
         const shouldRestart = await this.#waitBeforeRestart(
           (delay) => `Telegram isolated polling ingress failed; restarting in ${delay}.`,
@@ -803,7 +810,7 @@ export class TelegramPollingSession {
         this.#transportState.markDirty();
         stalledRestart = true;
         this.opts.log(`[telegram] ${stall.message}`);
-        this.#status.notePollingError(stall.message);
+        this.#status.notePollingError(stall.message, "recovering");
         requestStopForRestart();
       }
     }, POLL_WATCHDOG_INTERVAL_MS);
@@ -848,6 +855,10 @@ export class TelegramPollingSession {
         this.#transportState.markDirty();
       }
       if (!isConflict && !isRecoverable) {
+        this.#status.notePollingError(
+          formatErrorMessage(err),
+          isTelegramAuthenticationError(err) ? "blocked" : undefined,
+        );
         throw err;
       }
       const reason = isConflict ? "getUpdates conflict" : "network error";
@@ -860,7 +871,10 @@ export class TelegramPollingSession {
       // status. Recoverable network blips stay log-only; the stall watchdog
       // owns status for extended outages (see detectStall above).
       if (isConflict) {
-        this.#status.notePollingError(`Telegram ${reason}: ${errMsg}.${conflictHint}`);
+        this.#status.notePollingError(
+          `Telegram ${reason}: ${errMsg}.${conflictHint}`,
+          "recovering",
+        );
       }
       clearForceCycleTimer();
       const shouldRestart = await this.#waitBeforeRestart(

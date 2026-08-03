@@ -1,4 +1,5 @@
 import { mergeAllowlist, summarizeMapping } from "openclaw/plugin-sdk/allow-from";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import {
   createChannelInboundEnvelopeBuilder,
   createChannelPartialDeliveryError,
@@ -17,6 +18,7 @@ import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-na
 // Zalouser plugin module implements monitor behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
@@ -67,7 +69,7 @@ type ZalouserMonitorOptions = {
   config: OpenClawConfig;
   runtime: RuntimeEnv;
   abortSignal: AbortSignal;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
   ingressQueue?: Parameters<typeof createZalouserIngressMonitor>[0]["queue"];
 };
 
@@ -958,6 +960,8 @@ export async function monitorZalouserProvider(
   if (stopped) {
     listenerStop();
     listenerStop = null;
+  } else if (!abortSignal.aborted) {
+    statusSink?.(channelReadyPatch());
   }
 
   if (abortSignal.aborted) {

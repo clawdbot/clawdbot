@@ -141,6 +141,8 @@ export type AgentCommandOpts = {
   runId?: string;
   /** Immutable gateway lifecycle ownership captured when this run was admitted. */
   lifecycleGeneration?: string;
+  /** Called once when the selected runtime actually admits the prompt for execution. */
+  onExecutionStarted?: () => void;
   extraSystemPrompt?: string;
   /** Bootstrap workspace context injection mode for this run. */
   bootstrapContextMode?: "full" | "lightweight";

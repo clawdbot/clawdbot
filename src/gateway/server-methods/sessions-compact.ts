@@ -6,7 +6,7 @@ import {
   validateSessionsCompactParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
+import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import {
   resolveSessionWorkStartError,
@@ -19,12 +19,13 @@ import {
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { getCommandLaneSnapshot } from "../../process/command-queue.js";
 import {
   isCompetingSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { recordSessionCompacted } from "../../sessions/session-state-events.js";
-import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
+import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { resolveCanonicalGatewaySessionStoreKey } from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import { hasVisibleActiveSessionRun } from "./session-active-runs.js";
@@ -160,17 +161,12 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
     }
 
     const lifecycleRevision = entry.lifecycleRevision;
-    const lifecycleIdentities = [
-      key,
-      target.canonicalKey,
-      compactTarget.primaryKey,
-      sessionId,
-      lifecycleRevision,
-    ];
+    const queueIdentities = [key, target.canonicalKey, compactTarget.primaryKey, sessionId];
+    const lifecycleIdentities = [...queueIdentities, lifecycleRevision];
     let sessionStillCurrent = true;
     let compactionNoopReason: string | undefined;
     let blockedByActiveRun = false;
-    let blockedByQueuedFollowup = false;
+    let blockedByQueuedWork = false;
     try {
       await runExclusiveSessionLifecycleMutation({
         scope: storePath,
@@ -221,18 +217,14 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               agentId: requestedAgentId,
               defaultAgentId: resolveDefaultAgentId(cfg),
             });
-          blockedByQueuedFollowup = hasPendingFollowupQueueWork([
-            key,
-            target.canonicalKey,
-            compactTarget.primaryKey,
-            sessionId,
-          ]);
-          if (blockedByActiveRun || blockedByQueuedFollowup) {
-            return;
-          }
-          // Queued follow-ups are accepted user intent, not stale transcript work.
-          // Refuse compaction until the queue drains so cleanup cannot erase them.
-          clearSessionQueues([key, target.canonicalKey, compactTarget.primaryKey, sessionId]);
+          // Accepted work can live only in its command lane; waiting behind it
+          // while holding the lifecycle fence would deadlock or drop that turn.
+          blockedByQueuedWork =
+            hasPendingFollowupQueueWork(queueIdentities) ||
+            queueIdentities.some(
+              (identity) =>
+                getCommandLaneSnapshot(resolveEmbeddedSessionLane(identity)).queuedCount > 0,
+            );
         },
         run: async () => {
           if (!sessionStillCurrent) {
@@ -260,7 +252,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             );
             return;
           }
-          if (blockedByQueuedFollowup) {
+          if (blockedByQueuedWork) {
             respond(
               false,
               undefined,
