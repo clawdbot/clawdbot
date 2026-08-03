@@ -115,6 +115,56 @@ describe("compileMemoryWikiVault", () => {
     expect(claims.map((claim) => claim.text)).toContain("Alpha is the canonical source page.");
   });
 
+  it("hashes each source only twice while publishing a successful compile", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+    const sourcePath = path.join(rootDir, "sources", "hash-count.md");
+    const claimText = "The successful publication keeps its verified source snapshot.";
+
+    await fs.writeFile(
+      sourcePath,
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.hash-count",
+          title: "Hash Count",
+          claims: [{ text: claimText, status: "supported" }],
+        },
+        body: "# Hash Count\n",
+      }),
+      "utf8",
+    );
+
+    const originalReadFile = fs.readFile.bind(fs);
+    let sourceHashReads = 0;
+    const readFileSpy = vi
+      .spyOn(fs, "readFile")
+      .mockImplementation(async (...args: Parameters<typeof fs.readFile>) => {
+        const [target, options] = args;
+        if (
+          typeof target === "string" &&
+          path.resolve(target) === sourcePath &&
+          typeof options === "object" &&
+          options !== null &&
+          !("encoding" in options)
+        ) {
+          sourceHashReads += 1;
+        }
+        return await originalReadFile(...args);
+      });
+
+    try {
+      await compileMemoryWikiVault(config);
+    } finally {
+      readFileSpy.mockRestore();
+    }
+
+    expect((await expectCompiledCache(config)).claims[0]?.text).toBe(claimText);
+    expect(sourceHashReads).toBe(2);
+  });
+
   it("preserves source page bytes while rebuilding derived artifacts", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),

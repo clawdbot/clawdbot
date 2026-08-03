@@ -221,6 +221,41 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     );
   });
 
+  it("rejects a published snapshot after source edits on lifecycle refresh", async () => {
+    const { rootDir, config } = await createPersistentVault({ initialize: true });
+    const sourcePath = path.join(rootDir, "entities", "lifecycle-edit.md");
+    const renderSource = (claimText: string) =>
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.lifecycle-edit",
+          title: "Lifecycle Edit",
+          claims: [{ text: claimText, status: "supported" }],
+        },
+        body: "# Lifecycle Edit\n",
+      });
+
+    await fs.writeFile(sourcePath, renderSource("Claim before the source edit."), "utf8");
+    await compileMemoryWikiVault(config);
+
+    expect((await loadMemoryWikiCompiledCache(config))?.claims[0]?.text).toBe(
+      "Claim before the source edit.",
+    );
+
+    await fs.writeFile(sourcePath, renderSource("Claim after the source edit."), "utf8");
+
+    // Prompt preparation intentionally does not poll source files. The next lifecycle
+    // refresh performs the validated source-generation check and rejects this stale row.
+    expect((await loadMemoryWikiCompiledCache(config))?.claims[0]?.text).toBe(
+      "Claim before the source edit.",
+    );
+    configureMemoryWikiCompiledCacheStore(undefined);
+    configureMemoryWikiCompiledCacheStore(createCacheStore());
+    await activateVault(config);
+
+    await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
+  });
+
   it("ignores legacy files and rebuilds only on compile", async () => {
     const { rootDir, config } = await createPersistentVault({
       initialize: true,

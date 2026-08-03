@@ -37,7 +37,6 @@ import {
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import {
   appendMemoryWikiLog,
-  loadMemoryWikiValidatedVaultIdentity,
   loadMemoryWikiVaultIdentity,
   resolveMemoryWikiVaultSourceGeneration,
 } from "./log.js";
@@ -1370,7 +1369,7 @@ async function compileMemoryWikiVaultUnlocked(
         },
       });
     },
-    () => loadMemoryWikiValidatedVaultIdentity(rootDir),
+    () => loadMemoryWikiVaultIdentity(rootDir),
   );
   await appendMemoryWikiLog(rootDir, {
     type: "compile",
