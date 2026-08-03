@@ -1060,7 +1060,7 @@ describe("Tool Search", () => {
     const target = pluginTool("fake_network_page", "Read a network page");
     target.resultContentSource = "network";
     target.execute = vi.fn(async () => ({
-      content: [{ type: "text", text: "Protected page content" }],
+      content: [{ type: "text" as const, text: "Protected page content" }],
       details: { body: hostile },
     }));
     registerHeadlessToolSearchCatalog({ catalogRef, tools: [target] });
@@ -1091,7 +1091,7 @@ describe("Tool Search", () => {
     const network = pluginTool("fake_network_page", "Read a network page");
     network.resultContentSource = "network";
     network.execute = vi.fn(async () => ({
-      content: [{ type: "text", text: "Protected page content" }],
+      content: [{ type: "text" as const, text: "Protected page content" }],
       details: { body: hostile },
     }));
     const local = pluginTool("fake_local_page", "Read a local page");

@@ -284,7 +284,7 @@ describe("Code Mode guest execution", () => {
       const target = pluginTool("fake_network_page", "Read a network page");
       target.resultContentSource = "network";
       target.execute = vi.fn(async () => ({
-        content: [{ type: "text", text: "Already protected page content" }],
+        content: [{ type: "text" as const, text: "Already protected page content" }],
         details: { body: hostile, marker: "original" },
       }));
       applyCodeModeCatalog({
