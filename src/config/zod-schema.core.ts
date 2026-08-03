@@ -263,6 +263,67 @@ const ModelApiSchema = z.enum(MODEL_APIS, {
       : undefined,
 });
 
+// OpenRouter provider routing preferences (`compat.openRouterRouting`); mirrors the
+// `OpenRouterRouting` interface in packages/llm-core/src/types.ts.
+const OpenRouterRoutingPercentileCutoffsSchema = z
+  .object({
+    p50: z.number().optional(),
+    p75: z.number().optional(),
+    p90: z.number().optional(),
+    p99: z.number().optional(),
+  })
+  .strict();
+
+const OpenRouterRoutingSchema = z
+  .object({
+    allow_fallbacks: z.boolean().optional(),
+    require_parameters: z.boolean().optional(),
+    data_collection: z.union([z.literal("deny"), z.literal("allow")]).optional(),
+    zdr: z.boolean().optional(),
+    enforce_distillable_text: z.boolean().optional(),
+    order: z.array(z.string()).optional(),
+    only: z.array(z.string()).optional(),
+    ignore: z.array(z.string()).optional(),
+    quantizations: z.array(z.string()).optional(),
+    sort: z
+      .union([
+        z.string(),
+        z
+          .object({
+            by: z.string().optional(),
+            partition: z.union([z.string(), z.null()]).optional(),
+          })
+          .strict(),
+      ])
+      .optional(),
+    max_price: z
+      .object({
+        prompt: z.union([z.number(), z.string()]).optional(),
+        completion: z.union([z.number(), z.string()]).optional(),
+        image: z.union([z.number(), z.string()]).optional(),
+        audio: z.union([z.number(), z.string()]).optional(),
+        request: z.union([z.number(), z.string()]).optional(),
+      })
+      .strict()
+      .optional(),
+    preferred_min_throughput: z
+      .union([z.number(), OpenRouterRoutingPercentileCutoffsSchema])
+      .optional(),
+    preferred_max_latency: z
+      .union([z.number(), OpenRouterRoutingPercentileCutoffsSchema])
+      .optional(),
+  })
+  .strict();
+
+// Vercel AI Gateway routing preferences (`compat.vercelGatewayRouting`); mirrors the
+// `VercelGatewayRouting` interface in packages/llm-core/src/types.ts.
+const VercelGatewayRoutingSchema = z
+  .object({
+    only: z.array(z.string()).optional(),
+    order: z.array(z.string()).optional(),
+  })
+  .strict();
+
 const ModelCompatSchema = z
   .object({
     supportsStore: z.boolean().optional(),
@@ -293,6 +354,14 @@ const ModelCompatSchema = z
     unsupportedToolSchemaKeywords: z.array(z.string().min(1)).optional(),
     toolCallArgumentsEncoding: z.string().optional(),
     requiresOpenAiAnthropicToolPayload: z.boolean().optional(),
+    openRouterRouting: OpenRouterRoutingSchema.optional(),
+    vercelGatewayRouting: VercelGatewayRoutingSchema.optional(),
+    zaiToolStream: z.boolean().optional(),
+    cacheControlFormat: z.literal("anthropic").optional(),
+    sendSessionAffinityHeaders: z.boolean().optional(),
+    sendSessionIdHeader: z.boolean().optional(),
+    supportsEagerToolInputStreaming: z.boolean().optional(),
+    supportsLongCacheRetention: z.boolean().optional(),
   })
   .strict()
   .optional();
