@@ -38,7 +38,7 @@ describe("telemetry runtime boundaries", () => {
 
     expect(runtime.executionKind).toBe("flow");
     expect(runtime.result.scenarios).toEqual(
-      SCENARIO_IDS.map((id) =>
+      SCENARIO_IDS.map(() =>
         expect.objectContaining({
           name: expect.any(String),
           status: "pass",
