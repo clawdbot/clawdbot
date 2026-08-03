@@ -2688,7 +2688,7 @@ describe("qa mock openai server", () => {
     expect(outputText(payload)).toBe(expected);
   });
 
-  it("holds a runtime terminal worker until the parent post-spawn response is sent", async () => {
+  it("requires a parent response for each same-case runtime worker", async () => {
     const server = await startMockServer();
     const childResponse = postNonStreamingResponses(server, {
       model: "gpt-5.6-luna",
@@ -2724,6 +2724,41 @@ describe("qa mock openai server", () => {
 
     const child = await (await expectOk(childResponse)).json();
     expect(outputText(child)).toBe("QA-SUBAGENT-TERMINAL-VISIBLE-OK");
+
+    const secondChildResponse = postNonStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      instructions: "Runtime: embedded | sessionId=qa-terminal-child-2",
+      input: [makeUserInput("Subagent terminal reply QA worker: visible.")],
+    });
+    let secondChildSettled = false;
+    void secondChildResponse.then(() => {
+      secondChildSettled = true;
+    });
+
+    await expect
+      .poll(async () => {
+        const inflight = await getJson<unknown[]>(server, "/debug/inflight-requests");
+        return inflight.length;
+      })
+      .toBe(1);
+    expect(secondChildSettled).toBe(false);
+
+    const secondParent = await expectNonStreamingResponsesJson(server, {
+      model: "gpt-5.6-luna",
+      instructions: "Runtime: embedded | sessionId=qa-terminal-parent-2",
+      tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+      input: [
+        makeUserInput("Subagent terminal reply QA check: visible."),
+        makeToolOutputWithCallId(
+          "call_mock_sessions_spawn_2",
+          JSON.stringify({ status: "accepted", runId: "run-visible-2" }),
+        ),
+      ],
+    });
+    expect(outputText(secondParent)).toBe("NO_REPLY");
+
+    const secondChild = await (await expectOk(secondChildResponse)).json();
+    expect(outputText(secondChild)).toBe("QA-SUBAGENT-TERMINAL-VISIBLE-OK");
   });
 
   it("keeps the empty terminal worker empty across retry prompts", async () => {

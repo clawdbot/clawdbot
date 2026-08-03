@@ -469,50 +469,70 @@ function extractScenarioPlannedTool(events: StreamEvent[]) {
 
 type TerminalRequesterSettleGate = {
   markSettled: (caseName: string) => void;
-  waitUntilSettled: (caseName: string) => Promise<void>;
+  waitUntilSettled: (caseName: string, workerSessionId: string) => Promise<void>;
 };
 
 function createTerminalRequesterSettleGate(): TerminalRequesterSettleGate {
-  const settled = new Set<string>();
-  const waiters = new Map<string, Set<() => void>>();
+  const admittedWorkers = new Set<string>();
+  const availablePermits = new Map<string, number>();
+  const waiterPromises = new Map<string, Promise<void>>();
+  const waiters = new Map<string, { caseName: string; finish: () => void }>();
+  const workerKey = (caseName: string, workerSessionId: string) =>
+    `${caseName}\n${workerSessionId}`;
   return {
     markSettled(caseName) {
-      settled.add(caseName);
-      for (const resolve of waiters.get(caseName) ?? []) {
-        resolve();
-      }
-      waiters.delete(caseName);
-    },
-    async waitUntilSettled(caseName) {
-      if (settled.has(caseName)) {
+      const waiting = [...waiters.values()].find((candidate) => candidate.caseName === caseName);
+      if (waiting) {
+        waiting.finish();
         return;
       }
-      await new Promise<void>((resolve, reject) => {
-        const listeners = waiters.get(caseName) ?? new Set<() => void>();
+      availablePermits.set(caseName, (availablePermits.get(caseName) ?? 0) + 1);
+    },
+    async waitUntilSettled(caseName, workerSessionId) {
+      const key = workerKey(caseName, workerSessionId);
+      if (admittedWorkers.has(key)) {
+        return;
+      }
+      const existing = waiterPromises.get(key);
+      if (existing) {
+        return await existing;
+      }
+      const permitCount = availablePermits.get(caseName) ?? 0;
+      if (permitCount > 0) {
+        admittedWorkers.add(key);
+        availablePermits.set(caseName, permitCount - 1);
+        return;
+      }
+      const promise = new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
-          listeners.delete(finish);
-          reject(new Error(`terminal requester did not settle: ${caseName}`));
+          waiters.delete(key);
+          waiterPromises.delete(key);
+          reject(new Error(`terminal requester did not settle: ${caseName} (${workerSessionId})`));
         }, 30_000);
         const finish = () => {
           clearTimeout(timeout);
+          waiters.delete(key);
+          waiterPromises.delete(key);
+          admittedWorkers.add(key);
           resolve();
         };
-        listeners.add(finish);
-        waiters.set(caseName, listeners);
+        waiters.set(key, { caseName, finish });
       });
+      waiterPromises.set(key, promise);
+      await promise;
     },
   };
 }
 
-function isQaRuntimeSessionRequest(input: ResponsesInputItem[], body: Record<string, unknown>) {
-  return /\bRuntime:\s*[^\n]*\bsessionId=[^\s|]+/u.test(extractAllRequestTexts(input, body));
+function resolveQaRuntimeSessionId(input: ResponsesInputItem[], body: Record<string, unknown>) {
+  return /\bRuntime:\s*[^\n]*\bsessionId=([^\s|]+)/u.exec(extractAllRequestTexts(input, body))?.[1];
 }
 
 async function buildResponsesPayload(
   body: Record<string, unknown>,
   scenarioState: MockScenarioState,
   options: {
-    waitForTerminalRequesterSettled?: (caseName: string) => Promise<void>;
+    waitForTerminalRequesterSettled?: (caseName: string, workerSessionId: string) => Promise<void>;
   } = {},
 ) {
   const providerVariant = resolveProviderVariant(
@@ -821,8 +841,9 @@ async function buildResponsesPayload(
     .at(-1)?.[1]
     ?.toLowerCase();
   if (terminalWorkerCase) {
-    if (options.waitForTerminalRequesterSettled && isQaRuntimeSessionRequest(input, body)) {
-      await options.waitForTerminalRequesterSettled(terminalWorkerCase);
+    const workerSessionId = resolveQaRuntimeSessionId(input, body);
+    if (options.waitForTerminalRequesterSettled && workerSessionId) {
+      await options.waitForTerminalRequesterSettled(terminalWorkerCase, workerSessionId);
     }
   }
   if (terminalWorkerCase === "silent") {
@@ -1985,12 +2006,8 @@ export async function startQaMockOpenAiServer(params?: {
           system: body.system as AnthropicMessagesRequest["system"],
           messages: [],
         });
-    const systemPrompt = extractAllRequestTexts(
-      input.filter((item) => item.role === "developer" || item.role === "system"),
-      body,
-    );
     const sessionId =
-      /\bRuntime:\s*[^\n]*\bsessionId=([^\s|]+)/u.exec(systemPrompt)?.[1] ??
+      resolveQaRuntimeSessionId(input, body) ??
       (body.client_metadata as { session_id?: unknown } | undefined)?.session_id;
     const key = typeof sessionId === "string" ? sessionId : "";
     // Runtime session identity survives provider switches and cache-boundary changes.
@@ -2052,7 +2069,7 @@ export async function startQaMockOpenAiServer(params?: {
     const settledTerminalRequesterCase =
       terminalRequesterCase &&
       hasToolOutput(input) &&
-      isQaRuntimeSessionRequest(input, request.body)
+      resolveQaRuntimeSessionId(input, request.body)
         ? terminalRequesterCase
         : undefined;
     recordRequest({
