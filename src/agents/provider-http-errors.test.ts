@@ -421,19 +421,29 @@ describe("provider error utils", () => {
   });
 
   it("rejects stalled non-2xx error body read after chunk idle timeout", async () => {
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode('{"error": {"message": "par'));
-      },
-    });
-    const response = new Response(stream, {
-      status: 502,
-      headers: { "content-type": "application/json" },
-    });
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"error": {"message": "par'));
+        },
+      });
+      const response = new Response(stream, {
+        status: 502,
+        headers: { "content-type": "application/json" },
+      });
 
-    await expect(assertOkOrThrowProviderError(response, "stalled-error")).rejects.toThrow(
-      "stalled-error (502)",
-    );
+      const assertion = expect(
+        assertOkOrThrowProviderError(response, "stalled-error"),
+      ).rejects.toThrow("stalled-error (502)");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 10_000);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("proves idle timeout with a real TCP server that stalls mid-JSON-body", async () => {
