@@ -633,7 +633,6 @@ src/config/mutate.ts
 src/config/plugin-auto-enable.core.test.ts
 src/config/plugin-auto-enable.shared.ts
 src/config/redact-snapshot.test.ts
-src/config/redact-snapshot.ts
 src/config/schema.labels.ts
 src/config/schema.test.ts
 src/config/schema.ts
