@@ -108,11 +108,9 @@ export async function resolvePendingSkillProposal(input: {
 }): Promise<SkillProposalReadResult> {
   const proposalId = normalizeOptionalString(input.proposalId);
   if (proposalId) {
-    const direct = await readRequiredProposal(
-      proposalId,
-      input.workspaceDir,
-      input.env,
-      input.agentId,
+    const direct = await reconcilePendingCreateProposal(
+      await readRequiredProposal(proposalId, input.workspaceDir, input.env, input.agentId),
+      input,
     );
     if (direct.record.status !== "pending") {
       throw new Error(
@@ -143,11 +141,14 @@ export async function resolvePendingSkillProposal(input: {
       .join(", ");
     throw new Error(`Multiple pending skill proposals matched ${name}: ${candidates}`);
   }
-  const matched = await readRequiredProposal(
-    expectDefined(matches[0], "matches capture group 0").id,
-    input.workspaceDir,
-    input.env,
-    input.agentId,
+  const matched = await reconcilePendingCreateProposal(
+    await readRequiredProposal(
+      expectDefined(matches[0], "matches capture group 0").id,
+      input.workspaceDir,
+      input.env,
+      input.agentId,
+    ),
+    input,
   );
   if (matched.record.status !== "pending") {
     throw new Error(
@@ -176,13 +177,7 @@ export async function readRequiredProposal(
   if (!read) {
     throw new Error(`Skill proposal not found: ${proposalId}`);
   }
-  return readOptions.reconcile === false
-    ? read
-    : await reconcilePendingCreateProposal(read, {
-        ...(agentId ? { agentId } : {}),
-        ...(env ? { env } : {}),
-        ...(workspaceDir ? { workspaceDir } : {}),
-      });
+  return read;
 }
 
 async function reconcilePendingCreateProposal(
