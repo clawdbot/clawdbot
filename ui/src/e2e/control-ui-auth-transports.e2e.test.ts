@@ -23,6 +23,7 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const artifactDir = path.resolve(
   process.cwd(),
   process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim() ||
@@ -407,7 +408,7 @@ async function createBrowserPage(
   await mkdir(artifactDir, { recursive: true });
   const context = await browser.newContext({
     locale: "en-US",
-    recordVideo: { dir: artifactDir, size: viewport },
+    recordVideo: captureUiProofEnabled ? { dir: artifactDir, size: viewport } : undefined,
     serviceWorkers: "block",
     viewport,
   });
@@ -451,6 +452,9 @@ async function closeContext(context: BrowserContext): Promise<void> {
 }
 
 async function captureChromiumScreenshot(page: Page, fileName: string): Promise<void> {
+  if (!captureUiProofEnabled) {
+    return;
+  }
   const session = await page.context().newCDPSession(page);
   try {
     // The live dashboard keeps rendering while RPCs settle. Capture the current
