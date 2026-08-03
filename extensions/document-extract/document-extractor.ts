@@ -116,6 +116,9 @@ async function extractPdfContent(
       return { text, images };
     } catch (err) {
       request.onImageExtractionError?.(err);
+      if (!text.trim()) {
+        throw new Error("PDF image extraction failed with no extractable text.", { cause: err });
+      }
       return { text, images: [] };
     }
   } finally {
