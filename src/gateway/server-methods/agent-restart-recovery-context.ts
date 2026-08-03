@@ -15,13 +15,17 @@ type AgentRestartRecoveryChannelContext = {
 
 /** Resolve only the private token durably owned by the admitted recovery cycle. */
 export function resolveAgentRestartRecoveryExecutionIdentityAdmission(params: {
+  collectionEnabled: boolean;
   isRestartRecoveryResumeRun: boolean;
-  retryOnly: boolean;
+  retryOnly?: boolean;
   runId: string;
   sessionEntry?: SessionEntry;
 }) {
-  if (!params.isRestartRecoveryResumeRun) {
+  if (!params.isRestartRecoveryResumeRun || !params.collectionEnabled) {
     return undefined;
+  }
+  if (params.retryOnly === undefined) {
+    throw new Error("restart recovery execution identity admission mode is unavailable");
   }
   const stored = (params.sessionEntry as InternalSessionEntry | undefined)?.mainRestartRecovery
     ?.executionIdentity;

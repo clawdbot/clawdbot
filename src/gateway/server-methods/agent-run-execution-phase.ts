@@ -21,6 +21,7 @@ import {
 } from "../../agents/main-session-recovery-store.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
+import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";
 import {
   setChannelSourceTurnId,
   setChannelSourceTurnSameThreadRequired,
@@ -329,8 +330,9 @@ export function startAgentRunExecution(params: {
           ? params.client.internal.runtimePluginToolGrant
           : undefined;
       const executionIdentityAdmission = resolveAgentRestartRecoveryExecutionIdentityAdmission({
+        collectionEnabled: isExecutionIdentityCollectionEnabled(params.cfg),
         isRestartRecoveryResumeRun: params.isRestartRecoveryResumeRun,
-        retryOnly: params.request.internalExecutionIdentityRetry === true,
+        retryOnly: params.request.internalExecutionIdentityRetry,
         runId: params.runId,
         sessionEntry: params.sessionEntry,
       });

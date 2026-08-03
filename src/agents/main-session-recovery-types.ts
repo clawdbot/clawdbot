@@ -8,6 +8,10 @@ type MainSessionRecoveryExecutionIdentity = NonNullable<
   MainRestartRecoveryState["executionIdentity"]
 >;
 
+export type MainSessionRecoveryExecutionIdentityAdmission =
+  | { kind: "capture"; token: MainSessionRecoveryExecutionIdentity }
+  | { kind: "retry-reference"; token: MainSessionRecoveryExecutionIdentity };
+
 export type MainSessionRecoveryObservation = {
   sessionId: string;
   cycleId: string;
@@ -20,8 +24,7 @@ export type MainSessionRecoveryReservation = {
   lifecycleGeneration: string;
   runId: string;
   attempt: number;
-  executionIdentity: MainSessionRecoveryExecutionIdentity;
-  executionIdentityMode: "capture" | "retry-reference";
+  executionIdentityAdmission?: MainSessionRecoveryExecutionIdentityAdmission;
 };
 
 export type MainSessionRecoveryOwnerClaim = {
@@ -92,7 +95,9 @@ export type MainSessionRecoveryCommand =
       now: number;
       observation: MainSessionRecoveryObservation;
       runId: string;
-      executionIdentity: MainSessionRecoveryExecutionIdentity;
+      executionIdentity:
+        | { state: "disabled" }
+        | { state: "enabled"; token: MainSessionRecoveryExecutionIdentity };
     }
   | {
       kind: "cancel_reservation" | "abandon_reservation";

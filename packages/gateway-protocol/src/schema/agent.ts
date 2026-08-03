@@ -321,7 +321,8 @@ export const AgentParamsSchema = closedObject({
   ),
   acpTurnSource: Type.Optional(Type.Literal("manual_spawn")),
   internalRuntimeHandoffId: Type.Optional(NonEmptyString),
-  // Backend recovery supplies only retry mode. The private token remains in durable session state.
+  // Enabled backend recovery supplies only capture/retry mode. Disabled collection omits it;
+  // the private token, when present, remains in durable session state.
   internalExecutionIdentityRetry: Type.Optional(Type.Boolean()),
   execApprovalFollowupExpectedSessionId: Type.Optional(NonEmptyString),
   internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),

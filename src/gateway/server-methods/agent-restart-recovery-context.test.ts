@@ -108,6 +108,7 @@ describe("resolveAgentRestartRecoveryExecutionIdentityAdmission", () => {
     };
     expect(
       resolveAgentRestartRecoveryExecutionIdentityAdmission({
+        collectionEnabled: true,
         isRestartRecoveryResumeRun: true,
         retryOnly: false,
         runId: token.runId,
@@ -116,6 +117,7 @@ describe("resolveAgentRestartRecoveryExecutionIdentityAdmission", () => {
     ).toEqual({ token, retryOnly: false });
     expect(
       resolveAgentRestartRecoveryExecutionIdentityAdmission({
+        collectionEnabled: true,
         isRestartRecoveryResumeRun: true,
         retryOnly: true,
         runId: token.runId,
@@ -127,6 +129,7 @@ describe("resolveAgentRestartRecoveryExecutionIdentityAdmission", () => {
   it("returns no token for ordinary runs and refuses lost recovery evidence", () => {
     expect(
       resolveAgentRestartRecoveryExecutionIdentityAdmission({
+        collectionEnabled: true,
         isRestartRecoveryResumeRun: false,
         retryOnly: false,
         runId: token.runId,
@@ -135,11 +138,43 @@ describe("resolveAgentRestartRecoveryExecutionIdentityAdmission", () => {
     ).toBeUndefined();
     expect(() =>
       resolveAgentRestartRecoveryExecutionIdentityAdmission({
+        collectionEnabled: true,
         isRestartRecoveryResumeRun: true,
         retryOnly: true,
         runId: token.runId,
         sessionEntry: matchingParams.sessionEntry,
       }),
     ).toThrow("token is unavailable");
+  });
+
+  it("omits retained recovery identity while collection is disabled", () => {
+    expect(
+      resolveAgentRestartRecoveryExecutionIdentityAdmission({
+        collectionEnabled: false,
+        isRestartRecoveryResumeRun: true,
+        retryOnly: true,
+        runId: token.runId,
+        sessionEntry: {
+          ...matchingParams.sessionEntry,
+          mainRestartRecovery: {
+            cycleId: "cycle-1",
+            revision: 1,
+            chargedAttempts: 1,
+            executionIdentity: token,
+          },
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("refuses an enabled recovery without an explicit capture or retry mode", () => {
+    expect(() =>
+      resolveAgentRestartRecoveryExecutionIdentityAdmission({
+        collectionEnabled: true,
+        isRestartRecoveryResumeRun: true,
+        runId: token.runId,
+        sessionEntry: matchingParams.sessionEntry,
+      }),
+    ).toThrow("admission mode is unavailable");
   });
 });

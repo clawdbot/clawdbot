@@ -55,9 +55,11 @@ warning and never abort the run. Normal Gateway and direct-local CLI shutdown
 flushes accepted work when the writer lifecycle permits, but abrupt termination
 can still lose queued evidence.
 
-Restart recovery stores only the safe execution/context/run ids and timestamp
-with its existing private recovery owner. A later ambiguous retry references
-that token instead of rebuilding identity from the new process. If the original
+When identity collection is enabled, restart recovery stores only the safe
+execution/context/run ids and timestamp with its existing private recovery
+owner. A later ambiguous retry references that token instead of rebuilding
+identity from the new process. When collection or the audit ledger is disabled,
+recovery creates, stores, and propagates no new identity token. If the original
 queued context was lost, exact inspection stays explicitly unavailable; the
 retry never manufactures replacement evidence. Raw identity references are not
 stored in the recovery token.

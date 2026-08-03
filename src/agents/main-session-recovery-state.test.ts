@@ -15,6 +15,10 @@ const executionIdentity = (runId: string) => ({
   runId,
   createdAt: 1,
 });
+const enabledExecutionIdentity = (runId: string) => ({
+  state: "enabled" as const,
+  token: executionIdentity(runId),
+});
 
 function recoveryState(
   overrides: Partial<MainRestartRecoveryState> = {},
@@ -180,15 +184,17 @@ describe("main session recovery state", () => {
       now: 200,
       observation: { sessionId: "session-1", cycleId: "cycle-1", revision: 1 },
       runId: "recovery-1",
-      executionIdentity: executionIdentity("recovery-1"),
+      executionIdentity: enabledExecutionIdentity("recovery-1"),
     });
     expect(prepared.kind).toBe("reserved");
     if (prepared.kind !== "reserved") {
       throw new Error("expected reservation");
     }
     expect(prepared.reservation).toMatchObject({
-      executionIdentity: executionIdentity("recovery-1"),
-      executionIdentityMode: "capture",
+      executionIdentityAdmission: {
+        kind: "capture",
+        token: executionIdentity("recovery-1"),
+      },
     });
 
     expect(
@@ -199,7 +205,7 @@ describe("main session recovery state", () => {
         now: 201,
         observation: { sessionId: "session-1", cycleId: "cycle-1", revision: 1 },
         runId: "recovery-2",
-        executionIdentity: executionIdentity("recovery-2"),
+        executionIdentity: enabledExecutionIdentity("recovery-2"),
       }),
     ).toEqual({ kind: "rejected", reason: "stale_revision" });
     expect(entry.mainRestartRecovery?.reservation).toMatchObject({
@@ -226,6 +232,51 @@ describe("main session recovery state", () => {
     expect(entry.mainRestartRecovery?.reservation).toBeUndefined();
     expect(entry.mainRestartRecovery?.executionIdentity).toBeUndefined();
     expect(observe(entry, "generation-1")).toEqual({ status: "blocked" });
+  });
+
+  it("keeps disabled recovery identity out of durable state and reservations", () => {
+    const entry = interruptedEntry();
+
+    const prepared = transitionMainSessionRecovery(entry, {
+      kind: "prepare_attempt",
+      attempt: 1,
+      lifecycleGeneration: "generation-1",
+      now: 200,
+      observation: { sessionId: "session-1", cycleId: "cycle-1", revision: 1 },
+      runId: "recovery-1",
+      executionIdentity: { state: "disabled" },
+    });
+
+    expect(prepared).toMatchObject({ kind: "reserved" });
+    if (prepared.kind !== "reserved") {
+      throw new Error("expected reservation");
+    }
+    expect(prepared.reservation.executionIdentityAdmission).toBeUndefined();
+    expect(entry.mainRestartRecovery?.executionIdentity).toBeUndefined();
+  });
+
+  it("does not propagate a previously retained token while collection is disabled", () => {
+    const retained = executionIdentity("recovery-1");
+    const entry = interruptedEntry({
+      mainRestartRecovery: recoveryState({ executionIdentity: retained }),
+    });
+
+    const prepared = transitionMainSessionRecovery(entry, {
+      kind: "prepare_attempt",
+      attempt: 1,
+      lifecycleGeneration: "generation-1",
+      now: 200,
+      observation: { sessionId: "session-1", cycleId: "cycle-1", revision: 1 },
+      runId: "recovery-1",
+      executionIdentity: { state: "disabled" },
+    });
+
+    expect(prepared).toMatchObject({ kind: "reserved" });
+    if (prepared.kind !== "reserved") {
+      throw new Error("expected reservation");
+    }
+    expect(prepared.reservation.executionIdentityAdmission).toBeUndefined();
+    expect(entry.mainRestartRecovery?.executionIdentity).toEqual(retained);
   });
 
   it("rejects foreground work after the automatic recovery budget is exhausted", () => {
@@ -371,7 +422,7 @@ describe("main session recovery state", () => {
       now: 200,
       observation: { sessionId: "session-1", cycleId: "cycle-1", revision: 1 },
       runId: "recovery-1",
-      executionIdentity: executionIdentity("recovery-1"),
+      executionIdentity: enabledExecutionIdentity("recovery-1"),
     });
     if (prepared.kind !== "reserved") {
       throw new Error("expected reservation");
@@ -401,15 +452,20 @@ describe("main session recovery state", () => {
       },
       runId: "recovery-1",
       executionIdentity: {
-        ...executionIdentity("replacement"),
-        runId: "recovery-1",
+        state: "enabled",
+        token: {
+          ...executionIdentity("replacement"),
+          runId: "recovery-1",
+        },
       },
     });
     expect(retry).toMatchObject({
       kind: "reserved",
       reservation: {
-        executionIdentity: executionIdentity("recovery-1"),
-        executionIdentityMode: "retry-reference",
+        executionIdentityAdmission: {
+          kind: "retry-reference",
+          token: executionIdentity("recovery-1"),
+        },
       },
     });
   });
@@ -651,7 +707,7 @@ describe("main session recovery state", () => {
         now: 500,
         observation: oldObservation,
         runId: "stale-run",
-        executionIdentity: executionIdentity("stale-run"),
+        executionIdentity: enabledExecutionIdentity("stale-run"),
       }),
     ).toEqual({ kind: "rejected", reason: "stale_cycle" });
   });

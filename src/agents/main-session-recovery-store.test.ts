@@ -27,6 +27,10 @@ const executionIdentity = (runId: string) => ({
   runId,
   createdAt: 1,
 });
+const enabledExecutionIdentity = (runId: string) => ({
+  state: "enabled" as const,
+  token: executionIdentity(runId),
+});
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("main session recovery store", () => {
@@ -111,7 +115,7 @@ describe("main session recovery store", () => {
         now: 200,
         observation: { sessionId: "session-1", cycleId: "cycle-1", revision: 1 },
         runId: "recovery-1",
-        executionIdentity: executionIdentity("recovery-1"),
+        executionIdentity: enabledExecutionIdentity("recovery-1"),
       },
       target: { sessionKey: targetSessionKey, storePath },
     });
@@ -218,7 +222,7 @@ describe("main session recovery store", () => {
       now: 400,
       observation: { sessionId: "session-1", cycleId: "cycle-1", revision: 1 },
       runId: "stale-recovery",
-      executionIdentity: executionIdentity("stale-recovery"),
+      executionIdentity: enabledExecutionIdentity("stale-recovery"),
     });
 
     expect(result.transition).toEqual({ kind: "rejected", reason: "session_replaced" });

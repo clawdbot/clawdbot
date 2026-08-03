@@ -97,6 +97,9 @@ const discordDeliveryContext = {
   channel: "discord",
   to: "discord:dm:123",
 } as const;
+const executionIdentityEnabledConfig = {
+  logging: { audit: { executionIdentity: true } },
+} satisfies OpenClawConfig;
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(async () => ({ runId: "run-resumed" })),
@@ -1177,6 +1180,27 @@ describe("main-session-restart-recovery", () => {
     expect(sourceClaimAtDispatch).toBe("control-ui-run");
   });
 
+  it.each([
+    ["fresh default config", undefined],
+    ["upgrade config without the new setting", {}],
+    ["explicit collection disable", { logging: { audit: { executionIdentity: false } } }],
+    ["disabled audit ledger", { logging: { audit: { enabled: false, executionIdentity: true } } }],
+  ] satisfies Array<[string, OpenClawConfig | undefined]>)(
+    "stores no recovery identity with %s",
+    async (_label, cfg) => {
+      const sessionsDir = await makeSessionsDir();
+      const storePath = path.join(sessionsDir, "sessions.json");
+      await writeMainSession({ sessionsDir });
+      await writeCompletedToolTranscript(sessionsDir);
+
+      await expectRecovery({ recovered: 1, failed: 0, skipped: 0 }, cfg);
+
+      const entry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+      expect(entry?.mainRestartRecovery?.executionIdentity).toBeUndefined();
+      expect(gatewayParams()).not.toHaveProperty("internalExecutionIdentityRetry");
+    },
+  );
+
   it("retains one stable transcript-only claim across ambiguous dispatch rejection", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
@@ -1188,7 +1212,7 @@ describe("main-session-restart-recovery", () => {
     await writeCompletedToolTranscript(sessionsDir);
     vi.mocked(callGateway).mockRejectedValueOnce(new Error("gateway unavailable"));
 
-    await expectRecovery({ recovered: 0, failed: 1, skipped: 0 }, {});
+    await expectRecovery({ recovered: 0, failed: 1, skipped: 0 }, executionIdentityEnabledConfig);
 
     const firstRecoveryRunId = (
       vi.mocked(callGateway).mock.calls[0]?.[0].params as { idempotencyKey?: unknown } | undefined
@@ -1219,7 +1243,7 @@ describe("main-session-restart-recovery", () => {
       false,
     );
 
-    await expectRecovery({ recovered: 1, failed: 0, skipped: 0 }, {});
+    await expectRecovery({ recovered: 1, failed: 0, skipped: 0 }, executionIdentityEnabledConfig);
     const runIds = vi
       .mocked(callGateway)
       .mock.calls.map(([request]) =>
@@ -1245,6 +1269,39 @@ describe("main-session-restart-recovery", () => {
     expect(
       (agentRequests[1]!.params as Record<string, unknown>).internalExecutionIdentityRetry,
     ).toBe(true);
+  });
+
+  it("does not propagate a retained recovery token after collection is disabled", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeMainSession({
+      sessionsDir,
+      restartRecoveryDeliveryRunId: "control-ui-run",
+      restartRecoveryDeliverySourceRunId: "control-ui-run",
+    });
+    await writeCompletedToolTranscript(sessionsDir);
+    vi.mocked(callGateway).mockRejectedValueOnce(new Error("gateway unavailable"));
+
+    await expectRecovery({ recovered: 0, failed: 1, skipped: 0 }, executionIdentityEnabledConfig);
+    const retained = loadSessionEntry({ sessionKey: "agent:main:main", storePath })
+      ?.mainRestartRecovery?.executionIdentity;
+    expect(retained).toBeDefined();
+
+    await expectRecovery(
+      { recovered: 1, failed: 0, skipped: 0 },
+      { logging: { audit: { executionIdentity: false } } },
+    );
+
+    const requests = vi
+      .mocked(callGateway)
+      .mock.calls.map(([request]) => request)
+      .filter((request) => request.method === "agent");
+    expect(requests).toHaveLength(2);
+    expect(requests[1]?.params).not.toHaveProperty("internalExecutionIdentityRetry");
+    expect(
+      loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.mainRestartRecovery
+        ?.executionIdentity,
+    ).toEqual(retained);
   });
 
   it("retries reservation cleanup after a transient session-store failure", async () => {
