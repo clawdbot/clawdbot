@@ -422,10 +422,13 @@ async function createBrowserPage(
   const page = await context.newPage();
   page.setDefaultTimeout(15_000);
   const evidenceStartIndex = proxy.evidence.length;
-  const response = await page.goto(withGatewayUrl(baseUrl, gatewayUrl));
+  const response = await page.goto(withGatewayUrl(baseUrl, gatewayUrl), {
+    timeout: controlUiSettleTimeoutMs,
+    waitUntil: "domcontentloaded",
+  });
   expect(response?.status()).toBe(200);
-  // Source-served UI startup shares CI shard CPU. Use the existing settle
-  // budget for the first rendered interaction, not for transport assertions.
+  // Source-served UI startup shares CI shard CPU. Bound navigation and the
+  // first rendered interaction separately; transport assertions stay narrow.
   const confirmation = page.locator("openclaw-gateway-url-confirmation");
   await confirmation.waitFor({ timeout: controlUiSettleTimeoutMs });
   expect(await confirmation.textContent()).toContain(gatewayUrl);
