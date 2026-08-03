@@ -498,7 +498,11 @@ function childRows(
 ): Row[] {
   const cached = preloaded?.byTable.get(table);
   if (cached) {
-    return cached.get(cardId) ?? [];
+    const rows = cached.get(cardId) ?? [];
+    // Each table is read once per card. Release the raw rows as the decoded card
+    // is built instead of retaining both complete representations of the board.
+    cached.delete(cardId);
+    return rows;
   }
   return db
     .prepare(`SELECT * FROM ${table} WHERE card_id = ? ORDER BY ordinal ASC`)
@@ -511,7 +515,9 @@ function workerProtocolRow(
   preloaded?: CardChildRows,
 ): Row | undefined {
   if (preloaded) {
-    return preloaded.workerProtocol.get(cardId);
+    const row = preloaded.workerProtocol.get(cardId);
+    preloaded.workerProtocol.delete(cardId);
+    return row;
   }
   return db.prepare("SELECT * FROM workboard_worker_protocol WHERE card_id = ?").get(cardId) as
     | Row

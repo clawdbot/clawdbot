@@ -2,10 +2,27 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
+
+const sqliteStatements = vi.hoisted(() => ({ count: 0 }));
+
+vi.mock("openclaw/plugin-sdk/sqlite-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/sqlite-runtime")>();
+  return {
+    ...actual,
+    openNodeSqliteDatabase: (...args: Parameters<typeof actual.openNodeSqliteDatabase>) => {
+      const db = actual.openNodeSqliteDatabase(...args);
+      const prepare = db.prepare.bind(db);
+      vi.spyOn(db, "prepare").mockImplementation((sql) => {
+        sqliteStatements.count++;
+        return prepare(sql);
+      });
+      return db;
+    },
+  };
+});
 
 function fixtureCard(index: number): WorkboardCard {
   const id = `card-${index}`;
@@ -101,32 +118,14 @@ describe("workboard sqlite batch card read", () => {
           for (let index = 0; index < cardCount; index++) {
             await stores.cards.register(`card-${index}`, { version: 1, card: fixtureCard(index) });
           }
-          const before = statementCount;
+          const before = sqliteStatements.count;
           await stores.cards.entries();
-          return statementCount - before;
+          return sqliteStatements.count - before;
         };
-        let statementCount = 0;
-        // The store owns its connection, so the prototype is the only seam to count from.
-        const descriptor = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "prepare");
-        if (!descriptor?.value) {
-          throw new Error("DatabaseSync.prototype.prepare is not an own property");
-        }
-        const original = descriptor.value as (this: DatabaseSync, sql: string) => unknown;
-        Object.defineProperty(DatabaseSync.prototype, "prepare", {
-          ...descriptor,
-          value: function countingPrepare(this: DatabaseSync, sql: string) {
-            statementCount++;
-            return original.call(this, sql);
-          },
-        });
-        try {
-          const few = await prepared(3);
-          const many = await prepared(30);
-          // A per-card read would make this grow by a factor of ten.
-          expect(many).toBe(few);
-        } finally {
-          Object.defineProperty(DatabaseSync.prototype, "prepare", descriptor);
-        }
+        const few = await prepared(3);
+        const many = await prepared(30);
+
+        expect(many).toBe(few);
       } finally {
         stores.close();
       }
