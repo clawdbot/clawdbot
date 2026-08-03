@@ -218,7 +218,7 @@ OPENCLAW_LOCALE=en openclaw onboard # Explicit English override
 `--non-interactive` requires `--accept-risk` (acknowledges that agents are powerful and full system access is risky). `--mode` defaults to `local`.
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk \
   --auth-choice custom-api-key \
   --custom-base-url "https://llm.example.com/v1" \
   --custom-model-id "foo-large" \
@@ -307,7 +307,7 @@ openclaw onboard --non-interactive \
 
 ```bash
 # Promptless endpoint selection
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk \
   --auth-choice zai-coding-global \
   --zai-api-key "$ZAI_API_KEY"
 
@@ -317,7 +317,7 @@ openclaw onboard --non-interactive \
 Mistral:
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk \
   --auth-choice mistral-api-key \
   --mistral-api-key "$MISTRAL_API_KEY"
 ```
