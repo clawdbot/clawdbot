@@ -284,13 +284,18 @@ export async function finalizeCronRun(params: {
     });
   }
   const {
-    synthesizedText,
-    deliveryPayloads,
     deliveryPayloadHasStructuredContent,
     hasFatalStructuredErrorPayload,
     pendingPresentationWarningError,
   } = cronPayloadOutcome;
-  let { summary, outputText, hasFatalErrorPayload, embeddedRunError } = cronPayloadOutcome;
+  let {
+    synthesizedText,
+    deliveryPayloads,
+    summary,
+    outputText,
+    hasFatalErrorPayload,
+    embeddedRunError,
+  } = cronPayloadOutcome;
   const agentDiagnostics = createCronRunDiagnosticsFromAgentResult(finalRunResult, {
     finalStatus: hasFatalErrorPayload ? "error" : "ok",
   });
@@ -334,15 +339,23 @@ export async function finalizeCronRun(params: {
   };
 
   const acceptedSessionSpawn = hasAcceptedSessionSpawn(finalRunResult.acceptedSessionSpawns);
-  const spawnOnlyHandoff =
-    acceptedSessionSpawn &&
-    deliveryPayloads.length === 0 &&
-    normalizeOptionalString(synthesizedText) === undefined;
-  const skipHeartbeatDelivery =
+  const heartbeatOnlyResponse =
     prepared.deliveryRequested &&
     !hasFatalErrorPayload &&
-    !spawnOnlyHandoff &&
     isHeartbeatOnlyResponse(deliveryPayloads, resolveHeartbeatAckMaxChars(prepared.agentCfg));
+  const spawnOnlyHandoff =
+    acceptedSessionSpawn &&
+    (heartbeatOnlyResponse ||
+      (deliveryPayloads.length === 0 && normalizeOptionalString(synthesizedText) === undefined));
+  if (spawnOnlyHandoff && heartbeatOnlyResponse) {
+    // Parent heartbeat acknowledgments cannot fulfill child delivery; one-shot
+    // cleanup must wait for actual descendant output before retiring the job.
+    deliveryPayloads = [];
+    synthesizedText = undefined;
+    summary = undefined;
+    outputText = undefined;
+  }
+  const skipHeartbeatDelivery = heartbeatOnlyResponse && !spawnOnlyHandoff;
   const sourceDeliveryOutcome = resolveSourceDeliveryOutcome(prepared.sourceDelivery, {
     didSendViaMessageTool: finalRunResult.didSendViaMessagingTool,
     messageToolSentTargets: finalRunResult.messagingToolSentTargets,

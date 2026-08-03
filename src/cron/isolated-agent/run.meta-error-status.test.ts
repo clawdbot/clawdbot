@@ -246,8 +246,43 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     expect(result.delivered).toBe(false);
   });
 
-  it("keeps actual heartbeat acknowledgements silent after an accepted child spawn", async () => {
+  it.each(["HEARTBEAT_OK", "**HEARTBEAT_OK**"])(
+    "waits for the accepted child instead of treating %s as its final reply",
+    async (heartbeatReply) => {
+      const heartbeatPayload = { text: heartbeatReply };
+      isHeartbeatOnlyResponseMock.mockReturnValue(true);
+      mockAgentRun({
+        payloads: [heartbeatPayload],
+        usage: { input: 10, output: 1 },
+        acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:default:child" }],
+      });
+      mockAnnounceOutcome({
+        summary: heartbeatPayload.text,
+        outputText: heartbeatPayload.text,
+        synthesizedText: heartbeatPayload.text,
+        deliveryPayload: heartbeatPayload,
+        deliveryPayloads: [heartbeatPayload],
+      });
+
+      const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+
+      expect(dispatchCronDeliveryMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          spawnOnlyHandoff: true,
+          skipHeartbeatDelivery: false,
+          deliveryPayloads: [],
+          synthesizedText: undefined,
+          summary: undefined,
+          outputText: undefined,
+        }),
+      );
+      expect(result.status).toBe("ok");
+    },
+  );
+
+  it("preserves a heartbeat-only accepted child handoff failure as a cron error", async () => {
     const heartbeatPayload = { text: "HEARTBEAT_OK" };
+    const error = "cron child-session handoff timed out before producing a final assistant payload";
     isHeartbeatOnlyResponseMock.mockReturnValue(true);
     mockAgentRun({
       payloads: [heartbeatPayload],
@@ -261,12 +296,15 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
       deliveryPayload: heartbeatPayload,
       deliveryPayloads: [heartbeatPayload],
     });
+    mockDeliveryFailure(error);
 
-    await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
 
-    expect(dispatchCronDeliveryMock).toHaveBeenCalledWith(
-      expect.objectContaining({ spawnOnlyHandoff: false, skipHeartbeatDelivery: true }),
-    );
+    expect(result.status).toBe("error");
+    expect(result.error).toBe(error);
+    expect(result.delivered).toBe(false);
+    expect(result.summary).not.toBe(heartbeatPayload.text);
+    expect(result.outputText).not.toBe(heartbeatPayload.text);
   });
 
   it("preserves structured-parent delivery failures after accepting a child", async () => {
