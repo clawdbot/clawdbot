@@ -75,10 +75,68 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
 
     const accountId = discordVoiceTranscriptsSourceProvider.resolveAccountId?.({ cfg, source });
     expect(accountId).toBe("work");
+    expect(
+      discordVoiceTranscriptsSourceProvider.resolveAccountId?.({
+        cfg: {
+          channels: {
+            discord: {
+              defaultAccount: "primary",
+              accounts: { primary: {}, work: { token: "token-work" } },
+            },
+          },
+        },
+        source,
+      }),
+    ).toBe("work");
     const result = await discordVoiceTranscriptsSourceProvider.start?.({
       cfg,
       session: {
         sessionId: "notes-default",
+        startedAt: new Date().toISOString(),
+        source: { ...source, accountId },
+      },
+      onUtterance: vi.fn(),
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(workJoin).toHaveBeenCalledOnce();
+    expect(primaryJoin).not.toHaveBeenCalled();
+  });
+
+  it("resolves an omitted account through the gateway-eligible startup order", async () => {
+    const primaryJoin = vi.fn(async () => ({ ok: true, message: "joined primary" }));
+    const workJoin = vi.fn(async () => ({ ok: true, message: "joined work" }));
+    setDiscordTranscriptsVoiceManager({
+      accountId: "primary",
+      manager: { join: primaryJoin } as unknown as DiscordVoiceManager,
+    });
+    setDiscordTranscriptsVoiceManager({
+      accountId: "work",
+      manager: { join: workJoin } as unknown as DiscordVoiceManager,
+    });
+    const source = {
+      providerId: "discord-voice",
+      guildId: "g1",
+      channelId: "c1",
+    };
+    const cfg = {
+      channels: {
+        discord: {
+          defaultAccount: "primary",
+          accounts: {
+            primary: { enabled: false, token: "token-primary" },
+            work: { token: "token-work" },
+          },
+        },
+      },
+    };
+
+    const accountId = discordVoiceTranscriptsSourceProvider.resolveAccountId?.({ cfg, source });
+    expect(accountId).toBe("work");
+    const result = await discordVoiceTranscriptsSourceProvider.start?.({
+      cfg,
+      session: {
+        sessionId: "notes-eligible",
         startedAt: new Date().toISOString(),
         source: { ...source, accountId },
       },
