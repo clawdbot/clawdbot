@@ -70,9 +70,9 @@ the model ref canonical and select the CLI runtime per model:
 {
   agents: {
     defaults: {
-      model: "anthropic/claude-opus-4-8",
+      model: "anthropic/claude-opus-5",
       models: {
-        "anthropic/claude-opus-4-8": {
+        "anthropic/claude-opus-5": {
           agentRuntime: { id: "claude-cli" },
         },
       },
@@ -231,7 +231,11 @@ The bundled Google plugin registers for `google-gemini-cli`:
 | `sessionMode`             | `existing`                                                                             |
 | `sessionIdFields`         | `["session_id", "sessionId"]`                                                          |
 
-Prerequisite: the local Gemini CLI must be installed and on `PATH` as `gemini` (`brew install gemini-cli` or `npm install -g @google/gemini-cli`).
+Prerequisites: the local Gemini CLI must be installed and on `PATH` as `gemini`
+(`brew install gemini-cli` or `npm install -g @google/gemini-cli`), and the
+selected model must have a supported Google AI Studio API-key profile. Existing
+valid legacy Gemini CLI OAuth profiles remain runtime-compatible, but OpenClaw
+does not create or repair them.
 
 Gemini CLI output notes:
 

@@ -1,7 +1,11 @@
 import type { ReactiveControllerHost } from "lit";
 import { t } from "../i18n/index.ts";
-import { reorderSessionCustomGroups } from "../lib/sessions/custom-groups.ts";
-import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
+import { readSessionMethodAccess } from "../lib/session-method-access.ts";
+import {
+  moveSessionSection,
+  normalizeSessionSectionOrder,
+  type SidebarSessionsGrouping,
+} from "../lib/sessions/grouping.ts";
 import {
   buildAgentMainSessionKey,
   parseAgentSessionKey,
@@ -35,6 +39,8 @@ export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
   clearSessionSelection(): void;
   findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
   knownSessionGroups(): string[];
+  knownSessionCatalogIds(): string[];
+  knownSectionOrder(): string[];
   pruneSidebarSessionEntry(key: string): void;
   reconciledSidebarZone(): { sidebarEntries: readonly string[] };
   replaceCurrentSession(sessionKey: string): void;
@@ -42,18 +48,49 @@ export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
   sidebarSessionStatusFilter(): SidebarSessionStatusFilter;
 }
 
+function requireSessionMutationAccess(
+  host: SessionOrganizerControllerHost,
+  scope: SidebarSessionMutationScope,
+  request: {
+    method: string;
+    params?: unknown;
+    requiredScope?: "operator.write" | "operator.admin";
+  },
+): boolean {
+  const access = readSessionMethodAccess(scope.gateway.snapshot, request);
+  if (access.allowed) {
+    return true;
+  }
+  host.sessionData.publishSessionMutationError(scope, access.reason);
+  return false;
+}
+
 export async function patchSession(
   host: SessionOrganizerControllerHost,
   session: SidebarRecentSession,
   patch: SidebarSessionPatch,
   scope: SidebarSessionMutationScope,
+  refresh: { deferListRefresh?: boolean } = {},
 ): Promise<SidebarSessionMutationResult> {
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return "stale";
   }
-  const agentId = parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
+  const agentId = sessionRowAgentId(session, scope);
+  const requestParams = {
+    key: session.key,
+    ...patch,
+    agentId,
+  };
+  if (
+    !requireSessionMutationAccess(host, scope, { method: "sessions.patch", params: requestParams })
+  ) {
+    return "failed";
+  }
   try {
-    const patched = await scope.sessions.patch(session.key, patch, { agentId });
+    const patched = await scope.sessions.patch(session.key, patch, {
+      agentId,
+      ...(refresh.deferListRefresh ? { deferListRefresh: true } : {}),
+    });
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return "stale";
     }
@@ -70,24 +107,12 @@ export async function patchSession(
     if (patch.pinned === false || (patch.archived === true && session.pinned)) {
       host.pruneSidebarSessionEntry(session.key);
     }
-    if (host.sidebarSessionStatusFilter() !== "active") {
+    if (!refresh.deferListRefresh && host.sidebarSessionStatusFilter() !== "active") {
       await host.sessionData.refreshSidebarSessions(agentId);
       if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
         return "stale";
       }
     }
-    if (patch.archived !== true || !session.active) {
-      return "completed";
-    }
-    host.replaceCurrentSession(
-      buildAgentMainSessionKey({
-        agentId,
-        mainKey: resolveUiConfiguredMainKey({
-          agentsList: scope.context.agents.state.agentsList,
-          hello: scope.gateway.snapshot.hello,
-        }),
-      }),
-    );
     return "completed";
   } catch (error) {
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
@@ -96,6 +121,47 @@ export async function patchSession(
     host.sessionData.publishSessionMutationError(scope, error);
     return "failed";
   }
+}
+
+function sessionRowAgentId(
+  session: SidebarRecentSession,
+  scope: SidebarSessionMutationScope,
+): string {
+  return parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
+}
+
+/**
+ * One list refresh per owning agent, replacing the per-row refreshes a batch
+ * defers; each deferred row skipped a full `sessions.list` round trip and rode
+ * pushed `sessions.changed` events instead. Agents come from the rows, not the
+ * scope, because `patchSession` routes every mutation by its own key. The
+ * result carries the stale/failed reporting the per-row refresh owed its caller.
+ */
+async function refreshSessionsAfterBatch(
+  host: SessionOrganizerControllerHost,
+  scope: SidebarSessionMutationScope,
+  rows: readonly SidebarRecentSession[],
+): Promise<SidebarSessionMutationResult> {
+  const agentIds = [...new Set(rows.map((row) => sessionRowAgentId(row, scope)))];
+  const refreshSidebar = host.sidebarSessionStatusFilter() !== "active";
+  for (const agentId of agentIds) {
+    if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      return "stale";
+    }
+    try {
+      await scope.sessions.refreshReplacement(agentId);
+      if (refreshSidebar && host.sessionData.isSessionMutationScopeCurrent(scope)) {
+        await host.sessionData.refreshSidebarSessions(agentId);
+      }
+    } catch (error) {
+      if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+        return "stale";
+      }
+      host.sessionData.publishSessionMutationError(scope, error);
+      return "failed";
+    }
+  }
+  return host.sessionData.isSessionMutationScopeCurrent(scope) ? "completed" : "stale";
 }
 
 export async function patchSessions(
@@ -107,11 +173,14 @@ export async function patchSessions(
   if (!scope) {
     return "stale";
   }
+  if (rows.length === 0) {
+    return "completed";
+  }
   let result: SidebarSessionMutationResult = "completed";
   // Sequential like deleteMany: parallel patches would race the shared
   // session-state publishes inside the capability.
   for (const row of rows) {
-    const rowResult = await patchSession(host, row, patch, scope);
+    const rowResult = await patchSession(host, row, patch, scope, { deferListRefresh: true });
     if (rowResult === "stale") {
       return "stale";
     }
@@ -119,7 +188,8 @@ export async function patchSessions(
       result = "failed";
     }
   }
-  return result;
+  const refreshed = await refreshSessionsAfterBatch(host, scope, rows);
+  return refreshed === "completed" ? result : refreshed;
 }
 
 export async function archiveSessionWithUndo(
@@ -145,9 +215,14 @@ async function archiveSessionsWithUndo(
   rows: readonly SidebarRecentSession[],
   scope: SidebarSessionMutationScope,
 ) {
+  if (rows.length === 0) {
+    return;
+  }
   const archived: Array<{ session: SidebarRecentSession; pinned: boolean }> = [];
   for (const session of rows) {
-    const result = await patchSession(host, session, { archived: true }, scope);
+    const result = await patchSession(host, session, { archived: true }, scope, {
+      deferListRefresh: true,
+    });
     if (result === "stale") {
       return;
     }
@@ -155,7 +230,8 @@ async function archiveSessionsWithUndo(
       archived.push({ session, pinned: session.pinned });
     }
   }
-  if (archived.length === 0 || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  const refreshed = await refreshSessionsAfterBatch(host, scope, rows);
+  if (archived.length === 0 || refreshed === "stale") {
     return;
   }
   showToast({
@@ -176,24 +252,23 @@ async function restoreArchivedSessions(
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
-  let restoredActiveKey: string | null = null;
   for (const { session, pinned } of archived) {
     const result = await patchSession(
       host,
       session,
       { archived: false, ...(pinned ? { pinned: true } : {}) },
       scope,
+      { deferListRefresh: true },
     );
     if (result === "stale") {
       return;
     }
-    if (result === "completed" && session.active) {
-      restoredActiveKey = session.key;
-    }
   }
-  if (restoredActiveKey && host.sessionData.isSessionMutationScopeCurrent(scope)) {
-    host.replaceCurrentSession(restoredActiveKey);
-  }
+  await refreshSessionsAfterBatch(
+    host,
+    scope,
+    archived.map((entry) => entry.session),
+  );
 }
 
 /** One confirm and one preserved-worktrees alert for the whole selection. */
@@ -211,15 +286,19 @@ export async function deleteSessionsBatch(
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
+  const requests = rows.map((row) => ({
+    key: row.key,
+    agentId: parseAgentSessionKey(row.key)?.agentId ?? scope.selectedAgentId,
+    deleteTranscript: true,
+    ...(row.archived === true ? { archivedOnly: true } : {}),
+  }));
+  for (const params of requests) {
+    if (!requireSessionMutationAccess(host, scope, { method: "sessions.delete", params })) {
+      return;
+    }
+  }
   try {
-    const result = await scope.sessions.deleteMany(
-      rows.map((row) => ({
-        key: row.key,
-        agentId: parseAgentSessionKey(row.key)?.agentId ?? scope.selectedAgentId,
-        deleteTranscript: true,
-        ...(row.archived === true ? { archivedOnly: true } : {}),
-      })),
-    );
+    const result = await scope.sessions.deleteMany(requests);
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }
@@ -310,6 +389,14 @@ async function rememberSessionGroup(
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return "stale";
   }
+  if (
+    !requireSessionMutationAccess(host, scope, {
+      method: "sessions.groups.put",
+      requiredScope: "operator.write",
+    })
+  ) {
+    return "failed";
+  }
   try {
     await scope.sessions.groupsPut([...groups, name]);
     return host.sessionData.isSessionMutationScopeCurrent(scope) ? "completed" : "stale";
@@ -357,6 +444,14 @@ export async function renameSessionGroup(
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return false;
   }
+  if (
+    !requireSessionMutationAccess(host, scope, {
+      method: "sessions.groups.rename",
+      requiredScope: "operator.write",
+    })
+  ) {
+    return false;
+  }
   try {
     const outcome = await scope.sessions.groupsRename(group, next);
     return outcome === "completed" && host.sessionData.isSessionMutationScopeCurrent(scope);
@@ -374,6 +469,14 @@ export async function deleteSessionGroup(
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return false;
   }
+  if (
+    !requireSessionMutationAccess(host, scope, {
+      method: "sessions.groups.delete",
+      requiredScope: "operator.write",
+    })
+  ) {
+    return false;
+  }
   try {
     const outcome = await scope.sessions.groupsDelete(group);
     return outcome === "completed" && host.sessionData.isSessionMutationScopeCurrent(scope);
@@ -383,23 +486,45 @@ export async function deleteSessionGroup(
   }
 }
 
-export async function reorderSessionGroup(
+export async function reorderSidebarSection(
   host: SessionOrganizerControllerHost,
-  source: string,
-  target: string,
+  sourceSectionId: string,
+  targetSectionId: string,
   position: "before" | "after",
   scope: SidebarSessionMutationScope,
 ): Promise<void> {
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
+  if (
+    !requireSessionMutationAccess(host, scope, {
+      method: "sessions.groups.put",
+      requiredScope: "operator.write",
+    })
+  ) {
+    return;
+  }
   try {
-    await scope.sessions.groupsPut(
-      reorderSessionCustomGroups(host.knownSessionGroups(), source, target, position),
+    // knownSessionGroups() is the full discovered set (gateway catalog plus
+    // row-discovered categories), so normalize only prunes deleted groups.
+    const knownGroups = host.knownSessionGroups();
+    const knownCatalogIds = host.knownSessionCatalogIds();
+    const next = moveSessionSection(
+      normalizeSessionSectionOrder(host.knownSectionOrder(), knownGroups, knownCatalogIds),
+      sourceSectionId,
+      targetSectionId,
+      position,
     );
-    if (host.sessionData.isSessionMutationScopeCurrent(scope)) {
-      host.requestUpdate();
+    const nextGroups = next.flatMap((token) =>
+      token.startsWith("category:") ? [token.slice("category:".length)] : [],
+    );
+    // No capability gate: the gateway serves this UI from its own dist, so a
+    // newer UI never talks to an older gateway's closed put schema outside dev.
+    await scope.sessions.groupsPut(nextGroups, next);
+    if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      return;
     }
+    host.requestUpdate();
   } catch (error) {
     host.sessionData.publishSessionMutationError(scope, error);
   }
@@ -430,12 +555,18 @@ export async function forkSession(
     return;
   }
   const agentId = parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
+  const createParams = {
+    parentSessionKey: session.key,
+    fork: true,
+    agentId,
+  };
+  if (
+    !requireSessionMutationAccess(host, scope, { method: "sessions.create", params: createParams })
+  ) {
+    return;
+  }
   try {
-    const key = await scope.sessions.create({
-      parentSessionKey: session.key,
-      fork: true,
-      agentId,
-    });
+    const key = await scope.sessions.create(createParams);
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }
@@ -468,6 +599,14 @@ export async function stopCloudWorker(
     return;
   }
   const agentId = parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
+  if (
+    !requireSessionMutationAccess(host, scope, {
+      method: "sessions.reclaim",
+      requiredScope: "operator.admin",
+    })
+  ) {
+    return;
+  }
   try {
     await scope.client.request(
       "sessions.reclaim",
@@ -495,12 +634,21 @@ export async function deleteSession(
     return;
   }
   const agentId = parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
+  const deleteParams = {
+    agentId,
+    deleteTranscript: true,
+    ...(session.archived === true ? { archivedOnly: true } : {}),
+  };
+  if (
+    !requireSessionMutationAccess(host, scope, {
+      method: "sessions.delete",
+      params: { key: session.key, ...deleteParams },
+    })
+  ) {
+    return;
+  }
   try {
-    const outcome = await scope.sessions.delete(session.key, {
-      agentId,
-      deleteTranscript: true,
-      ...(session.archived === true ? { archivedOnly: true } : {}),
-    });
+    const outcome = await scope.sessions.delete(session.key, deleteParams);
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }
@@ -513,7 +661,21 @@ export async function deleteSession(
     // Dirty/unpushed checkouts survive deletion; offer explicit removal.
     if (outcome.worktreePreserved) {
       const preserved = outcome.worktreePreserved;
-      if (
+      const removeAccess = readSessionMethodAccess(scope.gateway.snapshot, {
+        method: "worktrees.remove",
+        requiredScope: "operator.admin",
+      });
+      if (!removeAccess.allowed) {
+        window.alert(
+          t("sessionsView.deletePreservedWorktrees", {
+            count: "1",
+            branches: preserved.branch,
+          }),
+        );
+        if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+          return;
+        }
+      } else if (
         window.confirm(
           t("sessionsView.deletePreservedWorktreeConfirm", { branch: preserved.branch }),
         )

@@ -25,22 +25,14 @@ export function listChannelPlugins(): ChannelPlugin[] {
  * Returns a loaded channel plugin without falling back to bundled metadata.
  */
 export function getLoadedChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
-  const resolvedId = normalizeOptionalString(id) ?? "";
-  if (!resolvedId) {
-    return undefined;
-  }
-  return getLoadedChannelPluginById(resolvedId) as ChannelPlugin | undefined;
+  return getLoadedChannelPluginById(id) as ChannelPlugin | undefined;
 }
 
 /**
  * Returns the package/install origin for a loaded channel plugin.
  */
 export function getLoadedChannelPluginOrigin(id: ChannelId): string | undefined {
-  const resolvedId = normalizeOptionalString(id) ?? "";
-  if (!resolvedId) {
-    return undefined;
-  }
-  return normalizeOptionalString(getLoadedChannelPluginEntryById(resolvedId)?.origin) ?? undefined;
+  return normalizeOptionalString(getLoadedChannelPluginEntryById(id)?.origin);
 }
 
 /**

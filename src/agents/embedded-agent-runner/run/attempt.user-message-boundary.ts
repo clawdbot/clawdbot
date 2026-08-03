@@ -1,10 +1,11 @@
-import { formatUntrustedJsonBlock } from "../../../auto-reply/reply/untrusted-context.js";
+import { stableStringify } from "@openclaw/normalization-core";
+import { formatContextJsonBlock } from "../../../auto-reply/reply/channel-prompt-context.js";
+import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-context-marker.js";
 import {
   hasInterSessionUserProvenance,
   INTER_SESSION_PROMPT_PREFIX_BASE,
 } from "../../../sessions/input-provenance.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { stableStringify } from "../../stable-stringify.js";
 import { isRunnerToolCallBlockType } from "./attempt.tool-call-block-type.js";
 
 export type UserTranscriptContext = {
@@ -22,7 +23,7 @@ export type CurrentUserTimestampMatch = {
 // Mirrors LEADING_TIMESTAMP_PREFIX_RE in strip-inbound-meta.ts so sender
 // projection never displaces or duplicates a cache-stable timestamp envelope.
 const LEADING_TIMESTAMP_ENVELOPE_RE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] */;
-const CONVERSATION_INFO_LABEL = "Conversation info (untrusted metadata):";
+const CONVERSATION_INFO_LABEL = markInboundContextLabel("Conversation info:");
 
 export function splitLeadingTimestampEnvelope(text: string): {
   body: string;
@@ -183,7 +184,7 @@ function readPersistedSender(message: AgentMessage): PersistedSender | undefined
 }
 
 function formatPersistedSenderContext(sender: PersistedSender): string {
-  return formatUntrustedJsonBlock(CONVERSATION_INFO_LABEL, { sender });
+  return formatContextJsonBlock(CONVERSATION_INFO_LABEL, { sender });
 }
 
 function mergeSenderIntoLeadingConversationInfo(
@@ -209,7 +210,7 @@ function mergeSenderIntoLeadingConversationInfo(
     return undefined;
   }
   const suffix = body.slice(jsonEnd + "\n```".length);
-  return `${envelope}${formatUntrustedJsonBlock(CONVERSATION_INFO_LABEL, {
+  return `${envelope}${formatContextJsonBlock(CONVERSATION_INFO_LABEL, {
     ...(payload as Record<string, unknown>),
     sender,
   })}${suffix}`;

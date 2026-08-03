@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
+import { stableStringify } from "@openclaw/normalization-core";
 import { listAgentEntries } from "../agents/agent-scope.js";
-import { stableStringify } from "../agents/stable-stringify.js";
 import { transformConfigFileWithRetry } from "../config/config.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -31,6 +31,7 @@ import {
 import {
   CLAW_OUTPUT_STABILITY,
   type ClawManifest,
+  type ClawOpenClawProfile,
   type ClawPackage,
   type ClawSourceIdentity,
 } from "./types.js";
@@ -88,6 +89,8 @@ export async function applyClawUpdatePlan(
   plan: ClawUpdatePlan,
   params: {
     targetManifest: ClawManifest;
+    targetClawMarkdownBody?: Buffer;
+    targetOpenClawProfile?: ClawOpenClawProfile;
     targetSource: ClawSourceIdentity;
   },
   options: OpenClawStateDatabaseOptions & {
@@ -124,6 +127,8 @@ export async function applyClawUpdatePlan(
   const fresh = await rebuildPlan({
     agentId: plan.agentId,
     targetManifest: params.targetManifest,
+    targetClawMarkdownBody: params.targetClawMarkdownBody,
+    targetOpenClawProfile: params.targetOpenClawProfile,
     targetSource: params.targetSource,
     config: options.config,
     sourceMcpServers: options.sourceMcpServers,
@@ -175,6 +180,8 @@ export async function applyClawUpdatePlan(
   };
   const targetAddPlan = await buildAddPlan({
     manifest: params.targetManifest,
+    clawMarkdownBody: params.targetClawMarkdownBody,
+    openClawProfile: params.targetOpenClawProfile,
     source: params.targetSource,
     context: {
       agentId: fresh.agentId,

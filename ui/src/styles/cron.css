@@ -425,16 +425,6 @@
   height: 12px;
 }
 
-.cron-table__footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-4);
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-  font-size: var(--control-ui-text-sm);
-}
-
 .cron-empty-state {
   padding: var(--space-6) var(--space-4);
   display: grid;
@@ -453,10 +443,6 @@
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
   line-height: 1.45;
-}
-
-.cron-load-more {
-  align-self: flex-start;
 }
 
 /* ── Detail view ── */
@@ -593,6 +579,27 @@
 
 .cron-control--wide .cron-help {
   text-align: left;
+}
+
+/* Read-only script/command payload: a highlighted code block sized like the
+   textarea it replaces, scrollable and focusable so keyboard users can reach it.
+   `resize` needs an explicit height (not max-height) as the resize origin, so the
+   drag handle keeps working for long scripts the way the old textarea did. */
+.cron-payload-code {
+  margin: 0;
+  width: 100%;
+  height: 240px;
+  max-height: none;
+  min-height: 96px;
+  resize: vertical;
+  overflow: auto;
+  white-space: pre;
+  tab-size: 2;
+}
+
+.cron-payload-code:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .cron-inline-controls {

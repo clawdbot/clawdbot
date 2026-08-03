@@ -22,8 +22,13 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { redactToolPayloadText } from "../logging/redact.js";
-import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
+import { normalizeAgentId } from "../routing/session-key.js";
+import type {
+  SessionEventSubscriberRegistry,
+  SessionMessageSubscriberRegistry,
+} from "./server-chat-state.js";
 
 const HEADLINE_MAX_CHARS = 120;
 const ASSESSMENT_MAX_CHARS = 320;
@@ -33,16 +38,20 @@ const MAX_DORMANT_RUNS = 256;
 const MAX_DISABLED_RUNS = 512;
 
 export const SESSION_OBSERVER_MODEL_MAX_TOKENS = 300;
+
+export function sessionObserverScopeKey(sessionKey: string, agentId: string): string {
+  return sessionKey === "global" ? `agent:${normalizeAgentId(agentId)}:global` : sessionKey;
+}
 type PrepareModel = typeof prepareSimpleCompletionModelForAgent;
 type CompleteModel = typeof completeWithPreparedSimpleCompletionModel;
-export type PreparedModel = Awaited<ReturnType<PrepareModel>>;
+type PreparedModel = Awaited<ReturnType<PrepareModel>>;
 
 export type SessionObserverState = SessionActivityNoteState & {
   sessionKey: string;
   sessionId?: string;
   runId: string;
   agentId: string;
-  utilityModelRef: string;
+  utilityModelRef?: string;
   startedAt: number;
   lastActivityAt: number;
   lastRunAt: number;
@@ -51,6 +60,8 @@ export type SessionObserverState = SessionActivityNoteState & {
   digestCount: number;
   consecutiveFailures: number;
   lastDigestNoteSequence: number;
+  lastPreambleHeadline?: string;
+  lastPublishedPreambleHeadline?: string;
   previousDigest?: SessionObserverDigest;
   preparedPromise?: Promise<PreparedModel>;
   activeController?: AbortController;
@@ -72,6 +83,7 @@ export type DormantSessionObserverRun = Pick<
   | "revision"
   | "digestCount"
   | "consecutiveFailures"
+  | "lastPreambleHeadline"
   | "planProgress"
   | "previousDigest"
 >;
@@ -91,13 +103,7 @@ export function rememberSessionObserverRevisionFloor(
     floors.delete(sessionKey);
     floors.set(sessionKey, candidate);
   }
-  while (floors.size > MAX_REVISION_FLOORS) {
-    const oldest = floors.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    floors.delete(oldest);
-  }
+  pruneMapToMaxSize(floors, MAX_REVISION_FLOORS);
 }
 
 export function rememberSessionObserverDormantRun(
@@ -117,10 +123,14 @@ export function rememberSessionObserverDormantRun(
     if (evicted) {
       // Evicted dormant runs keep revision continuity through the bounded floor
       // map so a later resume cannot restart below an already broadcast revision.
-      rememberSessionObserverRevisionFloor(floors, evicted.sessionKey, {
-        revision: evicted.revision,
-        previousDigest: evicted.previousDigest,
-      });
+      rememberSessionObserverRevisionFloor(
+        floors,
+        sessionObserverScopeKey(evicted.sessionKey, evicted.agentId),
+        {
+          revision: evicted.revision,
+          previousDigest: evicted.previousDigest,
+        },
+      );
     }
   }
 }
@@ -144,13 +154,7 @@ export function markSessionObserverRunSuperseded(
 ): void {
   runs.delete(runId);
   runs.set(runId, observedAt);
-  while (runs.size > MAX_SUPERSEDED_RUNS) {
-    const oldest = runs.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    runs.delete(oldest);
-  }
+  pruneMapToMaxSize(runs, MAX_SUPERSEDED_RUNS);
 }
 
 export function createDormantSessionObserverRun(
@@ -161,12 +165,15 @@ export function createDormantSessionObserverRun(
     sessionId: state.sessionId,
     runId: state.runId,
     agentId: state.agentId,
-    utilityModelRef: state.utilityModelRef,
+    ...(state.utilityModelRef ? { utilityModelRef: state.utilityModelRef } : {}),
     startedAt: state.startedAt,
     lastPersistedAt: state.lastPersistedAt,
     revision: state.revision,
     digestCount: state.digestCount,
     consecutiveFailures: state.consecutiveFailures,
+    ...(state.lastPublishedPreambleHeadline
+      ? { lastPreambleHeadline: state.lastPublishedPreambleHeadline }
+      : {}),
     planProgress: state.planProgress,
     previousDigest: state.previousDigest,
   };
@@ -175,6 +182,7 @@ export function createDormantSessionObserverRun(
 export type SessionObserverDeps = {
   getConfig: () => OpenClawConfig;
   subscribers: SessionMessageSubscriberRegistry;
+  sessionEventSubscribers?: SessionEventSubscriberRegistry;
   broadcastToConnIds: (
     event: string,
     payload: unknown,
@@ -193,7 +201,7 @@ export type SessionObserverDeps = {
     /** Evaluated inside the entry updater so run rollover cannot commit a
      * digest from a replaced run between acceptance and the async write. */
     stillCurrent?: () => boolean;
-  }) => Promise<boolean>;
+  }) => Promise<boolean | null>;
   now?: () => number;
   setTimeoutFn?: typeof setTimeout;
   clearTimeoutFn?: typeof clearTimeout;
@@ -240,7 +248,7 @@ const ModelDigestSchema = z
   })
   .strict();
 
-export function sanitizeSessionObserverModelText(value: string, maxChars: number): string {
+function sanitizeSessionObserverModelText(value: string, maxChars: number): string {
   const normalized = redactToolPayloadText(value).replace(/\s+/gu, " ").trim();
   return truncateUtf16Safe(normalized, maxChars);
 }
@@ -257,11 +265,13 @@ export async function defaultPersistDigest(params: {
   agentId: string;
   digest: SessionObserverDigest;
   stillCurrent?: () => boolean;
-}): Promise<boolean> {
+}): Promise<boolean | null> {
+  let missingEntry = false;
   const result = await patchSessionEntry(
     { sessionKey: params.sessionKey, agentId: params.agentId },
     (entry, context) => {
       if (!context.existingEntry) {
+        missingEntry = true;
         return null;
       }
       if (params.stillCurrent?.() === false) {
@@ -277,7 +287,10 @@ export async function defaultPersistDigest(params: {
     },
     { preserveActivity: true },
   );
-  return result != null;
+  if (result) {
+    return true;
+  }
+  return missingEntry ? null : false;
 }
 
 export function isTerminalLifecycleEvent(event: AgentEventPayload): boolean {
@@ -330,13 +343,16 @@ export async function synthesizeSessionObserverTerminalDigest(params: {
         return false;
       }
       try {
-        return await params.persistDigest({
+        // null means the store entry is gone (unpersistable session) — treat as
+        // a terminal false rather than a retryable failure.
+        const persisted = await params.persistDigest({
           sessionKey,
           sessionId,
           agentId,
           digest: candidate,
           stillCurrent: params.stillCurrent,
         });
+        return persisted === true;
       } catch (error) {
         lastError = error;
       }
@@ -354,6 +370,7 @@ export async function synthesizeSessionObserverTerminalDigest(params: {
   const digest: SessionObserverDigest = {
     ...previous,
     sessionKey,
+    agentId,
     runId,
     health,
     revision: previous.revision + 1,

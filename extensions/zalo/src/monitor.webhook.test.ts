@@ -218,7 +218,9 @@ describe("handleZaloWebhookRequest", () => {
         await vi.waitFor(() => expect(acceptWebhook).toHaveBeenCalledTimes(1));
         expect(settled).toBe(false);
         releaseAdmission();
-        expect((await responsePromise).status).toBe(200);
+        const response = await responsePromise;
+        expect(response.status).toBe(200);
+        expect(response.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
       });
     } finally {
       releaseAdmission();
@@ -256,6 +258,7 @@ describe("handleZaloWebhookRequest", () => {
           body: '{"event_name":"message.text.received"}',
         });
         expect(response.status).toBe(500);
+        expect(response.headers.get("x-openclaw-delivery-accepted")).toBeNull();
       });
     } finally {
       unregister();

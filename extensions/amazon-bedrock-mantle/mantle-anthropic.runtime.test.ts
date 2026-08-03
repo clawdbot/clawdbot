@@ -133,6 +133,47 @@ describe("createMantleAnthropicStreamFn", () => {
   });
 
   it.each([
+    { reasoning: undefined, thinkingEnabled: true, effort: "high" },
+    { reasoning: "off" as const, thinkingEnabled: false, effort: undefined },
+    { reasoning: "max" as const, thinkingEnabled: true, effort: "max" },
+  ])(
+    "uses the Opus 5 contract for reasoning=$reasoning",
+    ({ reasoning, thinkingEnabled, effort }) => {
+      const model = createTestModel({
+        id: "anthropic.claude-opus-5",
+        name: "Claude Opus 5",
+        reasoning: true,
+        params: { canonicalModelId: "claude-opus-5" },
+        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+        maxTokens: 128_000,
+      });
+      const deps = createTestDeps();
+      deps.stream.mockReturnValue({ kind: "anthropic-stream" } as never);
+
+      void createMantleAnthropicStreamFn(deps)(
+        model,
+        { messages: [] },
+        {
+          apiKey: "bedrock-bearer-token",
+          reasoning,
+          temperature: 0.2,
+        },
+      );
+
+      expect(firstStreamOptions(deps)).toMatchObject({
+        thinkingEnabled,
+        maxTokens: 128_000,
+      });
+      if (effort) {
+        expect(firstStreamOptions(deps).effort).toBe(effort);
+      } else {
+        expect(firstStreamOptions(deps)).not.toHaveProperty("effort");
+      }
+      expect(firstStreamOptions(deps)).not.toHaveProperty("temperature");
+    },
+  );
+
+  it.each([
     { reasoning: undefined, effort: "high" },
     { reasoning: "off" as const, effort: "low" },
   ])("keeps Sonnet 5 adaptive for reasoning=$reasoning", ({ reasoning, effort }) => {

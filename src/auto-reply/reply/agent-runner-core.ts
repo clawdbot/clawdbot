@@ -9,10 +9,6 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import {
-  formatSqliteSessionFileMarker,
-  sqliteSessionFileMarkerMatchesSession,
-} from "../../config/sessions/sqlite-marker.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
@@ -356,20 +352,11 @@ export function resolveAdmittedRunSessionFile(params: {
   agentId: string;
   sessionId: string;
   sessionFile?: string;
+  sessionKey?: string;
   storePath?: string;
 }): string | undefined {
-  if (
-    params.sessionFile &&
-    sqliteSessionFileMarkerMatchesSession(params.sessionFile, params.sessionId)
-  ) {
-    return params.sessionFile;
-  }
-  if (params.storePath) {
-    return formatSqliteSessionFileMarker({
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      storePath: params.storePath,
-    });
+  if (params.sessionKey?.trim()) {
+    return params.sessionKey.trim();
   }
   return params.sessionFile;
 }

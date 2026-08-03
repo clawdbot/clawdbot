@@ -257,7 +257,9 @@ async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<boo
     if (predicate()) {
       return true;
     }
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
   }
   return predicate();
 }
@@ -434,7 +436,8 @@ describe("remote testbox gate delegation", () => {
         "--blacksmith-ref main " +
         "--idle-timeout 90m --ttl 240m --timing-json " +
         "--label pr-424242-gates " +
-        "-- env CI=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=install corepack pnpm test",
+        "-- env CI=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 " +
+        "PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=install corepack pnpm test",
     );
   });
 
@@ -532,6 +535,50 @@ describe("lease-retry gate stamp refresh", () => {
     expect(result.stdout).toContain("REMOTE_GATES_LEASE_ID=''");
     expect(result.stdout).toContain(`FULL_GATES_HEAD_SHA=${headSha}`);
     expect(result.stdout).not.toContain("tbx_stale");
+  });
+});
+
+describe("prepare review readiness", () => {
+  it("rejects invalid review artifacts before any preparation side effects", () => {
+    const repoDir = makeTempDir("openclaw-pr-prepare-invalid-review-");
+    mkdirSync(join(repoDir, ".local"));
+    const result = runGatesBash(
+      [
+        "review_validate_artifacts() { echo 'invalid review artifacts'; return 1; }",
+        "require_ready_review_recommendation() { touch .local/readiness-called; }",
+        "mark_pr_operation_side_effects_started() { touch .local/side-effects; }",
+        "enter_worktree() { touch .local/worktree-entered; }",
+        "prepare_init 4242",
+      ].join("\n"),
+      { cwd: repoDir, sourcePrepareCore: true },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("invalid review artifacts");
+    expect(existsSync(join(repoDir, ".local", "readiness-called"))).toBe(false);
+    expect(existsSync(join(repoDir, ".local", "side-effects"))).toBe(false);
+    expect(existsSync(join(repoDir, ".local", "worktree-entered"))).toBe(false);
+  });
+
+  it("rejects a non-ready review before taking the operation lock past validation", () => {
+    const repoDir = makeTempDir("openclaw-pr-prepare-not-ready-");
+    mkdirSync(join(repoDir, ".local"));
+    const result = runGatesBash(
+      [
+        "review_validate_artifacts() { touch .local/review-validated; }",
+        "require_ready_review_recommendation() { echo 'review is not ready'; return 1; }",
+        "mark_pr_operation_side_effects_started() { touch .local/side-effects; }",
+        "enter_worktree() { touch .local/worktree-entered; }",
+        "prepare_init 4242",
+      ].join("\n"),
+      { cwd: repoDir, sourcePrepareCore: true },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("review is not ready");
+    expect(existsSync(join(repoDir, ".local", "review-validated"))).toBe(true);
+    expect(existsSync(join(repoDir, ".local", "side-effects"))).toBe(false);
+    expect(existsSync(join(repoDir, ".local", "worktree-entered"))).toBe(false);
   });
 });
 

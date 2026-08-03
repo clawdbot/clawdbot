@@ -1,6 +1,10 @@
 // Media read capability tests cover allowed roots and blocked file access.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import { readOutboundMediaFile } from "./bounded-read-file.js";
 import { getDefaultMediaLocalRoots } from "./local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "./read-capability.js";
 
@@ -182,6 +186,28 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
     });
 
     expect(result.readFile).toBeTypeOf("function");
+  });
+
+  it("enforces the caller byte cap before buffering host media", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-cap-"));
+    try {
+      const filePath = path.join(workspaceDir, "oversized.bin");
+      await fs.writeFile(filePath, Buffer.alloc(2));
+      const result = resolveAgentScopedOutboundMediaAccess({
+        cfg: {
+          tools: {
+            allow: ["read"],
+          },
+        } as OpenClawConfig,
+        workspaceDir,
+      });
+
+      await expect(
+        readOutboundMediaFile(result.readFile!, filePath, { maxBytes: 1 }),
+      ).rejects.toThrow(/exceeds.*1 byte/i);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 
   it("keeps host reads enabled for DM sender when no group context exists", () => {

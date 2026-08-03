@@ -8,6 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { AnsiSequenceStripper } from "../../packages/terminal-core/src/ansi-sequences.js";
 import { stripAnsiForStreamChunk } from "../../packages/terminal-core/src/ansi.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
   killProcessTree as killProcessTreeGracefully,
   type KillProcessTreeOptions,
@@ -133,12 +134,7 @@ function resolveWindowsGitBashUsrBin(shellPath: string): string | undefined {
     fs.existsSync(usrBin)
       ? usrBin
       : undefined;
-  if (windowsGitBashUsrBinCache.size >= WINDOWS_GIT_BASH_CACHE_LIMIT) {
-    const oldestKey = windowsGitBashUsrBinCache.keys().next().value;
-    if (oldestKey) {
-      windowsGitBashUsrBinCache.delete(oldestKey);
-    }
-  }
+  pruneMapToMaxSize(windowsGitBashUsrBinCache, WINDOWS_GIT_BASH_CACHE_LIMIT - 1);
   windowsGitBashUsrBinCache.set(cacheKey, resolved);
   return resolved;
 }
@@ -267,13 +263,17 @@ function resolveShellFromPath(
     return undefined;
   }
   const entries = envPath.split(path.delimiter).filter(Boolean);
-  for (const entry of entries) {
-    const candidate = path.join(entry, name);
-    try {
-      fs.accessSync(candidate, fs.constants.X_OK);
-      return candidate;
-    } catch {
-      // ignore missing or non-executable entries
+  const executableNames =
+    process.platform === "win32" && !path.extname(name) ? [`${name}.exe`, name] : [name];
+  for (const executableName of executableNames) {
+    for (const entry of entries) {
+      const candidate = path.join(entry, executableName);
+      try {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        return candidate;
+      } catch {
+        // Ignore missing or non-executable entries.
+      }
     }
   }
   return undefined;

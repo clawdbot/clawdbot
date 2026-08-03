@@ -494,4 +494,20 @@ describe("copyBundledPluginMetadata", () => {
       type: "module",
     });
   });
+
+  it("refuses to remove dist plugin trees through a symlinked dist root", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-meta-symlink-");
+    const targetDir = path.join(repoRoot, "gateway-dist");
+    const pluginFile = path.join(targetDir, "extensions", "acpx", "index.js");
+    fs.mkdirSync(path.dirname(pluginFile), { recursive: true });
+    fs.writeFileSync(pluginFile, "export {};\n");
+    createPlugin(repoRoot, { id: "acpx", packageName: "@openclaw/acpx" });
+    const distLink = path.join(repoRoot, "dist");
+    fs.symlinkSync(targetDir, distLink, "dir");
+
+    expect(() => copyBundledPluginMetadataWithEnv({ repoRoot })).toThrow(/symbolic link/u);
+
+    expect(fs.readlinkSync(distLink)).toBe(targetDir);
+    expect(fs.readFileSync(pluginFile, "utf8")).toBe("export {};\n");
+  });
 });

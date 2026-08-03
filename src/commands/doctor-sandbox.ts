@@ -10,6 +10,11 @@ import {
   resolveSandboxScope,
 } from "../agents/sandbox.js";
 import {
+  DOCKER_SANDBOX_ENGINE,
+  PODMAN_SANDBOX_ENGINE,
+  validateSandboxContainerEngineTarget,
+} from "../agents/sandbox/docker.js";
+import {
   inspectLegacySandboxRegistryFiles,
   migrateLegacySandboxRegistryFiles,
   type LegacySandboxRegistryInspection,
@@ -84,11 +89,15 @@ async function runSandboxScript(scriptRel: string, runtime: RuntimeEnv): Promise
   return true;
 }
 
-async function isDockerAvailable(): Promise<boolean> {
+async function isContainerEngineAvailable(command: "docker" | "podman"): Promise<boolean> {
   try {
-    await runExec("docker", ["version", "--format", "{{.Server.Version}}"], {
-      timeoutMs: 5_000,
-    });
+    await runExec(
+      command,
+      command === "docker" ? ["version", "--format", "{{.Server.Version}}"] : ["info"],
+      {
+        timeoutMs: 5_000,
+      },
+    );
     return true;
   } catch {
     return false;
@@ -146,7 +155,10 @@ async function probeCodexBwrapNamespaces(cfg: OpenClawConfig): Promise<CodexBwra
   ]);
 }
 
-async function noteCodexBwrapNamespaceWarning(cfg: OpenClawConfig): Promise<void> {
+async function noteCodexBwrapNamespaceWarning(
+  cfg: OpenClawConfig,
+  engineName: "Docker" | "Podman",
+): Promise<void> {
   const probe = await probeCodexBwrapNamespaces(cfg);
   if (probe.ok) {
     return;
@@ -156,10 +168,10 @@ async function noteCodexBwrapNamespaceWarning(cfg: OpenClawConfig): Promise<void
       ? "  bwrap: setting up uid map: Permission denied"
       : "  bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted";
   const networkSentence = codexBwrapNeedsNetworkNamespaceProbe(cfg)
-    ? "With Docker sandbox network egress disabled, it also needs an unprivileged network namespace."
-    : "Docker sandbox network egress is enabled, so doctor only checked the user namespace.";
+    ? `With ${engineName} sandbox network egress disabled, it also needs an unprivileged network namespace.`
+    : `${engineName} sandbox network egress is enabled, so doctor only checked the user namespace.`;
   const lines = [
-    `Codex bwrap ${probe.kind} namespace probe failed while Docker sandbox mode is enabled.`,
+    `Codex bwrap ${probe.kind} namespace probe failed while ${engineName} sandbox mode is enabled.`,
     `Codex app-server \`workspace-write\` shell execution needs unprivileged user namespaces. ${networkSentence}`,
     "On Ubuntu/AppArmor hosts this usually appears as:",
     symptom,
@@ -174,19 +186,23 @@ async function noteCodexBwrapNamespaceWarning(cfg: OpenClawConfig): Promise<void
   note(lines.join("\n"), "Sandbox");
 }
 
-async function dockerImageExists(image: string): Promise<boolean> {
+async function containerImageExists(command: "docker" | "podman", image: string): Promise<boolean> {
   try {
-    await runExec("docker", ["image", "inspect", image], { timeoutMs: 5_000 });
+    await runExec(command, ["image", "inspect", image], { timeoutMs: 5_000 });
     return true;
   } catch (error) {
     const stderr =
       (error as { stderr: string } | undefined)?.stderr ||
       (error as { message: string } | undefined)?.message ||
       "";
-    if (stderr.includes("No such image")) {
+    const imageMissing =
+      command === "docker"
+        ? stderr.includes("No such image")
+        : /No such image|image not known|image .* not found/iu.test(stderr);
+    if (imageMissing) {
       return false;
     }
-    if (isDockerDaemonUnavailable(stderr)) {
+    if (command === "docker" && isDockerDaemonUnavailable(stderr)) {
       return false;
     }
     throw error;
@@ -200,7 +216,7 @@ function resolveSandboxDockerImage(cfg: OpenClawConfig): string {
 
 function resolveSandboxBackend(cfg: OpenClawConfig): string {
   const backend = cfg.agents?.defaults?.sandbox?.backend?.trim();
-  return backend || "docker";
+  return (backend || "docker").toLowerCase();
 }
 
 function resolveSandboxBrowserImage(cfg: OpenClawConfig): string {
@@ -247,6 +263,7 @@ function updateSandboxBrowserImage(cfg: OpenClawConfig, image: string): OpenClaw
 }
 
 type SandboxImageCheck = {
+  engineCommand: "docker" | "podman";
   kind: string;
   image: string;
   buildScript?: string;
@@ -258,7 +275,7 @@ async function handleMissingSandboxImage(
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
 ) {
-  const exists = await dockerImageExists(params.image);
+  const exists = await containerImageExists(params.engineCommand, params.image);
   if (exists) {
     return;
   }
@@ -282,7 +299,7 @@ async function handleMissingSandboxImage(
 /**
  * Checks configured sandbox images and optionally runs repo build scripts for missing defaults.
  *
- * Non-Docker backends skip Docker image checks; Docker mode also probes Codex bwrap namespace
+ * Non-container backends skip image checks; local container mode also probes Codex bwrap namespace
  * support because nested app-server shells rely on host user/network namespace policy.
  */
 export async function maybeRepairSandboxImages(
@@ -296,7 +313,7 @@ export async function maybeRepairSandboxImages(
     return cfg;
   }
   const backend = resolveSandboxBackend(cfg);
-  if (backend !== "docker") {
+  if (backend !== "docker" && backend !== "podman") {
     if (sandbox.browser?.enabled) {
       note(
         `Sandbox backend "${backend}" selected. Docker browser health checks are skipped; browser sandbox currently requires the docker backend.`,
@@ -305,22 +322,35 @@ export async function maybeRepairSandboxImages(
     }
     return cfg;
   }
+  const containerEngine = backend === "podman" ? PODMAN_SANDBOX_ENGINE : DOCKER_SANDBOX_ENGINE;
 
-  const dockerAvailable = await isDockerAvailable();
-  if (!dockerAvailable) {
-    const lines = [
-      `Sandbox mode is enabled (mode: "${mode}") but Docker is not available.`,
-      "Docker is required for sandbox mode to function.",
-      "Isolated sessions (cron jobs, sub-agents) will fail without Docker.",
-      "",
-      "Options:",
-      "- Install Docker and restart the gateway",
-      "- Disable sandbox mode: openclaw config set agents.defaults.sandbox.mode off",
-    ];
+  const engineAvailable = await isContainerEngineAvailable(containerEngine.command);
+  if (!engineAvailable) {
+    const lines =
+      containerEngine.id === "docker"
+        ? [
+            `Sandbox mode is enabled (mode: "${mode}") but Docker is not available.`,
+            "Docker is required for sandbox mode to function.",
+            "Isolated sessions (automations, sub-agents) will fail without Docker.",
+            "",
+            "Options:",
+            "- Install Docker and restart the gateway",
+            "- Disable sandbox mode: openclaw config set agents.defaults.sandbox.mode off",
+          ]
+        : [
+            `Sandbox mode is enabled (mode: "${mode}") but Podman is not available.`,
+            "Podman is required by the selected sandbox backend.",
+            "Isolated sessions (automations, sub-agents) will fail without Podman.",
+            "",
+            "Options:",
+            "- Install Podman and restart the gateway",
+            "- Disable sandbox mode: openclaw config set agents.defaults.sandbox.mode off",
+          ];
     note(lines.join("\n"), "Sandbox");
     return cfg;
   }
-  await noteCodexBwrapNamespaceWarning(cfg);
+  await validateSandboxContainerEngineTarget(containerEngine);
+  await noteCodexBwrapNamespaceWarning(cfg, containerEngine.displayName);
 
   let next = cfg;
   const changes: string[] = [];
@@ -328,14 +358,17 @@ export async function maybeRepairSandboxImages(
   const dockerImage = resolveSandboxDockerImage(cfg);
   await handleMissingSandboxImage(
     {
+      engineCommand: containerEngine.command,
       kind: "base",
       image: dockerImage,
       buildScript:
-        dockerImage === DEFAULT_SANDBOX_COMMON_IMAGE
-          ? "scripts/sandbox-common-setup.sh"
-          : dockerImage === DEFAULT_SANDBOX_IMAGE
-            ? "scripts/sandbox-setup.sh"
-            : undefined,
+        containerEngine.id !== "docker"
+          ? undefined
+          : dockerImage === DEFAULT_SANDBOX_COMMON_IMAGE
+            ? "scripts/sandbox-common-setup.sh"
+            : dockerImage === DEFAULT_SANDBOX_IMAGE
+              ? "scripts/sandbox-setup.sh"
+              : undefined,
       updateConfig: (image) => {
         next = updateSandboxDockerImage(next, image);
         changes.push(`Updated agents.defaults.sandbox.docker.image → ${image}`);
@@ -345,9 +378,10 @@ export async function maybeRepairSandboxImages(
     prompter,
   );
 
-  if (sandbox.browser?.enabled) {
+  if (sandbox.browser?.enabled && containerEngine.id === "docker") {
     await handleMissingSandboxImage(
       {
+        engineCommand: containerEngine.command,
         kind: "browser",
         image: resolveSandboxBrowserImage(cfg),
         buildScript: "scripts/sandbox-browser-setup.sh",
@@ -358,6 +392,11 @@ export async function maybeRepairSandboxImages(
       },
       runtime,
       prompter,
+    );
+  } else if (sandbox.browser?.enabled) {
+    note(
+      "Podman sandbox selected. Browser sandbox health checks are skipped because browser sandboxing requires the Docker engine.",
+      "Sandbox",
     );
   }
 

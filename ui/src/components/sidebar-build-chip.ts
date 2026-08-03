@@ -4,7 +4,11 @@ import { pathForRoute } from "../app-route-paths.ts";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
-import { formatBuildChipText, renderSidebarServerDetails } from "./sidebar-build-chip-format.ts";
+import {
+  formatBuildChipText,
+  formatSettingsBuildLabel,
+  renderSidebarServerDetails,
+} from "./sidebar-build-chip-format.ts";
 import "./tooltip.ts";
 
 function shouldHandleNavigationClick(event: MouseEvent): boolean {
@@ -23,9 +27,13 @@ class SidebarBuildChip extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) basePath = "";
   @property({ attribute: false }) gatewayVersion: string | null = null;
   @property({ attribute: false }) onNavigate?: (routeId: "about") => void;
+  @property({ attribute: false }) variant: "compact" | "settings" = "compact";
 
   override render() {
-    const text = formatBuildChipText(CONTROL_UI_BUILD_INFO);
+    const text =
+      this.variant === "settings"
+        ? formatSettingsBuildLabel(CONTROL_UI_BUILD_INFO, this.gatewayVersion)
+        : formatBuildChipText(CONTROL_UI_BUILD_INFO);
     if (!text) {
       return nothing;
     }

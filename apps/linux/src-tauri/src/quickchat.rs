@@ -478,7 +478,28 @@ fn ensure_quickchat_window(app: &AppHandle) -> Result<WebviewWindow, String> {
     Ok(window)
 }
 
-fn position_quickchat(app: &AppHandle, window: &Window) -> Result<(), String> {
+/// Re-express a window's physical size in a target monitor's physical pixels.
+///
+/// `inner_size()` reports physical pixels at the scale of the monitor the
+/// window is on *now*, while `work_area()` is physical pixels of the monitor we
+/// are about to move to. Comparing them directly misplaces Quick Chat across a
+/// mixed-DPI boundary: a 640pt window on a 2x display reports 1280px, so
+/// centring it on a 1x display uses double its real width. Scales that are
+/// equal (the single-monitor case) give a ratio of 1 and change nothing.
+pub(crate) fn quickchat_target_size(
+    window_physical: (f64, f64),
+    window_scale: f64,
+    monitor_scale: f64,
+) -> (f64, f64) {
+    let usable = |scale: f64| scale.is_finite() && scale > 0.0;
+    if !usable(window_scale) || !usable(monitor_scale) {
+        return window_physical;
+    }
+    let ratio = monitor_scale / window_scale;
+    (window_physical.0 * ratio, window_physical.1 * ratio)
+}
+
+pub(crate) fn position_quickchat(app: &AppHandle, window: &Window) -> Result<(), String> {
     let monitor = app
         .cursor_position()
         .ok()
@@ -490,10 +511,18 @@ fn position_quickchat(app: &AppHandle, window: &Window) -> Result<(), String> {
     let window_size = window
         .inner_size()
         .map_err(|error| format!("Could not read Quick Chat size: {error}"))?;
+    let window_scale = window
+        .scale_factor()
+        .map_err(|error| format!("Could not read Quick Chat scale: {error}"))?;
+    let target_size = quickchat_target_size(
+        (window_size.width as f64, window_size.height as f64),
+        window_scale,
+        monitor.scale_factor(),
+    );
     let (x, y) = quickchat_position(
         (work_area.position.x as f64, work_area.position.y as f64),
         (work_area.size.width as f64, work_area.size.height as f64),
-        (window_size.width as f64, window_size.height as f64),
+        target_size,
     );
     window
         .set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32))
@@ -782,13 +811,9 @@ pub async fn quickchat_ready(
 }
 
 #[tauri::command]
-pub fn quickchat_show_dashboard(
-    webview: Webview,
-    app: AppHandle,
-    desktop: State<'_, DesktopState>,
-) -> Result<(), String> {
+pub fn quickchat_show_dashboard(webview: Webview, app: AppHandle) -> Result<(), String> {
     require_quickchat_webview(&webview)?;
-    tray::open_dashboard(&app, desktop.inner());
+    tray::open_dashboard(&app);
     Ok(())
 }
 
@@ -980,5 +1005,65 @@ mod tests {
         assert!(!state.matches_shortcut(&default));
         state.set_shortcut_registered(false);
         assert!(!state.matches_shortcut(&custom));
+    }
+
+    #[test]
+    fn target_size_is_identity_within_one_monitor() {
+        // The single-monitor case must not move by even a pixel.
+        assert_eq!(
+            quickchat_target_size((1280.0, 720.0), 2.0, 2.0),
+            (1280.0, 720.0)
+        );
+        assert_eq!(
+            quickchat_target_size((640.0, 360.0), 1.0, 1.0),
+            (640.0, 360.0)
+        );
+        assert_eq!(
+            quickchat_target_size((960.0, 540.0), 1.5, 1.5),
+            (960.0, 540.0)
+        );
+    }
+
+    #[test]
+    fn target_size_rescales_across_a_dpi_boundary() {
+        // A 640pt window on a 2x display reports 1280px; on a 1x display it is
+        // really 640px wide, and centring with 1280 would sit it far left.
+        assert_eq!(
+            quickchat_target_size((1280.0, 720.0), 2.0, 1.0),
+            (640.0, 360.0)
+        );
+        // And the reverse direction.
+        assert_eq!(
+            quickchat_target_size((640.0, 360.0), 1.0, 2.0),
+            (1280.0, 720.0)
+        );
+        // Fractional scales, as Windows and some Linux compositors report.
+        assert_eq!(
+            quickchat_target_size((1200.0, 600.0), 2.0, 1.5),
+            (900.0, 450.0)
+        );
+    }
+
+    #[test]
+    fn target_size_falls_back_on_unusable_scales() {
+        for scale in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(
+                quickchat_target_size((800.0, 600.0), scale, 2.0),
+                (800.0, 600.0)
+            );
+            assert_eq!(
+                quickchat_target_size((800.0, 600.0), 2.0, scale),
+                (800.0, 600.0)
+            );
+        }
+    }
+
+    #[test]
+    fn rescaled_window_centers_on_the_target_monitor() {
+        // End to end: a 2x-scaled 640pt-wide window invoked on a 1x 1920px
+        // monitor. Without the rescale it centers using 1280 and lands at 320.
+        let target = quickchat_target_size((1280.0, 720.0), 2.0, 1.0);
+        let (x, _) = quickchat_position((0.0, 0.0), (1920.0, 1080.0), target);
+        assert_eq!(x, 640.0);
     }
 }

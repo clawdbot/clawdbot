@@ -57,6 +57,7 @@ async function transcribeXaiAudio(
     headers,
     body: form,
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
     fetchFn,
     allowPrivateNetwork,
     dispatcherPolicy,

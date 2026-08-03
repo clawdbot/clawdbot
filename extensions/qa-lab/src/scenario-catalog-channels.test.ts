@@ -20,18 +20,22 @@ function requireFlowScenario(scenario: CatalogScenario): FlowCatalogScenario {
 
 describe("qa scenario catalog channel contracts", () => {
   const agentRuntime = "agent-runtime";
-  const memory = "session-memory";
 
   it("routes native command session targeting through Crabline Telegram", () => {
     const scenario = readQaScenarioById("native-command-session-target");
     const config = readQaScenarioExecutionConfig("native-command-session-target") as
       | {
           requiredProviderMode?: string;
+          sessionKey?: string;
         }
       | undefined;
 
     expect(scenario.execution.channel).toBe("telegram");
     expect(config?.requiredProviderMode).toBe("mock-openai");
+    expect(config?.sessionKey).toBe("agent:main:telegram:direct:qa-native-operator");
+    expect(JSON.stringify(requireFlowScenario(scenario).execution.flow)).toContain(
+      "session.key === config.sessionKey && session.hasActiveRun === true",
+    );
   });
 
   it("keeps channel-owned scenarios independent from the driver implementation", () => {
@@ -51,6 +55,66 @@ describe("qa scenario catalog channel contracts", () => {
     }
   });
 
+  it("keeps the memory channel-context proof on the internal QA channel", () => {
+    expect(readQaScenarioById("memory-tools-channel-context").execution.channel).toBe("qa-channel");
+  });
+
+  it("keeps stored inbound audio proof on the real QA Channel and Gateway flow", () => {
+    const scenario = requireFlowScenario(
+      readQaScenarioById("inbound-media-store-audio-transcription"),
+    );
+    const flow = JSON.stringify(scenario.execution.flow);
+
+    expect(scenario.coverage?.primary).toEqual(["media.inbound-media-store"]);
+    expect(scenario.coverage?.secondary).toEqual(["channels.inbound-media-normalization"]);
+    expect(scenario.execution.channel).toBe("qa-channel");
+    expect(scenario.execution.providerMode).toBe("mock-openai");
+    expect(flow).toContain('"sendInbound"');
+    expect(flow).toContain('"contentBase64"');
+    expect(flow).toContain('"mediaFactCarrier":"media-store-url"');
+    expect(flow).toContain("String(candidate.text ?? '').trim() === config.expectedMarker");
+    expect(flow).toContain("String(message.text ?? '').trim() === config.expectedMarker");
+    expect(flow).toContain("conversationOutbound.length === 1");
+    expect(flow).not.toContain(".includes(config.expectedMarker)");
+    expect(scenario.gatewayConfigPatch).toMatchObject({
+      tools: { media: { audio: { echoTranscript: false } } },
+    });
+    expect(flow).not.toContain('"call":"runAgentPrompt"');
+  });
+
+  it("marks live transport modules as live-driver-only", () => {
+    for (const scenarioId of [
+      "matrix-approval-exec-metadata-single-event",
+      "matrix-mxid-prefixed-command-block",
+      "slack-codex-approval-exec-native",
+      "slack-codex-approval-plugin-native",
+    ]) {
+      expect(readQaScenarioExecutionConfig(scenarioId)?.requiredChannelDriver, scenarioId).toBe(
+        "live",
+      );
+    }
+  });
+
+  it("keeps the Teams final-dedupe proof on the real Gateway transport", () => {
+    const scenario = requireFlowScenario(
+      readQaScenarioById("msteams-thread-message-tool-final-dedupe"),
+    );
+    const flow = JSON.stringify(scenario.execution.flow);
+
+    expect(scenario.execution.channel).toBe("msteams");
+    expect(scenario.execution.suiteIsolation).toBe("isolated");
+    expect(scenario.gatewayConfigPatch).toMatchObject({
+      messages: { groupChat: { visibleReplies: "automatic" } },
+      tools: { alsoAllow: ["message"] },
+      agents: { entries: { qa: { tools: { alsoAllow: ["message"] } } } },
+    });
+    expect(flow).toContain("QA-MSTEAMS-SAME-OK");
+    expect(flow).toContain("QA-MSTEAMS-OTHER-THREAD-OK");
+    expect(flow).toContain("QA-MSTEAMS-OTHER-CONVERSATION-OK");
+    expect(flow).toContain("QA-MSTEAMS-DM-OK");
+    expect(flow).toContain("QA-MSTEAMS-GROUP-OK");
+  });
+
   it("isolates scenarios that own asynchronous transport state", () => {
     const channelBaseline = requireFlowScenario(readQaScenarioById("channel-chat-baseline"));
     const subagentFanout = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));
@@ -59,54 +123,48 @@ describe("qa scenario catalog channel contracts", () => {
     expect(subagentFanout.execution.suiteIsolation).toBe("isolated");
   });
 
-  it("settles subagent completions before reading the SQLite session store", () => {
+  it("uses public parent history and durable task records before accepting fanout", () => {
     const scenario = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));
     const flow = JSON.stringify(scenario.execution.flow);
-    const completionWaits = [...flow.matchAll(/expectedChildCompletionMarkers/gu)].map(
-      (match) => match.index,
-    );
-    const storeReads = [...flow.matchAll(/readRawQaSessionStore/gu)].map((match) => match.index);
 
-    expect(completionWaits).toHaveLength(2);
-    expect(storeReads).toHaveLength(2);
-    expect(completionWaits.every((wait, index) => wait < (storeReads[index] ?? -1))).toBe(true);
+    expect(flow).toContain('"call":"startAgentRun"');
+    expect(flow).not.toContain('"call":"runAgentPrompt"');
+    expect(flow).toContain('"taskTracking":false');
+    expect(flow).toContain('"saveAs":"parentOutbound"');
+    expect(flow).toContain("waitForAgentHistoryReply");
+    expect(flow).not.toContain('"call":"waitForOutboundMessage"');
+    expect(flow).not.toContain("childCompletionMarker");
+    expect(flow).toContain("['tasks', 'list', '--json', '--runtime', 'subagent']");
+    expect(flow).toContain("task.requesterSessionKey === sessionKey");
+    expect(flow).toContain("task?.status === 'succeeded'");
+    expect(flow).toContain("task.deliveryStatus === 'delivered'");
+    expect(flow).not.toContain("readRawQaSessionStore");
+    expect(flow).not.toContain("readSessionTranscriptSummary");
+    expect(flow).not.toContain('"value":"subagent-1: ok\\nsubagent-2: ok"');
   });
 
-  it("adds a dreaming shadow trial report scenario", () => {
-    const scenario = readQaScenarioById("dreaming-shadow-trial-report");
-    const config = readQaScenarioExecutionConfig("dreaming-shadow-trial-report") as
-      | {
-          prompt?: string;
-          reportName?: string;
-          expectedReportAll?: string[];
-          forbiddenReplyNeedles?: string[];
-          seededMemory?: string;
-        }
-      | undefined;
-    const flow = JSON.stringify(scenario.execution.flow);
+  it("keeps channel streaming evidence portable across QA Channel and Crabline Telegram", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("channel-message-flows"));
 
-    expect(scenario.coverage?.primary).toEqual([`${memory}.memory-files-dreaming`]);
-    expect(scenario.coverage?.secondary).toEqual([
-      `${memory}.memory-files-promotion`,
-      `${memory}.memory-files-artifact-safety`,
-    ]);
-    expect(config?.expectedReportAll).toContain("verdict: helpful");
-    expect(config?.expectedReportAll).toContain("exact verification commands and remaining risk");
-    expect(config?.expectedReportAll).toContain("omits the exact command and remaining risk");
-    expect(config?.expectedReportAll).toContain("calls out the remaining review risk");
-    expect(config?.forbiddenReplyNeedles).toContain("candidate was promoted to MEMORY.md");
-    expect(flow).toContain("plannedToolName === 'write'");
-    expect(flow).toContain("readIndices[1] < firstWrite");
-    expect(flow).toContain("String(memoryAfter) === config.seededMemory");
-  });
-
-  it("enables Telegram previews for channel streaming evidence", () => {
-    const scenario = readQaScenarioById("channel-message-flows");
-
-    expect(scenario.coverage?.primary).toEqual([`${agentRuntime}.streaming-replies`]);
+    expect(scenario.execution.channel).toBeUndefined();
+    expect(scenario.execution.channels).toEqual(["qa-channel", "telegram"]);
+    expect(scenario.coverage?.primary).toEqual(["channels.streaming-final-reply"]);
     expect(scenario.coverage?.secondary).toEqual([`${agentRuntime}.streaming-replies-delivery`]);
     expect(scenario.gatewayConfigPatch).toMatchObject({
-      channels: { telegram: { streaming: { mode: "partial" } } },
+      channels: {
+        telegram: {
+          groups: { "*": { requireMention: false } },
+          streaming: { mode: "partial" },
+        },
+      },
+    });
+  });
+
+  it("disables Telegram mention gating for deterministic group delivery proofs", () => {
+    const scenario = readQaScenarioById("telegram-assistant-transcript-role-boundary");
+
+    expect(scenario.gatewayConfigPatch).toMatchObject({
+      channels: { telegram: { groups: { "*": { requireMention: false } } } },
     });
   });
 

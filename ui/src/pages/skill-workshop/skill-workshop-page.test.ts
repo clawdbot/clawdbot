@@ -68,6 +68,7 @@ function createContext(
     client,
     phase: "connected",
     offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: "research",
     sessionKey: "global",
@@ -113,6 +114,7 @@ describe("SkillWorkshopPage lifecycle", () => {
       body: "## Workflow\n- test",
       status: "pending",
       version: 1,
+      revisionHash: null,
       createdAt: 0,
       recencyGroup: "today",
       ageLabel: "now",
@@ -153,6 +155,7 @@ describe("SkillWorkshopPage lifecycle", () => {
       body: `## Workflow\n- ${previewText}`,
       status: "pending",
       version: 1,
+      revisionHash: null,
       createdAt: 0,
       updatedAt: 0,
       recencyGroup: "today",
@@ -321,6 +324,7 @@ describe("SkillWorkshopPage lifecycle", () => {
       body: "",
       status: "pending",
       version: 1,
+      revisionHash: null,
       createdAt: 0,
       updatedAt: 0,
       recencyGroup: "today",
@@ -369,6 +373,141 @@ describe("SkillWorkshopPage lifecycle", () => {
     expect(newContext.navigate).not.toHaveBeenCalled();
   });
 
+  it("does not create a fallback revision session after a same-context reconnect", async () => {
+    const sessionList = deferred<SessionsListResult>();
+    const create = vi.fn(async () => "agent:research:revision");
+    const sessions = {
+      state: { agentId: null, result: null, loading: false, error: null },
+      list: vi.fn(() => sessionList.promise),
+      create,
+    } as unknown as ApplicationContext["sessions"];
+    let gatewayListener: ((snapshot: ApplicationGatewaySnapshot) => void) | undefined;
+    const context = createContext(
+      vi.fn(async () => ({})),
+      {
+        sessions,
+        gatewaySubscribe: (listener) => {
+          gatewayListener = listener;
+          return () => undefined;
+        },
+      },
+    );
+    context.gateway.snapshot.hello = {
+      auth: { role: "operator", scopes: ["operator.write"] },
+      features: { methods: ["sessions.create"] },
+    } as ApplicationGatewaySnapshot["hello"];
+    const loadedState = createSkillWorkshopState();
+    loadedState.skillWorkshopAgentId = "research";
+    loadedState.skillWorkshopLoaded = true;
+    const proposal = {
+      key: "proposal-reconnect",
+      slug: "proposal-reconnect",
+      name: "Proposal",
+      oneLine: "",
+      body: "",
+      status: "pending",
+      version: 1,
+      revisionHash: null,
+      createdAt: 0,
+      updatedAt: 0,
+      recencyGroup: "today",
+      ageLabel: "now",
+      supportFiles: [],
+      isNew: false,
+    } satisfies SkillWorkshopProposal;
+    loadedState.skillWorkshopProposals = [proposal];
+    loadedState.skillWorkshopSelectedKey = proposal.key;
+    const page = document.createElement(
+      "openclaw-skill-workshop-page",
+    ) as SkillWorkshopPageTestElement;
+    page.data = skillWorkshopRouteData(loadedState);
+    page.context = context;
+    document.body.append(page);
+    await page.updateComplete;
+
+    const revision = page.handleRevisionRequest("revise it", proposal, "research");
+    await waitForSkillWorkshop(() => expect(sessions.list).toHaveBeenCalledTimes(1));
+
+    const replacement = {
+      ...context.gateway.snapshot,
+      client: {
+        request: vi.fn(async () => ({})),
+      } as unknown as GatewayBrowserClient,
+    };
+    Object.defineProperty(context.gateway, "snapshot", {
+      configurable: true,
+      get: () => replacement,
+    });
+    gatewayListener?.(replacement);
+    sessionList.resolve({
+      ts: 0,
+      path: "",
+      count: 0,
+      defaults: {
+        modelProvider: null,
+        model: null,
+        contextTokens: null,
+      },
+      sessions: [],
+    });
+    await revision;
+
+    expect(create).not.toHaveBeenCalled();
+    expect(context.skillWorkshopRevision.prepare).not.toHaveBeenCalled();
+    expect(context.navigate).not.toHaveBeenCalled();
+  });
+
+  it("does not create a fallback revision session without sessions.create access", async () => {
+    const create = vi.fn(async () => "agent:research:revision");
+    const sessions = {
+      state: { agentId: "research", result: { sessions: [] }, loading: false, error: null },
+      list: vi.fn(async () => ({ sessions: [] })),
+      create,
+    } as unknown as ApplicationContext["sessions"];
+    const context = createContext(
+      vi.fn(async () => ({})),
+      { sessions },
+    );
+    context.gateway.snapshot.hello = {
+      auth: { role: "operator", scopes: ["operator.read"] },
+      features: { methods: ["sessions.create"] },
+    } as ApplicationGatewaySnapshot["hello"];
+    const loadedState = createSkillWorkshopState();
+    loadedState.skillWorkshopAgentId = "research";
+    loadedState.skillWorkshopLoaded = true;
+    const proposal = {
+      key: "proposal-read-only",
+      slug: "proposal-read-only",
+      name: "Proposal",
+      oneLine: "",
+      body: "",
+      status: "pending",
+      version: 1,
+      revisionHash: null,
+      createdAt: 0,
+      updatedAt: 0,
+      recencyGroup: "today",
+      ageLabel: "now",
+      supportFiles: [],
+      isNew: false,
+    } satisfies SkillWorkshopProposal;
+    loadedState.skillWorkshopProposals = [proposal];
+    loadedState.skillWorkshopSelectedKey = proposal.key;
+    const page = document.createElement(
+      "openclaw-skill-workshop-page",
+    ) as SkillWorkshopPageTestElement;
+    page.data = skillWorkshopRouteData(loadedState);
+    page.context = context;
+    document.body.append(page);
+    await page.updateComplete;
+
+    await expect(page.handleRevisionRequest("revise it", proposal, "research")).rejects.toThrow();
+
+    expect(create).not.toHaveBeenCalled();
+    expect(context.skillWorkshopRevision.prepare).not.toHaveBeenCalled();
+    expect(context.navigate).not.toHaveBeenCalled();
+  });
+
   it("does not refresh the previous agent after a history scan finishes", async () => {
     const scan = deferred<unknown>();
     const scanStatus = {
@@ -407,6 +546,12 @@ describe("SkillWorkshopPage lifecycle", () => {
     );
     await waitForSkillWorkshop(() =>
       expect(page.state?.skillWorkshopHistoryScan.loaded).toBe(true),
+    );
+    await page.updateComplete;
+    await waitForSkillWorkshop(() =>
+      expect(page.querySelector<HTMLButtonElement>(".sw-history__action button")?.disabled).toBe(
+        false,
+      ),
     );
 
     page.querySelector<HTMLButtonElement>(".sw-history__action button")?.click();
@@ -471,6 +616,12 @@ describe("SkillWorkshopPage lifecycle", () => {
     await page.updateComplete;
     await waitForSkillWorkshop(() =>
       expect(page.state?.skillWorkshopHistoryScan.loaded).toBe(true),
+    );
+    await page.updateComplete;
+    await waitForSkillWorkshop(() =>
+      expect(page.querySelector<HTMLButtonElement>(".sw-history__action button")?.disabled).toBe(
+        false,
+      ),
     );
 
     page.querySelector<HTMLButtonElement>(".sw-history__action button")?.click();
@@ -556,6 +707,12 @@ describe("SkillWorkshopPage lifecycle", () => {
     await waitForSkillWorkshop(() =>
       expect(page.state?.skillWorkshopHistoryScan.loaded).toBe(true),
     );
+    await page.updateComplete;
+    await waitForSkillWorkshop(() =>
+      expect(page.querySelector<HTMLButtonElement>(".sw-history__action button")?.disabled).toBe(
+        false,
+      ),
+    );
 
     page.querySelector<HTMLButtonElement>(".sw-history__action button")?.click();
 
@@ -595,12 +752,12 @@ describe("SkillWorkshopPage self-learning toggle", () => {
   it("reflects the config value in the header toggle and hides it without a snapshot", async () => {
     const enabledPage = createLoadedPage(
       createRuntimeConfigStub({
-        sourceConfig: { skills: { workshop: { autonomous: { enabled: true } } } },
+        sourceConfig: { skills: { workshop: { autonomous: { mode: "auto" } } } },
       }),
     );
     await enabledPage.updateComplete;
     const toggle = enabledPage.querySelector<HTMLInputElement>(
-      ".sw-header-controls input[aria-label='Toggle self-learning skill proposals']",
+      ".sw-header-controls input[aria-label='Toggle autonomous self-learning']",
     );
     expect(toggle?.checked).toBe(true);
     document.body.replaceChildren();
@@ -609,14 +766,17 @@ describe("SkillWorkshopPage self-learning toggle", () => {
     await noSnapshotPage.updateComplete;
     expect(
       noSnapshotPage.querySelector(
-        ".sw-header-controls input[aria-label='Toggle self-learning skill proposals']",
+        ".sw-header-controls input[aria-label='Toggle autonomous self-learning']",
       ),
     ).toBeNull();
   });
 
   it("enables self-learning from the empty-state pitch via a config merge patch", async () => {
     const patch = vi.fn(async () => true);
-    const runtimeConfig = createRuntimeConfigStub({ sourceConfig: {}, patch });
+    const runtimeConfig = createRuntimeConfigStub({
+      sourceConfig: { skills: { workshop: { autonomous: { mode: "off" } } } },
+      patch,
+    });
     const page = createLoadedPage(runtimeConfig);
     await page.updateComplete;
 
@@ -626,7 +786,7 @@ describe("SkillWorkshopPage self-learning toggle", () => {
 
     await waitForSkillWorkshop(() =>
       expect(patch).toHaveBeenCalledWith({
-        raw: { skills: { workshop: { autonomous: { enabled: true } } } },
+        raw: { skills: { workshop: { autonomous: { mode: "auto" } } } },
         note: "Enable Skill Workshop self-learning",
       }),
     );
@@ -634,7 +794,9 @@ describe("SkillWorkshopPage self-learning toggle", () => {
   });
 
   it("refreshes a stale config snapshot and retries the self-learning toggle", async () => {
-    const runtimeConfig = createRuntimeConfigStub({ sourceConfig: {} });
+    const runtimeConfig = createRuntimeConfigStub({
+      sourceConfig: { skills: { workshop: { autonomous: { mode: "off" } } } },
+    });
     runtimeConfig.patch = vi
       .fn()
       .mockImplementationOnce(async () => {
@@ -651,7 +813,7 @@ describe("SkillWorkshopPage self-learning toggle", () => {
       if (runtimeConfig.patch.mock.calls.length === 2) {
         runtimeConfig.state.configSnapshot = {
           hash: "hash-3",
-          sourceConfig: { skills: { workshop: { autonomous: { enabled: true } } } },
+          sourceConfig: { skills: { workshop: { autonomous: { mode: "auto" } } } },
         };
       }
     });
@@ -666,14 +828,17 @@ describe("SkillWorkshopPage self-learning toggle", () => {
     expect(page.querySelector(".sw-error")).toBeNull();
     expect(
       page.querySelector<HTMLInputElement>(
-        ".sw-header-controls input[aria-label='Toggle self-learning skill proposals']",
+        ".sw-header-controls input[aria-label='Toggle autonomous self-learning']",
       )?.checked,
     ).toBe(true);
   });
 
   it("surfaces a patch failure and keeps the toggle off", async () => {
     const patch = vi.fn(async () => false);
-    const runtimeConfig = createRuntimeConfigStub({ sourceConfig: {}, patch });
+    const runtimeConfig = createRuntimeConfigStub({
+      sourceConfig: { skills: { workshop: { autonomous: { mode: "off" } } } },
+      patch,
+    });
     const page = createLoadedPage(runtimeConfig);
     await page.updateComplete;
 
@@ -685,7 +850,7 @@ describe("SkillWorkshopPage self-learning toggle", () => {
     );
     expect(runtimeConfig.refresh).not.toHaveBeenCalled();
     const toggle = page.querySelector<HTMLInputElement>(
-      ".sw-header-controls input[aria-label='Toggle self-learning skill proposals']",
+      ".sw-header-controls input[aria-label='Toggle autonomous self-learning']",
     );
     expect(toggle?.checked).toBe(false);
   });

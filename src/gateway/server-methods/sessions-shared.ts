@@ -13,9 +13,13 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import {
+  resolvePluginSessionOwnershipError,
+  type PluginSessionOwnershipAction,
+} from "../session-plugin-ownership.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "../session-store-key.js";
 import {
-  resolveFreshestSessionEntryFromStoreKeys,
+  resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
 } from "../session-utils.js";
@@ -161,27 +165,23 @@ export function requireSessionKey(key: unknown, respond: RespondFn): string | nu
   return normalized;
 }
 
-export function rejectPluginRuntimeDeleteMismatch(params: {
+export function rejectPluginRuntimeSessionOwnershipMismatch(params: {
+  action: PluginSessionOwnershipAction;
   client: GatewayClient | null;
   key: string;
   entry: SessionEntry | undefined;
   respond: RespondFn;
 }): boolean {
-  const pluginOwnerId = normalizeOptionalString(params.client?.internal?.pluginRuntimeOwnerId);
-  if (!pluginOwnerId || !params.entry) {
+  const error = resolvePluginSessionOwnershipError({
+    action: params.action,
+    entry: params.entry,
+    key: params.key,
+    pluginOwnerId: params.client?.internal?.pluginRuntimeOwnerId,
+  });
+  if (!error) {
     return false;
   }
-  if (normalizeOptionalString(params.entry.pluginOwnerId) === pluginOwnerId) {
-    return false;
-  }
-  params.respond(
-    false,
-    undefined,
-    errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      `Plugin "${pluginOwnerId}" cannot delete session "${params.key}" because it did not create it.`,
-    ),
-  );
+  params.respond(false, undefined, error);
   return true;
 }
 
@@ -253,7 +253,7 @@ export function loadSessionEntriesForTarget(params: {
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
   const store = target.store;
-  const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
+  const entry = resolveCanonicalSessionEntryFromStoreKeys(store, target.storeKeys);
   return { target, storePath: target.storePath, store, entry };
 }
 

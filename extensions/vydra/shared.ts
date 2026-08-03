@@ -26,9 +26,6 @@ export const DEFAULT_VYDRA_VIDEO_MODEL = "veo3";
 export const DEFAULT_VYDRA_SPEECH_MODEL = "elevenlabs/tts";
 export const DEFAULT_VYDRA_VOICE_ID = "21m00Tcm4TlvDq8ikWAM";
 const DEFAULT_HTTP_TIMEOUT_MS = 120_000;
-const DEFAULT_GENERATED_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
-const DEFAULT_GENERATED_AUDIO_MAX_BYTES = 16 * 1024 * 1024;
-const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
 const POLL_INTERVAL_MS = 2_500;
 const MAX_POLL_ATTEMPTS = 120;
 type VydraAuthStore = Parameters<typeof resolveApiKeyForProvider>[0]["store"];
@@ -259,23 +256,6 @@ function resolveVydraAssetRequestHeaders(
   } catch {
     return undefined;
   }
-}
-
-export function resolveVydraGeneratedMediaMaxBytes(params: {
-  cfg: { agents?: { defaults?: { mediaMaxMb?: number } } };
-  kind: VydraMediaKind;
-}): number {
-  const configured = params.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  if (params.kind === "image") {
-    return DEFAULT_GENERATED_IMAGE_MAX_BYTES;
-  }
-  if (params.kind === "audio") {
-    return DEFAULT_GENERATED_AUDIO_MAX_BYTES;
-  }
-  return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
 }
 
 export async function downloadVydraAsset(params: {

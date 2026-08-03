@@ -408,8 +408,11 @@ export function createReadToolDefinition(
             } else {
               // Read text content.
               const buffer = await ops.readFile(absolutePath);
-              const textContent =
+              const decodedText =
                 ops.decodeText?.({ buffer, absolutePath }) ?? buffer.toString("utf8");
+              const textContent = decodedText.startsWith("\uFEFF")
+                ? decodedText.slice(1)
+                : decodedText;
               const allLines = textContent.split("\n");
               const totalFileLines = allLines.length;
               // Apply offset if specified. Convert from 1-indexed input to 0-indexed array access.

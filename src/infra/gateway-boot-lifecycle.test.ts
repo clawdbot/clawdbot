@@ -2,7 +2,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  formatLegacyAgentMediaMigrationRequiredMessage,
+  GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON,
+} from "../state/openclaw-agent-db-migration-required.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -11,9 +16,13 @@ import {
 import {
   GATEWAY_CRASH_LOOP_BREAKER_REASON,
   GATEWAY_CRASH_LOOP_RECOVERED_REASON,
+  GATEWAY_BOOT_REASON_MAX_UTF16_CODE_UNITS,
   completeGatewayBootLifecycle,
+  formatGatewayCrashLoopManualChannelStartHint,
   inspectGatewayCrashLoopBreaker,
   recordGatewayBootStart,
+  recordGatewayCrashLoopRecovery,
+  repairGatewayAgentMediaMigrationStartupFailures,
 } from "./gateway-boot-lifecycle.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 
@@ -170,6 +179,59 @@ describe("gateway crash-loop breaker", () => {
     expect(secondDecision).toMatchObject({ tripped: false, recovered: false });
   });
 
+  it("records a fresh lifecycle segment before recovered channel startup", () => {
+    const db = createLifecycleDb();
+    const nowMs = 1_000_000;
+    const safeModeBootId = recordGatewayBootStart(
+      db.env,
+      nowMs - GATEWAY_BOOT_LOOP_WINDOW_MS - 1,
+      GATEWAY_CRASH_LOOP_BREAKER_REASON,
+    );
+
+    expect(inspectGatewayCrashLoopBreaker(db.env, nowMs)).toMatchObject({
+      recovered: true,
+      uncleanBoots: 0,
+    });
+
+    const recoveredBootId = recordGatewayCrashLoopRecovery(safeModeBootId, db.env, nowMs);
+
+    expect(recoveredBootId).toBeDefined();
+    expect(
+      executeSqliteQuerySync(
+        db.db,
+        db.kysely
+          .selectFrom("gateway_boot_lifecycle")
+          .select(["boot_id", "completed_at_ms", "outcome", "startup_reason"])
+          .orderBy("started_at_ms"),
+      ).rows,
+    ).toEqual([
+      {
+        boot_id: safeModeBootId,
+        completed_at_ms: nowMs,
+        outcome: "safe_mode_stable",
+        startup_reason: GATEWAY_CRASH_LOOP_BREAKER_REASON,
+      },
+      {
+        boot_id: recoveredBootId,
+        completed_at_ms: null,
+        outcome: null,
+        startup_reason: GATEWAY_CRASH_LOOP_RECOVERED_REASON,
+      },
+    ]);
+    expect(inspectGatewayCrashLoopBreaker(db.env, nowMs + 1)).toMatchObject({
+      recovered: false,
+      uncleanBoots: 1,
+    });
+    insertBootRows(db, [
+      { bootId: "post-recovery-crash-a", startedAtMs: nowMs + 2 },
+      { bootId: "post-recovery-crash-b", startedAtMs: nowMs + 3 },
+    ]);
+    expect(inspectGatewayCrashLoopBreaker(db.env, nowMs + 4)).toMatchObject({
+      tripped: true,
+      uncleanBoots: GATEWAY_BOOT_LOOP_UNCLEAN_THRESHOLD,
+    });
+  });
+
   it("records forced stops without tripping the breaker", () => {
     const db = createLifecycleDb();
     const nowMs = 1_000_000;
@@ -191,6 +253,89 @@ describe("gateway crash-loop breaker", () => {
 
     expect(decision.tripped).toBe(false);
     expect(decision.uncleanBoots).toBe(0);
+  });
+
+  it("repairs only typed and shipped media-migration startup failures", () => {
+    const lifecycle = createLifecycleDb();
+    const databasePath = "/tmp/openclaw-agent.sqlite";
+    const longDatabasePath = `/tmp/${"agent-".repeat(100)}openclaw-agent.sqlite`;
+    const nowMs = 1_000_000;
+
+    insertBootRows(lifecycle, [
+      {
+        bootId: "typed-a",
+        startedAtMs: nowMs - 4,
+        completedAtMs: nowMs - 3,
+        outcome: "startup_failed",
+        startupReason: GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON,
+        reason: "typed migration failure",
+      },
+      {
+        bootId: "typed-b",
+        startedAtMs: nowMs - 3,
+        completedAtMs: nowMs - 2,
+        outcome: "startup_failed",
+        startupReason: GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON,
+        reason: "typed migration failure",
+      },
+      {
+        bootId: "beta-raw",
+        startedAtMs: nowMs - 2,
+        completedAtMs: nowMs - 1,
+        outcome: "startup_failed",
+        reason: formatLegacyAgentMediaMigrationRequiredMessage(databasePath, 14),
+      },
+      {
+        bootId: "beta-raw-truncated",
+        startedAtMs: nowMs - 2,
+        completedAtMs: nowMs - 1,
+        outcome: "startup_failed",
+        reason: truncateUtf16Safe(
+          formatLegacyAgentMediaMigrationRequiredMessage(longDatabasePath, 14),
+          GATEWAY_BOOT_REASON_MAX_UTF16_CODE_UNITS,
+        ),
+      },
+      {
+        bootId: "unrelated",
+        startedAtMs: nowMs - 1,
+        completedAtMs: nowMs,
+        outcome: "startup_failed",
+        reason: "EADDRINUSE",
+      },
+    ]);
+
+    expect(inspectGatewayCrashLoopBreaker(lifecycle.env, nowMs).tripped).toBe(true);
+    expect(
+      repairGatewayAgentMediaMigrationStartupFailures({
+        databasePaths: [databasePath, longDatabasePath],
+        env: lifecycle.env,
+      }),
+    ).toBe(4);
+    expect(inspectGatewayCrashLoopBreaker(lifecycle.env, nowMs + 1)).toMatchObject({
+      tripped: false,
+      uncleanBoots: 1,
+    });
+    expect(
+      repairGatewayAgentMediaMigrationStartupFailures({
+        databasePaths: [databasePath],
+        env: lifecycle.env,
+      }),
+    ).toBe(0);
+
+    const rows = executeSqliteQuerySync(
+      lifecycle.db,
+      lifecycle.kysely
+        .selectFrom("gateway_boot_lifecycle")
+        .select(["boot_id", "outcome"])
+        .orderBy("boot_id"),
+    ).rows;
+    expect(rows).toEqual([
+      { boot_id: "beta-raw", outcome: "startup_failure_repaired" },
+      { boot_id: "beta-raw-truncated", outcome: "startup_failure_repaired" },
+      { boot_id: "typed-a", outcome: "startup_failure_repaired" },
+      { boot_id: "typed-b", outcome: "startup_failure_repaired" },
+      { boot_id: "unrelated", outcome: "startup_failed" },
+    ]);
   });
 
   it("prunes boot rows older than retention when recording a new boot", () => {
@@ -218,5 +363,27 @@ describe("gateway crash-loop breaker", () => {
     expect(rows).toHaveLength(2);
     expect(rows).toContain("kept");
     expect(rows).not.toContain("old");
+  });
+});
+
+describe("formatGatewayCrashLoopManualChannelStartHint", () => {
+  it("uses a placeholder when no channel is known", () => {
+    expect(formatGatewayCrashLoopManualChannelStartHint()).toContain(
+      `--params '{"channel":"<id>"}'`,
+    );
+  });
+
+  it("names the channel being suppressed", () => {
+    expect(formatGatewayCrashLoopManualChannelStartHint({ channelId: "telegram" })).toContain(
+      `--params '{"channel":"telegram"}'`,
+    );
+  });
+
+  // Suppression is reported per account; omitting accountId would tell operators to run a command
+  // that starts the channel's default account instead of the one the warning named.
+  it("carries the account when suppression is account-scoped", () => {
+    expect(
+      formatGatewayCrashLoopManualChannelStartHint({ channelId: "telegram", accountId: "work" }),
+    ).toContain(`--params '{"channel":"telegram","accountId":"work"}'`);
   });
 });

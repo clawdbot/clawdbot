@@ -1,5 +1,5 @@
 import type { ContextEngineSessionTarget } from "../../../context-engine/types.js";
-import { registerAgentRunContext } from "../../../infra/agent-events.js";
+import { registerAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveAgentRunSessionTarget } from "../../run-session-target.js";
 import { log } from "../logger.js";
@@ -33,6 +33,7 @@ export function createEmbeddedRunSessionPromptState(input: {
       sessionKey: resolvedSessionKey,
       sessionTarget: params.sessionTarget,
     });
+  let sessionTargetAdopted = false;
   let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
   let activePrompt: ActivePrompt = {
     persisted: suppressNextUserMessagePersistence,
@@ -64,8 +65,12 @@ export function createEmbeddedRunSessionPromptState(input: {
       sessionKey: nextSessionTarget.sessionKey ?? resolvedSessionKey,
       sessionTarget: nextSessionTarget,
     });
-    activeSessionTarget = nextSessionTarget;
-    activeSessionFile = resolvedTarget.sessionFile;
+    activeSessionTarget = {
+      ...resolvedTarget,
+      ...(nextSessionTarget.threadId !== undefined ? { threadId: nextSessionTarget.threadId } : {}),
+    };
+    sessionTargetAdopted = true;
+    activeSessionFile = resolvedTarget.sessionKey;
     adoptSessionId(resolvedTarget.sessionId);
   };
   const activateInternalPrompt = (prompt: string, persisted: boolean) => {
@@ -127,6 +132,10 @@ export function createEmbeddedRunSessionPromptState(input: {
     },
     set sessionTarget(value: ContextEngineSessionTarget | undefined) {
       activeSessionTarget = value;
+      sessionTargetAdopted = true;
+    },
+    get sessionTargetAdopted() {
+      return sessionTargetAdopted;
     },
     get activePrompt() {
       return activePrompt;

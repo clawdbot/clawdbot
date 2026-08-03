@@ -1,12 +1,12 @@
 // Gateway cron tests cover isolated agent turns, heartbeat wakeups, completion
 // delivery, lifecycle cleanup, hook emission, and SSRF-guarded webhooks.
+import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentDeletionCommitUncertainError } from "../agents/agent-lifecycle-registry.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -27,7 +27,6 @@ const {
   fetchWithSsrFGuardMock,
   sendCronAnnouncePayloadStrictMock,
   runCronIsolatedAgentTurnMock,
-  cleanupBrowserSessionsForLifecycleEndMock,
   getGlobalHookRunnerMock,
   runCronChangedMock,
   abortAndDrainEmbeddedAgentRunMock,
@@ -52,7 +51,6 @@ const {
     status: "ok",
     summary: "ok",
   })),
-  cleanupBrowserSessionsForLifecycleEndMock: vi.fn(async () => {}),
   runCronChangedMock: vi.fn(async (_event: unknown, _context?: unknown) => {}),
   getGlobalHookRunnerMock: vi.fn(() => ({
     hasHooks: (hookName: string) => hookName === "cron_changed",
@@ -193,10 +191,6 @@ vi.mock("../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: runCronIsolatedAgentTurnMock,
 }));
 
-vi.mock("../browser-lifecycle-cleanup.js", () => ({
-  cleanupBrowserSessionsForLifecycleEnd: cleanupBrowserSessionsForLifecycleEndMock,
-}));
-
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: getGlobalHookRunnerMock,
 }));
@@ -321,16 +315,6 @@ function expectIsolatedRunFields(fields: Record<string, unknown>) {
   return options;
 }
 
-function expectCleanupForSessionKeys(sessionKeys: string[]) {
-  expect(cleanupBrowserSessionsForLifecycleEndMock).toHaveBeenCalledTimes(1);
-  const options = requireRecord(
-    callArg(cleanupBrowserSessionsForLifecycleEndMock, 0, 0, "cleanup options"),
-    "cleanup options",
-  );
-  expect(options.sessionKeys).toEqual(sessionKeys);
-  expect(options.onWarn).toBeTypeOf("function");
-}
-
 describe("buildGatewayCronService", () => {
   beforeEach(() => {
     resetActiveCronTaskRunsForTests();
@@ -342,7 +326,6 @@ describe("buildGatewayCronService", () => {
     fetchWithSsrFGuardMock.mockClear();
     sendCronAnnouncePayloadStrictMock.mockClear();
     runCronIsolatedAgentTurnMock.mockClear();
-    cleanupBrowserSessionsForLifecycleEndMock.mockClear();
     runCronChangedMock.mockClear();
     getGlobalHookRunnerMock.mockClear();
     abortAndDrainEmbeddedAgentRunMock.mockClear();
@@ -447,11 +430,176 @@ describe("buildGatewayCronService", () => {
       state.cron.stop();
       expect(cancelRun).toHaveBeenCalledWith("manual-cancel");
       expect(cancelScope).toHaveBeenCalledWith(`cron-exit:${job.id}`, "manual-cancel");
+
+      await state.reconcileExitWatchers?.();
+      expect(spawn).toHaveBeenCalledTimes(1);
     } finally {
       state.cron.stop();
       vi.unstubAllEnvs();
     }
   });
+
+  it("restarts on-exit watchers only after their scheduler successfully restarts", async () => {
+    const spawn = vi.fn(async () => {
+      const runDone = createDeferred<{
+        reason: "manual-cancel";
+        exitCode: null;
+        exitSignal: null;
+        durationMs: number;
+        stdout: string;
+        stderr: string;
+        timedOut: false;
+        noOutputTimedOut: false;
+      }>();
+      return {
+        runId: `run-on-exit-restart-${spawn.mock.calls.length}`,
+        startedAtMs: Date.now(),
+        cancel: vi.fn(() =>
+          runDone.resolve({
+            reason: "manual-cancel",
+            exitCode: null,
+            exitSignal: null,
+            durationMs: 1,
+            stdout: "",
+            stderr: "",
+            timedOut: false,
+            noOutputTimedOut: false,
+          }),
+        ),
+        wait: () => runDone.promise,
+      };
+    });
+    getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+    const cfg = createCronConfig("server-cron-restart-exit-watchers");
+    loadConfigMock.mockReturnValue(cfg);
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+
+    try {
+      await state.cron.add({
+        name: "restart watched build",
+        enabled: true,
+        schedule: { kind: "on-exit", command: "sleep 60" },
+        payload: { kind: "systemEvent", text: "done" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+      });
+      await state.reconcileExitWatchers?.();
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+
+      state.cron.stop();
+      await state.reconcileExitWatchers?.();
+      expect(spawn).toHaveBeenCalledOnce();
+
+      await state.cron.start();
+      await state.reconcileExitWatchers?.();
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2));
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it.each(["add", "remove"] as const)(
+    "does not apply a stale on-exit watcher snapshot after a concurrent %s",
+    async (mutation) => {
+      const runDone = createDeferred<{
+        reason: "manual-cancel";
+        exitCode: null;
+        exitSignal: null;
+        durationMs: number;
+        stdout: string;
+        stderr: string;
+        timedOut: false;
+        noOutputTimedOut: false;
+      }>();
+      const cancel = vi.fn(() =>
+        runDone.resolve({
+          reason: "manual-cancel",
+          exitCode: null,
+          exitSignal: null,
+          durationMs: 1,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        }),
+      );
+      const cancelScope = vi.fn();
+      const spawn = vi.fn(async () => ({
+        runId: `run-on-exit-${mutation}-race`,
+        startedAtMs: Date.now(),
+        cancel,
+        wait: () => runDone.promise,
+      }));
+      getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope });
+      const cfg = createCronConfig(`server-cron-on-exit-${mutation}-race`);
+      loadConfigMock.mockReturnValue(cfg);
+      const state = buildGatewayCronService({
+        cfg,
+        deps: {} as CliDeps,
+        broadcast: () => {},
+      });
+      const captured = createDeferred();
+      const release = createDeferred();
+
+      try {
+        const addJob = async () =>
+          await state.cron.add({
+            name: "Watch concurrent mutation",
+            enabled: true,
+            schedule: { kind: "on-exit", command: "sleep 60" },
+            payload: { kind: "systemEvent", text: "done" },
+            sessionTarget: "main",
+            wakeMode: "next-heartbeat",
+          });
+        const existing = mutation === "remove" ? await addJob() : undefined;
+        if (existing) {
+          await state.reconcileExitWatchers?.();
+          await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+        }
+
+        const originalList = state.cron.list.bind(state.cron);
+        let gateNextList = true;
+        state.cron.list = async (options?: Parameters<typeof originalList>[0]) => {
+          if (!gateNextList) {
+            return await originalList(options);
+          }
+          gateNextList = false;
+          const snapshot = await originalList(options);
+          captured.resolve();
+          await release.promise;
+          return snapshot;
+        };
+
+        const staleReconciliation = state.reconcileExitWatchers?.();
+        await captured.promise;
+        if (mutation === "remove") {
+          if (!existing) {
+            throw new Error("expected an existing exit-watcher job");
+          }
+          await state.cron.remove(existing.id);
+          await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+        } else {
+          await addJob();
+          await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+        }
+        release.resolve();
+        await staleReconciliation;
+
+        expect(spawn).toHaveBeenCalledOnce();
+        if (mutation === "add") {
+          expect(cancel).not.toHaveBeenCalled();
+          expect(cancelScope).not.toHaveBeenCalled();
+        }
+      } finally {
+        release.resolve();
+        state.cron.stop();
+      }
+    },
+  );
 
   it("fires an on-exit payload after persisting its terminal disable", async () => {
     let resolveWait!: (result: {
@@ -1599,7 +1747,11 @@ describe("buildGatewayCronService", () => {
       notify: "queue changed",
       stateChanged: false,
     });
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({ release: vi.fn() });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(null, { status: 204 }),
+      finalUrl: "https://example.invalid/cron",
+      release: vi.fn(async () => {}),
+    });
 
     const state = buildGatewayCronService({
       cfg,
@@ -2487,12 +2639,50 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("blocks private webhook URLs via SSRF-guarded fetch", async () => {
-    const cfg = createCronConfig("server-cron-ssrf");
+  it.each([
+    {
+      name: "blocks loopback by default",
+      ssrfPolicy: undefined,
+      expectedRequests: 0,
+      expectedDeliveryStatus: "not-delivered",
+    },
+    {
+      name: "allows loopback with the private-network opt-in",
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+      expectedRequests: 1,
+      expectedDeliveryStatus: "delivered",
+    },
+    {
+      name: "allows exactly configured loopback hostnames",
+      ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
+      expectedRequests: 1,
+      expectedDeliveryStatus: "delivered",
+    },
+  ])("$name", async ({ ssrfPolicy, expectedRequests, expectedDeliveryStatus }) => {
+    const receivedMethods: string[] = [];
+    const server = createServer((req, res) => {
+      receivedMethods.push(req.method ?? "");
+      req.resume();
+      res.writeHead(204).end();
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected loopback webhook listener address");
+    }
+
+    const cfg = createCronConfig(`server-cron-ssrf-${expectedDeliveryStatus}`);
+    if (ssrfPolicy) {
+      cfg.cron = { ...cfg.cron, webhookSsrfPolicy: ssrfPolicy };
+    }
     loadConfigMock.mockReturnValue(cfg);
-    fetchWithSsrFGuardMock.mockRejectedValue(
-      new SsrFBlockedError("Blocked: resolves to private/internal/special-use IP address"),
+    const actualFetchGuard = await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
+      "../infra/net/fetch-guard.js",
     );
+    fetchWithSsrFGuardMock.mockImplementationOnce(actualFetchGuard.fetchWithSsrFGuard);
 
     const state = buildGatewayCronService({
       cfg,
@@ -2503,31 +2693,37 @@ describe("buildGatewayCronService", () => {
       const job = await state.cron.add({
         name: "ssrf-webhook-blocked",
         enabled: true,
+        deleteAfterRun: false,
         schedule: { kind: "at", at: new Date(1).toISOString() },
         sessionTarget: "main",
         wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "hello" },
         delivery: {
           mode: "webhook",
-          to: "http://127.0.0.1:8080/cron-finished",
+          to: `http://127.0.0.1:${address.port}/cron-finished`,
         },
       });
 
       await state.cron.run(job.id, "force");
 
       expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
-      const request = requireRecord(
-        callArg(fetchWithSsrFGuardMock, 0, 0, "fetch request"),
-        "fetch request",
-      );
-      expect(request.url).toBe("http://127.0.0.1:8080/cron-finished");
-      const init = requireRecord(request.init, "fetch init");
-      expect(init.method).toBe("POST");
-      expect(init.headers).toEqual({ "Content-Type": "application/json" });
-      expect(String(init.body)).toContain('"action":"finished"');
-      expect(init.signal).toBeInstanceOf(AbortSignal);
+      expect(receivedMethods).toEqual(Array.from({ length: expectedRequests }, () => "POST"));
+      const updatedState = state.cron.getJob(job.id)?.state;
+      expect(updatedState).toMatchObject({
+        lastRunStatus: "ok",
+        lastDelivered: expectedRequests === 1,
+        lastDeliveryStatus: expectedDeliveryStatus,
+      });
+      if (expectedRequests === 0) {
+        expect(updatedState?.lastDeliveryError).toMatch(/blocked.*private|private.*blocked/i);
+      } else {
+        expect(updatedState?.lastDeliveryError).toBeUndefined();
+      }
     } finally {
       state.cron.stop();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
     }
   });
 
@@ -2563,7 +2759,6 @@ describe("buildGatewayCronService", () => {
 
       const options = expectIsolatedRunFields({ sessionKey });
       expect(requireRecord(options.job, "isolated job").id).toBe(job.id);
-      expectCleanupForSessionKeys([sessionKey]);
     } finally {
       state.cron.stop();
     }
@@ -2604,7 +2799,6 @@ describe("buildGatewayCronService", () => {
           return record.sessionKey === "main";
         }),
       ).toBe(false);
-      expectCleanupForSessionKeys([`cron:${job.id}`]);
     } finally {
       state.cron.stop();
     }

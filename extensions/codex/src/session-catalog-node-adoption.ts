@@ -4,6 +4,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import {
+  listSessionCatalogEntries,
+  type SessionCatalogEntrySnapshot,
+} from "openclaw/plugin-sdk/session-catalog";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexThread } from "./app-server/protocol.js";
@@ -137,41 +141,41 @@ export function listNodeAdoptedSessionEntries(params: {
   config?: OpenClawConfig;
   runtime: PluginRuntime;
   includeInitializing?: boolean;
+  sessionEntries?: SessionCatalogEntrySnapshot;
 }): Map<string, AdoptedSessionEntry> {
   const adopted = new Map<string, AdoptedSessionEntry>();
-  for (const agentId of listSupervisionAgentIds(params.config ?? {})) {
-    for (const { entry, sessionKey } of params.runtime.agent.session.listSessionEntries({
-      agentId,
-      readOnly: true,
-    })) {
-      const marker = readNodeSessionMarker(entry);
-      const sessionId = entry.sessionId?.trim();
-      if (
-        !marker ||
-        (marker.initializing === true && params.includeInitializing !== true) ||
-        entry.initializationPending === true ||
-        entry.agentHarnessId !== "codex" ||
-        entry.modelSelectionLocked !== true ||
-        !sessionId ||
-        adoptionSessionKeyRest(sessionKey) !==
-          nodeAdoptionSessionKey(marker.sourceHostId, marker.sourceThreadId) ||
-        marker.sourceHostId !== `node:${marker.nodeId}`
-      ) {
-        continue;
-      }
-      const sourceKey = adoptedSourceKey(marker.sourceHostId, marker.sourceThreadId);
-      if (adopted.has(sourceKey)) {
-        throw new Error(
-          `multiple OpenClaw sessions adopt Codex thread ${marker.sourceThreadId} on ${marker.sourceHostId}`,
-        );
-      }
-      adopted.set(sourceKey, {
-        key: sessionKey,
-        sessionId,
-        agentId,
-        ...(marker.initializing === true ? { initializing: true } : {}),
-      });
+  for (const { agentId, entry, sessionKey } of listSessionCatalogEntries({
+    config: params.config ?? {},
+    runtime: params.runtime,
+    sessionEntries: params.sessionEntries,
+  })) {
+    const marker = readNodeSessionMarker(entry);
+    const sessionId = entry.sessionId?.trim();
+    if (
+      !marker ||
+      (marker.initializing === true && params.includeInitializing !== true) ||
+      entry.initializationPending === true ||
+      entry.agentHarnessId !== "codex" ||
+      entry.modelSelectionLocked !== true ||
+      !sessionId ||
+      adoptionSessionKeyRest(sessionKey) !==
+        nodeAdoptionSessionKey(marker.sourceHostId, marker.sourceThreadId) ||
+      marker.sourceHostId !== `node:${marker.nodeId}`
+    ) {
+      continue;
     }
+    const sourceKey = adoptedSourceKey(marker.sourceHostId, marker.sourceThreadId);
+    if (adopted.has(sourceKey)) {
+      throw new Error(
+        `multiple OpenClaw sessions adopt Codex thread ${marker.sourceThreadId} on ${marker.sourceHostId}`,
+      );
+    }
+    adopted.set(sourceKey, {
+      key: sessionKey,
+      sessionId,
+      agentId,
+      ...(marker.initializing === true ? { initializing: true } : {}),
+    });
   }
   return adopted;
 }

@@ -5,8 +5,11 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { Message, Usage } from "openclaw/plugin-sdk/llm";
 import { afterAll, describe, expect, it } from "vitest";
-import { replaceTranscriptEvents } from "../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import {
+  replaceSessionEntry,
+  replaceTranscriptEvents,
+} from "../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
@@ -81,7 +84,7 @@ function eventTypes(events: readonly Pick<TrajectoryEvent, "type">[]): string[] 
 
 function writeSimpleSessionFile(
   sessionFile: string,
-  params: { userEntryTimestamp?: string | number } = {},
+  params: { userEntryTimestamp?: string | number; userMessage?: Message } = {},
 ): void {
   const header = {
     type: "session",
@@ -95,7 +98,7 @@ function writeSimpleSessionFile(
     id: "entry-user",
     parentId: null,
     timestamp: params.userEntryTimestamp ?? "2026-04-01T05:46:40.000Z",
-    message: userMessage("hello"),
+    message: params.userMessage ?? userMessage("hello"),
   };
   const assistantEntry = {
     type: "message",
@@ -203,6 +206,88 @@ afterAll(() => {
 });
 
 describe("exportTrajectoryBundle", () => {
+  it("rejects a structured transcript target for a different session", async () => {
+    const outputDir = makeTempDir();
+
+    await expect(
+      exportTrajectoryBundle({
+        outputDir,
+        sessionId: "requested-session",
+        sessionKey: "agent:main:requested",
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "other-session",
+          sessionKey: "agent:main:other",
+          storePath: path.join(outputDir, "sessions.json"),
+        },
+        workspaceDir: outputDir,
+      }),
+    ).rejects.toThrow("transcript target does not match the requested session");
+  });
+
+  it("rejects a structured transcript target whose key belongs to another agent", async () => {
+    const outputDir = makeTempDir();
+
+    await expect(
+      exportTrajectoryBundle({
+        outputDir,
+        sessionId: "requested-session",
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "requested-session",
+          sessionKey: "agent:worker:requested",
+          storePath: path.join(outputDir, "sessions.json"),
+        },
+        workspaceDir: outputDir,
+      }),
+    ).rejects.toThrow("transcript target does not match the requested session");
+  });
+
+  it("rejects a structured transcript target whose key maps to another session", async () => {
+    const outputDir = makeTempDir();
+    const storePath = path.join(outputDir, "sessions.json");
+    const sessionKey = "agent:main:stored-session";
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionId: "stored-session",
+        updatedAt: 1,
+      },
+    );
+
+    await expect(
+      exportTrajectoryBundle({
+        outputDir: path.join(outputDir, "bundle"),
+        sessionId: "requested-session",
+        sessionKey,
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "requested-session",
+          sessionKey,
+          storePath,
+        },
+        workspaceDir: outputDir,
+      }),
+    ).rejects.toThrow("transcript target does not match the requested session");
+  });
+
+  it("rejects a legacy SQLite marker for a different session", async () => {
+    const outputDir = makeTempDir();
+
+    await expect(
+      exportTrajectoryBundle({
+        outputDir: path.join(outputDir, "bundle"),
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId: "stale-session",
+          storePath: path.join(outputDir, "sessions.json"),
+        }),
+        sessionId: "requested-session",
+        workspaceDir: outputDir,
+      }),
+    ).rejects.toThrow("legacy marker does not match the requested session");
+  });
+
   it("sanitizes session ids in default export directory names", () => {
     const outputDir = resolveDefaultTrajectoryExportDir({
       workspaceDir: "/tmp/workspace",
@@ -280,11 +365,13 @@ describe("exportTrajectoryBundle", () => {
 
     const bundle = await exportTrajectoryBundle({
       outputDir,
-      sessionFile: formatSqliteSessionFileMarker({
+      sessionFile: path.join(tmpDir, "stale-session.jsonl"),
+      sessionTarget: {
         agentId: "main",
         sessionId,
+        sessionKey,
         storePath,
-      }),
+      },
       sessionId,
       sessionKey,
       workspaceDir: tmpDir,
@@ -292,6 +379,8 @@ describe("exportTrajectoryBundle", () => {
 
     expect(bundle.header?.id).toBe(sessionId);
     expect(bundle.manifest.transcriptEventCount).toBe(2);
+    expect(bundle.manifest.sourceFiles.session).toMatch(/^agent:/u);
+    expect(bundle.manifest.sourceFiles.session).not.toContain("stale-session");
     expect(eventTypes(bundle.events)).toEqual(["user.message", "assistant.message"]);
     expect(fs.existsSync(path.join(tmpDir, "session-1.jsonl"))).toBe(false);
   });
@@ -326,7 +415,7 @@ describe("exportTrajectoryBundle", () => {
         },
       ],
     );
-    appendSqliteTrajectoryRuntimeEvents({ sessionId, storePath }, [
+    appendSqliteTrajectoryRuntimeEvents({ agentId: "main", sessionId, storePath }, [
       {
         traceSchema: "openclaw-trajectory",
         schemaVersion: 1,
@@ -379,6 +468,56 @@ describe("exportTrajectoryBundle", () => {
     expect(fs.existsSync(path.join(outputDir, "prompts.json"))).toBe(false);
     expect(fs.existsSync(path.join(outputDir, "system-prompt.txt"))).toBe(false);
     expect(fs.existsSync(path.join(outputDir, "tools.json"))).toBe(false);
+  });
+
+  it("falls back to artifact files when the structured target is incomplete", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    writeSimpleSessionFile(sessionFile);
+    const runtimeEvent: TrajectoryEvent = {
+      traceSchema: "openclaw-trajectory",
+      schemaVersion: 1,
+      traceId: "session-1",
+      source: "runtime",
+      type: "partial-target-runtime",
+      ts: "2026-04-22T08:00:02.000Z",
+      seq: 1,
+      sourceSeq: 1,
+      sessionId: "session-1",
+    };
+    fs.writeFileSync(runtimeFile, `${JSON.stringify(runtimeEvent)}\n`, "utf8");
+
+    const bundle = await exportTrajectoryBundle({
+      outputDir,
+      sessionFile,
+      sessionTarget: { agentId: "main", sessionKey: "agent:main:stale" } as never,
+      sessionId: "session-1",
+      workspaceDir: tmpDir,
+      runtimeFile,
+    });
+
+    expect(eventTypes(bundle.events)).toContain("partial-target-runtime");
+    expect(bundle.manifest.sourceFiles.session).toBe("$WORKSPACE_DIR/session.jsonl");
+  });
+
+  it("rejects an incomplete target that conflicts with a legacy marker", async () => {
+    const tmpDir = makeTempDir();
+
+    await expect(
+      exportTrajectoryBundle({
+        outputDir: path.join(tmpDir, "bundle"),
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId: "worker",
+          sessionId: "session-1",
+          storePath: path.join(tmpDir, "sessions.json"),
+        }),
+        sessionTarget: { agentId: "main" } as never,
+        sessionId: "session-1",
+        workspaceDir: tmpDir,
+      }),
+    ).rejects.toThrow("transcript target conflicts with the legacy marker");
   });
 
   it("exports usage from truncated model completion runtime events", async () => {
@@ -454,6 +593,161 @@ describe("exportTrajectoryBundle", () => {
       .map((line) => JSON.parse(line) as TrajectoryEvent);
     expect(exportedEvents.find((event) => event.type === "user.message")?.ts).toBe(
       "2026-04-01T05:46:40.000Z",
+    );
+  });
+
+  it("rejects retired media fields in versionless transcript inputs", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    writeSimpleSessionFile(sessionFile, {
+      userMessage: {
+        ...userMessage(""),
+        MediaPath: "media/legacy.png",
+        MediaType: "image/png",
+      } as unknown as Message,
+    });
+
+    await expect(
+      exportTrajectoryBundle({
+        outputDir: path.join(tmpDir, "bundle"),
+        sessionFile,
+        sessionId: "session-1",
+        workspaceDir: tmpDir,
+      }),
+    ).rejects.toThrow("retired top-level media fields");
+  });
+
+  it("rejects empty retired media fields in versionless transcript inputs", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    writeSimpleSessionFile(sessionFile, {
+      userMessage: {
+        ...userMessage("empty"),
+        media: null,
+      } as unknown as Message,
+    });
+
+    await expect(
+      exportTrajectoryBundle({
+        outputDir: path.join(tmpDir, "bundle"),
+        sessionFile,
+        sessionId: "session-1",
+        workspaceDir: tmpDir,
+      }),
+    ).rejects.toThrow("retired top-level media fields");
+  });
+
+  it("rejects retired media carriers in versionless runtime trajectories", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
+    writeSimpleSessionFile(sessionFile);
+    const runtimeEvent: TrajectoryEvent = {
+      traceSchema: "openclaw-trajectory",
+      schemaVersion: 1,
+      traceId: "session-1",
+      source: "runtime",
+      type: "model.completed",
+      ts: "2026-04-22T08:00:02.000Z",
+      seq: 1,
+      sessionId: "session-1",
+      data: {
+        messagesSnapshot: [{ role: "user", content: "", media: [{ path: "media/legacy.png" }] }],
+      },
+    };
+    fs.writeFileSync(runtimeFile, `${JSON.stringify(runtimeEvent)}\n`, "utf8");
+
+    await expect(
+      exportTrajectoryBundle({
+        outputDir: path.join(tmpDir, "bundle"),
+        sessionFile,
+        sessionId: "session-1",
+        workspaceDir: tmpDir,
+        runtimeFile,
+      }),
+    ).rejects.toThrow("retired top-level media fields");
+  });
+
+  it("allows empty retired media carriers in versionless runtime trajectories", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
+    writeSimpleSessionFile(sessionFile);
+    const runtimeEvent: TrajectoryEvent = {
+      traceSchema: "openclaw-trajectory",
+      schemaVersion: 1,
+      traceId: "session-1",
+      source: "runtime",
+      type: "model.completed",
+      ts: "2026-04-22T08:00:02.000Z",
+      seq: 1,
+      sessionId: "session-1",
+      data: {
+        messagesSnapshot: [
+          { role: "user", content: "empty", media: [], MediaPaths: [], MediaTypes: [] },
+        ],
+      },
+    };
+    fs.writeFileSync(runtimeFile, `${JSON.stringify(runtimeEvent)}\n`, "utf8");
+
+    await expect(
+      exportTrajectoryBundle({
+        outputDir: path.join(tmpDir, "bundle"),
+        sessionFile,
+        sessionId: "session-1",
+        workspaceDir: tmpDir,
+        runtimeFile,
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  it.each([
+    {
+      name: "facts-only",
+      message: { __openclaw: { media: [{ path: "media/fact.png", contentType: "image/png" }] } },
+      expectedPath: "media/fact.png",
+    },
+    {
+      name: "sparse",
+      message: { __openclaw: { media: [{}, { path: "media/sparse.png" }] } },
+      expectedPath: "media/sparse.png",
+      expectedIndex: 1,
+    },
+    {
+      name: "type-only",
+      message: { __openclaw: { media: [{ contentType: "image/png" }] } },
+      expectedPath: undefined,
+    },
+    {
+      name: "media-only",
+      message: { content: "", __openclaw: { media: [{ path: "media/media-only.png" }] } },
+      expectedPath: "media/media-only.png",
+    },
+  ])("exports $name transcript rows as facts only", async (testCase) => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    writeSimpleSessionFile(sessionFile, {
+      userMessage: { ...userMessage(""), ...testCase.message } as unknown as Message,
+    });
+
+    await exportTrajectoryBundle({
+      outputDir,
+      sessionFile,
+      sessionId: "session-1",
+      workspaceDir: tmpDir,
+    });
+
+    const sessionBranch = JSON.parse(
+      fs.readFileSync(path.join(outputDir, "session-branch.json"), "utf8"),
+    ) as { entries?: Array<{ type?: string; message?: Record<string, unknown> }> };
+    const exported = sessionBranch.entries?.find((entry) => entry.type === "message")?.message;
+    const media = (exported?.["__openclaw"] as { media?: Array<{ path?: string }> })?.media;
+    const expectedIndex = "expectedIndex" in testCase ? (testCase.expectedIndex ?? 0) : 0;
+    expect(media?.[expectedIndex]?.path).toBe(testCase.expectedPath);
+    expect(exported).not.toHaveProperty("MediaPath");
+    expect(fs.readFileSync(path.join(outputDir, "events.jsonl"), "utf8")).not.toContain(
+      '"MediaPath"',
     );
   });
 
@@ -655,6 +949,7 @@ describe("exportTrajectoryBundle", () => {
       exportTrajectoryBundle({
         outputDir,
         sessionFile,
+        sessionTarget: { agentId: "main" } as never,
         sessionId: "session-1",
         workspaceDir: tmpDir,
       }),
@@ -1613,6 +1908,7 @@ describe("exportTrajectoryBundle", () => {
           terminalError: "non_deliverable_terminal_turn",
           assistantTexts: ["done"],
           finalPromptText: `final prompt from ${path.join(tmpDir, "prompt.txt")}`,
+          finalPromptTextOriginalLength: 12_345,
           itemLifecycle: {
             startedCount: 1,
             completedCount: 1,
@@ -1694,6 +1990,7 @@ describe("exportTrajectoryBundle", () => {
     const tools = fs.readFileSync(path.join(outputDir, "tools.json"), "utf8");
     expect(prompts).toContain("$WORKSPACE_DIR/AGENTS.md");
     expect(artifacts).toContain("$WORKSPACE_DIR/prompt.txt");
+    expect(JSON.parse(artifacts).finalPromptTextOriginalLength).toBe(12_345);
     expect(artifacts).toContain("non_deliverable_terminal_turn");
     expect(systemPrompt).toContain("$WORKSPACE_DIR/instructions.md");
     expect(tools).toContain("$WORKSPACE_DIR/docs");

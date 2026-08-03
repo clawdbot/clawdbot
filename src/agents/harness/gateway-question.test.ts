@@ -116,6 +116,7 @@ describe("gateway harness questions", () => {
     const waitError = new Error("gateway disconnected");
     const gatewayCall: AgentHarnessQuestionGatewayCall = async (method, _opts, params) => {
       if (method === "question.request") {
+        expect(params).toMatchObject({ runId: "run-delivery" });
         return { id: (params as { id: string }).id };
       }
       if (method === "question.waitAnswer") {
@@ -130,6 +131,7 @@ describe("gateway harness questions", () => {
     const run = runAgentHarnessGatewayQuestion({
       questions,
       sessionKey: "agent:main:delivery",
+      runId: "run-delivery",
       timeoutMs: 60_000,
       gatewayCall,
       delivery: { onBlockReply },

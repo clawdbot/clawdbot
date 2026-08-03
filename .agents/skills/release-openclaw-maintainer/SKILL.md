@@ -226,6 +226,15 @@ The backport flow covers mainline inventory, private-security reconciliation,
 approval, the staging PR, and proof handoff. After it lands, use the sequence
 below. Never route `.33+` through regular beta/stable release steps.
 
+Extended-stable requires a visible **SDK/config backport warning** whenever a
+candidate changes the public plugin SDK or a config/default/schema/migration
+surface. Prefer an adaptation that uses the SDK and configuration already
+shipped on that line. If a contract change remains necessary, record its
+published impact and the maintainer decision in the ledger and staging PR.
+Read `references/extended-stable-backports.md`; a clean cherry-pick, green
+release checks, or a regenerated baseline does not by itself explain the
+maintenance risk.
+
 ## Publish Gateway extended-stable releases
 
 Use this path only for the trailing completed month's `.33+` Gateway
@@ -298,13 +307,13 @@ complete until `main` carries the actual shipped release state.
    release-only compatibility, test, or validation adapters into newer `main`.
 2. Set `main` to the shipped stable version, not a speculative next train. Run
    `pnpm release:prep` after the root version change, then
-   `pnpm deps:shrinkwrap:generate`.
+   `pnpm deps:npm-lock:check`.
 3. Make `CHANGELOG.md`'s `## YYYY.M.PATCH` section on `main` exactly match the
    tagged release branch. Include the stable `appcast.xml` update when the mac
    release published one.
 4. Do not add `YYYY.M.PATCH+1`, a beta version, or an empty future changelog
    section to `main` until the operator explicitly starts that release train.
-5. Run `pnpm release:generated:check`, `pnpm deps:shrinkwrap:check`, and
+5. Run `pnpm release:generated:check`, `pnpm deps:npm-lock:check`, and
    `OPENCLAW_TESTBOX=1 pnpm check:changed`. Push, then verify `origin/main`
    contains the shipped version and changelog before calling the stable release
    done.

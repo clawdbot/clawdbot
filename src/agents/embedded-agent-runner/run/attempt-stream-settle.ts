@@ -144,7 +144,12 @@ export async function settleEmbeddedAttemptStream(input: {
         abortSignal: input.runAbortSignal,
       });
     } catch (err) {
-      if (!input.readLifecycleState().timedOut || !isRunnerAbortError(err)) {
+      // Timeouts AND user aborts must still settle so the attempt reaches
+      // after-turn (transcript flush, agent-end side effects). Rethrowing here
+      // unwinds the whole lane task and silently starves every agent_end
+      // consumer for aborted runs.
+      const lifecycle = input.readLifecycleState();
+      if ((!lifecycle.timedOut && !lifecycle.aborted) || !isRunnerAbortError(err)) {
         throw err;
       }
       asyncTaskWait = await waitForCompletionRequiredAsyncTasks({
@@ -153,15 +158,15 @@ export async function settleEmbeddedAttemptStream(input: {
         deadlineAtMs: Date.now(),
       });
     }
-    if (asyncTaskWait.timedOutRunIds.length > 0) {
+    // An aborted run legitimately leaves async tasks unfinished; stamping a
+    // timeout failure here would reclassify the abort as an errored completion.
+    if (asyncTaskWait.timedOutRunIds.length > 0 && !input.readLifecycleState().aborted) {
       promptError = new Error(
         `Timed out waiting for async task completion: ${asyncTaskWait.timedOutRunIds.join(", ")}`,
       );
       promptErrorSource = "prompt";
       state.promptError = promptError;
       state.promptErrorSource = promptErrorSource;
-    } else if (asyncTaskWait.waitedRunIds.length > 0) {
-      await input.sessionLockController.waitForSessionEvents(activeSession);
     }
   }
 
@@ -235,7 +240,6 @@ export async function settleEmbeddedAttemptStream(input: {
   let lastCallUsage: NormalizedUsage | undefined;
   let promptCache: EmbeddedRunAttemptResult["promptCache"];
 
-  await input.sessionLockController.waitForSessionEvents(activeSession);
   await input.withOwnedSessionWriteLock(async () => {
     const { timedOutDuringCompaction } = input.readLifecycleState();
     compactionOccurredThisAttempt = subscription.getCompactionCount() > 0;
@@ -276,17 +280,20 @@ export async function settleEmbeddedAttemptStream(input: {
           `runId=${attempt.runId} sessionId=${attempt.sessionId}`,
       );
     }
+    const modelMessagesSnapshot = snapshotSelection.messagesSnapshot;
     messagesSnapshot = projectToolSearchTargetTranscriptMessages(
-      snapshotSelection.messagesSnapshot,
+      modelMessagesSnapshot,
       input.toolSearchTargetTranscriptProjections,
     );
     sessionIdUsed = snapshotSelection.sessionIdUsed;
-    lastAssistant = messagesSnapshot
+    // Projected target-tool assistants are transcript evidence, not model
+    // turns. Letting one own terminal state hides its parent tool's outcome.
+    lastAssistant = modelMessagesSnapshot
       .slice()
       .toReversed()
       .find((message): message is AssistantMessage => message.role === "assistant");
     currentAttemptAssistant = findCurrentAttemptAssistantMessage({
-      messagesSnapshot,
+      messagesSnapshot: modelMessagesSnapshot,
       prePromptMessageCount: input.prePromptMessageCount,
     });
     currentAttemptCompletedAssistant = subscription.getCurrentAttemptAssistant();

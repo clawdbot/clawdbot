@@ -1,4 +1,4 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing } from "lit";
 import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { titleForRoute } from "../app-navigation.ts";
@@ -6,16 +6,15 @@ import type { CatalogOpenTarget } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
-import { writeSessionGroupDragData } from "../lib/sessions/drag.ts";
 import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
-import { renderSessionCatalogGroups } from "./app-sidebar-session-catalogs.ts";
+import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.ts";
 import {
   renderRecentSession,
   renderSessionTree,
   type SessionListHost,
 } from "./app-sidebar-session-row-render.ts";
+import { renderSidebarSessionSectionHeader } from "./app-sidebar-session-section-header.ts";
 import {
-  limitSidebarSessionRows,
   rowDemandsVisibility,
   RowVisibilityReason,
   SIDEBAR_SESSION_PAGE_SIZE,
@@ -23,16 +22,26 @@ import {
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
+import { renderPanelRefreshStatus, type PanelRefreshStatus } from "./panel-refresh-status.ts";
 
 type RenderableSessionSection = SidebarSessionSection<SidebarRecentSession> & {
   totalRowCount: number;
+  visibleRowCount: number;
+  visibleLimit: number;
+  collapsedVisibleRowCount: number;
+};
+
+type SidebarSessionListHost = SessionListHost & {
+  loadMoreSidebarSessions(): Promise<void>;
 };
 
 type SessionCatalogRenderSnapshot = {
   catalogs: readonly SessionCatalog[];
+  refreshStatus: PanelRefreshStatus;
   basePath: string;
   routeSessionKey: string;
   newSessionAgentId: string;
+  mainKey: string;
   loadingMoreCatalogIds: ReadonlySet<string>;
   projectGrouping: CatalogProjectGrouping;
   liveRows: readonly GatewaySessionRow[];
@@ -43,13 +52,12 @@ type SessionCatalogRenderSnapshot = {
 };
 
 function renderSessionSection(params: {
-  host: SessionListHost;
+  host: SidebarSessionListHost;
   section: RenderableSessionSection;
-  trailing?: TemplateResult | typeof nothing;
   showDraft?: boolean;
+  nativeSessionsHaveMore?: boolean;
 }) {
   const { host, section } = params;
-  const trailing = params.trailing ?? nothing;
   const showDraft = params.showDraft ?? false;
   const totalRowCount = section.totalRowCount;
   const group = section.category;
@@ -72,20 +80,23 @@ function renderSessionSection(params: {
   const collapsedAttentionDot =
     collapsed &&
     section.rows.some((row) => rowDemandsVisibility(row, RowVisibilityReason.Attention));
-  const acceptsSessions =
-    host.sessionsGrouping === "category" && (section.id === "ungrouped" || Boolean(group));
+  const newSessionAccess = host.readNewSessionAccess();
+  const groupWriteAccess = host.readSessionMutationAccess({
+    method: "sessions.groups.put",
+    requiredScope: "operator.write",
+  });
   const sectionClass = [
     "sidebar-recent-sessions__group",
     `sidebar-recent-sessions__group--zone-${zone}`,
     collapsed ? "sidebar-recent-sessions__group--collapsed" : "",
-    group && host.sessionOrganizer.draggingSessionGroup === group
+    host.sessionOrganizer.draggingSidebarSection === section.id
       ? "sidebar-recent-sessions__group--dragging"
       : "",
     host.sessionOrganizer.sessionDropTarget === section.id
       ? "sidebar-recent-sessions__group--session-drop"
       : "",
-    group && host.sessionOrganizer.sessionGroupDropTarget?.group === group
-      ? `sidebar-recent-sessions__group--group-drop-${host.sessionOrganizer.sessionGroupDropTarget.position}`
+    host.sessionOrganizer.sidebarSectionDropTarget?.sectionId === section.id
+      ? `sidebar-recent-sessions__group--section-drop-${host.sessionOrganizer.sidebarSectionDropTarget.position}`
       : "",
   ]
     .filter(Boolean)
@@ -94,45 +105,28 @@ function renderSessionSection(params: {
     <div
       class=${sectionClass}
       data-session-section=${section.id}
-      @dragover=${acceptsSessions || group
+      @dragover=${groupWriteAccess.allowed
         ? (event: DragEvent) => host.sectionDragOver(event, section.id, group)
         : nothing}
-      @dragleave=${acceptsSessions || group
+      @dragleave=${groupWriteAccess.allowed
         ? (event: DragEvent) => host.sectionDragLeave(event, section.id, group)
         : nothing}
-      @drop=${acceptsSessions || group
+      @drop=${groupWriteAccess.allowed
         ? (event: DragEvent) => host.sectionDrop(event, section.id, group)
         : nothing}
     >
-      ${html`
-        <div
-          class="sidebar-recent-sessions__head ${group
-            ? "sidebar-recent-sessions__head--draggable"
-            : ""}"
-          draggable=${group ? "true" : "false"}
-          @dragstart=${group
-            ? (event: DragEvent) => {
-                if (event.dataTransfer) {
-                  writeSessionGroupDragData(event.dataTransfer, group);
-                  host.startSessionGroupDrag(group);
-                }
-              }
-            : nothing}
-          @dragend=${group
-            ? () => {
-                host.finishSessionGroupDrag();
-              }
-            : nothing}
-          @contextmenu=${group
-            ? (event: MouseEvent) => {
-                event.preventDefault();
-                host.sidebarMenus.openSessionGroupMenu(group, event.clientX, event.clientY, null);
-              }
-            : nothing}
-        >
-          ${group
-            ? html`<span class="sidebar-session-group-drag-handle" aria-hidden="true"></span>`
-            : nothing}
+      ${renderSidebarSessionSectionHeader({
+        sectionId: section.id,
+        disabledReason: groupWriteAccess.allowed ? undefined : groupWriteAccess.reason,
+        onStartDrag: (sectionId) => host.startSidebarSectionDrag(sectionId),
+        onFinishDrag: () => host.finishSidebarSectionDrag(),
+        onContextMenu: group
+          ? (event: MouseEvent) => {
+              event.preventDefault();
+              host.sidebarMenus.openSessionGroupMenu(group, event.clientX, event.clientY, null);
+            }
+          : undefined,
+        content: html`
           <button
             type="button"
             class="sidebar-session-group-toggle"
@@ -185,11 +179,11 @@ function renderSessionSection(params: {
                 <button
                   type="button"
                   class="sidebar-session-group-actions sidebar-new-session"
-                  title=${host.connected
+                  title=${newSessionAccess.allowed
                     ? t("chat.runControls.newSession")
-                    : t("chat.runControls.newSessionDisconnected")}
+                    : newSessionAccess.reason}
                   aria-label=${t("chat.runControls.newSession")}
-                  ?disabled=${!host.connected}
+                  ?disabled=${!newSessionAccess.allowed}
                   @click=${(event: MouseEvent) => {
                     event.stopPropagation();
                     host.openNewSession();
@@ -224,18 +218,27 @@ function renderSessionSection(params: {
                 </button>
               `
             : nothing}
-        </div>
-      `}
+        `,
+      })}
       ${collapsed
         ? nothing
         : html`
+            ${group && totalRowCount === 0
+              ? html`<span class="sidebar-session-empty-hint sidebar-session-empty-placeholder"
+                  >${t("chat.sidebar.noSessionsForAgent")}</span
+                >`
+              : nothing}
             ${section.rows.length > 0 || showDraft
               ? html`<div class="sidebar-recent-sessions__list" role="list" aria-label=${label}>
                   ${showDraft ? renderDraftSessionRow() : nothing}
                   ${section.rows.map((session) => renderSessionTree({ host, session }))}
                 </div>`
               : nothing}
-            ${trailing}
+            ${renderSessionPagination({
+              host,
+              section,
+              nativeSessionsHaveMore: params.nativeSessionsHaveMore ?? false,
+            })}
           `}
     </div>
   `;
@@ -257,14 +260,16 @@ function renderDraftSessionRow() {
 }
 
 function renderSessionPagination(params: {
-  host: SessionListHost;
-  rows: SidebarRecentSession[];
-  visible: number;
+  host: SidebarSessionListHost;
+  section: RenderableSessionSection;
+  nativeSessionsHaveMore: boolean;
 }) {
-  const { host, rows, visible } = params;
-  const canShowMore = visible < rows.length;
-  const collapsedVisible = limitSidebarSessionRows(rows, SIDEBAR_SESSION_PAGE_SIZE).length;
-  const canShowLess = visible > SIDEBAR_SESSION_SEE_LESS_THRESHOLD && visible > collapsedVisible;
+  const { host, section } = params;
+  const canLoadMore = section.id === "ungrouped" && params.nativeSessionsHaveMore;
+  const canShowMore = section.visibleRowCount < section.totalRowCount || canLoadMore;
+  const canShowLess =
+    section.visibleRowCount > SIDEBAR_SESSION_SEE_LESS_THRESHOLD &&
+    section.visibleRowCount > section.collapsedVisibleRowCount;
   if (!canShowMore && !canShowLess) {
     return nothing;
   }
@@ -276,7 +281,11 @@ function renderSessionPagination(params: {
             class="sidebar-session-pagination__button"
             aria-label=${t("chat.selectors.loadMoreSessions")}
             @click=${() => {
-              host.setVisibleSessionLimit(visible + SIDEBAR_SESSION_PAGE_SIZE);
+              const nextLimit = section.visibleLimit + SIDEBAR_SESSION_PAGE_SIZE;
+              host.setVisibleSessionLimit(section.id, nextLimit);
+              if (canLoadMore && nextLimit > section.totalRowCount) {
+                void host.loadMoreSidebarSessions();
+              }
             }}
           >
             ${t("chat.selectors.loadMoreSessions")}
@@ -289,7 +298,7 @@ function renderSessionPagination(params: {
             aria-label=${t("usage.details.collapse")}
             @click=${() => {
               host.clearSessionSelection();
-              host.setVisibleSessionLimit(SIDEBAR_SESSION_PAGE_SIZE);
+              host.setVisibleSessionLimit(section.id, SIDEBAR_SESSION_PAGE_SIZE);
             }}
           >
             ${t("usage.details.collapse")}
@@ -299,95 +308,150 @@ function renderSessionPagination(params: {
   `;
 }
 
-function renderSessionCatalogs(params: {
+function renderSessionCatalog(params: {
   host: SessionListHost;
   snapshot: SessionCatalogRenderSnapshot;
+  catalog: SessionCatalog;
+  renderer: SessionCatalogGroupsRenderer;
 }) {
-  const { host, snapshot } = params;
-  return renderSessionCatalogGroups({
-    catalogs: snapshot.catalogs,
-    connected: host.connected,
-    basePath: snapshot.basePath,
-    routeSessionKey: snapshot.routeSessionKey,
-    newSessionAgentId: snapshot.newSessionAgentId,
-    collapsedSections: host.collapsedSessionSections,
-    loadingMoreCatalogIds: snapshot.loadingMoreCatalogIds,
-    projectGrouping: snapshot.projectGrouping,
-    liveRows: snapshot.liveRows,
-    creatorId: snapshot.creatorId,
-    renderLiveRow: (row, display) =>
-      renderRecentSession({
-        host,
-        session: snapshot.sidebarRowsByKey.get(row.key)!,
-        display,
-      }),
-    onToggleSection: (sectionId) => host.toggleSection(sectionId),
-    onToggleProjectGrouping: () => host.toggleCatalogProjectGrouping(),
-    onLoadMore: (catalogId) => void host.sessionData.loadMoreSessionCatalog(catalogId),
-    onOpenNewSession: host.onOpenNewSession,
-    onNavigate: host.onNavigate,
-    catalogOpenTarget: snapshot.catalogOpenTarget,
-    terminalAvailable: snapshot.terminalAvailable,
-    onOpenTerminal: openCatalogSessionInTerminal,
-    onOpenMenu: (request, x, y, trigger) => host.openCatalogMenu(request, x, y, trigger),
+  const { host, snapshot, catalog, renderer } = params;
+  const newSessionAccess = host.readNewSessionAccess();
+  const groupWriteAccess = host.readSessionMutationAccess({
+    method: "sessions.groups.put",
+    requiredScope: "operator.write",
   });
+  return html`
+    ${renderer({
+      catalogs: [catalog],
+      connected: host.connected,
+      basePath: snapshot.basePath,
+      routeSessionKey: snapshot.routeSessionKey,
+      newSessionAgentId: snapshot.newSessionAgentId,
+      mainKey: snapshot.mainKey,
+      collapsedSections: host.collapsedSessionSections,
+      loadingMoreCatalogIds: snapshot.loadingMoreCatalogIds,
+      projectGrouping: snapshot.projectGrouping,
+      liveRows: snapshot.liveRows,
+      creatorId: snapshot.creatorId,
+      renderLiveRow: (row, display) =>
+        renderRecentSession({
+          host,
+          session: snapshot.sidebarRowsByKey.get(row.key)!,
+          display,
+        }),
+      onToggleSection: (sectionId) => host.toggleSection(sectionId),
+      draggingSectionId: host.sessionOrganizer.draggingSidebarSection,
+      sectionDropTarget: host.sessionOrganizer.sidebarSectionDropTarget,
+      onSectionDragOver: (event, sectionId) => host.sectionDragOver(event, sectionId),
+      onSectionDragLeave: (event, sectionId) => host.sectionDragLeave(event, sectionId),
+      onSectionDrop: (event, sectionId) => host.sectionDrop(event, sectionId),
+      onStartSectionDrag: (sectionId) => host.startSidebarSectionDrag(sectionId),
+      onFinishSectionDrag: () => host.finishSidebarSectionDrag(),
+      viewMenuOpenCatalogId: host.sidebarMenus.catalogViewMenuPosition?.catalogId ?? null,
+      creatorFilterActive: host.sessionCreatorFilterActive,
+      onOpenViewMenu: (catalogId, trigger, position) => {
+        if (position) {
+          host.sidebarMenus.openCatalogViewMenu(catalogId, position.x, position.y, trigger);
+          return;
+        }
+        host.sidebarMenus.toggleCatalogViewMenu(catalogId, trigger);
+      },
+      onLoadMore: (catalogId) => void host.sessionData.loadMoreSessionCatalog(catalogId),
+      onOpenNewSession: (agentId, target) => host.requestOpenNewSession(agentId, target),
+      newSessionDisabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
+      sectionDragDisabledReason: groupWriteAccess.allowed ? undefined : groupWriteAccess.reason,
+      onNavigate: host.onNavigate,
+      catalogOpenTarget: snapshot.catalogOpenTarget,
+      terminalAvailable: snapshot.terminalAvailable,
+      onOpenTerminal: openCatalogSessionInTerminal,
+      onOpenMenu: (request, x, y, trigger) => host.openCatalogMenu(request, x, y, trigger),
+    })}
+  `;
 }
 
 function renderSessionListBody(params: {
-  host: SessionListHost;
+  host: SidebarSessionListHost;
   sections: RenderableSessionSection[];
-  expandedRows: SidebarRecentSession[];
-  visibleRowCount: number;
   showDraft: boolean;
-  codingTrailing?: TemplateResult | typeof nothing;
-  codingTrailingPresent?: boolean;
+  nativeSessionsHaveMore: boolean;
+  catalogs: SessionCatalogRenderSnapshot;
+  catalogRenderer: SessionCatalogGroupsRenderer | null;
 }) {
   const { host } = params;
+  const catalogsVisible = host.sessionsStatusFilter !== "archived";
+  const catalogsBySectionId = new Map(
+    params.catalogs.catalogs.map((catalog) => [`catalog:${catalog.id}`, catalog]),
+  );
+  const firstCatalogSectionIndex = catalogsVisible
+    ? params.sections.findIndex((section) => section.id.startsWith("catalog:"))
+    : -1;
+  const catalogStatus = catalogsVisible
+    ? renderPanelRefreshStatus({
+        status: params.catalogs.refreshStatus,
+        onRetry: () => void host.sessionData.refreshSessionCatalogs(),
+        className: "sidebar-session-error sidebar-session-catalog-error",
+      })
+    : nothing;
+  // Categorized threads still need the global sort and new-thread actions,
+  // which belong to Threads even when that section has no rows of its own.
+  const hasCategorizedThreads = params.sections.some(
+    (section) => Boolean(section.category) && section.totalRowCount > 0,
+  );
   return html`
-    ${params.sections.map((section) => {
+    ${params.sections.map((section, index) => {
       const showDraft = section.id === "ungrouped" && params.showDraft;
+      if (section.id.startsWith("catalog:")) {
+        const catalog = catalogsBySectionId.get(section.id);
+        return html`${index === firstCatalogSectionIndex ? catalogStatus : nothing}${catalog
+          ? params.catalogRenderer
+            ? renderSessionCatalog({
+                host,
+                snapshot: params.catalogs,
+                catalog,
+                renderer: params.catalogRenderer,
+              })
+            : nothing
+          : nothing}`;
+      }
       if (section.id === "work") {
-        // Coding hosts live work/ACP rows plus the CLI catalogs; hide the
-        // whole zone when both are empty.
-        if (section.totalRowCount === 0 && params.codingTrailingPresent !== true) {
+        if (section.totalRowCount === 0) {
           return nothing;
         }
-        return renderSessionSection({
-          host,
-          section,
-          trailing: params.codingTrailing ?? nothing,
-        });
+        return renderSessionSection({ host, section });
       }
-      // Threads hides its bare empty header unless it owns the collaborative
-      // creator filter; custom categories stay visible as drop targets.
+      // Hide an empty Threads header only when it does not own reachable
+      // actions for categorized threads, collaborators, or an active drag.
       if (
         section.id === "ungrouped" &&
         section.totalRowCount === 0 &&
         !showDraft &&
+        !params.nativeSessionsHaveMore &&
+        !hasCategorizedThreads &&
         !host.sessionOwnershipVisible &&
         host.sessionsStatusFilter === "active" &&
         host.sessionOrganizer.draggingSessionKey === null
       ) {
         return nothing;
       }
-      return renderSessionSection({ host, section, showDraft });
+      return renderSessionSection({
+        host,
+        section,
+        showDraft,
+        nativeSessionsHaveMore: params.nativeSessionsHaveMore,
+      });
     })}
-    ${renderSessionPagination({
-      host,
-      rows: params.expandedRows,
-      visible: params.visibleRowCount,
-    })}
+    ${firstCatalogSectionIndex < 0 ? catalogStatus : nothing}
   `;
 }
 
 export function renderSessionList(params: {
-  host: SessionListHost;
+  host: SidebarSessionListHost;
   empty: boolean;
   sections: RenderableSessionSection[];
-  expandedRows: SidebarRecentSession[];
-  visibleRowCount: number;
   showDraft: boolean;
+  nativeSessionsHaveMore: boolean;
   catalogs: SessionCatalogRenderSnapshot;
+  catalogRenderer: SessionCatalogGroupsRenderer | null;
 }) {
   const { host } = params;
   return html`
@@ -424,15 +488,10 @@ export function renderSessionList(params: {
         ${renderSessionListBody({
           host,
           sections: params.sections,
-          expandedRows: params.expandedRows,
-          visibleRowCount: params.visibleRowCount,
           showDraft: params.showDraft,
-          codingTrailing:
-            host.sessionsStatusFilter === "archived"
-              ? nothing
-              : html`${renderSessionCatalogs({ host, snapshot: params.catalogs })}`,
-          codingTrailingPresent:
-            host.sessionsStatusFilter !== "archived" && params.catalogs.catalogs.length > 0,
+          nativeSessionsHaveMore: params.nativeSessionsHaveMore,
+          catalogs: params.catalogs,
+          catalogRenderer: params.catalogRenderer,
         })}
         ${host.sessionsStatusFilter === "archived" && params.empty
           ? html`<span class="sidebar-session-empty-hint"

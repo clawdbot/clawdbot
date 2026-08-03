@@ -8,7 +8,8 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { getAgentRunContext } from "../infra/agent-events.js";
+import { getAgentRunContext } from "../infra/agent-run-registry.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -48,10 +49,7 @@ function setResolvedSessionKeyCache(
     !resolvedSessionKeyByRunId.has(cacheKey) &&
     resolvedSessionKeyByRunId.size >= RUN_LOOKUP_CACHE_LIMIT
   ) {
-    const oldest = resolvedSessionKeyByRunId.keys().next().value;
-    if (oldest) {
-      resolvedSessionKeyByRunId.delete(oldest);
-    }
+    pruneMapToMaxSize(resolvedSessionKeyByRunId, RUN_LOOKUP_CACHE_LIMIT - 1);
   }
   let expiresAt: number | null = null;
   if (sessionKey === null) {

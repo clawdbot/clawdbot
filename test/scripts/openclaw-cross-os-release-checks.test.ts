@@ -19,6 +19,7 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   agentOutputHasExpectedOkMarker,
+  acquireManagedGatewayInstallerHostLease,
   buildCrossOsDiscordRoundtripNonces,
   buildCrossOsReleaseAgentSessionId,
   buildCrossOsReleaseSmokePluginAllowlist,
@@ -31,6 +32,7 @@ import {
   buildInstalledBrowserOverrideImportProbeScript,
   buildNpmGlobalInstallArgs,
   appendLatestNpmDebugLogTail,
+  assertManagedGatewayInstallerHostAvailable,
   buildGatewayStopArgsFromHelpText,
   buildGatewayStatusArgsFromHelpText,
   buildInstallerSmokeScript,
@@ -65,6 +67,7 @@ import {
   parsePositiveIntegerEnv,
   parseCrossOsSuiteFilter,
   parseArgs,
+  parseManagedGatewayServiceInstalled,
   packageHasScript,
   readInstalledVersion,
   readBoundedCrossOsResponseText,
@@ -79,6 +82,7 @@ import {
   resolveInstalledPackageRootFromCliPath,
   resolveNpmPackTarballFileName,
   resolveNpmDebugLogDirs,
+  resolveManagedGatewayInstallerEnv,
   resolvePackDestinationTarball,
   resolvePackageCandidatePackCommand,
   resolveProviderConfig,
@@ -178,6 +182,117 @@ async function withTempDirAsync<T>(prefix: string, run: (dir: string) => Promise
 }
 
 describe("scripts/openclaw-cross-os-release-checks", () => {
+  it("uses the host account identity for managed installer services", () => {
+    const env = resolveManagedGatewayInstallerEnv({
+      env: {
+        HOME: "C:\\temp\\lane",
+        USERPROFILE: "C:\\temp\\lane",
+        APPDATA: "C:\\temp\\lane\\AppData\\Roaming",
+        LOCALAPPDATA: "C:\\temp\\lane\\AppData\\Local",
+        OPENCLAW_HOME: "C:\\temp\\lane",
+        OPENCLAW_PROFILE: "work",
+        OPENCLAW_STATE_DIR: "C:\\temp\\lane\\.openclaw",
+        OPENCLAW_CONFIG_PATH: "C:\\temp\\lane\\.openclaw\\openclaw.json",
+        OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (work)",
+        OPENCLAW_TASK_SCRIPT_NAME: "work.cmd",
+        OPENCLAW_TASK_SCRIPT: "C:\\temp\\work.cmd",
+        OPENCLAW_SERVICE_KIND: "node",
+        OpenClaw_Home: "C:\\temp\\case-variant",
+        openclaw_config_path: "C:\\temp\\case-variant\\openclaw.json",
+        OPENAI_API_KEY: "secret",
+      },
+      enabled: true,
+      accountHome: "C:\\Users\\runneradmin",
+      hostEnv: {
+        APPDATA: "C:\\Users\\runneradmin\\AppData\\Roaming",
+        LOCALAPPDATA: "C:\\Users\\runneradmin\\AppData\\Local",
+      },
+    });
+
+    expect(env).toMatchObject({
+      HOME: "C:\\Users\\runneradmin",
+      USERPROFILE: "C:\\Users\\runneradmin",
+      APPDATA: "C:\\Users\\runneradmin\\AppData\\Roaming",
+      LOCALAPPDATA: "C:\\Users\\runneradmin\\AppData\\Local",
+      OPENAI_API_KEY: "secret",
+    });
+    expect(env.OPENCLAW_HOME).toBeUndefined();
+    expect(env.OPENCLAW_PROFILE).toBeUndefined();
+    expect(env.OPENCLAW_STATE_DIR).toBeUndefined();
+    expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+    expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBeUndefined();
+    expect(env.OPENCLAW_TASK_SCRIPT_NAME).toBeUndefined();
+    expect(env.OPENCLAW_TASK_SCRIPT).toBeUndefined();
+    expect(env.OPENCLAW_SERVICE_KIND).toBeUndefined();
+    expect(
+      Object.keys(env).filter((key) =>
+        [
+          "OPENCLAW_HOME",
+          "OPENCLAW_PROFILE",
+          "OPENCLAW_STATE_DIR",
+          "OPENCLAW_CONFIG_PATH",
+          "OPENCLAW_WINDOWS_TASK_NAME",
+          "OPENCLAW_TASK_SCRIPT_NAME",
+          "OPENCLAW_TASK_SCRIPT",
+          "OPENCLAW_SERVICE_KIND",
+        ].includes(key.toUpperCase()),
+      ),
+    ).toEqual([]);
+  });
+
+  it("keeps isolated installer state when no managed service is used", () => {
+    const env = { OPENCLAW_HOME: "/tmp/openclaw-installer" };
+
+    expect(resolveManagedGatewayInstallerEnv({ env, enabled: false })).toBe(env);
+  });
+
+  it("fails closed before borrowing an occupied managed-service account", () => {
+    expect(() =>
+      assertManagedGatewayInstallerHostAvailable({
+        accountHome: "C:\\Users\\runneradmin",
+        serviceInstalled: true,
+        pathExists: () => false,
+      }),
+    ).toThrow(/pristine host account/);
+    expect(() =>
+      assertManagedGatewayInstallerHostAvailable({
+        accountHome: "C:\\Users\\runneradmin",
+        serviceInstalled: false,
+        pathExists: (path) => path.endsWith(".openclaw"),
+      }),
+    ).toThrow(/pristine host account/);
+  });
+
+  it("requires a structured clean-service preflight result", () => {
+    expect(
+      parseManagedGatewayServiceInstalled({
+        exitCode: 0,
+        stdout: JSON.stringify({ service: { loaded: false } }),
+        stderr: "",
+      }),
+    ).toBe(false);
+    expect(() =>
+      parseManagedGatewayServiceInstalled({
+        exitCode: 1,
+        stdout: "",
+        stderr: "status failed",
+      }),
+    ).toThrow(/exit code 1/);
+  });
+
+  it("holds an exclusive managed-service host lease until release", () => {
+    withTempDir("openclaw-managed-host-", (accountHome) => {
+      const lease = acquireManagedGatewayInstallerHostLease(accountHome);
+
+      expect(() => acquireManagedGatewayInstallerHostLease(accountHome)).toThrow(
+        /exclusive access/,
+      );
+      lease.release();
+      const replacement = acquireManagedGatewayInstallerHostLease(accountHome);
+      replacement.release();
+    });
+  });
+
   it("keeps dashboard smoke patient enough for cold packaged gateway startup", () => {
     expect(CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS).toBeGreaterThanOrEqual(120_000);
     expect(CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS).toBeGreaterThanOrEqual(10_000);
@@ -604,7 +719,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       "bonjour",
       "browser",
       "device-pair",
-      "phone-control",
       "talk-voice",
     ]);
     expect(allowlist).not.toContain("memory-core");
@@ -1001,12 +1115,12 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   });
 
   it("can rebuild the Windows PATH with or without current-process entries", () => {
-    expect(buildWindowsPathBootstrapScript()).toContain("@($userPath, $machinePath, $env:Path)");
+    expect(buildWindowsPathBootstrapScript()).toContain("@($env:Path, $userPath, $machinePath)");
     const persistedOnlyScript = buildWindowsPathBootstrapScript({
       includeCurrentProcessPath: false,
     });
     expect(persistedOnlyScript).toContain("@($userPath, $machinePath)");
-    expect(persistedOnlyScript).not.toContain("@($userPath, $machinePath, $env:Path)");
+    expect(persistedOnlyScript).not.toContain("@($env:Path, $userPath, $machinePath)");
   });
 
   it("prefers the freshly installed Windows CLI under npm's prefix before PATH lookup", () => {
@@ -1413,6 +1527,115 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       expect(log).toContain("err-old-err-recent");
     });
   });
+
+  it("keeps multibyte command output and error tails within the byte budget", async () => {
+    await withTempDirAsync("openclaw-cross-os-run-command-utf8-tail-", async (dir) => {
+      const logPath = join(dir, "command.log");
+      const result = await runCommand(
+        process.execPath,
+        ["-e", "process.stdout.write('a😀bbbb'); process.stderr.write('a😀cccc');"],
+        { cwd: dir, env: process.env, logPath, maxOutputBytes: 6 },
+      );
+
+      expect(result.stdout).toBe("bbbb");
+      expect(result.stderr).toBe("cccc");
+      expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(6);
+      expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThanOrEqual(6);
+      const log = readFileSync(logPath, "utf8");
+      expect(log).toContain("a😀bbbb");
+      expect(log).toContain("a😀cccc");
+    });
+  });
+
+  it("keeps rolling multibyte command output and error tails within the byte budget", async () => {
+    await withTempDirAsync("openclaw-cross-os-run-command-utf8-rolling-", async (dir) => {
+      const logPath = join(dir, "command.log");
+      const script = [
+        "process.stdout.write('a😀');",
+        "process.stderr.write('a😀');",
+        "setTimeout(() => { process.stdout.write('bbbb'); process.stderr.write('cccc'); }, 25);",
+      ].join("");
+      const result = await runCommand(process.execPath, ["-e", script], {
+        cwd: dir,
+        env: process.env,
+        logPath,
+        maxOutputBytes: 7,
+      });
+
+      expect(result.stdout).toBe("bbbb");
+      expect(result.stderr).toBe("cccc");
+      expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(7);
+      expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThanOrEqual(7);
+    });
+  });
+
+  it.each(["stdout", "stderr"] as const)(
+    "preserves a UTF-8 character split across real %s chunks and its full log",
+    async (stream) => {
+      await withTempDirAsync("openclaw-cross-os-run-command-utf8-split-", async (dir) => {
+        const logPath = join(dir, "command.log");
+        const script = [
+          `process.${stream}.write('A');`,
+          `process.${stream}.write(Buffer.from([0xf0, 0x9f]));`,
+          `setTimeout(() => { process.${stream}.write(Buffer.from([0x98, 0x80])); process.${stream}.write('Z'); }, 25);`,
+        ].join("");
+        const result = await runCommand(process.execPath, ["-e", script], {
+          cwd: dir,
+          env: process.env,
+          logPath,
+          maxOutputBytes: 64,
+        });
+
+        expect(result[stream]).toBe("A😀Z");
+        expect(readFileSync(logPath, "utf8")).toContain("A😀Z");
+      });
+    },
+  );
+
+  it.each([1, 2, 3])(
+    "never exceeds a %i-byte command output budget with a truncated UTF-8 character",
+    async (maxOutputBytes) => {
+      await withTempDirAsync("openclaw-cross-os-run-command-utf8-budget-", async (dir) => {
+        const logPath = join(dir, "command.log");
+        const result = await runCommand(
+          process.execPath,
+          ["-e", "process.stdout.write('😀'); process.stderr.write('😀');"],
+          { cwd: dir, env: process.env, logPath, maxOutputBytes },
+        );
+
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toBe("");
+        expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(maxOutputBytes);
+        expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThanOrEqual(maxOutputBytes);
+      });
+    },
+  );
+
+  it.each([
+    { maxOutputBytes: 1, expected: "" },
+    { maxOutputBytes: 2, expected: "" },
+    { maxOutputBytes: 3, expected: "�" },
+  ])(
+    "bounds incomplete UTF-8 command output to $maxOutputBytes bytes",
+    async ({ maxOutputBytes, expected }) => {
+      await withTempDirAsync("openclaw-cross-os-run-command-utf8-incomplete-", async (dir) => {
+        const logPath = join(dir, "command.log");
+        const result = await runCommand(
+          process.execPath,
+          [
+            "-e",
+            "process.stdout.write(Buffer.from([0xf0])); process.stderr.write(Buffer.from([0xf0]));",
+          ],
+          { cwd: dir, env: process.env, logPath, maxOutputBytes },
+        );
+
+        expect(result.stdout).toBe(expected);
+        expect(result.stderr).toBe(expected);
+        expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(maxOutputBytes);
+        expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThanOrEqual(maxOutputBytes);
+      });
+    },
+  );
 
   it("flushes command logs before resolving", async () => {
     await withTempDirAsync("openclaw-cross-os-run-command-flush-", async (dir) => {

@@ -33,10 +33,10 @@ export {
   sendVoice,
 } from "./outbound-media-send.js";
 
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { GatewayAccount } from "../types.js";
 import type { EngineLogger } from "../types.js";
-import { formatErrorMessage } from "../utils/format.js";
 import { debugError, debugLog, debugWarn } from "../utils/log.js";
 import { normalizeMediaTags } from "../utils/media-tags.js";
 import { decodeCronPayload } from "../utils/payload.js";
@@ -309,9 +309,7 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
   const mediaUrl = resolvedMediaPath.mediaPath;
 
   if (isAudioFile(mediaUrl, mimeType)) {
-    const formats =
-      account.config?.audioFormatPolicy?.uploadDirectFormats ??
-      account.config?.voiceDirectUploadFormats;
+    const formats = account.config?.audioFormatPolicy?.uploadDirectFormats;
     const transcodeEnabled = account.config?.audioFormatPolicy?.transcodeEnabled !== false;
     const result = await sendVoice(target, mediaUrl, formats, transcodeEnabled);
     if (!result.error) {

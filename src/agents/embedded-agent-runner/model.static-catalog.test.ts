@@ -841,12 +841,7 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
       discoveryEntriesOnly: true,
       includeManifestModelCatalogProviders: false,
     });
-    expect(providerMocks.runProviderStaticCatalog).toHaveBeenCalledWith({
-      provider,
-      config: cfg,
-      workspaceDir: undefined,
-      env: process.env,
-    });
+    expect(providerMocks.runProviderStaticCatalog).toHaveBeenCalledWith({ provider });
   });
 
   it("does not load bundled provider static catalogs when owner policy blocks the plugin", async () => {

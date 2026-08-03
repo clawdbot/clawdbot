@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing as toolSearchTesting } from "../../tool-search.test-support.js";
+import type { ToolSearchCatalogRef } from "../../tool-search.js";
 import {
   cleanupTempPaths,
   createContextEngineAttemptRunner,
@@ -29,6 +29,16 @@ function catalogProbeTools() {
   ];
 }
 
+function requireAttemptCatalogRef(): ToolSearchCatalogRef {
+  const options = hoisted.createOpenClawCodingToolsMock.mock.calls.at(-1)?.[0] as
+    | { toolSearchCatalogRef?: ToolSearchCatalogRef }
+    | undefined;
+  if (!options?.toolSearchCatalogRef) {
+    throw new Error("Expected the embedded attempt to own its Tool Search catalog");
+  }
+  return options.toolSearchCatalogRef;
+}
+
 describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
   beforeAll(async () => {
     await preloadRunEmbeddedAttemptForTests();
@@ -36,13 +46,11 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
 
   beforeEach(() => {
     resetEmbeddedAttemptHarness();
-    toolSearchTesting.sessionCatalogs.clear();
   });
 
   afterEach(async () => {
     await cleanupTempPaths(tempPaths);
     tempPaths.length = 0;
-    toolSearchTesting.sessionCatalogs.clear();
   });
 
   it("clears the registered run catalog when the run aborts during prep", async () => {
@@ -79,13 +87,66 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
       },
     });
     await lockRequested;
-    // Guards the test itself: without a registered catalog the assertion below
-    // would pass vacuously.
-    expect([...toolSearchTesting.sessionCatalogs.keys()]).toContain(`run:${runId}`);
+    const catalogRef = requireAttemptCatalogRef();
+    expect(catalogRef.current?.entries).toContainEqual(
+      expect.objectContaining({ name: "cataloged_probe_tool" }),
+    );
 
     abortController.abort(abortError);
     await expect(attempt).rejects.toBe(abortError);
 
-    expect(toolSearchTesting.sessionCatalogs.has(`run:${runId}`)).toBe(false);
+    expect(catalogRef.current).toBeUndefined();
   });
+
+  it.each([
+    {
+      mode: "code-mode",
+      tools: { codeMode: { enabled: true } },
+    },
+    {
+      mode: "tool-search-tools",
+      tools: { toolSearch: { enabled: true, mode: "tools" } },
+    },
+    {
+      mode: "tool-search-directory",
+      tools: { toolSearch: { enabled: true, mode: "directory" } },
+    },
+  ] as const)(
+    "clears the $mode run catalog when diagnostics throw during preparation",
+    async ({ mode, tools }) => {
+      const runId = `run-catalog-diagnostics-${mode}`;
+      const diagnosticsError = new Error(`failed ${mode} tool diagnostics`);
+      let catalogRef: ToolSearchCatalogRef | undefined;
+      const logDiagnostics = vi.fn(() => {
+        catalogRef = requireAttemptCatalogRef();
+        expect(catalogRef.current?.entries).toContainEqual(
+          expect.objectContaining({ name: "cataloged_probe_tool" }),
+        );
+        throw diagnosticsError;
+      });
+      hoisted.createOpenClawCodingToolsMock.mockImplementation(() => catalogProbeTools());
+
+      const attempt = createContextEngineAttemptRunner({
+        contextEngine: createContextEngineBootstrapAndAssemble(),
+        sessionKey: "agent:main:telegram:direct:123",
+        tempPaths,
+        attemptOverrides: {
+          runId,
+          disableTools: false,
+          config: { tools },
+          runtimePlan: {
+            tools: {
+              normalize: (normalizedTools: unknown[]) => normalizedTools,
+              logDiagnostics,
+            },
+          } as never,
+        },
+      });
+
+      await expect(attempt).rejects.toBe(diagnosticsError);
+      expect(logDiagnostics).toHaveBeenCalledOnce();
+      expect(catalogRef).toBeDefined();
+      expect(catalogRef?.current).toBeUndefined();
+    },
+  );
 });

@@ -10,6 +10,8 @@ Run multiple _isolated_ agents in one Gateway process, each with its own workspa
 
 An **agent** is the full per-persona scope: workspace files, auth profiles, model registry, and session store. A **binding** maps a channel account (a Slack workspace, a WhatsApp number, etc.) to one of those agents.
 
+For a focused setup guide with account and conversation examples, see [Agent bindings](/concepts/agent-bindings).
+
 ## What is one agent
 
 Each agent has its own:
@@ -21,7 +23,7 @@ Each agent has its own:
 Auth profiles are per-agent, read from:
 
 ```text
-~/.openclaw/agents/<agentId>/agent/auth-profiles.json
+~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite
 ```
 
 <Note>
@@ -242,6 +244,8 @@ Bindings are deterministic and most-specific wins. See [Channel routing](/channe
 - If a binding sets multiple match fields (for example `peer` + `guildId`), all specified fields must match (`AND` semantics).
 - A binding that omits `accountId` matches only the default account, not every account. Use `accountId: "*"` for a channel-wide fallback, or `accountId: "<name>"` for one account. Adding the same binding again with an explicit account id upgrades the existing channel-only binding instead of duplicating it.
 
+For existing multi-agent configs, `openclaw doctor --fix` materializes legacy ambient default routing into channel-wide bindings plus explicit heartbeat, Custodian, and Talk targets. Single-agent configs are unchanged.
+
 ## Multiple accounts / phone numbers
 
 Channels that support multiple accounts (e.g. WhatsApp) use `accountId` to identify each login. Each `accountId` routes to its own agent, so one server can host multiple phone numbers without mixing sessions.
@@ -284,7 +288,7 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
               guilds: {
                 "123456789012345678": {
                   channels: {
-                    "222222222222222222": { allow: true, requireMention: false },
+                    "222222222222222222": { enabled: true, requireMention: false },
                   },
                 },
               },
@@ -294,7 +298,7 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
               guilds: {
                 "123456789012345678": {
                   channels: {
-                    "333333333333333333": { allow: true, requireMention: false },
+                    "333333333333333333": { enabled: true, requireMention: false },
                   },
                 },
               },

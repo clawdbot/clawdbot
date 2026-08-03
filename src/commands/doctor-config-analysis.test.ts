@@ -6,6 +6,7 @@ import { OpenClawSchema } from "../config/zod-schema.js";
 import {
   formatConfigPath,
   noteImplicitFallbackClobberWarnings,
+  noteOpencodeProviderOverrides,
   noteSandboxOriginProxyWarning,
   resolveConfigPathTarget,
   stripUnknownConfigKeys,
@@ -23,6 +24,66 @@ function collectImplicitFallbackClobberWarnings(cfg: OpenClawConfig): string[] {
 }
 
 describe("doctor config analysis helpers", () => {
+  it("describes OpenCode overrides against the plugin-provided catalog", () => {
+    noteMock.mockClear();
+
+    noteOpencodeProviderOverrides(
+      {
+        models: {
+          providers: {
+            opencode: {
+              baseUrl: "https://opencode.ai/zen/v1",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      },
+      { opencodePluginActive: true },
+    );
+
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringContaining("plugin-provided OpenCode Zen catalog"),
+      "OpenCode",
+    );
+    expect(noteMock.mock.calls.at(-1)?.[0]).not.toContain("built-in");
+  });
+
+  it("classifies external OpenCode overrides only while their plugins are active", () => {
+    noteMock.mockClear();
+
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          opencode: {
+            baseUrl: "https://opencode.ai/zen/v1",
+            api: "openai-completions",
+            models: [],
+          },
+          "opencode-go": {
+            baseUrl: "https://opencode.ai/zen/go/v1",
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      },
+    };
+
+    noteOpencodeProviderOverrides(cfg);
+    expect(noteMock).not.toHaveBeenCalled();
+
+    noteOpencodeProviderOverrides(cfg, {
+      opencodePluginActive: true,
+      opencodeGoPluginActive: true,
+    });
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /plugin-provided OpenCode Zen catalog[\s\S]*plugin-provided OpenCode Go catalog/u,
+      ),
+      "OpenCode",
+    );
+  });
+
   it("formats config paths predictably", () => {
     expect(formatConfigPath([])).toBe("<root>");
     expect(formatConfigPath(["channels", "slack", "accounts", 0, "token"])).toBe(
@@ -89,6 +150,63 @@ describe("doctor config analysis helpers", () => {
           "stock-news": { description: "Tracks market news" },
         },
       },
+    });
+  });
+
+  it.each([
+    {
+      name: "the config root",
+      config: { $include: "./base.json5", unexpected: true },
+      path: [],
+    },
+    {
+      name: "an agent entry identity",
+      config: {
+        agents: {
+          entries: {
+            main: { identity: { $include: "./main-identity.json5" } },
+          },
+        },
+        unexpected: true,
+      },
+      path: ["agents", "entries", "main", "identity"],
+    },
+    {
+      name: "an agent entry",
+      config: {
+        agents: { entries: { main: { $include: "./main-agent.json5" } } },
+        unexpected: true,
+      },
+      path: ["agents", "entries", "main"],
+    },
+    {
+      name: "agent defaults",
+      config: {
+        agents: { defaults: { $include: "./agent-defaults.json5" } },
+        unexpected: true,
+      },
+      path: ["agents", "defaults"],
+    },
+    {
+      name: "gateway config",
+      config: { gateway: { $include: "./gateway.json5" }, unexpected: true },
+      path: ["gateway"],
+    },
+    {
+      name: "an array entry",
+      config: {
+        plugins: { load: { paths: [{ $include: "./plugin-path.json5" }] } },
+        unexpected: true,
+      },
+      path: ["plugins", "load", "paths", 0],
+    },
+  ])("preserves include syntax at $name while stripping unknown keys", ({ config, path }) => {
+    const result = stripUnknownConfigKeys(config as never);
+
+    expect(result.removed).toContain("unexpected");
+    expect(result.removed).not.toContain(formatConfigPath([...path, "$include"]));
+    expect(resolveConfigPathTarget(result.config, path)).toMatchObject({
+      $include: expect.any(String),
     });
   });
 

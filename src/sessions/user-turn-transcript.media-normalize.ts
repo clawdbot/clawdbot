@@ -12,19 +12,15 @@ const STRUCTURED_MEDIA_KINDS = new Set<NonNullable<MediaFactInput["kind"]>>([
   "sticker",
   "unknown",
 ]);
+const MIME_TYPE_PATTERN = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/iu;
 
 function normalizeOptionalText(value: string | null | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized ? normalized : undefined;
 }
 
-function mediaTypeForTranscript(media: PersistedUserTurnMediaInput, mediaPath?: string): string {
-  return (
-    normalizeOptionalText(media.contentType) ??
-    normalizeOptionalText(media.kind) ??
-    mimeTypeFromFilePath(mediaPath) ??
-    "application/octet-stream"
-  );
+function normalizeNonNegativeNumber(value: number | null | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function normalizeStructuredMediaKind(value: string | null | undefined): MediaFactInput["kind"] {
@@ -32,6 +28,10 @@ function normalizeStructuredMediaKind(value: string | null | undefined): MediaFa
   return kind && STRUCTURED_MEDIA_KINDS.has(kind as NonNullable<MediaFactInput["kind"]>)
     ? (kind as NonNullable<MediaFactInput["kind"]>)
     : undefined;
+}
+
+function normalizePositiveInteger(value: number | null | undefined): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
 export function resolveTranscriptMediaPath(
@@ -46,52 +46,37 @@ export function resolveTranscriptMediaPath(
   return path.join(workspaceDir, pathValue);
 }
 
-export function normalizeMediaEntryForTranscript(
-  media: PersistedUserTurnMediaInput,
-): MediaFactInput {
-  const rawPath = normalizeOptionalText(media.path) ?? normalizeOptionalText(media.url);
-  if (!rawPath) {
-    return media.hydrationSuppressed === true
-      ? {
-          contentType: normalizeOptionalText(media.contentType),
-          hydrationSuppressed: true,
-        }
-      : {};
-  }
-  return {
-    path: resolveTranscriptMediaPath(rawPath, normalizeOptionalText(media.workspaceDir)),
-    contentType: mediaTypeForTranscript(media, rawPath),
-    ...(media.hydrationSuppressed === true ? { hydrationSuppressed: true } : {}),
-  };
-}
-
 export function normalizeStructuredMediaEntryForTranscript(
   media: PersistedUserTurnMediaInput,
 ): MediaFactInput {
+  const workspaceDir = normalizeOptionalText(media.workspaceDir);
   const mediaPath = normalizeOptionalText(media.path);
   const mediaUrl = normalizeOptionalText(media.url);
+  const kind = normalizeStructuredMediaKind(media.kind);
+  const legacyKind = normalizeOptionalText(media.kind);
+  const messageId = normalizeOptionalText(media.messageId);
+  const contentType =
+    normalizeOptionalText(media.contentType) ??
+    (kind || !legacyKind || !MIME_TYPE_PATTERN.test(legacyKind) ? undefined : legacyKind) ??
+    mimeTypeFromFilePath(mediaPath ?? mediaUrl);
+  const durationMs = normalizePositiveInteger(media.durationMs);
+  const width = normalizePositiveInteger(media.width);
+  const height = normalizePositiveInteger(media.height);
+  const fileName = normalizeOptionalText(media.fileName);
+  const sizeBytes = normalizeNonNegativeNumber(media.sizeBytes);
   return {
-    path: mediaPath,
-    url: mediaUrl,
-    contentType:
-      normalizeOptionalText(media.contentType) ?? mimeTypeFromFilePath(mediaPath ?? mediaUrl),
-    kind: normalizeStructuredMediaKind(media.kind),
-    workspaceDir: normalizeOptionalText(media.workspaceDir),
+    ...(mediaPath ? { path: resolveTranscriptMediaPath(mediaPath, workspaceDir) } : {}),
+    ...(mediaUrl ? { url: mediaUrl } : {}),
+    ...(contentType ? { contentType } : {}),
+    ...(kind ? { kind } : {}),
+    ...(fileName ? { fileName } : {}),
+    ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+    ...(durationMs ? { durationMs } : {}),
+    ...(width ? { width } : {}),
+    ...(height ? { height } : {}),
+    ...(media.transcribed === true ? { transcribed: true } : {}),
+    ...(messageId ? { messageId } : {}),
+    ...(workspaceDir ? { workspaceDir } : {}),
     ...(media.hydrationSuppressed === true ? { hydrationSuppressed: true } : {}),
   };
-}
-
-export function shouldPersistStructuredMediaEntries(
-  media: readonly PersistedUserTurnMediaInput[] | null | undefined,
-): boolean {
-  return (media ?? []).some((entry) => {
-    const legacy = normalizeMediaEntryForTranscript(entry);
-    const structured = normalizeStructuredMediaEntryForTranscript(entry);
-    const structuredIdentity = structured.path ?? structured.url;
-    return (
-      structured.hydrationSuppressed === true ||
-      structuredIdentity !== legacy.path ||
-      Boolean(structured.url && structured.url !== legacy.path)
-    );
-  });
 }

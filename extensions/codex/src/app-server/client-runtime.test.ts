@@ -15,7 +15,11 @@ vi.mock("./rate-limit-cache.js", () => ({
   mergeCodexRateLimitsUpdate: mocks.mergeRateLimitUpdate,
 }));
 
-const { ensureCodexAppServerClientRuntime } = await import("./client-runtime.js");
+const {
+  consumeCodexAppServerLiveThread,
+  ensureCodexAppServerClientRuntime,
+  retainCodexAppServerLiveThread,
+} = await import("./client-runtime.js");
 
 describe("Codex app-server client runtime", () => {
   const clients: CodexAppServerClient[] = [];
@@ -98,5 +102,78 @@ describe("Codex app-server client runtime", () => {
         message: "ChatGPT token refresh is unavailable for prepared Codex API-key auth.",
       },
     });
+  });
+
+  it("retains and consumes only one subscribed thread per physical client", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    await expect(
+      retainCodexAppServerLiveThread(harness.client, "thread-before-runtime"),
+    ).resolves.toBeUndefined();
+    ensureCodexAppServerClientRuntime(harness.client, { agentDir: "/tmp/agent" });
+
+    await expect(retainCodexAppServerLiveThread(harness.client, "thread-1")).resolves.toEqual({});
+    await expect(consumeCodexAppServerLiveThread(harness.client, "thread-2")).resolves.toBe(false);
+    await expect(retainCodexAppServerLiveThread(harness.client, "thread-2")).resolves.toEqual({
+      previousThreadId: "thread-1",
+    });
+    await expect(consumeCodexAppServerLiveThread(harness.client, "thread-1")).resolves.toBe(false);
+    await expect(consumeCodexAppServerLiveThread(harness.client, "thread-2")).resolves.toBe(true);
+    await expect(consumeCodexAppServerLiveThread(harness.client, "thread-2")).resolves.toBe(false);
+  });
+
+  it("waits for the old subscription to release before another thread can acquire it", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    ensureCodexAppServerClientRuntime(harness.client, { agentDir: "/tmp/agent" });
+    await retainCodexAppServerLiveThread(harness.client, "thread-1");
+
+    let finishRelease: (() => void) | undefined;
+    const previousRelease = new Promise<void>((resolve) => {
+      finishRelease = resolve;
+    });
+    const transition = retainCodexAppServerLiveThread(
+      harness.client,
+      "thread-2",
+      async () => previousRelease,
+    );
+    const oldThreadAcquisition = consumeCodexAppServerLiveThread(harness.client, "thread-1");
+
+    finishRelease?.();
+    await expect(transition).resolves.toEqual({ previousThreadId: "thread-1" });
+    await expect(oldThreadAcquisition).resolves.toBe(false);
+    await expect(consumeCodexAppServerLiveThread(harness.client, "thread-2")).resolves.toBe(true);
+  });
+
+  it("does not expose either thread after a previous subscription release fails", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    ensureCodexAppServerClientRuntime(harness.client, { agentDir: "/tmp/agent" });
+    await retainCodexAppServerLiveThread(harness.client, "thread-1");
+
+    await expect(
+      retainCodexAppServerLiveThread(harness.client, "thread-2", async () => {
+        throw new Error("unsubscribe unavailable");
+      }),
+    ).rejects.toThrow("unsubscribe unavailable");
+    await expect(consumeCodexAppServerLiveThread(harness.client, "thread-1")).resolves.toBe(false);
+    await expect(consumeCodexAppServerLiveThread(harness.client, "thread-2")).resolves.toBe(false);
+  });
+
+  it("reuses a retained subscription only for its complete configuration fingerprint", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    ensureCodexAppServerClientRuntime(harness.client, { agentDir: "/tmp/agent" });
+
+    await expect(
+      retainCodexAppServerLiveThread(harness.client, "thread-1", undefined, "config-before"),
+    ).resolves.toEqual({});
+    await expect(
+      consumeCodexAppServerLiveThread(harness.client, "thread-1", "config-after"),
+    ).resolves.toBe(false);
+    await expect(
+      consumeCodexAppServerLiveThread(harness.client, "thread-1", "config-before"),
+    ).resolves.toBe(true);
   });
 });

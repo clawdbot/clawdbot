@@ -19,7 +19,6 @@ import {
 } from "../infra/diagnostic-trace-context.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { appendRegularFileSync } from "../infra/regular-file.js";
 import {
   DEFAULT_POSIX_TMP_ROOT,
   resolvePreferredOpenClawTmpDir,
@@ -30,6 +29,14 @@ import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
 import { isLegacyRollingLogFilePath, resolveRollingLogFilePathForDate } from "./log-file-path.js";
 import { resolveDefaultRollingLogFile } from "./log-file-path.js";
 import { canUseNodeFs, formatLocalDate, LOG_PREFIX, LOG_SUFFIX } from "./log-file-shared.js";
+import {
+  drainFileLogQueueSync,
+  enqueueFileLog,
+  flushFileLogQueue,
+  resetFileLogTransportForTests,
+  setFileLogAppenderForTests,
+  setFileLogQueueMaxRecordsForTests,
+} from "./logger-file-transport.js";
 import { setLoggerFileTargetResolver } from "./logger-settings-internal.js";
 import { redactSecrets, redactSensitiveText } from "./redact.js";
 import { loggingState } from "./state.js";
@@ -52,7 +59,6 @@ export const DEFAULT_LOG_FILE = resolveDefaultLogFile(DEFAULT_LOG_DIR); // legac
 
 const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
 const DEFAULT_MAX_LOG_FILE_BYTES = 100 * 1024 * 1024; // 100 MB
-const MAX_ROTATED_LOG_FILES = 5;
 
 type LogObj = { date?: Date } & Record<string, unknown>;
 
@@ -582,15 +588,19 @@ export function isFileLogLevelEnabled(level: LogLevel): boolean {
 }
 
 function buildLogger(settings: ResolvedRuntimeSettings): TsLogger<LogObj> {
+  const silent = settings.level === "silent";
   const logger = new TsLogger<LogObj>({
     name: "openclaw",
     maskValuesOfKeys: [],
-    minLevel: levelToMinLevel(settings.level),
+    // tslog reports Infinity as an out-of-range setting even though its runtime filter supports it.
+    minLevel: levelToMinLevel(silent ? "fatal" : settings.level),
     type: "hidden", // no ansi formatting
   });
 
-  // Silent logging does not write files; skip all filesystem setup in this path.
-  if (settings.level === "silent") {
+  // Restore the silent threshold after constructor validation. Keep the diagnostic transport
+  // attached exactly as before; tslog filters every level before transport dispatch.
+  if (silent) {
+    logger.settings.minLevel = levelToMinLevel("silent");
     attachDiagnosticEventTransport(logger);
     return logger;
   }
@@ -602,9 +612,6 @@ function buildLogger(settings: ResolvedRuntimeSettings): TsLogger<LogObj> {
   if (rollingFile) {
     pruneOldRollingLogs(path.dirname(activeFile));
   }
-  let currentFileBytes = getCurrentLogFileBytes(activeFile);
-  let warnedAboutRotationFailure = false;
-
   logger.attachTransport((logObj: LogObj) => {
     try {
       const nextActiveFile = resolveActiveLogFileWithMode(settings.file, rollingFile);
@@ -614,7 +621,6 @@ function buildLogger(settings: ResolvedRuntimeSettings): TsLogger<LogObj> {
         if (rollingFile) {
           pruneOldRollingLogs(path.dirname(activeFile));
         }
-        currentFileBytes = getCurrentLogFileBytes(activeFile);
       }
       const time = formatTimestamp(logObj.date ?? new Date(), { style: "long" });
       const traceFields = buildTraceFileLogFields(logObj as TsLogRecord);
@@ -630,23 +636,12 @@ function buildLogger(settings: ResolvedRuntimeSettings): TsLogger<LogObj> {
         ...traceFields,
       };
       const line = redactSensitiveText(JSON.stringify(redactLogRecordForTransport(record)));
-      const payload = `${line}\n`;
-      const payloadBytes = Buffer.byteLength(payload, "utf8");
-      const nextBytes = currentFileBytes + payloadBytes;
-      if (currentFileBytes > 0 && nextBytes > settings.maxFileBytes) {
-        if (rotateLogFile(activeFile)) {
-          currentFileBytes = getCurrentLogFileBytes(activeFile);
-          warnedAboutRotationFailure = false;
-        } else if (!warnedAboutRotationFailure) {
-          warnedAboutRotationFailure = true;
-          process.stderr.write(
-            `[openclaw] log file rotation failed; continuing writes file=${activeFile} maxFileBytes=${settings.maxFileBytes}\n`,
-          );
-        }
-      }
-      if (appendLogLine(activeFile, payload)) {
-        currentFileBytes += payloadBytes;
-      }
+      enqueueFileLog({
+        file: activeFile,
+        hostname: expectDefined(structuredFields.hostname, "structured log hostname"),
+        maxFileBytes: settings.maxFileBytes,
+        payload: `${line}\n`,
+      });
     } catch {
       // never block on logging failures
     }
@@ -663,23 +658,6 @@ function resolveMaxLogFileBytes(raw: unknown): number {
   return DEFAULT_MAX_LOG_FILE_BYTES;
 }
 
-function getCurrentLogFileBytes(file: string): number {
-  try {
-    return fs.statSync(file).size;
-  } catch {
-    return 0;
-  }
-}
-
-function appendLogLine(file: string, line: string): boolean {
-  try {
-    appendRegularFileSync({ filePath: file, content: line });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export function getLogger(): TsLogger<LogObj> {
   const settings = resolveSettings();
   const cachedLogger = loggingState.cachedLogger as TsLogger<LogObj> | null;
@@ -691,6 +669,24 @@ export function getLogger(): TsLogger<LogObj> {
   return loggingState.cachedLogger as TsLogger<LogObj>;
 }
 
+type SubLoggerSettings = NonNullable<Parameters<TsLogger<LogObj>["getSubLogger"]>[0]>;
+
+function getSubLoggerWithResolvedMinLevel(
+  logger: TsLogger<LogObj>,
+  settings: SubLoggerSettings,
+  minLevel: number,
+): TsLogger<LogObj> {
+  const silent = minLevel === levelToMinLevel("silent");
+  const child = logger.getSubLogger({
+    ...settings,
+    minLevel: silent ? levelToMinLevel("fatal") : minLevel,
+  });
+  if (silent) {
+    child.settings.minLevel = minLevel;
+  }
+  return child;
+}
+
 export function getChildLogger(
   bindings?: Record<string, unknown>,
   opts?: { level?: LogLevel },
@@ -698,21 +694,25 @@ export function getChildLogger(
   const base = getLogger();
   const minLevel = opts?.level ? levelToMinLevel(opts.level) : base.settings.minLevel;
   const name = bindings ? JSON.stringify(bindings) : undefined;
-  return base.getSubLogger({
-    name,
+  return getSubLoggerWithResolvedMinLevel(
+    base,
+    {
+      name,
+      prefix: bindings ? [name ?? ""] : [],
+    },
     minLevel,
-    prefix: bindings ? [name ?? ""] : [],
-  });
+  );
 }
 
 // Baileys expects a pino-like logger shape. Provide a lightweight adapter.
 export function toPinoLikeLogger(logger: TsLogger<LogObj>, level: LogLevel): PinoLikeLogger {
   const buildChild = (bindings?: Record<string, unknown>) =>
     toPinoLikeLogger(
-      logger.getSubLogger({
-        name: bindings ? JSON.stringify(bindings) : undefined,
-        minLevel: logger.settings.minLevel,
-      }),
+      getSubLoggerWithResolvedMinLevel(
+        logger,
+        { name: bindings ? JSON.stringify(bindings) : undefined },
+        logger.settings.minLevel,
+      ),
       level,
     );
 
@@ -744,6 +744,11 @@ export function getResolvedLoggerSettings(): LoggerResolvedSettings {
   return settings;
 }
 
+/** Flushes queued file logs before a graceful owner exits the process. */
+export async function flushLogger(): Promise<void> {
+  await flushFileLogQueue();
+}
+
 // Test helpers
 export function setLoggerOverride(settings: LoggerSettings | null) {
   loggingState.overrideSettings = settings;
@@ -763,7 +768,12 @@ export function resetLogger() {
 }
 
 export const testApi = {
+  drainFileLogQueueSyncForTests: drainFileLogQueueSync,
+  flushFileLogQueueForTests: flushFileLogQueue,
+  resetFileLogTransportForTests,
   resolveActiveLogFile,
+  setFileLogAppenderForTests,
+  setFileLogQueueMaxRecordsForTests,
   setHostnameResolverForTests: (resolver?: HostnameResolver) => {
     hostnameResolver = resolver ?? defaultHostnameResolver;
     cachedHostname = null;
@@ -807,29 +817,4 @@ function pruneOldRollingLogs(dir: string): void {
   }
 }
 
-function rotatedLogPath(file: string, index: number): string {
-  const ext = path.extname(file);
-  const base = file.slice(0, file.length - ext.length);
-  return `${base}.${index}${ext}`;
-}
-
-function rotateLogFile(file: string): boolean {
-  try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.rmSync(rotatedLogPath(file, MAX_ROTATED_LOG_FILES), { force: true });
-    for (let index = MAX_ROTATED_LOG_FILES - 1; index >= 1; index -= 1) {
-      const from = rotatedLogPath(file, index);
-      if (!fs.existsSync(from)) {
-        continue;
-      }
-      fs.renameSync(from, rotatedLogPath(file, index + 1));
-    }
-    if (fs.existsSync(file)) {
-      fs.renameSync(file, rotatedLogPath(file, 1));
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

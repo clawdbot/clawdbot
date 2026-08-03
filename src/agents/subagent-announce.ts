@@ -28,10 +28,12 @@ import {
   loadSessionEntryByKey,
   runAnnounceDeliveryWithRetry,
   resolveSubagentAnnounceTimeoutMs,
-  resolveSubagentCompletionOrigin,
 } from "./subagent-announce-delivery.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
-import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
+import {
+  resolveAnnounceOrigin,
+  resolveSubagentCompletionOrigin,
+} from "./subagent-announce-origin.js";
 import {
   applySubagentWaitOutcome,
   buildChildCompletionFindings,
@@ -573,6 +575,14 @@ export async function runSubagentAnnounceFlow(params: {
           })
         : targetRequesterOrigin;
     const directIdempotencyKey = buildAnnounceIdempotencyKey(announceId);
+    let deliveryResultReported = false;
+    const reportDeliveryResult = (delivery: SubagentAnnounceDeliveryResult) => {
+      if (deliveryResultReported) {
+        return;
+      }
+      deliveryResultReported = true;
+      params.onDeliveryResult?.(delivery);
+    };
     const delivery = await deliverSubagentAnnouncement({
       requesterSessionKey: targetRequesterSessionKey,
       announceId,
@@ -595,9 +605,10 @@ export async function runSubagentAnnounceFlow(params: {
       expectsCompletionMessage,
       bestEffortDeliver: params.bestEffortDeliver,
       directIdempotencyKey,
+      onDeliveryResult: reportDeliveryResult,
       signal: params.signal,
     });
-    params.onDeliveryResult?.(delivery);
+    reportDeliveryResult(delivery);
     didAnnounce = delivery.delivered || delivery.terminal === true;
     if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
       defaultRuntime.log(
@@ -608,18 +619,8 @@ export async function runSubagentAnnounceFlow(params: {
     defaultRuntime.error?.(`Subagent announce failed: ${String(err)}`);
     // Best-effort follow-ups; ignore failures to avoid breaking the caller response.
   } finally {
-    // Patch label after all writes complete
-    if (params.label) {
-      try {
-        await subagentAnnounceDeps.callGateway({
-          method: "sessions.patch",
-          params: { key: params.childSessionKey, label: params.label },
-          timeoutMs: 10_000,
-        });
-      } catch {
-        // Best-effort
-      }
-    }
+    // The spawn label is persisted at run start (agent request `label` →
+    // buildAgentSessionPatch), so no post-run label patch is needed here.
     if (shouldDeleteChildSession && (params.onBeforeDeleteChildSession?.() ?? true)) {
       await deleteSubagentSessionForCleanup({
         callGateway: subagentAnnounceDeps.callGateway,

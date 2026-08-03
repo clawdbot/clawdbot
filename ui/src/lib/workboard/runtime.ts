@@ -1,5 +1,5 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { normalizeString, workboardCardSessionKey } from "./card-state.ts";
+import { isActiveWorkboardCard, normalizeString, workboardCardSessionKey } from "./card-state.ts";
 import { WORKBOARD_STATUSES, type WorkboardTaskLinkState, type WorkboardUiState } from "./types.ts";
 
 export type WorkboardHost = object;
@@ -424,8 +424,11 @@ export function workboardLifecycleSyncBlocked(
 
 export function workboardLifecycleRequiresTaskRefresh(state: WorkboardTaskLinkState): boolean {
   return (
-    state.tasksByCardId.size > 0 ||
+    state.cards.some((card) => isActiveWorkboardCard(card) && state.tasksByCardId.has(card.id)) ||
     state.cards.some((card) => {
+      if (!isActiveWorkboardCard(card)) {
+        return false;
+      }
       const taskId = normalizeString(card.taskId);
       return Boolean(taskId && !state.missingTaskIds.has(taskId));
     })
@@ -435,7 +438,12 @@ export function workboardLifecycleRequiresTaskRefresh(state: WorkboardTaskLinkSt
 export function shouldRefreshWorkboardTasksForLifecycle(state: WorkboardTaskLinkState): boolean {
   return (
     workboardLifecycleRequiresTaskRefresh(state) ||
-    state.cards.some((card) => card.status === "running" && Boolean(workboardCardSessionKey(card)))
+    state.cards.some(
+      (card) =>
+        isActiveWorkboardCard(card) &&
+        card.status === "running" &&
+        Boolean(workboardCardSessionKey(card)),
+    )
   );
 }
 
@@ -444,6 +452,9 @@ export function workboardTaskLinksReadyForLifecycle(
   options: { requireRunningTaskDiscovery?: boolean } = {},
 ): boolean {
   return state.cards.every((card) => {
+    if (!isActiveWorkboardCard(card)) {
+      return true;
+    }
     const taskId = normalizeString(card.taskId);
     if (taskId) {
       return state.missingTaskIds.has(taskId) || state.tasksByCardId.has(card.id);

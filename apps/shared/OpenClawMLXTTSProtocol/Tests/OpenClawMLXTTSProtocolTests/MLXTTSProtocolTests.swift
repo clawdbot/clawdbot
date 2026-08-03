@@ -9,13 +9,26 @@ final class MLXTTSProtocolTests: XCTestCase {
             text: "hello",
             modelRepo: "mlx-community/Soprano-80M-bf16",
             language: "en",
-            voice: nil))
+            voice: nil,
+            referenceAudioPath: "/tmp/reference.wav",
+            referenceText: "reference transcript",
+            stream: true))
 
         var decoder = MLXTTSFrameDecoder()
         let payloads = try decoder.append(MLXTTSFrameCodec.encode(request))
 
         XCTAssertEqual(payloads.count, 1)
         XCTAssertEqual(try MLXTTSFrameCodec.decode(MLXTTSRequest.self, payload: payloads[0]), request)
+    }
+
+    func testLegacySynthesisRequestDefaultsStreamToFalse() throws {
+        let payload = Data(
+            #"{"id":"legacy","text":"hello","modelRepo":"repo","language":null,"voice":null}"#.utf8)
+        let request = try JSONDecoder().decode(MLXTTSSynthesizeRequest.self, from: payload)
+
+        XCTAssertFalse(request.stream)
+        XCTAssertNil(request.referenceAudioPath)
+        XCTAssertNil(request.referenceText)
     }
 
     func testDecoderAcceptsFragmentedAndCoalescedFrames() throws {
@@ -49,6 +62,20 @@ final class MLXTTSProtocolTests: XCTestCase {
         let decoded = try MLXTTSFrameCodec.decode(MLXTTSEvent.self, payload: payload)
 
         XCTAssertEqual(decoded, event)
+    }
+
+    func testStreamingEventsRoundTrip() throws {
+        let events: [MLXTTSEvent] = [
+            .streamStarted(MLXTTSStreamStart(id: "request-3", sampleRate: 44100)),
+            .audioChunk(MLXTTSAudioChunk(id: "request-3", pcm: Data([0x00, 0x00]))),
+            .completed(id: "request-3"),
+        ]
+
+        for event in events {
+            var decoder = MLXTTSFrameDecoder()
+            let payload = try XCTUnwrap(decoder.append(MLXTTSFrameCodec.encode(event)).first)
+            XCTAssertEqual(try MLXTTSFrameCodec.decode(MLXTTSEvent.self, payload: payload), event)
+        }
     }
 
     func testDecoderRejectsEmptyAndOversizedFrames() {

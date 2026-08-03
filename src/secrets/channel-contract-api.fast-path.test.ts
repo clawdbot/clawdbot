@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { loadPluginMetadataSnapshotMock } = vi.hoisted(() => ({
-  loadPluginMetadataSnapshotMock: vi.fn(() => ({ plugins: [] })),
+  loadPluginMetadataSnapshotMock: vi.fn((_params: unknown) => ({ plugins: [] })),
 }));
 const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
   loadBundledPluginPublicArtifactModuleSyncMock: vi.fn(
@@ -69,5 +69,6 @@ describe("channel contract api explicit fast path", () => {
       artifactBasename: "contract-api.js",
     });
     expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(loadPluginMetadataSnapshotMock.mock.calls[0]?.[0]).not.toHaveProperty("workspaceDir");
   });
 });

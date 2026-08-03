@@ -55,10 +55,10 @@ async function openDashboard(page: Page): Promise<void> {
       string,
       unknown
     >;
-    settings.boardSessionViews = { [key]: { face: "dashboard", activeTabId: "main" } };
+    settings.boardSessionViews = { [key]: { activeTabId: "main" } };
     localStorage.setItem(settingsKey, JSON.stringify(settings));
   }, sessionKey);
-  await page.goto(`${controlUi.baseUrl}chat`);
+  await page.goto(`${controlUi.baseUrl}dashboard`);
   await page.locator(".board-session-surface").waitFor();
 }
 

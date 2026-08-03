@@ -65,7 +65,7 @@ describe("memory-wiki plugin", () => {
       "wiki.status",
       "wiki.importRuns",
       "wiki.importInsights",
-      "wiki.palace",
+      "wiki.overview",
       "wiki.init",
       "wiki.doctor",
       "wiki.compile",
@@ -151,6 +151,36 @@ describe("memory-wiki plugin", () => {
         expect(marketingTool).toMatchObject({ testMemoryContext: { agentId: "marketing" } });
       }
       expect(() => factory({ agentId: "finance" })).toThrow("Unknown memory-wiki agentId: finance");
+    }
+  });
+
+  it("forwards protected recall authorization to wiki search and get", () => {
+    const { api, registerTool } = createPluginApi();
+    plugin.register(api);
+    const conversationRecall = {
+      anchorSessionKey: "agent:main:telegram:direct:owner",
+      scope: "same-agent-private",
+      corpus: "sessions",
+    } as const;
+
+    for (const toolName of ["wiki_search", "wiki_get"]) {
+      const registration = registerTool.mock.calls.find((call) => call[1]?.name === toolName);
+      const factory = registration?.[0];
+      expect(
+        factory?.({
+          agentId: "main",
+          sessionKey: "agent:main:telegram:direct:owner:active-memory:abcdef123456",
+          sandboxed: false,
+          conversationRecall,
+        }),
+      ).toMatchObject({
+        testMemoryContext: {
+          agentId: "main",
+          agentSessionKey: "agent:main:telegram:direct:owner:active-memory:abcdef123456",
+          sandboxed: false,
+          conversationRecall,
+        },
+      });
     }
   });
 

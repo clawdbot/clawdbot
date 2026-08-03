@@ -1,8 +1,9 @@
+import path from "node:path";
 import { buildInboundMediaNoteProjection } from "../../../auto-reply/media-note.js";
 import {
-  normalizeMediaFacts,
+  readPersistedMediaFacts,
   readRuntimePromptMediaFacts,
-  resolveMediaFacts,
+  stripLegacyMediaContextFields,
   type MediaFact,
 } from "../../../media/media-facts.js";
 /**
@@ -39,18 +40,6 @@ type PrunableContextAgent = {
  * ones, so text-only turns consume the window.
  */
 const PRESERVE_RECENT_COMPLETED_TURNS = 3;
-const PERSISTED_MEDIA_FIELD_KEYS = [
-  "media",
-  "MediaPath",
-  "MediaPaths",
-  "MediaUrl",
-  "MediaUrls",
-  "MediaType",
-  "MediaTypes",
-  "MediaTranscribedIndexes",
-  "MediaWorkspaceDir",
-] as const;
-
 function resolvePruneBeforeIndex(messages: AgentMessage[]): number {
   const completedTurnStarts: number[] = [];
   let currentTurnStart = -1;
@@ -92,14 +81,7 @@ function resolveMessageMediaFacts(message: AgentMessage): MediaFact[] {
   if (runtimeMedia) {
     return runtimeMedia;
   }
-  const meta = (message as unknown as Record<string, unknown>)["__openclaw"];
-  const nestedMedia =
-    meta && typeof meta === "object" && !Array.isArray(meta)
-      ? (meta as Record<string, unknown>).media
-      : undefined;
-  return Array.isArray(nestedMedia)
-    ? normalizeMediaFacts(nestedMedia as MediaFact[])
-    : resolveMediaFacts(message as unknown as Parameters<typeof resolveMediaFacts>[0]);
+  return readPersistedMediaFacts(message) ?? [];
 }
 
 function wasStructurallyMediaPruned(message: AgentMessage): boolean {
@@ -119,11 +101,36 @@ function replaceLegacyFactlessMediaText(text: string): string {
     .replace(LEGACY_INBOUND_MEDIA_URI_PATTERN, PRUNED_HISTORY_MEDIA_REFERENCE_MARKER);
 }
 
+function normalizeMarkerIdentity(identity: string): string {
+  return identity.replaceAll("\\", "/");
+}
+
+function resolveWorkspaceRelativeMarkerAliases(fact: MediaFact): string[] {
+  if (
+    !fact.path ||
+    !fact.workspaceDir ||
+    !path.isAbsolute(fact.path) ||
+    !path.isAbsolute(fact.workspaceDir)
+  ) {
+    return [];
+  }
+  const relativePath = path.relative(fact.workspaceDir, fact.path);
+  if (!relativePath || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    return [];
+  }
+  const normalizedRelativePath = normalizeMarkerIdentity(relativePath);
+  return [normalizedRelativePath, `./${normalizedRelativePath}`];
+}
+
 function factOwnsMarkerIdentity(identity: string, media: MediaFact[]): boolean {
-  const normalizedIdentity = identity.replaceAll("\\", "/");
-  return media.some((fact) =>
-    [fact.path, fact.url].some((alias) => alias?.replaceAll("\\", "/") === normalizedIdentity),
-  );
+  const normalizedIdentity = normalizeMarkerIdentity(identity);
+  return media.some((fact) => {
+    // Persistence anchors sandbox paths for browser previews, while existing
+    // prompt marker text remains relative. Derive aliases only from an
+    // explicitly recorded workspace so unrelated absolute facts stay distinct.
+    const aliases = [fact.path, fact.url, ...resolveWorkspaceRelativeMarkerAliases(fact)];
+    return aliases.some((alias) => alias && normalizeMarkerIdentity(alias) === normalizedIdentity);
+  });
 }
 
 function extractMediaAttachedIdentity(marker: string): string {
@@ -188,9 +195,8 @@ function cloneMessageWithContent(
 ): AgentMessage {
   const clone = { ...message, content } as AgentMessage & Record<string, unknown>;
   if (dropMedia) {
-    for (const key of PERSISTED_MEDIA_FIELD_KEYS) {
-      delete clone[key];
-    }
+    delete clone.media;
+    stripLegacyMediaContextFields(clone);
   }
   if (dropImageMetadata) {
     const meta = clone["__openclaw"];

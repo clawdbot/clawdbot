@@ -40,12 +40,15 @@ const resolveCommandSecretRefsViaGatewayMock = vi.fn();
 const resolveOutboundAttachmentFromUrlMock = vi.fn();
 const createReplyMediaContextRuntimeMock = vi.fn();
 
-vi.mock("../../agents/model-fallback.js", () => ({
+vi.mock("../../agents/model-fallback-runner.js", () => ({
   runWithModelFallback: (params: {
     provider: string;
     model: string;
     run: (provider: string, model: string) => Promise<unknown>;
   }) => runWithModelFallbackMock(params),
+}));
+
+vi.mock("../../agents/model-fallback-attempt.js", () => ({
   isFallbackSummaryError: (err: unknown) =>
     err instanceof Error &&
     err.name === "FallbackSummaryError" &&
@@ -95,6 +98,15 @@ vi.mock("../../infra/agent-events.js", async () => {
     registerAgentRunContext: vi.fn(),
   };
 });
+vi.mock("../../infra/agent-run-registry.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/agent-run-registry.js")>(
+    "../../infra/agent-run-registry.js",
+  );
+  return {
+    ...actual,
+    registerAgentRunContext: vi.fn(),
+  };
+});
 
 vi.mock("../../agents/embedded-agent.js", () => ({
   abortEmbeddedAgentRun: abortEmbeddedAgentRunMock,
@@ -122,6 +134,7 @@ vi.mock("../../cli/command-secret-gateway.js", () => ({
 
 vi.mock("../../cli/command-secret-targets.js", () => ({
   getAgentRuntimeCommandSecretTargetIds: () => new Set<string>(),
+  getAgentRuntimeOptionalCommandSecretPaths: () => new Set<string>(),
   getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
 }));
 
@@ -247,7 +260,7 @@ vi.mock("../../media/outbound-attachment.js", () => ({
 }));
 
 // Spy on the .runtime import path used by agent-runner-execution.ts so we can assert
-// that the fix prevents a second media context from being created inside runAgentTurnWithFallback.
+// that the fix prevents a second media context from being created inside executeAgentTurn.
 vi.mock("./reply-media-paths.runtime.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("./reply-media-paths.runtime.js")>();
   return {
@@ -642,8 +655,8 @@ describe("runReplyAgent media path normalization", () => {
     sessionCtx: TemplateContext,
     prompt = "describe this image",
   ): Promise<void> {
-    const { runAgentTurnWithFallback } = await import("./agent-runner-execution.js");
-    await runAgentTurnWithFallback({
+    const { executeAgentTurn } = await import("./agent-runner-execution.js");
+    await executeAgentTurn({
       commandBody: prompt,
       followupRun: createMockFollowupRun({
         prompt,
@@ -685,9 +698,9 @@ describe("runReplyAgent media path normalization", () => {
     });
   }
 
-  it("reuses the provided media context inside runAgentTurnWithFallback", async () => {
+  it("reuses the provided media context inside executeAgentTurn", async () => {
     // Regression test for openclaw/openclaw#68056.
-    // runAgentTurnWithFallback must use the caller-provided context so block
+    // executeAgentTurn must use the caller-provided context so block
     // replies and final replies can share one media cache.
     runEmbeddedAgentMock.mockResolvedValue({
       payloads: [],
@@ -700,7 +713,7 @@ describe("runReplyAgent media path normalization", () => {
       },
     });
 
-    const { runAgentTurnWithFallback } = await import("./agent-runner-execution.js");
+    const { executeAgentTurn } = await import("./agent-runner-execution.js");
     const followupRun = createMockFollowupRun({
       prompt: "generate",
       run: {
@@ -710,7 +723,7 @@ describe("runReplyAgent media path normalization", () => {
         config: {},
       },
     });
-    await runAgentTurnWithFallback({
+    await executeAgentTurn({
       commandBody: "generate",
       followupRun,
       sessionCtx: {
@@ -784,9 +797,7 @@ describe("runReplyAgent media path normalization", () => {
       OriginatingTo: "chat-1",
       AccountId: "default",
       MessageSid: "msg-1",
-      MediaPaths: [imagePath],
-      MediaTypes: ["image/png"],
-      MediaWorkspaceDir: tmpDir,
+      media: [{ path: imagePath, contentType: "image/png", workspaceDir: tmpDir }],
     } as unknown as TemplateContext);
 
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();

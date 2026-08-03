@@ -5,9 +5,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
-import { resolveGatewayPort } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveGatewayAuth } from "../gateway/auth-resolve.js";
 import { callGateway } from "../gateway/call.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
 import type { SystemPresence } from "../infra/system-presence.js";
@@ -15,11 +13,16 @@ import { sleep } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
-  buildOnboardingControlUiUrl,
+  hasVerifiedControlUiLoopbackAlias,
+  issueControlUiBrowserHandoff,
+  resolveControlUiHandoffTarget,
+  waitForControlUiDocument,
+  type ControlUiHandoffTarget,
+} from "./control-ui-handoff.js";
+import {
   formatControlUiSshHint,
   openUrl,
   resolveAdvertisedControlUiLinks,
-  resolveLocalControlUiProbeLinks,
 } from "./onboard-helpers.js";
 
 const GUI_HANDOFF_TIMEOUT_MS = 60_000;
@@ -30,8 +33,11 @@ const HANDOFF_PROBE_TIMEOUT_MS = 5_000;
 type BrowserHatchTarget = {
   config: OpenClawConfig;
   dashboardUrl: string;
+  documentUrl: string;
   sshHint?: string;
-  wsUrl: string;
+  port: number;
+  loopbackAliasHost?: string;
+  tlsConfig?: ControlUiHandoffTarget["tlsConfig"];
   token?: string;
   password?: string;
 };
@@ -55,15 +61,14 @@ type BrowserHatchHandoffDeps = {
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   openBrowser?: (url: string) => Promise<boolean>;
-  resolveTarget?: (
-    config: OpenClawConfig,
-    env: NodeJS.ProcessEnv,
-    suppressTokenOutput: boolean,
-  ) => Promise<BrowserHatchTarget>;
+  resolveTarget?: (config: OpenClawConfig, env: NodeJS.ProcessEnv) => Promise<BrowserHatchTarget>;
   probePresence?: (
     target: BrowserHatchTarget,
     timeoutMs: number,
   ) => Promise<DashboardPresenceProbeResult>;
+  waitForDocument?: typeof waitForControlUiDocument;
+  issueBrowserHandoff?: typeof issueControlUiBrowserHandoff;
+  verifyLoopbackAlias?: typeof hasVerifiedControlUiLoopbackAlias;
   pollForClient?: (params: {
     target: BrowserHatchTarget;
     baselineClientKeys: ReadonlySet<string>;
@@ -97,67 +102,32 @@ export function detectGraphicalSession(env: NodeJS.ProcessEnv, platform: NodeJS.
 async function resolveBrowserHatchTarget(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
-  suppressTokenOutput: boolean,
 ): Promise<BrowserHatchTarget> {
-  const port = resolveGatewayPort(config, env);
-  const bind = config.gateway?.bind ?? "loopback";
-  const customBindHost = config.gateway?.customBindHost;
-  const basePath = config.gateway?.controlUi?.basePath;
-  const tlsEnabled = config.gateway?.tls?.enabled === true;
+  const shared = await resolveControlUiHandoffTarget({ config, env });
   const credentials = await resolveGatewayCredentialsWithSecretInputs({
     config,
     env,
     modeOverride: "local",
-    localTokenPrecedence: "config-first",
-    localPasswordPrecedence: "config-first",
   });
-  const auth = resolveGatewayAuth({
-    authConfig: {
-      ...config.gateway?.auth,
-      ...(credentials.token ? { token: credentials.token } : {}),
-      ...(credentials.password ? { password: credentials.password } : {}),
-    },
-    env: {},
-    ...(config.gateway?.tailscale?.mode ? { tailscaleMode: config.gateway.tailscale.mode } : {}),
-  });
-  const [displayLinks, probeLinks] = await Promise.all([
-    resolveAdvertisedControlUiLinks({
-      bind,
-      port,
-      customBindHost,
-      basePath,
-      tlsEnabled,
-    }),
-    Promise.resolve(
-      resolveLocalControlUiProbeLinks({
-        bind,
-        port,
-        customBindHost,
-        basePath,
-        tlsEnabled,
-      }),
-    ),
-  ]);
-  const token = auth.mode === "token" ? auth.token : undefined;
-  const setupAuthValue = auth.mode === "password" ? auth.password : undefined;
+  const authMode =
+    !config.gateway?.auth?.mode && credentials.password ? "password" : shared.authMode;
+  const token = authMode === "token" ? credentials.token : undefined;
+  const setupAuthValue = authMode === "password" ? credentials.password : undefined;
   const target: BrowserHatchTarget = {
     config,
-    dashboardUrl: buildOnboardingControlUiUrl({
-      httpUrl: displayLinks.httpUrl,
-      authMode: auth.mode,
-      token,
-      suppressTokenOutput,
-    }),
-    ...(bind === "loopback"
+    dashboardUrl: shared.links.httpUrl,
+    documentUrl: shared.documentUrl,
+    port: shared.port,
+    ...(shared.loopbackAliasHost ? { loopbackAliasHost: shared.loopbackAliasHost } : {}),
+    ...(shared.tlsConfig ? { tlsConfig: shared.tlsConfig } : {}),
+    ...(shared.bind === "loopback" || shared.tlsConfig?.enabled !== true
       ? {
           sshHint: formatControlUiSshHint({
-            port,
-            ...(basePath ? { basePath } : {}),
-            ...(token && !suppressTokenOutput ? { token } : {}),
+            port: shared.port,
+            ...(shared.basePath ? { basePath: shared.basePath } : {}),
           }),
         }
       : {}),
-    wsUrl: probeLinks.wsUrl,
     ...(token ? { token } : {}),
   };
   if (setupAuthValue) {
@@ -174,8 +144,12 @@ function isConnectedControlUi(entry: SystemPresence): boolean {
   );
 }
 
-function dashboardPresenceKey(entry: SystemPresence): string {
-  return [entry.deviceId, entry.instanceId, entry.host, entry.mode, entry.ts].join("\0");
+export function resolveConnectedControlUiPresenceKeys(
+  entries: readonly SystemPresence[],
+): string[] {
+  return entries
+    .filter(isConnectedControlUi)
+    .map((entry) => [entry.deviceId, entry.instanceId, entry.host, entry.mode].join("\0"));
 }
 
 async function probeDashboardPresence(
@@ -205,7 +179,7 @@ async function probeDashboardPresence(
     });
     return {
       reachable: true,
-      clientKeys: (presence ?? []).filter(isConnectedControlUi).map(dashboardPresenceKey),
+      clientKeys: resolveConnectedControlUiPresenceKeys(presence ?? []),
     };
   } catch (error) {
     return {
@@ -249,31 +223,6 @@ async function waitForDashboardClient(params: {
   }
 }
 
-/** Lightweight reachability gate used before guided onboarding announces a handoff. */
-export async function probeBrowserHatchGateway(params: {
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): Promise<{ ok: boolean; detail?: string }> {
-  // A disabled Control UI still answers the WS/presence RPC, so without this
-  // guard the handoff would open a dead dashboard URL and block for the full
-  // timeout before falling back. Skip straight to the terminal hatch instead.
-  if (params.config.gateway?.controlUi?.enabled === false) {
-    return { ok: false, detail: "control ui disabled" };
-  }
-  // Reachability is proven by the same presence read (and same resolved target,
-  // so the same shared secret) the handoff waits on — the gate and the wait
-  // never disagree on auth.
-  try {
-    const target = await resolveBrowserHatchTarget(params.config, params.env ?? process.env, false);
-    const presence = await probeDashboardPresence(target, HANDOFF_PROBE_TIMEOUT_MS);
-    return presence.reachable
-      ? { ok: true }
-      : { ok: false, ...(presence.reason ? { detail: presence.reason } : {}) };
-  } catch (error) {
-    return { ok: false, detail: error instanceof Error ? error.message : String(error) };
-  }
-}
-
 /** Opens or prints the dashboard and waits for its Control UI client connection. */
 export async function runBrowserHatchHandoff(
   params: {
@@ -286,15 +235,36 @@ export async function runBrowserHatchHandoff(
   const env = deps.env ?? process.env;
   const platform = deps.platform ?? process.platform;
   const graphical = detectGraphicalSession(env, platform);
+  if (params.suppressTokenOutput === true || params.config.gateway?.controlUi?.enabled === false) {
+    return { handedOff: false, reason: "target-unavailable" };
+  }
   let target: BrowserHatchTarget;
   try {
-    target = await (deps.resolveTarget ?? resolveBrowserHatchTarget)(
-      params.config,
-      env,
-      params.suppressTokenOutput === true,
-    );
+    target = await (deps.resolveTarget ?? resolveBrowserHatchTarget)(params.config, env);
   } catch {
     return { handedOff: false, reason: "target-unavailable" };
+  }
+
+  if (!(await (deps.verifyLoopbackAlias ?? hasVerifiedControlUiLoopbackAlias)(target))) {
+    return { handedOff: false, reason: "target-unavailable" };
+  }
+
+  let progress: ReturnType<WizardPrompter["progress"]> | undefined;
+  try {
+    const document = await (deps.waitForDocument ?? waitForControlUiDocument)({
+      url: target.documentUrl,
+      tlsConfig: target.tlsConfig,
+      onPending: () => {
+        progress = params.prompter.progress(t("wizard.guided.controlUiPreparing"));
+      },
+    });
+    if (!document.ready) {
+      return { handedOff: false, reason: "target-unavailable" };
+    }
+  } catch {
+    return { handedOff: false, reason: "target-unavailable" };
+  } finally {
+    progress?.stop();
   }
 
   const probePresence = deps.probePresence ?? probeDashboardPresence;
@@ -305,7 +275,14 @@ export async function runBrowserHatchHandoff(
 
   let opened = false;
   if (graphical) {
-    opened = await (deps.openBrowser ?? openUrl)(target.dashboardUrl);
+    try {
+      const browserHandoff = await (deps.issueBrowserHandoff ?? issueControlUiBrowserHandoff)(
+        target.dashboardUrl,
+      );
+      opened = await (deps.openBrowser ?? openUrl)(browserHandoff.browserUrl);
+    } catch {
+      return { handedOff: false, reason: "target-unavailable" };
+    }
   }
   if (opened) {
     await params.prompter.note(
@@ -313,9 +290,44 @@ export async function runBrowserHatchHandoff(
       t("wizard.guided.browserHandoffTitle"),
     );
   } else {
-    const sshHint = target.sshHint ? `\n\n${target.sshHint}` : "";
+    const bind = target.config.gateway?.bind;
+    const remoteBind = bind === "lan" || bind === "tailnet" || bind === "custom";
+    // Plain HTTP on a remote host cannot create the device identity required by
+    // the Control UI. Keep those browsers on a tunneled localhost secure context.
+    const directRemoteDisplay = !graphical && remoteBind && target.tlsConfig?.enabled === true;
+    const tunnelHint =
+      !graphical && !directRemoteDisplay
+        ? (target.sshHint ??
+          (remoteBind
+            ? formatControlUiSshHint({
+                port: target.port,
+                ...(target.config.gateway?.controlUi?.basePath
+                  ? { basePath: target.config.gateway.controlUi.basePath }
+                  : {}),
+              })
+            : undefined))
+        : undefined;
+    const sshHint = tunnelHint ? `\n\n${tunnelHint}` : "";
+    const visibleUrl = directRemoteDisplay
+      ? (
+          await resolveAdvertisedControlUiLinks({
+            bind,
+            port: target.port,
+            customBindHost: target.config.gateway?.customBindHost,
+            basePath: target.config.gateway?.controlUi?.basePath,
+            tlsEnabled: target.tlsConfig?.enabled === true,
+          })
+        ).httpUrl
+      : target.dashboardUrl;
+    const authHint =
+      target.token || target.password
+        ? "\n\nIf prompted, enter your Gateway token or password from its configured secret source."
+        : "";
+    const pairingHint = directRemoteDisplay
+      ? "\n\nIf device approval is required, run `openclaw devices list`, then `openclaw devices approve <requestId>`."
+      : "";
     await params.prompter.note(
-      `${t("wizard.guided.browserHandoffCopy", { url: target.dashboardUrl })}${sshHint}`,
+      `${t("wizard.guided.browserHandoffCopy", { url: visibleUrl })}${sshHint}${authHint}${pairingHint}`,
       t("wizard.guided.browserHandoffTitle"),
     );
   }

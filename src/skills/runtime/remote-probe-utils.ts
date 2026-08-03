@@ -43,6 +43,23 @@ export function supportsSystemRun(commands?: string[]): boolean {
   return Array.isArray(commands) && commands.includes("system.run");
 }
 
+export function isRemoteSkillEligibilityNode(
+  node:
+    | {
+        connected?: boolean;
+        platform?: string;
+        deviceFamily?: string;
+        commands?: string[];
+      }
+    | undefined,
+): boolean {
+  return Boolean(
+    node?.connected &&
+    isMacPlatform(node.platform, node.deviceFamily) &&
+    supportsSystemRun(node.commands),
+  );
+}
+
 export function supportsSystemWhich(commands?: string[]): boolean {
   return Array.isArray(commands) && commands.includes("system.which");
 }

@@ -39,9 +39,11 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import {
   completeGatewayBootLifecycle,
   GATEWAY_CRASH_LOOP_BREAKER_REASON,
+  formatGatewayCrashLoopManualChannelStartHint,
   GATEWAY_CRASH_LOOP_RECOVERED_REASON,
   inspectGatewayCrashLoopBreaker,
   recordGatewayBootStart,
+  recordGatewayCrashLoopRecovery,
   type GatewayCrashLoopBreakerDecision,
   type GatewayBootLifecycleCompletion,
 } from "../../infra/gateway-boot-lifecycle.js";
@@ -57,6 +59,8 @@ import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logg
 import { withDiagnosticPhase } from "../../logging/diagnostic-phase.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
+import { findOpenClawAgentDatabaseMediaMigrationRequiredError } from "../../state/openclaw-agent-db-migration-required.js";
+import { findOpenClawStateDatabaseSchemaMigrationRequiredError } from "../../state/openclaw-state-db-schema-migration-required.js";
 import { printClawBanner, type ClawBannerResult } from "../claw-banner.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
@@ -473,7 +477,11 @@ function resolveGatewayLockErrorExitCode(err: unknown): number {
 }
 
 function resolveGatewayStartupFailureExitCode(err: unknown): number {
-  return isInvalidConfigError(err) ? EXIT_CONFIG_ERROR : 1;
+  return isInvalidConfigError(err) ||
+    findOpenClawAgentDatabaseMediaMigrationRequiredError(err) ||
+    findOpenClawStateDatabaseSchemaMigrationRequiredError(err)
+    ? EXIT_CONFIG_ERROR
+    : 1;
 }
 
 function normalizeGatewayHealthProbeHost(host: string): string {
@@ -866,6 +874,20 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       gatewayLog.info(
         `service-mode: cleared ${stale.length} stale gateway pid(s) before bind on port ${port}`,
       );
+      // A repeated stale-kill on a managed host can be the symptom of two
+      // supervisors (a user-scope + a system-scope systemd unit) evicting each
+      // other in a restart loop (issue #79375). Surface the dueling condition
+      // with concrete remediation instead of letting it look like routine
+      // cleanup. Gated on an actual eviction so clean starts pay no cost.
+      if (process.platform === "linux") {
+        const { findSystemdGatewayInstallation, formatDuelingScopesWarning } =
+          await import("../../daemon/systemd.js");
+        const installation = await findSystemdGatewayInstallation(process.env).catch(() => null);
+        const warning = installation ? formatDuelingScopesWarning(installation, port) : null;
+        if (warning) {
+          gatewayLog.warn(`service-mode: ${warning}`);
+        }
+      }
     }
   }
   if (opts.force) {
@@ -1115,6 +1137,22 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   let crashLoopDecision: GatewayCrashLoopBreakerDecision | undefined;
   let channelAutostartSuppression: { reason: "crash-loop-breaker"; message: string } | undefined;
   let activeBootId: string | undefined;
+  const tryRecoverChannelAutostartSuppression = () => {
+    const decision = inspectGatewayCrashLoopBreaker(process.env);
+    // The current safe-mode boot remains an open row until the full window has
+    // drained. Requiring zero prevents a near-expiry history from restoring
+    // channels before this process itself has proven stable for the whole window.
+    if (!decision.recovered || decision.uncleanBoots !== 0) {
+      return false;
+    }
+    const recoveredBootId = recordGatewayCrashLoopRecovery(activeBootId, process.env);
+    if (!recoveredBootId) {
+      return false;
+    }
+    activeBootId = recoveredBootId;
+    gatewayLog.info("gateway restart-loop breaker recovered; channel auto-start restored");
+    return true;
+  };
   const beginBoot = async (startedAtMs: number) => {
     // run-loop calls beginBoot before every startGatewayServer invocation, so
     // in-process restarts re-evaluate breaker state instead of reusing stale mode.
@@ -1126,6 +1164,8 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       : crashLoopDecision.recovered
         ? GATEWAY_CRASH_LOOP_RECOVERED_REASON
         : undefined;
+    // Shared-state schema failures make this write fail open, so no lifecycle
+    // row exists for Doctor to reconcile after it repairs the schema.
     activeBootId = recordGatewayBootStart(process.env, startedAtMs, bootStartReason);
     channelAutostartSuppression = undefined;
     if (crashLoopDecision.recovered) {
@@ -1136,7 +1176,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     }
     const message =
       `gateway restart-loop breaker tripped: ${crashLoopDecision.uncleanBoots} unclean boot(s) within ${crashLoopDecision.windowMs}ms; ` +
-      "suppressing channel/provider account auto-start. Inspect the stability bundle and fix the startup crash before restarting the service.";
+      `suppressing channel/provider account auto-start. Inspect the stability bundle and fix the startup crash before restarting the service. ${formatGatewayCrashLoopManualChannelStartHint()}`;
     channelAutostartSuppression = { reason: "crash-loop-breaker", message };
     gatewayLog.error(message);
     if (crashLoopDecision.shouldWriteStabilityBundle) {
@@ -1171,6 +1211,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
             : {}),
           ...(envSidecarStartupMode !== "start" ? { sidecarStartup: envSidecarStartupMode } : {}),
           ...(channelAutostartSuppression ? { channelAutostartSuppression } : {}),
+          ...(channelAutostartSuppression ? { tryRecoverChannelAutostartSuppression } : {}),
           ...(devMode
             ? {
                 ambientEnvTriggers: devAmbientEnvTriggers,
@@ -1215,6 +1256,34 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     }
     if (isInvalidConfigError(err)) {
       throw err;
+    }
+    if (findOpenClawAgentDatabaseMediaMigrationRequiredError(err)) {
+      try {
+        const { parkCurrentLaunchAgentForMaintenance } = await import("../../daemon/launchd.js");
+        if (await parkCurrentLaunchAgentForMaintenance()) {
+          gatewayLog.error(
+            `gateway requires offline media migration; parked the managed LaunchAgent. Run ${formatCliCommand("openclaw doctor --fix")} to repair and restart it.`,
+          );
+        }
+      } catch (parkError) {
+        gatewayLog.error(
+          `failed to park the managed LaunchAgent after migration-required startup: ${formatErrorMessage(parkError)}`,
+        );
+      }
+    }
+    if (findOpenClawStateDatabaseSchemaMigrationRequiredError(err)) {
+      try {
+        const { parkCurrentLaunchAgentForMaintenance } = await import("../../daemon/launchd.js");
+        if (await parkCurrentLaunchAgentForMaintenance()) {
+          gatewayLog.error(
+            `gateway requires state database schema migration; parked the managed LaunchAgent. Run ${formatCliCommand("openclaw doctor --fix")} to repair and restart it.`,
+          );
+        }
+      } catch (parkError) {
+        gatewayLog.error(
+          `failed to park the managed LaunchAgent after state schema migration-required startup: ${formatErrorMessage(parkError)}`,
+        );
+      }
     }
     await maybeWriteGatewayStartupFailureBundle(err);
     defaultRuntime.error(

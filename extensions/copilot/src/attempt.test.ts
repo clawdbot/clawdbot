@@ -18,6 +18,7 @@ import {
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCopilotAttempt } from "./attempt.js";
 import type { CopilotClientPool } from "./runtime.js";
@@ -43,6 +44,7 @@ const gatewayQuestionMock = vi.hoisted(() => ({
   waiters: new Map<string, (value: unknown) => void>(),
   cancelError: undefined as Error | undefined,
   warn: vi.fn(),
+  setActiveEmbeddedRun: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
@@ -81,6 +83,12 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
       }
       return await actual.callGatewayTool(...args);
     },
+    setActiveEmbeddedRun: (
+      ...args: Parameters<typeof actual.setActiveEmbeddedRun>
+    ): ReturnType<typeof actual.setActiveEmbeddedRun> => {
+      gatewayQuestionMock.setActiveEmbeddedRun(...args);
+      return actual.setActiveEmbeddedRun(...args);
+    },
   };
 });
 
@@ -89,22 +97,60 @@ type CopilotToolBridgeInput = Parameters<typeof createCopilotToolBridge>[0];
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
 
-// Mock the dual-write transcript mirror so attempt tests do not touch the
-// real filesystem. The mirror call site is exercised separately in
-// dual-write-transcripts.test.ts and by the dedicated attempt
-// dual-write tests below; the mocked module here just captures the
-// invocation arguments without writing to disk.
-const dualWriteMock = vi.hoisted(() => ({
-  dualWriteCopilotTranscriptBestEffort: vi.fn().mockResolvedValue(undefined),
-  attachCopilotMirrorIdentity: <T>(message: T, identity: string): T => {
-    const record = message as unknown as Record<string, unknown>;
-    return {
-      ...record,
-      __openclaw: { ...(record["__openclaw"] as object | undefined), mirrorIdentity: identity },
-    } as unknown as T;
-  },
+const transcriptRuntimeMock = vi.hoisted(() => ({
+  append: vi.fn(async (params: Record<string, unknown>) => {
+    const prepare = params.prepareMessageAfterIdempotencyCheck as
+      | ((message: unknown) => unknown)
+      | undefined;
+    const message = prepare ? prepare(params.message) : params.message;
+    return message
+      ? {
+          appended: true,
+          message,
+          messageId: (params.eventId as string | undefined) ?? "transcript-message",
+        }
+      : undefined;
+  }),
+  appendBatch: vi.fn(async (params: { messages: Array<Record<string, unknown>> }) =>
+    params.messages.map((message) => ({
+      appended: true,
+      message: message.message,
+      messageId: (message.eventId as string | undefined) ?? "transcript-message",
+    })),
+  ),
+  publish: vi.fn(async () => undefined),
+  appendStrict: vi.fn(async (params: Record<string, unknown>) => {
+    const result = await transcriptRuntimeMock.append(params);
+    return result ? { kind: "result" as const, result } : { kind: "suppressed" as const };
+  }),
+  readVisible: vi.fn(async () => []),
 }));
-vi.mock("./dual-write-transcripts.js", () => dualWriteMock);
+vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/session-transcript-runtime")>();
+  return {
+    ...actual,
+    appendSessionTranscriptMessageByIdentity: transcriptRuntimeMock.append,
+    appendSessionTranscriptMessageByIdentityStrict: transcriptRuntimeMock.appendStrict,
+    appendSessionTranscriptMessagesByIdentity: transcriptRuntimeMock.appendBatch,
+    publishSessionTranscriptUpdateByIdentity: transcriptRuntimeMock.publish,
+    readVisibleSessionTranscriptMessageEntries: transcriptRuntimeMock.readVisible,
+  };
+});
+
+async function appendPreparedTranscriptMessage(params: Record<string, unknown>) {
+  const prepare = params.prepareMessageAfterIdempotencyCheck as
+    | ((message: unknown) => unknown)
+    | undefined;
+  const message = prepare ? prepare(params.message) : params.message;
+  return message
+    ? {
+        appended: true,
+        message,
+        messageId: (params.eventId as string | undefined) ?? "transcript-message",
+      }
+    : undefined;
+}
 
 // Mock the workspace-bootstrap loader so attempt tests do not perform
 // real filesystem reads (which add async ticks and would break the
@@ -235,7 +281,11 @@ function createFakeSession(cfg: Record<string, unknown>, id: string): FakeSessio
     cfg,
     disconnect: vi.fn<() => Promise<void>>(async () => undefined),
     emit: (eventType: string, data: Record<string, unknown>) => {
-      const event = makeEvent(eventType, data);
+      const { __eventId, ...eventData } = data;
+      const event = {
+        ...makeEvent(eventType, eventData),
+        ...(typeof __eventId === "string" ? { id: __eventId } : {}),
+      };
       for (const listener of listeners.get(eventType) ?? []) {
         listener(event);
       }
@@ -317,6 +367,31 @@ function makeFakeSdk(
   };
 }
 
+function makeUserTurnRecorder(
+  message: Extract<AgentMessage, { role: "user" }>,
+): NonNullable<AgentHarnessAttemptParams["userTurnTranscriptRecorder"]> {
+  let blocked = false;
+  let persisted = false;
+  return {
+    message,
+    resolveMessage: vi.fn(async () => message),
+    markRuntimePersistencePending: vi.fn(),
+    markRuntimePersisted: vi.fn(() => {
+      persisted = true;
+    }),
+    markBlocked: vi.fn(() => {
+      blocked = true;
+    }),
+    hasPersisted: () => persisted,
+    isBlocked: () => blocked,
+    hasRuntimePersistencePending: () => false,
+    waitForRuntimePersistence: vi.fn(async () => undefined),
+    persistApproved: vi.fn(async () => undefined),
+    persistBlocked: vi.fn(async () => undefined),
+    persistFallback: vi.fn(async () => undefined),
+  };
+}
+
 function makeParams(
   overrides: Partial<
     AgentHarnessAttemptParams & {
@@ -326,7 +401,7 @@ function makeParams(
         profileVersion?: string;
         useLoggedInUser?: boolean;
       };
-      initialReplayState: { sdkSessionId?: string };
+      initialReplayState: { journalValidated?: boolean; sdkSessionId?: string };
       messages: AgentMessage[];
       model: { api: string; id: string; provider: string };
       onAssistantDelta: (payload: { delta: string; text: string }) => void | Promise<void>;
@@ -334,6 +409,8 @@ function makeParams(
     }
   > = {},
 ): AgentHarnessAttemptParams {
+  const prompt = overrides.prompt ?? "hello";
+  const transcriptPrompt = overrides.transcriptPrompt ?? prompt;
   return {
     agentDir: "C:\\copilot-home",
     agentId: "agent-1",
@@ -347,7 +424,7 @@ function makeParams(
       provider: "github-copilot",
       ...(typeof overrides.model === "object" ? overrides.model : {}),
     },
-    prompt: "hello",
+    prompt,
     runId: "run-1",
     sessionFile: "session.json",
     sessionId: "session-1",
@@ -358,6 +435,11 @@ function makeParams(
       storePath: "openclaw-agent.sqlite",
     },
     timeoutMs: 5000,
+    userTurnTranscriptRecorder: makeUserTurnRecorder({
+      content: transcriptPrompt,
+      role: "user",
+      timestamp: 1,
+    }),
     workspaceDir: "C:\\workspace",
     ...overrides,
   } as unknown as AgentHarnessAttemptParams;
@@ -437,6 +519,46 @@ describe("runCopilotAttempt", () => {
 
     expect(observeToolTerminal).toHaveBeenCalledTimes(2);
     expect(result.lastToolError).toEqual(terminalError);
+  });
+
+  it("reports code-mode engagement through the real tool bridge", async () => {
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
+      },
+    });
+
+    // No `createToolBridge` override: this runs the production bridge, so the
+    // reported value is the gate `createAgentHarnessToolSurfaceRuntime`
+    // actually resolved for the run rather than a stubbed constant.
+    const result = await runCopilotAttempt(
+      makeParams({
+        disableTools: false,
+        config: { tools: { codeMode: true } },
+      } as never),
+      { pool: makeFakePool(sdk) },
+    );
+
+    expect(result.codeModeEngaged).toBe(true);
+  });
+
+  it("reports the tool bridge's code-mode engagement on the attempt result", async () => {
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
+      },
+    });
+
+    const result = await runCopilotAttempt(makeParams(), {
+      createToolBridge: vi.fn(async () => ({
+        codeModeEngaged: true,
+        sdkTools: [],
+        sourceTools: [],
+      })),
+      pool: makeFakePool(sdk),
+    });
+
+    expect(result.codeModeEngaged).toBe(true);
   });
 
   it("clears the host terminal error after matching tool recovery", async () => {
@@ -593,6 +715,7 @@ describe("runCopilotAttempt", () => {
       onCreateSession: (session) => {
         activeSession = session;
         session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("user.message", { content: "hello" });
           session.emit("session.compaction_start", {});
           return makeAssistantMessageEvent("done");
         });
@@ -678,6 +801,7 @@ describe("runCopilotAttempt", () => {
     const sdk = makeFakeSdk({
       onCreateSession: (session) => {
         session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("user.message", { content: "hello" });
           session.emit("session.compaction_start", {});
           return makeAssistantMessageEvent("done");
         });
@@ -700,6 +824,59 @@ describe("runCopilotAttempt", () => {
     expect(pool.release.mock.calls).toHaveLength(1);
   });
 
+  it("does not delete a fresh session when its SDK user was never validated", async () => {
+    vi.useFakeTimers();
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("session.compaction_start", {});
+          return makeAssistantMessageEvent("done");
+        });
+      },
+    });
+    const pool = makeFakePool(sdk);
+
+    const result = await runCopilotAttempt(makeParams(), { pool });
+    expect(
+      (result as AgentHarnessAttemptResult & { journalValidated?: boolean }).journalValidated,
+    ).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(180_000);
+
+    expect(sdk.sessions[0]?.disconnect).toHaveBeenCalledTimes(1);
+    expect(sdk.client.deleteSession).not.toHaveBeenCalled();
+    expect(pool.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not delete a resumed session when deferred compaction cannot complete", async () => {
+    vi.useFakeTimers();
+    const sdk = makeFakeSdk({
+      onResumeSession: (session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("session.compaction_start", {});
+          return makeAssistantMessageEvent("done");
+        });
+      },
+    });
+    const pool = makeFakePool(sdk);
+
+    const result = await runCopilotAttempt(
+      makeParams({ initialReplayState: { sdkSessionId: "legacy-session" } as never }),
+      { pool },
+    );
+
+    expect(result.terminal).toEqual({ kind: "ok" });
+    expect(result.replayMetadata.replaySafe).toBe(false);
+    expect(
+      (result as AgentHarnessAttemptResult & { journalValidated?: boolean }).journalValidated,
+    ).toBe(false);
+    await vi.advanceTimersByTimeAsync(180_000);
+
+    expect(sdk.sessions[0]?.disconnect).toHaveBeenCalledTimes(1);
+    expect(sdk.client.deleteSession).not.toHaveBeenCalled();
+    expect(pool.release).toHaveBeenCalledTimes(1);
+  });
+
   it("cancels retained compaction when the caller aborts after a turn result", async () => {
     const controller = new AbortController();
     const onDeferredCompaction = vi.fn();
@@ -708,6 +885,7 @@ describe("runCopilotAttempt", () => {
       onCreateSession: (session) => {
         activeSession = session;
         session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("user.message", { content: "hello" });
           session.emit("session.compaction_start", {});
           setTimeout(() => controller.abort(), 0);
           return makeAssistantMessageEvent("done");
@@ -909,12 +1087,14 @@ describe("runCopilotAttempt", () => {
   });
 
   it("hydrates offloaded prompt images before creating SDK blob attachments", async () => {
-    const stateDir = await fsp.mkdtemp(path.join(tmpdir(), "copilot-offloaded-image-"));
-    const inboundDir = path.join(stateDir, "media", "inbound");
+    const openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "copilot-offloaded-image-",
+    });
+    const inboundDir = openClawState.statePath("media", "inbound");
     const mediaId = "telegram-photo.png";
     await fsp.mkdir(inboundDir, { recursive: true });
     await fsp.writeFile(path.join(inboundDir, mediaId), Buffer.from(TINY_PNG_BASE64, "base64"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const sdk = makeFakeSdk();
     const pool = makeFakePool(sdk);
 
@@ -953,8 +1133,7 @@ describe("runCopilotAttempt", () => {
         },
       ]);
     } finally {
-      vi.unstubAllEnvs();
-      await fsp.rm(stateDir, { recursive: true, force: true });
+      await openClawState.cleanup();
     }
   });
 
@@ -1085,7 +1264,7 @@ describe("runCopilotAttempt", () => {
     await runCopilotAttempt(makeParams(), { pool });
 
     const session = requireSession(sdk);
-    expect(session.on.mock.calls[0]?.[0]).toBe("assistant.message_delta");
+    expect(session.on.mock.calls[0]?.[0]).toBe("user.message");
     expect(
       expectDefined(session.on.mock.invocationCallOrder[0], "Copilot subscribe order"),
     ).toBeLessThan(
@@ -1167,13 +1346,18 @@ describe("runCopilotAttempt", () => {
   it("resume path", async () => {
     const sdk = makeFakeSdk({
       onResumeSession: (session) => {
-        session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("resumed"));
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("user.message", { content: "hello" });
+          return makeAssistantMessageEvent("resumed");
+        });
       },
     });
     const pool = makeFakePool(sdk);
 
-    await runCopilotAttempt(
-      makeParams({ initialReplayState: { sdkSessionId: "resume-1" } as never }),
+    const result = await runCopilotAttempt(
+      makeParams({
+        initialReplayState: { journalValidated: true, sdkSessionId: "resume-1" } as never,
+      }),
       { pool },
     );
 
@@ -1183,6 +1367,10 @@ describe("runCopilotAttempt", () => {
       (requireResumeSessionConfig(sdk) as { continuePendingWork?: boolean }).continuePendingWork,
     ).toBe(false);
     expect(sdk.createSession).toHaveBeenCalledTimes(0);
+    expect(result.replayMetadata.replaySafe).toBe(true);
+    expect(
+      (result as AgentHarnessAttemptResult & { journalValidated?: boolean }).journalValidated,
+    ).toBe(true);
   });
 
   it("replay-shim: replayInvalid:true forces createSession even when sdkSessionId is present", async () => {
@@ -1361,14 +1549,12 @@ describe("runCopilotAttempt", () => {
   });
 
   it("active-run abort path marks the attempt as externally aborted", async () => {
+    gatewayQuestionMock.setActiveEmbeddedRun.mockClear();
     const sendDeferred = createDeferred<SessionEventShape | undefined>();
     const sessionCreated = createDeferred<FakeSession>();
     const sdk = makeFakeSdk({
       onCreateSession: (session) => {
         session.sendAndWait.mockReturnValue(sendDeferred.promise);
-        session.abort.mockImplementationOnce(async () => {
-          sendDeferred.resolve(undefined);
-        });
         sessionCreated.resolve(session);
       },
     });
@@ -1381,12 +1567,21 @@ describe("runCopilotAttempt", () => {
     });
     const session = await sessionCreated.promise;
     await vi.waitFor(() => expect(session.sendAndWait).toHaveBeenCalledTimes(1));
+    const activeRunHandle = expectDefined(
+      gatewayQuestionMock.setActiveEmbeddedRun.mock.calls.findLast(
+        ([sessionId]) => sessionId === "session-1",
+      )?.[1] as { isAborted?: () => boolean } | undefined,
+      "active Copilot run handle",
+    );
+    expect(activeRunHandle.isAborted?.()).toBe(false);
 
     gatewayQuestionMock.cancelError = new Error("gateway unavailable");
     expect(abortAgentHarnessRun("session-1")).toBe(true);
+    expect(activeRunHandle.isAborted?.()).toBe(true);
+    expect(session.abort).toHaveBeenCalledTimes(1);
+    sendDeferred.resolve(undefined);
     const result = await runPromise;
 
-    expect(session.abort).toHaveBeenCalledTimes(1);
     expect(result.terminal).toMatchObject({ kind: "aborted", source: "external" });
     await vi.waitFor(() =>
       expect(gatewayQuestionMock.warn).toHaveBeenCalledWith(
@@ -1474,6 +1669,65 @@ describe("runCopilotAttempt", () => {
       ((sdk.createSession.mock.calls[0] as unknown[] | undefined)![0] as { tools?: unknown[] })
         .tools,
     ).toBe(sdkTools);
+  });
+
+  it("applies before_prompt_build toolsAllow to the submitted SDK tool surface", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_prompt_build",
+          handler: () => ({ toolsAllow: [] }),
+        },
+      ]),
+    );
+    const sdk = makeFakeSdk();
+    const sdkTools: SdkTool[] = [
+      {
+        description: "Fake SDK tool",
+        handler: async () => ({ resultType: "success", textResultForLlm: "ok" }),
+        name: "fake_sdk_tool",
+        parameters: { type: "object" },
+      },
+    ];
+
+    await runCopilotAttempt(makeParams(), {
+      createToolBridge: vi.fn(async () => ({ sdkTools, sourceTools: [] })),
+      pool: makeFakePool(sdk),
+    });
+
+    expect((requireCreateSessionConfig(sdk) as { tools?: SdkTool[] }).tools).toEqual([]);
+  });
+
+  it("preserves the required message tool through before_prompt_build toolsAllow", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_prompt_build",
+          handler: () => ({ toolsAllow: [] }),
+        },
+      ]),
+    );
+    const sdk = makeFakeSdk();
+    const makeTool = (name: string): SdkTool => ({
+      description: name,
+      handler: async () => ({ resultType: "success", textResultForLlm: "ok" }),
+      name,
+      parameters: { type: "object" },
+    });
+
+    await runCopilotAttempt(makeParams({ sourceReplyDeliveryMode: "message_tool_only" }), {
+      createToolBridge: vi.fn(async () => ({
+        sdkTools: [makeTool("message"), makeTool("read")],
+        sourceTools: [],
+      })),
+      pool: makeFakePool(sdk),
+    });
+
+    expect(
+      ((requireCreateSessionConfig(sdk) as { tools?: SdkTool[] }).tools ?? []).map(
+        (tool) => tool.name,
+      ),
+    ).toEqual(["message"]);
   });
 
   it("F6: sessionRef is populated after createSession so the tool bridge's onYield can abort the live SDK session", async () => {
@@ -2074,6 +2328,7 @@ describe("runCopilotAttempt", () => {
     const sdk = makeFakeSdk({
       onCreateSession: (session) => {
         session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("user.message", { content: "hello" });
           session.emit("session.compaction_start", {});
           return undefined;
         });
@@ -2169,6 +2424,7 @@ describe("runCopilotAttempt", () => {
     const sdk = makeFakeSdk({
       onCreateSession: (session) => {
         session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("user.message", { content: "hello" });
           session.emit("session.compaction_start", {});
           return undefined;
         });
@@ -2194,6 +2450,7 @@ describe("runCopilotAttempt", () => {
     const sdk = makeFakeSdk({
       onCreateSession: (session) => {
         session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("user.message", { content: "hello" });
           session.emit("session.compaction_start", {});
           return undefined;
         });
@@ -2217,9 +2474,6 @@ describe("runCopilotAttempt", () => {
   });
 
   it("keeps the compaction timeout classification after deferred completion", async () => {
-    const mirror = createDeferred<void>();
-    dualWriteMock.dualWriteCopilotTranscriptBestEffort.mockClear();
-    dualWriteMock.dualWriteCopilotTranscriptBestEffort.mockImplementationOnce(() => mirror.promise);
     const sdk = makeFakeSdk({
       onCreateSession: (session) => {
         session.sendAndWait.mockImplementationOnce(async () => {
@@ -2229,17 +2483,11 @@ describe("runCopilotAttempt", () => {
       },
     });
 
-    const attempt = runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
-    await vi.waitFor(() => {
-      expect(dualWriteMock.dualWriteCopilotTranscriptBestEffort).toHaveBeenCalledTimes(1);
-    });
+    const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
+    expect(result.terminal).toMatchObject({ kind: "timeout", phase: "compaction" });
+
     sdk.sessions[0]?.emit("session.compaction_complete", { success: true });
     sdk.sessions[0]?.emit("session.idle", {});
-    mirror.resolve();
-
-    const result = await attempt;
-
-    expect(result.terminal).toMatchObject({ kind: "timeout", phase: "compaction" });
   });
 
   it("G1: SDK timeout rejection (Error 'Timeout after Nms waiting for session.idle') sets timedOut, leaves promptError undefined, and does NOT abort the session", async () => {
@@ -2253,9 +2501,10 @@ describe("runCopilotAttempt", () => {
     // the attempt as side-effect-safe.
     const sdk = makeFakeSdk({
       onCreateSession: (session) => {
-        session.sendAndWait.mockRejectedValueOnce(
-          new Error("Timeout after 60000ms waiting for session.idle"),
-        );
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("user.message", { content: "hello" });
+          throw new Error("Timeout after 60000ms waiting for session.idle");
+        });
       },
     });
     const pool = makeFakePool(sdk);
@@ -2274,6 +2523,9 @@ describe("runCopilotAttempt", () => {
     // replay-shim incorrectly treated the attempt as side-effect-safe.
     expect(result.replayMetadata?.hadPotentialSideEffects).toBe(true);
     expect(result.replayMetadata?.replaySafe).toBe(false);
+    expect(
+      (result as AgentHarnessAttemptResult & { journalValidated?: boolean }).journalValidated,
+    ).toBe(false);
     sdk.sessions[0]?.emit("session.idle", {});
     await vi.waitFor(() => {
       expect(sdk.sessions[0]?.disconnect).toHaveBeenCalledTimes(1);
@@ -2423,7 +2675,10 @@ describe("runCopilotAttempt", () => {
     const error = new Error("send failed");
     const sdk = makeFakeSdk({
       onCreateSession: (session) => {
-        session.sendAndWait.mockRejectedValueOnce(error);
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("user.message", { content: "hello" });
+          throw error;
+        });
       },
     });
     const pool = makeFakePool(sdk);
@@ -2432,6 +2687,9 @@ describe("runCopilotAttempt", () => {
     const session = requireSession(sdk);
 
     expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBe(error);
+    expect(
+      (result as AgentHarnessAttemptResult & { journalValidated?: boolean }).journalValidated,
+    ).toBe(false);
     expect(session.off).toHaveBeenCalledTimes(session.on.mock.calls.length);
     expect(session.disconnect).toHaveBeenCalledTimes(1);
     expect(pool["release"]).toHaveBeenCalledTimes(1);
@@ -2807,348 +3065,614 @@ describe("runCopilotAttempt", () => {
     });
   });
 
-  describe("dual-write transcript mirror", () => {
+  describe("canonical transcript journal", () => {
     afterEach(() => {
-      dualWriteMock.dualWriteCopilotTranscriptBestEffort.mockClear();
-      dualWriteMock.dualWriteCopilotTranscriptBestEffort.mockResolvedValue(undefined);
+      transcriptRuntimeMock.append.mockClear();
+      transcriptRuntimeMock.appendBatch.mockClear();
+      transcriptRuntimeMock.appendStrict.mockClear();
+      transcriptRuntimeMock.publish.mockClear();
+      transcriptRuntimeMock.readVisible.mockClear();
     });
 
-    it("invokes dual-write mirror with runtime identity and scoped idempotencyScope", async () => {
-      dualWriteMock.dualWriteCopilotTranscriptBestEffort.mockClear();
-      const sdk = makeFakeSdk({
-        onCreateSession: (session) => {
-          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
+    it("persists the prepared user before provider dispatch and owns the terminal assistant", async () => {
+      const order: string[] = [];
+      transcriptRuntimeMock.append.mockImplementationOnce(
+        async (params: Record<string, unknown>) => {
+          order.push("user");
+          const prepare = params.prepareMessageAfterIdempotencyCheck as
+            | ((message: unknown) => unknown)
+            | undefined;
+          const message = prepare ? prepare(params.message) : params.message;
+          return { appended: true, message: message as object, messageId: "user-event" };
         },
-      });
-      const pool = makeFakePool(sdk);
-
-      await runCopilotAttempt(
-        makeParams({
-          sessionTarget: {
-            sessionId: "session-1",
-            sessionKey: "agent:main:session-1",
-            storePath: "sessions.json",
-          },
-        }),
-        { pool },
       );
-
-      expect(dualWriteMock.dualWriteCopilotTranscriptBestEffort).toHaveBeenCalledTimes(1);
-      const args = dualWriteMock.dualWriteCopilotTranscriptBestEffort.mock.calls[0]?.[0] as {
-        sessionId: string;
-        sessionKey: string;
-        storePath?: string;
-        messages: Array<{ role: string }>;
-        idempotencyScope?: string;
-      };
-      expect(args.sessionId).toBe("session-1");
-      expect(args.sessionKey).toBe("agent:main:session-1");
-      expect(args.storePath).toBe("sessions.json");
-      expect(args.idempotencyScope).toBe("copilot:sess-1");
-      expect(args.messages.length).toBeGreaterThan(0);
-      const roles = args.messages.map((m) => m.role);
-      expect(roles).toContain("user");
-      expect(roles).toContain("assistant");
-    });
-
-    it("keeps current memory-maintenance visibility hidden across later replays", async () => {
       const sdk = makeFakeSdk({
         onCreateSession: (session) => {
-          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("NO_REPLY"));
+          session.sendAndWait.mockImplementationOnce(async () => {
+            order.push("dispatch");
+            return makeAssistantMessageEvent("done");
+          });
         },
       });
-      const pool = makeFakePool(sdk);
-      const priorAssistant = {
-        role: "assistant",
-        content: [{ type: "text", text: "ordinary prior reply" }],
-        timestamp: Date.now() - 1,
-      } as AgentMessage;
-      const currentUser = {
+
+      const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
+
+      expect(order).toEqual(["user", "dispatch"]);
+      expect(result.assistantTranscriptOwned).toBe(true);
+      expect(result.assistantTranscriptIdempotencyKey).toBe(
+        "copilot-sdk:sess-1:assistant.message-id",
+      );
+      expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["user", "assistant"]);
+    });
+
+    it("invalidates replay when storage rewrites a singleton payload", async () => {
+      transcriptRuntimeMock.appendStrict.mockImplementationOnce(async (params) => {
+        const stored = await appendPreparedTranscriptMessage(params);
+        if (!stored) {
+          return { kind: "suppressed" as const };
+        }
+        return {
+          kind: "result" as const,
+          result: {
+            ...stored,
+            message: { ...stored.message, content: "[storage-redacted]" },
+          },
+        };
+      });
+
+      const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(makeFakeSdk()) });
+
+      expect(result.replayMetadata.replaySafe).toBe(false);
+      expect(result.messagesSnapshot[0]).toMatchObject({
         role: "user",
-        content: "Pre-compaction memory flush",
-        timestamp: Date.now(),
-      } as AgentMessage;
+        content: "[storage-redacted]",
+      });
+    });
+
+    it("fails before dispatch when the exact transcript target is absent", async () => {
+      const sdk = makeFakeSdk();
+      const params = makeParams({ trigger: "memory" }) as AgentHarnessAttemptParams & {
+        sessionTarget?: unknown;
+      };
+      delete params.sessionTarget;
+      delete params.userTurnTranscriptRecorder;
+
+      const result = await runCopilotAttempt(params, { pool: makeFakePool(sdk) });
+
+      expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toMatchObject({
+        code: "transcript_persistence_failed",
+      });
+      expect(requireSession(sdk).sendAndWait).not.toHaveBeenCalled();
+      expect(result.replayMetadata.replaySafe).toBe(false);
+      expect(sdk.client.deleteSession).not.toHaveBeenCalled();
+      expect(result.messagesSnapshot.at(-1)).toMatchObject({ role: "user" });
+    });
+
+    it("keeps the prepared recorder user when journal setup fails before assignment", async () => {
+      const sdk = makeFakeSdk();
+      const params = makeParams({ messages: [] }) as AgentHarnessAttemptParams & {
+        sessionTarget?: unknown;
+      };
+      delete params.sessionTarget;
+
+      const result = await runCopilotAttempt(params, { pool: makeFakePool(sdk) });
+
+      expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toMatchObject({
+        code: "transcript_persistence_failed",
+      });
+      expect(result.messagesSnapshot).toMatchObject([
+        { role: "user", content: params.userTurnTranscriptRecorder?.message?.content },
+      ]);
+      expect(
+        (result as AgentHarnessAttemptResult & { journalValidated?: boolean }).journalValidated,
+      ).toBe(false);
+    });
+
+    it("keeps a pre-journal memory user hidden when setup fails", async () => {
+      const sdk = makeFakeSdk();
+      const params = makeParams({
+        messages: [],
+        trigger: "memory",
+      }) as AgentHarnessAttemptParams & {
+        sessionTarget?: unknown;
+      };
+      delete params.sessionTarget;
+
+      const result = await runCopilotAttempt(params, { pool: makeFakePool(sdk) });
+
+      expect(result.messagesSnapshot).toMatchObject([
+        { role: "user", content: "hello", display: false },
+      ]);
+    });
+
+    it("does not restore an already-blocked user when pre-journal setup fails", async () => {
+      const sdk = makeFakeSdk();
+      const recorder = makeUserTurnRecorder({ role: "user", content: "blocked", timestamp: 1 });
+      recorder.markBlocked();
+      const params = makeParams({
+        messages: [{ role: "user", content: "blocked", timestamp: 1 }],
+        userTurnTranscriptRecorder: recorder,
+      }) as AgentHarnessAttemptParams & { sessionTarget?: unknown };
+      delete params.sessionTarget;
+
+      const result = await runCopilotAttempt(params, { pool: makeFakePool(sdk) });
+
+      expect(result.messagesSnapshot).toEqual([]);
+    });
+
+    it("does not restore a keyed blocked user when pre-journal setup fails", async () => {
+      const sdk = makeFakeSdk();
+      const current = {
+        role: "user",
+        content: "blocked",
+        idempotencyKey: "run-1:user",
+        timestamp: 1,
+      } as Extract<AgentMessage, { role: "user" }> & { idempotencyKey: string };
+      const recorder = makeUserTurnRecorder(current);
+      recorder.markBlocked();
+      const params = makeParams({
+        messages: [current],
+        userTurnTranscriptRecorder: recorder,
+      }) as AgentHarnessAttemptParams & { sessionTarget?: unknown };
+      delete params.sessionTarget;
+
+      const result = await runCopilotAttempt(params, { pool: makeFakePool(sdk) });
+
+      expect(result.messagesSnapshot).toEqual([]);
+    });
+
+    it("replaces the common unkeyed active user in the pre-journal fallback", async () => {
+      const sdk = makeFakeSdk();
+      const params = makeParams() as AgentHarnessAttemptParams & { sessionTarget?: unknown };
+      delete params.sessionTarget;
+
+      const result = await runCopilotAttempt(params, { pool: makeFakePool(sdk) });
+
+      expect(result.messagesSnapshot).toMatchObject([
+        { role: "user", content: "hello", timestamp: 1 },
+      ]);
+    });
+
+    it("does not collapse distinct repeated users in the pre-journal fallback", async () => {
+      const sdk = makeFakeSdk();
+      const recorder = makeUserTurnRecorder({ role: "user", content: "repeat", timestamp: 2 });
+      const params = makeParams({
+        messages: [{ role: "user", content: "repeat", timestamp: 1 }],
+        prompt: "repeat",
+        userTurnTranscriptRecorder: recorder,
+      }) as AgentHarnessAttemptParams & { sessionTarget?: unknown };
+      delete params.sessionTarget;
+
+      const result = await runCopilotAttempt(params, { pool: makeFakePool(sdk) });
+
+      expect(result.messagesSnapshot).toMatchObject([
+        { role: "user", content: "repeat", timestamp: 1 },
+        { role: "user", content: "repeat", timestamp: 2 },
+      ]);
+    });
+
+    it("does not collapse distinct repeated users in the normal journal path", async () => {
+      const recorder = makeUserTurnRecorder({ role: "user", content: "repeat", timestamp: 2 });
 
       const result = await runCopilotAttempt(
         makeParams({
-          messages: [priorAssistant, currentUser],
-          prompt: "Pre-compaction memory flush",
-          trigger: "memory",
+          messages: [
+            {
+              role: "user",
+              content: "repeat",
+              idempotencyKey: "copilot:legacy:user:content-fingerprint",
+              timestamp: 1,
+            } as AgentMessage,
+          ],
+          prompt: "repeat",
+          userTurnTranscriptRecorder: recorder,
         }),
-        { pool },
+        { pool: makeFakePool(makeFakeSdk()) },
       );
 
-      const [replayedPrior, persistedPrompt, persistedAssistant] =
-        result.messagesSnapshot as Array<{
-          display?: boolean;
-          role: string;
-        }>;
-      expect(replayedPrior).not.toHaveProperty("display", false);
-      expect(persistedPrompt).toMatchObject({ display: false, role: "user" });
-      expect(persistedAssistant).toMatchObject({ display: false, role: "assistant" });
+      expect(result.messagesSnapshot.slice(0, 2)).toMatchObject([
+        { role: "user", content: "repeat", timestamp: 1 },
+        { role: "user", content: "repeat", timestamp: 2 },
+      ]);
     });
 
-    it("does not invoke dual-write mirror when runtime identity is absent", async () => {
-      dualWriteMock.dualWriteCopilotTranscriptBestEffort.mockClear();
-      const sdk = makeFakeSdk({
-        onCreateSession: (session) => {
-          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
-        },
-      });
-      const pool = makeFakePool(sdk);
-      const params = makeParams() as unknown as Record<string, unknown>;
-      delete params.sessionTarget;
+    it("replaces the active legacy-keyed user instead of duplicating it", async () => {
+      const recorder = makeUserTurnRecorder({ role: "user", content: "active", timestamp: 2 });
 
-      await runCopilotAttempt(params as never, { pool });
-
-      expect(dualWriteMock.dualWriteCopilotTranscriptBestEffort).not.toHaveBeenCalled();
-    });
-
-    it("tags mirrored messages with copilot mirror identity per role and position", async () => {
-      dualWriteMock.dualWriteCopilotTranscriptBestEffort.mockClear();
-      const sdk = makeFakeSdk({
-        onCreateSession: (session) => {
-          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
-        },
-      });
-      const pool = makeFakePool(sdk);
-
-      await runCopilotAttempt(makeParams(), { pool });
-
-      const args = dualWriteMock.dualWriteCopilotTranscriptBestEffort.mock.calls[0]?.[0] as {
-        messages: Array<{
-          role: string;
-          idempotencyKey?: string;
-          __openclaw?: { mirrorIdentity?: string };
-        }>;
-      };
-      for (const [index, message] of args.messages.entries()) {
-        if (
-          message.role !== "user" &&
-          message.role !== "assistant" &&
-          message.role !== "toolResult"
-        ) {
-          continue;
-        }
-        const identity = message["__openclaw"]?.mirrorIdentity ?? "";
-        // The current user and terminal assistant carry turn-stable identities.
-        // Caller-passed history without an identity falls through to
-        // the positional `${scope}:role:idx`.
-        if (message.role === "user" && message.idempotencyKey === "run-1:user") {
-          expect(identity).toBe("run-1:prompt");
-        } else if (message.role === "assistant" && index === args.messages.length - 1) {
-          expect(identity).toMatch(/:assistant:final$/u);
-          expect(identity).toContain("run-1");
-        } else {
-          expect(identity).toMatch(new RegExp(`:${message.role}:${index}$`, "u"));
-        }
-      }
-    });
-
-    it("dual-write failure does not surface from runCopilotAttempt", async () => {
-      dualWriteMock.dualWriteCopilotTranscriptBestEffort.mockRejectedValueOnce(
-        new Error("mirror boom"),
+      const result = await runCopilotAttempt(
+        makeParams({
+          messages: [
+            {
+              role: "user",
+              content: "active",
+              idempotencyKey: "copilot:legacy:user:content-fingerprint",
+              timestamp: 2,
+            } as AgentMessage,
+          ],
+          prompt: "active",
+          userTurnTranscriptRecorder: recorder,
+        }),
+        { pool: makeFakePool(makeFakeSdk()) },
       );
-      const sdk = makeFakeSdk({
-        onCreateSession: (session) => {
-          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
-        },
-      });
-      const pool = makeFakePool(sdk);
 
-      // dualWriteCopilotTranscriptBestEffort is already best-effort
-      // internally; this test asserts attempt.ts also awaits it without
-      // letting an unexpected rejection escape.
-      await expect(runCopilotAttempt(makeParams(), { pool })).resolves.toBeDefined();
+      expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["user", "assistant"]);
+      expect(result.messagesSnapshot[0]).toMatchObject({
+        content: "active",
+        idempotencyKey: "run-1:user",
+      });
     });
 
-    // ---------------------------------------------------------------
-    // Dogfood finding #3: synthetic current-turn user message in the
-    // OpenClaw audit transcript (mirrors codex event-projector pattern).
-    //
-    // Without this synthesis the dashboard / CLI history shows only
-    // assistant bubbles — the user's typed turn is lost — because the
-    // OpenClaw shell's `persistTextTurnTranscript` skips its own user
-    // write when `embeddedAssistantGapFill` is true, trusting the
-    // harness to mirror the user turn.
-    // ---------------------------------------------------------------
-    it("injects synthetic user message with runId:prompt identity when caller passes no history", async () => {
-      dualWriteMock.dualWriteCopilotTranscriptBestEffort.mockClear();
-      const sdk = makeFakeSdk({
-        onCreateSession: (session) => {
-          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
-        },
+    it("retains a keyed current user after replacing its staged snapshot", async () => {
+      const current = {
+        role: "user",
+        content: "keyed current",
+        idempotencyKey: "run-1:user",
+        timestamp: 2,
+      } as Extract<AgentMessage, { role: "user" }> & { idempotencyKey: string };
+      const recorder = makeUserTurnRecorder(current);
+
+      const result = await runCopilotAttempt(
+        makeParams({
+          messages: [current],
+          prompt: "keyed current",
+          userTurnTranscriptRecorder: recorder,
+        }),
+        { pool: makeFakePool(makeFakeSdk()) },
+      );
+
+      expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["user", "assistant"]);
+      expect(result.messagesSnapshot[0]).toMatchObject({ idempotencyKey: "run-1:user" });
+    });
+
+    it("fails closed, aborts once, and invalidates replay after an append rejection", async () => {
+      const appendError = new Error("sqlite unavailable");
+      transcriptRuntimeMock.append.mockRejectedValueOnce(appendError);
+      const sdk = makeFakeSdk();
+
+      const result = await runCopilotAttempt(makeParams({ trigger: "memory" }), {
+        pool: makeFakePool(sdk),
       });
-      const pool = makeFakePool(sdk);
-      const params = makeParams({
-        messages: [],
-        prompt: "what's my name?",
-        runId: "run-A",
+
+      expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toMatchObject({
+        code: "transcript_persistence_failed",
+        cause: appendError,
+      });
+      expect(requireSession(sdk).abort).toHaveBeenCalledTimes(1);
+      expect(requireSession(sdk).sendAndWait).not.toHaveBeenCalled();
+      expect(requireSession(sdk).disconnect).toHaveBeenCalledTimes(1);
+      expect(sdk.client.deleteSession).not.toHaveBeenCalled();
+      expect(result.replayMetadata.replaySafe).toBe(false);
+      expect(result.messagesSnapshot.at(-1)).toMatchObject({ display: false });
+    });
+
+    it("fails closed instead of treating a singleton session rebind as policy suppression", async () => {
+      transcriptRuntimeMock.appendStrict.mockResolvedValueOnce({
+        kind: "rejected",
+        reason: "session-rebound",
       } as never);
+      const sdk = makeFakeSdk();
 
-      await runCopilotAttempt(params, { pool });
+      const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
 
-      const args = dualWriteMock.dualWriteCopilotTranscriptBestEffort.mock.calls[0]?.[0] as {
-        messages: Array<{
-          role: string;
-          content: unknown;
-          idempotencyKey?: string;
-          __openclaw?: { mirrorIdentity?: string };
-        }>;
-      };
-      expect(args.messages.length).toBe(2);
-      expect(args.messages[0]?.role).toBe("user");
-      expect(args.messages[0]?.content).toBe("what's my name?");
-      expect(args.messages[0]?.idempotencyKey).toBe("run-A:user");
-      expect(args.messages[0]?.["__openclaw"]?.mirrorIdentity).toBe("run-A:prompt");
-      expect(args.messages[1]?.role).toBe("assistant");
-      expect(args.messages[1]?.["__openclaw"]?.mirrorIdentity).toBe("run-A:assistant:final");
+      expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toMatchObject({
+        code: "transcript_persistence_failed",
+        cause: expect.objectContaining({
+          message: "Transcript session changed before singleton append",
+        }),
+      });
+      expect(requireSession(sdk).sendAndWait).not.toHaveBeenCalled();
+      expect(result.assistantTranscriptOwned).toBeUndefined();
     });
 
-    it("does not duplicate synthetic user when caller passed the same prompt as the messages tail", async () => {
-      dualWriteMock.dualWriteCopilotTranscriptBestEffort.mockClear();
+    it("fails closed when an assistant append rejects", async () => {
+      const appendError = new Error("assistant append failed");
+      transcriptRuntimeMock.append
+        .mockImplementationOnce(appendPreparedTranscriptMessage)
+        .mockRejectedValueOnce(appendError);
+      const sdk = makeFakeSdk();
+
+      const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
+
+      expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toMatchObject({
+        code: "transcript_persistence_failed",
+        cause: appendError,
+      });
+      expect(requireSession(sdk).abort).toHaveBeenCalledTimes(1);
+      expect(result.assistantTranscriptOwned).toBeUndefined();
+      expect(result.replayMetadata.replaySafe).toBe(false);
+    });
+
+    it("fails closed when an ordered tool-result append rejects", async () => {
+      const appendError = new Error("tool append failed");
+      transcriptRuntimeMock.append.mockImplementationOnce(appendPreparedTranscriptMessage);
+      transcriptRuntimeMock.appendBatch.mockRejectedValueOnce(appendError);
       const sdk = makeFakeSdk({
         onCreateSession: (session) => {
-          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
+          session.sendAndWait.mockImplementationOnce(async () => {
+            session.emit("assistant.message", {
+              content: "",
+              messageId: "tools",
+              toolRequests: [{ name: "read", toolCallId: "call-1" }],
+            });
+            session.emit("tool.execution_start", {
+              toolCallId: "call-1",
+              toolName: "read",
+            });
+            session.emit("tool.execution_complete", {
+              result: { content: "done" },
+              success: true,
+              toolCallId: "call-1",
+            });
+            session.emit("assistant.message", {
+              __eventId: "assistant-final",
+              content: "final after tool",
+              messageId: "final",
+            });
+            return undefined;
+          });
         },
       });
-      const pool = makeFakePool(sdk);
-      // Default makeParams() seeds messages with the same text as
-      // prompt, so the synthetic user should be suppressed and the
-      // mirrored payload should contain exactly one user entry.
-      await runCopilotAttempt(makeParams(), { pool });
 
-      const args = dualWriteMock.dualWriteCopilotTranscriptBestEffort.mock.calls[0]?.[0] as {
-        messages: Array<{ role: string; idempotencyKey?: string }>;
-      };
-      const userCount = args.messages.filter((m) => m.role === "user").length;
-      expect(userCount).toBe(1);
-      expect(args.messages.find((message) => message.role === "user")?.idempotencyKey).toBe(
-        "run-1:user",
+      const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
+
+      expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toMatchObject({
+        code: "transcript_persistence_failed",
+        cause: appendError,
+      });
+      expect(requireSession(sdk).abort).toHaveBeenCalledTimes(1);
+      expect(transcriptRuntimeMock.append).toHaveBeenCalledOnce();
+      expect(transcriptRuntimeMock.appendBatch).toHaveBeenCalledOnce();
+      expect(result.assistantTranscriptOwned).toBeUndefined();
+      expect(result.replayMetadata.replaySafe).toBe(false);
+    });
+
+    it("invalidates replay when storage rewrites a tool-group payload", async () => {
+      transcriptRuntimeMock.appendBatch.mockImplementationOnce(async (params) =>
+        params.messages.map((message, index) => ({
+          appended: true,
+          message:
+            index === 1
+              ? {
+                  ...(message.message as object),
+                  content: [{ type: "text", text: "[storage-redacted]" }],
+                }
+              : message.message,
+          messageId: (message.eventId as string | undefined) ?? "transcript-message",
+        })),
       );
-    });
-
-    it("prefers transcriptPrompt over prompt for the synthetic user body", async () => {
-      dualWriteMock.dualWriteCopilotTranscriptBestEffort.mockClear();
       const sdk = makeFakeSdk({
         onCreateSession: (session) => {
-          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
+          session.sendAndWait.mockImplementationOnce(async () => {
+            session.emit("assistant.message", {
+              content: "checking",
+              messageId: "tools",
+              toolRequests: [{ name: "read", toolCallId: "call-1" }],
+            });
+            session.emit("tool.execution_complete", {
+              result: { content: "done" },
+              success: true,
+              toolCallId: "call-1",
+            });
+            const final = makeAssistantMessageEvent("final after tool");
+            session.emit("assistant.message", { __eventId: "assistant-final", ...final.data });
+            return final;
+          });
         },
       });
-      const pool = makeFakePool(sdk);
-      const params = makeParams({
-        messages: [],
-        prompt: "EXPANDED: please answer with your real name",
-        transcriptPrompt: "what's your name?",
-        runId: "run-B",
-      } as never);
 
-      await runCopilotAttempt(params, { pool });
+      const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
 
-      const args = dualWriteMock.dualWriteCopilotTranscriptBestEffort.mock.calls[0]?.[0] as {
-        messages: Array<{ role: string; content: unknown }>;
-      };
-      const user = args.messages.find((m) => m.role === "user");
-      expect(user?.content).toBe("what's your name?");
+      expect(result.terminal).toEqual({ kind: "ok" });
+      expect(result.replayMetadata.replaySafe).toBe(false);
+      expect(
+        result.messagesSnapshot.find((message) => message.role === "toolResult"),
+      ).toMatchObject({
+        content: [{ type: "text", text: "[storage-redacted]" }],
+      });
     });
 
-    it("two attempts that share the same sdkSessionId but differ by runId produce distinct user/assistant mirror identities", async () => {
-      // Simulates session reuse (Fix B): the SDK keeps `sess-1` across
-      // both turns, so a session-relative `${sdkSessionId}:user:0`
-      // identity would collide and drop the second turn's user message.
-      // The runId-stable identity scheme avoids that collision.
-      dualWriteMock.dualWriteCopilotTranscriptBestEffort.mockClear();
+    it("treats before_message_write blocking as authoritative ownership", async () => {
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_message_write",
+            handler: (event: unknown) =>
+              (event as { message: AgentMessage }).message.role === "assistant"
+                ? { block: true }
+                : undefined,
+          },
+        ]),
+      );
       const sdk = makeFakeSdk({
         onCreateSession: (session) => {
-          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("turn-1-reply"));
-        },
-        onResumeSession: (session) => {
-          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("turn-2-reply"));
+          session.sendAndWait.mockImplementationOnce(async () => {
+            const assistant = makeAssistantMessageEvent("", {
+              toolRequests: [{ name: "read", toolCallId: "blocked-call" }],
+            });
+            session.emit("assistant.message", assistant.data);
+            session.emit("tool.execution_complete", {
+              result: { content: "must stay suppressed" },
+              success: true,
+              toolCallId: "blocked-call",
+            });
+            return assistant;
+          });
         },
       });
-      const pool = makeFakePool(sdk);
 
-      await runCopilotAttempt(
+      const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
+
+      expect(result.terminal).toEqual({ kind: "ok" });
+      expect(result.assistantTranscriptOwned).toBe(true);
+      expect(result.assistantTranscriptIdempotencyKey).toBeUndefined();
+      expect(result.messagesSnapshot.some((message) => message.role === "assistant")).toBe(false);
+      expect(result.messagesSnapshot.some((message) => message.role === "toolResult")).toBe(false);
+    });
+
+    it("invalidates native replay when policy blocks a persisted tool result", async () => {
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_message_write",
+            handler: (event: unknown) =>
+              (event as { message: AgentMessage }).message.role === "toolResult"
+                ? { block: true }
+                : undefined,
+          },
+        ]),
+      );
+      const sdk = makeFakeSdk({
+        onCreateSession: (session) => {
+          session.sendAndWait.mockImplementationOnce(async () => {
+            session.emit("assistant.message", {
+              content: "",
+              messageId: "tools",
+              toolRequests: [{ name: "read", toolCallId: "policy-call" }],
+            });
+            session.emit("tool.execution_complete", {
+              result: { content: "blocked by policy" },
+              success: true,
+              toolCallId: "policy-call",
+            });
+            session.emit("session.compaction_start", {});
+            const final = { ...makeAssistantMessageEvent("done"), id: "final" };
+            session.emit("assistant.message", { __eventId: "final", ...final.data });
+            return final;
+          });
+        },
+      });
+
+      const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
+
+      expect(result.terminal).toEqual({ kind: "ok" });
+      expect(requireSession(sdk).abort).not.toHaveBeenCalled();
+      expect(requireSession(sdk).disconnect).toHaveBeenCalledTimes(1);
+      expect(sdk.client.deleteSession).not.toHaveBeenCalled();
+      expect(result.replayMetadata.replaySafe).toBe(false);
+      expect(result.messagesSnapshot.some((message) => message.role === "toolResult")).toBe(false);
+      expect(result.assistantTranscriptOwned).toBe(true);
+    });
+
+    it("preserves stable idempotency keys across hook replacements", async () => {
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_message_write",
+            handler: (event: unknown) => {
+              const message = (
+                event as {
+                  message: AgentMessage & { idempotencyKey?: string };
+                }
+              ).message;
+              delete message.idempotencyKey;
+              return { message };
+            },
+          },
+        ]),
+      );
+
+      await runCopilotAttempt(makeParams(), { pool: makeFakePool(makeFakeSdk()) });
+
+      expect(transcriptRuntimeMock.append.mock.calls[0]?.[0]).toMatchObject({
+        message: { idempotencyKey: "run-1:user" },
+      });
+      expect(transcriptRuntimeMock.append.mock.calls[1]?.[0]).toMatchObject({
+        message: { idempotencyKey: "copilot-sdk:sess-1:assistant.message-id" },
+      });
+    });
+
+    it("removes an explicitly blocked memory user from the returned snapshot", async () => {
+      const recorder = makeUserTurnRecorder({ role: "user", content: "memory", timestamp: 1 });
+      recorder.markBlocked();
+
+      const result = await runCopilotAttempt(
         makeParams({
-          messages: [],
-          prompt: "turn 1",
-          runId: "run-1",
-        } as never),
-        { pool },
-      );
-      await runCopilotAttempt(
-        makeParams({
-          messages: [],
-          prompt: "turn 2",
-          runId: "run-2",
-          initialReplayState: { sdkSessionId: "sess-1" },
-        } as never),
-        { pool },
+          messages: [{ role: "user", content: "memory", timestamp: 1 }],
+          trigger: "memory",
+          userTurnTranscriptRecorder: recorder,
+        }),
+        { pool: makeFakePool(makeFakeSdk()) },
       );
 
-      const calls = dualWriteMock.dualWriteCopilotTranscriptBestEffort.mock.calls;
-      expect(calls.length).toBe(2);
-      const turn1 = calls[0]?.[0] as {
-        messages: Array<{ role: string; __openclaw?: { mirrorIdentity?: string } }>;
-      };
-      const turn2 = calls[1]?.[0] as {
-        messages: Array<{ role: string; __openclaw?: { mirrorIdentity?: string } }>;
-      };
-      const turn1User = turn1.messages.find((m) => m.role === "user");
-      const turn2User = turn2.messages.find((m) => m.role === "user");
-      const turn1Assistant = turn1.messages.find((m) => m.role === "assistant");
-      const turn2Assistant = turn2.messages.find((m) => m.role === "assistant");
-      expect(turn1User?.["__openclaw"]?.mirrorIdentity).toBe("run-1:prompt");
-      expect(turn2User?.["__openclaw"]?.mirrorIdentity).toBe("run-2:prompt");
-      expect(turn1Assistant?.["__openclaw"]?.mirrorIdentity).toBe("run-1:assistant:final");
-      expect(turn2Assistant?.["__openclaw"]?.mirrorIdentity).toBe("run-2:assistant:final");
+      expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["assistant"]);
+      expect(result.messagesSnapshot[0]).toMatchObject({ display: false });
     });
 
-    it("two attempts with identical prompts but different runIds remain distinct (no content-fingerprint collapse)", async () => {
-      dualWriteMock.dualWriteCopilotTranscriptBestEffort.mockClear();
-      const sdk = makeFakeSdk({
-        onCreateSession: (session) => {
-          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("first"));
-        },
-        onResumeSession: (session) => {
-          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("second"));
-        },
-      });
-      const pool = makeFakePool(sdk);
+    it("removes a keyed blocked user from the returned snapshot", async () => {
+      const current = {
+        role: "user",
+        content: "blocked",
+        idempotencyKey: "run-1:user",
+        timestamp: 1,
+      } as Extract<AgentMessage, { role: "user" }> & { idempotencyKey: string };
+      const recorder = makeUserTurnRecorder(current);
+      recorder.markBlocked();
 
-      await runCopilotAttempt(
-        makeParams({ messages: [], prompt: "same question", runId: "run-X" } as never),
-        { pool },
+      const result = await runCopilotAttempt(
+        makeParams({ messages: [current], userTurnTranscriptRecorder: recorder }),
+        { pool: makeFakePool(makeFakeSdk()) },
       );
-      await runCopilotAttempt(
+
+      expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["assistant"]);
+    });
+
+    it("preserves an unrelated user tail when persisting the current turn", async () => {
+      const result = await runCopilotAttempt(
         makeParams({
-          messages: [],
-          prompt: "same question",
-          runId: "run-Y",
-          initialReplayState: { sdkSessionId: "sess-1" },
-        } as never),
-        { pool },
+          messages: [{ role: "user", content: "older unanswered turn", timestamp: 1 }],
+          prompt: "new turn",
+        }),
+        { pool: makeFakePool(makeFakeSdk()) },
       );
 
-      const calls = dualWriteMock.dualWriteCopilotTranscriptBestEffort.mock.calls;
-      const firstCall = expectDefined(calls[0], "first Copilot transcript mirror call");
-      const secondCall = expectDefined(calls[1], "second Copilot transcript mirror call");
-      const id1 = (
-        firstCall[0] as {
-          messages: Array<{ role: string; __openclaw?: { mirrorIdentity?: string } }>;
-        }
-      ).messages.find((m) => m.role === "user")?.["__openclaw"]?.mirrorIdentity;
-      const id2 = (
-        secondCall[0] as {
-          messages: Array<{ role: string; __openclaw?: { mirrorIdentity?: string } }>;
-        }
-      ).messages.find((m) => m.role === "user")?.["__openclaw"]?.mirrorIdentity;
-      expect(id1).toBe("run-X:prompt");
-      expect(id2).toBe("run-Y:prompt");
-      expect(id1).not.toBe(id2);
+      expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
+        "user",
+        "user",
+        "assistant",
+      ]);
+      expect(
+        result.messagesSnapshot
+          .slice(0, 2)
+          .map((message) => (message as { content?: unknown }).content),
+      ).toEqual(["older unanswered turn", "new turn"]);
+    });
+
+    it("replaces equivalent string and text-block current-user representations", async () => {
+      const result = await runCopilotAttempt(
+        makeParams({
+          messages: [{ role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 }],
+        }),
+        { pool: makeFakePool(makeFakeSdk()) },
+      );
+
+      expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["user", "assistant"]);
+    });
+
+    it("keeps a keyed earlier turn when the current prompt repeats its text", async () => {
+      const result = await runCopilotAttempt(
+        makeParams({
+          messages: [
+            {
+              role: "user",
+              content: "hello",
+              idempotencyKey: "older-run:user",
+              timestamp: 1,
+            } as AgentMessage,
+          ],
+        }),
+        { pool: makeFakePool(makeFakeSdk()) },
+      );
+
+      expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
+        "user",
+        "user",
+        "assistant",
+      ]);
+      expect(
+        (result.messagesSnapshot[0] as AgentMessage & { idempotencyKey?: string }).idempotencyKey,
+      ).toBe("older-run:user");
     });
   });
-
   describe("sandbox parity (PR #86155 [P1])", () => {
     function makeSandboxStub(overrides: Partial<SandboxContext> = {}): SandboxContext {
       return {

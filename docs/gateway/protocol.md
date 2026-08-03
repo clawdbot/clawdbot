@@ -20,7 +20,7 @@ npm may return `E404` until the first package-bearing release is published.
 - [`@openclaw/gateway-protocol`](https://www.npmjs.com/package/@openclaw/gateway-protocol)
   publishes the schemas, validators, TypeScript types, lightweight frame and error
   helpers, and version constants. Its tarball includes the generated
-  [`protocol.schema.json`](https://unpkg.com/@openclaw/gateway-protocol/protocol.schema.json)
+  [`protocol.schema.json`](https://unpkg.com/@openclaw/gateway-protocol@beta/protocol.schema.json)
   machine-readable contract.
 - [`@openclaw/gateway-client`](https://www.npmjs.com/package/@openclaw/gateway-client)
   publishes the reference Node client and a browser-safe entry at
@@ -45,9 +45,18 @@ that supervise the Gateway as a child process, see
 
 Frame shapes:
 
-- Request: `{type:"req", id, method, params}`
+- Request: `{type:"req", id, method, params, traceparent?}`
 - Response: `{type:"res", id, ok, payload|error}`
 - Event: `{type:"event", event, payload, seq?, stateVersion?}`
+
+After authentication, a client may include a W3C `traceparent` string on each
+request frame. The Gateway continues a valid value as a child trace context for
+that request. Missing or syntactically malformed values within the
+128-character field limit keep the default fresh request trace and do not fail
+the RPC; longer values make the request frame invalid. The initial `connect`
+request never establishes trace context for later frames. Use a separate
+`traceparent` for each logical request on a long-lived connection; do not treat
+the WebSocket itself as one trace.
 
 Response errors use `{ code, message, details?, retryable?, retryAfterMs? }`.
 Clients should branch on `code` and `details.code`; `message` remains human-readable
@@ -82,6 +91,12 @@ Gateway sends a pre-connect challenge:
   "payload": { "nonce": "…", "ts": 1737264000000 }
 }
 ```
+
+Device-auth clients use the challenge `ts` as `connect.params.device.signedAt`.
+For WebSocket challenges, `ts` must be a non-negative integer. Clients that
+explicitly support Gateways from before `connect.challenge` existed may use local
+time only when no challenge arrives; a received challenge with an absent or
+malformed `ts` is invalid.
 
 Client replies with `connect`:
 
@@ -138,7 +153,8 @@ Gateway responds with `hello-ok`:
     "policy": {
       "maxPayload": 26214400,
       "maxBufferedBytes": 52428800,
-      "tickIntervalMs": 15000
+      "tickIntervalMs": 15000,
+      "attachments": { "maxBytes": 20971520, "maxImageBytes": 6291456 }
     }
   }
 }
@@ -147,11 +163,37 @@ Gateway responds with `hello-ok`:
 `server`, `features`, `snapshot`, `policy`, and `auth` are all required by
 `HelloOkSchema` (`packages/gateway-protocol/src/schema/frames.ts`). `auth`
 reports the negotiated role/scopes even when no device token is issued (shape
-above). `pluginSurfaceUrls` is optional and maps plugin surface names (e.g.
+above). `policy.attachments` is optional (older gateways omit it) and advertises
+the decoded-size ceilings chat attachments face on `chat.send`, `sessions.send`,
+and session-creation initial turns:
+
+| Field           | Meaning                                                                                             |
+| --------------- | --------------------------------------------------------------------------------------------------- |
+| `maxBytes`      | Largest decoded size accepted for a single attachment (`agents.defaults.mediaMaxMb`, default 20 MB) |
+| `maxImageBytes` | Largest decoded size accepted for a single image: `min(maxBytes, 6 MB agent-hydration cap)`         |
+
+Validating before send:
+
+1. Check each file's decoded size against `maxImageBytes` for images and
+   `maxBytes` for everything else.
+2. Serialize the whole request and check its encoded size against
+   `policy.maxPayload`. `policy.attachments` is a per-attachment ceiling, never a
+   promise the frame fits: attachments travel as base64, so a 20 MB file is about
+   26.7 MB on the wire and exceeds the default 25 MiB frame limit on its own.
+3. Treat the server as authoritative for everything else. Accepted MIME types and
+   per-message handling are deliberately not advertised because they depend on
+   the entrypoint, the resolved model, and payload sniffing. The gateway can
+   return a typed rejection, while text-only model runs can omit additional
+   images after their offload cap and still complete the request.
+4. Re-read the values on every reconnect. They are a connection-time snapshot, so
+   a live `mediaMaxMb` edit reaches existing connections only after they reconnect.
+
+`pluginSurfaceUrls` is optional and maps plugin surface names (e.g.
 `canvas`) to scoped hosted URLs; it may expire, so nodes call
 `node.pluginSurface.refresh` with `{ "surface": "canvas" }` for a fresh entry.
 The deprecated `canvasHostUrl` / `canvasCapability` / `node.canvas.capability.refresh`
 path is not supported; use plugin surfaces.
+The `sessions.observer.ask` method was removed; use `sessions.companion.ask`.
 The snapshot's optional `appliedConfigHash` is the resolved source-config revision
 accepted by the active Gateway runtime. Clients can compare it with
 `config.get.configRevisionHash` to determine whether a newer saved config still
@@ -197,8 +239,9 @@ operator token:
 ```
 
 This operator handoff is bounded on purpose: enough to start the mobile
-operator loop and native setup, including `operator.talk.secrets` for Talk
-config reads, but no pairing-mutation scopes and no `operator.admin`. Broader
+operator loop and native setup, with `operator.write` satisfying Talk sessions
+and `operator.talk.secrets` covering Talk config reads, but no pairing-mutation scopes
+and no `operator.admin`. Broader
 pairing/admin access needs a separate approved pairing or token flow. Persist
 `hello-ok.auth.deviceTokens` only when bootstrap auth ran over a trusted
 transport (`wss://` or loopback/local pairing).
@@ -301,7 +344,12 @@ Operator scopes (`src/gateway/operator-scopes.ts`), the full closed set:
 - `operator.admin`
 - `operator.approvals`
 - `operator.pairing`
+- `operator.talk`
 - `operator.talk.secrets`
+
+`operator.write` continues to satisfy `operator.talk` for compatibility with
+existing clients. Voice-device setup can issue the narrower Talk grant without
+general Gateway write access.
 
 `talk.config` with `includeSecrets: true` requires `operator.talk.secrets` (or
 `operator.admin`). When secrets are included, read the active Talk provider
@@ -322,11 +370,11 @@ already hold a lower operator scope.
 method scope (`operator.pairing`), based on the pending request's declared
 `commands` (`src/infra/node-pairing-authz.ts`):
 
-| Declared commands                                                                                                             | Required scopes                       |
-| ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| none                                                                                                                          | `operator.pairing`                    |
-| ordinary commands                                                                                                             | `operator.pairing` + `operator.write` |
-| includes `system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `fs.listDir`, or `system.execApprovals.get/set` | `operator.pairing` + `operator.admin` |
+| Declared commands                                                                                                                                        | Required scopes                       |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| none                                                                                                                                                     | `operator.pairing`                    |
+| ordinary commands                                                                                                                                        | `operator.pairing` + `operator.write` |
+| includes `system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir`, or `system.execApprovals.get/set` | `operator.pairing` + `operator.admin` |
 
 ### Caps/commands/permissions (node)
 
@@ -503,14 +551,14 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `terminal.data` and `terminal.exit` events stream only to the connection that owns the session.
     - Sessions whose connection drops are detached, not killed: they stay reattachable for `gateway.terminal.detachedSessionTimeoutSeconds` (default 300; `0` restores kill-on-disconnect) while recent output accumulates in a bounded server-side buffer.
     - `terminal.list` returns attachable sessions; `terminal.attach` rebinds a live-or-detached session to the calling connection and returns the replay buffer (tmux-style take-over — a previous live owner receives `terminal.exit` with reason `detached`); `terminal.text` reads the buffer as plain text without attaching.
-    - Every terminal method requires `operator.admin`; `gateway.terminal.enabled` must be explicitly true. Fully sandboxed agents are refused, and an agent policy change closes existing and in-flight PTYs, detached ones included.
+    - Every terminal method requires `operator.admin`; `gateway.terminal.enabled` is on by default and refuses every method when set to `false`. Fully sandboxed agents are refused, and an agent policy change closes existing and in-flight PTYs, detached ones included.
 
   </Accordion>
 
   <Accordion title="Talk and TTS">
     - `talk.catalog` returns the read-only Talk provider catalog for speech, streaming transcription, and realtime voice: canonical provider ids, registry aliases, labels, configured state, an optional group-level `ready` result, exposed model/voice ids, canonical modes, transports, brain strategies, and realtime audio/capability flags, without returning provider secrets or mutating global config. Current gateways set `ready` after applying runtime provider selection; treat its absence as unverified on older gateways.
     - `talk.config` returns the effective Talk config payload; `includeSecrets` requires `operator.talk.secrets` (or `operator.admin`).
-    - `talk.session.create` creates a gateway-owned Talk session for `realtime/gateway-relay`, `transcription/gateway-relay`, or `stt-tts/managed-room`. For `stt-tts/managed-room`, `operator.write` callers that pass `sessionKey` must also pass `spawnedBy` for scoped session-key visibility; unscoped `sessionKey` creation and `brain: "direct-tools"` require `operator.admin`.
+    - `talk.session.create` (`operator.talk`) creates a gateway-owned Talk session for `realtime/gateway-relay`, `transcription/gateway-relay`, or `stt-tts/managed-room`. For `stt-tts/managed-room`, non-admin callers that pass `sessionKey` must also pass `spawnedBy` for scoped session-key visibility; unscoped `sessionKey` creation and `brain: "direct-tools"` require `operator.admin`.
     - `talk.session.join` validates a managed-room session token, emits `session.ready` or `session.replaced` as needed, and returns room/session metadata plus recent Talk events, never the plaintext token or its hash.
     - `talk.session.appendAudio` appends base64 PCM input audio to gateway-owned realtime relay and transcription sessions.
     - `talk.session.startTurn`, `talk.session.endTurn`, and `talk.session.cancelTurn` drive managed-room turn lifecycle with stale-turn rejection before state clears.
@@ -522,7 +570,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `talk.client.create` creates or resumes a client-owned realtime provider session using `webrtc` or `provider-websocket` while the gateway owns credentials, instructions, tool policy, and the returned `voiceSessionId`. Clients pass `sessionKey` and reuse `voiceSessionId` when replacing the provider transport during one call.
     - `talk.client.transcript` appends one finalized `{ role, text }` item to the normal agent session. The required `entryId` is idempotent within `voiceSessionId`; retries do not duplicate transcript messages.
     - `talk.client.close` closes the logical voice session after pending transcript writes. Closing is idempotent and may deliver a mutation-only call digest to the session's last non-WebChat channel.
-    - `talk.client.toolCall` lets client-owned realtime transports forward provider tool calls to gateway policy. The first supported tool is `openclaw_agent_consult`; clients get a run id and wait for normal chat lifecycle events before submitting the provider-specific tool result. Voice-bound high-impact actions return `VOICE_CONFIRMATION_REQUIRED:<id>` until a later finalized user utterance explicitly confirms that exact action and the next consult supplies the `confirmationId`.
+    - `talk.client.toolCall` lets client-owned realtime transports forward provider tool calls to gateway policy. The first supported tool is `openclaw_agent_consult`; clients get a run id and wait for normal chat lifecycle events before submitting the provider-specific tool result. Voice-bound high-impact actions return `VOICE_CONFIRMATION_REQUIRED:<id>` until a later finalized user utterance explicitly confirms that exact final execution action and the next consult supplies the `confirmationId`; policy or hook rewrites require confirmation again.
     - `talk.client.steer` sends active-run voice control for client-owned realtime transports. The gateway resolves the active embedded run from `sessionKey` and returns a structured accepted/rejected result instead of silently dropping steering.
     - `talk.event` is the single Talk event channel for realtime, transcription, STT/TTS, managed-room, telephony, and meeting adapters.
     - `talk.speak` synthesizes speech through the active Talk speech provider.
@@ -572,12 +620,12 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `sessions.preview` returns bounded transcript previews for specific session keys.
     - `sessions.describe` returns one gateway session row for an exact session key.
     - `sessions.resolve` resolves or canonicalizes a session target.
-    - `sessions.create` creates a new session entry. Optional `model` and `thinkingLevel` values persist the initial model and reasoning overrides atomically. `worktree: true` provisions a managed worktree; optional `worktreeBaseRef`/`worktreeName` select the base ref and branch name, and `execNode` (`operator.admin`) binds session exec to a node host. The created worktree is echoed in the result and persisted on the session row (`worktree: { id, branch, repoRoot }`). When the entry is created but its nested initial `chat.send` is rejected, the successful result includes `runStarted: false` and `runError`; clients can preserve the prompt and retry against the returned session key. A caller that passes `parentSessionKey` with `emitCommandHooks: true` should also declare the lifecycle disposition of a distinct child: `succeedsParent: true` ends the parent with `session_end`, while `false` keeps the parent active and emits only the child's `session_start`. Omitting `succeedsParent` preserves the legacy parent-rollover behavior for existing clients. The disposition requires both parent linkage and command hooks; a fork cannot succeed its parent. Main-session reset-in-place behavior is unchanged because no distinct child is created. New rows are stamped with write-once creation provenance (`createdVia`, `createdActor`, `createdAt`) from the trusted creation seam; adopting an existing key never restamps it. For human profile actors, `createdActor.label` is resolved from the current user profile when the row is projected and is never stored on the session entry, so profile renames do not drift. Session rows also carry `parentSessionKey` (navigation parent, persisted), `controlOwnerSessionKey` (runtime controller when live), `forkSource` (exact source key + transcript generation for forks), and `previousSessionId` (prior transcript generation under the same key).
+    - `sessions.create` creates a new session entry. Optional `model` and `thinkingLevel` values persist the initial model and reasoning overrides atomically. `worktree: true` provisions a managed worktree; optional `worktreeBaseRef`/`worktreeName` select the base ref and branch name, and `execNode` (`operator.admin`) binds session exec to a node host. Without `worktreeName`, OpenClaw derives a readable name from the session label or generated first-message title, then falls back to a crustacean-themed name; names already occupied by another owner, local branch, or unmanaged path receive a numeric suffix. The created worktree is echoed in the result and persisted on the session row (`worktree: { id, branch, repoRoot }`). When the entry is created but its nested initial `chat.send` is rejected, the successful result includes `runStarted: false` and `runError`; clients can preserve the prompt and retry against the returned session key. A caller that passes `parentSessionKey` with `emitCommandHooks: true` should also declare the lifecycle disposition of a distinct child: `succeedsParent: true` ends the parent with `session_end`, while `false` keeps the parent active and emits only the child's `session_start`. Omitting `succeedsParent` preserves the legacy parent-rollover behavior for existing clients. The disposition requires both parent linkage and command hooks; a fork cannot succeed its parent. Main-session reset-in-place behavior is unchanged because no distinct child is created. New rows are stamped with write-once creation provenance (`createdVia`, `createdActor`, `createdAt`) from the trusted creation seam; adopting an existing key never restamps it. For human profile actors, `createdActor.label` is resolved from the current user profile when the row is projected and is never stored on the session entry, so profile renames do not drift. Session rows also carry `parentSessionKey` (navigation parent, persisted), `controlOwnerSessionKey` (runtime controller when live), `forkSource` (exact source key + transcript generation for forks), and `previousSessionId` (prior transcript generation under the same key).
     - `sessions.dispatch` (`operator.admin`) moves an existing local OpenClaw session with a session-owned managed worktree to a configured cloud-worker profile. Pass `{ key, profileId, agentId? }`. The method is absent when no worker profile is configured, closes local turn admission before draining active work, and returns only after placement reaches `active` worker ownership. Dispatch is one-way; worker-to-local pull-back is not part of this RPC.
     - `sessions.groups.list`, `sessions.groups.put`, `sessions.groups.rename`, and `sessions.groups.delete` manage the gateway-owned custom session group catalog (names + display order). Membership stays on each session's `category` field; rename and delete update member sessions server-side.
     - `sessions.send` sends a message into an existing session.
     - `sessions.steer` is the interrupt-and-steer variant for an active session.
-    - `sessions.abort` aborts active work for a session. Pass `key` plus optional `runId`, or `runId` alone for active runs the gateway can resolve to a session.
+    - `sessions.abort` aborts active work for a session. Pass `key` plus optional `runId`, or `runId` alone for active runs the gateway can resolve to a session. Supplying `runId` keeps cancellation scoped to that run. Set `clearQueued: true` on a key-only non-global request to also discard followup and lane queues owned by that session. Existing callers that omit `clearQueued` preserve those queues. The literal `global` key keeps the existing agent-qualified `chat.abort` ownership rules and does not perform non-global followup or lane cleanup.
     - `sessions.patch` updates session metadata/overrides and reports the resolved canonical model plus effective `agentRuntime`. Spawn lineage (`spawnedBy`, `spawnedWorkspaceDir`, `spawnedCwd`, `spawnDepth`, `subagentRole`, `subagentControlScope`) is no longer publicly patchable; those facts are written once by trusted creation paths, and requests that still send them are rejected.
     - `sessions.reset`, `sessions.delete`, and `sessions.compact` perform session maintenance.
     - `sessions.get` returns the full stored session row.
@@ -653,6 +701,9 @@ methods. Treat this as feature discovery, not a full enumeration of
 - `session.approval`: sanitized pending and terminal approval truth for an
   explicitly opted-in exact-session subscriber. Child approvals use the
   persisted ancestor audience; events never mutate transcripts or wake agents.
+- `session.observer`: safe live session headline and status digest. A model-authored
+  preamble can update the headline immediately; utility-model assessments replace
+  it later when available. Web, iOS, and Android use the same run-scoped digest.
 - `sessions.changed`: session index or metadata changed.
 - `presence`: system presence snapshot updates.
 - `tick`: periodic keepalive/liveness event.
@@ -667,6 +718,11 @@ methods. Treat this as feature discovery, not a full enumeration of
 - `config.changed`: a config write persisted (payload carries the config path,
   the new snapshot hash, and a timestamp — never config content). Operator-read
   scoped; clients refresh via `config.get`.
+- `skills.changed`: connectivity, the skill catalog, config, or eligibility
+  changed after the gateway invalidated its skills snapshot. The payload's
+  `reason` is `watch`, `watch-targets`, `manual`, `remote-node`,
+  `config-change`, or `workshop`. Operator-read scoped; clients refresh via
+  `skills.status`.
 - `exec.approval.requested` / `exec.approval.resolved`: exec approval
   lifecycle.
 - `plugin.approval.requested` / `plugin.approval.resolved`: plugin approval
@@ -779,8 +835,9 @@ and may drop records on failure or saturation, so this surface is not a
 lossless compliance archive.
 
 Recording is on by default and controlled by
-[`audit.enabled`](/gateway/configuration-reference#audit). Message recording is
-separately controlled by `audit.messages` and defaults to `"off"`. When
+[`logging.audit.enabled`](/gateway/configuration-reference#audit). Message
+recording is separately controlled by `logging.audit.messages` and defaults to
+`"off"`. When
 recording is disabled, `audit.activity.list` keeps serving records written
 earlier until they expire.
 
@@ -1003,10 +1060,13 @@ third-party clients.
 | Default tick interval (pre `hello-ok`)    | `30_000` ms                                           | `packages/gateway-client/src/client.ts`                                                                                   |
 | Tick-timeout close                        | code `4000` when silence exceeds `tickIntervalMs * 2` | `packages/gateway-client/src/client.ts`                                                                                   |
 | `MAX_PAYLOAD_BYTES`                       | `25 * 1024 * 1024` (25 MB)                            | `src/gateway/server-constants.ts`                                                                                         |
+| Chat attachment ceiling                   | `agents.defaults.mediaMaxMb`, default 20 MB decoded   | `src/gateway/chat-attachment-policy.ts`                                                                                   |
+| Chat attachment image ceiling             | `min(attachment ceiling, 6 MB)`                       | `src/gateway/chat-attachment-policy.ts`, `packages/media-core/src/constants.ts`                                           |
 
 The server advertises the effective `policy.tickIntervalMs`,
-`policy.maxPayload`, and `policy.maxBufferedBytes` in `hello-ok`; clients
-should honor those values rather than the pre-handshake defaults.
+`policy.maxPayload`, `policy.maxBufferedBytes`, and `policy.attachments` in
+`hello-ok`; clients should honor those values rather than the pre-handshake
+defaults or hardcoded attachment sizes.
 
 The reference client lets finite requests own their configured deadline when
 every pending request has one. An `expectFinal` request without a finite
@@ -1140,6 +1200,7 @@ Common migration failures:
 Migration target:
 
 - Always wait for `connect.challenge`.
+- Use `connect.challenge.payload.ts` as `connect.params.device.signedAt`.
 - Sign the v2 payload that includes the server nonce.
 - Send the same nonce in `connect.params.device.nonce`.
 - Preferred signature payload is `v3`

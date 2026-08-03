@@ -20,12 +20,11 @@ export type RuntimeFallbackAttempt = {
   code?: string;
 };
 
-/** Result of running an agent turn through fallback/retry handling. */
-export type AgentRunLoopResult =
+/** Internal fallback-cycle result before caller-facing settlement projection. */
+export type AgentTurnInternalResult =
   | {
-      kind: "success";
-      runId: string;
-      runResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
+      kind: "completed";
+      result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
       fallbackProvider?: string;
       fallbackModel?: string;
       fallbackExhausted?: true;
@@ -39,7 +38,38 @@ export type AgentRunLoopResult =
       /** Prepared terminal failure, appended only after delivery evidence settles. */
       terminalFailurePayload?: ReplyPayload;
     }
-  | { kind: "final"; payload: ReplyPayload };
+  | {
+      kind: "final";
+      payload: ReplyPayload;
+      resolved?: { provider: string; model: string };
+    };
+
+export type SettledAgentTurn = {
+  kind: "settled";
+  status: "ok" | "failed";
+  abortReason?: "user" | "restart";
+  result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
+  resolved: { provider: string; model: string };
+  fallback: { exhausted: boolean; attempts: RuntimeFallbackAttempt[] };
+  autoCompactionCount: number;
+  didLogHeartbeatStrip: boolean;
+  directlySentBlockKeys?: Set<string>;
+  directlySentBlockPayloads?: ReplyPayload[];
+  terminalFailurePayload?: ReplyPayload;
+};
+
+/** Closed result shared by foreground and queued agent-turn callers. */
+export type AgentTurnExecutionResult = {
+  runId: string;
+  outcome:
+    | SettledAgentTurn
+    | { kind: "aborted"; reason: "user" | "restart" }
+    | {
+        kind: "rejected";
+        payload: ReplyPayload;
+        resolved?: { provider: string; model: string };
+      };
+};
 
 /** Inputs shared by direct and queued agent-turn execution. */
 export type AgentTurnParams = {
@@ -75,6 +105,7 @@ export type AgentTurnParams = {
   toolProgressDetail?: "explain" | "raw";
   replyMediaContext?: ReplyMediaContext;
   onCompactionNoticePayload?: (payload: ReplyPayload) => Promise<void> | void;
+  confirmRestartRecoveryArmedAfterLeaseLoss?: () => Promise<boolean>;
   isRestartRecoveryArmed?: () => boolean;
 };
 

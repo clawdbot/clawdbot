@@ -90,6 +90,7 @@ async function reconcileAgentPatchedSessionModel(params: {
         modelOverride: marker.prevModelOverride,
         providerOverride: marker.prevProviderOverride,
         modelOverrideSource: marker.prevModelOverrideSource,
+        modelOverrideRouteResolution: marker.prevModelOverrideRouteResolution,
         modelOverrideFallbackOriginProvider: marker.prevModelOverrideFallbackOriginProvider,
         modelOverrideFallbackOriginModel: marker.prevModelOverrideFallbackOriginModel,
         authProfileOverride: marker.prevAuthProfileOverride,

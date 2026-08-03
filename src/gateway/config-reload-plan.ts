@@ -7,7 +7,6 @@ import {
 } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  getActivePluginChannelRegistryVersion,
   getActivePluginHttpRouteRegistry,
   getActivePluginHttpRouteRegistryVersion,
 } from "../plugins/runtime.js";
@@ -33,6 +32,22 @@ export type GatewayReloadPlan = {
   restartChannelAccounts?: Map<ChannelKind, Set<string>>;
   noopPaths: string[];
 };
+
+export function isNoopGatewayReloadPlan(plan: GatewayReloadPlan): boolean {
+  return (
+    !plan.restartGateway &&
+    plan.hotReasons.length === 0 &&
+    !plan.reloadHooks &&
+    !plan.restartGmailWatcher &&
+    !plan.restartCron &&
+    !plan.restartHeartbeat &&
+    !plan.restartHealthMonitor &&
+    !plan.reloadPlugins &&
+    !plan.disposeMcpRuntimes &&
+    plan.restartChannels.size === 0 &&
+    (plan.restartChannelAccounts?.size ?? 0) === 0
+  );
+}
 
 type ReloadRule = {
   prefix: string;
@@ -80,6 +95,7 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
     kind: "hot",
     actions: ["restart-heartbeat"],
   },
+  { prefix: "agents.defaults", kind: "hot" },
   {
     prefix: "agents.defaults.models",
     kind: "hot",
@@ -96,16 +112,12 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
     actions: ["restart-heartbeat"],
   },
   {
-    prefix: "models.pricing",
-    kind: "restart",
-  },
-  {
     prefix: "models",
     kind: "hot",
     actions: ["restart-heartbeat"],
   },
   {
-    prefix: "agents.list",
+    prefix: "agents.entries",
     kind: "hot",
     actions: ["restart-heartbeat"],
   },
@@ -125,7 +137,7 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
   { prefix: "wizard", kind: "none" },
   { prefix: "logging", kind: "none" },
   { prefix: "agents", kind: "none" },
-  { prefix: "tools", kind: "none" },
+  { prefix: "tools", kind: "hot" },
   { prefix: "bindings", kind: "none" },
   { prefix: "audio", kind: "none" },
   { prefix: "agent", kind: "none" },
@@ -145,25 +157,17 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
 let cachedReloadRules: ReloadRule[] | null = null;
 let cachedRegistry: ReturnType<typeof getActivePluginHttpRouteRegistry> | null = null;
 let cachedGatewayRegistryVersion = -1;
-let cachedChannelRegistryVersion = -1;
 
 function listReloadRules(): ReloadRule[] {
-  // Reload metadata is Gateway policy. Agent-scoped registry activation must
-  // not replace the pinned Gateway surface and silently change restart rules.
+  // Reload metadata is gateway policy owned by the process-root registry.
   const registry = getActivePluginHttpRouteRegistry();
   const gatewayRegistryVersion = getActivePluginHttpRouteRegistryVersion();
-  const channelRegistryVersion = getActivePluginChannelRegistryVersion();
-  // Plugin/channel reload rules are process-stable until the active registry
+  // Plugin/channel reload rules are process-stable until the root registry
   // version changes; cache them to keep every config diff cheap.
-  if (
-    registry !== cachedRegistry ||
-    gatewayRegistryVersion !== cachedGatewayRegistryVersion ||
-    channelRegistryVersion !== cachedChannelRegistryVersion
-  ) {
+  if (registry !== cachedRegistry || gatewayRegistryVersion !== cachedGatewayRegistryVersion) {
     cachedReloadRules = null;
     cachedRegistry = registry;
     cachedGatewayRegistryVersion = gatewayRegistryVersion;
-    cachedChannelRegistryVersion = channelRegistryVersion;
   }
   if (cachedReloadRules) {
     return cachedReloadRules;

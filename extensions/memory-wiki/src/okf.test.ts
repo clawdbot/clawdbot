@@ -193,6 +193,32 @@ describe("importMemoryWikiOkfBundle", () => {
     expect(searchResults.map((searchResult) => searchResult.path)).toContain(ordersPath);
   });
 
+  it("prunes repository metadata and dependency subtrees", async () => {
+    const rootDir = await createTempDir("memory-wiki-okf-prune-");
+    const bundlePath = path.join(rootDir, "pruned-okf");
+    await Promise.all([
+      fs.mkdir(path.join(bundlePath, "tables"), { recursive: true }),
+      fs.mkdir(path.join(bundlePath, ".git"), { recursive: true }),
+      fs.mkdir(path.join(bundlePath, "node_modules"), { recursive: true }),
+    ]);
+    const concept = `---\ntype: BigQuery Table\ntitle: Included\n---\n\nIncluded body.\n`;
+    await Promise.all([
+      fs.writeFile(path.join(bundlePath, "tables", "included.md"), concept),
+      fs.writeFile(path.join(bundlePath, ".git", "ignored.md"), concept),
+      fs.writeFile(path.join(bundlePath, "node_modules", "ignored.md"), concept),
+    ]);
+    const { config } = await createVault({ rootDir: path.join(rootDir, "vault") });
+
+    const result = await importMemoryWikiOkfBundle({
+      config,
+      bundlePath,
+      nowMs: Date.UTC(2026, 5, 12, 10, 0, 0),
+    });
+
+    expect(result.importedCount).toBe(1);
+    expect(result.pagePaths).toHaveLength(1);
+  });
+
   it("caps generated concept filenames for long OKF concept paths", async () => {
     const rootDir = await createTempDir("memory-wiki-okf-long-");
     const bundlePath = path.join(rootDir, "long-okf");

@@ -6,8 +6,9 @@ import {
   type CodexCliApiKeyCredential,
   readCodexCliActiveApiKey,
 } from "../agents/cli-credentials.js";
-import { createMergePatch } from "../config/io.write-prepare.js";
+import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import { applyAutoLocalModelLean } from "../config/local-model-lean-auto.js";
+import { createMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -113,10 +114,12 @@ async function activateSetupInferenceUnredacted(
   if (snapshot.exists && !snapshot.valid) {
     throw new Error(invalidSetupConfigError(snapshot));
   }
-  const cfg: OpenClawConfig = snapshot.exists ? (snapshot.runtimeConfig ?? snapshot.config) : {};
-  const sourceCfg: OpenClawConfig = snapshot.exists
-    ? (snapshot.sourceConfig ?? snapshot.config)
-    : {};
+  // Missing-file snapshots still carry the load-time implicit-main roster.
+  // Setup must probe against that runtime view without treating it as authored config.
+  const cfg: OpenClawConfig = snapshot.runtimeConfig ?? snapshot.config;
+  // The source snapshot includes raw compatibility migrations for comparison,
+  // while the writer still projects changes back onto the untouched authored bytes.
+  const sourceCfg: OpenClawConfig = snapshot.sourceConfig ?? snapshot.config;
   const workspace = params.workspace?.trim()
     ? resolveUserPath(params.workspace)
     : (
@@ -279,18 +282,22 @@ async function activateSetupInferenceUnredacted(
         traceCommand: "openclaw-setup-probe",
         logger: { warn: (message) => (registryRefreshWarning = message) },
       });
-      const ensureHarnessPlugin =
-        deps.ensureSelectedAgentHarnessPlugin ??
-        (await import("../agents/harness/runtime-plugin.js")).ensureSelectedAgentHarnessPlugin;
       try {
-        await ensureHarnessPlugin({
-          provider: testPlan.provider,
-          modelId: testPlan.model,
+        const pluginRegistry = loadAgentRuntimePluginRegistryHandle({
           config: testPlan.config,
-          agentId: testPlan.routeAgentId,
-          agentHarnessRuntimeOverride: "codex",
           workspaceDir: tempDir,
+          selections: [
+            {
+              provider: testPlan.provider,
+              modelId: testPlan.model,
+              runtime: "codex",
+              agentId: testPlan.routeAgentId,
+            },
+          ],
         });
+        if (!pluginRegistry) {
+          throw new Error("The Codex runtime plugin registry is unavailable.");
+        }
       } catch (error) {
         const loadError = `Could not load the Codex runtime plugin: ${formatErrorMessage(error)}`;
         return {

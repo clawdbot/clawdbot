@@ -1,22 +1,29 @@
 // Gateway chat attachment parser.
 // Normalizes image attachments, offloads large media, and reports unsupported payloads.
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
-import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
-import { extensionForMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import { MAX_IMAGE_BYTES, type MediaKind } from "@openclaw/media-core/constants";
+import { extensionForMime, kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
+import type { SubsystemLogger } from "../logging/subsystem.js";
 import type { MediaFact } from "../media/media-facts.js";
+import { probeMediaFilesWithinBudget } from "../media/media-probe.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import { deleteMediaBuffer, saveMediaBuffer, type SavedMedia } from "../media/store.js";
+import { DEFAULT_CHAT_ATTACHMENT_MAX_BYTES } from "./chat-attachment-policy.js";
+import { formatForLog } from "./ws-log.js";
 
 export type ChatAttachment = {
   type?: string;
   mimeType?: string;
   fileName?: string;
   content?: unknown;
+  sizeBytes?: number;
+  durationMs?: number;
+  width?: number;
+  height?: number;
 };
 
 export type ChatImageContent = {
@@ -29,14 +36,17 @@ export type OffloadedRef = {
   mediaRef: string;
   id: string;
   path: string;
+  kind: MediaKind;
   mimeType: string;
   label: string;
   sizeBytes: number;
+  durationMs?: number;
+  width?: number;
+  height?: number;
 };
 
 type ParsedMessageWithImages = {
   message: string;
-  messageWithoutOffloadedImageRefs: string;
   images: ChatImageContent[];
   imageOrder: PromptImageOrderEntry[];
   media: MediaFact[];
@@ -57,12 +67,58 @@ type NormalizedAttachment = {
 type SavedMediaRef = {
   id: string;
   path: string;
+  durationMs?: number;
+  width?: number;
+  height?: number;
 };
 
 const OFFLOAD_THRESHOLD_BYTES = 2_000_000;
 const TEXT_ONLY_OFFLOAD_LIMIT = 10;
+const MAX_CHAT_ATTACHMENT_MEDIA_PROBES = 8;
+const CHAT_ATTACHMENT_MEDIA_PROBE_CONCURRENCY = 2;
+const CHAT_ATTACHMENT_MEDIA_PROBE_BUDGET_MS = 3000;
 
-const DEFAULT_CHAT_ATTACHMENT_MAX_MB = 20;
+async function enrichOffloadedMediaMetadata(refs: OffloadedRef[]): Promise<void> {
+  const candidates = refs.flatMap((ref) => {
+    const kind = kindFromMime(ref.mimeType);
+    return kind === "audio" || kind === "video" ? [{ kind, ref }] : [];
+  });
+  const metadata = await probeMediaFilesWithinBudget(
+    candidates.map(({ kind, ref }) => ({ filePath: ref.path, kind })),
+    {
+      budgetMs: CHAT_ATTACHMENT_MEDIA_PROBE_BUDGET_MS,
+      concurrency: CHAT_ATTACHMENT_MEDIA_PROBE_CONCURRENCY,
+      maxProbes: MAX_CHAT_ATTACHMENT_MEDIA_PROBES,
+    },
+  );
+  for (const [index, candidate] of candidates.entries()) {
+    Object.assign(candidate.ref, metadata[index]);
+  }
+}
+
+export function logAttachmentFailure(
+  log: Pick<SubsystemLogger, "error">,
+  label: string,
+  err: unknown,
+): void {
+  const primary = formatUncaughtError(err);
+  const cause = err instanceof Error ? err.cause : undefined;
+  const causeText = cause === undefined ? "" : formatUncaughtError(cause);
+  log.error(label, {
+    error: !causeText || causeText === primary ? primary : `${primary}\nCaused by: ${causeText}`,
+    consoleMessage: `${label}: ${formatForLog(err)}`,
+  });
+}
+
+export function stripImageMediaMarkers(message: string, refs: readonly OffloadedRef[]): string {
+  return refs.reduce((projected, ref) => {
+    const marker = ref.mimeType.startsWith("image/") ? `\n[media attached: ${ref.mediaRef}]` : "";
+    const index = marker ? projected.lastIndexOf(marker) : -1;
+    return index < 0
+      ? projected
+      : projected.slice(0, index) + projected.slice(index + marker.length);
+  }, message);
+}
 
 export async function persistInboundImagesForTranscript(params: {
   images: ChatImageContent[];
@@ -114,16 +170,6 @@ export async function persistInboundImagesForTranscript(params: {
     ...nonImageOffloaded,
   );
   return ordered;
-}
-
-/** Resolve the maximum decoded attachment size accepted for chat image inputs. */
-export function resolveChatAttachmentMaxBytes(cfg: OpenClawConfig): number {
-  const configured = cfg.agents?.defaults?.mediaMaxMb;
-  const mb =
-    typeof configured === "number" && Number.isFinite(configured) && configured > 0
-      ? configured
-      : DEFAULT_CHAT_ATTACHMENT_MAX_MB;
-  return Math.floor(mb * 1024 * 1024);
 }
 
 type UnsupportedAttachmentReason =
@@ -316,7 +362,7 @@ export async function parseMessageWithAttachments(
     acceptNonImage?: boolean;
   },
 ): Promise<ParsedMessageWithImages> {
-  const maxBytes = opts?.maxBytes ?? DEFAULT_CHAT_ATTACHMENT_MAX_MB * 1024 * 1024;
+  const maxBytes = opts?.maxBytes ?? DEFAULT_CHAT_ATTACHMENT_MAX_BYTES;
   const log = opts?.log;
   const shouldForceImageOffload = opts?.supportsImages === false;
   const supportsInlineImages = opts?.supportsInlineImages !== false;
@@ -325,7 +371,6 @@ export async function parseMessageWithAttachments(
   if (!attachments || attachments.length === 0) {
     return {
       message,
-      messageWithoutOffloadedImageRefs: message,
       images: [],
       imageOrder: [],
       media: [],
@@ -337,7 +382,6 @@ export async function parseMessageWithAttachments(
   const imageOrder: PromptImageOrderEntry[] = [];
   const offloadedRefs: OffloadedRef[] = [];
   let updatedMessage = message;
-  let messageWithoutOffloadedImageRefs = message;
   let textOnlyImageOffloadCount = 0;
   const savedMediaIds: string[] = [];
 
@@ -431,8 +475,6 @@ export async function parseMessageWithAttachments(
             `${TEXT_ONLY_OFFLOAD_LIMIT} was reached`,
         );
         updatedMessage += "\n[image attachment omitted: text-only attachment limit reached]";
-        messageWithoutOffloadedImageRefs +=
-          "\n[image attachment omitted: text-only attachment limit reached]";
         continue;
       }
 
@@ -469,11 +511,7 @@ export async function parseMessageWithAttachments(
       savedMediaIds.push(savedMedia.id);
 
       const mediaRef = `media://inbound/${savedMedia.id}`;
-      const mediaLine = `\n[media attached: ${mediaRef}]`;
-      updatedMessage += mediaLine;
-      if (!isImage) {
-        messageWithoutOffloadedImageRefs += mediaLine;
-      }
+      updatedMessage += `\n[media attached: ${mediaRef}]`;
       log?.info?.(
         shouldForceImageOffload && isImage
           ? `[Gateway] Offloaded image for text-only model. Saved: ${mediaRef}`
@@ -484,9 +522,21 @@ export async function parseMessageWithAttachments(
         mediaRef,
         id: savedMedia.id,
         path: savedMedia.path,
+        kind: kindFromMime(finalMime) ?? "unknown",
         mimeType: finalMime,
         label,
         sizeBytes,
+        ...(typeof att.durationMs === "number" &&
+        Number.isFinite(att.durationMs) &&
+        att.durationMs >= 0
+          ? { durationMs: att.durationMs }
+          : {}),
+        ...(typeof att.width === "number" && Number.isFinite(att.width) && att.width >= 0
+          ? { width: att.width }
+          : {}),
+        ...(typeof att.height === "number" && Number.isFinite(att.height) && att.height >= 0
+          ? { height: att.height }
+          : {}),
       });
       if (isImage) {
         imageOrder.push("offloaded");
@@ -502,18 +552,22 @@ export async function parseMessageWithAttachments(
     throw err;
   }
 
+  await enrichOffloadedMediaMetadata(offloadedRefs);
+
   return {
     message: updatedMessage !== message ? updatedMessage.trimEnd() : message,
-    messageWithoutOffloadedImageRefs:
-      messageWithoutOffloadedImageRefs !== message
-        ? messageWithoutOffloadedImageRefs.trimEnd()
-        : message,
     images,
     imageOrder,
     media: offloadedRefs.map((ref) => ({
       path: ref.path,
       url: ref.mediaRef,
       contentType: ref.mimeType,
+      kind: ref.kind,
+      fileName: ref.label,
+      sizeBytes: ref.sizeBytes,
+      ...(ref.durationMs ? { durationMs: ref.durationMs } : {}),
+      ...(ref.width ? { width: ref.width } : {}),
+      ...(ref.height ? { height: ref.height } : {}),
     })),
     offloadedRefs,
   };

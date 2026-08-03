@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../lib/session-pull-requests.ts";
 import {
   createContext,
   createGateway,
@@ -14,9 +16,10 @@ import {
   type SidebarLifecycleState,
   successfulSessionPatch,
   type TestSessionMenu,
+  TWO_AGENTS,
 } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
-import "../../components/app-sidebar.ts";
+import "./session-pagination.ts";
 
 describe("AppSidebar session indicators", () => {
   it("keeps one leading slot across neutral, running, open, and merged states", async () => {
@@ -42,31 +45,44 @@ describe("AppSidebar session indicators", () => {
         };
       }
     }
-    const request = vi.fn((_method: string, params: { sessionKey: string }) =>
-      Promise.resolve({
-        pullRequests: [
-          {
-            number: 1,
-            owner: "openclaw",
-            repo: "openclaw",
-            branch: "feature/test",
-            title: "Test",
-            url: "https://example.test/pr/1",
-            state: params.sessionKey.endsWith("open-pr") ? "open" : "merged",
-          },
-        ],
-        rateLimited: false,
-      }),
-    );
+    const request = vi.fn(() => Promise.resolve({ subscribed: true }));
     const gatewayHarness = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
     gatewayHarness.publish({
       hello: {
-        features: { methods: ["controlUi.sessionPullRequests"] },
+        features: { methods: [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD] },
       } as ApplicationGatewaySnapshot["hello"],
     });
     const { sidebar } = await mountSidebar(gatewayHarness.gateway, sessions.sessions);
     sidebar.connected = true;
     await sidebar.updateComplete;
+    await waitForFast(() => {
+      expect(request).toHaveBeenCalledWith(
+        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+        expect.objectContaining({ sessionKeys: expect.arrayContaining(keys.slice(2)) }),
+      );
+    });
+    gatewayHarness.publishEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+      sessions: Object.fromEntries(
+        keys.slice(2).map((key) => [
+          key,
+          {
+            pullRequests: [
+              {
+                number: 1,
+                owner: "openclaw",
+                repo: "openclaw",
+                branch: "feature/test",
+                title: "Test",
+                url: "https://example.test/pr/1",
+                state: key.endsWith("open-pr") ? "open" : "merged",
+              },
+            ],
+            rateLimited: false,
+            status: "ready",
+          },
+        ]),
+      ),
+    });
 
     await waitForFast(() => {
       expect(sidebar.querySelector('[data-session-pr-state="open"]')).not.toBeNull();
@@ -124,35 +140,35 @@ describe("AppSidebar session pagination", () => {
       sidebar.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
 
     expect(rows()).toHaveLength(10);
-    expect(button("Load more threads")).not.toBeNull();
+    expect(button("Show more")).not.toBeNull();
     expect(button("Collapse")).toBeNull();
 
-    button("Load more threads")?.click();
+    button("Show more")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(20);
     expect(button("Collapse")).toBeNull();
 
-    button("Load more threads")?.click();
+    button("Show more")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(30);
     expect(button("Collapse")).toBeNull();
 
-    button("Load more threads")?.click();
+    button("Show more")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(40);
-    expect(button("Load more threads")).not.toBeNull();
+    expect(button("Show more")).not.toBeNull();
     expect(button("Collapse")).not.toBeNull();
 
-    button("Load more threads")?.click();
+    button("Show more")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(41);
-    expect(button("Load more threads")).toBeNull();
+    expect(button("Show more")).toBeNull();
     expect(button("Collapse")).not.toBeNull();
 
     button("Collapse")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(10);
-    expect(button("Load more threads")).not.toBeNull();
+    expect(button("Show more")).not.toBeNull();
     expect(button("Collapse")).toBeNull();
   });
 });
@@ -398,6 +414,27 @@ describe("AppSidebar session accessibility", () => {
   });
 });
 
+describe("AppSidebar session navigation", () => {
+  it("selects a literal session's agent before changing the active session", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar, context } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main", "agent:research:work"]),
+      "panel",
+      TWO_AGENTS,
+    );
+    const calls: string[] = [];
+    context.agentSelection.set = vi.fn((agentId) => calls.push(`agent:${agentId}`));
+    gateway.setSessionKey = vi.fn((sessionKey) => calls.push(`session:${sessionKey}`));
+
+    (sidebar as unknown as { selectSession: (sessionKey: string) => void }).selectSession(
+      "agent:research:work",
+    );
+
+    expect(calls).toEqual(["agent:research", "session:agent:research:work"]);
+  });
+});
+
 describe("AppSidebar session mutation feedback", () => {
   async function mountMutationHarness(client: GatewayBrowserClient = {} as GatewayBrowserClient) {
     const gateway = createGatewayHarness(client);
@@ -450,8 +487,9 @@ describe("AppSidebar session mutation feedback", () => {
     const { gateway, harness, sidebar } = await mountMutationHarness();
     const setSessionKey = vi.fn();
     (gateway.gateway as { setSessionKey: (key: string) => void }).setSessionKey = setSessionKey;
-    const state = createSessionState("main", ["agent:main:main", "agent:main:a", "agent:main:b"]);
-    const archivedRow = state.result?.sessions.find((row) => row.key === "agent:main:a");
+    const archivedKey = "agent:main:dashboard:00000002-0000-4000-8000-000000000000";
+    const state = createSessionState("main", ["agent:main:main", archivedKey, "agent:main:b"]);
+    const archivedRow = state.result?.sessions.find((row) => row.key === archivedKey);
     if (!archivedRow) {
       throw new Error("expected archive row");
     }
@@ -479,15 +517,14 @@ describe("AppSidebar session mutation feedback", () => {
     toast.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
 
     await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(setSessionKey).toHaveBeenLastCalledWith(archivedRow.key));
+    expect(setSessionKey).not.toHaveBeenCalled();
+    // Undo restores through the batch helper, which refreshes once at the end.
     expect(harness.patch).toHaveBeenLastCalledWith(
       archivedRow.key,
       { archived: false, pinned: true },
-      { agentId: "main" },
+      { agentId: "main", deferListRefresh: true },
     );
-    expect(navigate).toHaveBeenLastCalledWith("chat", {
-      search: "?session=agent%3Amain%3Aa",
-    });
+    expect(navigate).not.toHaveBeenCalled();
   });
 
   it("patches a session icon from the picker", async () => {

@@ -1,5 +1,6 @@
 // Telegram provider-owned authorization for message mutations in forum topics.
 import { normalizeAccountId, normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-core";
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type {
   ChannelMessageActionContext,
   ChannelThreadingToolContext,
@@ -8,10 +9,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveDefaultTelegramAccountId } from "./accounts.js";
+import { resolveTelegramMessageCacheScope } from "./message-cache-persistence.js";
 import {
   createTelegramMessageCache,
   hasProviderObservedTelegramThreadBinding,
-  resolveTelegramMessageCacheScope,
 } from "./message-cache.js";
 import { parseTelegramTarget } from "./targets.js";
 
@@ -112,7 +113,11 @@ export async function resolveTelegramMessageMutationChatId(params: {
   }
 
   const cache = createTelegramMessageCache({
-    scope: resolveTelegramMessageCacheScope(resolveStorePath(params.cfg.session?.store)),
+    scope: resolveTelegramMessageCacheScope(
+      resolveStorePath(params.cfg.session?.store, {
+        agentId: params.cfg.agents ? resolveDefaultAgentId(params.cfg) : "main",
+      }),
+    ),
   });
   const cached = await cache.get({
     accountId: selectedAccountId,

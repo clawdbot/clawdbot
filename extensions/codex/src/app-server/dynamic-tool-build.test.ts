@@ -15,7 +15,9 @@ import {
   buildDynamicTools,
   disableCodexPluginThreadConfig,
   resolveCodexAppServerExecutionCwd,
+  resolveCodexExternalSandboxPolicyForOpenClawSandbox,
   resolveCodexMessageToolProvider,
+  resolveCodexSandboxEnvironmentSelection,
   shouldEnableCodexAppServerNativeToolSurface,
 } from "./dynamic-tool-build.js";
 import {
@@ -185,6 +187,42 @@ describe("Codex app-server dynamic tool build", () => {
         messageProvider: "discord-voice",
       }),
     ).toBe("discord");
+  });
+
+  const sandboxEnvironment = { environmentId: "sandbox-1", cwd: "/workspace" };
+
+  it.each([
+    {
+      name: "restricted without a sandbox",
+      environment: undefined,
+      nativeToolSurfaceEnabled: false,
+      expected: [],
+    },
+    {
+      name: "restricted with a sandbox",
+      environment: sandboxEnvironment,
+      nativeToolSurfaceEnabled: false,
+      expected: [],
+    },
+    {
+      name: "native without a sandbox",
+      environment: undefined,
+      nativeToolSurfaceEnabled: true,
+      expected: undefined,
+    },
+    {
+      name: "native with a sandbox",
+      environment: sandboxEnvironment,
+      nativeToolSurfaceEnabled: true,
+      expected: [sandboxEnvironment],
+    },
+  ])("preserves the explicit Codex environment selection when $name", (testCase) => {
+    expect(
+      resolveCodexSandboxEnvironmentSelection(
+        testCase.environment,
+        testCase.nativeToolSurfaceEnabled,
+      ),
+    ).toEqual(testCase.expected);
   });
 
   it("maps sandbox exec-server cwd through the remote workspace mapping", () => {
@@ -459,7 +497,17 @@ describe("Codex app-server dynamic tool build", () => {
       sourceSessionKey: "agent:main:subagent:codex-child",
       sourceTool: "subagent_announce",
     };
-    params.trustedInternalHandoff = true;
+    params.config = {};
+    const trustedInternalHandoff: NonNullable<EmbeddedRunAttemptParams["trustedInternalHandoff"]> =
+      {
+        kind: "subagent-completion",
+        sourceSessionKey: "agent:main:subagent:codex-child",
+        targetSessionKey: "agent:main:session-1",
+        targetSessionId: "session-1",
+        provider: "codex",
+        model: "gpt-5.4-codex",
+      };
+    params.trustedInternalHandoff = trustedInternalHandoff;
     params.scheduledToolPolicy = {
       version: 1,
       mode: "account",
@@ -476,13 +524,13 @@ describe("Codex app-server dynamic tool build", () => {
 
     expect(receivedOptions).toMatchObject({
       inputProvenance: params.inputProvenance,
-      trustedInternalHandoff: true,
+      trustedInternalHandoff,
       scheduledToolPolicy: params.scheduledToolPolicy,
     });
     expect(hoisted.resolveWebSearchToolPolicy).toHaveBeenCalledWith(
       expect.objectContaining({
         inputProvenance: params.inputProvenance,
-        trustedInternalHandoff: true,
+        trustedInternalHandoff,
         scheduledToolPolicy: params.scheduledToolPolicy,
       }),
     );
@@ -564,9 +612,15 @@ describe("Codex app-server dynamic tool build", () => {
   });
 
   it("exposes app-server-owned tools directly for forced private QA Codex runtime", () => {
-    const tools = ["read", "write", "get_goal", "image_generate", "message"].map((name) => ({
-      name,
-    }));
+    const tools = [
+      "read",
+      "write",
+      "apply_patch",
+      "apply-patch",
+      "get_goal",
+      "image_generate",
+      "message",
+    ].map((name) => ({ name }));
     const privateQaCodexEnv = {
       OPENCLAW_BUILD_PRIVATE_QA: "1",
       OPENCLAW_QA_FORCE_RUNTIME: "codex",
@@ -748,6 +802,24 @@ describe("Codex app-server dynamic tool build", () => {
     });
 
     expect(persistentWebSearchAllowed).toBe(false);
+  });
+
+  it("maps Podman sandbox network config into Codex external sandbox policy", () => {
+    expect(
+      resolveCodexExternalSandboxPolicyForOpenClawSandbox({
+        enabled: true,
+        backendId: "podman",
+        docker: { network: "none" },
+      } as never),
+    ).toEqual({ type: "externalSandbox", networkAccess: "restricted" });
+
+    expect(
+      resolveCodexExternalSandboxPolicyForOpenClawSandbox({
+        enabled: true,
+        backendId: "Podman",
+        docker: { network: "bridge" },
+      } as never),
+    ).toEqual({ type: "externalSandbox", networkAccess: "enabled" });
   });
 
   it("exposes OpenClaw sandbox shell tools under distinct names for non-Docker sandbox backends", async () => {

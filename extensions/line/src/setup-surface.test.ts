@@ -1,7 +1,10 @@
 // Line tests cover setup surface plugin behavior.
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
+import {
+  createStartAccountContext,
+  installChannelDmPolicyContractSuite,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import {
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,
@@ -186,98 +189,18 @@ describe("line setup wizard", () => {
     expect(result.cfg.channels?.line?.channelSecret).toBe("line-secret");
   });
 
-  it("reads the named-account DM policy instead of the channel root", () => {
-    expect(
-      lineSetupWizard.dmPolicy?.getCurrent(
-        {
-          channels: {
-            line: {
-              dmPolicy: "disabled",
-              accounts: {
-                work: {
-                  channelAccessToken: "token",
-                  channelSecret: "secret",
-                  dmPolicy: "allowlist",
-                },
-              },
-            },
-          },
-        } as OpenClawConfig,
-        "work",
-      ),
-    ).toBe("allowlist");
-  });
-
-  it("reports account-scoped config keys for named accounts", () => {
-    expect(lineSetupWizard.dmPolicy?.resolveConfigKeys?.({} as OpenClawConfig, "work")).toEqual({
-      policyKey: "channels.line.accounts.work.dmPolicy",
-      allowFromKey: "channels.line.accounts.work.allowFrom",
-    });
-  });
-
-  it("uses configured defaultAccount for omitted DM policy account context", () => {
-    const cfg = {
-      channels: {
-        line: {
-          defaultAccount: "work",
-          dmPolicy: "disabled",
-          allowFrom: ["Uroot"],
-          accounts: {
-            work: {
-              channelAccessToken: "token",
-              channelSecret: "secret",
-              dmPolicy: "allowlist",
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(lineSetupWizard.dmPolicy?.getCurrent(cfg)).toBe("allowlist");
-    expect(lineSetupWizard.dmPolicy?.resolveConfigKeys?.(cfg)).toEqual({
-      policyKey: "channels.line.accounts.work.dmPolicy",
-      allowFromKey: "channels.line.accounts.work.allowFrom",
-    });
-
-    const next = lineSetupWizard.dmPolicy?.setPolicy(cfg, "open");
-    const workAccount = next?.channels?.line?.accounts?.work as
-      | {
-          dmPolicy?: string;
-        }
-      | undefined;
-    expect(next?.channels?.line?.dmPolicy).toBe("disabled");
-    expect(workAccount?.dmPolicy).toBe("open");
-  });
-
-  it('writes open policy state to the named account and preserves inherited allowFrom with "*"', () => {
-    const next = lineSetupWizard.dmPolicy?.setPolicy(
+  installChannelDmPolicyContractSuite({
+    dmPolicy: lineSetupWizard.dmPolicy!,
+    cases: [
       {
-        channels: {
-          line: {
-            allowFrom: ["Uroot"],
-            accounts: {
-              work: {
-                channelAccessToken: "token",
-                channelSecret: "secret",
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
-      "open",
-      "work",
-    );
-
-    const workAccount = next?.channels?.line?.accounts?.work as
-      | {
-          dmPolicy?: string;
-          allowFrom?: string[];
-        }
-      | undefined;
-    expect(next?.channels?.line?.dmPolicy).toBeUndefined();
-    expect(next?.channels?.line?.allowFrom).toEqual(["Uroot"]);
-    expect(workAccount?.dmPolicy).toBe("open");
-    expect(workAccount?.allowFrom).toEqual(["Uroot", "*"]);
+        name: "LINE named accounts",
+        channel: "line",
+        accountId: "work",
+        accountConfig: { channelAccessToken: "token", channelSecret: "secret" },
+        inheritedAllowFrom: ["Uroot"],
+        defaultAccount: { rootAllowFrom: ["Uroot"] },
+      },
+    ],
   });
 
   it("uses configured defaultAccount for omitted setup configured state", async () => {
@@ -375,9 +298,11 @@ describe("linePlugin status.probeAccount", () => {
       timeoutMs: 50,
     };
 
-    await expect(lineStatusAdapter.probeAccount!(params)).resolves.toEqual(
-      await probeLineBot("token", 50),
-    );
+    const directResult = await probeLineBot("token", 50);
+    await expect(lineStatusAdapter.probeAccount!(params)).resolves.toEqual({
+      ...directResult,
+      elapsedMs: expect.any(Number),
+    });
   });
 });
 
@@ -425,13 +350,16 @@ function createAccount(params: { token: string; secret: string }): ResolvedLineA
 
 function startLineAccount(params: { account: ResolvedLineAccount; abortSignal?: AbortSignal }) {
   const { runtime, monitorLineProvider } = createRuntime();
+  const statusEvents: unknown[] = [];
   setLineRuntime(runtime);
   return {
     monitorLineProvider,
+    statusEvents,
     task: lineGatewayAdapter.startAccount!(
       createStartAccountContext({
         account: params.account,
         abortSignal: params.abortSignal,
+        statusPatchSink: (patch) => statusEvents.push(patch),
       }),
     ),
   };
@@ -462,7 +390,7 @@ describe("linePlugin gateway.startAccount", () => {
 
   it("starts provider when token and secret are present", async () => {
     const abort = new AbortController();
-    const { monitorLineProvider, task } = startLineAccount({
+    const { monitorLineProvider, statusEvents, task } = startLineAccount({
       account: createAccount({ token: "token", secret: "secret" }),
       abortSignal: abort.signal,
     });
@@ -476,6 +404,10 @@ describe("linePlugin gateway.startAccount", () => {
     expect(startupParams?.channelAccessToken).toBe("token");
     expect(startupParams?.channelSecret).toBe("secret");
     expect(startupParams?.accountId).toBe("default");
+    expect(statusEvents).toContainEqual(
+      expect.objectContaining({ accountId: "default", lifecycle: "starting" }),
+    );
+    expect(startupParams).toEqual(expect.objectContaining({ statusSink: expect.any(Function) }));
 
     abort.abort();
     await task;

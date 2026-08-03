@@ -9,6 +9,7 @@ export {
   extractNonEmptyAssistantText,
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
+  readLiveTestConfig,
 } from "./live-test-config.js";
 
 export type CompleteSimpleContent<TApi extends Api = Api> = Awaited<

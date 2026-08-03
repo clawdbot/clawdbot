@@ -1,68 +1,49 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
-import { assertInsideWorkspace } from "../lifecycle/workspace-skill-write.js";
 import {
   readProposalSupportFiles,
   readSkillProposal,
   readSkillProposalManifest,
   readSkillProposalRecord,
-  refreshSkillProposalManifest,
 } from "./store.js";
-import type {
-  SkillProposalManifest,
-  SkillProposalReadResult,
-  SkillProposalRecord,
-} from "./types.js";
+import type { SkillProposalManifest, SkillProposalReadResult } from "./types.js";
 
 type SkillProposalScopeOptions = {
+  agentId?: string;
   env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
+};
+
+type RequiredProposalReadOptions = {
+  config?: OpenClawConfig;
+  reconcile?: boolean;
 };
 
 function storeOptions(env?: NodeJS.ProcessEnv) {
   return env ? { env } : {};
 }
 
-export function isProposalInWorkspace(record: SkillProposalRecord, workspaceDir: string): boolean {
-  try {
-    assertInsideWorkspace(workspaceDir, record.target.skillFile, "skill file");
-    assertInsideWorkspace(workspaceDir, record.target.skillDir, "skill directory");
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export async function listSkillProposals(
   options: SkillProposalScopeOptions = {},
 ): Promise<SkillProposalManifest> {
-  const store = storeOptions(options.env);
-  const manifest = await readSkillProposalManifest(store);
-  if (!options.workspaceDir) {
-    return manifest;
-  }
-  const proposals: SkillProposalManifest["proposals"] = [];
-  for (const proposal of manifest.proposals) {
-    const record = await readSkillProposalRecord(proposal.id, store);
-    if (record && isProposalInWorkspace(record, options.workspaceDir)) {
-      proposals.push(proposal);
-    }
-  }
-  return { ...manifest, proposals };
+  return await readSkillProposalManifest(storeOptions(options.env), {
+    ...(options.agentId ? { agentId: options.agentId } : {}),
+    ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
+  });
 }
 
 export async function getSkillProposalRunProgress(
   options: SkillProposalScopeOptions & { runId: string },
 ): Promise<{ mutationCount: number; proposalIds: string[] }> {
   const store = storeOptions(options.env);
-  // Records land before the derived manifest, so rebuild before crash recovery reads them.
-  const manifest = await refreshSkillProposalManifest(store);
+  const manifest = await readSkillProposalManifest(store, options);
   const ids: string[] = [];
   let mutationCount = 0;
   for (const proposal of manifest.proposals) {
-    const record = await readSkillProposalRecord(proposal.id, store);
-    if (!record || (options.workspaceDir && !isProposalInWorkspace(record, options.workspaceDir))) {
+    const record = await readSkillProposalRecord(proposal.id, store, options);
+    if (!record) {
       continue;
     }
     if (record.origin?.runId === options.runId || record.originRunIds?.includes(options.runId)) {
@@ -77,17 +58,15 @@ export async function inspectSkillProposal(
   proposalId: string,
   options: SkillProposalScopeOptions = {},
 ): Promise<SkillProposalReadResult | null> {
-  const read = await readSkillProposal(proposalId, storeOptions(options.env));
-  if (
-    !read ||
-    (options.workspaceDir && !isProposalInWorkspace(read.record, options.workspaceDir))
-  ) {
+  const read = await readSkillProposal(proposalId, storeOptions(options.env), options);
+  if (!read) {
     return null;
   }
   return await hydrateProposalSupportFiles(read, options.env);
 }
 
 export async function resolvePendingSkillProposal(input: {
+  agentId?: string;
   env?: NodeJS.ProcessEnv;
   proposalId?: string;
   name?: string;
@@ -95,7 +74,12 @@ export async function resolvePendingSkillProposal(input: {
 }): Promise<SkillProposalReadResult> {
   const proposalId = normalizeOptionalString(input.proposalId);
   if (proposalId) {
-    const direct = await readRequiredProposal(proposalId, input.workspaceDir, input.env);
+    const direct = await readRequiredProposal(
+      proposalId,
+      input.workspaceDir,
+      input.env,
+      input.agentId,
+    );
     if (direct.record.status !== "pending") {
       throw new Error(
         `Only pending proposals can be revised. Current status: ${direct.record.status}.`,
@@ -107,7 +91,11 @@ export async function resolvePendingSkillProposal(input: {
   if (!name) {
     throw new Error("proposal_id or name required.");
   }
-  const manifest = await listSkillProposals({ workspaceDir: input.workspaceDir, env: input.env });
+  const manifest = await listSkillProposals({
+    agentId: input.agentId,
+    workspaceDir: input.workspaceDir,
+    env: input.env,
+  });
   const matches = manifest.proposals.filter(
     (proposal) => proposal.status === "pending" && proposalMatchesName(proposal, name),
   );
@@ -125,6 +113,7 @@ export async function resolvePendingSkillProposal(input: {
     expectDefined(matches[0], "matches capture group 0").id,
     input.workspaceDir,
     input.env,
+    input.agentId,
   );
   if (matched.record.status !== "pending") {
     throw new Error(
@@ -138,9 +127,19 @@ export async function readRequiredProposal(
   proposalId: string,
   workspaceDir?: string,
   env?: NodeJS.ProcessEnv,
+  agentId?: string,
+  readOptions: RequiredProposalReadOptions = {},
 ): Promise<SkillProposalReadResult> {
-  const read = await readSkillProposal(proposalId, storeOptions(env));
-  if (!read || (workspaceDir && !isProposalInWorkspace(read.record, workspaceDir))) {
+  const read = await readSkillProposal(
+    proposalId,
+    storeOptions(env),
+    {
+      ...(agentId ? { agentId } : {}),
+      ...(workspaceDir ? { workspaceDir } : {}),
+    },
+    readOptions,
+  );
+  if (!read) {
     throw new Error(`Skill proposal not found: ${proposalId}`);
   }
   return read;

@@ -1,11 +1,14 @@
 // Orchestrates security audit collection and report formatting.
 import path from "node:path";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { hasAgentRosterProperty, listAgentEntries } from "../agents/agent-scope-config.js";
+import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
@@ -31,9 +34,9 @@ import {
   resolveMergedSafeBinProfileFixtures,
 } from "../infra/exec-safe-bin-runtime-policy.js";
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
-import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { readControlUiDeviceAuthMigrationState } from "../state/control-ui-device-auth-migration.js";
+import { resolveUserPath } from "../utils.js";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
 import {
@@ -75,6 +78,9 @@ type AgentSkillMcpBoundaryScope = {
   execSecurity: string;
   execAsk: string;
 };
+type AgentSkillMcpBoundaryCandidate =
+  | { kind: "defaults"; id: "agents.defaults"; skillSource: string }
+  | { kind: "agent"; id: string; skillSource: string; agentId: string };
 
 export type { SecurityAuditReport } from "./audit.types.js";
 
@@ -243,8 +249,10 @@ async function materializeAuditGatewayAuthRefs(params: {
     cfg: params.cfg,
     env: params.env,
     mode: params.cfg.gateway?.auth?.mode,
-    hasTokenCandidate: Boolean(normalizeOptionalString(params.env.OPENCLAW_GATEWAY_TOKEN)),
-    hasPasswordCandidate: Boolean(normalizeOptionalString(params.env.OPENCLAW_GATEWAY_PASSWORD)),
+    hasTokenOverride: false,
+    hasPasswordOverride: false,
+    hasTokenFallback: Boolean(normalizeOptionalString(params.env.OPENCLAW_GATEWAY_TOKEN)),
+    hasPasswordFallback: Boolean(normalizeOptionalString(params.env.OPENCLAW_GATEWAY_PASSWORD)),
   };
   if (!canMaterializeGatewayAuthSecretRefsWithoutExec(materializeParams)) {
     return params.cfg;
@@ -643,7 +651,8 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
     });
   }
 
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  const agents = listAgentEntries(cfg);
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const riskyAgents = agents
     .filter(
       (entry) =>
@@ -662,10 +671,10 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
       severity: "warn",
       title: "Agent exec host uses sandbox while sandbox mode is off",
       detail:
-        `agents.list.*.tools.exec.host is set to sandbox for: ${riskyAgents.join(", ")}. ` +
+        `agents.entries.*.tools.exec.host is set to sandbox for: ${riskyAgents.join(", ")}. ` +
         "With sandbox mode off, exec fails closed for those agents.",
       remediation:
-        'Enable sandbox mode for these agents (`agents.list[].sandbox.mode`) or set their tools.exec.host to "gateway".',
+        'Enable sandbox mode for these agents (`agents.entries.*.sandbox.mode`) or set their tools.exec.host to "gateway".',
     });
   }
 
@@ -673,7 +682,7 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
     new Map(
       [
         {
-          id: DEFAULT_AGENT_ID,
+          id: defaultAgentId ?? "global",
           security: resolveExecModePolicy({
             mode: cfg.tools?.exec?.mode,
             security: cfg.tools?.exec?.security ?? "deny",
@@ -768,11 +777,11 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
   const interpreterAllowlistHits = collectInterpreterAllowlistHits({
     approvals,
     strictInlineEvalForAgentId: (agentId) => {
-      if (!agentId || agentId === "*" || agentId === DEFAULT_AGENT_ID) {
+      if (!agentId || agentId === "*") {
         return globalStrictInlineEval;
       }
       const agent = agents.find((entry) => entry?.id === agentId);
-      return agent?.tools?.exec?.strictInlineEval === true || globalStrictInlineEval;
+      return agent?.tools?.exec?.strictInlineEval ?? globalStrictInlineEval;
     },
   });
   if (interpreterAllowlistHits.length > 0) {
@@ -843,7 +852,7 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
       continue;
     }
     collectRiskyTrustedDirHits(
-      `agents.list.${entry.id}.tools.exec`,
+      `agents.entries.${entry.id}.tools.exec`,
       entry.tools?.exec?.safeBinTrustedDirs,
     );
   }
@@ -880,17 +889,17 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
     if (interpreters.length === 0) {
       for (const hit of listRiskyConfiguredSafeBins(agentSafeBins)) {
         riskySemanticSafeBinHits.push(
-          `- agents.list.${entry.id}.tools.exec.safeBins: ${hit.bin} (${hit.warning})`,
+          `- agents.entries.${entry.id}.tools.exec.safeBins: ${hit.bin} (${hit.warning})`,
         );
       }
       continue;
     }
     interpreterHits.push(
-      `- agents.list.${entry.id}.tools.exec.safeBins: ${interpreters.join(", ")}`,
+      `- agents.entries.${entry.id}.tools.exec.safeBins: ${interpreters.join(", ")}`,
     );
     for (const hit of listRiskyConfiguredSafeBins(agentSafeBins)) {
       riskySemanticSafeBinHits.push(
-        `- agents.list.${entry.id}.tools.exec.safeBins: ${hit.bin} (${hit.warning})`,
+        `- agents.entries.${entry.id}.tools.exec.safeBins: ${hit.bin} (${hit.warning})`,
       );
     }
   }
@@ -937,6 +946,28 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
   }
 
   return findings;
+}
+
+function collectAgentRosterFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+  const agents = listAgentEntries(cfg);
+  // A missing roster is the supported pre-roster compatibility state and is
+  // materialized by config loading. An explicitly authored empty roster is invalid.
+  if (agents.length === 0 && !hasAgentRosterProperty(cfg)) {
+    return [];
+  }
+  const defaultCount = agents.filter((agent) => agent?.default === true).length;
+  if (defaultCount === 1) {
+    return [];
+  }
+  return [
+    {
+      checkId: "config.agent_roster.invalid_default_count",
+      severity: "warn",
+      title: "Agent roster has an invalid default selection",
+      detail: `Expected exactly one agents.entries default=true entry, found ${defaultCount}.`,
+      remediation: "Run `openclaw doctor --fix` to repair the authored agent roster.",
+    },
+  ];
 }
 
 function formatNamesPreview(names: readonly string[]): string {
@@ -1002,15 +1033,15 @@ function hasOwnSkillsAllowlist(entry: object | undefined): boolean {
 }
 
 function collectAgentSkillMcpBoundaryScopes(cfg: OpenClawConfig): AgentSkillMcpBoundaryScope[] {
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  const agents = listAgentEntries(cfg);
   const defaultsHaveSkillAllowlist = hasOwnSkillsAllowlist(cfg.agents?.defaults);
-  const candidates = [
+  const candidates: AgentSkillMcpBoundaryCandidate[] = [
     ...(defaultsHaveSkillAllowlist
       ? [
           {
-            id: DEFAULT_AGENT_ID,
+            kind: "defaults" as const,
+            id: "agents.defaults" as const,
             skillSource: "agents.defaults.skills",
-            agentId: undefined,
           },
         ]
       : []),
@@ -1021,11 +1052,19 @@ function collectAgentSkillMcpBoundaryScopes(cfg: OpenClawConfig): AgentSkillMcpB
       )
       .flatMap((entry) => {
         if (hasOwnSkillsAllowlist(entry)) {
-          return [{ id: entry.id, skillSource: "agents.list[].skills", agentId: entry.id }];
+          return [
+            {
+              kind: "agent" as const,
+              id: entry.id,
+              skillSource: "agents.entries.*.skills",
+              agentId: entry.id,
+            },
+          ];
         }
         if (defaultsHaveSkillAllowlist) {
           return [
             {
+              kind: "agent" as const,
               id: entry.id,
               skillSource: "agents.defaults.skills (inherited)",
               agentId: entry.id,
@@ -1037,10 +1076,11 @@ function collectAgentSkillMcpBoundaryScopes(cfg: OpenClawConfig): AgentSkillMcpB
   ];
 
   return candidates.flatMap((candidate) => {
-    const sandboxMode = resolveSandboxConfigForAgent(cfg, candidate.agentId).mode;
+    const agentId = candidate.kind === "agent" ? candidate.agentId : undefined;
+    const sandboxMode = resolveSandboxConfigForAgent(cfg, agentId).mode;
     const exec = resolveExecDefaults({
       cfg,
-      agentId: candidate.agentId,
+      ...(candidate.kind === "defaults" ? { scope: { kind: "defaults" as const } } : { agentId }),
       sandboxAvailable: sandboxMode !== "off",
     });
     if (exec.security === "deny" || exec.effectiveHost === "sandbox") {
@@ -1229,10 +1269,15 @@ async function maybeProbeGateway(params: {
     deep: {
       gateway: {
         attempted: true,
-        url,
+        url: redactSensitiveUrlLikeString(url),
         ok: res.ok,
-        error: res.ok ? null : res.error,
-        close: res.close ? { code: res.close.code, reason: res.close.reason } : null,
+        error: res.ok || res.error === null ? null : redactSensitiveUrlLikeString(res.error),
+        close: res.close
+          ? {
+              code: res.close.code,
+              reason: redactSensitiveUrlLikeString(res.close.reason),
+            }
+          : null,
       },
     },
     authWarning: authResolution.warning,
@@ -1252,8 +1297,15 @@ async function createAuditExecutionContext(
   const deepTimeoutMs = Math.max(250, opts.deepTimeoutMs ?? 5000);
   const stateDir = opts.stateDir ?? resolveStateDir(env);
   const configPath = opts.configPath ?? resolveConfigPath(env, stateDir);
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
+  const configuredDefaultWorkspace = cfg.agents?.defaults?.workspace?.trim();
   const workspaceDir =
-    opts.workspaceDir ?? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+    opts.workspaceDir ??
+    (defaultAgentId
+      ? resolveAgentWorkspaceDir(cfg, defaultAgentId)
+      : configuredDefaultWorkspace
+        ? resolveUserPath(configuredDefaultWorkspace, env)
+        : resolveDefaultAgentWorkspaceDir(env));
   const { readConfigSnapshotForAudit } = await loadAuditNonDeepModule();
   const configSnapshot = includeFilesystem
     ? opts.configSnapshot !== undefined
@@ -1291,6 +1343,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   const auditNonDeep = await loadAuditNonDeepModule();
 
   findings.push(...auditNonDeep.collectAttackSurfaceSummaryFindings(cfg));
+  findings.push(...collectAgentRosterFindings(context.sourceConfig));
   findings.push(...auditNonDeep.collectSyncedFolderFindings({ stateDir, configPath }));
 
   findings.push(
@@ -1360,7 +1413,12 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
         execIcacls: context.execIcacls,
       })),
     );
-    findings.push(...(await auditNonDeep.collectWorkspaceSkillSymlinkEscapeFindings({ cfg })));
+    findings.push(
+      ...(await auditNonDeep.collectWorkspaceSkillSymlinkEscapeFindings({
+        cfg,
+        workspaceDir: context.workspaceDir,
+      })),
+    );
     findings.push(
       ...(await auditNonDeep.collectSandboxBrowserHashLabelFindings({
         execDockerRawFn: context.execDockerRawFn,
@@ -1373,6 +1431,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
         cfg,
         stateDir,
         deep: context.deep,
+        workspaceDir: context.workspaceDir,
         summaryCache: context.codeSafetySummaryCache,
       })),
     );

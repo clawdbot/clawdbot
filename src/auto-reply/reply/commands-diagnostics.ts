@@ -444,7 +444,7 @@ async function executeCodexDiagnosticsAddon(
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     sessionId: targetSessionEntry?.sessionId,
-    sessionFile: targetSessionEntry?.sessionFile,
+    sessionFile: targetSessionEntry ? params.sessionKey : undefined,
     authProfileId: targetSessionEntry?.authProfileOverride,
     commandBody,
     config: params.cfg,
@@ -485,11 +485,11 @@ function buildCodexDiagnosticsSessions(
     }
   }
   return Array.from(sessions.entries())
-    .filter(([, entry]) => Boolean(entry.sessionFile))
+    .filter(([, entry]) => Boolean(entry.sessionId?.trim()))
     .map(([sessionKey, entry]) => ({
       sessionKey,
       sessionId: entry.sessionId,
-      sessionFile: entry.sessionFile,
+      sessionFile: sessionKey,
       agentHarnessId: entry.agentHarnessId,
       channel: resolveDiagnosticsSessionChannel(entry, params, sessionKey),
       channelId: resolveDiagnosticsSessionChannelId(entry, params, sessionKey),
@@ -628,17 +628,15 @@ function rewritePresentationAction(action: MessagePresentationAction): MessagePr
 }
 
 function rewriteSelectPresentationAction(
-  action: Extract<MessagePresentationAction, { type: "command" | "callback" }>,
-): Extract<MessagePresentationAction, { type: "command" | "callback" }> {
-  return action.type === "command"
-    ? {
-        type: "command",
-        command: rewriteCodexDiagnosticsCommandPrefix(action.command),
-      }
-    : {
-        type: "callback",
-        value: rewriteCodexDiagnosticsCommandPrefix(action.value),
-      };
+  action: Extract<MessagePresentationAction, { type: "command" | "callback" | "model-picker" }>,
+): Extract<MessagePresentationAction, { type: "command" | "callback" | "model-picker" }> {
+  if (action.type === "command") {
+    return { type: "command", command: rewriteCodexDiagnosticsCommandPrefix(action.command) };
+  }
+  if (action.type === "callback") {
+    return { type: "callback", value: rewriteCodexDiagnosticsCommandPrefix(action.value) };
+  }
+  return action;
 }
 
 function rewriteCodexDiagnosticsCommandPrefix(value: string): string {

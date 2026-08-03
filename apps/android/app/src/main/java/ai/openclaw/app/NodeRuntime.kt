@@ -2,6 +2,7 @@ package ai.openclaw.app
 
 import ai.openclaw.app.chat.AndroidClientDatabases
 import ai.openclaw.app.chat.BackgroundTask
+import ai.openclaw.app.chat.ChatActiveRunPresentation
 import ai.openclaw.app.chat.ChatCacheScope
 import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatCommandOutbox
@@ -14,6 +15,7 @@ import ai.openclaw.app.chat.ChatPlanStep
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSessionDeletion
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.ChatSwarmGroup
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
 import ai.openclaw.app.chat.ChatTranscriptAnchorState
 import ai.openclaw.app.chat.ChatTranscriptCache
@@ -28,6 +30,7 @@ import ai.openclaw.app.chat.MessageSpeechController
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.chat.SessionBranch
+import ai.openclaw.app.chat.SessionForkResult
 import ai.openclaw.app.chat.SessionRewindResult
 import ai.openclaw.app.chat.SystemSpeechSpeaker
 import ai.openclaw.app.gateway.DeviceAuthEntry
@@ -36,6 +39,7 @@ import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewayDiscovery
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayEvent
+import ai.openclaw.app.gateway.GatewayMediaKind
 import ai.openclaw.app.gateway.GatewayMethod
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
@@ -92,6 +96,7 @@ import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.node.invokeErrorFromThrowable
 import ai.openclaw.app.node.parseHexColorArgb
+import ai.openclaw.app.node.readAndroidPermissionSnapshot
 import ai.openclaw.app.protocol.OpenClawCanvasA2UIAction
 import ai.openclaw.app.systemagent.SystemAgentChatController
 import ai.openclaw.app.systemagent.SystemAgentChatState
@@ -115,6 +120,7 @@ import ai.openclaw.app.wear.WearProxyBridge
 import ai.openclaw.app.wear.WearProxyController
 import ai.openclaw.app.wear.WearProxyGatewayException
 import ai.openclaw.app.wear.WearProxyModel
+import ai.openclaw.app.wear.WearRealtimeAttemptOwner
 import ai.openclaw.app.wear.WearRealtimeTalkController
 import ai.openclaw.app.wear.wearConnectionFailure
 import ai.openclaw.wear.shared.WearMessage
@@ -189,6 +195,36 @@ private fun execApprovalResolveFailureMessage(): String = nativeText("Could not 
 
 internal typealias GatewayDataRequestOverride =
   suspend (stableId: String, method: String, paramsJson: String?) -> String
+
+internal suspend fun startWearRealtimeTalkWhileCurrent(
+  owner: WearRealtimeAttemptOwner,
+  isCurrent: suspend (WearRealtimeAttemptOwner) -> Boolean,
+  start: suspend (onSessionActivated: () -> Unit) -> Boolean,
+  stop: suspend (WearRealtimeAttemptOwner) -> Unit,
+): Boolean {
+  if (!isCurrent(owner)) return false
+  var relayStarted = false
+  var committed = false
+  try {
+    val startReturned =
+      start {
+        // The controller invokes this synchronously at activation, before a
+        // canceled caller can lose the successful suspend result.
+        relayStarted = true
+      }
+    if (!startReturned || !isCurrent(owner)) return false
+    committed = true
+    return true
+  } finally {
+    // Relay creation suspends outside the channel registry. Never leave a late
+    // session alive when replacement or cancellation wins before commit.
+    if (relayStarted && !committed) {
+      withContext(NonCancellable) {
+        stop(owner)
+      }
+    }
+  }
+}
 
 private class ExecApprovalWriteOutcomeUnknown : IllegalStateException("approval resolve response was not authoritative")
 
@@ -612,6 +648,35 @@ internal enum class NodeRuntimeMode {
   ScreenshotFixture,
 }
 
+internal class SessionObserverVisibility(
+  private val isVisible: () -> Boolean,
+  private val captureLease: () -> GatewaySession.RequestLease?,
+) {
+  private val mutex = Mutex()
+  private var appliedLease: GatewaySession.RequestLease? = null
+  private var appliedVisibility: Boolean? = null
+
+  suspend fun sync() {
+    mutex.withLock {
+      val lease = captureLease() ?: return@withLock
+      val visible = isVisible()
+      // Socket-bound declarations must survive reconnect without duplicate
+      // foreground RPCs or leaking a queued update onto the next gateway.
+      if (appliedVisibility == visible && appliedLease?.isCurrent() == true) return@withLock
+      // A timeout can mean the Gateway applied this change but lost its reply.
+      // Invalidate the old confirmation first so the next sync cannot skip recovery.
+      appliedLease = null
+      appliedVisibility = null
+      lease.request(
+        GatewayMethod.SessionsObserverVisibility.rawValue,
+        """{"visible":$visible}""",
+      )
+      appliedLease = lease
+      appliedVisibility = visible
+    }
+  }
+}
+
 private fun openAndroidChatStores(
   context: Context,
   prefs: SecurePrefs,
@@ -874,11 +939,23 @@ class NodeRuntime private constructor(
       locationPreciseEnabled = { locationPreciseEnabled.value },
     )
 
+  private val permissionSnapshot = {
+    readAndroidPermissionSnapshot(
+      context = appContext,
+      smsEnabled = SensitiveFeatureConfig.smsEnabled,
+      callLogEnabled = SensitiveFeatureConfig.callLogEnabled,
+      photosEnabled = SensitiveFeatureConfig.photosEnabled,
+      backgroundLocationEnabled = SensitiveFeatureConfig.backgroundLocationEnabled,
+    )
+  }
+
   private val deviceHandler: DeviceHandler =
-    DeviceHandler(
+    DeviceHandler.withPermissionSnapshot(
       appContext = appContext,
       smsEnabled = SensitiveFeatureConfig.smsEnabled,
       callLogEnabled = SensitiveFeatureConfig.callLogEnabled,
+      photosEnabled = SensitiveFeatureConfig.photosEnabled,
+      permissionSnapshot = permissionSnapshot,
     )
 
   private val notificationsHandler: NotificationsHandler =
@@ -952,12 +1029,14 @@ class NodeRuntime private constructor(
         SensitiveFeatureConfig.accessibilityControlEnabled && mobileUiHandler.isConnected.value
       },
       inlineWidgetsAvailable = { WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE) },
+      permissionSnapshot = permissionSnapshot,
       manualTls = { endpoint ->
         prefs.gatewayRegistry.entries.value
           .firstOrNull { it.stableId == endpoint.stableId }
           ?.tls ?: manualTls.value
       },
     )
+  private var lastNodePermissions = connectionManager.buildPermissions()
   private var lastVoiceWakeCapabilityEnabled = isVoiceWakeCapabilityEnabled()
 
   private val invokeDispatcher: InvokeDispatcher =
@@ -1385,6 +1464,12 @@ class NodeRuntime private constructor(
       customHeadersProvider = prefs::loadGatewayCustomHeaders,
     )
 
+  private val sessionObserverVisibility =
+    SessionObserverVisibility(
+      isVisible = { _isForeground.value },
+      captureLease = { operatorSession.captureRequestLease() },
+    )
+
   private val systemAgentChatController by lazy {
     SystemAgentChatController(
       scope = scope,
@@ -1471,8 +1556,8 @@ class NodeRuntime private constructor(
       },
       connectGateway = { refreshGatewayConnection() },
       disconnectGateway = { disconnect() },
-      startRealtimeTalk = { nodeId, sessionKey, attemptId, language ->
-        if (startWearRealtimeTalk(nodeId, sessionKey, attemptId, language)) wearRealtimeTalkSnapshot.value else null
+      startRealtimeTalk = { nodeId, sessionKey, attemptId, language, attemptScopedAudio ->
+        if (startWearRealtimeTalk(nodeId, sessionKey, attemptId, language, attemptScopedAudio)) wearRealtimeTalkSnapshot.value else null
       },
       stopRealtimeTalk = { nodeId, attemptId ->
         if (stopWearRealtimeTalk(nodeId, attemptId)) wearRealtimeTalkSnapshot.value else null
@@ -1599,9 +1684,21 @@ class NodeRuntime private constructor(
 
   private suspend fun subscribeOperatorSessionEvents() {
     try {
-      operatorSession.request("sessions.subscribe", null)
+      operatorSession.request(GatewayMethod.SessionsSubscribe.rawValue, null)
     } catch (err: Throwable) {
       Log.d("OpenClawRuntime", "sessions.subscribe failed: ${err.message ?: err::class.java.simpleName}")
+    }
+    syncSessionObserverVisibility()
+  }
+
+  private suspend fun syncSessionObserverVisibility() {
+    try {
+      sessionObserverVisibility.sync()
+    } catch (err: Throwable) {
+      Log.d(
+        "OpenClawRuntime",
+        "sessions.observer.visibility failed: ${err.message ?: err::class.java.simpleName}",
+      )
     }
   }
 
@@ -1622,7 +1719,7 @@ class NodeRuntime private constructor(
           nodeStatusText = "Connected"
         }
         notificationOutbox.onConnected()
-        showLocalCanvasOnConnect()
+        resetLocalCanvas()
         publishNodePresenceAliveBeacon(NodePresenceAliveBeacon.Trigger.Connect)
         val endpoint = connectedEndpoint
         val auth = activeGatewayAuth
@@ -1643,7 +1740,7 @@ class NodeRuntime private constructor(
           nodeStatusText = message
           nodeConnectionProblem = gatewayProblemAfterDisconnect(nodeConnectionProblem, message)
         }
-        showLocalCanvasOnDisconnect()
+        resetLocalCanvas()
       },
       onConnectFailure = { error, pauseReconnect ->
         updateStatus {
@@ -1991,6 +2088,8 @@ class NodeRuntime private constructor(
   val talkModeConversation: StateFlow<List<VoiceConversationEntry>>
     get() = talkMode.conversation
 
+  private val wearRealtimeLifecycleMutex = Mutex()
+
   private val wearRealtimeTalkControllerLazy: Lazy<WearRealtimeTalkController> =
     lazy {
       WearRealtimeTalkController(
@@ -2006,15 +2105,17 @@ class NodeRuntime private constructor(
             onError(error.message)
           }
         },
-        sendWatchFrame = { nodeId, type, payload ->
+        sendWatchFrame = { owner, type, payload ->
           val app = appContext as? NodeApp ?: error("Wear channel owner is unavailable")
-          app.wearRealtimeChannels.send(nodeId, type, payload)
+          app.wearRealtimeChannels.send(owner, type, payload)
         },
         onSnapshot = { snapshot ->
           wearProxyBridge()?.publishTalk(WearRealtimeTalkCodec.encode(snapshot))
         },
-        onForceCloseWatchChannel = { nodeId ->
-          scope.launch { (appContext as? NodeApp)?.wearRealtimeChannels?.close(nodeId) }
+        onForceCloseWatchChannel = { owner ->
+          scope.launch {
+            (appContext as? NodeApp)?.wearRealtimeChannels?.close(owner)
+          }
         },
       )
     }
@@ -2030,27 +2131,68 @@ class NodeRuntime private constructor(
     sessionKey: String,
     attemptId: String,
     language: String?,
+    attemptScopedAudio: Boolean,
   ): Boolean {
     if (talkModeEnabled.value || micEnabled.value || micCooldown.value) return false
+    val app = appContext as? NodeApp ?: return false
+    val claim =
+      app.wearRealtimeChannels.claim(
+        nodeId = nodeId,
+        attemptId = attemptId,
+        attemptScopedAudio = attemptScopedAudio,
+      ) ?: return false
+    val owner = claim.owner
     val resolvedLanguage = talkMode.resolveRealtimeLanguageHint(language)
-    return wearRealtimeTalkController.start(nodeId, sessionKey, attemptId, resolvedLanguage)
+    var started = false
+    return try {
+      started =
+        wearRealtimeLifecycleMutex.withLock {
+          if (talkModeEnabled.value || micEnabled.value || micCooldown.value) {
+            return@withLock false
+          }
+          startWearRealtimeTalkWhileCurrent(
+            owner = owner,
+            isCurrent = app.wearRealtimeChannels::isCurrent,
+            start = { onSessionActivated ->
+              wearRealtimeTalkController.start(
+                owner = owner,
+                sessionKey = sessionKey,
+                language = resolvedLanguage,
+                onSessionActivated = onSessionActivated,
+              )
+            },
+            stop = { staleOwner ->
+              wearRealtimeTalkController.stop(staleOwner)
+            },
+          )
+        }
+      started
+    } finally {
+      if (!started && claim.newlyAcquired) app.wearRealtimeChannels.release(owner)
+    }
   }
 
   internal suspend fun stopWearRealtimeTalk(
     nodeId: String? = null,
     attemptId: String? = null,
-  ): Boolean {
-    // The watch closes its channel after receiving the stop response. Closing
-    // here races the response and makes a normal stop look like link failure.
-    return wearRealtimeTalkController.stop(nodeId, attemptId)
-  }
+  ): Boolean =
+    wearRealtimeLifecycleMutex.withLock {
+      // The watch closes its channel after receiving the stop response. Closing
+      // here races the response and makes a normal stop look like link failure.
+      wearRealtimeTalkController.stop(nodeId, attemptId)
+    }
+
+  internal suspend fun stopWearRealtimeTalk(owner: WearRealtimeAttemptOwner): Boolean =
+    wearRealtimeLifecycleMutex.withLock {
+      wearRealtimeTalkController.stop(owner)
+    }
 
   internal fun appendWearRealtimeAudio(
-    nodeId: String,
+    owner: WearRealtimeAttemptOwner,
     payload: ByteArray,
   ) {
     if (wearRealtimeTalkControllerLazy.isInitialized()) {
-      wearRealtimeTalkController.appendAudio(nodeId, payload)
+      wearRealtimeTalkController.appendAudio(owner, payload)
     }
   }
 
@@ -2152,18 +2294,15 @@ class NodeRuntime private constructor(
     return if (trimmed.isEmpty()) "main" else trimmed
   }
 
-  private fun showLocalCanvasOnConnect() {
+  private fun resetLocalCanvas() {
     _canvasA2uiHydrated.value = false
     _canvasRehydratePending.value = false
     _canvasRehydrateErrorText.value = null
     canvas.navigate("")
   }
 
-  private fun showLocalCanvasOnDisconnect() {
-    _canvasA2uiHydrated.value = false
-    _canvasRehydratePending.value = false
-    _canvasRehydrateErrorText.value = null
-    canvas.navigate("")
+  private fun launchGatewayRefresh(refresh: suspend () -> Unit) {
+    if (mode != NodeRuntimeMode.ScreenshotFixture) scope.launch { refresh() }
   }
 
   fun refreshHomeCanvasOverviewIfConnected() {
@@ -2188,38 +2327,15 @@ class NodeRuntime private constructor(
     }
   }
 
-  fun refreshModelCatalog() {
-    if (mode == NodeRuntimeMode.ScreenshotFixture) return
-    scope.launch {
-      refreshModelCatalogFromGateway()
-    }
-  }
+  fun refreshModelCatalog() = launchGatewayRefresh { refreshModelCatalogFromGateway() }
 
-  fun refreshProviderModels() {
-    if (mode == NodeRuntimeMode.ScreenshotFixture) return
-    scope.launch {
-      refreshProviderModelsFromGateway()
-    }
-  }
+  fun refreshProviderModels() = launchGatewayRefresh { refreshProviderModelsFromGateway() }
 
-  fun refreshTalkSetupReadiness() {
-    if (mode == NodeRuntimeMode.ScreenshotFixture) return
-    scope.launch { refreshTalkSetupReadinessFromGateway() }
-  }
+  fun refreshTalkSetupReadiness() = launchGatewayRefresh { refreshTalkSetupReadinessFromGateway() }
 
-  fun refreshAgents() {
-    if (mode == NodeRuntimeMode.ScreenshotFixture) return
-    scope.launch {
-      refreshAgentsFromGateway()
-    }
-  }
+  fun refreshAgents() = launchGatewayRefresh { refreshAgentsFromGateway() }
 
-  fun refreshCronJobs() {
-    if (mode == NodeRuntimeMode.ScreenshotFixture) return
-    scope.launch {
-      refreshCronFromGateway()
-    }
-  }
+  fun refreshCronJobs() = launchGatewayRefresh { refreshCronFromGateway() }
 
   fun loadCronJobDetail(id: String) {
     val detailRequest = cronJobDetailRequestGuard.begin(id) ?: return
@@ -2392,19 +2508,9 @@ class NodeRuntime private constructor(
     }
   }
 
-  fun refreshUsage() {
-    if (mode == NodeRuntimeMode.ScreenshotFixture) return
-    scope.launch {
-      refreshUsageFromGateway()
-    }
-  }
+  fun refreshUsage() = launchGatewayRefresh { refreshUsageFromGateway() }
 
-  fun refreshSkills() {
-    if (mode == NodeRuntimeMode.ScreenshotFixture) return
-    scope.launch {
-      refreshSkillsFromGateway()
-    }
-  }
+  fun refreshSkills() = launchGatewayRefresh { refreshSkillsFromGateway() }
 
   fun setSkillEnabled(
     skillKey: String,
@@ -2527,12 +2633,7 @@ class NodeRuntime private constructor(
     _skillWorkshopNoticeText.value = null
   }
 
-  fun refreshNodesDevices() {
-    if (mode == NodeRuntimeMode.ScreenshotFixture) return
-    scope.launch {
-      refreshNodesDevicesFromGateway()
-    }
-  }
+  fun refreshNodesDevices() = launchGatewayRefresh { refreshNodesDevicesFromGateway() }
 
   fun approveDevicePairing(
     requestId: String,
@@ -2579,12 +2680,7 @@ class NodeRuntime private constructor(
     }
   }
 
-  fun refreshExecApprovals() {
-    if (mode == NodeRuntimeMode.ScreenshotFixture) return
-    scope.launch {
-      refreshExecApprovalsFromGateway()
-    }
-  }
+  fun refreshExecApprovals() = launchGatewayRefresh { refreshExecApprovalsFromGateway() }
 
   fun resolveExecApproval(
     id: String,
@@ -2605,26 +2701,11 @@ class NodeRuntime private constructor(
     _execApprovalsNotice.compareAndSet(expected, null)
   }
 
-  fun refreshChannels() {
-    if (mode == NodeRuntimeMode.ScreenshotFixture) return
-    scope.launch {
-      refreshChannelsFromGateway()
-    }
-  }
+  fun refreshChannels() = launchGatewayRefresh { refreshChannelsFromGateway() }
 
-  fun refreshDreaming() {
-    if (mode == NodeRuntimeMode.ScreenshotFixture) return
-    scope.launch {
-      refreshDreamingFromGateway()
-    }
-  }
+  fun refreshDreaming() = launchGatewayRefresh { refreshDreamingFromGateway() }
 
-  fun refreshHealthLogs() {
-    if (mode == NodeRuntimeMode.ScreenshotFixture) return
-    scope.launch {
-      refreshHealthLogsFromGateway()
-    }
-  }
+  fun refreshHealthLogs() = launchGatewayRefresh { refreshHealthLogsFromGateway() }
 
   fun requestCanvasRehydrate(
     source: String = "manual",
@@ -2794,10 +2875,13 @@ class NodeRuntime private constructor(
   val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = chat.questions
   val chatPlanSteps: StateFlow<List<ChatPlanStep>> = chat.planSteps
   val chatSessions: StateFlow<List<ChatSessionEntry>> = chat.sessions
+  val chatSwarmGroups: StateFlow<List<ChatSwarmGroup>> = chat.swarmGroups
   val chatSessionBranches: StateFlow<List<SessionBranch>> = chat.sessionBranches
   val chatSessionBranchesLoading: StateFlow<Boolean> = chat.sessionBranchesLoading
   val chatSessionBranchSwitching: StateFlow<Boolean> = chat.sessionBranchSwitching
   val pendingRunCount: StateFlow<Int> = chat.pendingRunCount
+  internal val chatSelectedActiveRunPresentation: StateFlow<ChatActiveRunPresentation> =
+    chat.selectedActiveRunPresentation
   val chatCommands: StateFlow<List<ChatCommandEntry>> = chat.commands
   val chatOutboxItems: StateFlow<List<ChatOutboxItem>> = chat.outboxItems
   val chatOutboxPresentationRestored: StateFlow<Boolean> = chat.outboxPresentationRestored
@@ -2985,13 +3069,20 @@ class NodeRuntime private constructor(
 
   /** Updates foreground state and triggers reconnect/presence behavior on app visibility changes. */
   fun setForeground(value: Boolean) {
+    val visibilityChanged = _isForeground.value != value
     _isForeground.value = value
     voiceWakeManager.setForeground(value)
     if (mode == NodeRuntimeMode.ScreenshotFixture) return
+    if (visibilityChanged) {
+      scope.launch {
+        syncSessionObserverVisibility()
+      }
+    }
     if (!value) {
       voiceLifecycleEpoch.incrementAndGet()
     }
     if (value) {
+      refreshNodePermissionSurface()
       refreshVoiceWakeCapabilitySurfaceIfChanged()
       reconnectPreferredGatewayOnForeground()
       scope.launch {
@@ -3262,6 +3353,15 @@ class NodeRuntime private constructor(
       return
     }
     resolvePreferredGatewayEndpoint()?.let(::connect)
+  }
+
+  /**
+   * Reconnect a live node only when Android authority changed since its last connect.
+   */
+  fun refreshNodePermissionSurface() {
+    val permissions = connectionManager.buildPermissions()
+    if (permissions == lastNodePermissions) return
+    refreshNodeSurfaceAfterSettingsChange()
   }
 
   fun setDisplayName(value: String) {
@@ -3576,6 +3676,8 @@ class NodeRuntime private constructor(
   private suspend fun runTalkPttCommand(block: suspend () -> GatewaySession.InvokeResult): GatewaySession.InvokeResult =
     try {
       block()
+    } catch (err: CancellationException) {
+      throw err
     } catch (err: Throwable) {
       val (code, message) = invokeErrorFromThrowable(err)
       GatewaySession.InvokeResult.error(code = code, message = message)
@@ -4246,12 +4348,14 @@ class NodeRuntime private constructor(
           tls,
         )
       }
+      val nodeConnectOptions = connectionManager.buildNodeConnectOptions()
+      lastNodePermissions = nodeConnectOptions.permissions
       nodeSession.connect(
         endpoint,
         auth.token,
         auth.bootstrapToken,
         auth.password,
-        connectionManager.buildNodeConnectOptions(),
+        nodeConnectOptions,
         tls,
       )
       if (reconnect && operatorAuth != null) {
@@ -4589,23 +4693,17 @@ class NodeRuntime private constructor(
     }
   }
 
-  fun disconnect() {
-    synchronized(gatewayLifecycleIntentLock) {
-      preferredGatewayReconnectSuppressed = true
-      secondaryGatewayConnectionsEnabled.value = false
-      gatewayLifecycleIntentSeq.incrementAndGet()
-      disconnectSecondaryGatewayConnections()
-      disconnect(retireRunState = false)
-    }
-  }
+  fun disconnect() = disconnectGatewayLifecycle(retireRunState = false)
 
-  fun prepareForGatewaySetup() {
+  fun prepareForGatewaySetup() = disconnectGatewayLifecycle(retireRunState = true)
+
+  private fun disconnectGatewayLifecycle(retireRunState: Boolean) {
     synchronized(gatewayLifecycleIntentLock) {
       preferredGatewayReconnectSuppressed = true
       secondaryGatewayConnectionsEnabled.value = false
       gatewayLifecycleIntentSeq.incrementAndGet()
       disconnectSecondaryGatewayConnections()
-      disconnect(retireRunState = true)
+      disconnect(retireRunState)
     }
   }
 
@@ -4919,6 +5017,14 @@ class NodeRuntime private constructor(
     }
   }
 
+  internal suspend fun loadChatImageArtifact(artifactId: String) = chat.loadImageArtifact(artifactId)
+
+  internal suspend fun loadChatMediaArtifact(
+    artifactId: String,
+    kind: GatewayMediaKind,
+    playbackRendition: Boolean,
+  ) = chat.loadMediaArtifact(artifactId, kind, playbackRendition)
+
   fun loadChat(
     sessionKey: String,
     ownerAgentId: String? = null,
@@ -4985,7 +5091,7 @@ class NodeRuntime private constructor(
 
   suspend fun rewindChatAtEntry(entryId: String): SessionRewindResult? = chat.rewindSessionAtEntryResult(chatSessionKey.value, entryId)
 
-  suspend fun forkChatAtEntry(entryId: String): Pair<String, String?>? = chat.forkSessionAtEntry(chatSessionKey.value, entryId)
+  suspend fun forkChatAtEntry(entryId: String): SessionForkResult? = chat.forkSessionAtEntry(chatSessionKey.value, entryId)
 
   suspend fun refreshChatSessionBranches(): Boolean = chat.refreshSessionBranches()
 
@@ -5422,6 +5528,36 @@ class NodeRuntime private constructor(
         true
       }
     }
+
+  private suspend fun <T> refreshGatewaySummary(
+    summary: MutableStateFlow<T>,
+    refreshing: MutableStateFlow<Boolean>,
+    errorText: MutableStateFlow<NativeText?>,
+    disconnectedSummary: T,
+    failureText: NativeText,
+    fetch: suspend (GatewayDataScope) -> T,
+  ): Boolean {
+    val gatewayScope = captureGatewayDataScope() ?: return false
+    publishGatewayData(gatewayScope) {
+      refreshing.value = true
+      errorText.value = null
+    }
+    if (!operatorConnected) {
+      summary.value = disconnectedSummary
+      refreshing.value = false
+      return false
+    }
+    return try {
+      val nextSummary = fetch(gatewayScope)
+      publishGatewayData(gatewayScope) { summary.value = nextSummary }
+      true
+    } catch (_: Throwable) {
+      publishGatewayData(gatewayScope) { errorText.value = failureText }
+      false
+    } finally {
+      publishGatewayData(gatewayScope) { refreshing.value = false }
+    }
+  }
 
   /** Publishes approval state only while the response's operator socket still owns the method catalog. */
   private inline fun publishGatewayApprovalData(
@@ -6024,68 +6160,40 @@ class NodeRuntime private constructor(
     }
   }
 
-  private suspend fun refreshUsageFromGateway() {
-    val gatewayScope = captureGatewayDataScope() ?: return
-    publishGatewayData(gatewayScope) {
-      _usageRefreshing.value = true
-      _usageErrorText.value = null
+  private suspend fun refreshUsageFromGateway() =
+    refreshGatewaySummary(
+      summary = _usageSummary,
+      refreshing = _usageRefreshing,
+      errorText = _usageErrorText,
+      disconnectedSummary = GatewayUsageSummary(updatedAtMs = null, providers = emptyList()),
+      failureText = nativeText("Could not load usage."),
+    ) { gatewayScope ->
+      val root = json.parseToJsonElement(requestGatewayData(gatewayScope, "usage.status", "{}")).asObjectOrNull()
+      GatewayUsageSummary(
+        updatedAtMs = root.long("updatedAt"),
+        providers = parseUsageProviders(root?.get("providers") as? JsonArray),
+      )
     }
-    if (!operatorConnected) {
-      _usageSummary.value = GatewayUsageSummary(updatedAtMs = null, providers = emptyList())
-      _usageRefreshing.value = false
-      return
-    }
-    try {
-      val res = requestGatewayData(gatewayScope, "usage.status", "{}")
-      val root = json.parseToJsonElement(res).asObjectOrNull()
-      val summary =
-        GatewayUsageSummary(
-          updatedAtMs = root.long("updatedAt"),
-          providers = parseUsageProviders(root?.get("providers") as? JsonArray),
-        )
-      publishGatewayData(gatewayScope) { _usageSummary.value = summary }
-    } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) { _usageErrorText.value = nativeText("Could not load usage.") }
-    } finally {
-      publishGatewayData(gatewayScope) { _usageRefreshing.value = false }
-    }
-  }
 
-  private suspend fun refreshSkillsFromGateway(): Boolean {
-    val gatewayScope = captureGatewayDataScope() ?: return false
-    publishGatewayData(gatewayScope) {
-      _skillsRefreshing.value = true
-      _skillsErrorText.value = null
+  private suspend fun refreshSkillsFromGateway(): Boolean =
+    refreshGatewaySummary(
+      summary = _skillsSummary,
+      refreshing = _skillsRefreshing,
+      errorText = _skillsErrorText,
+      disconnectedSummary = GatewaySkillsSummary(skills = emptyList()),
+      failureText = nativeText("Could not load skills."),
+    ) { gatewayScope ->
+      val root = json.parseToJsonElement(requestGatewayData(gatewayScope, "skills.status", "{}")).asObjectOrNull()
+      GatewaySkillsSummary(
+        managedSkillsDirAvailable =
+          root
+            ?.get("managedSkillsDir")
+            .asStringOrNull()
+            ?.trim()
+            ?.isNotEmpty() == true,
+        skills = parseSkillSummaries(root?.get("skills") as? JsonArray),
+      )
     }
-    if (!operatorConnected) {
-      _skillsSummary.value = GatewaySkillsSummary(skills = emptyList())
-      _skillsRefreshing.value = false
-      return false
-    }
-    try {
-      val res = requestGatewayData(gatewayScope, "skills.status", "{}")
-      val root = json.parseToJsonElement(res).asObjectOrNull()
-      val summary =
-        GatewaySkillsSummary(
-          managedSkillsDirAvailable =
-            root
-              ?.get("managedSkillsDir")
-              .asStringOrNull()
-              ?.trim()
-              ?.isNotEmpty() == true,
-          skills = parseSkillSummaries(root?.get("skills") as? JsonArray),
-        )
-      publishGatewayData(gatewayScope) {
-        _skillsSummary.value = summary
-      }
-      return true
-    } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) { _skillsErrorText.value = nativeText("Could not load skills.") }
-      return false
-    } finally {
-      publishGatewayData(gatewayScope) { _skillsRefreshing.value = false }
-    }
-  }
 
   private suspend fun setSkillEnabledOnGateway(
     skillKey: String,
@@ -6924,6 +7032,8 @@ class NodeRuntime private constructor(
                   id = row.id,
                   createdAtMs = row.createdAtMs ?: System.currentTimeMillis(),
                 )
+              } catch (err: CancellationException) {
+                throw err
               } catch (_: Throwable) {
                 null
               }
@@ -6960,6 +7070,8 @@ class NodeRuntime private constructor(
         rows = rows,
         terminalApprovals = terminalApprovals,
       )
+    } catch (err: CancellationException) {
+      throw err
     } catch (_: Throwable) {
       publishGatewayData(gatewayScope) {
         if (execApprovalsRefreshSeq.get() == refreshGeneration) {
@@ -7016,6 +7128,8 @@ class NodeRuntime private constructor(
             markExecApprovalResolved(id)
           }
       }
+    } catch (err: CancellationException) {
+      throw err
     } catch (_: Throwable) {
       if (isGatewayDataScopeCurrent(gatewayScope)) {
         refreshExecApprovalsFromGateway()
@@ -7295,6 +7409,8 @@ class NodeRuntime private constructor(
             pendingWrite.createdAtMs
               ?: _execApprovals.value.firstOrNull { it.id == pendingWrite.id }?.createdAtMs,
         )
+      } catch (err: CancellationException) {
+        throw err
       } catch (_: Throwable) {
         return
       }
@@ -7482,101 +7598,64 @@ class NodeRuntime private constructor(
     }
   }
 
-  private suspend fun refreshChannelsFromGateway() {
-    val gatewayScope = captureGatewayDataScope() ?: return
-    publishGatewayData(gatewayScope) {
-      _channelsRefreshing.value = true
-      _channelsErrorText.value = null
+  private suspend fun refreshChannelsFromGateway() =
+    refreshGatewaySummary(
+      summary = _channelsSummary,
+      refreshing = _channelsRefreshing,
+      errorText = _channelsErrorText,
+      disconnectedSummary = GatewayChannelsSummary(channels = emptyList()),
+      failureText = nativeText("Could not load channels."),
+    ) { gatewayScope ->
+      val response = requestGatewayData(gatewayScope, "channels.status", """{"probe":false,"timeoutMs":8000}""")
+      val root = json.parseToJsonElement(response).asObjectOrNull()
+      GatewayChannelsSummary(
+        updatedAtMs = root.long("ts"),
+        partial = root.boolean("partial"),
+        warnings = parseStringArray(root?.get("warnings") as? JsonArray),
+        channels = parseChannelSummaries(root),
+      )
     }
-    if (!operatorConnected) {
-      _channelsSummary.value = GatewayChannelsSummary(channels = emptyList())
-      _channelsRefreshing.value = false
-      return
-    }
-    try {
-      val res = requestGatewayData(gatewayScope, "channels.status", """{"probe":false,"timeoutMs":8000}""")
-      val root = json.parseToJsonElement(res).asObjectOrNull()
-      val summary =
-        GatewayChannelsSummary(
-          updatedAtMs = root.long("ts"),
-          partial = root.boolean("partial"),
-          warnings = parseStringArray(root?.get("warnings") as? JsonArray),
-          channels = parseChannelSummaries(root),
-        )
-      publishGatewayData(gatewayScope) { _channelsSummary.value = summary }
-    } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) { _channelsErrorText.value = nativeText("Could not load channels.") }
-    } finally {
-      publishGatewayData(gatewayScope) { _channelsRefreshing.value = false }
-    }
-  }
 
-  private suspend fun refreshDreamingFromGateway() {
-    val gatewayScope = captureGatewayDataScope() ?: return
-    publishGatewayData(gatewayScope) {
-      _dreamingRefreshing.value = true
-      _dreamingErrorText.value = null
+  private suspend fun refreshDreamingFromGateway() =
+    refreshGatewaySummary(
+      summary = _dreamingSummary,
+      refreshing = _dreamingRefreshing,
+      errorText = _dreamingErrorText,
+      disconnectedSummary = GatewayDreamingSummary(),
+      failureText = nativeText("Could not load dreaming."),
+    ) { gatewayScope ->
+      val statusResponse = requestGatewayData(gatewayScope, "doctor.memory.status", "{}")
+      val statusRoot = json.parseToJsonElement(statusResponse).asObjectOrNull()
+      val diaryResponse = requestGatewayData(gatewayScope, "doctor.memory.dreamDiary", "{}")
+      val diaryRoot = json.parseToJsonElement(diaryResponse).asObjectOrNull()
+      parseDreamingSummary(dreaming = statusRoot?.get("dreaming").asObjectOrNull(), diary = diaryRoot)
     }
-    if (!operatorConnected) {
-      _dreamingSummary.value = GatewayDreamingSummary()
-      _dreamingRefreshing.value = false
-      return
-    }
-    try {
-      val statusRes = requestGatewayData(gatewayScope, "doctor.memory.status", "{}")
-      val statusRoot = json.parseToJsonElement(statusRes).asObjectOrNull()
-      val diaryRes = requestGatewayData(gatewayScope, "doctor.memory.dreamDiary", "{}")
-      val diaryRoot = json.parseToJsonElement(diaryRes).asObjectOrNull()
-      val dreaming = statusRoot?.get("dreaming").asObjectOrNull()
-      val summary =
-        parseDreamingSummary(
-          dreaming = dreaming,
-          diary = diaryRoot,
-        )
-      publishGatewayData(gatewayScope) { _dreamingSummary.value = summary }
-    } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) { _dreamingErrorText.value = nativeText("Could not load dreaming.") }
-    } finally {
-      publishGatewayData(gatewayScope) { _dreamingRefreshing.value = false }
-    }
-  }
 
-  private suspend fun refreshHealthLogsFromGateway() {
-    val gatewayScope = captureGatewayDataScope() ?: return
-    publishGatewayData(gatewayScope) {
-      _healthLogsRefreshing.value = true
-      _healthLogsErrorText.value = null
-    }
-    if (!operatorConnected) {
-      _healthLogsSummary.value = GatewayHealthLogsSummary()
-      _healthLogsRefreshing.value = false
-      return
-    }
-    try {
-      val res = requestGatewayData(gatewayScope, "logs.tail", """{"limit":40,"maxBytes":65536}""")
-      val root = json.parseToJsonElement(res).asObjectOrNull()
+  private suspend fun refreshHealthLogsFromGateway() =
+    refreshGatewaySummary(
+      summary = _healthLogsSummary,
+      refreshing = _healthLogsRefreshing,
+      errorText = _healthLogsErrorText,
+      disconnectedSummary = GatewayHealthLogsSummary(),
+      failureText = nativeText("Could not load gateway logs."),
+    ) { gatewayScope ->
+      val response = requestGatewayData(gatewayScope, "logs.tail", """{"limit":40,"maxBytes":65536}""")
+      val root = json.parseToJsonElement(response).asObjectOrNull()
       val lines = (root?.get("lines") as? JsonArray)?.mapNotNull { it.asStringOrNull() }.orEmpty()
-      val summary =
-        GatewayHealthLogsSummary(
-          fileName =
-            root
-              ?.get("file")
-              .asStringOrNull()
-              ?.trim()
-              ?.takeIf { it.isNotEmpty() }
-              ?.substringAfterLast('/')
-              ?.substringAfterLast('\\'),
-          cursor = root.long("cursor"),
-          truncated = root.boolean("truncated"),
-          entries = lines.map { parseGatewayLogEntry(it) },
-        )
-      publishGatewayData(gatewayScope) { _healthLogsSummary.value = summary }
-    } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) { _healthLogsErrorText.value = nativeText("Could not load gateway logs.") }
-    } finally {
-      publishGatewayData(gatewayScope) { _healthLogsRefreshing.value = false }
+      GatewayHealthLogsSummary(
+        fileName =
+          root
+            ?.get("file")
+            .asStringOrNull()
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.substringAfterLast('/')
+            ?.substringAfterLast('\\'),
+        cursor = root.long("cursor"),
+        truncated = root.boolean("truncated"),
+        entries = lines.map { parseGatewayLogEntry(it) },
+      )
     }
-  }
 
   private fun parseGatewayLogEntry(line: String): GatewayLogEntry {
     val sanitizedLine = sanitizeGatewayLogText(line)

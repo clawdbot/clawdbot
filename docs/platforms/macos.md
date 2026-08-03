@@ -13,6 +13,11 @@ Mac-hosted node tools such as `system.run`.
 
 Use **Quick Chat** for a Spotlight-style main-session composer without opening a full window. Press Option-Space (⌥Space) by default, choose it from the menu bar menu, or record another shortcut in **Settings → General**.
 
+The full native chat accepts image attachments through its picker, paste, and
+drag and drop. Assistant-generated images render inline through short-lived
+Gateway artifact URLs and open in a larger preview; iOS and macOS share the same
+bounded image model and renderer.
+
 Only need the CLI and Gateway? Start with [Getting started](/start/getting-started).
 
 ## Download
@@ -33,9 +38,12 @@ has no macOS app asset, use the newest one that does, or build from source with
 2. Pick **This Mac** for a local Gateway, or connect to a remote Gateway.
 3. Wait while the app installs the matching CLI runtime. In local mode it also
    installs and starts the Gateway.
-4. Establish inference with a live model check. After it passes, OpenClaw
-   handles the remaining setup.
-5. Complete the macOS permission checklist and send the onboarding test message.
+4. Establish inference with a live model check. If the app reused a login you
+   did not want, **Choose a different AI** on the success banner reopens the
+   picker, including the API-key option.
+5. Finish. The app opens the dashboard, where OpenClaw guides the rest of the
+   setup (memory import, channels, permissions) in one conversation. Grant
+   macOS permissions any time from **Settings → Permissions**.
 
 If the app reaches an existing Gateway whose default agent has a configured
 model, it treats that Gateway as already set up, skips provider onboarding and

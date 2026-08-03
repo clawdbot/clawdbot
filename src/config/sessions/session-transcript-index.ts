@@ -14,9 +14,11 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
+  buildSessionTranscriptProjection,
   extractTranscriptIndexEntry,
   hasTranscriptMessage,
   shouldProjectActiveEvent,
+  type SessionTranscriptProjectionSourceRow,
   type TranscriptIndexEntry,
 } from "./session-transcript-projection-rebuild.js";
 import {
@@ -25,11 +27,6 @@ import {
   isSessionTranscriptSideAppendEntry,
   parseSessionTranscriptTreeEntry,
 } from "./transcript-tree.js";
-import {
-  resolveVisibleTranscriptAppendParentId,
-  selectVisibleTranscriptEventEntries,
-} from "./transcript-visible-events.js";
-
 type TranscriptIndexDatabase = Pick<
   OpenClawAgentKyselyDatabase,
   | "session_windows"
@@ -45,11 +42,6 @@ export type SessionTranscriptProjectionState = {
   indexedSeq: number;
   leafEventId: string | null;
   needsRebuild: boolean;
-};
-
-type SessionTranscriptProjectionSourceRow = {
-  event: unknown;
-  seq: number;
 };
 
 function getIndexKysely(db: DatabaseSync) {
@@ -334,44 +326,30 @@ function rebuildSessionTranscriptIndexInTransaction(
   sessionId: string,
   rows: readonly SessionTranscriptProjectionSourceRow[],
 ): void {
+  const projection = buildSessionTranscriptProjection({
+    rows,
+    sessionId,
+    sourceTranscriptUpdatedAt: null,
+  });
   deleteFtsRows(db, sessionId);
   deleteActiveEventRows(db, sessionId);
-  const now = Date.now();
-  const events = rows.map((row) => row.event);
-  let activeEventCount = 0;
-  let activeMessageCount = 0;
-  for (const entry of selectVisibleTranscriptEventEntries(events)) {
-    const indexed = extractTranscriptIndexEntry(entry.event, now);
-    if (indexed) {
-      insertFtsRow(db, sessionId, indexed);
-    }
-    const source = rows[entry.seq - 1];
-    if (!source || !shouldProjectActiveEvent(entry.event)) {
-      continue;
-    }
-    const projectsMessage = hasTranscriptMessage(entry.event);
-    insertActiveEventRow(db, {
-      activePosition: activeEventCount,
-      eventSeq: source.seq,
-      messagePosition: projectsMessage ? activeMessageCount : null,
-      sessionId,
-    });
-    activeEventCount += 1;
-    if (projectsMessage) {
-      activeMessageCount += 1;
-    }
+  for (const entry of projection.ftsRows) {
+    insertFtsRow(db, sessionId, entry);
+  }
+  for (const row of projection.activeRows) {
+    insertActiveEventRow(db, { ...row, sessionId });
   }
   writeWatermark(
     db,
     sessionId,
     {
-      activeEventCount,
-      activeMessageCount,
-      indexedSeq: rows.at(-1)?.seq ?? -1,
-      leafEventId: resolveVisibleTranscriptAppendParentId(events),
+      activeEventCount: projection.activeEventCount,
+      activeMessageCount: projection.activeMessageCount,
+      indexedSeq: projection.sourceIndexedSeq,
+      leafEventId: projection.leafEventId,
       needsRebuild: false,
     },
-    now,
+    Date.now(),
   );
 }
 
@@ -401,7 +379,7 @@ export function reconcileSessionTranscriptIndexInTransaction(
     db,
     getIndexKysely(db)
       .selectFrom("transcript_events")
-      .select(["event_json", "seq"])
+      .select(["event_json", "seq", "created_at"])
       .where("session_id", "=", sessionId)
       .orderBy("seq", "asc"),
   ).rows;
@@ -411,6 +389,7 @@ export function reconcileSessionTranscriptIndexInTransaction(
     rows.map((row) => ({
       event: JSON.parse(row.event_json) as unknown,
       seq: row.seq,
+      createdAt: row.created_at,
     })),
   );
   return true;

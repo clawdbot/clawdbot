@@ -24,7 +24,11 @@ describe("AppSidebar session catalog pagination", () => {
       const request = vi
         .fn()
         .mockRejectedValueOnce(
-          new GatewayRequestError({ code: "INVALID_REQUEST", message: "invalid params" }),
+          new GatewayRequestError({
+            code: "INVALID_REQUEST",
+            message:
+              "invalid sessions.catalog.list params: at root: unexpected property 'progressId'",
+          }),
         )
         .mockResolvedValue(catalogPage([]));
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
@@ -68,7 +72,11 @@ describe("AppSidebar session catalog pagination", () => {
       const legacyRequest = vi
         .fn()
         .mockRejectedValueOnce(
-          new GatewayRequestError({ code: "INVALID_REQUEST", message: "invalid params" }),
+          new GatewayRequestError({
+            code: "INVALID_REQUEST",
+            message:
+              "invalid sessions.catalog.list params: at root: unexpected property 'progressId'",
+          }),
         )
         .mockReturnValueOnce(legacyFallback.promise);
       const legacyGateway = createGatewayHarness({
@@ -97,7 +105,7 @@ describe("AppSidebar session catalog pagination", () => {
       });
       provider.setContext(createContext(currentGateway.gateway, sessions));
       await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(50);
 
       legacyFallback.resolve(catalogPage([]));
       await vi.advanceTimersByTimeAsync(0);
@@ -217,6 +225,11 @@ describe("AppSidebar session catalog pagination", () => {
     await sidebar.updateComplete;
 
     const section = sidebar.querySelector(`[data-session-section="catalog:${id}"]`);
+    expect(
+      section
+        ?.querySelector(".sidebar-session-catalog-provider-icon")
+        ?.getAttribute("data-provider-icon"),
+    ).toBe(id);
     const hostGroups = section?.querySelectorAll<HTMLElement>("[data-session-catalog-host]");
     expect(Array.from(hostGroups ?? []).map((host) => host.dataset.sessionCatalogHost)).toEqual([
       "gateway:local",
@@ -257,6 +270,7 @@ describe("AppSidebar session catalog pagination", () => {
         ],
       },
     );
+    sidebar.connected = true;
     sidebar.sessionData.sessionCatalogs = [
       {
         id: "claude",
@@ -684,7 +698,7 @@ describe("AppSidebar session catalog pagination", () => {
     }
   });
 
-  it("refreshes immediately when paired-node presence changes", async () => {
+  it("coalesces a presence and focus burst into one catalog refresh", async () => {
     vi.useFakeTimers();
     try {
       const request = vi.fn().mockResolvedValue(catalogPage([]));
@@ -705,13 +719,13 @@ describe("AppSidebar session catalog pagination", () => {
       gateway.publishEvent("presence", {
         presence: [{ deviceId: "node-1", mode: "node", reason: "connect" }],
       });
+      globalThis.dispatchEvent(new Event("focus"));
+      await vi.advanceTimersByTimeAsync(49);
+      expect(request).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
       expect(request).toHaveBeenCalledTimes(2);
-
-      gateway.publishEvent("presence", {
-        presence: [{ deviceId: "node-1", mode: "node", reason: "disconnect" }],
-      });
       await vi.advanceTimersByTimeAsync(0);
-      expect(request).toHaveBeenCalledTimes(3);
+      expect(request).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }

@@ -80,7 +80,7 @@ Other selection rules:
 
 - Changing `agents.defaults.model.primary` does not rewrite existing session pins. If status reports `This session is pinned to X; config primary Y will apply to new/unpinned sessions.`, run `/model default` to clear the pin.
 - CLI default-model and allowlist pickers respect `models.mode: "replace"` by listing only `models.providers.*.models` instead of the full built-in catalog.
-- The Control UI model picker asks the Gateway for its configured model view. An explicit `modelPolicy.allow` filters it, including trailing prefix wildcard entries; otherwise it shows configured models plus providers with usable auth. The full built-in catalog is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
+- The Control UI model picker asks the Gateway for its configured model view. An explicit `modelPolicy.allow` filters it, including trailing prefix wildcard entries; otherwise it shows configured models plus providers with usable auth. Default and configured picker views hide catalog rows marked `deprecated` or `disabled` unless that exact model is configured as a primary, fallback, utility/tool model, alias/settings key, or exact policy entry. Hidden rows remain selectable by exact `provider/model` ref. The full built-in catalog, including hidden rows, is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
 - Provider inventory UIs use `models.list` with `view: "provider-config"` to show source-authored `models.providers.*.models` rows without applying picker allowlists.
 
 Full mechanics: [Model failover](/concepts/model-failover).
@@ -211,6 +211,32 @@ openclaw models auth list|add|login|paste-api-key|paste-token|setup-token|order
 </AccordionGroup>
 
 ## Models registry (`models.json`)
+
+### Hosted catalog updates
+
+OpenClaw can refresh the model metadata shipped by installed provider plugins
+without waiting for a new OpenClaw release. The Gateway makes one background
+JSON `GET` at startup and then checks at most every six hours. The request sends
+no prompts, credentials, model usage, or configuration payload beyond the
+normal HTTP user agent and conditional cache headers.
+
+The downloaded bundle is stored in the shared SQLite state database and becomes
+visible after the next Gateway restart. Remote data can update or add models
+only for providers declared by installed plugin manifests. It cannot supply API
+base URLs or request headers, and a catalog older than the installed release's
+build stamp is ignored.
+
+The hosted file is published from the public
+[`openclaw/catalog`](https://github.com/openclaw/catalog) GitHub repository.
+Its scheduled workflow refreshes from OpenClaw's shipped plugin manifests and
+pricing sources; every catalog content change is preserved as a public commit.
+
+Run `openclaw models refresh` for an immediate metadata and pricing check, or
+disable every hosted catalog request with `models.catalogRefresh.enabled:
+false`. When disabled, pricing stays at bundled and explicitly configured
+values. A self-hosted mirror can be selected with an HTTPS
+`models.catalogRefresh.url` (or localhost HTTP for testing); see
+[configuration reference](/gateway/configuration-reference#models).
 
 Custom providers configured under `models.providers` are written into `models.json` under the agent directory (default `~/.openclaw/agents/<agentId>/agent/models.json`). Provider-plugin catalogs are stored separately as generated plugin-owned catalog shards and load automatically. This file is merged with config by default; set `models.mode: "replace"` to use only your configured providers.
 

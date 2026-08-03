@@ -7,7 +7,7 @@ import {
 } from "../../test-utils/plugin-registration.js";
 import type { AuthProfileStore, OpenClawConfig } from "../provider-auth.js";
 
-const resolveCopilotApiTokenMock = vi.hoisted(() => vi.fn());
+const resolveCopilotRuntimeAuthMock = vi.hoisted(() => vi.fn());
 const buildVllmProviderMock = vi.hoisted(() => vi.fn());
 const buildSglangProviderMock = vi.hoisted(() => vi.fn());
 const ensureAuthProfileStoreMock = vi.hoisted(() => vi.fn());
@@ -184,12 +184,36 @@ function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContract
         validateApiKeyInput: () => undefined,
       };
     });
+    vi.doMock("openclaw/plugin-sdk/provider-setup", async () => {
+      const actual = await vi.importActual<typeof import("../provider-setup.js")>(
+        "openclaw/plugin-sdk/provider-setup",
+      );
+      return {
+        ...actual,
+        discoverOpenAICompatibleLocalModels: async (params: {
+          apiKey?: string;
+          baseUrl: string;
+          label: string;
+        }) => {
+          const isVllm = params.label === "vLLM";
+          const defaultBaseUrl = isVllm ? "http://127.0.0.1:8000/v1" : "http://127.0.0.1:30000/v1";
+          const provider = requireRecord(
+            await (isVllm ? buildVllmProviderMock : buildSglangProviderMock)({
+              apiKey: params.apiKey,
+              ...(params.baseUrl === defaultBaseUrl ? {} : { baseUrl: params.baseUrl }),
+            }),
+            `${params.label} provider`,
+          );
+          return Array.isArray(provider.models) ? provider.models : [];
+        },
+      };
+    });
     if (options.githubCopilotRegisterRuntimeModuleId) {
       vi.doMock(options.githubCopilotRegisterRuntimeModuleId, async () => {
         const actual = await vi.importActual<object>(options.githubCopilotRegisterRuntimeModuleId!);
         return {
           ...actual,
-          resolveCopilotApiToken: resolveCopilotApiTokenMock,
+          resolveCopilotRuntimeAuth: resolveCopilotRuntimeAuthMock,
         };
       });
     }
@@ -200,7 +224,6 @@ function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContract
           VLLM_DEFAULT_BASE_URL: "http://127.0.0.1:8000/v1",
           VLLM_MODEL_PLACEHOLDER: "meta-llama/Meta-Llama-3-8B-Instruct",
           VLLM_PROVIDER_LABEL: "vLLM",
-          buildVllmProvider: (...args: unknown[]) => buildVllmProviderMock(...args),
         };
       });
     }
@@ -211,7 +234,6 @@ function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContract
           SGLANG_DEFAULT_BASE_URL: "http://127.0.0.1:30000/v1",
           SGLANG_MODEL_PLACEHOLDER: "Qwen/Qwen3-8B",
           SGLANG_PROVIDER_LABEL: "SGLang",
-          buildSglangProvider: (...args: unknown[]) => buildSglangProviderMock(...args),
         };
       });
     }
@@ -262,7 +284,7 @@ function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContract
 
   afterEach(() => {
     vi.restoreAllMocks();
-    resolveCopilotApiTokenMock.mockReset();
+    resolveCopilotRuntimeAuthMock.mockReset();
     buildVllmProviderMock.mockReset();
     buildSglangProviderMock.mockReset();
     ensureAuthProfileStoreMock.mockReset();
@@ -306,10 +328,10 @@ export function describeGithubCopilotProviderDiscoveryContract(params: {
     });
 
     it("keeps env-token base URL resolution provider-owned", async () => {
-      resolveCopilotApiTokenMock.mockResolvedValueOnce({
-        token: "copilot-api-token",
+      resolveCopilotRuntimeAuthMock.mockResolvedValueOnce({
+        apiKey: "copilot-api-token",
+        source: "validated:https://api.github.com/copilot_internal/user",
         baseUrl: "https://copilot-proxy.example.com",
-        expiresAt: Date.now() + 60_000,
       });
 
       await expect(
@@ -327,7 +349,7 @@ export function describeGithubCopilotProviderDiscoveryContract(params: {
         },
       });
       const copilotCall = requireRecord(
-        resolveCopilotApiTokenMock.mock.calls.at(0)?.[0],
+        resolveCopilotRuntimeAuthMock.mock.calls.at(0)?.[0],
         "copilot token params",
       );
       expect(copilotCall.githubToken).toBe("github-env-token");

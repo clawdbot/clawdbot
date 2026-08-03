@@ -160,6 +160,7 @@ export function readPreRegisteredRun(params: {
   key: string;
   entry: GatewayRequestContext["dedupe"] extends Map<string, infer T> ? T | undefined : never;
   keyPrefix: string;
+  includeHidden?: boolean;
 }): PreRegisteredAgentRun | undefined {
   if (!params.key.startsWith(params.keyPrefix) || !params.entry?.ok) {
     return undefined;
@@ -168,7 +169,7 @@ export function readPreRegisteredRun(params: {
   if (payload?.status !== "accepted") {
     return undefined;
   }
-  if (payload.controlUiVisible === false) {
+  if (!params.includeHidden && payload.controlUiVisible === false) {
     return undefined;
   }
   const runId =
@@ -293,6 +294,7 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
   requester: ChatAbortRequester;
   keyPrefix: string;
   preserveSideRuns?: boolean;
+  excludeRunIds?: ReadonlySet<string>;
 }) {
   const sessionKeys = new Set(
     Array.from(params.sessionKeys, (sessionKey) => normalizeOptionalText(sessionKey)).filter(
@@ -300,13 +302,20 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
     ),
   );
   const authorizedByRunId = new Map<string, PreRegisteredAgentRun>();
-  let matchedSessionRuns = 0;
+  let hasUnauthorizedRuns = false;
+  let hasUnauthorizedProtectedRuns = false;
+  let hasProtectedRuns = false;
   for (const [key, entry] of params.context.dedupe) {
-    const run = readPreRegisteredRun({ key, entry, keyPrefix: params.keyPrefix });
+    const run = readPreRegisteredRun({
+      key,
+      entry,
+      keyPrefix: params.keyPrefix,
+      includeHidden: true,
+    });
     if (!run) {
       continue;
     }
-    if (params.preserveSideRuns && normalizeUnknownText(run.payload.turnKind) === "btw") {
+    if (params.excludeRunIds?.has(run.runId)) {
       continue;
     }
     const runSessionKeys = [
@@ -330,16 +339,34 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
         params.defaultAgentId,
       ) !== agentId
     ) {
+      // Global keys are shared across agent stores; another agent's run is
+      // outside the selected global-agent scope.
       continue;
     }
-    matchedSessionRuns += 1;
-    if (canRequesterAbortPreRegisteredRun(run.payload, params.requester)) {
+    const requesterCanAbort = canRequesterAbortPreRegisteredRun(run.payload, params.requester);
+    const isProtected =
+      run.payload.controlUiVisible === false ||
+      (params.preserveSideRuns && normalizeUnknownText(run.payload.turnKind) === "btw");
+    if (isProtected) {
+      // Broad lifecycle cleanup still needs ownership, while ordinary chat.abort
+      // must keep treating hidden or preserved work as a non-match.
+      hasProtectedRuns = true;
+      if (!requesterCanAbort) {
+        hasUnauthorizedProtectedRuns = true;
+      }
+      continue;
+    }
+    if (requesterCanAbort) {
       authorizedByRunId.set(run.runId, run);
+    } else {
+      hasUnauthorizedRuns = true;
     }
   }
   return {
-    matchedSessionRuns,
     authorizedRuns: [...authorizedByRunId.values()],
+    hasUnauthorizedRuns,
+    hasUnauthorizedProtectedRuns,
+    hasProtectedRuns,
   };
 }
 
@@ -351,6 +378,7 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
   defaultAgentId: string;
   requester: ChatAbortRequester;
   preserveSideRuns?: boolean;
+  excludeRunIds?: ReadonlySet<string>;
 }) {
   const sessionKeys = new Set(
     Array.from(params.sessionKeys, (sessionKey) => normalizeOptionalText(sessionKey)).filter(
@@ -364,12 +392,12 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
   );
   const agentId = normalizeOptionalText(params.agentId)?.toLowerCase();
   const authorizedRuns: Array<{ runId: string; sessionKey: string }> = [];
-  let matchedSessionRuns = 0;
+  const matchedRunIds: string[] = [];
+  let hasUnauthorizedRuns = false;
+  let hasUnauthorizedProtectedRuns = false;
+  let hasProtectedRuns = false;
   for (const [runId, active] of params.chatAbortControllers) {
-    if (active.controlUiVisible === false) {
-      continue;
-    }
-    if (params.preserveSideRuns && active.turnKind === "btw") {
+    if (params.excludeRunIds?.has(runId)) {
       continue;
     }
     if (!sessionKeys.has(active.sessionKey) && !sessionIds.has(active.sessionId)) {
@@ -380,16 +408,35 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
       active.sessionKey === "global" &&
       resolveStoredGlobalRunAgentId(active.agentId, params.defaultAgentId) !== agentId
     ) {
+      // Global keys are shared across agent stores; another agent's run is
+      // outside the selected global-agent scope.
       continue;
     }
-    matchedSessionRuns += 1;
-    if (canRequesterAbortChatRun(active, params.requester)) {
+    matchedRunIds.push(runId);
+    const requesterCanAbort = canRequesterAbortChatRun(active, params.requester);
+    const isProtected =
+      active.controlUiVisible === false || (params.preserveSideRuns && active.turnKind === "btw");
+    if (isProtected) {
+      // Broad lifecycle cleanup still needs ownership, while ordinary chat.abort
+      // must keep treating hidden or preserved work as a non-match.
+      hasProtectedRuns = true;
+      if (!requesterCanAbort) {
+        hasUnauthorizedProtectedRuns = true;
+      }
+      continue;
+    }
+    if (requesterCanAbort) {
       authorizedRuns.push({ runId, sessionKey: active.sessionKey });
+    } else {
+      hasUnauthorizedRuns = true;
     }
   }
   return {
-    matchedSessionRuns,
     authorizedRuns,
+    matchedRunIds,
+    hasUnauthorizedRuns,
+    hasUnauthorizedProtectedRuns,
+    hasProtectedRuns,
   };
 }
 

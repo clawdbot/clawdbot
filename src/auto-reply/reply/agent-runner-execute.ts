@@ -14,7 +14,7 @@ import {
   resolveSourceReplyPolicy,
   type RunReplyAgentParams,
 } from "./agent-runner-core.js";
-import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
+import { executeAgentTurn } from "./agent-runner-execution.js";
 import { runMemoryFlushIfNeeded, runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
 import { buildThreadingToolContext } from "./agent-runner-utils.js";
@@ -74,6 +74,9 @@ type ExecutePreparedReplyAgentRunInput = Pick<
   checkpointBeforeAgentReply: ReturnType<
     typeof createReplyRestartRecoveryClaimController
   >["checkpointBeforeAgentReply"];
+  confirmRestartRecoveryArmedAfterLeaseLoss: ReturnType<
+    typeof createReplyRestartRecoveryClaimController
+  >["confirmRestartRecoveryArmedAfterLeaseLoss"];
   getActiveIsNewSession: () => boolean;
   getActiveSessionEntry: () => SessionEntry | undefined;
   isHeartbeat: boolean;
@@ -113,6 +116,7 @@ export async function executePreparedReplyAgentRun(
     blockStreamingEnabled,
     cfg,
     checkpointBeforeAgentReply: checkpointBeforeAgentReplyWithRecovery,
+    confirmRestartRecoveryArmedAfterLeaseLoss,
     commandBody,
     defaultModel,
     followupRun,
@@ -359,7 +363,7 @@ export async function executePreparedReplyAgentRun(
     },
     () =>
       traceAgentPhase("reply.run_agent_turn", () =>
-        runAgentTurnWithFallback({
+        executeAgentTurn({
           commandBody,
           transcriptCommandBody,
           followupRun,
@@ -386,6 +390,7 @@ export async function executePreparedReplyAgentRun(
           resolvedVerboseLevel,
           toolProgressDetail,
           replyMediaContext,
+          confirmRestartRecoveryArmedAfterLeaseLoss,
           isRestartRecoveryArmed,
         }),
       ),
@@ -393,11 +398,15 @@ export async function executePreparedReplyAgentRun(
   activeSessionEntry = getActiveSessionEntry();
   activeIsNewSession = getActiveIsNewSession();
 
-  if (runOutcome.kind === "final") {
-    if (!replyOperation.result) {
+  if (runOutcome.outcome.kind !== "settled") {
+    if (runOutcome.outcome.kind === "rejected" && !replyOperation.result) {
       replyOperation.fail("run_failed", new Error("reply operation exited with final payload"));
     }
-    return returnWithQueuedFollowupDrain(runOutcome.payload);
+    return returnWithQueuedFollowupDrain(
+      runOutcome.outcome.kind === "rejected"
+        ? runOutcome.outcome.payload
+        : { text: SILENT_REPLY_TOKEN },
+    );
   }
 
   return await finalizeReplyAgentRun({
@@ -427,7 +436,8 @@ export async function executePreparedReplyAgentRun(
     resolvedVerboseLevel,
     returnWithQueuedFollowupDrain,
     runFollowupTurn,
-    runOutcome,
+    execution: runOutcome.outcome,
+    runId: runOutcome.runId,
     runStartedAt,
     runtimePolicySessionKey,
     sessionCtx,
@@ -478,6 +488,7 @@ export function createReplyAgentRestartRecoveryController(
     beginBeforeAgentReply,
     checkpointBeforeAgentReply,
     clear: clearRestartRecoveryDeliveryClaim,
+    confirmRestartRecoveryArmedAfterLeaseLoss,
     isArmed: isRestartRecoveryArmed,
   } = createReplyRestartRecoveryClaimController({
     admissionRunId:
@@ -546,6 +557,7 @@ export function createReplyAgentRestartRecoveryController(
     admitUserTurn,
     beginBeforeAgentReply,
     checkpointBeforeAgentReply,
+    confirmRestartRecoveryArmedAfterLeaseLoss,
     clear: clearRestartRecoveryDeliveryClaim,
     isArmed: isRestartRecoveryArmed,
   };

@@ -18,6 +18,7 @@ OpenClaw can run a **dedicated Chrome/Brave/Edge/Chromium profile** that the age
 - A separate browser profile named **openclaw** (orange accent by default).
 - Deterministic tab control (list/open/focus/close).
 - Agent actions (click/type/drag/select), snapshots, screenshots, PDFs.
+- Question answering over readable page text without returning a full snapshot.
 - Playwright-backed profiles save direct attachment navigations under the managed downloads directory and return `{ url, suggestedFilename, path }` metadata after final-URL policy validation.
 - Playwright-backed agent actions return a `downloads` array with the same managed metadata when the action immediately starts one or more downloads.
 - A bundled `browser-automation` skill that teaches agents the snapshot,
@@ -101,6 +102,17 @@ Plugin-bundled skills are listed in the agent's available skills when the
 plugin is enabled. The full skill instructions load on demand, so routine
 turns do not pay the full token cost.
 
+For “read this page and answer X,” use browser `action="extract"` with a
+`query`. It sends sanitized, bounded readable text through one model call and
+returns only the answer; keep `snapshot` for choosing actions and obtaining
+refs. Extraction requires a Playwright-backed profile and falls back to a
+snapshot workflow when it cannot complete.
+
+On large pages, pass `selector` to capture only the relevant CSS subtree and
+`ignoreSelectors` to remove repeated chrome before conversion. Pass a JSON
+`schema` when the caller needs validated machine-usable fields in
+`details.json`; without it, extraction remains a free-text answer.
+
 ## Missing browser command or tool
 
 If `openclaw browser` is unknown after an upgrade, `browser.request` is missing, or the agent reports the browser tool as unavailable, the usual cause is a `plugins.allow` list that omits `browser` and no root `browser` config block exists. Add it:
@@ -153,8 +165,9 @@ Browser settings live in `~/.openclaw/openclaw.json`.
     evaluateEnabled: true, // default: true; false disables act:evaluate (arbitrary JS)
     ssrfPolicy: {
       // dangerouslyAllowPrivateNetwork: true, // opt in only for trusted private-network access
-      // hostnameAllowlist: ["*.example.com", "example.com"],
       // allowedHostnames: ["localhost"],
+      // allowRfc2544BenchmarkRange: true, // trusted fake-IP proxy range
+      // allowIpv6UniqueLocalRange: true, // trusted fake-IP proxy IPv6 range
     },
     // cdpUrl: "http://127.0.0.1:18792", // legacy single-profile override
     tabCleanup: {
@@ -196,6 +209,11 @@ Browser settings live in `~/.openclaw/openclaw.json`.
 extraction mode when a caller does not pass an explicit `snapshotFormat` or
 `mode`; see [Browser control API](/tools/browser-control) for per-call
 snapshot options.
+
+On drivers with stable document identity, repeated AI or role snapshots of the
+same tab, document, and option family mark newly appeared ref-bearing elements
+with `[new]`. The first snapshot—and the first snapshot after navigation—sets
+an unmarked baseline. Existing-session snapshots omit deltas.
 
 ### Tab cleanup ownership
 
@@ -315,6 +333,8 @@ main model can read the screenshot directly.
 - OpenClaw-managed local CDP readiness probes and DevTools WebSocket connections bypass the managed network proxy for the exact launched loopback endpoint, so `openclaw browser start` still works when an operator proxy blocks loopback egress.
 - To proxy the managed browser itself, pass explicit Chrome proxy flags through `browser.extraArgs`, such as `--proxy-server=...` or `--proxy-pac-url=...`. Strict SSRF mode blocks explicit browser proxy routing unless private-network browser access is intentionally enabled.
 - `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` is off by default; enable only when private-network browser access is intentionally trusted.
+- `browser.ssrfPolicy.allowedHostnames` grants exact hosts while the rest of the private network remains blocked.
+- `browser.ssrfPolicy.allowRfc2544BenchmarkRange` and `browser.ssrfPolicy.allowIpv6UniqueLocalRange` narrowly allow trusted fake-IP proxy ranges.
 - `browser.ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias.
 
 </Accordion>
@@ -905,6 +925,11 @@ The agent gets **one tool** for browser automation:
 How it maps:
 
 - `browser snapshot` returns a stable UI tree (AI or ARIA).
+- `browser navigate` also returns the loaded page's snapshot inline (efficient
+  interactive tier, so the payload stays compact and bounded), so the agent
+  does not need a follow-up snapshot call. Batch `act` results that report a
+  cross-document navigation include the same fresh page state. Navigations
+  that resolve to a download skip it.
 - `browser act` uses the snapshot `ref` IDs to click/type/drag/select.
 - `browser screenshot` captures pixels (full page, element, or labeled refs).
 - `browser doctor` checks Gateway, plugin, profile, browser, and tab readiness.

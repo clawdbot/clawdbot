@@ -131,25 +131,22 @@ export function prepareEmbeddedAttemptClientTools(params: {
         },
       )
     : [];
-  const clientToolSearch = params.codeModeControlsEnabledForRun
-    ? addClientToolsToCodeModeCatalog({
-        tools: clientToolDefs,
-        config: params.attempt.config,
-        sessionId: params.attempt.sessionId,
-        sessionKey: params.sandboxSessionKey,
-        agentId: params.sessionAgentId,
-        runId: params.attempt.runId,
-        catalogRef: params.toolSearchCatalogRef,
-      })
-    : addClientToolsToToolSearchCatalog({
-        tools: clientToolDefs,
-        config: params.toolSearchRuntimeConfig,
-        sessionId: params.attempt.sessionId,
-        sessionKey: params.sandboxSessionKey,
-        agentId: params.sessionAgentId,
-        runId: params.attempt.runId,
-        catalogRef: params.toolSearchCatalogRef,
-      });
+  const addClientToolsToCatalog = params.codeModeControlsEnabledForRun
+    ? addClientToolsToCodeModeCatalog
+    : addClientToolsToToolSearchCatalog;
+  const clientToolSearch = addClientToolsToCatalog({
+    tools: clientToolDefs,
+    // Mirrors applyAgentToolSurfaceCatalog: code mode reads the base config,
+    // tool search reads the run's resolved tool-search runtime config.
+    config: params.codeModeControlsEnabledForRun
+      ? params.attempt.config
+      : params.toolSearchRuntimeConfig,
+    sessionId: params.attempt.sessionId,
+    sessionKey: params.sandboxSessionKey,
+    agentId: params.sessionAgentId,
+    runId: params.attempt.runId,
+    catalogRef: params.toolSearchCatalogRef,
+  });
   clientToolDefs = clientToolSearch.tools;
   if (clientToolSearch.compacted) {
     log.info(

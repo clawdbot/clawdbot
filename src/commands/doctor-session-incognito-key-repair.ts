@@ -15,6 +15,8 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
+import { writeValidatedDoctorSessionEntryJson } from "./doctor-session-entry-rewrite.js";
 import {
   collectSharedStateSessionKeys,
   deleteRepairJournal,
@@ -46,20 +48,25 @@ export function repairReservedIncognitoSessionKeys(params: {
     ? collectSharedStateSessionKeys(sharedDatabase.db)
     : new Set<string>();
   for (const target of targets) {
-    const inspected = withOpenClawAgentDatabaseReadOnly(
-      (database) => ({
-        occupied: params.apply ? collectOccupiedSessionKeys(database.db) : new Set<string>(),
-        reserved: listReservedIncognitoKeys(database.db),
-      }),
-      { agentId: target.agentId, env: params.env, path: target.sqlitePath },
-    );
-    if (!inspected.found) {
+    const operation = runDoctorAgentDatabaseOperation({
+      agentId: target.agentId,
+      path: target.sqlitePath,
+      run: () =>
+        withOpenClawAgentDatabaseReadOnly(
+          (database) => ({
+            occupied: params.apply ? collectOccupiedSessionKeys(database.db) : new Set<string>(),
+            reserved: listReservedIncognitoKeys(database.db),
+          }),
+          { agentId: target.agentId, env: params.env, path: target.sqlitePath },
+        ),
+    });
+    if (!operation.ok || !operation.value.found) {
       continue;
     }
-    for (const key of inspected.value.reserved) {
+    for (const key of operation.value.value.reserved) {
       reservedKeys.add(key);
     }
-    for (const key of inspected.value.occupied) {
+    for (const key of operation.value.value.occupied) {
       occupiedKeys.add(key);
     }
   }
@@ -351,7 +358,9 @@ function rewriteSessionEntryJsonReferences(
   const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database);
   const rows = executeSqliteQuerySync(
     database,
-    db.selectFrom("session_nodes").select(["session_key", "entry_json"]),
+    db
+      .selectFrom("session_nodes")
+      .select(["session_key", "current_session_id", "entry_json", "updated_at"]),
   ).rows;
   for (const row of rows) {
     let parsed: unknown;
@@ -365,13 +374,7 @@ function rewriteSessionEntryJsonReferences(
     if (entryJson === row.entry_json) {
       continue;
     }
-    executeSqliteQuerySync(
-      database,
-      db
-        .updateTable("session_nodes")
-        .set({ entry_json: entryJson })
-        .where("session_key", "=", row.session_key),
-    );
+    writeValidatedDoctorSessionEntryJson(database, row, entryJson);
   }
 }
 

@@ -1,9 +1,132 @@
 import { describe, expect, it, vi } from "vitest";
-import { ClickClackHttpError } from "../http-client.js";
+import { ClickClackHttpError, type ClickClackClient } from "../http-client.js";
+import type { ClickClackChannel } from "../types.js";
+import { controlSessionUrl } from "./control-session-url.js";
 import { fallbackDiscussionLabel } from "./naming.js";
 import { MANAGED_CONTRACT_FIELDS, createHarness, testExternalRef } from "./service-test-support.js";
 
+type SessionUrlContractCase = {
+  sessionKey: string;
+  agentId: string;
+  mainKey: string | undefined;
+  expectedPath: string | null;
+};
+
+// Keep in sync with ui/src/app-navigation.test.ts. Core cannot import plugin internals,
+// and this independently published plugin cannot source-import the workspace contract.
+const SESSION_URL_CONTRACT_CASES = [
+  {
+    sessionKey: "agent:main:main",
+    agentId: "main",
+    mainKey: undefined,
+    expectedPath: "/chat/main",
+  },
+  { sessionKey: "main", agentId: "research", mainKey: undefined, expectedPath: "/chat/research" },
+  {
+    sessionKey: "main",
+    agentId: "research",
+    mainKey: "workspace",
+    expectedPath: "/chat/research",
+  },
+  { sessionKey: "main", agentId: "..", mainKey: undefined, expectedPath: "/chat/main" },
+  {
+    sessionKey: "agent:research:workspace",
+    agentId: "main",
+    mainKey: "workspace",
+    expectedPath: "/chat/research",
+  },
+  {
+    sessionKey: "agent:research:main",
+    agentId: "main",
+    mainKey: "workspace",
+    expectedPath: "/chat/research/main",
+  },
+  {
+    sessionKey: "telegram:12345",
+    agentId: "research",
+    mainKey: undefined,
+    expectedPath: "/chat/research/telegram/12345",
+  },
+  {
+    // Dots must be percent-escaped or the server treats the URL as a static asset
+    // request and it never reaches the SPA on refresh or via an external link.
+    sessionKey: "channel:release.js",
+    agentId: "research",
+    mainKey: undefined,
+    expectedPath: "/chat/research/channel/release%2Ejs",
+  },
+  {
+    sessionKey: "agent:main:control-link",
+    agentId: "main",
+    mainKey: undefined,
+    expectedPath: "/chat/main/control-link",
+  },
+  {
+    sessionKey: "agent:main:12345678",
+    agentId: "main",
+    mainKey: undefined,
+    expectedPath: "/chat/main/~key/12345678",
+  },
+  {
+    sessionKey: "agent:main:release-deadbeef",
+    agentId: "main",
+    mainKey: undefined,
+    expectedPath: "/chat/main/~key/release-deadbeef",
+  },
+  {
+    sessionKey: "agent:main:telegram:12345",
+    agentId: "main",
+    mainKey: undefined,
+    expectedPath: "/chat/main/telegram/12345",
+  },
+  {
+    sessionKey: "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
+    agentId: "main",
+    mainKey: undefined,
+    expectedPath: "/chat/main/12345678",
+  },
+  {
+    sessionKey: "agent:main:dashboard:deadbeef-0aaa-4000-8000-000000000001",
+    agentId: "main",
+    mainKey: "deadbeef",
+    expectedPath: "/chat/main/deadbeef0",
+  },
+  {
+    sessionKey: "agent:main:cron:..:run",
+    agentId: "main",
+    mainKey: undefined,
+    expectedPath: "/chat/main/cron/~dotdot/run",
+  },
+] satisfies readonly SessionUrlContractCase[];
+
+function legacyCreateResponse(
+  input: Parameters<ClickClackClient["createChannel"]>[1],
+): ClickClackChannel {
+  const response: ClickClackChannel = {
+    id: "chn_discussion",
+    route_id: "discussion-route",
+    workspace_id: "wsp_team",
+    ...input,
+    kind: "public",
+    created_at: "2026-07-19T00:00:00.000Z",
+  };
+  Reflect.deleteProperty(response, "display_title");
+  return response;
+}
+
 describe("ClickClack discussion service", () => {
+  it("matches the Control UI session URL contract vectors", () => {
+    for (const testCase of SESSION_URL_CONTRACT_CASES) {
+      const url = controlSessionUrl(
+        "https://control.example",
+        testCase.sessionKey,
+        testCase.agentId,
+        testCase.mainKey,
+      );
+      expect(url ? new URL(url).pathname : null).toBe(testCase.expectedPath);
+    }
+  });
+
   it("opens a managed channel once and returns stable info URLs", async () => {
     const harness = createHarness({ label: "Release Planning", category: "Projects" });
     harness.config.channels!.clickclack!.apiBaseUrl = "http://127.0.0.1:8484";
@@ -17,7 +140,8 @@ describe("ClickClack discussion service", () => {
 
     expect(opened).toEqual({
       state: "open",
-      embedUrl: "https://clickclack.example/embed/channel/team-route/discussion-route",
+      embedUrl:
+        "https://clickclack.example/embed/channel/team-route/discussion-route?openclawHostTheme=1",
       openUrl: "https://clickclack.example/app/team-route/discussion-route",
     });
     expect(reopened).toEqual(opened);
@@ -40,30 +164,160 @@ describe("ClickClack discussion service", () => {
       kind: "public",
       external_managed: true,
       external_ref: testExternalRef(sessionKey),
-      external_url: "https://control.example/control/chat?session=agent%3Amain%3Amain",
+      external_url: "https://control.example/control/chat/main",
       sidebar_section: "Projects",
+      display_title: "Release Planning",
     });
   });
 
-  it("pins an owning agent for an unqualified global session key", async () => {
-    const harness = createHarness({ label: "Global session" });
-
-    expect(await harness.service.open("global")).toMatchObject({ state: "open" });
-    expect(harness.store.lookup("global")).toMatchObject({ agentId: "main" });
-  });
-
-  it("builds control links from URL path and query components", async () => {
-    const harness = createHarness({ label: "Control link" });
-    harness.config.channels!.clickclack!.discussions!.controlUrlBase =
-      "https://control.example/control///?tenant=alpha#old";
-    const sessionKey = "agent:main:control-link";
+  it("clears display_title for fallback labels", async () => {
+    const harness = createHarness({});
+    const sessionKey = "agent:main:untitled";
 
     await harness.service.open(sessionKey);
 
     expect(harness.createChannel).toHaveBeenCalledWith(
       "wsp_team",
       expect.objectContaining({
-        external_url: `https://control.example/control/chat?tenant=alpha&session=${encodeURIComponent(sessionKey)}`,
+        name: fallbackDiscussionLabel(sessionKey, "main"),
+        display_title: "",
+      }),
+    );
+  });
+
+  it("truncates display_title by Unicode code point", async () => {
+    const harness = createHarness({ label: "😀".repeat(201) });
+
+    await harness.service.open("agent:main:long-title");
+
+    expect(harness.createChannel).toHaveBeenCalledWith(
+      "wsp_team",
+      expect.objectContaining({ display_title: "😀".repeat(200) }),
+    );
+  });
+
+  it("records display_title confirmation only when create responses include it", async () => {
+    const modern = createHarness({ label: "Confirmed title" });
+    await modern.service.open("agent:main:confirmed-title");
+    expect(modern.store.lookup("agent:main:confirmed-title")).toMatchObject({
+      displayTitle: "Confirmed title",
+    });
+
+    const legacy = createHarness({ label: "Unconfirmed title" });
+    vi.mocked(legacy.createChannel).mockImplementationOnce(async (_workspaceId, input) =>
+      legacyCreateResponse(input),
+    );
+    await legacy.service.open("agent:main:unconfirmed-title");
+    expect(legacy.store.lookup("agent:main:unconfirmed-title")).toMatchObject({
+      displayTitle: undefined,
+    });
+  });
+
+  it("backfills an unchanged title after a sibling confirms server support", async () => {
+    const harness = createHarness({ label: "Needs Backfill" });
+    const sessionKey = "agent:main:needs-backfill";
+    vi.mocked(harness.createChannel).mockImplementationOnce(async (_workspaceId, input) =>
+      legacyCreateResponse(input),
+    );
+    await harness.service.open(sessionKey);
+
+    harness.setSessionEntry({ label: "Confirmed Sibling" });
+    await harness.service.open("agent:main:confirmed-sibling");
+    expect(harness.store.lookup("agent:main:confirmed-sibling")).toMatchObject({
+      displayTitle: "Confirmed Sibling",
+    });
+
+    harness.updateChannel.mockClear();
+    harness.setSessionEntry({ label: "Needs Backfill" });
+    await harness.service.reconcile(sessionKey);
+
+    expect(harness.updateChannel).toHaveBeenCalledWith("chn_discussion", {
+      display_title: "Needs Backfill",
+    });
+    expect(harness.store.lookup(sessionKey)).toMatchObject({ displayTitle: "Needs Backfill" });
+  });
+
+  it("does not retry an unchanged title without server capability confirmation", async () => {
+    const harness = createHarness({ label: "Legacy title" });
+    const sessionKey = "agent:main:legacy-title-no-retry";
+    vi.mocked(harness.createChannel).mockImplementationOnce(async (_workspaceId, input) =>
+      legacyCreateResponse(input),
+    );
+    await harness.service.open(sessionKey);
+
+    harness.updateChannel.mockClear();
+    await harness.service.reconcile(sessionKey);
+
+    expect(harness.updateChannel).not.toHaveBeenCalled();
+  });
+
+  it("pins the configured default for global keys and preserves qualified owners", async () => {
+    const globalHarness = createHarness({ label: "Global session" });
+    globalHarness.config.agents = { list: [{ id: "ops", default: true }] };
+
+    expect(await globalHarness.service.open("global")).toMatchObject({ state: "open" });
+    expect(globalHarness.store.lookup("global")).toMatchObject({ agentId: "ops" });
+
+    const qualifiedHarness = createHarness({ label: "Qualified session" });
+    qualifiedHarness.config.agents = { list: [{ id: "ops", default: true }] };
+    const qualifiedKey = "agent:worker:qualified";
+
+    expect(await qualifiedHarness.service.open(qualifiedKey)).toMatchObject({ state: "open" });
+    expect(qualifiedHarness.store.lookup(qualifiedKey)).toMatchObject({ agentId: "worker" });
+  });
+
+  it("uses the account agent for unscoped links without changing the configured owner", async () => {
+    const harness = createHarness({ label: "Telegram peer" });
+    harness.config.agents = { list: [{ id: "ops", default: true }] };
+    harness.config.channels!.clickclack!.agentId = "research";
+
+    await harness.service.open("telegram:12345");
+
+    expect(harness.createChannel).toHaveBeenCalledWith(
+      "wsp_team",
+      expect.objectContaining({
+        external_url: "https://control.example/control/chat/research/telegram/12345",
+      }),
+    );
+    expect(harness.store.lookup("telegram:12345")).toMatchObject({ agentId: "ops" });
+
+    await harness.service.reconcile("telegram:12345");
+    expect(harness.updateChannel).not.toHaveBeenCalled();
+
+    harness.config.channels!.clickclack!.agentId = "writer";
+    await harness.service.reconcile("telegram:12345");
+    expect(harness.updateChannel).toHaveBeenCalledWith("chn_discussion", {
+      external_url: "https://control.example/control/chat/writer/telegram/12345",
+    });
+  });
+
+  it("uses the configured main key when building control links", async () => {
+    const harness = createHarness({ label: "Workspace main" });
+    harness.config.session = { mainKey: "workspace" };
+
+    await harness.service.open("agent:research:workspace");
+
+    expect(harness.createChannel).toHaveBeenCalledWith(
+      "wsp_team",
+      expect.objectContaining({
+        external_url: "https://control.example/control/chat/research",
+      }),
+    );
+  });
+
+  it("builds control links from URL path and query components", async () => {
+    const harness = createHarness({ label: "Control link" });
+    harness.config.channels!.clickclack!.discussions!.controlUrlBase =
+      "https://control.example/control///?tenant=alpha#old";
+    const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
+
+    await harness.service.open(sessionKey);
+
+    expect(harness.createChannel).toHaveBeenCalledWith(
+      "wsp_team",
+      expect.objectContaining({
+        external_url:
+          "https://control.example/control/chat/main/control-link-12345678?tenant=alpha",
       }),
     );
   });
@@ -100,6 +354,7 @@ describe("ClickClack discussion service", () => {
     await harness.service.reconcile(sessionKey);
     expect(harness.updateChannel).toHaveBeenLastCalledWith("chn_discussion", {
       archived: true,
+      display_title: "Renamed Session",
       name: "renamed-session",
       sidebar_section: "Incidents",
     });
@@ -113,8 +368,25 @@ describe("ClickClack discussion service", () => {
 
     harness.setSessionEntry(undefined);
     await harness.service.reconcile(sessionKey);
-    expect(harness.updateChannel).toHaveBeenLastCalledWith("chn_discussion", { archived: true });
+    expect(harness.updateChannel).toHaveBeenLastCalledWith("chn_discussion", {
+      archived: true,
+    });
     expect(await harness.service.info(sessionKey)).toEqual({ state: "available" });
+  });
+
+  it("renames a fallback discussion when displayName arrives", async () => {
+    const harness = createHarness({});
+    const sessionKey = "agent:main:generated-title";
+    await harness.service.open(sessionKey);
+
+    harness.setSessionEntry({ displayName: "Generated Session Title" });
+    await harness.service.reconcile(sessionKey);
+
+    expect(harness.updateChannel).toHaveBeenLastCalledWith("chn_discussion", {
+      display_title: "Generated Session Title",
+      name: "generated-session-title",
+    });
+    expect(harness.store.lookup(sessionKey)).toMatchObject({ label: "Generated Session Title" });
   });
 
   it("does not return a binding removed while info or open reconciles a deleted session", async () => {
@@ -171,7 +443,7 @@ describe("ClickClack discussion service", () => {
     expect(harness.store.lookup(sessionKey)).toBeUndefined();
   });
 
-  it("uses the short session fallback when a label slug already exists", async () => {
+  it("suffixes a desired name when its slug already exists", async () => {
     const harness = createHarness({ label: "Release Planning" });
     vi.mocked(harness.channels).mockResolvedValue([
       {
@@ -189,39 +461,30 @@ describe("ClickClack discussion service", () => {
 
     expect(harness.createChannel).toHaveBeenCalledWith(
       "wsp_team",
-      expect.objectContaining({ name: fallbackDiscussionLabel("agent:main:duplicate-label") }),
+      expect.objectContaining({ name: "release-planning-2" }),
     );
   });
 
-  it("adds a deterministic suffix when both the label and hash fallback are occupied", async () => {
+  it("falls back after exhausting desired-name suffixes through 20", async () => {
     const harness = createHarness({ label: "Release Planning" });
     const sessionKey = "agent:main:duplicate-label";
-    vi.mocked(harness.channels).mockResolvedValue([
-      {
-        id: "chn_existing_label",
-        route_id: "existing-label-route",
+    vi.mocked(harness.channels).mockResolvedValue(
+      Array.from({ length: 20 }, (_, index) => ({
+        id: `chn_existing_${index}`,
+        route_id: `existing-route-${index}`,
         workspace_id: "wsp_team",
-        name: "release-planning",
+        name: index === 0 ? "release-planning" : `release-planning-${index + 1}`,
         kind: "public",
         ...MANAGED_CONTRACT_FIELDS,
         created_at: "2026-07-19T00:00:00.000Z",
-      },
-      {
-        id: "chn_existing_hash",
-        route_id: "existing-hash-route",
-        workspace_id: "wsp_team",
-        name: fallbackDiscussionLabel(sessionKey),
-        kind: "public",
-        ...MANAGED_CONTRACT_FIELDS,
-        created_at: "2026-07-19T00:00:00.000Z",
-      },
-    ]);
+      })),
+    );
 
     await harness.service.open(sessionKey);
 
     expect(harness.createChannel).toHaveBeenCalledWith(
       "wsp_team",
-      expect.objectContaining({ name: `${fallbackDiscussionLabel(sessionKey)}-2` }),
+      expect.objectContaining({ name: fallbackDiscussionLabel(sessionKey, "main") }),
     );
   });
 
@@ -253,7 +516,7 @@ describe("ClickClack discussion service", () => {
     expect(harness.createChannel).toHaveBeenCalledTimes(2);
     expect(harness.createChannel).toHaveBeenLastCalledWith(
       "wsp_team",
-      expect.objectContaining({ name: fallbackDiscussionLabel(sessionKey) }),
+      expect.objectContaining({ name: "release-planning-2" }),
     );
   });
 
@@ -287,7 +550,7 @@ describe("ClickClack discussion service", () => {
     expect(harness.updateChannel).toHaveBeenCalledTimes(2);
     expect(harness.updateChannel).toHaveBeenLastCalledWith(
       "chn_discussion",
-      expect.objectContaining({ name: fallbackDiscussionLabel(sessionKey) }),
+      expect.objectContaining({ name: "renamed-2" }),
     );
   });
 
@@ -304,7 +567,7 @@ describe("ClickClack discussion service", () => {
         kind: "public",
         external_managed: true,
         external_ref: externalRef,
-        external_url: `https://control.example/control/chat?session=${encodeURIComponent(sessionKey)}`,
+        external_url: "https://control.example/control/chat/main/release-planning-12345678",
         sidebar_section: "Projects",
         archived: false,
         created_at: "2026-07-19T00:00:00.000Z",
@@ -333,7 +596,8 @@ describe("ClickClack discussion service", () => {
     );
     expect(opened).toEqual({
       state: "open",
-      embedUrl: "https://clickclack.example/embed/channel/team-route/recovered-route",
+      embedUrl:
+        "https://clickclack.example/embed/channel/team-route/recovered-route?openclawHostTheme=1",
       openUrl: "https://clickclack.example/app/team-route/recovered-route",
     });
   });
@@ -708,7 +972,7 @@ describe("ClickClack discussion service", () => {
         kind: "public",
         external_managed: true,
         external_ref: externalRef,
-        external_url: `https://control.example/control/chat?session=${encodeURIComponent(sessionKey)}`,
+        external_url: "https://control.example/control/chat/main/release-planning-12345678",
         sidebar_section: "Sessions",
         archived: false,
         created_at: "2026-07-19T00:00:00.000Z",

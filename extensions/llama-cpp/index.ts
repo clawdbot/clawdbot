@@ -1,7 +1,9 @@
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import {
   LLAMA_CPP_PROVIDER_ID,
   LLAMA_CPP_PROVIDER_LABEL,
+  LLAMA_CPP_LOCAL_BASE_URL,
   buildLlamaCppProviderConfig,
   resolveLlamaCppSyntheticApiKey,
 } from "./src/defaults.js";
@@ -23,7 +25,7 @@ export default definePluginEntry({
         {
           id: "local",
           label: LLAMA_CPP_PROVIDER_LABEL,
-          hint: "In-process local GGUF model (about 5.0 GB download; requires 16 GB RAM)",
+          hint: "Run one private GGUF model directly inside this Gateway",
           kind: "custom",
           appGuidedSetup: {
             detect: detectLlamaCppSetup,
@@ -44,28 +46,34 @@ export default definePluginEntry({
         order: "late",
         run: async () => ({ provider: buildLlamaCppProviderConfig() }),
       },
-      createStreamFn: ({ config, provider }) =>
-        createLlamaCppStreamFn({
+      createStreamFn: ({ config, model, provider }) => {
+        // Explicit HTTP routes sharing this provider id stay on the configured transport.
+        if (model.baseUrl !== LLAMA_CPP_LOCAL_BASE_URL) {
+          return undefined;
+        }
+        return createLlamaCppStreamFn({
           providerConfig: config?.models?.providers?.[provider],
-        }),
+        });
+      },
       resolveSyntheticAuth: () => ({
         apiKey: resolveLlamaCppSyntheticApiKey(),
         source: "local llama.cpp runtime",
         mode: "api-key" as const,
       }),
+      ...buildProviderToolCompatFamilyHooks("llamacpp-gbnf"),
       wizard: {
         setup: {
           choiceId: LLAMA_CPP_PROVIDER_ID,
           choiceLabel: LLAMA_CPP_PROVIDER_LABEL,
-          choiceHint: "In-process local model (about 5.0 GB download; requires 16 GB RAM)",
+          choiceHint: "Run one private GGUF model directly inside this Gateway",
           groupId: LLAMA_CPP_PROVIDER_ID,
           groupLabel: "Local llama.cpp",
           groupHint: "No API key required",
           methodId: "local",
         },
         modelPicker: {
-          label: "llama.cpp (local GGUF)",
-          hint: "Run a GGUF model in the OpenClaw process",
+          label: "llama.cpp",
+          hint: "Run a GGUF model directly inside OpenClaw",
           methodId: "local",
         },
       },

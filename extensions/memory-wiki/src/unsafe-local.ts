@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import pMap from "p-map";
+import { walkMemoryWikiDirectory } from "./bounded-walk.js";
 import type { BridgeMemoryWikiResult } from "./bridge.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
@@ -53,22 +54,20 @@ function detectFenceLanguage(filePath: string): string {
 }
 
 async function listAllowedFilesRecursive(rootDir: string): Promise<string[]> {
-  const entries = await fs.readdir(rootDir, { withFileTypes: true });
-  const files: string[] = [];
-  for (const entry of entries) {
-    const fullPath = path.join(rootDir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await listAllowedFilesRecursive(fullPath)));
-      continue;
-    }
-    if (
-      entry.isFile() &&
-      DIRECTORY_TEXT_EXTENSIONS.has(normalizeLowercaseStringOrEmpty(path.extname(entry.name)))
-    ) {
-      files.push(fullPath);
-    }
-  }
-  return files.toSorted((left, right) => left.localeCompare(right));
+  const entries = await walkMemoryWikiDirectory(rootDir, "", {
+    entryFilter: (entry) =>
+      entry.kind === "directory" ||
+      (entry.kind === "file" &&
+        DIRECTORY_TEXT_EXTENSIONS.has(
+          normalizeLowercaseStringOrEmpty(path.extname(entry.relativePath)),
+        ))
+        ? "include"
+        : "skip",
+  });
+  return entries
+    .filter((entry) => entry.kind === "file")
+    .map((entry) => path.join(rootDir, entry.relativePath))
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 async function collectUnsafeLocalArtifacts(

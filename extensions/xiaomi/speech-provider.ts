@@ -1,5 +1,5 @@
 // Xiaomi provider module implements model/runtime integration.
-import { transcodeAudioBufferToOpus } from "openclaw/plugin-sdk/media-runtime";
+import { canonicalizeBase64, transcodeAudioBufferToOpus } from "openclaw/plugin-sdk/media-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   assertOkOrThrowProviderError,
@@ -245,7 +245,11 @@ function decodeXiaomiAudioData(body: unknown): Buffer {
   if (!audioData) {
     throw new Error("Xiaomi TTS API returned no audio data");
   }
-  return Buffer.from(audioData, "base64");
+  const canonicalAudio = canonicalizeBase64(audioData);
+  if (!canonicalAudio) {
+    throw new Error("Xiaomi TTS API returned malformed base64 audio data");
+  }
+  return Buffer.from(canonicalAudio, "base64");
 }
 
 async function xiaomiTTS(params: {

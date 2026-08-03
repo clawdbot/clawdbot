@@ -1,8 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isBackgroundExecTask } from "./background-exec-task-contract.js";
+import { CRON_TASK_KIND } from "./cron-task-contract.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
-import { isChildlessNativeSubagentTask } from "./native-subagent-task.js";
+import { isHarnessOwnedSubagentTask } from "./harness-owned-subagent-task.js";
 import { isProvisionalSubagentKillTask } from "./task-cancellation-state.js";
 import { isTerminalTaskStatus } from "./task-executor-policy.js";
 import { ensureLinkedTaskFlowRegistryReady } from "./task-registry-common.js";
@@ -92,7 +93,7 @@ export async function cancelTaskById(params: {
             reason: params.reason?.trim() || "Cancelled by operator.",
           })
         ) {
-          if (childSessionKey) {
+          if (task.taskKind === CRON_TASK_KIND || childSessionKey) {
             return {
               found: true,
               cancelled: false,
@@ -100,11 +101,11 @@ export async function cancelTaskById(params: {
               task: cloneTaskRecord(task),
             };
           }
-          // Childless cron rows are stale legacy ledger records; with no live
-          // runner handle and no child session to cancel, clear the task row.
+          // Current rows carry taskKind before their runner publishes a child
+          // session. Only an unmarked childless row is legacy cleanup state.
         }
       } else if (!childSessionKey) {
-        if (!isChildlessNativeSubagentTask(task)) {
+        if (!isHarnessOwnedSubagentTask(task)) {
           return {
             found: true,
             cancelled: false,
@@ -117,9 +118,8 @@ export async function cancelTaskById(params: {
         // The live cron service owns the abort signal; registry finalization below
         // keeps CLI/Gateway callers aligned while the run unwinds.
       } else if (!childSessionKey) {
-        // Codex native subagents are mirrored from the Codex app server and do
-        // not have OpenClaw child sessions to terminate. Cancellation clears
-        // the stale task-registry record only.
+        // Harness-mirrored rows have no OpenClaw child session to terminate.
+        // Cancellation clears only their task-registry record.
       } else if (task.runtime === "acp") {
         const { getAcpSessionManager } = await loadTaskRegistryControlRuntime();
         await getAcpSessionManager().cancelSession({

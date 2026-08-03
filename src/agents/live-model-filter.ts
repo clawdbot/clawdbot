@@ -16,6 +16,7 @@ type ModelRef = {
 };
 
 const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
+  "anthropic/claude-opus-5",
   "anthropic/claude-opus-4-8",
   "anthropic/claude-sonnet-5",
   "anthropic/claude-sonnet-4-6",

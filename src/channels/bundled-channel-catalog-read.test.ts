@@ -33,6 +33,7 @@ vi.mock("../infra/openclaw-root.js", () => ({
 }));
 
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { listBundledChannelCatalogEntries } from "./bundled-channel-catalog-read.js";
 
 const tempDirs: string[] = [];
@@ -105,6 +106,22 @@ function seedChannelPkg(
   fs.writeFileSync(path.join(pluginDir, "index.js"), "export default { register() {} };\n", "utf8");
 }
 
+function seedGeneratedChannelCatalog(
+  root: string,
+  params: {
+    packageName: string;
+    id: string;
+    label: string;
+    docsPath: string;
+    blurb: string;
+  },
+): void {
+  const { packageName, ...channel } = params;
+  writeJsonFile(path.join(root, "dist", "channel-catalog.json"), {
+    entries: [{ name: packageName, openclaw: { channel } }],
+  });
+}
+
 describe("listBundledChannelCatalogEntries", () => {
   it("reads bundled channel metadata from the extensions dir returned by resolveBundledPluginsDir", () => {
     // Regression gate for the onboard crash on globally installed CLI: in a
@@ -144,20 +161,12 @@ describe("listBundledChannelCatalogEntries", () => {
       docsPath: "/channels/telegram",
       label: "Telegram",
     });
-    writeJsonFile(path.join(root, "dist", "channel-catalog.json"), {
-      entries: [
-        {
-          name: "@openclaw/qqbot",
-          openclaw: {
-            channel: {
-              id: "qqbot",
-              label: "QQ Bot",
-              docsPath: "/channels/qqbot",
-              blurb: "downloadable channel",
-            },
-          },
-        },
-      ],
+    seedGeneratedChannelCatalog(root, {
+      packageName: "@openclaw/qqbot",
+      id: "qqbot",
+      label: "QQ Bot",
+      docsPath: "/channels/qqbot",
+      blurb: "downloadable channel",
     });
     useBundledPluginsDir(extensionsRoot);
 
@@ -176,20 +185,12 @@ describe("listBundledChannelCatalogEntries", () => {
       label: "Matrix",
       markdownCapable: true,
     });
-    writeJsonFile(path.join(root, "dist", "channel-catalog.json"), {
-      entries: [
-        {
-          name: "@openclaw/matrix",
-          openclaw: {
-            channel: {
-              id: "matrix",
-              label: "Matrix",
-              docsPath: "/channels/matrix",
-              blurb: "stale generated entry",
-            },
-          },
-        },
-      ],
+    seedGeneratedChannelCatalog(root, {
+      packageName: "@openclaw/matrix",
+      id: "matrix",
+      label: "Matrix",
+      docsPath: "/channels/matrix",
+      blurb: "stale generated entry",
     });
     useBundledPluginsDir(extensionsRoot);
 
@@ -203,20 +204,12 @@ describe("listBundledChannelCatalogEntries", () => {
     // that case the loader should consult the shipped channel-catalog.json
     // rather than report zero bundled channels.
     const root = seedRoot("bcr-fallback-undefined-");
-    writeJsonFile(path.join(root, "dist", "channel-catalog.json"), {
-      entries: [
-        {
-          name: "@openclaw/fallback",
-          openclaw: {
-            channel: {
-              id: "fallback-channel",
-              label: "Fallback",
-              docsPath: "/channels/fallback",
-              blurb: "fallback blurb",
-            },
-          },
-        },
-      ],
+    seedGeneratedChannelCatalog(root, {
+      packageName: "@openclaw/fallback",
+      id: "fallback-channel",
+      label: "Fallback",
+      docsPath: "/channels/fallback",
+      blurb: "fallback blurb",
     });
     useBundledPluginsDir(undefined);
 
@@ -232,24 +225,55 @@ describe("listBundledChannelCatalogEntries", () => {
     const root = seedRoot("bcr-fallback-empty-");
     const extensionsRoot = path.join(root, "dist", "extensions");
     fs.mkdirSync(extensionsRoot, { recursive: true });
-    writeJsonFile(path.join(root, "dist", "channel-catalog.json"), {
-      entries: [
-        {
-          name: "@openclaw/fallback",
-          openclaw: {
-            channel: {
-              id: "fallback-channel",
-              label: "Fallback",
-              docsPath: "/channels/fallback",
-              blurb: "fallback blurb",
-            },
-          },
-        },
-      ],
+    seedGeneratedChannelCatalog(root, {
+      packageName: "@openclaw/fallback",
+      id: "fallback-channel",
+      label: "Fallback",
+      docsPath: "/channels/fallback",
+      blurb: "fallback blurb",
     });
     useBundledPluginsDir(extensionsRoot);
 
     const entries = listBundledChannelCatalogEntries();
     expect(entries.map((entry) => entry.id)).toContain("fallback-channel");
+  });
+
+  it("reloads installed bundled package metadata after an explicit plugin lifecycle reset", () => {
+    const root = seedRoot("bcr-package-lifecycle-");
+    const extensionsRoot = path.join(root, "dist", "extensions");
+    const packagePath = path.join(extensionsRoot, "alpha", "package.json");
+    seedChannelPkg(packagePath, { id: "alpha", docsPath: "/channels/alpha", label: "Before" });
+    useBundledPluginsDir(extensionsRoot);
+
+    expect(
+      listBundledChannelCatalogEntries().find((entry) => entry.id === "alpha")?.channel.label,
+    ).toBe("Before");
+    seedChannelPkg(packagePath, { id: "alpha", docsPath: "/channels/alpha", label: "After" });
+    clearPluginMetadataLifecycleCaches();
+
+    expect(
+      listBundledChannelCatalogEntries().find((entry) => entry.id === "alpha")?.channel.label,
+    ).toBe("After");
+  });
+
+  it("discovers a generated catalog created after an explicit plugin lifecycle reset", () => {
+    const root = seedRoot("bcr-generated-lifecycle-");
+    useBundledPluginsDir(undefined);
+
+    expect(
+      listBundledChannelCatalogEntries().find((entry) => entry.id === "generated"),
+    ).toBeUndefined();
+    seedGeneratedChannelCatalog(root, {
+      packageName: "@openclaw/generated",
+      id: "generated",
+      label: "Generated after reset",
+      docsPath: "/channels/generated",
+      blurb: "generated channel",
+    });
+    clearPluginMetadataLifecycleCaches();
+
+    expect(
+      listBundledChannelCatalogEntries().find((entry) => entry.id === "generated")?.channel.label,
+    ).toBe("Generated after reset");
   });
 });

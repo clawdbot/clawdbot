@@ -175,6 +175,7 @@ import {
   getMemorySearchManager,
   type MemoryIndexManager,
 } from "./index.js";
+import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
 
 describe("memory watcher config", () => {
   let manager: MemoryIndexManager | null = null;
@@ -230,7 +231,7 @@ describe("memory watcher config", () => {
     const defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> = {
       workspace: workspaceDir,
     };
-    return {
+    return isolateMemoryManagerTestConfig({
       memory: {
         backend: "builtin",
         search: {
@@ -247,7 +248,7 @@ describe("memory watcher config", () => {
         defaults,
         list: [{ id: "main", default: true }],
       },
-    } as OpenClawConfig;
+    } as OpenClawConfig);
   }
 
   async function expectWatcherManager(cfg: OpenClawConfig) {
@@ -272,7 +273,10 @@ describe("memory watcher config", () => {
       string[],
       Record<string, unknown>,
     ];
-    expect(chokidarPaths).toStrictEqual([path.join(workspaceDir, "MEMORY.md")]);
+    expect(chokidarPaths).toStrictEqual([
+      path.join(workspaceDir, "MEMORY.md"),
+      path.join(workspaceDir, "USER.md"),
+    ]);
     expect(chokidarPaths.filter((watchedPath) => watchedPath.includes("*"))).toEqual([]);
     expect(chokidarOptions.ignoreInitial).toBe(true);
     expect(chokidarOptions).not.toHaveProperty("awaitWriteFinish");
@@ -345,7 +349,10 @@ describe("memory watcher config", () => {
       string[],
       Record<string, unknown>,
     ];
-    expect(chokidarPaths).toStrictEqual([path.join(workspaceDir, "MEMORY.md")]);
+    expect(chokidarPaths).toStrictEqual([
+      path.join(workspaceDir, "MEMORY.md"),
+      path.join(workspaceDir, "USER.md"),
+    ]);
 
     // 2 directories × (main + parent) = 4 native watch calls.
     expect(nativeWatchMock).toHaveBeenCalledTimes(4);
@@ -460,6 +467,7 @@ describe("memory watcher config", () => {
     expect(chokidarPathsFallback).toStrictEqual(
       expect.arrayContaining([
         path.join(workspaceDir, "MEMORY.md"),
+        path.join(workspaceDir, "USER.md"),
         path.join(workspaceDir, "memory"),
       ]),
     );
@@ -490,7 +498,7 @@ describe("memory watcher config", () => {
     expect(memoryWatcher).toBeDefined();
     const closeSpy = memoryWatcher!.close;
 
-    // Pre-error: chokidar has MEMORY.md only; memoryDir is not in its set.
+    // Pre-error: chokidar has root memory files only; memoryDir is not in its set.
     const existingChokidar = createdChokidarWatchers[0];
     expect(existingChokidar).toBeDefined();
     const addSpy = vi.spyOn(
@@ -539,7 +547,10 @@ describe("memory watcher config", () => {
         string[],
         Record<string, unknown>,
       ];
-      expect(chokidarPathsLinux).toStrictEqual([path.join(workspaceDir, "MEMORY.md")]);
+      expect(chokidarPathsLinux).toStrictEqual([
+        path.join(workspaceDir, "MEMORY.md"),
+        path.join(workspaceDir, "USER.md"),
+      ]);
 
       const nativeCalls = nativeWatchMock.mock.calls as unknown as [
         string,
@@ -715,6 +726,7 @@ describe("memory watcher config", () => {
       expect(fallbackPaths).toStrictEqual([path.join(workspaceDir, "memory")]);
       expect(createdChokidarWatchers[0]?.add).toHaveBeenCalledWith([
         path.join(workspaceDir, "MEMORY.md"),
+        path.join(workspaceDir, "USER.md"),
       ]);
     } finally {
       Object.defineProperty(process, "platform", {
@@ -760,6 +772,7 @@ describe("memory watcher config", () => {
       expect(fallbackPaths).toStrictEqual([path.join(workspaceDir, "memory")]);
       expect(createdChokidarWatchers[0]?.add).toHaveBeenCalledWith([
         path.join(workspaceDir, "MEMORY.md"),
+        path.join(workspaceDir, "USER.md"),
       ]);
       expect(memoryLoggerWarn).toHaveBeenCalledWith(
         expect.stringContaining("failed to attach Linux memory directory watcher subtree"),
@@ -791,7 +804,10 @@ describe("memory watcher config", () => {
         string[],
         Record<string, unknown>,
       ];
-      expect(chokidarPathsWin).toStrictEqual([path.join(workspaceDir, "MEMORY.md")]);
+      expect(chokidarPathsWin).toStrictEqual([
+        path.join(workspaceDir, "MEMORY.md"),
+        path.join(workspaceDir, "USER.md"),
+      ]);
 
       // 2 directories × (main + parent) = 4 native watch calls.
       expect(nativeWatchMock).toHaveBeenCalledTimes(4);
@@ -826,10 +842,8 @@ describe("memory watcher config", () => {
     await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
     const cfg = createWatcherConfig({ extraPaths: [] });
 
-    // Force the only chokidar caller (MEMORY.md) to NOT exist by deleting it
-    // before manager construction so fileWatchPaths starts empty. Note that
-    // MEMORY.md is still a watch *path* in source even if missing on disk —
-    // chokidar handles missing paths fine. To truly test the "no chokidar
+    // Root memory files stay watch paths even when missing, and chokidar handles
+    // missing paths fine. To truly test the "no chokidar
     // yet" branch we instead simulate by clearing the watchMock buffer and
     // exercising attachMemoryChokidarFallback directly.
     await expectWatcherManager(cfg);

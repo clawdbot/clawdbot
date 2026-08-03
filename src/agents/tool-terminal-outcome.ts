@@ -1,3 +1,4 @@
+import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   consumeTrackedToolExecutionStarted,
   peekAdjustedParamsForToolCall,
@@ -7,12 +8,6 @@ import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types
 import { createToolErrorState } from "./tool-error-state.js";
 import type { ToolErrorSummary } from "./tool-error-summary.js";
 import { buildToolMutationState } from "./tool-mutation.js";
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
 
 /** Build one attempt-scoped facts-in/state-out terminal observer for every harness. */
 export function createToolTerminalObserver(

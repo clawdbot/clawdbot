@@ -3,6 +3,7 @@
  */
 import crypto from "node:crypto";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { BundleMcpConfig, BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
 import { resolveApiKeyForProfile } from "./auth-profiles/oauth.js";
@@ -19,10 +20,6 @@ type McpAuthProfileOptions = {
   cfg?: OpenClawConfig;
   agentDir?: string;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function normalizeStringHeaders(value: unknown): Record<string, string> | undefined {
   if (!isRecord(value)) {

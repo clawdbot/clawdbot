@@ -10,7 +10,7 @@ import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
-import { buildKimiCodingProvider } from "./provider-catalog.js";
+import { buildKimiCodingProvider, normalizeKimiCodingModelId } from "./provider-catalog.js";
 
 const describeLive =
   isLiveTestEnabled() && process.env.KIMI_API_KEY?.trim() ? describe : describe.skip;
@@ -33,9 +33,10 @@ async function collectDoneMessage(
   return doneMessage;
 }
 
-function resolveModel(modelId: "k3" | "k3[1m]"): Model<"anthropic-messages"> {
+function resolveModel(modelId: "k3" | "k3-256k"): Model<"anthropic-messages"> {
   const provider = buildKimiCodingProvider();
-  const definition = provider.models.find((model) => model.id === modelId);
+  const normalizedModelId = normalizeKimiCodingModelId(modelId);
+  const definition = provider.models.find((model) => model.id === normalizedModelId);
   if (!definition) {
     throw new Error(`Missing model ${modelId}`);
   }
@@ -61,8 +62,8 @@ function countContentChars(message: AssistantMessage, type: "text" | "thinking")
 }
 
 async function runReasoningScenario(params: {
-  modelId: "k3" | "k3[1m]";
-  thinkingLevel: "off" | "max";
+  modelId: "k3" | "k3-256k";
+  thinkingLevel: "off" | "low" | "adaptive" | "max";
 }): Promise<AssistantMessage> {
   const registered = await registerSingleProviderPlugin(plugin);
   const wrapped = registered.wrapStreamFn?.({
@@ -98,7 +99,7 @@ async function runReasoningScenario(params: {
 }
 
 describeLive("Kimi Code K3 reasoning live", () => {
-  it.each(["k3", "k3[1m]"] as const)(
+  it.each(["k3", "k3-256k"] as const)(
     "%s honors off and max reasoning",
     async (modelId) => {
       const off = await runReasoningScenario({ modelId, thinkingLevel: "off" });
@@ -108,6 +109,16 @@ describeLive("Kimi Code K3 reasoning live", () => {
       const max = await runReasoningScenario({ modelId, thinkingLevel: "max" });
       expect(countContentChars(max, "thinking")).toBeGreaterThan(0);
       expect(countContentChars(max, "text")).toBeGreaterThan(0);
+    },
+    180_000,
+  );
+
+  it.each(["low", "adaptive"] as const)(
+    "k3 accepts %s reasoning",
+    async (thinkingLevel) => {
+      const message = await runReasoningScenario({ modelId: "k3", thinkingLevel });
+      expect(countContentChars(message, "thinking")).toBeGreaterThan(0);
+      expect(countContentChars(message, "text")).toBeGreaterThan(0);
     },
     180_000,
   );

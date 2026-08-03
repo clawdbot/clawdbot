@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  createHarness,
+  createHarness as createBaseHarness,
   event,
   flushObserver,
   modelMessage,
@@ -13,27 +13,100 @@ import {
 } from "./session-observer.test-utils.js";
 
 afterEach(() => {
+  for (const harness of activeHarnesses) {
+    harness.observer.dispose();
+  }
+  activeHarnesses.clear();
   vi.useRealTimers();
   vi.restoreAllMocks();
   resetSessionObserverEventSequence();
 });
 
+type Harness = ReturnType<typeof createBaseHarness>;
+type HarnessOptions = NonNullable<Parameters<typeof createBaseHarness>[0]>;
+type EventRoute = { runId?: string; sessionKey?: string; agentId?: string };
+
+const activeHarnesses = new Set<Harness>();
+
+function createHarness(options?: HarnessOptions): Harness {
+  const harness = createBaseHarness(options);
+  activeHarnesses.add(harness);
+  return harness;
+}
+
+function useFakeTime(now = 0): void {
+  vi.useFakeTimers();
+  vi.setSystemTime(now);
+}
+
+function createPersistedHarness(
+  options: HarnessOptions = {},
+  digestOverrides: Partial<SessionObserverDigest> = {},
+) {
+  const storedDigest = persistedLiveDigest(digestOverrides);
+  const readSession = vi.fn(() => ({
+    sessionId: "session-id",
+    updatedAt: 1_000,
+    observerDigest: storedDigest,
+  }));
+  return { storedDigest, harness: createHarness({ ...options, readSession }) };
+}
+
+function lifecycleEvent(data: Record<string, unknown>, route: EventRoute = {}) {
+  return event({ ...route, stream: "lifecycle", data });
+}
+
+function emitEvent(
+  harness: Harness,
+  stream: string,
+  data: Record<string, unknown>,
+  route: EventRoute = {},
+): void {
+  harness.observer.handleEvent(event({ ...route, stream, data }));
+}
+
+async function advanceAndFlush(ms: number): Promise<void> {
+  await vi.advanceTimersByTimeAsync(ms);
+  await flushObserver();
+}
+
+async function handleLifecycle(
+  harness: Harness,
+  data: Record<string, unknown>,
+  route: EventRoute = {},
+): Promise<void> {
+  harness.observer.handleEvent(lifecycleEvent(data, route));
+  await flushObserver();
+}
+
+function persistedDigest(harness: Harness, index = 0): SessionObserverDigest | undefined {
+  return harness.persistDigest.mock.calls.at(index)?.[0]?.digest as
+    | SessionObserverDigest
+    | undefined;
+}
+
+function broadcastDigest(harness: Harness, index = 0): SessionObserverDigest | undefined {
+  return harness.broadcastToConnIds.mock.calls.at(index)?.[1] as SessionObserverDigest | undefined;
+}
+
+function observerBroadcasts(harness: Harness) {
+  return harness.broadcastToConnIds.mock.calls.filter((call) => call[0] === "session.observer");
+}
+
+function persistGuard(harness: Harness): (() => boolean) | undefined {
+  return harness.persistDigest.mock.calls[0]?.[0]?.stillCurrent as (() => boolean) | undefined;
+}
+
+function completionMessages(harness: Harness, index = 0) {
+  return harness.completeModel.mock.calls[index]?.[0]?.context?.messages ?? [];
+}
+
 describe("session observer terminal, persistence, synthesis, and races", () => {
   it("persists and broadcasts terminal synthesis with no visible connections", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(30_000);
-    const storedDigest = persistedLiveDigest();
-    const readSession = vi.fn(() => ({
-      sessionId: "session-id",
-      updatedAt: 1_000,
-      observerDigest: storedDigest,
-    }));
-    const harness = createHarness({ visible: false, readSession });
+    useFakeTime(30_000);
+    const { harness } = createPersistedHarness({ visible: false });
 
-    harness.observer.handleEvent(
-      event({ stream: "lifecycle", data: { phase: "end", startedAt: 0, endedAt: 30_000 } }),
-    );
-    await flushObserver();
+    await handleLifecycle(harness, { phase: "end", startedAt: 0, endedAt: 30_000 });
 
     expect(harness.completeModel).not.toHaveBeenCalled();
     expect(harness.persistDigest).toHaveBeenCalledOnce();
@@ -43,7 +116,94 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
       harness.subscribers.get("agent:main:session-1"),
       { dropIfSlow: true },
     );
-    harness.observer.dispose();
+  });
+
+  it("accepts a routed terminal event after a contextless duplicate", async () => {
+    useFakeTime(30_000);
+    const { harness } = createPersistedHarness({ subscribe: false });
+    const contextlessTerminal = lifecycleEvent({
+      phase: "end",
+      startedAt: 0,
+      endedAt: 30_000,
+    });
+    delete contextlessTerminal.sessionKey;
+    delete contextlessTerminal.agentId;
+
+    harness.observer.handleEvent(contextlessTerminal);
+    harness.observer.handleEvent(lifecycleEvent({ phase: "end", startedAt: 0, endedAt: 30_000 }));
+    await flushObserver();
+
+    expect(harness.persistDigest).toHaveBeenCalledOnce();
+    expect(harness.persistDigest.mock.calls[0]?.[0]?.digest).toMatchObject({ health: "done" });
+  });
+
+  it("finalizes an active run from a contextless terminal", async () => {
+    useFakeTime();
+    const harness = createHarness();
+    harness.observer.handleEvent(lifecycleEvent({ phase: "start" }));
+    vi.setSystemTime(30_000);
+    const contextlessTerminal = lifecycleEvent({ phase: "end", startedAt: 0, endedAt: 30_000 });
+    delete contextlessTerminal.sessionKey;
+    delete contextlessTerminal.agentId;
+
+    harness.observer.handleEvent(contextlessTerminal);
+    await flushObserver();
+
+    const digest = broadcastDigest(harness, -1);
+    expect(digest?.health).toBe("done");
+    expect(harness.persistDigest).toHaveBeenCalledOnce();
+  });
+
+  it("finalizes an active run when the terminal omits only its agent owner", async () => {
+    useFakeTime();
+    const harness = createHarness();
+    harness.observer.handleEvent(lifecycleEvent({ phase: "start" }));
+    vi.setSystemTime(30_000);
+    const terminal = lifecycleEvent({ phase: "end", startedAt: 0, endedAt: 30_000 });
+    delete terminal.agentId;
+
+    harness.observer.handleEvent(terminal);
+    await flushObserver();
+
+    const digest = broadcastDigest(harness, -1);
+    expect(digest).toMatchObject({ agentId: "main", health: "done" });
+    expect(harness.persistDigest).toHaveBeenCalledOnce();
+  });
+
+  it("finalizes a dormant run from a contextless terminal", async () => {
+    useFakeTime();
+    const { harness } = createPersistedHarness();
+    harness.observer.handleEvent(lifecycleEvent({ phase: "start" }));
+    harness.observer.removeConnection("conn-1");
+    vi.setSystemTime(30_000);
+    const contextlessTerminal = lifecycleEvent({ phase: "end", startedAt: 0, endedAt: 30_000 });
+    delete contextlessTerminal.sessionKey;
+    delete contextlessTerminal.agentId;
+
+    harness.observer.handleEvent(contextlessTerminal);
+    await flushObserver();
+
+    expect(harness.persistDigest).toHaveBeenCalledOnce();
+    expect(harness.persistDigest.mock.calls[0]?.[0]?.digest).toMatchObject({
+      runId: "run-1",
+      health: "done",
+    });
+  });
+
+  it("suppresses live events after a contextless terminal", () => {
+    const harness = createHarness();
+    const contextlessTerminal = lifecycleEvent({ phase: "end" });
+    delete contextlessTerminal.sessionKey;
+
+    harness.observer.handleEvent(contextlessTerminal);
+    emitEvent(harness, "item", {
+      kind: "preamble",
+      phase: "update",
+      progressText: "Late progress",
+    });
+
+    expect(harness.broadcastToConnIds).not.toHaveBeenCalled();
+    expect(harness.persistDigest).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -52,29 +212,19 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
   ])(
     "synthesizes $expected from a persisted live digest without subscribers",
     async ({ phase, expected }) => {
-      vi.useFakeTimers();
-      vi.setSystemTime(30_000);
-      const storedDigest = persistedLiveDigest();
-      const readSession = vi.fn(() => ({
-        sessionId: "session-id",
-        updatedAt: 1_000,
-        observerDigest: storedDigest,
-      }));
-      const harness = createHarness({ subscribe: false, readSession });
+      useFakeTime(30_000);
+      const { storedDigest, harness } = createPersistedHarness({ subscribe: false });
 
-      harness.observer.handleEvent(
-        event({
-          stream: "lifecycle",
-          data: { phase, startedAt: 0, endedAt: 30_000, error: "test failure" },
-        }),
-      );
-      await flushObserver();
+      await handleLifecycle(harness, {
+        phase,
+        startedAt: 0,
+        endedAt: 30_000,
+        error: "test failure",
+      });
 
       expect(harness.completeModel).not.toHaveBeenCalled();
       expect(harness.persistDigest).toHaveBeenCalledOnce();
-      const synthesized = harness.persistDigest.mock.calls[0]?.[0]?.digest as
-        | SessionObserverDigest
-        | undefined;
+      const synthesized = persistedDigest(harness);
       expect(synthesized).toMatchObject({
         headline: storedDigest.headline,
         assessment: storedDigest.assessment,
@@ -84,211 +234,126 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
         revision: storedDigest.revision + 1,
         updatedAt: 30_000,
       });
-      harness.observer.dispose();
     },
   );
 
   it("does not synthesize a terminal digest from another run", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(30_000);
-    const readSession = vi.fn(() => ({
-      sessionId: "session-id",
-      updatedAt: 1_000,
-      observerDigest: persistedLiveDigest({ runId: "another-run" }),
-    }));
-    const harness = createHarness({ subscribe: false, readSession });
+    useFakeTime(30_000);
+    const { harness } = createPersistedHarness({ subscribe: false }, { runId: "another-run" });
 
-    harness.observer.handleEvent(
-      event({
-        stream: "lifecycle",
-        data: { phase: "end", startedAt: 0, endedAt: 30_000 },
-      }),
-    );
-    await flushObserver();
+    await handleLifecycle(harness, { phase: "end", startedAt: 0, endedAt: 30_000 });
 
     expect(harness.persistDigest).not.toHaveBeenCalled();
-    harness.observer.dispose();
   });
 
   it("retries synthesized terminal persistence once", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(30_000);
-    const storedDigest = persistedLiveDigest();
-    const readSession = vi.fn(() => ({
-      sessionId: "session-id",
-      updatedAt: 1_000,
-      observerDigest: storedDigest,
-    }));
+    useFakeTime(30_000);
     const persistDigest = vi
       .fn()
       .mockRejectedValueOnce(new Error("temporary write failure"))
       .mockResolvedValueOnce(true);
-    const harness = createHarness({ subscribe: false, persistDigest, readSession });
+    const { harness } = createPersistedHarness({ subscribe: false, persistDigest });
 
-    harness.observer.handleEvent(
-      event({
-        stream: "lifecycle",
-        data: { phase: "end", startedAt: 0, endedAt: 30_000 },
-      }),
-    );
-    await flushObserver();
+    await handleLifecycle(harness, { phase: "end", startedAt: 0, endedAt: 30_000 });
 
     expect(persistDigest).toHaveBeenCalledTimes(2);
-    const synthesized = persistDigest.mock.calls[1]?.[0]?.digest as
-      | SessionObserverDigest
-      | undefined;
+    const synthesized = persistedDigest(harness, 1);
     expect(synthesized?.health).toBe("done");
-    harness.observer.dispose();
   });
 
   it("synthesizes terminal health for a disabled run", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const storedDigest = persistedLiveDigest({ health: "waiting-on-user" });
-    const readSession = vi.fn(() => ({
-      sessionId: "session-id",
-      updatedAt: 1_000,
-      observerDigest: storedDigest,
-    }));
+    useFakeTime();
     const completeModel = vi
       .fn()
       .mockResolvedValueOnce(modelMessage({ headline: "Latest live headline", health: "on-track" }))
       .mockRejectedValueOnce(new Error("first model failure"))
       .mockRejectedValueOnce(new Error("second model failure"));
-    const harness = createHarness({ completeModel, readSession });
+    const { storedDigest, harness } = createPersistedHarness(
+      { completeModel },
+      { health: "waiting-on-user" },
+    );
     startAndAddToolNotes(harness.observer);
     await vi.advanceTimersByTimeAsync(12_000);
     for (let index = 0; index < 4; index += 1) {
-      harness.observer.handleEvent(
-        event({ stream: "tool", data: { phase: "start", name: "read", args: { index } } }),
-      );
+      emitEvent(harness, "tool", { phase: "start", name: "read", args: { index } });
     }
-    await vi.advanceTimersByTimeAsync(24_000);
-    await flushObserver();
+    await advanceAndFlush(24_000);
 
-    harness.observer.handleEvent(
-      event({
-        stream: "lifecycle",
-        data: { phase: "error", startedAt: 0, endedAt: 36_000, error: "run failed" },
-      }),
-    );
-    await flushObserver();
+    await handleLifecycle(harness, {
+      phase: "error",
+      startedAt: 0,
+      endedAt: 36_000,
+      error: "run failed",
+    });
 
     expect(completeModel).toHaveBeenCalledTimes(3);
-    const synthesized = harness.persistDigest.mock.calls[0]?.[0]?.digest as
-      | SessionObserverDigest
-      | undefined;
+    const synthesized = persistedDigest(harness);
     expect(synthesized).toMatchObject({
       headline: "Latest live headline",
       health: "failed",
       revision: storedDigest.revision + 2,
     });
-    harness.observer.dispose();
   });
 
   it("synthesizes terminal health when config disables terminal admission", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
+    useFakeTime();
     const runtimeCfg = {
       gateway: { controlUi: { sessionObserver: true as boolean } },
       agents: { defaults: { utilityModel: "openai/gpt-test" } },
     } satisfies OpenClawConfig;
-    const storedDigest = persistedLiveDigest();
-    const readSession = vi.fn(() => ({
-      sessionId: "session-id",
-      updatedAt: 1_000,
-      observerDigest: storedDigest,
-    }));
-    const harness = createHarness({ config: runtimeCfg, readSession });
-    harness.observer.handleEvent(event({ stream: "lifecycle", data: { phase: "start" } }));
+    const { storedDigest, harness } = createPersistedHarness({ config: runtimeCfg });
+    harness.observer.handleEvent(lifecycleEvent({ phase: "start" }));
     runtimeCfg.gateway.controlUi.sessionObserver = false;
 
-    harness.observer.handleEvent(
-      event({
-        stream: "lifecycle",
-        data: { phase: "end", startedAt: 0, endedAt: 30_000 },
-      }),
-    );
-    await flushObserver();
+    await handleLifecycle(harness, { phase: "end", startedAt: 0, endedAt: 30_000 });
 
     expect(harness.completeModel).not.toHaveBeenCalled();
-    const synthesized = harness.persistDigest.mock.calls[0]?.[0]?.digest as
-      | SessionObserverDigest
-      | undefined;
+    const synthesized = persistedDigest(harness);
     expect(synthesized).toMatchObject({
       headline: storedDigest.headline,
       health: "done",
       revision: storedDigest.revision + 1,
     });
-    harness.observer.dispose();
   });
 
   it("synthesizes before dropping an in-flight terminal state", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(30_000);
-    const storedDigest = persistedLiveDigest();
-    const readSession = vi.fn(() => ({
-      sessionId: "session-id",
-      updatedAt: 1_000,
-      observerDigest: storedDigest,
-    }));
+    useFakeTime(30_000);
     const completeModel = vi.fn(
       () =>
         new Promise<never>(() => {
           // Intentionally unresolved until the observer aborts this terminal call.
         }),
     );
-    const harness = createHarness({ completeModel, readSession });
-    harness.observer.handleEvent(
-      event({
-        stream: "lifecycle",
-        data: { phase: "end", startedAt: 0, endedAt: 30_000 },
-      }),
-    );
-    await flushObserver();
+    const { storedDigest, harness } = createPersistedHarness({ completeModel });
+    await handleLifecycle(harness, { phase: "end", startedAt: 0, endedAt: 30_000 });
     expect(completeModel).toHaveBeenCalledOnce();
 
     harness.subscribers.unsubscribe("conn-1", "agent:main:session-1");
     await flushObserver();
 
-    const synthesized = harness.persistDigest.mock.calls[0]?.[0]?.digest as
-      | SessionObserverDigest
-      | undefined;
+    const synthesized = persistedDigest(harness);
     expect(synthesized).toMatchObject({
       headline: storedDigest.headline,
       health: "done",
       revision: storedDigest.revision + 1,
     });
-    harness.observer.dispose();
   });
 
   it("synthesizes terminal health after final model retries fail", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(30_000);
-    const storedDigest = persistedLiveDigest({ health: "failed" });
-    const readSession = vi.fn(() => ({
-      sessionId: "session-id",
-      updatedAt: 1_000,
-      observerDigest: storedDigest,
-    }));
+    useFakeTime(30_000);
     const completeModel = vi.fn(async () => {
       throw new Error("model unavailable");
     });
-    const harness = createHarness({ completeModel, readSession });
-
-    harness.observer.handleEvent(
-      event({
-        stream: "lifecycle",
-        data: { phase: "end", startedAt: 0, endedAt: 30_000 },
-      }),
+    const { storedDigest, harness } = createPersistedHarness(
+      { completeModel },
+      { health: "failed" },
     );
-    await flushObserver();
+
+    await handleLifecycle(harness, { phase: "end", startedAt: 0, endedAt: 30_000 });
 
     expect(completeModel).toHaveBeenCalledTimes(2);
     expect(harness.broadcastToConnIds).not.toHaveBeenCalled();
-    const synthesized = harness.persistDigest.mock.calls[0]?.[0]?.digest as
-      | SessionObserverDigest
-      | undefined;
+    const synthesized = persistedDigest(harness);
     expect(synthesized).toMatchObject({
       headline: storedDigest.headline,
       assessment: storedDigest.assessment,
@@ -297,18 +362,10 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
       revision: storedDigest.revision + 1,
       updatedAt: 30_000,
     });
-    harness.observer.dispose();
   });
 
   it("synthesizes a queued terminal when a live call reaches the failure limit", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const storedDigest = persistedLiveDigest();
-    const readSession = vi.fn(() => ({
-      sessionId: "session-id",
-      updatedAt: 1_000,
-      observerDigest: storedDigest,
-    }));
+    useFakeTime();
     let rejectSecond: ((error: Error) => void) | undefined;
     const completeModel = vi
       .fn()
@@ -319,126 +376,84 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
             rejectSecond = reject;
           }),
       );
-    const harness = createHarness({ completeModel, readSession });
+    const { storedDigest, harness } = createPersistedHarness({ completeModel });
     startAndAddToolNotes(harness.observer);
     await vi.advanceTimersByTimeAsync(24_000);
     expect(completeModel).toHaveBeenCalledTimes(2);
 
-    harness.observer.handleEvent(
-      event({
-        stream: "lifecycle",
-        data: { phase: "end", startedAt: 0, endedAt: 24_000 },
-      }),
-    );
+    harness.observer.handleEvent(lifecycleEvent({ phase: "end", startedAt: 0, endedAt: 24_000 }));
     rejectSecond?.(new Error("second failure"));
     await flushObserver();
 
-    const synthesized = harness.persistDigest.mock.calls[0]?.[0]?.digest as
-      | SessionObserverDigest
-      | undefined;
+    const synthesized = persistedDigest(harness);
     expect(synthesized).toMatchObject({
       headline: storedDigest.headline,
       health: "done",
       revision: storedDigest.revision + 1,
     });
-    harness.observer.dispose();
   });
 
   it("produces a terminal digest when subscribing late in a long run", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(30_000);
+    useFakeTime(30_000);
     const harness = createHarness();
-    harness.observer.handleEvent(
-      event({
-        stream: "lifecycle",
-        data: { phase: "end", startedAt: 0, endedAt: 30_000 },
-      }),
-    );
-    await flushObserver();
+    await handleLifecycle(harness, { phase: "end", startedAt: 0, endedAt: 30_000 });
 
-    const digest = harness.broadcastToConnIds.mock.calls[0]?.[1] as
-      | SessionObserverDigest
-      | undefined;
+    const digest = broadcastDigest(harness);
     expect(digest?.health).toBe("done");
-    harness.observer.dispose();
   });
 
   it.each([
     { phase: "end", expected: "done" },
     { phase: "error", expected: "failed" },
   ])("forces $expected health on a terminal lifecycle digest", async ({ phase, expected }) => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
+    useFakeTime();
     const harness = createHarness();
-    harness.observer.handleEvent(event({ stream: "lifecycle", data: { phase: "start" } }));
+    harness.observer.handleEvent(lifecycleEvent({ phase: "start" }));
     await vi.advanceTimersByTimeAsync(30_000);
-    harness.observer.handleEvent(
-      event({
-        stream: "lifecycle",
-        data: { phase, startedAt: 0, endedAt: 30_000, error: "test failure" },
-      }),
-    );
-    await flushObserver();
+    await handleLifecycle(harness, {
+      phase,
+      startedAt: 0,
+      endedAt: 30_000,
+      error: "test failure",
+    });
 
     expect(harness.broadcastToConnIds).toHaveBeenCalledOnce();
-    const digest = harness.broadcastToConnIds.mock.calls[0]?.[1] as
-      | SessionObserverDigest
-      | undefined;
+    const digest = broadcastDigest(harness);
     expect(digest?.health).toBe(expected);
     expect(harness.persistDigest).toHaveBeenCalledOnce();
-    harness.observer.dispose();
   });
 
   it("retries one transient terminal digest failure", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
+    useFakeTime();
     const completeModel = vi
       .fn()
       .mockRejectedValueOnce(new Error("temporary failure"))
       .mockResolvedValueOnce(modelMessage({ headline: "Finished the work", health: "on-track" }));
     const harness = createHarness({ completeModel });
-    harness.observer.handleEvent(event({ stream: "lifecycle", data: { phase: "start" } }));
+    harness.observer.handleEvent(lifecycleEvent({ phase: "start" }));
     await vi.advanceTimersByTimeAsync(30_000);
-    harness.observer.handleEvent(
-      event({
-        stream: "lifecycle",
-        data: { phase: "end", startedAt: 0, endedAt: 30_000 },
-      }),
-    );
-    await flushObserver();
+    await handleLifecycle(harness, { phase: "end", startedAt: 0, endedAt: 30_000 });
 
     expect(completeModel).toHaveBeenCalledTimes(2);
-    const digest = harness.broadcastToConnIds.mock.calls[0]?.[1] as
-      | SessionObserverDigest
-      | undefined;
+    const digest = broadcastDigest(harness);
     expect(digest?.health).toBe("done");
     expect(harness.persistDigest).toHaveBeenCalledOnce();
-    harness.observer.dispose();
   });
 
   it("retries failed terminal persistence", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(30_000);
+    useFakeTime(30_000);
     const persistDigest = vi
       .fn()
       .mockRejectedValueOnce(new Error("temporary write failure"))
       .mockResolvedValueOnce(true);
     const harness = createHarness({ persistDigest });
-    harness.observer.handleEvent(
-      event({
-        stream: "lifecycle",
-        data: { phase: "end", startedAt: 0, endedAt: 30_000 },
-      }),
-    );
-    await flushObserver();
+    await handleLifecycle(harness, { phase: "end", startedAt: 0, endedAt: 30_000 });
 
     expect(persistDigest).toHaveBeenCalledTimes(2);
-    harness.observer.dispose();
   });
 
   it("does not throttle persistence after a failed live write", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
+    useFakeTime();
     const persistDigest = vi
       .fn()
       .mockRejectedValueOnce(new Error("temporary write failure"))
@@ -447,109 +462,73 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
     startAndAddToolNotes(harness.observer);
     await vi.advanceTimersByTimeAsync(12_000);
     for (let index = 0; index < 4; index += 1) {
-      harness.observer.handleEvent(
-        event({ stream: "tool", data: { phase: "start", name: "read", args: { index } } }),
-      );
+      emitEvent(harness, "tool", { phase: "start", name: "read", args: { index } });
     }
-    await vi.advanceTimersByTimeAsync(12_000);
-    await flushObserver();
+    await advanceAndFlush(12_000);
 
     expect(persistDigest).toHaveBeenCalledTimes(2);
-    harness.observer.dispose();
   });
 
   it("redacts secrets split across assistant deltas in the assembled note", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
+    useFakeTime();
     const harness = createHarness();
     startAndAddToolNotes(harness.observer);
-    harness.observer.handleEvent(
-      event({ stream: "assistant", data: { delta: "Calling the API with api_k" } }),
-    );
-    harness.observer.handleEvent(
-      event({ stream: "assistant", data: { delta: "ey=super-secret-value-0123456789 attached." } }),
-    );
-    await vi.advanceTimersByTimeAsync(12_000);
-    await flushObserver();
+    emitEvent(harness, "assistant", { delta: "Calling the API with api_k" });
+    emitEvent(harness, "assistant", { delta: "ey=super-secret-value-0123456789 attached." });
+    await advanceAndFlush(12_000);
     expect(harness.completeModel).toHaveBeenCalledOnce();
-    const prompt = JSON.stringify(
-      harness.completeModel.mock.calls[0]?.[0]?.context?.messages ?? [],
-    );
+    const prompt = JSON.stringify(completionMessages(harness));
     expect(prompt).toContain("Assistant:");
     expect(prompt).not.toContain("super-secret-value-0123456789");
-    harness.observer.dispose();
   });
 
   it("does not count assistant fragments toward the note threshold", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
+    useFakeTime();
     const harness = createHarness();
     startAndAddToolNotes(harness.observer, { count: 2 });
     for (let index = 0; index < 6; index += 1) {
-      harness.observer.handleEvent(
-        event({ stream: "assistant", data: { delta: `progress fragment ${index} ` } }),
-      );
+      emitEvent(harness, "assistant", { delta: `progress fragment ${index} ` });
     }
-    await vi.advanceTimersByTimeAsync(20_000);
-    await flushObserver();
+    await advanceAndFlush(20_000);
     expect(harness.completeModel).not.toHaveBeenCalled();
 
-    harness.observer.handleEvent(
-      event({
-        stream: "tool",
-        data: { phase: "start", name: "read", args: { path: "src/final.ts" } },
-      }),
-    );
-    await vi.advanceTimersByTimeAsync(12_000);
-    await flushObserver();
+    emitEvent(harness, "tool", {
+      phase: "start",
+      name: "read",
+      args: { path: "src/final.ts" },
+    });
+    await advanceAndFlush(12_000);
     expect(harness.completeModel).toHaveBeenCalledOnce();
-    harness.observer.dispose();
   });
 
   it("prefers cumulative assistant text and emits a single assembled note", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
+    useFakeTime();
     const harness = createHarness();
     startAndAddToolNotes(harness.observer);
-    harness.observer.handleEvent(
-      event({ stream: "assistant", data: { delta: "Working on the f" } }),
-    );
-    harness.observer.handleEvent(event({ stream: "assistant", data: { delta: "ix" } }));
-    harness.observer.handleEvent(
-      event({ stream: "assistant", data: { text: "Working on the fix and verifying it." } }),
-    );
-    await vi.advanceTimersByTimeAsync(12_000);
-    await flushObserver();
+    emitEvent(harness, "assistant", { delta: "Working on the f" });
+    emitEvent(harness, "assistant", { delta: "ix" });
+    emitEvent(harness, "assistant", { text: "Working on the fix and verifying it." });
+    await advanceAndFlush(12_000);
     expect(harness.completeModel).toHaveBeenCalledOnce();
-    const prompt = JSON.stringify(
-      harness.completeModel.mock.calls[0]?.[0]?.context?.messages ?? [],
-    );
+    const prompt = JSON.stringify(completionMessages(harness));
     expect(prompt.match(/Assistant:/gu)).toHaveLength(1);
     expect(prompt).toContain("Working on the fix and verifying it.");
-    harness.observer.dispose();
   });
 
   it("broadcasts a synthesized terminal digest when the final model call keeps failing", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
+    useFakeTime();
     const completeModel = vi.fn(async () =>
       modelMessage({ headline: "Fixing tests", health: "grinding" }),
     );
     const harness = createHarness({ completeModel });
     startAndAddToolNotes(harness.observer);
-    await vi.advanceTimersByTimeAsync(12_000);
-    await flushObserver();
+    await advanceAndFlush(12_000);
     expect(harness.completeModel).toHaveBeenCalledOnce();
 
     completeModel.mockRejectedValue(new Error("model unavailable"));
-    harness.observer.handleEvent(
-      event({ stream: "lifecycle", data: { phase: "end", endedAt: 60_000 } }),
-    );
-    await vi.advanceTimersByTimeAsync(0);
-    await flushObserver();
-    const observerCalls = harness.broadcastToConnIds.mock.calls.filter(
-      (call) => call[0] === "session.observer",
-    );
+    harness.observer.handleEvent(lifecycleEvent({ phase: "end", endedAt: 60_000 }));
+    await advanceAndFlush(0);
+    const observerCalls = observerBroadcasts(harness);
     expect(observerCalls).toHaveLength(2);
     const synthesized = observerCalls.at(-1)?.[1] as SessionObserverDigest;
     expect(synthesized.health).toBe("done");
@@ -560,213 +539,152 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
         digest: expect.objectContaining({ health: "done", revision: 2 }),
       }),
     );
-    harness.observer.dispose();
   });
 
   it("does not persist a synthesized terminal digest for a superseded run", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
+    useFakeTime();
     const completeModel = vi.fn(async () =>
       modelMessage({ headline: "Fixing tests", health: "grinding" }),
     );
     const harness = createHarness({ completeModel });
     startAndAddToolNotes(harness.observer);
-    await vi.advanceTimersByTimeAsync(12_000);
-    await flushObserver();
+    await advanceAndFlush(12_000);
     expect(harness.completeModel).toHaveBeenCalledOnce();
 
     completeModel.mockImplementation(() => new Promise(() => {}));
-    harness.observer.handleEvent(
-      event({ stream: "lifecycle", data: { phase: "end", endedAt: 30_000 } }),
-    );
-    harness.observer.handleEvent(
-      event({ runId: "run-2", stream: "lifecycle", data: { phase: "start" } }),
-    );
-    await vi.advanceTimersByTimeAsync(0);
-    await flushObserver();
+    harness.observer.handleEvent(lifecycleEvent({ phase: "end", endedAt: 30_000 }));
+    harness.observer.handleEvent(lifecycleEvent({ phase: "start" }, { runId: "run-2" }));
+    await advanceAndFlush(0);
     const persistedTerminal = harness.persistDigest.mock.calls.filter(
       (call) => call[0]?.digest?.runId === "run-1" && call[0]?.digest?.health !== "grinding",
     );
     expect(persistedTerminal).toHaveLength(0);
-    const terminalBroadcasts = harness.broadcastToConnIds.mock.calls.filter(
+    const terminalBroadcasts = observerBroadcasts(harness).filter(
       (call) =>
-        call[0] === "session.observer" &&
         (call[1] as SessionObserverDigest | undefined)?.runId === "run-1" &&
         (call[1] as SessionObserverDigest | undefined)?.health === "done",
     );
     expect(terminalBroadcasts).toHaveLength(0);
-    harness.observer.dispose();
   });
 
   it("invalidates the persist-time guard when a newer run replaces the digest's run", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
+    useFakeTime();
     const persistDigest = vi.fn(async (_params: PersistDigestParams) => undefined);
     const harness = createHarness({ persistDigest });
     startAndAddToolNotes(harness.observer);
-    await vi.advanceTimersByTimeAsync(12_000);
-    await flushObserver();
+    await advanceAndFlush(12_000);
     expect(persistDigest).toHaveBeenCalledOnce();
-    const guard = persistDigest.mock.calls[0]?.[0]?.stillCurrent as (() => boolean) | undefined;
+    const guard = persistGuard(harness);
     expect(guard?.()).toBe(true);
 
-    harness.observer.handleEvent(
-      event({ runId: "run-2", stream: "lifecycle", data: { phase: "start" } }),
-    );
+    harness.observer.handleEvent(lifecycleEvent({ phase: "start" }, { runId: "run-2" }));
     expect(guard?.()).toBe(false);
-    harness.observer.dispose();
   });
 
   it("drops a completed digest when the session was reset mid-flight", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
+    useFakeTime();
     const readSession = vi.fn(() => ({ sessionId: "session-id", updatedAt: 0 }));
     const harness = createHarness({ readSession });
     startAndAddToolNotes(harness.observer);
     readSession.mockReturnValue({ sessionId: "session-id-reset", updatedAt: 0 });
-    await vi.advanceTimersByTimeAsync(12_000);
-    await flushObserver();
+    await advanceAndFlush(12_000);
     expect(harness.completeModel).toHaveBeenCalledOnce();
-    const observerBroadcasts = harness.broadcastToConnIds.mock.calls.filter(
-      (call) => call[0] === "session.observer",
-    );
-    expect(observerBroadcasts).toHaveLength(0);
+    const broadcasts = observerBroadcasts(harness);
+    expect(broadcasts).toHaveLength(0);
     expect(harness.persistDigest).not.toHaveBeenCalled();
-    harness.observer.dispose();
   });
 
   it("catches up durable persistence when the live digest already carried terminal health", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
+    useFakeTime();
     const completeModel = vi.fn(async () =>
       modelMessage({ headline: "Finished the fix", health: "done" }),
     );
     const harness = createHarness({ completeModel });
     startAndAddToolNotes(harness.observer);
-    await vi.advanceTimersByTimeAsync(12_000);
-    await flushObserver();
+    await advanceAndFlush(12_000);
     expect(harness.completeModel).toHaveBeenCalledOnce();
-    const liveBroadcasts = harness.broadcastToConnIds.mock.calls.filter(
-      (call) => call[0] === "session.observer",
-    );
+    const liveBroadcasts = observerBroadcasts(harness);
     expect(liveBroadcasts).toHaveLength(1);
 
     completeModel.mockRejectedValue(new Error("model unavailable"));
-    harness.observer.handleEvent(
-      event({ stream: "lifecycle", data: { phase: "end", endedAt: 30_000 } }),
-    );
-    await vi.advanceTimersByTimeAsync(0);
-    await flushObserver();
-    const persisted = harness.persistDigest.mock.calls.at(-1)?.[0]?.digest as
-      | SessionObserverDigest
-      | undefined;
+    harness.observer.handleEvent(lifecycleEvent({ phase: "end", endedAt: 30_000 }));
+    await advanceAndFlush(0);
+    const persisted = persistedDigest(harness, -1);
     expect(persisted?.health).toBe("done");
     expect(persisted?.revision).toBe(1);
-    const observerBroadcasts = harness.broadcastToConnIds.mock.calls.filter(
-      (call) => call[0] === "session.observer",
-    );
-    expect(observerBroadcasts).toHaveLength(1);
-    harness.observer.dispose();
+    const broadcasts = observerBroadcasts(harness);
+    expect(broadcasts).toHaveLength(1);
   });
 
   it("does not broadcast a synthesized terminal digest the store rejected", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
+    useFakeTime();
     const completeModel = vi.fn(async () =>
       modelMessage({ headline: "Fixing tests", health: "grinding" }),
     );
     const persistDigest = vi.fn(async () => false);
     const harness = createHarness({ completeModel, persistDigest });
     startAndAddToolNotes(harness.observer);
-    await vi.advanceTimersByTimeAsync(12_000);
-    await flushObserver();
+    await advanceAndFlush(12_000);
     expect(harness.completeModel).toHaveBeenCalledOnce();
 
     completeModel.mockRejectedValue(new Error("model unavailable"));
-    harness.observer.handleEvent(
-      event({ stream: "lifecycle", data: { phase: "end", endedAt: 30_000 } }),
-    );
-    await vi.advanceTimersByTimeAsync(0);
-    await flushObserver();
-    const terminalBroadcasts = harness.broadcastToConnIds.mock.calls.filter(
-      (call) =>
-        call[0] === "session.observer" &&
-        (call[1] as SessionObserverDigest | undefined)?.health === "done",
+    harness.observer.handleEvent(lifecycleEvent({ phase: "end", endedAt: 30_000 }));
+    await advanceAndFlush(0);
+    const terminalBroadcasts = observerBroadcasts(harness).filter(
+      (call) => (call[1] as SessionObserverDigest | undefined)?.health === "done",
     );
     expect(terminalBroadcasts).toHaveLength(0);
-    harness.observer.dispose();
   });
 
   it("suppresses assistant notes while a runtime-context block is still streaming", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
+    useFakeTime();
     const harness = createHarness();
     startAndAddToolNotes(harness.observer);
-    harness.observer.handleEvent(
-      event({
-        stream: "assistant",
-        data: { delta: "prose before\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n" },
-      }),
-    );
-    harness.observer.handleEvent(
-      event({ stream: "assistant", data: { delta: "private-context-body-must-not-leave" } }),
-    );
-    await vi.advanceTimersByTimeAsync(12_000);
-    await flushObserver();
+    emitEvent(harness, "assistant", {
+      delta: "prose before\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n",
+    });
+    emitEvent(harness, "assistant", { delta: "private-context-body-must-not-leave" });
+    await advanceAndFlush(12_000);
     expect(harness.completeModel).toHaveBeenCalledOnce();
-    const openPrompt = String(
-      harness.completeModel.mock.calls[0]?.[0]?.context?.messages?.[0]?.content,
-    );
+    const openPrompt = String(completionMessages(harness)[0]?.content);
     expect(openPrompt).not.toContain("private-context-body-must-not-leave");
     expect(openPrompt).not.toContain("Assistant:");
 
-    harness.observer.handleEvent(
-      event({
-        stream: "assistant",
-        data: { delta: "\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nvisible prose after" },
-      }),
-    );
+    emitEvent(harness, "assistant", {
+      delta: "\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nvisible prose after",
+    });
     startAndAddToolNotes(harness.observer, { count: 4 });
-    await vi.advanceTimersByTimeAsync(12_000);
-    await flushObserver();
+    await advanceAndFlush(12_000);
     expect(harness.completeModel).toHaveBeenCalledTimes(2);
-    const closedPrompt = String(
-      harness.completeModel.mock.calls[1]?.[0]?.context?.messages?.[0]?.content,
-    );
+    const closedPrompt = String(completionMessages(harness, 1)[0]?.content);
     expect(closedPrompt).not.toContain("private-context-body-must-not-leave");
     expect(closedPrompt).toContain("visible prose after");
-    harness.observer.dispose();
   });
 
   it("invalidates the persist-time guard after disposal", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
+    useFakeTime();
     const persistDigest = vi.fn(async (_params: PersistDigestParams) => true);
     const harness = createHarness({ persistDigest });
     startAndAddToolNotes(harness.observer);
-    await vi.advanceTimersByTimeAsync(12_000);
-    await flushObserver();
-    const guard = persistDigest.mock.calls[0]?.[0]?.stillCurrent as (() => boolean) | undefined;
+    await advanceAndFlush(12_000);
+    const guard = persistGuard(harness);
     expect(guard?.()).toBe(true);
     harness.observer.dispose();
+    activeHarnesses.delete(harness);
     expect(guard?.()).toBe(false);
   });
 
   it("does not throttle the next digest after a rejected persist", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
+    useFakeTime();
     const persistDigest = vi.fn(async () => false);
     const harness = createHarness({ persistDigest });
     startAndAddToolNotes(harness.observer);
-    await vi.advanceTimersByTimeAsync(12_000);
-    await flushObserver();
+    await advanceAndFlush(12_000);
     expect(persistDigest).toHaveBeenCalledOnce();
 
     persistDigest.mockResolvedValue(true);
     startAndAddToolNotes(harness.observer, { count: 4 });
-    await vi.advanceTimersByTimeAsync(12_000);
-    await flushObserver();
+    await advanceAndFlush(12_000);
     expect(persistDigest).toHaveBeenCalledTimes(2);
-    harness.observer.dispose();
   });
 });

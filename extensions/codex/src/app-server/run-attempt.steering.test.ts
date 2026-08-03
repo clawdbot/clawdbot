@@ -2,6 +2,7 @@
 import path from "node:path";
 import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it, vi } from "vitest";
+import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import type { CodexServerNotification } from "./protocol.js";
 import {
   createParams,
@@ -107,6 +108,40 @@ async function waitAndQueueActiveRunMessage(
 }
 
 describe("runCodexAppServerAttempt steering", () => {
+  it("marks the active run aborted before asynchronous cleanup releases its handle", async () => {
+    const { requests, waitForMethod } = createStartedThreadHarness();
+    const params = createSteeringParams();
+    activeRunRegistrationMocks.setActiveEmbeddedRun.mockClear();
+    activeRunRegistrationMocks.clearActiveEmbeddedRun.mockClear();
+
+    const run = runCodexAppServerAttempt(params);
+    await waitForMethod("turn/start");
+
+    let handle: { abort: () => void; isAborted?: () => boolean } | undefined;
+    await vi.waitFor(() => {
+      handle = activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLast(
+        (call) => call[0] === params.sessionId,
+      )?.[1] as typeof handle;
+      expect(handle).toBeDefined();
+    }, fastWait);
+    expect(handle?.isAborted?.()).toBe(false);
+
+    handle?.abort();
+    expect(handle?.isAborted?.()).toBe(true);
+    expect(activeRunRegistrationMocks.clearActiveEmbeddedRun).not.toHaveBeenCalled();
+    expect(readAttemptTerminal(await run).aborted).toBe(true);
+    expect(activeRunRegistrationMocks.clearActiveEmbeddedRun).toHaveBeenCalledWith(
+      params.sessionId,
+      handle,
+      params.sessionKey,
+      params.sessionFile,
+    );
+    expect(requests).toContainEqual({
+      method: "turn/interrupt",
+      params: { threadId: "thread-1", turnId: "turn-1" },
+    });
+  });
+
   it("accepts Gateway transcript-backed steering for the active Codex turn", async () => {
     const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
     const params = createSteeringParams();

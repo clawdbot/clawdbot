@@ -1,6 +1,7 @@
 // Gateway shutdown and restart close orchestration.
 // Coordinates hooks, drains, sockets, sidecars, plugins, and runtime cleanup.
 import type { Server as HttpServer } from "node:http";
+import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { WebSocketServer } from "ws";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
@@ -12,7 +13,9 @@ import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { closePluginStateDatabase } from "../plugin-state/plugin-state-store.js";
+import { clearActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import {
   abortTrackedChatRunById,
   type ChatAbortControllerEntry,
@@ -31,6 +34,7 @@ import {
   type ChatRunEntry,
   type ChatRunState,
 } from "./server-chat-state.js";
+import { clearSessionTypingState } from "./server-methods/session-typing-state.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
@@ -43,6 +47,7 @@ const HTTP_CLOSE_GRACE_MS = 1_000;
 const HTTP_CLOSE_FORCE_WAIT_MS = 5_000;
 const MCP_RUNTIME_CLOSE_GRACE_MS = 5_000;
 const LSP_RUNTIME_CLOSE_GRACE_MS = 5_000;
+const EMBEDDING_PROVIDER_CLOSE_GRACE_MS = 5_000;
 const RESTART_REPLY_DRAIN_POLL_MS = 100;
 const RESTART_REPLY_POST_ABORT_DRAIN_TIMEOUT_MS = 1_000;
 const RESTART_REPLY_POST_ABORT_DRAIN_POLL_MS = 50;
@@ -574,7 +579,7 @@ async function triggerGatewayLifecycleHookWithTimeout(params: {
 }
 
 async function disposeRuntimeWithShutdownGrace(params: {
-  label: "bundle-mcp" | "bundle-lsp";
+  label: "plugin-services" | "bundle-mcp" | "bundle-lsp" | "embedding-providers";
   dispose: () => Promise<void>;
   graceMs: number;
   warnings: string[];
@@ -600,6 +605,11 @@ async function disposeAllBundleLspRuntimesOnDemand(): Promise<void> {
   await disposeAllBundleLspRuntimes();
 }
 
+async function drainRetainedEmbeddingProvidersOnDemand(): Promise<void> {
+  const { drainRetainedOpenAiEmbeddingProviders } = await import("./embeddings-http.js");
+  await drainRetainedOpenAiEmbeddingProviders();
+}
+
 async function stopGmailWatcherOnDemand(): Promise<void> {
   const { stopGmailWatcher } = await import("../hooks/gmail-watcher.js");
   await stopGmailWatcher();
@@ -611,10 +621,8 @@ export async function runGatewayClosePrelude(params: {
   skillsChangeUnsub?: () => void;
   disposeAuthRateLimiter?: () => void;
   disposeBrowserAuthRateLimiter: () => void;
-  stopModelPricingRefresh?: () => void;
   stopChannelHealthMonitor?: () => Promise<void>;
   stopReadinessEventLoopHealth?: () => void;
-  clearSecretsRuntimeSnapshot?: () => void;
   closeMcpServer?: () => Promise<void>;
 }): Promise<void> {
   params.stopDiagnostics?.();
@@ -622,10 +630,8 @@ export async function runGatewayClosePrelude(params: {
   params.skillsChangeUnsub?.();
   params.disposeAuthRateLimiter?.();
   params.disposeBrowserAuthRateLimiter();
-  params.stopModelPricingRefresh?.();
   await params.stopChannelHealthMonitor?.();
   params.stopReadinessEventLoopHealth?.();
-  params.clearSecretsRuntimeSnapshot?.();
   await params.closeMcpServer?.().catch(() => {});
 }
 
@@ -669,7 +675,7 @@ export function createGatewayCloseHandler(
   params: {
     bonjourStop: (() => Promise<void>) | null;
     tailscaleCleanup: (() => Promise<void>) | null;
-    releasePluginRouteRegistry?: (() => void) | null;
+    clearSecretsRuntimeSnapshot?: (() => void) | null;
     channelIds?: readonly ChannelId[];
     stopChannel: (name: ChannelId, accountId?: string) => Promise<void>;
     pluginServices: PluginServicesHandle | null;
@@ -850,7 +856,13 @@ export function createGatewayCloseHandler(
       }
       if (params.pluginServices) {
         await measureCloseStep("plugin-services", () =>
-          shutdownStep("plugin-services", () => params.pluginServices!.stop(), warnings),
+          // A stalled plugin must not prevent later runtime and child-process cleanup.
+          disposeRuntimeWithShutdownGrace({
+            label: "plugin-services",
+            dispose: () => params.pluginServices!.stop(),
+            graceMs: MCP_RUNTIME_CLOSE_GRACE_MS,
+            warnings,
+          }),
         );
       }
       await measureCloseStep("channels", async () => {
@@ -859,7 +871,18 @@ export function createGatewayCloseHandler(
           await shutdownStep(`channel/${channelId}`, () => params.stopChannel(channelId), warnings);
         }
       });
+      // Load the bridge only at shutdown; eager imports boot the subagent registry at startup.
+      // Cancel parked calls before their agent harnesses and MCP transports disappear.
+      await shutdownStep(
+        "code-mode-runs",
+        async () => {
+          const { disposeAllCodeModeRuns } = await import("../agents/code-mode-state.js");
+          return disposeAllCodeModeRuns();
+        },
+        warnings,
+      );
       await shutdownStep("agent-harnesses", () => disposeRegisteredAgentHarnesses(), warnings);
+      await shutdownStep("ai-session-resources", () => cleanupSessionResources(), warnings);
       await measureCloseStep("bundle-runtimes", async () => {
         await Promise.all([
           disposeRuntimeWithShutdownGrace({
@@ -880,12 +903,12 @@ export function createGatewayCloseHandler(
       await measureCloseStep("gmail-watcher", () =>
         shutdownStep("gmail-watcher", () => stopGmailWatcherOnDemand(), warnings),
       );
-      if (params.cron.stopAndDrain) {
-        await params.cron.stopAndDrain();
-      } else {
-        params.cron.stop();
-      }
-      params.heartbeatRunner.stop();
+      await shutdownStep(
+        "cron",
+        () => (params.cron.stopAndDrain ? params.cron.stopAndDrain() : params.cron.stop()),
+        warnings,
+      );
+      await shutdownStep("heartbeat-runner", () => params.heartbeatRunner.stop(), warnings);
       await shutdownStep(
         "task-registry-maintenance",
         () => params.stopTaskRegistryMaintenance?.(),
@@ -976,6 +999,7 @@ export function createGatewayCloseHandler(
           await Promise.race([closePromise, websocketForceTimeout.promise]);
           websocketForceTimeout.clear();
         }
+        clearSessionTypingState();
       });
       await measureCloseStep("http-server", async () => {
         const servers =
@@ -1027,9 +1051,25 @@ export function createGatewayCloseHandler(
           }
         }
       });
+      await disposeRuntimeWithShutdownGrace({
+        label: "embedding-providers",
+        dispose: drainRetainedEmbeddingProvidersOnDemand,
+        graceMs: EMBEDDING_PROVIDER_CLOSE_GRACE_MS,
+        warnings,
+      });
     } finally {
+      await shutdownStep("plugin-host-registry", clearActivePluginRegistry, warnings);
+      // Rent: plugin cleanup may still read ambient slots, so drain their shared
+      // lifecycle only after the registry owner has finished retiring plugins.
+      await shutdownStep(
+        "ambient-runtime-state",
+        () => drainGlobalSingletonLifecycleState(restartExpectedMs === null ? "close" : "restart"),
+        warnings,
+      );
+      // Channel and plugin teardown still resolve account credentials. Keep the
+      // active snapshot until every teardown owner is done, then always scrub it.
       try {
-        params.releasePluginRouteRegistry?.();
+        params.clearSecretsRuntimeSnapshot?.();
       } catch {
         /* ignore */
       }

@@ -6,7 +6,10 @@
 import { normalizeOptionalStringifiedId } from "@openclaw/normalization-core/string-coerce";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
-import { parseThreadSessionSuffix } from "../../sessions/session-key-utils.js";
+import {
+  parseSessionDeliveryRoute,
+  parseThreadSessionSuffix,
+} from "../../sessions/session-key-utils.js";
 import type { GatewaySessionListRow } from "./sessions-helpers.js";
 import type { AnnounceTarget } from "./sessions-send-helpers.js";
 import { resolveAnnounceTargetFromKey } from "./sessions-send-helpers.js";
@@ -31,7 +34,12 @@ export async function resolveAnnounceTarget(params: {
   if (fallback) {
     const normalized = normalizeChannelId(fallback.channel);
     const plugin = normalized ? getChannelPlugin(normalized) : null;
-    if (!plugin?.meta?.preferSessionLookupForAnnounceTarget) {
+    const route =
+      parseSessionDeliveryRoute(params.sessionKey) ?? parseSessionDeliveryRoute(params.displayKey);
+    // Stored DM delivery context carries the authoritative account and thread;
+    // use the parsed address only when that exact session has no saved route.
+    const isDirectRoute = route?.peerKind === "direct" || route?.peerKind === "dm";
+    if (!isDirectRoute && !plugin?.meta?.preferSessionLookupForAnnounceTarget) {
       return fallback;
     }
   }

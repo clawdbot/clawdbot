@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { SpawnResult } from "../process/exec-result.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
@@ -78,13 +79,14 @@ const mocks = vi.hoisted(() => ({
     (
       argv: string[],
       options?: { timeoutMs?: number; windowsVerbatimArguments?: boolean },
-    ) => Promise<{ stdout: string; stderr: string; code: number; signal: null; killed: boolean }>
+    ) => Promise<SpawnResult>
   >(async () => ({
     stdout: "",
     stderr: "",
     code: 0,
     signal: null,
     killed: false,
+    termination: "exit",
   })),
   pickPrimaryTailnetIPv4: vi.fn<() => string | undefined>(() => undefined),
   resolveAdvertisedLanHost: vi.fn<() => Promise<string | null>>(async () => null),

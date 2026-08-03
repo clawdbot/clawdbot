@@ -7,6 +7,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionRunStatus } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import type { BoardFace } from "../lib/board/settings.ts";
 import {
   normalizeCatalogProjectGrouping,
   type CatalogProjectGrouping,
@@ -52,6 +53,7 @@ export function sidebarSessionAttentionPriority(attention: SidebarSessionAttenti
 
 export type SidebarRecentSession = {
   key: string;
+  displayName?: string;
   incognito?: boolean;
   createdActor?: SessionCreatedActor;
   archivedBy?: SessionCreatedActor;
@@ -72,6 +74,7 @@ export type SidebarRecentSession = {
   draftOwnedBySelf?: boolean;
   icon?: string;
   category?: string;
+  boardFace?: BoardFace;
   channel?: string;
   channelSession?: boolean;
   workSession?: boolean;
@@ -90,7 +93,7 @@ export type SidebarRecentSession = {
   agentStatusNote?: string;
   observerDigest?: Pick<
     SessionObserverDigest,
-    "runId" | "headline" | "health" | "updatedAt" | "revision"
+    "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
   >;
   spawnedBy?: string;
   status?: SessionRunStatus;
@@ -125,7 +128,6 @@ export function rowDemandsVisibility(
       : row.visuallyActive ||
         row.containsActiveDescendant ||
         row.hasActiveRun ||
-        row.status === "running" ||
         row.runningChildCount > 0 ||
         row.attention.kind !== "none";
 }
@@ -161,8 +163,8 @@ export function resolveSidebarSessionsScrollState(
   }
   return "middle";
 }
-export type SidebarSessionGroupDropTarget = {
-  group: string;
+export type SidebarSectionDropTarget = {
+  sectionId: string;
   position: "before" | "after";
 };
 
@@ -200,6 +202,9 @@ const SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY = "openclaw:sidebar:sessions:show-cr
 const SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY = "openclaw:sidebar:sessions:status-filter";
 const SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY =
   "openclaw:sidebar:sessions:collapsed-sections";
+const SIDEBAR_HIDDEN_SESSION_CATALOGS_STORAGE_KEY = "openclaw:sidebar:sessions:hidden-catalogs";
+export const SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT =
+  "openclaw:sidebar-hidden-catalogs-changed";
 
 export function limitSidebarSessionRows(rows: SidebarRecentSession[], limit: number) {
   const requiredCount = rows.filter((row) => row.active || row.pinned).length;
@@ -258,6 +263,21 @@ export function loadStoredCollapsedSessionSections(): ReadonlySet<string> {
   }
 }
 
+export function loadStoredHiddenSessionCatalogIds(): ReadonlySet<string> {
+  try {
+    const parsed: unknown = JSON.parse(
+      getSafeLocalStorage()?.getItem(SIDEBAR_HIDDEN_SESSION_CATALOGS_STORAGE_KEY) ?? "[]",
+    );
+    return new Set(
+      Array.isArray(parsed)
+        ? parsed.flatMap((value) => (typeof value === "string" && value ? [value] : []))
+        : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
+
 export function storeSidebarSessionsGrouping(grouping: SidebarSessionsGrouping) {
   getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_GROUPING_STORAGE_KEY, grouping);
 }
@@ -279,6 +299,16 @@ export function storeCollapsedSessionSections(sections: ReadonlySet<string>) {
     SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY,
     JSON.stringify([...sections]),
   );
+}
+
+export function storeHiddenSessionCatalogIds(ids: ReadonlySet<string>) {
+  getSafeLocalStorage()?.setItem(
+    SIDEBAR_HIDDEN_SESSION_CATALOGS_STORAGE_KEY,
+    JSON.stringify([...ids]),
+  );
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT));
+  }
 }
 
 export const SIDEBAR_SESSION_SORT_OPTIONS = [

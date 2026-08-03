@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
@@ -20,7 +21,7 @@ import {
   listPluginDoctorSessionStoreAgentIds,
 } from "../plugins/doctor-contract-registry.js";
 import {
-  DEFAULT_AGENT_ID,
+  LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   isValidAgentId,
   normalizeAgentId,
@@ -28,6 +29,7 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
+import { readFileWindowFullySync } from "./file-read.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { expandHomePrefix } from "./home-dir.js";
 import { isWithinDir } from "./path-safety.js";
@@ -234,8 +236,11 @@ export function pickLatestLegacyDirectEntry(
   return best;
 }
 
-export function normalizeSessionEntry(entry: SessionEntryLike): SessionEntry | null {
-  const shaped = normalizePersistedSessionEntryShape(entry);
+export function normalizeSessionEntry(
+  entry: SessionEntryLike,
+  sessionKey?: string,
+): SessionEntry | null {
+  const shaped = normalizePersistedSessionEntryShape(entry, { sessionKey });
   if (!shaped) {
     return null;
   }
@@ -430,7 +435,7 @@ export function resolveStaleLegacySessionFile(params: {
     const fd = fs.openSync(targetSessionFile, "r");
     try {
       const buffer = Buffer.alloc(8192);
-      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+      const bytesRead = readFileWindowFullySync(fd, buffer, 0);
       if (bytesRead <= 0) {
         return undefined;
       }
@@ -458,158 +463,16 @@ export function resolveStaleLegacySessionFile(params: {
   }
 }
 
-function skipJson5Trivia(raw: string, index: number): number {
-  let i = index;
-  while (i < raw.length) {
-    const ch = raw[i];
-    if (ch === " " || ch === "\n" || ch === "\r" || ch === "\t") {
-      i++;
-      continue;
-    }
-    if (ch === "/" && raw[i + 1] === "/") {
-      i += 2;
-      while (i < raw.length && raw[i] !== "\n") {
-        i++;
-      }
-      continue;
-    }
-    if (ch === "/" && raw[i + 1] === "*") {
-      i += 2;
-      while (i < raw.length && !(raw[i] === "*" && raw[i + 1] === "/")) {
-        i++;
-      }
-      return i < raw.length ? i + 2 : i;
-    }
-    break;
-  }
-  return i;
-}
-
-function readJson5String(raw: string, index: number): { value: string; next: number } | null {
-  const quote = raw[index];
-  if (quote !== '"' && quote !== "'") {
-    return null;
-  }
-  let i = index + 1;
-  let value = "";
-  while (i < raw.length) {
-    const ch = raw[i];
-    if (ch === quote) {
-      return { value, next: i + 1 };
-    }
-    if (ch === "\\") {
-      return null;
-    }
-    value += ch;
-    i++;
-  }
-  return null;
-}
-
-function readJson5BareKey(raw: string, index: number): { value: string; next: number } | null {
-  let i = index;
-  while (i < raw.length) {
-    const ch = raw[i];
-    if (
-      ch === ":" ||
-      ch === " " ||
-      ch === "\n" ||
-      ch === "\r" ||
-      ch === "\t" ||
-      ch === "," ||
-      ch === "}" ||
-      ch === "{" ||
-      ch === "[" ||
-      ch === "]"
-    ) {
-      break;
-    }
-    i++;
-  }
-  if (i === index) {
-    return null;
-  }
-  return { value: raw.slice(index, i), next: i };
-}
-
-function listTopLevelSessionStoreKeys(raw: string): string[] | null {
-  let i = skipJson5Trivia(raw, 0);
-  if (raw[i] !== "{") {
-    return null;
-  }
-  i++;
-  const keys: string[] = [];
-  let depth = 1;
-  let expectingKey = true;
-
-  while (i < raw.length) {
-    i = skipJson5Trivia(raw, i);
-    const ch = raw[i];
-    if (ch === undefined) {
-      return null;
-    }
-    if (depth === 1 && ch === "}") {
-      return keys;
-    }
-    if (depth === 1 && expectingKey) {
-      const key = ch === '"' || ch === "'" ? readJson5String(raw, i) : readJson5BareKey(raw, i);
-      if (!key) {
-        return null;
-      }
-      i = skipJson5Trivia(raw, key.next);
-      if (raw[i] !== ":") {
-        return null;
-      }
-      keys.push(key.value);
-      i++;
-      expectingKey = false;
-      continue;
-    }
-    if (ch === '"' || ch === "'") {
-      const str = readJson5String(raw, i);
-      if (!str) {
-        return null;
-      }
-      i = str.next;
-      continue;
-    }
-    if (ch === "{" || ch === "[") {
-      depth++;
-      i++;
-      continue;
-    }
-    if (ch === "}" || ch === "]") {
-      depth--;
-      i++;
-      if (depth < 1) {
-        return keys;
-      }
-      continue;
-    }
-    if (depth === 1 && ch === ",") {
-      expectingKey = true;
-      i++;
-      continue;
-    }
-    i++;
-  }
-  return null;
-}
-
-function sessionStoreTextMayNeedCanonicalization(params: {
-  raw: string;
+function sessionStoreMayNeedCanonicalization(params: {
+  store: Record<string, SessionEntryLike>;
   storeAgentIds: Iterable<string>;
   mainKey: string;
   scope?: SessionScope;
   preserveForeignMainAliases?: boolean;
 }): boolean {
-  const keys = listTopLevelSessionStoreKeys(params.raw);
-  if (!keys) {
-    return true;
-  }
   const storeAgentIds = new Set([...params.storeAgentIds].map((id) => normalizeAgentId(id)));
   const hasNonMainAgent = [...storeAgentIds].some((id) => id !== DEFAULT_AGENT_ID);
-  for (const key of keys) {
+  for (const key of Object.keys(params.store)) {
     const rawKey = key.trim();
     if (rawKey !== key) {
       return true;
@@ -809,16 +672,17 @@ export async function migrateOrphanedSessionKeys(params: {
     const pluginForeignMainAliasRisk = [...storeAgentIds].some(
       (id) => pluginAgentIdSet.has(id) && id !== DEFAULT_AGENT_ID,
     );
-    let raw: string;
+    let parsed: ReturnType<typeof parseSessionStoreJson5>;
     try {
-      raw = fs.readFileSync(storePath, "utf-8");
+      parsed = parseSessionStoreJson5(fs.readFileSync(storePath, "utf-8"));
     } catch (err) {
       warnings.push(`Could not read ${storePath}: ${String(err)}`);
       continue;
     }
     if (
-      !sessionStoreTextMayNeedCanonicalization({
-        raw,
+      !parsed.ok ||
+      !sessionStoreMayNeedCanonicalization({
+        store: parsed.store,
         storeAgentIds,
         mainKey,
         scope,
@@ -827,17 +691,6 @@ export async function migrateOrphanedSessionKeys(params: {
     ) {
       continue;
     }
-    let parsed: ReturnType<typeof readSessionStoreJson5>;
-    try {
-      parsed = parseSessionStoreJson5(raw);
-    } catch (err) {
-      warnings.push(`Could not read ${storePath}: ${String(err)}`);
-      continue;
-    }
-    if (!parsed.ok) {
-      continue;
-    }
-
     // A physical store can have several owners. Canonicalize valid scoped rows
     // within their declared owner on every pass so iteration order cannot move
     // one agent's history into another namespace.
@@ -901,7 +754,7 @@ export async function migrateOrphanedSessionKeys(params: {
     }
     const normalized = Object.create(null) as Record<string, SessionEntry>;
     for (const [key, entry] of Object.entries(working)) {
-      const ne = normalizeSessionEntry(entry);
+      const ne = normalizeSessionEntry(entry, key);
       if (ne) {
         normalized[key] = ne;
       }
@@ -950,7 +803,7 @@ export async function migrateLegacyAcpSessionMetadata(params: {
   const pluginTargets = declaredTargets.filter(
     ({ agentId }) => agentId !== DEFAULT_AGENT_ID && normalizedPluginAgentIds.has(agentId),
   );
-  const configuredAgents = Array.isArray(params.cfg.agents?.list) ? params.cfg.agents.list : [];
+  const configuredAgents = listAgentEntries(params.cfg);
   const configuredAgentIds = new Set(
     configuredAgents.flatMap((entry) => (entry?.id ? [normalizeAgentId(entry.id)] : [])),
   );
@@ -1032,8 +885,8 @@ export async function migrateLegacyAcpSessionMetadata(params: {
         isAmbiguousSharedStoreKey(key, mainKey, scope) ||
         (pluginForeignMainAliasRisk && isLegacyDefaultMainAliasKey(key, mainKey)),
     ).length;
-    const hasLegacyAcpMetadata = Object.values(parsed.store).some(
-      (entry) => normalizeSessionEntry(entry)?.acp !== undefined,
+    const hasLegacyAcpMetadata = Object.entries(parsed.store).some(
+      ([sessionKey, entry]) => normalizeSessionEntry(entry, sessionKey)?.acp !== undefined,
     );
     if (hasLegacyAcpMetadata && storeAliases.hasUnresolvedIdentity) {
       warnings.push(unresolvedSessionStoreIdentityWarning("ACP metadata migration", storePath));
@@ -1063,7 +916,7 @@ export async function migrateLegacyAcpSessionMetadata(params: {
     let migrated = 0;
     let preserved = 0;
     for (const [sessionKey, entry] of Object.entries(parsed.store)) {
-      const normalizedEntry = normalizeSessionEntry(entry);
+      const normalizedEntry = normalizeSessionEntry(entry, sessionKey);
       if (!normalizedEntry) {
         continue;
       }

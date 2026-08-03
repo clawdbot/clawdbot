@@ -30,12 +30,18 @@ function resolveChromeExtensionDir(pluginRoot?: string): string {
   return path.resolve(here, "..", "..", "chrome-extension");
 }
 
-function firstExtensionProfile(): { name: string; relayPort: number } | null {
-  const cfg = getRuntimeConfig();
-  const resolved = resolveBrowserConfig(cfg.browser, cfg);
+function firstExtensionProfile(
+  resolved: ReturnType<typeof resolveBrowserConfig>,
+): { name: string; relayPort: number } | null {
   for (const [name, profile] of Object.entries(resolved.profiles)) {
     if (profile.driver === "extension") {
-      return { name, relayPort: profile.cdpPort ?? resolved.extensionRelayDefaultPort };
+      return {
+        name,
+        relayPort:
+          profile.cdpPort ??
+          resolved.extensionRelayPorts[name] ??
+          resolved.extensionRelayDefaultPort,
+      };
     }
   }
   return null;
@@ -65,18 +71,18 @@ function buildRemoteGatewayRelayUrl(raw: string): string {
   return url.toString();
 }
 
-function buildPairingString(gatewayUrl?: string): {
+async function buildPairingString(gatewayUrl?: string): Promise<{
   pairing: string;
   relayPort: number;
   remote: boolean;
-} {
+}> {
   const cfg = getRuntimeConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   // Create the host-local relay secret if this host has not used the extension
   // driver yet, so pairing works on a fresh gateway or node host before the
   // relay has started. Pairing must run on the machine that hosts the browser.
-  const token = ensureExtensionRelayToken();
-  const profile = firstExtensionProfile();
+  const token = await ensureExtensionRelayToken();
+  const profile = firstExtensionProfile(resolved);
   const relayPort = profile?.relayPort ?? resolved.extensionRelayDefaultPort;
 
   const gateway = gatewayUrl?.trim();
@@ -107,7 +113,29 @@ function buildPairingString(gatewayUrl?: string): {
   };
 }
 
-/** Register `openclaw browser extension {path,pair}`. */
+/**
+ * Resolve the local relay CDP endpoint for third-party CDP clients
+ * (Puppeteer, chrome-devtools-mcp, raw WebSocket). Creates the host-local
+ * relay secret on first use, mirroring `pair`.
+ */
+async function buildCdpEndpoint(): Promise<{
+  browserUrl: string;
+  wsEndpoint: string;
+  headers: { Authorization: string };
+}> {
+  const cfg = getRuntimeConfig();
+  const resolved = resolveBrowserConfig(cfg.browser, cfg);
+  const token = await ensureExtensionRelayToken();
+  const profile = firstExtensionProfile(resolved);
+  const relayPort = profile?.relayPort ?? resolved.extensionRelayDefaultPort;
+  return {
+    browserUrl: `http://127.0.0.1:${relayPort}`,
+    wsEndpoint: `ws://127.0.0.1:${relayPort}/cdp`,
+    headers: { Authorization: `Bearer ${token}` },
+  };
+}
+
+/** Register `openclaw browser extension {path,pair,cdp}`. */
 export function registerBrowserExtensionCommands(
   browser: Command,
   _parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -136,15 +164,13 @@ export function registerBrowserExtensionCommands(
       await runCommandWithRuntime(
         defaultRuntime,
         async () => {
-          const result = buildPairingString(opts.gatewayUrl);
+          const result = await buildPairingString(opts.gatewayUrl);
           if (opts.json === true) {
-            defaultRuntime.log(
-              JSON.stringify({
-                pairingString: result.pairing,
-                relayPort: result.relayPort,
-                remote: result.remote,
-              }),
-            );
+            defaultRuntime.writeJson({
+              pairingString: result.pairing,
+              relayPort: result.relayPort,
+              remote: result.remote,
+            });
             return;
           }
           const setupLine = result.remote
@@ -162,6 +188,41 @@ export function registerBrowserExtensionCommands(
               info("2. Open the OpenClaw popup and paste this pairing string:"),
               "",
               theme.heading(result.pairing),
+              "",
+              info("The token is a host-local secret; keep it private."),
+            ].join("\n"),
+          );
+        },
+        (err: unknown) => {
+          defaultRuntime.error(danger(String(err)));
+          defaultRuntime.exit(1);
+        },
+      );
+    });
+
+  extension
+    .command("cdp")
+    .description("Print the relay CDP endpoint and auth header for external CDP clients")
+    .option("--json", "Print the endpoint as JSON")
+    .action(async (opts) => {
+      await runCommandWithRuntime(
+        defaultRuntime,
+        async () => {
+          const endpoint = await buildCdpEndpoint();
+          if (opts.json === true) {
+            defaultRuntime.writeJson(endpoint);
+            return;
+          }
+          defaultRuntime.log(
+            [
+              info("Relay CDP endpoint (pair the extension first):"),
+              `browserUrl: ${endpoint.browserUrl}`,
+              `wsEndpoint: ${endpoint.wsEndpoint}`,
+              `header:     Authorization: ${endpoint.headers.Authorization}`,
+              "",
+              info("Example (chrome-devtools-mcp):"),
+              `  npx chrome-devtools-mcp --wsEndpoint ${endpoint.wsEndpoint} \\`,
+              `    --wsHeaders '${JSON.stringify(endpoint.headers)}'`,
               "",
               info("The token is a host-local secret; keep it private."),
             ].join("\n"),

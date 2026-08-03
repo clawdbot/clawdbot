@@ -589,7 +589,7 @@ describe("GatewayClient request errors", () => {
       JSON.stringify({
         type: "event",
         event: "connect.challenge",
-        payload: { nonce: "nonce-1" },
+        payload: { nonce: "nonce-1", ts: 1_777_777_777_000 },
       }),
     );
     const connectFrame = JSON.parse(
@@ -657,7 +657,7 @@ describe("GatewayClient request errors", () => {
         JSON.stringify({
           type: "event",
           event: "connect.challenge",
-          payload: { nonce: "nonce-1" },
+          payload: { nonce: "nonce-1", ts: 1_777_777_777_000 },
         }),
       );
       const connectFrame = JSON.parse(
@@ -869,7 +869,7 @@ describe("GatewayClient close handling", () => {
         JSON.stringify({
           type: "event",
           event: "connect.challenge",
-          payload: { nonce: "nonce-1" },
+          payload: { nonce: "nonce-1", ts: 1_777_777_777_000 },
         }),
       );
       expect(firstWs.sent.some((frame) => frame.includes('"method":"connect"'))).toBe(true);
@@ -897,7 +897,7 @@ describe("GatewayClient close handling", () => {
         JSON.stringify({
           type: "event",
           event: "connect.challenge",
-          payload: { nonce: "nonce-2" },
+          payload: { nonce: "nonce-2", ts: 1_777_777_778_000 },
         }),
       );
       const connectFrame = JSON.parse(
@@ -942,7 +942,7 @@ describe("GatewayClient close handling", () => {
         JSON.stringify({
           type: "event",
           event: "connect.challenge",
-          payload: { nonce: "nonce-1" },
+          payload: { nonce: "nonce-1", ts: 1_777_777_777_000 },
         }),
       );
       firstWs.emitClose(1000, "");
@@ -961,7 +961,7 @@ describe("GatewayClient close handling", () => {
         JSON.stringify({
           type: "event",
           event: "connect.challenge",
-          payload: { nonce: "nonce-2" },
+          payload: { nonce: "nonce-2", ts: 1_777_777_778_000 },
         }),
       );
       secondWs.emitClose(1000, "");
@@ -1168,6 +1168,9 @@ describe("GatewayClient connect auth payload", () => {
         approvalRuntimeToken?: string;
         agentRuntimeIdentityToken?: string;
       };
+      device?: {
+        signedAt?: number;
+      };
     };
   };
 
@@ -1216,12 +1219,79 @@ describe("GatewayClient connect auth payload", () => {
     client.stop();
   });
 
-  function emitConnectChallenge(ws: MockWebSocket, nonce = "nonce-1") {
+  it("signs device proof with Gateway time instead of client wall-clock time", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2040-01-01T00:00:00.000Z"));
+    const client = createClientWithIdentity("device-gateway-time", vi.fn());
+    const challengeTs = 1_700_000_000_123;
+
+    client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+    emitConnectChallenge(ws, "nonce-clock-skew", challengeTs);
+    const connect = connectRequestFrom(ws);
+
+    expect(connect.params?.device?.signedAt).toBe(challengeTs);
+    client.stop();
+    vi.useRealTimers();
+  });
+
+  it("fails closed when a device challenge omits its Gateway timestamp", () => {
+    const onConnectError = vi.fn();
+    const client = createClientWithIdentity("device-missing-challenge-time", vi.fn(), {
+      onConnectError,
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
     ws.emitMessage(
       JSON.stringify({
         type: "event",
         event: "connect.challenge",
-        payload: { nonce },
+        payload: { nonce: "nonce-missing-time" },
+      }),
+    );
+
+    expect(ws.sent.some((frame) => frame.includes('"method":"connect"'))).toBe(false);
+    expect(firstMockArg(onConnectError, "connect error")).toMatchObject({
+      message: "gateway connect challenge timestamp invalid",
+    });
+    expect(ws.lastClose).toEqual({ code: 1008, reason: "connect failed" });
+    client.stop();
+  });
+
+  it("fails closed when a device challenge timestamp is malformed", () => {
+    const onConnectError = vi.fn();
+    const client = createClientWithIdentity("device-invalid-challenge-time", vi.fn(), {
+      onConnectError,
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+    ws.emitMessage(
+      JSON.stringify({
+        type: "event",
+        event: "connect.challenge",
+        payload: { nonce: "nonce-invalid-time", ts: "not-a-number" },
+      }),
+    );
+
+    expect(ws.sent.some((frame) => frame.includes('"method":"connect"'))).toBe(false);
+    expect(firstMockArg(onConnectError, "connect error")).toMatchObject({
+      message: "gateway connect challenge timestamp invalid",
+    });
+    expect(ws.lastClose).toEqual({ code: 1008, reason: "connect failed" });
+    client.stop();
+  });
+
+  function emitConnectChallenge(ws: MockWebSocket, nonce = "nonce-1", ts = 1_800_000_000_000) {
+    ws.emitMessage(
+      JSON.stringify({
+        type: "event",
+        event: "connect.challenge",
+        payload: { nonce, ts },
       }),
     );
   }

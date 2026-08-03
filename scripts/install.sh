@@ -16,7 +16,10 @@ MUTED='\033[38;2;90;100;128m'       # text-muted    #5a6480
 NC='\033[0m' # No Color
 
 DEFAULT_TAGLINE="All your chats, one OpenClaw."
-NODE_DEFAULT_MAJOR=24
+NODE_DEFAULT_MAJOR=26
+# Homebrew ships the current Node line as plain "node" (no versioned node@26
+# formula exists); versioned formulas only cover LTS lines like node@24.
+NODE_BREW_FORMULA="node"
 NODE_MIN_MAJOR=22
 NODE_22_MIN_MINOR=22
 NODE_22_MIN_PATCH=3
@@ -110,10 +113,18 @@ detect_downloader() {
 download_file() {
     local url="$1"
     local output="$2"
+    local redirect_mode="${3:-follow}"
     if [[ -z "$DOWNLOADER" ]]; then
         detect_downloader
     fi
     if [[ "$DOWNLOADER" == "curl" ]]; then
+        if [[ "$redirect_mode" == "deny" ]]; then
+            curl -fsSL --max-redirs 0 --proto '=https' --tlsv1.2 \
+                --speed-limit 1 --speed-time 30 \
+                --retry 3 --retry-delay 1 --retry-connrefused \
+                -o "$output" "$url"
+            return
+        fi
         # Bound post-connect stalls without imposing a total download duration.
         curl -fsSL --proto '=https' --tlsv1.2 \
             --speed-limit 1 --speed-time 30 \
@@ -121,14 +132,45 @@ download_file() {
             -o "$output" "$url"
         return
     fi
+    if [[ "$redirect_mode" == "deny" ]]; then
+        wget -q --max-redirect=0 --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout=20 -O "$output" "$url"
+        return
+    fi
     wget -q --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout=20 -O "$output" "$url"
+}
+
+# Managed setup endpoints must return a non-empty script with a raw shebang.
+# This is a response-shape check, not an authenticity or completeness check.
+validate_downloaded_script() {
+    local file="$1" url="$2"
+    if [[ ! -s "$file" ]]; then
+        ui_error "Downloaded script is empty: ${url}"
+        return 1
+    fi
+    # Check the first two raw bytes are '#!' (0x23 0x21) BEFORE command
+    # substitution, which strips NUL/control bytes and could false-accept
+    # a file whose raw content does not actually start with a shebang.
+    local raw_magic
+    raw_magic="$(od -An -tx1 -N2 "$file" | tr -d ' ')"
+    if [[ "$raw_magic" != "2321" ]]; then
+        ui_error "Downloaded file does not look like a shell script (no shebang): ${url}"
+        return 1
+    fi
+}
+
+download_validated_script() {
+    local url="$1" output="$2"
+    # These fixed executable-script endpoints must not redirect: Wget's
+    # --https-only only filters recursive traversal, not ordinary redirects.
+    download_file "$url" "$output" deny || return 1
+    validate_downloaded_script "$output" "$url"
 }
 
 run_remote_bash() {
     local url="$1"
     local tmp
     mktempfile tmp
-    download_file "$url" "$tmp"
+    download_validated_script "$url" "$tmp" || return 1
     /bin/bash "$tmp"
 }
 
@@ -1729,8 +1771,11 @@ promote_supported_node_binary() {
         "/usr/bin/node"
         "/usr/local/bin/node"
         "/opt/homebrew/bin/node"
-        "/opt/homebrew/opt/node@${NODE_DEFAULT_MAJOR}/bin/node"
-        "/usr/local/opt/node@${NODE_DEFAULT_MAJOR}/bin/node"
+        "/opt/homebrew/opt/${NODE_BREW_FORMULA}/bin/node"
+        "/usr/local/opt/${NODE_BREW_FORMULA}/bin/node"
+        # Keep-alive for installs provisioned when node@24 was the default.
+        "/opt/homebrew/opt/node@24/bin/node"
+        "/usr/local/opt/node@24/bin/node"
     )
 
     for candidate in "${candidates[@]}"; do
@@ -1787,7 +1832,7 @@ ensure_macos_default_node_active() {
 
     local brew_node_prefix=""
     if command -v brew &> /dev/null; then
-        brew_node_prefix="$(brew --prefix "node@${NODE_DEFAULT_MAJOR}" 2>/dev/null || true)"
+        brew_node_prefix="$(brew --prefix "${NODE_BREW_FORMULA}" 2>/dev/null || true)"
         if [[ -n "$brew_node_prefix" && -x "${brew_node_prefix}/bin/node" ]]; then
             export PATH="${brew_node_prefix}/bin:$PATH"
             refresh_shell_command_cache
@@ -1803,9 +1848,9 @@ ensure_macos_default_node_active() {
     active_version="$(node -v 2>/dev/null || echo "missing")"
 
     if [[ -z "$brew_node_prefix" || ! -x "${brew_node_prefix}/bin/node" ]]; then
-        ui_error "Homebrew node@${NODE_DEFAULT_MAJOR} is not installed on disk"
+        ui_error "Homebrew ${NODE_BREW_FORMULA} is not installed on disk"
         echo "The previous 'brew install' step appears to have failed."
-        echo "Re-run 'brew install node@${NODE_DEFAULT_MAJOR}' directly or rerun the installer with --verbose to see the underlying error."
+        echo "Re-run 'brew install ${NODE_BREW_FORMULA}' directly or rerun the installer with --verbose to see the underlying error."
         return 1
     fi
 
@@ -1951,11 +1996,11 @@ install_node_with_apk() {
 install_node() {
     if [[ "$OS" == "macos" ]]; then
         ui_info "Installing Node.js via Homebrew"
-        if ! run_quiet_step "Installing node@${NODE_DEFAULT_MAJOR}" brew install "node@${NODE_DEFAULT_MAJOR}"; then
-            echo "Re-run with --verbose or run 'brew install node@${NODE_DEFAULT_MAJOR}' directly, then rerun the installer."
+        if ! run_quiet_step "Installing ${NODE_BREW_FORMULA}" brew install "${NODE_BREW_FORMULA}"; then
+            echo "Re-run with --verbose or run 'brew install ${NODE_BREW_FORMULA}' directly, then rerun the installer."
             exit 1
         fi
-        brew link "node@${NODE_DEFAULT_MAJOR}" --overwrite --force 2>/dev/null || true
+        brew link "${NODE_BREW_FORMULA}" --overwrite --force 2>/dev/null || true
         if ! ensure_macos_default_node_active; then
             exit 1
         fi
@@ -1990,9 +2035,10 @@ install_node() {
 
         ui_info "Installing Node.js via NodeSource"
         if command -v apt-get &> /dev/null; then
-            local tmp
+            local tmp setup_url
+            setup_url="https://deb.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x"
             mktempfile tmp
-            run_required_step "Downloading NodeSource setup script" download_file "https://deb.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            run_required_step "Downloading NodeSource setup script" download_validated_script "$setup_url" "$tmp"
             if is_root; then
                 run_required_step "Configuring NodeSource repository" bash "$tmp"
                 run_required_step "Installing Node.js" apt_get_install nodejs
@@ -2001,9 +2047,10 @@ install_node() {
                 run_required_step "Installing Node.js" apt_get_install nodejs
             fi
         elif command -v dnf &> /dev/null; then
-            local tmp
+            local tmp setup_url
+            setup_url="https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x"
             mktempfile tmp
-            run_required_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            run_required_step "Downloading NodeSource setup script" download_validated_script "$setup_url" "$tmp"
             if is_root; then
                 run_required_step "Configuring NodeSource repository" bash "$tmp"
                 run_required_step "Installing Node.js" dnf install -y -q nodejs
@@ -2012,9 +2059,10 @@ install_node() {
                 run_required_step "Installing Node.js" sudo dnf install -y -q nodejs
             fi
         elif command -v yum &> /dev/null; then
-            local tmp
+            local tmp setup_url
+            setup_url="https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x"
             mktempfile tmp
-            run_required_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            run_required_step "Downloading NodeSource setup script" download_validated_script "$setup_url" "$tmp"
             if is_root; then
                 run_required_step "Configuring NodeSource repository" bash "$tmp"
                 run_required_step "Installing Node.js" yum install -y -q nodejs
@@ -2367,6 +2415,21 @@ checkout_git_openclaw_ref() {
     fi
 
     ui_error "Requested git version not found: ${ref}"
+    return 1
+}
+
+validate_git_checkout_head() {
+    local repo_dir="$1"
+
+    if [[ ! -d "$repo_dir/.git" ]]; then
+        return 0
+    fi
+    if git --git-dir="$repo_dir/.git" --work-tree="$repo_dir" rev-parse --verify --quiet 'HEAD^{commit}' >/dev/null 2>&1; then
+        return 0
+    fi
+
+    ui_error "Git checkout has no commit: ${repo_dir}"
+    ui_info "Move or remove this incomplete checkout, then retry the installer."
     return 1
 }
 
@@ -2825,6 +2888,7 @@ install_openclaw_from_git() {
     ensure_pnpm
     ensure_pnpm_binary_for_scripts
 
+    validate_git_checkout_head "$repo_dir" || return 1
     if [[ ! -d "$repo_dir" ]]; then
         mkdir -p "$(dirname "$repo_dir")"
         run_quiet_step "Cloning OpenClaw" git clone "$repo_url" "$repo_dir"

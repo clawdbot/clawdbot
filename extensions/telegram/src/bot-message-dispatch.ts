@@ -1,8 +1,5 @@
 // Telegram plugin module coordinates one inbound message dispatch lifecycle.
-import {
-  createOutboundPayloadPlan,
-  projectOutboundPayloadPlanForDelivery,
-} from "openclaw/plugin-sdk/channel-outbound";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { createSubsystemLogger, danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveDispatchTelegramContext } from "./bot-message-dispatch-context.js";
@@ -314,11 +311,19 @@ export const dispatchTelegramMessage = async ({
   const forceBlockStreamingForReasoning =
     resolvedReasoningLevel === "on" && streamMode !== "progress";
   const quote = resolveTelegramQuoteContext({ context: dispatchContext, replyToMode });
+  // Draft messages are provider-visible before final modifiers run. Suppress them when a hook
+  // can rewrite or cancel, or the original payload can flash before the normal delivery gate.
+  const hookRunner = getGlobalHookRunner();
+  const allowProviderPreview = !(
+    (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
+    (hookRunner?.hasHooks("message_sending") ?? false)
+  );
   // Pre-adoption abort is drain-owned via turnAdoptionLifecycle.abortSignal.
   const isDispatchSuperseded = () => turnAdoptionLifecycle?.abortSignal?.aborted === true;
   const dispatchGeneration = 0;
   const draft = createTelegramDraftController({
     accountId: dispatchContext.route.accountId,
+    allowProviderPreview,
     bot,
     cfg,
     chatId: dispatchContext.chatId,
@@ -375,6 +380,7 @@ export const dispatchTelegramMessage = async ({
   });
   const state: TelegramDispatchTurnState = {
     queuedFinal: false,
+    noVisibleReplyFallbackEligible: false,
     suppressSilentReplyFallback: false,
     hadErrorReplyFailureOrSkip: false,
   };
@@ -480,8 +486,8 @@ export const dispatchTelegramMessage = async ({
     !suppressFailureFallback &&
     !progress.finalAnswerDelivered() &&
     (state.dispatchError ||
-      deliverySummary.skippedNonSilent > 0 ||
-      deliverySummary.failedNonSilent > 0);
+      deliverySummary.failedNonSilent > 0 ||
+      (deliverySummary.skippedNonSilent > 0 && !state.suppressSilentReplyFallback));
   if (shouldSendFailureFallback) {
     const fallbackText = state.dispatchError
       ? "Something went wrong while processing your request. Please try again."
@@ -500,25 +506,12 @@ export const dispatchTelegramMessage = async ({
     !deliverySummary.delivered &&
     !state.suppressSilentReplyFallback &&
     !state.queuedFinal &&
-    dispatchContext.isGroup
+    state.noVisibleReplyFallbackEligible
   ) {
-    const policySessionKey =
-      dispatchContext.ctxPayload.CommandSource === "native"
-        ? (dispatchContext.ctxPayload.CommandTargetSessionKey ??
-          dispatchContext.ctxPayload.SessionKey)
-        : dispatchContext.ctxPayload.SessionKey;
-    const silentReplyFallback = projectOutboundPayloadPlanForDelivery(
-      createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
-        cfg,
-        sessionKey: policySessionKey,
-        surface: "telegram",
-      }),
-    );
-    if (silentReplyFallback.length > 0) {
-      sentFallback = (await delivery.deliverFallback(silentReplyFallback, false)).delivered;
-    }
-    silentReplyDispatchLogger.debug("telegram turn ended without visible final response", {
-      hasSessionKey: Boolean(policySessionKey),
+    sentFallback = (await delivery.deliverFallback([{ text: EMPTY_RESPONSE_FALLBACK }], false))
+      .delivered;
+    silentReplyDispatchLogger.debug("telegram recovered eligible turn without visible response", {
+      hasSessionKey: Boolean(dispatchContext.ctxPayload.SessionKey),
       hasChatId: dispatchContext.chatId != null,
       queuedFinal: state.queuedFinal,
       sentFallback,

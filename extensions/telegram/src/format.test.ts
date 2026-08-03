@@ -139,12 +139,24 @@ describe("markdownToTelegramHtml", () => {
     );
   });
 
-  it("renders block-mode tables as code in legacy Telegram HTML", () => {
+  it.each([
+    { name: "a table-only reply", before: "", after: "" },
+    { name: "a table between surrounding prose", before: "Before\n\n", after: "\n\nAfter" },
+  ])("keeps $name visible in one-shot and chunked legacy Telegram HTML", ({ before, after }) => {
     const table = "| A | B |\n| --- | --- |\n| 1 | 2 |";
+    const markdown = `${before}${table}${after}`;
+    const html = markdownToTelegramHtml(markdown, { tableMode: "block" });
+    const chunks = markdownToTelegramChunks(markdown, 4096, { tableMode: "block" });
 
-    expect(markdownToTelegramHtml(table, { tableMode: "block" })).toBe(
-      "<pre><code>| A | B |\n| --- | --- |\n| 1 | 2 |\n</code></pre>",
-    );
+    expect(html).toContain(`<pre><code>${table}\n</code></pre>`);
+    expect(chunks.map((chunk) => chunk.html)).toEqual([html]);
+    expect(chunks[0]?.text).toContain("| 1 | 2 |");
+    if (before) {
+      expect(html).toContain("Before");
+    }
+    if (after) {
+      expect(html).toContain("After");
+    }
   });
 
   it("normalizes raw code language HTML without leaking tags", () => {
@@ -325,6 +337,27 @@ describe("markdownToTelegramHtml", () => {
     const chunks = splitTelegramHtmlChunks(`&${"A".repeat(5000)}`, 4000);
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
+  });
+
+  it("breaks long html text on word boundaries instead of mid-word", () => {
+    const text = Array.from({ length: 12 }, () => "abcde").join(" ");
+    const chunks = splitTelegramHtmlChunks(text, 13);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 13)).toBe(true);
+    for (const chunk of chunks) {
+      for (const token of chunk.trim().split(/\s+/)) {
+        expect(token).toBe("abcde");
+      }
+    }
+    expect(chunks.join("")).toBe(text);
+  });
+
+  it("still hard-cuts a single word longer than the html chunk limit", () => {
+    const chunks = splitTelegramHtmlChunks("A".repeat(30), 10);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 10)).toBe(true);
+    expect(chunks.join("")).toBe("A".repeat(30));
   });
 
   it("derives readable plain text from Telegram HTML fallback markup", () => {

@@ -12,6 +12,7 @@ import {
   readCodexAppServerClientRuntimeArtifact,
   validateCodexAppServerRuntimeArtifact,
 } from "./runtime-artifact.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 function startOptions(
   command: string,
@@ -51,7 +52,7 @@ async function captureBinding(params: {
     before,
     startOptions: params.options,
     spawnIdentity: identity,
-    runtimeIdentity: { serverVersion: "0.144.1", userAgent: "codex-test" },
+    runtimeIdentity: { serverVersion: CODEX_APP_SERVER_VERSION, userAgent: "codex-test" },
   });
   bindCodexAppServerRuntimeArtifact(client, binding);
   return { binding, client };
@@ -210,7 +211,7 @@ describe("Codex app-server runtime artifact", () => {
           before,
           startOptions: options,
           spawnIdentity: identity,
-          runtimeIdentity: { serverVersion: "0.144.1" },
+          runtimeIdentity: { serverVersion: CODEX_APP_SERVER_VERSION },
         }),
       ).rejects.toThrow("changed during startup");
     });
@@ -242,14 +243,36 @@ describe("Codex app-server runtime artifact", () => {
     ).rejects.toThrow("WebSocket attestation is unsupported");
   });
 
-  it("fails closed when spawn environment can inject runtime code", async () => {
-    const options = startOptions("codex", { env: { NODE_OPTIONS: "--require=/tmp/inject.js" } });
+  it.each([
+    ["preload", "--require=/tmp/super-secret-inject.js", "--require"],
+    ["mixed safe and unsafe", "--no-warnings --import=/tmp/inject.mjs", "--import"],
+    ["module resolution", "--preserve-symlinks", "--preserve-symlinks"],
+    ["debugger", "--inspect=127.0.0.1:9229", "--inspect"],
+    ["unknown", "--future-node-option", "--future-node-option"],
+    ["invalid boolean value", "--no-warnings=true", "--no-warnings"],
+  ])("fails closed for %s NODE_OPTIONS", async (_label, nodeOptions, option) => {
+    const options = startOptions("codex", { env: { NODE_OPTIONS: nodeOptions } });
+    const capture = captureCodexAppServerRuntimeArtifactBeforeStart({
+      startOptions: options,
+      spawnIdentity: spawnIdentity(options),
+    });
+
+    await expect(capture).rejects.toThrow(`cannot attest NODE_OPTIONS option ${option}`);
+    await expect(capture).rejects.not.toThrow("super-secret-inject.js");
+  });
+
+  it.each([
+    ["unterminated quote", '--no-warnings "'],
+    ["trailing quoted escape", '--no-warnings "\\'],
+    ["tab delimiter", "--no-warnings\t--trace-warnings"],
+  ])("fails closed for malformed Node tokenization: %s", async (_label, nodeOptions) => {
+    const options = startOptions("codex", { env: { NODE_OPTIONS: nodeOptions } });
     await expect(
       captureCodexAppServerRuntimeArtifactBeforeStart({
         startOptions: options,
         spawnIdentity: spawnIdentity(options),
       }),
-    ).rejects.toThrow("injected runtime environment: NODE_OPTIONS");
+    ).rejects.toThrow("cannot safely parse NODE_OPTIONS");
   });
 
   it("allows bounded Node resource and warning options", async () => {
@@ -262,6 +285,32 @@ describe("Codex app-server runtime artifact", () => {
             "--max-old-space-size=4096 --no-warnings --disable-warning=ExperimentalWarning",
         },
       });
+
+      await expect(captureBinding({ options })).resolves.toMatchObject({
+        binding: { id: expect.stringMatching(/^codex-app-server:v1:/u) },
+      });
+    });
+  });
+
+  it.each([
+    [
+      "Discord network workaround",
+      "--dns-result-order=ipv4first --no-network-family-autoselection",
+    ],
+    [
+      "separate values and underscore aliases",
+      "--dns_result_order ipv6first --network_family_autoselection",
+    ],
+    ["quoted Node syntax", '"--dns-result-order=verbatim" "" --no-warnings'],
+    ["network attempt timeout", "--network-family-autoselection-attempt-timeout=250"],
+    ["proxy and platform trust", "--use-env-proxy --use-system-ca"],
+    ["bundled trust", "--use-bundled-ca"],
+    ["OpenSSL trust", "--use-openssl-ca"],
+  ])("allows bounded %s NODE_OPTIONS", async (_label, nodeOptions) => {
+    await withTempDir("openclaw-codex-runtime-node-options-", async (root) => {
+      const command = path.join(root, "codex");
+      await fs.writeFile(command, "native-v1");
+      const options = startOptions(command, { env: { NODE_OPTIONS: nodeOptions } });
 
       await expect(captureBinding({ options })).resolves.toMatchObject({
         binding: { id: expect.stringMatching(/^codex-app-server:v1:/u) },

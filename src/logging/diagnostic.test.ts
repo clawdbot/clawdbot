@@ -3,12 +3,17 @@ import fs from "node:fs";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  appendTranscriptMessageSync,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import {
   emitDiagnosticEvent,
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withDiagnosticPhase } from "./diagnostic-phase.js";
 import {
   getDiagnosticSessionActivitySnapshot,
@@ -369,7 +374,7 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
-  it("keeps queued stale sessions eligible for lane recovery", () => {
+  it("does not count a single in-flight turn as queued work without an active run", () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
     const unsubscribe = onDiagnosticEvent((event) => {
@@ -396,14 +401,81 @@ describe("stuck session diagnostics threshold", () => {
     expect(stuckEvents).toHaveLength(1);
     expectRecordFields(requireRecord(stuckEvents[0], "stuck event"), {
       classification: "stale_session_state",
-      reason: "queued_work_without_active_run",
-      queueDepth: 1,
+      reason: "stale_session_state",
+      queueDepth: 0,
     });
     expectRecoveryCall(
       recoverStuckSession,
-      { sessionId: "s1", sessionKey: "main", queueDepth: 1 },
+      { sessionId: "s1", sessionKey: "main", queueDepth: 0 },
       ["ageMs", "stateGeneration"],
     );
+  });
+
+  it("includes the current app-agent SQLite assistant reply in heartbeat diagnostics", async () => {
+    const openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-heartbeat-app-agent-",
+    });
+    const sessionKey = "agent:oauth-agent:main";
+    const sessionId = "oauth-session";
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+
+    try {
+      await replaceSessionEntry(
+        { agentId: "oauth-agent", sessionKey },
+        { sessionId, updatedAt: 1 },
+      );
+      appendTranscriptMessageSync(
+        { agentId: "oauth-agent", sessionId, sessionKey },
+        { message: { role: "assistant", content: "the reimbursement was approved" } },
+      );
+
+      startDiagnosticHeartbeat(
+        { diagnostics: { enabled: true } },
+        { recoverStuckSession: vi.fn() },
+      );
+      logSessionStateChange({ sessionId, sessionKey, state: "processing" });
+      vi.advanceTimersByTime(61_000);
+
+      expectLoggerMessageContaining(warnSpy, 'lastAssistant="the reimbursement was approved"');
+    } finally {
+      await openClawState.cleanup();
+    }
+  });
+
+  it("never copies an incognito assistant reply into durable heartbeat diagnostics", async () => {
+    const openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-heartbeat-incognito-",
+    });
+    const sessionKey = "agent:main:dashboard:incognito-private";
+    const sessionId = "incognito-private-session";
+    const privateReply = "memory-only personal reimbursement details";
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+
+    try {
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey },
+        { sessionId, updatedAt: 1, incognito: true },
+      );
+      appendTranscriptMessageSync(
+        { agentId: "main", sessionId, sessionKey },
+        { message: { role: "assistant", content: privateReply } },
+      );
+
+      startDiagnosticHeartbeat(
+        { diagnostics: { enabled: true } },
+        { recoverStuckSession: vi.fn() },
+      );
+      logSessionStateChange({ sessionId, sessionKey, state: "processing" });
+      vi.advanceTimersByTime(61_000);
+
+      expectLoggerMessageContaining(warnSpy, `sessionKey=${sessionKey}`);
+      expectNoLoggerMessageContaining(warnSpy, privateReply);
+      expectNoLoggerMessageContaining(warnSpy, "lastAssistant=");
+    } finally {
+      await openClawState.cleanup();
+    }
   });
 
   it("threads session files from heartbeat state into stuck-session recovery", () => {
@@ -1980,9 +2052,9 @@ describe("stuck session diagnostics threshold", () => {
     expect(longRunningEvents).toHaveLength(1);
     expectRecordFields(requireRecord(longRunningEvents[0], "long-running event"), {
       classification: "long_running",
-      reason: "queued_behind_active_work",
+      reason: "active_work",
       activeWorkKind: "embedded_run",
-      queueDepth: 1,
+      queueDepth: 0,
     });
     expect(recoverStuckSession).not.toHaveBeenCalled();
   });
@@ -2031,13 +2103,13 @@ describe("stuck session diagnostics threshold", () => {
       classification: "stalled_agent_run",
       reason: "queued_behind_terminal_active_work",
       activeWorkKind: "embedded_run",
-      queueDepth: 2,
+      queueDepth: 1,
       terminalProgressStale: true,
       lastProgressReason: terminalReason,
     });
     expectRecoveryCall(
       recoverStuckSession,
-      { sessionId: "s1", sessionKey: "main", queueDepth: 2, allowActiveAbort: true },
+      { sessionId: "s1", sessionKey: "main", queueDepth: 1, allowActiveAbort: true },
       ["ageMs", "stateGeneration"],
     );
   });
@@ -2154,6 +2226,46 @@ describe("stuck session diagnostics threshold", () => {
         queued: 0,
       },
       "idle liveness stability event",
+    );
+  });
+
+  it("warns and records the full duration for persistent idle event-loop degradation", () => {
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+    const events: DiagnosticEventPayload[] = [];
+    const unsubscribe = onDiagnosticEvent((event) => events.push(event));
+
+    try {
+      startDiagnosticHeartbeat(
+        { diagnostics: { enabled: true } },
+        {
+          emitMemorySample: createEmitMemorySampleMock(),
+          sampleLiveness: () => ({
+            reasons: ["event_loop_delay"],
+            intervalMs: 30_000,
+            degradedSinceMs: 60_000,
+            eventLoopDelayP99Ms: 1_200,
+            eventLoopDelayMaxMs: 1_500,
+          }),
+        },
+      );
+
+      vi.advanceTimersByTime(30_000);
+    } finally {
+      unsubscribe();
+    }
+
+    expectLoggerMessageContaining(warnSpy, "degradedFor=60s");
+    expect(events.findLast((event) => event.type === "diagnostic.liveness.warning")).toMatchObject({
+      degradedSinceMs: 60_000,
+    });
+    requireMatchingRecord(
+      getDiagnosticStabilitySnapshot({ limit: 10 }).events,
+      {
+        type: "diagnostic.liveness.warning",
+        level: "warning",
+        durationMs: 60_000,
+      },
+      "persistent liveness stability event",
     );
   });
 
@@ -2458,6 +2570,7 @@ describe("stuck session diagnostics threshold", () => {
           sampleLiveness: () => ({
             reasons: ["event_loop_delay"],
             intervalMs: 30_000,
+            degradedSinceMs: 60_000,
             eventLoopDelayP99Ms: 1_500,
             eventLoopDelayMaxMs: 2_000,
           }),

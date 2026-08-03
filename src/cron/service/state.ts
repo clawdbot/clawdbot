@@ -2,6 +2,7 @@
 import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
+import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
@@ -65,6 +66,9 @@ export type CronSystemEventEnqueueResult =
       remove?: () => boolean | void;
     };
 
+/** Notifications queued by cron mutations until their state is durable. */
+export type DeferredCronNotifications = Array<() => void>;
+
 /** Dependency injection surface for the cron service runtime. */
 export type CronServiceDeps = {
   nowMs?: () => number;
@@ -73,6 +77,8 @@ export type CronServiceDeps = {
   cronEnabled: boolean;
   /** CronConfig for session retention settings. */
   cronConfig?: CronConfig;
+  /** List enabled, configured channel ids without exposing channel machinery to cron core. */
+  listConfiguredChannels?: () => readonly string[] | Promise<readonly string[]>;
   evaluateCronTrigger?: (params: {
     job: CronJob;
     script: string;
@@ -84,6 +90,8 @@ export type CronServiceDeps = {
   defaultAgentId?: string;
   /** Resolve the current default when runtime config can change after startup. */
   resolveDefaultAgentId?: () => string;
+  /** Resolve configured or persisted owners whose session stores need periodic cleanup. */
+  resolveSessionStoreAgentIds?: () => string[];
   /** Revalidate agent ownership inside the cron mutation lock. */
   isAgentAvailable?: (agentId: string) => boolean;
   /** Resolve session store path for a given agent id. */
@@ -203,6 +211,14 @@ export type CronServiceDeps = {
       nextCheck?: CronNextCheckProposal;
     } & CronRunOutcome
   >;
+  /** Deliver a primary cron webhook before the run outcome is finalized. */
+  sendCronWebhook?: (params: {
+    job: CronJob;
+    event: CronEvent;
+    abortSignal: AbortSignal;
+    deadlineAtMs?: number;
+    onDeliveryAccepted: () => void;
+  }) => Promise<void>;
   cleanupTimedOutAgentRun?: (params: {
     job: CronJob;
     timeoutMs: number;
@@ -216,10 +232,12 @@ export type CronServiceDeps = {
   sendCronFailureAlert?: (params: {
     job: CronJob;
     text: string;
+    runAtMs?: number;
     channel: CronMessageChannel;
     to?: string;
     mode?: "announce" | "webhook";
     accountId?: string;
+    threadId?: string | number;
   }) => Promise<void>;
   onEvent?: (evt: CronEvent) => void;
 };
@@ -276,8 +294,12 @@ export type CronServiceState = {
 
 /** Creates mutable cron service state with a concrete clock dependency. */
 export function createCronServiceState(deps: CronServiceDeps): CronServiceState {
+  // The public CronService constructor shipped before roster-aware callers.
+  // Preserve its implicit owner unless a static or dynamic configured default exists.
+  const defaultAgentId =
+    deps.defaultAgentId ?? (deps.resolveDefaultAgentId ? undefined : LEGACY_IMPLICIT_AGENT_ID);
   return {
-    deps: { ...deps, nowMs: deps.nowMs ?? (() => Date.now()) },
+    deps: { ...deps, defaultAgentId, nowMs: deps.nowMs ?? (() => Date.now()) },
     store: null,
     durableNextRunAtMsByJobId: new Map<string, number | undefined>(),
     timer: null,

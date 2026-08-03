@@ -314,6 +314,36 @@ describeTelegramDispatch("dispatchTelegramMessage progress-summary", () => {
     );
   });
 
+  it("keeps Claude CLI pre-tool commentary after the progress window collapses", async () => {
+    const markers = "Test markers: caribou-lampion-473, fromage-quantique, satellite-en-tricot";
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        expect(replyOptions?.commentaryPayloadsEnabled).toBe(true);
+        await replyOptions?.onItemEvent?.({
+          kind: "preamble",
+          itemId: "commentary-1",
+          progressText: markers,
+          suppressDurableProgress: true,
+        });
+        await replyOptions?.onBlockReplyQueued?.({ text: markers, isCommentary: true });
+        await dispatcherOptions.deliver({ text: markers, isCommentary: true }, { kind: "block" });
+        await replyOptions?.onToolStart?.({ name: "Bash", phase: "start" });
+        await dispatcherOptions.deliver({ text: "TEST DONE" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress" } },
+    });
+
+    expectWindowCollapsedTo(answerDraftStream, "🛠️ 1 tool call · ⏱️ 1s");
+    expect(allDeliveredReplyTexts()).toEqual([markers, "TEST DONE"]);
+  });
+
   it("never streams an interim answer block into the progress window (Discord parity)", async () => {
     // Progress mode: the window is a pure activity log. An intermediate assistant
     // answer block (info.kind === "block", before the final) must NOT render into

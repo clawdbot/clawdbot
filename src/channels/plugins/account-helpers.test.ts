@@ -158,6 +158,53 @@ describe("createAccountListHelpers", () => {
         }
       }
     });
+
+    it("does not synthesize an account when an owner disables the empty fallback", () => {
+      const helpers = createAccountListHelpers("testchannel", {
+        fallbackAccountIdWhenEmpty: false,
+        implicitDefaultAccount: { channelKeys: ["token"] },
+      });
+
+      expect(helpers.listAccountIds({} as OpenClawConfig)).toEqual([]);
+      expect(helpers.listAccountIds(cfg({}))).toEqual([]);
+      expect(
+        helpers.listAccountIds({
+          channels: { testchannel: { token: "root-token" } },
+        } as unknown as OpenClawConfig),
+      ).toEqual(["default"]);
+      expect(helpers.resolveDefaultAccountId({} as OpenClawConfig)).toBe("default");
+    });
+
+    it("combines additional owner-discovered accounts without changing stable order", () => {
+      const helpers = createAccountListHelpers("testchannel", {
+        additionalAccountIds: () => ["bound", "work", "bound"],
+      });
+
+      expect(helpers.listAccountIds(cfg({ work: {}, alerts: {} }))).toEqual([
+        "alerts",
+        "bound",
+        "work",
+      ]);
+    });
+
+    it("allows a single-account owner to name its configured implicit account", () => {
+      const helpers = createAccountListHelpers("testchannel", {
+        fallbackAccountIdWhenEmpty: false,
+        resolveImplicitAccountId: (config) => {
+          const channel = config.channels?.["testchannel"] as
+            | { token?: string; defaultAccount?: string }
+            | undefined;
+          return channel?.token ? (channel.defaultAccount ?? "default") : undefined;
+        },
+      });
+
+      expect(helpers.listAccountIds({} as OpenClawConfig)).toEqual([]);
+      expect(
+        helpers.listAccountIds({
+          channels: { testchannel: { token: "root-token", defaultAccount: "work" } },
+        } as unknown as OpenClawConfig),
+      ).toEqual(["work"]);
+    });
   });
 
   describe("resolveDefaultAccountId", () => {
@@ -205,6 +252,86 @@ describe("createAccountListHelpers", () => {
         "ops",
       );
     });
+  });
+});
+
+describe("createAccountListHelpers account resolution", () => {
+  type TestAccountConfig = {
+    enabled?: boolean;
+    defaultAccount?: string;
+    name?: string;
+    token?: string | { source: "env"; provider: string; id: string };
+    commands?: { native?: boolean; callbackPath?: string };
+    accounts?: Record<string, Partial<TestAccountConfig>>;
+  };
+
+  const resolver = createAccountListHelpers<TestAccountConfig>("testchannel", {
+    normalizeAccountId,
+    omitKeys: ["defaultAccount"],
+    nestedObjectKeys: ["commands"],
+    implicitDefaultAccount: { channelKeys: ["token"] },
+  });
+
+  it("shares normalized account enumeration and configured default selection", () => {
+    const input = cfg({ "Work Team": { name: "Work" }, alerts: {} }, "Work Team");
+
+    expect(resolver.listConfiguredAccountIds(input)).toEqual(["work-team", "alerts"]);
+    expect(resolver.listAccountIds(input)).toEqual(["alerts", "work-team"]);
+    expect(resolver.resolveDefaultAccountId(input)).toBe("work-team");
+  });
+
+  it("merges owner-declared nested fields while omitting account-selection metadata", () => {
+    const input = {
+      channels: {
+        testchannel: {
+          enabled: true,
+          defaultAccount: "Work Team",
+          commands: { native: true },
+          accounts: {
+            "Work Team": {
+              name: "Work",
+              commands: { callbackPath: "/work" },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(resolver.resolveAccountConfig(input, "work-team")).toEqual({
+      enabled: true,
+      name: "Work",
+      commands: { native: true, callbackPath: "/work" },
+    });
+  });
+
+  it("preserves unresolved SecretRef values without inspecting credentials", () => {
+    const token = { source: "env" as const, provider: "default", id: "TESTCHANNEL_TOKEN" };
+    const input = {
+      channels: {
+        testchannel: {
+          accounts: { work: { token } },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(resolver.resolveAccountConfig(input, "work").token).toBe(token);
+  });
+
+  it("keeps a disabled root and explicit account overrides visible to their owner", () => {
+    const input = {
+      channels: {
+        testchannel: {
+          enabled: false,
+          accounts: { work: { enabled: true, name: "Work" } },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(resolver.resolveAccountConfig(input, "work")).toEqual({
+      enabled: true,
+      name: "Work",
+    });
+    expect(input.channels?.["testchannel"]).toMatchObject({ enabled: false });
   });
 });
 

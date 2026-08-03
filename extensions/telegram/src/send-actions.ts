@@ -7,7 +7,6 @@ import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import {
   createTelegramRequestWithDiag,
   isTelegramMessageDeleteNoopError,
-  normalizeMessageId,
   resolveAndPersistChatId,
   resolveTelegramApiContext,
   withTelegramApiContextLease,
@@ -15,6 +14,7 @@ import {
   type TelegramApiContext,
   type TelegramApiOverride,
 } from "./send-context.js";
+import { prepareTelegramOutbound } from "./send-outbound.js";
 import type { OpenClawConfig } from "./send.runtime.js";
 import { parseTelegramTarget } from "./targets.js";
 
@@ -101,23 +101,16 @@ async function reactMessageTelegramWithContext(
   opts: TelegramReactionOpts,
   context: TelegramApiContext,
 ): Promise<{ ok: true } | { ok: false; warning: string }> {
-  const { cfg, account, api } = context;
-  const rawTarget = String(chatIdInput);
-  const chatId = await resolveAndPersistChatId({
-    cfg,
-    api,
-    lookupTarget: rawTarget,
-    persistTarget: rawTarget,
-    verbose: opts.verbose,
-    gatewayClientScopes: opts.gatewayClientScopes,
-  });
-  const messageId = normalizeMessageId(messageIdInput);
-  const requestWithDiag = createTelegramRequestWithDiag({
-    cfg,
-    account,
-    retry: opts.retry,
-    verbose: opts.verbose,
-    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "react" }),
+  const { api } = context;
+  const { chatId, messageId, request } = await prepareTelegramOutbound({
+    to: chatIdInput,
+    context,
+    opts,
+    messageIdInput,
+    request: {
+      kind: "standard",
+      shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "react" }),
+    },
   });
   const remove = opts.remove === true;
   const trimmedEmoji = emoji.trim();
@@ -131,7 +124,7 @@ async function reactMessageTelegramWithContext(
     throw new Error("Telegram reactions are unavailable in this bot API.");
   }
   try {
-    await requestWithDiag(() => api.setMessageReaction(chatId, messageId, reactions), "reaction");
+    await request(() => api.setMessageReaction(chatId, messageId, reactions), "reaction");
   } catch (err: unknown) {
     const msg = formatErrorMessage(err);
     if (/REACTION_INVALID/i.test(msg)) {
@@ -171,26 +164,19 @@ async function deleteMessageTelegramWithContext(
   opts: TelegramDeleteOpts,
   context: TelegramApiContext,
 ): Promise<{ ok: true } | { ok: false; warning: string }> {
-  const { cfg, account, api } = context;
-  const rawTarget = String(chatIdInput);
-  const chatId = await resolveAndPersistChatId({
-    cfg,
-    api,
-    lookupTarget: rawTarget,
-    persistTarget: rawTarget,
-    verbose: opts.verbose,
-    gatewayClientScopes: opts.gatewayClientScopes,
-  });
-  const messageId = normalizeMessageId(messageIdInput);
-  const requestWithDiag = createTelegramRequestWithDiag({
-    cfg,
-    account,
-    retry: opts.retry,
-    verbose: opts.verbose,
-    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "delete" }),
+  const { api } = context;
+  const { chatId, messageId, request } = await prepareTelegramOutbound({
+    to: chatIdInput,
+    context,
+    opts,
+    messageIdInput,
+    request: {
+      kind: "standard",
+      shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "delete" }),
+    },
   });
   try {
-    await requestWithDiag(() => api.deleteMessage(chatId, messageId), "deleteMessage", {
+    await request(() => api.deleteMessage(chatId, messageId), "deleteMessage", {
       shouldLog: (err) => !isTelegramMessageDeleteNoopError(err),
     });
   } catch (err: unknown) {
@@ -226,24 +212,15 @@ async function pinMessageTelegramWithContext(
   opts: TelegramDeleteOpts,
   context: TelegramApiContext,
 ): Promise<{ ok: true; messageId: string; chatId: string }> {
-  const { cfg, account, api } = context;
-  const rawTarget = String(chatIdInput);
-  const chatId = await resolveAndPersistChatId({
-    cfg,
-    api,
-    lookupTarget: rawTarget,
-    persistTarget: rawTarget,
-    verbose: opts.verbose,
-    gatewayClientScopes: opts.gatewayClientScopes,
+  const { api } = context;
+  const { chatId, messageId, request } = await prepareTelegramOutbound({
+    to: chatIdInput,
+    context,
+    opts,
+    messageIdInput,
+    request: { kind: "standard" },
   });
-  const messageId = normalizeMessageId(messageIdInput);
-  const requestWithDiag = createTelegramRequestWithDiag({
-    cfg,
-    account,
-    retry: opts.retry,
-    verbose: opts.verbose,
-  });
-  await requestWithDiag(
+  await request(
     () =>
       api.pinChatMessage(chatId, messageId, {
         disable_notification: opts.notify !== true,
@@ -272,24 +249,15 @@ async function unpinMessageTelegramWithContext(
   opts: TelegramDeleteOpts,
   context: TelegramApiContext,
 ): Promise<{ ok: true; chatId: string; messageId?: string }> {
-  const { cfg, account, api } = context;
-  const rawTarget = String(chatIdInput);
-  const chatId = await resolveAndPersistChatId({
-    cfg,
-    api,
-    lookupTarget: rawTarget,
-    persistTarget: rawTarget,
-    verbose: opts.verbose,
-    gatewayClientScopes: opts.gatewayClientScopes,
+  const { api } = context;
+  const { chatId, messageId, request } = await prepareTelegramOutbound({
+    to: chatIdInput,
+    context,
+    opts,
+    ...(messageIdInput !== undefined ? { messageIdInput } : {}),
+    request: { kind: "standard" },
   });
-  const messageId = messageIdInput === undefined ? undefined : normalizeMessageId(messageIdInput);
-  const requestWithDiag = createTelegramRequestWithDiag({
-    cfg,
-    account,
-    retry: opts.retry,
-    verbose: opts.verbose,
-  });
-  await requestWithDiag(() => api.unpinChatMessage(chatId, messageId), "unpinChatMessage");
+  await request(() => api.unpinChatMessage(chatId, messageId), "unpinChatMessage");
   logVerbose(
     `[telegram] Unpinned ${messageId != null ? `message ${messageId}` : "active message"} in chat ${chatId}`,
   );

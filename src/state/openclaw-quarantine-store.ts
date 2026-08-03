@@ -2,12 +2,19 @@
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
+import {
+  parseSqliteFileGeneration,
+  readStableSqliteFileGeneration,
+  sameSqliteFileGeneration,
+  serializeSqliteFileGeneration,
+  type SqliteFileGeneration,
+} from "../infra/sqlite-file-generation.js";
 import { VERSION } from "../version.js";
 import { resolveOpenClawStateSqliteDir } from "./openclaw-state-db.paths.js";
 
-const OPENCLAW_QUARANTINE_SCHEMA_VERSION = 1;
+const OPENCLAW_QUARANTINE_SCHEMA_VERSION = 2;
 const OPENCLAW_QUARANTINE_BUSY_TIMEOUT_MS = 5_000;
 const OPENCLAW_QUARANTINE_DIR_MODE = 0o700;
 const OPENCLAW_QUARANTINE_FILE_MODE = 0o600;
@@ -45,6 +52,15 @@ function configureQuarantineWriter(database: DatabaseSync, storePath: string): v
   if (userVersion === OPENCLAW_QUARANTINE_SCHEMA_VERSION) {
     return;
   }
+  if (userVersion === 1) {
+    database.exec(`
+      BEGIN IMMEDIATE;
+      ALTER TABLE quarantined_databases ADD COLUMN verified_generation TEXT;
+      PRAGMA user_version = ${OPENCLAW_QUARANTINE_SCHEMA_VERSION};
+      COMMIT;
+    `);
+    return;
+  }
   database.exec(`
     BEGIN IMMEDIATE;
     CREATE TABLE IF NOT EXISTS quarantined_databases (
@@ -52,7 +68,8 @@ function configureQuarantineWriter(database: DatabaseSync, storePath: string): v
       kind TEXT NOT NULL,
       reason TEXT NOT NULL,
       quarantined_at INTEGER NOT NULL,
-      writer_app_version TEXT
+      writer_app_version TEXT,
+      verified_generation TEXT
     ) STRICT;
     PRAGMA user_version = ${OPENCLAW_QUARANTINE_SCHEMA_VERSION};
     COMMIT;
@@ -74,8 +91,7 @@ function withQuarantineWriter<T>(env: NodeJS.ProcessEnv, operation: (db: Databas
   const storePath = resolveQuarantineStorePath(env);
   const existed = existsSync(storePath);
   ensureQuarantineStoreDirectory(storePath);
-  const sqlite = requireNodeSqlite();
-  const database = new sqlite.DatabaseSync(storePath);
+  const database = openNodeSqliteDatabase(storePath);
   let completed = false;
   try {
     if (!existed) {
@@ -103,25 +119,30 @@ export function readOpenClawDatabaseQuarantine(
   if (!existsSync(storePath)) {
     return undefined;
   }
-  const sqlite = requireNodeSqlite();
-  const database = new sqlite.DatabaseSync(storePath);
+  const database = openNodeSqliteDatabase(storePath);
   try {
     database.exec(`PRAGMA busy_timeout = ${OPENCLAW_QUARANTINE_BUSY_TIMEOUT_MS};`);
     const userVersion = readQuarantineSchemaVersion(database, storePath);
     if (userVersion === 0) {
       return undefined;
     }
-    if (userVersion !== OPENCLAW_QUARANTINE_SCHEMA_VERSION) {
+    if (userVersion > OPENCLAW_QUARANTINE_SCHEMA_VERSION) {
       throw new Error(
         `OpenClaw quarantine store ${storePath} uses newer schema version ${userVersion}.`,
       );
     }
+    const generationColumn = userVersion >= 2 ? ", verified_generation" : "";
     const row = database
       .prepare(
-        "SELECT kind, reason, quarantined_at FROM quarantined_databases WHERE path = ? LIMIT 1",
+        `SELECT kind, reason, quarantined_at${generationColumn} FROM quarantined_databases WHERE path = ? LIMIT 1`,
       )
       .get(path.resolve(pathname)) as
-      | { kind?: unknown; quarantined_at?: unknown; reason?: unknown }
+      | {
+          kind?: unknown;
+          quarantined_at?: unknown;
+          reason?: unknown;
+          verified_generation?: unknown;
+        }
       | undefined;
     if (!row) {
       return undefined;
@@ -130,9 +151,28 @@ export function readOpenClawDatabaseQuarantine(
       (row.kind !== "agent" && row.kind !== "state") ||
       typeof row.reason !== "string" ||
       typeof row.quarantined_at !== "number" ||
-      !Number.isInteger(row.quarantined_at)
+      !Number.isInteger(row.quarantined_at) ||
+      (row.verified_generation !== undefined &&
+        row.verified_generation !== null &&
+        typeof row.verified_generation !== "string")
     ) {
       throw new Error(`OpenClaw quarantine store ${storePath} contains an invalid row.`);
+    }
+    if (typeof row.verified_generation === "string") {
+      let verifiedGeneration: SqliteFileGeneration;
+      try {
+        verifiedGeneration = parseSqliteFileGeneration(row.verified_generation);
+      } catch {
+        throw new Error(`OpenClaw quarantine store ${storePath} contains an invalid row.`);
+      }
+      try {
+        const currentGeneration = readStableSqliteFileGeneration(path.resolve(pathname));
+        if (!sameSqliteFileGeneration(verifiedGeneration, currentGeneration)) {
+          return undefined;
+        }
+      } catch {
+        return undefined;
+      }
     }
     return { kind: row.kind, quarantinedAt: row.quarantined_at, reason: row.reason };
   } finally {
@@ -143,10 +183,14 @@ export function readOpenClawDatabaseQuarantine(
 /** Persist one authoritative quarantine decision. */
 export function recordOpenClawDatabaseQuarantine(options: {
   env?: NodeJS.ProcessEnv;
+  generation?: SqliteFileGeneration;
   kind: OpenClawDatabaseKind;
   path: string;
   reason: string;
 }): boolean {
+  const serializedGeneration = options.generation
+    ? serializeSqliteFileGeneration(options.generation)
+    : null;
   try {
     return withQuarantineWriter(options.env ?? process.env, (database) => {
       database.exec("BEGIN IMMEDIATE;");
@@ -155,16 +199,24 @@ export function recordOpenClawDatabaseQuarantine(options: {
           .prepare(
             `
               INSERT INTO quarantined_databases (
-                path, kind, reason, quarantined_at, writer_app_version
-              ) VALUES (?, ?, ?, ?, ?)
+                path, kind, reason, quarantined_at, writer_app_version, verified_generation
+              ) VALUES (?, ?, ?, ?, ?, ?)
               ON CONFLICT(path) DO UPDATE SET
                 kind = excluded.kind,
                 reason = excluded.reason,
                 quarantined_at = excluded.quarantined_at,
-                writer_app_version = excluded.writer_app_version
+                writer_app_version = excluded.writer_app_version,
+                verified_generation = excluded.verified_generation
             `,
           )
-          .run(path.resolve(options.path), options.kind, options.reason, Date.now(), VERSION);
+          .run(
+            path.resolve(options.path),
+            options.kind,
+            options.reason,
+            Date.now(),
+            VERSION,
+            serializedGeneration,
+          );
         database.exec("COMMIT;");
         return true;
       } catch (error) {

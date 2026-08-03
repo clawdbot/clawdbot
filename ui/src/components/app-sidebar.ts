@@ -1,6 +1,7 @@
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import { isSessionRouteId } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { BoardAvailabilityController } from "../lib/board/availability-controller.ts";
 import "./menu-surface.ts";
@@ -12,6 +13,7 @@ import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
+import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
@@ -24,6 +26,7 @@ import {
   renderAppSidebarPluginTabEntry,
   renderAppSidebarZoneEntry,
 } from "./app-sidebar-render.ts";
+import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.ts";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
 import { renderSessionList } from "./app-sidebar-session-list-render.ts";
 import type {
@@ -37,7 +40,10 @@ import {
   visibleSessionChildren,
 } from "./app-sidebar-session-row-render.ts";
 import {
+  loadStoredHiddenSessionCatalogIds,
   loadStoredSidebarCatalogGrouping,
+  SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
+  storeHiddenSessionCatalogIds,
   storeSidebarCatalogGrouping,
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
@@ -72,12 +78,35 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   private narration: SidebarSessionNarrationController | null = null;
   private narrationLoad: Promise<void> | null = null;
   private readonly narrationSubscriptions = this.createNarrationSubscriptions();
+  private readonly nativeGatewaysChanged = () => this.requestUpdate();
+  private readonly hiddenSessionCatalogsChanged = () => {
+    this.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
+  };
 
-  @state() protected catalogProjectGrouping = loadStoredSidebarCatalogGrouping();
+  // Catalog rows are non-startup content. Load their renderer through the same
+  // idle boundary as other sidebar chrome, then repaint when the chunk arrives.
+  private catalogRenderer: SessionCatalogGroupsRenderer | null = null;
+  private readonly catalogRendererImport = createIdleImport(
+    () => import("./app-sidebar-session-catalog-render.ts"),
+    (module) => {
+      this.catalogRenderer = module.renderSessionCatalogGroups;
+      if (this.isConnected) {
+        this.requestUpdate();
+      }
+    },
+  );
+  private readonly agentIdentitySubscriptions = new SubscriptionsController(this).watch(
+    () => this.context?.agentIdentity,
+    (agentIdentity, notify) => agentIdentity.subscribe(notify),
+  );
+
+  @state() catalogProjectGrouping = loadStoredSidebarCatalogGrouping();
+  @state() hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
 
   constructor() {
     super();
     void this.narrationSubscriptions;
+    void this.agentIdentitySubscriptions;
     void new BoardAvailabilityController(
       this,
       () => {
@@ -121,12 +150,26 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   }
 
   override disconnectedCallback() {
+    window.removeEventListener("openclaw:native-gateways-changed", this.nativeGatewaysChanged);
+    window.removeEventListener(
+      SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
+      this.hiddenSessionCatalogsChanged,
+    );
     this.narration?.disconnect();
+    this.catalogRendererImport.dispose();
     super.disconnectedCallback();
   }
 
   protected override willUpdate(changed: PropertyValues<this>) {
     super.willUpdate(changed);
+    const chip = this.activeChipAgent();
+    // An open switcher tracks roster/reconnect updates; otherwise only hydrate
+    // the active card and avoid background RPCs for every configured agent.
+    const identityIds =
+      this.sidebarMenus.agentMenuPosition === null
+        ? [chip.activeId]
+        : chip.agents.map((agent) => agent.id);
+    this.ensureAgentIdentities(identityIds);
     // A fresh draft must be visible where it will live: genuinely expand a
     // collapsed Threads section (persisted) instead of overriding at render
     // time, so the header toggle keeps matching the visible state.
@@ -136,6 +179,12 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       this.collapsedSessionSections.has("ungrouped")
     ) {
       this.sessionOrganizer.toggleSection("ungrouped");
+    }
+  }
+
+  ensureAgentIdentities(agentIds: readonly string[]): void {
+    if (this.connected) {
+      void this.context?.agentIdentity.ensure(agentIds);
     }
   }
 
@@ -173,7 +222,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       connectionIdentity: gateway?.client ?? null,
       source: this.context?.sessions ?? null,
       rows: this.visibleNarrationRowsInOrder(),
-      openSessionKey: this.activeRouteId === "chat" ? this.getRouteSessionKey() : "",
+      openSessionKey: isSessionRouteId(this.activeRouteId) ? this.getRouteSessionKey() : "",
       agentId: this.selectedAgentIdForSessions(),
     };
   }
@@ -202,9 +251,16 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   override connectedCallback() {
     super.connectedCallback();
+    window.addEventListener("openclaw:native-gateways-changed", this.nativeGatewaysChanged);
+    this.hiddenSessionCatalogsChanged();
+    window.addEventListener(
+      SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
+      this.hiddenSessionCatalogsChanged,
+    );
     // The decorative pet's large module stays out of startup and upgrades in place.
     // Its first visit is at least 15 seconds after load, so idle loading cannot miss one.
     sidebarChromeImport.schedule();
+    this.catalogRendererImport.schedule();
   }
 
   protected override firstUpdated() {
@@ -236,12 +292,12 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     this.sidebarMenus.openSessionMenu(menuSession, rect.right, rect.bottom + 4, trigger);
   }
 
-  startSessionGroupDrag(group: string): void {
-    this.sessionOrganizer.startSessionGroupDrag(group);
+  startSidebarSectionDrag(sectionId: string): void {
+    this.sessionOrganizer.startSidebarSectionDrag(sectionId);
   }
 
-  finishSessionGroupDrag(): void {
-    this.sessionOrganizer.finishSessionGroupDrag();
+  finishSidebarSectionDrag(): void {
+    this.sessionOrganizer.finishSidebarSectionDrag();
   }
 
   sectionDragOver(event: DragEvent, sectionId: string, group?: string): void {
@@ -273,21 +329,32 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   }
 
   openNewSession(): void {
-    this.onOpenNewSession?.(this.expandedAgentId());
+    this.requestOpenNewSession(this.expandedAgentId());
   }
 
-  setVisibleSessionLimit(limit: number): void {
-    this.sessionData.setVisibleSessionLimit(limit);
+  setVisibleSessionLimit(sectionId: string, limit: number): void {
+    this.sessionData.setVisibleSessionLimit(sectionId, limit);
+  }
+
+  loadMoreSidebarSessions(): Promise<void> {
+    return this.sessionData.loadMoreSidebarSessions();
   }
 
   dismissSessionMutationError(): void {
     this.sessionData.dismissSessionMutationError();
   }
 
-  toggleCatalogProjectGrouping(): void {
-    const next = this.catalogProjectGrouping === "project" ? "none" : "project";
+  preloadCatalogRenderer() {
+    return this.catalogRendererImport.load();
+  }
+
+  setCatalogProjectGrouping(next: CatalogProjectGrouping): void {
     storeSidebarCatalogGrouping(next);
     this.catalogProjectGrouping = next;
+  }
+
+  hideSessionCatalog(catalogId: string): void {
+    storeHiddenSessionCatalogIds(new Set([...this.hiddenSessionCatalogIds, catalogId]));
   }
 
   openCatalogMenu(
@@ -317,21 +384,36 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
         sidebarRowsByKey.set(row.key, navigationState.toSidebarSession(row));
       }
     }
-    const { sections, expandedRows, visibleRows } = this.zonedVisibleSections(visibleSessions);
+    const { sections: allSections } = this.zonedVisibleSections(visibleSessions);
+    const catalogs = this.sessionData.sessionCatalogs.filter(
+      (catalog) => !this.hiddenSessionCatalogIds.has(catalog.id),
+    );
+    const visibleCatalogIds = new Set(catalogs.map((catalog) => catalog.id));
+    const sections = allSections.filter(
+      (section) => !section.id.startsWith("catalog:") || visibleCatalogIds.has(section.id.slice(8)),
+    );
+    if (
+      !this.catalogRenderer &&
+      (catalogs.length > 0 || this.sessionData.sessionCatalogRefreshStatus.error !== null)
+    ) {
+      void this.preloadCatalogRenderer().catch(() => undefined);
+    }
     return renderSessionList({
       host: this,
       empty: visibleSessions.length === 0,
       sections,
-      expandedRows,
-      visibleRowCount: visibleRows.length,
+      nativeSessionsHaveMore: this.sessionData.sessionsResult?.hasMore === true,
+      catalogRenderer: this.catalogRenderer,
       showDraft:
         Boolean(this.draftSessionAgentId) &&
         normalizeAgentId(this.draftSessionAgentId) === expandedAgentId,
       catalogs: {
-        catalogs: this.sessionData.sessionCatalogs,
+        catalogs,
+        refreshStatus: this.sessionData.sessionCatalogRefreshStatus,
         basePath: this.basePath,
-        routeSessionKey: this.activeRouteId === "chat" ? this.getRouteSessionKey() : "",
+        routeSessionKey: isSessionRouteId(this.activeRouteId) ? this.getRouteSessionKey() : "",
         newSessionAgentId: expandedAgentId,
+        mainKey: this.sessionMainKey(),
         loadingMoreCatalogIds: this.sessionData.loadingMoreSessionCatalogIds,
         projectGrouping: this.catalogProjectGrouping,
         liveRows,
@@ -346,7 +428,15 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   override render() {
     const sidebarZone = this.reconciledSidebarZone();
     return html`
-      <aside class="sidebar">
+      <aside
+        class="sidebar"
+        @contextmenu=${(event: MouseEvent) => {
+          // Editable controls keep the platform editing menu; all other sidebar chrome is owned here.
+          if (!(event.target as Element).closest("input, textarea, [contenteditable]")) {
+            event.preventDefault();
+          }
+        }}
+      >
         <div class="sidebar-shell" @mousedown=${beginNativeWindowDragFromTopInset}>
           ${renderAppSidebarBrand(this)}
           <div
@@ -416,6 +506,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
         ${this.sidebarMenus.renderAgentMenu()} ${this.sidebarMenus.renderIdentityMenu()}
         ${this.sidebarMenus.renderSessionMenu()} ${this.sidebarMenus.catalogMenu.render()}
         ${this.sidebarMenus.renderSessionGroupMenu()} ${this.sidebarMenus.renderSessionSortMenu()}
+        ${this.sidebarMenus.renderCatalogViewMenu()}
       </aside>
     `;
   }

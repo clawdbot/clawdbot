@@ -6,6 +6,7 @@ import {
   createStartAccountContext,
   expectLifecyclePatch,
   expectPendingUntilAbort,
+  installChannelDmPolicyContractSuite,
   startAccountAndTrackLifecycle,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import {
@@ -33,16 +34,17 @@ const hoisted = vi.hoisted(() => ({
   startGoogleChatMonitor: vi.fn(),
 }));
 
-vi.mock("./channel.runtime.js", () => ({
-  googleChatChannelRuntime: {
-    resolveGoogleChatWebhookPath: ({
-      account,
-    }: {
-      account: { config: { webhookPath?: string } };
-    }) => account.config.webhookPath ?? "/googlechat",
-    startGoogleChatMonitor: hoisted.startGoogleChatMonitor,
-  },
-}));
+// The path resolver stays real so the status assertions below cover the whole chain
+// from configured webhookUrl to published snapshot; only the monitor is stubbed.
+vi.mock("./channel.runtime.js", async () => {
+  const monitor = await vi.importActual<typeof import("./monitor.js")>("./monitor.js");
+  return {
+    googleChatChannelRuntime: {
+      resolveGoogleChatWebhookPath: monitor.resolveGoogleChatWebhookPath,
+      startGoogleChatMonitor: hoisted.startGoogleChatMonitor,
+    },
+  };
+});
 
 const googlechatSetupPlugin = {
   id: "googlechat",
@@ -252,25 +254,18 @@ describe("googlechat setup", () => {
     expect(result.cfg.channels?.googlechat?.audience).toBe("https://example.com/googlechat");
   });
 
-  it("reads the named-account DM policy instead of the channel root", () => {
-    expect(
-      googlechatSetupWizard.dmPolicy?.getCurrent(
-        {
-          channels: {
-            googlechat: {
-              dmPolicy: "disabled",
-              accounts: {
-                alerts: {
-                  serviceAccount: { client_email: "bot@example.com" },
-                  dmPolicy: "allowlist",
-                },
-              },
-            },
-          },
-        } as OpenClawConfig,
-        "alerts",
-      ),
-    ).toBe("allowlist");
+  installChannelDmPolicyContractSuite({
+    dmPolicy: googlechatSetupWizard.dmPolicy!,
+    cases: [
+      {
+        name: "Google Chat named accounts",
+        channel: "googlechat",
+        accountId: "alerts",
+        accountConfig: { serviceAccount: { client_email: "bot@example.com" } },
+        inheritedAllowFrom: ["users/123"],
+        defaultAccount: {},
+      },
+    ],
   });
 
   it("reports configured state for the selected account instead of any account", async () => {
@@ -318,40 +313,6 @@ describe("googlechat setup", () => {
     expect(status.configured).toBe(false);
   });
 
-  it("reports account-scoped config keys for named accounts", () => {
-    expect(googlechatSetupWizard.dmPolicy?.resolveConfigKeys?.({}, "alerts")).toEqual({
-      policyKey: "channels.googlechat.accounts.alerts.dmPolicy",
-      allowFromKey: "channels.googlechat.accounts.alerts.allowFrom",
-    });
-  });
-
-  it("uses configured defaultAccount for omitted DM policy account context", () => {
-    const cfg = {
-      channels: {
-        googlechat: {
-          defaultAccount: "alerts",
-          dmPolicy: "disabled",
-          accounts: {
-            alerts: {
-              serviceAccount: { client_email: "bot@example.com" },
-              dmPolicy: "allowlist",
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(googlechatSetupWizard.dmPolicy?.getCurrent(cfg)).toBe("allowlist");
-    expect(googlechatSetupWizard.dmPolicy?.resolveConfigKeys?.(cfg)).toEqual({
-      policyKey: "channels.googlechat.accounts.alerts.dmPolicy",
-      allowFromKey: "channels.googlechat.accounts.alerts.allowFrom",
-    });
-
-    const next = googlechatSetupWizard.dmPolicy?.setPolicy(cfg, "open");
-    expect(next?.channels?.googlechat?.dmPolicy).toBe("disabled");
-    expect(next?.channels?.googlechat?.accounts?.alerts?.dmPolicy).toBe("open");
-  });
-
   it("uses configured defaultAccount for omitted allowFrom prompt context", async () => {
     const prompter = createTestWizardPrompter({
       note: vi.fn(async () => {}),
@@ -380,29 +341,6 @@ describe("googlechat setup", () => {
     expect(next?.channels?.googlechat?.accounts?.alerts?.allowFrom).toEqual(["users/123456789"]);
   });
 
-  it('writes open DM policy to the named account and preserves inherited allowFrom with "*"', () => {
-    const next = googlechatSetupWizard.dmPolicy?.setPolicy(
-      {
-        channels: {
-          googlechat: {
-            allowFrom: ["users/123"],
-            accounts: {
-              alerts: {
-                serviceAccount: { client_email: "bot@example.com" },
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
-      "open",
-      "alerts",
-    );
-
-    expect(next?.channels?.googlechat?.dmPolicy).toBeUndefined();
-    expect(next?.channels?.googlechat?.accounts?.alerts?.dmPolicy).toBe("open");
-    expect(next?.channels?.googlechat?.accounts?.alerts?.allowFrom).toEqual(["users/123", "*"]);
-  });
-
   it("keeps startAccount pending until abort, then unregisters", async () => {
     const unregister = vi.fn();
     hoisted.startGoogleChatMonitor.mockResolvedValue(unregister);
@@ -425,6 +363,101 @@ describe("googlechat setup", () => {
     });
     expectLifecyclePatch(patches, { running: true });
     expectLifecyclePatch(patches, { running: false });
+  });
+
+  it("publishes the bound webhook path when the account resolves one", async () => {
+    hoisted.startGoogleChatMonitor.mockResolvedValue(vi.fn());
+
+    const { abort, patches, task, isSettled } = startAccountAndTrackLifecycle({
+      startAccount: startGoogleChatGatewayAccount,
+      account: buildAccount(),
+    });
+    await expectPendingUntilAbort({
+      waitForStarted: waitForGoogleChatMonitorStarted,
+      isSettled,
+      abort,
+      task,
+    });
+
+    expectLifecyclePatch(patches, {
+      running: true,
+      webhookPath: "/googlechat",
+      lifecycle: "starting",
+    });
+    expect(patches.some((patch) => patch.lifecycle === "blocked")).toBe(false);
+  });
+
+  it("reports a blocked lifecycle when the configured webhookUrl resolves to no path", async () => {
+    hoisted.startGoogleChatMonitor.mockResolvedValue(vi.fn());
+    const account = buildAccount();
+
+    const { abort, patches, task, isSettled } = startAccountAndTrackLifecycle({
+      startAccount: startGoogleChatGatewayAccount,
+      account: {
+        ...account,
+        config: {
+          ...account.config,
+          webhookPath: undefined,
+          webhookUrl: "chat.example.com/googlechat",
+        },
+      },
+    });
+    await expectPendingUntilAbort({
+      waitForStarted: waitForGoogleChatMonitorStarted,
+      isSettled,
+      abort,
+      task,
+    });
+
+    const startPatch = patches.find((patch) => patch.running === true);
+    expect(startPatch).toBeDefined();
+    expect(startPatch?.lifecycle).toBe("blocked");
+    expect(startPatch?.lastError).toContain("webhookUrl");
+    // The account must not advertise a route the monitor never registered.
+    expect(startPatch?.webhookPath).toBeUndefined();
+  });
+
+  it("clears a previously published webhook path when a restart resolves none", async () => {
+    hoisted.startGoogleChatMonitor.mockResolvedValue(vi.fn());
+    const account = buildAccount();
+    const resolvable = {
+      ...account,
+      config: {
+        ...account.config,
+        webhookPath: undefined,
+        webhookUrl: "https://chat.example.com/gc-inbound",
+      },
+    };
+    const firstAbort = new AbortController();
+    // One context, so both starts write through the same status snapshot the way
+    // the gateway's runtime store patch-merges successive plugin patches.
+    const ctx = createStartAccountContext({
+      account: resolvable,
+      abortSignal: firstAbort.signal,
+    });
+    const firstRun = startGoogleChatGatewayAccount(ctx);
+    await waitForGoogleChatMonitorStarted();
+    expect(ctx.getStatus().webhookPath).toBe("/gc-inbound");
+    firstAbort.abort();
+    await firstRun;
+
+    hoisted.startGoogleChatMonitor.mockClear();
+    const secondAbort = new AbortController();
+    const secondRun = startGoogleChatGatewayAccount({
+      ...ctx,
+      account: {
+        ...resolvable,
+        config: { ...resolvable.config, webhookUrl: "chat.example.com/gc-inbound" },
+      },
+      abortSignal: secondAbort.signal,
+    });
+    await waitForGoogleChatMonitorStarted();
+
+    const restarted = ctx.getStatus();
+    expect(restarted.lifecycle).toBe("blocked");
+    expect(restarted.webhookPath).toBeUndefined();
+    secondAbort.abort();
+    await secondRun;
   });
 
   it("clears running status when monitor startup fails", async () => {

@@ -3,6 +3,7 @@ import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
@@ -58,80 +59,8 @@ type DiscordMessageDispatcherWithLifecycle = DiscordMessageDispatcher & {
   deactivate: () => Promise<void>;
 };
 
-type DiscordFlushIngressSettlement = {
-  lifecycle: DiscordIngressLifecycle | undefined;
-  settle: () => Promise<void>;
-  abandon: (error?: unknown) => Promise<void>;
-};
-
 function isNonEmptyString(value: string | undefined): value is string {
   return typeof value === "string" && value.length > 0;
-}
-
-function buildFlushIngressLifecycle(
-  entries: Array<{ turnAdoptionLifecycle?: DiscordIngressLifecycle }>,
-): DiscordFlushIngressSettlement {
-  const lifecycles = entries
-    .map((entry) => entry.turnAdoptionLifecycle)
-    .filter((lifecycle) => lifecycle !== undefined);
-  const [firstLifecycle] = lifecycles;
-  if (!firstLifecycle) {
-    return {
-      lifecycle: undefined,
-      settle: async () => {},
-      abandon: async () => {},
-    };
-  }
-  let handedOff = false;
-  const adoptAll = async () => {
-    for (const lifecycle of lifecycles) {
-      await lifecycle.onAdopted();
-    }
-  };
-  return {
-    lifecycle: {
-      abortSignal:
-        lifecycles.length === 1
-          ? firstLifecycle.abortSignal
-          : AbortSignal.any(lifecycles.map((lifecycle) => lifecycle.abortSignal)),
-      onAdopted: async () => {
-        handedOff = true;
-        await adoptAll();
-      },
-      onDeferred: () => {
-        handedOff = true;
-        for (const lifecycle of lifecycles) {
-          lifecycle.onDeferred();
-        }
-      },
-      onAdoptionFinalizing: () => {
-        for (const lifecycle of lifecycles) {
-          lifecycle.onAdoptionFinalizing();
-        }
-      },
-      onAbandoned: async () => {
-        handedOff = true;
-        for (const lifecycle of lifecycles) {
-          await lifecycle.onAbandoned();
-        }
-      },
-    },
-    // A gate or deliberate no-dispatch still consumes every merged queue row.
-    settle: async () => {
-      if (!handedOff) {
-        await adoptAll();
-      }
-    },
-    abandon: async () => {
-      if (handedOff) {
-        return;
-      }
-      handedOff = true;
-      for (const lifecycle of lifecycles) {
-        await lifecycle.onAbandoned();
-      }
-    },
-  };
 }
 
 export function createDiscordMessageDispatcher(
@@ -164,7 +93,6 @@ export function createDiscordMessageDispatcher(
   };
   const pendingDebounceEntries = new Set<DiscordDebounceEntry>();
   const pendingCancellationSettlements = new Set<Promise<void>>();
-  const activeDebounceFlushes = new Set<Promise<void>>();
   const resolveDebounceKey = (entry: DiscordDebounceEntry) => {
     const message = entry.data.message;
     const authorId = entry.data.author?.id;
@@ -195,28 +123,81 @@ export function createDiscordMessageDispatcher(
           hasDiscordMessageStickers(message),
       });
     },
-    onFlush: async (entries) => {
-      let resolveTrackedFlush!: () => void;
-      const trackedFlush = new Promise<void>((resolve) => {
-        resolveTrackedFlush = resolve;
-      });
-      activeDebounceFlushes.add(trackedFlush);
-      try {
-        for (const entry of entries) {
-          pendingDebounceEntries.delete(entry);
-        }
-        const last = entries.at(-1);
-        if (!last) {
-          return;
-        }
-        const ingress = buildFlushIngressLifecycle(entries);
-        const abortSignal = last.abortSignal;
-        if (abortSignal?.aborted) {
-          await ingress.abandon(abortSignal.reason);
-          return;
-        }
-        try {
-          if (entries.length === 1) {
+    onFlush: (entries, createFlush) => {
+      const ingress = fanInChannelIngressLifecycles(
+        entries.map((entry) => entry.turnAdoptionLifecycle),
+      );
+      return createFlush({
+        lifecycle: ingress.lifecycle,
+        dispatch: async (admissionLifecycle) => {
+          for (const entry of entries) {
+            pendingDebounceEntries.delete(entry);
+          }
+          const last = entries.at(-1);
+          if (!last) {
+            return;
+          }
+          const abortSignal = last.abortSignal;
+          if (abortSignal?.aborted) {
+            await admissionLifecycle.onAbandoned();
+            return;
+          }
+          try {
+            if (entries.length === 1) {
+              const preflight =
+                preflightDiscordMessageImpl ??
+                (await loadMessagePreflightRuntime()).preflightDiscordMessage;
+              const ctx = await preflight({
+                ...params,
+                ackReactionScope,
+                groupPolicy,
+                abortSignal,
+                data: last.data,
+                client: last.client,
+                turnAdoptionLifecycle: admissionLifecycle,
+              });
+              if (abortSignal?.aborted) {
+                await ingress.abandon(abortSignal.reason);
+                return;
+              }
+              if (!ctx) {
+                await ingress.settle();
+                return;
+              }
+              applyImplicitReplyBatchGate(ctx, params.replyToMode, false);
+              messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { ingressSettlement: ingress }));
+              return;
+            }
+            const combinedBaseText = entries
+              .map((entry) =>
+                resolveDiscordMessageText(entry.data.message, { includeForwarded: false }),
+              )
+              .filter(Boolean)
+              .join("\n");
+            const syntheticMessage = Object.create(Object.getPrototypeOf(last.data.message), {
+              ...Object.getOwnPropertyDescriptors(last.data.message),
+              content: { value: combinedBaseText, enumerable: true, configurable: true },
+              attachments: { value: [], enumerable: true, configurable: true },
+              message_snapshots: {
+                value: (last.data.message as { message_snapshots?: unknown }).message_snapshots,
+                enumerable: true,
+                configurable: true,
+              },
+              messageSnapshots: {
+                value: (last.data.message as { messageSnapshots?: unknown }).messageSnapshots,
+                enumerable: true,
+                configurable: true,
+              },
+              rawData: {
+                value: { ...(last.data.message as { rawData?: Record<string, unknown> }).rawData },
+                enumerable: true,
+                configurable: true,
+              },
+            }) as DiscordMessageEvent["message"];
+            const syntheticData: DiscordMessageEvent = {
+              ...last.data,
+              message: syntheticMessage,
+            };
             const preflight =
               preflightDiscordMessageImpl ??
               (await loadMessagePreflightRuntime()).preflightDiscordMessage;
@@ -225,9 +206,9 @@ export function createDiscordMessageDispatcher(
               ackReactionScope,
               groupPolicy,
               abortSignal,
-              data: last.data,
+              data: syntheticData,
               client: last.client,
-              turnAdoptionLifecycle: ingress.lifecycle,
+              turnAdoptionLifecycle: admissionLifecycle,
             });
             if (abortSignal?.aborted) {
               await ingress.abandon(abortSignal.reason);
@@ -237,81 +218,25 @@ export function createDiscordMessageDispatcher(
               await ingress.settle();
               return;
             }
-            applyImplicitReplyBatchGate(ctx, params.replyToMode, false);
+            applyImplicitReplyBatchGate(ctx, params.replyToMode, true);
+            const ids = entries.map((entry) => entry.data.message?.id).filter(isNonEmptyString);
+            if (ids.length > 0) {
+              const ctxBatch = ctx as typeof ctx & {
+                MessageSids?: string[];
+                MessageSidFirst?: string;
+                MessageSidLast?: string;
+              };
+              ctxBatch.MessageSids = ids;
+              ctxBatch.MessageSidFirst = ids[0];
+              ctxBatch.MessageSidLast = ids[ids.length - 1];
+            }
             messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { ingressSettlement: ingress }));
-            return;
+          } catch (error) {
+            await admissionLifecycle.onAbandoned();
+            throw error;
           }
-          const combinedBaseText = entries
-            .map((entry) =>
-              resolveDiscordMessageText(entry.data.message, { includeForwarded: false }),
-            )
-            .filter(Boolean)
-            .join("\n");
-          const syntheticMessage = Object.create(Object.getPrototypeOf(last.data.message), {
-            ...Object.getOwnPropertyDescriptors(last.data.message),
-            content: { value: combinedBaseText, enumerable: true, configurable: true },
-            attachments: { value: [], enumerable: true, configurable: true },
-            message_snapshots: {
-              value: (last.data.message as { message_snapshots?: unknown }).message_snapshots,
-              enumerable: true,
-              configurable: true,
-            },
-            messageSnapshots: {
-              value: (last.data.message as { messageSnapshots?: unknown }).messageSnapshots,
-              enumerable: true,
-              configurable: true,
-            },
-            rawData: {
-              value: { ...(last.data.message as { rawData?: Record<string, unknown> }).rawData },
-              enumerable: true,
-              configurable: true,
-            },
-          }) as DiscordMessageEvent["message"];
-          const syntheticData: DiscordMessageEvent = {
-            ...last.data,
-            message: syntheticMessage,
-          };
-          const preflight =
-            preflightDiscordMessageImpl ??
-            (await loadMessagePreflightRuntime()).preflightDiscordMessage;
-          const ctx = await preflight({
-            ...params,
-            ackReactionScope,
-            groupPolicy,
-            abortSignal,
-            data: syntheticData,
-            client: last.client,
-            turnAdoptionLifecycle: ingress.lifecycle,
-          });
-          if (abortSignal?.aborted) {
-            await ingress.abandon(abortSignal.reason);
-            return;
-          }
-          if (!ctx) {
-            await ingress.settle();
-            return;
-          }
-          applyImplicitReplyBatchGate(ctx, params.replyToMode, true);
-          const ids = entries.map((entry) => entry.data.message?.id).filter(isNonEmptyString);
-          if (ids.length > 0) {
-            const ctxBatch = ctx as typeof ctx & {
-              MessageSids?: string[];
-              MessageSidFirst?: string;
-              MessageSidLast?: string;
-            };
-            ctxBatch.MessageSids = ids;
-            ctxBatch.MessageSidFirst = ids[0];
-            ctxBatch.MessageSidLast = ids[ids.length - 1];
-          }
-          messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { ingressSettlement: ingress }));
-        } catch (error) {
-          await ingress.abandon(error);
-          throw error;
-        }
-      } finally {
-        activeDebounceFlushes.delete(trackedFlush);
-        resolveTrackedFlush();
-      }
+        },
+      });
     },
     onError: (err) => {
       params.runtime.error(danger(`discord debounce flush failed: ${String(err)}`));
@@ -402,7 +327,7 @@ export function createDiscordMessageDispatcher(
     }
     pendingDebounceEntries.clear();
     await Promise.allSettled(pendingCancellationSettlements);
-    await Promise.allSettled(activeDebounceFlushes);
+    await debouncer.drain();
     await messageRunQueue.deactivate();
   };
 

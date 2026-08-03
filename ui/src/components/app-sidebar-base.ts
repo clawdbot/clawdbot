@@ -3,6 +3,7 @@ import { property } from "lit/decorators.js";
 import type { UpdateAvailable } from "../api/types.ts";
 import { DEFAULT_SIDEBAR_ENTRIES, type NavigationRouteId } from "../app-navigation.ts";
 import type { RouteId } from "../app-route-paths.ts";
+import { selectApplicationSession } from "../app/agent-selection.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -10,6 +11,10 @@ import {
 } from "../app/context.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import type { ThemeMode } from "../app/theme.ts";
+import { readSessionMethodAccess, type SessionMethodAccess } from "../lib/session-method-access.ts";
+import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-handoff.ts";
+import { SESSION_NAVIGATION_KEY_PARAM } from "../lib/sessions/route-navigation.ts";
+import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import type { SidebarWorkboardBoard, SidebarWorkboardRenderers } from "./app-sidebar-workboard.ts";
@@ -59,4 +64,58 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
 
   @consume({ context: applicationContext, subscribe: true })
   protected context?: ApplicationContext<RouteId>;
+
+  protected setApplicationSession(sessionKey: string, fallbackAgentId?: string): void {
+    const context = this.context;
+    if (!context) {
+      return;
+    }
+    selectApplicationSession({
+      selection: context.agentSelection,
+      gateway: context.gateway,
+      sessionKey,
+      agentId: parseAgentSessionKey(sessionKey)?.agentId ?? fallbackAgentId,
+    });
+  }
+
+  prepareSessionNavigation(sessionKey: string, pathname: string): void {
+    if (this.context) {
+      prepareSessionNavigationHandoff(this.context.gateway, pathname, sessionKey);
+    }
+  }
+
+  protected bindLiteralSession(
+    sessionKey: string,
+    fallbackAgentId: string,
+    options: ApplicationNavigationOptions,
+  ): void {
+    if (!new URLSearchParams(options.search ?? "").has(SESSION_NAVIGATION_KEY_PARAM)) {
+      this.setApplicationSession(sessionKey, fallbackAgentId);
+    }
+  }
+
+  readNewSessionAccess(): SessionMethodAccess {
+    return readSessionMethodAccess(this.connected ? this.context?.gateway.snapshot : null, {
+      method: "sessions.create",
+      params: {},
+    });
+  }
+
+  readSessionMutationAccess(request: {
+    method: string;
+    params?: unknown;
+    requiredScope?: "operator.write" | "operator.admin";
+  }): SessionMethodAccess {
+    return readSessionMethodAccess(this.connected ? this.context?.gateway.snapshot : null, request);
+  }
+
+  requestOpenNewSession(agentId: string, target?: NewSessionTarget): void {
+    if (this.readNewSessionAccess().allowed) {
+      if (target) {
+        this.onOpenNewSession?.(agentId, target);
+      } else {
+        this.onOpenNewSession?.(agentId);
+      }
+    }
+  }
 }

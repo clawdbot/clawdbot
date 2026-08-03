@@ -32,7 +32,10 @@ import {
 import { removePreparedBackupArchive, writeArchiveStreamToFile } from "./backup-create-stream.js";
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";
-import { createBackupVolatileStatCache } from "./backup-volatile-stat-cache.js";
+import {
+  createBackupLinkCache,
+  createBackupVolatileStatCache,
+} from "./backup-volatile-stat-cache.js";
 import { formatErrorMessage } from "./errors.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { writeJson } from "./json-files.js";
@@ -47,18 +50,6 @@ import {
 import { withLegacyAuditMigrationLease } from "./state-migrations.audit-coordination.js";
 
 const loadTarRuntime = createLazyRuntimeModule(() => import("tar"));
-
-type BackupLinkCacheKey = `${number}:${number}`;
-
-class BackupLinkCache extends Map<BackupLinkCacheKey, string> {
-  override get(_key: BackupLinkCacheKey): undefined {
-    return undefined;
-  }
-
-  override set(_key: BackupLinkCacheKey, _value: string): this {
-    return this;
-  }
-}
 
 export type BackupCreateOptions = {
   output?: string;
@@ -725,7 +716,7 @@ async function createStateSqliteBackupPlan(params: {
       });
     } catch (err) {
       throw new Error(
-        `SQLite database cannot be compacted safely for backup: ${archiveSourcePath}. ${formatErrorMessage(err)}. The source must pass full integrity checks and VACUUM INTO with its required SQLite capabilities; raw page backup was refused because it can retain deleted data.`,
+        `SQLite database cannot be compacted safely for backup: ${archiveSourcePath}. ${formatErrorMessage(err)}. The source must pass full integrity checks, online SQLite backup, and offline compaction with its required SQLite capabilities; a direct file copy was refused because it can retain deleted data.`,
         { cause: err },
       );
     }
@@ -945,7 +936,7 @@ export async function createBackupArchive(
               gzip: true,
               portable: true,
               preservePaths: true,
-              linkCache: new BackupLinkCache(),
+              linkCache: createBackupLinkCache(),
               statCache: createBackupVolatileStatCache(volatilePlan),
               filter: tarFilter,
               onWriteEntry: (entry) => {

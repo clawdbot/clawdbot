@@ -178,6 +178,125 @@ async function readMirrorMessages(target: {
 }
 
 describe("importCodexThreadHistoryToTranscript", () => {
+  it.each([
+    {
+      label: "remote audio-only input",
+      caseId: "remote",
+      content: [
+        {
+          type: "audio",
+          url: "https://private.example/secret-recording.wav?token=secret-audio-token",
+        },
+      ],
+      expectedText: "[Audio attachment]",
+      privateValues: ["private.example", "secret-recording.wav", "secret-audio-token"],
+    },
+    {
+      label: "local audio-only input",
+      caseId: "local",
+      content: [{ type: "localAudio", path: "/private/codex/secret-local-recording.wav" }],
+      expectedText: "[Audio attachment]",
+      privateValues: ["/private/codex/secret-local-recording.wav"],
+    },
+    {
+      label: "legacy local audio-only input",
+      caseId: "legacy-local",
+      content: [{ type: "local_audio", path: "/private/codex/secret-legacy-recording.wav" }],
+      expectedText: "[Audio attachment]",
+      privateValues: ["/private/codex/secret-legacy-recording.wav"],
+    },
+    {
+      label: "mixed text, image, and audio input in source order",
+      caseId: "mixed",
+      content: [
+        { type: "text", text: "Before the recording" },
+        { type: "audio", url: "data:audio/wav;base64,c2VjcmV0LWF1ZGlv" },
+        { type: "text", text: "After the recording" },
+        { type: "image", url: "data:image/png;base64,c2VjcmV0LWltYWdl" },
+        { type: "localAudio", path: "/private/codex/secret-mixed-recording.wav" },
+        { type: "local_audio", path: "/private/codex/secret-mixed-legacy.wav" },
+      ],
+      expectedText:
+        "Before the recording\n[Audio attachment]\nAfter the recording\n" +
+        "[Image attachment]\n[Audio attachment]\n[Audio attachment]",
+      privateValues: [
+        "data:audio/wav",
+        "c2VjcmV0LWF1ZGlv",
+        "data:image/png",
+        "c2VjcmV0LWltYWdl",
+        "/private/codex/secret-mixed-recording.wav",
+        "/private/codex/secret-mixed-legacy.wav",
+      ],
+    },
+  ])(
+    "preserves $label without leaking attachment contents or locations",
+    async ({ caseId, content, expectedText, privateValues }) => {
+      const target = await createSqliteMirrorTarget(`openclaw-codex-audio-history-${caseId}-`, {
+        sessionId: `session-audio-${caseId}`,
+      });
+      const thread = {
+        id: `thread-audio-${caseId}`,
+        turns: [
+          {
+            id: "turn-audio",
+            status: "completed",
+            items: [
+              { id: "user-audio", type: "userMessage", content },
+              {
+                id: "assistant-audio",
+                type: "agentMessage",
+                text: "The recording was received.",
+                phase: "final_answer",
+              },
+            ],
+          },
+        ],
+      } as unknown as CodexThread;
+
+      const projection = projectBoundedCodexThreadHistory({
+        thread,
+        throughTurnId: "turn-audio",
+        importedAt: 1_800_000_000_000,
+      });
+      expect(projection).toMatchObject({ importedMessages: 2, omittedMessages: 0 });
+      expect(projection.responseItems).toEqual([
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: expectedText }],
+        },
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "The recording was received." }],
+          phase: "final_answer",
+        },
+      ]);
+
+      await expect(
+        importCodexThreadHistoryToTranscript({
+          thread,
+          throughTurnId: "turn-audio",
+          storePath: target.storePath,
+          sessionId: target.sessionId,
+          sessionKey: target.sessionKey,
+          agentId: target.agentId,
+        }),
+      ).resolves.toEqual({ importedMessages: 2, omittedMessages: 0 });
+      await expect(readMirrorMessages(target)).resolves.toEqual([
+        { role: "user", text: expectedText },
+        { role: "assistant", text: "The recording was received." },
+      ]);
+
+      const responseArtifacts = JSON.stringify(projection.responseItems);
+      const transcriptArtifacts = await readMirrorRaw(target);
+      for (const privateValue of privateValues) {
+        expect(responseArtifacts).not.toContain(privateValue);
+        expect(transcriptArtifacts).not.toContain(privateValue);
+      }
+    },
+  );
+
   it("imports only bounded user-visible conversation items with stable identities", async () => {
     const target = await createSqliteMirrorTarget("openclaw-codex-history-", {
       sessionId: "session-history",
@@ -527,7 +646,11 @@ describe("projectBoundedCodexThreadHistory", () => {
   });
 
   it("accepts terminal boundaries", () => {
-    for (const status of ["completed", "interrupted", "failed"]) {
+    for (const [status, stopReason] of [
+      ["completed", "stop"],
+      ["interrupted", "aborted"],
+      ["failed", "error"],
+    ] as const) {
       const terminalThread = {
         ...thread,
         turns: [
@@ -535,7 +658,13 @@ describe("projectBoundedCodexThreadHistory", () => {
           {
             id: `turn-${status}`,
             status,
+            ...(status === "failed" ? { error: { message: "provider disconnected" } } : {}),
             items: [
+              {
+                id: `user-${status}`,
+                type: "userMessage",
+                content: [{ type: "text", text: `${status} question` }],
+              },
               {
                 id: `assistant-${status}`,
                 type: "agentMessage",
@@ -550,9 +679,29 @@ describe("projectBoundedCodexThreadHistory", () => {
         throughTurnId: `turn-${status}`,
         importedAt: 1_800_000_000_000,
       });
-      expect(messageContent(projection.transcriptMessages.at(-1))).toEqual([
-        { type: "text", text: `${status} answer` },
-      ]);
+      expect(messageContent(projection.transcriptMessages.at(-2))).toBe(`${status} question`);
+      const assistant = projection.transcriptMessages.at(-1);
+      expect(messageContent(assistant)).toEqual([{ type: "text", text: `${status} answer` }]);
+      expect(assistant).toMatchObject({ role: "assistant", stopReason });
+      expect(projection.responseItems).toHaveLength(status === "completed" ? 6 : 5);
+      expect(projection.responseItems.at(-1)).toEqual(
+        status === "completed"
+          ? {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: "completed answer" }],
+            }
+          : {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_text", text: `${status} question` }],
+            },
+      );
+      if (status === "failed") {
+        expect(assistant).toMatchObject({ errorMessage: "provider disconnected" });
+      } else {
+        expect(assistant).not.toHaveProperty("errorMessage");
+      }
     }
   });
 
@@ -924,6 +1073,38 @@ describe("mirrorCodexAppServerTranscript", () => {
     });
 
     expect((await readMirrorMessages(target)).filter((message) => message.role)).toHaveLength(2);
+  });
+
+  it("serializes concurrent mirrors with the same supplied identity", async () => {
+    const target = await createSqliteMirrorTarget("openclaw-codex-mirror-concurrent-");
+    const message = attachCodexMirrorIdentity(
+      makeAgentUserMessage({
+        content: [{ type: "text", text: "append once" }],
+        timestamp: Date.now(),
+      }),
+      "turn-1:prompt",
+    );
+
+    const results = await Promise.all([
+      mirrorCodexAppServerTranscript({
+        ...target,
+        messages: [message],
+        idempotencyScope: "codex-app-server:thread-1",
+      }),
+      mirrorCodexAppServerTranscript({
+        ...target,
+        messages: [message],
+        idempotencyScope: "codex-app-server:thread-1",
+      }),
+    ]);
+
+    expect((await readMirrorMessages(target)).filter((entry) => entry.role)).toEqual([
+      { role: "user", text: "append once" },
+    ]);
+    expect(results.map((result) => messageContent(result.userMessagesPresent[0]))).toEqual([
+      [{ type: "text", text: "append once" }],
+      [{ type: "text", text: "append once" }],
+    ]);
   });
 
   it("reports final assistant ownership for new and idempotent mirrors", async () => {

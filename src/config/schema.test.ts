@@ -5,6 +5,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
 import { applyDerivedTags } from "./schema.tags.js";
 import { applyResolvedConfigTierHints } from "./schema.tiers.js";
+import { validateConfigObjectRaw } from "./validation.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
@@ -255,6 +256,55 @@ describe("config schema", () => {
           nodeHost: { mcp: { servers: { [serverName]: { command: "server" } } } },
         }),
       ).toThrow(/MCP server name must be non-empty and must not have surrounding whitespace/);
+    }
+  });
+
+  it("rejects the reserved __proto__ MCP server name without tightening other names", () => {
+    for (const raw of [
+      '{"mcp":{"servers":{"__proto__":{"command":"server"}}}}',
+      '{"nodeHost":{"mcp":{"servers":{"__proto__":{"command":"server"}}}}}',
+    ]) {
+      const result = OpenClawSchema.safeParse(JSON.parse(raw));
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues).toContainEqual(
+          expect.objectContaining({
+            message: 'MCP server name "__proto__" is reserved; rename the server',
+          }),
+        );
+      }
+    }
+
+    for (const serverName of ["docs", "_internal"]) {
+      expect(
+        OpenClawSchema.safeParse({
+          mcp: { servers: { [serverName]: { command: "server" } } },
+          nodeHost: { mcp: { servers: { [serverName]: { command: "server" } } } },
+        }).success,
+      ).toBe(true);
+    }
+  });
+
+  it("rejects reserved MCP server names from the pre-normalization config", () => {
+    const sourceRaw = JSON.parse('{"mcp":{"servers":{"__proto__":{"command":"server"}}}}');
+    const result = validateConfigObjectRaw({ mcp: { servers: {} } }, { sourceRaw });
+
+    expect(result).toEqual({
+      ok: false,
+      issues: [
+        expect.objectContaining({
+          path: "mcp.servers.__proto__",
+          message: 'MCP server name "__proto__" is reserved; rename the server',
+        }),
+      ],
+    });
+
+    const directResult = validateConfigObjectRaw(sourceRaw);
+    expect(directResult.ok).toBe(false);
+    if (!directResult.ok) {
+      expect(
+        directResult.issues.filter((issue) => issue.path === "mcp.servers.__proto__"),
+      ).toHaveLength(1);
     }
   });
 
@@ -588,10 +638,10 @@ describe("config schema", () => {
     const res = buildConfigSchema(heartbeatChannelInput);
 
     const defaultsHint = res.uiHints["agents.defaults.heartbeat.target"];
-    const listHint = res.uiHints["agents.list.*.heartbeat.target"];
+    const entryHint = res.uiHints["agents.entries.*.heartbeat.target"];
     expect(defaultsHint?.help).toContain("imessage");
     expect(defaultsHint?.help).toContain("last");
-    expect(listHint?.help).toContain("imessage");
+    expect(entryHint?.help).toContain("imessage");
   });
 
   it("caches merged schemas for identical plugin/channel metadata", () => {
@@ -622,12 +672,15 @@ describe("config schema", () => {
     );
   });
 
-  it("covers core config paths with derived tags", () => {
-    for (const [key, hint] of Object.entries(baseSchema.uiHints)) {
-      if (key.includes(".")) {
-        expect(hint.tags?.length ?? 0, `expected tags for ${key}`).toBeGreaterThan(0);
-      }
-    }
+  it("only derives the advanced tag from an explicit advanced hint", () => {
+    const tagged = applyDerivedTags({
+      "update.channel": { advanced: false },
+      "update.auto.enabled": { advanced: false },
+      "update.auto.interval": { advanced: true },
+    });
+    expect(tagged["update.channel"]?.tags).toEqual([]);
+    expect(tagged["update.auto.enabled"]?.tags).toEqual([]);
+    expect(tagged["update.auto.interval"]?.tags).toEqual(["performance", "advanced"]);
   });
 
   it("rejects removed Firecrawl config from the core web fetch schema", () => {
@@ -648,6 +701,44 @@ describe("config schema", () => {
     });
 
     expect(result.success).toBe(false);
+  });
+
+  it("accepts plain web fetch header strings but rejects non-string and SecretRef values", () => {
+    const parsed = ToolsSchema.parse({
+      web: {
+        fetch: {
+          headers: {
+            "X-Routing-Target": "staging",
+            "X-Presence-Flag": "",
+          },
+        },
+      },
+    });
+
+    expect(parsed?.web?.fetch?.headers).toEqual({
+      "X-Routing-Target": "staging",
+      "X-Presence-Flag": "",
+    });
+    expect(
+      ToolsSchema.safeParse({
+        web: { fetch: { headers: { "X-Routing-Target": 42 } } },
+      }).success,
+    ).toBe(false);
+    expect(
+      ToolsSchema.safeParse({
+        web: {
+          fetch: {
+            headers: {
+              "X-Routing-Target": {
+                source: "env",
+                provider: "default",
+                id: "WEB_FETCH_ROUTING_TARGET",
+              },
+            },
+          },
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it("keeps top-level subagent tools schema limited to tool policy", () => {
@@ -706,6 +797,7 @@ describe("config schema", () => {
       agents: {
         entries: {
           main: {
+            default: true,
             tools: {
               exec: {
                 commandHighlighting: false,
@@ -737,6 +829,7 @@ describe("config schema", () => {
       agents: {
         entries: {
           main: {
+            default: true,
             tools: {
               exec: {
                 reviewer: {
@@ -780,17 +873,13 @@ describe("config schema", () => {
     ).toBe(false);
   });
 
-  it("accepts experimental tool flags in the runtime zod schema", () => {
-    const parsed = ToolsSchema.parse({
-      experimental: {
-        planTool: true,
-      },
-    });
+  it("accepts the update_plan tool switch in the runtime zod schema", () => {
+    const parsed = ToolsSchema.parse({ updatePlan: false });
     if (!parsed) {
       throw new Error("expected parsed tools config");
     }
 
-    expect(parsed?.experimental?.planTool).toBe(true);
+    expect(parsed?.updatePlan).toBe(false);
   });
 
   it("accepts simplified Tool Search config in the runtime zod schema", () => {
@@ -895,6 +984,16 @@ describe("config schema", () => {
     ).toBe(false);
   });
 
+  it("accepts the Code Mode auto tier and rejects unknown tiers", () => {
+    expect(ToolsSchema.parse({ codeMode: "auto" })?.codeMode).toBe("auto");
+    expect(ToolsSchema.parse({ codeMode: false })?.codeMode).toBe(false);
+    expect(ToolsSchema.parse({ codeMode: { enabled: "auto" } })?.codeMode).toEqual({
+      enabled: "auto",
+    });
+    expect(ToolsSchema.safeParse({ codeMode: "on" }).success).toBe(false);
+    expect(ToolsSchema.safeParse({ codeMode: { enabled: "always" } }).success).toBe(false);
+  });
+
   it("accepts strict Swarm config in the runtime zod schema", () => {
     expect(ToolsSchema.parse({ swarm: true })?.swarm).toBe(true);
     expect(
@@ -936,6 +1035,8 @@ describe("config schema", () => {
       web: {
         fetch: {
           ssrfPolicy: {
+            dangerouslyAllowPrivateNetwork: true,
+            allowedHostnames: ["127.0.0.1"],
             allowRfc2544BenchmarkRange: true,
             allowIpv6UniqueLocalRange: true,
           },
@@ -944,6 +1045,8 @@ describe("config schema", () => {
     });
 
     expect(parsed?.web?.fetch?.ssrfPolicy).toEqual({
+      dangerouslyAllowPrivateNetwork: true,
+      allowedHostnames: ["127.0.0.1"],
       allowRfc2544BenchmarkRange: true,
       allowIpv6UniqueLocalRange: true,
     });

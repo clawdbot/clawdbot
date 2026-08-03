@@ -195,6 +195,13 @@ describe("crabline transport", () => {
           senderId: "alice",
           senderName: "Alice",
         });
+        await transport.sendInbound({
+          conversation: { id: "alice", kind: "direct" },
+          senderId: "alice",
+          senderName: "Alice",
+          text: "/status",
+          nativeCommand: { name: "status" },
+        });
 
         const config = transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" });
         const telegram = config.channels?.telegram as
@@ -209,6 +216,12 @@ describe("crabline transport", () => {
               message: {
                 entities: [{ length: 5, offset: 0, type: "bot_command" }],
                 text: "/stop",
+              },
+            },
+            {
+              message: {
+                entities: [{ length: 7, offset: 0, type: "bot_command" }],
+                text: "/status",
               },
             },
           ],

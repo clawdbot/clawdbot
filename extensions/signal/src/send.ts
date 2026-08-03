@@ -8,8 +8,11 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
-import { resolveOutboundAttachmentFromUrl } from "openclaw/plugin-sdk/media-runtime";
+import {
+  kindFromMime,
+  type OutboundMediaAccess,
+  resolveOutboundAttachmentFromUrl,
+} from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -33,10 +36,7 @@ export type SignalSendOpts = {
   account?: string;
   accountId?: string;
   mediaUrl?: string;
-  mediaAccess?: {
-    localRoots?: readonly string[];
-    readFile?: (filePath: string) => Promise<Buffer>;
-  };
+  mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   maxBytes?: number;
@@ -65,6 +65,49 @@ type SignalTarget =
   | { type: "recipient"; recipient: string }
   | { type: "group"; groupId: string }
   | { type: "username"; username: string };
+
+type SignalSendRpcResult = {
+  timestamp?: number;
+  results?: unknown;
+};
+
+function assertSignalRecipientDelivery(
+  result: SignalSendRpcResult | undefined,
+  target: SignalTarget,
+): void {
+  if (!Array.isArray(result?.results)) {
+    return;
+  }
+  const failures: string[] = [];
+  let hasSuccessfulRecipient = false;
+  for (const entry of result.results) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const type = normalizeOptionalString(record.type);
+    if ((type && normalizeLowercaseStringOrEmpty(type) !== "success") || record.success === false) {
+      failures.push(
+        type ??
+          normalizeOptionalString(record.error) ??
+          normalizeOptionalString(record.message) ??
+          "recipient delivery failed",
+      );
+      continue;
+    }
+    if (normalizeLowercaseStringOrEmpty(type) === "success" || record.success === true) {
+      hasSuccessfulRecipient = true;
+    }
+  }
+  // Group sends fan out per member; retrying an already delivered partial
+  // success would duplicate the post for every successful recipient.
+  if (failures.length === 0 || (target.type === "group" && hasSuccessfulRecipient)) {
+    return;
+  }
+  throw new Error(
+    `Signal send failed for ${failures.length} recipient${failures.length === 1 ? "" : "s"}: ${[...new Set(failures)].join(", ")}`,
+  );
+}
 
 async function resolveSignalRpcAccountInfo(opts: SignalRpcOpts) {
   if (!opts.cfg) {
@@ -216,6 +259,22 @@ function resolveSignalQuoteParams(opts: SignalSendOpts):
 function isSignalQuoteMetadataRejection(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   const normalized = normalizeLowercaseStringOrEmpty(message);
+  const rpcCode = /^signal rpc (-?\d+):/u.exec(normalized)?.[1];
+  if (rpcCode !== undefined) {
+    if (rpcCode !== "-32602") {
+      return false;
+    }
+  } else {
+    const restStatusText = /^signal rest (\d{3}):/u.exec(normalized)?.[1];
+    if (!restStatusText) {
+      return false;
+    }
+    const restStatus = Number(restStatusText);
+    // Only a definitive provider rejection makes replaying the send safe.
+    if (restStatus < 400 || restStatus >= 500 || restStatus === 408 || restStatus === 429) {
+      return false;
+    }
+  }
   if (!normalized.includes("quote")) {
     return false;
   }
@@ -333,10 +392,10 @@ export async function sendMessageSignal(
     maxAttachmentBytes: maxBytes,
   };
   let nativeReplyStatus: "sent" | "fallback" | undefined;
-  let result: { timestamp?: number } | undefined;
+  let result: SignalSendRpcResult | undefined;
   if (quote) {
     try {
-      result = await signalRpcRequest<{ timestamp?: number }>(
+      result = await signalRpcRequest<SignalSendRpcResult>(
         "send",
         { ...params, ...quote.params },
         sendOpts,
@@ -346,12 +405,13 @@ export async function sendMessageSignal(
       if (!isSignalQuoteMetadataRejection(error)) {
         throw error;
       }
-      result = await signalRpcRequest<{ timestamp?: number }>("send", params, sendOpts);
+      result = await signalRpcRequest<SignalSendRpcResult>("send", params, sendOpts);
       nativeReplyStatus = "fallback";
     }
   } else {
-    result = await signalRpcRequest<{ timestamp?: number }>("send", params, sendOpts);
+    result = await signalRpcRequest<SignalSendRpcResult>("send", params, sendOpts);
   }
+  assertSignalRecipientDelivery(result, target);
   const timestamp = result?.timestamp;
   const messageId = timestamp ? String(timestamp) : "unknown";
   const replyAuthor = targetAuthor ?? targetAuthorUuid;

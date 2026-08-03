@@ -27,8 +27,12 @@ import {
   loadCachedSessionSharingSnapshot,
   type SessionSharingSnapshot,
 } from "./session-sharing-snapshot-cache.js";
+import type {
+  GatewaySessionStoreCache,
+  GatewaySessionStoreDiscoveryCache,
+} from "./session-utils-store-lookup.js";
 import {
-  resolveFreshestSessionStoreMatchFromStoreKeys,
+  resolveCanonicalSessionStoreMatchFromStoreKeys,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils.js";
 
@@ -100,13 +104,20 @@ export function resolveSessionSharingTarget(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
+  projection?: "full" | "list";
+  storeCache?: GatewaySessionStoreCache;
+  targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
 }): SessionSharingTarget | null {
   const target = resolveGatewaySessionStoreTargetWithStore({
     cfg: params.cfg,
     key: params.sessionKey,
     agentId: params.agentId,
+    clone: false,
+    ...(params.projection ? { projection: params.projection } : {}),
+    ...(params.storeCache ? { storeCache: params.storeCache } : {}),
+    ...(params.targetDiscoveryCache ? { targetDiscoveryCache: params.targetDiscoveryCache } : {}),
   });
-  const match = resolveFreshestSessionStoreMatchFromStoreKeys(target.store, target.storeKeys);
+  const match = resolveCanonicalSessionStoreMatchFromStoreKeys(target.store, target.storeKeys);
   return match
     ? {
         agentId: target.agentId,
@@ -471,6 +482,13 @@ export function resolveSessionMutationAuthorization(params: {
   // config change cannot split target discovery from authorization.
   let cachedCfg: OpenClawConfig | undefined;
   const getCfg = (): OpenClawConfig => (cachedCfg ??= params.context.getRuntimeConfig());
+  // Each cache pair defines one synchronous freshness epoch: initial authorization shares one,
+  // while commit-time guards start fresh after handler work.
+  const createLookupCaches = (): {
+    storeCache: GatewaySessionStoreCache;
+    targetDiscoveryCache: GatewaySessionStoreDiscoveryCache;
+  } => ({ storeCache: new Map(), targetDiscoveryCache: new Map() });
+  const lookupCaches = createLookupCaches();
   // Incognito direct reads and writes share this central participation choke point;
   // hidden keys use the stale-session refusal instead of revealing existence.
   for (const targetRef of resolveDirectIncognitoTargets(params.method, params.requestParams)) {
@@ -478,6 +496,7 @@ export function resolveSessionMutationAuthorization(params: {
       cfg: getCfg(),
       sessionKey: targetRef.sessionKey,
       agentId: targetRef.agentId,
+      ...lookupCaches,
     });
     const error = authorizeIncognitoSessionTarget({
       client: params.client,
@@ -511,6 +530,7 @@ export function resolveSessionMutationAuthorization(params: {
       cfg,
       sessionKey: targetRef.sessionKey,
       agentId: targetRef.agentId,
+      ...lookupCaches,
     });
     const error = target ? authorizeSessionSharingTarget({ client: params.client, target }) : null;
     if (error) {
@@ -536,11 +556,13 @@ export function resolveSessionMutationAuthorization(params: {
         targetRef: SessionMutationTarget,
         expected: AuthorizedSessionMutationTarget | undefined,
         currentCfg: OpenClawConfig,
+        currentLookupCaches?: ReturnType<typeof createLookupCaches>,
       ) => {
         const current = resolveSessionSharingTarget({
           cfg: currentCfg,
           sessionKey: targetRef.sessionKey,
           agentId: targetRef.agentId,
+          ...currentLookupCaches,
         });
         const sameResolvedTarget =
           expected === undefined ||
@@ -578,8 +600,9 @@ export function resolveSessionMutationAuthorization(params: {
       return {
         assertCurrent: () => {
           const currentCfg = params.context.getRuntimeConfig();
+          const currentLookupCaches = createLookupCaches();
           for (const authorized of authorizedTargets) {
-            assertTargetCurrent(authorized, authorized, currentCfg);
+            assertTargetCurrent(authorized, authorized, currentCfg, currentLookupCaches);
           }
         },
         assertTargetCurrent: (targetRef: SessionMutationTarget) => {
@@ -679,19 +702,16 @@ export function canReceiveSessionEvent(params: {
   });
 }
 
-export function filterDraftSessionsForClient(params: {
+export function createSessionListEntryFilter(params: {
   client: GatewayClient | null;
-  store: Record<string, SessionEntry>;
-}): Record<string, SessionEntry> {
+}): ((sessionKey: string, entry: SessionEntry) => boolean) | undefined {
   const identity = gatewayClientSessionCreator(params.client);
   if (isGatewayAdmin(params.client) || !identity) {
-    return params.store;
+    return undefined;
   }
-  return Object.fromEntries(
-    Object.entries(params.store).filter(([sessionKey, entry]) => {
-      const owner = entry.createdActor?.id === identity.id;
-      const incognito = entry.incognito === true || isIncognitoSessionKey(sessionKey);
-      return !incognito && (owner || resolveSessionVisibility(entry) !== "draft");
-    }),
-  );
+  return (sessionKey, entry) => {
+    const owner = entry.createdActor?.id === identity.id;
+    const incognito = entry.incognito === true || isIncognitoSessionKey(sessionKey);
+    return !incognito && (owner || resolveSessionVisibility(entry) !== "draft");
+  };
 }

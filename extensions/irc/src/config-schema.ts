@@ -36,6 +36,7 @@ const IrcAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
+    configWrites: z.boolean().optional(),
     dangerouslyAllowNameMatching: z.boolean().optional(),
     host: z.string().optional(),
     port: z.number().int().min(1).max(65535).optional(),

@@ -37,7 +37,7 @@ const {
 
 const execFileMock = vi.hoisted(() => vi.fn());
 const execFileSyncMock = vi.hoisted(() => vi.fn());
-const spawnMock = vi.hoisted(() => vi.fn());
+const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
 const ensureAuthProfileStoreMock = vi.hoisted(() =>
   vi.fn(() => ({
     profiles: {},
@@ -49,7 +49,6 @@ vi.mock("node:child_process", async () => {
   return {
     ...actual,
     execFileSync: execFileSyncMock,
-    spawn: spawnMock,
   };
 });
 
@@ -57,6 +56,7 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>();
   return {
     ...actual,
+    runCommandWithTimeout: runCommandWithTimeoutMock,
     runExec: execFileMock,
   };
 });
@@ -803,6 +803,8 @@ describe("microsoft-foundry plugin", () => {
     const model = config.models?.providers?.["microsoft-foundry"]?.models[0];
     expect(model?.id).toBe("gpt-5.4");
     expect(model?.reasoning).toBe(true);
+    expect(model?.contextWindow).toBe(1_050_000);
+    expect(model?.maxTokens).toBe(128_000);
     expect(model?.compat?.supportsReasoningEffort).toBe(true);
   });
 
@@ -1421,7 +1423,43 @@ describe("microsoft-foundry plugin", () => {
   });
 
   it.each([
+    ["gpt-5.6", 1_050_000, 128_000],
+    ["gpt-5.6-sol", 1_050_000, 128_000],
+    ["gpt-5.6-terra", 1_050_000, 128_000],
+    ["gpt-5.6-luna", 1_050_000, 128_000],
+    ["gpt-5.5", 1_050_000, 128_000],
+    ["gpt-5.4", 1_050_000, 128_000],
+    ["gpt-5.4-pro", 1_050_000, 128_000],
+    ["gpt-5.4-mini", 400_000, 128_000],
+    ["gpt-5.4-nano", 400_000, 128_000],
+    ["gpt-5-chat", 128_000, 16_384],
+    ["gpt-4o-mini", 128_000, 16_384],
+  ] as const)(
+    "uses Foundry-native token limits for %s",
+    (modelNameHint, contextWindow, maxTokens) => {
+      const result = buildFoundryAuthResult({
+        profileId: "microsoft-foundry:default",
+        apiKey: "test-api-key",
+        endpoint: "https://example.services.ai.azure.com",
+        modelId: `prod-${modelNameHint}`,
+        modelNameHint,
+        api: modelNameHint.startsWith("gpt-5") ? "openai-responses" : "openai-completions",
+        authMethod: "api-key",
+      });
+
+      expect(result.configPatch?.models?.providers?.["microsoft-foundry"]?.models[0]).toMatchObject(
+        {
+          name: modelNameHint,
+          contextWindow,
+          maxTokens,
+        },
+      );
+    },
+  );
+
+  it.each([
     ["claude-mythos-preview", 128_000],
+    ["claude-opus-5", 128_000],
     ["claude-fable-5", 128_000],
     ["claude-opus-4.8", 128_000],
     ["claude-opus-4.7", 128_000],
@@ -1478,6 +1516,25 @@ describe("microsoft-foundry plugin", () => {
   it("resolves Claude thinking profiles from configured Foundry model names", () => {
     const provider = registerProvider();
 
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "microsoft-foundry",
+        modelId: "prod-opus",
+        params: { canonicalModelId: "claude-opus-5" },
+      }),
+    ).toMatchObject({
+      defaultLevel: "high",
+      levels: [
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        { id: "xhigh" },
+        { id: "adaptive" },
+        { id: "max" },
+      ],
+    });
     expect(
       provider.resolveThinkingProfile?.({
         provider: "microsoft-foundry",
@@ -2048,46 +2105,67 @@ describe("isAnthropicFoundryDeployment", () => {
 describe("azLoginDeviceCodeWithOptions utf-8 chunk boundary", () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    spawnMock.mockReset();
+    runCommandWithTimeoutMock.mockReset();
   });
 
   it("reassembles split-byte UTF-8 across both spawned process streams", async () => {
-    const { PassThrough } = await import("node:stream");
-    const { EventEmitter } = await import("node:events");
-
-    const stdout = new PassThrough();
-    const stderr = new PassThrough();
-
-    // Build a fake ChildProcess that mirrors spawn()'s return shape
-    const child = Object.assign(new EventEmitter(), {
-      stdout,
-      stderr,
-      pid: 99999,
-    });
-
-    spawnMock.mockReturnValue(child);
+    runCommandWithTimeoutMock.mockImplementationOnce(
+      async (
+        _argv: string[],
+        options: {
+          onOutputChunk?: (chunk: Buffer, stream: "stdout" | "stderr") => void;
+        },
+      ) => {
+        const writeSplitUtf8 = (stream: "stdout" | "stderr", text: string) => {
+          const bytes = Buffer.from(text);
+          options.onOutputChunk?.(bytes.subarray(0, 2), stream);
+          options.onOutputChunk?.(bytes.subarray(2), stream);
+        };
+        writeSplitUtf8("stderr", "😊");
+        writeSplitUtf8("stdout", "🚀");
+        return {
+          stdout: "",
+          stderr: "",
+          code: 1,
+          signal: null,
+          killed: false,
+          termination: "exit",
+          noOutputTimedOut: false,
+        };
+      },
+    );
     const stdoutWriteSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     const stderrWriteSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
-    const loginPromise = azLoginDeviceCodeWithOptions({});
-
-    const writeSplitUtf8 = (stream: typeof stdout, text: string) => {
-      const bytes = Buffer.from(text);
-      stream.write(bytes.subarray(0, 2));
-      stream.write(bytes.subarray(2));
-    };
-    writeSplitUtf8(stderr, "😊");
-    writeSplitUtf8(stdout, "🚀");
-    stderr.end();
-    stdout.end();
-
-    child.emit("close", 1);
-
-    const err = await loginPromise.catch((e: unknown) => e);
+    const err = await azLoginDeviceCodeWithOptions({}).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toBe("az login exited with code 1: 😊🚀");
     expect(stdoutWriteSpy).toHaveBeenCalledWith("🚀");
     expect(stderrWriteSpy).toHaveBeenCalledWith("😊");
+  });
+
+  it("allows post-auth work after the 15-minute device-code lifetime", async () => {
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      stdout: "",
+      stderr: "",
+      code: 124,
+      signal: null,
+      killed: true,
+      termination: "timeout",
+      noOutputTimedOut: false,
+    });
+
+    const err = await azLoginDeviceCodeWithOptions({}).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe("az login timed out after 20 minutes");
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
+      ["az", "login", "--use-device-code"],
+      expect.objectContaining({
+        killProcessTree: true,
+        outputCapture: "discard",
+        timeoutMs: 20 * 60 * 1000,
+      }),
+    );
   });
 });
 

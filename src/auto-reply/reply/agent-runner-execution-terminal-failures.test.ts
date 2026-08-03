@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../../agents/failover-error.js";
 import { AgentHarnessSessionSupersededError } from "../../agents/harness/errors.js";
+import { SessionWriteLockStaleError } from "../../agents/session-write-lock-error.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -9,7 +10,7 @@ import type { GetReplyOptions } from "../types.js";
 import {
   setupAgentRunnerExecutionTestState,
   GENERIC_RUN_FAILURE_TEXT,
-  getRunAgentTurnWithFallback,
+  getExecuteAgentTurnForTest,
   createMockTypingSignaler,
   createFollowupRun,
   createMockReplyOperation,
@@ -23,7 +24,7 @@ import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-re
 
 const state = setupAgentRunnerExecutionTestState();
 
-describe("runAgentTurnWithFallback: terminal failures", () => {
+describe("executeAgentTurn: terminal failures", () => {
   it("surfaces billing guidance for mixed-cause fallback exhaustion", async () => {
     state.runWithModelFallbackMock.mockRejectedValueOnce(
       Object.assign(
@@ -41,8 +42,8 @@ describe("runAgentTurnWithFallback: terminal failures", () => {
       ),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -92,8 +93,8 @@ describe("runAgentTurnWithFallback: terminal failures", () => {
       }),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -131,8 +132,8 @@ describe("runAgentTurnWithFallback: terminal failures", () => {
       "You've reached your Codex subscription usage limit. Codex did not return a reset time for this limit. Run /codex account for current usage details.";
     state.runWithModelFallbackMock.mockRejectedValueOnce(new Error(codexMessage));
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -191,8 +192,8 @@ describe("runAgentTurnWithFallback: terminal failures", () => {
       ),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -238,8 +239,8 @@ describe("runAgentTurnWithFallback: terminal failures", () => {
       }),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -291,8 +292,8 @@ describe("runAgentTurnWithFallback: terminal failures", () => {
       }),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -339,8 +340,8 @@ describe("runAgentTurnWithFallback: terminal failures", () => {
       Object.assign(new Error("aborted"), { name: "AbortError" }),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -381,6 +382,55 @@ describe("runAgentTurnWithFallback: terminal failures", () => {
     ).toBe(true);
   });
 
+  it("hands a confirmed restart lease loss to the replacement owner", async () => {
+    const agentEvents = await import("../../infra/agent-events.js");
+    const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
+    const { replyOperation, failMock } = createMockReplyOperation();
+    const abortForRestart = vi.spyOn(replyOperation, "abortForRestart");
+    abortForRestart.mockImplementationOnce(() => {
+      Object.defineProperty(replyOperation, "result", {
+        value: { kind: "aborted", code: "aborted_for_restart" } as const,
+        configurable: true,
+      });
+      return true;
+    });
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new Error("embedded runner failed", {
+        cause: new SessionWriteLockStaleError({
+          lockPath: "sqlite:session-write:agent:main:main",
+          owner: "replacement gateway",
+          staleReasons: ["lease-lost"],
+        }),
+      }),
+    );
+    const confirmRestartRecoveryArmedAfterLeaseLoss = vi.fn(async () => true);
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams({ replyOperation }),
+      confirmRestartRecoveryArmedAfterLeaseLoss,
+      isRestartRecoveryArmed: () => false,
+    });
+
+    expect(result).toEqual({ kind: "final", payload: { text: SILENT_REPLY_TOKEN } });
+    expect(confirmRestartRecoveryArmedAfterLeaseLoss).toHaveBeenCalledOnce();
+    expect(abortForRestart).toHaveBeenCalledOnce();
+    expect(failMock).not.toHaveBeenCalled();
+    expect(
+      emitAgentEvent.mock.calls.filter(
+        ([event]) =>
+          event.stream === "lifecycle" &&
+          event.data.phase === "end" &&
+          event.data.stopReason === "restart",
+      ),
+    ).toHaveLength(1);
+    expect(
+      emitAgentEvent.mock.calls.some(
+        ([event]) => event.stream === "lifecycle" && event.data.phase === "error",
+      ),
+    ).toBe(false);
+  });
+
   it("preserves restart ownership when an aborted embedded runner resolves normally", async () => {
     const agentEvents = await import("../../infra/agent-events.js");
     const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
@@ -394,8 +444,8 @@ describe("runAgentTurnWithFallback: terminal failures", () => {
       meta: {},
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -444,8 +494,8 @@ describe("runAgentTurnWithFallback: terminal failures", () => {
       new Error("INVALID_ARGUMENT: some other failure"),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -508,8 +558,8 @@ describe("runAgentTurnWithFallback: terminal failures", () => {
       ),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -524,8 +574,8 @@ describe("runAgentTurnWithFallback: terminal failures", () => {
       new Error('Command lane "main" task timed out after 120000ms'),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams(),
       isHeartbeat: true,
     });
@@ -567,8 +617,8 @@ describe("runAgentTurnWithFallback: terminal failures", () => {
     async ({ rejection, mode, routingSubstring }) => {
       state.runWithModelFallbackMock.mockRejectedValueOnce(rejection);
 
-      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-      const result = await runAgentTurnWithFallback({
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn({
         ...createMinimalRunAgentTurnParams(),
       });
 
@@ -638,8 +688,8 @@ describe("runAgentTurnWithFallback: terminal failures", () => {
     async ({ rejection, expected }) => {
       state.runWithModelFallbackMock.mockRejectedValueOnce(rejection);
 
-      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-      const result = await runAgentTurnWithFallback({
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn({
         ...createMinimalRunAgentTurnParams(),
       });
 
@@ -660,8 +710,8 @@ describe("runAgentTurnWithFallback: terminal failures", () => {
       ),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({
         sessionCtx: {
           Provider: "telegram",
@@ -688,8 +738,8 @@ describe("runAgentTurnWithFallback: terminal failures", () => {
       new Error("INVALID_ARGUMENT: some other failure"),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {

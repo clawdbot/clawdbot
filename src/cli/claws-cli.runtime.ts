@@ -1,10 +1,10 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { stableStringify } from "@openclaw/normalization-core";
 import {
   listAgentEntries,
   listAgentIds,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope-config.js";
-import { stableStringify } from "../agents/stable-stringify.js";
 import {
   applyClawAddPlan,
   CLAW_ADD_RESULT_SCHEMA_VERSION,
@@ -44,6 +44,7 @@ import {
 } from "../cron/store.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import { waitUntilGatewayConfigApplied } from "./claws-cli.gateway-readiness.js";
 import type {
   ClawsAddOptions,
   ClawsExportOptions,
@@ -200,6 +201,7 @@ export async function runClawsInspectCommand(
     valid: true,
     source: result.source,
     manifest: result.manifest,
+    ...(result.openClawProfile ? { openClawProfile: result.openClawProfile } : {}),
     diagnostics: result.diagnostics,
   };
   if (opts.json) {
@@ -262,6 +264,8 @@ export async function runClawsAddCommand(
   };
   let plan = await buildClawAddPlan({
     manifest: result.manifest,
+    clawMarkdownBody: result.clawMarkdownBody,
+    openClawProfile: result.openClawProfile,
     source: result.source,
     diagnostics: result.diagnostics,
     context: basePlanContext,
@@ -278,6 +282,8 @@ export async function runClawsAddCommand(
       (resumeRecord.status === "workspace_ready" && committedAgent !== undefined);
     plan = await buildClawAddPlan({
       manifest: result.manifest,
+      clawMarkdownBody: result.clawMarkdownBody,
+      openClawProfile: result.openClawProfile,
       source: result.source,
       diagnostics: result.diagnostics,
       context: {
@@ -344,6 +350,7 @@ export async function runClawsAddCommand(
         add: async (input) => await callGatewayFromCli("cron.add", {}, input),
         list: async (agentId) =>
           await callGatewayFromCli("cron.list", {}, { agentId, includeDisabled: true }),
+        waitUntilAgentAvailable: async () => await waitUntilGatewayConfigApplied(),
       },
     });
   } catch (error) {

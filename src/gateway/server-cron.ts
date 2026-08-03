@@ -5,7 +5,6 @@ import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
 import { listAgentEntries, listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
@@ -14,6 +13,10 @@ import {
   resolveAgentMainSessionKey,
 } from "../config/sessions.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
+import {
+  listConfiguredSessionStoreAgentIds,
+  listKnownSessionStoreAgentIds,
+} from "../config/sessions/targets.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -50,6 +53,8 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
+import { mergeSsrFPolicies } from "../infra/net/ssrf.js";
+import { listConfiguredMessageChannels } from "../infra/outbound/channel-selection.js";
 import {
   consumeSelectedSystemEventEntries,
   enqueueSystemEventEntry,
@@ -81,6 +86,7 @@ import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import { reconcileHeartbeatMonitorJobs } from "./server-cron-heartbeat-jobs.js";
 import {
   dispatchGatewayCronFinishedNotifications,
+  sendGatewayCronWebhook,
   sendGatewayCronFailureAlert,
 } from "./server-cron-notifications.js";
 import {
@@ -275,6 +281,9 @@ export function buildGatewayCronService(params: {
   const env = params.env ?? process.env;
   const storePath = resolveCronJobsStorePathFromConfig(params.cfg, env);
   const cronEnabled = env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
+  // Resolve once per cron service snapshot so every webhook route shares the
+  // same explicit opt-in while omitted config keeps the guard strict.
+  const webhookSsrfPolicy = mergeSsrFPolicies(params.cfg.cron?.webhookSsrfPolicy);
 
   const findAgentEntry = (cfg: OpenClawConfig, agentId: string) =>
     listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === agentId);
@@ -449,20 +458,27 @@ export function buildGatewayCronService(params: {
   let streamWatcherReconciliations = 0;
   const terminalExitCompletionTokens = new Map<string, object>();
   let exitWatcherGeneration = 0;
+  let exitWatcherMutationRevision = 0;
+  let exitWatchersStopped = false;
   let streamWatcherGeneration = 0;
   // Bumped when a direct watcher route begins; fences reconcile's async list
   // snapshot against mutations that commit inside the list await.
   let streamWatcherMutationRevision = 0;
   let streamWatchersStopped = false;
   const reconcileExitWatchers = async () => {
+    const revision = ++exitWatcherMutationRevision;
     const generation = exitWatcherGeneration;
     exitWatcherReconciliations += 1;
     try {
-      if (!exitWatchersRef.current) {
+      if (!exitWatchersRef.current || exitWatchersStopped) {
         return;
       }
       const result = await cron.list({ includeDisabled: true });
-      if (generation !== exitWatcherGeneration) {
+      if (
+        exitWatchersStopped ||
+        generation !== exitWatcherGeneration ||
+        revision !== exitWatcherMutationRevision
+      ) {
         return;
       }
       const jobs: CronJob[] = Array.isArray(result) ? result : (result as { jobs: CronJob[] }).jobs;
@@ -597,6 +613,7 @@ export function buildGatewayCronService(params: {
     storePath,
     cronEnabled,
     cronConfig: params.cfg.cron,
+    listConfiguredChannels: () => listConfiguredMessageChannels(getRuntimeConfig()),
     ...(scriptRuntime
       ? {
           evaluateCronTrigger: ({ job, script, state, streamBatch, abortSignal }) =>
@@ -618,6 +635,18 @@ export function buildGatewayCronService(params: {
       : {}),
     defaultAgentId,
     resolveDefaultAgentId: () => resolveDefaultAgentId(getRuntimeConfig()),
+    resolveSessionStoreAgentIds: () => {
+      const cfg = getRuntimeConfig();
+      try {
+        return listKnownSessionStoreAgentIds(cfg, { env });
+      } catch (error) {
+        cronLogger.warn(
+          { err: formatErrorMessage(error) },
+          "cron: persisted session-store owner discovery failed",
+        );
+        return listConfiguredSessionStoreAgentIds(cfg);
+      }
+    },
     isAgentAvailable: (agentId) =>
       !isAgentDeletionBlocked(agentId) &&
       listAgentIds(getRuntimeConfig()).some((id) => normalizeAgentId(id) === agentId),
@@ -705,26 +734,19 @@ export function buildGatewayCronService(params: {
     }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       const sessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? `cron:${job.id}`;
-      try {
-        return await runCronIsolatedAgentTurn({
-          cfg: runtimeConfig,
-          deps: params.deps,
-          job,
-          message,
-          abortSignal,
-          onExecutionStarted,
-          onExecutionPhase,
-          onLaneWait,
-          agentId,
-          sessionKey,
-          lane: "cron",
-        });
-      } finally {
-        await cleanupBrowserSessionsForLifecycleEnd({
-          sessionKeys: [sessionKey],
-          onWarn: (msg) => cronLogger.warn({ jobId: job.id }, msg),
-        });
-      }
+      return await runCronIsolatedAgentTurn({
+        cfg: runtimeConfig,
+        deps: params.deps,
+        job,
+        message,
+        abortSignal,
+        onExecutionStarted,
+        onExecutionPhase,
+        onLaneWait,
+        agentId,
+        sessionKey,
+        lane: "cron",
+      });
     },
     runCommandJob: async ({ job, abortSignal }) => {
       const result = await runCronCommandJob({
@@ -830,6 +852,17 @@ export function buildGatewayCronService(params: {
           },
         };
       }
+    },
+    sendCronWebhook: async ({ job, event, abortSignal, deadlineAtMs, onDeliveryAccepted }) => {
+      await sendGatewayCronWebhook({
+        job,
+        event,
+        abortSignal,
+        onDeliveryAccepted,
+        ...(deadlineAtMs !== undefined ? { deadlineAtMs } : {}),
+        webhookToken: params.cfg.cron?.webhookToken,
+        ssrfPolicy: webhookSsrfPolicy,
+      });
     },
     runScriptJob: async ({ job, streamBatch, abortSignal }) => {
       if (!scriptRuntime || job.payload.kind !== "script") {
@@ -972,18 +1005,21 @@ export function buildGatewayCronService(params: {
         "cron: isolated agent setup timed out before runner start; backing off job without gateway restart",
       );
     },
-    sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) =>
+    sendCronFailureAlert: async ({ job, text, runAtMs, channel, to, mode, accountId, threadId }) =>
       await sendGatewayCronFailureAlert({
         deps: params.deps,
         logger: cronLogger,
         resolveCronAgent,
         webhookToken: params.cfg.cron?.webhookToken,
+        ssrfPolicy: webhookSsrfPolicy,
         job,
         text,
+        runAtMs,
         channel,
         to,
         mode,
         accountId,
+        threadId,
       }),
     log: getChildLogger({ module: "cron", storePath }),
     onEvent: (evt) => {
@@ -1077,6 +1113,7 @@ export function buildGatewayCronService(params: {
           logger: cronLogger,
           resolveCronAgent,
           webhookToken: params.cfg.cron?.webhookToken,
+          ssrfPolicy: webhookSsrfPolicy,
           globalFailureDestination: params.cfg.cron?.failureAlert,
         });
       }
@@ -1295,6 +1332,9 @@ export function buildGatewayCronService(params: {
     (exitWatchersRef.current?.activeJobIds().length ?? 0) +
     (streamWatchersRef.current?.activeJobIds().length ?? 0);
   const stopExitWatchers = () => {
+    // Late completion cleanup can request reconciliation after shutdown.
+    // Fence new requests before cancellation so stopped children cannot respawn.
+    exitWatchersStopped = true;
     exitWatcherGeneration += 1;
     exitWatchersRef.current?.cancelAll();
   };
@@ -1328,23 +1368,24 @@ export function buildGatewayCronService(params: {
   const automationEpoch = claimSessionAutomationEpoch();
   const stopCron = cron.stop.bind(cron);
   cron.stop = () => {
-    stopCron();
-    stopExitWatchers();
-    stopHeartbeatReconcileRetry();
-    void stopStreamWatchers().catch((err: unknown) => {
-      cronLogger.warn(
-        { err: formatErrorMessage(err) },
-        "cron-stream: asynchronous teardown failed",
-      );
-    });
-    // Session rows must stop reporting automation from a stopped scheduler,
-    // but a reload's replacement service may already own the registration.
-    unregisterSessionAutomationSource(automationSource);
+    try {
+      stopCron();
+      stopExitWatchers();
+      stopHeartbeatReconcileRetry();
+      void stopStreamWatchers().catch((err: unknown) => {
+        cronLogger.warn(
+          { err: formatErrorMessage(err) },
+          "cron-stream: asynchronous teardown failed",
+        );
+      });
+    } finally {
+      // Session rows must stop reporting automation from a stopped scheduler,
+      // but a reload's replacement service may already own the registration.
+      unregisterSessionAutomationSource(automationSource);
+    }
   };
   cron.stopAndDrain = async () => {
-    stopCron();
-    stopExitWatchers();
-    stopHeartbeatReconcileRetry();
+    cron.stop();
     const streamWatchersStop = stopStreamWatchers().then(
       () => ({ ok: true as const }),
       (error: unknown) => ({ ok: false as const, error }),
@@ -1363,7 +1404,6 @@ export function buildGatewayCronService(params: {
     if (!streamWatchersResult.ok) {
       throw streamWatchersResult.error;
     }
-    unregisterSessionAutomationSource(automationSource);
   };
   // Reconciliations serialize on one tail and only the latest requested epoch
   // executes, so an older reload's convergence can never clobber a newer one.
@@ -1412,6 +1452,7 @@ export function buildGatewayCronService(params: {
     if (generation !== streamWatcherGeneration) {
       return;
     }
+    exitWatchersStopped = false;
     streamWatchersStopped = false;
     // A reload restart owns a fresh watcher lifecycle; the next stop must run.
     streamWatchersStopPromise = undefined;

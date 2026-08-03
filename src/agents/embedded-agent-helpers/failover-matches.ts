@@ -17,8 +17,13 @@ const HIGH_CONFIDENCE_AUTH_PERMANENT_PATTERNS = [
   "not allowed for this organization",
 ] as const satisfies readonly ErrorPattern[];
 
+// Providers use both "invalid API key" and "API key is/not valid" word order.
+// Keep them in one matcher so every result/exception classifier agrees on auth failover.
+const INVALID_API_KEY_RE =
+  /(?:invalid[_ ]?api[_ ]?key(?![a-z0-9])|api[_ ]?key(?:[_ ]?(?:is[_ ]?)?(?:invalid(?![a-z0-9])|not[_ ]?valid(?![a-z0-9]))))/i;
+
 const AMBIGUOUS_AUTH_ERROR_PATTERNS = [
-  /invalid[_ ]?api[_ ]?key/,
+  INVALID_API_KEY_RE,
   /could not (?:authenticate|validate).*(?:api[_ ]?key|credentials)/i,
   "permission_error",
 ] as const satisfies readonly ErrorPattern[];
@@ -142,6 +147,10 @@ const ERROR_PATTERNS = {
     "network request failed",
     "fetch failed",
     "socket hang up",
+    // Codex and node-fetch expose these exact terminal transport messages.
+    // Keep them anchored so unrelated local stream failures do not trigger model failover.
+    /^stream disconnected before completion(?::[\s\S]*)?$/i,
+    /^premature close of server response while trying to fetch\b/i,
     // Chinese provider error messages (ZhipuAI/GLM, Bailian, Kimi/Moonshot, DeepSeek, etc.)
     "网络错误",
     "网络异常",

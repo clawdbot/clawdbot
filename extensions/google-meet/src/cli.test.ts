@@ -229,9 +229,10 @@ describe("google-meet CLI", () => {
             tab: { targetId: "tab-1", url: "https://meet.google.com/abc-defg-hij" },
             browser: {
               inCall: false,
-              manualActionRequired: true,
-              manualActionReason: "meet-admission-required",
-              manualActionMessage: "Admit the OpenClaw browser participant in Google Meet.",
+              manualAction: {
+                reason: "meet-admission-required",
+                message: "Admit the OpenClaw browser participant in Google Meet.",
+              },
               browserUrl: "https://meet.google.com/abc-defg-hij",
             },
             message: "Admit the OpenClaw browser participant in Google Meet.",

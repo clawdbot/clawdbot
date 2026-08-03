@@ -217,7 +217,6 @@ describe("security audit install metadata findings", () => {
         startup: {
           sidecar: true,
           memory: false,
-          deferConfiguredChannelFullLoadUntilAfterListen: false,
           agentHarnesses: [],
         },
         compat: [],
@@ -542,6 +541,19 @@ describe("security audit extension tool reachability findings", () => {
                 finding.severity === "warn",
             ),
           ).toBe(true);
+        },
+      },
+      {
+        name: "reports canonical agent paths for permissive tool policy",
+        cfg: {
+          plugins: { allow: ["some-plugin"] },
+          agents: { entries: { ops: { tools: { profile: "full" } } } },
+        } satisfies OpenClawConfig,
+        assert: (findings: Awaited<ReturnType<typeof runSharedExtensionsAudit>>) => {
+          const finding = findings.find(
+            (entry) => entry.checkId === "plugins.tools_reachable_permissive_policy",
+          );
+          expect(finding?.detail).toContain("- agents.entries.ops");
         },
       },
       {

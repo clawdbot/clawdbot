@@ -1,7 +1,11 @@
 // Verifies guarded session managers emit transcript update events with stable sequence ids.
+import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   onInternalSessionTranscriptUpdate,
   type InternalSessionTranscriptUpdate,
@@ -11,28 +15,111 @@ import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcrip
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 
 const listeners: Array<() => void> = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let fixtureId = 0;
+
+async function openPersistedSessionManager() {
+  const root = tempDirs.make("openclaw-transcript-events-");
+  const sessionId = `session-${fixtureId++}`;
+  const target = {
+    agentId: "main",
+    sessionId,
+    sessionKey: `agent:main:${sessionId}`,
+    storePath: path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite"),
+  };
+  await upsertSessionEntry({
+    ...target,
+    entry: { sessionId, updatedAt: Date.now() },
+  });
+  return { sessionManager: SessionManager.open(target, root), target };
+}
 
 afterEach(() => {
   // Remove all transcript listeners between tests to avoid duplicate broadcasts.
   while (listeners.length > 0) {
     listeners.pop()?.();
   }
+  closeOpenClawAgentDatabasesForTest();
 });
 
 describe("guardSessionManager transcript updates", () => {
-  it("persists and broadcasts memory-maintenance messages as hidden", () => {
+  it.each(["active", "side", "setup-metadata"] as const)(
+    "adopts an ingress-persisted %s-branch user without broadcasting a duplicate",
+    (branch) => {
+      const updates: InternalSessionTranscriptUpdate[] = [];
+      listeners.push(onInternalSessionTranscriptUpdate((update) => updates.push(update)));
+
+      const sm = SessionManager.inMemory();
+      const preparedUserTurnMessage = {
+        role: "user" as const,
+        content: "canonical prompt",
+        idempotencyKey: "canonical-run:user",
+        timestamp: Date.now(),
+      };
+      const existingId = sm.appendMessage(preparedUserTurnMessage);
+      if (branch === "side") {
+        const visibleLeafId = sm.appendMessage({
+          role: "assistant",
+          content: [{ type: "text", text: "visible branch" }],
+          timestamp: Date.now(),
+        } as Parameters<typeof sm.appendMessage>[0]);
+        sm.appendLeafControl({
+          targetId: visibleLeafId,
+          appendParentId: existingId,
+          appendMode: "side",
+        });
+      } else if (branch === "setup-metadata") {
+        sm.appendModelChange("openai", "gpt-5.5");
+        sm.appendThinkingLevelChange("off");
+        sm.appendCustomEntry("model-snapshot", {
+          modelApi: "openai-responses",
+          modelId: "gpt-5.5",
+          provider: "openai",
+        });
+      }
+      const appendParentId = sm.getAppendParentId();
+      const markRuntimePersisted = vi.fn();
+      const recorder = {
+        markBlocked: vi.fn(),
+        markRuntimePersisted,
+      } as unknown as UserTurnTranscriptRecorder;
+      const guarded = guardSessionManager(sm, {
+        agentId: "main",
+        sessionKey: "agent:main:canonical",
+        preparedUserTurnMessage,
+        preparedUserTurnTranscriptRecorder: recorder,
+      });
+
+      const runtimeId = guarded.appendMessage({
+        role: "user",
+        content: "canonical prompt",
+        timestamp: preparedUserTurnMessage.timestamp,
+      });
+
+      expect(runtimeId).toBe(existingId);
+      expect(sm.getAppendParentId()).toBe(appendParentId);
+      expect(
+        sm
+          .getEntries()
+          .filter((entry) => entry.type === "message" && entry.message.role === "user"),
+      ).toHaveLength(1);
+      expect(updates).toEqual([]);
+      expect(markRuntimePersisted).toHaveBeenCalledTimes(1);
+      expect(markRuntimePersisted).toHaveBeenCalledWith(
+        expect.objectContaining({ idempotencyKey: "canonical-run:user" }),
+      );
+    },
+  );
+
+  it("persists and broadcasts memory-maintenance messages as hidden", async () => {
     const updates: InternalSessionTranscriptUpdate[] = [];
     listeners.push(onInternalSessionTranscriptUpdate((update) => updates.push(update)));
 
-    const sm = SessionManager.inMemory();
-    const sessionFile = "/tmp/openclaw-session-memory-events.jsonl";
-    Object.assign(sm, {
-      getSessionFile: () => sessionFile,
-    });
+    const { sessionManager: sm, target } = await openPersistedSessionManager();
 
     const guarded = guardSessionManager(sm, {
-      agentId: "main",
-      sessionKey: "agent:main:memory",
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
       trigger: "memory",
     });
     const appendMessage = guarded.appendMessage.bind(guarded) as unknown as (
@@ -110,19 +197,15 @@ describe("guardSessionManager transcript updates", () => {
     expect(persisted?.message).not.toHaveProperty("display", false);
   });
 
-  it("includes the session key when broadcasting appended non-tool-result messages", () => {
+  it("broadcasts the SQLite target for appended non-tool-result messages", async () => {
     const updates: InternalSessionTranscriptUpdate[] = [];
     listeners.push(onInternalSessionTranscriptUpdate((update) => updates.push(update)));
 
-    const sm = SessionManager.inMemory();
-    const sessionFile = "/tmp/openclaw-session-message-events.jsonl";
-    Object.assign(sm, {
-      getSessionFile: () => sessionFile,
-    });
+    const { sessionManager: sm, target } = await openPersistedSessionManager();
 
     const guarded = guardSessionManager(sm, {
-      agentId: "main",
-      sessionKey: "agent:main:worker",
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
     });
     const appendMessage = guarded.appendMessage.bind(guarded) as unknown as (
       message: AgentMessage,
@@ -145,18 +228,16 @@ describe("guardSessionManager transcript updates", () => {
         },
         messageId: expect.any(String),
         messageSeq: 1,
-        sessionFile,
-        sessionKey: "agent:main:worker",
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        target,
       },
     ]);
     expect(updates[0]?.messageId).not.toBe("");
   });
 
-  it("does not resolve transcript sequence when no session file is available", () => {
+  it("does not resolve transcript sequence for an in-memory session", () => {
     const sm = SessionManager.inMemory();
-    Object.assign(sm, {
-      getSessionFile: () => undefined,
-    });
     const getBranchSpy = vi.spyOn(sm, "getBranch");
 
     const guarded = guardSessionManager(sm, {
@@ -177,25 +258,20 @@ describe("guardSessionManager transcript updates", () => {
     getBranchSpy.mockRestore();
   });
 
-  it("reuses cached transcript sequence for consecutive appended messages", () => {
+  it("reuses cached transcript sequence for consecutive appended messages", async () => {
     const updates: InternalSessionTranscriptUpdate[] = [];
     listeners.push(onInternalSessionTranscriptUpdate((update) => updates.push(update)));
 
-    const sm = SessionManager.inMemory();
+    const { sessionManager: sm, target } = await openPersistedSessionManager();
     sm.appendMessage({
       role: "user",
       content: "existing prompt",
       timestamp: Date.now(),
     } as Parameters<typeof sm.appendMessage>[0]);
     const getBranchSpy = vi.spyOn(sm, "getBranch");
-    const sessionFile = "/tmp/openclaw-session-message-events.jsonl";
-    Object.assign(sm, {
-      getSessionFile: () => sessionFile,
-    });
-
     const guarded = guardSessionManager(sm, {
-      agentId: "main",
-      sessionKey: "agent:main:worker",
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
     });
     const appendMessage = guarded.appendMessage.bind(guarded) as unknown as (
       message: AgentMessage,
@@ -217,26 +293,21 @@ describe("guardSessionManager transcript updates", () => {
     getBranchSpy.mockRestore();
   });
 
-  it("caches real tool result sequence before final assistant messages", () => {
+  it("caches real tool result sequence before final assistant messages", async () => {
     // Tool results are persisted but not broadcast, so later visible messages must skip their seq.
     const updates: InternalSessionTranscriptUpdate[] = [];
     listeners.push(onInternalSessionTranscriptUpdate((update) => updates.push(update)));
 
-    const sm = SessionManager.inMemory();
+    const { sessionManager: sm, target } = await openPersistedSessionManager();
     sm.appendMessage({
       role: "user",
       content: "existing prompt",
       timestamp: Date.now(),
     } as Parameters<typeof sm.appendMessage>[0]);
     const getBranchSpy = vi.spyOn(sm, "getBranch");
-    const sessionFile = "/tmp/openclaw-session-message-events.jsonl";
-    Object.assign(sm, {
-      getSessionFile: () => sessionFile,
-    });
-
     const guarded = guardSessionManager(sm, {
-      agentId: "main",
-      sessionKey: "agent:main:worker",
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
     });
     const appendMessage = guarded.appendMessage.bind(guarded) as unknown as (
       message: AgentMessage,

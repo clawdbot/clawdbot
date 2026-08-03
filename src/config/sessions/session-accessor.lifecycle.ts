@@ -16,33 +16,19 @@ import {
   replaceSessionEntry,
   patchSessionEntry,
 } from "./session-accessor.entry.js";
-import type {
-  DeleteSessionEntryLifecycleResult,
-  ResetSessionEntryLifecycleResult,
-  DeletedAgentSessionEntryPurgeParams,
-  SessionArchivedTranscriptCleanupRule,
-  SessionEntryLifecycleMutationResult,
-  SessionEntryLifecycleRemoval,
-  SessionEntryLifecycleUpsert,
-  SessionLifecycleArtifactCleanupParams,
-  SessionLifecycleArtifactCleanupResult,
-} from "./session-accessor.lifecycle-types.js";
 import {
-  applySqliteSessionEntryLifecycleMutation,
-  applySqliteSessionEntryReplacements,
-  applySqliteSessionStoreProjection,
-  cleanupSqliteSessionLifecycleArtifacts,
-  deleteSqliteSessionEntryLifecycle,
-  purgeSqliteDeletedAgentSessionEntries,
-  rollbackSqliteAgentHarnessSessionEntryLifecycle,
-  rollbackSqlitePluginOwnedSessionEntryLifecycle,
-  resetSqliteSessionEntryLifecycle,
+  applySqliteSessionEntryLifecycleMutation as applySessionEntryLifecycleMutation,
+  applySqliteSessionEntryReplacements as applySessionEntryReplacements,
+  applySqliteSessionStoreProjection as applySessionStoreProjection,
+  cleanupSqliteSessionLifecycleArtifacts as cleanupSessionLifecycleArtifacts,
+  deleteSqliteSessionEntryLifecycle as deleteSessionEntryLifecycle,
+  purgeSqliteDeletedAgentSessionEntries as purgeDeletedAgentSessionEntries,
+  rollbackSqliteAgentHarnessSessionEntryLifecycle as rollbackAgentHarnessSessionEntryLifecycle,
+  rollbackSqlitePluginOwnedSessionEntryLifecycle as rollbackPluginOwnedSessionEntryLifecycle,
+  resetSqliteSessionEntryLifecycle as resetSessionEntryLifecycle,
 } from "./session-accessor.sqlite.js";
 import type {
   SessionAccessScope,
-  SessionEntryStatus,
-  SessionEntryReplacementSnapshot,
-  SessionEntryReplacementUpdate,
   SessionCompactionCheckpointMutationResult,
   SessionCompactionCheckpointTranscriptForker,
   SessionCompactionCheckpointEntryBuilder,
@@ -54,12 +40,23 @@ import type {
   SessionPatchProjectionContext,
   SessionPatchProjectionFailure,
   SessionPatchProjectionResult,
-  ResetSessionEntryLifecycleParams,
-  DeleteSessionEntryLifecycleParams,
 } from "./session-accessor.types.js";
 import { resolveProjectionExistingEntry } from "./session-entry-selection.js";
-import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
+
+// Session lifecycle storage is canonical SQLite; direct exports keep reset,
+// rollback, cleanup, and bulk projections on their actual transaction owner.
+export {
+  applySessionEntryLifecycleMutation,
+  applySessionEntryReplacements,
+  applySessionStoreProjection,
+  cleanupSessionLifecycleArtifacts,
+  deleteSessionEntryLifecycle,
+  purgeDeletedAgentSessionEntries,
+  resetSessionEntryLifecycle,
+  rollbackAgentHarnessSessionEntryLifecycle,
+  rollbackPluginOwnedSessionEntryLifecycle,
+};
 
 type TemporarySessionMappingSnapshot =
   | {
@@ -256,47 +253,6 @@ export async function applySessionPatchProjection<
 }
 
 /**
- * Applies explicit entry replacements without exposing the backing store shape.
- * The file backend runs selection and replacement under one writer lock; the
- * SQLite backend can map the same callback to a transaction.
- */
-export async function applySessionEntryReplacements<T>(params: {
-  activeSessionKey?: string;
-  /** Limits snapshots and replacement authority to these exact persisted keys. */
-  sessionKeys?: readonly string[];
-  /** Limits snapshots and replacement authority to normalized session statuses. */
-  statuses?: readonly SessionEntryStatus[];
-  storePath: string;
-  update: (
-    entries: SessionEntryReplacementSnapshot[],
-  ) => Promise<SessionEntryReplacementUpdate<T>> | SessionEntryReplacementUpdate<T>;
-  requireWriteSuccess?: boolean;
-  skipMaintenance?: boolean;
-}): Promise<T> {
-  return await applySqliteSessionEntryReplacements(params);
-}
-
-/**
- * Applies a detached whole-store projection under the storage writer lane.
- * Compatibility adapters use this to preserve callback serialization while
- * steady-state runtime callers stay on row-level accessors.
- */
-export async function applySessionStoreProjection<T>(params: {
-  activeSessionKey?: string;
-  agentId?: string;
-  skipMaintenance?: boolean;
-  storePath: string;
-  update: (store: Record<string, SessionEntry>) =>
-    | Promise<{ persist: boolean; result: T }>
-    | {
-        persist: boolean;
-        result: T;
-      };
-}): Promise<T> {
-  return await applySqliteSessionStoreProjection(params);
-}
-
-/**
  * Runs an operation while preserving one temporary session mapping.
  * The storage backend snapshots exactly the named key before the operation and
  * restores that entry, or deletes it when it did not previously exist, after
@@ -325,76 +281,6 @@ export async function preserveTemporarySessionMapping<T>(
     ...(snapshot.canRestore ? {} : { snapshotFailure: snapshot.snapshotFailure }),
     ...(restoreFailure ? { restoreFailure } : {}),
   };
-}
-
-/** Removes entries and orphan transcript artifacts owned by a named session lifecycle. */
-export async function cleanupSessionLifecycleArtifacts(
-  params: SessionLifecycleArtifactCleanupParams,
-): Promise<SessionLifecycleArtifactCleanupResult> {
-  return await cleanupSqliteSessionLifecycleArtifacts(params);
-}
-
-/** Resets one persisted session entry and transitions its transcript state. */
-export async function resetSessionEntryLifecycle(
-  params: ResetSessionEntryLifecycleParams,
-): Promise<ResetSessionEntryLifecycleResult> {
-  return await resetSqliteSessionEntryLifecycle(params);
-}
-
-/** Deletes one persisted session entry and transitions its transcript state. */
-export async function deleteSessionEntryLifecycle(
-  params: DeleteSessionEntryLifecycleParams,
-): Promise<DeleteSessionEntryLifecycleResult> {
-  return await deleteSqliteSessionEntryLifecycle(params);
-}
-
-/** Internal exact-row rollback for failed trusted agent-harness initialization. */
-export async function rollbackAgentHarnessSessionEntryLifecycle(
-  params: DeleteSessionEntryLifecycleParams & { expectedEntry: SessionEntry },
-): Promise<DeleteSessionEntryLifecycleResult> {
-  return await rollbackSqliteAgentHarnessSessionEntryLifecycle(params);
-}
-
-/** Internal exact-row rollback for failed trusted plugin-owned CLI initialization. */
-export async function rollbackPluginOwnedSessionEntryLifecycle(
-  params: DeleteSessionEntryLifecycleParams & {
-    expectedEntry: SessionEntry;
-    expectedPluginOwnerId: string;
-  },
-): Promise<DeleteSessionEntryLifecycleResult> {
-  return await rollbackSqlitePluginOwnedSessionEntryLifecycle(params);
-}
-
-/** Applies exact entry lifecycle mutations and artifact cleanup at the storage boundary. */
-export async function applySessionEntryLifecycleMutation(params: {
-  agentId?: string;
-  storePath: string;
-  removals?: Iterable<SessionEntryLifecycleRemoval>;
-  upserts?: Iterable<SessionEntryLifecycleUpsert>;
-  activeSessionKey?: string;
-  maintenanceOverride?: Partial<ResolvedSessionMaintenanceConfig>;
-  skipMaintenance?: boolean;
-  preserveActiveWork?: boolean;
-  archiveReason?: "deleted" | "reset";
-  restrictArchivedTranscriptsToStoreDir?: boolean;
-  cleanupArchivedTranscripts?: {
-    rules: SessionArchivedTranscriptCleanupRule[];
-    nowMs?: number;
-  };
-  pruneUnreferencedArtifacts?: {
-    olderThanMs: number;
-    dryRun?: boolean;
-  };
-  captureArtifactCleanupError?: boolean;
-}): Promise<SessionEntryLifecycleMutationResult> {
-  return await applySqliteSessionEntryLifecycleMutation(params);
-}
-
-/** Purges session entries owned by a deleted agent at the storage boundary. */
-export async function purgeDeletedAgentSessionEntries(
-  params: DeletedAgentSessionEntryPurgeParams,
-): Promise<SessionEntryLifecycleMutationResult> {
-  return await purgeSqliteDeletedAgentSessionEntries(params);
 }
 
 /**

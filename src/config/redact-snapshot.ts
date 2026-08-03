@@ -8,6 +8,7 @@ import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
+import { containsEnvVarReference } from "./env-substitution.js";
 import {
   replaceSensitiveValuesInRaw,
   shouldFallbackToStructuredRawRedaction,
@@ -616,17 +617,84 @@ function maybeRestoreSecretRefId(params: {
   return { handled: true, value: { ...incomingObj, id: originalObj.id } };
 }
 
+type RedactedArrayIdentity = {
+  item: unknown;
+  index: number;
+  count: number;
+};
+
+function readRedactedArrayItemId(item: unknown): string | undefined {
+  if (!isObjectRecord(item) || !Object.hasOwn(item, "id")) {
+    return undefined;
+  }
+  const id = item.id;
+  // Authored env references and escapes differ from their resolved snapshot identities.
+  if (
+    typeof id !== "string" ||
+    id.length === 0 ||
+    id === REDACTED_SENTINEL ||
+    containsEnvVarReference(id) ||
+    id.includes("$${")
+  ) {
+    return undefined;
+  }
+  return id;
+}
+
+function indexRedactedArrayItemsById(items: unknown[]): Map<string, RedactedArrayIdentity> {
+  const itemsById = new Map<string, RedactedArrayIdentity>();
+  for (const [index, item] of items.entries()) {
+    const id = readRedactedArrayItemId(item);
+    if (id === undefined) {
+      continue;
+    }
+    const previous = itemsById.get(id);
+    if (previous) {
+      previous.count += 1;
+    } else {
+      itemsById.set(id, { item, index, count: 1 });
+    }
+  }
+  return itemsById;
+}
+
 function mapRedactedArray(params: {
   incoming: unknown[];
   original: unknown;
   path: string;
-  mapItem: (item: unknown, index: number, originalArray: unknown[]) => unknown;
+  mapItem: (item: unknown, originalItem: unknown) => unknown;
 }): unknown[] {
   const originalArray = Array.isArray(params.original) ? params.original : [];
   if (params.incoming.length < originalArray.length) {
     log.warn(`Redacted config array key ${params.path} has been truncated`);
   }
-  return params.incoming.map((item, index) => params.mapItem(item, index, originalArray));
+  const originalById = indexRedactedArrayItemsById(originalArray);
+  const incomingById = indexRedactedArrayItemsById(params.incoming);
+  const reservedOriginalIndexes = new Set<number>();
+  for (const [id, incomingIdentity] of incomingById) {
+    const originalIdentity = originalById.get(id);
+    if (incomingIdentity.count === 1 && originalIdentity?.count === 1) {
+      reservedOriginalIndexes.add(originalIdentity.index);
+    }
+  }
+  const hasUniqueOriginalIdentity = Array.from(originalById.values()).some(
+    (identity) => identity.count === 1,
+  );
+
+  return params.incoming.map((item, index) => {
+    const id = readRedactedArrayItemId(item);
+    const originalIdentity = id === undefined ? undefined : originalById.get(id);
+    const incomingIdentity = id === undefined ? undefined : incomingById.get(id);
+    if (incomingIdentity?.count === 1 && originalIdentity?.count === 1) {
+      return params.mapItem(item, originalIdentity.item);
+    }
+    if (incomingIdentity?.count === 1 && !originalIdentity && hasUniqueOriginalIdentity) {
+      return params.mapItem(item, undefined);
+    }
+    // Positional fallback must not reuse a secret already reserved for another identified entry.
+    const originalItem = reservedOriginalIndexes.has(index) ? undefined : originalArray[index];
+    return params.mapItem(item, originalItem);
+  });
 }
 
 function toObjectRecord(value: unknown): Record<string, unknown> {
@@ -649,18 +717,17 @@ function toRestoreArrayContext(
 
 function restoreArrayItemWithLookup(params: {
   item: unknown;
-  index: number;
-  originalArray: unknown[];
+  originalItem: unknown;
   lookup: Set<string>;
   path: string;
   hints: ConfigUiHints;
 }): unknown {
   if (params.item === REDACTED_SENTINEL) {
-    return params.originalArray[params.index];
+    return params.originalItem;
   }
   return restoreRedactedValuesWithLookup(
     params.item,
-    params.originalArray[params.index],
+    params.originalItem,
     params.lookup,
     params.path,
     params.hints,
@@ -669,8 +736,7 @@ function restoreArrayItemWithLookup(params: {
 
 function restoreArrayItemWithGuessing(params: {
   item: unknown;
-  index: number;
-  originalArray: unknown[];
+  originalItem: unknown;
   path: string;
   hints?: ConfigUiHints;
 }): unknown {
@@ -679,14 +745,9 @@ function restoreArrayItemWithGuessing(params: {
     isSensitivePath(params.path) &&
     params.item === REDACTED_SENTINEL
   ) {
-    return params.originalArray[params.index];
+    return params.originalItem;
   }
-  return restoreRedactedValuesGuessing(
-    params.item,
-    params.originalArray[params.index],
-    params.path,
-    params.hints,
-  );
+  return restoreRedactedValuesGuessing(params.item, params.originalItem, params.path, params.hints);
 }
 
 function restoreGuessingArray(
@@ -699,11 +760,10 @@ function restoreGuessingArray(
     incoming,
     original,
     path,
-    mapItem: (item, index, originalArray) =>
+    mapItem: (item, originalItem) =>
       restoreArrayItemWithGuessing({
         item,
-        index,
-        originalArray,
+        originalItem,
         path,
         hints,
       }),
@@ -780,10 +840,6 @@ function restoreRedactedValuesWithLookup(
 
   const arrayContext = toRestoreArrayContext(incoming, prefix);
   if (arrayContext) {
-    // Note: If the user removed an item in the middle of the array,
-    // we have no way of knowing which one. In this case, the last
-    // element(s) get(s) chopped off. Not good, so please don't put
-    // sensitive string array in the config...
     const { incoming: incomingArray, path } = arrayContext;
     if (!lookup.has(path)) {
       // Keep behavior symmetric with object fallback: if hints miss the path,
@@ -794,11 +850,10 @@ function restoreRedactedValuesWithLookup(
       incoming: incomingArray,
       original,
       path,
-      mapItem: (item, index, originalArray) =>
+      mapItem: (item, originalItem) =>
         restoreArrayItemWithLookup({
           item,
-          index,
-          originalArray,
+          originalItem,
           lookup,
           path,
           hints,
@@ -865,10 +920,6 @@ function restoreRedactedValuesGuessing(
 
   const arrayContext = toRestoreArrayContext(incoming, prefix);
   if (arrayContext) {
-    // Note: If the user removed an item in the middle of the array,
-    // we have no way of knowing which one. In this case, the last
-    // element(s) get(s) chopped off. Not good, so please don't put
-    // sensitive string array in the config...
     const { incoming: incomingArray, path } = arrayContext;
     return restoreGuessingArray(incomingArray, original, path, hints);
   }

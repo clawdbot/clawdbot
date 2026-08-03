@@ -438,7 +438,6 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       tempRoots.add(rootDir);
       const descendantPidPath = path.join(rootDir, "descendant.pid");
       let descendantPid = 0;
-      let runnerPid = 0;
       const moduleHref = pathToFileURL(
         path.resolve("scripts/prepare-extension-package-boundary-artifacts.mjs"),
       ).href;
@@ -461,7 +460,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       const runner = spawn(process.execPath, ["--input-type=module", "--eval", runnerScript], {
         stdio: "ignore",
       });
-      runnerPid = runner.pid ?? 0;
+      const runnerPid = runner.pid ?? 0;
 
       try {
         descendantPid = Number.parseInt(await waitForFile(descendantPidPath, 10_000), 10);
@@ -627,10 +626,18 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     });
 
     expect(productionOutputs).toContain("dist/plugin-sdk/provider-auth-runtime.d.ts");
-    expect(productionOutputs).not.toContain("dist/plugin-sdk/codex-native-task-runtime.d.ts");
     expect(productionOutputs).not.toContain("dist/plugin-sdk/test-fixtures.d.ts");
     expect(privateQaOutputs).toContain("dist/plugin-sdk/provider-auth-runtime.d.ts");
     expect(privateQaOutputs).toContain("dist/plugin-sdk/test-fixtures.d.ts");
+    for (const entry of [
+      "channel-contract-testing",
+      "plugin-state-test-runtime",
+      "plugin-test-runtime",
+    ]) {
+      expect(productionOutputs).not.toContain(`dist/plugin-sdk/${entry}.d.ts`);
+      expect(privateQaOutputs).toContain(`dist/plugin-sdk/${entry}.d.ts`);
+      expect(privateQaOutputs).toContain(`packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`);
+    }
   });
 
   it("parses prep mode and rejects unknown values", () => {

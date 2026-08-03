@@ -9,9 +9,13 @@ import {
 import {
   clearEmbeddingProviders,
   clearMemoryEmbeddingProviders,
+  createEmptyPluginRegistry,
+  getActivePluginRegistry,
   getRegisteredEmbeddingProvider,
+  setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const memoryHostEmbeddingMocks = vi.hoisted(() => ({
   createLocalEmbeddingProvider: vi.fn(),
@@ -23,6 +27,7 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => ({
 }));
 
 import llamaCppPlugin from "./index.js";
+import { LLAMA_CPP_LOCAL_BASE_URL } from "./src/defaults.js";
 import { llamaCppEmbeddingProviderAdapter } from "./src/embedding-provider.js";
 
 const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL =
@@ -32,6 +37,27 @@ type MemoryCreateTestOptions = AdapterCreateOptions & {
   fallback?: "none";
   outputDimensionality?: number;
 };
+let previousPluginRegistry: ReturnType<typeof getActivePluginRegistry>;
+
+beforeEach(() => {
+  previousPluginRegistry = getActivePluginRegistry();
+});
+
+function registerLlamaCppTextProvider(): ProviderPlugin {
+  const providers: ProviderPlugin[] = [];
+  llamaCppPlugin.register(
+    createTestPluginApi({
+      id: "llama-cpp",
+      name: "llama.cpp Provider",
+      source: "test",
+      config: {},
+      pluginConfig: {},
+      runtime: {} as never,
+      registerProvider: (provider) => providers.push(provider),
+    }),
+  );
+  return expectDefined(providers[0], "llama.cpp text provider");
+}
 
 async function createLlamaCppMemoryEmbeddingProvider(options: MemoryCreateTestOptions) {
   const { fallback: _fallback, outputDimensionality, ...adapterOptions } = options;
@@ -44,33 +70,51 @@ async function createLlamaCppMemoryEmbeddingProvider(options: MemoryCreateTestOp
 afterEach(() => {
   clearEmbeddingProviders();
   clearMemoryEmbeddingProviders();
+  setActivePluginRegistry(previousPluginRegistry ?? createEmptyPluginRegistry());
   memoryHostEmbeddingMocks.createLocalEmbeddingProvider.mockReset();
 });
 
 describe("llama.cpp provider plugin", () => {
   it("registers the local text-inference provider", () => {
-    const registerProvider = vi.fn();
-
-    llamaCppPlugin.register(
-      createTestPluginApi({
-        id: "llama-cpp",
-        name: "llama.cpp Provider",
-        source: "test",
-        config: {},
-        pluginConfig: {},
-        runtime: {} as never,
-        registerProvider,
-      }),
-    );
-
-    expect(registerProvider).toHaveBeenCalledWith(
+    expect(registerLlamaCppTextProvider()).toEqual(
       expect.objectContaining({
         id: "llama-cpp",
-        label: "Local model (llama.cpp)",
+        label: "llama.cpp",
         createStreamFn: expect.any(Function),
+        normalizeToolSchemas: expect.any(Function),
+        inspectToolSchemas: expect.any(Function),
         auth: [expect.objectContaining({ id: "local" })],
       }),
     );
+  });
+
+  it("keeps explicit HTTP routes on the configured transport", () => {
+    const provider = registerLlamaCppTextProvider();
+    const createStream = (baseUrl: string) =>
+      provider.createStreamFn?.({
+        config: {
+          models: {
+            providers: {
+              "llama-cpp": {
+                api: "openai-completions",
+                baseUrl,
+                models: [],
+              },
+            },
+          },
+        },
+        model: {
+          api: "openai-completions",
+          baseUrl,
+          id: "local-model",
+          provider: "llama-cpp",
+        },
+        modelId: "local-model",
+        provider: "llama-cpp",
+      } as never);
+
+    expect(createStream("http://127.0.0.1:8080/v1")).toBeUndefined();
+    expect(createStream(LLAMA_CPP_LOCAL_BASE_URL)).toBeTypeOf("function");
   });
 
   it("registers the local embedding provider through the generic SDK contract", () => {
@@ -86,6 +130,7 @@ describe("llama.cpp provider plugin", () => {
       },
       register: llamaCppPlugin.register,
     });
+    setActivePluginRegistry(registry.registry);
 
     const provider = getRegisteredEmbeddingProvider("local");
     expect(provider?.ownerPluginId).toBe("llama-cpp");

@@ -83,7 +83,6 @@ function resolvePackageRoot(packageRoot: string | undefined): string {
 async function isReleasedPackageInstall(packageRoot: string): Promise<boolean> {
   const entries = new Set(await fs.readdir(packageRoot));
   return (
-    entries.has("npm-shrinkwrap.json") &&
     !entries.has(".git") &&
     !entries.has("pnpm-lock.yaml") &&
     !entries.has("bun.lock") &&

@@ -57,10 +57,6 @@ function normalizeComparablePath(filePath: string): string {
   return path.join(comparableParent, basename);
 }
 
-function createFsError(code: string, message = code): NodeJS.ErrnoException {
-  return Object.assign(new Error(message), { code });
-}
-
 async function expectMissingPath(filePath: string): Promise<void> {
   try {
     await fs.stat(filePath);
@@ -319,7 +315,7 @@ describe("installPackageDir", () => {
     await expect(fs.readdir(backupRoot)).resolves.toHaveLength(0);
   });
 
-  it("publishes the staged install through the copy fallback when rename crosses devices", async () => {
+  it("publishes through the staged-copy path when source hardlinks are rejected", async () => {
     await fixtureRootTracker.setup();
     const fixtureRoot = await fixtureRootTracker.make("case");
     const sourceDir = path.join(fixtureRoot, "source");
@@ -329,17 +325,15 @@ describe("installPackageDir", () => {
     await fs.writeFile(path.join(sourceDir, "marker.txt"), "new");
 
     const realRename = fs.rename.bind(fs);
-    let exdevMoves = 0;
+    let directMoves = 0;
     vi.spyOn(fs, "rename").mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
       const [from, to] = args;
       const fromPath = String(from);
       if (
-        exdevMoves === 0 &&
         path.basename(fromPath).startsWith(".openclaw-install-stage-") &&
         normalizeComparablePath(String(to)) === normalizeComparablePath(targetDir)
       ) {
-        exdevMoves += 1;
-        throw createFsError("EXDEV", "cross-device link not permitted");
+        directMoves += 1;
       }
       return await realRename(...args);
     });
@@ -355,7 +349,7 @@ describe("installPackageDir", () => {
     });
 
     expect(result).toEqual({ ok: true });
-    expect(exdevMoves).toBe(1);
+    expect(directMoves).toBe(0);
     await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe("new");
     await expect(
       listMatchingDirs(installBaseDir, ".openclaw-install-stage-"),
@@ -443,7 +437,7 @@ describe("installPackageDir", () => {
 
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.error).toContain("Hardlinked source file is not allowed");
+        expect(result.error).toContain("Refusing to move hardlinked file");
       }
       await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe("old");
     },
@@ -472,7 +466,7 @@ describe("installPackageDir", () => {
 
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.error).toContain("Hardlinked source file is not allowed");
+        expect(result.error).toContain("Refusing to move hardlinked file");
       }
       await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe("old");
     },
@@ -506,7 +500,7 @@ describe("installPackageDir", () => {
 
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.error).toContain("Hardlinked source file is not allowed");
+        expect(result.error).toContain("Refusing to move hardlinked file");
       }
       await expectMissingPath(path.join(targetDir, "marker.txt"));
     },

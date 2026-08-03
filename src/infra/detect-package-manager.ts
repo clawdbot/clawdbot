@@ -24,7 +24,7 @@ function resolveBunGlobalNodeModules(): string {
   );
 }
 
-function resolvePnpmNodeModulesRoot(root: string): string | null {
+export function resolvePnpmNodeModulesRoot(root: string): string | null {
   const resolved = path.resolve(root);
   const parts = resolved.split(path.sep);
   const pnpmIndex = parts.lastIndexOf(".pnpm");
@@ -39,11 +39,11 @@ function resolvePnpmNodeModulesRoot(root: string): string | null {
   return path.basename(parent) === "node_modules" ? parent : null;
 }
 
-async function isBunOwnedPackageRoot(root: string): Promise<boolean> {
+export async function isBunOwnedPackageRoot(root: string): Promise<boolean> {
   return path.resolve(path.dirname(root)) === path.resolve(resolveBunGlobalNodeModules());
 }
 
-async function isPnpmOwnedPackageRoot(root: string): Promise<boolean> {
+export async function isPnpmOwnedPackageRoot(root: string): Promise<boolean> {
   const nodeModulesRoot = resolvePnpmNodeModulesRoot(root);
   if (!nodeModulesRoot || !(await exists(path.join(nodeModulesRoot, ".modules.yaml")))) {
     return false;
@@ -59,12 +59,12 @@ export async function detectPackageManager(root: string): Promise<DetectedPackag
   const hasPnpmLock = files.includes("pnpm-lock.yaml");
   const hasBunLock = files.includes("bun.lock") || files.includes("bun.lockb");
 
+  // Published packages retain source pnpm metadata, and modern releases omit
+  // shrinkwrap; detect Bun by its install root before checking older npm locks.
+  if (await isBunOwnedPackageRoot(root)) {
+    return "bun";
+  }
   if (hasNpmShrinkwrap) {
-    // Published npm packages carry npm-shrinkwrap even when their source uses pnpm;
-    // installed pnpm/bun-owned roots need layout proof before overriding npm.
-    if (await isBunOwnedPackageRoot(root)) {
-      return "bun";
-    }
     if (pm === "pnpm" && (hasPnpmLock || (await isPnpmOwnedPackageRoot(root)))) {
       return "pnpm";
     }

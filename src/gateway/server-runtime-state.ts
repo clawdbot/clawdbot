@@ -1,5 +1,5 @@
 // Gateway HTTP/WebSocket runtime state factory.
-// Builds one server runtime with pinned plugin registries and lazy route handlers.
+// Builds one server runtime with lazy plugin route handlers.
 import {
   createServer as createHttpServer,
   type IncomingMessage,
@@ -15,14 +15,6 @@ import { resolveCanvasNodeCapability } from "../canvas/constants.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
-import {
-  pinActivePluginChannelRegistry,
-  pinActivePluginHttpRouteRegistry,
-  pinActivePluginSessionExtensionRegistry,
-  releasePinnedPluginChannelRegistry,
-  releasePinnedPluginHttpRouteRegistry,
-  releasePinnedPluginSessionExtensionRegistry,
-} from "../plugins/runtime.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
@@ -59,6 +51,7 @@ import { runWithGatewayHttpWorkAdmission } from "./server/http-work-admission.js
 import type { PluginRoutePathContext } from "./server/plugins-http/path-context.js";
 import { shouldEnforceGatewayAuthForPluginPath } from "./server/plugins-http/route-auth.js";
 import { findMatchingPluginNodeCapabilityRoute } from "./server/plugins-http/route-capability.js";
+import { findMatchingPluginHttpRoutes } from "./server/plugins-http/route-match.js";
 import {
   createPreauthConnectionBudget,
   type PreauthConnectionBudget,
@@ -93,7 +86,21 @@ type GatewayPluginUpgradeHandler = (
 
 const loadGatewayPluginsHttpModule = async () => await import("./server/plugins-http.js");
 
-/** Creates the HTTP/WebSocket runtime state and pinned plugin registries for one gateway start. */
+function hasMatchingGatewayPluginRoute(
+  registry: PluginRegistry,
+  pathContext: PluginRoutePathContext | undefined,
+  requiresUpgrade: boolean,
+): boolean {
+  if (!pathContext) {
+    return (registry.httpRoutes ?? []).length > 0;
+  }
+  const matchingRoutes = findMatchingPluginHttpRoutes(registry, pathContext);
+  return requiresUpgrade
+    ? matchingRoutes.some((route) => typeof route.handleUpgrade === "function")
+    : matchingRoutes.length > 0;
+}
+
+/** Creates the HTTP/WebSocket runtime state for one gateway start. */
 export async function createGatewayRuntimeState(params: {
   cfg: import("../config/config.js").OpenClawConfig;
   getRuntimeConfig?: () => import("../config/config.js").OpenClawConfig;
@@ -116,8 +123,8 @@ export async function createGatewayRuntimeState(params: {
   getHookClientIpConfig: () => HookClientIpConfig;
   pluginRegistry: PluginRegistry;
   getPluginRouteRegistry?: () => PluginRegistry;
+  isStartupPluginRuntimeReady?: () => boolean;
   getGatewayRequestContext?: () => GatewayRequestContext | undefined;
-  pinChannelRegistry?: boolean;
   deps: CliDeps;
   log: { info: (msg: string) => void; warn: (msg: string) => void };
   logHooks: ReturnType<typeof createSubsystemLogger>;
@@ -127,7 +134,6 @@ export async function createGatewayRuntimeState(params: {
   handleWatchNodeRequest?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   workerIngressEnabled?: boolean;
 }): Promise<{
-  releasePluginRouteRegistry: () => void;
   httpServer: HttpServer;
   httpServers: HttpServer[];
   httpBindHosts: string[];
@@ -157,419 +163,393 @@ export async function createGatewayRuntimeState(params: {
   getMcpAppSandboxPort: () => number | undefined;
   ensureSandboxHostPort: () => Promise<number>;
 }> {
-  pinActivePluginHttpRouteRegistry(params.pluginRegistry);
-  pinActivePluginSessionExtensionRegistry(params.pluginRegistry);
-  if (params.pinChannelRegistry !== false) {
-    pinActivePluginChannelRegistry(params.pluginRegistry);
-  } else {
-    releasePinnedPluginChannelRegistry();
-  }
-  try {
-    const loadRuntimeConfig = params.getRuntimeConfig ?? (() => params.cfg);
-    const resolvePluginRouteRegistry = () =>
-      params.getPluginRouteRegistry?.() ?? params.pluginRegistry;
-    const clients = new Set<GatewayWsClient>();
-    const sessionEventSubscribers = createSessionEventSubscriberRegistry();
-    const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
-    const gatewayBroadcaster = createGatewayBroadcaster({
-      clients,
-      sessionMessageSubscribers,
-      canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) =>
-        canReceiveSessionEvent({
-          cfg: loadRuntimeConfig(),
-          client,
-          sessionKeys,
-          agentId,
-          event,
-          payload,
-        }),
-    });
+  const loadRuntimeConfig = params.getRuntimeConfig ?? (() => params.cfg);
+  const resolvePluginRouteRegistry = () =>
+    params.getPluginRouteRegistry?.() ?? params.pluginRegistry;
+  const clients = new Set<GatewayWsClient>();
+  const sessionEventSubscribers = createSessionEventSubscriberRegistry();
+  const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
+  const gatewayBroadcaster = createGatewayBroadcaster({
+    clients,
+    sessionMessageSubscribers,
+    canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) =>
+      canReceiveSessionEvent({
+        cfg: loadRuntimeConfig(),
+        client,
+        sessionKeys,
+        agentId,
+        event,
+        payload,
+      }),
+  });
 
-    let loadedHooksRequestHandler: HooksRequestHandler | null = null;
-    const handleHooksRequest: HooksRequestHandler = async (req, res) => {
-      const hooksConfig = params.hooksConfig();
-      if (!hooksConfig) {
-        return false;
+  let loadedHooksRequestHandler: HooksRequestHandler | null = null;
+  const handleHooksRequest: HooksRequestHandler = async (req, res) => {
+    const hooksConfig = params.hooksConfig();
+    if (!hooksConfig) {
+      return false;
+    }
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const basePath = hooksConfig.basePath;
+    if (url.pathname !== basePath && !url.pathname.startsWith(`${basePath}/`)) {
+      return false;
+    }
+    return await runWithGatewayHttpWorkAdmission(res, async () => {
+      if (!loadedHooksRequestHandler) {
+        // Hooks are cold for most gateway starts; create the handler only after a request
+        // matches the configured base path so startup avoids importing hook runtime code.
+        const { createGatewayHooksRequestHandler } = await import("./server/hooks.js");
+        loadedHooksRequestHandler = createGatewayHooksRequestHandler({
+          deps: params.deps,
+          getHooksConfig: params.hooksConfig,
+          getClientIpConfig: params.getHookClientIpConfig,
+          bindHost: params.bindHost,
+          port: params.port,
+          logHooks: params.logHooks,
+        });
       }
-      const url = new URL(req.url ?? "/", "http://localhost");
-      const basePath = hooksConfig.basePath;
-      if (url.pathname !== basePath && !url.pathname.startsWith(`${basePath}/`)) {
-        return false;
+      return await loadedHooksRequestHandler(req, res);
+    });
+  };
+
+  let loadedPluginRequestHandler: GatewayPluginRequestHandler | null = null;
+  let loadedPluginUpgradeHandler: GatewayPluginUpgradeHandler | null = null;
+  const handlePluginRequest: GatewayPluginRequestHandler = async (
+    req,
+    res,
+    pathContext,
+    dispatchContext,
+  ) => {
+    if (loadedPluginRequestHandler) {
+      return await loadedPluginRequestHandler(req, res, pathContext, dispatchContext);
+    }
+    const registry = resolvePluginRouteRegistry();
+    if (!hasMatchingGatewayPluginRoute(registry, pathContext, false)) {
+      return false;
+    }
+    // Keep unrelated core HTTP paths cold; the loaded handler still owns dynamic registry lookup.
+    const { createGatewayPluginRequestHandler } = await loadGatewayPluginsHttpModule();
+    loadedPluginRequestHandler = createGatewayPluginRequestHandler({
+      registry: params.pluginRegistry,
+      getRouteRegistry: resolvePluginRouteRegistry,
+      log: params.logPlugins,
+      getGatewayRequestContext: params.getGatewayRequestContext,
+    });
+    return await loadedPluginRequestHandler(req, res, pathContext, dispatchContext);
+  };
+  const handlePluginUpgrade: GatewayPluginUpgradeHandler = async (
+    req,
+    socket,
+    head,
+    pathContext,
+    dispatchContext,
+  ) => {
+    if (loadedPluginUpgradeHandler) {
+      return await loadedPluginUpgradeHandler(req, socket, head, pathContext, dispatchContext);
+    }
+    const registry = resolvePluginRouteRegistry();
+    if (!hasMatchingGatewayPluginRoute(registry, pathContext, true)) {
+      return false;
+    }
+    // Keep core WebSocket upgrades cold while plugin upgrades follow the current route registry.
+    const { createGatewayPluginUpgradeHandler } = await loadGatewayPluginsHttpModule();
+    loadedPluginUpgradeHandler = createGatewayPluginUpgradeHandler({
+      registry: params.pluginRegistry,
+      getRouteRegistry: resolvePluginRouteRegistry,
+      log: params.logPlugins,
+      getGatewayRequestContext: params.getGatewayRequestContext,
+    });
+    return await loadedPluginUpgradeHandler(req, socket, head, pathContext, dispatchContext);
+  };
+  const shouldEnforcePluginGatewayAuth = (pathContext: PluginRoutePathContext): boolean => {
+    return shouldEnforceGatewayAuthForPluginPath(resolvePluginRouteRegistry(), pathContext);
+  };
+  const resolvePluginNodeCapabilityRoute = (pathContext: PluginRoutePathContext) => {
+    const coreCanvasCapability = isCoreCanvasHostEnabled(loadRuntimeConfig())
+      ? resolveCanvasNodeCapability(pathContext.candidates)
+      : undefined;
+    if (coreCanvasCapability) {
+      return coreCanvasCapability;
+    }
+    // Plugin capability routes follow the current root registry so auth and dispatch agree.
+    return findMatchingPluginNodeCapabilityRoute(resolvePluginRouteRegistry(), pathContext)
+      ?.nodeCapability;
+  };
+
+  const bindHosts = await resolveGatewayListenHosts(params.bindHost);
+  if (!isLoopbackHost(params.bindHost)) {
+    params.log.warn(
+      "⚠️  Gateway is binding to a non-loopback address. " +
+        "Ensure authentication is configured before exposing to public networks.",
+    );
+  }
+  if (params.cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true) {
+    params.log.warn(
+      "⚠️  gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true is enabled. " +
+        "Host-header origin fallback weakens origin checks and should only be used as break-glass.",
+    );
+  }
+  // Create WebSocketServer first (with noServer: true) so we can attach upgrade handlers
+  // before HTTP servers start listening. This prevents a race condition where connections
+  // arrive before the upgrade handler is attached, which causes silent 1006 errors.
+  const wss = new WebSocketServer({
+    noServer: true,
+    maxPayload: MAX_PREAUTH_PAYLOAD_BYTES,
+  });
+  const preauthConnectionBudget = createPreauthConnectionBudget();
+  const workerPreauthConnectionBudget = createPreauthConnectionBudget();
+
+  const httpServers: HttpServer[] = [];
+  const gatewayHttpServers: HttpServer[] = [];
+  const httpBindHosts: string[] = [];
+  for (const _ of bindHosts) {
+    const httpServer = createGatewayHttpServer({
+      clients,
+      controlUiEnabled: params.controlUiEnabled,
+      controlUiBasePath: params.controlUiBasePath,
+      controlUiRoot: params.controlUiRoot,
+      openAiChatCompletionsEnabled: params.openAiChatCompletionsEnabled,
+      openAiChatCompletionsConfig: params.openAiChatCompletionsConfig,
+      openResponsesEnabled: params.openResponsesEnabled,
+      openResponsesConfig: params.openResponsesConfig,
+      strictTransportSecurityHeader: params.strictTransportSecurityHeader,
+      handleWatchNodeRequest: params.handleWatchNodeRequest,
+      handleHooksRequest,
+      handlePluginRequest,
+      shouldEnforcePluginGatewayAuth,
+      resolvePluginNodeCapabilityRoute,
+      resolvedAuth: params.resolvedAuth,
+      getResolvedAuth: params.getResolvedAuth,
+      rateLimiter: params.rateLimiter,
+      getReadiness: params.getReadiness,
+      getRuntimeConfig: loadRuntimeConfig,
+      isStartupPluginRuntimeReady: params.isStartupPluginRuntimeReady,
+      isTerminalEnabled: params.isTerminalEnabled,
+      tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
+    });
+    // Attach upgrade handler BEFORE listening to prevent race condition
+    attachGatewayUpgradeHandler({
+      httpServer,
+      wss,
+      handlePluginUpgrade,
+      shouldEnforcePluginGatewayAuth,
+      resolvePluginNodeCapabilityRoute,
+      clients,
+      preauthConnectionBudget,
+      resolvedAuth: params.resolvedAuth,
+      getResolvedAuth: params.getResolvedAuth,
+      rateLimiter: params.rateLimiter,
+      log: params.log,
+    });
+    gatewayHttpServers.push(httpServer);
+    httpServers.push(httpServer);
+  }
+  let workerIngressPort: number | undefined;
+  const workerHttpServer = params.workerIngressEnabled
+    ? createHttpServer((_req, res) => {
+        res.statusCode = 404;
+        res.end("Not Found");
+      })
+    : undefined;
+  if (workerHttpServer) {
+    attachWorkerGatewayUpgradeHandler({
+      httpServer: workerHttpServer,
+      wss,
+      preauthConnectionBudget: workerPreauthConnectionBudget,
+      log: params.log,
+    });
+  }
+  const httpServer = gatewayHttpServers[0];
+  if (!httpServer) {
+    throw new Error("Gateway HTTP server failed to start");
+  }
+  let mcpAppSandboxPort: number | undefined;
+  let sandboxHostStartPromise: Promise<number> | null = null;
+  let startListeningPromise: Promise<void> | null = null;
+  let startListeningComplete = false;
+  const startSandboxHost = async (): Promise<number> => {
+    if (sandboxHostStartPromise) {
+      return await sandboxHostStartPromise;
+    }
+    // MCP Apps retain their eager startup path. Board-only gateways defer the
+    // second listener until an admitted HTML widget actually needs isolation.
+    sandboxHostStartPromise = (async () => {
+      if (httpBindHosts.length === 0) {
+        throw new Error("Gateway listener must start before the sandbox host");
       }
-      return await runWithGatewayHttpWorkAdmission(res, async () => {
-        if (!loadedHooksRequestHandler) {
-          // Hooks are cold for most gateway starts; create the handler only after a request
-          // matches the configured base path so startup avoids importing hook runtime code.
-          const { createGatewayHooksRequestHandler } = await import("./server/hooks.js");
-          loadedHooksRequestHandler = createGatewayHooksRequestHandler({
-            deps: params.deps,
-            getHooksConfig: params.hooksConfig,
-            getClientIpConfig: params.getHookClientIpConfig,
-            bindHost: params.bindHost,
-            port: params.port,
-            logHooks: params.logHooks,
+      const sandboxPort = resolveSandboxHostPort(params.port, params.cfg.mcp?.apps?.sandboxPort);
+      const sandboxServers = bindHosts.map(() =>
+        createSandboxHostHttpServer(
+          params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
+        ),
+      );
+      // Register before binding so normal runtime cleanup closes a partially
+      // started multi-host listener after any later bind failure.
+      httpServers.push(...sandboxServers);
+      try {
+        for (const host of httpBindHosts) {
+          const index = bindHosts.indexOf(host);
+          const server = sandboxServers[index];
+          if (!server) {
+            throw new Error(`Missing sandbox host HTTP server for bind host ${host}`);
+          }
+          await listenGatewayHttpServer({
+            httpServer: server,
+            bindHost: host,
+            port: sandboxPort,
+            retryEaddrinuse: false,
+            serviceName: "MCP App sandbox",
+            endpointScheme: params.gatewayTls?.enabled ? "https" : "http",
           });
         }
-        return await loadedHooksRequestHandler(req, res);
-      });
-    };
-
-    let loadedPluginRequestHandler: GatewayPluginRequestHandler | null = null;
-    let loadedPluginUpgradeHandler: GatewayPluginUpgradeHandler | null = null;
-    const handlePluginRequest: GatewayPluginRequestHandler = async (
-      req,
-      res,
-      pathContext,
-      dispatchContext,
-    ) => {
-      const registry = resolvePluginRouteRegistry();
-      if ((registry.httpRoutes ?? []).length === 0) {
-        return false;
-      }
-      if (!loadedPluginRequestHandler) {
-        // Route registries can be re-pinned after bootstrap; keep the handler lazy and route
-        // lookup dynamic so plugin HTTP routes follow the active registry snapshot.
-        const { createGatewayPluginRequestHandler } = await loadGatewayPluginsHttpModule();
-        loadedPluginRequestHandler = createGatewayPluginRequestHandler({
-          registry: params.pluginRegistry,
-          getRouteRegistry: resolvePluginRouteRegistry,
-          log: params.logPlugins,
-          getGatewayRequestContext: params.getGatewayRequestContext,
-        });
-      }
-      return await loadedPluginRequestHandler(req, res, pathContext, dispatchContext);
-    };
-    const handlePluginUpgrade: GatewayPluginUpgradeHandler = async (
-      req,
-      socket,
-      head,
-      pathContext,
-      dispatchContext,
-    ) => {
-      const registry = resolvePluginRouteRegistry();
-      if ((registry.httpRoutes ?? []).length === 0) {
-        return false;
-      }
-      if (!loadedPluginUpgradeHandler) {
-        // WebSocket upgrades share the same dynamic route registry as HTTP requests; this keeps
-        // reloads from serving stale plugin upgrade handlers.
-        const { createGatewayPluginUpgradeHandler } = await loadGatewayPluginsHttpModule();
-        loadedPluginUpgradeHandler = createGatewayPluginUpgradeHandler({
-          registry: params.pluginRegistry,
-          getRouteRegistry: resolvePluginRouteRegistry,
-          log: params.logPlugins,
-          getGatewayRequestContext: params.getGatewayRequestContext,
-        });
-      }
-      return await loadedPluginUpgradeHandler(req, socket, head, pathContext, dispatchContext);
-    };
-    const shouldEnforcePluginGatewayAuth = (pathContext: PluginRoutePathContext): boolean => {
-      return shouldEnforceGatewayAuthForPluginPath(resolvePluginRouteRegistry(), pathContext);
-    };
-    const resolvePluginNodeCapabilityRoute = (pathContext: PluginRoutePathContext) => {
-      const coreCanvasCapability = isCoreCanvasHostEnabled(loadRuntimeConfig())
-        ? resolveCanvasNodeCapability(pathContext.candidates)
-        : undefined;
-      if (coreCanvasCapability) {
-        return coreCanvasCapability;
-      }
-      // Plugin capability routes follow the current pinned registry so auth and dispatch agree.
-      return findMatchingPluginNodeCapabilityRoute(resolvePluginRouteRegistry(), pathContext)
-        ?.nodeCapability;
-    };
-
-    const bindHosts = await resolveGatewayListenHosts(params.bindHost);
-    if (!isLoopbackHost(params.bindHost)) {
-      params.log.warn(
-        "⚠️  Gateway is binding to a non-loopback address. " +
-          "Ensure authentication is configured before exposing to public networks.",
-      );
-    }
-    if (params.cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true) {
-      params.log.warn(
-        "⚠️  gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true is enabled. " +
-          "Host-header origin fallback weakens origin checks and should only be used as break-glass.",
-      );
-    }
-    // Create WebSocketServer first (with noServer: true) so we can attach upgrade handlers
-    // before HTTP servers start listening. This prevents a race condition where connections
-    // arrive before the upgrade handler is attached, which causes silent 1006 errors.
-    const wss = new WebSocketServer({
-      noServer: true,
-      maxPayload: MAX_PREAUTH_PAYLOAD_BYTES,
-    });
-    const preauthConnectionBudget = createPreauthConnectionBudget();
-    const workerPreauthConnectionBudget = createPreauthConnectionBudget();
-
-    const httpServers: HttpServer[] = [];
-    const gatewayHttpServers: HttpServer[] = [];
-    const httpBindHosts: string[] = [];
-    for (const _ of bindHosts) {
-      const httpServer = createGatewayHttpServer({
-        clients,
-        controlUiEnabled: params.controlUiEnabled,
-        controlUiBasePath: params.controlUiBasePath,
-        controlUiRoot: params.controlUiRoot,
-        openAiChatCompletionsEnabled: params.openAiChatCompletionsEnabled,
-        openAiChatCompletionsConfig: params.openAiChatCompletionsConfig,
-        openResponsesEnabled: params.openResponsesEnabled,
-        openResponsesConfig: params.openResponsesConfig,
-        strictTransportSecurityHeader: params.strictTransportSecurityHeader,
-        handleWatchNodeRequest: params.handleWatchNodeRequest,
-        handleHooksRequest,
-        handlePluginRequest,
-        shouldEnforcePluginGatewayAuth,
-        resolvePluginNodeCapabilityRoute,
-        resolvedAuth: params.resolvedAuth,
-        getResolvedAuth: params.getResolvedAuth,
-        rateLimiter: params.rateLimiter,
-        getReadiness: params.getReadiness,
-        getRuntimeConfig: loadRuntimeConfig,
-        isTerminalEnabled: params.isTerminalEnabled,
-        tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
-      });
-      // Attach upgrade handler BEFORE listening to prevent race condition
-      attachGatewayUpgradeHandler({
-        httpServer,
-        wss,
-        handlePluginUpgrade,
-        shouldEnforcePluginGatewayAuth,
-        resolvePluginNodeCapabilityRoute,
-        clients,
-        preauthConnectionBudget,
-        resolvedAuth: params.resolvedAuth,
-        getResolvedAuth: params.getResolvedAuth,
-        rateLimiter: params.rateLimiter,
-        log: params.log,
-      });
-      gatewayHttpServers.push(httpServer);
-      httpServers.push(httpServer);
-    }
-    let workerIngressPort: number | undefined;
-    const workerHttpServer = params.workerIngressEnabled
-      ? createHttpServer((_req, res) => {
-          res.statusCode = 404;
-          res.end("Not Found");
-        })
-      : undefined;
-    if (workerHttpServer) {
-      attachWorkerGatewayUpgradeHandler({
-        httpServer: workerHttpServer,
-        wss,
-        preauthConnectionBudget: workerPreauthConnectionBudget,
-        log: params.log,
-      });
-    }
-    const httpServer = gatewayHttpServers[0];
-    if (!httpServer) {
-      throw new Error("Gateway HTTP server failed to start");
-    }
-    let mcpAppSandboxPort: number | undefined;
-    let sandboxHostStartPromise: Promise<number> | null = null;
-    let startListeningPromise: Promise<void> | null = null;
-    let startListeningComplete = false;
-    const startSandboxHost = async (): Promise<number> => {
-      if (sandboxHostStartPromise) {
-        return await sandboxHostStartPromise;
-      }
-      // MCP Apps retain their eager startup path. Board-only gateways defer the
-      // second listener until an admitted HTML widget actually needs isolation.
-      sandboxHostStartPromise = (async () => {
-        if (httpBindHosts.length === 0) {
-          throw new Error("Gateway listener must start before the sandbox host");
-        }
-        const sandboxPort = resolveSandboxHostPort(params.port, params.cfg.mcp?.apps?.sandboxPort);
-        const sandboxServers = bindHosts.map(() =>
-          createSandboxHostHttpServer(
-            params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
+      } catch (error) {
+        await Promise.all(
+          sandboxServers.map(
+            (server) =>
+              new Promise<void>((resolve) => {
+                if (!server.listening) {
+                  resolve();
+                  return;
+                }
+                server.close(() => resolve());
+              }),
           ),
         );
-        // Register before binding so normal runtime cleanup closes a partially
-        // started multi-host listener after any later bind failure.
-        httpServers.push(...sandboxServers);
-        try {
-          for (const host of httpBindHosts) {
-            const index = bindHosts.indexOf(host);
-            const server = sandboxServers[index];
-            if (!server) {
-              throw new Error(`Missing sandbox host HTTP server for bind host ${host}`);
-            }
-            await listenGatewayHttpServer({
-              httpServer: server,
-              bindHost: host,
-              port: sandboxPort,
-              retryEaddrinuse: false,
-              serviceName: "MCP App sandbox",
-              endpointScheme: params.gatewayTls?.enabled ? "https" : "http",
-            });
+        for (const server of sandboxServers) {
+          const index = httpServers.indexOf(server);
+          if (index >= 0) {
+            httpServers.splice(index, 1);
           }
-        } catch (error) {
-          await Promise.all(
-            sandboxServers.map(
-              (server) =>
-                new Promise<void>((resolve) => {
-                  if (!server.listening) {
-                    resolve();
-                    return;
-                  }
-                  server.close(() => resolve());
-                }),
-            ),
-          );
-          for (const server of sandboxServers) {
-            const index = httpServers.indexOf(server);
-            if (index >= 0) {
-              httpServers.splice(index, 1);
-            }
-          }
-          throw error;
         }
-        mcpAppSandboxPort = sandboxPort;
-        return sandboxPort;
-      })();
-      const startAttempt = sandboxHostStartPromise;
-      void startAttempt.catch(() => {
-        // Lazy startup failures are recoverable: the next admitted widget may
-        // retry after an occupied port or other transient bind error clears.
-        if (sandboxHostStartPromise === startAttempt) {
-          sandboxHostStartPromise = null;
-        }
-      });
-      return await startAttempt;
-    };
-    const ensureSandboxHostPort = async (): Promise<number> => {
-      if (!startListeningComplete) {
-        if (!startListeningPromise) {
-          throw new Error("Gateway listener must start before the sandbox host");
-        }
-        // Gateway sockets begin accepting independently. Wait for every bind
-        // host before freezing the shared sandbox listener set.
-        await startListeningPromise;
+        throw error;
       }
-      return await startSandboxHost();
-    };
-    const startListening = async (): Promise<void> => {
-      if (startListeningPromise) {
-        await startListeningPromise;
-        return;
+      mcpAppSandboxPort = sandboxPort;
+      return sandboxPort;
+    })();
+    const startAttempt = sandboxHostStartPromise;
+    void startAttempt.catch(() => {
+      // Lazy startup failures are recoverable: the next admitted widget may
+      // retry after an occupied port or other transient bind error clears.
+      if (sandboxHostStartPromise === startAttempt) {
+        sandboxHostStartPromise = null;
       }
-      // Listening is idempotent for callers racing startup. A failure is terminal for this runtime
-      // state; the startup owner tears down every partially bound HTTP/WS server before retrying.
-      startListeningPromise = (async () => {
-        const requiredAlias =
-          params.bindHost !== "127.0.0.1" && bindHosts.includes("127.0.0.1")
-            ? "127.0.0.1"
-            : undefined;
-        // Claim the trusted local endpoint before exposing the selected interface. This prevents
-        // another loopback listener from receiving credentials while startup is still resolving.
-        const listenOrder = requiredAlias
-          ? [requiredAlias, ...bindHosts.filter((host) => host !== requiredAlias)]
-          : bindHosts;
-        const boundHosts = new Set<string>();
-        for (const host of listenOrder) {
-          const index = bindHosts.indexOf(host);
-          const server = gatewayHttpServers[index];
-          if (!server) {
-            throw new Error(`Missing gateway HTTP server for bind host ${host}`);
-          }
-          // Specific IPv4 modes rely on this canonical local endpoint for authenticated
-          // helpers. A collision must fail startup instead of sending credentials to it.
-          const requiredLoopbackAlias = host === requiredAlias;
-          try {
-            await listenGatewayHttpServer({
-              httpServer: server,
-              bindHost: host,
-              port: params.port,
-              retryEaddrinuse: !requiredLoopbackAlias,
-            });
-            boundHosts.add(host);
-          } catch (err) {
-            if (host === bindHosts[0] || requiredLoopbackAlias) {
-              throw err;
-            }
-            params.log.warn(
-              `gateway: failed to bind loopback alias ${host}:${params.port} (${String(err)})`,
-            );
-          }
-        }
-        httpBindHosts.push(...bindHosts.filter((host) => boundHosts.has(host)));
-        if (httpBindHosts.length === 0) {
-          throw new Error("Gateway HTTP server failed to start");
-        }
-        if (params.cfg.mcp?.apps?.enabled === true) {
-          await startSandboxHost();
-        }
-        if (workerHttpServer) {
-          await listenGatewayHttpServer({
-            httpServer: workerHttpServer,
-            bindHost: "127.0.0.1",
-            port: 0,
-            retryEaddrinuse: false,
-          });
-          const address = workerHttpServer.address() as AddressInfo | null;
-          if (!address || typeof address === "string") {
-            throw new Error("Worker gateway ingress failed to resolve its loopback port");
-          }
-          workerIngressPort = address.port;
-          httpServers.push(workerHttpServer);
-        }
-        startListeningComplete = true;
-      })();
+    });
+    return await startAttempt;
+  };
+  const ensureSandboxHostPort = async (): Promise<number> => {
+    if (!startListeningComplete) {
+      if (!startListeningPromise) {
+        throw new Error("Gateway listener must start before the sandbox host");
+      }
+      // Gateway sockets begin accepting independently. Wait for every bind
+      // host before freezing the shared sandbox listener set.
       await startListeningPromise;
-    };
-    const agentRunSeq = new Map<string, number>();
-    const dedupe = new Map<string, DedupeEntry>();
-    const chatRunState = createChatRunState();
-    const chatRunRegistry = chatRunState.registry;
-    const addChatRun = chatRunRegistry.add;
-    const removeChatRun = chatRunRegistry.remove;
-    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
-    const chatQueuedTurns = new Map<string, import("./chat-queued-turns.js").QueuedChatTurnEntry>();
-    const toolEventRecipients = chatRunState.toolEventRecipients;
+    }
+    return await startSandboxHost();
+  };
+  const startListening = async (): Promise<void> => {
+    if (startListeningPromise) {
+      await startListeningPromise;
+      return;
+    }
+    // Listening is idempotent for callers racing startup. A failure is terminal for this runtime
+    // state; the startup owner tears down every partially bound HTTP/WS server before retrying.
+    startListeningPromise = (async () => {
+      const requiredAlias =
+        params.bindHost !== "127.0.0.1" && bindHosts.includes("127.0.0.1")
+          ? "127.0.0.1"
+          : undefined;
+      // Claim the trusted local endpoint before exposing the selected interface. This prevents
+      // another loopback listener from receiving credentials while startup is still resolving.
+      const listenOrder = requiredAlias
+        ? [requiredAlias, ...bindHosts.filter((host) => host !== requiredAlias)]
+        : bindHosts;
+      const boundHosts = new Set<string>();
+      for (const host of listenOrder) {
+        const index = bindHosts.indexOf(host);
+        const server = gatewayHttpServers[index];
+        if (!server) {
+          throw new Error(`Missing gateway HTTP server for bind host ${host}`);
+        }
+        // Specific IPv4 modes rely on this canonical local endpoint for authenticated
+        // helpers. A collision must fail startup instead of sending credentials to it.
+        const requiredLoopbackAlias = host === requiredAlias;
+        try {
+          await listenGatewayHttpServer({
+            httpServer: server,
+            bindHost: host,
+            port: params.port,
+            retryEaddrinuse: !requiredLoopbackAlias,
+          });
+          boundHosts.add(host);
+        } catch (err) {
+          if (host === bindHosts[0] || requiredLoopbackAlias) {
+            throw err;
+          }
+          params.log.warn(
+            `gateway: failed to bind loopback alias ${host}:${params.port} (${String(err)})`,
+          );
+        }
+      }
+      httpBindHosts.push(...bindHosts.filter((host) => boundHosts.has(host)));
+      if (httpBindHosts.length === 0) {
+        throw new Error("Gateway HTTP server failed to start");
+      }
+      if (params.cfg.mcp?.apps?.enabled === true) {
+        await startSandboxHost();
+      }
+      if (workerHttpServer) {
+        await listenGatewayHttpServer({
+          httpServer: workerHttpServer,
+          bindHost: "127.0.0.1",
+          port: 0,
+          retryEaddrinuse: false,
+        });
+        const address = workerHttpServer.address() as AddressInfo | null;
+        if (!address || typeof address === "string") {
+          throw new Error("Worker gateway ingress failed to resolve its loopback port");
+        }
+        workerIngressPort = address.port;
+        httpServers.push(workerHttpServer);
+      }
+      startListeningComplete = true;
+    })();
+    await startListeningPromise;
+  };
+  const agentRunSeq = new Map<string, number>();
+  const dedupe = new Map<string, DedupeEntry>();
+  const chatRunState = createChatRunState();
+  const chatRunRegistry = chatRunState.registry;
+  const addChatRun = chatRunRegistry.add;
+  const removeChatRun = chatRunRegistry.remove;
+  const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+  const chatQueuedTurns = new Map<string, import("./chat-queued-turns.js").QueuedChatTurnEntry>();
+  const toolEventRecipients = chatRunState.toolEventRecipients;
 
-    return {
-      releasePluginRouteRegistry: () => {
-        // Releases pinned HTTP-route, session-extension, and channel registries.
-        // Startup/reload can re-pin them to a registry that differs from bootstrap.
-        releasePinnedPluginHttpRouteRegistry();
-        releasePinnedPluginSessionExtensionRegistry();
-        // Release unconditionally (no registry arg): the channel pin may have
-        // been re-pinned to a deferred-reload registry that differs from the
-        // original params.pluginRegistry, so an identity-guarded release would
-        // be a no-op and leak the pin across in-process restarts.
-        releasePinnedPluginChannelRegistry();
-      },
-      httpServer,
-      httpServers,
-      httpBindHosts,
-      startListening,
-      wss,
-      preauthConnectionBudget,
-      clients,
-      ...gatewayBroadcaster,
-      agentRunSeq,
-      dedupe,
-      chatRunState,
-      addChatRun,
-      removeChatRun,
-      chatAbortControllers,
-      chatQueuedTurns,
-      toolEventRecipients,
-      sessionEventSubscribers,
-      sessionMessageSubscribers,
-      getWorkerIngressEndpoint: () =>
-        workerIngressPort === undefined
-          ? undefined
-          : { host: "127.0.0.1" as const, port: workerIngressPort },
-      getMcpAppSandboxPort: () => mcpAppSandboxPort,
-      ensureSandboxHostPort,
-    };
-  } catch (err) {
-    // If state creation fails after pins are installed, release them immediately so later
-    // in-process gateway starts do not inherit a half-created plugin runtime.
-    releasePinnedPluginHttpRouteRegistry();
-    releasePinnedPluginSessionExtensionRegistry();
-    releasePinnedPluginChannelRegistry();
-    throw err;
-  }
+  return {
+    httpServer,
+    httpServers,
+    httpBindHosts,
+    startListening,
+    wss,
+    preauthConnectionBudget,
+    clients,
+    ...gatewayBroadcaster,
+    agentRunSeq,
+    dedupe,
+    chatRunState,
+    addChatRun,
+    removeChatRun,
+    chatAbortControllers,
+    chatQueuedTurns,
+    toolEventRecipients,
+    sessionEventSubscribers,
+    sessionMessageSubscribers,
+    getWorkerIngressEndpoint: () =>
+      workerIngressPort === undefined
+        ? undefined
+        : { host: "127.0.0.1" as const, port: workerIngressPort },
+    getMcpAppSandboxPort: () => mcpAppSandboxPort,
+    ensureSandboxHostPort,
+  };
 }

@@ -149,7 +149,6 @@ describe("browser server-context listProfiles", () => {
         profile,
         running: { pid: 123 } as never,
         lastTargetId: null,
-        reconcile: null,
       });
 
       const ctx = createBrowserRouteContext({ getState: () => state });

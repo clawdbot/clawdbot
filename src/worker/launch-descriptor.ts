@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
 import {
   GATEWAY_CLIENT_IDS,
@@ -59,10 +60,6 @@ export type WorkerLaunchDescriptor = {
   admission: WorkerLaunchAdmission;
   assignment: WorkerLaunchAssignment;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function hasExactKeys(value: Record<string, unknown>, required: string[], optional: string[] = []) {
   const allowed = new Set([...required, ...optional]);

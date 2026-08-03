@@ -216,6 +216,105 @@ openclaw-chat-pane {
   min-width: 0;
 }
 
+.chat-pane__gateway-menu {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.chat-pane__gateway-menu::part(menu) {
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+}
+
+.chat-pane__gateway-menu-item {
+  min-height: 30px;
+  padding: 0 8px;
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.chat-pane__gateway-chip {
+  display: inline-flex;
+  max-width: 170px;
+  height: 26px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.chat-pane__gateway-chip:hover,
+.chat-pane__gateway-chip:focus-visible {
+  border-color: var(--muted-strong);
+  color: var(--text);
+  outline: none;
+}
+
+.chat-pane__gateway-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-pane__gateway-health {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.chat-pane__gateway-health[data-health="ok"] {
+  background: var(--ok);
+}
+
+.chat-pane__gateway-health[data-health="error"] {
+  background: var(--danger);
+}
+
+.chat-pane__gateway-chevron,
+.chat-pane__gateway-check {
+  display: inline-flex;
+}
+
+.chat-pane__gateway-chevron svg,
+.chat-pane__gateway-check svg {
+  width: 12px;
+  height: 12px;
+}
+
+.chat-pane__gateway-chevron svg {
+  transform: rotate(180deg);
+}
+
+.chat-pane__gateway-details {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-pane__gateway-primary {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.chat-pane__gateway-divider {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border);
+}
+
 .chat-pane__branches-menu {
   flex: 0 0 auto;
 }

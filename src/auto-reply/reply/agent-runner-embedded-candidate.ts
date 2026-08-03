@@ -23,6 +23,7 @@ import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,
 } from "../../utils/message-channel.js";
+import type { PartialReplyPayload } from "../get-reply-options.types.js";
 import type { ThinkLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -39,12 +40,13 @@ import type { AgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import type { FollowupRun } from "./queue.js";
 import { isReplyOperationRestartAbort } from "./reply-operation-abort.js";
+import { markReplyOperationGlobalLaneWaitProgress } from "./reply-run-registry.js";
 
 type EmbeddedPresentation = Pick<
   ReturnType<typeof createAgentTurnPresentation>,
+  | "classifyStreamingPartial"
+  | "sanitizeStreamingText"
   | "normalizeStreamingText"
-  | "preparePartialForTyping"
-  | "handlePartialForTyping"
   | "startPresentationWhileTyping"
   | "blockReplyHandler"
 >;
@@ -144,6 +146,7 @@ export async function runEmbeddedFallbackCandidate(params: {
           agentId: embeddedContext.agentId,
           runId: params.runId,
           sessionKey: messageActionCapabilitySessionKey,
+          sourceReplySessionKey: embeddedContext.sessionKey,
           sessionId: embeddedContext.sessionId,
           requesterAccountId: embeddedContext.agentAccountId,
           requesterSenderId: senderContext.senderId,
@@ -248,26 +251,45 @@ export async function runEmbeddedFallbackCandidate(params: {
           }
         },
         onExecutionPhase: params.signalExecutionPhaseForTyping,
+        onLaneWait: ({ waiting }) => {
+          const replyOperation = turn.replyOperation;
+          if (waiting && replyOperation) {
+            markReplyOperationGlobalLaneWaitProgress(replyOperation);
+          }
+        },
         blockReplyBreak: turn.resolvedBlockStreamingBreak,
         blockReplyChunking: turn.blockReplyChunking,
         // Subscriber callbacks are detached. Stage channel presentation before typing I/O.
         onPartialReply: async (payload) => {
-          if (!params.preserveProgressCallbackStartOrder) {
-            const textForTyping = await params.presentation.handlePartialForTyping(payload);
-            if (!turn.opts?.onPartialReply || textForTyping === undefined) {
-              return;
-            }
-            await turn.opts.onPartialReply({ text: textForTyping, mediaUrls: payload.mediaUrls });
+          const classified = params.presentation.classifyStreamingPartial(payload);
+          if (classified.skip || !classified.text) {
             return;
           }
-          const textForTyping = params.presentation.preparePartialForTyping(payload);
-          if (textForTyping === undefined) {
+          const textForTyping = classified.text;
+          let didMaterialize = false;
+          let materializedText: string | undefined;
+          const partialPayload: PartialReplyPayload = {
+            get text() {
+              if (!didMaterialize) {
+                const sanitized = params.presentation.sanitizeStreamingText(textForTyping, false);
+                materializedText = sanitized.skip ? undefined : sanitized.text;
+                didMaterialize = true;
+              }
+              return materializedText;
+            },
+            mediaUrls: payload.mediaUrls,
+          };
+          if (!params.preserveProgressCallbackStartOrder) {
+            await turn.typingSignals.signalTextDelta(textForTyping);
+            if (!turn.opts?.onPartialReply) {
+              return;
+            }
+            await turn.opts.onPartialReply(partialPayload);
             return;
           }
           await params.presentation.startPresentationWhileTyping(
             turn.typingSignals.signalTextDelta(textForTyping),
-            () =>
-              turn.opts?.onPartialReply?.({ text: textForTyping, mediaUrls: payload.mediaUrls }),
+            () => turn.opts?.onPartialReply?.(partialPayload),
           );
         },
         onAssistantMessageStart: async () => {
@@ -346,25 +368,26 @@ export async function runEmbeddedFallbackCandidate(params: {
               // Serialized delivery preserves tool result order across detached callbacks.
               let toolResultChain: Promise<void> = Promise.resolve();
               return (payload: ReplyPayload) => {
-                toolResultChain = toolResultChain
-                  .then(async () => {
-                    turn.replyOperation?.recordActivity();
-                    const { text, skip } = params.presentation.normalizeStreamingText(payload);
-                    if (skip) {
-                      return;
-                    }
-                    if (text !== undefined) {
-                      await turn.typingSignals.signalTextDelta(text);
-                    }
-                    await turn.opts?.onToolResult?.({ ...payload, text });
-                  })
-                  .catch((err: unknown) => {
-                    logVerbose(`tool result delivery failed: ${String(err)}`);
-                  });
+                const delivery = toolResultChain.then(async () => {
+                  turn.replyOperation?.recordActivity();
+                  const { text, skip } = params.presentation.normalizeStreamingText(payload);
+                  if (skip) {
+                    return;
+                  }
+                  if (text !== undefined) {
+                    await turn.typingSignals.signalTextDelta(text);
+                  }
+                  await turn.opts?.onToolResult?.({ ...payload, text });
+                });
+                // Keep later results best-effort while exposing this delivery to awaiting owners.
+                toolResultChain = delivery.catch((err: unknown) => {
+                  logVerbose(`tool result delivery failed: ${String(err)}`);
+                });
                 const task = toolResultChain.finally(() => {
                   turn.pendingToolTasks.delete(task);
                 });
                 turn.pendingToolTasks.add(task);
+                return delivery;
               };
             })()
           : undefined,

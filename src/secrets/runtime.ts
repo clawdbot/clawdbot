@@ -7,6 +7,11 @@ import {
   loadAuthProfileStoreForSecretsRuntime,
   loadAuthProfileStoreWithoutExternalProfiles,
 } from "../agents/auth-profiles.js";
+import {
+  AuthProfileMigrationRequiredError,
+  clearAuthProfileMigrationDiagnostics,
+  markAuthProfileMigrationRequired,
+} from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
@@ -23,6 +28,7 @@ import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { isRecord, resolveUserPath } from "../utils.js";
 import { resolveAuthProfileSecretOwnerId } from "./runtime-auth-profile-owner.js";
+import type { DegradedSecretOwner } from "./runtime-degraded-state.js";
 import {
   canUseSecretsRuntimeFastPath,
   collectCandidateAgentDirs,
@@ -58,6 +64,7 @@ export type { SecretResolverWarning } from "./runtime-shared.js";
 export type { PreparedSecretsRuntimeSnapshot } from "./runtime-state.js";
 
 registerSecretsRuntimeStateClearHook(clearRuntimeAuthProfileStoreSnapshots);
+registerSecretsRuntimeStateClearHook(clearAuthProfileMigrationDiagnostics);
 registerSecretsRuntimeStateClearHook(clearProviderAuthRuntimeSnapshotActivation);
 
 const loadRuntimeManifestHelpers = createLazyRuntimeModule(
@@ -80,6 +87,7 @@ async function resolveLoadablePluginOrigins(params: {
   const workspaceDir = resolveAgentWorkspaceDir(
     params.config,
     resolveDefaultAgentId(params.config),
+    params.env,
   );
   const { listPluginOriginsFromMetadataSnapshot, loadPluginMetadataSnapshot } =
     await loadRuntimeManifestHelpers();
@@ -134,6 +142,39 @@ function shouldLoadPluginMetadataForSecrets(config: OpenClawConfig): boolean {
   );
 }
 
+function loadAuthStoresWithMigrationIsolation(params: {
+  agentDirs: readonly string[];
+  loadAuthStore: (agentDir?: string) => AuthProfileStore;
+  allowUnavailable: boolean;
+}): {
+  authStores: Array<{ agentDir: string; store: AuthProfileStore }>;
+  degradedOwners: DegradedSecretOwner[];
+} {
+  const authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];
+  const degradedOwners: DegradedSecretOwner[] = [];
+  for (const agentDir of params.agentDirs) {
+    try {
+      authStores.push({ agentDir, store: structuredClone(params.loadAuthStore(agentDir)) });
+    } catch (error) {
+      if (!(error instanceof AuthProfileMigrationRequiredError) || !params.allowUnavailable) {
+        throw error;
+      }
+      markAuthProfileMigrationRequired(agentDir, error);
+      authStores.push({ agentDir, store: { version: 1, profiles: {} } });
+      degradedOwners.push({
+        ownerKind: "route",
+        ownerId: error.ownerId,
+        state: "unavailable",
+        degradationState: "cold",
+        paths: error.sourceKinds.map((kind) => `auth-profile-legacy:${kind}`),
+        refKeys: [],
+        reason: "auth profile migration required",
+      });
+    }
+  }
+  return { authStores, degradedOwners };
+}
+
 /** Prepares a secrets runtime snapshot and records refresh context for later activation. */
 export async function prepareSecretsRuntimeSnapshot(params: {
   config: OpenClawConfig;
@@ -164,13 +205,15 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   const candidateDirs = params.agentDirs?.length
     ? uniqueStrings(params.agentDirs.map((entry) => resolveUserPath(entry, runtimeEnv)))
     : collectCandidateAgentDirs(resolvedConfig, runtimeEnv);
+  let migrationDegradedOwners: DegradedSecretOwner[] = [];
   if (includeAuthStoreRefs) {
-    for (const agentDir of candidateDirs) {
-      authStores.push({
-        agentDir,
-        store: structuredClone(fastPathLoadAuthStore(agentDir)),
-      });
-    }
+    const loaded = loadAuthStoresWithMigrationIsolation({
+      agentDirs: candidateDirs,
+      loadAuthStore: fastPathLoadAuthStore,
+      allowUnavailable: params.allowUnavailableSecretOwners === true,
+    });
+    authStores = loaded.authStores;
+    migrationDegradedOwners = loaded.degradedOwners;
   }
   if (
     canUseSecretsRuntimeFastPath({
@@ -186,7 +229,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
       authStores,
       authStoreCredentialsRevision,
       warnings: [],
-      degradedOwners: [],
+      degradedOwners: migrationDegradedOwners,
       secretOwners: [],
       webTools: createEmptyRuntimeWebToolsMetadata(),
     };
@@ -240,10 +283,13 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   if (includeAuthStoreRefs) {
     const loadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime;
     if (!params.loadAuthStore) {
-      authStores = candidateDirs.map((agentDir) => ({
-        agentDir,
-        store: structuredClone(loadAuthStore(agentDir)),
-      }));
+      const loaded = loadAuthStoresWithMigrationIsolation({
+        agentDirs: candidateDirs,
+        loadAuthStore,
+        allowUnavailable: params.allowUnavailableSecretOwners === true,
+      });
+      authStores = loaded.authStores;
+      migrationDegradedOwners = loaded.degradedOwners;
     }
     for (const entry of authStores) {
       collectAuthStoreAssignments({
@@ -291,7 +337,11 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     authStores,
     authStoreCredentialsRevision,
     warnings: context.warnings,
-    degradedOwners: [...assignmentResolution.degradedOwners, ...webTools.degradedOwners],
+    degradedOwners: [
+      ...migrationDegradedOwners,
+      ...assignmentResolution.degradedOwners,
+      ...webTools.degradedOwners,
+    ],
     secretOwners: [...assignmentSecretOwners, ...webTools.secretOwners],
     webTools: webTools.metadata,
   };

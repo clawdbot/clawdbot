@@ -77,6 +77,7 @@ describe("Control UI build info", () => {
         builtAt: "later",
         branch: "HEAD",
         dirty: "yes",
+        release: "yes",
         buildId: "",
       }),
     ).toEqual({
@@ -86,14 +87,18 @@ describe("Control UI build info", () => {
       builtAt: null,
       branch: null,
       dirty: null,
+      release: false,
       buildId: "dev",
     });
   });
 
-  it("passes through normalized branch and boolean dirty state", () => {
-    expect(normalizeControlUiBuildInfo({ branch: " feature/x ", dirty: false })).toMatchObject({
+  it("passes through normalized branch, dirty state, and release identity", () => {
+    expect(
+      normalizeControlUiBuildInfo({ branch: " feature/x ", dirty: false, release: true }),
+    ).toMatchObject({
       branch: "feature/x",
       dirty: false,
+      release: true,
     });
   });
 
@@ -103,7 +108,8 @@ describe("Control UI build info", () => {
         version: "2026.7.10",
         commit: COMMIT,
         builtAt: "2026-07-10T12:34:56.000Z",
+        release: true,
       }).buildId,
-    ).toBe("2026.7.10-0123456789ab-2026-07-10T12-34-56.000Z");
+    ).toBe("2026.7.10-release-0123456789ab-2026-07-10T12-34-56.000Z");
   });
 });

@@ -19,7 +19,7 @@ scenario:
     - docs/concepts/model-failover.md
   codeRefs:
     - extensions/qa-lab/src/suite.ts
-    - extensions/qa-lab/src/mock-openai-server.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
   execution:
     kind: flow
     summary: Verify switching models preserves session context and tool use instead of dropping into plain-text only behavior.
@@ -51,6 +51,9 @@ flow:
         - set: beforeSwitchCursor
           value:
             expr: state.getSnapshot().messages.length
+        - set: beforeSwitchRequestCursor
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - call: runAgentPrompt
           args:
             - ref: env
@@ -78,7 +81,7 @@ flow:
             then:
               - set: switchDebugRequests
                 value:
-                  expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests`)"
+                  expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${beforeSwitchRequestCursor}`)"
               - set: switchRequest
                 value:
                   expr: "switchDebugRequests.find((request) => String(request.allInputText ?? '').includes(config.promptSnippet))"

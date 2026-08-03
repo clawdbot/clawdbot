@@ -9,12 +9,13 @@ import {
 } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { TableColumn } from "../../packages/terminal-core/src/table.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
+import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { Tone } from "../memory-host-sdk/status.js";
+import type { SessionStatus, StatusSummary } from "../status/types.js";
 import type { HealthSummary } from "./health.js";
 import type { AgentLocalStatus } from "./status.agent-local.js";
 import type { MemoryStatusSnapshot, MemoryPluginStatus } from "./status.scan.shared.js";
-import type { SessionStatus, StatusSummary } from "./status.types.js";
 
 type AgentStatusLike = {
   defaultId?: string | null;
@@ -286,15 +287,6 @@ export function buildStatusHealthRows(params: {
       Detail: formatEventLoopHealthDetail(params.health.eventLoop),
     });
   }
-  if (params.health.modelPricing?.state === "degraded") {
-    rows.push({
-      Item: "Model pricing",
-      Status: params.warn("WARN"),
-      Detail: `optional pricing refresh degraded${
-        params.health.modelPricing.detail ? `: ${params.health.modelPricing.detail}` : ""
-      }`,
-    });
-  }
   for (const line of params.formatHealthChannelLines(params.health, { accountMode: "all" })) {
     const colon = line.indexOf(":");
     if (colon === -1) {
@@ -325,13 +317,16 @@ export function buildStatusHealthRows(params: {
 /** Formats event-loop latency/utilization health into one table detail string. */
 function formatEventLoopHealthDetail(eventLoop: EventLoopHealthLike): string {
   const parts = [
+    eventLoop.degraded && eventLoop.degradedSinceMs != null
+      ? `degraded for ${formatDurationCompact(eventLoop.degradedSinceMs) ?? "0s"}`
+      : null,
     eventLoop.reasons.length > 0 ? `reasons ${eventLoop.reasons.join(",")}` : "healthy",
     `max ${Math.round(eventLoop.delayMaxMs)}ms`,
     `p99 ${Math.round(eventLoop.delayP99Ms)}ms`,
     `util ${eventLoop.utilization}`,
     `cpu ${eventLoop.cpuCoreRatio}`,
   ];
-  return parts.join(" · ");
+  return parts.filter((part): part is string => part !== null).join(" · ");
 }
 
 /** Builds recent session table rows, optionally including prompt-cache data. */

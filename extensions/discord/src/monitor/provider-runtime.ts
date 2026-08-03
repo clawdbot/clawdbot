@@ -9,7 +9,7 @@ import {
 import { isVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveDiscordAccount } from "../accounts.js";
 import { Client } from "../internal/discord.js";
-import { fetchDiscordApplicationId } from "../probe.js";
+import { probeDiscordApplicationId } from "../probe.js";
 import { createDiscordNativeCommand } from "./native-command.js";
 import type { GetPluginCommandSpecs } from "./provider.commands.js";
 import { runDiscordGatewayLifecycle } from "./provider.lifecycle.js";
@@ -47,7 +47,7 @@ async function loadDiscordProviderSessionRuntime(): Promise<DiscordProviderSessi
 }
 
 export const discordProviderRuntime = {
-  fetchDiscordApplicationId,
+  probeDiscordApplicationId,
   createDiscordNativeCommand,
   runDiscordGatewayLifecycle,
   loadDiscordVoiceRuntime,

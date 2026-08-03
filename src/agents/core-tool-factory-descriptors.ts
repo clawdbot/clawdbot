@@ -2,6 +2,8 @@
  * Static identity for names that select core agent factory families before assembly.
  */
 
+import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
+
 export type CoreToolFactoryFamily = "base-coding" | "shell" | "openclaw";
 
 type CoreToolFactoryDescriptor = {
@@ -25,7 +27,7 @@ const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "conversations_list", family: "openclaw" },
   { name: "conversations_send", family: "openclaw" },
   { name: "conversations_turn", family: "openclaw" },
-  { name: "cron", family: "openclaw" },
+  { name: AUTOMATIONS_TOOL_NAME, family: "openclaw" },
   { name: "dashboard", family: "openclaw" },
   { name: "gateway", family: "openclaw" },
   { name: "get_goal", family: "openclaw" },
@@ -76,4 +78,14 @@ export type OpenClawCodingToolConstructionPlan = {
 
 export function resolveCoreToolFactoryFamily(name: string): CoreToolFactoryFamily | undefined {
   return CORE_TOOL_FACTORY_FAMILY_BY_NAME.get(name);
+}
+
+/**
+ * Core coding primitives (file + shell families). Tool-search compaction keeps
+ * these directly visible: hiding them behind search adds a lookup round-trip to
+ * nearly every coding turn.
+ */
+export function isCoreCodingSurfaceToolName(name: string): boolean {
+  const family = CORE_TOOL_FACTORY_FAMILY_BY_NAME.get(name);
+  return family === "base-coding" || family === "shell";
 }

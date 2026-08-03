@@ -1,8 +1,15 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { normalizeString, workboardCardRunId, workboardCardSessionKey } from "./card-state.ts";
-import { formatError, isRecord } from "./normalization-utils.ts";
-import { normalizeTaskSummary, normalizeTasksPage } from "./normalization.ts";
+import { normalizeTaskSummary } from "../tasks/task-summary.ts";
+import {
+  isActiveWorkboardCard,
+  normalizeString,
+  workboardCardRunId,
+  workboardCardSessionKey,
+} from "./card-state.ts";
+import { formatError } from "./normalization-utils.ts";
+import { normalizeTasksPage } from "./normalization.ts";
 import { getWorkboardRuntime, type WorkboardHost } from "./runtime.ts";
 import type { WorkboardCard, WorkboardTaskLinkState, WorkboardTaskSummary } from "./types.ts";
 
@@ -144,6 +151,9 @@ export function selectWorkboardTaskPollIds(
   const ids: string[] = [];
   const seen = new Set<string>();
   for (const card of cards) {
+    if (!isActiveWorkboardCard(card)) {
+      continue;
+    }
     const previousTask = previousTasksByCardId.get(card.id);
     const previousMatches = previousTask
       ? taskMatchesTrackedCardLink(previousTask, card, missingTaskIds)
@@ -180,6 +190,9 @@ export function selectWorkboardTaskDiscoveryQueries(
   const seenSessionKeys = new Set<string>();
   let hasUnfilteredQuery = false;
   for (const card of cards) {
+    if (!isActiveWorkboardCard(card)) {
+      continue;
+    }
     const previousTask = previousTasksByCardId.get(card.id);
     const cardTaskId = normalizeString(card.taskId);
     const hasCanonicalTask =
@@ -371,6 +384,9 @@ export function selectWorkboardMissingTaskConfirmationIds(
   const ids: string[] = [];
   const seen = new Set<string>();
   for (const card of cards) {
+    if (!isActiveWorkboardCard(card)) {
+      continue;
+    }
     const previousTask = previousTasksByCardId.get(card.id);
     const previousMatches = previousTask
       ? taskMatchesTrackedCardLink(previousTask, card, missingTaskIds)
@@ -405,6 +421,9 @@ export function applyTaskSummariesToState(
   // Confirmed misses stop blocking starts without writes from passive refresh paths.
   const missingTaskIds = new Set([...state.missingTaskIds, ...(options.missingTaskIds ?? [])]);
   const cards = state.cards.map((card) => {
+    if (!isActiveWorkboardCard(card)) {
+      return card;
+    }
     const cardTaskId = normalizeString(card.taskId);
     const task = findLatestTaskForCard(taskIndex, card, missingTaskIds);
     if (!task) {

@@ -45,9 +45,11 @@ describe("Web Awesome control ownership", () => {
 
   it("limits custom comboboxes to dynamic suggestion surfaces", async () => {
     // Web Awesome Core has no combobox; its combobox is a paid Pro component.
+    // This inventory tracks literal ARIA roles, not Web Awesome elements that own roles internally.
     expect(await matchingFiles(/<[a-z][^>]*\srole=["'](?:combobox|listbox|option)["']/u)).toEqual([
       "components/command-palette.ts",
-      "pages/chat/components/chat-composer.ts",
+      "pages/chat/components/chat-composer-skill-menu.ts",
+      "pages/chat/components/chat-composer-slash-menu.ts",
       "pages/chat/components/chat-model-controls.ts",
     ]);
   });
@@ -56,7 +58,7 @@ describe("Web Awesome control ownership", () => {
     // Web Awesome split panel owns exactly two panes; these layouts coordinate
     // sidebar, inspector, and responsive dock state across more than two panes.
     expect(await matchingFiles(/<resizable-divider\b/u)).toEqual([
-      "app/app-host.ts",
+      "app/app-shell-view.ts",
       "pages/chat/chat-page.ts",
       "pages/chat/components/chat-resizable-divider.ts",
     ]);

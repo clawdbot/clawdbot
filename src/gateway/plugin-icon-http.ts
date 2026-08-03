@@ -2,6 +2,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { fileTypeFromBuffer } from "file-type";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { readRemoteMediaBuffer } from "../media/fetch.js";
 import {
   createImageProcessor,
@@ -130,13 +131,7 @@ function rememberIcon(
 ): PluginIconCacheEntry {
   cache.delete(cacheKey);
   cache.set(cacheKey, entry);
-  while (cache.size > PLUGIN_ICON_CACHE_MAX_ENTRIES) {
-    const oldest = cache.keys().next();
-    if (oldest.done) {
-      break;
-    }
-    cache.delete(oldest.value);
-  }
+  pruneMapToMaxSize(cache, PLUGIN_ICON_CACHE_MAX_ENTRIES);
   return entry;
 }
 
@@ -269,8 +264,9 @@ export async function handlePluginIconHttpRequest(
   if (!pluginId && !catalogIconUrl) {
     return false;
   }
-  if (req.method !== "GET") {
-    sendMethodNotAllowed(res, "GET");
+  const method = req.method;
+  if (method !== "GET" && method !== "HEAD") {
+    sendMethodNotAllowed(res, "GET, HEAD");
     return true;
   }
   const requestAuth = await authorizeGatewayHttpRequestOrReply({
@@ -322,6 +318,7 @@ export async function handlePluginIconHttpRequest(
     "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; sandbox",
   );
   res.setHeader("content-disposition", 'attachment; filename="plugin-icon"');
-  res.end(icon.body);
+  // HEAD uses the same authenticated, cached representation; only its body is omitted.
+  res.end(method === "HEAD" ? undefined : icon.body);
   return true;
 }

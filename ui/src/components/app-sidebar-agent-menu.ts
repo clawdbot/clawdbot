@@ -2,7 +2,9 @@
 // component inside the TS LOC ratchet.
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
+import type { AgentIdentityResult } from "../api/types.ts";
 import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
+import { pathForAgentPanel } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
@@ -53,10 +55,12 @@ type AgentMenuAgent = {
 };
 
 type SidebarAgentMenuParams = {
-  position: { x: number; bottom: number } | null;
+  position: { x: number; top: number } | null;
+  basePath: string;
   activeId: string;
   activeName: string;
   agents: readonly AgentMenuAgent[];
+  identities: ReadonlyMap<string, AgentIdentityResult>;
   filter: string;
   pinnedAgentIds: readonly string[];
   connected: boolean;
@@ -99,6 +103,7 @@ function sidebarAgentMenuRows(params: {
   activeId: string;
   filter: string;
   pinnedAgentIds: readonly string[];
+  identities: ReadonlyMap<string, AgentIdentityResult>;
 }) {
   const { agents, activeId } = params;
   const availableIds = new Set(agents.map((agent) => normalizeAgentId(agent.id)));
@@ -121,7 +126,9 @@ function sidebarAgentMenuRows(params: {
       const agentId = normalizeAgentId(entry.id);
       return (
         agentId.toLowerCase().includes(query) ||
-        normalizeAgentLabel(entry).toLowerCase().includes(query)
+        (params.identities.get(agentId)?.name?.trim() || normalizeAgentLabel(entry))
+          .toLowerCase()
+          .includes(query)
       );
     });
     return { rows, showFilter: true };
@@ -147,7 +154,8 @@ function sidebarAgentMenuRows(params: {
 
 function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
   const agentId = normalizeAgentId(agent.id);
-  const label = normalizeAgentLabel(agent);
+  const identity = params.identities.get(agentId) ?? null;
+  const label = identity?.name?.trim() || normalizeAgentLabel(agent);
   const active = agentId === params.activeId;
   const unread = active ? 0 : params.agentUnreadCount(agentId);
   const approvals = params.agentApprovalCount(agentId);
@@ -165,7 +173,7 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
       aria-checked=${String(active)}
       ${ref((element) => syncDropdownItemRadio(element, active))}
     >
-      <span slot="icon">${renderAgentSelectAvatar(option)}</span>
+      <span slot="icon">${renderAgentSelectAvatar(option, identity)}</span>
       ${renderAgentSelectCopy(option)}
       ${approvals > 0
         ? html`<span
@@ -234,7 +242,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
       <wa-dropdown
         class="sidebar-customize-menu sidebar-agent-menu"
         .open=${true}
-        placement="top-start"
+        placement="bottom-start"
         .distance=${0}
         aria-label=${t("agentChip.menuLabel")}
         @wa-select=${(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
@@ -259,7 +267,9 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
               params.onAskCapabilities(activeId);
               break;
             case `${COMMAND_VALUE_PREFIX}agent-settings`:
-              params.onNavigate("agents", { search: `?agent=${encodeURIComponent(activeId)}` });
+              params.onNavigate("agents", {
+                pathname: pathForAgentPanel(activeId, null, params.basePath),
+              });
               break;
             case `${COMMAND_VALUE_PREFIX}new-agent`:
               params.onNavigate("custodian", { search: "?intent=new-agent" });
@@ -283,7 +293,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
           tabindex="-1"
           aria-hidden="true"
           aria-label=${t("agentChip.menuLabel")}
-          style="position: fixed; left: ${position.x}px; bottom: ${position.bottom}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
+          style="position: fixed; left: ${position.x}px; top: ${position.top}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
         ></button>
         ${agents.length > 1
           ? html`
@@ -397,7 +407,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
               params.onNavigate("profile", { hash: "#settings-profile-identity" });
               break;
             case `${COMMAND_VALUE_PREFIX}settings`:
-              params.onNavigate("config");
+              params.onNavigate("appearance");
               break;
             case `${COMMAND_VALUE_PREFIX}usage`:
               params.onNavigate("usage");

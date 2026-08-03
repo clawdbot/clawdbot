@@ -4,6 +4,7 @@ import type {
   QuestionRequestQuestion,
   QuestionWaitAnswerResult,
 } from "../../../packages/gateway-protocol/src/schema/questions.js";
+import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import {
   buildAgentHarnessUserInputAnswers,
@@ -32,6 +33,7 @@ type PendingAgentQuestion = {
   questions: readonly AgentHarnessUserInputQuestion[];
   gatewayCall: AgentHarnessQuestionGatewayCall;
   registration: Promise<unknown>;
+  rejectRegistration: (error: unknown) => void;
   attachRegistration: (promise: Promise<unknown>) => void;
   answer?: Promise<QuestionWaitAnswerResult>;
   bufferedAnswers?: AgentHarnessUserInputAnswers;
@@ -40,7 +42,16 @@ type PendingAgentQuestion = {
   resolving: boolean;
 };
 
-const pendingAgentQuestions = new Map<string, PendingAgentQuestion>();
+const pendingAgentQuestions = resolveGlobalMap<string, PendingAgentQuestion>(
+  Symbol.for("openclaw.pendingAgentQuestions"),
+  (questions) => {
+    const error = new Error("gateway lifecycle ended before question registration completed");
+    for (const state of questions.values()) {
+      state.rejectRegistration(error);
+    }
+    questions.clear();
+  },
+);
 
 function readQuestionErrorReason(error: unknown): string | undefined {
   if (!error || typeof error !== "object") {
@@ -149,6 +160,7 @@ export function registerPendingAgentQuestion(params: {
     ...params,
     sessionKey,
     registration,
+    rejectRegistration,
     attachRegistration: (promise) => {
       if (registrationAttached) {
         throw new Error("gateway question registration already attached");
@@ -270,6 +282,7 @@ type RunAgentHarnessGatewayQuestionParams = {
   questions: readonly AgentHarnessUserInputQuestion[];
   sessionKey: string;
   agentId?: string;
+  runId?: string;
   timeoutMs: number;
   gatewayCall: AgentHarnessQuestionGatewayCall;
   delivery: Pick<EmbeddedRunAttemptParams, "onBlockReply" | "onPartialReply">;
@@ -306,6 +319,7 @@ export async function runAgentHarnessGatewayQuestion(
           questions,
           sessionKey: params.sessionKey,
           ...(params.agentId ? { agentId: params.agentId } : {}),
+          ...(params.runId ? { runId: params.runId } : {}),
           timeoutMs: params.timeoutMs,
         },
         params.signal ? { signal: params.signal } : undefined,

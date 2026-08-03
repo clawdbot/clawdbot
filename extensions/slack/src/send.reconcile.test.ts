@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { reconcileSlackUnknownSend, sendMessageSlack } from "./send.js";
 
 const slackClientMocks = vi.hoisted(() => ({
-  createSlackWebClient: vi.fn(),
+  createSlackReadClient: vi.fn(),
   getSlackWriteClient: vi.fn(),
 }));
 
@@ -16,7 +16,7 @@ vi.mock("./client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./client.js")>();
   return {
     ...actual,
-    createSlackWebClient: slackClientMocks.createSlackWebClient,
+    createSlackReadClient: slackClientMocks.createSlackReadClient,
     getSlackWriteClient: slackClientMocks.getSlackWriteClient,
   };
 });
@@ -105,7 +105,7 @@ async function postWithDeliveryMetadata(params: {
 
 describe("reconcileSlackUnknownSend", () => {
   beforeEach(() => {
-    slackClientMocks.createSlackWebClient.mockReset();
+    slackClientMocks.createSlackReadClient.mockReset();
     slackClientMocks.getSlackWriteClient.mockReset();
   });
 
@@ -182,6 +182,18 @@ describe("reconcileSlackUnknownSend", () => {
         channel: "C123",
         ts: "1782584647.000002",
         message: {},
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        channel: "C123",
+        ts: "1782584647.000003",
+        message: {},
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        channel: "C123",
+        ts: "1782584647.000004",
+        message: {},
       });
     const metadata = {
       event_type: "assistant_thread_context",
@@ -216,34 +228,36 @@ describe("reconcileSlackUnknownSend", () => {
       ([request]) => request as ChatPostMessageArguments,
     );
     const rejectedMetadata = requests[0]?.metadata as MessageMetadata;
-    const firstFallbackMetadata = requests[1]?.metadata as MessageMetadata;
-    const secondFallbackMetadata = requests[2]?.metadata as MessageMetadata;
+    const fallbackMetadata = requests
+      .slice(1)
+      .map((request) => request.metadata as MessageMetadata);
 
     expect(rejectedMetadata.event_payload.openclaw_delivery_part_count).toBe(1);
+    expect(fallbackMetadata.map((part) => part.event_payload.openclaw_delivery_part_index)).toEqual(
+      [0, 1, 2, 3],
+    );
+    expect(fallbackMetadata.map((part) => part.event_payload.openclaw_delivery_part_count)).toEqual(
+      [4, 4, 4, 4],
+    );
+    expect(fallbackMetadata[0]?.event_payload).toMatchObject({ team_id: "T123" });
+    expect(fallbackMetadata[1]?.event_payload).not.toHaveProperty("team_id");
+    expect(fallbackMetadata[2]?.event_payload).not.toHaveProperty("team_id");
+    expect(fallbackMetadata[3]?.event_payload).not.toHaveProperty("team_id");
     expect(
-      [firstFallbackMetadata, secondFallbackMetadata].map(
-        (part) => part.event_payload.openclaw_delivery_part_index,
-      ),
-    ).toEqual([0, 1]);
-    expect(
-      [firstFallbackMetadata, secondFallbackMetadata].map(
-        (part) => part.event_payload.openclaw_delivery_part_count,
-      ),
-    ).toEqual([2, 2]);
-    expect(firstFallbackMetadata.event_payload).toMatchObject({ team_id: "T123" });
-    expect(secondFallbackMetadata.event_payload).not.toHaveProperty("team_id");
-    expect(
-      new Set(
-        [firstFallbackMetadata, secondFallbackMetadata].map(
-          (part) => part.event_payload.openclaw_delivery_id,
-        ),
-      ).size,
+      new Set(fallbackMetadata.map((part) => part.event_payload.openclaw_delivery_id)).size,
     ).toBe(1);
-    expect(sent.receipt.platformMessageIds).toEqual(["1782584647.000001", "1782584647.000002"]);
+    expect(sent.receipt.platformMessageIds).toEqual([
+      "1782584647.000001",
+      "1782584647.000002",
+      "1782584647.000003",
+      "1782584647.000004",
+    ]);
     client.conversations.history.mockResolvedValueOnce({
       messages: [
-        { ts: "1782584647.000002", metadata: secondFallbackMetadata },
-        { ts: "1782584647.000001", metadata: firstFallbackMetadata },
+        { ts: "1782584647.000004", metadata: fallbackMetadata[3] },
+        { ts: "1782584647.000003", metadata: fallbackMetadata[2] },
+        { ts: "1782584647.000002", metadata: fallbackMetadata[1] },
+        { ts: "1782584647.000001", metadata: fallbackMetadata[0] },
       ],
     });
 
@@ -253,6 +267,8 @@ describe("reconcileSlackUnknownSend", () => {
       expect(reconciled.receipt.platformMessageIds).toEqual([
         "1782584647.000001",
         "1782584647.000002",
+        "1782584647.000003",
+        "1782584647.000004",
       ]);
     }
   });
@@ -345,7 +361,7 @@ describe("reconcileSlackUnknownSend", () => {
       messages: [{ ts: "1782584647.000002", metadata }],
     });
     const writeClient = createSlackReconcileTestClient();
-    slackClientMocks.createSlackWebClient.mockReturnValue(readClient);
+    slackClientMocks.createSlackReadClient.mockReturnValue(readClient);
     slackClientMocks.getSlackWriteClient.mockReturnValue(writeClient);
     const tokenCfg = {
       channels: {
@@ -359,7 +375,7 @@ describe("reconcileSlackUnknownSend", () => {
     await expect(
       reconcileSlackUnknownSend(createUnknownSendContext({ cfg: tokenCfg })),
     ).resolves.toEqual(expect.objectContaining({ status: "sent" }));
-    expect(slackClientMocks.createSlackWebClient).toHaveBeenCalledWith("xoxp-read");
+    expect(slackClientMocks.createSlackReadClient).toHaveBeenCalledWith("xoxp-read");
     expect(slackClientMocks.getSlackWriteClient).toHaveBeenCalledWith("xoxb-write");
     expect(readClient.conversations.history).toHaveBeenCalledOnce();
     expect(writeClient.conversations.history).not.toHaveBeenCalled();
@@ -374,7 +390,7 @@ describe("reconcileSlackUnknownSend", () => {
     writeClient.conversations.history.mockResolvedValueOnce({
       messages: [{ ts: "1782584647.000002", metadata }],
     });
-    slackClientMocks.createSlackWebClient.mockReturnValue(readClient);
+    slackClientMocks.createSlackReadClient.mockReturnValue(readClient);
     slackClientMocks.getSlackWriteClient.mockReturnValue(writeClient);
     const tokenCfg = {
       channels: {
@@ -402,7 +418,7 @@ describe("reconcileSlackUnknownSend", () => {
     writeClient.conversations.history.mockResolvedValueOnce({
       messages: [{ ts: "1782584647.000002", metadata }],
     });
-    slackClientMocks.createSlackWebClient.mockReturnValue(readClient);
+    slackClientMocks.createSlackReadClient.mockReturnValue(readClient);
     slackClientMocks.getSlackWriteClient.mockReturnValue(writeClient);
     const tokenCfg = {
       channels: {

@@ -153,10 +153,10 @@ without exceptions outside doctor/import/export/debug boundaries.
 - Doctor migration: `migrating`, intentionally. Doctor imports legacy JSON,
   JSONL, and retired sidecar stores into SQLite, records migration runs/sources,
   and removes successful sources.
-- Exec approvals: `file-runtime`. TypeScript and macOS still read and write the
-  active state directory's `exec-approvals.json`; the reserved
-  `exec_approvals_config` schema has no runtime owner yet. A future cutover must
-  add same-state doctor import and move both runtimes together.
+- Exec approvals: `sqlite-runtime`. TypeScript and macOS read and write the
+  `exec_approvals_config` singleton row in shared state. Doctor exclusively
+  imports the retired state-scoped JSON file, and runtime fails closed until
+  that one-time migration completes.
 - E2E scripts: `clean` for runtime coverage. Docker MCP seeding writes SQLite
   rows. The runtime-context Docker script creates legacy JSONL only inside the
   doctor migration seed and names the legacy session index path explicitly.
@@ -183,7 +183,7 @@ without exceptions outside doctor/import/export/debug boundaries.
 - [x] Keep Kysely generated types aligned after any schema change.
       Files: `src/state/openclaw-state-schema.sql`,
       `src/state/openclaw-agent-schema.sql`,
-      `src/state/*generated*`.
+      `src/state/*-db.generated.d.ts`.
       Proof: no schema change in this pass; `pnpm db:kysely:check`;
       `pnpm lint:kysely`.
 - [x] Re-run focused tests for touched stores, commands, and scripts.
@@ -296,12 +296,12 @@ The branch already has a real shared SQLite base:
   macOS runtime locator, CI, and public install docs all agree.
 - `src/state/openclaw-state-db.ts` opens `openclaw.sqlite`, sets WAL,
   `synchronous=NORMAL`, `busy_timeout=30000`, `foreign_keys=ON`, and applies
-  the generated schema module derived from
+  the build-inlined schema bytes derived from
   `src/state/openclaw-state-schema.sql`.
-- Kysely table types and runtime schema modules are generated from disposable
-  SQLite databases created from the committed `.sql` files; runtime code no
-  longer keeps copy-pasted schema strings for global, per-agent, or proxy
-  capture databases.
+- Kysely table types are generated from disposable SQLite databases created
+  from the committed `.sql` files. Source runs read those canonical files;
+  packaged builds inline the same bytes, so runtime code keeps no committed
+  copy-pasted schema strings or packaged SQL assets.
 - Runtime stores derive selected and inserted row types from those generated
   Kysely `DB` interfaces instead of shadowing SQLite row shapes by hand. Raw SQL
   remains limited to schema application, pragmas, and migration-only DDL.
@@ -472,9 +472,9 @@ The branch already has a real shared SQLite base:
   sidecars. `openclaw doctor --fix` validates and claims legacy sources,
   imports them into SQLite with migration receipts, verifies the canonical
   rows, and only then removes the claimed files.
-- The shared schema reserves an `exec_approvals_config` singleton row, but the
-  runtime cutover remains pending. TypeScript and the macOS companion still use
-  the state-scoped JSON file and must move to SQLite together.
+- Exec approvals use the shared `exec_approvals_config` singleton row in both
+  TypeScript and the macOS companion. The row's `raw_json` remains authoritative
+  for protocol CAS hashes; typed columns are write-time projections.
 - TypeScript device identity now uses typed `device_identities` rows, with
   doctor-only legacy JSON import kept outside the runtime owner. Device auth is
   still file-backed pending a coordinated schema and cross-runtime migration;
@@ -1065,9 +1065,9 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   of `crestodian/rescue-pending/*.json` or `openclaw/rescue-pending/*.json`.
   These short-lived security capabilities are never imported; doctor discards
   both retired directories so an upgrade cannot reactivate a stale write.
-- Phone Control temporary arm state now uses SQLite plugin state instead of
-  `plugins/phone-control/armed.json`. Doctor imports the legacy armed-state
-  file into the `phone-control/arm-state` namespace and removes the file.
+- The retired Phone Control lease state is no longer runtime state. Doctor
+  drops its SQLite plugin-state journal and archives the legacy
+  `plugins/phone-control/armed.json` source after canonical config cleanup.
 - Doctor no longer repairs JSONL transcripts in place or creates backup JSONL
   files. It imports the active branch into SQLite and removes the legacy source.
 - Session-memory hook transcript lookup uses `{agentId, sessionId}` scope-only
@@ -1410,7 +1410,7 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   Runtime tests no longer create invalid or empty `runs.json` fixtures to prove
   registry behavior; they seed/read SQLite rows directly.
 - Backup stages the state directory before archiving, copies non-database files,
-  snapshots databases with `VACUUM INTO`, omits live WAL/SHM sidecars, records
+  snapshots databases with online backup plus offline `VACUUM`, omits live WAL/SHM sidecars, records
   snapshot metadata in the archive manifest, and records
   completed backup runs in SQLite with the archive manifest. `openclaw backup
 create` validates the written archive by default; `--no-verify` is the
@@ -1891,7 +1891,7 @@ The migration imports old JSONL files once, records counts/hashes in
 Backups remain one archive file:
 
 - Checkpoint every global and agent database.
-- Snapshot each DB with SQLite backup semantics or `VACUUM INTO`.
+- Snapshot each DB with SQLite online backup followed by offline `VACUUM`.
 - Archive compact DB snapshots, config, external credentials, and requested
   workspace exports.
 - Omit raw live `*.sqlite-wal` and `*.sqlite-shm` files.
@@ -1932,9 +1932,10 @@ doctor input or support/export output:
 Backups should be one archive file, but database capture should be
 SQLite-native:
 
-1. Stop long-running write activity or enter a short backup barrier.
-2. For every global and agent database, run a checkpoint.
-3. Snapshot databases with `VACUUM INTO` into a temporary backup directory.
+1. Keep write transactions bounded so online backup can make forward progress.
+2. Verify every live global and agent database before capture.
+3. Capture each database with SQLite online backup into a temporary backup
+   directory, then close the live connection and `VACUUM` the private copy.
    Plugin schemas that require owner-defined SQLite capabilities fail closed
    until the owner provides a safe snapshot contract.
 4. Archive the database snapshots, config file, credentials directory, selected
@@ -2057,8 +2058,8 @@ payload.
      lifetime and cancellation behavior are boring.
 
 8. Backup integration.
-   - Teach backup to snapshot global, agent, and plugin databases with
-     `VACUUM INTO`. Done for discovered `*.sqlite` files under the state asset;
+   - Teach backup to snapshot global, agent, and plugin databases with online
+     backup followed by offline `VACUUM`. Done for discovered `*.sqlite` files under the state asset;
      plugin schemas requiring unavailable owner capabilities fail closed.
    - Add backup verification for canonical SQLite integrity and schema identity,
      plus generic file-shape validation for dedicated plugin snapshots. Done for
@@ -2223,7 +2224,7 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - `openrouter-models.json`
 - `auth-profiles.json`
 - `auth-state.json`
-- `exec-approvals.json`
+- `exec-approvals.json` (retired; Doctor-only import into `exec_approvals_config`)
 - `openclaw-workspace-state.json`
 - `workspace-state.json`
 - `workspace-attestations/*.attested`

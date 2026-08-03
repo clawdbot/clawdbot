@@ -6,12 +6,13 @@
   "type": "module",
   "dependencies": {
     "mdast-util-from-markdown": "2.0.3",
-    "p-map": "7.0.5",
+    "p-map": "7.0.6",
     "typebox": "1.3.6",
     "yaml": "2.9.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@openclaw/memory-core": "workspace:*",
     "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },

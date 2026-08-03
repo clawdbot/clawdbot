@@ -1,10 +1,7 @@
 // Session reset concurrency tests protect newer same-id lifecycle owners.
 import { afterEach, expect, test } from "vitest";
-import {
-  listRegisteredAgentHarnesses,
-  registerAgentHarness,
-  restoreRegisteredAgentHarnesses,
-} from "../agents/harness/registry.js";
+import { listRegisteredAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
+import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
 import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { writeSessionStore } from "./test-helpers.js";

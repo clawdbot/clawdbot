@@ -1,10 +1,12 @@
 /* @vitest-environment jsdom */
 
+import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { UiSettings } from "../../app/settings.ts";
+import { SLASH_COMMANDS } from "../../lib/chat/commands.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -24,14 +26,16 @@ import {
   switchChatThinkingLevel,
 } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
-import type { ChatPageHost } from "./chat-state.ts";
+import type { ChatComposerMemoryFallback, ChatPageHost } from "./chat-state-host.ts";
 import {
   admitStoredChatComposerQueueItem,
   listStoredChatOutboxes,
   loadChatComposerSnapshot,
+  removeStoredChatComposerQueueItem,
   resolveStoredChatOutboxScope,
   storedChatOutboxScopeKey,
 } from "./composer-persistence.ts";
+import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
 import { handleChatInputHistoryKey } from "./input-history.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import {
@@ -72,6 +76,7 @@ type TestChatHost = Omit<ChatHost, "settings"> & {
   chatAvatarSource?: string | null;
   chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
   chatAvatarReason?: string | null;
+  chatComposerFallbackByScope: Record<string, ChatComposerMemoryFallback>;
   sessionsError?: string | null;
   sessionsResultAgentId?: string | null;
   sessionsArchivedFilter?: "active" | "archived" | "all";
@@ -102,6 +107,22 @@ function cacheChatMessages(
     pagination: { hasMore: false },
     sessionId: null,
   });
+}
+
+function createQueuedLocalCommand(
+  id: string,
+  text: string,
+  options: { createdAt?: number; sessionKey?: string } = {},
+) {
+  const [name, ...args] = text.slice(1).split(" ");
+  return {
+    id,
+    text,
+    createdAt: options.createdAt ?? 1,
+    localCommandArgs: args.join(" "),
+    localCommandName: name ?? "",
+    sessionKey: options.sessionKey ?? "agent:main",
+  };
 }
 
 const executeSlashCommandMock = vi.fn();
@@ -142,7 +163,7 @@ let handleSendChat: typeof import("./chat-send-submit.ts").handleSendChat;
 let steerQueuedChatMessage: typeof import("./chat-send-actions.ts").steerQueuedChatMessage;
 let handleAbortChat: typeof import("./run-lifecycle.ts").handleAbortChat;
 let hasAbortableSessionRun: typeof import("./run-lifecycle.ts").hasAbortableSessionRun;
-let handlePageGatewayEvent: typeof import("./chat-state.ts").handlePageGatewayEvent;
+let handlePageGatewayEvent: typeof import("./chat-state-events.ts").handlePageGatewayEvent;
 let loadChatBranches: typeof import("./chat-history.ts").loadChatBranches;
 let loadChatHistory: typeof import("./chat-history.ts").loadChatHistory;
 let clearPendingQueueItemsForRun: typeof import("./chat-queue.ts").clearPendingQueueItemsForRun;
@@ -152,12 +173,14 @@ let removeDeliveredQueuedChatSendForRun: typeof import("./chat-queue.ts").remove
 let removeVisibleOrScopedQueuedMessageWithoutReleasing: typeof import("./chat-queue.ts").removeVisibleOrScopedQueuedMessageWithoutReleasing;
 let markQueuedChatSendsWaitingForReconnect: typeof import("./chat-queue.ts").markQueuedChatSendsWaitingForReconnect;
 let subscribeChatOutboxProjection: typeof import("./chat-queue.ts").subscribeChatOutboxProjection;
-let syncChatQueueFromStoredOutbox: typeof import("./chat-queue.ts").syncChatQueueFromStoredOutbox;
+let syncVisibleChatQueueProjection: typeof import("./chat-queue.ts").syncVisibleChatQueueProjection;
+let readChatQueueForScope: typeof import("./chat-queue.ts").readChatQueueForScope;
+let writeChatQueueForScope: typeof import("./chat-queue.ts").writeChatQueueForScope;
 let flushChatQueueForEvent: typeof import("./chat-send-actions.ts").flushChatQueueForEvent;
 let retryReconnectableQueuedChatSends: typeof import("./chat-send-actions.ts").retryReconnectableQueuedChatSends;
 let retryQueuedChatMessage: typeof import("./chat-send-actions.ts").retryQueuedChatMessage;
 let recordChatSendServerTiming: typeof import("./chat-send-timing.ts").recordChatSendServerTiming;
-let refreshPageChat: typeof import("./chat-state.ts").refreshPageChat;
+let refreshPageChat: typeof import("./chat-state-refresh.ts").refreshPageChat;
 
 async function loadChatHelpers(): Promise<void> {
   ({
@@ -168,9 +191,8 @@ async function loadChatHelpers(): Promise<void> {
   } = await import("./chat-send-actions.ts"));
   ({ handleSendChat } = await import("./chat-send-submit.ts"));
   ({ recordChatSendServerTiming } = await import("./chat-send-timing.ts"));
-  const chatState = await import("./chat-state.ts");
-  handlePageGatewayEvent = chatState.handlePageGatewayEvent;
-  refreshPageChat = chatState.refreshPageChat;
+  ({ handlePageGatewayEvent } = await import("./chat-state-events.ts"));
+  ({ refreshPageChat } = await import("./chat-state-refresh.ts"));
   ({ loadChatBranches, loadChatHistory } = await import("./chat-history.ts"));
   ({ handleAbortChat, hasAbortableSessionRun } = await import("./run-lifecycle.ts"));
   ({
@@ -180,8 +202,10 @@ async function loadChatHelpers(): Promise<void> {
     removeQueuedMessage,
     markQueuedChatSendsWaitingForReconnect,
     removeVisibleOrScopedQueuedMessageWithoutReleasing,
+    readChatQueueForScope,
     subscribeChatOutboxProjection,
-    syncChatQueueFromStoredOutbox,
+    syncVisibleChatQueueProjection,
+    writeChatQueueForScope,
   } = await import("./chat-queue.ts"));
 }
 
@@ -255,8 +279,7 @@ function eventPayloads(host: TestChatHost, event: string): Array<Record<string, 
 }
 
 function admitHostQueueItems(host: TestChatHost): void {
-  const queues = [host.chatQueue, ...Object.values(host.chatQueueByScope ?? {})];
-  for (const item of queues.flat()) {
+  for (const item of host.chatQueue) {
     expect(
       admitStoredChatComposerQueueItem(
         host,
@@ -266,10 +289,6 @@ function admitHostQueueItems(host: TestChatHost): void {
       ),
     ).toBe(true);
   }
-}
-
-function queueScopeKey(host: TestChatHost, sessionKey: string, agentId?: string): string {
-  return storedChatOutboxScopeKey(resolveStoredChatOutboxScope(host, sessionKey, agentId));
 }
 
 function fetchInit(source: MockCallSource, callIndex: number) {
@@ -351,8 +370,8 @@ function makeHost(overrides?: MakeHostOverrides): TestChatHost | TestChatHostWit
     chatInputHistoryIndex: -1,
     chatDraftBeforeHistory: null,
     chatAttachments: [],
+    chatComposerFallbackByScope: {},
     chatQueue: [],
-    chatQueueByScope: {},
     chatRunId: null,
     chatSending: false,
     lastError: null,
@@ -363,14 +382,13 @@ function makeHost(overrides?: MakeHostOverrides): TestChatHost | TestChatHostWit
     chatAvatarSource: null,
     chatAvatarStatus: null,
     chatAvatarReason: null,
-    chatSideChatTurns: [],
-    chatSideResultTerminalRuns: new Set<string>(),
     sessionsLoading: false,
     sessionsResult: null,
     sessionsResultAgentId: null,
     sessionsError: null,
     sessionsArchivedFilter: "active" as const,
     chatModelsLoading: false,
+    chatMetadataRequestVersion: 0,
     chatModelCatalog: [],
     refreshSessionsAfterChat: new Map(),
     toolStreamById: new Map(),
@@ -397,7 +415,6 @@ function makeHost(overrides?: MakeHostOverrides): TestChatHost | TestChatHostWit
         chatShowToolCalls: next.chatShowToolCalls,
         chatPersistCommentary: next.chatPersistCommentary,
         chatSendShortcut: next.chatSendShortcut,
-        splitRatio: next.splitRatio,
       });
     }),
     ...hostOverrides,
@@ -533,6 +550,120 @@ describe("refreshChat", () => {
     expect(host.request).toHaveBeenCalledWith("chat.history", { sessionKey: "main", limit: 100 });
     expect(host.request).not.toHaveBeenCalledWith("sessions.list", expect.anything());
     expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("uses startup-shipped metadata without requesting chat.metadata", async () => {
+    const startup = createDeferred<unknown>();
+    const host = makeHost({
+      hello: {
+        features: { methods: ["chat.metadata", "chat.startup"] },
+      } as TestChatHost["hello"],
+      requestHandlers: {
+        "chat.startup": () => startup.promise,
+      },
+    });
+
+    const refresh = refreshPageChat(asChatPageHost(host), {
+      awaitHistory: true,
+      deferBranches: true,
+      startup: true,
+    });
+
+    expect(host.request.mock.calls.map(([method]) => method)).toEqual(["chat.startup"]);
+    expect(await raceWithMacrotask(refresh)).toBe("pending");
+
+    startup.resolve({
+      messages: [],
+      metadata: {
+        commands: [],
+        models: [
+          {
+            available: true,
+            id: "startup-model",
+            name: "Startup Model",
+            provider: "openai",
+          },
+        ],
+      },
+    });
+    await expect(refresh).resolves.toBeUndefined();
+    await waitForFast(() =>
+      expect(host.chatModelCatalog).toEqual([
+        {
+          available: true,
+          id: "startup-model",
+          name: "Startup Model",
+          provider: "openai",
+        },
+      ]),
+    );
+    expect(host.request).not.toHaveBeenCalledWith("chat.metadata", expect.anything());
+    expect(host.request).not.toHaveBeenCalledWith("models.list", expect.anything());
+    expect(host.request).not.toHaveBeenCalledWith("commands.list", expect.anything());
+  });
+
+  it("fills omitted startup metadata immediately and populates models and commands", async () => {
+    const startup = createDeferred<unknown>();
+    const host = makeHost({
+      hello: {
+        features: { methods: ["chat.metadata", "chat.startup"] },
+      } as TestChatHost["hello"],
+      requestHandlers: {
+        "chat.metadata": {},
+        "commands.list": {
+          commands: [
+            {
+              name: "startup-gap-command",
+              textAliases: ["/startup-gap-command"],
+              description: "Loaded from the startup metadata gap fill.",
+              source: "plugin",
+              scope: "text",
+              acceptsArgs: false,
+            },
+          ],
+        },
+        "chat.startup": () => startup.promise,
+        "models.list": {
+          models: [
+            {
+              available: true,
+              id: "gap-model",
+              name: "Gap Model",
+              provider: "openai",
+            },
+          ],
+        },
+      },
+    });
+    const refresh = refreshPageChat(asChatPageHost(host), {
+      awaitHistory: true,
+      deferBranches: true,
+      startup: true,
+    });
+
+    expect(host.request.mock.calls.map(([method]) => method)).toEqual(["chat.startup"]);
+    expect(host.request).not.toHaveBeenCalledWith("models.list", expect.anything());
+    expect(host.request).not.toHaveBeenCalledWith("commands.list", expect.anything());
+
+    startup.resolve({ messages: [] });
+    await expect(refresh).resolves.toBeUndefined();
+    await waitForFast(() =>
+      expect(host.chatModelCatalog).toEqual([
+        {
+          available: true,
+          id: "gap-model",
+          name: "Gap Model",
+          provider: "openai",
+        },
+      ]),
+    );
+    expect(SLASH_COMMANDS.some((command) => command.name === "startup-gap-command")).toBe(true);
+    expect(host.request).toHaveBeenCalledWith("models.list", { view: "configured" });
+    expect(host.request).toHaveBeenCalledWith(
+      "commands.list",
+      expect.objectContaining({ includeArgs: true, scope: "text" }),
+    );
+    expect(host.request).toHaveBeenCalledWith("chat.metadata", { agentId: "main" });
   });
 
   it.each([
@@ -741,7 +872,7 @@ describe("refreshChat", () => {
       setImmediate(resolve);
     });
 
-    expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
     expect(host.chatQueue).toEqual([expect.objectContaining(restoredQueue[0])]);
     if (expectedSession) {
       expect(host.sessionsResult?.sessions[0]).toMatchObject(expectedSession);
@@ -754,103 +885,34 @@ describe("refreshChatAvatar", () => {
     await loadChatHelpers();
   });
 
-  it("uses a route-relative avatar endpoint before basePath bootstrap finishes", async () => {
-    const createObjectURL = vi.fn(() => "blob:local-avatar");
-    const revokeObjectURL = vi.fn();
-    vi.stubGlobal(
-      "URL",
-      class extends URL {
-        static override createObjectURL = createObjectURL;
-        static override revokeObjectURL = revokeObjectURL;
-      },
-    );
-    const fetchMock = vi.fn((input: string | URL | Request) => {
-      const url = requestUrl(input);
-      if (url === "/avatar/main?meta=1") {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ avatarUrl: "/avatar/main" }),
-        });
-      }
-      if (url === "/avatar/main") {
-        return Promise.resolve({
-          ok: true,
-          blob: async () => new Blob(["avatar"]),
-        });
-      }
-      throw new Error(`Unexpected avatar URL: ${url}`);
-    });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-
-    const host = makeHost({ basePath: "", sessionKey: "agent:main" });
-    await refreshChatAvatar(host);
-
-    expect(fetchUrl(fetchMock as unknown as MockCallSource, 0)).toBe("/avatar/main?meta=1");
-    expect(fetchInit(fetchMock as unknown as MockCallSource, 0).method).toBe("GET");
-    expect(fetchUrl(fetchMock as unknown as MockCallSource, 1)).toBe("/avatar/main");
-    expect(fetchInit(fetchMock as unknown as MockCallSource, 1).method).toBe("GET");
-    expect(fetchInit(fetchMock as unknown as MockCallSource, 1)).not.toHaveProperty("headers");
-    expect(createObjectURL).toHaveBeenCalledTimes(1);
-    expect(revokeObjectURL).not.toHaveBeenCalled();
-    expect(host.chatAvatarUrl).toBe("blob:local-avatar");
-  });
-
-  it("prefers the paired device token for avatar metadata and local avatar URLs", async () => {
-    const createObjectURL = vi.fn(() => "blob:device-avatar");
-    const revokeObjectURL = vi.fn();
-    vi.stubGlobal(
-      "URL",
-      class extends URL {
-        static override createObjectURL = createObjectURL;
-        static override revokeObjectURL = revokeObjectURL;
-      },
-    );
-    const fetchMock = vi.fn((input: string | URL | Request) => {
-      const url = requestUrl(input);
-      if (url === "/openclaw/avatar/main?meta=1") {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ avatarUrl: "/avatar/main" }),
-        });
-      }
-      if (url === "/avatar/main") {
-        return Promise.resolve({
-          ok: true,
-          blob: async () => new Blob(["avatar"]),
-        });
-      }
-      throw new Error(`Unexpected avatar URL: ${url}`);
-    });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-
-    const host = makeHost({
+  it.each([
+    {
+      name: "uses a route-relative avatar endpoint before basePath bootstrap finishes",
+      basePath: "",
+      objectUrl: "blob:local-avatar",
+      expectedToken: undefined,
+      overrides: {},
+    },
+    {
+      name: "prefers the paired device token for avatar metadata and local avatar URLs",
       basePath: "/openclaw/",
-      sessionKey: "agent:main",
-      settings: { token: "session-token" },
-      password: "shared-password",
-      hello: { auth: { deviceToken: "device-token" } } as ChatHost["hello"],
-    });
-    await refreshChatAvatar(host);
-
-    expect(fetchUrl(fetchMock as unknown as MockCallSource, 0)).toBe(
-      "/openclaw/avatar/main?meta=1",
-    );
-    expect(fetchInit(fetchMock as unknown as MockCallSource, 0).method).toBe("GET");
-    expect(fetchInit(fetchMock as unknown as MockCallSource, 0).headers).toEqual({
-      Authorization: "Bearer device-token",
-    });
-    expect(fetchUrl(fetchMock as unknown as MockCallSource, 1)).toBe("/avatar/main");
-    expect(fetchInit(fetchMock as unknown as MockCallSource, 1).method).toBe("GET");
-    expect(fetchInit(fetchMock as unknown as MockCallSource, 1).headers).toEqual({
-      Authorization: "Bearer device-token",
-    });
-    expect(createObjectURL).toHaveBeenCalledTimes(1);
-    expect(revokeObjectURL).not.toHaveBeenCalled();
-    expect(host.chatAvatarUrl).toBe("blob:device-avatar");
-  });
-
-  it("fetches local avatars through Authorization headers instead of tokenized URLs", async () => {
-    const createObjectURL = vi.fn(() => "blob:session-avatar");
+      objectUrl: "blob:device-avatar",
+      expectedToken: "device-token",
+      overrides: {
+        settings: { token: "session-token" },
+        password: "shared-password",
+        hello: { auth: { deviceToken: "device-token" } } as ChatHost["hello"],
+      },
+    },
+    {
+      name: "fetches local avatars through Authorization headers instead of tokenized URLs",
+      basePath: "/openclaw/",
+      objectUrl: "blob:session-avatar",
+      expectedToken: "session-token",
+      overrides: { settings: { token: "session-token" } },
+    },
+  ])("$name", async ({ basePath, objectUrl, expectedToken, overrides }) => {
+    const createObjectURL = vi.fn(() => objectUrl);
     const revokeObjectURL = vi.fn();
     vi.stubGlobal(
       "URL",
@@ -859,48 +921,36 @@ describe("refreshChatAvatar", () => {
         static override revokeObjectURL = revokeObjectURL;
       },
     );
+    const metadataUrl = `${basePath.replace(/\/$/, "")}/avatar/main?meta=1`;
     const fetchMock = vi.fn((input: string | URL | Request) => {
       const url = requestUrl(input);
-      if (url === "/openclaw/avatar/main?meta=1") {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ avatarUrl: "/avatar/main" }),
-        });
+      if (url === metadataUrl) {
+        return Promise.resolve({ ok: true, json: async () => ({ avatarUrl: "/avatar/main" }) });
       }
       if (url === "/avatar/main") {
-        return Promise.resolve({
-          ok: true,
-          blob: async () => new Blob(["avatar"]),
-        });
+        return Promise.resolve({ ok: true, blob: async () => new Blob(["avatar"]) });
       }
       throw new Error(`Unexpected avatar URL: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const host = makeHost({ basePath, sessionKey: "agent:main", ...overrides });
 
-    const host = makeHost({
-      basePath: "/openclaw/",
-      sessionKey: "agent:main",
-      settings: { token: "session-token" },
-    });
     await refreshChatAvatar(host);
 
-    expect(fetchUrl(fetchMock as unknown as MockCallSource, 0)).toBe(
-      "/openclaw/avatar/main?meta=1",
-    );
-    expect(fetchInit(fetchMock as unknown as MockCallSource, 0).method).toBe("GET");
-    expect(fetchInit(fetchMock as unknown as MockCallSource, 0).headers).toEqual({
-      Authorization: "Bearer session-token",
-    });
-    expect(fetchUrl(fetchMock as unknown as MockCallSource, 1)).toBe("/avatar/main");
-    expect(fetchInit(fetchMock as unknown as MockCallSource, 1).method).toBe("GET");
-    expect(fetchInit(fetchMock as unknown as MockCallSource, 1).headers).toEqual({
-      Authorization: "Bearer session-token",
-    });
+    for (const [index, url] of [metadataUrl, "/avatar/main"].entries()) {
+      expect(fetchUrl(fetchMock as unknown as MockCallSource, index)).toBe(url);
+      const init = fetchInit(fetchMock as unknown as MockCallSource, index);
+      expect(init.method).toBe("GET");
+      if (expectedToken) {
+        expect(init.headers).toEqual({ Authorization: `Bearer ${expectedToken}` });
+      } else {
+        expect(init).not.toHaveProperty("headers");
+      }
+    }
     expect(createObjectURL).toHaveBeenCalledTimes(1);
     expect(revokeObjectURL).not.toHaveBeenCalled();
-    expect(host.chatAvatarUrl).toBe("blob:session-avatar");
+    expect(host.chatAvatarUrl).toBe(objectUrl);
   });
-
   it("keeps mounted dashboard avatar endpoints under the normalized base path", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: false,
@@ -957,7 +1007,29 @@ describe("refreshChatAvatar", () => {
     expect(host.chatAvatarReason).toBe("missing");
   });
 
-  it("ignores stale avatar responses after switching sessions", async () => {
+  it.each([
+    {
+      name: "ignores stale avatar responses after switching sessions",
+      firstAgent: "main",
+      overrides: { sessionKey: "agent:main:main" },
+      switchAgent(host: TestChatHost) {
+        host.sessionKey = "agent:ops:main";
+      },
+    },
+    {
+      name: "ignores stale global avatar responses after switching selected agents",
+      firstAgent: "work",
+      overrides: {
+        sessionKey: "global",
+        assistantAgentId: "work",
+        agentsList: { defaultId: "main" },
+      },
+      switchAgent(host: TestChatHost) {
+        host.assistantAgentId = "ops";
+      },
+    },
+  ])("$name", async (fixture) => {
+    const { firstAgent, overrides } = fixture;
     const createObjectURL = vi.fn(() => "blob:ops-avatar");
     const revokeObjectURL = vi.fn();
     vi.stubGlobal(
@@ -967,114 +1039,41 @@ describe("refreshChatAvatar", () => {
         static override revokeObjectURL = revokeObjectURL;
       },
     );
-    const mainRequest = createDeferred<{ avatarUrl?: string }>();
+    const firstRequest = createDeferred<{ avatarUrl?: string }>();
     const opsRequest = createDeferred<{ avatarUrl?: string }>();
+    const firstMetadataUrl = `/avatar/${firstAgent}?meta=1`;
     const fetchMock = vi.fn((input: string | URL | Request) => {
       const url = requestUrl(input);
-      if (url === "/avatar/main?meta=1") {
-        return Promise.resolve({
-          ok: true,
-          json: async () => mainRequest.promise,
-        });
+      if (url === firstMetadataUrl) {
+        return Promise.resolve({ ok: true, json: async () => firstRequest.promise });
       }
       if (url === "/avatar/ops?meta=1") {
-        return Promise.resolve({
-          ok: true,
-          json: async () => opsRequest.promise,
-        });
+        return Promise.resolve({ ok: true, json: async () => opsRequest.promise });
       }
       if (url === "/avatar/ops") {
-        return Promise.resolve({
-          ok: true,
-          blob: async () => new Blob(["avatar"]),
-        });
+        return Promise.resolve({ ok: true, blob: async () => new Blob(["avatar"]) });
       }
       throw new Error(`Unexpected avatar URL: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-
-    const host = makeHost({ basePath: "", sessionKey: "agent:main:main" });
+    const host = makeHost({ basePath: "", ...overrides });
 
     const firstRefresh = refreshChatAvatar(host);
-    host.sessionKey = "agent:ops:main";
+    fixture.switchAgent(host);
     const secondRefresh = refreshChatAvatar(host);
-
-    mainRequest.resolve({ avatarUrl: "/avatar/main" });
+    firstRequest.resolve({ avatarUrl: `/avatar/${firstAgent}` });
     await firstRefresh;
     expect(host.chatAvatarUrl).toBeNull();
-
     opsRequest.resolve({ avatarUrl: "/avatar/ops" });
     await secondRefresh;
 
     expect(createObjectURL).toHaveBeenCalledTimes(1);
+    expect(revokeObjectURL).not.toHaveBeenCalled();
     expect(host.chatAvatarUrl).toBe("blob:ops-avatar");
-    expect(fetchUrl(fetchMock as unknown as MockCallSource, 0)).toBe("/avatar/main?meta=1");
-    expect(fetchInit(fetchMock as unknown as MockCallSource, 0).method).toBe("GET");
-    expect(fetchUrl(fetchMock as unknown as MockCallSource, 1)).toBe("/avatar/ops?meta=1");
-    expect(fetchInit(fetchMock as unknown as MockCallSource, 1).method).toBe("GET");
-    expect(fetchUrl(fetchMock as unknown as MockCallSource, 2)).toBe("/avatar/ops");
-    expect(fetchInit(fetchMock as unknown as MockCallSource, 2).method).toBe("GET");
-  });
-
-  it("ignores stale global avatar responses after switching selected agents", async () => {
-    const createObjectURL = vi.fn(() => "blob:ops-avatar");
-    const revokeObjectURL = vi.fn();
-    vi.stubGlobal(
-      "URL",
-      class extends URL {
-        static override createObjectURL = createObjectURL;
-        static override revokeObjectURL = revokeObjectURL;
-      },
-    );
-    const workRequest = createDeferred<{ avatarUrl?: string }>();
-    const opsRequest = createDeferred<{ avatarUrl?: string }>();
-    const fetchMock = vi.fn((input: string | URL | Request) => {
-      const url = requestUrl(input);
-      if (url === "/avatar/work?meta=1") {
-        return Promise.resolve({
-          ok: true,
-          json: async () => workRequest.promise,
-        });
-      }
-      if (url === "/avatar/ops?meta=1") {
-        return Promise.resolve({
-          ok: true,
-          json: async () => opsRequest.promise,
-        });
-      }
-      if (url === "/avatar/ops") {
-        return Promise.resolve({
-          ok: true,
-          blob: async () => new Blob(["avatar"]),
-        });
-      }
-      throw new Error(`Unexpected avatar URL: ${url}`);
-    });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-
-    const host = makeHost({
-      basePath: "",
-      sessionKey: "global",
-      assistantAgentId: "work",
-      agentsList: { defaultId: "main" },
-    });
-
-    const firstRefresh = refreshChatAvatar(host);
-    host.assistantAgentId = "ops";
-    const secondRefresh = refreshChatAvatar(host);
-
-    workRequest.resolve({ avatarUrl: "/avatar/work" });
-    await firstRefresh;
-    expect(host.chatAvatarUrl).toBeNull();
-
-    opsRequest.resolve({ avatarUrl: "/avatar/ops" });
-    await secondRefresh;
-
-    expect(createObjectURL).toHaveBeenCalledTimes(1);
-    expect(host.chatAvatarUrl).toBe("blob:ops-avatar");
-    expect(fetchUrl(fetchMock as unknown as MockCallSource, 0)).toBe("/avatar/work?meta=1");
-    expect(fetchUrl(fetchMock as unknown as MockCallSource, 1)).toBe("/avatar/ops?meta=1");
-    expect(fetchUrl(fetchMock as unknown as MockCallSource, 2)).toBe("/avatar/ops");
+    for (const [index, url] of [firstMetadataUrl, "/avatar/ops?meta=1", "/avatar/ops"].entries()) {
+      expect(fetchUrl(fetchMock as unknown as MockCallSource, index)).toBe(url);
+      expect(fetchInit(fetchMock as unknown as MockCallSource, index).method).toBe("GET");
+    }
   });
 });
 
@@ -1153,69 +1152,7 @@ describe("handleSendChat", () => {
     vi.unstubAllGlobals();
   });
 
-  it("cancels button-triggered /new resets when confirmation is declined", async () => {
-    const confirm = vi.fn(() => false);
-    vi.stubGlobal("confirm", confirm);
-
-    const host = makeHost({
-      requestHandlers: {},
-      chatMessage: "keep this draft",
-      sessionKey: "agent:main",
-    });
-
-    await handleSendChat(host, "/new", { confirmReset: true, restoreDraft: true });
-
-    expect(confirm).toHaveBeenCalledWith("Start a new thread? This will reset the current chat.");
-    expect(host.request).not.toHaveBeenCalled();
-    expect(host.chatMessage).toBe("keep this draft");
-    expect(host.chatMessages).toStrictEqual([]);
-    expect(host.chatRunId).toBeNull();
-    expect(host.refreshSessionsAfterChat.size).toBe(0);
-  });
-
-  it("cancels button-triggered /new resets when confirmation is unavailable", async () => {
-    vi.stubGlobal("confirm", undefined);
-
-    const host = makeHost({
-      requestHandlers: {},
-      chatMessage: "keep this draft",
-      sessionKey: "agent:main",
-    });
-
-    await handleSendChat(host, "/new", { confirmReset: true, restoreDraft: true });
-
-    expect(host.request).not.toHaveBeenCalled();
-    expect(host.chatMessage).toBe("keep this draft");
-    expect(host.chatMessages).toStrictEqual([]);
-    expect(host.chatRunId).toBeNull();
-    expect(host.refreshSessionsAfterChat.size).toBe(0);
-  });
-
-  it("runs the fresh-session action for confirmed /new overrides", async () => {
-    const confirm = vi.fn(() => true);
-    vi.stubGlobal("confirm", confirm);
-
-    const createChatSession = vi.fn(async () => true);
-    const host = makeHost({
-      requestHandlers: {},
-      chatMessage: "restore me",
-      sessionKey: "agent:main",
-      createChatSession,
-    });
-
-    await handleSendChat(host, "/new", { confirmReset: true, restoreDraft: true });
-
-    expect(confirm).toHaveBeenCalledTimes(1);
-    expect(host.request).not.toHaveBeenCalled();
-    expect(createChatSession).toHaveBeenCalledTimes(1);
-    expect(host.chatMessage).toBe("restore me");
-    expect(host.refreshSessionsAfterChat.size).toBe(0);
-  });
-
   it("routes typed /new through the fresh-session action without confirmation", async () => {
-    const confirm = vi.fn(() => false);
-    vi.stubGlobal("confirm", confirm);
-
     const createChatSession = vi.fn(async () => true);
     const host = makeHost({
       requestHandlers: {},
@@ -1226,7 +1163,6 @@ describe("handleSendChat", () => {
 
     await handleSendChat(host);
 
-    expect(confirm).not.toHaveBeenCalled();
     expect(host.request).not.toHaveBeenCalled();
     expect(createChatSession).toHaveBeenCalledTimes(1);
     expect(host.chatMessage).toBe("");
@@ -1265,9 +1201,6 @@ describe("handleSendChat", () => {
   });
 
   it("preserves typed /reset command dispatch without confirmation", async () => {
-    const confirm = vi.fn(() => false);
-    vi.stubGlobal("confirm", confirm);
-
     const host = makeHost({
       requestHandlers: {
         "chat.send": { status: "started" },
@@ -1278,7 +1211,6 @@ describe("handleSendChat", () => {
 
     await handleSendChat(host);
 
-    expect(confirm).not.toHaveBeenCalled();
     const payload = findRequestPayload(
       host.request as unknown as MockCallSource,
       "chat.send",
@@ -1308,15 +1240,14 @@ describe("handleSendChat", () => {
       text: "/reset",
     });
 
-    const queuedScopeKey = queueScopeKey(host, "agent:main");
-    host.chatQueueByScope = { [queuedScopeKey]: [...host.chatQueue] };
-    host.chatQueue = [];
+    writeChatQueueForScope(host, "agent:main", host.chatQueue);
     host.sessionKey = "agent:other";
+    syncVisibleChatQueueProjection(host);
     settingsPatch.resolve(true);
     await send;
 
     expect(host.request).not.toHaveBeenCalled();
-    expect(host.chatQueueByScope?.[queuedScopeKey]?.[0]).toMatchObject({
+    expect(readChatQueueForScope(host, "agent:main")[0]).toMatchObject({
       sendState: "waiting-idle",
       text: "/reset",
     });
@@ -1406,9 +1337,6 @@ describe("handleSendChat", () => {
       expected: "/reset soft please reload system prompt",
     },
   ])("preserves $input args and skips confirmation dialog", async ({ input, expected }) => {
-    const confirm = vi.fn(() => false);
-    vi.stubGlobal("confirm", confirm);
-
     const host = makeHost({
       requestHandlers: {
         "chat.send": { status: "started" },
@@ -1419,7 +1347,6 @@ describe("handleSendChat", () => {
 
     await handleSendChat(host);
 
-    expect(confirm).not.toHaveBeenCalled();
     const payload = findRequestPayload(
       host.request as unknown as MockCallSource,
       "chat.send",
@@ -1428,31 +1355,6 @@ describe("handleSendChat", () => {
     expect(payload.sessionKey).toBe("agent:main");
     expect(payload.message).toBe(expected);
     expect(host.chatMessage).toBe("");
-  });
-
-  it.each([
-    "/reset softish please archive",
-    "/reset\tsoftish please archive",
-    "/reset\nsoftish please archive",
-    "/reset: softish please archive",
-  ])("keeps %s on the hard-reset confirmation path", async (message) => {
-    const confirm = vi.fn(() => false);
-    vi.stubGlobal("confirm", confirm);
-
-    const host = makeHost({
-      requestHandlers: {},
-      chatMessage: "keep this draft",
-      sessionKey: "agent:main",
-    });
-
-    await handleSendChat(host, message, {
-      confirmReset: true,
-      restoreDraft: true,
-    });
-
-    expect(confirm).toHaveBeenCalledTimes(1);
-    expect(host.request).not.toHaveBeenCalled();
-    expect(host.chatMessage).toBe("keep this draft");
   });
 
   it("does not seed refreshSessionsAfterChat for a terminal timeout ack on a refreshing send", async () => {
@@ -1550,6 +1452,60 @@ describe("handleSendChat", () => {
     expect(host.lastError).toBe("Chat failed before the run started; try again.");
     expect(host.chatRunId).toBeNull();
   });
+
+  it.each(["error", "timeout"] as const)(
+    "removes only a reducer-owned optimistic turn after a terminal %s ACK",
+    async (status) => {
+      const persistedPeer = {
+        role: "user",
+        content: [{ type: "text", text: "same visible message" }],
+        __openclaw: { id: "peer-user", seq: 1, idempotencyKey: "peer-run:user" },
+      };
+      let rejectedRunId = "";
+      const host = makeHost({
+        requestHandlers: {
+          "chat.send": (params: unknown) => {
+            const payload = requireRecord(params, "terminal chat send payload");
+            rejectedRunId = String(payload.idempotencyKey);
+            const scope = { sessionKey: host.sessionKey };
+            const projection = reduceSessionProjection(
+              getChatSessionProjection(host, host.chatMessages, scope),
+              {
+                type: "sendPending",
+                runId: rejectedRunId,
+                message: {
+                  role: "user",
+                  content: [{ type: "text", text: "same visible message" }],
+                  __openclaw: { idempotencyKey: `${rejectedRunId}:user` },
+                },
+                scope,
+              },
+            );
+            setChatSessionProjection(host, projection);
+            host.chatMessages = [...projection.messages];
+            return { runId: rejectedRunId, status };
+          },
+        },
+        chatMessage: "same visible message",
+        chatMessages: [persistedPeer],
+        sessionKey: "agent:main",
+      });
+
+      await handleSendChat(host);
+
+      expect(host.chatMessages).toStrictEqual([persistedPeer]);
+      expect(host.chatMessage).toBe("same visible message");
+      expect(host.chatQueue).toHaveLength(1);
+      expect(host.chatQueue[0]).toMatchObject({
+        text: "same visible message",
+        sendRunId: rejectedRunId,
+        sendState: "failed",
+      });
+      expect(
+        getChatSessionProjection(host, host.chatMessages, { sessionKey: host.sessionKey }).entries,
+      ).not.toContainEqual(expect.objectContaining({ pendingRunId: rejectedRunId }));
+    },
+  );
 
   it("records visible send timing phases for a normal chat send", async () => {
     const host = makeHost({
@@ -1738,7 +1694,7 @@ describe("handleSendChat", () => {
     expect(host.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(
       1,
     );
-    expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toStrictEqual([]);
     expect(host.chatQueue[0]).toMatchObject({
       sendState: "waiting-model",
       text: "use the new reasoning and speed",
@@ -1764,6 +1720,219 @@ describe("handleSendChat", () => {
       message: "use the new reasoning and speed",
       sessionKey: "agent:main",
     });
+  });
+
+  it("rechecks a picker update started as the captured update completes", async () => {
+    const firstUpdate = createDeferred<unknown>();
+    const secondUpdate = createDeferred<unknown>();
+    const storage = createStorageMock();
+    const write = storage.setItem.bind(storage);
+    const queuedText = "do not use a superseded picker selection";
+    let queuedWrites = 0;
+    vi.spyOn(storage, "setItem").mockImplementation((key, value) => {
+      if (value.includes(queuedText) && ++queuedWrites > 1) {
+        throw new DOMException("quota exceeded", "QuotaExceededError");
+      }
+      write(key, value);
+    });
+    vi.stubGlobal("sessionStorage", storage);
+    let patchCount = 0;
+    const host = makeHost({
+      requestHandlers: {
+        "sessions.patch": () => (++patchCount === 1 ? firstUpdate.promise : secondUpdate.promise),
+        "chat.send": { status: "started" },
+      },
+      chatMessage: queuedText,
+    });
+
+    const firstPatch = patchChatSessionSettings(host, "agent:main", { model: "first" });
+    const secondPatch = firstPatch.then(() =>
+      patchChatSessionSettings(host, "agent:main", { model: "second" }),
+    );
+    const send = handleSendChat(host);
+    await waitForFast(() => expect(host.chatQueue[0]?.sendState).toBe("waiting-model"));
+
+    firstUpdate.resolve({});
+    await waitForFast(() => expect(patchCount).toBe(2));
+    expect(await raceWithMacrotask(send)).toBe("pending");
+    expect(queuedWrites).toBe(1);
+    expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+
+    secondUpdate.resolve(null);
+    await Promise.all([firstPatch, secondPatch, send]);
+
+    expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+    expect(host.chatMessage).toBe(queuedText);
+    expect(host.chatQueue).toStrictEqual([]);
+  });
+
+  it("keeps waiting when a late picker barrier cannot be persisted", async () => {
+    const queuedText = "do not bypass the late picker";
+    const history = createDeferred<unknown>();
+    const settingsUpdate = createDeferred<unknown>();
+    const storage = createStorageMock();
+    const write = storage.setItem.bind(storage);
+    let rejectedBarrier = false;
+    vi.spyOn(storage, "setItem").mockImplementation((key, value) => {
+      if (
+        !rejectedBarrier &&
+        value.includes(`"text":"${queuedText}"`) &&
+        value.includes('"sendState":"failed"')
+      ) {
+        rejectedBarrier = true;
+        throw new DOMException("quota exceeded", "QuotaExceededError");
+      }
+      write(key, value);
+    });
+    vi.stubGlobal("sessionStorage", storage);
+    const host = makeHost({
+      requestHandlers: {
+        "chat.history": () => history.promise,
+        "chat.send": { status: "started" },
+        "sessions.patch": () => settingsUpdate.promise,
+      },
+      chatMessage: queuedText,
+      chatQueue: [
+        {
+          id: "older-picker-barrier",
+          text: "already delivered",
+          createdAt: 1,
+          sendAttempts: 1,
+          sendRunId: "older-picker-run",
+          sendState: "waiting-reconnect",
+          sessionKey: "agent:main",
+        },
+      ],
+    });
+    admitHostQueueItems(host);
+
+    const send = handleSendChat(host);
+    await waitForFast(() =>
+      expect(host.request).toHaveBeenCalledWith("chat.history", expect.anything()),
+    );
+    const patch = patchChatSessionSettings(host, "agent:main", { model: "next" });
+    history.resolve({
+      messages: [{ role: "user", __openclaw: { idempotencyKey: "older-picker-run:user" } }],
+      sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
+    });
+
+    await waitForFast(() => expect(rejectedBarrier).toBe(true));
+    expect(await raceWithMacrotask(send)).toBe("pending");
+    expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+
+    settingsUpdate.resolve(null);
+    await Promise.all([patch, send]);
+    await retryReconnectableQueuedChatSends(host);
+
+    expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+    expect(host.chatMessage).toBe(queuedText);
+    expect(host.chatQueue).toStrictEqual([]);
+  });
+
+  it("does not gate a queued local command on an unrelated picker update", async () => {
+    const settingsUpdate = createDeferred<boolean>();
+    executeSlashCommandMock.mockResolvedValue({ content: "Compaction complete." });
+    const host = makeHost({
+      requestHandlers: {},
+      chatMessage: "/compact",
+      pendingSettingsPatches: { "agent:main": settingsUpdate.promise },
+    });
+
+    await handleSendChat(host);
+
+    expect(executeSlashCommandMock).toHaveBeenCalledOnce();
+    expect(host.chatMessage).toBe("");
+    expect(host.chatQueue).toStrictEqual([]);
+    settingsUpdate.resolve(false);
+  });
+
+  it("wakes a picker-delayed durable send after reconnect already tried its drain", async () => {
+    const settingsUpdate = createDeferred<boolean>();
+    const host = makeHost({
+      requestHandlers: {
+        "chat.send": { status: "started" },
+      },
+      chatMessage: "send after picker and reconnect",
+      client: null,
+      connected: false,
+      pendingSettingsPatches: { "agent:main": settingsUpdate.promise },
+    });
+
+    const send = handleSendChat(host);
+    await waitForFast(() => expect(host.chatQueue[0]?.sendState).toBe("waiting-model"));
+
+    host.client = clientWithRequest(host.request);
+    host.connected = true;
+    host.connectionEpoch = (host.connectionEpoch ?? 0) + 1;
+    await retryReconnectableQueuedChatSends(host);
+    expect(host.request).not.toHaveBeenCalled();
+
+    settingsUpdate.resolve(true);
+    await send;
+
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+    expect(host.chatQueue[0]).toMatchObject({
+      sendState: "sending",
+      text: "send after picker and reconnect",
+    });
+  });
+
+  it("settles a picker-delayed send before an older FIFO head blocks transport", async () => {
+    const settingsUpdate = createDeferred<boolean>();
+    const replyTarget = {
+      messageId: "picker-fifo-reply",
+      sourceMessageId: "picker-fifo-source",
+      text: "reply context",
+      senderLabel: "User",
+    };
+    const host = makeHost({
+      requestHandlers: {
+        "chat.history": {
+          messages: [],
+          sessionInfo: row("agent:main", { hasActiveRun: true, status: "running" }),
+        },
+      },
+      chatFollowUpMode: "queue",
+      chatMessage: "wait behind the active turn",
+      chatQueue: [
+        {
+          id: "older-fifo-head",
+          text: "older queued send",
+          agentId: "main",
+          createdAt: 1,
+          sendRunId: "older-run",
+          sendState: "waiting-idle",
+          sessionKey: "agent:main",
+        },
+      ],
+      chatReplyTarget: replyTarget,
+      chatRunId: "active-run",
+      pendingSettingsPatches: { "agent:main": settingsUpdate.promise },
+    });
+    admitHostQueueItems(host);
+    expect(
+      listStoredChatOutboxes(host).map((outbox) => outbox.queue.map((item) => item.id)),
+    ).toEqual([["older-fifo-head"]]);
+
+    const send = handleSendChat(host);
+    expect(await raceWithMacrotask(send)).toBe("pending");
+    expect(
+      listStoredChatOutboxes(host).map((outbox) => outbox.queue.map((item) => item.id)),
+    ).toEqual([["older-fifo-head", expect.any(String)]]);
+    expect(host.chatQueue[1]).toMatchObject({
+      sendState: "waiting-model",
+      text: "wait behind the active turn",
+    });
+
+    settingsUpdate.resolve(true);
+    await send;
+
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toStrictEqual([]);
+    expect(host.chatQueue[1]).toMatchObject({
+      sendState: "waiting-idle",
+      text: "wait behind the active turn",
+    });
+    expect(host.chatReplyTarget).toBeNull();
   });
 
   it("waits for a settings patch started in another split pane", async () => {
@@ -1962,16 +2131,15 @@ describe("handleSendChat", () => {
 
     const send = handleSendChat(host);
     expect(await raceWithMacrotask(send)).toBe("pending");
-    const queuedScopeKey = queueScopeKey(host, "global", "work");
-    host.chatQueueByScope = { [queuedScopeKey]: [...host.chatQueue] };
-    host.chatQueue = [];
+    writeChatQueueForScope(host, "global", host.chatQueue, "work");
     host.sessionKey = "agent:work:main";
+    syncVisibleChatQueueProjection(host);
 
     globalPatch.resolve(true);
     await send;
 
     expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
-    expect(host.chatQueueByScope?.[queuedScopeKey]?.[0]).toMatchObject({
+    expect(readChatQueueForScope(host, "global", "work")[0]).toMatchObject({
       sendState: "waiting-idle",
       text: "keep this on global",
     });
@@ -2264,10 +2432,16 @@ describe("handleSendChat", () => {
 
   it("keeps the draft when a pending model picker update fails", async () => {
     const switchUpdate = createDeferred<boolean>();
+    const replyTarget = {
+      messageId: "picker-reply-source",
+      text: "quoted picker context",
+      senderLabel: "User",
+    };
 
     const host = makeHost({
       requestHandlers: {},
       chatMessage: "do not send on rollback",
+      chatReplyTarget: replyTarget,
       pendingSettingsPatches: { "agent:main": switchUpdate.promise },
     });
 
@@ -2278,6 +2452,42 @@ describe("handleSendChat", () => {
 
     expect(host.request).not.toHaveBeenCalled();
     expect(host.chatMessage).toBe("do not send on rollback");
+    expect(host.chatReplyTarget).toEqual(replyTarget);
+    expect(host.applySettings).not.toHaveBeenCalled();
+  });
+
+  it("does not mix a failed model-wait draft with a newer attachment-only draft", async () => {
+    const switchUpdate = createDeferred<boolean>();
+    const newerAttachment = registerChatAttachmentPayload({
+      attachment: {
+        id: "newer-picker-attachment",
+        mimeType: "text/plain",
+      },
+      dataUrl: "data:text/plain;base64,bmV3ZXI=",
+      file: new File(["newer"], "newer.txt", { type: "text/plain" }),
+    });
+    const host = makeHost({
+      requestHandlers: {},
+      chatMessage: "keep this send separate",
+      pendingSettingsPatches: { "agent:main": switchUpdate.promise },
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+    host.chatAttachments = [newerAttachment];
+
+    switchUpdate.resolve(false);
+    await send;
+
+    expect(host.request).not.toHaveBeenCalled();
+    expect(host.chatMessage).toBe("");
+    expect(host.chatAttachments).toEqual([newerAttachment]);
+    expect(host.chatQueue[0]).toMatchObject({
+      sendError: "Chat settings update was interrupted. Review and retry when ready.",
+      sendState: "failed",
+      text: "keep this send separate",
+    });
+    expect(getChatAttachmentDataUrl(newerAttachment)).toBe("data:text/plain;base64,bmV3ZXI=");
   });
 
   it("preserves every send when a shared picker patch fails", async () => {
@@ -2393,10 +2603,9 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
     expect(host.chatQueue[0]?.text).toBe("send from session a");
 
-    const queuedScopeKey = queueScopeKey(host, "agent:main");
-    host.chatQueueByScope = { [queuedScopeKey]: [...host.chatQueue] };
-    host.chatQueue = [];
+    writeChatQueueForScope(host, "agent:main", host.chatQueue);
     host.sessionKey = "agent:other";
+    syncVisibleChatQueueProjection(host);
     host.chatMessage = "session b draft";
     switchUpdate.resolve(true);
     await send;
@@ -2404,7 +2613,7 @@ describe("handleSendChat", () => {
     expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
     expect(host.chatMessage).toBe("session b draft");
     expect(host.chatQueue).toStrictEqual([]);
-    expect(host.chatQueueByScope?.[queuedScopeKey]?.[0]).toMatchObject({
+    expect(readChatQueueForScope(host, "agent:main")[0]).toMatchObject({
       sendState: "waiting-idle",
       text: "send from session a",
     });
@@ -2431,10 +2640,9 @@ describe("handleSendChat", () => {
 
     const send = handleSendChat(host);
     await Promise.resolve();
-    const queuedScopeKey = queueScopeKey(host, "agent:main");
-    host.chatQueueByScope = { [queuedScopeKey]: [...host.chatQueue] };
-    host.chatQueue = [];
+    writeChatQueueForScope(host, "agent:main", host.chatQueue);
     host.sessionKey = "agent:other";
+    syncVisibleChatQueueProjection(host);
     host.chatMessage = "session b draft";
 
     // Model the only settings event arriving before its follow-up refresh lets
@@ -2453,7 +2661,7 @@ describe("handleSendChat", () => {
     });
     expect(host.chatMessage).toBe("session b draft");
     expect(host.chatQueue).toStrictEqual([]);
-    expect(host.chatQueueByScope?.[queuedScopeKey]).toBeUndefined();
+    expect(readChatQueueForScope(host, "agent:main")).toStrictEqual([]);
     expect(listStoredChatOutboxes(host)).toStrictEqual([]);
   });
 
@@ -2469,10 +2677,9 @@ describe("handleSendChat", () => {
 
     const send = handleSendChat(host);
     await Promise.resolve();
-    const queuedScopeKey = queueScopeKey(host, "agent:main");
-    host.chatQueueByScope = { [queuedScopeKey]: [...host.chatQueue] };
-    host.chatQueue = [];
+    writeChatQueueForScope(host, "agent:main", host.chatQueue);
     host.sessionKey = "agent:other";
+    syncVisibleChatQueueProjection(host);
     host.chatMessage = "";
 
     switchUpdate.resolve(false);
@@ -2481,7 +2688,7 @@ describe("handleSendChat", () => {
     expect(host.request).not.toHaveBeenCalled();
     expect(host.chatMessage).toBe("");
     expect(host.chatQueue).toStrictEqual([]);
-    expect(host.chatQueueByScope?.[queuedScopeKey]?.[0]).toMatchObject({
+    expect(readChatQueueForScope(host, "agent:main")[0]).toMatchObject({
       sendError: "Chat settings update was interrupted. Review and retry when ready.",
       sendState: "failed",
       text: "send from session a",
@@ -2635,10 +2842,7 @@ describe("handleSendChat", () => {
 
     await retryQueuedChatMessage(host, original.id);
 
-    syncChatQueueFromStoredOutbox(host, {
-      sessionKey: original.sessionKey,
-      queue: [],
-    });
+    syncVisibleChatQueueProjection(host);
 
     expect(host.request).not.toHaveBeenCalled();
     expect(host.chatQueue).toStrictEqual([original]);
@@ -2783,20 +2987,16 @@ describe("handleSendChat", () => {
       pendingSettingsPatches: { "agent:other": settingsPatch.promise },
       sessionKey: "agent:main",
     });
-    const replayScopeKey = queueScopeKey(host, "agent:other");
-    host.chatQueueByScope = {
-      [replayScopeKey]: [
-        {
-          id: "settings-gated-replay",
-          text: "replay after settings",
-          createdAt: 1,
-          sendRunId: "settings-gated-run",
-          sendState: "waiting-reconnect",
-          sessionKey: "agent:other",
-        },
-      ],
+    const replayItem = {
+      id: "settings-gated-replay",
+      text: "replay after settings",
+      createdAt: 1,
+      sendRunId: "settings-gated-run",
+      sendState: "waiting-reconnect" as const,
+      sessionKey: "agent:other",
     };
-    admitHostQueueItems(host);
+    writeChatQueueForScope(host, replayItem.sessionKey, [replayItem]);
+    expect(admitQueuedMessageForSession(host, replayItem.sessionKey, replayItem)).toBe(true);
 
     const replay = retryReconnectableQueuedChatSends(host);
     expect(await raceWithMacrotask(replay)).toBe("pending");
@@ -2919,29 +3119,18 @@ describe("handleSendChat", () => {
     ]);
   });
 
-  it("sends /btw immediately while a main run is active without queueing it", async () => {
+  it("routes /btw to the session companion while a main run is active", async () => {
+    const openSessionCompanion = vi.fn();
     const host = makeHost({
-      requestHandlers: {
-        "chat.send": {},
-      },
       chatRunId: "run-main",
       chatStream: "Working...",
       chatMessage: "/btw what changed?",
+      openSessionCompanion,
     });
 
     await handleSendChat(host);
 
-    const payload = findRequestPayload(
-      host.request as unknown as MockCallSource,
-      "chat.send",
-      "chat send payload",
-    );
-    expect(payload.sessionKey).toBe("agent:main");
-    expect(payload.message).toBe("/btw what changed?");
-    expect(payload.deliver).toBe(false);
-    const idempotencyKey = payload.idempotencyKey;
-    expect(typeof idempotencyKey).toBe("string");
-    expect(uuidPattern.test(idempotencyKey as string)).toBe(true);
+    expect(openSessionCompanion).toHaveBeenCalledWith("what changed?");
     expect(host.chatQueue).toStrictEqual([]);
     expect(host.chatRunId).toBe("run-main");
     expect(host.chatStream).toBe("Working...");
@@ -2981,46 +3170,323 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("/approve approval-123 allow-once");
   });
 
-  it("sends /side through the detached BTW path", async () => {
+  it("keeps a delayed approval failure recoverable in its submitted session", async () => {
+    const ack = createDeferred<{ runId: string; status: "error" }>();
+    const attachment = registerChatAttachmentPayload({
+      attachment: {
+        id: "approval-session-attachment",
+        mimeType: "text/plain",
+        fileName: "approval.txt",
+      },
+      dataUrl: "data:text/plain;base64,YXBwcm92YWw=",
+      file: new File(["approval"], "approval.txt", { type: "text/plain" }),
+    });
     const host = makeHost({
       requestHandlers: {
-        "chat.send": {},
+        "chat.send": () => ack.promise,
       },
+      chatAttachments: [attachment],
+      chatMessage: "/approve approval-123 allow-once",
+      chatRunId: "run-main",
+      chatStream: "Waiting for approval...",
+      sessionKey: "agent:main:first",
+    });
+
+    const send = handleSendChat(host);
+    await waitForFast(() => expect(host.request).toHaveBeenCalledOnce());
+    host.sessionKey = "agent:main:second";
+    host.chatMessage = "second session draft";
+    host.lastError = "second session error";
+    host.chatError = "second session error";
+
+    ack.resolve({ runId: "approval-command", status: "error" });
+    await send;
+
+    expect(host.chatMessage).toBe("second session draft");
+    expect(host.lastError).toBe("second session error");
+    expect(host.chatError).toBe("second session error");
+
+    const fallback = Object.values(host.chatComposerFallbackByScope)[0];
+    expect(fallback?.message).toBe("/approve approval-123 allow-once");
+    expect(fallback?.attachments).toEqual([expect.objectContaining({ id: attachment.id })]);
+    expect(getChatAttachmentDataUrl(fallback!.attachments[0]!)).toBe(
+      "data:text/plain;base64,YXBwcm92YWw=",
+    );
+  });
+
+  it("fences a detached transport rejection when the composer and session changed", async () => {
+    const settingsPatch = createDeferred<boolean>();
+    const request = createDeferred<never>();
+    const host = makeHost({
+      requestHandlers: {
+        "chat.send": () => request.promise,
+      },
+      chatMessage: "/approve approval-123 allow-once",
+      chatRunId: "run-main",
+      chatStream: "Waiting for approval...",
+      pendingSettingsPatches: { "agent:main:first": settingsPatch.promise },
+      sessionKey: "agent:main:first",
+    });
+
+    const send = handleSendChat(host);
+    host.chatMessage = "newer first-session draft";
+    settingsPatch.resolve(true);
+    await waitForFast(() => expect(host.request).toHaveBeenCalledOnce());
+    host.sessionKey = "agent:main:second";
+    host.chatMessage = "second session draft";
+    host.lastError = "second session error";
+    host.chatError = "second session error";
+
+    request.reject(new Error("transport failed"));
+    await send;
+
+    expect(host.chatMessage).toBe("second session draft");
+    expect(host.lastError).toBe("second session error");
+    expect(host.chatError).toBe("second session error");
+    expect(host.chatComposerFallbackByScope).toEqual({});
+  });
+
+  it("clears detached command recovery after offscreen success", async () => {
+    const ack = createDeferred<{ runId: string; status: "started" }>();
+    const attachment = registerChatAttachmentPayload({
+      attachment: {
+        id: "successful-detached-attachment",
+        mimeType: "text/plain",
+      },
+      dataUrl: "data:text/plain;base64,c3VjY2Vzcw==",
+      file: new File(["success"], "success.txt", { type: "text/plain" }),
+    });
+    const host = makeHost({
+      requestHandlers: {
+        "chat.send": () => ack.promise,
+      },
+      chatAttachments: [attachment],
+      chatMessage: "/approve approval-123 allow-once",
+      chatRunId: "run-main",
+      chatStream: "Waiting for approval...",
+      sessionKey: "agent:main:first",
+    });
+    const scopeKey = storedChatOutboxScopeKey(resolveStoredChatOutboxScope(host, host.sessionKey));
+    host.chatComposerFallbackByScope = {
+      [scopeKey]: {
+        message: host.chatMessage,
+        attachments: [attachment],
+        storageFailed: true,
+        sequence: 42,
+      },
+    };
+
+    const send = handleSendChat(host);
+    await waitForFast(() => expect(host.request).toHaveBeenCalledOnce());
+    host.sessionKey = "agent:main:second";
+    host.chatMessage = "second session draft";
+
+    ack.resolve({ runId: "approval-command", status: "started" });
+    await send;
+
+    expect(host.chatMessage).toBe("second session draft");
+    expect(host.chatComposerFallbackByScope).toEqual({});
+    expect(getChatAttachmentDataUrl(attachment)).toBeNull();
+  });
+
+  it("keeps a delayed local-command failure recoverable in its submitted session", async () => {
+    const command = createDeferred<Awaited<ReturnType<ExecuteSlashCommand>>>();
+    executeSlashCommandMock.mockImplementationOnce(() => command.promise);
+    const attachment = registerChatAttachmentPayload({
+      attachment: {
+        id: "redirect-session-attachment",
+        mimeType: "text/plain",
+        fileName: "redirect.txt",
+      },
+      dataUrl: "data:text/plain;base64,cmVkaXJlY3Q=",
+      file: new File(["redirect"], "redirect.txt", { type: "text/plain" }),
+    });
+    const host = makeHost({
+      chatAttachments: [attachment],
+      chatMessage: "/redirect start over",
+      client: clientWithRequest(vi.fn()),
+      connectionEpoch: 1,
+      sessionKey: "agent:main:first",
+    });
+
+    const send = handleSendChat(host);
+    await waitForFast(() => expect(executeSlashCommandMock).toHaveBeenCalledOnce());
+    host.sessionKey = "agent:main:second";
+    host.chatMessage = "second session draft";
+    host.lastError = "second session error";
+    host.chatError = "second session error";
+
+    command.resolve({ content: "Redirect failed.", failed: true });
+    await send;
+
+    expect(host.chatMessage).toBe("second session draft");
+    expect(host.lastError).toBe("second session error");
+    expect(host.chatError).toBe("second session error");
+
+    const fallback = Object.values(host.chatComposerFallbackByScope)[0];
+    expect(fallback?.message).toBe("/redirect start over");
+    expect(fallback?.attachments).toEqual([expect.objectContaining({ id: attachment.id })]);
+    expect(getChatAttachmentDataUrl(fallback!.attachments[0]!)).toBe(
+      "data:text/plain;base64,cmVkaXJlY3Q=",
+    );
+  });
+
+  it("does not recover a delayed local command through a replaced connection", async () => {
+    const command = createDeferred<Awaited<ReturnType<ExecuteSlashCommand>>>();
+    executeSlashCommandMock.mockImplementationOnce(() => command.promise);
+    const attachment = registerChatAttachmentPayload({
+      attachment: {
+        id: "stale-connection-attachment",
+        mimeType: "text/plain",
+      },
+      dataUrl: "data:text/plain;base64,c3RhbGU=",
+      file: new File(["stale"], "stale.txt", { type: "text/plain" }),
+    });
+    const originalClient = clientWithRequest(vi.fn());
+    const host = makeHost({
+      chatAttachments: [attachment],
+      chatMessage: "/redirect start over",
+      client: originalClient,
+      connectionEpoch: 1,
+      sessionKey: "agent:main:first",
+    });
+
+    const send = handleSendChat(host);
+    await waitForFast(() => expect(executeSlashCommandMock).toHaveBeenCalledOnce());
+    host.client = clientWithRequest(vi.fn());
+    host.connectionEpoch = 2;
+    host.chatMessage = "new connection draft";
+
+    command.resolve({ content: "Redirect failed.", failed: true });
+    await send;
+
+    expect(host.chatMessage).toBe("new connection draft");
+    expect(host.chatComposerFallbackByScope).toEqual({});
+    expect(getChatAttachmentDataUrl(attachment)).toBeNull();
+  });
+
+  it("does not overwrite newer same-session input after a delayed command failure", async () => {
+    const command = createDeferred<Awaited<ReturnType<ExecuteSlashCommand>>>();
+    executeSlashCommandMock.mockImplementationOnce(() => command.promise);
+    const host = makeHost({
+      chatMessage: "/redirect start over",
+      client: clientWithRequest(vi.fn()),
+      connectionEpoch: 1,
+      sessionKey: "agent:main:first",
+    });
+
+    const send = handleSendChat(host);
+    await waitForFast(() => expect(executeSlashCommandMock).toHaveBeenCalledOnce());
+    host.chatMessage = "newer draft";
+
+    command.resolve({ content: "Redirect failed.", failed: true });
+    await send;
+
+    expect(host.chatMessage).toBe("newer draft");
+    expect(host.chatComposerFallbackByScope).toEqual({});
+  });
+
+  it("does not combine a failed command with a newer attachment-only draft", async () => {
+    const command = createDeferred<Awaited<ReturnType<ExecuteSlashCommand>>>();
+    executeSlashCommandMock.mockImplementationOnce(() => command.promise);
+    const submittedAttachment = registerChatAttachmentPayload({
+      attachment: {
+        id: "submitted-command-attachment",
+        mimeType: "text/plain",
+      },
+      dataUrl: "data:text/plain;base64,c3VibWl0dGVk",
+      file: new File(["submitted"], "submitted.txt", { type: "text/plain" }),
+    });
+    const newerAttachment = registerChatAttachmentPayload({
+      attachment: {
+        id: "newer-draft-attachment",
+        mimeType: "text/plain",
+      },
+      dataUrl: "data:text/plain;base64,bmV3ZXI=",
+      file: new File(["newer"], "newer.txt", { type: "text/plain" }),
+    });
+    const host = makeHost({
+      chatAttachments: [submittedAttachment],
+      chatMessage: "/redirect start over",
+      client: clientWithRequest(vi.fn()),
+      connectionEpoch: 1,
+      sessionKey: "agent:main:first",
+    });
+
+    const send = handleSendChat(host);
+    await waitForFast(() => expect(executeSlashCommandMock).toHaveBeenCalledOnce());
+    host.chatAttachments = [newerAttachment];
+
+    command.resolve({ content: "Redirect failed.", failed: true });
+    await send;
+
+    expect(host.chatMessage).toBe("");
+    expect(host.chatAttachments).toEqual([newerAttachment]);
+    expect(host.chatComposerFallbackByScope).toEqual({});
+    expect(getChatAttachmentDataUrl(submittedAttachment)).toBeNull();
+    expect(getChatAttachmentDataUrl(newerAttachment)).toBe("data:text/plain;base64,bmV3ZXI=");
+  });
+
+  it("clears the owned fallback after a successful local command retry", async () => {
+    executeSlashCommandMock.mockResolvedValueOnce({ content: "Redirected.", failed: false });
+    const attachment = registerChatAttachmentPayload({
+      attachment: {
+        id: "successful-retry-attachment",
+        mimeType: "text/plain",
+      },
+      dataUrl: "data:text/plain;base64,c3VjY2Vzcw==",
+      file: new File(["success"], "success.txt", { type: "text/plain" }),
+    });
+    const host = makeHost({
+      chatAttachments: [attachment],
+      chatMessage: "/redirect start over",
+      client: clientWithRequest(vi.fn()),
+      connectionEpoch: 1,
+      sessionKey: "agent:main:first",
+    });
+    const scopeKey = storedChatOutboxScopeKey(resolveStoredChatOutboxScope(host, host.sessionKey));
+    host.chatComposerFallbackByScope = {
+      [scopeKey]: {
+        message: host.chatMessage,
+        attachments: [attachment],
+        storageFailed: false,
+        sequence: 41,
+      },
+    };
+
+    await handleSendChat(host);
+
+    expect(host.chatMessage).toBe("");
+    expect(host.chatComposerFallbackByScope).toEqual({});
+    expect(getChatAttachmentDataUrl(attachment)).toBeNull();
+  });
+
+  it("routes /side through the same session companion path", async () => {
+    const openSessionCompanion = vi.fn();
+    const host = makeHost({
       chatRunId: "run-main",
       chatStream: "Working...",
       chatMessage: "/side what changed?",
+      openSessionCompanion,
     });
 
     await handleSendChat(host);
 
-    const payload = findRequestPayload(
-      host.request as unknown as MockCallSource,
-      "chat.send",
-      "chat send payload",
-    );
-    expect(payload.message).toBe("/side what changed?");
-    expect(payload.deliver).toBe(false);
+    expect(openSessionCompanion).toHaveBeenCalledWith("what changed?");
     expect(host.chatQueue).toStrictEqual([]);
     expect(host.chatRunId).toBe("run-main");
   });
 
-  it("sends /btw without adopting a main chat run when idle", async () => {
+  it("routes /btw without adopting a main chat run when idle", async () => {
+    const openSessionCompanion = vi.fn();
     const host = makeHost({
-      requestHandlers: {
-        "chat.send": {},
-      },
       chatMessage: "/btw summarize this",
+      openSessionCompanion,
     });
 
     await handleSendChat(host);
 
-    const payload = findRequestPayload(
-      host.request as unknown as MockCallSource,
-      "chat.send",
-      "chat send payload",
-    );
-    expect(payload.message).toBe("/btw summarize this");
-    expect(payload.deliver).toBe(false);
+    expect(openSessionCompanion).toHaveBeenCalledWith("summarize this");
     expect(host.chatRunId).toBeNull();
     expect(host.chatMessages).toStrictEqual([]);
     expect(host.chatMessage).toBe("");
@@ -3047,6 +3513,41 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
     expect(navigateChatInputHistory(host, "up")).toBe(true);
     expect(host.chatMessage).toBe("queued while busy");
+  });
+
+  it("fails visibly when a busy send cannot be parked after durable admission", async () => {
+    const storage = createStorageMock();
+    const setItem = storage.setItem.bind(storage);
+    let writes = 0;
+    vi.spyOn(storage, "setItem").mockImplementation((key, value) => {
+      writes += 1;
+      if (writes > 1) {
+        throw new DOMException("quota exceeded", "QuotaExceededError");
+      }
+      setItem(key, value);
+    });
+    vi.stubGlobal("sessionStorage", storage);
+    const replyTarget = {
+      messageId: "busy-storage-reply",
+      text: "keep this reply target",
+      senderLabel: "User",
+    };
+    const host = makeHost({
+      requestHandlers: {},
+      chatMessage: "queue behind the active run",
+      chatReplyTarget: replyTarget,
+      chatRunId: "run-1",
+      settings: { chatFollowUpMode: "queue" },
+    });
+
+    await handleSendChat(host);
+
+    expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(host.chatReplyTarget).toEqual(replyTarget);
+    expect(host.lastError).toBe(
+      "Could not store this message for reconnect. Free browser storage or reconnect before sending.",
+    );
+    expect(host.applySettings).not.toHaveBeenCalled();
   });
 
   it("auto-steers messages sent during an active run with the default steer setting", async () => {
@@ -3077,6 +3578,69 @@ describe("handleSendChat", () => {
     expect(host.chatRunId).toBe("run-1");
     await waitForFast(() => expect(host.chatQueue[0]?.kind).toBe("steered"));
     expect(host.chatQueue[0]?.pendingRunId).toBe("run-1");
+  });
+
+  it("steers an active-run send without waiting for older outbox reconciliation", async () => {
+    const olderHistory = createDeferred<unknown>();
+    let historyRequests = 0;
+    const replyTarget = {
+      messageId: "steer-behind-outbox-reply",
+      sourceMessageId: "steer-behind-outbox-source",
+      text: "reply context",
+      senderLabel: "User",
+    };
+    const host = makeHost({
+      requestHandlers: {
+        "chat.history": () => {
+          historyRequests += 1;
+          return historyRequests === 1
+            ? olderHistory.promise
+            : Promise.resolve({
+                messages: [],
+                sessionInfo: row("agent:main", { hasActiveRun: true, status: "running" }),
+              });
+        },
+        "chat.send": { status: "started", runId: "steer-with-backlog-run" },
+      },
+      chatMessage: "steer without waiting for history",
+      chatQueue: [
+        {
+          id: "older-reconciliation-head",
+          text: "already delivered older turn",
+          createdAt: 1,
+          sendAttempts: 1,
+          sendRunId: "older-reconciliation-run",
+          sendState: "waiting-reconnect",
+          sessionKey: "agent:main",
+        },
+      ],
+      chatReplyTarget: replyTarget,
+      chatRunId: "active-run",
+      chatStream: "Working...",
+      settings: { chatFollowUpMode: "steer" },
+    });
+    admitHostQueueItems(host);
+
+    const send = handleSendChat(host);
+    await waitForFast(() => expect(historyRequests).toBe(1));
+    await waitForFast(() =>
+      expect(host.request).toHaveBeenCalledWith(
+        "chat.send",
+        expect.objectContaining({
+          message: "steer without waiting for history",
+          queueMode: "steer",
+        }),
+      ),
+    );
+    await send;
+
+    expect(host.chatReplyTarget).toBeNull();
+    expect(host.chatRunId).toBe("active-run");
+    olderHistory.resolve({
+      messages: [{ role: "user", __openclaw: { idempotencyKey: "older-reconciliation-run:user" } }],
+      sessionInfo: row("agent:main", { hasActiveRun: true, status: "running" }),
+    });
+    await waitForFast(() => expect(historyRequests).toBe(2));
   });
 
   it("leaves active-run resolution to the Gateway while its effective mode is loading", async () => {
@@ -3355,10 +3919,8 @@ describe("handleSendChat", () => {
       },
       sessionKey: "agent:main:visible",
     });
-    host.chatQueueByScope = {
-      [queueScopeKey(host, slowItem.sessionKey)]: [slowItem],
-      [queueScopeKey(host, readyItem.sessionKey)]: [readyItem],
-    };
+    writeChatQueueForScope(host, slowItem.sessionKey, [slowItem]);
+    writeChatQueueForScope(host, readyItem.sessionKey, [readyItem]);
     expect(admitQueuedMessageForSession(host, slowItem.sessionKey, slowItem)).toBe(true);
     expect(admitQueuedMessageForSession(host, readyItem.sessionKey, readyItem)).toBe(true);
 
@@ -3415,10 +3977,7 @@ describe("handleSendChat", () => {
       createdAt: 2,
       sessionKey: inactiveSessionKey,
     };
-    host.chatQueueByScope = {
-      ...host.chatQueueByScope,
-      [queueScopeKey(host, inactiveSessionKey)]: [inactiveItem],
-    };
+    writeChatQueueForScope(host, inactiveSessionKey, [inactiveItem]);
     expect(admitQueuedMessageForSession(host, inactiveSessionKey, inactiveItem)).toBe(true);
     const resume = retryReconnectableQueuedChatSends(host);
 
@@ -3467,9 +4026,7 @@ describe("handleSendChat", () => {
       agentId: "work",
     };
     host.chatQueue = [mainItem];
-    host.chatQueueByScope = {
-      [queueScopeKey(host, "global", "work")]: [workItem],
-    };
+    writeChatQueueForScope(host, "global", [workItem], "work");
     expect(admitQueuedMessageForSession(host, "global", mainItem)).toBe(true);
     expect(admitQueuedMessageForSession(host, "global", workItem)).toBe(true);
 
@@ -3486,14 +4043,7 @@ describe("handleSendChat", () => {
   });
 
   it("reconciles a restored undefined-state command before destructive execution", async () => {
-    const item = {
-      id: "restored-undefined-clear",
-      text: "/clear",
-      createdAt: 1,
-      localCommandArgs: "",
-      localCommandName: "clear",
-      sessionKey: "agent:main",
-    };
+    const item = createQueuedLocalCommand("restored-undefined-clear", "/clear");
     const host = makeHost({
       requestHandlers: {
         "chat.history": {
@@ -3555,14 +4105,7 @@ describe("handleSendChat", () => {
       "chat.history": () => idleChatHistory(),
     });
     const client = clientWithRequest(request);
-    const item = {
-      id: "shared-local-command",
-      text: "/think high",
-      createdAt: 1,
-      localCommandArgs: "high",
-      localCommandName: "think",
-      sessionKey: "agent:main",
-    };
+    const item = createQueuedLocalCommand("shared-local-command", "/think high");
     const firstHost = makeHost({ client, chatQueue: [item] });
     const secondHost = makeHost({ client, chatQueue: [{ ...item }] });
     expect(admitQueuedMessageForSession(firstHost, firstHost.sessionKey, item)).toBe(true);
@@ -3587,22 +4130,13 @@ describe("handleSendChat", () => {
     const client = clientWithRequest(request);
     const sessionKey = "agent:main:visible";
     const items = [
-      {
-        id: "first-shared-local-command",
-        text: "/think high",
-        createdAt: 1,
-        localCommandArgs: "high",
-        localCommandName: "think",
+      createQueuedLocalCommand("first-shared-local-command", "/think high", {
         sessionKey,
-      },
-      {
-        id: "second-shared-local-command",
-        text: "/think low",
+      }),
+      createQueuedLocalCommand("second-shared-local-command", "/think low", {
         createdAt: 2,
-        localCommandArgs: "low",
-        localCommandName: "think",
         sessionKey,
-      },
+      }),
     ];
     const visibleHost = makeHost({ client, chatQueue: items, sessionKey });
     const inactiveHost = makeHost({ client, chatQueue: [], sessionKey: "agent:main:inactive" });
@@ -3624,14 +4158,7 @@ describe("handleSendChat", () => {
     const request = makeRequestMock({
       "chat.history": () => idleChatHistory(),
     });
-    const item = {
-      id: "slow-local-command",
-      text: "/compact",
-      createdAt: 1,
-      localCommandArgs: "",
-      localCommandName: "compact",
-      sessionKey: "agent:main",
-    };
+    const item = createQueuedLocalCommand("slow-local-command", "/compact");
     const client = clientWithRequest(request);
     const host = makeHost({
       client,
@@ -3682,14 +4209,7 @@ describe("handleSendChat", () => {
   it("returns a confirmed clear to waiting-idle when a run starts during the dialog", async () => {
     const confirmation = createDeferred<boolean>();
 
-    const item = {
-      id: "clear-confirmation-race",
-      text: "/clear",
-      createdAt: 1,
-      localCommandArgs: "",
-      localCommandName: "clear",
-      sessionKey: "agent:main",
-    };
+    const item = createQueuedLocalCommand("clear-confirmation-race", "/clear");
     const host = makeHost({
       requestHandlers: {
         "chat.history": () => idleChatHistory(),
@@ -3711,14 +4231,7 @@ describe("handleSendChat", () => {
   });
 
   it("cancels a queued reset when dashboard reset confirmation is rejected", async () => {
-    const item = {
-      id: "queued-reset-cancelled",
-      text: "/reset",
-      createdAt: 1,
-      localCommandArgs: "",
-      localCommandName: "reset",
-      sessionKey: "agent:main",
-    };
+    const item = createQueuedLocalCommand("queued-reset-cancelled", "/reset");
     const confirmConversationReset = vi.fn(async () => false);
     const host = makeHost({
       requestHandlers: {
@@ -3740,14 +4253,7 @@ describe("handleSendChat", () => {
     const confirmation = createDeferred<boolean>();
     const sendPayloads: Array<Record<string, unknown>> = [];
 
-    const item = {
-      id: "queued-reset-approved-before-run",
-      text: "/reset",
-      createdAt: 1,
-      localCommandArgs: "",
-      localCommandName: "reset",
-      sessionKey: "agent:main",
-    };
+    const item = createQueuedLocalCommand("queued-reset-approved-before-run", "/reset");
     const confirmConversationReset = vi.fn(async () => await confirmation.promise);
     const host = makeHost({
       requestHandlers: {
@@ -3790,14 +4296,9 @@ describe("handleSendChat", () => {
   it("keeps a queued reset when its session changes during confirmation", async () => {
     const confirmation = createDeferred<boolean>();
 
-    const item = {
-      id: "queued-reset-route-switch",
-      text: "/reset",
-      createdAt: 1,
-      localCommandArgs: "",
-      localCommandName: "reset",
+    const item = createQueuedLocalCommand("queued-reset-route-switch", "/reset", {
       sessionKey: "agent:main:first",
-    };
+    });
     const confirmConversationReset = vi.fn(async () => await confirmation.promise);
     const host = makeHost({
       requestHandlers: {
@@ -3828,14 +4329,9 @@ describe("handleSendChat", () => {
     const command = createDeferred<Awaited<ReturnType<ExecuteSlashCommand>>>();
     executeSlashCommandMock.mockImplementationOnce(() => command.promise);
 
-    const item = {
-      id: "route-switched-local-command",
-      text: "/model gpt-5-mini",
-      createdAt: 1,
-      localCommandArgs: "gpt-5-mini",
-      localCommandName: "model",
+    const item = createQueuedLocalCommand("route-switched-local-command", "/model gpt-5-mini", {
       sessionKey: "agent:main:first",
-    };
+    });
     const refreshCurrentSessionTools = vi.fn(async () => undefined);
     const refreshCurrentChat = vi.fn(async () => undefined);
     const host = makeHost({
@@ -3887,14 +4383,9 @@ describe("handleSendChat", () => {
         "chat.history": () => idleChatHistory("agent:main:first"),
       }),
     );
-    const item = {
-      id: "reconnected-local-command",
-      text: "/model unavailable",
-      createdAt: 1,
-      localCommandArgs: "unavailable",
-      localCommandName: "model",
+    const item = createQueuedLocalCommand("reconnected-local-command", "/model unavailable", {
       sessionKey: "agent:main:first",
-    };
+    });
     const host = makeHost({
       client: firstClient,
       connectionEpoch: 1,
@@ -4136,22 +4627,8 @@ describe("handleSendChat", () => {
     const sendPayloads: Array<Record<string, unknown>> = [];
 
     const items = [
-      {
-        id: "queued-think-before-reset",
-        text: "/think high",
-        createdAt: 1,
-        localCommandArgs: "high",
-        localCommandName: "think",
-        sessionKey: "agent:main",
-      },
-      {
-        id: "queued-reset-after-think",
-        text: "/reset",
-        createdAt: 2,
-        localCommandArgs: "",
-        localCommandName: "reset",
-        sessionKey: "agent:main",
-      },
+      createQueuedLocalCommand("queued-think-before-reset", "/think high"),
+      createQueuedLocalCommand("queued-reset-after-think", "/reset", { createdAt: 2 }),
       {
         id: "queued-prompt-after-reset",
         text: "run only after reset",
@@ -4226,14 +4703,7 @@ describe("handleSendChat", () => {
     const write = storage.setItem.bind(storage);
     executeSlashCommandMock.mockResolvedValue({ content: "Thinking level set." });
 
-    const item = {
-      id: "local-command-claim-failure",
-      text: "/think high",
-      createdAt: 1,
-      localCommandArgs: "high",
-      localCommandName: "think",
-      sessionKey: "agent:main",
-    };
+    const item = createQueuedLocalCommand("local-command-claim-failure", "/think high");
     const host = makeHost({
       requestHandlers: {
         "chat.history": () => idleChatHistory(),
@@ -4272,14 +4742,7 @@ describe("handleSendChat", () => {
         return { content: "Thinking level set." };
       });
 
-    const item = {
-      id: "retry-local-command-after-disconnect",
-      text: "/think high",
-      createdAt: 1,
-      localCommandArgs: "high",
-      localCommandName: "think",
-      sessionKey: "agent:main",
-    };
+    const item = createQueuedLocalCommand("retry-local-command-after-disconnect", "/think high");
     const following = {
       id: "prompt-after-retried-command",
       text: "use the new thinking level",
@@ -4326,14 +4789,7 @@ describe("handleSendChat", () => {
   it("retires a rejected clear, drops its optimistic history, and parks its successor", async () => {
     const sentMessages: string[] = [];
 
-    const clear = {
-      id: "uncertain-clear",
-      text: "/clear",
-      createdAt: 1,
-      localCommandArgs: "",
-      localCommandName: "clear",
-      sessionKey: "agent:main",
-    };
+    const clear = createQueuedLocalCommand("uncertain-clear", "/clear");
     const successor = {
       id: "prompt-after-uncertain-clear",
       text: "send only after review",
@@ -4415,14 +4871,7 @@ describe("handleSendChat", () => {
     let resetIssued = false;
     let failedBarrierWrites = 0;
 
-    const clear = {
-      id: "uncertain-clear-storage-barrier",
-      text: "/clear",
-      createdAt: 1,
-      localCommandArgs: "",
-      localCommandName: "clear",
-      sessionKey: "agent:main",
-    };
+    const clear = createQueuedLocalCommand("uncertain-clear-storage-barrier", "/clear");
     const successor = {
       id: "successor-storage-barrier",
       text: "must stay parked",
@@ -4508,19 +4957,18 @@ describe("handleSendChat", () => {
       sessionKey: queuedSessionKey,
     };
     const host = makeHost({ sessionKey: "agent:main:new-route" });
-    const queuedScopeKey = queueScopeKey(host, queuedSessionKey);
-    host.chatQueueByScope = { [queuedScopeKey]: [item] };
+    writeChatQueueForScope(host, queuedSessionKey, [item]);
     expect(admitQueuedMessageForSession(host, queuedSessionKey, item)).toBe(true);
 
     expect(
       removeVisibleOrScopedQueuedMessageWithoutReleasing(host, item.id, queuedSessionKey),
     ).toMatchObject({ id: item.id });
 
-    expect(host.chatQueueByScope?.[queuedScopeKey]).toBeUndefined();
+    expect(readChatQueueForScope(host, queuedSessionKey)).toStrictEqual([]);
     expect(listStoredChatOutboxes(host)).toStrictEqual([]);
   });
 
-  it("does not publish an outbox projection across gateways", () => {
+  it("does not project an outbox across gateways", () => {
     const source = makeHost({
       settings: { gatewayUrl: "ws://gateway-a.test/control" },
     });
@@ -4545,6 +4993,29 @@ describe("handleSendChat", () => {
     }
   });
 
+  it("projects direct canonical store mutations into an open pane", () => {
+    const source = makeHost();
+    const peer = makeHost();
+    const item = {
+      id: "direct-store-projection",
+      text: "refresh the already-open pane",
+      createdAt: 1,
+      sessionKey: source.sessionKey,
+    };
+    const stopPeer = subscribeChatOutboxProjection(peer);
+    try {
+      expect(admitStoredChatComposerQueueItem(source, source.sessionKey, item)).toBe(true);
+      expect(peer.chatQueue).toEqual([expect.objectContaining({ id: item.id })]);
+
+      expect(removeStoredChatComposerQueueItem(source, source.sessionKey, item.id, item)).toBe(
+        true,
+      );
+      expect(peer.chatQueue).toStrictEqual([]);
+    } finally {
+      stopPeer();
+    }
+  });
+
   it("clears an inactive pane cache when another pane removes its durable item", () => {
     const sessionKey = "agent:main:cached-session";
     const item = {
@@ -4555,8 +5026,7 @@ describe("handleSendChat", () => {
     };
     const source = makeHost({ chatQueue: [item], sessionKey });
     const cachedPane = makeHost({ sessionKey: "agent:main:other-session" });
-    const cachedScopeKey = queueScopeKey(cachedPane, sessionKey);
-    cachedPane.chatQueueByScope = { [cachedScopeKey]: [{ ...item }] };
+    writeChatQueueForScope(cachedPane, sessionKey, [{ ...item }]);
     const stopSource = subscribeChatOutboxProjection(source);
     const stopCachedPane = subscribeChatOutboxProjection(cachedPane);
     try {
@@ -4564,9 +5034,9 @@ describe("handleSendChat", () => {
 
       removeQueuedMessage(source, item.id);
 
-      expect(cachedPane.chatQueueByScope?.[cachedScopeKey]).toBeUndefined();
+      expect(readChatQueueForScope(cachedPane, sessionKey)).toStrictEqual([]);
       cachedPane.sessionKey = sessionKey;
-      cachedPane.chatQueue = cachedPane.chatQueueByScope?.[cachedScopeKey] ?? [];
+      syncVisibleChatQueueProjection(cachedPane);
       expect(cachedPane.chatQueue).toStrictEqual([]);
     } finally {
       stopCachedPane();
@@ -4637,6 +5107,30 @@ describe("handleSendChat", () => {
       expect.objectContaining({ sendAttempts: 1, sendState: "waiting-reconnect" }),
     ]);
     expect(host.chatMessages).toStrictEqual([]);
+  });
+
+  it("coalesces duplicate queued local commands while the first command is running", async () => {
+    const command = createDeferred<{ content: string }>();
+    executeSlashCommandMock.mockImplementation(() => command.promise);
+    const host = makeHost({
+      requestHandlers: {
+        "chat.history": () => idleChatHistory(),
+      },
+    });
+
+    const first = handleSendChat(host, "/compact");
+    await waitForFast(() => expect(executeSlashCommandMock).toHaveBeenCalledOnce());
+    const duplicate = handleSendChat(host, "/compact");
+
+    try {
+      expect(host.chatQueue.filter((item) => item.localCommandName === "compact")).toHaveLength(1);
+      expect(executeSlashCommandMock).toHaveBeenCalledOnce();
+    } finally {
+      command.resolve({ content: "Compaction complete." });
+      await Promise.all([first, duplicate]);
+    }
+
+    expect(executeSlashCommandMock).toHaveBeenCalledOnce();
   });
 
   it("keeps normal prompt text visible as pending until chat.send is acknowledged", async () => {
@@ -4924,10 +5418,9 @@ describe("handleSendChat", () => {
     const queuedRunId = host.chatQueue[0]?.sendRunId;
     expect(queuedRunId).toEqual(expect.any(String));
 
-    const submittedScopeKey = queueScopeKey(host, "agent:a");
-    host.chatQueueByScope = { [submittedScopeKey]: [...host.chatQueue] };
-    host.chatQueue = [];
+    writeChatQueueForScope(host, "agent:a", host.chatQueue);
     host.sessionKey = "agent:b";
+    syncVisibleChatQueueProjection(host);
     host.chatMessages = [];
     host.chatRunId = null;
     host.chatStream = null;
@@ -4940,7 +5433,7 @@ describe("handleSendChat", () => {
     expect(host.chatRunId).toBeNull();
     expect(host.chatStream).toBeNull();
     expect(host.chatQueue).toStrictEqual([]);
-    expect(host.chatQueueByScope?.[submittedScopeKey]).toEqual([
+    expect(readChatQueueForScope(host, "agent:a")).toEqual([
       expect.objectContaining({ sendState: "sending", text: "stay with session A" }),
     ]);
   });
@@ -4964,6 +5457,52 @@ describe("handleSendChat", () => {
     expect(queued?.sendState).toBe("waiting-reconnect");
     expect(queued?.sendRunId).toEqual(expect.any(String));
     expect(host.lastError).toBe("Message will send when the Gateway reconnects.");
+  });
+
+  it("keeps an acknowledged send pending when durable retirement fails", async () => {
+    const storage = createStorageMock();
+    const write = storage.setItem.bind(storage);
+    const remove = storage.removeItem.bind(storage);
+    let rejectWrites = false;
+    vi.spyOn(storage, "setItem").mockImplementation((key, value) => {
+      if (rejectWrites) {
+        throw new DOMException("quota exceeded", "QuotaExceededError");
+      }
+      write(key, value);
+    });
+    vi.spyOn(storage, "removeItem").mockImplementation((key) => {
+      if (rejectWrites) {
+        throw new DOMException("storage blocked", "SecurityError");
+      }
+      remove(key);
+    });
+    vi.stubGlobal("sessionStorage", storage);
+
+    const host = makeHost({
+      requestHandlers: {
+        "chat.send": (params: unknown) => {
+          rejectWrites = true;
+          const payload = requireRecord(params, "acknowledged durable send payload");
+          return { runId: payload.idempotencyKey, status: "ok" };
+        },
+      },
+      chatMessage: "keep until durable retirement succeeds",
+    });
+
+    await handleSendChat(host);
+
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+    expect(host.chatQueue).toEqual([
+      expect.objectContaining({
+        sendAttempts: 1,
+        sendState: "sending",
+        text: "keep until durable retirement succeeds",
+      }),
+    ]);
+    expect(host.lastError).toBe(
+      "Could not store this message for reconnect. Free browser storage or reconnect before sending.",
+    );
+    expect(host.applySettings).not.toHaveBeenCalled();
   });
 
   it("retains an ambiguous pre-ack send id when browser storage rejects recovery", async () => {
@@ -6247,23 +6786,20 @@ describe("handleSendChat", () => {
 
   it("marks saved session queued sends waiting after a disconnect", () => {
     const host = makeHost({ chatQueue: [] });
-    const queuedScopeKey = queueScopeKey(host, "agent:a");
-    host.chatQueueByScope = {
-      [queuedScopeKey]: [
-        {
-          id: "pending-send-a",
-          text: "pending",
-          createdAt: 1,
-          sendRunId: "run-a",
-          sendState: "sending",
-          sessionKey: "agent:a",
-        },
-      ],
-    };
+    writeChatQueueForScope(host, "agent:a", [
+      {
+        id: "pending-send-a",
+        text: "pending",
+        createdAt: 1,
+        sendRunId: "run-a",
+        sendState: "sending",
+        sessionKey: "agent:a",
+      },
+    ]);
 
     markQueuedChatSendsWaitingForReconnect(host);
 
-    expect(host.chatQueueByScope?.[queuedScopeKey]?.[0]).toMatchObject({
+    expect(readChatQueueForScope(host, "agent:a")[0]).toMatchObject({
       sendRunId: "run-a",
       sendState: "waiting-reconnect",
     });
@@ -6459,77 +6995,7 @@ describe("handleSendChat", () => {
     });
   });
 
-  it.each([
-    {
-      name: "restores the BTW draft when detached send fails",
-      response: () => {
-        throw new Error("network down");
-      },
-      error: "network down",
-    },
-    {
-      name: "restores the BTW draft when detached send returns a terminal timeout ACK",
-      response: { runId: "btw-terminal", status: "timeout" },
-      error: "The active run ended before the detached message was accepted.",
-    },
-  ])("$name", async ({ response, error }) => {
-    const host = makeHost({
-      requestHandlers: { "chat.send": response },
-      chatRunId: "run-main",
-      chatStream: "Working...",
-      chatMessage: "/btw what changed?",
-    });
-
-    await handleSendChat(host);
-
-    expect(host.chatQueue).toStrictEqual([]);
-    expect(host.chatRunId).toBe("run-main");
-    expect(host.chatStream).toBe("Working...");
-    expect(host.chatMessage).toBe("/btw what changed?");
-    expect(host.lastError).toBe(error);
-  });
-
-  it("notifies side-chat rejection on failed sends and pre-send exits", async () => {
-    const onSideQuestionSendRejected = vi.fn();
-    const host = makeHost({
-      client: clientWithRequest(
-        makeRequestMock({
-          "chat.send": { runId: "btw-rejected", status: "timeout" },
-        }),
-      ),
-    });
-
-    await handleSendChat(host, "/btw and why?", {
-      sideQuestionDisplayText: "and why?",
-      onSideQuestionSendRejected,
-    });
-    expect(onSideQuestionSendRejected).toHaveBeenCalledTimes(1);
-    expect(host.chatSideResultPending).toBeNull();
-
-    // Pre-send exit (session switched away before the guarded send ran) must
-    // also notify: the panel cleared its input when it handed the command off.
-    const switchingHost = makeHost({
-      client: clientWithRequest(
-        vi.fn(async () => {
-          throw new Error("must not send");
-        }),
-      ),
-      chatSubmitGuards: new Map(),
-    });
-    const originalGuards = switchingHost.chatSubmitGuards;
-    // Simulate the session switching between submit and the guarded body.
-    Object.defineProperty(switchingHost, "sessionKey", {
-      configurable: true,
-      get: () => (originalGuards?.size ? "other-session" : "main"),
-    });
-    await handleSendChat(switchingHost, "/btw and why?", {
-      sideQuestionDisplayText: "and why?",
-      onSideQuestionSendRejected,
-    });
-    expect(onSideQuestionSendRejected).toHaveBeenCalledTimes(2);
-  });
-
-  it("clears BTW side results when /clear resets chat history", async () => {
+  it("clears chat state when /clear resets chat history", async () => {
     const host = makeHost({
       requestHandlers: {
         "sessions.reset": { ok: true },
@@ -6539,18 +7005,6 @@ describe("handleSendChat", () => {
       chatMessage: "/clear",
       chatMessages: [{ role: "user", content: "hello", timestamp: 1 }],
       chatRunError: { summary: "Error: previous run failed" },
-      chatSideChatTurns: [
-        {
-          kind: "btw",
-          runId: "btw-run-clear",
-          sessionKey: "main",
-          question: "what changed?",
-          text: "Detached BTW result",
-          isError: false,
-          ts: 1,
-        },
-      ],
-      chatSideResultTerminalRuns: new Set(["btw-run-clear"]),
     });
 
     await handleSendChat(host);
@@ -6558,8 +7012,6 @@ describe("handleSendChat", () => {
     expect(host.request).toHaveBeenCalledWith("sessions.reset", { key: "main" });
     expect(host.chatMessages).toStrictEqual([]);
     expect(host.chatRunError).toBeNull();
-    expect(host.chatSideChatTurns).toEqual([]);
-    expect(host.chatSideResultTerminalRuns?.size).toBe(0);
     expect(host.chatRunId).toBeNull();
     expect(host.chatStream).toBeNull();
   });
@@ -6628,9 +7080,9 @@ describe("handleSendChat", () => {
     await waitForFast(() =>
       expect(host.request).toHaveBeenCalledWith("sessions.reset", { key: sourceSessionKey }),
     );
-    host.chatQueueByScope = { [queueScopeKey(host, sourceSessionKey)]: host.chatQueue };
-    host.chatQueue = [];
+    writeChatQueueForScope(host, sourceSessionKey, host.chatQueue);
     host.sessionKey = visibleSessionKey;
+    syncVisibleChatQueueProjection(host);
     host.chatMessages = [{ role: "user", content: "visible history" }];
     host.chatRunId = "visible-run";
     reset.resolve({ ok: true });
@@ -6674,9 +7126,9 @@ describe("handleSendChat", () => {
     await waitForFast(() =>
       expect(host.request).toHaveBeenCalledWith("sessions.reset", { key: sourceSessionKey }),
     );
-    host.chatQueueByScope = { [queueScopeKey(host, sourceSessionKey)]: host.chatQueue };
-    host.chatQueue = [];
+    writeChatQueueForScope(host, sourceSessionKey, host.chatQueue);
     host.sessionKey = visibleSessionKey;
+    syncVisibleChatQueueProjection(host);
     host.chatMessages = [{ role: "user", content: "visible history" }];
     reset.reject(new Error("post-commit lifecycle failed"));
     await clearing;
@@ -7479,12 +7931,9 @@ describe("handleSendChat", () => {
 
     const steering = steerQueuedChatMessage(host, original.id);
     await waitForFast(() => expect(sends).toBe(1));
-    const originalScopeKey = storedChatOutboxScopeKey(
-      resolveStoredChatOutboxScope(host, host.sessionKey),
-    );
-    host.chatQueueByScope = { [originalScopeKey]: [...host.chatQueue] };
-    host.chatQueue = [];
+    writeChatQueueForScope(host, original.sessionKey, host.chatQueue, original.agentId);
     host.sessionKey = "agent:main:replacement";
+    syncVisibleChatQueueProjection(host);
     host.chatRunId = null;
 
     // The terminal event cannot replay an unconfirmed steer. The later
@@ -7497,7 +7946,7 @@ describe("handleSendChat", () => {
     await waitForFast(() => expect(listStoredChatOutboxes(host)).toEqual([]));
 
     expect(host.chatQueue).toEqual([]);
-    expect(host.chatQueueByScope[originalScopeKey]).toBeUndefined();
+    expect(readChatQueueForScope(host, original.sessionKey, original.agentId)).toStrictEqual([]);
   });
 
   it("resumes a restored steer attachment from its durable payload after terminal cleanup", async () => {
@@ -7601,18 +8050,15 @@ describe("handleSendChat", () => {
 
     const steering = steerQueuedChatMessage(host, original.id);
     await waitForFast(() => expect(host.request).toHaveBeenCalledOnce());
-    const originalScopeKey = storedChatOutboxScopeKey(
-      resolveStoredChatOutboxScope(host, host.sessionKey),
-    );
-    host.chatQueueByScope = { [originalScopeKey]: [...host.chatQueue] };
-    host.chatQueue = [];
+    writeChatQueueForScope(host, original.sessionKey, host.chatQueue, original.agentId);
     host.sessionKey = "agent:main:replacement";
+    syncVisibleChatQueueProjection(host);
     resolveRequest({ status: "started", runId: "steer-run" });
     await steering;
 
     expect(listStoredChatOutboxes(host)).toEqual([]);
     expect(host.chatQueue).toEqual([]);
-    expect(host.chatQueueByScope[originalScopeKey]).toBeUndefined();
+    expect(readChatQueueForScope(host, original.sessionKey, original.agentId)).toStrictEqual([]);
     expect(host.applySettings).not.toHaveBeenCalled();
   });
 
@@ -7649,12 +8095,9 @@ describe("handleSendChat", () => {
 
       const steering = steerQueuedChatMessage(host, original.id);
       await waitForFast(() => expect(host.request).toHaveBeenCalledOnce());
-      const originalScopeKey = storedChatOutboxScopeKey(
-        resolveStoredChatOutboxScope(host, host.sessionKey),
-      );
-      host.chatQueueByScope = { [originalScopeKey]: [...host.chatQueue] };
-      host.chatQueue = [];
+      writeChatQueueForScope(host, original.sessionKey, host.chatQueue, original.agentId);
       host.sessionKey = "agent:main:replacement";
+      syncVisibleChatQueueProjection(host);
       if (outcome === "terminal error") {
         resolveRequest({ status: "error", runId: "steer-error" });
       } else {
@@ -7667,7 +8110,7 @@ describe("handleSendChat", () => {
         { id: original.id, sendState: expectedState },
       ]);
       expect(host.chatQueue).toEqual([]);
-      expect(host.chatQueueByScope[originalScopeKey]).toMatchObject([
+      expect(readChatQueueForScope(host, original.sessionKey, original.agentId)).toMatchObject([
         { id: original.id, sendState: expectedState },
       ]);
       expect(host.lastError).toBeNull();
@@ -7733,7 +8176,7 @@ describe("handleSendChat", () => {
       );
       const outbox = listStoredChatOutboxes(host)[0];
       expect(outbox).toBeDefined();
-      syncChatQueueFromStoredOutbox(peer, outbox!);
+      syncVisibleChatQueueProjection(peer);
       expect(peer.chatQueue).toHaveLength(1);
       expect(peer.chatQueue[0]?.sendState).toBe("steering");
 
@@ -7960,6 +8403,87 @@ describe("handleAbortChat", () => {
     expect(host.chatRunId).toBe("run-main");
   });
 
+  it("aborts the exact selected session when no browser run id exists", async () => {
+    const request = vi.fn(async () => ({ abortedRunId: null, status: "aborted" }));
+    const sessionKey = "agent:main:openclaw-weixin:direct:wechat-user";
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: null,
+      chatMessage: "/stop",
+      sessionKey,
+      sessionsResult: createSessionsResult([
+        row(sessionKey, { hasActiveRun: true, status: "running" }),
+      ]),
+    });
+
+    await handleAbortChat(host);
+
+    expect(request).toHaveBeenCalledWith("sessions.abort", {
+      key: sessionKey,
+      clearQueued: true,
+    });
+    expect(request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
+    expect(host.chatMessage).toBe("");
+  });
+
+  it("keeps selected global aborts on the compatible key-only request", async () => {
+    const request = vi.fn(async () => ({ abortedRunId: null, status: "aborted" }));
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: null,
+      chatMessage: "/stop",
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+      sessionsResult: createSessionsResult([
+        row("global", { hasActiveRun: true, agentId: "work" } as Partial<GatewaySessionRow>),
+      ]),
+    });
+
+    await handleAbortChat(host);
+
+    expect(request).toHaveBeenCalledWith("sessions.abort", {
+      key: "global",
+      agentId: "work",
+    });
+  });
+
+  it.each([
+    {
+      name: "clears queues for a per-sender agent main session",
+      scope: "per-sender",
+      expected: {
+        key: "agent:work:main",
+        agentId: "work",
+        clearQueued: true,
+      },
+    },
+    {
+      name: "keeps a global-scope agent main alias on the compatible request",
+      scope: "global",
+      expected: {
+        key: "agent:work:main",
+        agentId: "work",
+      },
+    },
+  ])("$name", async ({ scope, expected }) => {
+    const request = vi.fn(async () => ({ abortedRunId: null, status: "aborted" }));
+    const sessionKey = "agent:work:main";
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: null,
+      sessionKey,
+      agentsList: { defaultId: "main", mainKey: "main", scope },
+      sessionsResult: createSessionsResult([
+        row(sessionKey, { hasActiveRun: true, status: "running" }),
+      ]),
+    });
+
+    await handleAbortChat(host);
+
+    expect(request).toHaveBeenCalledWith("sessions.abort", expected);
+  });
+
   it.each(["/stop", "stop", "esc", "abort", "wait", "exit"])(
     "clears the typed stop command %s after aborting the active run",
     async (message) => {
@@ -7983,7 +8507,9 @@ describe("handleAbortChat", () => {
   );
 
   it("queues the active run abort while disconnected", async () => {
+    const client = { request: vi.fn() } as unknown as NonNullable<ChatHost["client"]>;
     const host = makeHost({
+      client,
       connected: false,
       chatRunId: "run-main",
       chatMessage: "draft",
@@ -7992,13 +8518,19 @@ describe("handleAbortChat", () => {
 
     await handleAbortChat(host);
 
-    expect(host.pendingAbort).toEqual({ runId: "run-main", sessionKey: "agent:main" });
+    expect(host.pendingAbort).toEqual({
+      sourceClient: client,
+      runId: "run-main",
+      sessionKey: "agent:main",
+    });
     expect(host.chatMessage).toBe("");
     expect(host.chatRunId).toBe("run-main");
   });
 
   it("preserves the draft when queueing a toolbar abort while disconnected", async () => {
+    const client = { request: vi.fn() } as unknown as NonNullable<ChatHost["client"]>;
     const host = makeHost({
+      client,
       connected: false,
       chatRunId: "run-main",
       chatMessage: "draft",
@@ -8007,31 +8539,43 @@ describe("handleAbortChat", () => {
 
     await handleAbortChat(host, { preserveDraft: true });
 
-    expect(host.pendingAbort).toEqual({ runId: "run-main", sessionKey: "agent:main" });
+    expect(host.pendingAbort).toEqual({
+      sourceClient: client,
+      runId: "run-main",
+      sessionKey: "agent:main",
+    });
     expect(host.chatMessage).toBe("draft");
     expect(host.chatRunId).toBe("run-main");
   });
 
-  it("queues a session-scoped abort while disconnected after active run state is recovered", async () => {
+  it("does not queue an unversioned session stop while disconnected", async () => {
+    const request = vi.fn();
+    const client = { request } as unknown as NonNullable<ChatHost["client"]>;
+    const sessionKey = "agent:main:telegram:direct:queued-user";
     const host = makeHost({
+      client,
       connected: false,
       chatRunId: null,
       chatMessage: "draft",
-      sessionKey: "agent:main",
+      sessionKey,
       sessionsResult: createSessionsResult([
-        row("agent:main", { hasActiveRun: true }),
+        row(sessionKey, { hasActiveRun: true }),
         row("agent:other", { hasActiveRun: true }),
       ]),
     });
 
     await handleAbortChat(host);
 
-    expect(host.pendingAbort).toEqual({ runId: null, sessionKey: "agent:main" });
-    expect(host.chatMessage).toBe("");
+    expect(host.pendingAbort).toBeUndefined();
+    expect(host.chatMessage).toBe("draft");
+    expect(request).not.toHaveBeenCalled();
   });
 
-  it("queues selected-agent global aborts with agent scope while disconnected", async () => {
+  it("does not queue an unversioned global stop while disconnected", async () => {
+    const request = vi.fn();
+    const client = { request } as unknown as NonNullable<ChatHost["client"]>;
     const host = makeHost({
+      client,
       connected: false,
       chatRunId: null,
       chatMessage: "draft",
@@ -8045,12 +8589,9 @@ describe("handleAbortChat", () => {
 
     await handleAbortChat(host);
 
-    expect(host.pendingAbort).toEqual({
-      runId: null,
-      sessionKey: "global",
-      agentId: "work",
-    });
-    expect(host.chatMessage).toBe("");
+    expect(host.pendingAbort).toBeUndefined();
+    expect(host.chatMessage).toBe("draft");
+    expect(request).not.toHaveBeenCalled();
   });
 
   it.each([

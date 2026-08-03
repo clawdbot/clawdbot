@@ -1,7 +1,6 @@
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ContextEngineFactory } from "../context-engine/registry.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
@@ -24,7 +23,11 @@ import type {
 import type { CliBackendPlugin, PluginTextTransforms } from "./cli-backend.types.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { PluginConversationBindingResolvedEvent } from "./conversation-binding.types.js";
-import type { PluginHookHandlerMap, PluginHookName } from "./hook-types.js";
+import type {
+  PluginHookHandlerMap,
+  PluginHookName,
+  PluginHookRegistrationOptions,
+} from "./hook-types.js";
 import type {
   PluginAgentEventEmitParams,
   PluginAgentEventEmitResult,
@@ -49,7 +52,6 @@ import type {
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
 import type { PluginLogger } from "./logger-types.js";
-import type { MemoryCorpusSupplement } from "./memory-state.js";
 import type {
   MigrationProviderPlugin,
   PluginConfigMigration,
@@ -58,7 +60,7 @@ import type {
 import type { OpenClawPluginCommandDefinition } from "./plugin-command.types.js";
 import type {
   OpenClawPluginChannelRegistration,
-  OpenClawPluginCliCommandDescriptor,
+  OpenClawPluginCliRegistrationOptions,
   OpenClawPluginCliRegistrar,
   OpenClawGatewayDiscoveryService,
   OpenClawPluginHostedMediaResolver,
@@ -73,6 +75,14 @@ import type {
 } from "./plugin-registration.types.js";
 import type { UnifiedModelCatalogProviderPlugin } from "./provider-catalog.types.js";
 import type { ProviderPlugin } from "./provider-plugin.types.js";
+import type {
+  ContextEngineFactory,
+  MemoryCorpusSupplement,
+  MemoryEmbeddingProviderAdapter,
+  MemoryPluginCapability,
+  MemoryPromptSectionBuilder,
+  MemoryPromptSectionParams,
+} from "./registry-contribution-types.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
 import type {
@@ -223,20 +233,7 @@ export type OpenClawPluginApi = {
   registerSessionCatalog: (provider: SessionCatalogProvider) => void;
   registerCli: (
     registrar: OpenClawPluginCliRegistrar,
-    opts?: {
-      /** Parent command path for nested command groups, for example `["nodes"]`. */
-      parentPath?: string[];
-      /** Explicit command names owned by this registrar at `parentPath`. */
-      commands?: string[];
-      /**
-       * Parse-time command descriptors for lazy CLI registration.
-       *
-       * When descriptors cover every command exposed at `parentPath`, OpenClaw
-       * can keep the plugin registrar lazy. Command-only registrations stay on
-       * the eager compatibility path.
-       */
-      descriptors?: OpenClawPluginCliCommandDescriptor[];
-    },
+    opts?: OpenClawPluginCliRegistrationOptions,
   ) => void;
   /**
    * Register a plugin-owned node feature command group under `openclaw nodes`.
@@ -435,18 +432,12 @@ export type OpenClawPluginApi = {
   /** Register the active detached task runtime for this plugin (exclusive slot). */
   registerDetachedTaskRuntime: (runtime: DetachedTaskLifecycleRuntime) => void;
   /** Register the active memory capability for this memory plugin (exclusive slot). */
-  registerMemoryCapability: (
-    capability: import("./memory-state.js").MemoryPluginCapability,
-  ) => void;
+  registerMemoryCapability: (capability: MemoryPluginCapability) => void;
   /** Register an additive memory-adjacent prompt section (non-exclusive). */
-  registerMemoryPromptSupplement: (
-    builder: import("./memory-state.js").MemoryPromptSectionBuilder,
-  ) => void;
+  registerMemoryPromptSupplement: (builder: MemoryPromptSectionBuilder) => void;
   /** Register an async memory prompt preparation step (non-exclusive). */
   registerMemoryPromptPreparation: (
-    prepare: (
-      params: import("./memory-state.js").MemoryPromptSectionParams,
-    ) => Promise<readonly string[]>,
+    prepare: (params: MemoryPromptSectionParams) => Promise<readonly string[]>,
   ) => void;
   /** Register an additive memory-adjacent search/read corpus supplement (non-exclusive). */
   registerMemoryCorpusSupplement: (supplement: MemoryCorpusSupplement) => void;
@@ -456,14 +447,12 @@ export type OpenClawPluginApi = {
    * and `contracts.embeddingProviders`. This memory-specific seam is retained
    * while existing memory providers migrate.
    */
-  registerMemoryEmbeddingProvider: (
-    adapter: import("./memory-embedding-providers.js").MemoryEmbeddingProviderAdapter,
-  ) => void;
+  registerMemoryEmbeddingProvider: (adapter: MemoryEmbeddingProviderAdapter) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(
     hookName: K,
     handler: PluginHookHandlerMap[K],
-    opts?: { priority?: number; timeoutMs?: number },
+    opts?: PluginHookRegistrationOptions<K>,
   ) => void;
 };

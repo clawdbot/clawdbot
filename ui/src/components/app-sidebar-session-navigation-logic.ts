@@ -1,7 +1,6 @@
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { SIDEBAR_NAV_ROUTES } from "../app-navigation.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
-import { pathForRoute } from "../app-route-paths.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import {
@@ -9,6 +8,7 @@ import {
   resolveSessionDisplayName,
   resolveSessionWorkSubtitle,
 } from "../lib/session-display.ts";
+import { isSessionRunActive } from "../lib/session-run-state.ts";
 import {
   groupSidebarSessionRows,
   sidebarSectionHasHeader,
@@ -19,8 +19,11 @@ import {
   compareSessionRowsByUpdatedAt,
   filterVisibleSessionRows,
   resolveSessionNavigation,
-  searchForSession,
 } from "../lib/sessions/index.ts";
+import {
+  resolveSessionPreferredFace,
+  sessionNavigationTarget,
+} from "../lib/sessions/route-navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
@@ -36,6 +39,7 @@ import { formatSidebarTimestamp } from "./app-sidebar-session-catalogs.ts";
 import {
   limitSidebarSessionRows,
   SIDEBAR_SESSION_NO_ATTENTION,
+  SIDEBAR_SESSION_PAGE_SIZE,
   type SidebarRecentSession,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
@@ -70,6 +74,7 @@ export function buildSidebarSessionNavigationState(input: {
   context: ApplicationContext<RouteId> | undefined;
   routeSessionKey: string;
   sessionsResult: SessionsListResult | null;
+  activeSession?: GatewaySessionRow | null;
   sessionsAgentId: string | null;
   showCron: boolean;
   statusFilter: SidebarSessionStatusFilter;
@@ -82,8 +87,15 @@ export function buildSidebarSessionNavigationState(input: {
   resolveAgentStatusNote: (row: GatewaySessionRow) => string | undefined;
 }): SidebarSessionNavigationState {
   const { context } = input;
+  const mainKey = context
+    ? resolveUiConfiguredMainKey({
+        agentsList: context.agents.state.agentsList,
+        hello: context.gateway.snapshot.hello,
+      })
+    : undefined;
   const navigation = resolveSessionNavigation({
     result: input.sessionsResult,
+    activeSession: input.activeSession,
     resultAgentId: input.sessionsAgentId,
     sessionKey: input.routeSessionKey,
     assistantAgentId:
@@ -105,6 +117,7 @@ export function buildSidebarSessionNavigationState(input: {
     }
     return {
       key: row.key,
+      displayName: row.displayName,
       incognito: row.incognito === true,
       createdActor: row.createdActor,
       archivedBy: row.archivedBy,
@@ -113,10 +126,19 @@ export function buildSidebarSessionNavigationState(input: {
       label: resolveSessionDisplayName(row.key, row, { includeSubagentPrefix: false }),
       meta: formatSidebarTimestamp(row.updatedAt),
       subtitle: resolveSessionWorkSubtitle(row),
-      href: `${pathForRoute("chat", context?.basePath ?? "")}${searchForSession(row.key)}`,
+      href: sessionNavigationTarget({
+        face: resolveSessionPreferredFace(row),
+        sessionKey: row.key,
+        fallbackAgentId: navigation.selectedAgentId,
+        basePath: context?.basePath ?? "",
+        row,
+        mainKey,
+        preferenceDerivedFace: true,
+      }).href,
       active: row.key === navigation.activeRowKey,
       visuallyActive: input.highlightCurrentSession && row.key === navigation.currentSessionKey,
-      hasActiveRun: row.archived !== true && Boolean(row.hasActiveRun),
+      // Normalize optional gateway state before collapsing it to the sidebar's required fact.
+      hasActiveRun: row.archived !== true && isSessionRunActive(row),
       activeRunIds: row.archived === true ? undefined : row.activeRunIds,
       modelSelectionLocked: row.modelSelectionLocked === true,
       kind: row.kind,
@@ -126,9 +148,12 @@ export function buildSidebarSessionNavigationState(input: {
       draftOwnedBySelf: isSidebarDraftOwnedBySelf(row, context?.gateway.snapshot.selfUser?.id),
       icon: row.icon,
       category: normalizeOptionalString(row.category),
+      boardFace: row.boardFace,
       channel: channelInfo.channel,
       channelSession: channelInfo.channelSession,
-      workSession: Boolean(row.worktree || row.execNode),
+      workSession:
+        Boolean(row.worktree || row.execNode) ||
+        context?.sessions.isPreparedWorkSession(row.key) === true,
       acpSession: isAcpSessionKey(row.key),
       worktreeId: row.worktree?.id,
       placementState: row.placement?.state,
@@ -173,7 +198,12 @@ export function buildSidebarSessionNavigationState(input: {
 }
 
 export type SidebarVisibleSections = {
-  sections: (SidebarSessionSection<SidebarRecentSession> & { totalRowCount: number })[];
+  sections: (SidebarSessionSection<SidebarRecentSession> & {
+    totalRowCount: number;
+    visibleRowCount: number;
+    visibleLimit: number;
+    collapsedVisibleRowCount: number;
+  })[];
   expandedRows: SidebarRecentSession[];
   visibleRows: SidebarRecentSession[];
 };
@@ -182,32 +212,51 @@ export function partitionSidebarVisibleSections(input: {
   rows: SidebarRecentSession[];
   grouping: SidebarSessionsGrouping;
   knownGroups: string[] | undefined;
+  catalogIds?: readonly string[];
+  sectionOrder?: readonly string[];
   collapsedSections: ReadonlySet<string>;
   hideEmptyCreatorFilteredGroup: (category: string | undefined, rowCount: number) => boolean;
-  visibleSessionLimit: number;
+  visibleSessionLimits: ReadonlyMap<string, number>;
 }): SidebarVisibleSections {
   const isCollapsed = (sectionId: string) =>
     sidebarSectionHasHeader(sectionId, input.grouping) && input.collapsedSections.has(sectionId);
   const sections = groupSidebarSessionRows(input.rows, {
     grouping: input.grouping,
     knownGroups: input.knownGroups,
+    sectionOrder: input.sectionOrder,
+    catalogIds: input.catalogIds,
   }).filter(
     (section) =>
       section.id !== "pinned" &&
       !input.hideEmptyCreatorFilteredGroup(section.category, section.rows.length),
   );
-  const expandedRows = sections.flatMap((section) => (isCollapsed(section.id) ? [] : section.rows));
-  const visibleRows = limitSidebarSessionRows(expandedRows, input.visibleSessionLimit);
-  const keep = new Set(visibleRows.map((row) => row.key));
+  const expandedRows: SidebarRecentSession[] = [];
+  const visibleRows: SidebarRecentSession[] = [];
   // totalRowCount is the pre-pagination size: headers and empty-zone
   // checks must not mistake a page-filtered section for an empty one.
   const limitedSections: SidebarVisibleSections["sections"] = [];
   for (const section of sections) {
     const totalRowCount = section.rows.length;
+    const visibleLimit = input.visibleSessionLimits.get(section.id) ?? SIDEBAR_SESSION_PAGE_SIZE;
+    const collapsedVisibleRowCount = limitSidebarSessionRows(
+      section.rows,
+      SIDEBAR_SESSION_PAGE_SIZE,
+    ).length;
+    let visibleRowCount = 0;
     if (!isCollapsed(section.id)) {
-      section.rows = section.rows.filter((row) => keep.has(row.key));
+      expandedRows.push(...section.rows);
+      section.rows = limitSidebarSessionRows(section.rows, visibleLimit);
+      visibleRows.push(...section.rows);
+      visibleRowCount = section.rows.length;
     }
-    limitedSections.push(Object.assign(section, { totalRowCount }));
+    limitedSections.push(
+      Object.assign(section, {
+        totalRowCount,
+        visibleRowCount,
+        visibleLimit,
+        collapsedVisibleRowCount,
+      }),
+    );
   }
   return { sections: limitedSections, expandedRows, visibleRows };
 }
@@ -376,7 +425,7 @@ export function promoteSidebarSessionCreatedOrder(
 export function applySidebarSessionCreatorFilter(input: {
   projected: readonly SidebarRecentSession[];
   creatorRows: readonly { createdActor?: SessionCreatedActor }[];
-  creatorFacet: readonly { id: string; label?: string }[] | undefined;
+  creatorFacet: readonly { id: string; label?: string; avatarUrl?: string }[] | undefined;
   selectedCreatorId: string | null;
 }): {
   rows: SidebarRecentSession[];

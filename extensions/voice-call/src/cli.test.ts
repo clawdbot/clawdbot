@@ -1,12 +1,27 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 // Voice Call tests cover cli plugin behavior.
 import { Command } from "commander";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 const callGatewayFromCliMock = vi.hoisted(() => vi.fn());
+const sleepMock = vi.hoisted(() =>
+  vi.fn(
+    async (ms: number) =>
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }),
+  ),
+);
 
 vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/gateway-runtime")>()),
   callGatewayFromCli: callGatewayFromCliMock,
+}));
+vi.mock("../api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../api.js")>()),
+  sleep: sleepMock,
 }));
 
 import { registerVoiceCallCli } from "./cli.js";
@@ -26,6 +41,13 @@ function captureStdout() {
 describe("voice-call CLI status fallback", () => {
   afterEach(() => {
     callGatewayFromCliMock.mockReset();
+    sleepMock.mockReset();
+    sleepMock.mockImplementation(
+      async (ms: number) =>
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, ms);
+        }),
+    );
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -99,6 +121,147 @@ describe("voice-call CLI status fallback", () => {
     await expect(
       program.parseAsync(["voicecall", "tail", "--since", "0x10"], { from: "user" }),
     ).rejects.toThrow("Invalid numeric value for --since: 0x10");
+  });
+
+  async function runCustomLogTailShortRead(
+    appended: string | Buffer,
+    firstReadBytes?: number,
+    initial: string | Buffer = "initial\n",
+    copyTruncated?: string | Buffer,
+  ): Promise<{ output: string; shortened: boolean }> {
+    // openclaw-temp-dir: allow extension tests cannot import repo-only test helpers
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-voice-call-tail-"));
+    const logFile = path.join(tempDir, "custom.log");
+    fs.writeFileSync(logFile, initial);
+    const initialByteLength = Buffer.isBuffer(initial)
+      ? initial.length
+      : Buffer.byteLength(initial, "utf8");
+
+    const sentinel = new Error("stop voice-call tail test");
+    let output = "";
+    const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+      output += String(chunk);
+      return true;
+    }) as typeof process.stdout.write);
+    const originalReadSync = fs.readSync.bind(fs);
+    const readSyncSpy = vi.spyOn(fs, "readSync");
+    let shortened = false;
+
+    readSyncSpy.mockImplementation(((fd, buffer, offset, length, position) => {
+      if (
+        !shortened &&
+        firstReadBytes !== undefined &&
+        typeof position === "number" &&
+        position === initialByteLength &&
+        Buffer.isBuffer(buffer)
+      ) {
+        shortened = true;
+        return originalReadSync(fd, buffer, offset, firstReadBytes, position);
+      }
+      return originalReadSync(fd, buffer, offset, length, position);
+    }) as typeof fs.readSync);
+
+    sleepMock
+      .mockImplementationOnce(async () => {
+        fs.appendFileSync(logFile, appended);
+      })
+      .mockImplementationOnce(async () => {
+        if (copyTruncated !== undefined) {
+          fs.writeFileSync(logFile, copyTruncated);
+        }
+      })
+      .mockImplementationOnce(async () => {
+        throw sentinel;
+      });
+
+    try {
+      const program = buildProgram({});
+      await expect(
+        program.parseAsync(
+          ["voicecall", "tail", "--file", logFile, "--since", "0", "--poll", "50"],
+          {
+            from: "user",
+          },
+        ),
+      ).rejects.toBe(sentinel);
+    } finally {
+      stdoutSpy.mockRestore();
+      readSyncSpy.mockRestore();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+    return { output, shortened };
+  }
+
+  it("keeps custom log tail follow offset aligned with newline short reads", async () => {
+    const result = await runCustomLogTailShortRead(
+      "first\nsecond\n",
+      Buffer.byteLength("first\n", "utf8"),
+    );
+
+    expect(result.shortened).toBe(true);
+    expect(result.output).toContain("first\n");
+    expect(result.output).toContain("second\n");
+  });
+
+  it("buffers custom log tail records across mid-record short reads", async () => {
+    const result = await runCustomLogTailShortRead(
+      '{"event":"first"}\n{"event":"second"}\n',
+      Buffer.byteLength('{"event":"fir', "utf8"),
+    );
+
+    expect(result.shortened).toBe(true);
+    expect(result.output).not.toContain('{"event":"fir\n');
+    expect(result.output).toContain('{"event":"first"}\n');
+    expect(result.output).toContain('{"event":"second"}\n');
+  });
+
+  it("buffers custom log tail UTF-8 characters across short reads", async () => {
+    const result = await runCustomLogTailShortRead(
+      '{"word":"café"}\n',
+      Buffer.byteLength('{"word":"caf', "utf8") + 1,
+    );
+
+    expect(result.shortened).toBe(true);
+    expect(result.output).not.toContain("\ufffd");
+    expect(result.output).toContain('{"word":"café"}\n');
+  });
+
+  it("resets short-read text and UTF-8 state when a custom log is copy-truncated", async () => {
+    const initial = "initial\n";
+    const appended = '{"event":"staleé-with-more-observed-bytes"}\n';
+    const replacement = '{"event":"fresh-start-full"}\n';
+    const firstReadBytes = Buffer.byteLength('{"event":"stale', "utf8") + 1;
+    const shortReadCursor = Buffer.byteLength(initial, "utf8") + firstReadBytes;
+
+    expect(Buffer.byteLength(replacement, "utf8")).toBeGreaterThan(shortReadCursor);
+    expect(Buffer.byteLength(replacement, "utf8")).toBeLessThan(
+      Buffer.byteLength(initial, "utf8") + Buffer.byteLength(appended, "utf8"),
+    );
+
+    const result = await runCustomLogTailShortRead(appended, firstReadBytes, initial, replacement);
+
+    expect(result.shortened).toBe(true);
+    expect(result.output).toBe(replacement);
+  });
+
+  it("buffers custom log tail records that are partial at startup", async () => {
+    const result = await runCustomLogTailShortRead('rt"}\n', undefined, '{"event":"sta');
+
+    expect(result.shortened).toBe(false);
+    expect(result.output).not.toContain('{"event":"sta\n');
+    expect(result.output).toContain('{"event":"start"}\n');
+  });
+
+  it("buffers custom log tail UTF-8 characters that are partial at startup", async () => {
+    const prefix = Buffer.from('{"word":"caf', "utf8");
+    const eAcute = Buffer.from("é", "utf8");
+    const initial = Buffer.concat([prefix, eAcute.subarray(0, 1)]);
+    const suffix = Buffer.concat([eAcute.subarray(1), Buffer.from('"}\n', "utf8")]);
+    const result = await runCustomLogTailShortRead(suffix, undefined, initial);
+
+    expect(result.shortened).toBe(false);
+    expect(result.output).not.toContain("\ufffd");
+    expect(result.output).toContain('{"word":"café"}\n');
   });
 
   it("caps oversized operation timeouts through the start command", async () => {

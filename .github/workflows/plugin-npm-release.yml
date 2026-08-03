@@ -9,7 +9,9 @@ on:
       - ".github/workflows/plugin-npm-release.yml"
       - "extensions/**"
       - "package.json"
+      - "scripts/generate-npm-package-lock.mjs"
       - "scripts/lib/npm-publish-plan.mjs"
+      - "scripts/lib/npm-json-output.mjs"
       - "scripts/lib/release-version.mjs"
       - "scripts/lib/plugin-npm-package-manifest.mjs"
       - "scripts/lib/plugin-npm-release.ts"
@@ -78,7 +80,7 @@ jobs:
       all_matrix: ${{ steps.plan.outputs.all_matrix }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
@@ -283,7 +285,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
 
@@ -322,11 +324,37 @@ jobs:
         plugin: ${{ fromJson(github.event_name == 'workflow_dispatch' && inputs.preflight_only && needs.preview_plugins_npm.outputs.all_matrix || needs.preview_plugins_npm.outputs.matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
           fetch-depth: 1
+
+      - name: Checkout trusted packaging helper
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          fetch-depth: 1
+          sparse-checkout: |
+            scripts/generate-npm-package-lock.mjs
+            scripts/lib/npm-json-output.mjs
+            scripts/lib/plugin-npm-package-manifest.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Overlay trusted packaging helper
+        run: |
+          set -euo pipefail
+          cp \
+            .release-tooling/scripts/generate-npm-package-lock.mjs \
+            scripts/generate-npm-package-lock.mjs
+          cp \
+            .release-tooling/scripts/lib/npm-json-output.mjs \
+            scripts/lib/npm-json-output.mjs
+          cp \
+            .release-tooling/scripts/lib/plugin-npm-package-manifest.mjs \
+            scripts/lib/plugin-npm-package-manifest.mjs
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -375,26 +403,27 @@ jobs:
             OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR="${artifact_dir}" \
             bash scripts/plugin-npm-publish.sh --pack "${PACKAGE_DIR}" > "${pack_output}"
 
-          node - "${pack_output}" "${pack_json}" <<'NODE'
-          const fs = require("node:fs");
+          node --input-type=module - "${pack_output}" "${pack_json}" <<'NODE'
+          import fs from "node:fs";
+          import { resolveNpmJsonEntries } from "./scripts/lib/npm-json-output.mjs";
+
           const raw = fs.readFileSync(process.argv[2], "utf8").trim();
           let pack;
-          for (let index = raw.lastIndexOf("["); index >= 0; index = raw.lastIndexOf("[", index - 1)) {
+          for (let index = raw.length - 1; index >= 0; index -= 1) {
+            if (raw[index] !== "[" && raw[index] !== "{") continue;
             try {
               const candidate = JSON.parse(raw.slice(index));
-              if (Array.isArray(candidate)) {
-                pack = candidate;
+              const entries = resolveNpmJsonEntries(candidate);
+              if (entries.length > 0) {
+                pack = entries;
                 break;
               }
             } catch {
               // npm can print bundled-dependency summaries before its JSON result.
             }
-            if (index === 0) {
-              break;
-            }
           }
           if (!pack) {
-            throw new Error("npm pack did not emit a JSON array.");
+            throw new Error("npm pack did not emit package JSON.");
           }
           fs.writeFileSync(process.argv[3], `${JSON.stringify(pack, null, 2)}\n`);
           NODE
@@ -586,7 +615,7 @@ jobs:
         plugin: ${{ fromJson(inputs.preflight_only && needs.preview_plugins_npm.outputs.all_matrix || needs.preview_plugins_npm.outputs.matrix) }}
     steps:
       - name: Checkout trusted npm preflight tooling
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ github.workflow_sha }}
@@ -1008,14 +1037,14 @@ jobs:
         plugin: ${{ fromJson(needs.preview_plugins_npm.outputs.matrix) }}
     steps:
       - name: Checkout trusted publication tooling
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ github.workflow_sha }}
           fetch-depth: 1
 
       - name: Setup trusted Node
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -1201,11 +1230,26 @@ jobs:
 
       - name: Checkout OIDC publication target
         if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
+          path: .publication-target
           fetch-depth: 1
+
+      - name: Overlay trusted OIDC packaging helper
+        if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
+        run: |
+          set -euo pipefail
+          cp \
+            scripts/generate-npm-package-lock.mjs \
+            .publication-target/scripts/generate-npm-package-lock.mjs
+          cp \
+            scripts/lib/npm-json-output.mjs \
+            .publication-target/scripts/lib/npm-json-output.mjs
+          cp \
+            scripts/lib/plugin-npm-package-manifest.mjs \
+            .publication-target/scripts/lib/plugin-npm-package-manifest.mjs
 
       - name: Setup OIDC publication target
         if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
@@ -1231,6 +1275,7 @@ jobs:
 
       - name: Publish with trusted publisher
         if: steps.publication_evidence.outputs.publish_route == 'npm-oidc' && steps.npm_package_version.outputs.already_published != 'true'
+        working-directory: .publication-target
         env:
           OPENCLAW_NPM_PUBLISH_AUTH_MODE: trusted-publisher
           OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag == 'extended-stable' && inputs.npm_dist_tag || '' }}
@@ -1378,7 +1423,7 @@ jobs:
         plugin: ${{ fromJson(needs.preview_plugins_npm.outputs.all_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}

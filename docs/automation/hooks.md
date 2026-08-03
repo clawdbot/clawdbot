@@ -27,6 +27,8 @@ OpenClaw has several extension surfaces that look similar but solve different pr
 
 Use internal hooks when you want automation that behaves like a small installed integration. Use typed plugin hooks when you need runtime lifecycle control.
 
+Internal hook handlers are request/event handlers. They must not own long-lived timers, watchers, sockets, or clients; plugins should register a service or use the typed `gateway_start` / `gateway_stop` lifecycle instead.
+
 ## Quick start
 
 ```bash
@@ -59,6 +61,7 @@ hook that never runs is diagnosable.
 | `command:reset`          | `/reset` command issued                                    |
 | `command:stop`           | `/stop` command issued                                     |
 | `command`                | Any command event (general listener)                       |
+| `session:auto-reset`     | A daily or idle reset replaces the current session         |
 | `session:compact:before` | Before compaction summarizes history                       |
 | `session:compact:after`  | After compaction completes                                 |
 | `session:patch`          | When session properties are modified                       |
@@ -147,11 +150,13 @@ conversation) and for `session:compact:before` / `session:compact:after`
 
 **Command events** (`command:stop`): `context.sessionEntry`, `context.sessionId`, `context.commandSource`, `context.senderId`.
 
-**Message events** (`message:received`): `context.from`, `context.content`, `context.channelId`, `context.metadata` (provider-specific data including `senderId`, `senderName`, `guildId`). `context.content` prefers a nonblank command body for command-like messages, then falls back to the raw inbound body and generic body; it does not include agent-only enrichment such as thread history or link summaries.
+**Automatic reset events** (`session:auto-reset`): `context.sessionEntry`, `context.reason` (`daily` or `idle`), `context.transcriptArchived`, `context.nextSessionId`, `context.nextSessionKey`, `context.agentId`, `context.workspaceDir`, `context.storePath`, and `context.cfg`.
+
+**Message events** (`message:received`): `context.from`, `context.content`, `context.channelId`, `context.media` (ordered staged attachment facts), `context.originalMedia` plus `context.mediaStagingPending` when remote media is not locally staged yet, and `context.metadata` (provider-specific data including `senderId`, `senderName`, `guildId`). `context.content` prefers a nonblank command body for command-like messages, then falls back to the raw inbound body and generic body; it does not include agent-only enrichment such as thread history or link summaries. Legacy media aliases inside `metadata` are deprecated.
 
 **Message events** (`message:sent`): `context.to`, `context.content`, `context.success`, `context.channelId`, plus `context.error` when sending failed.
 
-**Message events** (`message:transcribed`): `context.transcript`, `context.from`, `context.channelId`, `context.mediaPath`.
+**Message events** (`message:transcribed`): `context.transcript`, `context.from`, `context.channelId`, and `context.media`. `context.mediaPath` and `context.mediaType` remain deprecated aliases for the first fact.
 
 **Message events** (`message:preprocessed`): `context.bodyForAgent` (final enriched body), `context.from`, `context.channelId`.
 
@@ -220,13 +225,13 @@ Npm specs are registry-only (package name + optional exact version or dist-tag).
 
 ## Bundled hooks
 
-| Hook                  | Events                                            | What it does                                                   |
-| --------------------- | ------------------------------------------------- | -------------------------------------------------------------- |
-| session-memory        | `command:new`, `command:reset`                    | Saves session context to `<workspace>/memory/`                 |
-| bootstrap-extra-files | `agent:bootstrap`                                 | Injects additional bootstrap files from glob patterns          |
-| command-logger        | `command`                                         | Logs all commands to `~/.openclaw/logs/commands.log`           |
-| compaction-notifier   | `session:compact:before`, `session:compact:after` | Sends visible chat notices when session compaction starts/ends |
-| boot-md               | `gateway:startup`                                 | Runs `BOOT.md` when the gateway starts                         |
+| Hook                  | Events                                               | What it does                                                   |
+| --------------------- | ---------------------------------------------------- | -------------------------------------------------------------- |
+| session-memory        | `command:new`, `command:reset`, `session:auto-reset` | Saves session context to `<workspace>/memory/`                 |
+| bootstrap-extra-files | `agent:bootstrap`                                    | Injects additional bootstrap files from glob patterns          |
+| command-logger        | `command`                                            | Logs all commands to `~/.openclaw/logs/commands.log`           |
+| compaction-notifier   | `session:compact:before`, `session:compact:after`    | Sends visible chat notices when session compaction starts/ends |
+| boot-md               | `gateway:startup`                                    | Runs `BOOT.md` when the gateway starts                         |
 
 Enable any bundled hook:
 
@@ -238,7 +243,19 @@ openclaw hooks enable <hook-name>
 
 ### session-memory details
 
-Extracts the last user/assistant messages (default 15, configurable with `hooks.internal.entries.session-memory.messages`) and saves them to `<workspace>/memory/YYYY-MM-DD-HHMM.md` using the host local date. Memory capture runs in the background so `/new` and `/reset` acknowledgements are not delayed by transcript reads or optional slug generation. Set `hooks.internal.entries.session-memory.llmSlug: true` to generate descriptive filename slugs, and optionally set `hooks.internal.entries.session-memory.model` to a configured alias such as `sonnet`, a bare model ID on the agent's default provider, or a `provider/model` ref. Slug generation uses the agent's default model when `model` is omitted and falls back to timestamp slugs when unavailable. Requires `workspace.dir` to be configured.
+On `/new`, `/reset`, daily reset, or idle expiry, extracts the last user/assistant messages (default 15, configurable with `hooks.internal.entries.session-memory.messages`) and saves them to `<workspace>/memory/YYYY-MM-DD-HHMM.md` using `agents.defaults.userTimezone`. When no user timezone is configured, it falls back to the host timezone. Memory capture runs in the background so reset handling and replacement sessions are not delayed by transcript reads or optional slug generation. Set `hooks.internal.entries.session-memory.llmSlug: true` to generate descriptive filename slugs, and optionally set `hooks.internal.entries.session-memory.model` to a configured alias such as `sonnet`, a bare model ID on the agent's default provider, or a `provider/model` ref. Slug generation uses the agent's default model when `model` is omitted and falls back to timestamp slugs when unavailable. Requires `workspace.dir` to be configured.
+
+<Note>
+The `memory` source already indexes this hook's saved conversation excerpts. If
+[session transcript indexing](/reference/memory-config#session-memory-search)
+is also enabled, the same conversation can appear from both `memory` and
+`sessions`, producing overlapping search results and additional embedding work.
+For hook-only recall, set `memory.search.sources: ["memory"]` and
+`memory.search.rememberAcrossConversations: false`; `sources` alone does not
+prevent cross-conversation recall from adding `sessions`. For full-transcript
+recall instead, run `openclaw hooks disable session-memory`. Enable both only
+when you intentionally want both representations.
+</Note>
 
 <a id="bootstrap-extra-files"></a>
 
@@ -251,7 +268,7 @@ Extracts the last user/assistant messages (default 15, configurable with `hooks.
       "entries": {
         "bootstrap-extra-files": {
           "enabled": true,
-          "paths": ["packages/*/AGENTS.md", "packages/*/TOOLS.md"]
+          "paths": ["packages/*/AGENTS.md"]
         }
       }
     }
@@ -259,7 +276,9 @@ Extracts the last user/assistant messages (default 15, configurable with `hooks.
 }
 ```
 
-`patterns` and `files` are accepted as aliases of `paths`. Paths resolve relative to the workspace and must stay inside it. Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, `MEMORY.md`).
+`patterns` and `files` are accepted as aliases of `paths`. Paths resolve relative to the workspace and must stay inside it. Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`, `MEMORY.md`).
+
+`TOOLS.md` is no longer a recognized bootstrap basename and is not loaded into runtime context. `openclaw doctor --fix` migrates the workspace-root `TOOLS.md` into the `## Tools` section of `AGENTS.md`; patterns that name other `TOOLS.md` files are not migrated and should be repointed at `AGENTS.md`.
 
 <a id="command-logger"></a>
 

@@ -20,6 +20,11 @@ on:
         required: true
         default: all
         type: string
+      allow_failures:
+        description: Continue after validated QA result failures
+        required: false
+        default: false
+        type: boolean
   workflow_call:
     inputs:
       ref:
@@ -35,6 +40,11 @@ on:
         description: Taxonomy QA profile id to run
         required: true
         type: string
+      allow_failures:
+        description: Continue after validated QA result failures
+        required: false
+        default: false
+        type: boolean
     secrets:
       OPENAI_API_KEY:
         description: OpenAI API key used by live QA profile scenarios
@@ -135,7 +145,7 @@ jobs:
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ inputs.ref }}
@@ -197,7 +207,9 @@ jobs:
     name: Generate QA profile evidence
     needs: validate_selected_ref
     runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 60
+    # The full live profile can exceed 90 minutes before aggregate evidence is finalized.
+    # Preserve enough headroom to record its terminal result instead of losing it to cancellation.
+    timeout-minutes: 150
     permissions:
       contents: read
     outputs:
@@ -211,7 +223,7 @@ jobs:
     environment: qa-live-shared
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
@@ -232,6 +244,7 @@ jobs:
           set -euo pipefail
           node --import tsx --input-type=module <<'NODE'
           import fs from "node:fs";
+          import { readQaScenarioPack } from "./extensions/qa-lab/src/scenario-catalog.ts";
           import { readQaScorecardTaxonomyReport } from "./extensions/qa-lab/src/scorecard-taxonomy.ts";
 
           const requested = process.env.QA_PROFILE?.trim() ?? "";
@@ -239,7 +252,7 @@ jobs:
             throw new Error(`qa_profile must use a taxonomy profile id, got ${JSON.stringify(process.env.QA_PROFILE)}`);
           }
 
-          const taxonomy = readQaScorecardTaxonomyReport([]);
+          const taxonomy = readQaScorecardTaxonomyReport(readQaScenarioPack().scenarios);
           const profile = taxonomy.profiles.find((entry) => entry.id === requested);
           if (!profile) {
             const available = taxonomy.profiles.map((entry) => entry.id).join(", ");
@@ -292,6 +305,7 @@ jobs:
           OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "120000"
           OPENCLAW_QA_CREDENTIAL_ROLE: ci
           OPENCLAW_QA_CREDENTIAL_SOURCE: convex
+          OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF: "1"
         shell: bash
         run: |
           set -euo pipefail
@@ -314,6 +328,7 @@ jobs:
         if: always()
         env:
           ARTIFACT_NAME: qa-profile-evidence-${{ steps.profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}
+          ALLOW_FAILURES: ${{ inputs.allow_failures }}
           OUTPUT_DIR: ${{ steps.run_profile.outputs.output_dir }}
           QA_EXIT_CODE: ${{ steps.run_profile.outputs.qa_exit_code }}
           QA_PROFILE: ${{ steps.profile.outputs.profile }}
@@ -324,9 +339,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          node --input-type=module <<'NODE'
+          node --import tsx --input-type=module <<'NODE'
           import fs from "node:fs";
           import path from "node:path";
+          import { validateQaEvidenceSummaryJson } from "./extensions/qa-lab/src/evidence-summary.ts";
 
           const outputDir = process.env.OUTPUT_DIR;
           if (!outputDir) {
@@ -337,7 +353,9 @@ jobs:
           }
 
           const evidencePath = path.join(outputDir, "qa-evidence.json");
-          const payload = JSON.parse(fs.readFileSync(evidencePath, "utf8"));
+          const payload = validateQaEvidenceSummaryJson(
+            JSON.parse(fs.readFileSync(evidencePath, "utf8")),
+          );
           if (payload.profile !== process.env.QA_PROFILE) {
             throw new Error(`qa-evidence.json profile must be ${process.env.QA_PROFILE}, got ${JSON.stringify(payload.profile)}`);
           }
@@ -354,6 +372,7 @@ jobs:
             qaProfile: process.env.QA_PROFILE,
             qaExitCode: Number(process.env.QA_EXIT_CODE),
             qaPassed: process.env.QA_EXIT_CODE === "0",
+            allowFailures: process.env.ALLOW_FAILURES === "true",
             requestedRef: process.env.REQUESTED_REF,
             targetSha: process.env.TARGET_SHA,
             trustedReason: process.env.TRUSTED_REASON,
@@ -389,6 +408,7 @@ jobs:
             echo "- Artifact: \`${ARTIFACT_NAME}\`"
             echo "- QA profile: \`${QA_PROFILE}\`"
             echo "- QA exit code: \`${QA_EXIT_CODE}\`"
+            echo "- QA failures allowed: \`${ALLOW_FAILURES}\`"
             echo "- Target SHA: \`${TARGET_SHA}\`"
             echo "- Evidence path: \`${OUTPUT_DIR}/qa-evidence.json\`"
             echo "- Manifest: \`${OUTPUT_DIR}/qa-profile-evidence-manifest.json\`"
@@ -406,6 +426,8 @@ jobs:
       - name: Fail if QA profile failed
         if: always()
         env:
+          ALLOW_FAILURES: ${{ inputs.allow_failures }}
+          EVIDENCE_VALIDATED: ${{ steps.evidence.outcome == 'success' }}
           QA_EXIT_CODE: ${{ steps.run_profile.outputs.qa_exit_code }}
           QA_PROFILE: ${{ steps.profile.outputs.profile }}
         shell: bash
@@ -416,6 +438,10 @@ jobs:
             exit 1
           fi
           if [[ "$QA_EXIT_CODE" != "0" ]]; then
+            if [[ "$ALLOW_FAILURES" == "true" && "$EVIDENCE_VALIDATED" == "true" ]]; then
+              echo "::warning::QA profile '${QA_PROFILE}' failed with exit code ${QA_EXIT_CODE}; allow_failures accepted the validated evidence."
+              exit 0
+            fi
             echo "QA profile '${QA_PROFILE}' failed with exit code ${QA_EXIT_CODE}." >&2
             exit "$QA_EXIT_CODE"
           fi

@@ -354,6 +354,9 @@ function parsePayload(
   };
 }
 
+const SYNOLOGY_WEBHOOK_ACCEPTED_HEADER = "x-openclaw-delivery-accepted";
+const SYNOLOGY_WEBHOOK_ACCEPTED_VALUE = "durable";
+
 /** Send a JSON response. */
 function respondJson(res: ServerResponse, statusCode: number, body: Record<string, unknown>) {
   res.writeHead(statusCode, { "Content-Type": "application/json" });
@@ -684,6 +687,9 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
       respondJson(res, 400, { error: admitted.message });
       return;
     }
+    // Only a durably admitted event is acknowledged here; mark the ack so
+    // proxies can distinguish it from other responses (same marker as #104407).
+    res.setHeader(SYNOLOGY_WEBHOOK_ACCEPTED_HEADER, SYNOLOGY_WEBHOOK_ACCEPTED_VALUE);
     respondNoContent(res);
   };
 }

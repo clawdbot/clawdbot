@@ -22,7 +22,7 @@ import {
   updateClawPackageRefStatus,
 } from "./provenance.js";
 import { parseClawManifest } from "./schema.js";
-import type { ClawSourceIdentity } from "./types.js";
+import type { ClawOpenClawProfile, ClawSourceIdentity } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -32,7 +32,7 @@ afterEach(() => {
 
 async function makePlan(
   manifestValue: unknown = { schemaVersion: 1, agent: { id: "worker" } },
-  options: { workspace?: string } = {},
+  options: { workspace?: string; openClawProfile?: ClawOpenClawProfile } = {},
 ) {
   const root = tempDirs.make("openclaw-claw-add-");
   const parsed = parseClawManifest(manifestValue);
@@ -51,6 +51,7 @@ async function makePlan(
   };
   const plan = await buildClawAddPlan({
     manifest: parsed.manifest,
+    openClawProfile: options.openClawProfile,
     source,
     context: { workspace: options.workspace ?? join(root, "workspace-worker") },
   });
@@ -349,15 +350,22 @@ describe("Claw root install provenance", () => {
 
 describe("applyClawAddPlan", () => {
   it("appends one agent, preserves defaults and existing agents, and creates a new workspace", async () => {
-    const { root, plan } = await makePlan({
-      schemaVersion: 1,
-      agent: {
-        id: "worker",
-        name: "Worker",
-        identity: { name: "Work" },
-        tools: { deny: ["exec"] },
+    const { root, plan } = await makePlan(
+      {
+        schemaVersion: 1,
+        agent: {
+          id: "worker",
+          name: "Worker",
+          identity: { name: "Work" },
+        },
       },
-    });
+      {
+        openClawProfile: {
+          schemaVersion: 1,
+          agent: { tools: { deny: ["exec"] } },
+        },
+      },
+    );
     let config: OpenClawConfig = {
       agents: {
         defaults: { workspace: "/operator/default" },

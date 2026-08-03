@@ -2,12 +2,14 @@
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { resolveGlobalSet } from "../shared/global-singleton.js";
 
 /** Storage-neutral identity for the session transcript that changed. */
 type SessionTranscriptUpdateTarget = {
   agentId: string;
   sessionId: string;
   sessionKey: string;
+  storePath?: string;
 };
 
 type SessionTranscriptUpdateFields = {
@@ -16,14 +18,19 @@ type SessionTranscriptUpdateFields = {
   sessionKey?: string;
   agentId?: string;
   sessionId?: string;
+  /** Committed lifecycle owner; internal delivery must not expose it publicly. */
+  lifecycleRevision?: string;
   message?: unknown;
   messageId?: string;
   messageSeq?: number;
 };
 
 /** Normalized transcript update emitted after a session transcript changes. */
-export type SessionTranscriptUpdate = Omit<SessionTranscriptUpdateFields, "sessionFile"> & {
-  target: SessionTranscriptUpdateTarget;
+export type SessionTranscriptUpdate = Omit<
+  SessionTranscriptUpdateFields,
+  "sessionFile" | "lifecycleRevision" | "target"
+> & {
+  target: Omit<SessionTranscriptUpdateTarget, "storePath">;
 };
 
 /** Internal transcript update that may identify a transcript without a file path. */
@@ -32,8 +39,14 @@ export type InternalSessionTranscriptUpdate = SessionTranscriptUpdateFields;
 type SessionTranscriptListener = (update: SessionTranscriptUpdate) => void;
 type InternalSessionTranscriptListener = (update: InternalSessionTranscriptUpdate) => void;
 
-const SESSION_TRANSCRIPT_LISTENERS = new Set<SessionTranscriptListener>();
-const INTERNAL_SESSION_TRANSCRIPT_LISTENERS = new Set<InternalSessionTranscriptListener>();
+const SESSION_TRANSCRIPT_LISTENERS = resolveGlobalSet<SessionTranscriptListener>(
+  Symbol.for("openclaw.sessionTranscriptListeners"),
+  "close-and-restart",
+);
+const INTERNAL_SESSION_TRANSCRIPT_LISTENERS = resolveGlobalSet<InternalSessionTranscriptListener>(
+  Symbol.for("openclaw.internalSessionTranscriptListeners"),
+  "close-and-restart",
+);
 
 /** Registers a listener for normalized session transcript updates. */
 export function onSessionTranscriptUpdate(listener: SessionTranscriptListener): () => void {
@@ -76,6 +89,7 @@ function normalizeSessionTranscriptUpdate(
     sessionKey: update.sessionKey,
     agentId: update.agentId,
     sessionId: update.sessionId,
+    lifecycleRevision: update.lifecycleRevision,
     message: update.message,
     messageId: update.messageId,
     messageSeq: update.messageSeq,
@@ -89,12 +103,14 @@ function normalizeSessionTranscriptUpdate(
   const sessionKey = normalizeOptionalString(normalized.sessionKey) ?? target?.sessionKey;
   const agentId = normalizeOptionalString(normalized.agentId) ?? target?.agentId;
   const sessionId = normalizeOptionalString(normalized.sessionId) ?? target?.sessionId;
+  const lifecycleRevision = normalizeOptionalString(normalized.lifecycleRevision);
   return {
     ...(trimmed ? { sessionFile: trimmed } : {}),
     ...(target ? { target } : {}),
     ...(sessionKey ? { sessionKey } : {}),
     ...(agentId ? { agentId } : {}),
     ...(sessionId ? { sessionId } : {}),
+    ...(lifecycleRevision ? { lifecycleRevision } : {}),
     ...(normalized.message !== undefined ? { message: normalized.message } : {}),
     ...(normalizeOptionalString(normalized.messageId)
       ? { messageId: normalizeOptionalString(normalized.messageId) }
@@ -131,7 +147,11 @@ function projectPublicSessionTranscriptUpdate(
     return undefined;
   }
   return {
-    target,
+    target: {
+      agentId: target.agentId,
+      sessionId: target.sessionId,
+      sessionKey: target.sessionKey,
+    },
     ...(update.sessionKey ? { sessionKey: update.sessionKey } : {}),
     ...(update.agentId ? { agentId: update.agentId } : {}),
     ...(update.sessionId ? { sessionId: update.sessionId } : {}),
@@ -145,7 +165,7 @@ function normalizeUpdateTarget(update: {
   agentId?: string;
   sessionId?: string;
   sessionKey?: string;
-  target?: SessionTranscriptUpdate["target"];
+  target?: InternalSessionTranscriptUpdate["target"];
 }): SessionTranscriptUpdateTarget | undefined {
   const sessionKey =
     normalizeOptionalString(update.target?.sessionKey) ??
@@ -156,6 +176,7 @@ function normalizeUpdateTarget(update: {
     (sessionKey ? parseAgentSessionKey(sessionKey)?.agentId : undefined);
   const sessionId =
     normalizeOptionalString(update.target?.sessionId) ?? normalizeOptionalString(update.sessionId);
+  const storePath = normalizeOptionalString(update.target?.storePath);
   if (!agentId || !sessionId || !sessionKey) {
     return undefined;
   }
@@ -163,5 +184,6 @@ function normalizeUpdateTarget(update: {
     agentId,
     sessionId,
     sessionKey,
+    ...(storePath ? { storePath } : {}),
   };
 }

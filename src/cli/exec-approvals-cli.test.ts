@@ -169,6 +169,7 @@ function scopeByLabel(label: string, output: Record<string, unknown> = writtenJs
 }
 
 function resetLocalSnapshot() {
+  localSnapshot.exists = true;
   localSnapshot.hash = "hash-local";
   localSnapshot.file = { version: 1, agents: {} };
 }
@@ -309,6 +310,17 @@ describe("exec approvals CLI", () => {
     expect(runtimeErrors).toHaveLength(0);
   });
 
+  it("renders an unstored fresh-install policy as defaults instead of absent", async () => {
+    localSnapshot.exists = false;
+
+    await runApprovalsCommand(["approvals", "get"]);
+
+    const output = defaultRuntime.log.mock.calls.map(([line]) => String(line ?? "")).join("\n");
+    expect(output).toContain("State");
+    expect(output).toContain("defaults (no stored overrides)");
+    expect(output).not.toContain("Exists");
+  });
+
   it("adds effective policy to json output", async () => {
     localSnapshot.file = {
       version: 1,
@@ -329,7 +341,7 @@ describe("exec approvals CLI", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(writtenJson(), 0);
     const policy = effectivePolicy();
     expect(String(policy.note)).toContain(
-      "Effective exec policy is the host approvals file intersected with requested tools.exec policy.",
+      "Effective exec policy is the host approvals policy intersected with requested tools.exec policy.",
     );
     expect(String(policy.note)).toContain(SESSION_EXEC_OVERRIDES_NOTE);
     const scope = scopeByLabel("tools.exec");
@@ -430,7 +442,7 @@ describe("exec approvals CLI", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(writtenJson(), 0);
     const policy = effectivePolicy();
     expect(String(policy.note)).toContain(
-      "Effective exec policy is the node host approvals file intersected with gateway tools.exec policy.",
+      "Effective exec policy is the node host approvals policy intersected with gateway tools.exec policy.",
     );
     expect(String(policy.note)).toContain(SESSION_EXEC_OVERRIDES_NOTE);
     const scope = scopeByLabel("tools.exec");
@@ -786,7 +798,7 @@ describe("exec approvals CLI", () => {
         },
       },
       agents: {
-        list: [{ id: "runner" }],
+        list: [{ id: "main", default: true }, { id: "runner" }],
       },
     });
 

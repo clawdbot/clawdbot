@@ -8,6 +8,8 @@ import { defaultRuntime } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
+import { setCommandJsonMode } from "./program/json-mode.js";
+import { isSystemMachineOutput } from "./system-output-mode.js";
 
 type SystemEventOpts = GatewayRpcOpts & {
   text?: string;
@@ -56,6 +58,7 @@ export function registerSystemCli(program: Command) {
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/system", "docs.openclaw.ai/cli/system")}\n`,
     );
+  setCommandJsonMode(system, "output", ({ argv }) => isSystemMachineOutput(argv));
 
   addGatewayClientOptions(
     system
@@ -80,12 +83,20 @@ export function registerSystemCli(program: Command) {
         }
         const mode = normalizeWakeMode(opts.mode);
         const sessionKey = normalizeOptionalString(opts.sessionKey);
-        return await callGatewayFromCli(
+        const result = await callGatewayFromCli(
           "wake",
           opts,
           sessionKey ? { mode, text, sessionKey } : { mode, text },
           { expectFinal: false },
         );
+        if (typeof result === "object" && result !== null && "ok" in result && !result.ok) {
+          const reason =
+            "reason" in result && typeof result.reason === "string"
+              ? result.reason
+              : "Gateway did not accept the system event";
+          throw new Error(reason);
+        }
+        return result;
       },
       "ok",
     );

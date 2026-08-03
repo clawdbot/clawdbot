@@ -5,6 +5,10 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+import {
+  loadStoredHiddenSessionCatalogIds,
+  storeHiddenSessionCatalogIds,
+} from "../../components/app-sidebar-session-types.ts";
 import { TERMINAL_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
 import { CATALOG_SESSION_CONTINUED_EVENT } from "../../lib/sessions/catalog-key.ts";
 import {
@@ -19,28 +23,29 @@ import {
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
 
-function createDataTransferStub() {
-  const data = new Map<string, string>();
-  return {
-    get types() {
-      return [...data.keys()];
-    },
-    setData: (type: string, value: string) => void data.set(type, value),
-    getData: (type: string) => data.get(type) ?? "",
-    effectAllowed: "none",
-    dropEffect: "none",
-  };
-}
+describe("AppSidebar context menu boundary", () => {
+  it("suppresses native menus except on editable controls", async () => {
+    const { sidebar } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      createSessions("main", ["agent:main:main"]),
+    );
+    const aside = sidebar.querySelector<HTMLElement>("aside.sidebar");
+    const footer = sidebar.querySelector<HTMLElement>(".sidebar-shell__footer");
+    if (!aside || !footer) {
+      throw new Error("expected sidebar chrome");
+    }
 
-function dispatchDragEvent(
-  target: Element,
-  type: "dragstart" | "dragover" | "drop",
-  dataTransfer: ReturnType<typeof createDataTransferStub>,
-) {
-  const event = new Event(type, { bubbles: true, cancelable: true });
-  Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
-  target.dispatchEvent(event);
-}
+    const chromeMenu = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    footer.dispatchEvent(chromeMenu);
+    expect(chromeMenu.defaultPrevented).toBe(true);
+
+    const input = document.createElement("input");
+    aside.append(input);
+    const editableMenu = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    input.dispatchEvent(editableMenu);
+    expect(editableMenu.defaultPrevented).toBe(false);
+  });
+});
 
 describe("AppSidebar multi-select", () => {
   const KEYS = ["agent:main:main", "agent:main:a", "agent:main:b", "agent:main:c"];
@@ -91,6 +96,42 @@ describe("AppSidebar multi-select", () => {
     return { sidebar, harness };
   }
 
+  it("names each session's pin and menu buttons after their owning session", async () => {
+    const { sidebar } = await mountMultiSelect();
+
+    for (const key of ["agent:main:a", "agent:main:b"]) {
+      const row = sidebar.querySelector<HTMLElement>(`[data-session-key="${key}"]`);
+      const label = row?.querySelector(".sidebar-recent-session__name")?.textContent?.trim();
+      expect(label).toBeTruthy();
+      expect(row?.querySelector("[data-sidebar-session-pin]")?.getAttribute("aria-label")).toBe(
+        `Pin thread: ${label}`,
+      );
+      expect(row?.querySelector("[data-session-menu]")?.getAttribute("aria-label")).toBe(
+        `Open thread menu: ${label}`,
+      );
+    }
+  });
+
+  it("restores the thread action anchor when Tab exits its keyboard context menu", async () => {
+    const { sidebar } = await mountMultiSelect();
+    const link = rowLink(sidebar, "agent:main:a");
+    const trigger = sidebar.querySelector<HTMLElement>(
+      '[data-session-key="agent:main:a"] [data-session-menu]',
+    );
+    link.focus();
+    link.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    await sidebar.updateComplete;
+
+    const menu = await sessionMenu(sidebar);
+    const item = menu.querySelector<HTMLElement>("wa-dropdown-item:not([disabled])");
+    item?.focus();
+    item?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }),
+    );
+
+    expect(document.activeElement).toBe(trigger);
+  });
+
   it("cmd-click toggles rows into the selection and plain click clears it", async () => {
     const { sidebar } = await mountMultiSelect();
 
@@ -134,18 +175,22 @@ describe("AppSidebar multi-select", () => {
     menu.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
 
     await waitForFast(() => expect(harness.patch).toHaveBeenCalledTimes(2));
+    // Each row defers its canonical list refresh; the batch pays one refresh at
+    // the end instead of a full sessions.list round trip per archived row.
     expect(harness.patch).toHaveBeenNthCalledWith(
       1,
       "agent:main:a",
       { archived: true },
-      { agentId: "main" },
+      { agentId: "main", deferListRefresh: true },
     );
     expect(harness.patch).toHaveBeenNthCalledWith(
       2,
       "agent:main:b",
       { archived: true },
-      { agentId: "main" },
+      { agentId: "main", deferListRefresh: true },
     );
+    await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledTimes(1));
+    expect(harness.refreshReplacement).toHaveBeenCalledWith("main");
   });
 
   it("deletes the selection in one batch after a single confirm", async () => {
@@ -339,66 +384,6 @@ describe("AppSidebar transient menus", () => {
   });
 });
 
-describe("AppSidebar custom group reordering", () => {
-  async function mountWithGroups(groups: string[]) {
-    const client = {} as GatewayBrowserClient;
-    const gateway = createGateway(client);
-    const harness = createSessionsHarness("main", [
-      "agent:main:main",
-      "agent:main:thread",
-      ...groups.map((_, index) => `agent:main:group-${index}`),
-    ]);
-    const result = harness.sessions.state.result;
-    if (!result) {
-      throw new Error("expected grouped session fixtures");
-    }
-    for (const [index, group] of groups.entries()) {
-      const row = result.sessions.find((entry) => entry.key === `agent:main:group-${index}`);
-      if (!row) {
-        throw new Error(`expected session fixture for ${group}`);
-      }
-      row.category = group;
-    }
-    const { sidebar } = await mountSidebar(gateway, harness.sessions);
-    sidebar.connected = true;
-    harness.publish({ groups });
-    await sidebar.updateComplete;
-    return { sidebar, harness };
-  }
-
-  function groupHeader(sidebar: SidebarLifecycleState, sectionId: string) {
-    const header = sidebar.querySelector(
-      `[data-session-section="${sectionId}"] .sidebar-recent-sessions__head`,
-    );
-    if (!header) {
-      throw new Error(`expected header for section ${sectionId}`);
-    }
-    return header;
-  }
-
-  it("marks custom group headers draggable but keeps smart sections static", async () => {
-    const { sidebar } = await mountWithGroups(["Alpha", "Beta"]);
-
-    expect(groupHeader(sidebar, "category:Alpha").getAttribute("draggable")).toBe("true");
-    expect(groupHeader(sidebar, "ungrouped").getAttribute("draggable")).toBe("false");
-  });
-
-  it("persists the new catalog order when a group header drops onto another group", async () => {
-    const { sidebar, harness } = await mountWithGroups(["Alpha", "Beta", "Gamma"]);
-    const dataTransfer = createDataTransferStub();
-
-    dispatchDragEvent(groupHeader(sidebar, "category:Gamma"), "dragstart", dataTransfer);
-    const alphaSection = sidebar.querySelector('[data-session-section="category:Alpha"]');
-    if (!alphaSection) {
-      throw new Error("expected Alpha section");
-    }
-    dispatchDragEvent(alphaSection, "drop", dataTransfer);
-
-    await waitForFast(() =>
-      expect(harness.groupsPut).toHaveBeenCalledWith(["Gamma", "Alpha", "Beta"]),
-    );
-  });
-});
 describe("AppSidebar catalog session rows", () => {
   const catalogList = (
     sessions: Array<Record<string, unknown>>,
@@ -443,6 +428,47 @@ describe("AppSidebar catalog session rows", () => {
     await sidebar.updateComplete;
     return { sidebar, request };
   }
+
+  it("opens the catalog view menu from its header and hides that section", async () => {
+    vi.useFakeTimers();
+    try {
+      const { sidebar } = await mountWithCatalog(
+        catalogList([{ threadId: "thread-1", name: "Release checklist" }]),
+        ["agent:main:main"],
+      );
+      const header = sidebar.querySelector<HTMLElement>(
+        '[data-session-section="catalog:codex"] .sidebar-recent-sessions__head',
+      );
+      if (!header) {
+        throw new Error("expected catalog section header");
+      }
+      const contextMenu = new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        clientX: 24,
+        clientY: 36,
+      });
+      header.dispatchEvent(contextMenu);
+      await sidebar.updateComplete;
+
+      expect(contextMenu.defaultPrevented).toBe(true);
+      const menu = sidebar.querySelector<HTMLElement>(".sidebar-catalog-view-menu");
+      const hide = menu?.querySelector<HTMLElement>('wa-dropdown-item[value="hide-catalog"]');
+      expect(menu).not.toBeNull();
+      expect(hide).not.toBeNull();
+      menu?.dispatchEvent(new CustomEvent("wa-select", { bubbles: true, detail: { item: hide } }));
+      await sidebar.updateComplete;
+
+      expect(loadStoredHiddenSessionCatalogIds().has("codex")).toBe(true);
+      expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).toBeNull();
+
+      storeHiddenSessionCatalogIds(new Set());
+      await sidebar.updateComplete;
+      expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("renders local rows directly and keeps paired-node rows under their host heading", async () => {
     vi.useFakeTimers();
@@ -492,7 +518,8 @@ describe("AppSidebar catalog session rows", () => {
       const section = sidebar.querySelector('[data-session-section="catalog:codex"]');
       const local = section?.querySelector('[data-session-catalog-host="gateway:local"]');
       const node = section?.querySelector('[data-session-catalog-host="node:devbox"]');
-      expect(section?.querySelector(".sidebar-session-group-count")?.textContent?.trim()).toBe("2");
+      // Counts only render while a catalog section is collapsed.
+      expect(section?.querySelector(".sidebar-session-group-count")).toBeNull();
       expect(local?.querySelector(".sidebar-session-catalog-host__head")).toBeNull();
       expect(local?.textContent).toContain("Local session");
       expect(local?.textContent).not.toContain("Node session");
@@ -501,6 +528,14 @@ describe("AppSidebar catalog session rows", () => {
       );
       expect(node?.textContent).toContain("Node session");
       expect(node?.textContent).not.toContain("Local session");
+
+      // Collapsing the catalog surfaces the row count as the closed-state indicator.
+      section?.querySelector<HTMLButtonElement>(".sidebar-session-group-toggle")?.click();
+      await sidebar.updateComplete;
+      const collapsedSection = sidebar.querySelector('[data-session-section="catalog:codex"]');
+      expect(
+        collapsedSection?.querySelector(".sidebar-session-group-count")?.textContent?.trim(),
+      ).toBe("2");
     } finally {
       vi.useRealTimers();
     }
@@ -553,7 +588,8 @@ describe("AppSidebar catalog session rows", () => {
       const row = sidebar.querySelector('[data-session-key*="thread-1"]') as HTMLElement;
       (row.querySelector("a") as HTMLElement).click();
       expect(navigate).toHaveBeenCalledWith("chat", {
-        search: "?session=catalog%3Acodex%3Agateway%253Alocal%3Athread-1",
+        pathname: "/chat/main",
+        search: "?catalog=codex&host=gateway%3Alocal&thread=thread-1",
       });
       row.dispatchEvent(
         new MouseEvent("contextmenu", {

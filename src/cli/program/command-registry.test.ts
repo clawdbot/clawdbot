@@ -109,7 +109,7 @@ describe("command-registry", () => {
     expect(names).toContain("sessions");
     expect(names).toContain("commitments");
     expect(names).toContain("tasks");
-    expect(names).not.toContain("agent");
+    expect(names).toContain("agent");
     expect(names).not.toContain("setup");
     expect(names).not.toContain("status");
     expect(names).not.toContain("doctor");

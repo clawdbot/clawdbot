@@ -27,7 +27,7 @@ const CLIENT_ID = "Iv1.b507a08c87ecfe98";
 const GITHUB_DEVICE_FLOW_REQUEST_TIMEOUT_MS = 30_000;
 const GITHUB_DEVICE_FLOW_DEFAULT_INTERVAL_MS = 5_000;
 const GITHUB_DEVICE_FLOW_SLOW_DOWN_INCREMENT_MS = 5_000;
-// Data-residency GitHub Enterprise support: the device flow, token exchange, and
+// Data-residency GitHub Enterprise support: the device flow, runtime auth, and
 // completions endpoints all live under the tenant host (e.g. "acme.ghe.com")
 // instead of github.com. The host is threaded in from the selected auth flow so
 // the SSRF allowlist and every request target stay consistent for one login.
@@ -161,6 +161,8 @@ async function postGitHubDeviceFlowForm(params: {
   });
   try {
     if (!response.ok) {
+      // Release closes the dispatcher, so cancel its unread response body first.
+      await response.body?.cancel().catch(() => undefined);
       throw new Error(`${params.failureLabel}: HTTP ${response.status}`);
     }
     return parseJsonResponse(
@@ -391,7 +393,7 @@ export async function githubCopilotLoginCommand(
   }
 
   // Mint against the same host the runtime will route to. resolveGithubCopilotDomain
-  // is env-authoritative (COPILOT_GITHUB_DOMAIN wins), and runtime token exchange
+  // is env-authoritative (COPILOT_GITHUB_DOMAIN wins), and runtime authentication
   // uses the same resolver, so honoring it here keeps the minted token and the
   // runtime endpoint on the same tenant instead of minting a public token that
   // then 401s against api.<tenant>.

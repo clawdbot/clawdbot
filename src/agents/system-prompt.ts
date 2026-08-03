@@ -28,6 +28,7 @@ import {
 } from "../channels/plugins/native-approval-prompt.js";
 import type { SubagentDelegationMode } from "../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
   buildMemoryPromptSection,
   type PreparedMemoryPromptSection,
@@ -35,18 +36,20 @@ import {
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
+import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import type { BootstrapMode } from "./bootstrap-mode.js";
 import {
   buildFullBootstrapPromptLines,
   buildLimitedBootstrapPromptLines,
 } from "./bootstrap-prompt.js";
-import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import type {
   EmbeddedFullAccessBlockedReason,
   EmbeddedSandboxInfo,
 } from "./embedded-agent-runner/types.js";
+import { MAX_OWNER_PROMPT_CONTENT_BYTES, resolveOwnerPromptNumbers } from "./owner-display.js";
+import { filterProjectScopedCuratedContextFiles } from "./project-memory-bootstrap.js";
 import { buildPromisedWorkPromptSection } from "./promised-work-prompt.js";
 import {
   buildOpenClawToolFallbackText,
@@ -62,6 +65,11 @@ import type {
   ProviderSystemPromptSectionId,
 } from "./system-prompt-contribution.js";
 import type { PromptMode, SilentReplyPromptMode } from "./system-prompt.types.js";
+import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
+import {
+  buildWatchedSessionsPromptLines,
+  type PreparedWatchedSessionsPrompt,
+} from "./watched-sessions-prompt.js";
 
 /**
  * Controls which hardcoded sections are included in the system prompt.
@@ -83,7 +91,7 @@ const CONTEXT_FILE_ORDER = new Map<string, number>([
 
 const DYNAMIC_CONTEXT_FILE_BASENAMES = new Set<string>();
 const DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK =
-  "Default heartbeat prompt:\n`Follow the heartbeat monitor scratch context when provided. Recurring tasks are cron jobs; create or change their schedules with cron tools or the openclaw cron CLI, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`";
+  "Default heartbeat prompt:\n`Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`";
 const SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT = 64;
 
 type StablePromptPrefixCacheEntry = {
@@ -111,7 +119,7 @@ function buildSubagentDelegationPreferenceSection(params: {
     "- Otherwise use `sessions_spawn`; avoid expensive calls yourself.",
     "- Delegate inspection, shell/web/browser, long reads, debugging, coding, multi-step analysis, comparison, summarization, waits.",
     "- Brief each child: objective, output, inputs/files, write scope, verification, blocking status.",
-    '- Need stable handle: lowercase `taskName` (underscores/hyphens). Default isolated: omit `context`; transcript needed: `context:"fork"`.',
+    '- Need stable handle: lowercase `taskName` (underscores/hyphens); `label`: short task title for UI lists, not a persona. Default isolated: omit `context`; transcript needed: `context:"fork"`.',
     params.hasSessionsYield
       ? "- Need results before reply: `sessions_yield`; never poll."
       : "- Completion is push-based; never poll. Synthesize returned events for user.",
@@ -152,13 +160,7 @@ function cacheStablePromptPrefix(key: string, build: () => string): string {
 
   const value = build();
   stablePromptPrefixCache.set(key, { value });
-  while (stablePromptPrefixCache.size > SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT) {
-    const oldestKey = stablePromptPrefixCache.keys().next().value;
-    if (oldestKey === undefined) {
-      break;
-    }
-    stablePromptPrefixCache.delete(oldestKey);
-  }
+  pruneMapToMaxSize(stablePromptPrefixCache, SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT);
   return value;
 }
 
@@ -239,13 +241,21 @@ function buildProjectContextSection(params: {
     const hasMemoryFile = params.files.some(
       (file) => getContextFileBasename(file.path) === "memory.md",
     );
+    const hasUserFile = params.files.some(
+      (file) => getContextFileBasename(file.path) === "user.md",
+    );
     lines.push("Loaded project context:");
     if (hasSoulFile) {
       lines.push("SOUL.md: persona/tone. Follow it unless higher-priority instructions override.");
     }
     if (hasMemoryFile) {
       lines.push(
-        "MEMORY.md: durable preferences/behavior; follow all session unless higher priority overrides.",
+        "MEMORY.md: durable non-profile facts and decisions; use when relevant unless higher-priority instructions override.",
+      );
+    }
+    if (hasUserFile) {
+      lines.push(
+        "USER.md: durable user preferences and profile directives; follow unless higher-priority instructions override.",
       );
     }
     lines.push("");
@@ -285,14 +295,20 @@ function buildExecApprovalPromptGuidance(params: {
   return 'exec approval-pending: send exact /approve from "Reply with:"; never ask for another code.';
 }
 
-function buildSkillsSection(params: { skillsPrompt?: string; readToolName: string }) {
+function buildSkillsSection(params: {
+  skillsPrompt?: string;
+  readToolName: string;
+  codeModeActive?: boolean;
+}) {
   const trimmed = params.skillsPrompt?.trim();
   if (!trimmed) {
     return [];
   }
   return [
     "## Skills",
-    `Scan <available_skills>. Clear match: read exact <location> with \`${params.readToolName}\`; obey.`,
+    params.codeModeActive
+      ? 'Scan <available_skills>. Clear match: use `skills.read("<name>")` inside `exec`; obey.'
+      : `Scan <available_skills>. Clear match: read exact <location> with \`${params.readToolName}\`; obey.`,
     "Changed <version>: re-read. Several: most specific. None: read none.",
     "Up-front max one. Never invent paths.",
     "External writes: batch safely; no tight loops; honor 429/Retry-After.",
@@ -395,27 +411,78 @@ function formatOwnerDisplayId(ownerId: string, ownerDisplaySecret?: string) {
   return digest.slice(0, 12);
 }
 
+const MAX_OWNER_PROMPT_LINE_BYTES = 1_024;
+const OWNER_PROMPT_PREFIX = "Allowlisted senders: ";
+const OWNER_PROMPT_SUFFIX = ". Allowlisted != owner.";
+
+function formatRawOwnerDisplayId(ownerId: string, maxBytes: number): string {
+  const sanitized = sanitizeForPromptLiteral(ownerId);
+  if (Buffer.byteLength(sanitized, "utf8") <= maxBytes) {
+    return sanitized;
+  }
+  if (maxBytes <= 3) {
+    return "";
+  }
+  return `${truncateUtf8Prefix(sanitized, maxBytes - 3)}...`;
+}
+
 function buildOwnerIdentityLine(
   ownerNumbers: string[],
   ownerDisplay: OwnerIdDisplay,
   ownerDisplaySecret?: string,
 ) {
-  const normalized = normalizeStringEntries(ownerNumbers);
+  const normalized = normalizeStringEntries(resolveOwnerPromptNumbers({ ownerNumbers }));
   if (normalized.length === 0) {
     return undefined;
   }
-  const displayOwnerNumbers =
-    ownerDisplay === "hash"
-      ? normalized.map((ownerId) => formatOwnerDisplayId(ownerId, ownerDisplaySecret))
-      : normalized;
-  return `Allowlisted senders: ${displayOwnerNumbers.join(", ")}. Allowlisted != owner.`;
+  const displayOwnerNumbers: string[] = [];
+  let remainingBytes = Math.min(
+    MAX_OWNER_PROMPT_CONTENT_BYTES,
+    MAX_OWNER_PROMPT_LINE_BYTES - Buffer.byteLength(OWNER_PROMPT_PREFIX + OWNER_PROMPT_SUFFIX),
+  );
+  for (const ownerId of normalized) {
+    const separatorBytes = displayOwnerNumbers.length > 0 ? 2 : 0;
+    const availableBytes = remainingBytes - separatorBytes;
+    if (availableBytes <= 0) {
+      break;
+    }
+    const displayOwnerId =
+      ownerDisplay === "hash"
+        ? formatOwnerDisplayId(ownerId, ownerDisplaySecret)
+        : formatRawOwnerDisplayId(ownerId, availableBytes);
+    if (!displayOwnerId) {
+      continue;
+    }
+    const nextBytes = Buffer.byteLength(displayOwnerId, "utf8") + separatorBytes;
+    if (nextBytes > remainingBytes) {
+      break;
+    }
+    displayOwnerNumbers.push(displayOwnerId);
+    remainingBytes -= nextBytes;
+  }
+  if (displayOwnerNumbers.length === 0) {
+    return undefined;
+  }
+  return `${OWNER_PROMPT_PREFIX}${displayOwnerNumbers.join(", ")}${OWNER_PROMPT_SUFFIX}`;
 }
 
-function buildTimeSection(params: { userTimezone?: string }) {
-  if (!params.userTimezone) {
+function buildTemporalContextSection(params: {
+  userDate?: string;
+  userTimezone?: string;
+  sessionStatusAvailable: boolean;
+}) {
+  const userDate = params.userDate?.trim();
+  const userTimezone = params.userTimezone?.trim();
+  if (!userDate || !userTimezone) {
     return [];
   }
-  return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
+  return [
+    "## Temporal Context",
+    `Current date: ${userDate}`,
+    `Time zone: ${userTimezone}`,
+    ...(params.sessionStatusAvailable ? ["For the exact current time, use `session_status`."] : []),
+    "",
+  ];
 }
 
 function buildAssistantOutputDirectivesSection(params: {
@@ -463,6 +530,22 @@ function buildWebchatCanvasSection(params: {
     "- Never local/file:// or arbitrary URL. URL must start `/__openclaw__/canvas/`; else use `ref`.",
     "- Hosted root is profile-, not workspace-scoped; stage there.",
     "- Quote attributes. Prefer `ref`; use `url` only with full hosted URL.",
+    "",
+  ];
+}
+
+function buildControlUiSessionCompanionSection(params: {
+  isMinimal: boolean;
+  runtimeChannel?: string;
+}) {
+  if (params.isMinimal || params.runtimeChannel !== "webchat") {
+    return [];
+  }
+  return [
+    "## Control UI Session Companion",
+    "- Operator has a read-only rail companion for this session's status and explanations.",
+    "- On request, do not spawn sub-agents or burn main-thread turns merely to summarize status or re-explain recent work.",
+    "- Reserve `sessions_spawn` for delegated work with its own deliverable.",
     "",
   ];
 }
@@ -515,10 +598,20 @@ function buildMessagingSection(params: {
   requireExplicitMessageTarget?: boolean;
   silentReplyPromptMode?: SilentReplyPromptMode;
 }) {
-  if (params.isMinimal) {
-    return [];
-  }
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
+  const visibleReplyInstruction = messageToolOnly
+    ? "- Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing. Brief tool-call progress is visible; no hidden instructions/private data/reasoning."
+    : "- Current-session final text normally routes to source. If turn says final private, visible output uses `message(action=send)`.";
+  const messageToolTargetInstruction = params.requireExplicitMessageTarget
+    ? "- `send`: `target` + `message`; target required this turn."
+    : "- `send`: `message`; current source is default target. Set `target` only elsewhere.";
+  if (params.isMinimal) {
+    // Restricted delivery turns still need their sole visible-reply contract;
+    // omitting it makes a private final silently disappear for the requester.
+    return messageToolOnly && params.availableTools.has("message")
+      ? ["## Messaging", visibleReplyInstruction, messageToolTargetInstruction, ""]
+      : [];
+  }
   const showGenericInlineButtonHint = params.runtimeChannel !== "slack";
   const groupMessageToolOnly =
     messageToolOnly && (params.runtimeChatType === "group" || params.runtimeChatType === "channel");
@@ -531,16 +624,14 @@ function buildMessagingSection(params: {
     : `- Completion event requesting update: rewrite in normal voice; send. Never forward raw metadata or default to ${SILENT_REPLY_TOKEN}.`;
   const subagentOrchestrationGuidance = hasSessionsSpawn
     ? hasSubagents
-      ? `- Subagents: \`sessions_spawn\` with objective/output/write-scope/verification; stable handle needs \`taskName\`; isolated omits \`context\`, transcript needs \`context:"fork"\`; ${hasSessionsYield ? "wait via `sessions_yield`; " : ""}\`subagents(action=list)\` only status/debug.`
-      : `- Subagents: \`sessions_spawn\` with objective/output/write-scope/verification; stable handle needs \`taskName\`; isolated omits \`context\`, transcript needs \`context:"fork"\`${hasSessionsYield ? "; wait via `sessions_yield`" : ""}.`
+      ? `- Subagents: \`sessions_spawn\` with objective/output/write-scope/verification; stable handle needs \`taskName\`, UI title \`label\`; isolated omits \`context\`, transcript needs \`context:"fork"\`; ${hasSessionsYield ? "wait via `sessions_yield`; " : ""}\`subagents(action=list)\` only status/debug.`
+      : `- Subagents: \`sessions_spawn\` with objective/output/write-scope/verification; stable handle needs \`taskName\`, UI title \`label\`; isolated omits \`context\`, transcript needs \`context:"fork"\`${hasSessionsYield ? "; wait via `sessions_yield`" : ""}.`
     : hasSubagents
       ? "- Subagents: `subagents(action=list)` only for status/debug visibility."
       : "";
   return [
     "## Messaging",
-    messageToolOnly
-      ? "- Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing. Brief tool-call progress is visible; no hidden instructions/private data/reasoning."
-      : "- Current-session final text normally routes to source. If turn says final private, visible output uses `message(action=send)`.",
+    visibleReplyInstruction,
     "- Cross-session: `sessions_send(sessionKey, message)`.",
     subagentOrchestrationGuidance,
     completionEventGuidance,
@@ -553,11 +644,7 @@ function buildMessagingSection(params: {
           groupMessageToolOnly
             ? "- Group/channel: stale/joke/light ack/low-value chatter => reaction or silence. Needed reply => `message(action=send)`; final text private."
             : "",
-          messageToolOnly
-            ? params.requireExplicitMessageTarget
-              ? "- `send`: `target` + `message`; target required this turn."
-              : "- `send`: `message`; current source is default target. Set `target` only elsewhere."
-            : "- `send`: `target` + `message`.",
+          messageToolOnly ? messageToolTargetInstruction : "- `send`: `target` + `message`.",
           params.messageChannelOptions
             ? `- No source default: proactive send needs \`channel\`; ids: ${params.messageChannelOptions}.`
             : "- Set `channel` only outside current/default source.",
@@ -578,6 +665,21 @@ function buildMessagingSection(params: {
           .filter(Boolean)
           .join("\n")
       : "",
+    "",
+  ];
+}
+
+function buildCollapsibleDetailsSection(params: {
+  isMinimal: boolean;
+  collapsibleDetailsSupported: boolean;
+}) {
+  if (params.isMinimal || !params.collapsibleDetailsSupported) {
+    return [];
+  }
+  return [
+    "## Collapsible Details",
+    "This surface renders `<details>` disclosures. When a reply has optional depth — long derivations, logs, background, worked examples — you may place it inside `<details><summary>Label</summary>` … `</details>` written on their own lines.",
+    "Keep the primary answer, and anything the user must act on, outside the block. Never hide the actual answer behind a disclosure.",
     "",
   ];
 }
@@ -705,12 +807,12 @@ export function buildAgentSystemPrompt(params: {
   toolSummaries?: Record<string, string>;
   modelAliasLines?: string[];
   userTimezone?: string;
-  userTime?: string;
-  userTimeFormat?: ResolvedTimeFormat;
+  userDate?: string;
   contextFiles?: EmbeddedContextFile[];
   bootstrapMode?: BootstrapMode;
   bootstrapTruncationNotice?: string;
   skillsPrompt?: string;
+  codeModeActive?: boolean;
   heartbeatPrompt?: string;
   docsPath?: string;
   sourcePath?: string;
@@ -766,6 +868,12 @@ export function buildAgentSystemPrompt(params: {
   memoryCitationsMode?: MemoryCitationsMode;
   /** Immutable memory state prepared before synchronous prompt assembly. */
   preparedMemoryPrompt?: PreparedMemoryPromptSection;
+  /** Watched same-agent group sessions prepared before synchronous prompt assembly. */
+  preparedWatchedSessions?: PreparedWatchedSessionsPrompt;
+  /** Per-turn learned facts restricted to the currently active repository. */
+  projectMemoryBootstrap?: string[];
+  /** Prepared repository identities used to filter curated raw context fail-closed. */
+  activeProjectKeys?: readonly string[];
   promptContribution?: ProviderSystemPromptContribution;
 }) {
   const acpEnabled = params.acpEnabled === true;
@@ -780,10 +888,12 @@ export function buildAgentSystemPrompt(params: {
     grep: "Search file contents",
     find: "Find files by glob",
     ls: "List directories",
-    exec:
-      promptSurface === "cli_backend"
+    exec: params.codeModeActive
+      ? "Run JavaScript/TypeScript Code Mode; call exact catalog tools from code, never shell/Python/imports"
+      : promptSurface === "cli_backend"
         ? "Run shell on connected node; sync; host=node"
         : "Run shell; pty for TTY CLIs",
+    wait: "Resume a suspended Code Mode exec",
     process: "Control background exec",
     web_search: "Web search",
     web_fetch: "Fetch/extract URL",
@@ -794,18 +904,19 @@ export function buildAgentSystemPrompt(params: {
       "Own visible shell. Use for long/interactive jobs user should watch. exec for quiet work",
     canvas: "Present/eval/snapshot Canvas",
     nodes: "Paired node status/control/media",
-    cron: "Schedule/wake. Reminder text must read as reminder when fired; mention reminder for delayed gaps; include useful recent context.",
+    [AUTOMATIONS_TOOL_NAME]:
+      "Schedule/wake. Reminder text must read as reminder when fired; mention reminder for delayed gaps; include useful recent context. This feature is called automations; never call it cron.",
     message: "Message/channel actions",
     conversations_list: "List exact external conversation addresses",
     conversations_send: "Send directly to an external conversation",
     conversations_turn: "Send and wait for one correlated external reply",
-    openclaw: "System setup/config expert; writes need human approval",
+    openclaw: "Gateway restart/system setup/config; changes need human approval",
     gateway: "Read gateway config/schema",
     agents_list: acpSpawnRuntimeEnabled
       ? "List allowed OpenClaw subagent ids; not ACP ids"
       : "List allowed subagent ids",
-    sessions_list: "List other sessions/subagents; filters/last",
-    sessions_history: "Read other session/subagent history",
+    sessions_list: "List visible sessions; filters/last",
+    sessions_history: "Read visible session/subagent history",
     sessions_search: "Search past sessions; use sessionKey with sessions_history",
     sessions_send: "Message other session/subagent",
     sessions_spawn: acpSpawnRuntimeEnabled
@@ -836,7 +947,7 @@ export function buildAgentSystemPrompt(params: {
     "terminal",
     "canvas",
     "nodes",
-    "cron",
+    AUTOMATIONS_TOOL_NAME,
     "message",
     "conversations_list",
     "conversations_send",
@@ -904,10 +1015,11 @@ export function buildAgentSystemPrompt(params: {
     toolLines.push(summary ? `- ${name}: ${summary}` : `- ${name}`);
   }
   const toolSchemaDirectoryPrompt = params.toolSchemaDirectoryPrompt?.trim();
-  const renderOpenClawToolWorkflowHints = shouldRenderOpenClawToolWorkflowHints({
-    surface: promptSurface,
-    hasToolList: toolLines.length > 0,
-  });
+  const renderOpenClawToolWorkflowHints =
+    shouldRenderOpenClawToolWorkflowHints({
+      surface: promptSurface,
+      hasToolList: toolLines.length > 0,
+    }) && params.codeModeActive !== true;
 
   const hasGateway = availableTools.has("gateway");
   const hasOpenClaw = availableTools.has("openclaw");
@@ -926,12 +1038,12 @@ export function buildAgentSystemPrompt(params: {
       ])
       .filter(([, value]) => Boolean(value)),
   ) as Partial<Record<ProviderSystemPromptSectionId, string>>;
+  const promptMode = params.promptMode ?? "full";
+  const isMinimal = promptMode === "minimal" || promptMode === "none";
   const ownerDisplay = params.ownerDisplay === "hash" ? "hash" : "raw";
-  const ownerLine = buildOwnerIdentityLine(
-    params.ownerNumbers ?? [],
-    ownerDisplay,
-    params.ownerDisplaySecret,
-  );
+  const ownerLine = isMinimal
+    ? undefined
+    : buildOwnerIdentityLine(params.ownerNumbers ?? [], ownerDisplay, params.ownerDisplaySecret);
   const reasoningHint = params.reasoningTagHint
     ? [
         "Internal reasoning ONLY inside <think>...</think>.",
@@ -944,6 +1056,7 @@ export function buildAgentSystemPrompt(params: {
     : undefined;
   const reasoningLevel = params.reasoningLevel ?? "off";
   const userTimezone = params.userTimezone?.trim();
+  const userDate = params.userDate?.trim();
   const skillsPrompt = params.skillsPrompt?.trim();
   const heartbeatPrompt = params.heartbeatPrompt?.trim();
   const runtimeInfo = params.runtimeInfo;
@@ -953,9 +1066,8 @@ export function buildAgentSystemPrompt(params: {
   const runtimeCapabilities = runtimeInfo?.capabilities ?? [];
   const runtimeCapabilitiesLower = new Set(normalizeStringEntriesLower(runtimeCapabilities));
   const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
+  const collapsibleDetailsSupported = runtimeCapabilitiesLower.has("markdowndetails");
   const threadBoundAcpSpawnEnabled = runtimeCapabilitiesLower.has("threadbound-acp-spawn");
-  const promptMode = params.promptMode ?? "full";
-  const isMinimal = promptMode === "minimal" || promptMode === "none";
   const subagentDelegationMode = normalizeSubagentDelegationMode(params.subagentDelegationMode);
   const proactiveSubagentOrchestration = params.proactiveSubagentOrchestration === true;
   const sourceMessageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
@@ -996,23 +1108,34 @@ export function buildAgentSystemPrompt(params: {
     "Never copy self or change prompts/safety/tool policy unless user explicitly requests.",
     "",
   ];
-  const skillsSection = buildSkillsSection({
-    skillsPrompt,
-    readToolName,
-  });
+  // CLI backends own native file tools outside OpenClaw's projected tool list.
+  // Keep their skill catalog visible while embedded runs require a real read tool.
+  const canAccessSkills = params.codeModeActive
+    ? visibleTools.has("exec")
+    : visibleTools.has("read") || promptSurface === "cli_backend";
+  const skillsSection = canAccessSkills
+    ? buildSkillsSection({
+        skillsPrompt,
+        readToolName,
+        codeModeActive: params.codeModeActive,
+      })
+    : [];
   const skillWorkshopSection = availableTools.has(SKILL_WORKSHOP_TOOL_NAME)
     ? buildSkillWorkshopPromptSection()
     : [];
-  const memorySection = buildMemorySection({
-    isMinimal,
-    includeMemorySection: params.includeMemorySection,
-    availableTools,
-    citationsMode: params.memoryCitationsMode,
-    agentId: params.runtimeInfo?.agentId,
-    agentSessionKey: params.runtimeInfo?.sessionKey,
-    sandboxed: params.sandboxInfo?.enabled === true,
-    prepared: params.preparedMemoryPrompt,
-  });
+  const memorySection = [
+    ...buildMemorySection({
+      isMinimal,
+      includeMemorySection: params.includeMemorySection,
+      availableTools,
+      citationsMode: params.memoryCitationsMode,
+      agentId: params.runtimeInfo?.agentId,
+      agentSessionKey: params.runtimeInfo?.sessionKey,
+      sandboxed: params.sandboxInfo?.enabled === true,
+      prepared: params.preparedMemoryPrompt,
+    }),
+    ...normalizeStringEntries(params.projectMemoryBootstrap),
+  ];
   const docsSection = buildDocsSection({
     docsPath: params.docsPath,
     sourcePath: params.sourcePath,
@@ -1028,7 +1151,12 @@ export function buildAgentSystemPrompt(params: {
       .join("\n");
   }
 
-  const contextFiles = prepareContextFilesForPrompt(params.contextFiles);
+  const contextFiles = prepareContextFilesForPrompt(
+    filterProjectScopedCuratedContextFiles({
+      contextFiles: params.contextFiles,
+      activeProjectKeys: params.activeProjectKeys,
+    }),
+  );
   const bootstrapSystemPromptSections = buildAgentBootstrapSystemPromptSections({
     bootstrapMode: params.bootstrapMode,
     bootstrapTruncationNotice: params.bootstrapTruncationNotice,
@@ -1069,6 +1197,7 @@ export function buildAgentSystemPrompt(params: {
     docsPath: params.docsPath,
     sourcePath: params.sourcePath,
     skillsPrompt,
+    codeModeActive: params.codeModeActive,
     modelAliasLines: params.modelAliasLines,
     includeMemorySection: params.includeMemorySection,
     memoryCitationsMode: params.memoryCitationsMode,
@@ -1092,7 +1221,7 @@ export function buildAgentSystemPrompt(params: {
       ...(toolSchemaDirectoryPrompt
         ? ["", "### Deferred Tool Schemas", toolSchemaDirectoryPrompt]
         : []),
-      "TOOLS.md guides usage; never grants availability.",
+      "The AGENTS.md Tools section guides usage; it never grants availability.",
       ...(renderOpenClawToolWorkflowHints
         ? [
             `Long wait: no rapid poll. Use ${execToolName} yieldMs or ${processToolName}(poll, timeout=<ms>).`,
@@ -1127,6 +1256,12 @@ export function buildAgentSystemPrompt(params: {
             availableTools.has("sessions_yield")
               ? "Never loop-poll `subagents list`/`sessions_list`; wait with `sessions_yield`. Status only on-demand/intervention/debug/request."
               : "Never loop-poll `subagents list`/`sessions_list`; status only on-demand/intervention/debug/request.",
+          ]
+        : []),
+      ...(renderOpenClawToolWorkflowHints &&
+      (availableTools.has("sessions_search") || availableTools.has("sessions_list"))
+        ? [
+            "Asked about another chat/group/session not in context: check `sessions_list`/`sessions_search` before claiming no access.",
           ]
         : []),
       "",
@@ -1174,7 +1309,7 @@ export function buildAgentSystemPrompt(params: {
       "Do not invent commands.",
       ...(hasOpenClaw
         ? [
-            "Config, channels, plugins, new agents, model/provider, updates: ask `openclaw`. Never write own config; OpenClaw is system expert.",
+            "Gateway restart, config, channels, plugins, agents, models/providers, updates: ask `openclaw`. Never restart the Gateway through shell commands or write your own config.",
           ]
         : [
             "Config read: `gateway` (`config.get|config.schema.lookup`). Write/restart unavailable; ask human.",
@@ -1187,13 +1322,12 @@ export function buildAgentSystemPrompt(params: {
         ? "## Model Aliases"
         : "",
       params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
-        ? "Model override: prefer alias; provider/model also accepted."
+        ? "Model override: aliases are shortcuts for unqualified model requests. Use explicit provider/model references verbatim; do not substitute an alias or another provider."
         : "",
       params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
         ? params.modelAliasLines.join("\n")
         : "",
       params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
-      userTimezone ? "Need date/time/day: `session_status`." : "",
       "## Workspace",
       `Working directory: ${displayWorkspaceDir}`,
       workspaceGuidance,
@@ -1263,9 +1397,6 @@ export function buildAgentSystemPrompt(params: {
             .join("\n")
         : "",
       params.sandboxInfo?.enabled ? "" : "",
-      ...buildTimeSection({
-        userTimezone,
-      }),
       ...bootstrapSystemPromptSections,
       "## Workspace Files (injected)",
       "User-editable; OpenClaw loads below as Project Context.",
@@ -1300,6 +1431,16 @@ export function buildAgentSystemPrompt(params: {
 
   const lines = [stablePrefix];
 
+  // Local date and timezone can change between turns. Keep them at the front of
+  // the volatile suffix so rollover is visible without invalidating the stable prefix.
+  lines.push(
+    ...buildTemporalContextSection({
+      userDate,
+      userTimezone,
+      sessionStatusAvailable: availableTools.has("session_status"),
+    }),
+  );
+
   lines.push(
     ...buildProjectContextSection({
       files: contextFiles.dynamic,
@@ -1328,6 +1469,10 @@ export function buildAgentSystemPrompt(params: {
       runtimeChannel,
       sourceMessageToolOnly,
     }),
+    ...buildControlUiSessionCompanionSection({
+      isMinimal,
+      runtimeChannel,
+    }),
     ...buildMessagingSection({
       isMinimal,
       availableTools,
@@ -1340,6 +1485,9 @@ export function buildAgentSystemPrompt(params: {
       requireExplicitMessageTarget: params.requireExplicitMessageTarget,
       silentReplyPromptMode,
     }),
+    // Capability-gated reply guidance stays below the cache boundary so channel changes
+    // cannot alter the byte-identical stable prefix shared across sessions.
+    ...buildCollapsibleDetailsSection({ isMinimal, collapsibleDetailsSupported }),
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
   );
 
@@ -1366,6 +1514,10 @@ export function buildAgentSystemPrompt(params: {
   if (providerDynamicSuffix) {
     lines.push(providerDynamicSuffix, "");
   }
+
+  // Watched sessions change rarely but per-session; keep them below the cache
+  // boundary so the shared stable prefix stays byte-identical across sessions.
+  lines.push(...buildWatchedSessionsPromptLines(params.preparedWatchedSessions));
 
   lines.push(...buildHeartbeatSection({ isMinimal, heartbeatPrompt }));
 

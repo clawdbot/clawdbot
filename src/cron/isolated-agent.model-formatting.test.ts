@@ -36,8 +36,10 @@ vi.mock("./isolated-agent/run-model-selection.runtime.js", () => ({
   DEFAULT_MODEL: "claude-opus-4-6",
   DEFAULT_PROVIDER: "anthropic",
   getModelRefStatus: getModelRefStatusMock,
-  loadPreparedModelCatalogOwnerSnapshot: loadModelCatalogMock,
+  loadResolvedPublishedModelCatalogOwner: loadModelCatalogMock,
   normalizeModelSelection: normalizeModelSelectionMock,
+  publishedModelCatalogOwnerMatchesAgent: (owner: { agentId: string }, agentId: string) =>
+    owner.agentId === agentId.trim().toLowerCase(),
   resolveAgentConfig: (cfg: { agents?: { list?: AgentConfig[] } }, agentId: string) =>
     cfg.agents?.list?.find((agent) => agent.id === agentId),
   resolveAgentWorkspaceDir: (
@@ -236,7 +238,7 @@ describe("cron model formatting and precedence edge cases", () => {
         }),
       ).resolves.toEqual({
         ok: false,
-        error: "cron payload.model 'openai/' rejected: invalid model",
+        error: "automation model override 'openai/' rejected: invalid model",
       });
     });
 
@@ -247,7 +249,7 @@ describe("cron model formatting and precedence edge cases", () => {
         }),
       ).resolves.toEqual({
         ok: false,
-        error: "cron payload.model '/gpt-4.1-mini' rejected: invalid model",
+        error: "automation model override '/gpt-4.1-mini' rejected: invalid model",
       });
     });
 
@@ -267,7 +269,7 @@ describe("cron model formatting and precedence edge cases", () => {
       ).resolves.toEqual({
         ok: false,
         error:
-          "cron payload.model 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.modelPolicy.allow: anthropic/claude-sonnet-4-6 is not in [(none configured)]",
+          "automation model override 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.modelPolicy.allow: anthropic/claude-sonnet-4-6 is not in [(none configured)]",
       });
     });
 
@@ -289,7 +291,7 @@ describe("cron model formatting and precedence edge cases", () => {
       ).resolves.toEqual({
         ok: false,
         error:
-          "cron payload.model 'openai/gpt-5.5' rejected by agents.list[].modelPolicy.allow: openai/gpt-5.5 is not in [anthropic/*]",
+          "automation model override 'openai/gpt-5.5' rejected by agents.entries.*.modelPolicy.allow: openai/gpt-5.5 is not in [anthropic/*]",
       });
     });
 
@@ -356,7 +358,7 @@ describe("cron model formatting and precedence edge cases", () => {
       expect(loadModelCatalogMock).toHaveBeenCalledOnce();
       expect(loadModelCatalogMock).toHaveBeenCalledWith({
         config: callerConfig,
-        readOnly: true,
+        allowGatewaySubagentBinding: true,
       });
       expect(resolveConfiguredModelRefMock).toHaveBeenCalledWith(
         expect.objectContaining({ cfg: expect.objectContaining(ownerConfig) }),
@@ -378,7 +380,7 @@ describe("cron model formatting and precedence edge cases", () => {
           agentId: "main",
           agentDir: "/tmp/owner-agent",
           workspaceDir: "/tmp/owner-workspace",
-          catalog: ownerCatalog,
+          modelCatalog: { entries: ownerCatalog, routeVariants: [] },
         },
       });
     });

@@ -1,13 +1,12 @@
 // Msteams plugin module implements channel behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
-import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
-import { createTopLevelChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
+  createAccountStatusSink,
   createChannelMessageAdapterFromOutbound,
   createRuntimeOutboundDelegates,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -42,7 +41,17 @@ import {
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
 } from "../runtime-api.js";
+import {
+  extractMSTeamsToolSendResult,
+  msteamsContextTargetsMatch,
+  resolveMSTeamsAutoThreadId,
+} from "./action-threading.js";
 import { msTeamsApprovalAuth } from "./approval-auth.js";
+import {
+  msteamsConfigAdapter,
+  msteamsMeta,
+  type ResolvedMSTeamsAccount,
+} from "./channel-config.js";
 import { MSTeamsChannelConfigSchema } from "./config-schema.js";
 import { collectMSTeamsMutableAllowlistWarnings } from "./doctor.js";
 import { resolveMSTeamsGroupToolPolicy } from "./policy.js";
@@ -63,26 +72,9 @@ import {
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
 import { resolveMSTeamsOutboundSessionRoute } from "./session-route.js";
-import { msteamsSetupAdapter, msteamsSetupContract } from "./setup-core.js";
+import { msteamsSetupContract } from "./setup-core.js";
 import { msteamsSetupWizard } from "./setup-surface.js";
 import { resolveMSTeamsCredentials } from "./token.js";
-
-type ResolvedMSTeamsAccount = {
-  accountId: string;
-  enabled: boolean;
-  configured: boolean;
-};
-
-const meta = {
-  id: "msteams",
-  label: "Microsoft Teams",
-  selectionLabel: "Microsoft Teams (Bot Framework)",
-  docsPath: "/channels/msteams",
-  docsLabel: "msteams",
-  blurb: "Teams SDK; enterprise support.",
-  aliases: ["teams"],
-  order: 60,
-} as const;
 
 const TEAMS_GRAPH_PERMISSION_HINTS: Record<string, string> = {
   "ChannelMessage.Read.All": "channel history",
@@ -117,30 +109,6 @@ const loadMSTeamsChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
   "msTeamsChannelRuntime",
 );
-
-const resolveMSTeamsChannelConfig = (cfg: OpenClawConfig) => ({
-  allowFrom: cfg.channels?.msteams?.allowFrom,
-  defaultTo: cfg.channels?.msteams?.defaultTo,
-});
-
-const msteamsConfigAdapter = createTopLevelChannelConfigAdapter<
-  ResolvedMSTeamsAccount,
-  {
-    allowFrom?: Array<string | number>;
-    defaultTo?: string;
-  }
->({
-  sectionKey: "msteams",
-  resolveAccount: (cfg) => ({
-    accountId: DEFAULT_ACCOUNT_ID,
-    enabled: cfg.channels?.msteams?.enabled !== false,
-    configured: Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams)),
-  }),
-  resolveAccessorAccount: ({ cfg }) => resolveMSTeamsChannelConfig(cfg),
-  resolveAllowFrom: (account) => account.allowFrom,
-  formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
-  resolveDefaultTo: (account) => account.defaultTo,
-});
 
 function jsonActionResult(data: Record<string, unknown>) {
   const text = JSON.stringify(data);
@@ -484,6 +452,8 @@ const msteamsChannelOutbound: ChannelOutboundAdapter = {
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
+  resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
+    typeof fallbackLimit === "number" && fallbackLimit > 0 ? Math.min(fallbackLimit, 4000) : 4000,
   pollMaxOptions: 12,
   deliveryCapabilities: {
     durableFinal: {
@@ -529,8 +499,8 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
     base: {
       id: "msteams",
       meta: {
-        ...meta,
-        aliases: [...meta.aliases],
+        ...msteamsMeta,
+        aliases: [...msteamsMeta.aliases],
       },
       setupWizard: msteamsSetupWizard,
       capabilities: {
@@ -570,7 +540,6 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         warnOnEmptyGroupSenderAllowlist: true,
         collectMutableAllowlistWarnings: collectMSTeamsMutableAllowlistWarnings,
       },
-      setup: msteamsSetupAdapter,
       setupContract: msteamsSetupContract,
       messaging: {
         targetPrefixes: ["msteams", "teams"],
@@ -757,6 +726,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
       },
       actions: {
         describeMessageTool: describeMSTeamsMessageTool,
+        extractToolSendResult: ({ result, send }) => extractMSTeamsToolSendResult(result, send),
         requiresTrustedRequesterSender: ({ action, toolContext }) =>
           normalizeOptionalString(toolContext?.currentChannelProvider)?.toLowerCase() ===
             "msteams" && MSTEAMS_GROUP_MANAGEMENT_ACTIONS.has(action),
@@ -817,6 +787,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                   filename:
                     readOptionalTrimmedString(ctx.params, "filename") ??
                     readOptionalTrimmedString(ctx.params, "title"),
+                  mediaAccess: ctx.mediaAccess,
                   mediaLocalRoots: ctx.mediaLocalRoots,
                   mediaReadFile: ctx.mediaReadFile,
                 });
@@ -1293,12 +1264,17 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         startAccount: async (ctx) => {
           const { monitorMSTeamsProvider } = await import("./index.js");
           const port = ctx.cfg.channels?.msteams?.webhook?.port ?? 3978;
-          ctx.setStatus({ accountId: ctx.accountId, port });
+          const statusSink = createAccountStatusSink({
+            accountId: ctx.accountId,
+            setStatus: ctx.setStatus,
+          });
+          statusSink({ port });
           ctx.log?.info(`starting provider (port ${port})`);
           return monitorMSTeamsProvider({
             cfg: ctx.cfg,
             runtime: ctx.runtime,
             abortSignal: ctx.abortSignal,
+            statusSink,
           });
         },
       },
@@ -1324,9 +1300,20 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
       },
     },
     threading: {
+      matchesToolContextTarget: ({ target, toolContext }) =>
+        msteamsContextTargetsMatch(target, toolContext),
       buildToolContext: ({ context, hasRepliedRef }) => {
         const nativeChannelId = context.NativeChannelId?.trim();
         const hasChannelRoute = Boolean(nativeChannelId && nativeChannelId.includes("/"));
+        const isChannel = context.ChatType === "channel";
+        const messageThreadId =
+          context.MessageThreadId != null
+            ? normalizeOptionalString(String(context.MessageThreadId))
+            : undefined;
+        // Prefer MessageThreadId (root). ReplyToId fallback is channel-only — DM/group
+        // quote replies must not inherit ambient thread metadata for dedupe.
+        const currentThreadTs =
+          messageThreadId ?? (isChannel ? normalizeOptionalString(context.ReplyToId) : undefined);
         return {
           currentChannelId: normalizeOptionalString(context.To),
           currentChatType:
@@ -1337,10 +1324,17 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
               : undefined,
           currentMessagingTarget: hasChannelRoute ? nativeChannelId : undefined,
           currentGraphChannelId: hasChannelRoute ? nativeChannelId : undefined,
-          currentThreadTs: context.ReplyToId,
+          currentThreadTs,
+          ...(currentThreadTs ? { replyToMode: "all" as const } : {}),
           hasRepliedRef,
         };
       },
+      resolveAutoThreadId: ({ cfg, to, toolContext }) =>
+        resolveMSTeamsAutoThreadId({
+          cfg: cfg.channels?.msteams,
+          to,
+          toolContext,
+        }),
     },
     outbound: msteamsChannelOutbound,
   });

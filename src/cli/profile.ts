@@ -5,7 +5,12 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import {
+  resolveGatewayLaunchAgentLabel,
+  resolveGatewaySystemdServiceName,
+  resolveGatewayWindowsTaskName,
+} from "../daemon/constants.js";
+import { resolveHomeRelativePath, resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { isValidProfileName } from "./profile-utils.js";
 import { scanCliRootOptions } from "./root-option-scan.js";
@@ -91,17 +96,60 @@ export function applyCliProfileEnv(params: {
     return;
   }
 
-  // Convenience only: fill defaults, never override explicit env values.
+  const inheritedProfile = normalizeOptionalString(env.OPENCLAW_PROFILE) ?? "default";
+  const existingStateDir = normalizeOptionalString(env.OPENCLAW_STATE_DIR);
+  const existingConfigPath = normalizeOptionalString(env.OPENCLAW_CONFIG_PATH);
+  const inheritedProfileStateDir = resolveProfileStateDir(inheritedProfile, env, homedir);
+  const selectedProfileStateDir = resolveProfileStateDir(profile, env, homedir);
+  const switchesInheritedProfile = inheritedProfileStateDir !== selectedProfileStateDir;
+  const switchesInheritedProfileState = Boolean(
+    existingStateDir &&
+    switchesInheritedProfile &&
+    resolveHomeRelativePath(existingStateDir, {
+      env: env as NodeJS.ProcessEnv,
+      homedir,
+    }) === inheritedProfileStateDir,
+  );
+  const replacesInheritedProfileConfig = Boolean(
+    switchesInheritedProfile &&
+    (!existingStateDir || switchesInheritedProfileState) &&
+    existingConfigPath &&
+    resolveHomeRelativePath(existingConfigPath, {
+      env: env as NodeJS.ProcessEnv,
+      homedir,
+    }) === path.join(inheritedProfileStateDir, "openclaw.json"),
+  );
+
+  // A service's canonical profile paths are inherited defaults, not custom overrides.
+  // Switch them together so an explicit profile cannot mutate the service's profile.
   env.OPENCLAW_PROFILE = profile;
 
-  const existingStateDir = normalizeOptionalString(env.OPENCLAW_STATE_DIR);
-  const stateDir = existingStateDir || resolveProfileStateDir(profile, env, homedir);
-  if (!existingStateDir) {
+  const stateDir =
+    existingStateDir && !switchesInheritedProfileState ? existingStateDir : selectedProfileStateDir;
+  if (!existingStateDir || switchesInheritedProfileState) {
     env.OPENCLAW_STATE_DIR = stateDir;
   }
 
-  if (!normalizeOptionalString(env.OPENCLAW_CONFIG_PATH)) {
+  if (!existingConfigPath || replacesInheritedProfileConfig) {
     env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
+  }
+
+  if (switchesInheritedProfile) {
+    const inheritedSystemdServiceName = resolveGatewaySystemdServiceName(inheritedProfile);
+    const inheritedServiceIdentities = {
+      OPENCLAW_LAUNCHD_LABEL: [resolveGatewayLaunchAgentLabel(inheritedProfile)],
+      OPENCLAW_SYSTEMD_UNIT: [
+        inheritedSystemdServiceName,
+        `${inheritedSystemdServiceName}.service`,
+      ],
+      OPENCLAW_WINDOWS_TASK_NAME: [resolveGatewayWindowsTaskName(inheritedProfile)],
+    };
+    for (const [key, inheritedValues] of Object.entries(inheritedServiceIdentities)) {
+      const activeValue = normalizeOptionalString(env[key]);
+      if (activeValue && inheritedValues.includes(activeValue)) {
+        delete env[key];
+      }
+    }
   }
 
   if (profile === "dev" && !env.OPENCLAW_GATEWAY_PORT?.trim()) {

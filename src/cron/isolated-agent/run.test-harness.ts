@@ -4,6 +4,7 @@ import { vi, type Mock } from "vitest";
 import { resolveFastModeState as resolveFastModeStateImpl } from "../../agents/fast-mode.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 
 // Central mock harness for isolated cron agent run orchestration tests.
 type CronSessionEntry = {
@@ -97,9 +98,10 @@ export const resolveSessionAuthProfileOverrideMock = createMock();
 export const resolveFastModeStateMock = createMock();
 export const getChannelPluginMock = createMock();
 export const retireSessionMcpRuntimeMock = createMock();
+export const cleanupBrowserSessionsForLifecycleEndMock = createMock();
 export const callGatewayMock = createMock();
-export const ensureRuntimePluginsLoadedMock = createMock();
 export const hasUsableWebSearchProviderMock = createMock();
+export const readSessionMessagesAsyncMock = createMock();
 export const classifyEmbeddedAgentRunResultForModelFallbackMock = createMock();
 export const mergeEmbeddedAgentRunResultForModelFallbackExhaustionMock = createMock();
 
@@ -126,7 +128,12 @@ const resolveHookExternalContentSourceMock = createMock();
 const getSkillsSnapshotVersionMock = createMock();
 export const loadModelCatalogMock = createMock();
 export const loadModelCatalogOwnerMock = createMock();
+export const loadAgentRuntimePluginRegistryHandleMock = createMock();
 const getRemoteSkillEligibilityMock = createMock();
+
+vi.mock("../../agents/runtime-plugins.js", () => ({
+  loadAgentRuntimePluginRegistryHandle: loadAgentRuntimePluginRegistryHandleMock,
+}));
 
 vi.mock("./run.runtime.js", async () => ({
   resolveAgentConfig: resolveAgentConfigMock,
@@ -182,10 +189,6 @@ vi.mock("./run-context.runtime.js", () => ({
   lookupContextTokens: lookupContextTokensMock,
 }));
 
-vi.mock("../../plugins/runtime-plugins.runtime.js", () => ({
-  ensureRuntimePluginsLoaded: ensureRuntimePluginsLoadedMock,
-}));
-
 vi.mock("../../web-search/runtime.js", () => ({
   hasUsableWebSearchProvider: hasUsableWebSearchProviderMock,
 }));
@@ -231,7 +234,13 @@ vi.mock("../../skills/runtime/cron-snapshot.runtime.js", () => ({
 vi.mock("./run-model-selection.runtime.js", () => ({
   DEFAULT_MODEL: "gpt-5.4",
   DEFAULT_PROVIDER: "openai",
-  loadPreparedModelCatalogOwnerSnapshot: loadModelCatalogOwnerMock,
+  loadPreparedModelCatalogSnapshot: async (params: unknown) => ({
+    entries: await loadModelCatalogMock(params),
+    routeVariants: [],
+  }),
+  loadResolvedPublishedModelCatalogOwner: loadModelCatalogOwnerMock,
+  publishedModelCatalogOwnerMatchesAgent: (owner: { agentId: string }, agentId: string) =>
+    owner.agentId === agentId.trim().toLowerCase(),
   resolveAgentConfig: resolveAgentConfigMock,
   resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
   getModelRefStatus: getModelRefStatusMock,
@@ -353,8 +362,16 @@ vi.mock("../../agents/agent-bundle-mcp-tools.js", () => ({
   retireSessionMcpRuntime: retireSessionMcpRuntimeMock,
 }));
 
+vi.mock("../../browser-lifecycle-cleanup.js", () => ({
+  cleanupBrowserSessionsForLifecycleEnd: cleanupBrowserSessionsForLifecycleEndMock,
+}));
+
 vi.mock("../../gateway/call.runtime.js", () => ({
   callGateway: callGatewayMock,
+}));
+
+vi.mock("../../gateway/session-transcript-readers.js", () => ({
+  readSessionMessagesAsync: readSessionMessagesAsyncMock,
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", async () => {
@@ -568,6 +585,7 @@ function resetRunConfigMocks(): void {
   resolveHookExternalContentSourceMock.mockReturnValue(undefined);
   getSkillsSnapshotVersionMock.mockReturnValue(42);
   loadModelCatalogMock.mockResolvedValue([]);
+  loadAgentRuntimePluginRegistryHandleMock.mockReturnValue(createEmptyPluginRegistry());
   loadModelCatalogOwnerMock.mockImplementation(
     async (params: {
       agentId?: string;
@@ -834,12 +852,13 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
   resetRunSessionMocks();
   setSessionRuntimeModelMock.mockReturnValue(undefined);
   logWarnMock.mockReset();
-  ensureRuntimePluginsLoadedMock.mockReset();
   hasUsableWebSearchProviderMock.mockReset();
   hasUsableWebSearchProviderMock.mockImplementation(
     (params?: { runtimeWebSearch?: { selectedProvider?: string } }) =>
       Boolean(params?.runtimeWebSearch?.selectedProvider),
   );
+  readSessionMessagesAsyncMock.mockReset();
+  readSessionMessagesAsyncMock.mockResolvedValue([]);
 }
 
 export function clearFastTestEnv(): string | undefined {

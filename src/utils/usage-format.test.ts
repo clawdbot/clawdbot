@@ -6,11 +6,6 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  clearGatewayModelPricingFailures,
-  replaceGatewayModelPricingCache,
-  type CachedModelPricing,
-} from "../gateway/model-pricing-cache-state.js";
 import * as manifestModelIdNormalization from "../plugins/manifest-model-id-normalization.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
@@ -24,23 +19,6 @@ import {
 
 type ModelCostConfig = NonNullable<ReturnType<typeof resolveModelCostConfig>>;
 type PricingTier = NonNullable<ModelCostConfig["tieredPricing"]>[number];
-
-function setGatewayModelPricing(
-  entries: Array<{
-    provider: string;
-    model: string;
-    pricing: CachedModelPricing;
-  }>,
-): void {
-  replaceGatewayModelPricingCache(
-    new Map(entries.map((entry) => [`${entry.provider}/${entry.model}`, entry.pricing])),
-  );
-}
-
-function clearGatewayModelPricingState(): void {
-  replaceGatewayModelPricingCache(new Map(), 0);
-  clearGatewayModelPricingFailures();
-}
 
 function requireCostConfig(
   cost: ReturnType<typeof resolveModelCostConfig>,
@@ -75,14 +53,12 @@ describe("usage-format", () => {
     delete process.env.OPENCLAW_AGENT_DIR;
     await fs.mkdir(agentDir, { recursive: true });
     resetUsageFormatCachesForTest();
-    clearGatewayModelPricingState();
   });
 
   afterEach(async () => {
     envSnapshot?.restore();
     envSnapshot = undefined;
     resetUsageFormatCachesForTest();
-    clearGatewayModelPricingState();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
@@ -216,14 +192,6 @@ describe("usage-format", () => {
       "utf8",
     );
 
-    setGatewayModelPricing([
-      {
-        provider: "demo-preferred",
-        model: "demo-model",
-        pricing: { input: 30, output: 31, cacheRead: 32, cacheWrite: 33 },
-      },
-    ]);
-
     expect(
       resolveModelCostConfig({
         provider: "demo-preferred",
@@ -236,6 +204,73 @@ describe("usage-format", () => {
       cacheRead: 12,
       cacheWrite: 13,
     });
+  });
+
+  it("prefers explicit configured pricing over a provider-owned static model price", () => {
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                id: "gpt-5.4",
+                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveModelCostConfig({
+        provider: "openai",
+        model: "gpt-5.4",
+        config,
+      }),
+    ).toEqual({ input: 1, output: 2, cacheRead: 0, cacheWrite: 0 });
+  });
+
+  it("prefers agent-local pricing over configured and provider-owned static model prices", async () => {
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                id: "gpt-5.4",
+                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await fs.writeFile(
+      path.join(agentDir, "models.json"),
+      JSON.stringify({
+        providers: {
+          openai: {
+            models: [
+              {
+                id: "gpt-5.4",
+                cost: { input: 7, output: 11, cacheRead: 0.5, cacheWrite: 0.25 },
+              },
+            ],
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    expect(
+      resolveModelCostConfig({
+        provider: "openai",
+        model: "gpt-5.4",
+        config,
+      }),
+    ).toEqual({ input: 7, output: 11, cacheRead: 0.5, cacheWrite: 0.25 });
   });
 
   it("scopes models.json pricing by agent directory before configured and default pricing", async () => {
@@ -353,14 +388,6 @@ describe("usage-format", () => {
       },
     } as unknown as OpenClawConfig;
 
-    setGatewayModelPricing([
-      {
-        provider: "demo-config-provider",
-        model: "demo-model",
-        pricing: { input: 3, output: 4, cacheRead: 0.3, cacheWrite: 0.4 },
-      },
-    ]);
-
     expect(
       resolveModelCostConfig({
         provider: "demo-config-provider",
@@ -372,28 +399,6 @@ describe("usage-format", () => {
       output: 19,
       cacheRead: 0.9,
       cacheWrite: 1.9,
-    });
-  });
-
-  it("falls back to cached gateway pricing when no configured cost exists", () => {
-    setGatewayModelPricing([
-      {
-        provider: "demo-cached-provider",
-        model: "demo-model",
-        pricing: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
-      },
-    ]);
-
-    expect(
-      resolveModelCostConfig({
-        provider: "demo-cached-provider",
-        model: "demo-model",
-      }),
-    ).toEqual({
-      input: 2.5,
-      output: 15,
-      cacheRead: 0.25,
-      cacheWrite: 0,
     });
   });
 
@@ -703,6 +708,8 @@ describe("usage-format", () => {
     metadataOnlyModel.cost = { input: 9, output: 8, cacheRead: 7, cacheWrite: 6 };
     const after = resolveModelCostConfigFingerprint(config);
 
+    expect(before).toMatch(/^[0-9a-f]{64}$/u);
+    expect(after).toMatch(/^[0-9a-f]{64}$/u);
     expect(after).not.toBe(before);
     expect(
       resolveModelCostConfig({
@@ -1087,44 +1094,5 @@ describe("usage-format", () => {
     expect(tiers).toHaveLength(2);
     expect(expectDefined(tiers[0], "tiers[0] test invariant").range).toEqual([0, 32000]);
     expect(expectDefined(tiers[1], "tiers[1] test invariant").input).toBe(0.7);
-  });
-
-  it("resolves tiered pricing from cached gateway (LiteLLM)", () => {
-    setGatewayModelPricing([
-      {
-        provider: "volcengine",
-        model: "doubao-seed",
-        pricing: {
-          input: 0.46,
-          output: 2.3,
-          cacheRead: 0,
-          cacheWrite: 0,
-          tieredPricing: [
-            {
-              input: 0.46,
-              output: 2.3,
-              cacheRead: 0,
-              cacheWrite: 0,
-              range: [0, 32000] as [number, number],
-            },
-            {
-              input: 0.7,
-              output: 3.5,
-              cacheRead: 0,
-              cacheWrite: 0,
-              range: [32000, 128000] as [number, number],
-            },
-          ],
-        },
-      },
-    ]);
-
-    const cost = resolveModelCostConfig({
-      provider: "volcengine",
-      model: "doubao-seed",
-    });
-    const tiers = requireTieredPricing(requireCostConfig(cost, "cached gateway"), "cached gateway");
-
-    expect(tiers).toHaveLength(2);
   });
 });

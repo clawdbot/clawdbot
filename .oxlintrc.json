@@ -8,7 +8,7 @@
   },
   "rules": {
     "curly": "error",
-    "eslint/no-underscore-dangle": "error",
+    "eslint/no-underscore-dangle": ["error", { "allow": ["__typename", "_meta"] }],
     "eslint-plugin-unicorn/prefer-array-find": "error",
     "eslint/no-array-constructor": "error",
     "eslint/no-await-in-loop": "off",
@@ -210,6 +210,9 @@
     "dist/",
     "dist-runtime/",
     "docs/_layouts/",
+    // Intentional negative-test corpora contain parser and lint violations by contract.
+    ".agents/skills/autoreview/tests/fixtures/**",
+    "test/fixtures/oxlint-boundary-guards/**",
     "**/a2ui.bundle.js",
     "extensions/browser/chrome-extension/modules/copilot-runtime.js",
     "extensions/diffs/assets/viewer-runtime.js",
@@ -243,7 +246,6 @@
         "packages/terminal-core/**/*.ts",
         "packages/normalization-core/**/*.ts",
         "packages/model-catalog-core/**/*.ts",
-        "packages/web-content-core/**/*.ts",
         "packages/agent-core/**/*.ts",
         "packages/acp-core/**/*.ts",
         "packages/ai/**/*.ts",
@@ -361,6 +363,18 @@
       ],
       "rules": {
         "max-lines": ["error", { "max": 1000, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["extensions/copilot/src/event-bridge.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 950, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["extensions/copilot/src/attempt-transcript-journal.test.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 1200, "skipBlankLines": true, "skipComments": true }]
       }
     }
   ]

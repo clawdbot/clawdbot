@@ -4,17 +4,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
-import type { HealthSummary } from "../../../commands/health.types.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticSecurityEvent,
 } from "../../../infra/diagnostic-events.js";
+import {
+  getActiveDiagnosticTraceContext,
+  type DiagnosticTraceContext,
+} from "../../../infra/diagnostic-trace-context.js";
 import { setAvatar } from "../../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { mintAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
+import type { HealthSummary } from "../../health/types.js";
 import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import { handleGatewayRequest } from "../../server-methods.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
@@ -282,23 +286,30 @@ function attachGatewayHarness(options: {
     logWsControl,
     send,
     socketSend,
-    sendRequest: (id: string, method: string, params: Record<string, unknown> = {}) => {
+    sendRequest: (
+      id: string,
+      method: string,
+      params: Record<string, unknown> = {},
+      traceparent?: string,
+    ) => {
       sendMessage(
         JSON.stringify({
           type: "req",
           id,
           method,
           params,
+          ...(traceparent ? { traceparent } : {}),
         }),
       );
     },
-    sendConnect: (id: string, params: Record<string, unknown>) => {
+    sendConnect: (id: string, params: Record<string, unknown>, traceparent?: string) => {
       sendMessage(
         JSON.stringify({
           type: "req",
           id,
           method: "connect",
           params,
+          ...(traceparent ? { traceparent } : {}),
         }),
       );
     },
@@ -307,6 +318,54 @@ function attachGatewayHarness(options: {
     },
   };
 }
+
+describe("WebSocket request trace context", () => {
+  const upstreamTraceId = "4bf92f3577b34da6a3ce929d0e0e4736";
+  const upstreamSpanId = "00f067aa0ba902b7";
+  const upstreamTraceparent = `00-${upstreamTraceId}-${upstreamSpanId}-01`;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("does not carry connect-frame trace context into later requests", async () => {
+    let observed: DiagnosticTraceContext | undefined;
+    vi.mocked(handleGatewayRequest).mockImplementation(async () => {
+      observed = getActiveDiagnosticTraceContext();
+    });
+    const harness = attachGatewayHarness({
+      connId: "conn-connect-trace",
+      connectNonce: "nonce-connect-trace",
+    });
+
+    harness.sendConnect(
+      "connect-1",
+      {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: {
+          id: "gateway-client",
+          version: "dev",
+          platform: "test",
+          mode: "backend",
+        },
+        role: "operator",
+        caps: [],
+      },
+      upstreamTraceparent,
+    );
+    await waitForFast(() => {
+      expect(harness.client).not.toBeNull();
+    });
+
+    harness.sendRequest("untraced-1", "status.summary");
+
+    await waitForFast(() => {
+      expect(observed).toBeDefined();
+    });
+    expect(observed?.traceId).not.toBe(upstreamTraceId);
+  });
+});
 
 function connectTrustedProxyUser(connId: string) {
   loadConfigMock.mockImplementationOnce(() => ({
@@ -790,6 +849,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     const rateLimiter: AuthRateLimiter = {
       check: vi.fn(() => ({ allowed: false, remaining: 0, retryAfterMs })),
       recordFailure: vi.fn(),
+      recordFailureAndDelay: vi.fn(async () => {}),
       reset: vi.fn(),
       size: vi.fn(() => 0),
       prune: vi.fn(),

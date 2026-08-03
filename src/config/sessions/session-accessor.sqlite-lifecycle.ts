@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   isAgentHarnessSessionKey,
   isValidAgentHarnessSessionStoreEntry,
@@ -7,6 +8,7 @@ import {
   resolveAgentHarnessSessionStoreEntryError,
 } from "../../sessions/agent-harness-session-key.js";
 import { emitSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
@@ -108,6 +110,7 @@ export async function cleanupSqliteSessionLifecycleArtifacts(
 ): Promise<SessionLifecycleArtifactCleanupResult> {
   const sessionKeySegmentPrefix = params.sessionKeySegmentPrefix.trim();
   const transcriptContentMarker = params.transcriptContentMarker;
+  const pluginOwnerId = params.pluginOwnerId?.trim();
   if (!sessionKeySegmentPrefix || !transcriptContentMarker) {
     return { removedEntries: 0, archivedTranscriptArtifacts: 0 };
   }
@@ -116,11 +119,18 @@ export async function cleanupSqliteSessionLifecycleArtifacts(
     ...(params.agentId ? { agentId: params.agentId } : {}),
     storePath: params.storePath,
   });
+  const databaseOptions = toDatabaseOptions(resolved);
+  // Maintenance must not turn a read-only startup probe into a newly materialized agent store.
+  if (!withOpenClawAgentDatabaseReadOnly(() => true, databaseOptions).found) {
+    return { removedEntries: 0, archivedTranscriptArtifacts: 0 };
+  }
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
-    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+    const database = openOpenClawAgentDatabase(databaseOptions);
     const cleanupPlan = planSqliteSessionLifecycleArtifactCleanup(database, {
+      ...(params.agentId !== undefined ? { agentId: resolved.agentId } : {}),
       archiveRemovedEntryTranscripts: params.archiveRemovedEntryTranscripts !== false,
       archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
+      ...(pluginOwnerId ? { pluginOwnerId } : {}),
       sessionKeySegmentPrefix,
       transcriptContentMarker,
       orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
@@ -141,7 +151,7 @@ export async function cleanupSqliteSessionLifecycleArtifacts(
         transactionDb,
         cleanupPlan.entries,
       );
-    }, toDatabaseOptions(resolved));
+    }, databaseOptions);
     emitCommittedSessionEntryRemovals(cleanupPlan.entries);
     return {
       removedEntries,
@@ -154,7 +164,8 @@ export async function cleanupSqliteSessionLifecycleArtifacts(
 export async function resetSqliteSessionEntryLifecycle(
   params: ResetSessionEntryLifecycleParams,
 ): Promise<ResetSessionEntryLifecycleResult> {
-  const resolved = resolveSqliteStoreScope(params.storePath, { agentId: params.agentId });
+  const agentId = params.agentId ?? parseAgentSessionKey(params.target.canonicalKey)?.agentId;
+  const resolved = resolveSqliteStoreScope(params.storePath, { agentId });
   // Retained reset history is the store's growth event; give the throttled
   // budget pass a chance to extract-and-evict once we finish.
   try {
@@ -172,14 +183,12 @@ export async function resetSqliteSessionEntryLifecycle(
         !sqliteSessionEntriesEqual(current.entry, nextEntry)
           ? await buildSessionResetBoundaryPlan({
               events: loadSqliteTranscriptEventsFromDatabase(database, current.entry.sessionId),
-              legacySessionFile: current.entry.sessionFile,
               reason: params.resetBoundaryReason,
             })
           : undefined;
       const mutation: ResetSessionEntryLifecycleMutation = {
         nextEntry: cloneSessionEntry(nextEntry),
         ...(current ? { previousEntry: cloneSessionEntry(current.entry) } : {}),
-        ...(current?.entry.sessionFile ? { previousSessionFile: current.entry.sessionFile } : {}),
         ...(current?.entry.sessionId ? { previousSessionId: current.entry.sessionId } : {}),
       };
       runOpenClawAgentWriteTransaction((transactionDb) => {
@@ -261,7 +270,8 @@ async function deleteSqliteSessionEntryLifecycleInternal(
   allowLockedEntryRemoval: boolean,
   expectedPluginOwnerId?: string,
 ): Promise<DeleteSessionEntryLifecycleResult> {
-  const resolved = resolveSqliteStoreScope(params.storePath, { agentId: params.agentId });
+  const agentId = params.agentId ?? parseAgentSessionKey(params.target.canonicalKey)?.agentId;
+  const resolved = resolveSqliteStoreScope(params.storePath, { agentId });
   try {
     return await deleteSqliteSessionEntryLifecycleLocked(
       resolved,
@@ -452,7 +462,6 @@ async function deleteSqliteSessionEntryLifecycleLocked(
         archivedTranscripts,
         deleted: true,
         deletedEntry: cloneSessionEntry(current.entry),
-        ...(current.entry.sessionFile ? { deletedSessionFile: current.entry.sessionFile } : {}),
         ...(current.entry.sessionId ? { deletedSessionId: current.entry.sessionId } : {}),
       };
     }, toDatabaseOptions(resolved));

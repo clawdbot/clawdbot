@@ -1,6 +1,7 @@
 // Audits gateway config for bind, auth, and exposure risks.
 import { isIP } from "node:net";
 import {
+  hasNonEmptyString,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
@@ -21,10 +22,6 @@ type CollectGatewayConfigFindingsOptions = {
   collectDangerousConfigFlags?: CollectDangerousConfigFlags;
   gatewayAuthOverride?: Pick<GatewayAuthConfig, "mode" | "token" | "password">;
 };
-
-function hasNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
 
 export function collectGatewayConfigFindings(
   cfg: OpenClawConfig,

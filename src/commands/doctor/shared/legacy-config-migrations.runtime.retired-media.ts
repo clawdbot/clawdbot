@@ -1,5 +1,6 @@
 // Media and voice compatibility migrations retired from canonical runtime config.
 import { getRecord } from "../../../config/legacy.shared.js";
+import { deleteRetiredPath } from "./legacy-config-record-shared.js";
 
 export function moveVoice(owner: Record<string, unknown>, path: string, changes: string[]): void {
   if (!Object.hasOwn(owner, "voice")) {
@@ -241,39 +242,6 @@ const RETIRED_AGENT_TUNING_PATHS = [
   ["tools", "loopDetection", "detectors"],
   ["tools", "loopDetection", "postCompactionGuard"],
 ] as const;
-
-function deleteRetiredPath(owner: unknown, path: readonly string[], index = 0): boolean {
-  const record = getRecord(owner);
-  if (!record) {
-    return false;
-  }
-  const key = path[index];
-  if (!key) {
-    return false;
-  }
-  if (key === "*") {
-    let changed = false;
-    for (const value of Object.values(record)) {
-      changed = deleteRetiredPath(value, path, index + 1) || changed;
-    }
-    return changed;
-  }
-  if (index === path.length - 1) {
-    if (!Object.hasOwn(record, key)) {
-      return false;
-    }
-    delete record[key];
-    return true;
-  }
-  const child = getRecord(record[key]);
-  if (!child || !deleteRetiredPath(child, path, index + 1)) {
-    return false;
-  }
-  if (Object.keys(child).length === 0) {
-    delete record[key];
-  }
-  return true;
-}
 
 export function stripRetiredTuningKnobs(raw: Record<string, unknown>): boolean {
   let changed = false;

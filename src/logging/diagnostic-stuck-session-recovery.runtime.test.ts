@@ -1,9 +1,12 @@
 // Stuck session recovery runtime tests cover recovery inspection and event output.
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  appendTranscriptMessageSync,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { saveCronStore } from "../cron/store.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 const mocks = vi.hoisted(() => ({
   abortEmbeddedAgentRun: vi.fn(),
@@ -187,6 +190,27 @@ describe("stuck session recovery", () => {
     expect(outcome.status).toBe("aborted");
     expect(warnLogMessages().some((m) => m.includes("reclaiming stale active run"))).toBe(true);
   });
+
+  it("reclaims an orphaned handle once classification age is stale without an activity record", async () => {
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("orphaned-session");
+    mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({});
+    mocks.abortEmbeddedAgentRun.mockReturnValue(true);
+    mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "orphaned-session",
+      sessionKey: "agent:main:main",
+      ageMs: 10 * 60_000,
+      queueDepth: 1,
+    });
+
+    expect(mocks.abortEmbeddedAgentRun).toHaveBeenCalledWith("orphaned-session");
+    expect(outcome).toMatchObject({
+      status: "aborted",
+      action: "abort_embedded_run",
+      activeSessionId: "orphaned-session",
+    });
+  });
   it("aborts an active embedded run when active abort recovery is enabled", async () => {
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-1");
     mocks.abortEmbeddedAgentRun.mockReturnValue(true);
@@ -289,10 +313,12 @@ describe("stuck session recovery", () => {
   });
 
   it("logs stopped cron context when aborting an active embedded run", async () => {
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-recovery-context-"));
+    const openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-recovery-context-",
+    });
+    const tempDir = openClawState.stateDir;
     try {
-      process.env.OPENCLAW_STATE_DIR = tempDir;
       await saveCronStore(path.join(tempDir, "cron", "jobs.json"), {
         version: 1,
         jobs: [
@@ -310,14 +336,14 @@ describe("stuck session recovery", () => {
           },
         ],
       });
-      fs.mkdirSync(path.join(tempDir, "agents", "clawblocker", "sessions"), {
-        recursive: true,
-      });
-      fs.writeFileSync(
-        path.join(tempDir, "agents", "clawblocker", "sessions", "run-456.jsonl"),
-        JSON.stringify({
-          message: { role: "assistant", content: "There are 40 cached mentions." },
-        }) + "\n",
+      const sessionKey = "agent:clawblocker:cron:job-123:run:run-456";
+      await replaceSessionEntry(
+        { agentId: "clawblocker", sessionKey },
+        { sessionId: "run-456", updatedAt: 1 },
+      );
+      appendTranscriptMessageSync(
+        { agentId: "clawblocker", sessionId: "run-456", sessionKey },
+        { message: { role: "assistant", content: "There are 40 cached mentions." } },
       );
       mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("run-456");
       mocks.abortEmbeddedAgentRun.mockReturnValue(true);
@@ -325,17 +351,12 @@ describe("stuck session recovery", () => {
 
       await recoverStuckDiagnosticSession({
         sessionId: "run-456",
-        sessionKey: "agent:clawblocker:cron:job-123:run:run-456",
+        sessionKey,
         ageMs: 629_000,
         allowActiveAbort: true,
       });
     } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      fs.rmSync(tempDir, { recursive: true, force: true });
+      await openClawState.cleanup();
     }
 
     expect(warnLogMessages()).toEqual([
@@ -475,6 +496,31 @@ describe("stuck session recovery", () => {
     expect(warnLogMessages()).toEqual([
       "stuck session recovery outcome: status=skipped action=keep_lane sessionId=queued-reply-session sessionKey=agent:main:main activeSessionId=queued-reply-session reason=deferred_maintenance_wait",
     ]);
+  });
+
+  it("keeps a reply queued on the global lane instead of reclaiming it", async () => {
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("queued-reply-session");
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.resolveEmbeddedAgentReplyRunPhase.mockReturnValue("waiting_for_global_lane");
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "queued-reply-session",
+      sessionKey: "agent:main:main",
+      ageMs: 15 * 60_000,
+      queueDepth: 1,
+      allowActiveAbort: true,
+    });
+
+    expect(outcome).toMatchObject({
+      status: "skipped",
+      action: "keep_lane",
+      reason: "global_lane_wait",
+      activeSessionId: "queued-reply-session",
+    });
+    expect(mocks.abortEmbeddedAgentRun).not.toHaveBeenCalled();
+    expect(mocks.forceClearEmbeddedAgentRun).not.toHaveBeenCalled();
+    expect(mocks.resetCommandLane).not.toHaveBeenCalled();
   });
 
   it("releases the session lane when abort+drain succeeds but queued messages remain (ghost run + queued messages)", async () => {

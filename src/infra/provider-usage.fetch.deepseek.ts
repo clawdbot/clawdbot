@@ -1,4 +1,5 @@
 // Fetches and normalizes DeepSeek provider usage records.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   buildUsageHttpErrorSnapshot,
   discardUsageResponseBody,
@@ -86,8 +87,8 @@ export async function fetchDeepSeekUsage(
     return parsed.snapshot;
   }
 
-  const data = parsed.data as DeepSeekBalanceResponse;
-  const balances = Array.isArray(data.balance_infos) ? data.balance_infos : [];
+  const data = isRecord(parsed.data) ? (parsed.data as DeepSeekBalanceResponse) : undefined;
+  const balances = data && Array.isArray(data.balance_infos) ? data.balance_infos : [];
   const summary = balances
     .map((info) => buildBalanceSummary(info))
     .filter((entry): entry is string => Boolean(entry))
@@ -120,6 +121,6 @@ export async function fetchDeepSeekUsage(
     windows: [],
     billing,
     summary,
-    ...(data.is_available === false ? { plan: "Unavailable" } : {}),
+    ...(data?.is_available === false ? { plan: "Unavailable" } : {}),
   };
 }

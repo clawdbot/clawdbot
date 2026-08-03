@@ -2,6 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readExecApprovalsSnapshot } from "../infra/exec-approvals-store.js";
+import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 
 const envSnapshot = captureEnv(["HOME", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
@@ -13,20 +16,16 @@ function useTempHome(): string {
   tempHomes.push(home);
   setTestEnvValue("HOME", home);
   setTestEnvValue("OPENCLAW_HOME", home);
-  setTestEnvValue("OPENCLAW_STATE_DIR", "");
+  setTestEnvValue("OPENCLAW_STATE_DIR", path.join(home, ".openclaw"));
+  closeOpenClawStateDatabaseForTest();
+  execApprovalsStoreTesting.reset();
   return home;
 }
 
-function execApprovalsPath(home: string): string {
-  return path.join(home, ".openclaw", "exec-approvals.json");
-}
-
-function readExecApprovals(home: string): {
+function readExecApprovals(): {
   socket?: { token?: string };
 } {
-  return JSON.parse(fs.readFileSync(execApprovalsPath(home), "utf8")) as {
-    socket?: { token?: string };
-  };
+  return readExecApprovalsSnapshot().file;
 }
 
 async function importRuntimeTokenModule(): Promise<
@@ -37,6 +36,8 @@ async function importRuntimeTokenModule(): Promise<
 }
 
 afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+  execApprovalsStoreTesting.reset();
   vi.resetModules();
   envSnapshot.restore();
   for (const home of tempHomes.splice(0)) {
@@ -46,7 +47,7 @@ afterEach(() => {
 
 describe("agent runtime identity token", () => {
   it("persists the local signing secret so tokens verify across processes", async () => {
-    const home = useTempHome();
+    useTempHome();
     const firstProcess = await importRuntimeTokenModule();
 
     const token = await firstProcess.mintAgentRuntimeIdentityToken({
@@ -54,7 +55,7 @@ describe("agent runtime identity token", () => {
       sessionKey: "session-1",
     });
 
-    const persistedToken = readExecApprovals(home).socket?.token;
+    const persistedToken = readExecApprovals().socket?.token;
     expect(persistedToken).toEqual(expect.any(String));
     expect(persistedToken).not.toHaveLength(0);
 
@@ -83,6 +84,37 @@ describe("agent runtime identity token", () => {
     });
   });
 
+  it("round-trips a signed visible-session spawn policy", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionSpawnContext: {
+        completionOwnerSessionKey: " agent:main:discord:direct:alice ",
+        inheritedToolPolicy: {
+          version: 1,
+          allow: [" read ", "sessions_spawn"],
+          deny: ["exec"],
+        },
+      },
+    });
+
+    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({
+      kind: "agentRuntime",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionSpawnContext: {
+        completionOwnerSessionKey: "agent:main:discord:direct:alice",
+        inheritedToolPolicy: {
+          version: 1,
+          allow: ["read", "sessions_spawn"],
+          deny: ["exec"],
+        },
+      },
+    });
+  });
+
   it("round-trips a short-lived cron self-management capability", async () => {
     useTempHome();
     const runtimeToken = await importRuntimeTokenModule();
@@ -106,13 +138,13 @@ describe("agent runtime identity token", () => {
   });
 
   it("does not mint local credentials while rejecting invalid presented tokens", async () => {
-    const home = useTempHome();
+    useTempHome();
     const runtimeToken = await importRuntimeTokenModule();
 
     await expect(
       runtimeToken.verifyAgentRuntimeIdentityToken("not-a-valid-token"),
     ).resolves.toBeUndefined();
-    expect(fs.existsSync(execApprovalsPath(home))).toBe(false);
+    expect(readExecApprovalsSnapshot().exists).toBe(false);
   });
 
   it("rejects a token with a shortened signature", async () => {
@@ -129,13 +161,13 @@ describe("agent runtime identity token", () => {
   });
 
   it("rejects tokens minted from a different local state directory", async () => {
-    const firstHome = useTempHome();
+    useTempHome();
     const firstProcess = await importRuntimeTokenModule();
     const token = await firstProcess.mintAgentRuntimeIdentityToken({
       agentId: "main",
       sessionKey: "session-1",
     });
-    expect(fs.existsSync(execApprovalsPath(firstHome))).toBe(true);
+    expect(readExecApprovals().socket?.token).toEqual(expect.any(String));
 
     useTempHome();
     const secondProcess = await importRuntimeTokenModule();
@@ -158,6 +190,7 @@ describe("agent runtime identity token", () => {
         expiresAtMs: 5000,
         sourceReplyFinal: true,
         sourceReplyToolCallId: "message-call-1",
+        sourceReplySessionKey: "agent:main:main",
         sessionId: "session-id-1",
         requesterAccountId: "ops",
         requesterSenderId: "sender-1",
@@ -178,6 +211,7 @@ describe("agent runtime identity token", () => {
         expiresAtMs: 5000,
         sourceReplyFinal: true,
         sourceReplyToolCallId: "message-call-1",
+        sourceReplySessionKey: "agent:main:main",
         sessionId: "session-id-1",
         requesterAccountId: "ops",
         requesterSenderId: "sender-1",

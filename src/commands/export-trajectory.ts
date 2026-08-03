@@ -7,9 +7,7 @@ import {
   loadSessionEntryReadOnly,
   resolveSessionTranscriptReadTarget,
 } from "../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { pathExists } from "../infra/fs-safe.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
@@ -136,33 +134,30 @@ export async function exportTrajectoryCommand(
     return;
   }
 
-  let sessionFile: string;
+  let sessionTarget: ReturnType<typeof resolveSessionTranscriptReadTarget>;
   try {
-    sessionFile = resolveSessionTranscriptReadTarget({
+    sessionTarget = resolveSessionTranscriptReadTarget({
       agentId: targetAgentId,
       sessionEntry: entry,
       sessionId: entry.sessionId,
       sessionKey,
       storePath,
-    }).sessionFile;
+    });
   } catch (error) {
     runtime.error(`Failed to resolve session file: ${formatErrorMessage(error)}`);
     runtime.exit(1);
     return;
   }
-  if (!parseSqliteSessionFileMarker(sessionFile) && !(await pathExists(sessionFile))) {
-    runtime.error(
-      `Session file not found for ${sessionKey}. Run ${formatCliCommand("openclaw doctor")} to inspect session storage.`,
-    );
-    runtime.exit(1);
-    return;
-  }
-
   let summary: TrajectoryCommandExportSummary;
   try {
     summary = await exportTrajectoryForCommand({
       outputPath: resolvedOpts.output,
-      sessionFile,
+      sessionTarget: {
+        agentId: sessionTarget.agentId ?? targetAgentId,
+        sessionId: sessionTarget.sessionId,
+        sessionKey: sessionTarget.sessionKey ?? sessionKey,
+        storePath: sessionTarget.storePath,
+      },
       sessionId: entry.sessionId,
       sessionKey,
       workspaceDir: path.resolve(resolvedOpts.workspace ?? process.cwd()),

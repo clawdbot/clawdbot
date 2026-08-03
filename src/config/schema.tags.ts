@@ -56,6 +56,7 @@ const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
     "network",
     "advanced",
   ],
+  "gateway.nodes.pairing.autoApproveLocal": ["security", "access", "advanced"],
   "gateway.nodes.pairing.autoApproveCidrs": ["security", "access", "network", "advanced"],
   "gateway.nodes.pairing.sshVerify": ["security", "access", "network", "advanced"],
   "mcp.apps.enabled": ["security", "access", "advanced"],
@@ -199,10 +200,6 @@ function deriveTagsForPath(path: string, hint?: ConfigUiHint): ConfigTag[] {
     }
   }
   if (hint?.advanced) {
-    tags.add("advanced");
-  }
-
-  if (tags.size === 0) {
     tags.add("advanced");
   }
 

@@ -1,6 +1,7 @@
 // Telegram tests cover bot.create telegram bot.media group skip warning plugin behavior.
 import { setTimeout as delay } from "node:timers/promises";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 
 const saveRemoteMedia = vi.fn();
 const saveMediaBuffer = vi.fn();
@@ -167,6 +168,7 @@ describe("createTelegramBot media-group skip warning (#55216)", () => {
   beforeAll(() => {
     createTelegramBot = (opts) =>
       createTelegramBotBase({
+        botInfo: telegramBotInfoForTest,
         ...opts,
         telegramDeps: telegramBotDepsForTest,
       });

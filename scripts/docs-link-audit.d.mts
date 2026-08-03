@@ -1,10 +1,3 @@
-export type BrokenDocLink = {
-  file: string;
-  line: number;
-  link: string;
-  reason: string;
-};
-
 export type ResolveRouteResult = {
   ok: boolean;
   terminal: string;
@@ -35,15 +28,6 @@ export type ScriptSpawn = (
   options: ScriptSpawnOptions,
 ) => ScriptSpawnResult;
 
-export type ScriptInvocation = {
-  command: string;
-  args: string[];
-  options?: Partial<ScriptSpawnOptions> & {
-    detached?: boolean;
-    windowsVerbatimArguments?: boolean;
-  };
-};
-
 export function normalizeRoute(route: string): string;
 export function resolveRoute(
   route: string,
@@ -51,6 +35,14 @@ export function resolveRoute(
 ): ResolveRouteResult;
 
 export function sanitizeDocsConfigForEnglishOnly(value: unknown): unknown;
+
+export function prepareExternalLinkAuditTree(
+  repoRoot: string,
+  outputDir: string,
+): {
+  files: number;
+  projectedLinks: number;
+};
 
 export function prepareMirroredDocsDir(
   sourceDir?: string,
@@ -67,25 +59,6 @@ export function prepareMirroredDocsDir(
 ): MirroredDocsDir;
 
 export function prepareAnchorAuditDocsDir(sourceDir?: string): string;
-
-export function resolveMintlifyAnchorAuditInvocation(params: {
-  cwd: string;
-  nodeVersion?: string;
-  spawnSyncImpl: ScriptSpawn;
-  env?: NodeJS.ProcessEnv;
-  nodeExecPath?: string;
-  npmExecPath?: string;
-  platform?: NodeJS.Platform;
-  comSpec?: string;
-}): ScriptInvocation;
-
-export function auditDocsLinks(options?: {
-  docsDir?: string;
-  allowExternalClawHubRoutes?: boolean;
-}): {
-  checked: number;
-  broken: BrokenDocLink[];
-};
 
 export function runDocsLinkAuditCli(options?: {
   args?: string[];

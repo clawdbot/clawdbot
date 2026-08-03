@@ -3,7 +3,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateChannelsStartParams,
   validateChannelsStopParams,
   validateChannelsLogoutParams,
@@ -31,6 +30,7 @@ import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
+  resolveChannelHealthState,
 } from "../channel-health-policy.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
@@ -335,15 +335,7 @@ async function stopChannelAccount(params: {
 /** Gateway request handlers for channel list, status, start, stop, and logout. */
 export const channelsHandlers: GatewayRequestHandlers = {
   "channels.status": async ({ params, respond, context }) => {
-    if (!validateChannelsStatusParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid channels.status params: ${formatValidationErrors(validateChannelsStatusParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateChannelsStatusParams, "channels.status", respond)) {
       return;
     }
     const probe = (params as { probe?: boolean }).probe === true;
@@ -361,6 +353,10 @@ export const channelsHandlers: GatewayRequestHandlers = {
     const selectedPlugins = requestedChannel
       ? plugins.filter((plugin) => plugin.id === requestedChannel)
       : plugins;
+    // Preserve registry-defined UI order while stabilizing keyed status maps for prompt-cache input.
+    const statusPlugins = selectedPlugins.toSorted((left, right) =>
+      left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
+    );
     if (rawChannel !== undefined && !requestedChannel) {
       respond(
         false,
@@ -486,8 +482,9 @@ export const channelsHandlers: GatewayRequestHandlers = {
         staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
         channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
       });
-      if (!health.healthy) {
-        snapshot.healthState = health.reason;
+      const healthState = resolveChannelHealthState(snapshot, health);
+      if (healthState !== undefined) {
+        snapshot.healthState = healthState;
       }
       return { accountId, account, snapshot };
     };
@@ -545,7 +542,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
     const accountsMap = payload.channelAccounts as Record<string, unknown>;
     const defaultAccountIdMap = payload.channelDefaultAccountId as Record<string, unknown>;
     const { results: channelResults } = await runTasksWithConcurrency({
-      tasks: selectedPlugins.map((plugin) => async () => {
+      tasks: statusPlugins.map((plugin) => async () => {
         const { accounts, defaultAccountId, defaultAccount, resolvedAccounts } =
           await buildChannelAccounts(plugin.id);
         const fallbackAccount =

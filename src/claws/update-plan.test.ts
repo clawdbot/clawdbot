@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { stableStringify } from "../agents/stable-stringify.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -241,8 +241,6 @@ describe("buildClawUpdatePlan", () => {
       agent: {
         id: "requested-id",
         name: "Worker v2",
-        sandbox: { mode: "all", scope: "agent", workspaceAccess: "rw" },
-        tools: { allow: ["web.fetch"] },
       },
       workspace: {
         bootstrapFiles: { "SOUL.md": { source: "SOUL-v2.md" } },
@@ -293,6 +291,13 @@ describe("buildClawUpdatePlan", () => {
     const plan = await buildClawUpdatePlan({
       agentId: "worker",
       targetManifest: parsed.manifest,
+      targetOpenClawProfile: {
+        schemaVersion: 1,
+        agent: {
+          sandbox: { mode: "all", scope: "agent", workspaceAccess: "rw" },
+          tools: { allow: ["web.fetch"] },
+        },
+      },
       targetSource: targetSource(current.root, "2.0.0", "sha256:target"),
       config: current.config,
       sourceMcpServers: current.config.mcp?.servers ?? {},
@@ -319,14 +324,16 @@ describe("buildClawUpdatePlan", () => {
           path: "agent.sandbox.mode",
           desired: expect.objectContaining({ digest: expect.any(String) }),
           effect: expect.objectContaining({ path: "sandbox.mode" }),
-          requiresDistinctConsent: true,
+          classification: "reduction",
+          requiresDistinctConsent: false,
         }),
         expect.objectContaining({
           kind: "agent",
           path: "agent.tools.allow",
           desired: expect.objectContaining({ digest: expect.any(String) }),
           effect: expect.objectContaining({ path: "tools.allow" }),
-          requiresDistinctConsent: true,
+          classification: "reduction",
+          requiresDistinctConsent: false,
         }),
         expect.objectContaining({
           kind: "package",

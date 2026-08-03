@@ -26,7 +26,7 @@ import {
 } from "./onboard.js";
 import { buildQwenProvider, buildQwenTokenPlanProvider } from "./provider-catalog.js";
 import { wrapQwenProviderStream } from "./stream.js";
-import { buildQwenVideoGenerationProvider } from "./video-generation-provider.js";
+import { qwenVideoGenerationProvider } from "./video-generation-provider.js";
 
 const PROVIDER_ID = "qwen";
 const LEGACY_PROVIDER_ID = "modelstudio";
@@ -116,6 +116,7 @@ function createQwenTokenPlanAuthMethod(region: "global" | "cn") {
 }
 
 function resolveQwenTokenPlanThinkingProfile(modelId: string) {
+  // Uncataloged exact refs remain selectable, so family predicates preserve their request controls.
   if (isQwenTokenPlanThinkingOnlyModelId(modelId)) {
     return {
       levels: [{ id: "low" as const, label: "on" }],
@@ -320,6 +321,6 @@ export default defineSingleProviderPluginEntry({
       wrapStreamFn: wrapQwenProviderStream,
     });
     api.registerMediaUnderstandingProvider(buildQwenMediaUnderstandingProvider());
-    api.registerVideoGenerationProvider(buildQwenVideoGenerationProvider());
+    api.registerVideoGenerationProvider(qwenVideoGenerationProvider);
   },
 });

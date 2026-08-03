@@ -291,6 +291,7 @@ export const en = {
       browserHandoffTitle: "Continue in your browser",
       codingAgentQuip:
         "I can see {labels} on this machine — good taste. Once your AI works I can bring their memories along too.",
+      controlUiPreparing: "Preparing the Control UI…",
       custodianIntro: "Hi — I'm OpenClaw. I keep this system running. Let's get you set up.",
       failedOptionLine: "{label}: {reason}",
       failedOptionsIntro: "These didn't work just now:",
@@ -519,6 +520,8 @@ export const en = {
         "{channel} plugin not available (continuing with setup). If the channel still doesn't work after setup, run `{listCommand}` and `{enableCommand}`, then restart the gateway.",
       pluginNotAvailable: "{channel} plugin not available.",
       removeTitle: "Remove channel",
+      resumeDisabledPluginSetup: "{channel} plugin is disabled. Enable it and continue setup now?",
+      resumeDisabledSetup: "{channel} is disabled. Enable it and continue setup now?",
       select: "Select a channel",
       selectQuickstart: "Select channel (QuickStart)",
       selectedTitle: "Selected channels",
@@ -706,8 +709,6 @@ export const en = {
       channelsLabel: "Slack channels",
       envPrompt: "SLACK_BOT_TOKEN + SLACK_APP_TOKEN detected. Use env vars?",
       examples: "Examples:",
-      interactiveRepliesPrompt:
-        "Enable Slack interactive replies (buttons/selects) for agent responses?",
       multipleEntries: "Multiple entries: comma-separated.",
       socketModeTokensTitle: "Slack socket mode tokens",
     },

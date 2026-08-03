@@ -73,6 +73,10 @@ describe("BoardAvailabilityController", () => {
     await vi.waitFor(() => expect(sessionHasBoard(sessionKey)).toBe(true));
     expect(client.request).toHaveBeenCalledWith("board.get", { sessionKey });
 
+    listener?.({ event: "board.changed", payload: { sessionKey, revision: 1 } });
+    await Promise.resolve();
+    expect(client.request).toHaveBeenCalledOnce();
+
     hasBoard = false;
     listener?.({ event: "board.changed", payload: { sessionKey, revision: 2 } });
     await vi.waitFor(() => expect(sessionHasBoard(sessionKey)).toBe(false));

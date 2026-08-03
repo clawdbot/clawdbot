@@ -6,6 +6,7 @@ import type { TelegramHandlerMessageRuntime } from "./bot-handlers.message.runti
 import type { TelegramAmbientTranscriptWatermark } from "./bot-message-context.types.js";
 import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 import type { TelegramSpooledReplayDeferredParticipant } from "./bot-processing-outcome.js";
+import { joinTelegramTextParts } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
 
@@ -71,7 +72,11 @@ export function createTelegramInboundTextRuntime(
         settleSpooledReplayParticipants(entry.spooledReplayParticipants, { kind: "skipped" });
         return;
       }
-      const combinedText = entry.messages.map((message) => message.msg.text ?? "").join("");
+      const combinedTextParts = joinTelegramTextParts(
+        entry.messages.map((message) => message.msg),
+        "",
+      );
+      const combinedText = combinedTextParts.text;
       if (!combinedText.trim()) {
         releaseDispatchDedupeClaims(entry.dispatchDedupeClaims);
         settleSpooledReplayParticipants(entry.spooledReplayParticipants, { kind: "skipped" });
@@ -80,6 +85,7 @@ export function createTelegramInboundTextRuntime(
       const syntheticMessage = buildSyntheticTextMessage({
         base: first.msg,
         text: combinedText,
+        entities: combinedTextParts.entities,
         date: last.msg.date ?? first.msg.date,
       });
       const result = await processMessageWithReplyChain({

@@ -251,7 +251,7 @@ async function main() {
   });
   assert(activation.ok, `fake Claude inference activation failed: ${JSON.stringify(activation)}`);
   assert(
-    activation.modelRef === "claude-cli/claude-opus-4-8",
+    activation.modelRef === "claude-cli/claude-opus-5",
     `activation selected the wrong model: ${activation.modelRef}`,
   );
   const inferenceConfig = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;

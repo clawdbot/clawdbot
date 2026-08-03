@@ -40,13 +40,11 @@ function resolvePendingSuggestion(params: {
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 
 describe("session suggestion store", () => {
-  it("lazily ensures deterministic rows and resolves only pending suggestions", async () => {
+  it("keeps deterministic rows and resolves only pending suggestions", async () => {
     await withTempDir({ prefix: "openclaw-session-suggestions-" }, async (dir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
       const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
       await upsertSessionEntry(scope, { sessionId: "session-a", updatedAt: 1 });
-      const database = openOpenClawAgentDatabase({ agentId: "main", env });
-      database.db.exec("DROP TABLE session_suggestions;");
 
       expect(listSessionSuggestions(scope)).toEqual([]);
       addSessionSuggestion(scope, {
@@ -88,6 +86,25 @@ describe("session suggestion store", () => {
       expect(listSessionSuggestions(scope, { pendingOnly: true }).map((item) => item.id)).toEqual([
         "b",
       ]);
+    });
+  });
+
+  it("does not recreate a missing canonical suggestions table", async () => {
+    await withTempDir({ prefix: "openclaw-session-suggestions-missing-" }, async (dir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+      const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
+      await upsertSessionEntry(scope, { sessionId: "session-a", updatedAt: 1 });
+      const database = openOpenClawAgentDatabase({ agentId: "main", env });
+      database.db.exec("DROP TABLE session_suggestions;");
+
+      expect(() => listSessionSuggestions(scope)).toThrow(/no such table: session_suggestions/);
+      expect(
+        database.db
+          .prepare(
+            "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'session_suggestions'",
+          )
+          .get(),
+      ).toBeUndefined();
     });
   });
 

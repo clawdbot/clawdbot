@@ -1,21 +1,21 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import type { DeliveryContext } from "../utils/delivery-context.shared.js";
-import {
-  isMainSessionRecoveryExhausted,
-  type MainSessionRecoveryObservation,
-} from "./main-session-recovery-state.js";
+import type { MainSessionRecoveryObservation } from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
-import { buildUnresumableSessionNoticeIdempotencyKey } from "./main-session-restart-claim.js";
 import { resolveRestartRecoveryDeliveryContext } from "./main-session-restart-dispatch.js";
+import {
+  sendUnresumableSessionNotice,
+  writeUnresumableSessionNotice,
+} from "./main-session-restart-recovery-notice.js";
+import {
+  buildRestartRecoveryExpectedState,
+  log,
+  MAX_RECOVERY_RETRIES,
+} from "./main-session-restart-recovery-shared.js";
 
-const log = createSubsystemLogger("main-session-restart-recovery");
 const TOMBSTONED_SESSION_NOTICE =
   "I couldn't recover this session after repeated gateway restarts. " +
   "Use /new or /reset to start a replacement session.";
@@ -64,10 +64,33 @@ export async function tombstoneMainRestartRecoveryWithNotice(params: {
     let entry = params.entry;
     let observation = params.observation;
     for (let attempt = 0; attempt < 3; attempt += 1) {
+      const recoveryState = entry.mainRestartRecovery;
+      if (
+        !recoveryState ||
+        recoveryState.cycleId !== observation.cycleId ||
+        recoveryState.revision !== observation.revision
+      ) {
+        return "skipped";
+      }
+      const now = Date.now();
       const notice = await writeUnresumableSessionNotice({
-        ...params,
+        agentId: resolveAgentIdFromSessionKey(params.sessionKey),
         entry,
-        observation,
+        expectedSessionState: buildRestartRecoveryExpectedState(entry, observation),
+        sessionKey: params.sessionKey,
+        sessionLifecyclePatch: {
+          abortedLastRun: false,
+          endedAt: now,
+          mainRestartRecovery: {
+            ...recoveryState,
+            revision: recoveryState.revision + 1,
+            tombstone: { reason: params.reason },
+          },
+          runtimeMs: Math.max(0, now - (entry.startedAt ?? now)),
+          status: "failed",
+          updatedAt: now,
+        },
+        storePath: params.storePath,
         text: TOMBSTONED_SESSION_NOTICE,
       });
       if (notice === "written") {
@@ -87,7 +110,9 @@ export async function tombstoneMainRestartRecoveryWithNotice(params: {
         current.sessionId !== params.entry.sessionId ||
         state?.cycleId !== params.observation.cycleId ||
         state.tombstone ||
-        !isMainSessionRecoveryExhausted(current)
+        current.status !== "running" ||
+        current.abortedLastRun !== true ||
+        state.chargedAttempts < MAX_RECOVERY_RETRIES
       ) {
         return "skipped";
       }
@@ -113,114 +138,4 @@ export async function tombstoneMainRestartRecoveryWithNotice(params: {
     text: TOMBSTONED_SESSION_NOTICE,
   });
   return "tombstoned";
-}
-
-async function sendUnresumableSessionNotice(params: {
-  deliveryContext: DeliveryContext;
-  entry: SessionEntry;
-  gatewayRuntime: GatewayRecoveryRuntime;
-  reason: string;
-  sessionKey: string;
-  text: string;
-}): Promise<void> {
-  const messageParams: Record<string, unknown> = {
-    to: params.deliveryContext.to,
-    message: params.text,
-    bestEffort: true,
-    ...(params.deliveryContext.threadId != null
-      ? { threadId: params.deliveryContext.threadId }
-      : {}),
-  };
-  const actionParams: Record<string, unknown> = {
-    channel: params.deliveryContext.channel,
-    action: "send",
-    sessionKey: params.sessionKey,
-    sessionId: params.entry.sessionId,
-    idempotencyKey: buildUnresumableSessionNoticeIdempotencyKey(params.entry),
-    params: messageParams,
-  };
-  const accountId = normalizeOptionalString(params.deliveryContext.accountId);
-  if (accountId) {
-    actionParams.accountId = accountId;
-  }
-  try {
-    await params.gatewayRuntime.sendRecoveryNotice(actionParams, 10_000);
-    log.info(
-      `sent interrupted main session recovery notice: ${params.sessionKey} (${params.reason})`,
-    );
-  } catch (error) {
-    log.warn(
-      `failed to send interrupted main session recovery notice ${params.sessionKey}: ${String(error)}`,
-    );
-  }
-}
-
-async function writeUnresumableSessionNotice(params: {
-  entry: SessionEntry;
-  observation: MainSessionRecoveryObservation;
-  reason: string;
-  sessionKey: string;
-  storePath: string;
-  text: string;
-}): Promise<"failed" | "stale" | "written"> {
-  const recoveryState = params.entry.mainRestartRecovery;
-  if (
-    !recoveryState ||
-    recoveryState.cycleId !== params.observation.cycleId ||
-    recoveryState.revision !== params.observation.revision
-  ) {
-    return "stale";
-  }
-  const now = Date.now();
-  const result = await appendAssistantMessageToSessionTranscript({
-    agentId: resolveAgentIdFromSessionKey(params.sessionKey),
-    sessionKey: params.sessionKey,
-    expectedSessionId: params.entry.sessionId,
-    expectedSessionState: {
-      abortedLastRun: params.entry.abortedLastRun,
-      mainRestartRecoveryCycleId: params.observation.cycleId,
-      mainRestartRecoveryRevision: params.observation.revision,
-      restartRecoveryBeforeAgentReplyState: params.entry.restartRecoveryBeforeAgentReplyState,
-      restartRecoveryDeliveryReceiptState: params.entry.restartRecoveryDeliveryReceiptState,
-      restartRecoveryDeliveryToolCallId: params.entry.restartRecoveryDeliveryToolCallId,
-      restartRecoveryDeliveryRequestFingerprint:
-        params.entry.restartRecoveryDeliveryRequestFingerprint,
-      restartRecoveryDeliveryRunId: params.entry.restartRecoveryDeliveryRunId,
-      restartRecoveryDeliverySourceRunId: params.entry.restartRecoveryDeliverySourceRunId,
-      restartRecoveryRequesterAccountId: params.entry.restartRecoveryRequesterAccountId,
-      restartRecoveryRequesterSenderId: params.entry.restartRecoveryRequesterSenderId,
-      restartRecoverySameChannelThreadRequired:
-        params.entry.restartRecoverySameChannelThreadRequired,
-      restartRecoverySourceIngress: params.entry.restartRecoverySourceIngress,
-      restartRecoverySourceReplyDeliveryMode: params.entry.restartRecoverySourceReplyDeliveryMode,
-      restartRecoveryTerminalRunIds: params.entry.restartRecoveryTerminalRunIds,
-      status: params.entry.status,
-      updatedAt: params.entry.updatedAt,
-    },
-    sessionLifecyclePatch: {
-      abortedLastRun: false,
-      endedAt: now,
-      mainRestartRecovery: {
-        ...recoveryState,
-        revision: recoveryState.revision + 1,
-        tombstone: { reason: params.reason },
-      },
-      runtimeMs: Math.max(0, now - (params.entry.startedAt ?? now)),
-      status: "failed",
-      updatedAt: now,
-    },
-    storePath: params.storePath,
-    text: params.text,
-    idempotencyKey: buildUnresumableSessionNoticeIdempotencyKey(params.entry),
-  }).catch((error: unknown) => ({ ok: false as const, reason: String(error) }));
-  if (!result.ok) {
-    log.warn(
-      `failed to write interrupted main session notice ${params.sessionKey}: ${result.reason}`,
-    );
-  }
-  return result.ok
-    ? "written"
-    : "code" in result && result.code === "session-rebound"
-      ? "stale"
-      : "failed";
 }

@@ -1,5 +1,6 @@
 // Telegram plugin module implements telegram ingress worker behavior.
 import { parentPort, workerData } from "node:worker_threads";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   computeBackoff,
@@ -69,13 +70,6 @@ type TelegramIngressRuntimeDeps = {
 type TelegramIngressWorkerRuntimeData = TelegramIngressWorkerOptions & {
   runtime: typeof TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER;
 };
-
-function formatErrorMessage(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message || err.name;
-  }
-  return String(err);
-}
 
 function readTelegramErrorCode(err: unknown): number | undefined {
   if (err && typeof err === "object" && "error_code" in err) {
@@ -196,6 +190,7 @@ export async function runTelegramIngressWorkerRuntime(params: {
   let lastUpdateId = options.initialUpdateId;
   let failures = 0;
   let consecutiveEmptyPolls = 0;
+  let pollingConfirmed = false;
 
   port.onMessage((message) => {
     if (message?.type === "stop") {
@@ -251,7 +246,9 @@ export async function runTelegramIngressWorkerRuntime(params: {
           fetch: fetchImpl,
           url: getUpdatesUrl,
           body: {
-            timeout: pollTimeoutSeconds,
+            // Confirm getUpdates ownership with a completed short poll before
+            // entering the long poll; request start alone cannot prove connectivity.
+            timeout: pollingConfirmed ? pollTimeoutSeconds : 0,
             limit: pollLimit,
             allowed_updates: resolveTelegramAllowedUpdates(),
             ...(offset === null ? {} : { offset }),
@@ -273,6 +270,7 @@ export async function runTelegramIngressWorkerRuntime(params: {
           }
           port.postMessage({ type: "spooled", updateId, queued: result.length });
         }
+        pollingConfirmed = true;
         failures = 0;
         port.postMessage({
           type: "poll-success",

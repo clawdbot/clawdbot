@@ -14,6 +14,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv } from "../test-utils/env.js";
+import { runDirectSessionAnnounceScenario } from "./server.sessions-send.direct-announce.test-support.js";
 import {
   agentCommand,
   getFreePort,
@@ -35,6 +36,7 @@ let envSnapshot: ReturnType<typeof captureEnv>;
 
 type SessionSendTool = ReturnType<typeof createOpenClawTools>[number];
 const SESSION_SEND_E2E_TIMEOUT_MS = 10_000;
+const SESSION_SEND_DM_ROUTING_E2E_TIMEOUT_MS = 30_000;
 let cachedSessionsSendTool: SessionSendTool | null = null;
 
 function getSessionsSendTool(): SessionSendTool {
@@ -187,6 +189,35 @@ describe("sessions_send gateway loopback", () => {
     expect(firstCall?.inputProvenance?.sourceTool).toBe("sessions_send");
   });
 
+  it.each([
+    {
+      label: "direct",
+      sessionKey: "agent:main:feishu:direct:ou_announce_recipient",
+      expectedAccountId: undefined,
+    },
+    {
+      label: "dm alias",
+      sessionKey: "agent:main:feishu:dm:ou_announce_recipient",
+      expectedAccountId: undefined,
+    },
+    {
+      label: "account-scoped direct",
+      sessionKey: "agent:main:feishu:work:direct:ou_announce_recipient",
+      expectedAccountId: "work",
+    },
+    {
+      label: "account-scoped dm alias",
+      sessionKey: "agent:main:feishu:work:dm:ou_announce_recipient",
+      expectedAccountId: "work",
+    },
+  ])(
+    "delivers a $label session announcement through the authenticated Gateway without stored delivery context",
+    { timeout: SESSION_SEND_DM_ROUTING_E2E_TIMEOUT_MS },
+    async ({ sessionKey, expectedAccountId }) => {
+      await runDirectSessionAnnounceScenario({ sessionKey, expectedAccountId });
+    },
+  );
+
   it(
     "announces through gateway send using external deliveryContext over stale webchat session fields",
     { timeout: SESSION_SEND_E2E_TIMEOUT_MS },
@@ -198,36 +229,43 @@ describe("sessions_send gateway loopback", () => {
         accountId?: string | null;
         threadId?: string | number | null;
       }> = [];
+      const whatsappPlugin = createOutboundTestPlugin({
+        id: "whatsapp",
+        label: "WhatsApp",
+        outbound: {
+          deliveryMode: "direct",
+          resolveTarget: ({ to }) => {
+            const target = to?.trim();
+            return target
+              ? { ok: true, to: target }
+              : { ok: false, error: new Error("missing target") };
+          },
+          sendText: async (ctx) => {
+            sendCalls.push({
+              to: ctx.to,
+              text: ctx.text,
+              accountId: ctx.accountId,
+              threadId: ctx.threadId,
+            });
+            return { channel: "whatsapp", messageId: "wa-proof-msg" };
+          },
+        },
+        messaging: {
+          normalizeTarget: (raw) => raw,
+        },
+      });
       setTestPluginRegistry(
         createTestRegistry([
           {
             pluginId: "whatsapp",
             source: "test",
-            plugin: createOutboundTestPlugin({
-              id: "whatsapp",
-              label: "WhatsApp",
-              outbound: {
-                deliveryMode: "direct",
-                resolveTarget: ({ to }) => {
-                  const target = to?.trim();
-                  return target
-                    ? { ok: true, to: target }
-                    : { ok: false, error: new Error("missing target") };
-                },
-                sendText: async (ctx) => {
-                  sendCalls.push({
-                    to: ctx.to,
-                    text: ctx.text,
-                    accountId: ctx.accountId,
-                    threadId: ctx.threadId,
-                  });
-                  return { channel: "whatsapp", messageId: "wa-proof-msg" };
-                },
+            plugin: {
+              ...whatsappPlugin,
+              config: {
+                ...whatsappPlugin.config,
+                listAccountIds: () => ["work"],
               },
-              messaging: {
-                normalizeTarget: (raw) => raw,
-              },
-            }),
+            },
           },
         ]),
       );
@@ -612,6 +650,202 @@ describe("sessions_send agent targeting", () => {
         });
         expect(stored?.sessionId).toBe(orionCall?.sessionId);
       } finally {
+        testState.agentsConfig = undefined;
+        testState.sessionStorePath = undefined;
+        await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      }
+    },
+  );
+});
+
+type DirectMessageRequesterRoutingCase = {
+  label: string;
+  requesterSessionKey: string;
+  dmScope: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  bindingAccountId?: string;
+  bindingAgentId?: string;
+  expectedReplySessionKey: string;
+};
+
+describe("sessions_send direct-message requester routing", () => {
+  // Exhaustive routing variants live in the sessions_send owner tests. Keep only
+  // opposite end-to-end outcomes here so Gateway composition is proven once.
+  it.each<DirectMessageRequesterRoutingCase>([
+    {
+      label: "legacy channel direct route",
+      requesterSessionKey: "agent:main:feishu:direct:legacy-peer",
+      dmScope: "main",
+      expectedReplySessionKey: "agent:main:main",
+    },
+    {
+      label: "erased named-account route owned by another agent",
+      requesterSessionKey: "agent:main:feishu:direct:legacy-peer",
+      dmScope: "main",
+      bindingAgentId: "stranger",
+      bindingAccountId: "work",
+      expectedReplySessionKey: "agent:main:feishu:direct:legacy-peer",
+    },
+  ] as const)(
+    "returns a real cross-agent reply to the $label",
+    { timeout: SESSION_SEND_DM_ROUTING_E2E_TIMEOUT_MS },
+    async ({
+      label,
+      requesterSessionKey,
+      dmScope,
+      bindingAccountId,
+      bindingAgentId,
+      expectedReplySessionKey,
+    }) => {
+      const configPath = process.env.OPENCLAW_CONFIG_PATH;
+      if (!configPath) {
+        throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
+      }
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-dm-scope-"));
+      // A2A follow-ups outlive tool.execute. Give every real Gateway case its
+      // own agent so a preceding case can never satisfy this case's spy.
+      const targetAgentId = `orion-${label.toLowerCase().replaceAll(" ", "-")}`;
+      const targetSessionKey = `agent:${targetAgentId}:main`;
+      const config: OpenClawConfig = {
+        ...(bindingAccountId || bindingAgentId
+          ? {
+              bindings: [
+                {
+                  type: "route",
+                  agentId: bindingAgentId ?? "main",
+                  match: {
+                    channel: "feishu",
+                    accountId: bindingAccountId ?? "default",
+                    peer: { kind: "direct", id: "legacy-peer" },
+                  },
+                },
+              ],
+            }
+          : {}),
+        session: { dmScope },
+        tools: {
+          sessions: { visibility: "all" },
+          agentToAgent: { enabled: true },
+        },
+        agents: {
+          list: [
+            { id: "main", default: true },
+            { id: targetAgentId },
+            ...(bindingAgentId ? [{ id: bindingAgentId }] : []),
+          ],
+        },
+      };
+
+      testState.sessionStorePath = path.join(dir, "sessions.json");
+      testState.agentsConfig = config.agents;
+      testState.sessionConfig = config.session;
+      try {
+        await fs.mkdir(path.dirname(configPath), { recursive: true });
+        await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+        await writeSessionStore({
+          entries: {
+            "agent:main:main": { sessionId: "dm-scope-main", updatedAt: Date.now() },
+            [requesterSessionKey]: { sessionId: "dm-scope-legacy", updatedAt: Date.now() },
+            [targetSessionKey]: { sessionId: "dm-scope-orion", updatedAt: Date.now() },
+          },
+        });
+
+        const spy = agentCommand as unknown as Mock<(opts: unknown) => Promise<void>>;
+        spy.mockReset();
+        spy.mockImplementation(async (opts: unknown) =>
+          emitLifecycleAssistantReply({
+            opts,
+            defaultSessionId: `dm-scope-${targetAgentId}`,
+            resolveText: (extraSystemPrompt) => {
+              if (extraSystemPrompt?.includes("Agent-to-agent reply step")) {
+                return "REPLY_SKIP";
+              }
+              if (extraSystemPrompt?.includes("Agent-to-agent announce step")) {
+                return "ANNOUNCE_SKIP";
+              }
+              return "orion received the session message";
+            },
+          }),
+        );
+
+        const tool = createOpenClawTools({
+          agentSessionKey: requesterSessionKey,
+          agentChannel: "feishu",
+          config,
+        }).find((candidate) => candidate.name === "sessions_send");
+        if (!tool) {
+          throw new Error("missing sessions_send tool");
+        }
+
+        const result = await tool.execute("call-dm-scope-routing", {
+          sessionKey: targetSessionKey,
+          message: "deliver to the monitored requester session",
+          timeoutSeconds: 10,
+        });
+        expectSessionsSendDetails(result, {
+          reply: "orion received the session message",
+          sessionKey: targetSessionKey,
+        });
+
+        const runId = (result.details as { runId?: string }).runId;
+        expect(runId).toBeTypeOf("string");
+        const targetCall = spy.mock.calls
+          .map(
+            ([opts]) =>
+              opts as {
+                runId?: string;
+                sessionKey?: string;
+                inputProvenance?: { sourceSessionKey?: string };
+              },
+          )
+          .find((opts) => opts.sessionKey === targetSessionKey && opts.runId === runId);
+        if (!targetCall) {
+          const observedRuns = spy.mock.calls.slice(-6).map(([opts]) => {
+            const call = opts as { runId?: string; sessionKey?: string };
+            return { runId: call.runId, sessionKey: call.sessionKey };
+          });
+          throw new Error(
+            `Target run ${runId} for ${targetSessionKey} was not observed: ${JSON.stringify(observedRuns)}`,
+          );
+        }
+        expect(targetCall?.inputProvenance?.sourceSessionKey).toBe(expectedReplySessionKey);
+
+        await vi.waitFor(
+          () => {
+            expect(
+              spy.mock.calls.some(([opts]) => {
+                const call = opts as {
+                  sessionKey?: string;
+                  extraSystemPrompt?: string;
+                  inputProvenance?: { sourceSessionKey?: string };
+                };
+                return (
+                  call.sessionKey === expectedReplySessionKey &&
+                  call.inputProvenance?.sourceSessionKey === targetSessionKey &&
+                  call.extraSystemPrompt?.includes("Agent-to-agent reply step")
+                );
+              }),
+            ).toBe(true);
+          },
+          { timeout: 10_000, interval: 25 },
+        );
+        if (expectedReplySessionKey !== requesterSessionKey) {
+          expect(
+            spy.mock.calls.some(([opts]) => {
+              const call = opts as {
+                sessionKey?: string;
+                extraSystemPrompt?: string;
+                inputProvenance?: { sourceSessionKey?: string };
+              };
+              return (
+                call.sessionKey === requesterSessionKey &&
+                call.inputProvenance?.sourceSessionKey === targetSessionKey &&
+                call.extraSystemPrompt?.includes("Agent-to-agent reply step")
+              );
+            }),
+          ).toBe(false);
+        }
+      } finally {
+        testState.sessionConfig = undefined;
         testState.agentsConfig = undefined;
         testState.sessionStorePath = undefined;
         await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });

@@ -1,4 +1,5 @@
 // Memory Host SDK tests cover embeddings behavior.
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,16 +11,34 @@ import { createLocalEmbeddingProviderInProcess, DEFAULT_LOCAL_MODEL } from "./em
 import { getLocalEmbeddingRuntimeFacts } from "./local-embedding-runtime-facts.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const LOCAL_PROVIDER_OPTIONS = {
+  config: {} as never,
+  provider: "local",
+  model: "",
+  fallback: "none",
+} as const;
 
 const nodeLlamaMock = vi.hoisted(() => ({
   importNodeLlamaCpp: vi.fn(),
 }));
+const forkMock = vi.hoisted(() => vi.fn());
+
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return {
+    ...actual,
+    fork: forkMock,
+  };
+});
 
 vi.mock("./node-llama.js", () => ({
   importNodeLlamaCpp: nodeLlamaMock.importNodeLlamaCpp,
 }));
 
-beforeEach(() => {
+beforeEach(async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  forkMock.mockReset();
+  forkMock.mockImplementation(actual.fork);
   nodeLlamaMock.importNodeLlamaCpp.mockReset();
 });
 
@@ -112,12 +131,7 @@ describe("local embedding provider", () => {
   it("normalizes local embeddings and resolves the default local model", async () => {
     const runtime = mockLocalEmbeddingRuntime();
 
-    const provider = await createLocalEmbeddingProviderInProcess({
-      config: {} as never,
-      provider: "local",
-      model: "",
-      fallback: "none",
-    });
+    const provider = await createLocalEmbeddingProviderInProcess(LOCAL_PROVIDER_OPTIONS);
 
     const embedding = await provider.embedQuery("test query");
     const magnitude = Math.sqrt(embedding.reduce((sum, value) => sum + value * value, 0));
@@ -142,10 +156,7 @@ describe("local embedding provider", () => {
   it("truncates local embeddings before normalizing them", async () => {
     mockLocalEmbeddingRuntime(new Float32Array([3, 4, 12]));
     const provider = await createLocalEmbeddingProviderInProcess({
-      config: {} as never,
-      provider: "local",
-      model: "",
-      fallback: "none",
+      ...LOCAL_PROVIDER_OPTIONS,
       outputDimensionality: 2,
     });
 
@@ -163,10 +174,7 @@ describe("local embedding provider", () => {
       },
     });
     const provider = await createLocalEmbeddingProviderInProcess({
-      config: {} as never,
-      provider: "local",
-      model: "",
-      fallback: "none",
+      ...LOCAL_PROVIDER_OPTIONS,
       outputDimensionality: 2,
     });
 
@@ -176,12 +184,7 @@ describe("local embedding provider", () => {
   it("passes default contextSize (4096) to createEmbeddingContext when not configured", async () => {
     const runtime = mockLocalEmbeddingRuntime();
 
-    const provider = await createLocalEmbeddingProviderInProcess({
-      config: {} as never,
-      provider: "local",
-      model: "",
-      fallback: "none",
-    });
+    const provider = await createLocalEmbeddingProviderInProcess(LOCAL_PROVIDER_OPTIONS);
 
     await provider.embedQuery("context size default test");
 
@@ -204,10 +207,7 @@ describe("local embedding provider", () => {
     mockLocalEmbeddingRuntime();
 
     await createLocalEmbeddingProviderInProcess({
-      config: {} as never,
-      provider: "local",
-      model: "",
-      fallback: "none",
+      ...LOCAL_PROVIDER_OPTIONS,
       local: {
         nodeLlamaCppImportUrl: "file:///plugins/llama-cpp/node-llama-cpp.js",
       } as never,
@@ -222,10 +222,7 @@ describe("local embedding provider", () => {
     const runtime = mockLocalEmbeddingRuntime();
 
     const provider = await createLocalEmbeddingProviderInProcess({
-      config: {} as never,
-      provider: "local",
-      model: "",
-      fallback: "none",
+      ...LOCAL_PROVIDER_OPTIONS,
       local: { contextSize: 2048 },
     });
 
@@ -250,10 +247,7 @@ describe("local embedding provider", () => {
     const runtime = mockLocalEmbeddingRuntime();
 
     const provider = await createLocalEmbeddingProviderInProcess({
-      config: {} as never,
-      provider: "local",
-      model: "",
-      fallback: "none",
+      ...LOCAL_PROVIDER_OPTIONS,
       local: { contextSize: "auto" },
     });
 
@@ -269,12 +263,7 @@ describe("local embedding provider", () => {
 
   it("reports selected backend, memory, offload, and requested context facts", async () => {
     mockLocalEmbeddingRuntime();
-    const provider = await createLocalEmbeddingProviderInProcess({
-      config: {} as never,
-      provider: "local",
-      model: "",
-      fallback: "none",
-    });
+    const provider = await createLocalEmbeddingProviderInProcess(LOCAL_PROVIDER_OPTIONS);
 
     expect(getLocalEmbeddingRuntimeFacts(provider)).toBeUndefined();
     await provider.embedQuery("runtime facts");
@@ -307,12 +296,7 @@ describe("local embedding provider", () => {
   it("retains reliable runtime facts when model loading fails", async () => {
     const runtime = mockLocalEmbeddingRuntime();
     runtime.loadModel.mockRejectedValueOnce(new Error("GGUF load failed"));
-    const provider = await createLocalEmbeddingProviderInProcess({
-      config: {} as never,
-      provider: "local",
-      model: "",
-      fallback: "none",
-    });
+    const provider = await createLocalEmbeddingProviderInProcess(LOCAL_PROVIDER_OPTIONS);
 
     await expect(provider.embedQuery("runtime failure")).rejects.toThrow("GGUF load failed");
 
@@ -333,10 +317,7 @@ describe("local embedding provider", () => {
     const runtime = mockLocalEmbeddingRuntime();
     runtime.getLlama.mockRejectedValueOnce(new Error("No compatible llama.cpp backend"));
     const provider = await createLocalEmbeddingProviderInProcess({
-      config: {} as never,
-      provider: "local",
-      model: "",
-      fallback: "none",
+      ...LOCAL_PROVIDER_OPTIONS,
       local: {
         contextSize: 2048,
       },
@@ -382,12 +363,7 @@ describe("local embedding provider", () => {
       resolveModelFile: vi.fn(async () => "/resolved/model.gguf"),
       LlamaLogLevel: { error: 0 },
     } as never);
-    const provider = await createLocalEmbeddingProviderInProcess({
-      config: {} as never,
-      provider: "local",
-      model: "",
-      fallback: "none",
-    });
+    const provider = await createLocalEmbeddingProviderInProcess(LOCAL_PROVIDER_OPTIONS);
 
     const batchPromise = provider.embedBatch(["first", "second"]);
     await expect.poll(() => calls.join(",")).toBe("first");
@@ -402,10 +378,7 @@ describe("local embedding provider", () => {
     const runtime = mockLocalEmbeddingRuntime(new Float32Array([1, 0]));
 
     const provider = await createLocalEmbeddingProviderInProcess({
-      config: {} as never,
-      provider: "local",
-      model: "",
-      fallback: "none",
+      ...LOCAL_PROVIDER_OPTIONS,
       local: {
         modelPath: "  /models/embed.gguf  ",
         modelCacheDir: "  /cache/models  ",
@@ -428,12 +401,7 @@ describe("local embedding provider", () => {
   it("disposes cached local llama resources when closed", async () => {
     const runtime = mockLocalEmbeddingRuntime();
 
-    const provider = await createLocalEmbeddingProviderInProcess({
-      config: {} as never,
-      provider: "local",
-      model: "",
-      fallback: "none",
-    });
+    const provider = await createLocalEmbeddingProviderInProcess(LOCAL_PROVIDER_OPTIONS);
 
     await provider.embedQuery("load local resources");
     await provider.close?.();
@@ -455,12 +423,7 @@ describe("local embedding provider", () => {
       resolveModelFile: vi.fn(async (modelPath: string) => `/resolved/${modelPath}`),
       LlamaLogLevel: { error: 0 },
     } as never);
-    const provider = await createLocalEmbeddingProviderInProcess({
-      config: {} as never,
-      provider: "local",
-      model: "",
-      fallback: "none",
-    });
+    const provider = await createLocalEmbeddingProviderInProcess(LOCAL_PROVIDER_OPTIONS);
 
     const embedPromise = provider.embedQuery("pending init");
     await expect(provider.close?.()).resolves.toBeUndefined();
@@ -491,12 +454,7 @@ describe("local embedding provider", () => {
       }),
       LlamaLogLevel: { error: 0 },
     } as never);
-    const provider = await createLocalEmbeddingProviderInProcess({
-      config: {} as never,
-      provider: "local",
-      model: "",
-      fallback: "none",
-    });
+    const provider = await createLocalEmbeddingProviderInProcess(LOCAL_PROVIDER_OPTIONS);
 
     const embedPromise = provider.embedQuery("pending model load");
     await loadModelStarted.promise;
@@ -535,12 +493,7 @@ describe("local embedding provider", () => {
       resolveModelFile: vi.fn(async () => "/resolved/model.gguf"),
       LlamaLogLevel: { error: 0 },
     } as never);
-    const provider = await createLocalEmbeddingProviderInProcess({
-      config: {} as never,
-      provider: "local",
-      model: "",
-      fallback: "none",
-    });
+    const provider = await createLocalEmbeddingProviderInProcess(LOCAL_PROVIDER_OPTIONS);
 
     const embedPromise = provider.embedQuery("pending context create");
     await createContextStarted.promise;
@@ -607,10 +560,7 @@ process.on("message", (message) => {
     );
     const provider = await createLocalEmbeddingWorkerProvider(
       {
-        config: {} as never,
-        provider: "local",
-        model: "",
-        fallback: "none",
+        ...LOCAL_PROVIDER_OPTIONS,
         outputDimensionality: 2,
       },
       {
@@ -631,6 +581,201 @@ process.on("message", (message) => {
       buildType: "prebuilt",
     });
     await expect(provider.close?.()).resolves.toBeUndefined();
+  });
+
+  it("waits for the local worker process to exit before close resolves", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-embedding-worker-"));
+    const workerScript = path.join(tempDir, "worker.cjs");
+    const exitMarker = path.join(tempDir, "worker-exited");
+    await fs.writeFile(
+      workerScript,
+      `
+const fs = require("node:fs");
+const exitMarker = ${JSON.stringify(exitMarker)};
+setInterval(() => {}, 1000);
+process.on("SIGTERM", () => {
+  setTimeout(() => {
+    fs.writeFileSync(exitMarker, "exited");
+    process.exit(0);
+  }, 50);
+});
+process.on("message", (message) => {
+  process.send({ id: message.id, ok: true });
+});
+`,
+      "utf8",
+    );
+    const provider = await createLocalEmbeddingWorkerProvider(LOCAL_PROVIDER_OPTIONS, {
+      workerScriptPath: workerScript,
+    });
+
+    const firstClose = provider.close?.() ?? Promise.resolve();
+    const secondClose = provider.close?.() ?? Promise.resolve();
+    await expect(Promise.all([firstClose, secondClose])).resolves.toEqual([undefined, undefined]);
+
+    await expect(fs.readFile(exitMarker, "utf8")).resolves.toBe("exited");
+  });
+
+  it("joins cancellation shutdown before a later close resolves", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-embedding-worker-"));
+    const workerScript = path.join(tempDir, "worker.cjs");
+    const embedStarted = path.join(tempDir, "embed-started");
+    const exitMarker = path.join(tempDir, "worker-exited");
+    await fs.writeFile(
+      workerScript,
+      `
+const fs = require("node:fs");
+setInterval(() => {}, 1000);
+process.on("SIGTERM", () => {
+  setTimeout(() => {
+    fs.writeFileSync(${JSON.stringify(exitMarker)}, "exited");
+    process.exit(0);
+  }, 50);
+});
+process.on("message", (message) => {
+  if (message.type === "initialize") {
+    process.send({ id: message.id, ok: true });
+  } else if (message.type === "embedQuery") {
+    fs.writeFileSync(${JSON.stringify(embedStarted)}, "started");
+  }
+});
+`,
+      "utf8",
+    );
+    const provider = await createLocalEmbeddingWorkerProvider(LOCAL_PROVIDER_OPTIONS, {
+      workerScriptPath: workerScript,
+    });
+    const controller = new AbortController();
+    const embedPromise = provider.embedQuery("cancel me", { signal: controller.signal });
+    await expect
+      .poll(async () => {
+        try {
+          return await fs.readFile(embedStarted, "utf8");
+        } catch {
+          return "";
+        }
+      })
+      .toBe("started");
+
+    controller.abort(new Error("cancelled"));
+    const queuedEmbedError = provider
+      .embedQuery("queued after cancel")
+      .catch((err: unknown) => err);
+    const closePromise = provider.close?.() ?? Promise.resolve();
+    await expect(embedPromise).rejects.toThrow("cancelled");
+    await expect(closePromise).resolves.toBeUndefined();
+    await expect(queuedEmbedError).resolves.toMatchObject({
+      message: "Local embedding worker client has been closed",
+    });
+
+    await expect(fs.readFile(exitMarker, "utf8")).resolves.toBe("exited");
+  });
+
+  it("escalates worker shutdown when the child ignores SIGTERM", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-embedding-worker-"));
+    const workerScript = path.join(tempDir, "worker.cjs");
+    await fs.writeFile(
+      workerScript,
+      `
+setInterval(() => {}, 1000);
+process.on("SIGTERM", () => {});
+process.on("message", (message) => {
+  process.send({ id: message.id, ok: true });
+});
+`,
+      "utf8",
+    );
+    const provider = await createLocalEmbeddingWorkerProvider(LOCAL_PROVIDER_OPTIONS, {
+      workerScriptPath: workerScript,
+    });
+
+    await expect(
+      settleWithin(
+        (provider.close?.() ?? Promise.resolve()).then(() => "closed" as const),
+        1_000,
+      ),
+    ).resolves.toBe("closed");
+  });
+
+  it("rejects close when worker signaling errors without a terminal event", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      connected: true,
+      exitCode: null as number | null,
+      signalCode: null as NodeJS.Signals | null,
+      disconnect: vi.fn(function (this: { connected: boolean }) {
+        this.connected = false;
+      }),
+      kill: vi.fn(function (this: EventEmitter) {
+        queueMicrotask(() => this.emit("error", new Error("kill failed")));
+        return false;
+      }),
+      send: vi.fn(function (
+        this: EventEmitter,
+        message: { id: number },
+        callback: (err?: Error | null) => void,
+      ) {
+        callback();
+        queueMicrotask(() => this.emit("message", { id: message.id, ok: true }));
+        return true;
+      }),
+    });
+    forkMock.mockReturnValue(child);
+    const provider = await createLocalEmbeddingWorkerProvider(LOCAL_PROVIDER_OPTIONS, {
+      workerScriptPath: "/mock/worker.cjs",
+    });
+
+    const closeResult = await settleWithin(
+      (provider.close?.() ?? Promise.resolve()).then(
+        () => "closed" as const,
+        (err: unknown) => err,
+      ),
+      1_000,
+    );
+
+    expect(closeResult).toMatchObject({
+      code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.processError,
+      message: "Local embedding worker did not exit after SIGKILL",
+    });
+    expect(child.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+
+    child.kill.mockImplementationOnce(function (this: typeof child) {
+      this.signalCode = "SIGTERM";
+      queueMicrotask(() => this.emit("close", null, "SIGTERM"));
+      return true;
+    });
+    await expect(provider.close?.()).resolves.toBeUndefined();
+    expect(child.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"], ["SIGTERM"]]);
+  });
+
+  it("treats confirmed worker exit as closed after graceful disposal fails", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-embedding-worker-"));
+    const workerScript = path.join(tempDir, "worker.cjs");
+    await fs.writeFile(
+      workerScript,
+      `
+process.on("message", (message) => {
+  if (message.type === "close") {
+    process.send({ id: message.id, ok: false, error: "native disposal failed" });
+    return;
+  }
+  process.send({ id: message.id, ok: true });
+});
+`,
+      "utf8",
+    );
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    const provider = await createLocalEmbeddingWorkerProvider(LOCAL_PROVIDER_OPTIONS, {
+      workerScriptPath: workerScript,
+    });
+
+    await expect(provider.close?.()).resolves.toBeUndefined();
+
+    expect(warning).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "native disposal failed" }),
+      {
+        code: "LOCAL_EMBEDDING_WORKER_CLOSE",
+      },
+    );
   });
 
   it("rejects pending and queued requests when closing a busy worker", async () => {
@@ -660,15 +805,9 @@ process.on("message", (message) => {
 `,
       "utf8",
     );
-    const provider = await createLocalEmbeddingWorkerProvider(
-      {
-        config: {} as never,
-        provider: "local",
-        model: "",
-        fallback: "none",
-      },
-      { workerScriptPath: workerScript },
-    );
+    const provider = await createLocalEmbeddingWorkerProvider(LOCAL_PROVIDER_OPTIONS, {
+      workerScriptPath: workerScript,
+    });
 
     const firstEmbedError = provider.embedQuery("first").then(
       () => undefined,
@@ -736,15 +875,9 @@ process.on("message", (message) => {
 `,
       "utf8",
     );
-    const provider = await createLocalEmbeddingWorkerProvider(
-      {
-        config: {} as never,
-        provider: "local",
-        model: "",
-        fallback: "none",
-      },
-      { workerScriptPath: workerScript },
-    );
+    const provider = await createLocalEmbeddingWorkerProvider(LOCAL_PROVIDER_OPTIONS, {
+      workerScriptPath: workerScript,
+    });
 
     await expect(provider.embedQuery("hello")).rejects.toMatchObject({
       message: "CUDA model load failed",
@@ -790,15 +923,9 @@ process.on("message", (message) => {
         "--inspect-port",
         "0",
       );
-      provider = await createLocalEmbeddingWorkerProvider(
-        {
-          config: {} as never,
-          provider: "local",
-          model: "",
-          fallback: "none",
-        },
-        { workerScriptPath: workerScript },
-      );
+      provider = await createLocalEmbeddingWorkerProvider(LOCAL_PROVIDER_OPTIONS, {
+        workerScriptPath: workerScript,
+      });
       await expect(provider.embedQuery("hello")).resolves.toEqual([0]);
     } finally {
       process.execArgv.splice(0, process.execArgv.length, ...originalExecArgv);
@@ -824,15 +951,9 @@ process.on("message", (message) => {
     );
 
     try {
-      await createLocalEmbeddingWorkerProvider(
-        {
-          config: {} as never,
-          provider: "local",
-          model: "",
-          fallback: "none",
-        },
-        { workerScriptPath: workerScript },
-      );
+      await createLocalEmbeddingWorkerProvider(LOCAL_PROVIDER_OPTIONS, {
+        workerScriptPath: workerScript,
+      });
       throw new Error("expected local embedding provider creation to fail");
     } catch (err) {
       expect(err).toBeInstanceOf(Error);
@@ -857,15 +978,9 @@ process.on("message", (message) => {
 `,
       "utf8",
     );
-    const provider = await createLocalEmbeddingWorkerProvider(
-      {
-        config: {} as never,
-        provider: "local",
-        model: "",
-        fallback: "none",
-      },
-      { workerScriptPath: workerScript },
-    );
+    const provider = await createLocalEmbeddingWorkerProvider(LOCAL_PROVIDER_OPTIONS, {
+      workerScriptPath: workerScript,
+    });
 
     await expect(provider.embedQuery("hello")).rejects.toMatchObject({
       code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.exited,

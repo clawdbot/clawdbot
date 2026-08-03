@@ -1,5 +1,6 @@
 // Speech Core tests cover tts behavior.
-import { realpathSync, rmSync } from "node:fs";
+import crypto from "node:crypto";
+import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig, TtsConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -18,6 +19,7 @@ import type {
 } from "openclaw/plugin-sdk/speech-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CODE_HEAVY_SPOKEN_FALLBACK } from "./speech-text.js";
+import type { TtsAudioPersistence } from "./tts-synthesis.js";
 
 type MockSpeechSynthesisResult = Awaited<ReturnType<SpeechProviderPlugin["synthesize"]>>;
 
@@ -118,7 +120,6 @@ const {
   getTtsProvider,
   isTtsProviderConfigured,
   listSpeechVoices,
-  maybeApplyTtsToPayload,
   prepareTtsRequest,
   resolveTtsConfig,
   resolveTtsPrefsPath,
@@ -126,10 +127,11 @@ const {
   setSummarizationEnabled,
   setTtsMaxLength,
   synthesizeSpeech,
-  textToSpeech,
   textToSpeechStream,
   textToSpeechTelephony,
 } = await import("../runtime-api.js");
+const { maybeApplyTtsToPayload: maybeApplyTtsToPayloadCore } = await import("./tts-payload.js");
+const { textToSpeech: textToSpeechCore } = await import("./tts-synthesis.js");
 
 const nativeVoiceNoteChannels = ["discord", "feishu", "matrix", "telegram", "whatsapp"] as const;
 
@@ -158,6 +160,25 @@ function installSpeechProviders(providers: SpeechProviderPlugin[]): void {
 // macOS os.tmpdir() is a /var -> /private/var symlink and fs-safe rejects
 // symlinked store roots; resolve the canonical dir before writing prefs.
 const PREFS_TMP_DIR = realpathSync(os.tmpdir());
+
+async function persistTestTtsAudio({
+  audioBuffer,
+  fileExtension,
+}: Parameters<TtsAudioPersistence>[0]): Promise<string> {
+  const dir = path.join(PREFS_TMP_DIR, `openclaw-speech-core-media-${crypto.randomUUID()}`);
+  mkdirSync(dir, { recursive: true });
+  const audioPath = path.join(dir, `voice---${crypto.randomUUID()}${fileExtension}`);
+  writeFileSync(audioPath, audioBuffer);
+  return audioPath;
+}
+
+function textToSpeech(params: Parameters<typeof textToSpeechCore>[0]) {
+  return textToSpeechCore(params, persistTestTtsAudio);
+}
+
+function maybeApplyTtsToPayload(params: Parameters<typeof maybeApplyTtsToPayloadCore>[0]) {
+  return maybeApplyTtsToPayloadCore(params, persistTestTtsAudio);
+}
 
 function prefsPathFor(prefsName: string): string {
   return path.join(PREFS_TMP_DIR, `${prefsName}.json`);
@@ -229,7 +250,9 @@ async function expectTtsPayloadResult(params: {
     );
     expect(request.target).toBe(params.target);
     expect(result.audioAsVoice).toBe(params.audioAsVoice);
-    expect(result.mediaUrl).toMatch(new RegExp(`voice-\\d+\\.${params.mediaExtension ?? "ogg"}$`));
+    expect(result.mediaUrl).toMatch(
+      new RegExp(`voice---[a-f0-9-]+\\.${params.mediaExtension ?? "ogg"}$`),
+    );
     expect(result.spokenText).toBe(params.text);
     expect(result.ttsSupplement).toEqual({ spokenText: params.text });
     expect((result as { trustedLocalMedia?: boolean }).trustedLocalMedia).toBe(true);
@@ -554,6 +577,24 @@ describe("speech-core native voice-note routing", () => {
         rmSync(mediaDir, { recursive: true, force: true });
       }
     }
+  });
+
+  it("returns a normal TTS failure when audio persistence rejects", async () => {
+    const result = await textToSpeechCore(
+      {
+        text: "Store this synthesized reply.",
+        cfg: createTtsConfig("openclaw-speech-core-persistence-failure-test"),
+      },
+      async () => {
+        throw new Error("Media exceeds configured limit");
+      },
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: "TTS audio persistence failed",
+      provider: "mock",
+    });
   });
 
   it("resolves the configured timeout for voice listing", async () => {
@@ -1155,6 +1196,23 @@ describe("speech-core native voice-note routing", () => {
     });
   });
 
+  it("preserves the text reply when auto-TTS audio persistence fails", async () => {
+    const payload = { text: "This text must still be delivered when media storage rejects audio." };
+    const result = await maybeApplyTtsToPayloadCore(
+      {
+        payload,
+        cfg: createTtsConfig("openclaw-speech-core-auto-persistence-failure-test"),
+        channel: "slack",
+        kind: "final",
+      },
+      async () => {
+        throw new Error("Media exceeds configured limit");
+      },
+    );
+
+    expect(result).toBe(payload);
+  });
+
   it("normalizes voice-note Markdown once before synthesis", async () => {
     const text =
       'This short explanation keeps the fenced literal below from becoming code-heavy.\n\n```md\nconst literal = "[x](y)";\n```';
@@ -1236,7 +1294,7 @@ describe("speech-core native voice-note routing", () => {
       expect(synthesizeMock).toHaveBeenCalled();
       const request = requireFirstSynthesisRequest("hidden TTS request");
       expect(request.text).toBe("hello");
-      expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
+      expect(result.mediaUrl).toMatch(/voice---[a-f0-9-]+\.ogg$/);
       expect(result.audioAsVoice).toBe(true);
       expect(result.text).toBeUndefined();
       expect(result.ttsSupplement).toBeUndefined();
@@ -1451,7 +1509,7 @@ describe("speech-core native voice-note routing", () => {
       expect(providerConfig.model).toBe("base-model");
       expect(providerConfig.voice).toBe("persona-voice");
       expect(providerConfig.style).toBe("dry");
-      expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
+      expect(result.mediaUrl).toMatch(/voice---[a-f0-9-]+\.ogg$/);
 
       mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
     } finally {
@@ -1779,7 +1837,7 @@ describe("speech-core per-agent TTS config", () => {
       expect(providerConfig.model).toBe("base-model");
       expect(providerConfig.voice).toBe("agent-voice");
       expect(providerConfig.style).toBe("jarvis-style");
-      expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
+      expect(result.mediaUrl).toMatch(/voice---[a-f0-9-]+\.ogg$/);
       mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
     } finally {
       if (mediaDir) {

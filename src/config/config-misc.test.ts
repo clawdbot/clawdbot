@@ -101,7 +101,7 @@ describe("agent timeoutSeconds config", () => {
     ["fractional", 1.5, false],
   ])("agents.defaults.timeoutSeconds %s", (_label, timeoutSeconds, ok) => {
     const result = OpenClawSchema.safeParse({
-      agents: { defaults: { timeoutSeconds } },
+      agents: { defaults: { timeoutSeconds }, entries: { main: { default: true } } },
     });
     expect(result.success).toBe(ok);
   });
@@ -411,25 +411,36 @@ describe("plugins.slots.contextEngine", () => {
   });
 });
 
-describe("models.pricing", () => {
-  it("accepts the model pricing bootstrap toggle", () => {
-    for (const enabled of [true, false]) {
-      const result = OpenClawSchema.safeParse({
-        models: {
-          pricing: { enabled },
-        },
-      });
-      expect(result.success).toBe(true);
-    }
+describe("models.catalogRefresh", () => {
+  it("accepts the refresh toggle and an http(s) override", () => {
+    expect(
+      OpenClawSchema.safeParse({
+        models: { catalogRefresh: { enabled: false, url: "https://catalog.example.test/v1.json" } },
+      }).success,
+    ).toBe(true);
+    expect(
+      OpenClawSchema.safeParse({
+        models: { catalogRefresh: { url: "http://localhost:8080/catalog.json" } },
+      }).success,
+    ).toBe(true);
   });
 
-  it("rejects non-boolean model pricing bootstrap values", () => {
-    const result = OpenClawSchema.safeParse({
-      models: {
-        pricing: { enabled: "false" },
-      },
-    });
-    expect(result.success).toBe(false);
+  it("rejects invalid refresh values", () => {
+    expect(
+      OpenClawSchema.safeParse({ models: { catalogRefresh: { enabled: "false" } } }).success,
+    ).toBe(false);
+    expect(
+      OpenClawSchema.safeParse({ models: { catalogRefresh: { url: "file:///tmp/catalog.json" } } })
+        .success,
+    ).toBe(false);
+    expect(
+      OpenClawSchema.safeParse({ models: { catalogRefresh: { url: "not a url" } } }).success,
+    ).toBe(false);
+    expect(
+      OpenClawSchema.safeParse({
+        models: { catalogRefresh: { url: "http://catalog.internal.example/catalog.json" } },
+      }).success,
+    ).toBe(false);
   });
 });
 
@@ -458,7 +469,7 @@ describe("diagnostics.otel.captureContent", () => {
     expect(invalid.success).toBe(false);
   });
 
-  it("accepts boolean and granular OTEL content capture config", () => {
+  it("accepts boolean OTEL content capture config", () => {
     for (const captureContent of [true, false]) {
       const result = OpenClawSchema.safeParse({
         diagnostics: {
@@ -468,6 +479,24 @@ describe("diagnostics.otel.captureContent", () => {
         },
       });
       expect(result.success).toBe(true);
+    }
+  });
+});
+
+describe("diagnostics.otel.metricNamePrefix", () => {
+  it("accepts valid metric name fragments and rejects invalid values", () => {
+    for (const metricNamePrefix of ["", "acme.", "Acme/team-1_"]) {
+      const result = OpenClawSchema.safeParse({
+        diagnostics: { otel: { metricNamePrefix } },
+      });
+      expect(result.success).toBe(true);
+    }
+
+    for (const metricNamePrefix of [42, " ", ".acme", "acme metrics.", "é.", "a".repeat(129)]) {
+      const result = OpenClawSchema.safeParse({
+        diagnostics: { otel: { metricNamePrefix } },
+      });
+      expect(result.success).toBe(false);
     }
   });
 });
@@ -730,6 +759,8 @@ describe("plugins.entries.*.llm", () => {
             llm: {
               allowModelOverride: true,
               allowedModels: ["anthropic/claude-haiku-4-5"],
+              allowedCompletionModels: ["anthropic/claude-haiku-4-5"],
+              allowAuthProfileOverride: true,
               allowAgentIdOverride: true,
             },
           },
@@ -747,6 +778,8 @@ describe("plugins.entries.*.llm", () => {
             llm: {
               allowModelOverride: "yes",
               allowedModels: [1],
+              allowedCompletionModels: [1],
+              allowAuthProfileOverride: "yes",
               allowAgentIdOverride: "yes",
             },
           },
@@ -980,6 +1013,37 @@ describe("cron webhook schema", () => {
 
     expect(res.success).toBe(true);
   });
+
+  it("accepts the shared cron webhook SSRF policy", () => {
+    const res = OpenClawSchema.safeParse({
+      cron: {
+        webhookSsrfPolicy: {
+          dangerouslyAllowPrivateNetwork: true,
+          allowedHostnames: ["127.0.0.1", "internal.example"],
+          allowRfc2544BenchmarkRange: true,
+          allowIpv6UniqueLocalRange: true,
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.cron?.webhookSsrfPolicy).toEqual({
+        dangerouslyAllowPrivateNetwork: true,
+        allowedHostnames: ["127.0.0.1", "internal.example"],
+        allowRfc2544BenchmarkRange: true,
+        allowIpv6UniqueLocalRange: true,
+      });
+    }
+  });
+
+  it("rejects unknown cron webhook SSRF policy fields", () => {
+    const res = OpenClawSchema.safeParse({
+      cron: { webhookSsrfPolicy: { allowEverything: true } },
+    });
+
+    expect(res.success).toBe(false);
+  });
 });
 
 describe("broadcast", () => {
@@ -1028,6 +1092,7 @@ describe("model compat config schema", () => {
                   compat: {
                     supportsUsageInStreaming: true,
                     supportsStrictMode: false,
+                    supportsJsonSchemaResponseFormat: true,
                     requiresStringContent: true,
                     thinkingFormat,
                     requiresToolResultName: true,
@@ -1258,11 +1323,17 @@ describe("config strict validation", () => {
 
       expect(snap.valid).toBe(false);
       expect(issuePaths(snap.issues)).toContain("agents.defaults.sandbox");
-      expect(issuePaths(snap.issues)).toContain("agents");
+      expect(issuePaths(snap.issues)).toContain("agents.entries.openclaw.sandbox");
       expect(issuePaths(snap.legacyIssues)).toContain("agents.defaults.sandbox");
-      expect(issuePaths(snap.legacyIssues)).toContain("agents.list");
-      expect(snap.sourceConfig.agents?.defaults?.sandbox).toEqual({ perSession: true });
-      expect(snap.sourceConfig.agents?.list?.[0]?.sandbox).toEqual({ perSession: false });
+      expect(snap.sourceConfigBeforeMigrations?.agents?.defaults?.sandbox).toEqual({
+        perSession: true,
+      });
+      expect(snap.sourceConfigBeforeMigrations?.agents?.list?.[0]?.sandbox).toEqual({
+        perSession: false,
+      });
+      expect(snap.sourceConfig.agents?.entries?.openclaw?.sandbox).toEqual({
+        perSession: false,
+      });
     });
   });
 

@@ -2,12 +2,12 @@
 import { createHash } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SystemAgentChatQuestion } from "../../packages/gateway-protocol/src/index.js";
-import type { HealthSummary } from "../commands/health.types.js";
 import {
   CONFIG_AUDIT_MAX_ENTRIES,
   CONFIG_AUDIT_SCOPE,
   type ConfigAuditRecord,
 } from "../config/io.audit.js";
+import type { HealthSummary } from "../gateway/health/types.js";
 import { getHealthCache } from "../gateway/server/health-state.js";
 import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
 import { getUpdateAvailable, type UpdateAvailable } from "../infra/update-startup.js";

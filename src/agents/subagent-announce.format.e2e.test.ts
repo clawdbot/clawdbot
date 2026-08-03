@@ -54,14 +54,16 @@ type MockSubagentRun = {
   task: string;
   cleanup: "keep" | "delete";
   createdAt: number;
-  endedAt?: number;
+  execution: {
+    endedAt?: number;
+    outcome?: {
+      status: "ok" | "timeout" | "error" | "unknown";
+      error?: string;
+    };
+  };
   cleanupCompletedAt?: number;
   label?: string;
   frozenResultText?: string | null;
-  outcome?: {
-    status: "ok" | "timeout" | "error" | "unknown";
-    error?: string;
-  };
 };
 type SessionEntryFixture = Partial<Omit<SessionEntry, "updatedAt">> & {
   updatedAt?: number;
@@ -388,9 +390,6 @@ describe("subagent announce formatting", () => {
       if (typed.method === "chat.history") {
         return await chatHistoryMock(typed.params?.sessionKey);
       }
-      if (typed.method === "sessions.patch") {
-        return {};
-      }
       if (typed.method === "sessions.delete") {
         sessionsDeleteSpy(typed);
         return {};
@@ -601,7 +600,7 @@ describe("subagent announce formatting", () => {
           ],
         };
       }
-      if (typed.method === "sessions.patch" || typed.method === "sessions.delete") {
+      if (typed.method === "sessions.delete") {
         return {};
       }
       return {};
@@ -2477,10 +2476,9 @@ describe("subagent announce formatting", () => {
               label: "child-stale",
               cleanup: "keep",
               createdAt: 1,
-              endedAt: 2,
+              execution: { endedAt: 2, outcome: { status: "ok" } },
               cleanupCompletedAt: 3,
               frozenResultText: "stale result that should be filtered",
-              outcome: { status: "ok" },
             },
           ];
         }
@@ -2494,10 +2492,9 @@ describe("subagent announce formatting", () => {
             label: "child-a",
             cleanup: "keep",
             createdAt: 10,
-            endedAt: 20,
+            execution: { endedAt: 20, outcome: { status: "ok" } },
             cleanupCompletedAt: 21,
             frozenResultText: "result from child a",
-            outcome: { status: "ok" },
           },
           {
             runId: "run-child-b",
@@ -2508,10 +2505,9 @@ describe("subagent announce formatting", () => {
             label: "child-b",
             cleanup: "keep",
             createdAt: 11,
-            endedAt: 21,
+            execution: { endedAt: 21, outcome: { status: "ok" } },
             cleanupCompletedAt: 22,
             frozenResultText: "result from child b",
-            outcome: { status: "ok" },
           },
         ];
       },
@@ -2565,10 +2561,9 @@ describe("subagent announce formatting", () => {
             label: "child-a",
             cleanup: "keep",
             createdAt: 10,
-            endedAt: 20,
+            execution: { endedAt: 20, outcome: { status: "ok" } },
             cleanupCompletedAt: 21,
             frozenResultText: "stale result from child a",
-            outcome: { status: "ok" },
           },
           {
             runId: "run-child-current",
@@ -2579,10 +2574,9 @@ describe("subagent announce formatting", () => {
             label: "child-a",
             cleanup: "keep",
             createdAt: 11,
-            endedAt: 22,
+            execution: { endedAt: 22, outcome: { status: "ok" } },
             cleanupCompletedAt: 23,
             frozenResultText: "current result from child a",
-            outcome: { status: "ok" },
           },
           {
             runId: "run-child-b",
@@ -2593,10 +2587,9 @@ describe("subagent announce formatting", () => {
             label: "child-b",
             cleanup: "keep",
             createdAt: 12,
-            endedAt: 24,
+            execution: { endedAt: 24, outcome: { status: "ok" } },
             cleanupCompletedAt: 25,
             frozenResultText: "result from child b",
-            outcome: { status: "ok" },
           },
         ];
       },
@@ -2641,10 +2634,9 @@ describe("subagent announce formatting", () => {
             label: "shared-child",
             cleanup: "keep",
             createdAt: 10,
-            endedAt: 20,
+            execution: { endedAt: 20, outcome: { status: "ok" } },
             cleanupCompletedAt: 21,
             frozenResultText: "stale old parent result",
-            outcome: { status: "ok" },
           },
         ];
       },
@@ -2663,10 +2655,9 @@ describe("subagent announce formatting", () => {
           label: "shared-child",
           cleanup: "keep",
           createdAt: 11,
-          endedAt: 22,
+          execution: { endedAt: 22, outcome: { status: "ok" } },
           cleanupCompletedAt: 23,
           frozenResultText: "current new parent result",
-          outcome: { status: "ok" },
         };
       },
     );
@@ -2716,10 +2707,9 @@ describe("subagent announce formatting", () => {
             label: "child-a",
             cleanup: "keep",
             createdAt: 10,
-            endedAt: 20,
+            execution: { endedAt: 20, outcome: { status: "ok" } },
             cleanupCompletedAt: 21,
             frozenResultText: "result from child a",
-            outcome: { status: "ok" },
           },
           {
             runId: "run-child-b",
@@ -2730,10 +2720,9 @@ describe("subagent announce formatting", () => {
             label: "child-b",
             cleanup: "keep",
             createdAt: 11,
-            endedAt: 21,
+            execution: { endedAt: 21, outcome: { status: "ok" } },
             cleanupCompletedAt: 22,
             frozenResultText: "result from child b",
-            outcome: { status: "ok" },
           },
         ];
       },
@@ -2796,10 +2785,9 @@ describe("subagent announce formatting", () => {
             label: "child-a",
             cleanup: "keep",
             createdAt: 10,
-            endedAt: 20,
+            execution: { endedAt: 20, outcome: { status: "ok" } },
             cleanupCompletedAt: 21,
             frozenResultText: "result from child a",
-            outcome: { status: "ok" },
           },
         ];
       },
@@ -2852,10 +2840,9 @@ describe("subagent announce formatting", () => {
             label: "grandchild",
             cleanup: "keep",
             createdAt: 10,
-            endedAt: 20,
+            execution: { endedAt: 20, outcome: { status: "ok" } },
             cleanupCompletedAt: 21,
             frozenResultText: "grandchild final output",
-            outcome: { status: "ok" },
           },
         ];
       }
@@ -2870,10 +2857,9 @@ describe("subagent announce formatting", () => {
             label: "child",
             cleanup: "keep",
             createdAt: 11,
-            endedAt: 21,
+            execution: { endedAt: 21, outcome: { status: "ok" } },
             cleanupCompletedAt: 22,
             frozenResultText: "child synthesized output from grandchild",
-            outcome: { status: "ok" },
           },
         ];
       }
@@ -3185,10 +3171,12 @@ describe("subagent announce formatting", () => {
         label: params.label,
         cleanup: "keep" as const,
         createdAt: params.createdAt,
-        endedAt: params.endedAt ?? params.createdAt + 1,
+        execution: {
+          endedAt: params.endedAt ?? params.createdAt + 1,
+          outcome: params.outcome ?? ({ status: "ok" } as const),
+        },
         cleanupCompletedAt: params.cleanupCompletedAt ?? params.createdAt + 2,
         frozenResultText: params.frozenResultText,
-        outcome: params.outcome ?? ({ status: "ok" } as const),
       };
     }
 

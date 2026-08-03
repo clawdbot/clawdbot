@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   createGatewayHarness,
   createSessionsHarness,
@@ -9,6 +10,33 @@ import {
 } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
+
+function createDataTransferStub() {
+  const data = new Map<string, string>();
+  return {
+    get types() {
+      return [...data.keys()];
+    },
+    setData: (type: string, value: string) => void data.set(type, value),
+    getData: (type: string) => data.get(type) ?? "",
+    effectAllowed: "none",
+    dropEffect: "none",
+  };
+}
+
+function dispatchDragEvent(
+  target: Element,
+  type: "dragstart" | "dragover" | "drop",
+  dataTransfer: ReturnType<typeof createDataTransferStub>,
+  clientY = 0,
+) {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperties(event, {
+    dataTransfer: { value: dataTransfer },
+    clientY: { value: clientY },
+  });
+  target.dispatchEvent(event);
+}
 
 describe("AppSidebar group mutation collapsed state", () => {
   const COLLAPSED_STORAGE_KEY = "openclaw:sidebar:sessions:collapsed-sections";
@@ -35,7 +63,10 @@ describe("AppSidebar group mutation collapsed state", () => {
     }
     const { sidebar } = await mountSidebar(gatewayHarness.gateway, harness.sessions);
     sidebar.connected = true;
-    harness.publish({ groups: ["Alpha"] });
+    harness.publish({
+      groups: ["Alpha"],
+      sectionOrder: ["category:Alpha", "ungrouped", "groups", "work"],
+    });
     await sidebar.updateComplete;
     return { sidebar, harness, gatewayHarness };
   }
@@ -142,5 +173,152 @@ describe("AppSidebar group mutation collapsed state", () => {
 
     expect(JSON.parse(localStorage.getItem(COLLAPSED_STORAGE_KEY) ?? "[]")).toEqual([]);
     confirmSpy.mockRestore();
+  });
+
+  it("disables only group actions whose exact method is unavailable", async () => {
+    const { sidebar, harness, gatewayHarness } = await mountCollapsedGroup({});
+    gatewayHarness.publish({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.write"] },
+        features: { methods: ["sessions.groups.put"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    await sidebar.updateComplete;
+    const menu = await openGroupMenu(sidebar);
+    const dropdown = menu.closest("wa-dropdown");
+    const rename = menu.querySelector<HTMLElement>('[value="rename-group"]');
+    const create = menu.querySelector<HTMLElement>('[value="new-group"]');
+    const remove = menu.querySelector<HTMLElement>('[value="delete-group"]');
+
+    expect(rename?.hasAttribute("disabled")).toBe(true);
+    expect(create?.hasAttribute("disabled")).toBe(false);
+    expect(remove?.hasAttribute("disabled")).toBe(true);
+
+    dropdown?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        cancelable: true,
+        detail: { item: { value: "rename-group" } },
+      }),
+    );
+    dropdown?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        cancelable: true,
+        detail: { item: { value: "delete-group" } },
+      }),
+    );
+
+    expect(harness.groupsRename).not.toHaveBeenCalled();
+    expect(harness.groupsDelete).not.toHaveBeenCalled();
+  });
+});
+
+describe("AppSidebar group section ordering", () => {
+  async function mountWithGroups(groups: string[]) {
+    const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
+    const harness = createSessionsHarness("main", [
+      "agent:main:main",
+      "agent:main:work",
+      ...groups.map((_, index) => `agent:main:group-${index}`),
+    ]);
+    const result = harness.sessions.state.result;
+    if (!result) {
+      throw new Error("expected grouped session fixtures");
+    }
+    const work = result.sessions.find((row) => row.key === "agent:main:work");
+    if (!work) {
+      throw new Error("expected Coding session fixture");
+    }
+    work.worktree = { id: "work", branch: "test", repoRoot: "/repo" };
+    for (const [index, group] of groups.entries()) {
+      const row = result.sessions.find((entry) => entry.key === `agent:main:group-${index}`);
+      if (!row) {
+        throw new Error(`expected session fixture for ${group}`);
+      }
+      row.category = group;
+    }
+    const { sidebar } = await mountSidebar(gatewayHarness.gateway, harness.sessions);
+    sidebar.connected = true;
+    harness.publish({ groups });
+    await sidebar.updateComplete;
+    return { sidebar, harness };
+  }
+
+  function section(sidebar: SidebarLifecycleState, sectionId: string): Element {
+    const element = sidebar.querySelector(`[data-session-section="${sectionId}"]`);
+    if (!element) {
+      throw new Error(`expected section ${sectionId}`);
+    }
+    return element;
+  }
+
+  function renderedSectionIds(sidebar: SidebarLifecycleState): string[] {
+    return Array.from(sidebar.querySelectorAll<HTMLElement>("[data-session-section]")).flatMap(
+      (element) => (element.dataset.sessionSection ? [element.dataset.sessionSection] : []),
+    );
+  }
+
+  function groupHeader(sidebar: SidebarLifecycleState, group: string): Element {
+    const header = section(sidebar, `category:${group}`).querySelector(
+      ".sidebar-recent-sessions__head",
+    );
+    if (!header) {
+      throw new Error(`expected group header for ${group}`);
+    }
+    return header;
+  }
+
+  async function dropGroupBeforeCoding(sidebar: SidebarLifecycleState, group: string) {
+    const dataTransfer = createDataTransferStub();
+    dispatchDragEvent(groupHeader(sidebar, group), "dragstart", dataTransfer);
+    const coding = section(sidebar, "work");
+    dispatchDragEvent(coding, "dragover", dataTransfer, -1);
+    dispatchDragEvent(coding, "drop", dataTransfer, -1);
+    await sidebar.updateComplete;
+  }
+
+  it("persists a group dropped before Coding without rewriting unchanged catalog order", async () => {
+    const { sidebar, harness } = await mountWithGroups(["Alpha", "Beta"]);
+
+    await dropGroupBeforeCoding(sidebar, "Beta");
+
+    await waitForFast(() =>
+      expect(harness.groupsPut).toHaveBeenCalledWith(
+        ["Alpha", "Beta"],
+        ["category:Alpha", "ungrouped", "groups", "category:Beta", "work"],
+      ),
+    );
+  });
+
+  it("also updates catalog order when a group crosses another group on its way to Coding", async () => {
+    const { sidebar, harness } = await mountWithGroups(["Alpha", "Beta"]);
+
+    await dropGroupBeforeCoding(sidebar, "Alpha");
+
+    await waitForFast(() =>
+      expect(harness.groupsPut).toHaveBeenCalledWith(
+        ["Beta", "Alpha"],
+        ["category:Beta", "ungrouped", "groups", "category:Alpha", "work"],
+      ),
+    );
+  });
+
+  it("does not persist cross-group ordering when the catalog update fails", async () => {
+    const { sidebar, harness } = await mountWithGroups(["Alpha", "Beta"]);
+    const before = renderedSectionIds(sidebar);
+    harness.groupsPut.mockRejectedValue(new Error("catalog update failed"));
+
+    await dropGroupBeforeCoding(sidebar, "Alpha");
+
+    await waitForFast(() =>
+      expect(harness.groupsPut).toHaveBeenCalledWith(
+        ["Beta", "Alpha"],
+        ["category:Beta", "ungrouped", "groups", "category:Alpha", "work"],
+      ),
+    );
+    await Promise.resolve();
+    await sidebar.updateComplete;
+    expect(renderedSectionIds(sidebar)).toEqual(before);
   });
 });

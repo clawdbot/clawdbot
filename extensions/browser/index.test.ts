@@ -11,6 +11,7 @@ import {
 } from "./plugin-registration.js";
 import type { OpenClawPluginApi } from "./runtime-api.js";
 import setupPlugin from "./setup-api.js";
+import { BrowserToolOutputSchema } from "./src/browser-tool.schema.js";
 
 type BrowserAutoEnableProbe = Parameters<OpenClawPluginApi["registerAutoEnableProbe"]>[0];
 
@@ -162,9 +163,12 @@ describe("browser plugin", () => {
       restartPrefixes: ["browser"],
       hotPrefixes: ["browser.profiles"],
     });
-    expect(browserPluginNodeHostCommands).toHaveLength(1);
-    expect(browserPluginNodeHostCommands[0]?.command).toBe("browser.proxy");
+    expect(browserPluginNodeHostCommands.map((entry) => entry.command)).toEqual([
+      "browser.proxy",
+      "browser.proxy.upload.v1",
+    ]);
     expect(browserPluginNodeHostCommands[0]?.cap).toBe("browser");
+    expect(browserPluginNodeHostCommands[1]?.cap).toBe("browser");
     expect(browserPluginNodeHostCommands[0]?.isAvailable?.({ config: {}, env: {} })).toBe(true);
     expect(
       browserPluginNodeHostCommands[0]?.isAvailable?.({
@@ -179,6 +183,8 @@ describe("browser plugin", () => {
       }),
     ).toBe(false);
     expect(typeof browserPluginNodeHostCommands[0]?.handle).toBe("function");
+    expect(typeof browserPluginNodeHostCommands[1]?.handle).toBe("function");
+    expect(typeof browserPluginNodeHostCommands[1]?.watchAvailability).toBe("function");
     expect(browserSecurityAuditCollectors).toHaveLength(1);
   });
 
@@ -213,8 +219,10 @@ describe("browser plugin", () => {
     }
 
     expect(tool.name).toBe("browser");
+    expect(tool.resultContentSource).toBe("network");
     expect(tool.description).toContain("action=profiles");
     expect(tool.description).not.toContain('profile="user"');
+    expect(tool.outputSchema).toBe(BrowserToolOutputSchema);
     expect(runtimeApiMocks.createBrowserTool).not.toHaveBeenCalled();
     await tool.execute("call-1", { action: "status" });
     expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
@@ -239,6 +247,7 @@ describe("browser plugin", () => {
 
     const tool = factory({
       sessionKey: "agent:main:webchat:direct:123",
+      agentId: "main",
       agentDir: "/tmp/agent",
       workspaceDir: "/tmp/workspace",
       activeModel: { provider: "openai", modelId: "gpt-5.5" },
@@ -251,6 +260,7 @@ describe("browser plugin", () => {
     await tool.execute("call-1", { action: "status" });
     expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
       agentSessionKey: "agent:main:webchat:direct:123",
+      agentId: "main",
       agentDir: "/tmp/agent",
       workspaceDir: "/tmp/workspace",
       activeModel: { provider: "openai", model: "gpt-5.5" },
@@ -340,6 +350,7 @@ describe("browser plugin", () => {
           name: "browser",
           description: "Manage OpenClaw's dedicated browser (Chrome/Chromium)",
           hasSubcommands: true,
+          machineOutput: expect.any(Function),
         },
       ],
     });
@@ -371,8 +382,26 @@ describe("browser plugin", () => {
   });
 
   it("lazy-loads node host and audit runtime handlers", async () => {
+    const abortController = new AbortController();
     await expect(browserPluginNodeHostCommands[0]?.handle("{}")).resolves.toBe("ok");
-    expect(runtimeApiMocks.runBrowserProxyCommand).toHaveBeenCalledWith("{}");
+    await expect(
+      browserPluginNodeHostCommands[1]?.handle("{}", undefined, {
+        sendNodeEvent: vi.fn(),
+        signal: abortController.signal,
+      }),
+    ).resolves.toBe("ok");
+    expect(runtimeApiMocks.runBrowserProxyCommand).toHaveBeenNthCalledWith(
+      1,
+      "{}",
+      "browser.proxy",
+      undefined,
+    );
+    expect(runtimeApiMocks.runBrowserProxyCommand).toHaveBeenNthCalledWith(
+      2,
+      "{}",
+      "browser.proxy.upload.v1",
+      abortController.signal,
+    );
 
     await expect(browserSecurityAuditCollectors[0]?.({} as never)).resolves.toStrictEqual([]);
     expect(runtimeApiMocks.collectBrowserSecurityAuditFindings).toHaveBeenCalled();

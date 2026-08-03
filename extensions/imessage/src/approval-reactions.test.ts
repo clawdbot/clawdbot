@@ -614,6 +614,29 @@ describe("iMessage approval reactions", () => {
     });
   });
 
+  it("binds prompts whose headers and labels are bold", () => {
+    // The prompt builder emits **Exec approval required** / **ID:** …; binding
+    // must still correlate the delivered prompt (reaction/tapback approvals).
+    expect(
+      extractIMessageApprovalPromptBinding(
+        [
+          "**Exec approval required**",
+          "**ID:** exec-bold",
+          "**Pending command:**",
+          "```sh",
+          "echo hi",
+          "```",
+          "**Full id:** `exec-bold`",
+          "Reply with: /approve exec-bold allow-once|deny",
+        ].join("\n"),
+      ),
+    ).toEqual({
+      approvalId: "exec-bold",
+      approvalKind: "exec",
+      allowedDecisions: ["allow-once", "deny"],
+    });
+  });
+
   it("extracts approval bindings from explicit outbound prompts", async () => {
     expect(
       extractIMessageApprovalPromptBinding(
@@ -729,6 +752,7 @@ describe("iMessage approval reactions", () => {
       allowedDecisions: ["allow-once", "deny"],
     });
 
+    const gatewayRuntime = { request: vi.fn() } as never;
     const handled = await maybeResolveIMessageApprovalReaction({
       cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
       accountId: "default",
@@ -739,6 +763,7 @@ describe("iMessage approval reactions", () => {
         reacted_to_guid: "approval-message",
       }),
       bodyText: "",
+      gatewayRuntime,
     });
 
     expect(handled).toBe(true);
@@ -747,6 +772,7 @@ describe("iMessage approval reactions", () => {
         approvalId: "exec-self",
         decision: "allow-once",
         senderId: "+15551230000",
+        gatewayRuntime,
       }),
     );
   });

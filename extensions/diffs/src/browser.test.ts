@@ -508,11 +508,15 @@ describe("diffs plugin registration", () => {
         "When you need to show edits as a real diff, prefer the `diffs` tool instead of writing a manual summary.",
         "It accepts either `before` + `after` text or a unified `patch`.",
         "Check `details.changed`: identical before/after input returns `false` without creating an artifact; rendered results return `true`.",
-        "`mode=view` returns `details.viewerUrl` for canvas use; `mode=file` returns `details.filePath`; `mode=both` returns both.",
-        "If you need to send the rendered file, use the `message` tool with `path` or `filePath`.",
+        "`mode=view` returns `details.viewerUrl` for interactive viewing; `mode=file` returns `details.filePath`; `mode=both` returns both.",
+        "To send the rendered file, use an available file-sending tool to send `details.filePath` as an attachment.",
         "Include `path` when you know the filename, and omit presentation overrides unless needed.",
       ].join("\n"),
     );
+    // This guidance is prepended unconditionally, so it must not name a tool owned by
+    // another toolset: `message` is absent whenever `disableMessageTool` is set, and
+    // `canvas` ships as a separate plugin.
+    expect(promptResult?.prependSystemContext).not.toMatch(/\bmessage\b|\bcanvas\b/i);
     expect(promptResult?.prependContext).toBeUndefined();
 
     const registeredTool = registeredToolFactory?.({

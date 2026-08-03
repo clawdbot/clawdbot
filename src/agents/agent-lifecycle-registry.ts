@@ -17,7 +17,10 @@ import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-co
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 
 const AGENT_LIFECYCLE_KEY = Symbol.for("openclaw.agentLifecycle");
-const agentLifecycle = resolveGlobalMap<string, "deleting" | "deleted">(AGENT_LIFECYCLE_KEY);
+const agentLifecycle = resolveGlobalMap<string, "deleting" | "deleted">(
+  AGENT_LIFECYCLE_KEY,
+  "close-and-restart",
+);
 
 export class AgentDeletionAuthorityRollbackError extends AggregateError {}
 

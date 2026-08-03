@@ -6,7 +6,7 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { extractTextContentParts } from "./query.js";
 import {
   ACTIVE_MEMORY_PLUGIN_TAG,
-  ACTIVE_MEMORY_UNTRUSTED_CONTEXT_HEADER,
+  ACTIVE_MEMORY_CONTEXT_HEADER,
   NO_RECALL_VALUES,
   STRUCTURED_MEMORY_EMPTY_STATUSES,
   STRUCTURED_MEMORY_FAILURE_STATUSES,
@@ -305,7 +305,7 @@ function buildPromptPrefix(summary: string | null): string | undefined {
   if (!metadata) {
     return undefined;
   }
-  return [ACTIVE_MEMORY_UNTRUSTED_CONTEXT_HEADER, metadata].join("\n");
+  return [ACTIVE_MEMORY_CONTEXT_HEADER, metadata].join("\n");
 }
 
 export {

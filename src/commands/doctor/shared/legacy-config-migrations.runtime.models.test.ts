@@ -10,6 +10,30 @@ import {
   LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS,
 } from "./legacy-config-migrations.runtime.models.js";
 
+describe("retired model pricing config migration", () => {
+  const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS.find(
+    (entry) => entry.id === "models.pricing-retired",
+  );
+
+  it("drops models.pricing while preserving hosted catalog config", () => {
+    const raw = {
+      models: {
+        pricing: { enabled: false },
+        catalogRefresh: { enabled: true },
+      },
+    };
+    const changes: string[] = [];
+
+    expect(migration?.legacyRules?.[0]?.path).toEqual(["models", "pricing"]);
+    migration?.apply(raw, changes);
+
+    expect(raw.models).toEqual({ catalogRefresh: { enabled: true } });
+    expect(changes).toEqual([
+      "Removed models.pricing (pricing now ships with the hosted model catalog).",
+    ]);
+  });
+});
+
 describe("model compat catalog ownership migration", () => {
   const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS.find(
     (entry) => entry.id === "models.providers.*.models.*.compat->provider-catalog",

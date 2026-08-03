@@ -109,6 +109,7 @@ export type WikiPageSummary = {
   sourcePath?: string;
   bridgeRelativePath?: string;
   bridgeWorkspaceDir?: string;
+  bridgeAgentIds: string[];
   unsafeLocalConfiguredPath?: string;
   unsafeLocalRelativePath?: string;
   lastRefreshedAt?: string;
@@ -529,14 +530,34 @@ function afterSourceContentFence(page: string): number {
 function findNotesHumanBlock(page: string): { start: number; end: number } | null {
   const searchFrom = afterSourceContentFence(page);
   const start = page.indexOf(HUMAN_START_MARKER, searchFrom);
-  if (start === -1) {
-    return null;
-  }
   const endMarker = page.lastIndexOf(HUMAN_END_MARKER);
-  if (endMarker < start) {
-    return null;
+  if (start === -1 && endMarker < searchFrom) {
+    const notesSection = /(?:^|\r?\n)## Notes[\t ]*(?:\r?\n|$)([\s\S]*)/u.exec(
+      page.slice(searchFrom),
+    );
+    if (!notesSection?.[1]?.trim()) {
+      return null;
+    }
+  }
+  if (start === -1 || endMarker < start) {
+    const missingMarker = start === -1 ? HUMAN_START_MARKER : HUMAN_END_MARKER;
+    throw new Error(
+      `Memory Wiki human Notes are missing ${missingMarker}; restore the missing marker before updating or removing this page`,
+    );
   }
   return { start, end: endMarker + HUMAN_END_MARKER.length };
+}
+
+export function extractHumanNotesBlock(page: string): string | null {
+  const block = findNotesHumanBlock(page);
+  if (!block) {
+    return null;
+  }
+  const notes = page.slice(
+    block.start + HUMAN_START_MARKER.length,
+    block.end - HUMAN_END_MARKER.length,
+  );
+  return notes.trim() ? page.slice(block.start, block.end) : null;
 }
 
 export function preserveHumanNotesBlock(rendered: string, existing: string): string {
@@ -741,6 +762,7 @@ export function scanWikiPageSummary(params: {
       sourcePath: normalizeOptionalString(parsed.frontmatter.sourcePath),
       bridgeRelativePath: normalizeOptionalString(parsed.frontmatter.bridgeRelativePath),
       bridgeWorkspaceDir: normalizeOptionalString(parsed.frontmatter.bridgeWorkspaceDir),
+      bridgeAgentIds: normalizeSingleOrTrimmedStringList(parsed.frontmatter.bridgeAgentIds),
       unsafeLocalConfiguredPath: normalizeOptionalString(
         parsed.frontmatter.unsafeLocalConfiguredPath,
       ),

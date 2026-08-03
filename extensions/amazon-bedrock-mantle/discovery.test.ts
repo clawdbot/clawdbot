@@ -520,7 +520,18 @@ describe("bedrock mantle discovery", () => {
     expect(provider?.api).toBe("openai-completions");
     expect(provider?.auth).toBe("api-key");
     expect(provider?.apiKey).toBe("env:AWS_BEARER_TOKEN_BEDROCK");
-    expect(provider?.models).toHaveLength(5);
+    expect(provider?.models).toHaveLength(6);
+    const opus5 = provider?.models?.find((model) => model.id === "anthropic.claude-opus-5");
+    expect(opus5).toMatchObject({
+      api: "anthropic-messages",
+      reasoning: true,
+      params: { canonicalModelId: "claude-opus-5" },
+      input: ["text", "image"],
+      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    });
     const sonnet = provider?.models?.find((model) => model.id === "anthropic.claude-sonnet-5");
     expect(sonnet).toMatchObject({
       api: "anthropic-messages",

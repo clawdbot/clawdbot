@@ -121,7 +121,7 @@ describe("jsonl replay", () => {
     const runCell: JsonlReplayCellRunner = async ({ runtime, turn }) => {
       if (turn.turn === 2) {
         return {
-          scenarioStatus: "pass",
+          status: "pass",
           cell: makeCell(runtime, {
             toolCalls: [makeToolCall(runtime === "openclaw" ? {} : { argsHash: "args-codex" })],
           }),
@@ -129,14 +129,14 @@ describe("jsonl replay", () => {
       }
       if (turn.turn === 3) {
         return {
-          scenarioStatus: "pass",
+          status: "pass",
           cell: makeCell(runtime, {
             finalText: runtime === "openclaw" ? "openclaw wording" : "codex wording",
           }),
         };
       }
       return {
-        scenarioStatus: "pass",
+        status: "pass",
         cell: makeCell(runtime),
       };
     };

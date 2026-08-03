@@ -8,11 +8,9 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
-import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
-import {
-  clearAgentRunContext,
-  getAgentEventLifecycleGeneration,
-} from "../../infra/agent-events.js";
+import { dispatchInboundMessageWithProjectedDispatcher } from "../../auto-reply/dispatch.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   emitDiagnosticsTimelineEvent,
   measureDiagnosticsTimelineSpan,
@@ -32,7 +30,6 @@ import { ensureChatQueuedTurns } from "./chat-abort-runtime.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import { hasGatewayAdminScope } from "./chat-origin-routing.js";
 import { terminalizeRestartSafeChatAdmission } from "./chat-restart-recovery.js";
-import { admitChatSend } from "./chat-send-admission.js";
 import { prepareChatSendAttachments } from "./chat-send-attachments.js";
 import {
   resolveWebchatPromptCacheKey,
@@ -40,17 +37,13 @@ import {
 } from "./chat-send-background.js";
 import { createChatSendDispatchErrorLifecycle } from "./chat-send-dispatch-errors.js";
 import { finalizeChatSendNonAgentReplies } from "./chat-send-nonagent-finalization.js";
-import {
-  respondChatSessionRoutingChanged,
-  runChatSendPreAdmission,
-} from "./chat-send-pre-admission.js";
+import { respondChatSessionRoutingChanged } from "./chat-send-pre-admission.js";
 import {
   applyChatSendReplyContextFields,
   resolveChatSendReplyContext,
 } from "./chat-send-reply-context.js";
 import { createChatSendReplyDispatch } from "./chat-send-reply-dispatch.js";
-import { normalizeChatSendRequest } from "./chat-send-request.js";
-import { prepareChatSendSession } from "./chat-send-session.js";
+import { prepareAndAdmitChatSend } from "./chat-send-setup.js";
 import { finalizeChatSendSourceReplies } from "./chat-send-source-finalization.js";
 import { applyChatSendManagedMedia, prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 import {
@@ -64,19 +57,20 @@ import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-
 import { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
 import { gatewayClientSenderFields } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlerOptions } from "./types.js";
 
-export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
-  params,
-  respond,
-  context,
-  client,
-}) => {
-  const normalizedRequest = normalizeChatSendRequest({ params, client });
-  if (!normalizedRequest.ok) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, normalizedRequest.error));
+export async function handleChatSend(
+  { params, respond, context, client }: GatewayRequestHandlerOptions,
+  onAdmissionOwned?: () => Promise<boolean>,
+): Promise<void> {
+  const setup = await prepareAndAdmitChatSend(
+    { params, respond, context, client },
+    onAdmissionOwned,
+  );
+  if (!setup) {
     return;
   }
+  const { normalizedRequest, preparedSession, admitted } = setup;
   const {
     chatSendReceivedAtMs,
     clientInfo,
@@ -86,15 +80,6 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
     rawMessage,
     reconnectResumeRequested,
   } = normalizedRequest.value;
-  const preparedSession = prepareChatSendSession({
-    request: normalizedRequest.value,
-    context,
-    client,
-  });
-  if (!preparedSession.ok) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, preparedSession.error));
-    return;
-  }
   const {
     clientRunId,
     sessionLoadOptions,
@@ -112,26 +97,6 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
     resolvedSessionModel,
     now,
   } = preparedSession.value;
-  const shouldAdmit = await runChatSendPreAdmission({
-    request: normalizedRequest.value,
-    session: preparedSession.value,
-    respond,
-    context,
-    client,
-  });
-  if (!shouldAdmit) {
-    return;
-  }
-  const admitted = await admitChatSend({
-    request: normalizedRequest.value,
-    session: preparedSession.value,
-    respond,
-    context,
-    client,
-  });
-  if (!admitted.ok) {
-    return;
-  }
   const {
     activeRunAbort,
     admittedSessionId,
@@ -331,16 +296,14 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
           warn: (message) => context.logGateway.warn(message),
         })
       : undefined;
-
     let agentRunStarted = false;
-    const { deliveredReplies, dispatcher, hasAppendedWebchatAgentMedia, onModelSelected } =
-      createChatSendReplyDispatch({
-        accountId,
-        isAgentRunStarted: () => agentRunStarted,
-        logGateway: context.logGateway,
-        session: preparedSession.value,
-        userTurnRecorder,
-      });
+    const replyDispatch = createChatSendReplyDispatch({
+      accountId,
+      isAgentRunStarted: () => agentRunStarted,
+      logGateway: context.logGateway,
+      session: preparedSession.value,
+      userTurnRecorder,
+    });
     let queuedFollowupEnqueued = false;
     const dispatchErrorLifecycle = createChatSendDispatchErrorLifecycle({
       admission: admitted.value,
@@ -388,8 +351,8 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
     // Reserve the detached dispatch before this request releases its root. Otherwise
     // its inherited ALS context becomes retired and rejects queued/session work.
     setReleaseGatewayRootContinuation(retainGatewayRootWorkAdmissionContinuation() ?? undefined);
-    void gatewayWorkAdmission
-      .run(() =>
+    void replyDispatch
+      .runAgentMediaTranscript(gatewayWorkAdmission, () =>
         measureDiagnosticsTimelineSpan(
           "gateway.chat_send.dispatch_inbound",
           async () => {
@@ -397,10 +360,10 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
             if (replyContextFieldsPromise) {
               applyChatSendReplyContextFields(ctx, await replyContextFieldsPromise);
             }
-            const dispatchResult = await dispatchInboundMessage({
+            const dispatchResult = await dispatchInboundMessageWithProjectedDispatcher({
               ctx,
               cfg,
-              dispatcher,
+              dispatcherOptions: replyDispatch.dispatcherOptions,
               onSessionMetadataChanges: (changes) => {
                 for (const change of changes) {
                   emitSessionsChanged(context, change);
@@ -482,7 +445,7 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
                 ...(restartSafeAdmission ? { suppressNextUserMessagePersistence: true } : {}),
                 fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
                 onAgentRunStart: (runId) => {
-                  agentRunStarted = true;
+                  agentRunStarted = replyDispatch.captureAgentTranscriptStart();
                   emitServerTiming(
                     "agent-run-started",
                     runId !== clientRunId ? { agentRunId: runId } : undefined,
@@ -529,7 +492,7 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
                       config: cfg,
                     }),
                   });
-                  onModelSelected(modelSelection);
+                  replyDispatch.onModelSelected(modelSelection);
                   emitServerTiming(
                     "model-selected",
                     {
@@ -560,7 +523,7 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
           "gateway.chat_send.post_dispatch",
           async () => {
             const returnedAgentErrorPayloads = agentRunStarted
-              ? deliveredReplies
+              ? replyDispatch.deliveredReplies
                   .map((entryInner) => entryInner.payload)
                   .filter((payload) => payload.isError)
               : [];
@@ -597,18 +560,18 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
               await finalizeChatSendNonAgentReplies({
                 accountId,
                 context,
-                deliveredReplies,
+                deliveredReplies: replyDispatch.deliveredReplies,
                 emitFirstAssistantServerTiming,
                 foldCommandBlocks: isInternalTextSlashCommandTurn,
                 persistUserTurnTranscript: persistGatewayUserTurnTranscriptBestEffort,
                 session: preparedSession.value,
-                suppressReplies: hasAppendedWebchatAgentMedia(),
+                suppressReplies: replyDispatch.hasAppendedWebchatAgentMedia(),
               });
             } else {
               broadcastedSourceReplyFinal = await finalizeChatSendSourceReplies({
                 accountId,
                 context,
-                deliveredReplies,
+                deliveredReplies: replyDispatch.deliveredReplies,
                 emitFirstAssistantServerTiming,
                 hasReturnedAgentErrorPayloads: returnedAgentErrorPayloads.length > 0,
                 session: preparedSession.value,
@@ -728,4 +691,4 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
       errorMessage: String(err),
     });
   }
-};
+}

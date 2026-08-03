@@ -15,13 +15,14 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { logWarn } from "../logger.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/account-id.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import {
   parseRawSessionConversationRef,
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
-import { resolveAgentConfig, resolveAgentIdFromSessionKey } from "./agent-scope.js";
+import { hasAgentRosterProperty } from "./agent-scope-config.js";
+import { listAgentEntries, resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import { resolveProviderToolPolicy } from "./provider-tool-policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
@@ -40,6 +41,7 @@ import {
   normalizeToolName,
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
+import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 
 export { resolveProviderToolPolicy };
 
@@ -53,7 +55,7 @@ const SUBAGENT_TOOL_DENY_ALWAYS = [
   "agents_list",
   // Status/scheduling - main agent coordinates
   "session_status",
-  "cron",
+  AUTOMATIONS_TOOL_NAME,
   // Direct session sends - subagents communicate through announce chain
   "sessions_send",
   "conversations_list",
@@ -382,10 +384,21 @@ export function resolveEffectiveToolPolicy(params: {
       : undefined;
   const agentId =
     explicitAgentId ??
-    (params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined);
+    (params.sessionKey ? parseAgentSessionKey(params.sessionKey)?.agentId : undefined) ??
+    (params.config &&
+    (!hasAgentRosterProperty(params.config) || listAgentEntries(params.config).length > 0)
+      ? resolveDefaultAgentId(params.config)
+      : undefined);
   const agentConfig =
     params.config && agentId ? resolveAgentConfig(params.config, agentId) : undefined;
-  const agentTools = agentConfig?.tools;
+  // Shipped pre-roster SDK inputs allowed this raw defaults shape. Runtime-loaded
+  // configs materialize main, but direct SDK callers still need its deny policy.
+  const implicitDefaultTools = params.config
+    ? (params.config.agents?.defaults as { tools?: AgentToolsConfig } | undefined)?.tools
+    : undefined;
+  const agentTools =
+    agentConfig?.tools ??
+    (params.config && !hasAgentRosterProperty(params.config) ? implicitDefaultTools : undefined);
   const globalTools = params.config?.tools;
 
   const profile = agentTools?.profile ?? globalTools?.profile;
@@ -457,6 +470,10 @@ export function resolveEffectiveToolPolicy(params: {
   };
 }
 
+function denyAllToolPolicy(): SandboxToolPolicy {
+  return { allow: [], deny: ["*"] };
+}
+
 /** Resolve group-scoped tool policy after validating session provenance. */
 export function resolveGroupToolPolicy(params: {
   config?: OpenClawConfig;
@@ -497,7 +514,7 @@ export function resolveGroupToolPolicy(params: {
   const accountId = normalizeAccountId(params.accountId);
   if (!channel) {
     return params.requireConfiguredAccount && accountId !== DEFAULT_ACCOUNT_ID
-      ? { allow: [] }
+      ? denyAllToolPolicy()
       : undefined;
   }
   let plugin;
@@ -519,7 +536,7 @@ export function resolveGroupToolPolicy(params: {
     if (!configured) {
       // A named creator account is an authority boundary, not a fallback hint.
       // If it disappears, deny the scheduled surface instead of selecting default config.
-      return { allow: [] };
+      return denyAllToolPolicy();
     }
   }
   if (groupIds.length === 0) {

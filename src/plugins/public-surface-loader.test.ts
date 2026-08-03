@@ -41,6 +41,8 @@ afterEach(() => {
 
 describe("bundled plugin public surface loader", () => {
   it("keeps auto-resolved bundled roots on built public artifacts", async () => {
+    // The non-isolated plugin shard may have already imported the native loader.
+    vi.resetModules();
     const tempRoot = createTempDir();
     const bundledPluginsDir = path.join(tempRoot, "dist", "extensions");
     const modulePath = path.join(bundledPluginsDir, "demo", "provider-policy-api.js");
@@ -243,6 +245,57 @@ describe("bundled plugin public surface loader", () => {
     ).toBe("dist");
     expect(createJiti).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { firstLocation: "root", nextLocation: "dist" },
+    { firstLocation: "dist", nextLocation: "root" },
+  ] as const)(
+    "refreshes native ESM artifact locations from $firstLocation to $nextLocation with plugin metadata",
+    async ({ firstLocation, nextLocation }) => {
+      const publicSurfaceLoader = await importFreshModule<
+        typeof import("./public-surface-loader.js")
+      >(
+        import.meta.url,
+        `./public-surface-loader.js?scope=esm-artifact-relocation-${firstLocation}-${nextLocation}`,
+      );
+      const { clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js");
+      const tempRoot = fs.realpathSync(createTempDir());
+      const bundledPluginsDir = path.join(tempRoot, "extensions");
+      const pluginDir = path.join(bundledPluginsDir, "demo");
+      fs.mkdirSync(pluginDir, { recursive: true });
+      fs.writeFileSync(path.join(pluginDir, "package.json"), '{"type":"module"}\n', "utf8");
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+      process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+
+      const artifactPath = (location: "root" | "dist") =>
+        path.join(pluginDir, ...(location === "dist" ? ["dist"] : []), "api.js");
+      const writeArtifact = (location: "root" | "dist") => {
+        const modulePath = artifactPath(location);
+        fs.mkdirSync(path.dirname(modulePath), { recursive: true });
+        fs.writeFileSync(
+          modulePath,
+          `export const marker = ${JSON.stringify(location)};\n`,
+          "utf8",
+        );
+      };
+      const loadArtifact = () =>
+        publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync<{ marker: string }>({
+          dirName: "demo",
+          artifactBasename: "api.js",
+        }).marker;
+
+      writeArtifact(firstLocation);
+      expect(loadArtifact()).toBe(firstLocation);
+
+      fs.unlinkSync(artifactPath(firstLocation));
+      writeArtifact(nextLocation);
+      expect(loadArtifact()).toBe(firstLocation);
+
+      clearPluginMetadataLifecycleCaches();
+
+      expect(loadArtifact()).toBe(nextLocation);
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "allows hardlinked bundled public artifacts under the trusted bundled root",

@@ -4,6 +4,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
@@ -121,13 +122,7 @@ function readTranscriptGeneration(projection: ResetWindowProjection): string | u
 function cacheResetMessageWindow(key: string, entry: ResetMessageWindowCacheEntry): void {
   resetMessageWindowCache.delete(key);
   resetMessageWindowCache.set(key, entry);
-  while (resetMessageWindowCache.size > MAX_RESET_MESSAGE_WINDOW_CACHE) {
-    const oldest = resetMessageWindowCache.keys().next().value;
-    if (typeof oldest !== "string") {
-      break;
-    }
-    resetMessageWindowCache.delete(oldest);
-  }
+  pruneMapToMaxSize(resetMessageWindowCache, MAX_RESET_MESSAGE_WINDOW_CACHE);
 }
 
 function findLatestResetMessageWindow(
@@ -283,4 +278,26 @@ export function readVisibleMessageRange(
     visible.postStart + postVisibleEnd - visible.kept.length,
   );
   return [...keptEvents, ...postEvents];
+}
+
+/** Maps a logical visible-message range to its materialized message positions. */
+export function resolveVisibleMessagePositionRange(
+  projection: ResetWindowProjection,
+  start: number,
+  endExclusive: number,
+): number[] {
+  if (endExclusive <= start) {
+    return [];
+  }
+  const visible = resolveVisibleMessagePositions(projection);
+  const boundedStart = Math.min(Math.max(0, start), visible.total);
+  const boundedEnd = Math.min(Math.max(boundedStart, endExclusive), visible.total);
+  const keptEnd = Math.min(boundedEnd, visible.kept.length);
+  const positions = visible.kept.slice(boundedStart, keptEnd);
+  const postVisibleStart = Math.max(boundedStart, visible.kept.length);
+  const postVisibleEnd = Math.max(postVisibleStart, boundedEnd);
+  for (let logical = postVisibleStart; logical < postVisibleEnd; logical += 1) {
+    positions.push(visible.postStart + logical - visible.kept.length);
+  }
+  return positions;
 }

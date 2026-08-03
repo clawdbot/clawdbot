@@ -5,6 +5,7 @@ import { chromium, expect, type Browser, type Page } from "playwright/test";
 import { afterAll, beforeAll, describe, it } from "vitest";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -60,6 +61,7 @@ describeControlUiE2e("Control UI attributed chat identity", () => {
     const page = await context.newPage();
     const now = Date.now();
     await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.rewind"],
       presenceUsers: [
         { self: true, id: "profile-riley", name: "Riley", email: "riley@example.test" },
         { id: "profile-colin", name: "Colin", email: "colin@example.test" },
@@ -100,12 +102,14 @@ describeControlUiE2e("Control UI attributed chat identity", () => {
       ],
     });
 
-    await page.goto(`${server.baseUrl}chat?session=agent%3Amain%3Amain`);
+    await page.goto(controlUiSessionUrl(server.baseUrl, "agent:main:main"));
     await page.getByText("This is much easier to scan in a team conversation.").waitFor();
 
     const userGroups = page.locator(".chat-group.user");
     await expect(userGroups).toHaveCount(2);
     await expect(page.locator(".chat-avatar.user")).toHaveCount(2);
+    await expect(page.locator(".chat-avatar.user")).toHaveText(["R", "C"]);
+    await expect(page.locator(".sidebar-identity-card openclaw-viewer-avatar")).toContainText("R");
 
     await expect(
       page.locator(".chat-group-footer--persistent-identity .chat-sender-name"),
@@ -138,5 +142,115 @@ describeControlUiE2e("Control UI attributed chat identity", () => {
     expect(footerOrder).toEqual(["Reply to message", "Hide message", "Rewind", "name", "time"]);
 
     await context.close();
+  });
+
+  it("keeps missing same-origin avatar initials through a live rerender", async () => {
+    const context = await browser.newContext({ viewport: { height: 760, width: 1180 } });
+    const page = await context.newPage();
+    const sender = {
+      id: "dd7c98e2-f51d-4590-b588-fa0682e165b7",
+      name: "Hannah",
+    };
+    let avatarRequestCount = 0;
+    let releaseRetry: () => void = () => undefined;
+    const retryGate = new Promise<void>((resolve) => {
+      releaseRetry = resolve;
+    });
+    let markRetryStarted: () => void = () => undefined;
+    const retryStarted = new Promise<void>((resolve) => {
+      markRetryStarted = resolve;
+    });
+    let markRetrySettled: () => void = () => undefined;
+    const retrySettled = new Promise<void>((resolve) => {
+      markRetrySettled = resolve;
+    });
+    await page.route(`**/api/users/${sender.id}/avatar`, async (route) => {
+      const requestIndex = ++avatarRequestCount;
+      if (requestIndex === 2) {
+        markRetryStarted();
+        await retryGate;
+      }
+      await route.fulfill({
+        body: JSON.stringify({ ok: false, error: { type: "not_found" } }),
+        contentType: "application/json",
+        status: 404,
+      });
+      if (requestIndex === 2) {
+        markRetrySettled();
+      }
+    });
+    await installMockGateway(page, {
+      presenceUsers: [
+        {
+          self: true,
+          id: "viewer-profile",
+          name: "Viewer",
+          email: "viewer@example.test",
+          watchedSessions: ["agent:main:main"],
+        },
+      ],
+      historyMessages: [
+        {
+          role: "user",
+          content: "Please keep my fallback avatar readable.",
+          timestamp: Date.now(),
+          __openclaw: {
+            id: "missing-avatar-message",
+            senderId: sender.id,
+            senderName: sender.name,
+            seq: 1,
+          },
+        },
+      ],
+    });
+
+    try {
+      await page.goto(controlUiSessionUrl(server.baseUrl, "agent:main:main"));
+      await page.getByText("Please keep my fallback avatar readable.").waitFor();
+
+      const userGroup = page.locator(".chat-group.user", {
+        hasText: "Please keep my fallback avatar readable.",
+      });
+      const slot = userGroup.locator(".chat-avatar-slot");
+      const image = slot.locator("img.chat-avatar.user");
+      const initials = slot.locator(".chat-avatar--sender-initials");
+      await retryStarted;
+      expect(avatarRequestCount).toBe(2);
+      await expect(slot).toHaveClass(/\bis-fallback\b/u);
+      await expect.poll(() => image.getAttribute("src")).toBeNull();
+      await expect(initials).toBeVisible();
+      await expect(initials).toHaveText("H");
+      await captureProof(page, "missing-avatar-after-404.png");
+
+      await userGroup.hover();
+      await userGroup.getByRole("button", { name: "Reply to message" }).click();
+      const replyPreview = page.locator(".chat-reply-preview");
+      await replyPreview.waitFor({ state: "visible" });
+      await expect(replyPreview.locator(".chat-reply-preview__text")).toHaveText(
+        "Please keep my fallback avatar readable.",
+      );
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+
+      expect(avatarRequestCount).toBe(2);
+      await expect(slot).toHaveClass(/\bis-fallback\b/u);
+      await expect.poll(() => image.getAttribute("src")).toBeNull();
+      await expect(initials).toBeVisible();
+      await expect(initials).toHaveText("H");
+      await captureProof(page, "missing-avatar-after-rerender.png");
+
+      releaseRetry();
+      await retrySettled;
+      await expect.poll(() => image.getAttribute("src")).toBeNull();
+      await expect(slot).toHaveClass(/\bis-fallback\b/u);
+      await expect(initials).toBeVisible();
+    } finally {
+      releaseRetry();
+      await context.close();
+    }
   });
 });

@@ -22,6 +22,11 @@ on:
         required: false
         default: true
         type: boolean
+      allow_failures:
+        description: Allow rendering from valid incomplete QA evidence
+        required: false
+        default: false
+        type: boolean
   workflow_call:
     inputs:
       qa_evidence_run_id:
@@ -38,6 +43,11 @@ on:
         required: false
         default: ""
         type: string
+      allow_failures:
+        description: Allow rendering from valid incomplete QA evidence
+        required: false
+        default: false
+        type: boolean
     secrets:
       OPENAI_API_KEY:
         description: OpenAI API key used by live QA profile scenarios
@@ -154,7 +164,7 @@ jobs:
           fi
 
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ inputs.ref }}
@@ -286,7 +296,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout trusted workflow source
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
@@ -321,6 +331,7 @@ jobs:
       ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
       expected_sha: ${{ needs.validate_selected_ref.outputs.selected_revision }}
       qa_profile: all
+      allow_failures: ${{ inputs.allow_failures }}
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
@@ -344,7 +355,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
           fetch-depth: 0
@@ -533,31 +544,46 @@ jobs:
           NODE
 
       - name: Render artifact docs
+        env:
+          ALLOW_FAILURES: ${{ inputs.allow_failures }}
         run: |
           set -euo pipefail
+          allow_failures_args=()
+          if [[ "$ALLOW_FAILURES" == "true" ]]; then
+            allow_failures_args+=(--allow-failures)
+          fi
           pnpm maturity:render -- \
             --output-dir .artifacts/maturity-docs \
             --static-assets-dir .artifacts/maturity-docs/assets/maturity \
             --scores qa/maturity-scores.yaml \
             --evidence-dir .artifacts/maturity-evidence \
-            --strict-inputs
+            --strict-inputs \
+            "${allow_failures_args[@]}"
           {
             echo "### Maturity scorecard docs"
             echo
             echo "- Source validation: passed"
             echo "- Artifact docs: \`.artifacts/maturity-docs\`"
             echo "- Strict inputs: \`true\`"
+            echo "- QA failures allowed: \`${ALLOW_FAILURES}\`"
             echo "- QA evidence: included"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Render committed docs preview
+        env:
+          ALLOW_FAILURES: ${{ inputs.allow_failures }}
         run: |
           set -euo pipefail
+          allow_failures_args=()
+          if [[ "$ALLOW_FAILURES" == "true" ]]; then
+            allow_failures_args+=(--allow-failures)
+          fi
           pnpm maturity:render -- \
             --output-dir docs \
             --scores qa/maturity-scores.yaml \
             --evidence-dir .artifacts/maturity-evidence \
-            --strict-inputs
+            --strict-inputs \
+            "${allow_failures_args[@]}"
 
       - name: Upload generated PR files
         if: ${{ inputs.publish_pull_request }}
@@ -600,7 +626,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout trusted workflow source
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
@@ -608,7 +634,7 @@ jobs:
           submodules: false
 
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
           path: selected
@@ -721,7 +747,7 @@ jobs:
 
             ## Why This Change Was Made
 
-            The maturity workflow generated this update from the selected immutable source and strict QA evidence.
+            The maturity workflow generated this update from the selected immutable source and validated QA evidence.
 
             ## User Impact
 

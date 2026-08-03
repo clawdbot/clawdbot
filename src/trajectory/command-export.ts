@@ -1,6 +1,7 @@
 // Trajectory command export helpers implement CLI export behavior.
 import fsp from "node:fs/promises";
 import path from "node:path";
+import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.types.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
@@ -112,7 +113,8 @@ async function resolveTrajectoryCommandOutputDir(params: {
 export async function exportTrajectoryForCommand(params: {
   outputDir?: string;
   outputPath?: string;
-  sessionFile: string;
+  sessionFile?: string;
+  sessionTarget?: SessionTranscriptRuntimeTarget;
   sessionId: string;
   sessionKey: string;
   workspaceDir: string;
@@ -127,6 +129,7 @@ export async function exportTrajectoryForCommand(params: {
   const bundle = await exportTrajectoryBundle({
     outputDir,
     sessionFile: params.sessionFile,
+    sessionTarget: params.sessionTarget,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,

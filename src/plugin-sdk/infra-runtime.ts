@@ -245,7 +245,17 @@ export * from "../infra/outbound/send-deps.js";
 export * from "../infra/retry.js";
 export * from "../infra/retry-policy.js";
 export * from "../infra/scp-host.ts";
-export * from "../infra/secret-file.js";
+export {
+  DEFAULT_SECRET_FILE_MAX_BYTES,
+  loadSecretFileSync,
+  PRIVATE_SECRET_DIR_MODE,
+  PRIVATE_SECRET_FILE_MODE,
+  readSecretFileSync,
+  tryReadSecretFileSync,
+  writePrivateSecretFileAtomic,
+  type SecretFileReadOptions,
+  type SecretFileReadResult,
+} from "../infra/secret-file.js";
 export * from "../infra/secure-random.js";
 export * from "../infra/system-events.js";
 export * from "../infra/system-message.ts";

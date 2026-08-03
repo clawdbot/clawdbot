@@ -85,6 +85,7 @@ describe("dead config keys", () => {
     "ui.prefs.chatMessageMaxWidth",
     "ui.prefs.textScale",
     "ui.prefs.sidebarLiveActivity",
+    "ui.prefs.showAdvancedSettings",
     "cron.failureDestination",
     "channels.defaults.heartbeat",
     "tools.loopDetection.historySize",

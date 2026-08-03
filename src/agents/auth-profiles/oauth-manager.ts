@@ -26,7 +26,8 @@ import {
   shouldBootstrapFromExternalCliCredential,
   shouldReplaceStoredOAuthCredential,
 } from "./oauth-shared.js";
-import { resolveAuthStorePath, resolveOAuthRefreshLockPath } from "./paths.js";
+import { resolveOAuthRefreshLockPath } from "./paths.js";
+import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   loadAuthProfileStoreWithoutExternalProfiles,
@@ -41,7 +42,10 @@ type OAuthManagerAdapter = {
     credentials: OAuthCredential,
     context: { cfg?: OpenClawConfig; agentDir?: string },
   ) => Promise<string>;
-  refreshCredential: (credential: OAuthCredential) => Promise<OAuthCredentials | null>;
+  refreshCredential: (
+    credential: OAuthCredential,
+    context: { cfg?: OpenClawConfig; agentDir?: string },
+  ) => Promise<OAuthCredentials | null>;
   readBootstrapCredential: (params: {
     store: AuthProfileStore;
     profileId: string;
@@ -489,7 +493,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     attemptedCredentials?: OAuthCredential[];
   }): Promise<ResolvedOAuthAccess | null> {
     const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir(params);
-    const authPath = resolveAuthStorePath(ownerAgentDir);
+    const authPath = resolveAuthProfileDatabasePath(ownerAgentDir);
     const globalRefreshLockPath = resolveOAuthRefreshLockPath(params.provider, params.profileId);
 
     try {
@@ -607,7 +611,10 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           OAUTH_REFRESH_CALL_TIMEOUT_MS,
           async () => {
             params.attemptedCredentials?.push(credentialToRefresh);
-            const refreshed = await adapter.refreshCredential(credentialToRefresh);
+            const refreshed = await adapter.refreshCredential(credentialToRefresh, {
+              cfg: params.cfg,
+              agentDir: params.agentDir,
+            });
             return refreshed
               ? ({
                   ...credentialToRefresh,
@@ -650,7 +657,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           }
         }
         if (ownerAgentDir) {
-          const mainPath = resolveAuthStorePath(undefined);
+          const mainPath = resolveAuthProfileDatabasePath(undefined);
           if (mainPath !== authPath) {
             await mirrorRefreshedCredentialIntoMainStore({
               profileId: params.profileId,

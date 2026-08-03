@@ -3,13 +3,12 @@ title: Cron explicit authority execution
 scenario:
   id: cron-explicit-authority-execution
   surface: cron
-  runtimeParityTier: live-only
   coverage:
     primary:
       - automation.isolated-cron-execution
     secondary:
-      - scheduling.cron
-      - agents.tool-fs-write
+      - automation.cron-rpcs
+      - agent-runtime.tool-fs-write
   gatewayConfigPatch:
     commands:
       ownerAllowFrom:
@@ -46,6 +45,7 @@ scenario:
     timeoutMs: 420000
     summary: Create one group-owned job through the operator API, add a sender wildcard restriction, then prove its scheduled write authority survives requester-policy resolution.
     config:
+      requiredProviderMode: live-frontier
       artifactFile: cron-explicit-authority-proof.txt
       artifactText: CRON_EXPLICIT_AUTHORITY_OK
       conversationId: qa-cron-authority-execution

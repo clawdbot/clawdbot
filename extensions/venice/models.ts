@@ -1,25 +1,18 @@
-// Venice plugin module implements models behavior.
 import {
-  getCachedLiveProviderModelRows,
-  LiveModelCatalogHttpError,
-} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
-import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { createSubsystemLogger, retryAsync } from "openclaw/plugin-sdk/runtime-env";
+  buildManifestModelDefinition,
+  readManifestProviderDefaultModelRef,
+} from "openclaw/plugin-sdk/provider-catalog-shared";
+import type {
+  ModelDefinitionConfig,
+  ModelProviderConfig,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-const log = createSubsystemLogger("venice-models");
+const VENICE_MANIFEST_CATALOG = manifest.modelCatalog.providers.venice;
 
-const VENICE_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
-  providerId: "venice",
-  catalog: manifest.modelCatalog.providers.venice,
-});
-
-export const VENICE_BASE_URL = VENICE_MANIFEST_PROVIDER.baseUrl;
-const VENICE_DEFAULT_MODEL_ID = "kimi-k2-5";
-export const VENICE_DEFAULT_MODEL_REF = `venice/${VENICE_DEFAULT_MODEL_ID}`;
-const VENICE_ALLOWED_HOSTNAMES = ["api.venice.ai"];
+export const VENICE_BASE_URL = VENICE_MANIFEST_CATALOG.baseUrl;
+export const VENICE_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(manifest, "venice")!;
 
 const VENICE_DEFAULT_COST = {
   input: 0,
@@ -33,28 +26,8 @@ const VENICE_DEFAULT_MAX_TOKENS = 4096;
 const VENICE_DISCOVERY_HARD_MAX_TOKENS = 131_072;
 const VENICE_DISCOVERY_TIMEOUT_MS = 10_000;
 const VENICE_DISCOVERY_CACHE_TTL_MS = 60_000;
-const VENICE_DISCOVERY_RETRYABLE_HTTP_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
-const VENICE_DISCOVERY_RETRYABLE_NETWORK_CODES = new Set([
-  "ECONNABORTED",
-  "ECONNREFUSED",
-  "ECONNRESET",
-  "EAI_AGAIN",
-  "ENETDOWN",
-  "ENETUNREACH",
-  "ENOTFOUND",
-  "ETIMEDOUT",
-  "UND_ERR_BODY_TIMEOUT",
-  "UND_ERR_CONNECT_TIMEOUT",
-  "UND_ERR_CONNECT_ERROR",
-  "UND_ERR_HEADERS_TIMEOUT",
-  "UND_ERR_SOCKET",
-]);
 
-export const VENICE_MODEL_CATALOG: ModelDefinitionConfig[] = VENICE_MANIFEST_PROVIDER.models;
-
-type VeniceCatalogEntry = ModelDefinitionConfig;
-
-export function buildVeniceModelDefinition(entry: VeniceCatalogEntry): ModelDefinitionConfig {
+function decorateVeniceModelDefinition(entry: ModelDefinitionConfig): ModelDefinitionConfig {
   return {
     id: entry.id,
     name: entry.name,
@@ -69,6 +42,15 @@ export function buildVeniceModelDefinition(entry: VeniceCatalogEntry): ModelDefi
     },
   };
 }
+
+/** Venice's decorated network-free fallback catalog. */
+export const VENICE_MODEL_CATALOG: ModelDefinitionConfig[] = VENICE_MANIFEST_CATALOG.models.map(
+  buildManifestModelDefinition({
+    providerId: "venice",
+    catalog: VENICE_MANIFEST_CATALOG,
+    decorate: decorateVeniceModelDefinition,
+  }),
+);
 
 interface VeniceModelSpec {
   name: string;
@@ -85,57 +67,6 @@ interface VeniceModelSpec {
 interface VeniceModel {
   id: string;
   model_spec?: VeniceModelSpec;
-}
-
-function staticVeniceModelDefinitions(): ModelDefinitionConfig[] {
-  return VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
-}
-
-function hasRetryableNetworkCode(err: unknown): boolean {
-  const queue: unknown[] = [err];
-  const seen = new Set<unknown>();
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (!current || typeof current !== "object" || seen.has(current)) {
-      continue;
-    }
-    seen.add(current);
-    const candidate = current as {
-      cause?: unknown;
-      errors?: unknown;
-      code?: unknown;
-      errno?: unknown;
-    };
-    const code =
-      typeof candidate.code === "string"
-        ? candidate.code
-        : typeof candidate.errno === "string"
-          ? candidate.errno
-          : undefined;
-    if (code && VENICE_DISCOVERY_RETRYABLE_NETWORK_CODES.has(code)) {
-      return true;
-    }
-    if (candidate.cause) {
-      queue.push(candidate.cause);
-    }
-    if (Array.isArray(candidate.errors)) {
-      queue.push(...candidate.errors);
-    }
-  }
-  return false;
-}
-
-function isRetryableVeniceDiscoveryError(err: unknown): boolean {
-  if (err instanceof LiveModelCatalogHttpError) {
-    return VENICE_DISCOVERY_RETRYABLE_HTTP_STATUS.has(err.status);
-  }
-  if (err instanceof Error && err.name === "AbortError") {
-    return true;
-  }
-  if (err instanceof TypeError && normalizeLowercaseStringOrEmpty(err.message) === "fetch failed") {
-    return true;
-  }
-  return hasRetryableNetworkCode(err);
 }
 
 function normalizePositiveInt(value: unknown): number | undefined {
@@ -168,102 +99,74 @@ function resolveApiSupportsTools(apiModel: VeniceModel): boolean | undefined {
   return typeof supportsFunctionCalling === "boolean" ? supportsFunctionCalling : undefined;
 }
 
-type VeniceModelDiscoveryOptions = {
-  retryDelayMs?: number;
-};
-
-export async function discoverVeniceModels(
-  options: VeniceModelDiscoveryOptions = {},
-): Promise<ModelDefinitionConfig[]> {
-  if (process.env.NODE_ENV === "test" || process.env.VITEST) {
-    return staticVeniceModelDefinitions();
-  }
-
-  try {
-    const data = await retryAsync(
-      async () =>
-        await getCachedLiveProviderModelRows({
-          providerId: "venice",
-          endpoint: `${VENICE_BASE_URL}/models`,
-          timeoutMs: VENICE_DISCOVERY_TIMEOUT_MS,
-          ttlMs: VENICE_DISCOVERY_CACHE_TTL_MS,
-          policy: { allowedHostnames: VENICE_ALLOWED_HOSTNAMES },
-          auditContext: "venice-model-discovery",
-        }),
-      {
-        attempts: 3,
-        minDelayMs: options.retryDelayMs ?? 300,
-        maxDelayMs: options.retryDelayMs ?? 2000,
-        jitter: options.retryDelayMs === undefined ? 0.2 : 0,
-        label: "venice-model-discovery",
-        shouldRetry: isRetryableVeniceDiscoveryError,
-      },
-    );
-
-    if (data.length === 0) {
-      log.warn("No models found from API, using static catalog");
-      return staticVeniceModelDefinitions();
+function projectVeniceModels(
+  rows: readonly unknown[],
+  fallback: ModelProviderConfig,
+): ModelDefinitionConfig[] {
+  const catalogById = new Map(fallback.models.map((model) => [model.id, model]));
+  const models: ModelDefinitionConfig[] = [];
+  for (const row of rows) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) {
+      continue;
     }
-
-    const catalogById = new Map<string, VeniceCatalogEntry>(
-      VENICE_MODEL_CATALOG.map((m) => [m.id, m]),
-    );
-    const models: ModelDefinitionConfig[] = [];
-
-    for (const apiModel of data as VeniceModel[]) {
-      const catalogEntry = catalogById.get(apiModel.id);
-      const apiMaxTokens = resolveApiMaxCompletionTokens({
-        apiModel,
-        knownMaxTokens: catalogEntry?.maxTokens,
-      });
-      const apiSupportsTools = resolveApiSupportsTools(apiModel);
-      if (catalogEntry) {
-        const definition = buildVeniceModelDefinition(catalogEntry);
-        if (apiMaxTokens !== undefined) {
-          definition.maxTokens = apiMaxTokens;
-        }
-        if (apiSupportsTools === false) {
-          definition.compat = {
-            ...definition.compat,
-            supportsTools: false,
-          };
-        }
-        models.push(definition);
-      } else {
-        const apiSpec = apiModel.model_spec;
-        const lowerModelId = normalizeLowercaseStringOrEmpty(apiModel.id);
-        const isReasoning =
-          apiSpec?.capabilities?.supportsReasoning ||
-          lowerModelId.includes("thinking") ||
-          lowerModelId.includes("reason") ||
-          lowerModelId.includes("r1");
-
-        const hasVision = apiSpec?.capabilities?.supportsVision === true;
-
-        models.push({
-          id: apiModel.id,
-          name: apiSpec?.name || apiModel.id,
-          reasoning: isReasoning,
-          input: hasVision ? ["text", "image"] : ["text"],
-          cost: VENICE_DEFAULT_COST,
-          contextWindow:
-            normalizePositiveInt(apiSpec?.availableContextTokens) ?? VENICE_DEFAULT_CONTEXT_WINDOW,
-          maxTokens: apiMaxTokens ?? VENICE_DEFAULT_MAX_TOKENS,
-          compat: {
-            supportsUsageInStreaming: false,
-            ...(apiSupportsTools === false ? { supportsTools: false } : {}),
-          },
-        });
+    const apiModel = row as VeniceModel;
+    if (typeof apiModel.id !== "string" || !apiModel.id.trim()) {
+      continue;
+    }
+    const catalogEntry = catalogById.get(apiModel.id);
+    const apiMaxTokens = resolveApiMaxCompletionTokens({
+      apiModel,
+      knownMaxTokens: catalogEntry?.maxTokens,
+    });
+    const apiSupportsTools = resolveApiSupportsTools(apiModel);
+    if (catalogEntry) {
+      const definition: ModelDefinitionConfig = {
+        ...catalogEntry,
+        input: [...catalogEntry.input],
+        cost: { ...catalogEntry.cost },
+        ...(catalogEntry.compat ? { compat: { ...catalogEntry.compat } } : {}),
+      };
+      if (apiMaxTokens !== undefined) {
+        definition.maxTokens = apiMaxTokens;
       }
+      if (apiSupportsTools === false) {
+        definition.compat = {
+          ...definition.compat,
+          supportsTools: false,
+        };
+      }
+      models.push(definition);
+    } else {
+      const apiSpec = apiModel.model_spec;
+      const lowerModelId = normalizeLowercaseStringOrEmpty(apiModel.id);
+      const isReasoning =
+        apiSpec?.capabilities?.supportsReasoning ||
+        lowerModelId.includes("thinking") ||
+        lowerModelId.includes("reason") ||
+        lowerModelId.includes("r1");
+      const hasVision = apiSpec?.capabilities?.supportsVision === true;
+      models.push({
+        id: apiModel.id,
+        name: apiSpec?.name || apiModel.id,
+        reasoning: isReasoning,
+        input: hasVision ? ["text", "image"] : ["text"],
+        cost: VENICE_DEFAULT_COST,
+        contextWindow:
+          normalizePositiveInt(apiSpec?.availableContextTokens) ?? VENICE_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: apiMaxTokens ?? VENICE_DEFAULT_MAX_TOKENS,
+        compat: {
+          supportsUsageInStreaming: false,
+          ...(apiSupportsTools === false ? { supportsTools: false } : {}),
+        },
+      });
     }
-
-    return models.length > 0 ? models : staticVeniceModelDefinitions();
-  } catch (error) {
-    if (error instanceof LiveModelCatalogHttpError) {
-      log.warn(`Failed to discover models: HTTP ${error.status}, using static catalog`);
-      return staticVeniceModelDefinitions();
-    }
-    log.warn(`Discovery failed: ${String(error)}, using static catalog`);
-    return staticVeniceModelDefinitions();
   }
+  return models;
 }
+
+export const VENICE_MODEL_DISCOVERY_OPTIONS = {
+  timeoutMs: VENICE_DISCOVERY_TIMEOUT_MS,
+  ttlMs: VENICE_DISCOVERY_CACHE_TTL_MS,
+  buildRequestHeaders: () => ({ Accept: "application/json" }),
+  projectRows: projectVeniceModels,
+} as const;

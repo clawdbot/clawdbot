@@ -58,6 +58,7 @@ export type CronJobRunResult = CronRunOutcome &
   Pick<CronRunTelemetry, "provider"> & {
     deliveryError?: string;
     delivered?: boolean;
+    deliveryAttempted?: boolean;
     startedAt: number;
     endedAt: number;
     nextCheck?: CronNextCheckProposal;
@@ -131,7 +132,11 @@ export function resolveMainSessionCronDeliveryContext(
   }
   const explicitAgentId = job.agentId?.trim();
   const agentId = normalizeAgentId(
-    explicitAgentId || resolveAgentIdFromSessionKey(targetSessionKey),
+    explicitAgentId ||
+      resolveAgentIdFromSessionKey(
+        targetSessionKey,
+        state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
+      ),
   );
   const storePath = state.deps.resolveSessionStorePath?.(agentId) ?? state.deps.sessionStorePath;
   if (!storePath) {

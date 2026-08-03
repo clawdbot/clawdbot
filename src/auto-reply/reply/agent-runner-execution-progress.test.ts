@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
-import type { TemplateContext } from "../templating.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDraftStreamLoop } from "../../channels/draft-stream-loop.js";
+import type { PartialReplyPayload } from "../get-reply-options.types.js";
 import type { GetReplyOptions } from "../types.js";
 import {
   setupAgentRunnerExecutionTestState,
-  getRunAgentTurnWithFallback,
+  getExecuteAgentTurnForTest,
   createMockTypingSignaler,
   createFollowupRun,
   requireRecord,
@@ -16,10 +17,39 @@ import type {
   FallbackRunnerParams,
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
+import type { AgentTurnParams } from "./agent-runner-execution.types.js";
+
+const sanitizerState = vi.hoisted(() => ({
+  sanitizeUserFacingText: vi.fn(),
+}));
+
+vi.mock("../../agents/embedded-agent-helpers/sanitize-user-facing-text.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../agents/embedded-agent-helpers/sanitize-user-facing-text.js")
+  >("../../agents/embedded-agent-helpers/sanitize-user-facing-text.js");
+  sanitizerState.sanitizeUserFacingText.mockImplementation(actual.sanitizeUserFacingText);
+  return {
+    ...actual,
+    sanitizeUserFacingText: (...args: Parameters<typeof actual.sanitizeUserFacingText>) =>
+      sanitizerState.sanitizeUserFacingText(...args),
+  };
+});
 
 const state = setupAgentRunnerExecutionTestState();
 
-describe("runAgentTurnWithFallback: lifecycle progress", () => {
+beforeEach(() => {
+  sanitizerState.sanitizeUserFacingText.mockClear();
+});
+
+async function executeTestTurn(
+  params?: Parameters<typeof createMinimalRunAgentTurnParams>[0],
+  overrides?: Partial<AgentTurnParams>,
+) {
+  const executeAgentTurn = await getExecuteAgentTurnForTest();
+  return executeAgentTurn({ ...createMinimalRunAgentTurnParams(params), ...overrides });
+}
+
+describe("executeAgentTurn: lifecycle progress", () => {
   it("forwards item lifecycle events to reply options", async () => {
     const onItemEvent = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
@@ -38,33 +68,11 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
     const pendingToolTasks = new Set<Promise<void>>();
-    const typingSignals = createMockTypingSignaler();
-    const result = await runAgentTurnWithFallback({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {
-        onItemEvent,
-      } satisfies GetReplyOptions,
-      typingSignals,
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks,
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeTestTurn(
+      { opts: { onItemEvent } satisfies GetReplyOptions },
+      { commandBody: "hello", pendingToolTasks },
+    );
 
     await Promise.all(pendingToolTasks);
 
@@ -110,14 +118,8 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
-      ...createMinimalRunAgentTurnParams({
-        opts: {
-          onItemEvent,
-          onToolStart,
-        } satisfies GetReplyOptions,
-      }),
+    const result = await executeTestTurn({
+      opts: { onItemEvent, onToolStart } satisfies GetReplyOptions,
     });
 
     expect(result.kind).toBe("success");
@@ -161,13 +163,8 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
-      ...createMinimalRunAgentTurnParams({
-        opts: {
-          onItemEvent,
-        } satisfies GetReplyOptions,
-      }),
+    const result = await executeTestTurn({
+      opts: { onItemEvent } satisfies GetReplyOptions,
     });
 
     expect(result.kind).toBe("success");
@@ -237,11 +234,8 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
-      ...createMinimalRunAgentTurnParams({
-        opts: { onItemEvent, onToolStart } satisfies GetReplyOptions,
-      }),
+    const result = await executeTestTurn({
+      opts: { onItemEvent, onToolStart } satisfies GetReplyOptions,
     });
 
     expect(result.kind).toBe("success");
@@ -272,15 +266,10 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
-      ...createMinimalRunAgentTurnParams({
-        opts: {
-          onToolStart,
-        } satisfies GetReplyOptions,
-      }),
-      toolProgressDetail: "raw",
-    });
+    const result = await executeTestTurn(
+      { opts: { onToolStart } satisfies GetReplyOptions },
+      { toolProgressDetail: "raw" },
+    );
 
     expect(result.kind).toBe("success");
     expect(onToolStart).toHaveBeenCalledWith({
@@ -317,13 +306,8 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
-      ...createMinimalRunAgentTurnParams({
-        opts: {
-          onToolStart,
-        } satisfies GetReplyOptions,
-      }),
+    const result = await executeTestTurn({
+      opts: { onToolStart } satisfies GetReplyOptions,
       typingSignals,
     });
 
@@ -373,28 +357,25 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
-      ...createMinimalRunAgentTurnParams({
-        opts: {
-          preserveProgressCallbackStartOrder: true,
-          onAssistantMessageStart: () => {
-            callbackOrder.push("message-start");
-          },
-          onPartialReply: () => {
-            callbackOrder.push("partial");
-          },
-          onReasoningStream: () => {
-            callbackOrder.push("reasoning");
-          },
-          onReasoningEnd: () => {
-            callbackOrder.push("reasoning-end");
-          },
-          onToolStart: () => {
-            callbackOrder.push("tool");
-          },
-        } satisfies GetReplyOptions,
-      }),
+    const result = await executeTestTurn({
+      opts: {
+        preserveProgressCallbackStartOrder: true,
+        onAssistantMessageStart: () => {
+          callbackOrder.push("message-start");
+        },
+        onPartialReply: () => {
+          callbackOrder.push("partial");
+        },
+        onReasoningStream: () => {
+          callbackOrder.push("reasoning");
+        },
+        onReasoningEnd: () => {
+          callbackOrder.push("reasoning-end");
+        },
+        onToolStart: () => {
+          callbackOrder.push("tool");
+        },
+      } satisfies GetReplyOptions,
       typingSignals,
     });
 
@@ -421,22 +402,132 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
     const typingSignals = createMockTypingSignaler();
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-
-    const result = await runAgentTurnWithFallback({
-      ...createMinimalRunAgentTurnParams({
-        opts: {
-          preserveProgressCallbackStartOrder: true,
-          onPartialReply: () => {
-            throw new Error("presentation failed");
-          },
+    const result = await executeTestTurn({
+      opts: {
+        preserveProgressCallbackStartOrder: true,
+        onPartialReply: () => {
+          throw new Error("presentation failed");
         },
-      }),
+      },
       typingSignals,
     });
 
     expect(result.kind).toBe("success");
     expect(typingSignals.signalTextDelta).toHaveBeenCalledWith("before failure");
+  });
+
+  it("materializes sanitized partial text at the consumer's rate", async () => {
+    const partials = Array.from({ length: 24 }, (_, index) => `partial ${index + 1}`);
+    const emptyPayload: PartialReplyPayload = {};
+    const delivered: string[] = [];
+    let latestPayload: PartialReplyPayload | undefined;
+    const draftLoop = createDraftStreamLoop<PartialReplyPayload>({
+      throttleMs: 60_000,
+      isStopped: () => false,
+      emptyValue: emptyPayload,
+      isEmpty: (payload) => payload === emptyPayload,
+      sendOrEditStreamMessage: async (payload) => {
+        const text = payload.text;
+        if (text !== undefined) {
+          delivered.push(text);
+        }
+      },
+    });
+    draftLoop.update({ text: "seed" });
+    await draftLoop.flush();
+    sanitizerState.sanitizeUserFacingText.mockClear();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      for (const text of partials) {
+        await params.onPartialReply?.({ text });
+      }
+      return { payloads: [], meta: {} };
+    });
+
+    await executeTestTurn({
+      opts: {
+        onPartialReply: (payload) => {
+          latestPayload = payload;
+          draftLoop.update(payload);
+        },
+      },
+    });
+
+    expect(sanitizerState.sanitizeUserFacingText).not.toHaveBeenCalled();
+    await draftLoop.flush();
+    expect(delivered).toEqual(["seed", partials.at(-1)]);
+    expect(latestPayload?.text).toBe(partials.at(-1));
+    expect(latestPayload?.text).toBe(partials.at(-1));
+    expect(sanitizerState.sanitizeUserFacingText).toHaveBeenCalledTimes(1);
+    draftLoop.stop();
+
+    sanitizerState.sanitizeUserFacingText.mockClear();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      for (const text of partials) {
+        await params.onPartialReply?.({ text });
+      }
+      return { payloads: [], meta: {} };
+    });
+
+    await executeTestTurn({
+      opts: {
+        onPartialReply: (payload) => {
+          void payload.text;
+        },
+      },
+    });
+
+    expect(sanitizerState.sanitizeUserFacingText).toHaveBeenCalledTimes(partials.length);
+  });
+
+  it("keeps lazy partial text enumerable and memoized across serialization", async () => {
+    let captured: PartialReplyPayload | undefined;
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onPartialReply?.({ text: "visible partial" });
+      return { payloads: [], meta: {} };
+    });
+
+    await executeTestTurn({
+      opts: {
+        onPartialReply: (payload) => {
+          captured = payload;
+        },
+      },
+    });
+
+    expect(captured).toBeDefined();
+    expect(Object.prototype.propertyIsEnumerable.call(captured, "text")).toBe(true);
+    expect(Object.keys(captured ?? {})).toContain("text");
+    expect(sanitizerState.sanitizeUserFacingText).not.toHaveBeenCalled();
+    expect(JSON.stringify(captured)).toBe('{"text":"visible partial"}');
+    expect(captured?.text).toBe("visible partial");
+    expect(sanitizerState.sanitizeUserFacingText).toHaveBeenCalledTimes(1);
+  });
+
+  it("materializes sanitizer-empty partial text to undefined", async () => {
+    let captured: PartialReplyPayload | undefined;
+    const typingSignals = createMockTypingSignaler();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onPartialReply?.({ text: "[tool calls omitted]" });
+      return { payloads: [], meta: {} };
+    });
+
+    await executeTestTurn(
+      {
+        opts: {
+          onPartialReply: (payload) => {
+            captured = payload;
+          },
+        },
+      },
+      { typingSignals },
+    );
+
+    expect(captured).toBeDefined();
+    expect(sanitizerState.sanitizeUserFacingText).not.toHaveBeenCalled();
+    expect(captured?.text).toBeUndefined();
+    expect(captured?.text).toBeUndefined();
+    expect(sanitizerState.sanitizeUserFacingText).toHaveBeenCalledTimes(1);
+    expect(typingSignals.signalTextDelta).toHaveBeenCalledWith("[tool calls omitted]");
   });
 
   it("leaves Codex app-server telemetry publication to the harness", async () => {
@@ -454,29 +545,10 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: { runId: "run-codex" } as GetReplyOptions,
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeTestTurn(
+      { opts: { runId: "run-codex" } as GetReplyOptions },
+      { commandBody: "hello" },
+    );
 
     expect(result.kind).toBe("success");
     expectNoMockCallWithFields(emitAgentEvent, {
@@ -499,29 +571,10 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: { runId: "run-timeout" } as GetReplyOptions,
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeTestTurn(
+      { opts: { runId: "run-timeout" } as GetReplyOptions },
+      { commandBody: "hello" },
+    );
 
     expect(result.kind).toBe("success");
     const lifecycleEvent = requireRecord(
@@ -579,29 +632,10 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: { runId: "run-recovered" } as GetReplyOptions,
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeTestTurn(
+      { opts: { runId: "run-recovered" } as GetReplyOptions },
+      { commandBody: "hello" },
+    );
 
     expect(result.kind).toBe("success");
     const lifecycleEvent = requireRecord(
@@ -633,29 +667,10 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       throw new Error("rebound failure");
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: { runId: "run-rebound" } as GetReplyOptions,
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeTestTurn(
+      { opts: { runId: "run-rebound" } as GetReplyOptions },
+      { commandBody: "hello" },
+    );
 
     expect(result.kind).toBe("final");
     const lifecycleEvents = emitAgentEvent.mock.calls
@@ -694,29 +709,10 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: { runId: "run-complete" } as GetReplyOptions,
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeTestTurn(
+      { opts: { runId: "run-complete" } as GetReplyOptions },
+      { commandBody: "hello" },
+    );
 
     expect(result.kind).toBe("success");
     expectNoMockCallWithFields(emitAgentEvent, {
@@ -747,32 +743,10 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       meta: {},
     }));
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "openai";
     followupRun.run.model = "gpt-5.4";
-    const result = await runAgentTurnWithFallback({
-      commandBody: "ok do it",
-      followupRun,
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeTestTurn({ followupRun }, { commandBody: "ok do it" });
 
     expect(result.kind).toBe("success");
     if (result.kind === "success") {
@@ -807,32 +781,13 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
       meta: {},
     }));
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "openai";
     followupRun.run.model = "gpt-5.4";
-    const result = await runAgentTurnWithFallback({
-      commandBody: "explain in detail what changed",
-      followupRun,
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeTestTurn(
+      { followupRun },
+      { commandBody: "explain in detail what changed" },
+    );
 
     expect(result.kind).toBe("success");
     if (result.kind === "success") {

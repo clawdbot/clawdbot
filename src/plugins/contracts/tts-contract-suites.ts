@@ -13,17 +13,11 @@ import {
   setActivePluginRegistry,
 } from "../../plugin-sdk/plugin-test-runtime.js";
 import { withEnv, withEnvAsync, withServer } from "../../plugin-sdk/test-env.js";
-import { resolveWorkspacePackagePublicModuleUrl } from "../../plugin-sdk/test-helpers/public-surface-loader.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 
 type TtsRuntimeModule = typeof import("openclaw/plugin-sdk/tts-runtime");
 type TtsCoreModule = typeof import("openclaw/plugin-sdk/speech-core");
 type SummarizeTextDeps = NonNullable<Parameters<TtsCoreModule["summarizeText"]>[1]>;
-
-const speechCoreRuntimeApiModuleId = resolveWorkspacePackagePublicModuleUrl({
-  packageName: "@openclaw/speech-core",
-  artifactBasename: "runtime-api.js",
-});
 
 let ttsRuntime: TtsRuntimeModule;
 let ttsRuntimeInitialized = false;
@@ -452,9 +446,7 @@ function buildTestGoogleSpeechProvider(): SpeechProviderPlugin {
   };
 }
 
-const loadTtsRuntime = createLazyRuntimeModule(
-  () => import(speechCoreRuntimeApiModuleId) as Promise<TtsRuntimeModule>,
-);
+const loadTtsRuntime = createLazyRuntimeModule(() => import("../../plugin-sdk/tts-runtime.js"));
 
 const loadTtsCore = createLazyRuntimeModule(() => import("../../plugin-sdk/speech-core.js"));
 

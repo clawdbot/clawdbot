@@ -29,7 +29,12 @@ const LOADED_INTERNAL_HOOK_REGISTRATIONS_KEY = Symbol.for(
 );
 const loadedHookRegistrations = resolveGlobalSingleton<
   Array<{ event: string; handler: InternalHookHandler }>
->(LOADED_INTERNAL_HOOK_REGISTRATIONS_KEY, () => []);
+>(
+  LOADED_INTERNAL_HOOK_REGISTRATIONS_KEY,
+  () => [],
+  () => resetLoadedInternalHooks(),
+  "plugin-registry",
+);
 
 function safeLogValue(value: string): string {
   return sanitizeForLog(value);

@@ -5,7 +5,12 @@ import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSignalReplyContextWithPersistence } from "../reply-authors.js";
 import { resetSignalReplyAuthorsForTests } from "../reply-authors.test-helpers.js";
-import type { SignalReactionMessage } from "./event-handler.types.js";
+import type {
+  SignalDataMessage,
+  SignalEnvelope,
+  SignalEventHandlerDeps,
+  SignalReactionMessage,
+} from "./event-handler.types.js";
 vi.useRealTimers();
 let createBaseSignalEventHandlerDeps: typeof import("./event-handler.test-harness.js").createBaseSignalEventHandlerDeps;
 let createSignalReceiveEvent: typeof import("./event-handler.test-harness.js").createSignalReceiveEvent;
@@ -38,6 +43,8 @@ const {
   dispatchInboundMessageMock,
   enqueueSystemEventMock,
   recordInboundSessionMock,
+  logVerboseMock,
+  shouldLogVerboseMock,
   capture,
 } = vi.hoisted(() => {
   const captureState: { ctx?: MsgContext } = {};
@@ -52,6 +59,8 @@ const {
       await Promise.resolve(params.replyOptions?.onReplyStart?.());
       return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
     }),
+    logVerboseMock: vi.fn(),
+    shouldLogVerboseMock: vi.fn(() => false),
     capture: captureState,
   };
 });
@@ -194,6 +203,17 @@ vi.mock("../approval-reactions.js", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
+  return {
+    ...actual,
+    logVerbose: logVerboseMock,
+    shouldLogVerbose: shouldLogVerboseMock,
+  };
+});
+
 function requireCapturedContext(): MsgContext {
   if (!capture.ctx) {
     throw new Error("expected inbound MsgContext");
@@ -205,6 +225,157 @@ function nextTimerTick(): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, 0);
   });
+}
+
+type SignalHandler = ReturnType<typeof createSignalEventHandler>;
+type SignalMessagesConfig = NonNullable<OpenClawConfig["messages"]>;
+type SignalChannelConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["signal"]>;
+type DirectMessageOverrides = Omit<SignalEnvelope, "dataMessage"> & {
+  dataMessage?: NonNullable<SignalEnvelope["dataMessage"]>;
+};
+
+const statusReactionTiming = {
+  debounceMs: 0,
+  doneHoldMs: 0,
+  errorHoldMs: 0,
+  stallSoftMs: 60_000,
+  stallHardMs: 120_000,
+};
+
+const shortStatusReactionTiming = {
+  ...statusReactionTiming,
+  stallSoftMs: 5_000,
+  stallHardMs: 15_000,
+};
+
+type TestMessagesConfig = Omit<Partial<SignalMessagesConfig>, "statusReactions"> & {
+  statusReactions?: NonNullable<SignalMessagesConfig["statusReactions"]> & {
+    timing?: typeof statusReactionTiming;
+  };
+};
+
+function createStatusReactionConfig(
+  options: {
+    messages?: TestMessagesConfig;
+    signal?: Partial<SignalChannelConfig>;
+  } = {},
+): OpenClawConfig {
+  return {
+    messages: {
+      ackReaction: "👀",
+      ackReactionScope: "direct",
+      inbound: { debounceMs: 0 },
+      statusReactions: { enabled: true, timing: { ...statusReactionTiming } },
+      ...options.messages,
+    },
+    channels: {
+      signal: {
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        ...options.signal,
+      },
+    },
+  } as OpenClawConfig;
+}
+
+function createDirectConfig(
+  options: {
+    messages?: TestMessagesConfig;
+    signal?: Partial<SignalChannelConfig>;
+  } = {},
+): OpenClawConfig {
+  return {
+    messages: {
+      inbound: { debounceMs: 0 },
+      ...options.messages,
+    },
+    channels: {
+      signal: {
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        ...options.signal,
+      },
+    },
+  };
+}
+
+function createGroupAllowlistConfig(options: {
+  messages?: TestMessagesConfig;
+  signal: Partial<SignalChannelConfig> & Pick<SignalChannelConfig, "groupAllowFrom">;
+}): OpenClawConfig {
+  return {
+    messages: {
+      inbound: { debounceMs: 0 },
+      ...options.messages,
+    },
+    channels: {
+      signal: {
+        groupPolicy: "allowlist",
+        ...options.signal,
+      },
+    },
+  };
+}
+
+function createTestHandler(overrides: Partial<SignalEventHandlerDeps> = {}): SignalHandler {
+  return createSignalEventHandler(
+    createBaseSignalEventHandlerDeps({
+      historyLimit: 0,
+      ...overrides,
+    }),
+  );
+}
+
+function receiveDirectMessage(
+  handler: SignalHandler,
+  overrides: DirectMessageOverrides = {},
+): ReturnType<SignalHandler> {
+  const { dataMessage, ...envelope } = overrides;
+  return handler(
+    createSignalReceiveEvent({
+      sourceNumber: "+15550002222",
+      sourceName: "Bob",
+      timestamp: 1700000000001,
+      ...envelope,
+      dataMessage: {
+        message: "ship it",
+        attachments: [],
+        ...dataMessage,
+      },
+    }),
+  );
+}
+
+function receiveMessage(
+  handler: SignalHandler,
+  dataMessage: SignalDataMessage,
+  envelope: Omit<SignalEnvelope, "dataMessage"> = {},
+): ReturnType<SignalHandler> {
+  return handler(createSignalReceiveEvent({ ...envelope, dataMessage }));
+}
+
+function receiveGroupMessage(
+  handler: SignalHandler,
+  message: string,
+  dataMessage: Partial<SignalDataMessage> = {},
+  envelope: Omit<SignalEnvelope, "dataMessage"> = {},
+): ReturnType<SignalHandler> {
+  return receiveMessage(
+    handler,
+    {
+      message,
+      attachments: [],
+      groupInfo: { groupId: "g1", groupName: "Test Group" },
+      ...dataMessage,
+    },
+    envelope,
+  );
+}
+
+function sentReactionEmojis(): string[] {
+  return (sendReactionSignalMock.mock.calls as unknown as SendReactionSignalMockCall[]).map(
+    (call) => call[2],
+  );
 }
 
 describe("signal createSignalEventHandler inbound context", () => {
@@ -223,26 +394,17 @@ describe("signal createSignalEventHandler inbound context", () => {
     enqueueSystemEventMock.mockReset();
     recordInboundSessionMock.mockReset().mockResolvedValue(undefined);
     dispatchInboundMessageMock.mockClear();
+    logVerboseMock.mockClear();
+    shouldLogVerboseMock.mockReset().mockReturnValue(false);
     approvalReactionMocks.maybeResolveSignalApprovalReaction.mockReset().mockResolvedValue(false);
   });
 
   it("passes a finalized MsgContext to dispatchInboundMessage", async () => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: { messages: { inbound: { debounceMs: 0 } } } as OpenClawConfig,
-        historyLimit: 0,
-      }),
-    );
+    const handler = createTestHandler({
+      cfg: { messages: { inbound: { debounceMs: 0 } } } as OpenClawConfig,
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        dataMessage: {
-          message: "hi",
-          attachments: [],
-          groupInfo: { groupId: "g1", groupName: "Test Group" },
-        },
-      }),
-    );
+    await receiveGroupMessage(handler, "hi");
 
     const contextWithBody = requireCapturedContext();
     expectInboundContextContract(contextWithBody);
@@ -253,24 +415,11 @@ describe("signal createSignalEventHandler inbound context", () => {
   });
 
   it("normalizes direct chat To/OriginatingTo targets to canonical Signal ids", async () => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: { messages: { inbound: { debounceMs: 0 } } } as OpenClawConfig,
-        historyLimit: 0,
-      }),
-    );
+    const handler = createTestHandler({
+      cfg: { messages: { inbound: { debounceMs: 0 } } } as OpenClawConfig,
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        sourceNumber: "+15550002222",
-        sourceName: "Bob",
-        timestamp: 1700000000001,
-        dataMessage: {
-          message: "hello",
-          attachments: [],
-        },
-      }),
-    );
+    await receiveDirectMessage(handler, { dataMessage: { message: "hello" } });
 
     const context = requireCapturedContext();
     expect(context.ChatType).toBe("direct");
@@ -279,24 +428,11 @@ describe("signal createSignalEventHandler inbound context", () => {
   });
 
   it("sets ReplyToId from the inbound Signal timestamp", async () => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: { messages: { inbound: { debounceMs: 0 } } } as OpenClawConfig,
-        historyLimit: 0,
-      }),
-    );
+    const handler = createTestHandler({
+      cfg: { messages: { inbound: { debounceMs: 0 } } } as OpenClawConfig,
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        sourceNumber: "+15550002222",
-        sourceName: "Bob",
-        timestamp: 1700000000001,
-        dataMessage: {
-          message: "hello",
-          attachments: [],
-        },
-      }),
-    );
+    await receiveDirectMessage(handler, { dataMessage: { message: "hello" } });
 
     const context = requireCapturedContext();
     expect(context.MessageSid).toBe("1700000000001");
@@ -327,12 +463,9 @@ describe("signal createSignalEventHandler inbound context", () => {
       },
     },
   ])("falls back to $name timestamp for native reply metadata", async ({ envelope }) => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: { messages: { inbound: { debounceMs: 0 } } } as OpenClawConfig,
-        historyLimit: 0,
-      }),
-    );
+    const handler = createTestHandler({
+      cfg: { messages: { inbound: { debounceMs: 0 } } } as OpenClawConfig,
+    });
 
     await handler(
       createSignalReceiveEvent({
@@ -350,12 +483,9 @@ describe("signal createSignalEventHandler inbound context", () => {
   });
 
   it("uses editMessage.targetSentTimestamp as the native reply target", async () => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: { messages: { inbound: { debounceMs: 0 } } } as OpenClawConfig,
-        historyLimit: 0,
-      }),
-    );
+    const handler = createTestHandler({
+      cfg: { messages: { inbound: { debounceMs: 0 } } } as OpenClawConfig,
+    });
 
     await handler(
       createSignalReceiveEvent({
@@ -397,35 +527,24 @@ describe("signal createSignalEventHandler inbound context", () => {
       await params.dispatcher.waitForIdle?.();
       return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
     });
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 10 } },
-          channels: { signal: { replyToMode: "batched" } },
-        } as OpenClawConfig,
-        deliverReplies: deliverRepliesMock,
-        historyLimit: 0,
-      }),
-    );
+    const handler = createTestHandler({
+      cfg: {
+        messages: { inbound: { debounceMs: 10 } },
+        channels: { signal: { replyToMode: "batched" } },
+      } as OpenClawConfig,
+      deliverReplies: deliverRepliesMock,
+    });
 
     try {
-      await handler(
-        createSignalReceiveEvent({
-          timestamp: 1700000000001,
-          dataMessage: {
-            message: "first debounced message",
-            attachments: [],
-          },
-        }),
+      await receiveMessage(
+        handler,
+        { message: "first debounced message", attachments: [] },
+        { timestamp: 1700000000001 },
       );
-      await handler(
-        createSignalReceiveEvent({
-          timestamp: 1700000000002,
-          dataMessage: {
-            message: "second debounced message",
-            attachments: [],
-          },
-        }),
+      await receiveMessage(
+        handler,
+        { message: "second debounced message", attachments: [] },
+        { timestamp: 1700000000002 },
       );
 
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
@@ -453,28 +572,15 @@ describe("signal createSignalEventHandler inbound context", () => {
   });
 
   it("keeps per-channel-peer direct-message last-route writes on the isolated session", async () => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          session: { dmScope: "per-channel-peer" },
-          messages: { inbound: { debounceMs: 0 } },
-          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        } as OpenClawConfig,
-        historyLimit: 0,
-      }),
-    );
+    const handler = createTestHandler({
+      cfg: {
+        session: { dmScope: "per-channel-peer" },
+        messages: { inbound: { debounceMs: 0 } },
+        channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+      } as OpenClawConfig,
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        sourceNumber: "+15550002222",
-        sourceName: "Bob",
-        timestamp: 1700000000001,
-        dataMessage: {
-          message: "hello",
-          attachments: [],
-        },
-      }),
-    );
+    await receiveDirectMessage(handler, { dataMessage: { message: "hello" } });
 
     const context = requireCapturedContext();
     expect(context.SessionKey).toBe("agent:main:signal:direct:+15550002222");
@@ -498,23 +604,14 @@ describe("signal createSignalEventHandler inbound context", () => {
   });
 
   it("keeps direct chat text in BodyForAgent while Body remains the legacy envelope", async () => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: { messages: { inbound: { debounceMs: 0 } } } as OpenClawConfig,
-        historyLimit: 0,
-      }),
-    );
+    const handler = createTestHandler({
+      cfg: { messages: { inbound: { debounceMs: 0 } } } as OpenClawConfig,
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        sourceNumber: "+15550002222",
-        sourceName: "Bob",
-        dataMessage: {
-          message: "summarize the release notes",
-          attachments: [],
-        },
-      }),
-    );
+    await receiveDirectMessage(handler, {
+      timestamp: 1700000000000,
+      dataMessage: { message: "summarize the release notes" },
+    });
 
     const context = requireCapturedContext();
     expect(context.BodyForAgent).toBe("summarize the release notes");
@@ -523,7 +620,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.BodyForCommands).toBe("summarize the release notes");
     expect(context.Body).toContain("summarize the release notes");
     expect(context.Body).not.toBe(context.BodyForAgent);
-    expect(context.UntrustedContext).toBeUndefined();
+    expect(context.ChannelPromptContext).toBeUndefined();
   });
 
   it("runs Telegram-parity Signal status reactions when explicitly enabled", async () => {
@@ -540,49 +637,17 @@ describe("signal createSignalEventHandler inbound context", () => {
         return { queuedFinal: false, counts: { tool: 0, block: 0, final: 1 } };
       },
     );
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: {
-            ackReaction: "👀",
-            ackReactionScope: "direct",
-            inbound: { debounceMs: 0 },
-            statusReactions: {
-              enabled: true,
-              timing: {
-                debounceMs: 0,
-                doneHoldMs: 0,
-                errorHoldMs: 0,
-                stallSoftMs: 60_000,
-                stallHardMs: 120_000,
-              },
-            },
-          },
-          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        } as OpenClawConfig,
-        historyLimit: 0,
-      }),
-    );
+    const handler = createTestHandler({
+      cfg: createStatusReactionConfig(),
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        sourceNumber: "+15550002222",
-        sourceName: "Bob",
-        timestamp: 1700000000001,
-        dataMessage: {
-          message: "ship it",
-          attachments: [],
-        },
-      }),
-    );
+    await receiveDirectMessage(handler);
     for (let i = 0; i < 5; i += 1) {
       await nextTimerTick();
     }
 
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-    const sentEmojis = (
-      sendReactionSignalMock.mock.calls as unknown as SendReactionSignalMockCall[]
-    ).map((call) => call[2]);
+    const sentEmojis = sentReactionEmojis();
     expect(sentEmojis).toEqual(expect.arrayContaining(["👀", "🧠", "🛠️", "🗜️", "✅"]));
     expect(sentEmojis.at(-1)).toBe("👀");
     expect(dispatchInboundMessageMock.mock.calls[0]?.[0].replyOptions).toEqual(
@@ -615,54 +680,20 @@ describe("signal createSignalEventHandler inbound context", () => {
           return { queuedFinal: false, counts: { tool: 0, block: 0, final: 1 } };
         },
       );
-      const handler = createSignalEventHandler(
-        createBaseSignalEventHandlerDeps({
-          cfg: {
-            messages: {
-              ackReaction: "👀",
-              ackReactionScope: "direct",
-              inbound: { debounceMs: 0 },
-              statusReactions: {
-                enabled: true,
-                timing: {
-                  debounceMs: 0,
-                  doneHoldMs: 0,
-                  errorHoldMs: 0,
-                  stallSoftMs: 5_000,
-                  stallHardMs: 15_000,
-                },
-              },
-            },
-            channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-          } as OpenClawConfig,
-          statusReactionTiming: {
-            debounceMs: 0,
-            doneHoldMs: 0,
-            errorHoldMs: 0,
-            stallSoftMs: 5_000,
-            stallHardMs: 15_000,
+      const handler = createTestHandler({
+        cfg: createStatusReactionConfig({
+          messages: {
+            statusReactions: { enabled: true, timing: { ...shortStatusReactionTiming } },
           },
-          historyLimit: 0,
         }),
-      );
+        statusReactionTiming: { ...shortStatusReactionTiming },
+      });
 
-      const handled = handler(
-        createSignalReceiveEvent({
-          sourceNumber: "+15550002222",
-          sourceName: "Bob",
-          timestamp: 1700000000001,
-          dataMessage: {
-            message: "ship it",
-            attachments: [],
-          },
-        }),
-      );
+      const handled = receiveDirectMessage(handler);
       await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(15_000);
 
-      let sentEmojis = (
-        sendReactionSignalMock.mock.calls as unknown as SendReactionSignalMockCall[]
-      ).map((call) => call[2]);
+      let sentEmojis = sentReactionEmojis();
       expect(sentEmojis).toContain("⏳");
       expect(sentEmojis).not.toContain("⚠️");
 
@@ -670,9 +701,7 @@ describe("signal createSignalEventHandler inbound context", () => {
       await handled;
       await vi.advanceTimersByTimeAsync(0);
 
-      sentEmojis = (
-        sendReactionSignalMock.mock.calls as unknown as SendReactionSignalMockCall[]
-      ).map((call) => call[2]);
+      sentEmojis = sentReactionEmojis();
       expect(sentEmojis).toContain("✅");
       expect(sentEmojis.at(-1)).toBe("👀");
     } finally {
@@ -693,54 +722,20 @@ describe("signal createSignalEventHandler inbound context", () => {
           return { queuedFinal: false, counts: { tool: 0, block: 0, final: 1 } };
         },
       );
-      const handler = createSignalEventHandler(
-        createBaseSignalEventHandlerDeps({
-          cfg: {
-            messages: {
-              ackReaction: "👀",
-              ackReactionScope: "direct",
-              inbound: { debounceMs: 0 },
-              statusReactions: {
-                enabled: true,
-                timing: {
-                  debounceMs: 0,
-                  doneHoldMs: 0,
-                  errorHoldMs: 0,
-                  stallSoftMs: 5_000,
-                  stallHardMs: 15_000,
-                },
-              },
-            },
-            channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-          } as OpenClawConfig,
-          statusReactionTiming: {
-            debounceMs: 0,
-            doneHoldMs: 0,
-            errorHoldMs: 0,
-            stallSoftMs: 5_000,
-            stallHardMs: 15_000,
+      const handler = createTestHandler({
+        cfg: createStatusReactionConfig({
+          messages: {
+            statusReactions: { enabled: true, timing: { ...shortStatusReactionTiming } },
           },
-          historyLimit: 0,
         }),
-      );
+        statusReactionTiming: { ...shortStatusReactionTiming },
+      });
 
-      const handled = handler(
-        createSignalReceiveEvent({
-          sourceNumber: "+15550002222",
-          sourceName: "Bob",
-          timestamp: 1700000000001,
-          dataMessage: {
-            message: "ship it",
-            attachments: [],
-          },
-        }),
-      );
+      const handled = receiveDirectMessage(handler);
       await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(15_000);
 
-      let sentEmojis = (
-        sendReactionSignalMock.mock.calls as unknown as SendReactionSignalMockCall[]
-      ).map((call) => call[2]);
+      let sentEmojis = sentReactionEmojis();
       expect(sentEmojis).toContain("⏳");
       expect(sentEmojis).not.toContain("⚠️");
 
@@ -748,9 +743,7 @@ describe("signal createSignalEventHandler inbound context", () => {
       await handled;
       await vi.advanceTimersByTimeAsync(0);
 
-      sentEmojis = (
-        sendReactionSignalMock.mock.calls as unknown as SendReactionSignalMockCall[]
-      ).map((call) => call[2]);
+      sentEmojis = sentReactionEmojis();
       expect(sentEmojis).toContain("✅");
       expect(sentEmojis.at(-1)).toBe("👀");
     } finally {
@@ -765,48 +758,16 @@ describe("signal createSignalEventHandler inbound context", () => {
         return { queuedFinal: false, counts: { tool: 0, block: 0, final: 1 } };
       },
     );
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: {
-            ackReaction: "👀",
-            ackReactionScope: "direct",
-            inbound: { debounceMs: 0 },
-            statusReactions: {
-              enabled: true,
-              timing: {
-                debounceMs: 0,
-                doneHoldMs: 0,
-                errorHoldMs: 0,
-                stallSoftMs: 60_000,
-                stallHardMs: 120_000,
-              },
-            },
-          },
-          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        } as OpenClawConfig,
-        historyLimit: 0,
-      }),
-    );
+    const handler = createTestHandler({
+      cfg: createStatusReactionConfig(),
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        sourceNumber: "+15550002222",
-        sourceName: "Bob",
-        timestamp: 1700000000001,
-        dataMessage: {
-          message: "ship it",
-          attachments: [],
-        },
-      }),
-    );
+    await receiveDirectMessage(handler);
     for (let i = 0; i < 5; i += 1) {
       await nextTimerTick();
     }
 
-    const sentEmojis = (
-      sendReactionSignalMock.mock.calls as unknown as SendReactionSignalMockCall[]
-    ).map((call) => call[2]);
+    const sentEmojis = sentReactionEmojis();
     expect(sentEmojis).toContain("✅");
     expect(sentEmojis.at(-1)).toBe("👀");
   });
@@ -822,91 +783,31 @@ describe("signal createSignalEventHandler inbound context", () => {
         };
       },
     );
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: {
-            ackReaction: "👀",
-            ackReactionScope: "direct",
-            inbound: { debounceMs: 0 },
-            statusReactions: {
-              enabled: true,
-              timing: {
-                debounceMs: 0,
-                doneHoldMs: 0,
-                errorHoldMs: 0,
-                stallSoftMs: 60_000,
-                stallHardMs: 120_000,
-              },
-            },
-          },
-          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        } as OpenClawConfig,
-        historyLimit: 0,
-      }),
-    );
+    const handler = createTestHandler({
+      cfg: createStatusReactionConfig(),
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        sourceNumber: "+15550002222",
-        sourceName: "Bob",
-        timestamp: 1700000000001,
-        dataMessage: {
-          message: "ship it",
-          attachments: [],
-        },
-      }),
-    );
+    await receiveDirectMessage(handler);
     for (let i = 0; i < 5; i += 1) {
       await nextTimerTick();
     }
 
-    const sentEmojis = (
-      sendReactionSignalMock.mock.calls as unknown as SendReactionSignalMockCall[]
-    ).map((call) => call[2]);
+    const sentEmojis = sentReactionEmojis();
     expect(sentEmojis).toContain("❌");
     expect(sentEmojis).not.toContain("✅");
     expect(sentEmojis.at(-1)).toBe("👀");
   });
 
   it("uses dataMessage timestamp fallback for Signal status reactions", async () => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: {
-            ackReaction: "👀",
-            ackReactionScope: "direct",
-            inbound: { debounceMs: 0 },
-            statusReactions: {
-              enabled: true,
-              timing: {
-                debounceMs: 0,
-                doneHoldMs: 0,
-                errorHoldMs: 0,
-                stallSoftMs: 60_000,
-                stallHardMs: 120_000,
-              },
-            },
-          },
-          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        } as OpenClawConfig,
-        sendReadReceipts: true,
-        historyLimit: 0,
-      }),
-    );
+    const handler = createTestHandler({
+      cfg: createStatusReactionConfig(),
+      sendReadReceipts: true,
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        sourceNumber: "+15550002222",
-        sourceName: "Bob",
-        timestamp: undefined,
-        dataMessage: {
-          timestamp: 1700000000002,
-          message: "ship it",
-          attachments: [],
-        },
-      }),
-    );
+    await receiveDirectMessage(handler, {
+      timestamp: undefined,
+      dataMessage: { timestamp: 1700000000002 },
+    });
     await nextTimerTick();
 
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
@@ -931,32 +832,13 @@ describe("signal createSignalEventHandler inbound context", () => {
   });
 
   it("does not send Signal status reactions without an inbound timestamp", async () => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: {
-            ackReaction: "👀",
-            ackReactionScope: "direct",
-            inbound: { debounceMs: 0 },
-            statusReactions: { enabled: true },
-          },
-          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        } as OpenClawConfig,
-        historyLimit: 0,
+    const handler = createTestHandler({
+      cfg: createStatusReactionConfig({
+        messages: { statusReactions: { enabled: true } },
       }),
-    );
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        sourceNumber: "+15550002222",
-        sourceName: "Bob",
-        timestamp: undefined,
-        dataMessage: {
-          message: "ship it",
-          attachments: [],
-        },
-      }),
-    );
+    await receiveDirectMessage(handler, { timestamp: undefined });
     await nextTimerTick();
 
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
@@ -964,32 +846,13 @@ describe("signal createSignalEventHandler inbound context", () => {
   });
 
   it("does not send Signal status reactions for non-positive inbound timestamps", async () => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: {
-            ackReaction: "👀",
-            ackReactionScope: "direct",
-            inbound: { debounceMs: 0 },
-            statusReactions: { enabled: true },
-          },
-          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        } as OpenClawConfig,
-        historyLimit: 0,
+    const handler = createTestHandler({
+      cfg: createStatusReactionConfig({
+        messages: { statusReactions: { enabled: true } },
       }),
-    );
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        sourceNumber: "+15550002222",
-        sourceName: "Bob",
-        timestamp: -1,
-        dataMessage: {
-          message: "ship it",
-          attachments: [],
-        },
-      }),
-    );
+    await receiveDirectMessage(handler, { timestamp: -1 });
     await nextTimerTick();
 
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
@@ -997,27 +860,9 @@ describe("signal createSignalEventHandler inbound context", () => {
   });
 
   it("does not send Signal status reactions unless explicitly enabled", async () => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 0 } },
-          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        } as OpenClawConfig,
-        historyLimit: 0,
-      }),
-    );
+    const handler = createTestHandler({ cfg: createDirectConfig() });
 
-    await handler(
-      createSignalReceiveEvent({
-        sourceNumber: "+15550002222",
-        sourceName: "Bob",
-        timestamp: 1700000000001,
-        dataMessage: {
-          message: "ship it",
-          attachments: [],
-        },
-      }),
-    );
+    await receiveDirectMessage(handler);
     await nextTimerTick();
 
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
@@ -1025,38 +870,14 @@ describe("signal createSignalEventHandler inbound context", () => {
   });
 
   it("does not send Signal status reactions when reactionLevel is off", async () => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: {
-            ackReaction: "👀",
-            ackReactionScope: "direct",
-            inbound: { debounceMs: 0 },
-            statusReactions: { enabled: true },
-          },
-          channels: {
-            signal: {
-              dmPolicy: "open",
-              allowFrom: ["*"],
-              reactionLevel: "off",
-            },
-          },
-        } as OpenClawConfig,
-        historyLimit: 0,
+    const handler = createTestHandler({
+      cfg: createStatusReactionConfig({
+        messages: { statusReactions: { enabled: true } },
+        signal: { reactionLevel: "off" },
       }),
-    );
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        sourceNumber: "+15550002222",
-        sourceName: "Bob",
-        timestamp: 1700000000001,
-        dataMessage: {
-          message: "ship it",
-          attachments: [],
-        },
-      }),
-    );
+    await receiveDirectMessage(handler);
     await nextTimerTick();
 
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
@@ -1073,47 +894,11 @@ describe("signal createSignalEventHandler inbound context", () => {
         };
       },
     );
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: {
-            ackReaction: "👀",
-            ackReactionScope: "direct",
-            inbound: { debounceMs: 0 },
-            statusReactions: {
-              enabled: true,
-              timing: {
-                debounceMs: 0,
-                doneHoldMs: 0,
-                errorHoldMs: 0,
-                stallSoftMs: 60_000,
-                stallHardMs: 120_000,
-              },
-            },
-          },
-          channels: {
-            signal: {
-              dmPolicy: "open",
-              allowFrom: ["*"],
-              reactionLevel: "ack",
-            },
-          },
-        } as OpenClawConfig,
-        historyLimit: 0,
-      }),
-    );
+    const handler = createTestHandler({
+      cfg: createStatusReactionConfig({ signal: { reactionLevel: "ack" } }),
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        sourceNumber: "+15550002222",
-        sourceName: "Bob",
-        timestamp: 1700000000001,
-        dataMessage: {
-          message: "ship it",
-          attachments: [],
-        },
-      }),
-    );
+    await receiveDirectMessage(handler);
     await nextTimerTick();
     await nextTimerTick();
 
@@ -1127,48 +912,20 @@ describe("signal createSignalEventHandler inbound context", () => {
         baseUrl: "http://localhost",
       }),
     );
-    const sentEmojis = (
-      sendReactionSignalMock.mock.calls as unknown as SendReactionSignalMockCall[]
-    ).map((call) => call[2]);
+    const sentEmojis = sentReactionEmojis();
     expect(sentEmojis).toContain("✅");
   });
 
   it("does not send Signal status reactions when account reactionLevel is off", async () => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: {
-            ackReaction: "👀",
-            ackReactionScope: "direct",
-            inbound: { debounceMs: 0 },
-            statusReactions: { enabled: true },
-          },
-          channels: {
-            signal: {
-              dmPolicy: "open",
-              allowFrom: ["*"],
-              accounts: {
-                work: { reactionLevel: "off" },
-              },
-            },
-          },
-        } as OpenClawConfig,
-        accountId: "work",
-        historyLimit: 0,
+    const handler = createTestHandler({
+      cfg: createStatusReactionConfig({
+        messages: { statusReactions: { enabled: true } },
+        signal: { accounts: { work: { reactionLevel: "off" } } },
       }),
-    );
+      accountId: "work",
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        sourceNumber: "+15550002222",
-        sourceName: "Bob",
-        timestamp: 1700000000001,
-        dataMessage: {
-          message: "ship it",
-          attachments: [],
-        },
-      }),
-    );
+    await receiveDirectMessage(handler);
     await nextTimerTick();
 
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
@@ -1176,32 +933,13 @@ describe("signal createSignalEventHandler inbound context", () => {
   });
 
   it("does not send Signal status reactions when ackReactionScope is off", async () => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: {
-            ackReaction: "👀",
-            ackReactionScope: "off",
-            inbound: { debounceMs: 0 },
-            statusReactions: { enabled: true },
-          },
-          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        } as OpenClawConfig,
-        historyLimit: 0,
+    const handler = createTestHandler({
+      cfg: createStatusReactionConfig({
+        messages: { ackReactionScope: "off", statusReactions: { enabled: true } },
       }),
-    );
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        sourceNumber: "+15550002222",
-        sourceName: "Bob",
-        timestamp: 1700000000001,
-        dataMessage: {
-          message: "ship it",
-          attachments: [],
-        },
-      }),
-    );
+    await receiveDirectMessage(handler);
     await nextTimerTick();
 
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
@@ -1215,48 +953,16 @@ describe("signal createSignalEventHandler inbound context", () => {
         return { queuedFinal: false, counts: { tool: 1, block: 0, final: 0 } };
       },
     );
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: {
-            ackReaction: "👀",
-            ackReactionScope: "direct",
-            inbound: { debounceMs: 0 },
-            statusReactions: {
-              enabled: true,
-              timing: {
-                debounceMs: 0,
-                doneHoldMs: 0,
-                errorHoldMs: 0,
-                stallSoftMs: 60_000,
-                stallHardMs: 120_000,
-              },
-            },
-          },
-          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        } as OpenClawConfig,
-        historyLimit: 0,
-      }),
-    );
+    const handler = createTestHandler({
+      cfg: createStatusReactionConfig(),
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        sourceNumber: "+15550002222",
-        sourceName: "Bob",
-        timestamp: 1700000000001,
-        dataMessage: {
-          message: "ship it",
-          attachments: [],
-        },
-      }),
-    );
+    await receiveDirectMessage(handler);
     for (let i = 0; i < 3; i += 1) {
       await nextTimerTick();
     }
 
-    const sentEmojis = (
-      sendReactionSignalMock.mock.calls as unknown as SendReactionSignalMockCall[]
-    ).map((call) => call[2]);
+    const sentEmojis = sentReactionEmojis();
     expect(sentEmojis).toContain("✅");
     expect(sentEmojis).not.toContain("❌");
   });
@@ -1272,95 +978,38 @@ describe("signal createSignalEventHandler inbound context", () => {
         };
       },
     );
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: {
-            ackReaction: "👀",
-            ackReactionScope: "direct",
-            inbound: { debounceMs: 0 },
-            statusReactions: {
-              enabled: true,
-              timing: {
-                debounceMs: 0,
-                doneHoldMs: 0,
-                errorHoldMs: 0,
-                stallSoftMs: 60_000,
-                stallHardMs: 120_000,
-              },
-            },
-          },
-          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        } as OpenClawConfig,
-        historyLimit: 0,
-      }),
-    );
+    const handler = createTestHandler({
+      cfg: createStatusReactionConfig(),
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        sourceNumber: "+15550002222",
-        sourceName: "Bob",
-        timestamp: 1700000000001,
-        dataMessage: {
-          message: "ship it",
-          attachments: [],
-        },
-      }),
-    );
+    await receiveDirectMessage(handler);
     for (let i = 0; i < 3; i += 1) {
       await nextTimerTick();
     }
 
-    const sentEmojis = (
-      sendReactionSignalMock.mock.calls as unknown as SendReactionSignalMockCall[]
-    ).map((call) => call[2]);
+    const sentEmojis = sentReactionEmojis();
     expect(sentEmojis).toContain("❌");
     expect(sentEmojis).not.toContain("✅");
   });
 
   it("targets Signal group status reactions with groupId and message author", async () => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: {
-            ackReaction: "👀",
-            ackReactionScope: "group-all",
-            inbound: { debounceMs: 0 },
-            statusReactions: {
-              enabled: true,
-              timing: {
-                debounceMs: 0,
-                doneHoldMs: 0,
-                errorHoldMs: 0,
-                stallSoftMs: 60_000,
-                stallHardMs: 120_000,
-              },
-            },
-          },
-          channels: {
-            signal: {
-              groupPolicy: "allowlist",
-              groupAllowFrom: ["g1"],
-              groups: { "*": { requireMention: false } },
-            },
-          },
-        } as OpenClawConfig,
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["g1"],
-        historyLimit: 0,
-      }),
-    );
-
-    await handler(
-      createSignalReceiveEvent({
-        timestamp: 1700000000001,
-        dataMessage: {
-          message: "ship it",
-          attachments: [],
-          groupInfo: { groupId: "g1", groupName: "Test Group" },
+    const handler = createTestHandler({
+      cfg: createGroupAllowlistConfig({
+        messages: {
+          ackReaction: "👀",
+          ackReactionScope: "group-all",
+          statusReactions: { enabled: true, timing: { ...statusReactionTiming } },
+        },
+        signal: {
+          groupAllowFrom: ["g1"],
+          groups: { "*": { requireMention: false } },
         },
       }),
-    );
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["g1"],
+    });
+
+    await receiveGroupMessage(handler, "ship it", {}, { timestamp: 1700000000001 });
     await nextTimerTick();
 
     expect(sendReactionSignalMock).toHaveBeenCalledWith(
@@ -1375,48 +1024,23 @@ describe("signal createSignalEventHandler inbound context", () => {
   });
 
   it("uses default group-mentions scope for mentioned Signal group status reactions", async () => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: {
-            ackReaction: "👀",
-            groupChat: { mentionPatterns: ["@bot"] },
-            inbound: { debounceMs: 0 },
-            statusReactions: {
-              enabled: true,
-              timing: {
-                debounceMs: 0,
-                doneHoldMs: 0,
-                errorHoldMs: 0,
-                stallSoftMs: 60_000,
-                stallHardMs: 120_000,
-              },
-            },
-          },
-          channels: {
-            signal: {
-              groupPolicy: "allowlist",
-              groupAllowFrom: ["g1"],
-              groups: { "*": { requireMention: true } },
-            },
-          },
-        } as OpenClawConfig,
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["g1"],
-        historyLimit: 0,
-      }),
-    );
-
-    await handler(
-      createSignalReceiveEvent({
-        timestamp: 1700000000001,
-        dataMessage: {
-          message: "hey @bot ship it",
-          attachments: [],
-          groupInfo: { groupId: "g1", groupName: "Test Group" },
+    const handler = createTestHandler({
+      cfg: createGroupAllowlistConfig({
+        messages: {
+          ackReaction: "👀",
+          groupChat: { mentionPatterns: ["@bot"] },
+          statusReactions: { enabled: true, timing: { ...statusReactionTiming } },
+        },
+        signal: {
+          groupAllowFrom: ["g1"],
+          groups: { "*": { requireMention: true } },
         },
       }),
-    );
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["g1"],
+    });
+
+    await receiveGroupMessage(handler, "hey @bot ship it", {}, { timestamp: 1700000000001 });
     await nextTimerTick();
 
     expect(sendReactionSignalMock).toHaveBeenCalledWith(
@@ -1433,41 +1057,11 @@ describe("signal createSignalEventHandler inbound context", () => {
 
   it("keeps dispatch running when Signal status reaction send fails", async () => {
     sendReactionSignalMock.mockRejectedValueOnce(new Error("reaction rejected"));
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: {
-            ackReaction: "👀",
-            ackReactionScope: "direct",
-            inbound: { debounceMs: 0 },
-            statusReactions: {
-              enabled: true,
-              timing: {
-                debounceMs: 0,
-                doneHoldMs: 0,
-                errorHoldMs: 0,
-                stallSoftMs: 60_000,
-                stallHardMs: 120_000,
-              },
-            },
-          },
-          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        } as OpenClawConfig,
-        historyLimit: 0,
-      }),
-    );
+    const handler = createTestHandler({
+      cfg: createStatusReactionConfig(),
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        sourceNumber: "+15550002222",
-        sourceName: "Bob",
-        timestamp: 1700000000001,
-        dataMessage: {
-          message: "ship it",
-          attachments: [],
-        },
-      }),
-    );
+    await receiveDirectMessage(handler);
     await nextTimerTick();
 
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
@@ -1476,49 +1070,17 @@ describe("signal createSignalEventHandler inbound context", () => {
 
   it("finalizes Signal status reactions as error when session recording fails", async () => {
     recordInboundSessionMock.mockRejectedValueOnce(new Error("record boom"));
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: {
-            ackReaction: "👀",
-            ackReactionScope: "direct",
-            inbound: { debounceMs: 0 },
-            statusReactions: {
-              enabled: true,
-              timing: {
-                debounceMs: 0,
-                doneHoldMs: 0,
-                errorHoldMs: 0,
-                stallSoftMs: 60_000,
-                stallHardMs: 120_000,
-              },
-            },
-          },
-          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        } as OpenClawConfig,
-        historyLimit: 0,
-      }),
-    );
+    const handler = createTestHandler({
+      cfg: createStatusReactionConfig(),
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        sourceNumber: "+15550002222",
-        sourceName: "Bob",
-        timestamp: 1700000000001,
-        dataMessage: {
-          message: "ship it",
-          attachments: [],
-        },
-      }),
-    );
+    await receiveDirectMessage(handler);
     for (let i = 0; i < 4; i += 1) {
       await nextTimerTick();
     }
 
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-    const sentEmojis = (
-      sendReactionSignalMock.mock.calls as unknown as SendReactionSignalMockCall[]
-    ).map((call) => call[2]);
+    const sentEmojis = sentReactionEmojis();
     expect(sentEmojis).toEqual(["👀", "❌", "👀"]);
   });
 
@@ -1536,23 +1098,13 @@ describe("signal createSignalEventHandler inbound context", () => {
         ],
       ],
     ]);
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: { messages: { inbound: { debounceMs: 0 } } } as OpenClawConfig,
-        groupHistories,
-        historyLimit: 5,
-      }),
-    );
+    const handler = createTestHandler({
+      cfg: { messages: { inbound: { debounceMs: 0 } } } as OpenClawConfig,
+      groupHistories,
+      historyLimit: 5,
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        dataMessage: {
-          message: "current request",
-          attachments: [],
-          groupInfo: { groupId: "g1", groupName: "Test Group" },
-        },
-      }),
-    );
+    await receiveGroupMessage(handler, "current request");
 
     const context = requireCapturedContext();
     expect(context.BodyForAgent).toBe("current request");
@@ -1571,27 +1123,16 @@ describe("signal createSignalEventHandler inbound context", () => {
   });
 
   it("sends typing + read receipt for allowed DMs", async () => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 0 } },
-          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        },
-        account: "+15550009999",
-        blockStreaming: false,
-        historyLimit: 0,
-        groupHistories: new Map(),
-        sendReadReceipts: true,
-      }),
-    );
+    const handler = createTestHandler({
+      cfg: createDirectConfig(),
+      account: "+15550009999",
+      blockStreaming: false,
+      historyLimit: 0,
+      groupHistories: new Map(),
+      sendReadReceipts: true,
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        dataMessage: {
-          message: "hi",
-        },
-      }),
-    );
+    await receiveMessage(handler, { message: "hi" });
 
     expect(sendTypingMock).toHaveBeenCalledWith("+15550001111", {
       cfg: {
@@ -1614,62 +1155,35 @@ describe("signal createSignalEventHandler inbound context", () => {
   });
 
   it("drops DM commands in open mode without allowlists", async () => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 0 } },
-          channels: { signal: { dmPolicy: "open", allowFrom: [] } },
-        },
-        allowFrom: [],
-        groupAllowFrom: [],
-        account: "+15550009999",
-        blockStreaming: false,
-        historyLimit: 0,
-        groupHistories: new Map(),
-      }),
-    );
+    const handler = createTestHandler({
+      cfg: createDirectConfig({ signal: { allowFrom: [] } }),
+      allowFrom: [],
+      groupAllowFrom: [],
+      account: "+15550009999",
+      blockStreaming: false,
+      historyLimit: 0,
+      groupHistories: new Map(),
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        dataMessage: {
-          message: "/status",
-          attachments: [],
-        },
-      }),
-    );
+    await receiveMessage(handler, { message: "/status", attachments: [] });
 
     expect(capture.ctx).toBeUndefined();
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   });
 
   it("allows Signal groups whose id is listed in groupAllowFrom", async () => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 0 } },
-          channels: {
-            signal: {
-              groupPolicy: "allowlist",
-              groupAllowFrom: ["g1"],
-              groups: { "*": { requireMention: false } },
-            },
-          },
+    const handler = createTestHandler({
+      cfg: createGroupAllowlistConfig({
+        signal: {
+          groupAllowFrom: ["g1"],
+          groups: { "*": { requireMention: false } },
         },
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["g1"],
-        historyLimit: 0,
       }),
-    );
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["g1"],
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        dataMessage: {
-          message: "hello from allowed group",
-          groupInfo: { groupId: "g1", groupName: "Test Group" },
-          attachments: [],
-        },
-      }),
-    );
+    await receiveGroupMessage(handler, "hello from allowed group");
 
     const context = requireCapturedContext();
     expect(context.ChatType).toBe("group");
@@ -1678,36 +1192,18 @@ describe("signal createSignalEventHandler inbound context", () => {
 
   it("keeps mention gating enabled for group-id allowlists by default", async () => {
     const groupHistories = new Map();
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: {
-            inbound: { debounceMs: 0 },
-            groupChat: { mentionPatterns: ["@bot"] },
-          },
-          channels: {
-            signal: {
-              groupPolicy: "allowlist",
-              groupAllowFrom: ["g1"],
-            },
-          },
-        },
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["g1"],
-        groupHistories,
-        historyLimit: 5,
+    const handler = createTestHandler({
+      cfg: createGroupAllowlistConfig({
+        messages: { groupChat: { mentionPatterns: ["@bot"] } },
+        signal: { groupAllowFrom: ["g1"] },
       }),
-    );
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["g1"],
+      groupHistories,
+      historyLimit: 5,
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        dataMessage: {
-          message: "hello without mention",
-          groupInfo: { groupId: "g1", groupName: "Test Group" },
-          attachments: [],
-        },
-      }),
-    );
+    await receiveGroupMessage(handler, "hello without mention");
 
     expect(capture.ctx).toBeUndefined();
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
@@ -1715,97 +1211,54 @@ describe("signal createSignalEventHandler inbound context", () => {
   });
 
   it("blocks Signal groups whose id is not listed in groupAllowFrom", async () => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 0 } },
-          channels: {
-            signal: {
-              groupPolicy: "allowlist",
-              groupAllowFrom: ["g2"],
-              groups: { "*": { requireMention: false } },
-            },
-          },
+    const handler = createTestHandler({
+      cfg: createGroupAllowlistConfig({
+        signal: {
+          groupAllowFrom: ["g2"],
+          groups: { "*": { requireMention: false } },
         },
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["g2"],
-        historyLimit: 0,
       }),
-    );
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["g2"],
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        dataMessage: {
-          message: "hello from blocked group",
-          groupInfo: { groupId: "g1", groupName: "Test Group" },
-          attachments: [],
-        },
-      }),
-    );
+    await receiveGroupMessage(handler, "hello from blocked group");
 
     expect(capture.ctx).toBeUndefined();
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   });
 
   it("authorizes group control commands when groupAllowFrom matches the Signal group id", async () => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: {
-            inbound: { debounceMs: 0 },
-            groupChat: { mentionPatterns: ["@bot"] },
-          },
-          channels: {
-            signal: {
-              groupPolicy: "allowlist",
-              groupAllowFrom: ["g1"],
-              groups: { "*": { requireMention: true } },
-            },
-          },
+    const handler = createTestHandler({
+      cfg: createGroupAllowlistConfig({
+        messages: { groupChat: { mentionPatterns: ["@bot"] } },
+        signal: {
+          groupAllowFrom: ["g1"],
+          groups: { "*": { requireMention: true } },
         },
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["g1"],
-        historyLimit: 0,
       }),
-    );
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["g1"],
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        dataMessage: {
-          message: "/status",
-          groupInfo: { groupId: "g1", groupName: "Test Group" },
-          attachments: [],
-        },
-      }),
-    );
+    await receiveGroupMessage(handler, "/status");
 
     expect(requireCapturedContext().CommandAuthorized).toBe(true);
   });
 
   it("allows reaction-only group events when groupAllowFrom matches the reaction group id", async () => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 0 } },
-          channels: {
-            signal: {
-              groupPolicy: "allowlist",
-              groupAllowFrom: ["g1"],
-            },
-          },
-        },
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["g1"],
-        reactionMode: "all",
-        isSignalReactionMessage: (reaction): reaction is SignalReactionMessage => Boolean(reaction),
-        shouldEmitSignalReactionNotification: () => true,
-        resolveSignalReactionTargets: () => [
-          { kind: "phone", id: "+15550001111", display: "+15550001111" },
-        ],
-        buildSignalReactionSystemEventText: () => "reaction added",
-        historyLimit: 0,
-      }),
-    );
+    const handler = createTestHandler({
+      cfg: createGroupAllowlistConfig({ signal: { groupAllowFrom: ["g1"] } }),
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["g1"],
+      reactionMode: "all",
+      isSignalReactionMessage: (reaction): reaction is SignalReactionMessage => Boolean(reaction),
+      shouldEmitSignalReactionNotification: () => true,
+      resolveSignalReactionTargets: () => [
+        { kind: "phone", id: "+15550001111", display: "+15550001111" },
+      ],
+      buildSignalReactionSystemEventText: () => "reaction added",
+    });
 
     await handler(
       createSignalReceiveEvent({
@@ -1836,21 +1289,18 @@ describe("signal createSignalEventHandler inbound context", () => {
         },
       },
     };
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: cfg as OpenClawConfig,
-        dmPolicy: "allowlist",
-        allowFrom: [],
-        reactionMode: "all",
-        isSignalReactionMessage: (reaction): reaction is SignalReactionMessage => Boolean(reaction),
-        shouldEmitSignalReactionNotification: () => true,
-        resolveSignalReactionTargets: () => [
-          { kind: "phone", id: "+15550001111", display: "+15550001111" },
-        ],
-        buildSignalReactionSystemEventText: () => "reaction added",
-        historyLimit: 0,
-      }),
-    );
+    const handler = createTestHandler({
+      cfg: cfg as OpenClawConfig,
+      dmPolicy: "allowlist",
+      allowFrom: [],
+      reactionMode: "all",
+      isSignalReactionMessage: (reaction): reaction is SignalReactionMessage => Boolean(reaction),
+      shouldEmitSignalReactionNotification: () => true,
+      resolveSignalReactionTargets: () => [
+        { kind: "phone", id: "+15550001111", display: "+15550001111" },
+      ],
+      buildSignalReactionSystemEventText: () => "reaction added",
+    });
 
     await handler(
       createSignalReceiveEvent({
@@ -1878,68 +1328,40 @@ describe("signal createSignalEventHandler inbound context", () => {
   });
 
   it("drops quote-only group context from non-allowlisted quoted senders in allowlist mode", async () => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 0 } },
-          channels: {
-            signal: {
-              groupPolicy: "allowlist",
-              groupAllowFrom: ["+15550001111"],
-              contextVisibility: "allowlist",
-            },
-          },
+    const handler = createTestHandler({
+      cfg: createGroupAllowlistConfig({
+        signal: {
+          groupAllowFrom: ["+15550001111"],
+          contextVisibility: "allowlist",
         },
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["+15550001111"],
-        historyLimit: 0,
       }),
-    );
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["+15550001111"],
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        dataMessage: {
-          message: "",
-          quote: { text: "blocked quote", author: "+15550002222" },
-          groupInfo: { groupId: "g1", groupName: "Test Group" },
-          attachments: [],
-        },
-      }),
-    );
+    await receiveGroupMessage(handler, "", {
+      quote: { text: "blocked quote", author: "+15550002222" },
+    });
 
     expect(capture.ctx).toBeUndefined();
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   });
 
   it("keeps quote-only group context in allowlist_quote mode", async () => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 0 } },
-          channels: {
-            signal: {
-              groupPolicy: "allowlist",
-              groupAllowFrom: ["+15550001111"],
-              contextVisibility: "allowlist_quote",
-            },
-          },
+    const handler = createTestHandler({
+      cfg: createGroupAllowlistConfig({
+        signal: {
+          groupAllowFrom: ["+15550001111"],
+          contextVisibility: "allowlist_quote",
         },
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["+15550001111"],
-        historyLimit: 0,
       }),
-    );
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["+15550001111"],
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        dataMessage: {
-          message: "",
-          quote: { text: "quoted context", author: "+15550002222" },
-          groupInfo: { groupId: "g1", groupName: "Test Group" },
-          attachments: [],
-        },
-      }),
-    );
+    await receiveGroupMessage(handler, "", {
+      quote: { text: "quoted context", author: "+15550002222" },
+    });
 
     const context = requireCapturedContext();
     expect(context.BodyForAgent).toBe("");
@@ -1949,29 +1371,19 @@ describe("signal createSignalEventHandler inbound context", () => {
   });
 
   it("forwards all fetched attachments via MediaPaths/MediaTypes", async () => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 0 } },
-          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        },
-        ignoreAttachments: false,
-        fetchAttachment: async ({ attachment }) => ({
-          path: `/tmp/${String(attachment.id)}.dat`,
-          contentType: attachment.id === "a1" ? "image/jpeg" : undefined,
-        }),
-        historyLimit: 0,
+    const handler = createTestHandler({
+      cfg: createDirectConfig(),
+      ignoreAttachments: false,
+      fetchAttachment: async ({ attachment }) => ({
+        path: `/tmp/${String(attachment.id)}.dat`,
+        contentType: attachment.id === "a1" ? "image/jpeg" : undefined,
       }),
-    );
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        dataMessage: {
-          message: "",
-          attachments: [{ id: "a1", contentType: "image/jpeg" }, { id: "a2" }],
-        },
-      }),
-    );
+    await receiveMessage(handler, {
+      message: "",
+      attachments: [{ id: "a1", contentType: "image/jpeg" }, { id: "a2" }],
+    });
 
     const context = requireCapturedContext();
     expect(context.media).toEqual([
@@ -1981,28 +1393,18 @@ describe("signal createSignalEventHandler inbound context", () => {
   });
 
   it("marks failed attachment downloads unavailable without a phantom media placeholder", async () => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 0 } },
-          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        },
-        ignoreAttachments: false,
-        fetchAttachment: async () => {
-          throw new Error("expired attachment");
-        },
-        historyLimit: 0,
-      }),
-    );
+    const handler = createTestHandler({
+      cfg: createDirectConfig(),
+      ignoreAttachments: false,
+      fetchAttachment: async () => {
+        throw new Error("expired attachment");
+      },
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        dataMessage: {
-          message: "please inspect this",
-          attachments: [{ id: "a1", contentType: "image/jpeg" }],
-        },
-      }),
-    );
+    await receiveMessage(handler, {
+      message: "please inspect this",
+      attachments: [{ id: "a1", contentType: "image/jpeg" }],
+    });
 
     const context = requireCapturedContext();
     expect(context.BodyForAgent).toContain(
@@ -2017,36 +1419,19 @@ describe("signal createSignalEventHandler inbound context", () => {
   it("combines raw and command text across failed-media debounce batches", async () => {
     vi.useFakeTimers();
     try {
-      const handler = createSignalEventHandler(
-        createBaseSignalEventHandlerDeps({
-          cfg: {
-            messages: { inbound: { debounceMs: 10 } },
-            channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-          },
-          ignoreAttachments: false,
-          fetchAttachment: async () => {
-            throw new Error("expired attachment");
-          },
-          historyLimit: 0,
-        }),
-      );
+      const handler = createTestHandler({
+        cfg: createDirectConfig({ messages: { inbound: { debounceMs: 10 } } }),
+        ignoreAttachments: false,
+        fetchAttachment: async () => {
+          throw new Error("expired attachment");
+        },
+      });
 
-      await handler(
-        createSignalReceiveEvent({
-          dataMessage: {
-            message: "first request",
-            attachments: [{ id: "a1", contentType: "image/jpeg" }],
-          },
-        }),
-      );
-      await handler(
-        createSignalReceiveEvent({
-          dataMessage: {
-            message: "second request",
-            attachments: [],
-          },
-        }),
-      );
+      await receiveMessage(handler, {
+        message: "first request",
+        attachments: [{ id: "a1", contentType: "image/jpeg" }],
+      });
+      await receiveMessage(handler, { message: "second request", attachments: [] });
       await vi.advanceTimersByTimeAsync(10);
 
       const context = requireCapturedContext();
@@ -2059,28 +1444,18 @@ describe("signal createSignalEventHandler inbound context", () => {
   });
 
   it("dispatches failed-media commands without text debounce", async () => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 60_000 } },
-          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        },
-        ignoreAttachments: false,
-        fetchAttachment: async () => {
-          throw new Error("expired attachment");
-        },
-        historyLimit: 0,
-      }),
-    );
+    const handler = createTestHandler({
+      cfg: createDirectConfig({ messages: { inbound: { debounceMs: 60_000 } } }),
+      ignoreAttachments: false,
+      fetchAttachment: async () => {
+        throw new Error("expired attachment");
+      },
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        dataMessage: {
-          message: "/stop",
-          attachments: [{ id: "a1", contentType: "image/jpeg" }],
-        },
-      }),
-    );
+    await receiveMessage(handler, {
+      message: "/stop",
+      attachments: [{ id: "a1", contentType: "image/jpeg" }],
+    });
 
     const context = requireCapturedContext();
     expect(context.CommandBody).toBe("/stop");
@@ -2089,29 +1464,19 @@ describe("signal createSignalEventHandler inbound context", () => {
   });
 
   it("threads resolved audio contentType for Signal voice attachments", async () => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 0 } },
-          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        },
-        ignoreAttachments: false,
-        fetchAttachment: async ({ attachment }) => ({
-          path: `/tmp/${String(attachment.id)}.aac`,
-          contentType: "audio/aac",
-        }),
-        historyLimit: 0,
+    const handler = createTestHandler({
+      cfg: createDirectConfig(),
+      ignoreAttachments: false,
+      fetchAttachment: async ({ attachment }) => ({
+        path: `/tmp/${String(attachment.id)}.aac`,
+        contentType: "audio/aac",
       }),
-    );
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        dataMessage: {
-          message: "",
-          attachments: [{ id: "voice1", contentType: undefined, filename: "voice.aac" }],
-        },
-      }),
-    );
+    await receiveMessage(handler, {
+      message: "",
+      attachments: [{ id: "voice1", contentType: undefined, filename: "voice.aac" }],
+    });
 
     const context = requireCapturedContext();
     expect(context.media).toEqual([
@@ -2121,27 +1486,16 @@ describe("signal createSignalEventHandler inbound context", () => {
 
   it("drops own UUID inbound messages when only accountUuid is configured", async () => {
     const ownUuid = "123e4567-e89b-12d3-a456-426614174000";
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 0 } },
-          channels: { signal: { dmPolicy: "open", allowFrom: ["*"], accountUuid: ownUuid } },
-        },
-        account: undefined,
-        accountUuid: ownUuid,
-        historyLimit: 0,
-      }),
-    );
+    const handler = createTestHandler({
+      cfg: createDirectConfig({ signal: { accountUuid: ownUuid } }),
+      account: undefined,
+      accountUuid: ownUuid,
+    });
 
-    await handler(
-      createSignalReceiveEvent({
-        sourceNumber: null,
-        sourceUuid: ownUuid,
-        dataMessage: {
-          message: "self message",
-          attachments: [],
-        },
-      }),
+    await receiveMessage(
+      handler,
+      { message: "self message", attachments: [] },
+      { sourceNumber: null, sourceUuid: ownUuid },
     );
 
     expect(capture.ctx).toBeUndefined();
@@ -2149,28 +1503,38 @@ describe("signal createSignalEventHandler inbound context", () => {
   });
 
   it("drops sync envelopes when syncMessage is present but null", async () => {
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 0 } },
-          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        },
-        historyLimit: 0,
-      }),
-    );
+    const handler = createTestHandler({ cfg: createDirectConfig() });
 
-    await handler(
-      createSignalReceiveEvent({
-        syncMessage: null,
-        dataMessage: {
-          message: "replayed sentTranscript envelope",
-          attachments: [],
-        },
-      }),
+    await receiveMessage(
+      handler,
+      { message: "replayed sentTranscript envelope", attachments: [] },
+      { syncMessage: null },
     );
 
     expect(capture.ctx).toBeUndefined();
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["LF", "line one\nline two", "line one\\nline two"],
+    ["CR", "line one\rline two", "line one\\rline two"],
+    ["CRLF", "line one\r\nline two", "line one\\r\\nline two"],
+    ["literal escape", "line one\\nline two", "line one\\nline two"],
+  ])("keeps %s inbound verbose previews single-line", async (_label, message, expectedPreview) => {
+    shouldLogVerboseMock.mockReturnValue(true);
+    try {
+      const handler = createTestHandler({ cfg: createDirectConfig() });
+
+      await receiveMessage(handler, { message });
+
+      // body is formatInboundEnvelope(...) with an envelope prefix, so assert
+      // the escaped tail is present and the logged line stays single-line.
+      expect(logVerboseMock).toHaveBeenCalledWith(expect.stringContaining(expectedPreview));
+      const logged = String(logVerboseMock.mock.calls[0]?.[0] ?? "");
+      expect(logged).not.toMatch(/[\r\n]/);
+    } finally {
+      shouldLogVerboseMock.mockReturnValue(false);
+    }
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
