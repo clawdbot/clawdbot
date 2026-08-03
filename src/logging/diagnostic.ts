@@ -550,6 +550,7 @@ function isStalledModelCallRecoveryEligible(params: {
   stuckSessionAbortMs: number;
 }): boolean {
   const lastProgressAgeMs = params.activity?.lastProgressAgeMs;
+  const abortMs = Math.max(params.stuckSessionAbortMs, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS);
   // Local providers are not blanket-exempt from recovery. Streaming model
   // chunks refresh run activity while emitted progress events are throttled, so
   // active streams stay fresh and silent/non-streaming calls can be recovered.
@@ -558,7 +559,7 @@ function isStalledModelCallRecoveryEligible(params: {
     params.classification.classification === "stalled_agent_run" &&
     params.classification.activeWorkKind === "model_call" &&
     typeof lastProgressAgeMs === "number" &&
-    lastProgressAgeMs >= params.stuckSessionAbortMs
+    lastProgressAgeMs >= abortMs
   );
 }
 
