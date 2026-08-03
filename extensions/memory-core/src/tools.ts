@@ -1,8 +1,10 @@
 // Memory Core plugin module implements tools behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type {
-  MemoryReadResult,
-  MemorySource,
+import {
+  resolveMemorySearchStaleness,
+  stripMemoryAnnotationCarriers,
+  type MemoryReadResult,
+  type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   asToolParamsRecord,
@@ -109,6 +111,18 @@ function mergeQmdRuntimeDebug(
     }
   }
   return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function mergeEmbeddingBootstrapRuntimeDebug(
+  entries: readonly MemorySearchRuntimeDebug[],
+): MemorySearchRuntimeDebug["embeddingBootstrap"] | undefined {
+  let merged: MemorySearchRuntimeDebug["embeddingBootstrap"];
+  for (const entry of entries) {
+    if (entry.embeddingBootstrap) {
+      merged = entry.embeddingBootstrap;
+    }
+  }
+  return merged;
 }
 
 function resolveMemorySearchToolCooldownKey(options: {
@@ -304,7 +318,8 @@ function queueShortTermRecallTracking(params: {
     results: trackingResults,
     timezone: params.timezone,
   }).catch(() => {
-    // Recall tracking is best-effort and must never block memory recall.
+    // Gateway tool calls are latency-sensitive and live in a long-running
+    // process, so background best-effort tracking is safe here unlike in the CLI.
   });
 }
 
@@ -416,6 +431,8 @@ async function executeMemoryReadResult(params: {
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  /** Resolved agent workspace for recall tracking. */
+  workspaceDir?: string;
 }) {
   try {
     const result = await params.read();
@@ -432,6 +449,27 @@ async function executeMemoryReadResult(params: {
       if (supplement) {
         return jsonResult(supplement);
       }
+    }
+    // Best-effort recall tracking: explicitly-read memory files contribute
+    // to the dreaming promotion pipeline (#94769). Use the actual returned
+    // range from the result, not the request parameters.
+    if (params.workspaceDir && result.text) {
+      const actualFrom = result.from ?? params.from ?? 1;
+      const actualLines = result.lines;
+      const endLine = actualLines ? actualFrom + actualLines - 1 : actualFrom;
+      void recordShortTermRecalls({
+        workspaceDir: params.workspaceDir,
+        query: params.relPath,
+        results: [{
+          source: "memory" as const,
+          path: params.relPath,
+          startLine: actualFrom,
+          endLine,
+          score: 0.5,
+        }],
+      }).catch(() => {
+        // Recall tracking is best-effort and must never block memory reads.
+      });
     }
     return jsonResult(result);
   } catch (error) {
@@ -456,6 +494,7 @@ export function createMemorySearchTool(options: {
   sandboxed?: boolean;
   oneShotCliRun?: boolean;
   conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
+  activeProjectKeys?: readonly string[];
   acquireLocalService?: MemoryCoreAcquireLocalService;
   withLease?: PluginStateLeaseRunner;
 }) {
@@ -464,7 +503,7 @@ export function createMemorySearchTool(options: {
     label: "Memory Search",
     name: "memory_search",
     description:
-      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos. Optional `corpus=wiki` or `corpus=all` also searches registered compiled-wiki supplements. `corpus=memory` restricts hits to indexed memory files (excludes session transcript chunks from ranking). `corpus=sessions` restricts hits to indexed session transcripts (same visibility rules as session history tools). If response has disabled=true, memory retrieval is unavailable; you must tell the user and include the warning/action guidance.",
+      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos. Optional `corpus=wiki` or `corpus=all` also searches registered compiled-wiki supplements. `corpus=memory` restricts hits to indexed memory files (excludes session transcript chunks from ranking). `corpus=sessions` restricts hits to indexed session transcripts (same visibility rules as session history tools). If response has disabled=true or stale=true, you must tell the user and include the warning/action guidance.",
     parameters: MemorySearchSchema,
     execute:
       ({ cfg, agentId }) =>
@@ -594,6 +633,9 @@ export function createMemorySearchTool(options: {
             let fallback: unknown;
             let searchMode: string | undefined;
             let pausedIndexIdentityReason: string | undefined;
+            let staleness:
+              | Exclude<ReturnType<typeof resolveMemorySearchStaleness>, null>
+              | undefined;
             let managerMs: number | undefined;
             let managerCacheState: string | undefined;
             let searchDebug:
@@ -607,6 +649,7 @@ export function createMemorySearchTool(options: {
                   outsideSearchMs?: number;
                   searchMs: number;
                   managerCacheState?: string;
+                  embeddingBootstrap?: MemorySearchRuntimeDebug["embeddingBootstrap"];
                   qmd?: MemorySearchRuntimeDebug["qmd"];
                   hits: number;
                 }
@@ -648,6 +691,9 @@ export function createMemorySearchTool(options: {
                     minScore,
                     sessionKey: options.agentSessionKey,
                     qmdSearchModeOverride,
+                    activeProjectKeys: options.activeProjectKeys
+                      ? [...options.activeProjectKeys]
+                      : undefined,
                     signal,
                     onDebug: (debug: MemorySearchRuntimeDebug) => {
                       runtimeDebug.push(debug);
@@ -700,6 +746,7 @@ export function createMemorySearchTool(options: {
                 // retry. Long-lived QMD managers must not run update work in the tool hot path.
                 if (
                   rawResults.length === 0 &&
+                  !runtimeDebug.some((entry) => entry.embeddingBootstrap) &&
                   activeMemory.manager.sync &&
                   (statusBeforeRetry.backend !== "qmd" || options.oneShotCliRun === true)
                 ) {
@@ -737,7 +784,12 @@ export function createMemorySearchTool(options: {
                   rawResults = rawResults.filter((hit) => hit.source === "memory");
                 }
                 const status = activeMemory.manager.status();
-                const decorated = decorateCitations(rawResults, includeCitations);
+                staleness = resolveMemorySearchStaleness(status, agentId) ?? undefined;
+                const payloadResults = rawResults.map((result) => ({
+                  ...result,
+                  snippet: stripMemoryAnnotationCarriers(result.snippet),
+                }));
+                const decorated = decorateCitations(payloadResults, includeCitations);
                 const memoryResults =
                   status.backend === "qmd"
                     ? clampResultsByInjectedChars(
@@ -763,6 +815,7 @@ export function createMemorySearchTool(options: {
                 fallback = status.fallback;
                 const latestDebug = runtimeDebug.at(-1);
                 const qmdDebug = mergeQmdRuntimeDebug(runtimeDebug);
+                const embeddingBootstrap = mergeEmbeddingBootstrapRuntimeDebug(runtimeDebug);
                 searchMode = latestDebug?.effectiveMode;
                 const searchMs = Math.max(0, Date.now() - searchStartedAt);
                 searchDebug = {
@@ -776,6 +829,7 @@ export function createMemorySearchTool(options: {
                   managerMs,
                   searchMs,
                   managerCacheState,
+                  embeddingBootstrap,
                   qmd: qmdDebug,
                   hits: rawResults.length,
                 };
@@ -827,6 +881,7 @@ export function createMemorySearchTool(options: {
               fallback,
               citations: citationsMode,
               mode: searchMode,
+              ...staleness,
               debug: searchDebug,
             });
           } finally {
@@ -882,7 +937,7 @@ export function createMemoryGetTool(options: {
         const from = readPositiveIntegerParam(rawParams, "from");
         const lines = readPositiveIntegerParam(rawParams, "lines");
         const requestedCorpus = readCorpusParam(rawParams, ["memory", "wiki", "all"]);
-        const { readAgentMemoryFile, resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
+        const { readAgentMemoryFile, resolveMemoryBackendConfig, resolveMemoryHostAgentWorkspaceDir } = await loadMemoryToolRuntime();
         if (requestedCorpus === "wiki") {
           const supplement = await getSupplementMemoryReadResult({
             relPath,
@@ -904,6 +959,7 @@ export function createMemoryGetTool(options: {
         }
         const resolved = resolveMemoryBackendConfig({ cfg, agentId });
         if (resolved.backend === "builtin") {
+          const workspaceDir = resolveMemoryHostAgentWorkspaceDir(cfg, agentId);
           return await executeMemoryReadResult({
             read: async () =>
               await readAgentMemoryFile({
@@ -920,6 +976,7 @@ export function createMemoryGetTool(options: {
             agentId,
             agentSessionKey: options.agentSessionKey,
             sandboxed: options.sandboxed,
+            workspaceDir,
           });
         }
         const memory = await getMemoryManagerContextWithPurpose({
@@ -932,6 +989,7 @@ export function createMemoryGetTool(options: {
         if ("error" in memory) {
           return jsonResult({ path: relPath, text: "", disabled: true, error: memory.error });
         }
+        const managerStatus = memory.manager.status();
         return await executeMemoryReadResult({
           read: async () =>
             await memory.manager.readFile({
@@ -946,6 +1004,7 @@ export function createMemoryGetTool(options: {
           agentId,
           agentSessionKey: options.agentSessionKey,
           sandboxed: options.sandboxed,
+          workspaceDir: managerStatus.workspaceDir,
         });
       },
   });
