@@ -74,6 +74,10 @@ export type HostedOutboundMediaChunkRecord = {
   dataBase64: string;
 };
 
+/**
+ * Capacity handling for hosted media.
+ * `"evict-oldest"` is the compatibility default; `"reject-new"` preserves live issued URLs.
+ */
 export type HostedOutboundMediaOverflowPolicy = "evict-oldest" | "reject-new";
 
 export type HostedOutboundMediaStore = {
@@ -82,6 +86,7 @@ export type HostedOutboundMediaStore = {
     routePath: string;
     publicBaseUrl: string;
     maxBytes: number;
+    /** Host-authorized local media access forwarded to the shared outbound loader. */
     mediaAccess?: OutboundMediaAccess;
     proxyUrl?: string;
   }) => Promise<string>;
@@ -102,6 +107,10 @@ export type CreateHostedOutboundMediaStoreOptions = {
   maxEntries?: number;
   maxChunkRows?: number;
   chunkRowsPerEntryBudget?: number;
+  /**
+   * Capacity action before storing a new entry. Defaults to `"evict-oldest"`.
+   * With `"reject-new"`, configure both backing stores to reject overflow too.
+   */
   overflowPolicy?: HostedOutboundMediaOverflowPolicy;
 };
 
