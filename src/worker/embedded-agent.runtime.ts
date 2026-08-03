@@ -75,7 +75,7 @@ type RunWorkerEmbeddedTurnParams = {
   systemPrompt?: string;
   inferenceOptions?: WorkerInferenceOptions;
   allowedToolNames: readonly WorkerLocalToolName[];
-  execMode: WorkerToolAuthority["execMode"];
+  execPolicy: WorkerToolAuthority["execPolicy"];
   signal?: AbortSignal;
 };
 
@@ -144,7 +144,7 @@ export async function runWorkerEmbeddedTurn(
     modelApi: model.api,
     modelContextWindowTokens: model.contextWindow,
     config: { plugins: { enabled: false } },
-    exec: { host: "gateway", mode: params.execMode },
+    exec: { host: "gateway", ...params.execPolicy },
     toolConstructionPlan: {
       includeBaseCodingTools: true,
       includeShellTools: true,

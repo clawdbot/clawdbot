@@ -80,7 +80,7 @@ export function resolveWorkerToolAuthority(params: {
   const turn = params.turn;
   const sandboxSessionKey = resolveWorkerSandboxSessionKey(turn);
   if (turn.disableTools === true || turn.modelRun === true || turn.promptMode === "none") {
-    return { allowedToolNames: [], execMode: "deny" };
+    return { allowedToolNames: [], execPolicy: { security: "deny", ask: "off" } };
   }
   const runtimeCappedTools = applyEmbeddedAttemptToolsAllow(
     WORKER_LOCAL_TOOL_NAMES.map((name) => ({ name })),
@@ -92,13 +92,13 @@ export function resolveWorkerToolAuthority(params: {
     warn: logWarn,
   });
   // The worker is the execution host, but the Gateway remains the authority owner.
-  // Carry the resolved mode so reconstruction cannot broaden deny/approval policy.
-  const execMode = resolveExecDefaults({
+  // Carry the exact resolved pair so reconstruction cannot broaden deny/approval policy.
+  const { security, ask } = resolveExecDefaults({
     cfg: turn.config,
     agentId: turn.agentId,
     sessionKey: sandboxSessionKey,
     execOverrides: { ...turn.execOverrides, host: "gateway" },
     sandboxAvailable: false,
-  }).mode;
-  return { allowedToolNames: projected, execMode };
+  });
+  return { allowedToolNames: projected, execPolicy: { security, ask } };
 }

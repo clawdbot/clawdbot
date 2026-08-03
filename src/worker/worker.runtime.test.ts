@@ -733,7 +733,7 @@ function descriptor(socketPath: string, workspaceDir: string): WorkerLaunchDescr
       liveEvents: { ackedSeq: 0, nextSeq: 1 },
       toolAuthority: {
         allowedToolNames: ["read", "write", "edit", "apply_patch", "exec", "process"],
-        execMode: "full",
+        execPolicy: { security: "full", ask: "off" },
       },
     },
   };
@@ -1142,7 +1142,7 @@ describe("worker runtime", () => {
 
   it("keeps Gateway-denied exec from reaching the worker host", async () => {
     const { gateway, workspaceDir, launch } = await setup({ inferencePlans: ["tool", "text"] });
-    launch.assignment.toolAuthority.execMode = "deny";
+    launch.assignment.toolAuthority.execPolicy = { security: "deny", ask: "off" };
 
     await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
 

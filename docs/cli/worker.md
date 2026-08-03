@@ -23,7 +23,7 @@ The command reads exactly one bounded JSON launch envelope from standard input.
 The envelope carries the local socket location, minted worker credential, bundle
 and protocol identity, owner epoch, the single assigned session and turn, and the
 exact worker-local tool authority for that turn. The authority includes the
-allowed tool names and resolved `exec` mode. The Gateway resolves both from
+allowed tool names and resolved `exec` policy. The Gateway resolves both from
 current policy before handoff; raw config and scheduled-owner identity never
 enter the worker envelope.
 The credential is never accepted through command-line arguments, and this page
@@ -41,7 +41,7 @@ The process runs the normal embedded agent loop with a restricted backend:
 
 - The `read`, `write`, `edit`, `apply_patch`, `exec`, and `process` coding tools
   run locally in the worker workspace when present in the Gateway-issued turn
-  authority. `exec` also enforces the Gateway-resolved execution mode. An empty
+  authority. `exec` also enforces the Gateway-resolved execution policy. An empty
   authority runs the model with no tools.
 - Model calls use the gateway inference proxy. No local model auth profile is
   loaded.

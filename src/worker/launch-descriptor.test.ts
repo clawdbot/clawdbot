@@ -41,7 +41,10 @@ function launchDescriptor(): WorkerLaunchDescriptor {
       ],
       transcript: { baseLeafId: "leaf-7", nextSeq: 8 },
       liveEvents: { ackedSeq: 12, nextSeq: 13 },
-      toolAuthority: { allowedToolNames: ["read", "exec"], execMode: "full" },
+      toolAuthority: {
+        allowedToolNames: ["read", "exec"],
+        execPolicy: { security: "full", ask: "off" },
+      },
     },
   };
 }
@@ -124,14 +127,20 @@ describe("worker launch descriptor", () => {
         ...descriptor,
         assignment: {
           ...descriptor.assignment,
-          toolAuthority: { allowedToolNames: ["read", "read"], execMode: "full" },
+          toolAuthority: {
+            allowedToolNames: ["read", "read"],
+            execPolicy: { security: "full", ask: "off" },
+          },
         },
       },
       {
         ...descriptor,
         assignment: {
           ...descriptor.assignment,
-          toolAuthority: { allowedToolNames: ["read", "gateway"], execMode: "full" },
+          toolAuthority: {
+            allowedToolNames: ["read", "gateway"],
+            execPolicy: { security: "full", ask: "off" },
+          },
         },
       },
       {
@@ -145,7 +154,20 @@ describe("worker launch descriptor", () => {
         ...descriptor,
         assignment: {
           ...descriptor.assignment,
-          toolAuthority: { allowedToolNames: ["read", "exec"], execMode: "FULL" },
+          toolAuthority: {
+            allowedToolNames: ["read", "exec"],
+            execPolicy: { security: "FULL", ask: "off" },
+          },
+        },
+      },
+      {
+        ...descriptor,
+        assignment: {
+          ...descriptor.assignment,
+          toolAuthority: {
+            allowedToolNames: ["read", "exec"],
+            execPolicy: { security: "full", ask: "ALWAYS" },
+          },
         },
       },
     ];

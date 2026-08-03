@@ -25,30 +25,30 @@ function authority(overrides: Partial<SessionPlacementTurnParams> = {}) {
   }).allowedToolNames;
 }
 
-function execMode(overrides: Partial<SessionPlacementTurnParams> = {}) {
+function execPolicy(overrides: Partial<SessionPlacementTurnParams> = {}) {
   return resolveWorkerToolAuthority({
     modelRef: { provider: "openai", model: "gpt-test" },
     turn: turn(overrides),
-  }).execMode;
+  }).execPolicy;
 }
 
 describe("resolveWorkerToolAuthority", () => {
   it("keeps the deterministic complete worker surface when no policy narrows it", () => {
     expect(authority()).toEqual(["read", "write", "edit", "apply_patch", "exec", "process"]);
-    expect(execMode()).toBe("full");
+    expect(execPolicy()).toEqual({ security: "full", ask: "off" });
   });
 
   it("carries the effective exec mode independently of tool visibility", () => {
     expect(
-      execMode({
+      execPolicy({
         config: { tools: { exec: { security: "deny" } } },
       }),
-    ).toBe("deny");
+    ).toEqual({ security: "deny", ask: "off" });
     expect(
-      execMode({
+      execPolicy({
         config: { tools: { exec: { security: "full", ask: "always" } } },
       }),
-    ).toBe("ask");
+    ).toEqual({ security: "full", ask: "always" });
     expect(
       authority({
         config: { tools: { exec: { security: "deny" } } },
@@ -142,7 +142,7 @@ describe("resolveWorkerToolAuthority", () => {
     "exposes no tools for non-tool run mode %#",
     (overrides) => {
       expect(authority(overrides)).toEqual([]);
-      expect(execMode(overrides)).toBe("deny");
+      expect(execPolicy(overrides)).toEqual({ security: "deny", ask: "off" });
     },
   );
 });
