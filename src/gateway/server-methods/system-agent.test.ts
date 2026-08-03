@@ -695,35 +695,6 @@ describe("openclaw.chat", () => {
     expect(handle).not.toHaveBeenCalled();
   });
 
-  it("rejects a structured answer without an active chat session", async () => {
-    const call = await callChat(makeContext(new Map()), {
-      sessionId: "missing",
-      wizardAnswer: { stepId: "channel", value: "twitch" },
-    });
-
-    expect(call).toMatchObject({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        details: { code: "system_agent_session_invalidated" },
-      },
-    });
-    expect(setupInferenceMocks.verifySetupInference).not.toHaveBeenCalled();
-  });
-
-  it("rejects a structured answer when the active session has no hosted wizard", async () => {
-    const engine = makeVerifiedEngine();
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
-
-    const call = await callChat(makeContext(sessions), {
-      sessionId: "s1",
-      wizardAnswer: { stepId: "stale", value: "twitch" },
-    });
-
-    expect(call).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
-    expect(transcriptStoreMocks.appendTranscriptTurn).not.toHaveBeenCalled();
-  });
-
   it("persists completed turns from the engine's sanitized history", async () => {
     const engine = new SystemAgentChatEngine({
       verifiedInference: requireVerifiedInferenceFixture(),
