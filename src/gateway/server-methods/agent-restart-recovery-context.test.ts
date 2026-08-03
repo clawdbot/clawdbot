@@ -148,21 +148,22 @@ describe("resolveAgentRestartRecoveryExecutionIdentityAdmission", () => {
   });
 
   it("omits retained recovery identity while collection is disabled", () => {
+    const sessionEntry = {
+      ...matchingParams.sessionEntry,
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 1,
+        chargedAttempts: 1,
+        executionIdentity: token,
+      },
+    };
     expect(
       resolveAgentRestartRecoveryExecutionIdentityAdmission({
         collectionEnabled: false,
         isRestartRecoveryResumeRun: true,
         retryOnly: true,
         runId: token.runId,
-        sessionEntry: {
-          ...matchingParams.sessionEntry,
-          mainRestartRecovery: {
-            cycleId: "cycle-1",
-            revision: 1,
-            chargedAttempts: 1,
-            executionIdentity: token,
-          },
-        },
+        sessionEntry,
       }),
     ).toBeUndefined();
   });
