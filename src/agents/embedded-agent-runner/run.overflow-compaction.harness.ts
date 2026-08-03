@@ -148,7 +148,7 @@ export const mockedGlobalHookRunner = {
   runAfterCompaction: vi.fn(async () => undefined),
 };
 
-export const mockedContextEngine = {
+const mockedContextEngine = {
   info: { ownsCompaction: false as boolean },
   compact: vi.fn<(params: unknown) => Promise<MockCompactionResult>>(async () => ({
     ok: false as const,
@@ -176,7 +176,7 @@ function makeMockRuntimePlan(): MockRuntimePlan {
 export const mockedCompactDirect = mockedContextEngine.compact;
 const mockedResolveContextEngine = vi.fn(async () => mockedContextEngine);
 const mockedResolveContextEngineOwnerPluginId = vi.fn(() => undefined);
-export const mockedBuildAgentRuntimePlan = vi.fn<() => AgentRuntimePlan>(
+const mockedBuildAgentRuntimePlan = vi.fn<() => AgentRuntimePlan>(
   () => makeMockRuntimePlan() as AgentRuntimePlan,
 );
 export const mockedAcquireAgentRunPreparedModelRuntime = vi.fn(
@@ -246,7 +246,7 @@ export const mockedResolveModelAsync = vi.fn(
   async (provider?: string, modelId?: string, _agentDir?: string, cfg?: unknown) =>
     createMockResolvedModel(provider, modelId, cfg),
 );
-export const mockedPrepareProviderRuntimeAuth = vi.fn<
+const mockedPrepareProviderRuntimeAuth = vi.fn<
   (params?: { context?: { apiKey?: string } }) => Promise<{ apiKey: string } | undefined>
 >(async () => undefined);
 export const mockedRunEmbeddedAttempt =
@@ -256,18 +256,18 @@ export const mockedBuildEmbeddedRunPayloads = vi.fn<
     ...args: Parameters<typeof buildEmbeddedRunPayloads>
   ) => ReturnType<typeof buildEmbeddedRunPayloads>
 >(() => []);
-export const mockedRunContextEngineMaintenance = vi.fn(async () => undefined);
-export const mockedWaitForDeferredTurnMaintenanceForSession = vi.fn(
+const mockedRunContextEngineMaintenance = vi.fn(async () => undefined);
+const mockedWaitForDeferredTurnMaintenanceForSession = vi.fn(
   async (_sessionKey?: string) => undefined,
 );
-export const mockedSessionLikelyHasOversizedToolResults = vi.fn(() => false);
+const mockedSessionLikelyHasOversizedToolResults = vi.fn(() => false);
 const mockedResolveLiveToolResultMaxChars = vi.fn(() => 32_000);
 type MockTruncateOversizedToolResultsResult = {
   truncated: boolean;
   truncatedCount: number;
   reason?: string;
 };
-export const mockedTruncateOversizedToolResultsInSession = vi.fn<
+const mockedTruncateOversizedToolResultsInSession = vi.fn<
   () => Promise<MockTruncateOversizedToolResultsResult>
 >(async () => ({
   truncated: false,
@@ -296,8 +296,8 @@ export class MockedFailoverError extends Error {
   }
 }
 
-export const mockedCoerceToFailoverError = vi.fn<MockCoerceToFailoverError>();
-export const mockedDescribeFailoverError = vi.fn<MockDescribeFailoverError>(
+const mockedCoerceToFailoverError = vi.fn<MockCoerceToFailoverError>();
+const mockedDescribeFailoverError = vi.fn<MockDescribeFailoverError>(
   (err: unknown): MockFailoverErrorDescription => ({
     message: formatErrorMessage(err),
     reason: undefined,
@@ -305,7 +305,7 @@ export const mockedDescribeFailoverError = vi.fn<MockDescribeFailoverError>(
     code: undefined,
   }),
 );
-export const mockedResolveFailoverStatus = vi.fn<MockResolveFailoverStatus>();
+const mockedResolveFailoverStatus = vi.fn<MockResolveFailoverStatus>();
 
 export const mockedLog: {
   debug: Mock<(...args: unknown[]) => void>;
@@ -329,7 +329,7 @@ export const mockedClassifyAssistantFailoverReason = vi.fn(
   (assistant?: { errorMessage?: string | null }): FailoverReason | null =>
     mockedClassifyFailoverReason(assistant?.errorMessage ?? ""),
 );
-export const mockedExtractObservedOverflowTokenCount = vi.fn((msg?: string) => {
+const mockedExtractObservedOverflowTokenCount = vi.fn((msg?: string) => {
   const match = msg?.match(/prompt is too long:\s*([\d,]+)\s+tokens\s*>\s*[\d,]+\s+maximum/i);
   return match?.[1] ? Number(match[1].replaceAll(",", "")) : undefined;
 });
@@ -355,10 +355,8 @@ const mockedParseImageSizeError = vi.fn(() => null);
 const mockedParseImageDimensionError = vi.fn(() => null);
 export const mockedIsRateLimitAssistantError = vi.fn<MockAssistantErrorProbe>(() => false);
 const mockedIsTimeoutErrorMessage = vi.fn(() => false);
-export const mockedPickFallbackThinkingLevel = vi.fn<(params?: unknown) => ThinkLevel | null>(
-  () => null,
-);
-export const mockedEvaluateContextWindowGuard = vi.fn(() => ({
+const mockedPickFallbackThinkingLevel = vi.fn<(params?: unknown) => ThinkLevel | null>(() => null);
+const mockedEvaluateContextWindowGuard = vi.fn(() => ({
   shouldWarn: false,
   shouldBlock: false,
   tokens: 200000,
@@ -366,7 +364,7 @@ export const mockedEvaluateContextWindowGuard = vi.fn(() => ({
   hardMinTokens: 1000,
   warnBelowTokens: 5000,
 }));
-export const mockedResolveContextWindowInfo = vi.fn(() => ({
+const mockedResolveContextWindowInfo = vi.fn(() => ({
   tokens: 200000,
   source: "model",
 }));
@@ -390,7 +388,7 @@ export const mockedGetApiKeyForModel = vi.fn<
   source: "test",
   mode: "api-key",
 }));
-export const mockedIsProfileInCooldown = vi.fn(
+const mockedIsProfileInCooldown = vi.fn(
   (_store: unknown, _profileId: string, _now?: number, _modelId?: string) => false,
 );
 export const mockedMarkAuthProfileFailure = vi.fn(async () => {});
@@ -432,11 +430,11 @@ const mockedResolveAuthProfileOrderWithMetadata = vi.fn<
   profileIds: mockedResolveAuthProfileOrder(params),
   hasExplicitOrder: false,
 }));
-export const mockedResolveProviderEntryApiKeyProfileReference = vi.fn<
-  (_params?: unknown) => unknown
->(() => ({ kind: "none" }));
+const mockedResolveProviderEntryApiKeyProfileReference = vi.fn<(_params?: unknown) => unknown>(
+  () => ({ kind: "none" }),
+);
 const mockedHasUsableCustomProviderApiKey = vi.fn(() => false);
-export const mockedMarkAuthProfileSuccess = vi.fn(async () => {});
+const mockedMarkAuthProfileSuccess = vi.fn(async () => {});
 const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);
 
 export const overflowBaseRunParams = {

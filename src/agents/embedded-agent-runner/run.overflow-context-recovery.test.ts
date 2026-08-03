@@ -462,4 +462,178 @@ describe("recoverEmbeddedRunOverflow", () => {
       undefined,
     );
   });
+
+  it("leaves overflow recovery to a transport-owning harness", async () => {
+    const result = await recoverEmbeddedRunOverflow(
+      makeInput({ genericCompactionRecoveryAllowed: false }),
+    );
+
+    expect(result).toEqual({ action: "none" });
+    expect(mocks.compact).not.toHaveBeenCalled();
+  });
+
+  it("forwards preflight prompt estimates into synthetic overflow compaction", async () => {
+    const result = await recoverEmbeddedRunOverflow(
+      makeInput({
+        attempt: {
+          preflightRecovery: {
+            route: "compact_then_truncate",
+            estimatedPromptTokens: 268_138,
+            promptBudgetBeforeReserve: 241_616,
+            overflowTokens: 26_522,
+          },
+        },
+      }),
+    );
+
+    expect(result).toEqual({ action: "retry" });
+    expect(mocks.compact).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ currentTokenCount: 268_138, trigger: "overflow" }),
+    );
+  });
+
+  it("uses the minimally over-budget count for unparseable overflow text", async () => {
+    const result = await recoverEmbeddedRunOverflow(
+      makeInput({ promptError: new Error("Context window exceeded for this request") }),
+    );
+
+    expect(result).toEqual({ action: "retry" });
+    expect(mocks.compact).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ currentTokenCount: 200_001 }),
+    );
+  });
+
+  it("does not reset the overflow-compaction budget after an in-attempt compaction", async () => {
+    const state = createEmbeddedRunContextRecoveryState();
+    const result = await recoverEmbeddedRunOverflow(
+      makeInput({ state, attemptCompactionCount: 1 }),
+    );
+
+    expect(result).toEqual({ action: "retry" });
+    expect(state.overflowCompactionAttempts).toBe(1);
+    expect(mocks.compact).not.toHaveBeenCalled();
+  });
+
+  it("resets stale token state after an empty preflight compaction", async () => {
+    const state = createEmbeddedRunContextRecoveryState();
+    state.lastCompactionTokensAfter = 80_000;
+    state.lastContextBudgetStatus = {
+      schemaVersion: 1,
+      source: "pre-prompt-estimate",
+      updatedAt: 1,
+      provider: "openai",
+      model: "gpt-test",
+      route: "compact_only",
+      shouldCompact: true,
+      estimatedPromptTokens: 268_138,
+      contextTokenBudget: 200_000,
+      promptBudgetBeforeReserve: 196_000,
+      reserveTokens: 4_000,
+      effectiveReserveTokens: 4_000,
+      remainingPromptBudgetTokens: 0,
+      overflowTokens: 72_138,
+      toolResultReducibleChars: 0,
+      messageCount: 0,
+      unwindowedMessageCount: 0,
+    };
+    mocks.compact.mockResolvedValueOnce({
+      result: { ok: true, compacted: false, reason: "no real conversation messages" },
+      runtimeContext: {},
+      runtimeSettings: {},
+    });
+    mocks.isNoRealConversationCompactionNoop.mockReturnValueOnce(true);
+
+    const result = await recoverEmbeddedRunOverflow(
+      makeInput({
+        state,
+        attempt: { preflightRecovery: { route: "compact_only" } },
+      }),
+    );
+
+    expect(result).toEqual({ action: "retry" });
+    expect(state.lastCompactionTokensAfter).toBeUndefined();
+    expect(state.lastContextBudgetStatus).toBeUndefined();
+    expect(mocks.resetNoRealConversationTokenSnapshot).toHaveBeenCalledWith({
+      config: {},
+      sessionKey: "agent:main:session-1",
+      agentId: "main",
+    });
+  });
+
+  it("runs hooks and maintenance against the adopted compacted transcript", async () => {
+    let activeSession = {
+      id: "session-1",
+      file: "/tmp/session-1.jsonl",
+      target: undefined,
+    };
+    const adoptCompactionTranscript = vi.fn(async () => {
+      activeSession = {
+        id: "rotated-session",
+        file: "/tmp/rotated-session.jsonl",
+        target: undefined,
+      };
+      return "session-1";
+    });
+    const input = makeInput({
+      contextEngine: {
+        info: { id: "test", name: "Test", ownsCompaction: true },
+        ingest: vi.fn(),
+        assemble: vi.fn(),
+        compact: vi.fn(),
+      } as RecoveryInput["contextEngine"],
+      adoptCompactionTranscript,
+      getActiveSession: () => activeSession,
+    });
+
+    expect(await recoverEmbeddedRunOverflow(input)).toEqual({ action: "retry" });
+    expect(input.runOwnsCompactionBeforeHook).toHaveBeenCalledWith("overflow recovery");
+    expect(input.runOwnsCompactionAfterHook).toHaveBeenCalledWith(
+      "overflow recovery",
+      expect.objectContaining({ compacted: true, ok: true }),
+      "session-1",
+    );
+    expect(mocks.maintenance).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "rotated-session",
+        sessionFile: "/tmp/rotated-session.jsonl",
+        reason: "compaction",
+      }),
+    );
+    expect(input.prepareCompactedTranscriptRetry).toHaveBeenCalledOnce();
+  });
+
+  it("guards thrown compaction attempts and still runs the after hook", async () => {
+    mocks.compact.mockRejectedValueOnce(new Error("engine boom"));
+    const input = makeInput();
+
+    const result = await recoverEmbeddedRunOverflow(input);
+
+    expect(result).toMatchObject({ action: "surface", kind: "context_overflow" });
+    expect(input.runOwnsCompactionBeforeHook).toHaveBeenCalledOnce();
+    expect(input.runOwnsCompactionAfterHook).toHaveBeenCalledWith(
+      "overflow recovery",
+      expect.objectContaining({ compacted: false, ok: false }),
+      undefined,
+    );
+  });
+
+  it("surfaces a visible blocked recovery payload after attempts are exhausted", async () => {
+    const state = createEmbeddedRunContextRecoveryState();
+    state.overflowCompactionAttempts = 3;
+
+    const result = await recoverEmbeddedRunOverflow(makeInput({ state }));
+
+    expect(result).toMatchObject({
+      action: "surface",
+      kind: "context_overflow",
+      userText: expect.stringContaining("Context overflow"),
+    });
+    if (result.action !== "surface") {
+      throw new Error("Expected exhausted overflow recovery to surface");
+    }
+    expect(result.userText).toContain("/reset");
+    expect(result.userText).toContain("/new");
+  });
 });
