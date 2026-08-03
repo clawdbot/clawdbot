@@ -41,6 +41,7 @@ type RegisteredRoute = {
   path?: string;
   pluginId?: string;
   replaceExisting?: boolean;
+  source?: string;
   throwOnFailure?: boolean;
 };
 
