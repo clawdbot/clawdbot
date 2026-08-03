@@ -222,3 +222,92 @@ Count reconciliation, byte-checked:
 - exactly one path drops out: `run.overflow-compaction.loop.test.ts` (now
   byte-identical to upstream)
 - **zero newly-appearing paths** — the merge introduced no feature-surface expansion
+
+---
+
+## §Gate 2.5 — semantic intersections
+
+Enumeration (pure git, exact bounds `0ea8d565…..18c9f27e…`):
+
+- upstream-touched test files in the exact merge delta: **515**
+- of those, intersecting our feature surface: **30**
+- plus owner tests for every manually composed production path and every #1219 path
+- **complete run set: 139 files**, executed with `node scripts/run-vitest.mjs`
+  (linked-worktree discipline per product `AGENTS.md`; never direct `pnpm test*`)
+
+### Candidate-specific failures — found and FIXED
+
+**`src/gateway/config-reload.test.ts`** — 2 failed / 969 passed.
+This is exactly the semantic conflict flagged when resolving row 12: upstream's
+`config-reload-plan.ts` now declares `{ prefix: "agents.defaults", kind: "hot" }`
+and `{ prefix: "tools", kind: "hot" }`, so our two asserted no-op paths resolve
+as hot. Measured shape for both: `restartGateway: false`, `restartReasons: []`,
+`hotReasons: [path]` — upstream's exact hot shape, so the feature invariant
+("these must not restart the gateway") still holds; hot is a refinement of no-op.
+This branch only ever asserted these in the test, never registered them in
+production metadata. Fixed in `af164ed52af` by moving both into upstream's hot
+matrix. Re-run: **175/175 pass**.
+
+### Inherited failures — classified with exit-code receipts (not from prose)
+
+| File | Failed | Class | Receipt |
+|---|---|---|---|
+| `src/agents/subagent-registry.persistence.timing.test.ts` | 3 | **pre-existing on accepted head `47c4169`** | file does not exist upstream, so the correct control is the PR head. Test blob, `subagent-session-metrics.ts` and `subagent-registry.types.ts` are byte-**identical** `47c4169`↔candidate; the only helper delta is an unrelated `resolveAnnounceRetryDelayMs` backoff refactor. Restoring the `47c4169` `subagent-registry-helpers.ts` blob and re-running reproduces **identically (3 failed / 1 passed)**. Added by `06aa99fe8bb`, i.e. **outside** the five #1219 commits. Not merge-introduced; out of this lane's remit to repair. |
+| `src/agents/subagent-registry.lifecycle-retry-grace.e2e.test.ts` | 9 | **upstream-class** | naive-upstream control worktree at exact `18c9f27e` (`/tmp/oc-bw-18c9f27e`, `pnpm install --frozen-lockfile` exit 0): **9 failed** — identical set. |
+| `src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts` | 1 (`queues a follow-up when transcript-backed steering is unsupported`) | **upstream-class** | same control at exact `18c9f27e`: the same test fails (**1 failed / 122 passed**). Candidate runs 126 tests there — our 3 extra all pass. |
+
+Reproduced in isolation first to rule out shard contention; both e2e reds
+reproduce standalone, then reproduce on exact upstream. No red was classified
+inherited without running the gate.
+
+### Owning proof for the Gate 2 row-13 manual review
+
+`src/agents/embedded-agent-runner/run.overflow-compaction.test.ts` — **68/68 pass**,
+including the two re-homed #1219 assertions. Upstream's replacement
+`run.overflow-compaction.loop.test.ts` (1 test) and its sibling
+`run.overflow-compaction.misc-owners.test.ts` (3 tests) also pass. The Gate 2
+FAIL row is therefore discharged with owning proof, not waived.
+
+Everything else in the 139-file set is green — notably
+`agent-runner*` 56/56, `agents-core` 19/20 (the 1 being the inherited timing
+file), gateway 10/10, infra 8/8, tasks 4/4, and codex extensions **253/253**.
+
+---
+
+## §Gate 3 — static, generated, build
+
+| Check | Result |
+|---|---|
+| `node scripts/check.mjs` (22 checks) | **21 ok / 1 failed** — the only failure is `oxfmt --check` on `tmp-drop-me-claude.md`, this journal. **No product file has a format issue**; self-resolves at journal cleanup. Includes ok: conflict markers, max-lines ratchet, typecheck prod, typecheck scripts, typecheck test root, **lint**, changelog attributions, database-first legacy-store guard, npm package-lock guard, package patch guard, host env policy, opengrep metadata, script declarations. |
+| `tsgo:core` (production typecheck) | exit 0 |
+| `tsgo:core:test` / `tsgo:extensions:test` / `tsgo:test:root` | exit 0 / 0 / 0 |
+| `config:schema:check` | exit 0 |
+| `config:channels:check` (bundled channel config metadata) | exit 0 |
+| `sqlite:sessions-schema:check` | exit 0 |
+| `protocol-registry:check` | exit 0 |
+| `protocol:gen` | exit 0 |
+| `protocol:check:swift` | exit 0 |
+| `check-protocol-since` | exit 0 |
+| `check:protocol-coverage` | exit 0 |
+| generated-artifact drift (`git diff --exit-code` on protocol schema/Swift/Kotlin) | **no drift** |
+| `check:import-cycles` | exit 0 — **0 runtime value cycles** |
+| `prompt:snapshots:check` | **exit 0 — "Prompt snapshots are current (7 files)"** — empirically confirms the derived fixture values in rows 14-16 |
+| `git diff --check` | clean |
+
+### Codex protocol check (WO requirement 9)
+
+- Adjacent `../codex` is version **0.0.0** → confirmed non-authority, not used.
+- Used the exact pinned control at
+  `/home/figs/.copilot/session-state/7a7d27c0-5282-46b3-ac01-ae0bae3b6054/files/codex-rust-v0.146.0-control`,
+  verified `version = "0.146.0"` in `codex-rs/Cargo.toml`, wired via
+  `OPENCLAW_CODEX_REPO`.
+- Run with **Node 24** (`v24.17.0`), not Node 25, per the known nested-pnpm hang.
+- Result: **`Codex app-server generated protocol matches OpenClaw bridge assumptions`** ✅
+
+### Dependency discipline (WO requirement 10)
+
+No pre-emptive install in this linked worktree. `node scripts/check.mjs` was run
+first per the wrapper discipline; it materialised `node_modules` itself as part of
+its own delegation, and only then were wrapper-based validations run. The control
+worktree install (`/tmp/oc-bw-18c9f27e`) happened only after
+`node scripts/run-vitest.mjs` there failed **solely** with `ERR_MODULE_NOT_FOUND`.
