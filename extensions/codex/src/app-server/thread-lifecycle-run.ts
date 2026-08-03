@@ -58,6 +58,18 @@ export async function startOrResumeThread(
     agentId: params.agentId ?? params.params.agentId,
     config: params.params.config,
   });
+  // A retired stable-key tombstone permanently fences withLease for the same
+  // session id. Reclaim it before the lease so the lifecycle can proceed.
+  if (bindingIdentity.kind === "session" && bindingIdentity.sessionKey) {
+    const reclaimed = await reclaimCurrentCodexSessionGeneration({
+      bindingStore: params.bindingStore,
+      identity: bindingIdentity,
+      config: params.params.config,
+    });
+    if (!reclaimed) {
+      throw createCodexSessionGenerationSupersededError(bindingIdentity.sessionId);
+    }
+  }
   return await params.bindingStore.withLease(bindingIdentity, async () => {
     const {
       contextEngineBinding,
@@ -102,20 +114,6 @@ export async function startOrResumeThread(
         lifecycleTiming,
         threadId,
       });
-    if (!binding && bindingIdentity.kind === "session" && bindingIdentity.sessionKey) {
-      // Reset may rotate the OpenClaw session while this plugin is unloaded. Only
-      // the authoritative session store may let its successor displace that stale owner.
-      const reclaimed = await lifecycleTiming.measure("reclaim-binding-generation", () =>
-        reclaimCurrentCodexSessionGeneration({
-          bindingStore: params.bindingStore,
-          identity: bindingIdentity,
-          config: params.params.config,
-        }),
-      );
-      if (!reclaimed) {
-        throw createCodexSessionGenerationSupersededError(bindingIdentity.sessionId);
-      }
-    }
     if (binding?.pendingSupervisionBranch) {
       await releaseRetainedThread(binding.threadId);
       const pendingBinding = binding as CodexAppServerThreadBinding & {

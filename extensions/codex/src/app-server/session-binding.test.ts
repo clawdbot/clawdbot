@@ -1077,6 +1077,62 @@ describe("Codex app-server binding store", () => {
     }
   });
 
+  it("recovers a same-ID retired stable tombstone through reclaim before withLease", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-reclaim-lease-"));
+    const storePath = path.join(root, "sessions.json");
+    const { state, values } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-same",
+      sessionKey: "agent:main:web:dashboard",
+    };
+    try {
+      await upsertSessionEntry({
+        agentId: identity.agentId,
+        sessionKey: identity.sessionKey,
+        storePath,
+        entry: { sessionId: identity.sessionId, updatedAt: 1 },
+      });
+      await store.mutate(identity, {
+        kind: "set",
+        binding: { threadId: "thread-initial", cwd: "/repo" },
+      });
+      await store.retireSessionGeneration(identity);
+
+      // A same-ID cleared/retired tombstone permanently fences withLease.
+      await expect(store.withLease(identity, async () => {})).rejects.toThrow(
+        "Codex binding generation was retired",
+      );
+
+      // Reclaim the tombstone before the lease.
+      const reclaimed = await reclaimCurrentCodexSessionGeneration({
+        bindingStore: store,
+        identity,
+        config: { session: { store: storePath } },
+      });
+      expect(reclaimed).toBe(true);
+
+      // After reclaim the tombstone is reset; withLease must now succeed.
+      await expect(
+        store.withLease(identity, async () => {
+          await store.mutate(identity, {
+            kind: "set",
+            binding: { threadId: "thread-recovered", cwd: "/repo" },
+          });
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(values.get(bindingStoreKey(identity))).toMatchObject({
+        state: "active",
+        sessionId: identity.sessionId,
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("drains an in-flight ownership mutation and rejects late attachment during archive", async () => {
     const fixture = createStateStore();
     const stateUpdate = fixture.state.update;
