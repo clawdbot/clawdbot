@@ -23,6 +23,7 @@ type TokenState = {
 
 type ParseFrame = {
   captureKeys: string[];
+  invalidatesCapturesOnClose: boolean;
   zeroWidth: boolean;
   opaque: boolean;
   lastToken: TokenState | null;
@@ -51,7 +52,13 @@ type PatternToken =
       ambiguousWhenRepeated?: boolean;
       backreferenceKey?: string;
     }
-  | { kind: "group-open"; zeroWidth: boolean; opaque: boolean; captureKeys: string[] }
+  | {
+      kind: "group-open";
+      zeroWidth: boolean;
+      opaque: boolean;
+      captureKeys: string[];
+      invalidatesCapturesOnClose: boolean;
+    }
   | { kind: "group-close" }
   | { kind: "alternation" }
   | { kind: "quantifier"; quantifier: QuantifierRead };
@@ -83,9 +90,11 @@ function createParseFrame(
   zeroWidth = false,
   opaque = false,
   captureKeys: string[] = [],
+  invalidatesCapturesOnClose = false,
 ): ParseFrame {
   return {
     captureKeys,
+    invalidatesCapturesOnClose,
     zeroWidth,
     opaque,
     lastToken: null,
@@ -301,14 +310,17 @@ function tokenizePattern(source: string, flags: string): PatternToken[] {
     if (ch === "(") {
       let zeroWidth = false;
       let opaque = false;
+      let invalidatesCapturesOnClose = false;
       let captureKeys: string[] = [];
       const shortPrefix = source.slice(i + 1, i + 3);
       const longPrefix = source.slice(i + 1, i + 4);
       if (longPrefix === "?<=" || longPrefix === "?<!") {
         zeroWidth = true;
+        invalidatesCapturesOnClose = longPrefix === "?<!";
         i += 3;
       } else if (shortPrefix === "?=" || shortPrefix === "?!") {
         zeroWidth = true;
+        invalidatesCapturesOnClose = shortPrefix === "?!";
         i += 2;
       } else if (shortPrefix === "?:") {
         i += 2;
@@ -331,7 +343,13 @@ function tokenizePattern(source: string, flags: string): PatternToken[] {
           captureKeys = [`index:${captureIndex}`];
         }
       }
-      tokens.push({ kind: "group-open", zeroWidth, opaque, captureKeys });
+      tokens.push({
+        kind: "group-open",
+        zeroWidth,
+        opaque,
+        captureKeys,
+        invalidatesCapturesOnClose,
+      });
       continue;
     }
 
@@ -471,7 +489,14 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
     }
 
     if (token.kind === "group-open") {
-      frames.push(createParseFrame(token.zeroWidth, token.opaque, token.captureKeys));
+      frames.push(
+        createParseFrame(
+          token.zeroWidth,
+          token.opaque,
+          token.captureKeys,
+          token.invalidatesCapturesOnClose,
+        ),
+      );
       continue;
     }
 
@@ -515,6 +540,11 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
             captureKey,
             frame.zeroWidth || frame.opaque ? null : consumingGroupPaths,
           );
+        }
+        if (frame.invalidatesCapturesOnClose) {
+          for (const captureKey of descendantCaptureKeys) {
+            capturedPaths.set(captureKey, null);
+          }
         }
         emitToken({
           captureKeys: [...new Set([...descendantCaptureKeys, ...frame.captureKeys])],
