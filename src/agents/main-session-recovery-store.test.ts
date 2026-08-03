@@ -74,6 +74,23 @@ describe("main session recovery store", () => {
     };
   }
 
+  function terminalRecoveryEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
+    return interruptedEntry({
+      abortedLastRun: false,
+      restartRecoveryRuns: [
+        { runId: "recovery-1", lifecycleGeneration: "generation-1" },
+        { runId: "recovery-2", lifecycleGeneration: "generation-2" },
+      ],
+      restartRecoveryTerminalRunIds: ["recovery-1", "recovery-2"],
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 5,
+        chargedAttempts: 2,
+      },
+      ...overrides,
+    });
+  }
+
   type ClaimParams = Parameters<typeof claimMainSessionRecoveryOwner>[0];
   type CommitParams = Parameters<typeof commitMainSessionRecovery>[0];
 
@@ -288,6 +305,114 @@ describe("main session recovery store", () => {
     });
     expect(read().restartRecoveryRuns).toBeUndefined();
     expect(read().mainRestartRecovery).toBeUndefined();
+  });
+
+  it("atomically retires terminal recovery ownership from a healthy row", async () => {
+    await write(terminalRecoveryEntry());
+
+    await expect(
+      claimMainSessionRecoveryOwner({
+        lifecycleGeneration,
+        sessionId: "session-1",
+        target: { sessionKey, storePath },
+      }),
+    ).resolves.toEqual({ kind: "not_required" });
+    expect(read()).toMatchObject({
+      sessionId: "session-1",
+      status: "running",
+      abortedLastRun: false,
+      restartRecoveryTerminalRunIds: ["recovery-1", "recovery-2"],
+    });
+    expect(read().restartRecoveryRuns).toBeUndefined();
+    expect(read().mainRestartRecovery).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: "a nonterminal fence",
+      overrides: { restartRecoveryTerminalRunIds: ["recovery-1"] },
+    },
+    {
+      name: "a reservation",
+      overrides: {
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 5,
+          chargedAttempts: 2,
+          reservation: {
+            runId: "recovery-3",
+            attempt: 3,
+            lifecycleGeneration: "generation-3",
+          },
+        },
+      },
+    },
+    {
+      name: "a foreground owner",
+      overrides: {
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 5,
+          chargedAttempts: 2,
+          foregroundClaims: {
+            lifecycleGeneration: "generation-3",
+            tokens: ["foreground-owner"],
+          },
+        },
+      },
+    },
+    {
+      name: "a tombstone",
+      overrides: {
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 5,
+          chargedAttempts: 2,
+          tombstone: { reason: "automatic recovery exhausted" },
+        },
+      },
+    },
+    {
+      name: "a delivery owner",
+      overrides: { restartRecoveryDeliveryRunId: "recovery-2" },
+    },
+  ] satisfies Array<{ name: string; overrides: Partial<SessionEntry> }>)(
+    "keeps terminal recovery ownership fenced while it has $name",
+    async ({ overrides }) => {
+      const entry = terminalRecoveryEntry(overrides);
+      await write(entry);
+      const before = read();
+
+      await expect(
+        claimMainSessionRecoveryOwner({
+          lifecycleGeneration,
+          sessionId: "session-1",
+          target: { sessionKey, storePath },
+        }),
+      ).resolves.toEqual({ kind: "invalidated", reason: "state_changed" });
+      expect(read()).toEqual(before);
+    },
+  );
+
+  it("keeps a current-generation terminal-marked fence authoritative", async () => {
+    const entry = terminalRecoveryEntry({
+      restartRecoveryRuns: [
+        { runId: "recovery-1", lifecycleGeneration: "generation-1" },
+        { runId: "recovery-1", lifecycleGeneration },
+        { runId: "recovery-2", lifecycleGeneration: "generation-2" },
+      ],
+    });
+    await write(entry);
+    const before = read();
+
+    await expect(
+      claimMainSessionRecoveryOwner({
+        lifecycleGeneration,
+        sessionId: "session-1",
+        target: { sessionKey, storePath },
+      }),
+    ).resolves.toEqual({ kind: "invalidated", reason: "state_changed" });
+    expect(read()).toEqual(before);
   });
 
   it("atomically clears orphaned recovery residue from a terminal row", async () => {
