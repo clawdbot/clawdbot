@@ -8,6 +8,7 @@ import type {
   ValidationError,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { GatewayApprovalEventKind } from "../../infra/approval-gateway-runtime.types.js";
 import { hasApprovalTurnSourceRoute } from "../../infra/approval-turn-source.js";
 import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import type {
@@ -292,7 +293,7 @@ export async function handlePendingApprovalRequest<
   requestEventName: string;
   requestEvent: RequestedApprovalEvent<TPayload>;
   twoPhase: boolean;
-  approvalKind?: ChannelApprovalKind;
+  approvalKind: ChannelApprovalKind | "system-agent";
   deliverRequest: () => boolean | Promise<boolean>;
   afterDecision?: (
     decision: ExecApprovalDecision | null,
@@ -314,10 +315,18 @@ export async function handlePendingApprovalRequest<
     // per-occurrence spam #128031 removed, while an approval client can end
     // the recurrence with one allow-always (standing grant).
     const approvalClientsOnly = !suppressDelivery && params.deliverToApprovalClientsOnly === true;
+    // Only exec/plugin approvals have a channel-native payload and a turn source.
+    // Publishing operator-owned system-agent approvals here makes channel subscribers
+    // reject the payload and silently drops the operator's binding. Allowlist, so a
+    // new kind stays non-routable until deliberately added.
+    const channelApprovalKind: GatewayApprovalEventKind | null =
+      params.approvalKind === "exec" || params.approvalKind === "plugin"
+        ? params.approvalKind
+        : null;
     const approvalClientConnIds = suppressDelivery
       ? null
       : resolveApprovalRequestRecipientConnIds({
-          approvalKind: params.approvalKind ?? "exec",
+          approvalKind: params.approvalKind,
           context: params.context,
           record: params.record,
           excludeConnId: params.clientConnId,
@@ -338,13 +347,10 @@ export async function handlePendingApprovalRequest<
         });
       }
     }
-    const internalApprovalSubscriberCount =
-      suppressDelivery || approvalClientsOnly
-        ? 0
-        : (params.context.approvalEvents?.publishRequested(
-            params.approvalKind ?? "exec",
-            params.requestEvent,
-          ) ?? 0);
+    const channelBusKind = suppressDelivery || approvalClientsOnly ? null : channelApprovalKind;
+    const internalApprovalSubscriberCount = channelBusKind
+      ? (params.context.approvalEvents?.publishRequested(channelBusKind, params.requestEvent) ?? 0)
+      : 0;
 
     const hasApprovalClients = suppressDelivery
       ? false
@@ -362,10 +368,11 @@ export async function handlePendingApprovalRequest<
       !approvalClientsOnly &&
       !hasApprovalClients &&
       !delivered &&
+      channelApprovalKind !== null &&
       hasApprovalTurnSourceRoute({
         turnSourceChannel: params.record.request.turnSourceChannel,
         turnSourceAccountId: params.record.request.turnSourceAccountId,
-        approvalKind: params.approvalKind ?? "exec",
+        approvalKind: channelApprovalKind,
       });
     const deliveryRoute: ApprovalRequestDeliveryRoute = delivered
       ? "forwarder"
