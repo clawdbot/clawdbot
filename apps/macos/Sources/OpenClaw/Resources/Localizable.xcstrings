@@ -29241,6 +29241,142 @@
         }
       }
     },
+    "Connected": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connected"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connected"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connected"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connected"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connected"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connected"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connected"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connected"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connected"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connected"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connected"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connected"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connected"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connected"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connected"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connected"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connected"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connected"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connected"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connected"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connected"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connected"
+          }
+        }
+      }
+    },
     "Connected Instances": {
       "localizations": {
         "en": {
@@ -29377,138 +29513,138 @@
         }
       }
     },
-    "Connected to a remote Gateway configuration.": {
+    "Connected to your remote Gateway.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Connected to a remote Gateway configuration."
+            "value": "Connected to your remote Gateway."
           }
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "translated",
-            "value": "已连接到远程 Gateway 配置。"
+            "state": "new",
+            "value": "Connected to your remote Gateway."
           }
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "translated",
-            "value": "已連線至遠端 Gateway 設定。"
+            "state": "new",
+            "value": "Connected to your remote Gateway."
           }
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "translated",
-            "value": "Conectado a uma configuração de Gateway remoto."
+            "state": "new",
+            "value": "Connected to your remote Gateway."
           }
         },
         "de": {
           "stringUnit": {
-            "state": "translated",
-            "value": "Mit einer Remote-Gateway-Konfiguration verbunden."
+            "state": "new",
+            "value": "Connected to your remote Gateway."
           }
         },
         "es": {
           "stringUnit": {
-            "state": "translated",
-            "value": "Conectado a una configuración de Gateway remoto."
+            "state": "new",
+            "value": "Connected to your remote Gateway."
           }
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "translated",
-            "value": "リモート Gateway 構成に接続されています。"
+            "state": "new",
+            "value": "Connected to your remote Gateway."
           }
         },
         "ko": {
           "stringUnit": {
-            "state": "translated",
-            "value": "원격 Gateway 구성에 연결되었습니다."
+            "state": "new",
+            "value": "Connected to your remote Gateway."
           }
         },
         "fr": {
           "stringUnit": {
-            "state": "translated",
-            "value": "Connecté à une configuration Gateway distante."
+            "state": "new",
+            "value": "Connected to your remote Gateway."
           }
         },
         "hi": {
           "stringUnit": {
-            "state": "translated",
-            "value": "किसी रिमोट Gateway कॉन्फ़िगरेशन से कनेक्टेड।"
+            "state": "new",
+            "value": "Connected to your remote Gateway."
           }
         },
         "ar": {
           "stringUnit": {
-            "state": "translated",
-            "value": "متصل بتكوين Gateway بعيد."
+            "state": "new",
+            "value": "Connected to your remote Gateway."
           }
         },
         "it": {
           "stringUnit": {
-            "state": "translated",
-            "value": "Connesso a una configurazione Gateway remota."
+            "state": "new",
+            "value": "Connected to your remote Gateway."
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "translated",
-            "value": "Uzak bir Gateway yapılandırmasına bağlandı."
+            "state": "new",
+            "value": "Connected to your remote Gateway."
           }
         },
         "uk": {
           "stringUnit": {
-            "state": "translated",
-            "value": "Підключено до віддаленої конфігурації Gateway."
+            "state": "new",
+            "value": "Connected to your remote Gateway."
           }
         },
         "id": {
           "stringUnit": {
-            "state": "translated",
-            "value": "Terhubung ke konfigurasi Gateway jarak jauh."
+            "state": "new",
+            "value": "Connected to your remote Gateway."
           }
         },
         "pl": {
           "stringUnit": {
-            "state": "translated",
-            "value": "Połączono ze zdalną konfiguracją Gateway."
+            "state": "new",
+            "value": "Connected to your remote Gateway."
           }
         },
         "th": {
           "stringUnit": {
-            "state": "translated",
-            "value": "เชื่อมต่อกับการกำหนดค่า Gateway ระยะไกลแล้ว"
+            "state": "new",
+            "value": "Connected to your remote Gateway."
           }
         },
         "vi": {
           "stringUnit": {
-            "state": "translated",
-            "value": "Đã kết nối với cấu hình Gateway từ xa."
+            "state": "new",
+            "value": "Connected to your remote Gateway."
           }
         },
         "nl": {
           "stringUnit": {
-            "state": "translated",
-            "value": "Verbonden met een externe Gateway-configuratie."
+            "state": "new",
+            "value": "Connected to your remote Gateway."
           }
         },
         "fa": {
           "stringUnit": {
-            "state": "translated",
-            "value": "به پیکربندی Gateway راه‌دور متصل شد."
+            "state": "new",
+            "value": "Connected to your remote Gateway."
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "translated",
-            "value": "Подключено к удаленной конфигурации Gateway."
+            "state": "new",
+            "value": "Connected to your remote Gateway."
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "translated",
-            "value": "Ansluten till en fjärrkonfiguration för Gateway."
+            "state": "new",
+            "value": "Connected to your remote Gateway."
           }
         }
       }
@@ -30053,6 +30189,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ansluten med installationskod"
+          }
+        }
+      }
+    },
+    "Connecting to your remote Gateway…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connecting to your remote Gateway…"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connecting to your remote Gateway…"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connecting to your remote Gateway…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connecting to your remote Gateway…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connecting to your remote Gateway…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connecting to your remote Gateway…"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connecting to your remote Gateway…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connecting to your remote Gateway…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connecting to your remote Gateway…"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connecting to your remote Gateway…"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connecting to your remote Gateway…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connecting to your remote Gateway…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connecting to your remote Gateway…"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connecting to your remote Gateway…"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connecting to your remote Gateway…"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connecting to your remote Gateway…"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connecting to your remote Gateway…"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connecting to your remote Gateway…"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connecting to your remote Gateway…"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connecting to your remote Gateway…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connecting to your remote Gateway…"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connecting to your remote Gateway…"
           }
         }
       }
@@ -42977,6 +43249,142 @@
         }
       }
     },
+    "Disconnected": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disconnected"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected"
+          }
+        }
+      }
+    },
     "Disconnected (using System default)": {
       "localizations": {
         "en": {
@@ -43109,6 +43517,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Frånkopplad (använder systemstandard)"
+          }
+        }
+      }
+    },
+    "Disconnected from your remote Gateway. Open Connection settings to fix it.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disconnected from your remote Gateway. Open Connection settings to fix it."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected from your remote Gateway. Open Connection settings to fix it."
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected from your remote Gateway. Open Connection settings to fix it."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected from your remote Gateway. Open Connection settings to fix it."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected from your remote Gateway. Open Connection settings to fix it."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected from your remote Gateway. Open Connection settings to fix it."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected from your remote Gateway. Open Connection settings to fix it."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected from your remote Gateway. Open Connection settings to fix it."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected from your remote Gateway. Open Connection settings to fix it."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected from your remote Gateway. Open Connection settings to fix it."
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected from your remote Gateway. Open Connection settings to fix it."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected from your remote Gateway. Open Connection settings to fix it."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected from your remote Gateway. Open Connection settings to fix it."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected from your remote Gateway. Open Connection settings to fix it."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected from your remote Gateway. Open Connection settings to fix it."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected from your remote Gateway. Open Connection settings to fix it."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected from your remote Gateway. Open Connection settings to fix it."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected from your remote Gateway. Open Connection settings to fix it."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected from your remote Gateway. Open Connection settings to fix it."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected from your remote Gateway. Open Connection settings to fix it."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected from your remote Gateway. Open Connection settings to fix it."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Disconnected from your remote Gateway. Open Connection settings to fix it."
           }
         }
       }
@@ -54265,6 +54809,142 @@
         }
       }
     },
+    "Gateway connection failed.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway connection failed."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway connection failed."
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway connection failed."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway connection failed."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway connection failed."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway connection failed."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway connection failed."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway connection failed."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway connection failed."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway connection failed."
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway connection failed."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway connection failed."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway connection failed."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway connection failed."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway connection failed."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway connection failed."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway connection failed."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway connection failed."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway connection failed."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway connection failed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway connection failed."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway connection failed."
+          }
+        }
+      }
+    },
     "Gateway location": {
       "localizations": {
         "en": {
@@ -55757,6 +56437,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Gateway-varning"
+          }
+        }
+      }
+    },
+    "Gateway work is paused; incoming messages will wait.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway work is paused; incoming messages will wait."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway work is paused; incoming messages will wait."
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway work is paused; incoming messages will wait."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway work is paused; incoming messages will wait."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway work is paused; incoming messages will wait."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway work is paused; incoming messages will wait."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway work is paused; incoming messages will wait."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway work is paused; incoming messages will wait."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway work is paused; incoming messages will wait."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway work is paused; incoming messages will wait."
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway work is paused; incoming messages will wait."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway work is paused; incoming messages will wait."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway work is paused; incoming messages will wait."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway work is paused; incoming messages will wait."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway work is paused; incoming messages will wait."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway work is paused; incoming messages will wait."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway work is paused; incoming messages will wait."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway work is paused; incoming messages will wait."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway work is paused; incoming messages will wait."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway work is paused; incoming messages will wait."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway work is paused; incoming messages will wait."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Gateway work is paused; incoming messages will wait."
           }
         }
       }
@@ -85273,6 +86089,278 @@
         }
       }
     },
+    "Open Connection Settings": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Connection Settings"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection Settings"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection Settings"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection Settings"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection Settings"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection Settings"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection Settings"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection Settings"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection Settings"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection Settings"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection Settings"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection Settings"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection Settings"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection Settings"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection Settings"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection Settings"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection Settings"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection Settings"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection Settings"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection Settings"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection Settings"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection Settings"
+          }
+        }
+      }
+    },
+    "Open Connection settings to fix it.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Connection settings to fix it."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection settings to fix it."
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection settings to fix it."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection settings to fix it."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection settings to fix it."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection settings to fix it."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection settings to fix it."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection settings to fix it."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection settings to fix it."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection settings to fix it."
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection settings to fix it."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection settings to fix it."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection settings to fix it."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection settings to fix it."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection settings to fix it."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection settings to fix it."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection settings to fix it."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection settings to fix it."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection settings to fix it."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection settings to fix it."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection settings to fix it."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Open Connection settings to fix it."
+          }
+        }
+      }
+    },
     "Open Dashboard": {
       "localizations": {
         "en": {
@@ -88265,6 +89353,142 @@
         }
       }
     },
+    "OpenClaw connecting": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw connecting"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw connecting"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw connecting"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw connecting"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw connecting"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw connecting"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw connecting"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw connecting"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw connecting"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw connecting"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw connecting"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw connecting"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw connecting"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw connecting"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw connecting"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw connecting"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw connecting"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw connecting"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw connecting"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw connecting"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw connecting"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw connecting"
+          }
+        }
+      }
+    },
     "OpenClaw could not confirm the agent notification. It will not retry, to avoid a duplicate welcome.": {
       "localizations": {
         "en": {
@@ -90029,6 +91253,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "OpenClaw arbetar…"
+          }
+        }
+      }
+    },
+    "OpenClaw needs attention": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw needs attention"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw needs attention"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw needs attention"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw needs attention"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw needs attention"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw needs attention"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw needs attention"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw needs attention"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw needs attention"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw needs attention"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw needs attention"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw needs attention"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw needs attention"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw needs attention"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw needs attention"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw needs attention"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw needs attention"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw needs attention"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw needs attention"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw needs attention"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw needs attention"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "OpenClaw needs attention"
           }
         }
       }
@@ -105805,6 +107165,278 @@
           "stringUnit": {
             "state": "translated",
             "value": "Fjärr-OpenClaw aktivt"
+          }
+        }
+      }
+    },
+    "Remote OpenClaw Connecting": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remote OpenClaw Connecting"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Connecting"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Connecting"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Connecting"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Connecting"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Connecting"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Connecting"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Connecting"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Connecting"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Connecting"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Connecting"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Connecting"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Connecting"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Connecting"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Connecting"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Connecting"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Connecting"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Connecting"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Connecting"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Connecting"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Connecting"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Connecting"
+          }
+        }
+      }
+    },
+    "Remote OpenClaw Needs Attention": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remote OpenClaw Needs Attention"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Needs Attention"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Needs Attention"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Needs Attention"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Needs Attention"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Needs Attention"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Needs Attention"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Needs Attention"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Needs Attention"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Needs Attention"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Needs Attention"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Needs Attention"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Needs Attention"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Needs Attention"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Needs Attention"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Needs Attention"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Needs Attention"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Needs Attention"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Needs Attention"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Needs Attention"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Needs Attention"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Remote OpenClaw Needs Attention"
           }
         }
       }
