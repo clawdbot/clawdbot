@@ -213,6 +213,7 @@ export async function runManagerTurn(params: {
             cfg: input.cfg,
             sessionKey,
             meta: metaWithBackend,
+            isCurrentActor: params.isCurrentActor,
           });
           runtime = ensured.runtime;
           handle = ensured.handle;

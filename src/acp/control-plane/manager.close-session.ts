@@ -70,6 +70,7 @@ export async function runManagerCloseSession(params: {
         cfg: input.cfg,
         sessionKey,
         meta,
+        isCurrentActor: params.isCurrentActor,
       });
       if (input.discardPersistentState) {
         // A discard close may itself hang. Evict before awaiting it so reset

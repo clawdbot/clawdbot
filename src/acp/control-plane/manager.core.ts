@@ -424,6 +424,7 @@ export class AcpSessionManager {
     cfg: OpenClawConfig;
     sessionKey: string;
     meta: SessionAcpMeta;
+    isCurrentActor?: () => boolean;
   }): Promise<{ runtime: AcpRuntime; handle: AcpRuntimeHandle; meta: SessionAcpMeta }> {
     const actorKey = normalizeActorKey(params.sessionKey);
     const actorEpoch = this.actorQueue.getEpoch(actorKey);
@@ -434,7 +435,8 @@ export class AcpSessionManager {
       enforceConcurrentSessionLimit: (limitParams) =>
         this.enforceConcurrentSessionLimit(limitParams),
       writeSessionMeta: async (writeParams) => await this.writeSessionMeta(writeParams),
-      isCurrentActor: () => this.actorQueue.isCurrentEpoch(actorKey, actorEpoch),
+      isCurrentActor:
+        params.isCurrentActor ?? (() => this.actorQueue.isCurrentEpoch(actorKey, actorEpoch)),
     });
   }
 

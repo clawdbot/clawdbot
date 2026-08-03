@@ -178,6 +178,7 @@ export type EnsureManagerRuntimeHandle = (params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   meta: SessionAcpMeta;
+  isCurrentActor?: () => boolean;
 }) => Promise<{ runtime: AcpRuntime; handle: AcpRuntimeHandle; meta: SessionAcpMeta }>;
 
 export type ReconcileManagerRuntimeSessionIdentifiers = (params: {

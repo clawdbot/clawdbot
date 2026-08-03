@@ -47,6 +47,7 @@ export async function runManagerCancelSession(params: {
       cfg: params.cfg,
       sessionKey: params.sessionKey,
       meta: resolvedMeta,
+      isCurrentActor: params.isCurrentActor,
     });
     try {
       await cancelRuntimeHandle({
