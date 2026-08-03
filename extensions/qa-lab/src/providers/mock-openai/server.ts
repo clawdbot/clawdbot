@@ -468,55 +468,43 @@ function extractScenarioPlannedTool(events: StreamEvent[]) {
 }
 
 type TerminalRequesterSettleGate = {
-  markSettled: (caseName: string) => void;
-  waitUntilSettled: (caseName: string, workerSessionId: string) => Promise<void>;
+  markSettled: (caseName: string, childSessionKey: string) => void;
+  waitUntilSettled: (caseName: string, childSessionKey: string) => Promise<void>;
 };
 
 function createTerminalRequesterSettleGate(): TerminalRequesterSettleGate {
-  const admittedWorkers = new Set<string>();
-  const availablePermits = new Map<string, number>();
+  const settledChildren = new Set<string>();
   const waiterPromises = new Map<string, Promise<void>>();
-  const waiters = new Map<string, { caseName: string; finish: () => void }>();
-  const workerKey = (caseName: string, workerSessionId: string) =>
-    `${caseName}\n${workerSessionId}`;
+  const waiters = new Map<string, () => void>();
+  const childKey = (caseName: string, childSessionKey: string) => `${caseName}\n${childSessionKey}`;
   return {
-    markSettled(caseName) {
-      const waiting = [...waiters.values()].find((candidate) => candidate.caseName === caseName);
-      if (waiting) {
-        waiting.finish();
-        return;
-      }
-      availablePermits.set(caseName, (availablePermits.get(caseName) ?? 0) + 1);
+    markSettled(caseName, childSessionKey) {
+      const key = childKey(caseName, childSessionKey);
+      settledChildren.add(key);
+      waiters.get(key)?.();
     },
-    async waitUntilSettled(caseName, workerSessionId) {
-      const key = workerKey(caseName, workerSessionId);
-      if (admittedWorkers.has(key)) {
+    async waitUntilSettled(caseName, childSessionKey) {
+      const key = childKey(caseName, childSessionKey);
+      if (settledChildren.has(key)) {
         return;
       }
       const existing = waiterPromises.get(key);
       if (existing) {
         return await existing;
       }
-      const permitCount = availablePermits.get(caseName) ?? 0;
-      if (permitCount > 0) {
-        admittedWorkers.add(key);
-        availablePermits.set(caseName, permitCount - 1);
-        return;
-      }
       const promise = new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
           waiters.delete(key);
           waiterPromises.delete(key);
-          reject(new Error(`terminal requester did not settle: ${caseName} (${workerSessionId})`));
+          reject(new Error(`terminal requester did not settle: ${caseName} (${childSessionKey})`));
         }, 30_000);
         const finish = () => {
           clearTimeout(timeout);
           waiters.delete(key);
           waiterPromises.delete(key);
-          admittedWorkers.add(key);
           resolve();
         };
-        waiters.set(key, { caseName, finish });
+        waiters.set(key, finish);
       });
       waiterPromises.set(key, promise);
       await promise;
@@ -528,11 +516,26 @@ function resolveQaRuntimeSessionId(input: ResponsesInputItem[], body: Record<str
   return /\bRuntime:\s*[^\n]*\bsessionId=([^\s|]+)/u.exec(extractAllRequestTexts(input, body))?.[1];
 }
 
+function resolveQaChildSessionKey(input: ResponsesInputItem[], body: Record<string, unknown>) {
+  const systemPrompt = extractAllRequestTexts(
+    input.filter((item) => item.role === "developer" || item.role === "system"),
+    body,
+  );
+  return /^- Your session:\s*(.+?)\.\s*$/mu.exec(systemPrompt)?.[1]?.trim();
+}
+
+function resolveAcceptedChildSessionKey(input: ResponsesInputItem[]) {
+  const output = parseToolOutputJson(extractToolOutput(input));
+  return output?.status === "accepted" && typeof output.childSessionKey === "string"
+    ? output.childSessionKey.trim() || undefined
+    : undefined;
+}
+
 async function buildResponsesPayload(
   body: Record<string, unknown>,
   scenarioState: MockScenarioState,
   options: {
-    waitForTerminalRequesterSettled?: (caseName: string, workerSessionId: string) => Promise<void>;
+    waitForTerminalRequesterSettled?: (caseName: string, childSessionKey: string) => Promise<void>;
   } = {},
 ) {
   const providerVariant = resolveProviderVariant(
@@ -841,9 +844,9 @@ async function buildResponsesPayload(
     .at(-1)?.[1]
     ?.toLowerCase();
   if (terminalWorkerCase) {
-    const workerSessionId = resolveQaRuntimeSessionId(input, body);
-    if (options.waitForTerminalRequesterSettled && workerSessionId) {
-      await options.waitForTerminalRequesterSettled(terminalWorkerCase, workerSessionId);
+    const childSessionKey = resolveQaChildSessionKey(input, body);
+    if (options.waitForTerminalRequesterSettled && childSessionKey) {
+      await options.waitForTerminalRequesterSettled(terminalWorkerCase, childSessionKey);
     }
   }
   if (terminalWorkerCase === "silent") {
@@ -2066,12 +2069,15 @@ export async function startQaMockOpenAiServer(params?: {
     )
       ?.text.match(QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE)?.[1]
       ?.toLowerCase();
-    const settledTerminalRequesterCase =
-      terminalRequesterCase &&
-      hasToolOutput(input) &&
-      resolveQaRuntimeSessionId(input, request.body)
-        ? terminalRequesterCase
+    const settledTerminalRequester =
+      terminalRequesterCase && resolveQaRuntimeSessionId(input, request.body)
+        ? {
+            caseName: terminalRequesterCase,
+            childSessionKey: resolveAcceptedChildSessionKey(input),
+          }
         : undefined;
+    const settledTerminalCaseName = settledTerminalRequester?.caseName;
+    const settledChildSessionKey = settledTerminalRequester?.childSessionKey;
     recordRequest({
       raw: request.raw,
       body: request.body,
@@ -2093,10 +2099,13 @@ export async function startQaMockOpenAiServer(params?: {
     });
     return {
       events,
-      ...(settledTerminalRequesterCase
+      ...(settledTerminalCaseName && settledChildSessionKey
         ? {
             onResponseSent: () =>
-              terminalRequesterSettleGate.markSettled(settledTerminalRequesterCase),
+              terminalRequesterSettleGate.markSettled(
+                settledTerminalCaseName,
+                settledChildSessionKey,
+              ),
           }
         : {}),
       ...(QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE.test(allInputText) && hasToolOutput(input)
