@@ -8,7 +8,7 @@ type MainSessionRecoveryExecutionIdentity = NonNullable<
   MainRestartRecoveryState["executionIdentity"]
 >;
 
-export type MainSessionRecoveryExecutionIdentityAdmission =
+type MainSessionRecoveryExecutionIdentityAdmission =
   | { kind: "capture"; token: MainSessionRecoveryExecutionIdentity }
   | { kind: "retry-reference"; token: MainSessionRecoveryExecutionIdentity };
 
