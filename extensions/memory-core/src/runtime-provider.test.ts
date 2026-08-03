@@ -19,6 +19,7 @@ const getMemorySearchManagerMock = vi.hoisted(() =>
   })),
 );
 const filterMemorySearchHitsBySessionVisibilityMock = vi.hoisted(() => vi.fn());
+const configureMemoryCoreDreamingStateMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./memory/index.js", () => ({
   closeAllMemorySearchManagers: vi.fn(async () => {}),
@@ -28,6 +29,10 @@ vi.mock("./memory/index.js", () => ({
 
 vi.mock("./session-search-visibility.js", () => ({
   filterMemorySearchHitsBySessionVisibility: filterMemorySearchHitsBySessionVisibilityMock,
+}));
+
+vi.mock("./dreaming-state.js", () => ({
+  configureMemoryCoreDreamingState: configureMemoryCoreDreamingStateMock,
 }));
 
 import { createMemoryRuntime, memoryRuntime } from "./runtime-provider.js";
@@ -102,6 +107,19 @@ describe("memoryRuntime", () => {
       agentId: "second",
       withLease: secondLease,
     });
+  });
+
+  it("binds the scoped state opener inside each lazy runtime instance", async () => {
+    const cfg = {} as OpenClawConfig;
+    const openKeyedStore = vi.fn();
+    configureMemoryCoreDreamingStateMock.mockClear();
+
+    await createMemoryRuntime({ openKeyedStore }).getMemorySearchManager({
+      cfg,
+      agentId: "main",
+    });
+
+    expect(configureMemoryCoreDreamingStateMock).toHaveBeenCalledWith(openKeyedStore);
   });
 
   it("delegates raw-hit authorization to the canonical session visibility filter", async () => {

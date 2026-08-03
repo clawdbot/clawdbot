@@ -6,9 +6,14 @@ import {
   closeMemorySearchManager,
   getMemorySearchManager,
 } from "./memory/index.js";
+import { configureMemoryCoreDreamingState } from "./dreaming-state.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 
 export function createMemoryRuntime(host: MemoryCoreRuntimeHost = {}): MemoryPluginRuntime {
+  if (host.openKeyedStore) {
+    configureMemoryCoreDreamingState(host.openKeyedStore);
+  }
+
   return {
     async getMemorySearchManager(params) {
       const { manager, debug, error } = await getMemorySearchManager({
