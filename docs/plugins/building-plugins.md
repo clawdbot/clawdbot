@@ -318,8 +318,15 @@ with the same runtime path as `sessions_yield`, and waits for a later inbound
 event to resume the session. Use this for flows such as native channel approval
 cards where continuing the model loop before the callback would create stale or
 duplicate work. OpenClaw applies the control only after host result-finalization
-hooks have finished, so a hook-added or hook-replaced control is the value the
-runtime uses.
+hooks have finished. Current plugin result hooks can change content and details,
+but do not add, replace, or veto the control.
+
+The result-level control is the opt-in atomic handoff path for agent-core tools.
+Existing `sessions_yield`, media-generation, and CLI loopback yield adapters keep
+their imperative compatibility behavior; they are not aliases for this Plugin
+SDK contract. Native Codex and Copilot harnesses do not consume result controls,
+so they return an explicit unsupported-runtime tool error instead of silently
+continuing.
 
 A tool that can return a yield control must declare both `canYield: true` and
 `executionMode: "sequential"`. The scheduler reads the execution mode before the

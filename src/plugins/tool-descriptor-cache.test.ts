@@ -142,9 +142,9 @@ describe("plugin tool descriptor cache keys", () => {
         requiredClientCaps: ["inline-widgets"],
         canYield: true,
         executionMode: "sequential",
-        catalogMode: "never",
+        catalogMode: "direct-only",
         hideFromChannelProgress: true,
-        resultContentSource: "details",
+        resultContentSource: "network",
         execute: async () => ({ content: [], details: {} }),
       },
     });
@@ -154,9 +154,9 @@ describe("plugin tool descriptor cache keys", () => {
     expect(cached.runtimeMetadata).toEqual({
       canYield: true,
       executionMode: "sequential",
-      catalogMode: "never",
+      catalogMode: "direct-only",
       hideFromChannelProgress: true,
-      resultContentSource: "details",
+      resultContentSource: "network",
     });
   });
 

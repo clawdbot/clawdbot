@@ -603,6 +603,11 @@ function convertOpenClawToolToSdkTool(
       );
     }
 
+    if (result.control) {
+      const message = `Tool requested ${result.control.type}, but ${result.control.type} is not supported in this runtime`;
+      return failureResult(preparedArgs, invocation, startedAt, message, new Error(message), true);
+    }
+
     // OpenClaw tools throw for execution failures. Error-shaped details remain
     // lifecycle metadata; successful content uses the SDK's MCP converter.
     const sdkResult = convertMcpCallToolResult({ content: result.content });

@@ -159,7 +159,7 @@ function normalizeToolPluginResult(result: unknown): AgentToolResult<unknown> {
     return textResult(result, result);
   }
   if (isRecord(result) && Array.isArray(result.content) && Object.hasOwn(result, "details")) {
-    return result as AgentToolResult<unknown>;
+    return result as unknown as AgentToolResult<unknown>;
   }
   return jsonResult(result);
 }

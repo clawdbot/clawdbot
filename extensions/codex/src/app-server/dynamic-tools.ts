@@ -645,7 +645,7 @@ export function createCodexDynamicToolBridge(params: {
           isError: rawIsError,
           result: rawResult,
         });
-        const result = await legacyExtensionRunner.applyToolResultExtensions({
+        const extensionResult = await legacyExtensionRunner.applyToolResultExtensions({
           threadId: call.threadId,
           turnId: call.turnId,
           toolCallId: call.callId,
@@ -653,6 +653,11 @@ export function createCodexDynamicToolBridge(params: {
           args: structuredClone(executedArgs),
           result: middlewareResult,
         });
+        const result = extensionResult.control
+          ? failedToolResult(
+              `Tool requested ${extensionResult.control.type}, but ${extensionResult.control.type} is not supported in this runtime`,
+            )
+          : extensionResult;
         const resultIsError = rawIsError || isToolResultError(result);
         const finalResultFailureKind = resolveToolResultFailureKind(result);
         const resultFailureKind = rawResultFailureKind ?? finalResultFailureKind;
