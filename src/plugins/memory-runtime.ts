@@ -4,7 +4,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { loadPluginRegistryHandle, resolvePluginRegistryLoadCacheKey } from "./loader.js";
-import { getMemoryRuntime, resolveMemoryCapabilityRegistration } from "./memory-state.js";
+import {
+  getMemoryRuntime,
+  resolveMemoryCapabilityRegistration,
+  setStandaloneMemoryManagerActive,
+} from "./memory-state.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 
@@ -121,6 +125,9 @@ export async function getActiveMemorySearchManager(params: {
   if (!owner) {
     return { manager: null, error: "memory plugin unavailable" };
   }
+  if (owner.registry) {
+    setStandaloneMemoryManagerActive(true);
+  }
   return await withMemoryRuntimeOwner(
     owner,
     async (runtime) => await runtime.getMemorySearchManager(params),
@@ -146,6 +153,7 @@ export async function closeActiveMemorySearchManagers(cfg?: OpenClawConfig): Pro
     ),
   );
   standaloneMemoryRegistrySlot?.retiredRuntimes.clear();
+  setStandaloneMemoryManagerActive(false);
 }
 
 /** Closes the plugin-backed memory search manager for one agent. */
@@ -164,6 +172,7 @@ export async function closeActiveMemorySearchManager(params: {
 
 function resetStandaloneMemoryRegistrySlot(): void {
   standaloneMemoryRegistrySlot = undefined;
+  setStandaloneMemoryManagerActive(false);
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

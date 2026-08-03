@@ -31,6 +31,7 @@ import {
   resolveActiveMemoryBackendConfig,
 } from "./memory-runtime.js";
 import { resetStandaloneMemoryRegistrySlot } from "./memory-runtime.test-support.js";
+import { hasMemoryRuntime } from "./memory-state.js";
 
 function createRuntime() {
   return {
@@ -93,6 +94,73 @@ describe("memory runtime handles", () => {
     expect(resolveActiveMemoryBackendConfig({ cfg: memoryConfig, agentId: "main" })).toEqual({
       backend: "builtin",
     });
+  });
+
+  it("tracks standalone managers without activating config-only lookups and rearms reused handles", async () => {
+    const { registry, runtime } = createRegistry();
+    mocks.loadPluginRegistryHandle.mockReturnValue(registry);
+
+    expect(hasMemoryRuntime()).toBe(false);
+    expect(resolveActiveMemoryBackendConfig({ cfg: memoryConfig, agentId: "main" })).toEqual({
+      backend: "builtin",
+    });
+    expect(hasMemoryRuntime()).toBe(false);
+
+    await getActiveMemorySearchManager({ cfg: memoryConfig, agentId: "main" });
+    expect(hasMemoryRuntime()).toBe(true);
+
+    await closeActiveMemorySearchManagers();
+    expect(hasMemoryRuntime()).toBe(false);
+
+    await getActiveMemorySearchManager({ cfg: memoryConfig, agentId: "main" });
+    expect(hasMemoryRuntime()).toBe(true);
+    expect(mocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
+
+    await closeActiveMemorySearchManagers();
+    expect(runtime.closeAllMemorySearchManagers).toHaveBeenCalledTimes(2);
+    expect(hasMemoryRuntime()).toBe(false);
+  });
+
+  it("retains standalone ownership across workspace replacement and per-agent cleanup", async () => {
+    const main = createRegistry();
+    const research = createRegistry();
+    mocks.loadPluginRegistryHandle
+      .mockReturnValueOnce(main.registry)
+      .mockReturnValueOnce(research.registry);
+
+    await getActiveMemorySearchManager({ cfg: memoryConfig, agentId: "main" });
+    await getActiveMemorySearchManager({ cfg: memoryConfig, agentId: "research" });
+    expect(hasMemoryRuntime()).toBe(true);
+
+    await closeActiveMemorySearchManager({ cfg: memoryConfig, agentId: "main" });
+    expect(hasMemoryRuntime()).toBe(true);
+
+    await closeActiveMemorySearchManagers();
+    expect(main.runtime.closeAllMemorySearchManagers).toHaveBeenCalledTimes(1);
+    expect(research.runtime.closeAllMemorySearchManagers).toHaveBeenCalledTimes(1);
+    expect(hasMemoryRuntime()).toBe(false);
+  });
+
+  it("retains standalone cleanup ownership when manager acquisition or teardown fails", async () => {
+    const { registry, runtime } = createRegistry();
+    mocks.loadPluginRegistryHandle.mockReturnValue(registry);
+    runtime.getMemorySearchManager.mockRejectedValueOnce(
+      new Error("manager initialization failed"),
+    );
+
+    await expect(
+      getActiveMemorySearchManager({ cfg: memoryConfig, agentId: "main" }),
+    ).rejects.toThrow("manager initialization failed");
+    expect(hasMemoryRuntime()).toBe(true);
+
+    runtime.closeAllMemorySearchManagers.mockRejectedValueOnce(
+      new Error("manager teardown failed"),
+    );
+    await expect(closeActiveMemorySearchManagers()).rejects.toThrow("manager teardown failed");
+    expect(hasMemoryRuntime()).toBe(true);
+
+    await closeActiveMemorySearchManagers();
+    expect(hasMemoryRuntime()).toBe(false);
   });
 
   it("keys the single slot by the requesting agent workspace", () => {
