@@ -225,7 +225,11 @@ describe("file sidebar clipboard feedback", () => {
     { label: "Copy file contents", value: "const answer = 42;" },
   ];
 
-  type FilePanel = HTMLElement & { content: unknown; updateComplete: Promise<unknown> };
+  type FilePanel = HTMLElement & {
+    content: unknown;
+    ensureFileEditor: () => Promise<void>;
+    updateComplete: Promise<unknown>;
+  };
 
   async function mountFilePanel(): Promise<FilePanel> {
     const panel = document.createElement("openclaw-chat-detail-panel") as FilePanel;
@@ -235,10 +239,7 @@ describe("file sidebar clipboard feedback", () => {
       name: "example.ts",
       content: "const answer = 42;",
     };
-    vi.spyOn(
-      panel as HTMLElement & { ensureFileEditor: () => Promise<void> },
-      "ensureFileEditor",
-    ).mockResolvedValue();
+    vi.spyOn(panel, "ensureFileEditor").mockResolvedValue();
     document.body.append(panel);
     await panel.updateComplete;
     return panel;
@@ -270,6 +271,9 @@ describe("file sidebar clipboard feedback", () => {
         const timerIndex = schedule.mock.calls
           .map(([, timeout], callIndex) => (timeout === delay ? callIndex : -1))
           .filter((callIndex) => callIndex >= 0)[index];
+        if (timerIndex === undefined) {
+          throw new Error(`Missing sidebar clipboard reset timer after ${delay}ms`);
+        }
         const reset = schedule.mock.calls[timerIndex]?.[0];
         if (typeof reset !== "function") {
           throw new Error(`Expected sidebar clipboard reset timer after ${delay}ms`);
