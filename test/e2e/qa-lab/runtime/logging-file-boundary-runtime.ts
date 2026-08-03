@@ -60,11 +60,14 @@ export async function runLoggingFileBoundary(outputRoot: string) {
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
-    const current = (await readFile(logPath, "utf8")).trim().split("\n").map(JSON.parse);
+    const current = (await readFile(logPath, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
     const archived = (await readFile(rotatedPath(logPath), "utf8"))
       .trim()
       .split("\n")
-      .map(JSON.parse);
+      .map((line) => JSON.parse(line));
     const fileRecord = current.find(
       (record: Record<string, unknown>) => record.message === "qa-correlated-record",
     ) as Record<string, unknown> | undefined;

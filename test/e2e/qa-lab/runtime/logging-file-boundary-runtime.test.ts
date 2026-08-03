@@ -1,19 +1,12 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import { runLoggingFileBoundary } from "./logging-file-boundary-runtime.js";
 
-const roots: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("logging file boundary runtime", () => {
   it("rotates valid JSONL and preserves linked trace fields", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "openclaw-logging-boundary-"));
-    roots.push(root);
+    const root = tempDirs.make("openclaw-logging-boundary-");
     const result = await runLoggingFileBoundary(root);
 
     expect(result.currentRecords).toBeGreaterThan(0);
