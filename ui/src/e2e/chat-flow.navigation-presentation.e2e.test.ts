@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import {
   SESSION_DRAG_MIME,
   captureSessionAccessibilityProof,
@@ -22,9 +23,9 @@ suite.define(() => {
       serviceWorkers: "block",
       viewport: { height: 900, width: 1440 },
     });
-    await context.addInitScript(() => {
+    await context.addInitScript((settingsKey) => {
       localStorage.setItem(
-        "openclaw.control.settings.v1:ws://127.0.0.1:18789",
+        settingsKey,
         JSON.stringify({
           chatSplitLayout: {
             activePaneId: "p1",
@@ -44,7 +45,7 @@ suite.define(() => {
           },
         }),
       );
-    });
+    }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["chat.startup", "chat.startup"],

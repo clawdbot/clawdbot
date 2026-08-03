@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiBundledGatewayUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -142,14 +142,17 @@ suite.define(() => {
       });
       const initialFamily = family === "claw" ? "knot" : "claw";
       await context.addInitScript(
-        ({ initialMode, initialTheme }) => {
-          const gatewayUrl = "ws://127.0.0.1:18789";
+        ({ gatewayUrl, initialMode, initialTheme }) => {
           localStorage.setItem(
             `openclaw.control.settings.v1:${gatewayUrl}`,
             JSON.stringify({ gatewayUrl, theme: initialTheme, themeMode: initialMode }),
           );
         },
-        { initialMode: mode, initialTheme: initialFamily },
+        {
+          gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl),
+          initialMode: mode,
+          initialTheme: initialFamily,
+        },
       );
 
       const page = await context.newPage();

@@ -31,6 +31,16 @@ export function controlUiSessionUrl(baseUrl: string, sessionKey: string): string
   return url.toString();
 }
 
+export function controlUiBundledGatewayUrl(baseUrl: string): string {
+  const url = new URL(baseUrl);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.origin;
+}
+
+export function controlUiBundledSettingsStorageKey(baseUrl: string): string {
+  return `openclaw.control.settings.v1:${controlUiBundledGatewayUrl(baseUrl)}`;
+}
+
 type ControlUiRouteTarget = {
   hash?: string;
   pathname?: string;
