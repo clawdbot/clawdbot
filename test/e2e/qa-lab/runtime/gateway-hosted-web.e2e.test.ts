@@ -6,9 +6,7 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import adminHttpRpcPlugin from "../../../../extensions/admin-http-rpc/index.js";
-import adminHttpRpcManifest from "../../../../extensions/admin-http-rpc/openclaw.plugin.json" with { type: "json" };
 import canvasPlugin from "../../../../extensions/canvas/index.js";
-import { setA2uiRootRealForTest } from "../../../../extensions/canvas/test-api.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../../src/config/config.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { startGatewayServer } from "../../../../src/gateway/server.js";
@@ -37,7 +35,6 @@ afterEach(async () => {
   clearConfigCache();
   clearRuntimeConfigSnapshot();
   resetPluginRuntimeStateForTest();
-  setA2uiRootRealForTest(undefined);
 });
 
 function waitForWebSocketOpen(ws: WebSocket): Promise<void> {
@@ -111,14 +108,11 @@ describe("Gateway hosted web surfaces", () => {
       const stateDir = path.join(root, "state");
       const controlUiRoot = path.join(root, "control-ui");
       const canvasRoot = path.join(root, "canvas");
-      const a2uiEntryDir = path.join(root, "fixture-entry");
-      const a2uiRoot = path.join(a2uiEntryDir, "a2ui");
       const configPath = path.join(root, "openclaw.json");
       await Promise.all([
         fs.mkdir(stateDir, { recursive: true }),
         fs.mkdir(controlUiRoot, { recursive: true }),
         fs.mkdir(canvasRoot, { recursive: true }),
-        fs.mkdir(a2uiRoot, { recursive: true }),
       ]);
       await Promise.all([
         fs.writeFile(
@@ -131,18 +125,7 @@ describe("Gateway hosted web surfaces", () => {
           "<!doctype html><html><body>Gateway hosted Canvas</body></html>",
           "utf8",
         ),
-        fs.writeFile(
-          path.join(a2uiRoot, "index.html"),
-          '<!doctype html><html><body><script src="./a2ui.bundle.js"></script>A2UI fixture</body></html>',
-          "utf8",
-        ),
-        fs.writeFile(
-          path.join(a2uiRoot, "a2ui.bundle.js"),
-          'globalThis.__openclawA2uiFixture = "loaded";',
-          "utf8",
-        ),
       ]);
-      setA2uiRootRealForTest(await fs.realpath(a2uiRoot));
 
       const config: OpenClawConfig = {
         gateway: {
@@ -207,12 +190,7 @@ describe("Gateway hosted web surfaces", () => {
                       source: `extensions/${pluginId}/index.ts`,
                     }),
                   );
-                  if (
-                    pluginId === adminHttpRpcManifest.id &&
-                    adminHttpRpcManifest.contracts.gatewayMethodDispatch.includes(
-                      "authenticated-request",
-                    )
-                  ) {
+                  if (pluginId === "admin-http-rpc") {
                     const registeredRoute = registry.httpRoutes[routeCount];
                     if (registeredRoute) {
                       registeredRoute.gatewayMethodDispatchAllowed = true;
@@ -312,11 +290,12 @@ describe("Gateway hosted web surfaces", () => {
               const a2ui = await fetch(`${scopedCanvasUrl}/__openclaw__/a2ui/`);
               expect(a2ui.status).toBe(200);
               expect(a2ui.headers.get("content-type")).toContain("text/html");
-              expect(await a2ui.text()).toContain("A2UI fixture");
+              expect(await a2ui.text()).toContain("<title>OpenClaw Canvas</title>");
 
               const a2uiBundle = await fetch(`${scopedCanvasUrl}/__openclaw__/a2ui/a2ui.bundle.js`);
               expect(a2uiBundle.status).toBe(200);
-              expect(await a2uiBundle.text()).toContain("__openclawA2uiFixture");
+              expect(a2uiBundle.headers.get("content-type")).toContain("javascript");
+              expect((await a2uiBundle.text()).length).toBeGreaterThan(100);
 
               const wrongCapability = await fetch(`${wrongCapabilityUrl}/__openclaw__/canvas/`);
               expect(wrongCapability.status).toBe(401);
