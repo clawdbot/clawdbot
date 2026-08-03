@@ -367,7 +367,7 @@ function isVideoTranscriptMediaPath(path: string, mediaType: unknown): boolean {
 // contains a "---<uuid>"-shaped part is preserved; the stored URI is unchanged.
 const MANAGED_INBOUND_MEDIA_PREFIX = "media://inbound/";
 const MANAGED_INBOUND_UUID_SUFFIX_PATTERN =
-  /---[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?=\.[^/]*$|$)/i;
+  /---[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?=\.[^./]*$|$)/i;
 
 function labelForMediaPath(mediaPath: string): string {
   const trimmed = mediaPath.trim();

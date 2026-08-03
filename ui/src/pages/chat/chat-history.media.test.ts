@@ -116,4 +116,18 @@ describe("chat history attachment card labels", () => {
       "report---a1b2c3d4-e5f6-7890-abcd-ef1234567890-final.docx",
     );
   });
+
+  it("preserves a dotted UUID-shaped segment in a legacy attachment name", () => {
+    const path = `media://inbound/report---a1b2c3d4-e5f6-7890-abcd-ef1234567890.backup---${MANAGED_UUID}.pdf`;
+    const attachments = extractTranscriptAttachments(
+      userMessageWithMedia([{ path, contentType: "application/pdf" }]),
+    );
+
+    expect(attachments[0]?.attachment).toMatchObject({
+      url: path,
+      label: "report---a1b2c3d4-e5f6-7890-abcd-ef1234567890.backup.pdf",
+      mimeType: "application/pdf",
+    });
+    expect(attachments[0]?.attachment.label).not.toContain(MANAGED_UUID);
+  });
 });
