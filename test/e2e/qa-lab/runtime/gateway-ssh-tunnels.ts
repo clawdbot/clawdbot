@@ -22,6 +22,8 @@ const execFile = promisify(execFileCallback);
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/gateway-ssh-tunnels.ts";
 const STATUS_TIMEOUT_MS = 8_000;
 const PROCESS_TIMEOUT_MS = 10_000;
+const KNOWN_HOSTS_LOCK_TIMEOUT_MS = 30_000;
+const KNOWN_HOSTS_LOCK_RETRY_MS = 50;
 const TEST_TOKEN = "qa-gateway-ssh-token";
 
 type ProducerOptions = {
@@ -57,8 +59,14 @@ type KnownHostsBackup = {
   value: Buffer;
 };
 
+type KnownHostsLock = {
+  release: () => Promise<void>;
+  waitMs: number;
+};
+
 type IsolatedSshd = {
   clientKeyPath: string;
+  knownHostsLockWaitMs: number;
   port: number;
   setKnownHost: (mode: "correct" | "wrong") => Promise<void>;
   stop: () => Promise<void>;
@@ -223,6 +231,50 @@ async function restoreKnownHosts(filePath: string, backup: KnownHostsBackup) {
   }
 }
 
+async function acquireKnownHostsLock(lockPath: string): Promise<KnownHostsLock> {
+  const startedAt = Date.now();
+  const deadlineAt = startedAt + KNOWN_HOSTS_LOCK_TIMEOUT_MS;
+  while (true) {
+    try {
+      const handle = await fs.open(lockPath, "wx", 0o600);
+      let released = false;
+      const release = async () => {
+        if (released) {
+          return;
+        }
+        released = true;
+        try {
+          await handle.close();
+        } finally {
+          await fs.rm(lockPath, { force: true });
+        }
+      };
+      try {
+        await handle.writeFile(`${process.pid}\n`, "utf8");
+      } catch (error) {
+        await release();
+        throw error;
+      }
+      return {
+        release,
+        waitMs: Date.now() - startedAt,
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw error;
+      }
+      if (Date.now() >= deadlineAt) {
+        throw new Error(
+          `timed out waiting for shared OpenSSH known-hosts lock after ${KNOWN_HOSTS_LOCK_TIMEOUT_MS}ms`,
+        );
+      }
+      await new Promise((resolve) => {
+        setTimeout(resolve, KNOWN_HOSTS_LOCK_RETRY_MS);
+      });
+    }
+  }
+}
+
 function withoutTargetKnownHost(existing: Buffer, targetPrefix: string) {
   return existing
     .toString("utf8")
@@ -296,6 +348,9 @@ async function startIsolatedSshd(root: string): Promise<IsolatedSshd> {
   const sshDir = path.join(systemHome, ".ssh");
   const knownHostsPath = path.join(sshDir, "known_hosts");
   const lockPath = path.join(sshDir, ".openclaw-qa-known-hosts.lock");
+  const targetPrefix = `[127.0.0.1]:${port} `;
+  const hostKeyLine = `${targetPrefix}${await readPublicKeyLine(hostKeyPath)}`;
+  const wrongHostKeyLine = `${targetPrefix}${await readPublicKeyLine(wrongHostKeyPath)}`;
   const sshDirExisted = await fs
     .stat(sshDir)
     .then(() => true)
@@ -306,13 +361,26 @@ async function startIsolatedSshd(root: string): Promise<IsolatedSshd> {
       throw error;
     });
   await fs.mkdir(sshDir, { recursive: true, mode: 0o700 });
-  const lock = await fs.open(lockPath, "wx", 0o600);
-  await lock.close();
-  const knownHostsBackup = await backupKnownHosts(knownHostsPath);
-  const targetPrefix = `[127.0.0.1]:${port} `;
+  let knownHostsLock: KnownHostsLock;
+  try {
+    knownHostsLock = await acquireKnownHostsLock(lockPath);
+  } catch (error) {
+    if (!sshDirExisted) {
+      await fs.rmdir(sshDir).catch(() => {});
+    }
+    throw error;
+  }
+  let knownHostsBackup: KnownHostsBackup;
+  try {
+    knownHostsBackup = await backupKnownHosts(knownHostsPath);
+  } catch (error) {
+    await knownHostsLock.release();
+    if (!sshDirExisted) {
+      await fs.rmdir(sshDir).catch(() => {});
+    }
+    throw error;
+  }
   const retainedKnownHosts = withoutTargetKnownHost(knownHostsBackup.value, targetPrefix);
-  const hostKeyLine = `${targetPrefix}${await readPublicKeyLine(hostKeyPath)}`;
-  const wrongHostKeyLine = `${targetPrefix}${await readPublicKeyLine(wrongHostKeyPath)}`;
   const setKnownHost = async (mode: "correct" | "wrong") => {
     const line = mode === "correct" ? hostKeyLine : wrongHostKeyLine;
     const content = retainedKnownHosts ? `${retainedKnownHosts}\n${line}\n` : `${line}\n`;
@@ -324,10 +392,13 @@ async function startIsolatedSshd(root: string): Promise<IsolatedSshd> {
       return;
     }
     restored = true;
-    await restoreKnownHosts(knownHostsPath, knownHostsBackup);
-    await fs.rm(lockPath, { force: true });
-    if (!sshDirExisted) {
-      await fs.rmdir(sshDir).catch(() => {});
+    try {
+      await restoreKnownHosts(knownHostsPath, knownHostsBackup);
+    } finally {
+      await knownHostsLock.release();
+      if (!sshDirExisted) {
+        await fs.rmdir(sshDir).catch(() => {});
+      }
     }
   };
 
@@ -403,6 +474,7 @@ async function startIsolatedSshd(root: string): Promise<IsolatedSshd> {
 
   return {
     clientKeyPath,
+    knownHostsLockWaitMs: knownHostsLock.waitMs,
     port,
     setKnownHost,
     stop,
@@ -609,6 +681,7 @@ export async function runGatewaySshTunnels(
             root,
             options.repoRoot,
           ]),
+          knownHostsLockWaitMs: sshd.knownHostsLockWaitMs,
           sshdPort: sshd.port,
           tunnelPort: localPort,
           unreachableDiagnostic: sanitizeDiagnostic(unreachableWarning.message ?? "", [
