@@ -94,6 +94,29 @@ function createRequest(
   return req;
 }
 
+function configureRequest(req: IncomingMessage): IncomingMessage {
+  req.method = "POST";
+  req.headers = {};
+  Object.defineProperty(req, "socket", {
+    value: { remoteAddress: "127.0.0.1" },
+  });
+  return req;
+}
+
+function createFailingRequest(error?: Error): IncomingMessage {
+  return configureRequest(
+    new Readable({
+      read() {
+        this.destroy(error);
+      },
+    }) as IncomingMessage,
+  );
+}
+
+function createPendingRequest(): IncomingMessage {
+  return configureRequest(new Readable({ read() {} }) as IncomingMessage);
+}
+
 type TestResponse = ServerResponse & {
   body?: string;
   setHeaderMock: ReturnType<typeof vi.fn>;
@@ -206,6 +229,83 @@ describe("createSmsWebhookHandler", () => {
     expect(res.statusCode).toBe(200);
     expect(res.setHeaderMock).toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
     expect(enqueueSmsIngress).toHaveBeenCalledWith(parseTestTwilioForm(body));
+  });
+
+  it("returns terminal HTTP 413 for an oversized callback body", async () => {
+    const delivery = createDeliveryRecorder();
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account: createAccount(),
+      ingress: createIngress(),
+      delivery,
+    });
+    const res = createResponse();
+
+    await handler(
+      createRequest("x", "unused", {
+        headers: { "content-length": String(32 * 1024 + 1) },
+      }),
+      res,
+    );
+
+    expect(res.statusCode).toBe(413);
+    expect(res.body).toBe("Payload too large");
+    expect(delivery.record).not.toHaveBeenCalled();
+    expect(enqueueSmsIngress).not.toHaveBeenCalled();
+  });
+
+  it("rethrows request body timeouts for Gateway-owned retry responses", async () => {
+    vi.useFakeTimers();
+    try {
+      const handler = createSmsWebhookHandler({
+        cfg: {},
+        account: createAccount(),
+        ingress: createIngress(),
+      });
+      const res = createResponse();
+      const handling = handler(createPendingRequest(), res);
+      const expected = expect(handling).rejects.toMatchObject({
+        code: "REQUEST_BODY_TIMEOUT",
+      });
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expected;
+
+      expect(res.endMock).not.toHaveBeenCalled();
+      expect(enqueueSmsIngress).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rethrows unexpected request read failures for Gateway-owned retry responses", async () => {
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account: createAccount(),
+      ingress: createIngress(),
+    });
+    const res = createResponse();
+
+    await expect(handler(createFailingRequest(new Error("read failed")), res)).rejects.toThrow(
+      "read failed",
+    );
+    expect(res.endMock).not.toHaveBeenCalled();
+    expect(enqueueSmsIngress).not.toHaveBeenCalled();
+  });
+
+  it("rethrows a closed request body for Gateway-owned retry responses", async () => {
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account: createAccount(),
+      ingress: createIngress(),
+    });
+    const res = createResponse();
+
+    await expect(handler(createFailingRequest(), res)).rejects.toMatchObject({
+      code: "CONNECTION_CLOSED",
+    });
+    expect(res.endMock).not.toHaveBeenCalled();
+    expect(enqueueSmsIngress).not.toHaveBeenCalled();
   });
 
   it("persists signed delivery callbacks without dispatching them as inbound messages", async () => {

@@ -343,16 +343,17 @@ describe("Twilio SMS helpers", () => {
     expect(body.get("To")).toBe("+15551234567");
     expect(body.get("Body")).toBe("hello");
     expect(body.get("StatusCallback")).toBe(
-      "https://gateway.example.com/webhooks/sms#rp=4xx,5xx&rc=1",
+      "https://gateway.example.com/webhooks/sms#rp=4xx,ct,rt,5xx&rt=5000&rc=1",
     );
   });
 
-  it("opts delivery commits into 5xx retries without adding 4xx retries", () => {
+  it("opts delivery commits into bounded connection, timeout, and 5xx retries", () => {
     const callbackUrl = resolveTwilioStatusCallbackUrl("https://gateway.example.com/webhooks/sms");
     const overrides = new URLSearchParams(callbackUrl.split("#")[1]);
 
-    expect(overrides.get("rp")?.split(",")).toEqual(["ct", "5xx"]);
+    expect(overrides.get("rp")?.split(",")).toEqual(["ct", "rt", "5xx"]);
     expect(overrides.get("rp")?.split(",")).not.toContain("4xx");
+    expect(overrides.get("rt")).toBe("5000");
     expect(overrides.get("rc")).toBe("1");
   });
 
@@ -360,12 +361,12 @@ describe("Twilio SMS helpers", () => {
     [
       "accepts an absolute HTTP callback URL",
       "http://gateway.example.com/webhooks/sms",
-      "http://gateway.example.com/webhooks/sms#rp=ct,5xx&rc=1",
+      "http://gateway.example.com/webhooks/sms#rp=ct,rt,5xx&rt=5000&rc=1",
     ],
     [
       "preserves the query and existing retry policy",
       "https://gateway.example.com/webhooks/sms?tenant=support#rp=4xx",
-      "https://gateway.example.com/webhooks/sms?tenant=support#rp=4xx,5xx&rc=1",
+      "https://gateway.example.com/webhooks/sms?tenant=support#rp=4xx,ct,rt,5xx&rt=5000&rc=1",
     ],
     [
       "preserves an all-failures policy and configured retry count",
@@ -373,9 +374,19 @@ describe("Twilio SMS helpers", () => {
       "https://gateway.example.com/webhooks/sms#rt=5000&rp=all&rc=3",
     ],
     [
+      "preserves a configured read timeout",
+      "https://gateway.example.com/webhooks/sms#rt=1200&rp=ct",
+      "https://gateway.example.com/webhooks/sms#rt=1200&rp=ct,rt,5xx&rc=1",
+    ],
+    [
+      "repairs an invalid read timeout",
+      "https://gateway.example.com/webhooks/sms#rt=16000",
+      "https://gateway.example.com/webhooks/sms#rt=5000&rp=ct,rt,5xx&rc=1",
+    ],
+    [
       "repairs a disabled retry count without replacing other overrides",
       "https://gateway.example.com/webhooks/sms#e=singapore&rc=0",
-      "https://gateway.example.com/webhooks/sms#e=singapore&rc=1&rp=ct,5xx",
+      "https://gateway.example.com/webhooks/sms#e=singapore&rc=1&rp=ct,rt,5xx&rt=5000",
     ],
   ])("%s", (_name, publicWebhookUrl, expected) => {
     expect(resolveTwilioStatusCallbackUrl(publicWebhookUrl)).toBe(expected);
@@ -387,7 +398,7 @@ describe("Twilio SMS helpers", () => {
 
   it("enforces OpenClaw's defensive 4,000-character status callback cap", () => {
     const prefix = "https://gateway.example.com/webhooks/sms?x=";
-    const suffix = "#rp=ct,5xx&rc=1";
+    const suffix = "#rp=ct,rt,5xx&rt=5000&rc=1";
     const paddingLength = 4_000 - prefix.length - suffix.length;
     const atLimit = `${prefix}${"a".repeat(paddingLength)}`;
 
@@ -716,7 +727,7 @@ describe("Twilio SMS helpers", () => {
     expect(body.get("To")).toBe("+15551234567");
     expect(body.get("Body")).toBe("hello");
     expect(body.get("StatusCallback")).toBe(
-      "https://gateway.example.com/webhooks/sms#rp=ct,5xx&rc=1",
+      "https://gateway.example.com/webhooks/sms#rp=ct,rt,5xx&rt=5000&rc=1",
     );
   });
 

@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createFixedWindowRateLimiter,
+  isRequestBodyLimitError,
   resolveRequestClientIp,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import {
@@ -114,12 +115,12 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
     let form: Record<string, string>;
     try {
       form = await readTwilioWebhookForm(req);
-    } catch {
-      if (invalidRequestRateLimited) {
-        return rejectInvalidRequestRateLimit({ key: clientAddressKey, log: params.log, res });
+    } catch (error) {
+      if (isRequestBodyLimitError(error, "PAYLOAD_TOO_LARGE")) {
+        respondTwiml(res, 413, "Payload too large");
+        return true;
       }
-      respondTwiml(res, 400, "Invalid request body");
-      return true;
+      throw error;
     }
 
     if (!params.account.dangerouslyDisableSignatureValidation) {
