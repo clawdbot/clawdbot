@@ -498,7 +498,9 @@ function createSynologyChatPlugin(): SynologyChatPlugin {
             "- Use short, clear responses (Synology Chat has a minimal UI)",
             "- Use line breaks to separate sections",
             "- Use numbered or bulleted lists for clarity",
-            "- Wrap URLs with `<URL|label>` for user-friendly links",
+            ...(account.dangerouslyAllowNasUrlFetches
+              ? ["- Wrap URLs with `<URL|label>` for user-friendly links"]
+              : []),
           ];
         },
       },

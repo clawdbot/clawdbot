@@ -487,6 +487,7 @@ describe("createSynologyChatPlugin", () => {
       expect(hints).toContain(
         "  OpenClaw omits remote media URLs and sends this notice instead: Remote media omitted: Synology Chat cannot safely fetch remote URLs.",
       );
+      expect(hints).not.toContain("- Wrap URLs with `<URL|label>` for user-friendly links");
     });
 
     it("warns the model when automatic NAS file fetching is enabled", () => {
@@ -502,6 +503,7 @@ describe("createSynologyChatPlugin", () => {
         "  The NAS is configured to download the URL automatically. Only send URLs the operator trusts the NAS to fetch.",
       );
       expect(hints).toContain("**Links**: Use `<URL|display text>` to create clickable links.");
+      expect(hints).toContain("- Wrap URLs with `<URL|label>` for user-friendly links");
     });
   });
 
