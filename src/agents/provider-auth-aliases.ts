@@ -161,7 +161,7 @@ export function resolveProviderAuthAliasMap(
           ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
           env,
           allowWorkspaceScopedSnapshot: true,
-          requireDefaultDiscoveryContext: true,
+          requireProcessFullContext: true,
         })) ??
     (() => {
       if (!config || normalizePluginsConfig(config.plugins).loadPaths.length !== 0) {
@@ -171,7 +171,7 @@ export function resolveProviderAuthAliasMap(
         ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
         env,
         allowWorkspaceScopedSnapshot: true,
-        requireDefaultDiscoveryContext: true,
+        requireProcessFullContext: true,
       });
       return currentSnapshot;
     })() ??

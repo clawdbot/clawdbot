@@ -38,7 +38,7 @@ function resolveMetadataSnapshotForPolicies(
       env,
       workspaceDir,
       allowWorkspaceScopedSnapshot: true,
-      requireDefaultDiscoveryContext: true,
+      requireProcessFullContext: true,
     });
     if (currentSnapshot) {
       return {

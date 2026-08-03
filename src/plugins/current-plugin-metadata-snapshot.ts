@@ -139,7 +139,20 @@ export function getCurrentPluginMetadataSnapshot(
     pluginIdScope?: PluginMetadataSnapshotPluginIdScope;
     workspaceDir?: string;
     allowWorkspaceScopedSnapshot?: boolean;
+    /**
+     * Discovery EQUIVALENCE: reject unless a config with default load paths
+     * would discover exactly this snapshot. For foreign-config consumers
+     * (plugin auto-enable, activation context, project settings) that apply
+     * their own config's policy to the registry.
+     */
     requireDefaultDiscoveryContext?: boolean;
+    /**
+     * Process IDENTITY: accept the process's published full (unscoped)
+     * snapshot, including operator plugins.load.paths. For process-global
+     * consumers (model-id normalization, provider env vars/aliases) that ask
+     * "what is this gateway's real plugin set?".
+     */
+    requireProcessFullContext?: boolean;
   } = {},
 ): PluginMetadataSnapshot | undefined {
   const {
@@ -215,11 +228,32 @@ export function getCurrentPluginMetadataSnapshot(
       return undefined;
     }
   }
-  if (params.requireDefaultDiscoveryContext === true && !defaultDiscoveryCompatible) {
-    // Scope and workspace rejections already ran above; the stored flag marks
-    // whether the published snapshot is the process's canonical full-context
-    // snapshot (see setCurrentPluginMetadataSnapshot).
+  if (params.requireProcessFullContext === true && !defaultDiscoveryCompatible) {
+    // The stored publish-time flag marks whether this is the process's
+    // canonical full-context snapshot (see setCurrentPluginMetadataSnapshot).
     return undefined;
+  }
+  if (params.requireDefaultDiscoveryContext === true) {
+    // Discovery equivalence must stay a fingerprint comparison against a
+    // default-load-path config: foreign-config consumers write policy from
+    // this registry (plugin auto-enable mutates plugins.allow), and the
+    // policy hash cannot see load.paths. See plugin-auto-enable.core.test.
+    const defaultDiscoveryConfigFingerprint = resolvePluginMetadataControlPlaneFingerprint(
+      {},
+      {
+        env: params.env,
+        index: snapshot.index,
+        policyHash: snapshot.policyHash,
+        workspaceDir: requestedWorkspaceDir,
+      },
+    );
+    const fingerprintMatches =
+      configFingerprint === defaultDiscoveryConfigFingerprint ||
+      snapshot.configFingerprint === defaultDiscoveryConfigFingerprint ||
+      Boolean(compatibleConfigFingerprints?.includes(defaultDiscoveryConfigFingerprint));
+    if (!fingerprintMatches) {
+      return undefined;
+    }
   }
   return snapshot;
 }

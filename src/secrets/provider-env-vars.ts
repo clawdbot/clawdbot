@@ -146,7 +146,7 @@ function resolveProviderMetadataSnapshot(
       env,
       ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
       allowWorkspaceScopedSnapshot: true,
-      requireDefaultDiscoveryContext: true,
+      requireProcessFullContext: true,
     });
   }
   if (current) {
@@ -159,7 +159,7 @@ function resolveProviderMetadataSnapshot(
       env,
       ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
       allowWorkspaceScopedSnapshot: true,
-      requireDefaultDiscoveryContext: true,
+      requireProcessFullContext: true,
     });
     if (unscopedCurrent) {
       return unscopedCurrent;

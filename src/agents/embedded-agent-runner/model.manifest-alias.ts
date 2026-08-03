@@ -305,7 +305,7 @@ export function resolveManifestModelCatalogProviderAliasMetadata(params: {
           config: params.cfg,
           workspaceDir: params.workspaceDir,
           env,
-          ...(params.cfg === undefined ? { requireDefaultDiscoveryContext: true } : {}),
+          ...(params.cfg === undefined ? { requireProcessFullContext: true } : {}),
         })?.plugins
       : undefined;
   const plugins =

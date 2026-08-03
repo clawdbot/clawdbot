@@ -2,7 +2,19 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+const normalizationRecordsSpy = vi.hoisted(() => vi.fn());
+vi.mock("@openclaw/model-catalog-core/provider-model-id-normalization", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@openclaw/model-catalog-core/provider-model-id-normalization")
+    >();
+  return {
+    ...actual,
+    setCurrentManifestModelIdNormalizationRecords: normalizationRecordsSpy,
+  };
+});
 import {
   captureCurrentPluginMetadataSnapshotState,
   getCurrentPluginMetadataSnapshot,
@@ -163,12 +175,12 @@ describe("current plugin metadata snapshot", () => {
     ).toBeUndefined();
   });
 
-  it("reuses load-path snapshots for configless default-discovery callers", () => {
-    // The published full snapshot IS the process's default discovery context.
-    // Requiring a literal-{} fingerprint made this permanently unmatchable for
-    // any operator with plugins.load.paths: every configless lookup paid a
-    // ~50ms rescan that returned a snapshot MISSING the load-path plugins,
-    // and manifest model-id normalization was silently disabled.
+  it("serves load-path snapshots to process-full-context callers", () => {
+    // The published full snapshot IS the process's plugin set. The old
+    // single gate required a literal-{} fingerprint, permanently unmatchable
+    // for operators with plugins.load.paths: every configless lookup paid a
+    // ~50ms rescan returning a snapshot MISSING the load-path plugins, and
+    // manifest model-id normalization was silently disabled.
     const config = { plugins: { allow: ["demo"], load: { paths: ["/plugins/one"] } } };
     const snapshot = createSnapshot({ config });
     setCurrentPluginMetadataSnapshot(snapshot, { config });
@@ -176,9 +188,35 @@ describe("current plugin metadata snapshot", () => {
     expect(
       getCurrentPluginMetadataSnapshot({
         allowWorkspaceScopedSnapshot: true,
-        requireDefaultDiscoveryContext: true,
+        requireProcessFullContext: true,
       }),
     ).toBe(snapshot);
+  });
+
+  it("still rejects load-path snapshots for discovery-EQUIVALENCE callers", () => {
+    // Foreign-config consumers (plugin auto-enable writes plugins.allow from
+    // this registry) need "would a default-load-path config discover exactly
+    // this?" — a load-path snapshot must stay invisible to them.
+    const config = { plugins: { allow: ["demo"], load: { paths: ["/plugins/one"] } } };
+    setCurrentPluginMetadataSnapshot(createSnapshot({ config }), { config });
+
+    expect(
+      getCurrentPluginMetadataSnapshot({
+        allowWorkspaceScopedSnapshot: true,
+        requireDefaultDiscoveryContext: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("publishes normalization records for full snapshots and clears them for scoped ones", () => {
+    const config = { plugins: { allow: ["demo"], load: { paths: ["/plugins/one"] } } };
+    const fullSnapshot = createSnapshot({ config });
+    normalizationRecordsSpy.mockClear();
+    setCurrentPluginMetadataSnapshot(fullSnapshot, { config });
+    expect(normalizationRecordsSpy).toHaveBeenLastCalledWith(fullSnapshot.plugins);
+
+    setCurrentPluginMetadataSnapshot(createSnapshot({ config, pluginIds: ["demo"] }), { config });
+    expect(normalizationRecordsSpy).toHaveBeenLastCalledWith(undefined);
   });
 
   it("round-trips the default-discovery flag through capture/restore", () => {
@@ -198,7 +236,7 @@ describe("current plugin metadata snapshot", () => {
     expect(
       getCurrentPluginMetadataSnapshot({
         allowWorkspaceScopedSnapshot: true,
-        requireDefaultDiscoveryContext: true,
+        requireProcessFullContext: true,
       }),
     ).toBeUndefined();
 
@@ -206,7 +244,7 @@ describe("current plugin metadata snapshot", () => {
     expect(
       getCurrentPluginMetadataSnapshot({
         allowWorkspaceScopedSnapshot: true,
-        requireDefaultDiscoveryContext: true,
+        requireProcessFullContext: true,
       }),
     ).toBe(fullSnapshot);
   });

@@ -174,7 +174,7 @@ function resolveBundledStaticCatalogMetadataSnapshot(
     env: params.env,
     workspaceDir: params.workspaceDir,
     ...(params.workspaceDir === undefined ? { allowWorkspaceScopedSnapshot: true } : {}),
-    ...(params.cfg === undefined ? { requireDefaultDiscoveryContext: true } : {}),
+    ...(params.cfg === undefined ? { requireProcessFullContext: true } : {}),
   });
 }
 
