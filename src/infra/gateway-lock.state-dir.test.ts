@@ -4,7 +4,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
+import { resolveConfigPath, resolveGatewayLockDir } from "../config/paths.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
 
