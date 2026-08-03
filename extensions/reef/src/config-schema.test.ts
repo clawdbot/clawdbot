@@ -91,16 +91,17 @@ describe("Reef configuration boundary", () => {
       },
       reviews: { list: vi.fn(), decide },
     } as never);
+    const ownerRequired = {
+      text: "Only an owner in commands.ownerAllowFrom can change Reef friends or decide reviews. Ask a configured owner; friendship changes can also use openclaw reef locally.",
+    };
     await expect(
       command.handler({ args: "friend autonomy peer extended", senderIsOwner: false }),
-    ).resolves.toEqual({ text: "Only an owner can change Reef friends or decide reviews." });
+    ).resolves.toEqual(ownerRequired);
     await expect(
       command.handler({ args: `review approve ${"a".repeat(64)}`, senderIsOwner: false }),
-    ).resolves.toEqual({ text: "Only an owner can change Reef friends or decide reviews." });
+    ).resolves.toEqual(ownerRequired);
     for (const args of ["friend code", "friend request peer code", "friend remove peer"]) {
-      await expect(command.handler({ args, senderIsOwner: false })).resolves.toEqual({
-        text: "Only an owner can change Reef friends or decide reviews.",
-      });
+      await expect(command.handler({ args, senderIsOwner: false })).resolves.toEqual(ownerRequired);
     }
     expect(mintCode).not.toHaveBeenCalled();
     expect(requestFriend).not.toHaveBeenCalled();

@@ -13,7 +13,9 @@ export async function handleReefCommand({
     words[0] === "friend" && /^(code|request|remove|block|autonomy)$/.test(words[1] ?? "");
   const decidesReview = words[0] === "review" && /^(approve|deny)$/.test(words[1] ?? "");
   if ((changesFriendship || decidesReview) && senderIsOwner !== true) {
-    return { text: "Only an owner can change Reef friends or decide reviews." };
+    return {
+      text: "Only an owner in commands.ownerAllowFrom can change Reef friends or decide reviews. Ask a configured owner; friendship changes can also use openclaw reef locally.",
+    };
   }
   const active = getActiveReef();
   if (words[0] === "friend" && words[1] === "code") {
