@@ -1462,9 +1462,11 @@ export async function handleOpenAiHttpRequest(
         finishStreamWithError(mapped.error);
         return;
       }
-      // Rejected runs retain their shipped visible-error fallback; only resolved
-      // runs must honor a producer-owned failed terminal instead of claiming success.
-      terminalStreamError = undefined;
+      if (terminalStreamError) {
+        finishStreamWithError(terminalStreamError);
+        return;
+      }
+      // Runs without a producer-owned terminal retain the visible-error fallback.
       const content = "Error: internal error";
       writeAssistantContentChunk(res, {
         runId,
