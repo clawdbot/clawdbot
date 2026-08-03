@@ -82,6 +82,8 @@ describe("agent-scoped memory-wiki tools", () => {
   it("keeps apply, search, and get behavior isolated by configured agent", async () => {
     const vaultParent = await createTempDir("memory-wiki-agent-vaults-");
     const appConfig = {
+      // This suite registers memory-core directly; runtime discovery would load unrelated plugins.
+      plugins: { enabled: false },
       agents: {
         list: [{ id: "support", default: true }, { id: "marketing" }],
       },
