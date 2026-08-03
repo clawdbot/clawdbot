@@ -605,7 +605,7 @@ async function fetchWithSsrFGuardInternal(
             ? createPinnedDispatcher(pinned, dispatcherPolicy, policyForUrl, timeoutMs)
             : createHttp1EnvHttpProxyAgent(
                 {
-                  // An explicitly proxied loopback must not fall back to Undici's NO_PROXY agent.
+                  // An explicitly proxied loopback must not inherit Undici's ambient bypass list.
                   noProxy: "",
                   // Target certificate trust belongs to the tunneled endpoint,
                   // never to the separately authenticated managed proxy.
