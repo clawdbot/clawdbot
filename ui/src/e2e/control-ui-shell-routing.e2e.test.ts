@@ -35,11 +35,11 @@ let browser: Browser;
 let server: ControlUiE2eServer;
 let proxy: BasePathProxy;
 
-async function listenOnLoopback(server: Server): Promise<AddressInfo> {
+async function listenOnLoopback(httpServer: Server): Promise<AddressInfo> {
   return new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
+    httpServer.once("error", reject);
+    httpServer.listen(0, "127.0.0.1", () => {
+      const address = httpServer.address();
       if (!address || typeof address === "string") {
         reject(new Error("Control UI base-path proxy did not expose a loopback port"));
         return;
@@ -163,12 +163,12 @@ describeControlUiE2e("Control UI shell routing E2E", () => {
         );
         return Promise.all(
           links.map(async (link) => {
-            const response = await fetch(link.href, { credentials: "include" });
+            const assetResponse = await fetch(link.href, { credentials: "include" });
             return {
-              contentType: response.headers.get("content-type") ?? "",
+              contentType: assetResponse.headers.get("content-type") ?? "",
               pathname: new URL(link.href).pathname,
               rel: link.rel,
-              status: response.status,
+              status: assetResponse.status,
               type: link.type,
             };
           }),
@@ -230,7 +230,7 @@ describeControlUiE2e("Control UI shell routing E2E", () => {
               ...new Set(
                 proxy.requests.filter((requestPath) => requestPath.startsWith(`${basePath}/`)),
               ),
-            ].sort(),
+            ].toSorted(),
             schemaVersion: 1,
           },
           null,
