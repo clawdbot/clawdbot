@@ -309,9 +309,6 @@ describe("diagnostics-otel gateway runtime", () => {
   test("exports linked success and failed-tool recovery spans from a real qa-channel run", async () => {
     const repoRoot = path.resolve(import.meta.dirname, "../../../..");
     const state = createQaBusState();
-    const bus = await startQaBusServer({ state });
-    const receiver = await startOtlpReceiver();
-    const mock = await startMockProvider(repoRoot);
     const transport = {
       requiredPluginIds: ["qa-channel"],
       createGatewayConfig: ({ baseUrl }: { baseUrl: string }) => ({
@@ -334,42 +331,49 @@ describe("diagnostics-otel gateway runtime", () => {
         },
       }),
     };
-    const gateway = await startQaGatewayChild({
-      repoRoot,
-      useRepoCli: true,
-      providerBaseUrl: `${mock.baseUrl}/v1`,
-      providerMode: "mock-openai",
-      transport,
-      transportBaseUrl: bus.baseUrl,
-      enabledPluginIds: ["diagnostics-otel"],
-      controlUiEnabled: false,
-      mutateConfig: (cfg) => ({
-        ...cfg,
-        tools: {
-          ...cfg.tools,
-          codeMode: {
-            ...cfg.tools?.codeMode,
-            enabled: true,
-          },
-        },
-        diagnostics: {
-          enabled: true,
-          otel: {
-            enabled: true,
-            endpoint: receiver.baseUrl,
-            protocol: "http/protobuf",
-            traces: true,
-            metrics: false,
-            logs: false,
-            sampleRate: 1,
-            flushIntervalMs: 1000,
-            captureContent: false,
-          },
-        },
-      }),
-    });
+    let bus: Awaited<ReturnType<typeof startQaBusServer>> | undefined;
+    let receiver: Awaited<ReturnType<typeof startOtlpReceiver>> | undefined;
+    let mock: Awaited<ReturnType<typeof startMockProvider>> | undefined;
+    let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
 
     try {
+      bus = await startQaBusServer({ state });
+      receiver = await startOtlpReceiver();
+      mock = await startMockProvider(repoRoot);
+      gateway = await startQaGatewayChild({
+        repoRoot,
+        useRepoCli: true,
+        providerBaseUrl: `${mock.baseUrl}/v1`,
+        providerMode: "mock-openai",
+        transport,
+        transportBaseUrl: bus.baseUrl,
+        enabledPluginIds: ["diagnostics-otel"],
+        controlUiEnabled: false,
+        mutateConfig: (cfg) => ({
+          ...cfg,
+          tools: {
+            ...cfg.tools,
+            codeMode: {
+              ...cfg.tools?.codeMode,
+              enabled: true,
+            },
+          },
+          diagnostics: {
+            enabled: true,
+            otel: {
+              enabled: true,
+              endpoint: receiver.baseUrl,
+              protocol: "http/protobuf",
+              traces: true,
+              metrics: false,
+              logs: false,
+              sampleRate: 1,
+              flushIntervalMs: 1000,
+              captureContent: false,
+            },
+          },
+        }),
+      });
       const conversation = { id: "qa-operator", kind: "direct" as const };
       const send = async (text: string) => {
         const cursor = state.getSnapshot().messages.length;
@@ -508,10 +512,14 @@ describe("diagnostics-otel gateway runtime", () => {
         ),
       ).toBe(true);
     } finally {
-      await gateway.stop();
-      await stopChild(mock.child);
-      await stopServer(receiver.server);
-      await bus.stop();
+      await gateway?.stop();
+      if (mock) {
+        await stopChild(mock.child);
+      }
+      if (receiver) {
+        await stopServer(receiver.server);
+      }
+      await bus?.stop();
     }
   }, 120_000);
 });
