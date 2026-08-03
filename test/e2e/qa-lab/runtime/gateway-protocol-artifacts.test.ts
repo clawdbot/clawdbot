@@ -30,11 +30,11 @@ describe("Gateway protocol artifact producer", () => {
         RequestFrame: request,
         ResponseFrame: { type: "object" },
       },
-      [{ name: "health", scope: "operator.read", since: 1 }],
+      [{ name: "health", scope: "operator.read", since: "2026.7" }],
     );
 
     expect(canonical.definitions.RequestFrame).toEqual(request);
-    expect(canonical.methods.health).toEqual({ scope: "operator.read", since: 1 });
+    expect(canonical.methods.health).toEqual({ scope: "operator.read", since: "2026.7" });
     expect(canonical.discriminator.mapping.req).toBe("#/definitions/RequestFrame");
   });
 
