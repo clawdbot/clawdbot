@@ -322,7 +322,7 @@ describe("transcripts tool account ownership", () => {
     });
     const localMainTool = createTool(stateDir, "main");
 
-    for (const session of sessions) {
+    for (const session of sessions.slice(0, 2)) {
       for (const channelTool of [discordTool, webchatTool]) {
         await expect(
           channelTool.execute(
@@ -341,6 +341,16 @@ describe("transcripts tool account ownership", () => {
           vi.fn(),
         ),
       ).resolves.toMatchObject({ details: { sessionId: session.sessionId } });
+    }
+    for (const tool of [discordTool, webchatTool, localMainTool]) {
+      await expect(
+        tool.execute(
+          "call-named-agent-boundary",
+          { action: "summarize", sessionId: "beta-named-agent" },
+          undefined,
+          vi.fn(),
+        ),
+      ).rejects.toThrow("transcripts session not found: beta-named-agent");
     }
 
     getTranscriptSourceProviderMock.mockReturnValue(undefined);
@@ -398,5 +408,51 @@ describe("transcripts tool account ownership", () => {
         vi.fn(),
       ),
     ).rejects.toThrow(`transcripts session not found: ${legacySession.sessionId}`);
+  });
+
+  it("keeps named-agent ownership authoritative for non-binding sources", async () => {
+    const stateDir = await makeStateDir();
+    const store = storeFor(stateDir);
+    getTranscriptSourceProviderMock.mockReturnValue({
+      id: "meeting-provider",
+      name: "Meeting Provider",
+      sourceKinds: ["live-caption"],
+    });
+    const sessions = [
+      {
+        sessionId: "research-import",
+        source: { providerId: "manual-transcript" },
+        startedAt: "2026-08-01T12:00:00.000Z",
+        stoppedAt: "2026-08-01T12:05:00.000Z",
+        metadata: { agentId: "research" },
+      },
+      {
+        sessionId: "research-meeting",
+        source: { providerId: "meeting-provider" },
+        startedAt: "2026-08-01T13:00:00.000Z",
+        stoppedAt: "2026-08-01T13:05:00.000Z",
+        metadata: { agentId: "research" },
+      },
+    ];
+    for (const session of sessions) {
+      await store.writeSession(session);
+      await store.appendUtteranceForSession(session, { text: "research notes" });
+      await expect(
+        createTool(stateDir, "research").execute(
+          `call-research-${session.sessionId}`,
+          { action: "summarize", sessionId: session.sessionId },
+          undefined,
+          vi.fn(),
+        ),
+      ).resolves.toMatchObject({ details: { sessionId: session.sessionId } });
+      await expect(
+        createTool(stateDir, "main").execute(
+          `call-main-${session.sessionId}`,
+          { action: "summarize", sessionId: session.sessionId },
+          undefined,
+          vi.fn(),
+        ),
+      ).rejects.toThrow(`transcripts session not found: ${session.sessionId}`);
+    }
   });
 });
