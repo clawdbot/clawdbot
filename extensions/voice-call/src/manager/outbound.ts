@@ -280,6 +280,17 @@ const DEFAULT_TTS_CHUNK_CHARS = 320;
 const MIN_TTS_CHUNK_CHARS = 80;
 
 /**
+ * Whether long-reply TTS chunking is enabled. Disabled by default so behavior
+ * is unchanged unless a user opts in via VOICECALL_TTS_CHUNK_ENABLED
+ * (accepts 1/true/yes/on, case-insensitive). When disabled, `speak()` sends the
+ * full reply as a single synthesis request, exactly as before.
+ */
+function isTtsChunkingEnabled(): boolean {
+  const raw = (process.env.VOICECALL_TTS_CHUNK_ENABLED ?? "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
+/**
  * Split text into chunks small enough for a single TTS synthesis request.
  *
  * Long replies synthesized as one request can exceed the provider synthesis
@@ -379,7 +390,8 @@ export async function speak(
       MIN_TTS_CHUNK_CHARS,
       Number(process.env.VOICECALL_TTS_CHUNK_CHARS) || DEFAULT_TTS_CHUNK_CHARS,
     );
-    let chunks = chunkTextForTts(text, chunkLimit);
+    // reply as a single request (original behavior).
+    let chunks = isTtsChunkingEnabled() ? chunkTextForTts(text, chunkLimit) : [text ?? ""];
     if (!chunks.length) chunks = [text ?? ""];
     if (chunks.length > 1) {
       console.log(
