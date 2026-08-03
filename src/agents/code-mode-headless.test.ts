@@ -419,11 +419,13 @@ describe("headless Code Mode", () => {
       name: "regular-expression module text",
       code: 'return /import.meta/.test("import.meta");',
       value: true,
+      realHeadless: true,
     },
     {
       name: "ordinary import method",
       code: "const api = { import(value) { return value; } }; return api.import(42);",
       value: 42,
+      realHeadless: true,
     },
     {
       name: "ordinary require method",
