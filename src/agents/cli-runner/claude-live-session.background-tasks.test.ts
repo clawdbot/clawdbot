@@ -966,6 +966,44 @@ describe("claude live session provisional results", () => {
     expect(driver.cancel).not.toHaveBeenCalled();
   });
 
+  it("mirrors outstanding background tasks into the diagnostic activity snapshot", async () => {
+    const driver = installLiveStdoutDriver();
+    const resultPromise = startLiveTurn({
+      runId: "run-bg-mirror",
+      timeoutMs: 60_000,
+    });
+    await driver.stdout.waitReady();
+    try {
+      driver.stdout.emit(
+        jsonl([
+          { type: "system", subtype: "init", session_id: "live-bg-mirror" },
+          {
+            type: "system",
+            subtype: "background_tasks_changed",
+            tasks: [{ task_id: "task-mirror", task_type: "local_agent", description: "work" }],
+          },
+        ]),
+      );
+      await waitForDiagnosticEventsDrained();
+      expect(
+        getDiagnosticSessionActivitySnapshot({ sessionKey: "agent:main:bg" })
+          .hasOutstandingBackgroundWork,
+      ).toBe(true);
+
+      driver.stdout.emit(
+        jsonl([{ type: "system", subtype: "background_tasks_changed", tasks: [] }]),
+      );
+      await waitForDiagnosticEventsDrained();
+      expect(
+        getDiagnosticSessionActivitySnapshot({ sessionKey: "agent:main:bg" })
+          .hasOutstandingBackgroundWork,
+      ).toBeUndefined();
+    } finally {
+      (driver.cancel as unknown as (reason?: string) => void)();
+      await resultPromise.catch(() => undefined);
+    }
+  });
+
   it("still aborts on overall turn timeout while waiting for a never-finishing background task", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const driver = installLiveStdoutDriver();

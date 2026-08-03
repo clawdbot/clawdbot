@@ -16,7 +16,9 @@ import {
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withDiagnosticPhase } from "./diagnostic-phase.js";
 import {
+  BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
   getDiagnosticSessionActivitySnapshot,
+  markDiagnosticClaudeBackgroundWorkState,
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
   resetDiagnosticRunActivityForTest,
@@ -1024,10 +1026,10 @@ describe("stuck session diagnostics threshold", () => {
         model: "gpt-5",
       });
 
-      vi.advanceTimersByTime(stuckSessionAbortMs - 30_000);
+      vi.advanceTimersByTime(stuckSessionAbortMs);
       expect(recoverStuckSession).not.toHaveBeenCalled();
 
-      vi.advanceTimersByTime(30_000);
+      vi.advanceTimersByTime(BLOCKED_TOOL_CALL_ABORT_FLOOR_MS - stuckSessionAbortMs);
     } finally {
       unsubscribe();
     }
@@ -1042,6 +1044,62 @@ describe("stuck session diagnostics threshold", () => {
         reason: "active_work_without_progress",
         activeWorkKind: "model_call",
         lastProgressReason: "model_call:started",
+      },
+    );
+    expectRecoveryCall(
+      recoverStuckSession,
+      { sessionId: "s1", sessionKey: "main", queueDepth: 0, allowActiveAbort: true },
+      ["ageMs", "stateGeneration"],
+    );
+  });
+
+  it("keeps silent model calls with outstanding claude background work alive until the quiet-work floor", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const stuckSessionAbortMs = 60_000;
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticModelStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        provider: "claude",
+        model: "claude-opus-5",
+      });
+      markDiagnosticClaudeBackgroundWorkState({
+        sessionId: "s1",
+        sessionKey: "main",
+        active: true,
+      });
+
+      vi.advanceTimersByTime(stuckSessionAbortMs);
+      expect(recoverStuckSession).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(BLOCKED_TOOL_CALL_ABORT_FLOOR_MS - stuckSessionAbortMs);
+    } finally {
+      unsubscribe();
+    }
+
+    expectRecordFields(
+      requireRecord(
+        events.findLast((event) => event.type === "session.stalled"),
+        "stalled event",
+      ),
+      {
+        classification: "stalled_agent_run",
+        reason: "active_work_without_progress",
+        activeWorkKind: "model_call",
       },
     );
     expectRecoveryCall(
@@ -1153,7 +1211,7 @@ describe("stuck session diagnostics threshold", () => {
     expect(recoverStuckSession).not.toHaveBeenCalled();
   });
 
-  it("actively aborts silent local model calls after the stuck timeout", async () => {
+  it("actively aborts silent local model calls after the quiet-work floor", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
     const stuckSessionAbortMs = 60_000;
@@ -1180,6 +1238,9 @@ describe("stuck session diagnostics threshold", () => {
       });
 
       vi.advanceTimersByTime(stuckSessionAbortMs);
+      expect(recoverStuckSession).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(BLOCKED_TOOL_CALL_ABORT_FLOOR_MS - stuckSessionAbortMs);
     } finally {
       unsubscribe();
     }
@@ -1420,6 +1481,9 @@ describe("stuck session diagnostics threshold", () => {
     vi.advanceTimersByTime(59_000);
     logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test-followup" });
     vi.advanceTimersByTime(1_000);
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(BLOCKED_TOOL_CALL_ABORT_FLOOR_MS - 60_000);
     await Promise.resolve();
 
     expectRecoveryCall(

@@ -7,9 +7,9 @@ import {
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
+import { clearDiagnosticEmbeddedRunActivityForSession } from "./diagnostic-embedded-run-recovery.js";
 import {
   BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
-  clearDiagnosticEmbeddedRunActivityForSession,
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticArgumentChurnObservation,
   markDiagnosticEmbeddedRunEnded,

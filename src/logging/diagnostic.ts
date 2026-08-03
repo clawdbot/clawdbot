@@ -550,15 +550,23 @@ function isStalledModelCallRecoveryEligible(params: {
   stuckSessionAbortMs: number;
 }): boolean {
   const lastProgressAgeMs = params.activity?.lastProgressAgeMs;
-  // Local providers are not blanket-exempt from recovery. Streaming model
-  // chunks refresh run activity while emitted progress events are throttled, so
-  // active streams stay fresh and silent/non-streaming calls can be recovered.
+  // Quiet-but-alive model calls (a parent waiting on an embedded run or on
+  // claude-cli background subagent/workflow work) get the same floor as blocked
+  // tool calls; #88870's floor bounds every quiet-work consumer. Orphaned or
+  // genuinely silent model calls keep the bare abort threshold so #99847
+  // orphaned-lane recovery is not delayed.
+  const hasQuietBackgroundWork =
+    params.activity?.hasActiveEmbeddedRun === true ||
+    params.activity?.hasOutstandingBackgroundWork === true;
+  const abortMs = hasQuietBackgroundWork
+    ? Math.max(params.stuckSessionAbortMs, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS)
+    : params.stuckSessionAbortMs;
   return (
     params.classification?.eventType === "session.stalled" &&
     params.classification.classification === "stalled_agent_run" &&
     params.classification.activeWorkKind === "model_call" &&
     typeof lastProgressAgeMs === "number" &&
-    lastProgressAgeMs >= params.stuckSessionAbortMs
+    lastProgressAgeMs >= abortMs
   );
 }
 

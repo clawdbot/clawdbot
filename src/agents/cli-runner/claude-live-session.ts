@@ -26,7 +26,10 @@ import {
   type ExecAsk,
   type ExecSecurity,
 } from "../../infra/exec-approvals.js";
-import { BLOCKED_TOOL_CALL_ABORT_FLOOR_MS } from "../../logging/diagnostic-run-activity.js";
+import {
+  BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
+  markDiagnosticClaudeBackgroundWorkState,
+} from "../../logging/diagnostic-run-activity.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import {
@@ -902,6 +905,7 @@ const CLAUDE_LIVE_RESULT_HOLDING_BACKGROUND_TASK_TYPES = new Set(["local_agent",
 /** Replace outstanding subagent/workflow task ids from background_tasks_changed. */
 function applyBackgroundTasksChanged(
   session: ClaudeLiveSession,
+  turn: ClaudeLiveTurn,
   parsed: Record<string, unknown>,
 ): void {
   if (parsed.type !== "system" || parsed.subtype !== "background_tasks_changed") {
@@ -924,6 +928,12 @@ function applyBackgroundTasksChanged(
       session.outstandingBackgroundTaskIds.add(taskId);
     }
   }
+  // Mirror the outstanding-work fact into session diagnostics so the recovery
+  // watchdog grants a quiet parent model_call the same floor the CLI grants it.
+  markDiagnosticClaudeBackgroundWorkState({
+    ...claudeLiveDiagnosticBase(turn),
+    active: session.outstandingBackgroundTaskIds.size > 0,
+  });
 }
 
 function isClaudeLiveProvisionalSyntheticPlaceholder(parsed: Record<string, unknown>): boolean {
@@ -1420,7 +1430,7 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
     return;
   }
   turn.rawLines.push(trimmed);
-  applyBackgroundTasksChanged(session, parsed);
+  applyBackgroundTasksChanged(session, turn, parsed);
   if (turn.allowSyntheticContinuationGrace && isClaudeLiveProvisionalSyntheticPlaceholder(parsed)) {
     turn.pendingSyntheticPlaceholder = true;
   } else if (turn.pendingSyntheticPlaceholder && isClaudeLiveSubstantiveAssistantProgress(parsed)) {

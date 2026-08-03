@@ -3,10 +3,8 @@ import {
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
   getInternalDiagnosticEventSequence,
 } from "../infra/diagnostic-events.js";
-import {
-  clearDiagnosticEmbeddedRunActivityForSession,
-  getDiagnosticEmbeddedRunActivitySequence,
-} from "./diagnostic-run-activity.js";
+import { clearDiagnosticEmbeddedRunActivityForSession } from "./diagnostic-embedded-run-recovery.js";
+import { getDiagnosticEmbeddedRunActivitySequence } from "./diagnostic-run-activity.js";
 import { markDiagnosticActivity as markActivity } from "./diagnostic-runtime.js";
 import type { SessionAttentionClassification } from "./diagnostic-session-attention.js";
 import {
