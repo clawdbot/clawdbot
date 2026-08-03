@@ -185,6 +185,12 @@ describe("package scripts", () => {
     );
   });
 
+  it("runs direct-run entrypoint coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "test/scripts/direct-run-entrypoints.test.ts",
+    );
+  });
+
   it("runs Docker package process-tree coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts",
