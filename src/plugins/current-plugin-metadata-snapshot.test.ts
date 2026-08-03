@@ -181,6 +181,36 @@ describe("current plugin metadata snapshot", () => {
     ).toBe(snapshot);
   });
 
+  it("round-trips the default-discovery flag through capture/restore", () => {
+    const config = { plugins: { allow: ["demo"], load: { paths: ["/plugins/one"] } } };
+    const fullSnapshot = createSnapshot({ config });
+    setCurrentPluginMetadataSnapshot(fullSnapshot, { config });
+    const captured = captureCurrentPluginMetadataSnapshotState();
+
+    // A temporary scoped publish flips the flag off (list/status flows do this).
+    const scopedConfig = { plugins: { allow: ["demo"] } };
+    setCurrentPluginMetadataSnapshot(
+      createSnapshot({ config: scopedConfig, pluginIds: ["demo"] }),
+      {
+        config: scopedConfig,
+      },
+    );
+    expect(
+      getCurrentPluginMetadataSnapshot({
+        allowWorkspaceScopedSnapshot: true,
+        requireDefaultDiscoveryContext: true,
+      }),
+    ).toBeUndefined();
+
+    restoreCurrentPluginMetadataSnapshotState(captured);
+    expect(
+      getCurrentPluginMetadataSnapshot({
+        allowWorkspaceScopedSnapshot: true,
+        requireDefaultDiscoveryContext: true,
+      }),
+    ).toBe(fullSnapshot);
+  });
+
   it("accepts configless default-discovery reuse for snapshots created without load paths", () => {
     const config = { plugins: { allow: ["demo"] } };
     const snapshot = createSnapshot({ config });
