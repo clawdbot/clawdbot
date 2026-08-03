@@ -17,10 +17,12 @@ describe("SessionRowSchema", () => {
       archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
       visibility: "suggest",
       sharingRole: "owner",
+      effectiveReasoningLevel: "stream",
     };
     const roundTripped = structuredClone(row);
 
     expect(SessionRowSchema.properties.activeLeafEntryId).toBeDefined();
+    expect(SessionRowSchema.properties.effectiveReasoningLevel).toBeDefined();
     expect(Value.Check(SessionRowSchema, roundTripped)).toBe(true);
     expect(Value.Check(SessionRowSchema, { ...roundTripped, activeLeafEntryId: null })).toBe(true);
     expect(roundTripped).toMatchObject({
