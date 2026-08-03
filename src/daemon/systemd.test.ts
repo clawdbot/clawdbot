@@ -1112,6 +1112,7 @@ describe("parseSystemdExecStart", () => {
 describe("readSystemdServiceExecStart", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    execFileMock.mockReset();
   });
 
   it("loads OPENCLAW_GATEWAY_TOKEN from EnvironmentFile", async () => {
@@ -1123,6 +1124,43 @@ describe("readSystemdServiceExecStart", () => {
     const command = await readSystemdServiceExecStart({ HOME: TEST_SERVICE_HOME });
     expect(command?.environment?.OPENCLAW_GATEWAY_TOKEN).toBe("env-file-token");
     expect(readFileSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("applies systemd drop-ins when reporting the effective service command", async () => {
+    mockReadGatewayServiceFile([
+      "[Service]",
+      "ExecStart=/usr/bin/node /old/openclaw.js gateway --port 18789",
+      "Environment=OPENCLAW_SERVICE_VERSION=2026.7.2-beta.7",
+    ]);
+    execFileMock.mockImplementation((_cmd, args, _opts, cb) => {
+      expect(args).toEqual(["--user", "cat", GATEWAY_SERVICE, "--no-pager"]);
+      cb(
+        null,
+        [
+          "# /home/test/.config/systemd/user/openclaw-gateway.service",
+          "[Service]",
+          "ExecStart=/usr/bin/node /old/openclaw.js gateway --port 18789",
+          "Environment=OPENCLAW_SERVICE_VERSION=2026.7.2-beta.7",
+          "# /home/test/.config/systemd/user/openclaw-gateway.service.d/release.conf",
+          "[Service]",
+          "ExecStart=",
+          "ExecStart=/usr/bin/node /current/openclaw.js gateway --port 18789",
+          "Environment=OPENCLAW_SERVICE_VERSION=2026.7.2",
+        ].join("\n"),
+        "",
+      );
+    });
+
+    const command = await readSystemdServiceExecStart({ HOME: TEST_SERVICE_HOME });
+
+    expect(command?.programArguments).toEqual([
+      "/usr/bin/node",
+      "/current/openclaw.js",
+      "gateway",
+      "--port",
+      "18789",
+    ]);
+    expect(command?.environment?.OPENCLAW_SERVICE_VERSION).toBe("2026.7.2");
   });
 
   it("lets EnvironmentFile override inline Environment values", async () => {

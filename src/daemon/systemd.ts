@@ -175,7 +175,21 @@ export async function readSystemdServiceExecStart(
 ): Promise<GatewayServiceCommandConfig | null> {
   const unitPath = resolveSystemdUnitPath(env);
   try {
-    const content = await fs.readFile(unitPath, "utf8");
+    const baseContent = await fs.readFile(unitPath, "utf8");
+    let content = baseContent;
+    try {
+      const unitName = `${resolveSystemdServiceName(env)}.service`;
+      const effective = await execSystemctlUser(env, ["cat", unitName, "--no-pager"]);
+      if (effective.code === 0 && effective.stdout.trim()) {
+        // `systemctl cat` returns the base unit followed by every drop-in in
+        // systemd precedence order. Parsing that stream keeps status/audit in
+        // sync with the command and environment the manager actually applies.
+        content = effective.stdout;
+      }
+    } catch {
+      // Offline inspection and tests may not have a reachable user manager;
+      // the base unit remains a useful best-effort fallback.
+    }
     let execStart = "";
     let workingDirectory = "";
     const inlineEnvironment: Record<string, string> = {};
