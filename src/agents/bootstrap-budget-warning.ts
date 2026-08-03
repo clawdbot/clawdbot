@@ -4,7 +4,7 @@ import type {
   BootstrapPromptWarning,
   BootstrapPromptWarningMode,
   BootstrapTruncationCause,
-} from "./bootstrap-budget.js";
+} from "./bootstrap-budget.types.js";
 import { USER_BOOTSTRAP_MAX_CHARS } from "./embedded-agent-helpers/bootstrap.js";
 
 const DEFAULT_BOOTSTRAP_PROMPT_WARNING_MAX_FILES = 3;

@@ -9,6 +9,13 @@ import {
   buildBootstrapPromptWarning,
   normalizeBootstrapWarningSignatures,
 } from "./bootstrap-budget-warning.js";
+import type {
+  BootstrapBudgetAnalysis,
+  BootstrapInjectionStat,
+  BootstrapPromptWarning,
+  BootstrapPromptWarningMode,
+  BootstrapTruncationCause,
+} from "./bootstrap-budget.types.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import {
   resolveBootstrapMaxChars,
@@ -18,47 +25,6 @@ import {
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 const DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO = 0.85;
-
-export type BootstrapTruncationCause = "per-file-limit" | "total-limit";
-export type BootstrapPromptWarningMode = "off" | "once" | "always";
-
-type BootstrapInjectionStat = {
-  name: string;
-  path: string;
-  missing: boolean;
-  rawChars: number;
-  injectedChars: number;
-  truncated: boolean;
-};
-
-type BootstrapAnalyzedFile = BootstrapInjectionStat & {
-  effectiveFileLimit: number;
-  nearLimit: boolean;
-  causes: BootstrapTruncationCause[];
-};
-
-export type BootstrapBudgetAnalysis = {
-  files: BootstrapAnalyzedFile[];
-  truncatedFiles: BootstrapAnalyzedFile[];
-  nearLimitFiles: BootstrapAnalyzedFile[];
-  totalNearLimit: boolean;
-  hasTruncation: boolean;
-  totals: {
-    rawChars: number;
-    injectedChars: number;
-    truncatedChars: number;
-    bootstrapMaxChars: number;
-    bootstrapTotalMaxChars: number;
-    nearLimitRatio: number;
-  };
-};
-
-export type BootstrapPromptWarning = {
-  signature?: string;
-  warningShown: boolean;
-  lines: string[];
-  warningSignaturesSeen: string[];
-};
 
 type BootstrapTruncationReportMeta = {
   warningMode: BootstrapPromptWarningMode;
