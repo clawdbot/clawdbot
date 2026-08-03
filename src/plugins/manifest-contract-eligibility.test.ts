@@ -69,7 +69,11 @@ describe("bundled manifest contract availability", () => {
     expect(mocks.readBundledDiscoveryMode).not.toHaveBeenCalled();
   });
 
-  it.each([{ enabled: true }, { token: "configured" }])(
+  it.each([
+    { enabled: true },
+    { token: "configured" },
+    { accounts: { primary: { token: "configured" } } },
+  ])(
     "preserves explicitly configured bundled channels outside a restrictive allowlist",
     (channelConfig) => {
       expect(
@@ -85,6 +89,20 @@ describe("bundled manifest contract availability", () => {
       expect(mocks.readBundledDiscoveryMode).not.toHaveBeenCalled();
     },
   );
+
+  it("preserves explicitly configured custom channel ids distinct from their plugin owner", () => {
+    expect(
+      isManifestPluginAvailableForControlPlane({
+        snapshot,
+        plugin: { ...plugin, id: "custom-owner", channels: ["private-channel"] },
+        config: {
+          plugins: { allow: ["another-plugin"] },
+          channels: { "private-channel": { enabled: true } },
+        } as never,
+      }),
+    ).toBe(true);
+    expect(mocks.readBundledDiscoveryMode).not.toHaveBeenCalled();
+  });
 
   it("does not let disabled channel configuration bypass a restrictive allowlist", () => {
     expect(

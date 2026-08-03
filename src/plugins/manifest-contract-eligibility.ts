@@ -1,8 +1,11 @@
 // Determines which manifest contracts are eligible for plugin activation.
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  hasMeaningfulChannelConfigShallow,
+  resolveChannelConfigRecord,
+} from "../config/channel-configured-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readBundledDiscoveryMode } from "./bundled-discovery-state.js";
-import { hasExplicitChannelConfig } from "./channel-presence-policy.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
 import { resolveManifestOwnerBasePolicyBlock } from "./manifest-owner-policy.js";
@@ -49,7 +52,12 @@ export function isManifestPluginOwnerAllowedByControlPlanePolicy(params: {
     return false;
   }
   const channelIds = params.plugin.channels ?? [params.plugin.id];
-  if (channelIds.some((channelId) => hasExplicitChannelConfig({ config, channelId }))) {
+  if (
+    channelIds.some((channelId) => {
+      const channelConfig = resolveChannelConfigRecord(config, channelId);
+      return channelConfig?.enabled !== false && hasMeaningfulChannelConfigShallow(channelConfig);
+    })
+  ) {
     return true;
   }
   bundledDiscoveryMode ??= { value: readBundledDiscoveryMode() };
