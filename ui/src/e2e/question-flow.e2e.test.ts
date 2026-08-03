@@ -356,11 +356,21 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
   });
 
   it.each([
-    { action: "answer", status: "answered" as const },
-    { action: "cancellation", status: "cancelled" as const },
+    { action: "answer", status: "answered" as const, closeSubmittingPane: false },
+    { action: "cancellation", status: "cancelled" as const, closeSubmittingPane: false },
+    {
+      action: "answer after its submitting pane closes",
+      status: "answered" as const,
+      closeSubmittingPane: true,
+    },
+    {
+      action: "cancellation after its submitting pane closes",
+      status: "cancelled" as const,
+      closeSubmittingPane: true,
+    },
   ])(
-    "updates both split panes and sidebar from an authoritative $action without a resolution event",
-    async ({ action, status }) => {
+    "updates current panes and sidebar from an authoritative $action without a resolution event",
+    async ({ status, closeSubmittingPane }) => {
       const { gateway, page } = await openQuestionPage();
       await page.getByRole("button", { name: "Open split view" }).click();
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
@@ -369,7 +379,7 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
         .poll(async () => (await gateway.getRequests("question.list")).length)
         .toBeGreaterThanOrEqual(3);
 
-      const request = questionRecord(`question-split-${action}`, [
+      const request = questionRecord(`question-split-${status}-${closeSubmittingPane}`, [
         {
           questionId: "deploy_target",
           header: "Deploy",
@@ -385,8 +395,14 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
       const answers = { answers: { deploy_target: ["Staging"] } };
       const result: QuestionResolveResult =
         status === "answered" ? { status, answers } : { status };
-      await gateway.setMethodResponse("question.resolve", result);
-      const submittingPanel = panels.first();
+      if (closeSubmittingPane) {
+        await gateway.deferNext("question.resolve");
+      } else {
+        await gateway.setMethodResponse("question.resolve", result);
+      }
+      const submittingIndex = closeSubmittingPane ? 1 : 0;
+      const submittingPane = panes.nth(submittingIndex);
+      const submittingPanel = panels.nth(submittingIndex);
       if (status === "answered") {
         await submittingPanel.getByRole("radio", { name: /Staging/ }).click();
       }
@@ -398,11 +414,19 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
         status === "answered" ? { id: request.id, answers } : { id: request.id, cancel: true },
       );
       expect(await gateway.getRequests("question.resolve")).toHaveLength(1);
+      const remainingPanes = page.locator("openclaw-chat-pane");
+      if (closeSubmittingPane) {
+        await submittingPane.getByRole("button", { name: "Close pane", exact: true }).click();
+        await expect.poll(() => remainingPanes.count()).toBe(1);
+        await expectQuestionAttention(page, true);
+        await gateway.resolveDeferred("question.resolve", result);
+      }
+      const remainingCount = closeSubmittingPane ? 1 : 2;
 
       await expect.poll(() => panels.count()).toBe(0);
       await expect
-        .poll(() => panes.locator(".agent-chat__composer-combobox textarea").count())
-        .toBe(2);
+        .poll(() => remainingPanes.locator(".agent-chat__composer-combobox textarea").count())
+        .toBe(remainingCount);
       await expect
         .poll(() =>
           page
@@ -410,7 +434,7 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
             .filter({ hasText: status === "answered" ? "Staging" : "Skipped" })
             .count(),
         )
-        .toBe(2);
+        .toBe(remainingCount);
       await expectQuestionAttention(page, false);
     },
   );

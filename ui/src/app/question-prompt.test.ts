@@ -553,7 +553,7 @@ describe("question resolution connection ownership", () => {
   );
 
   it.each(questionResolutionCases)(
-    "retires an old $action when the same gateway client reconnects",
+    "rejects an old $action when the same gateway transport reconnects",
     async ({ resolve }) => {
       const stale = createDeferredQuestionRequest();
       const current = createDeferredQuestionRequest();
@@ -569,12 +569,13 @@ describe("question resolution connection ownership", () => {
       const { state } = createConnectedState(client, requestedPayload());
 
       const staleResolution = resolve(state);
+      // Socket closure rejects its pending requests before reconnect callbacks.
+      stale.reject();
       setQuestionPromptClient(state, null);
       expect(state.prompts.get("question-1")?.submitting).toBe(false);
       setQuestionPromptClient(state, client);
 
       const currentResolution = resolve(state);
-      stale.resolve();
       await staleResolution;
 
       expect(state.prompts.get("question-1")).toMatchObject({

@@ -697,20 +697,18 @@ async function resolveQuestionPrompt(
       submittedAnswers ? { id, answers: submittedAnswers } : { id, cancel: true },
       prompt.expiresAtMs,
     );
-    if (state.client !== client || state.clientGeneration !== clientGeneration) {
-      return;
-    }
-    const current = state.prompts.get(id);
-    if (!current) {
-      return;
-    }
     const resolved = parseQuestionResolveResult(result);
     if (!resolved || resolved.status !== (submittedAnswers ? "answered" : "cancelled")) {
       throw new Error("invalid question.resolve response");
     }
-    current.localResolutionConfirmed = true;
+    if (state.client === client && state.clientGeneration === clientGeneration) {
+      const current = state.prompts.get(id);
+      if (current) {
+        current.localResolutionConfirmed = true;
+      }
+    }
     // The committed RPC result owns every same-client projection even when
-    // server event fanout fails; it is not a synthetic Gateway broadcast.
+    // fanout fails or its submitting pane unmounts before the response.
     publishQuestionClientResolution(client, { ...resolved, id });
   } catch (error) {
     if (state.client !== client || state.clientGeneration !== clientGeneration) {

@@ -60,7 +60,7 @@ function requestQuestion(
 
 function connectQuestionState(
   client: QuestionClient,
-  onChange = vi.fn(),
+  onChange: () => void = vi.fn(),
   expiresAtMs?: number,
 ): QuestionState {
   const state = createQuestionPromptState(onChange);
@@ -278,6 +278,46 @@ describe("Gateway-client question outcome ownership", () => {
     expect(onPeerChange).not.toHaveBeenCalled();
   });
 
+  it.each(resolutionCases)(
+    "publishes a committed $action to surviving peers after the submitting pane is disposed",
+    async ({ resolve, status }) => {
+      let finishRequest: ((result: QuestionResolveResult) => void) | undefined;
+      const client: QuestionClient = {
+        request: vi.fn(
+          () =>
+            new Promise<QuestionResolveResult>((complete) => {
+              finishRequest = complete;
+            }),
+        ),
+      };
+      const onSubmitterChange = vi.fn();
+      const submitter = connectQuestionState(client, onSubmitterChange);
+      const peer = connectQuestionState(client);
+      const sidebar = connectQuestionState(client);
+      const submission = resolve(submitter);
+      onSubmitterChange.mockClear();
+      disposeQuestionPromptState(submitter);
+      const result: QuestionResolveResult =
+        status === "answered"
+          ? { status, answers: { answers: { format: ["Compact"] } } }
+          : { status };
+      finishRequest?.(result);
+
+      await submission;
+
+      expect(submitter.prompts.get("question-1")?.status).toBe("pending");
+      expect(onSubmitterChange).not.toHaveBeenCalled();
+      for (const projection of [peer, sidebar]) {
+        expect(projection.prompts.get("question-1")).toMatchObject({
+          status,
+          answeredElsewhere: status === "answered",
+          localResolutionConfirmed: false,
+          submitting: false,
+        });
+      }
+    },
+  );
+
   it("does not deliver an old client result to a peer rebound to another Gateway", async () => {
     const firstClient = createQuestionClient();
     const submitter = connectQuestionState(firstClient);
@@ -421,22 +461,25 @@ describe("Gateway-client question outcome ownership", () => {
     expect(remounted.prompts.has("stale-before-remount")).toBe(false);
   });
 
-  it("does not publish a retired same-client request after its sender reconnects", async () => {
-    let finishRequest: ((result: QuestionResolveResult) => void) | undefined;
+  it("does not publish an old request rejected when its Gateway reconnects", async () => {
+    let rejectRequest: ((error: Error) => void) | undefined;
     const client: QuestionClient = {
       request: vi.fn(
         () =>
-          new Promise<QuestionResolveResult>((resolve) => {
-            finishRequest = resolve;
+          new Promise<QuestionResolveResult>((_resolve, reject) => {
+            rejectRequest = reject;
           }),
       ),
     };
     const submitter = connectQuestionState(client);
     const peer = connectQuestionState(client);
     const submission = cancelQuestionPrompt(submitter, "question-1");
-    setQuestionPromptClient(submitter, null);
-    setQuestionPromptClient(submitter, client);
-    finishRequest?.({ status: "cancelled" });
+    // The protocol rejects pending requests before its reconnect lifecycle.
+    rejectRequest?.(new Error("gateway closed"));
+    for (const projection of [submitter, peer]) {
+      setQuestionPromptClient(projection, null);
+      setQuestionPromptClient(projection, client);
+    }
 
     await submission;
 
