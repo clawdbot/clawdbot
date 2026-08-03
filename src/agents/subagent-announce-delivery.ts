@@ -1483,8 +1483,8 @@ export async function deliverSubagentAnnouncement(params: {
       });
       if (
         params.expectsCompletionMessage &&
-        normalizeOptionalLowercaseString(params.sourceTool) === "subagent_announce" &&
-        params.sourceRunId &&
+        (normalizeOptionalLowercaseString(params.sourceTool) === "subagent_announce" ||
+          isAgentMediatedCompletionSourceTool(params.sourceTool)) &&
         !direct.delivered &&
         direct.disposition === "permanent_failure" &&
         direct.reason === "session_file_changed"

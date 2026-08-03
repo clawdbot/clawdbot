@@ -260,6 +260,7 @@ async function deliverSlackThreadAnnouncement(params: {
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
   sourceTool?: string;
+  includeSourceRunId?: boolean;
   requesterAbandoned?: boolean;
   isSourceSessionEffectsAllowed?: () => boolean;
 }) {
@@ -293,7 +294,7 @@ async function deliverSlackThreadAnnouncement(params: {
     bestEffortDeliver: true,
     directIdempotencyKey: params.directIdempotencyKey,
     internalEvents: params.internalEvents,
-    sourceRunId: "run-generated-media",
+    ...(params.includeSourceRunId === false ? {} : { sourceRunId: "run-generated-media" }),
     sourceTool: params.sourceTool,
     isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
   });
@@ -3530,6 +3531,41 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         inputProvenance: expect.objectContaining({ sourceTool: "subagent_announce" }),
         expectedMediaUrls: [],
         idempotencyKey: "announce-durable-session-takeover:agent-loop",
+      }),
+      expect.any(Number),
+    );
+    expect(sessionDeliveryQueueMocks.scheduleSessionDelivery).toHaveBeenCalledWith(
+      "session-delivery-media",
+    );
+  });
+
+  it("queues a no-send agent harness completion without a run id after session-file retries", async () => {
+    const callGateway = vi.fn(async () => {
+      throw new Error("session file changed while embedded prompt lock was released");
+    }) as unknown as typeof runtimeCallGateway;
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      directIdempotencyKey: "announce-harness-durable-session-takeover",
+      sourceTool: "agent_harness_task",
+      includeSourceRunId: false,
+      internalEvents: taskCompletionEvents({
+        childSessionId: "harness-child-session-id",
+        taskLabel: "durable harness takeover completion",
+      }),
+    });
+
+    expect(result).toMatchObject({
+      delivered: false,
+      path: "queued",
+      disposition: "session_queued",
+      phases: [{ phase: "direct-primary", delivered: false, path: "queued" }],
+    });
+    expect(callGateway).toHaveBeenCalledTimes(4);
+    expect(sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "agentTurn",
+        inputProvenance: expect.objectContaining({ sourceTool: "agent_harness_task" }),
+        idempotencyKey: "announce-harness-durable-session-takeover:agent-loop",
       }),
       expect.any(Number),
     );
