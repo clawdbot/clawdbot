@@ -396,6 +396,7 @@ export function startAgentRunExecution(params: {
           bootstrapContextMode: params.request.bootstrapContextMode,
           bootstrapContextRunKind: params.effectiveBootstrapContextRunKind,
           toolsAllow: params.restoredCronContinuation?.toolsAllow ?? sessionHandoffPolicy?.allow,
+          trustedSessionHandoff: sessionHandoffPolicy !== undefined,
           runtimePluginToolGrant,
           trustedInternalHandoff: prepared.trustedInternalHandoff,
           toolsAllowIsDefault: params.restoredCronContinuation?.toolsAllowIsDefault,

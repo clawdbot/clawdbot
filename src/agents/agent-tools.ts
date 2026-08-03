@@ -471,6 +471,8 @@ type OpenClawCodingToolsOptions = {
   inputProvenance?: InputProvenance;
   /** Consumed in-process completion capability; never derived from model-facing input. */
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
+  /** Verified sessions_send authority; suppresses requester policy re-resolution. */
+  trustedSessionHandoff?: boolean;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
 };
@@ -533,6 +535,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       inheritRuntimeToolAllowlist: options?.inheritRuntimeToolAllowlist,
       inputProvenance: options?.inputProvenance,
       trustedInternalHandoff: options?.trustedInternalHandoff,
+      trustedSessionHandoff: options?.trustedSessionHandoff,
       scheduledToolPolicy: options?.scheduledToolPolicy,
     });
   const { agentId, runtimePluginToolGrant } = capabilityProfile.policy;

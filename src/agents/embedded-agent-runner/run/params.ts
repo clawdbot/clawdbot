@@ -255,6 +255,8 @@ export type RunEmbeddedAgentParams = {
   runtimePluginToolGrant?: RuntimePluginToolGrant;
   /** Consumed in-process subagent-completion capability; never derived from public input. */
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
+  /** Verified sessions_send authority carried outside public agent params. */
+  trustedSessionHandoff?: boolean;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   /** Seen bootstrap truncation warning signatures for this session (once mode dedupe). */

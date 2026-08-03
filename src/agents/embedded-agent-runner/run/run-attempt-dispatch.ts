@@ -385,6 +385,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     inputProvenance: params.inputProvenance,
     trustedInternalHandoff: params.trustedInternalHandoff,
+    trustedSessionHandoff: params.trustedSessionHandoff,
     scheduledToolPolicy: params.scheduledToolPolicy,
     streamParams: params.streamParams,
     modelRun: params.modelRun,

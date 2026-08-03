@@ -85,6 +85,8 @@ export type ConversationCapabilityProfileParams = {
   inputProvenance?: InputProvenance;
   /** Consumed in-process completion capability; public callers cannot set this fact. */
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
+  /** Verified sessions_send authority; public callers cannot set this fact. */
+  trustedSessionHandoff?: boolean;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
 };
@@ -213,30 +215,45 @@ export function resolveConversationCapabilityProfile(
     params.senderIsOwner === true &&
     normalizeMessageChannel(messageProvider ?? params.messageChannel) === INTERNAL_MESSAGE_CHANNEL;
   const subagentSessionKey = params.sandboxSessionKey ?? params.sessionKey;
-  const requesterPolicies = resolveRequesterToolPolicies({
-    config: params.config,
-    sessionKey: params.sessionKey,
-    subagentSessionKey,
-    agentId: effective.agentId,
-    spawnedBy: params.spawnedBy,
-    messageProvider,
-    groupId: trustedGroup.groupId,
-    groupChannel: trustedGroupChannel,
-    groupSpace: trustedGroupSpace,
-    accountId: params.scheduledToolPolicy?.ownerAccountId ?? params.agentAccountId,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-    inputProvenance: params.inputProvenance,
-    trustedInternalHandoff: params.trustedInternalHandoff,
-    sessionId: params.sessionId,
-    modelProvider: params.modelProvider,
-    modelId: params.modelId,
-    senderPolicyMode: params.scheduledToolPolicy || isOwnerInternalSession ? "never" : "always",
-    groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
-    requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
-  });
+  const sessionHandoffPolicy =
+    params.trustedSessionHandoff === true &&
+    params.inputProvenance?.kind === "inter_session" &&
+    params.inputProvenance.sourceTool === "sessions_send" &&
+    params.runtimeToolAllowlist
+      ? { allow: params.runtimeToolAllowlist }
+      : undefined;
+  // The signed handoff projection already includes sender/group policy. Treat
+  // it as delegated authority so missing ingress identity cannot select wildcards.
+  const requesterPolicies = sessionHandoffPolicy
+    ? {
+        delegated: true as const,
+        requesterPolicySource: "session-handoff" as const,
+        inheritedToolPolicy: sessionHandoffPolicy,
+      }
+    : resolveRequesterToolPolicies({
+        config: params.config,
+        sessionKey: params.sessionKey,
+        subagentSessionKey,
+        agentId: effective.agentId,
+        spawnedBy: params.spawnedBy,
+        messageProvider,
+        groupId: trustedGroup.groupId,
+        groupChannel: trustedGroupChannel,
+        groupSpace: trustedGroupSpace,
+        accountId: params.scheduledToolPolicy?.ownerAccountId ?? params.agentAccountId,
+        senderId: params.senderId,
+        senderName: params.senderName,
+        senderUsername: params.senderUsername,
+        senderE164: params.senderE164,
+        inputProvenance: params.inputProvenance,
+        trustedInternalHandoff: params.trustedInternalHandoff,
+        sessionId: params.sessionId,
+        modelProvider: params.modelProvider,
+        modelId: params.modelId,
+        senderPolicyMode: params.scheduledToolPolicy || isOwnerInternalSession ? "never" : "always",
+        groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
+        requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
+      });
   const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
   const profilePolicy = resolveToolProfilePolicy(effective.profile);
   const providerProfilePolicy = resolveToolProfilePolicy(effective.providerProfile);

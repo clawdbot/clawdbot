@@ -326,6 +326,30 @@ describe("resolveConversationCapabilityProfile", () => {
     );
   });
 
+  it("treats a sessions_send runtime projection as authoritative requester policy", () => {
+    const profile = resolveConversationCapabilityProfile({
+      config: {
+        tools: {
+          allow: ["read", "sessions_send"],
+          bySender: { "*": { allow: ["sessions_send"] } },
+        },
+      },
+      runtimeToolAllowlist: ["read", "sessions_send"],
+      trustedSessionHandoff: true,
+      inputProvenance: {
+        kind: "inter_session",
+        sourceTool: "sessions_send",
+      },
+    });
+
+    expect(profile.policy.requesterPolicySource).toBe("session-handoff");
+    expect(profile.policy.senderPolicy).toBeUndefined();
+    expect(profile.policy.groupPolicy).toBeUndefined();
+    expect(profile.policy.inheritedToolPolicy).toEqual({
+      allow: ["read", "sessions_send"],
+    });
+  });
+
   it("does not classify the conversation as shared from a dropped caller group id", () => {
     // Non-group session key cannot vouch for the caller-supplied group facts:
     // the trust check drops them, so scope must stay unknown instead of
