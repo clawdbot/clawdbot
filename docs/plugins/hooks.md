@@ -124,6 +124,23 @@ appending work with `dispatcher.appendBeforeDeliver(handler, { timeoutMs })`.
 Without an owner-declared budget, those callbacks use the same 15-second
 default so a hung callback cannot retain the serialized delivery lane.
 
+`before_prompt_build` is the one modifying hook whose losses are reported to the
+agent. When a contribution never reaches the prompt — the handler threw, it ran
+past its budget, or the chain was skipped because a nested prompt build
+re-entered assembly — OpenClaw adds a short `<dropped_plugin_context>` block to
+the turn's `appendContext`, naming the plugin and the reason. Without it an
+agent cannot tell "this plugin had nothing to add" from "this plugin's context
+was lost", so it reasons over a prompt that only looks complete.
+
+The block appears only on turns that actually dropped something, and it is
+bounded so a warning cannot distort the prompt it is warning about: identical
+plugin/reason pairs collapse, at most five entries are listed with a `+N more`
+remainder, the whole marker is capped at 640 bytes, and plugin ids are truncated
+and restricted to an identifier charset so plugin-authored text cannot break the
+marker's frame or address the model directly. Policy is unchanged — the
+re-entrancy guard still guards, budgets still expire, fail-open is still
+fail-open, and surviving handlers' contributions still land.
+
 Each hook receives `event.context.pluginConfig`, the resolved config for the
 plugin that registered that handler. OpenClaw injects it per handler without
 mutating the shared event object other plugins see.
