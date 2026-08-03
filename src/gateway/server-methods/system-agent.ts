@@ -561,13 +561,15 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           await existing?.engine.dispose();
         }
         let session = sessions.get(sessionId);
-        if (params.wizardAnswer !== undefined && !session) {
+        if ((params.wizardAnswer !== undefined || params.wizardCancel !== undefined) && !session) {
           respond(
             false,
             undefined,
             errorShape(
               ErrorCodes.INVALID_REQUEST,
-              "No active OpenClaw chat session is awaiting that wizard answer.",
+              params.wizardCancel !== undefined
+                ? "No active OpenClaw chat session is awaiting that wizard cancel."
+                : "No active OpenClaw chat session is awaiting that wizard answer.",
               { details: buildSystemAgentSessionInvalidatedErrorDetails() },
             ),
           );
@@ -576,6 +578,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         let greetingAuditSequence: number | undefined;
         const welcomeOnly =
           params.wizardAnswer === undefined &&
+          params.wizardCancel === undefined &&
           (params.message === undefined || !params.message.trim());
         if (!session) {
           const { verifySystemAgentInferenceWithFallback } =
@@ -679,6 +682,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         // Inline check (not `welcomeOnly`) so TS narrows params.message below.
         if (
           params.wizardAnswer === undefined &&
+          params.wizardCancel === undefined &&
           (params.message === undefined || !params.message.trim())
         ) {
           respond(

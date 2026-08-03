@@ -3495,6 +3495,50 @@ describe("OpenClaw chat wizard step payload", () => {
     expect(engine.historySince(0)).toContainEqual({ role: "user", text: "Beta" });
   });
 
+  it("cancels the current hosted wizard through a typed direct action", async () => {
+    useTempStateDir();
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({ message: "Bot token" });
+      },
+    });
+
+    const prompt = await engine.handle("connect telegram");
+    const stepId = expectDefined(prompt.step?.id, "expected an active wizard step");
+    const cancelled = await engine.cancelWizard({ stepId });
+
+    expect(cancelled.text).toContain("cancelled");
+    expect(cancelled.step).toBeUndefined();
+    expect(cancelled.wizardInputPending).toBeUndefined();
+    expect(engine.historySince(0)).toContainEqual({ role: "user", text: "Cancel" });
+  });
+
+  it("rejects a stale typed cancel without changing the active step", async () => {
+    useTempStateDir();
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({ message: "Bot token" });
+      },
+    });
+
+    const prompt = await engine.handle("connect telegram");
+    const stepId = expectDefined(prompt.step?.id, "expected an active wizard step");
+    await expect(engine.cancelWizard({ stepId: "stale-step" })).rejects.toBeInstanceOf(
+      SystemAgentWizardAnswerError,
+    );
+    const cancelled = await engine.cancelWizard({ stepId });
+
+    expect(cancelled.text).toContain("cancelled");
+  });
+
   it("rejects a stale structured answer without changing the active step", async () => {
     useTempStateDir();
     const engine = new SystemAgentChatEngine({

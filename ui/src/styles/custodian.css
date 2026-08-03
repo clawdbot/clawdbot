@@ -280,6 +280,15 @@ openclaw-custodian-page {
   font-size: 14px;
 }
 
+.custodian__wizard-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.custodian__wizard-cancel {
+  min-height: 44px;
+}
+
 .custodian__thinking {
   display: flex;
   flex-direction: row;
@@ -486,7 +495,8 @@ openclaw-custodian-page {
 }
 
 @media (max-width: 400px) {
-  .custodian__option-card {
+  .custodian__option-card,
+  .custodian__wizard-step {
     margin-left: 0;
   }
 }

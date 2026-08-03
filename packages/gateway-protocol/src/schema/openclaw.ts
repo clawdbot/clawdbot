@@ -5,6 +5,11 @@ import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { WizardAnswerSchema, WizardStartResultSchema, WizardStepSchema } from "./wizard.js";
 
+export const SystemAgentWizardCancelSchema = closedObject({
+  /** The visible step this action belongs to; stale controls must not affect a newer step. */
+  stepId: NonEmptyString,
+});
+
 /**
  * OpenClaw chat lets clients (macOS app onboarding, future UIs) hold the
  * setup/repair conversation over the gateway. The gateway live-tests the
@@ -17,6 +22,8 @@ export const SystemAgentChatParamsSchema = closedObject({
   message: Type.Optional(Type.String()),
   /** Typed answer from a client rendering the current `WizardStep`. */
   wizardAnswer: Type.Optional(WizardAnswerSchema),
+  /** Direct client control for cancelling the currently rendered hosted wizard. */
+  wizardCancel: Type.Optional(SystemAgentWizardCancelSchema),
   /** Seeds a purpose-specific first greeting for a fresh conversation. */
   welcomeVariant: Type.Optional(
     Type.Union([Type.Literal("onboarding"), Type.Literal("new-agent")]),
@@ -360,6 +367,7 @@ export const SystemAgentSetupAuthStartResultSchema = WizardStartResultSchema;
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
 export type SystemAgentChatParams = Static<typeof SystemAgentChatParamsSchema>;
+export type SystemAgentWizardCancel = Static<typeof SystemAgentWizardCancelSchema>;
 export type SystemAgentChatQuestion = Static<typeof SystemAgentChatQuestionSchema>;
 export type SystemAgentChatResult = Static<typeof SystemAgentChatResultSchema>;
 export type SystemAgentChatHistoryParams = Static<typeof SystemAgentChatHistoryParamsSchema>;
