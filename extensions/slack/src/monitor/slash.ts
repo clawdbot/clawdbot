@@ -387,6 +387,11 @@ export async function registerSlackMonitorSlashCommands(params: {
   const slashCommand = resolveSlackSlashCommandConfig(
     ctx.slashCommand ?? account.config.slashCommand,
   );
+  // App Home and argument handlers must share the registered command mode;
+  // explicit single-command mode also avoids loading inactive native runtimes.
+  let registration: SlackCommandRegistration = slashCommand.enabled
+    ? { mode: "single", name: slashCommand.name }
+    : { mode: "disabled" };
 
   const handleSlashCommand = async (p: {
     command: SlackCommandMiddlewareArgs["command"];
@@ -872,22 +877,22 @@ export async function registerSlackMonitorSlashCommands(params: {
     }
   };
 
-  const nativeEnabled = resolveNativeCommandsEnabled({
-    providerId: "slack",
-    providerSetting: account.config.commands?.native,
-    globalSetting: startupCfg.commands?.native,
-  });
-  const nativeSkillsEnabled = resolveNativeSkillsEnabled({
-    providerId: "slack",
-    providerSetting: account.config.commands?.nativeSkills,
-    globalSetting: startupCfg.commands?.nativeSkills,
-  });
-
   let nativeCommands: Array<{ name: string }> = [];
   let slashCommandsRuntime: typeof import("./slash-commands.runtime.js") | null = null;
-  if (nativeEnabled) {
+  if (
+    registration.mode === "disabled" &&
+    resolveNativeCommandsEnabled({
+      providerId: "slack",
+      providerSetting: account.config.commands?.native,
+      globalSetting: startupCfg.commands?.native,
+    })
+  ) {
     slashCommandsRuntime = await loadSlashCommandsRuntime();
-    const skillCommands = nativeSkillsEnabled
+    const skillCommands = resolveNativeSkillsEnabled({
+      providerId: "slack",
+      providerSetting: account.config.commands?.nativeSkills,
+      globalSetting: startupCfg.commands?.nativeSkills,
+    })
       ? (await loadSlashSkillCommandsRuntime()).listSkillCommandsForAgents({ cfg: startupCfg })
       : [];
     nativeCommands = slashCommandsRuntime.listNativeCommandSpecsForConfig(startupCfg, {
@@ -906,11 +911,12 @@ export async function registerSlackMonitorSlashCommands(params: {
       existingNativeNames.add(normalizedName);
       nativeCommands.push(pluginCommand);
     }
+    registration = nativeCommands.length > 0 ? { mode: "native" } : { mode: "disabled" };
   }
 
-  if (slashCommand.enabled) {
+  if (registration.mode === "single") {
     ctx.app.command(
-      buildSlackSlashCommandMatcher(slashCommand.name),
+      buildSlackSlashCommandMatcher(registration.name),
       async ({ command, ack, respond, body }: SlackCommandMiddlewareArgs) => {
         await handleSlashCommand({
           command,
@@ -921,7 +927,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         });
       },
     );
-  } else if (nativeCommands.length > 0) {
+  } else if (registration.mode === "native") {
     if (!slashCommandsRuntime) {
       throw new Error("Missing commands runtime for native Slack commands.");
     }
@@ -960,14 +966,7 @@ export async function registerSlackMonitorSlashCommands(params: {
     logVerbose("slack: slash commands disabled");
   }
 
-  const registration: SlackCommandRegistration =
-    nativeCommands.length > 0
-      ? { mode: "native" }
-      : slashCommand.enabled
-        ? { mode: "single", name: slashCommand.name }
-        : { mode: "disabled" };
-
-  if (nativeCommands.length === 0 || !supportsInteractiveArgMenus) {
+  if (registration.mode !== "native" || !supportsInteractiveArgMenus) {
     return registration;
   }
 
