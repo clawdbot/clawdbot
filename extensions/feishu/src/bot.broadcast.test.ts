@@ -720,6 +720,68 @@ describe("broadcast dispatch", () => {
     expect(retrySusanClaim.release).not.toHaveBeenCalled();
   });
 
+  it("delivers the reply-session conflict notice with thread routing when broadcast lanes exhaust retries (#108320)", async () => {
+    mockDispatchReply
+      .mockReset()
+      .mockRejectedValue(
+        new Error(
+          "reply session initialization conflicted for agent:main:feishu:group:oc-broadcast-group",
+        ),
+      );
+    const mockNoticeReply = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om-n" } });
+    const mockNoticeCreate = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om-n" } });
+    mockCreateFeishuClient.mockReturnValue({
+      contact: {
+        user: {
+          get: vi.fn().mockResolvedValue({ data: { user: { name: "Sender" } } }),
+        },
+      },
+      im: {
+        chat: {
+          get: mockGetChatInfo.mockResolvedValue({
+            code: 0,
+            data: { name: "Broadcast Team" },
+          }),
+        },
+        message: { reply: mockNoticeReply, create: mockNoticeCreate },
+      },
+    });
+    const cfg = createBroadcastConfig();
+    const broadcastGroups = cfg.channels?.feishu?.groups as Record<
+      string,
+      { replyInThread?: "enabled" | "disabled" }
+    >;
+    broadcastGroups["oc-broadcast-group"]!.replyInThread = "enabled";
+    const event = createBroadcastEvent({
+      messageId: "msg-broadcast-conflict",
+      text: "hello @bot",
+      botMentioned: true,
+    });
+    event.message.root_id = "om-broadcast-root";
+    event.message.thread_id = "omt-broadcast-thread";
+
+    // Every lane exhausts its reply-session init conflict, so the fan-out
+    // surfaces an AggregateError; the notice must still go out, anchored at the
+    // resolved thread root with reply_in_thread, not the catch-block defaults.
+    await handleFeishuMessage({
+      cfg,
+      event,
+      botOpenId: "bot-open-id",
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(mockNoticeReply).toHaveBeenCalledTimes(1);
+    expect(mockNoticeCreate).not.toHaveBeenCalled();
+    const noticeRequest = mockNoticeReply.mock.calls[0]?.[0] as {
+      path: { message_id: string };
+      data: { content: string; msg_type: string; reply_in_thread?: boolean };
+    };
+    expect(noticeRequest.path.message_id).toBe("om-broadcast-root");
+    expect(noticeRequest.data.msg_type).toBe("post");
+    expect(noticeRequest.data.reply_in_thread).toBe(true);
+    expect(noticeRequest.data.content).toContain("session stayed busy");
+  });
+
   it("keeps an adopted active lane committed when its no-visible fallback fails", async () => {
     const broadcastClaim = createReplayClaim("broadcast-fallback-failure");
     const susanClaim = createReplayClaim("broadcast-fallback-failure-susan");

@@ -19,6 +19,7 @@ import {
   createFeishuTestRoute,
 } from "./bot.test-support.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
+import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
 import { setFeishuRuntime } from "./runtime.js";
 import { setFeishuSyntheticDirectPreDispatchTarget } from "./synthetic-event-target.js";
@@ -482,6 +483,7 @@ async function dispatchMessage(params: {
   channelRuntime?: PluginRuntime["channel"];
   botOpenId?: string;
   directPreDispatchTarget?: string;
+  turnAdoptionLifecycle?: FeishuIngressLifecycle;
 }) {
   const runtime = createRuntimeEnv();
   const feishuConfig = params.cfg.channels?.feishu;
@@ -508,6 +510,7 @@ async function dispatchMessage(params: {
     botOpenId: params.botOpenId,
     runtime,
     channelRuntime: params.channelRuntime,
+    turnAdoptionLifecycle: params.turnAdoptionLifecycle,
   });
   return runtime;
 }
@@ -634,6 +637,83 @@ describe("handleFeishuMessage ACP routing", () => {
         replyToMessageId: "msg-conflict-thread-root",
         replyInThread: true,
       }),
+    );
+  });
+
+  function createTurnAdoptionLifecycle(): FeishuIngressLifecycle {
+    return {
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(async () => {}),
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onAbandoned: vi.fn(async () => {}),
+    };
+  }
+
+  it("delivers the conflict notice for durable ingress events instead of rethrowing (#108320)", async () => {
+    mockDispatchInboundMessage.mockRejectedValueOnce(
+      new Error("reply session initialization conflicted for agent:main:feishu:direct:ou_sender_1"),
+    );
+
+    // Durable ingress always supplies a turn-adoption lifecycle; a landed
+    // terminal notice means the handler resolves so the caller can settle.
+    await dispatchMessage({
+      cfg: {
+        session: { mainKey: "main", scope: "per-sender" },
+        channels: { feishu: { enabled: true, allowFrom: ["ou_sender_1"], dmPolicy: "open" } },
+      },
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-conflict-durable",
+          chat_id: "oc_dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello" }),
+        },
+      },
+      turnAdoptionLifecycle: createTurnAdoptionLifecycle(),
+    });
+
+    expect(mockSendMessageFeishu).toHaveBeenCalledTimes(1);
+    const notice = mockCallArg<{ text?: string; to?: string; replyToMessageId?: string }>(
+      mockSendMessageFeishu,
+      0,
+      0,
+    );
+    expect(notice.to).toBe("chat:oc_dm");
+    expect(notice.replyToMessageId).toBe("msg-conflict-durable");
+    expect(notice.text).toContain("session stayed busy");
+  });
+
+  it("rethrows the conflict for durable ingress when the notice fails to send (#108320)", async () => {
+    mockDispatchInboundMessage.mockRejectedValueOnce(
+      new Error("reply session initialization conflicted for agent:main:feishu:direct:ou_sender_1"),
+    );
+    mockSendMessageFeishu.mockRejectedValueOnce(new Error("feishu api unavailable"));
+
+    // The notice never landed, so the handler must rethrow to abandon the
+    // ingress lifecycle and keep durable redelivery alive.
+    await expect(
+      dispatchMessage({
+        cfg: {
+          session: { mainKey: "main", scope: "per-sender" },
+          channels: { feishu: { enabled: true, allowFrom: ["ou_sender_1"], dmPolicy: "open" } },
+        },
+        event: {
+          sender: { sender_id: { open_id: "ou_sender_1" } },
+          message: {
+            message_id: "msg-conflict-durable-notice-failure",
+            chat_id: "oc_dm",
+            chat_type: "p2p",
+            message_type: "text",
+            content: JSON.stringify({ text: "hello" }),
+          },
+        },
+        turnAdoptionLifecycle: createTurnAdoptionLifecycle(),
+      }),
+    ).rejects.toThrow(
+      "reply session initialization conflicted for agent:main:feishu:direct:ou_sender_1",
     );
   });
 

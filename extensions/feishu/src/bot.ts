@@ -107,8 +107,17 @@ const FEISHU_REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE =
   /reply session initialization conflicted for \S+/u;
 
 function isFeishuReplySessionInitConflictError(error: unknown): boolean {
-  return FEISHU_REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(
-    error instanceof Error ? error.message : String(error),
+  if (
+    FEISHU_REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(
+      error instanceof Error ? error.message : String(error),
+    )
+  ) {
+    return true;
+  }
+  // Broadcast fan-out aggregates per-lane failures, so an exhausted conflict
+  // can sit inside the AggregateError while its top-level message differs.
+  return (
+    error instanceof AggregateError && error.errors.some(isFeishuReplySessionInitConflictError)
   );
 }
 
@@ -1523,6 +1532,13 @@ export async function handleFeishuMessage(params: {
       };
     };
 
+    // Capture the resolved notice delivery parameters once, ahead of both the
+    // single-agent and broadcast dispatch paths, so a conflict surfacing from
+    // either path keeps the normal reply anchor and thread placement.
+    conflictNoticeCfg = effectiveCfg;
+    conflictNoticeReplyToMessageId = replyTargetMessageId;
+    conflictNoticeReplyInThread = replyInThread;
+
     if (broadcastAgents) {
       // Cross-account dedup: in multi-account setups, Feishu delivers the same
       // event to every bot account in the group. Only one account should handle
@@ -1853,9 +1869,6 @@ export async function handleFeishuMessage(params: {
           sessionKey: route.sessionKey,
         });
 
-      conflictNoticeCfg = effectiveCfg;
-      conflictNoticeReplyToMessageId = replyTargetMessageId;
-      conflictNoticeReplyInThread = replyInThread;
       log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
       const turnResult = await core.channel.inbound.run({
         channel: "feishu",
@@ -1918,7 +1931,7 @@ export async function handleFeishuMessage(params: {
       );
     }
   } catch (err) {
-    if (!turnAdoptionLifecycle && isFeishuReplySessionInitConflictError(err)) {
+    if (isFeishuReplySessionInitConflictError(err)) {
       // Parity with Slack/Signal/Discord: a reply-session init conflict that
       // exhausted its bounded retry must reach the user as a visible notice
       // instead of being silently dropped. See #108320.
@@ -1936,6 +1949,11 @@ export async function handleFeishuMessage(params: {
         error(
           `feishu[${account.accountId}]: reply-session conflict notice failed: ${String(noticeError)}`,
         );
+        // The notice never landed, so a durable event must not be adopted:
+        // rethrow to abandon the ingress lifecycle and keep redelivery alive.
+        if (turnAdoptionLifecycle) {
+          throw err;
+        }
       }
       return;
     }
