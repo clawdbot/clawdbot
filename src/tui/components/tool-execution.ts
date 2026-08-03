@@ -2,6 +2,7 @@
 import { Box, Container, Markdown, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatToolDetail, resolveToolDisplay } from "../../agents/tool-display.js";
+import { resolveRedactedToolArgumentSummary } from "../../chat/tool-argument-redaction.js";
 import { markdownTheme, theme } from "../theme/theme.js";
 import { sanitizeRenderableText } from "../tui-formatters.js";
 
@@ -20,9 +21,6 @@ type ToolResult = {
 };
 
 const PREVIEW_LINES = 12;
-const REDACTED_ARG_FALLBACKS: Record<string, string> = {
-  delegate_artifacts_publish: "artifact paths redacted",
-};
 
 const MAX_PREVIEW_CHARS = PREVIEW_LINES * 256;
 
@@ -76,7 +74,7 @@ class ToolOutputComponent extends Markdown {
 
 // Redact sensitive tools before consulting shared detail-key fallbacks.
 function formatArgs(toolName: string, args: unknown): string {
-  const redactedFallback = REDACTED_ARG_FALLBACKS[toolName.trim().toLowerCase()];
+  const redactedFallback = resolveRedactedToolArgumentSummary(toolName);
   if (redactedFallback) {
     return redactedFallback;
   }
