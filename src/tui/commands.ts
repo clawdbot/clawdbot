@@ -162,15 +162,14 @@ const TUI_COMMAND_ROWS = [
 const TUI_COMMAND_ROW_VALUES: readonly TuiCommandRow[] = TUI_COMMAND_ROWS;
 const TUI_COMMAND_DESCRIPTORS: readonly TuiCommandDescriptor[] = TUI_COMMAND_ROW_VALUES.map(
   ([name, description, help, completions, options]) => {
-    const { handler = true, ...metadata } = options ?? {};
-    return {
-      name,
-      description,
-      help,
-      completions,
-      ...metadata,
-      ...(handler ? { handler } : {}),
-    };
+    const descriptor: TuiCommandDescriptor = { name, description, help, completions };
+    descriptor.aliases = options?.aliases;
+    descriptor.scope = options?.scope;
+    descriptor.shared = options?.shared;
+    if (options?.handler !== false) {
+      descriptor.handler = true;
+    }
+    return descriptor;
   },
 );
 
