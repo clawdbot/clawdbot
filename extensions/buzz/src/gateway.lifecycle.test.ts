@@ -43,6 +43,49 @@ const CHANNEL_ID = "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c";
 const PRIVATE_KEY = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 const BOT_PUBLIC_KEY = "a".repeat(64);
 
+function createBuzzConfig(name?: string): OpenClawConfig {
+  return {
+    channels: {
+      buzz: {
+        ...(name ? { name } : {}),
+        relayUrl: "wss://buzz.example.com",
+        privateKey: PRIVATE_KEY,
+        groups: { [CHANNEL_ID]: {} },
+      },
+    },
+  } as OpenClawConfig;
+}
+
+function startTestGateway(
+  options: {
+    profileName?: string;
+    setStatus?: ReturnType<typeof vi.fn>;
+    logInfo?: ReturnType<typeof vi.fn>;
+    logError?: ReturnType<typeof vi.fn>;
+    invalidateDirectoryCache?: ReturnType<typeof vi.fn>;
+    omitLog?: boolean;
+  } = {},
+) {
+  const abortController = new AbortController();
+  const cfg = createBuzzConfig(options.profileName);
+  const account = resolveBuzzAccount({ cfg });
+  const setStatus = options.setStatus ?? vi.fn();
+  const lifecycle = startBuzzGatewayAccount({
+    cfg,
+    accountId: account.accountId,
+    account,
+    runtime: {},
+    abortSignal: abortController.signal,
+    ...(options.omitLog
+      ? {}
+      : { log: { info: options.logInfo ?? vi.fn(), error: options.logError ?? vi.fn() } }),
+    getStatus: vi.fn(),
+    setStatus,
+    invalidateDirectoryCache: options.invalidateDirectoryCache,
+  } as unknown as ChannelGatewayContext<ResolvedBuzzAccount>);
+  return { abortController, cfg, account, setStatus, lifecycle };
+}
+
 function createMockBus(): BuzzBus {
   return {
     publicKey: BOT_PUBLIC_KEY,
@@ -105,28 +148,11 @@ describe("Buzz gateway lifecycle", () => {
   });
 
   it("invalidates cached room targets after initial discovery and newer room metadata", async () => {
-    const abortController = new AbortController();
-    const cfg = {
-      channels: {
-        buzz: {
-          relayUrl: "wss://buzz.example.com",
-          privateKey: PRIVATE_KEY,
-          groups: { [CHANNEL_ID]: {} },
-        },
-      },
-    } as OpenClawConfig;
-    const account = resolveBuzzAccount({ cfg });
     const invalidateDirectoryCache = vi.fn();
-    const lifecycle = startBuzzGatewayAccount({
-      cfg,
-      accountId: account.accountId,
-      account,
-      runtime: {},
-      abortSignal: abortController.signal,
-      getStatus: vi.fn(),
-      setStatus: vi.fn(),
+    const { abortController, lifecycle } = startTestGateway({
       invalidateDirectoryCache,
-    } as unknown as ChannelGatewayContext<ResolvedBuzzAccount>);
+      omitLog: true,
+    });
 
     await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce());
     expect(invalidateDirectoryCache).toHaveBeenCalledOnce();
@@ -139,29 +165,8 @@ describe("Buzz gateway lifecycle", () => {
 
   it("restarts the account lifecycle when the bus reports a failure", async () => {
     gatewayMocks.resolveAgentIdentity.mockReturnValue({ name: "Molt" });
-    const abortController = new AbortController();
-    const cfg = {
-      channels: {
-        buzz: {
-          relayUrl: "wss://buzz.example.com",
-          privateKey: PRIVATE_KEY,
-          groups: { [CHANNEL_ID]: {} },
-        },
-      },
-    } as OpenClawConfig;
-    const account = resolveBuzzAccount({ cfg });
     const setStatus = vi.fn();
-    const ctx = {
-      cfg,
-      accountId: account.accountId,
-      account,
-      runtime: {},
-      abortSignal: abortController.signal,
-      log: { info: vi.fn(), error: vi.fn() },
-      getStatus: vi.fn(),
-      setStatus,
-    } as unknown as ChannelGatewayContext<ResolvedBuzzAccount>;
-    const lifecycle = startBuzzGatewayAccount(ctx);
+    const { abortController, account, lifecycle } = startTestGateway({ setStatus });
 
     await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce());
     expect(gatewayMocks.startBuzzBus.mock.calls[0]?.[0].profileName).toBe("Molt");
@@ -194,15 +199,7 @@ describe("Buzz gateway lifecycle", () => {
   });
 
   it("uses a one-shot authenticated connection when no gateway bus is running", async () => {
-    const cfg = {
-      channels: {
-        buzz: {
-          relayUrl: "wss://buzz.example.com",
-          privateKey: PRIVATE_KEY,
-          groups: { [CHANNEL_ID]: {} },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = createBuzzConfig();
 
     const result = await buzzOutboundAdapter.sendText({
       cfg,
@@ -230,15 +227,7 @@ describe("Buzz gateway lifecycle", () => {
   });
 
   it("drops heartbeat typing when no gateway bus is running", async () => {
-    const cfg = {
-      channels: {
-        buzz: {
-          relayUrl: "wss://buzz.example.com",
-          privateKey: PRIVATE_KEY,
-          groups: { [CHANNEL_ID]: {} },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = createBuzzConfig();
 
     await sendBuzzTyping({
       cfg,
@@ -252,29 +241,7 @@ describe("Buzz gateway lifecycle", () => {
   });
 
   it("reuses the gateway bus for sends in the running process", async () => {
-    const abortController = new AbortController();
-    const cfg = {
-      channels: {
-        buzz: {
-          name: "BuzzClaw",
-          relayUrl: "wss://buzz.example.com",
-          privateKey: PRIVATE_KEY,
-          groups: { [CHANNEL_ID]: {} },
-        },
-      },
-    } as OpenClawConfig;
-    const account = resolveBuzzAccount({ cfg });
-    const ctx = {
-      cfg,
-      accountId: account.accountId,
-      account,
-      runtime: {},
-      abortSignal: abortController.signal,
-      log: { info: vi.fn(), error: vi.fn() },
-      getStatus: vi.fn(),
-      setStatus: vi.fn(),
-    } as unknown as ChannelGatewayContext<ResolvedBuzzAccount>;
-    const lifecycle = startBuzzGatewayAccount(ctx);
+    const { abortController, cfg, lifecycle } = startTestGateway({ profileName: "BuzzClaw" });
     await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce());
     expect(gatewayMocks.startBuzzBus.mock.calls[0]?.[0].profileName).toBe("BuzzClaw");
     expect(gatewayMocks.resolveAgentRoute).not.toHaveBeenCalled();
@@ -299,28 +266,7 @@ describe("Buzz gateway lifecycle", () => {
   });
 
   it("uses the active bus for heartbeat typing without destabilizing the account", async () => {
-    const abortController = new AbortController();
-    const cfg = {
-      channels: {
-        buzz: {
-          relayUrl: "wss://buzz.example.com",
-          privateKey: PRIVATE_KEY,
-          groups: { [CHANNEL_ID]: {} },
-        },
-      },
-    } as OpenClawConfig;
-    const account = resolveBuzzAccount({ cfg });
-    const ctx = {
-      cfg,
-      accountId: account.accountId,
-      account,
-      runtime: {},
-      abortSignal: abortController.signal,
-      log: { info: vi.fn(), error: vi.fn() },
-      getStatus: vi.fn(),
-      setStatus: vi.fn(),
-    } as unknown as ChannelGatewayContext<ResolvedBuzzAccount>;
-    const lifecycle = startBuzzGatewayAccount(ctx);
+    const { abortController, cfg, lifecycle } = startTestGateway();
     await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce());
 
     await sendBuzzTyping({
@@ -351,28 +297,7 @@ describe("Buzz gateway lifecycle", () => {
 
   it("uses the rolling lookback after a failed initial session", async () => {
     gatewayMocks.startBuzzBus.mockRejectedValueOnce(new Error("connect failed"));
-    const abortController = new AbortController();
-    const cfg = {
-      channels: {
-        buzz: {
-          relayUrl: "wss://buzz.example.com",
-          privateKey: PRIVATE_KEY,
-          groups: { [CHANNEL_ID]: {} },
-        },
-      },
-    } as OpenClawConfig;
-    const account = resolveBuzzAccount({ cfg });
-    const ctx = {
-      cfg,
-      accountId: account.accountId,
-      account,
-      runtime: {},
-      abortSignal: abortController.signal,
-      log: { info: vi.fn(), error: vi.fn() },
-      getStatus: vi.fn(),
-      setStatus: vi.fn(),
-    } as unknown as ChannelGatewayContext<ResolvedBuzzAccount>;
-    const lifecycle = startBuzzGatewayAccount(ctx);
+    const { abortController, lifecycle } = startTestGateway();
 
     await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledTimes(2), {
       timeout: 3_000,
@@ -386,30 +311,9 @@ describe("Buzz gateway lifecycle", () => {
   });
 
   it("keeps the account running when one message fails", async () => {
-    const abortController = new AbortController();
-    const cfg = {
-      channels: {
-        buzz: {
-          relayUrl: "wss://buzz.example.com",
-          privateKey: PRIVATE_KEY,
-          groups: { [CHANNEL_ID]: {} },
-        },
-      },
-    } as OpenClawConfig;
-    const account = resolveBuzzAccount({ cfg });
     const setStatus = vi.fn();
     const logError = vi.fn();
-    const ctx = {
-      cfg,
-      accountId: account.accountId,
-      account,
-      runtime: {},
-      abortSignal: abortController.signal,
-      log: { info: vi.fn(), error: logError },
-      getStatus: vi.fn(),
-      setStatus,
-    } as unknown as ChannelGatewayContext<ResolvedBuzzAccount>;
-    const lifecycle = startBuzzGatewayAccount(ctx);
+    const { abortController, account, lifecycle } = startTestGateway({ setStatus, logError });
 
     await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce());
     gatewayMocks.onMessageError?.(new Error("dispatch failed"));
@@ -426,30 +330,8 @@ describe("Buzz gateway lifecycle", () => {
   });
 
   it("reconnects with a rolling lookback without trusting sender time", async () => {
-    const abortController = new AbortController();
-    const cfg = {
-      channels: {
-        buzz: {
-          relayUrl: "wss://buzz.example.com",
-          privateKey: PRIVATE_KEY,
-          groups: { [CHANNEL_ID]: {} },
-        },
-      },
-    } as OpenClawConfig;
-    const account = resolveBuzzAccount({ cfg });
     const invalidateDirectoryCache = vi.fn();
-    const ctx = {
-      cfg,
-      accountId: account.accountId,
-      account,
-      runtime: {},
-      abortSignal: abortController.signal,
-      log: { info: vi.fn(), error: vi.fn() },
-      getStatus: vi.fn(),
-      setStatus: vi.fn(),
-      invalidateDirectoryCache,
-    } as unknown as ChannelGatewayContext<ResolvedBuzzAccount>;
-    const lifecycle = startBuzzGatewayAccount(ctx);
+    const { abortController, lifecycle } = startTestGateway({ invalidateDirectoryCache });
 
     await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce());
     const createdAt = Math.floor(Date.now() / 1000) + 24 * 60 * 60;

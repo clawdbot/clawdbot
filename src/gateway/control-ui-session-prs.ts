@@ -5,6 +5,7 @@ import nodePath from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { runGit } from "../agents/worktrees/git.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type {
   ControlUiSessionBranch,
@@ -669,12 +670,6 @@ async function cachedBranchPullRequests(
   );
   branchCache.delete(key);
   branchCache.set(key, entry);
-  while (branchCache.size > CACHE_LIMIT) {
-    const oldestKey = branchCache.keys().next().value as string | undefined;
-    if (!oldestKey) {
-      break;
-    }
-    branchCache.delete(oldestKey);
-  }
+  pruneMapToMaxSize(branchCache, CACHE_LIMIT);
   return promise;
 }

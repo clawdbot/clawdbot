@@ -28,6 +28,7 @@ import {
 } from "../channels/plugins/native-approval-prompt.js";
 import type { SubagentDelegationMode } from "../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
   buildMemoryPromptSection,
   type PreparedMemoryPromptSection,
@@ -159,13 +160,7 @@ function cacheStablePromptPrefix(key: string, build: () => string): string {
 
   const value = build();
   stablePromptPrefixCache.set(key, { value });
-  while (stablePromptPrefixCache.size > SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT) {
-    const oldestKey = stablePromptPrefixCache.keys().next().value;
-    if (oldestKey === undefined) {
-      break;
-    }
-    stablePromptPrefixCache.delete(oldestKey);
-  }
+  pruneMapToMaxSize(stablePromptPrefixCache, SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT);
   return value;
 }
 

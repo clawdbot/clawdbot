@@ -1,8 +1,4 @@
 // Telegram plugin module coordinates one inbound message dispatch lifecycle.
-import {
-  createOutboundPayloadPlan,
-  projectOutboundPayloadPlanForDelivery,
-} from "openclaw/plugin-sdk/channel-outbound";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { createSubsystemLogger, danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -384,6 +380,7 @@ export const dispatchTelegramMessage = async ({
   });
   const state: TelegramDispatchTurnState = {
     queuedFinal: false,
+    noVisibleReplyFallbackEligible: false,
     suppressSilentReplyFallback: false,
     hadErrorReplyFailureOrSkip: false,
   };
@@ -509,25 +506,12 @@ export const dispatchTelegramMessage = async ({
     !deliverySummary.delivered &&
     !state.suppressSilentReplyFallback &&
     !state.queuedFinal &&
-    dispatchContext.isGroup
+    state.noVisibleReplyFallbackEligible
   ) {
-    const policySessionKey =
-      dispatchContext.ctxPayload.CommandSource === "native"
-        ? (dispatchContext.ctxPayload.CommandTargetSessionKey ??
-          dispatchContext.ctxPayload.SessionKey)
-        : dispatchContext.ctxPayload.SessionKey;
-    const silentReplyFallback = projectOutboundPayloadPlanForDelivery(
-      createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
-        cfg,
-        sessionKey: policySessionKey,
-        surface: "telegram",
-      }),
-    );
-    if (silentReplyFallback.length > 0) {
-      sentFallback = (await delivery.deliverFallback(silentReplyFallback, false)).delivered;
-    }
-    silentReplyDispatchLogger.debug("telegram turn ended without visible final response", {
-      hasSessionKey: Boolean(policySessionKey),
+    sentFallback = (await delivery.deliverFallback([{ text: EMPTY_RESPONSE_FALLBACK }], false))
+      .delivered;
+    silentReplyDispatchLogger.debug("telegram recovered eligible turn without visible response", {
+      hasSessionKey: Boolean(dispatchContext.ctxPayload.SessionKey),
       hasChatId: dispatchContext.chatId != null,
       queuedFinal: state.queuedFinal,
       sentFallback,

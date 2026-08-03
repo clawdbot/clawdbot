@@ -3,6 +3,7 @@
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { normalizeToolName } from "../agents/tool-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { DirectoryCache } from "../infra/outbound/directory-cache.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
 import {
@@ -28,8 +29,6 @@ type CachedScopedTools = {
   workspaceDir: string | undefined;
   tools: McpLoopbackTool[];
   toolSchema: McpToolSchemaEntry[];
-  configRef: OpenClawConfig;
-  time: number;
 };
 
 type McpLoopbackScopeParams = Omit<McpLoopbackRequestContext, "senderIsOwner"> & {
@@ -161,7 +160,7 @@ function applyPolicyToolsAllow(
 
 /** Short-lived cache for loopback tool lists keyed by session/channel context. */
 export class McpLoopbackToolCache {
-  #entries = new Map<string, CachedScopedTools>();
+  #entries = new DirectoryCache<CachedScopedTools>(TOOL_CACHE_TTL_MS, TOOL_CACHE_MAX_ENTRIES);
 
   resolve(params: McpLoopbackScopeParams): CachedScopedTools {
     // Callers differing only in capabilities must not share cached tool lists.
@@ -229,16 +228,8 @@ export class McpLoopbackToolCache {
           ? "non-owner"
           : "unknown-owner",
     ].join("\u0000");
-    const now = Date.now();
-    for (const [key, entry] of this.#entries) {
-      if (now - entry.time >= TOOL_CACHE_TTL_MS) {
-        this.#entries.delete(key);
-      }
-    }
-    const cached = this.#entries.get(cacheKey);
-    // Config object identity is part of the cache contract so explicit gateway
-    // reloads invalidate tool scope and schema without filesystem polling.
-    if (cached && cached.configRef === params.cfg && now - cached.time < TOOL_CACHE_TTL_MS) {
+    const cached = this.#entries.get(cacheKey, params.cfg);
+    if (cached) {
       return cached;
     }
 
@@ -248,17 +239,8 @@ export class McpLoopbackToolCache {
       workspaceDir: next.workspaceDir,
       tools: next.tools,
       toolSchema: buildMcpToolSchema(next.tools),
-      configRef: params.cfg,
-      time: now,
     };
-    this.#entries.set(cacheKey, nextEntry);
-    while (this.#entries.size > TOOL_CACHE_MAX_ENTRIES) {
-      const oldestKey = this.#entries.keys().next().value;
-      if (oldestKey === undefined) {
-        break;
-      }
-      this.#entries.delete(oldestKey);
-    }
+    this.#entries.set(cacheKey, nextEntry, params.cfg);
     return nextEntry;
   }
 }

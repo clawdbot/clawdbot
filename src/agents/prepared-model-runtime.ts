@@ -21,7 +21,6 @@ import {
   publishModelRuntimeSnapshot,
   rebindInputToCommittedConfiguredOwner,
   resolvePublishedOwner,
-  startSerializedSnapshotBuildBatch,
   toError,
   type PreparedModelRuntimeOwner,
   type PreparedModelRuntimeInput,
@@ -548,74 +547,20 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
     owner.environmentFingerprint = effectiveEnvironmentFingerprint(input);
     owner.catalogMode = catalogMode;
     owner.provenance = "configured";
-    owner.generation += 1;
-    owner.needsRefresh = true;
-    owner.refreshError = undefined;
-    const generation = owner.generation;
-    const isCurrent = () =>
-      publicationEpoch === refreshRequestEpoch &&
-      owner.generation === generation &&
-      owners.get(ownerKey(input)) === owner;
-    return { input, isCurrent, owner };
+    return { input, owner };
   });
-  const build = startSerializedSnapshotBuildBatch(
-    candidates.map(({ input }) => input),
+  await publishPreparedModelRuntimeOwnerBatch({
+    entries: candidates,
+    owners,
     agentBuildCompletions,
-    modelRuntimeBuildTimeoutMs,
-    catalogMode,
-    options.onBuildStats,
-    new Map(candidates.map((candidate) => [candidate.input, candidate.isCurrent])),
-    () => publicationEpoch === refreshRequestEpoch,
-  );
-  for (const candidate of candidates) {
-    owners.set(ownerKey(candidate.input), candidate.owner);
-    candidate.owner.buildCompletion = build.completion;
-    void build.completion.then(() => {
-      if (candidate.owner.buildCompletion === build.completion) {
-        candidate.owner.buildCompletion = undefined;
-      }
-    });
-  }
-  const publication = (async () => {
-    try {
-      const snapshots = await build.pending;
-      for (const [index, candidate] of candidates.entries()) {
-        if (!candidate.isCurrent()) {
-          continue;
-        }
-        candidate.owner.snapshot = snapshots[index]!;
-        candidate.owner.pending = undefined;
-        candidate.owner.needsRefresh = false;
-      }
-      return snapshots;
-    } catch (error) {
-      const refreshError = toError(error);
-      for (const candidate of candidates) {
-        if (!candidate.isCurrent()) {
-          continue;
-        }
-        candidate.owner.pending = undefined;
-        candidate.owner.needsRefresh = true;
-        candidate.owner.refreshError = refreshError;
-      }
-      throw refreshError;
-    }
-  })();
-  for (const [index, candidate] of candidates.entries()) {
-    const pending = publication.then((snapshots) => {
-      // Config publication is atomic, including callers deduplicated against an individual owner.
-      // A superseded batch must not leak its unpublished snapshot through that pending promise.
-      if (!candidate.isCurrent()) {
-        throw new PreparedModelRuntimePublicationSupersededError(
-          `prepared model runtime publication was superseded for ${candidate.input.agentDir}`,
-        );
-      }
-      return snapshots[index]!;
-    });
-    candidate.owner.pending = pending;
-    void pending.catch(() => undefined);
-  }
-  await publication;
+    buildTimeoutMs: modelRuntimeBuildTimeoutMs,
+    isPublicationCurrent: () => publicationEpoch === refreshRequestEpoch,
+    // Config replacement is one transaction. Per-owner auth supersession may retire individual
+    // candidates, while a newer config epoch stops every remaining build in this publication.
+    isBuildCurrent: () => publicationEpoch === refreshRequestEpoch,
+    onBuildStats: options.onBuildStats,
+    registerEntriesAfterBuildStart: true,
+  });
 }
 
 /** Serializes config/plugin publications so only the latest completed refresh retires owners. */

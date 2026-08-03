@@ -10,6 +10,7 @@ import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withSecureTestNodeExecPath } from "../secrets/test-node-command.test-support.js";
+import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { getGatewayRunRuntimeHooks } from "./gateway-cli/runtime-hooks.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
@@ -92,6 +93,14 @@ const readConfigFileSnapshotMock = vi.hoisted(() =>
     valid: true,
     sourceConfig: { gateway: { mode: "local" } },
   })),
+);
+const readLocalOnboardingStateMock = vi.hoisted(() =>
+  vi.fn<
+    (
+      configPath: string,
+      config: { wizard?: { securityAcknowledgedAt?: string } },
+    ) => LocalOnboardingState | undefined
+  >(() => undefined),
 );
 const setupWizardCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const runRemoteGatewayInferenceOnboardingMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -370,6 +379,10 @@ vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
 }));
 
+vi.mock("../state/local-onboarding-state.js", () => ({
+  readLocalOnboardingStateForConfig: readLocalOnboardingStateMock,
+}));
+
 vi.mock("../commands/onboard.js", () => ({
   setupWizardCommand: setupWizardCommandMock,
 }));
@@ -478,6 +491,7 @@ describe("runCli exit behavior", () => {
       valid: true,
       sourceConfig: { gateway: { mode: "local" } },
     });
+    readLocalOnboardingStateMock.mockReset().mockReturnValue(undefined);
     probeGatewayConfiguredModelMock.mockResolvedValue({ kind: "configured" });
     readActiveGatewayLockPortMock.mockReset().mockResolvedValue(undefined);
     loadGatewayTlsRuntimeMock.mockReset().mockResolvedValue({
@@ -3002,14 +3016,125 @@ describe("runCli exit behavior", () => {
         },
       },
     },
+    {
+      name: "resumes onboarding when an interrupted first run also persisted guarded access",
+      snapshot: {
+        exists: true,
+        valid: true,
+        sourceConfig: {
+          wizard: {
+            securityAcknowledgedAt: "2026-07-13T00:00:00.000Z",
+            accessMode: "guarded",
+          },
+        },
+      },
+    },
   ])("$name", async ({ snapshot }) => {
     readConfigFileSnapshotMock.mockResolvedValueOnce(snapshot);
     await runBareCli();
 
     expect(readConfigFileSnapshotMock).toHaveBeenCalledOnce();
+    expect(readLocalOnboardingStateMock).not.toHaveBeenCalled();
     expect(setupWizardCommandMock).toHaveBeenCalledWith({});
     expect(tryRouteCliMock).not.toHaveBeenCalled();
     expect(buildProgramMock).not.toHaveBeenCalled();
+  });
+
+  it("resumes pending local onboarding after inference persisted its model", async () => {
+    const configPath = "/tmp/openclaw.json";
+    const securityAcknowledgedAt = "2026-08-02T00:00:00.000Z";
+    const sourceConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.6-luna" } } },
+      wizard: { securityAcknowledgedAt },
+    };
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      path: configPath,
+      sourceConfig,
+    });
+    readLocalOnboardingStateMock.mockReturnValueOnce({
+      version: 1,
+      status: "pending",
+      runId: "pending-onboarding",
+      configPath,
+      workspace: "/tmp/workspace",
+      securityAcknowledgedAt,
+      startedAtMs: 1,
+    });
+
+    await runBareCli();
+
+    expect(readLocalOnboardingStateMock).toHaveBeenCalledWith(configPath, sourceConfig);
+    expect(setupWizardCommandMock).toHaveBeenCalledWith({});
+    expect(probeGatewayConfiguredModelMock).not.toHaveBeenCalled();
+    expect(launchTuiCliMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a completed model-only onboarding on its existing local TUI path", async () => {
+    const configPath = "/tmp/openclaw.json";
+    const securityAcknowledgedAt = "2026-08-02T00:00:00.000Z";
+    const sourceConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.6-luna" } } },
+      wizard: { securityAcknowledgedAt },
+    };
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      path: configPath,
+      sourceConfig,
+    });
+    readLocalOnboardingStateMock.mockReturnValueOnce({
+      version: 1,
+      status: "completed",
+      runId: "completed-onboarding",
+      configPath,
+      workspace: "/tmp/workspace",
+      securityAcknowledgedAt,
+      startedAtMs: 1,
+      completedAtMs: 2,
+    });
+    probeGatewayConfiguredModelMock.mockResolvedValueOnce({ kind: "unreachable" });
+
+    await runBareCli();
+
+    expect(readLocalOnboardingStateMock).toHaveBeenCalledWith(configPath, sourceConfig);
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    expect(launchTuiCliMock).toHaveBeenCalledWith({ deliver: false, local: true }, {});
+  });
+
+  it("does not resume a receipt belonging to the config replaced at the same path", async () => {
+    const configPath = "/tmp/openclaw.json";
+    const sourceConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.6-luna" } } },
+      wizard: { securityAcknowledgedAt: "2026-08-03T00:00:00.000Z" },
+    };
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      path: configPath,
+      sourceConfig,
+    });
+    readLocalOnboardingStateMock.mockImplementationOnce((_configPath, config) =>
+      config.wizard?.securityAcknowledgedAt === "2026-08-02T00:00:00.000Z"
+        ? {
+            version: 1,
+            status: "pending",
+            runId: "stale-onboarding",
+            configPath,
+            workspace: "/tmp/stale-workspace",
+            securityAcknowledgedAt: "2026-08-02T00:00:00.000Z",
+            startedAtMs: 1,
+          }
+        : undefined,
+    );
+    probeGatewayConfiguredModelMock.mockResolvedValueOnce({ kind: "unreachable" });
+
+    await runBareCli();
+
+    expect(readLocalOnboardingStateMock).toHaveBeenCalledWith(configPath, sourceConfig);
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    expect(launchTuiCliMock).toHaveBeenCalledWith({ deliver: false, local: true }, {});
   });
 
   it("points noninteractive fresh bare root invocations to onboarding automation", async () => {
@@ -3090,6 +3215,7 @@ describe("runCli exit behavior", () => {
     await runBareCli();
 
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    expect(readLocalOnboardingStateMock).not.toHaveBeenCalled();
     expect(runRemoteGatewayInferenceOnboardingMock).toHaveBeenCalledWith({
       config: sourceConfig,
       gatewayUrl: "wss://gateway.example/ws",
@@ -3723,6 +3849,7 @@ describe("runCli exit behavior", () => {
 
     await runBareCli();
 
+    expect(readLocalOnboardingStateMock).not.toHaveBeenCalled();
     expect(setupWizardCommandMock).toHaveBeenCalledWith({ classic: true });
     expect(launchTuiCliMock).not.toHaveBeenCalled();
   });

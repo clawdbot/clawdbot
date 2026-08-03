@@ -18,6 +18,7 @@ import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-s
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import type { ModelProviderConfig } from "./provider-model-shared.js";
 
@@ -89,12 +90,7 @@ export async function getCachedLiveCatalogValue<T>(params: {
   if (expiresAt !== undefined) {
     // Auth-scoped live provider catalogs can vary by token; keep this
     // process-local cache bounded so discovery cannot grow without limit.
-    if (liveCatalogCache.size >= LIVE_CATALOG_CACHE_MAX_ENTRIES) {
-      const oldestKey = liveCatalogCache.keys().next();
-      if (!oldestKey.done) {
-        liveCatalogCache.delete(oldestKey.value);
-      }
-    }
+    pruneMapToMaxSize(liveCatalogCache, LIVE_CATALOG_CACHE_MAX_ENTRIES - 1);
     liveCatalogCache.set(key, {
       expiresAt,
       value,

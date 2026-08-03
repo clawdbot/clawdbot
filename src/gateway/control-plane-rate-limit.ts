@@ -1,5 +1,6 @@
 // Control-plane rate limiting bounds write-side RPC attempts per device/IP and
 // caps bucket growth against unique-key memory pressure.
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { normalizeControlPlaneIdentityPart } from "./control-plane-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
 
@@ -53,10 +54,7 @@ export function consumeControlPlaneWriteBudget(params: {
       !controlPlaneBuckets.has(key) &&
       controlPlaneBuckets.size >= CONTROL_PLANE_BUCKET_MAX_ENTRIES
     ) {
-      const oldest = controlPlaneBuckets.keys().next().value;
-      if (oldest !== undefined) {
-        controlPlaneBuckets.delete(oldest);
-      }
+      pruneMapToMaxSize(controlPlaneBuckets, CONTROL_PLANE_BUCKET_MAX_ENTRIES - 1);
     }
     controlPlaneBuckets.set(key, {
       count: 1,

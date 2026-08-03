@@ -369,19 +369,22 @@ describe("Gateway child fixture helpers", () => {
     });
   });
 
-  it("resolves source and built Gateway CLI commands", async () => {
+  it("resolves the repo runner before a built Gateway CLI fallback", async () => {
     const repoRoot = await tempDirs.makeTempDir("qa-gateway-command-");
-    await mkdir(path.join(repoRoot, "src"), { recursive: true });
-    await writeFile(path.join(repoRoot, "src", "entry.ts"), "export {};\n", "utf8");
+    await mkdir(path.join(repoRoot, "scripts"), { recursive: true });
+    const runnerPath = path.join(repoRoot, "scripts", "run-node.mjs");
+    await writeFile(runnerPath, "export {};\n", "utf8");
 
     expect(testing.resolveQaGatewayChildCommand(repoRoot)).toEqual({
       executablePath: process.execPath,
-      argsPrefix: ["--import", "tsx", path.join(repoRoot, "src", "entry.ts")],
+      argsPrefix: [runnerPath],
       cwd: repoRoot,
+      usePackagedPlugins: true,
     });
 
     await mkdir(path.join(repoRoot, "dist"), { recursive: true });
     await writeFile(path.join(repoRoot, "dist", "index.js"), "export {};\n", "utf8");
+    await rm(path.join(repoRoot, "scripts"), { recursive: true });
     expect(testing.resolveQaGatewayChildCommand(repoRoot)).toEqual({
       executablePath: process.execPath,
       argsPrefix: [path.join(repoRoot, "dist", "index.js")],
@@ -463,6 +466,7 @@ describe("buildQaRuntimeEnv", () => {
       "/repo/.artifacts/qa-runtime/openclaw-qa-suite-test",
     );
     expect(env.OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER).toBe("1");
+    expect(env.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
     expect(env.OPENCLAW_ALLOW_SLOW_REPLY_TESTS).toBe("1");
     expect(env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBe("/tmp/openclaw-qa/bundled-plugins");
     expect(env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2026.4.8");

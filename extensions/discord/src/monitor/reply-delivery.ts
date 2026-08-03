@@ -1,7 +1,9 @@
 // Discord plugin module implements reply delivery behavior.
 import { formatReasoningMessage, resolveAgentAvatar } from "openclaw/plugin-sdk/agent-runtime";
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   buildOutboundSessionContext,
+  listMessageReceiptPlatformIds,
   sendDurableMessageBatch,
   type OutboundDeliveryFormattingOptions,
   type OutboundIdentity,
@@ -266,7 +268,7 @@ export async function deliverDiscordReply(params: {
       requesterAccountId: params.accountId,
     }),
   });
-  if (send.status === "failed" || send.status === "partial_failed") {
+  if (send.status === "failed") {
     throw send.error;
   }
   if (send.status === "suppressed") {
@@ -282,12 +284,17 @@ export async function deliverDiscordReply(params: {
       },
     };
   }
-  const results = send.results;
-  if (results.length === 0) {
+  if (send.results.length === 0) {
     throw new Error(`discord final reply produced no delivered message for ${delivery.to}`);
   }
-  return {
-    messageIds: results.flatMap((result) => (result.messageId ? [result.messageId] : [])),
-    visibleReplySent: true,
+  const deliveryResult = {
+    messageIds: listMessageReceiptPlatformIds(send.receipt),
+    receipt: send.receipt,
+    visibleReplySent: true as const,
   };
+  if (send.status === "partial_failed") {
+    // Accepted receipts must survive failure so dispatch never replays visible chunks.
+    throw createChannelPartialDeliveryError(send.error, deliveryResult);
+  }
+  return deliveryResult;
 }

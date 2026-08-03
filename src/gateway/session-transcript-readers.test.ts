@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
@@ -36,6 +37,8 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
     readSessionTranscriptMessageEventPage: vi.fn(actual.readSessionTranscriptMessageEventPage),
     readSessionTranscriptMessageEvents: vi.fn(actual.readSessionTranscriptMessageEvents),
     readSessionTranscriptTitleProbeBatch: vi.fn(actual.readSessionTranscriptTitleProbeBatch),
+    readSessionTranscriptWatermark: vi.fn(actual.readSessionTranscriptWatermark),
+    readSessionTranscriptWatermarkBatch: vi.fn(actual.readSessionTranscriptWatermarkBatch),
   };
 });
 
@@ -500,8 +503,39 @@ describe("session transcript reader facade", () => {
     expect(readSessionTitleFieldsFromTranscriptBatch([scope])).toEqual([
       { firstUserMessage: "cached batch prompt", lastMessagePreview: "cached batch reply" },
     ]);
+    expect(sessionAccessor.readSessionTranscriptWatermarkBatch).toHaveBeenCalledOnce();
+    expect(sessionAccessor.readSessionTranscriptWatermark).not.toHaveBeenCalled();
     expect(sessionAccessor.readSessionTranscriptTitleProbeBatch).not.toHaveBeenCalled();
     expect(sessionAccessor.readSessionTranscriptMessageEventPage).not.toHaveBeenCalled();
+  });
+
+  test("resolves SQLite store ownership once for a multi-row transcript batch", async () => {
+    const scopes: SessionTranscriptReadScope[] = [];
+    for (let index = 0; index < 30; index += 1) {
+      scopes.push(
+        await writeSqliteMessages(`reader-title-target-batch-${index}`, [
+          { role: "user", content: `prompt ${index}` },
+          { role: "assistant", content: `reply ${index}` },
+        ]),
+      );
+    }
+    const prepareSpy = vi.spyOn(DatabaseSync.prototype, "prepare");
+    try {
+      expect(sessionAccessor.readSessionTranscriptTitleProbeBatch(scopes)).toHaveLength(30);
+      const titleSchemaReads = prepareSpy.mock.calls.filter(([sql]) =>
+        sql.toLowerCase().includes("pragma user_version"),
+      );
+      expect(titleSchemaReads).toHaveLength(1);
+
+      prepareSpy.mockClear();
+      expect(sessionAccessor.readSessionTranscriptWatermarkBatch(scopes)).toHaveLength(30);
+      const watermarkSchemaReads = prepareSpy.mock.calls.filter(([sql]) =>
+        sql.toLowerCase().includes("pragma user_version"),
+      );
+      expect(watermarkSchemaReads).toHaveLength(1);
+    } finally {
+      prepareSpy.mockRestore();
+    }
   });
 
   test("reprobes cached batch title fields after an append advances max seq", async () => {
@@ -525,6 +559,8 @@ describe("session transcript reader facade", () => {
     expect(readSessionTitleFieldsFromTranscriptBatch([scope])[0]?.lastMessagePreview).toBe(
       "appended batch reply",
     );
+    expect(sessionAccessor.readSessionTranscriptWatermarkBatch).toHaveBeenCalledOnce();
+    expect(sessionAccessor.readSessionTranscriptWatermark).not.toHaveBeenCalled();
     expect(sessionAccessor.readSessionTranscriptTitleProbeBatch).toHaveBeenCalledOnce();
     expect(sessionAccessor.readSessionTranscriptMessageEventPage).not.toHaveBeenCalled();
   });

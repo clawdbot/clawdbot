@@ -1597,6 +1597,38 @@ describe("activateSetupInference", () => {
     expect(persistedConfig.gateway).toBeUndefined();
   });
 
+  it("exposes the locked authored config before committing the verified model", async () => {
+    const probedConfig: OpenClawConfig = {
+      wizard: { securityAcknowledgedAt: "2026-08-02T00:00:00.000Z" },
+    };
+    const lockedConfig: OpenClawConfig = {
+      wizard: { securityAcknowledgedAt: "2026-08-03T00:00:00.000Z" },
+    };
+    const configHarness = createConfigTransformHarness(lockedConfig);
+    const onCommitStarted = vi.fn((sourceConfig: OpenClawConfig) => {
+      expect(sourceConfig.wizard?.securityAcknowledgedAt).toBe("2026-08-03T00:00:00.000Z");
+      expect(configHarness.current().agents?.defaults?.model).toBeUndefined();
+    });
+
+    const result = await activateSetupInference({
+      kind: "claude-cli",
+      surface: "cli",
+      onCommitStarted,
+      deps: {
+        readConfigFileSnapshot: mockConfigSnapshot(probedConfig),
+        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-5")) as never,
+        transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, modelRef: "claude-cli/claude-opus-5" });
+    expect(onCommitStarted).toHaveBeenCalledWith(lockedConfig);
+    expect(configHarness.current()).toMatchObject({
+      wizard: { securityAcknowledgedAt: "2026-08-03T00:00:00.000Z" },
+      agents: { defaults: { model: "claude-cli/claude-opus-5" } },
+    });
+  });
+
   it("uses the materialized runtime roster when activating from a missing config file", async () => {
     const runtimeConfig: OpenClawConfig = {
       agents: { entries: { main: { default: true } } },

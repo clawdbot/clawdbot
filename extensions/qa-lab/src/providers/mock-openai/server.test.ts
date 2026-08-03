@@ -6943,6 +6943,79 @@ describe("qa mock openai server", () => {
     });
     expect(outputText(laterHeartbeatPayload)).toBe("HEARTBEAT_OK");
   });
+
+  it("scripts one failure-honest Code Mode terminal-tool continuation (#118274)", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Failed tool terminal recovery QA check: read the missing file, then respond with exact marker: `QA-FAILED-TOOL-FINALIZED-OK`.";
+    const codeModeTools = [
+      {
+        type: "function",
+        name: "exec",
+        parameters: {
+          type: "object",
+          properties: { code: { type: "string" } },
+          required: ["code"],
+        },
+      },
+      {
+        type: "function",
+        name: "wait",
+        parameters: {
+          type: "object",
+          properties: { runId: { type: "string" } },
+          required: ["runId"],
+        },
+      },
+    ];
+
+    const toolPlan = await postStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      tools: codeModeTools,
+      input: [makeUserInput(prompt)],
+    });
+    const plannedResponse = await toolPlan.text();
+    expect(plannedResponse).toContain('"name":"exec"');
+    expect(plannedResponse).toContain("qa-failed-terminal-missing-file.txt");
+    const plannedRequest = requireRecord(
+      await (await fetch(`${server.baseUrl}/debug/last-request`)).json(),
+      "failed terminal tool plan",
+    );
+    expect(plannedRequest.plannedToolName).toBe("read");
+    expect(plannedRequest.plannedWireToolName).toBe("exec");
+
+    const failedToolOutput = makeToolOutputWithCallId(
+      String(plannedRequest.plannedToolCallId),
+      JSON.stringify({ status: "failed", error: "ENOENT: qa-failed-terminal-missing-file.txt" }),
+    );
+    const dishonestFinalization = await expectNonStreamingResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(prompt),
+        makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
+        failedToolOutput,
+      ],
+    });
+    expect(outputText(dishonestFinalization)).toBe("FAILED-TOOL-HONESTY-INSTRUCTION-MISSING");
+
+    const recovered = await expectNonStreamingResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(prompt),
+        makeUserInput(
+          `${QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION} If any tool failed, state that failure plainly and do not claim it succeeded.`,
+        ),
+        failedToolOutput,
+      ],
+    });
+    expect(outputText(recovered)).toBe(
+      "The requested file could not be read: ENOENT. QA-FAILED-TOOL-FINALIZED-OK",
+    );
+  });
 });
 
 describe("qa mock openai server provider variant tagging", () => {

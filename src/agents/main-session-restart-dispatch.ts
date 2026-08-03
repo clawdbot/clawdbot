@@ -40,6 +40,7 @@ import {
   type MainSessionRecoveryReservation,
 } from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
+import { normalizeFiniteTimestamp } from "./main-session-restart-recovery-shared.js";
 import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
 
 const log = createSubsystemLogger("main-session-restart-recovery");
@@ -49,10 +50,6 @@ const RESTART_RECOVERY_RESUME_MESSAGE =
   "transcript and finish the interrupted response.";
 
 type RestartRecoveryTerminalStatus = "error" | "ok" | "timeout";
-
-function normalizeFiniteTimestamp(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
 
 export function hasRestartRecoveryMessageActionAuthority(entry: SessionEntry): boolean {
   const authority = resolveRestartRecoveryChannelAuthority(entry);

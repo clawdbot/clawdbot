@@ -38,6 +38,7 @@ const isGatewayTransportError = vi.hoisted(() =>
 const agentCommand = vi.hoisted(() => vi.fn());
 const agentModuleLoadCount = vi.hoisted(() => vi.fn());
 const loadAgentSessionModuleMock = vi.hoisted(() => vi.fn());
+const startOneShotDiagnosticsExporters = vi.hoisted(() => vi.fn());
 
 const runtime: RuntimeEnv = {
   log: vi.fn(),
@@ -119,6 +120,17 @@ function requireFirstCallArg(mock: { mock: { calls: unknown[][] } }, label: stri
     throw new Error(`expected ${label} call`);
   }
   return arg;
+}
+
+function requireFirstCallOrder(
+  mock: { mock: { invocationCallOrder: number[] } },
+  label: string,
+): number {
+  const [order] = mock.mock.invocationCallOrder;
+  if (order === undefined) {
+    throw new Error(`expected ${label} call`);
+  }
+  return order;
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -233,12 +245,19 @@ vi.mock("./agent.js", () => {
   agentModuleLoadCount();
   return { agentCommand };
 });
+vi.mock("../plugins/one-shot-diagnostics.js", () => ({
+  startOneShotDiagnosticsExporters,
+}));
 
 let originalForceConsoleToStderr = false;
 let zeroTimeoutGatewayRequestMs: number | undefined;
 
 function resetAgentCliCommandMocksForTest() {
   vi.clearAllMocks();
+  // clearAllMocks keeps implementations, so a rejecting exporter stub would leak
+  // into every later --local test and silently route them through the failure path.
+  startOneShotDiagnosticsExporters.mockReset();
+  startOneShotDiagnosticsExporters.mockResolvedValue(null);
   vi.stubEnv("OPENCLAW_GATEWAY_URL", "");
   agentViaGatewayTesting.resetLazyImportsForTests();
   agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests([0, 0, 0, 0]);
@@ -1782,6 +1801,90 @@ describe("agentCliCommand", () => {
             message.includes("Gateway agent call timed out") && message.includes("--local"),
         ),
       ).toBe(true);
+    });
+  });
+
+  it("starts and flushes the diagnostics exporter around local embedded runs", async () => {
+    await withTempStore(async () => {
+      const stop = vi.fn(async () => {});
+      startOneShotDiagnosticsExporters.mockResolvedValue({ stop });
+      mockLocalAgentReply();
+
+      await agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime);
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(startOneShotDiagnosticsExporters).toHaveBeenCalledTimes(1);
+      expect(startOneShotDiagnosticsExporters).toHaveBeenCalledWith(
+        expect.objectContaining({ suppressStdoutDiagnosticLogs: false }),
+      );
+      expect(loadRuntimeConfig).toHaveBeenCalledTimes(1);
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      expect(stop).toHaveBeenCalledTimes(1);
+      const startOrder = requireFirstCallOrder(startOneShotDiagnosticsExporters, "exporter start");
+      const runOrder = requireFirstCallOrder(agentCommand, "embedded agent");
+      const stopOrder = requireFirstCallOrder(stop, "exporter stop");
+      expect(startOrder).toBeLessThan(runOrder);
+      expect(runOrder).toBeLessThan(stopOrder);
+    });
+  });
+
+  it("suppresses stdout diagnostic logs around JSON local embedded runs", async () => {
+    await withTempStore(async () => {
+      const stop = vi.fn(async () => {});
+      startOneShotDiagnosticsExporters.mockResolvedValue({ stop });
+      mockLocalAgentReply();
+
+      await agentCliCommand({ message: "hi", to: "+1555", local: true, json: true }, jsonRuntime);
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      expect(startOneShotDiagnosticsExporters).toHaveBeenCalledWith(
+        expect.objectContaining({ suppressStdoutDiagnosticLogs: true }),
+      );
+      expect(stop).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("flushes the diagnostics exporter when the embedded run fails", async () => {
+    await withTempStore(async () => {
+      const stop = vi.fn(async () => {});
+      startOneShotDiagnosticsExporters.mockResolvedValue({ stop });
+      agentCommand.mockRejectedValueOnce(new Error("embedded run failed"));
+
+      await expect(
+        agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime),
+      ).rejects.toThrow("embedded run failed");
+
+      expect(stop).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("keeps the embedded run alive when diagnostics exporter startup fails", async () => {
+    await withTempStore(async () => {
+      startOneShotDiagnosticsExporters.mockRejectedValue(new Error("exporter start failed"));
+      mockLocalAgentReply();
+
+      await agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime);
+
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      expect(runtime.log).toHaveBeenCalledWith("local");
+      expect(
+        mockMessages(runtime.error).some((message) =>
+          message.includes("diagnostics exporter startup failed"),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("does not start the diagnostics exporter for gateway dispatch", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+
+      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(startOneShotDiagnosticsExporters).not.toHaveBeenCalled();
+      expect(loadRuntimeConfig).not.toHaveBeenCalled();
     });
   });
 

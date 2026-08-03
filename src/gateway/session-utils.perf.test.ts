@@ -311,6 +311,16 @@ describe("listSessionsFromStore resolver cache", () => {
           derivedTitle: "title 29",
           lastMessagePreview: "last 29",
         });
+
+        titleBatchSpy.mockClear();
+        await listSessionsFromStoreAsync({
+          cfg,
+          storePath,
+          store,
+          opts: { includeDerivedTitles: false, includeLastMessage: false, limit: 30 },
+        });
+        expect(titleBatchSpy).toHaveBeenCalledOnce();
+        expect(titleBatchSpy).toHaveBeenCalledWith([]);
       } finally {
         titleBatchSpy.mockRestore();
       }
