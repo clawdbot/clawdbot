@@ -477,7 +477,10 @@ export function annotateQueuedDelegatesInheritedPolicy(
   let annotated = 0;
   for (const flow of listQueuedPendingFlows(sessionKey)) {
     const delegate = decodeDelegateFlow(flow);
-    if (!delegate || delegate.mode !== undefined) {
+    // Mirror the spawn-time inheritance rule (`canInheritMode`) and
+    // `requeuePendingDelegate`: an explicit `normal` delegate inherits too, so
+    // the annotation is the complete record of what the hedge must replay.
+    if (!delegate || (delegate.mode !== undefined && delegate.mode !== "normal")) {
       continue;
     }
     const result = delegateFlowRecords.update({

@@ -208,6 +208,7 @@ import {
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { runWithGatewayRootWorkAdmissionForTest as runWithGatewayRootWorkAdmission } from "../../process/gateway-work-admission.test-helpers.js";
+import { armDelegateDispatchHedge } from "./delegate-dispatch-hedge.js";
 import {
   recoverAndReleaseStagedPostCompactionDelegates,
   recoverPendingContinuationDelegates,
@@ -791,5 +792,115 @@ describe("hedge timer ref/handle cleanup", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     await Promise.resolve();
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the recovery persistence contract when a later arm omits its callbacks", async () => {
+    // A merged hedge may never end up claiming `applyDelegateChainTokensFold`
+    // while its persist/load callbacks were dropped: dispatchToolDelegates
+    // reads that pair as `foldWithoutPersist` and force-claims every queued
+    // delegate with `ignoreDelay`, running not-yet-due work early AND losing
+    // the folded chain cost (cost-cap bypass on later hops).
+    const sessionKey = "agent:main:hedge-merge-keeps-persist";
+    const chainState = {
+      currentChainCount: 0,
+      chainStartedAt: Date.now(),
+      accumulatedChainTokens: 0,
+    };
+    const persistChainState = vi.fn(async () => {});
+    const loadFreshChainState = vi.fn(() => chainState);
+    const dispatch = vi.fn().mockResolvedValue({ dispatched: 0, rejected: 0, chainState });
+
+    armDelegateDispatchHedge(
+      sessionKey,
+      Date.now() + 10_000,
+      {
+        chainState,
+        ctx: { sessionKey },
+        maxChainLength: 10,
+        applyDelegateChainTokensFold: true,
+        persistChainState,
+        loadFreshChainState,
+      },
+      dispatch,
+    );
+    armDelegateDispatchHedge(
+      sessionKey,
+      Date.now() + 30_000,
+      {
+        chainState,
+        ctx: { sessionKey },
+        maxChainLength: 10,
+        persistChainState: undefined,
+        loadFreshChainState: undefined,
+      },
+      dispatch,
+    );
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await Promise.resolve();
+
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch.mock.calls[0]?.[0]).toMatchObject({
+      applyDelegateChainTokensFold: true,
+      persistChainState,
+      loadFreshChainState,
+    });
+    expect(loadFreshChainState).toHaveBeenCalled();
+  });
+
+  it("does not leak one chain's inherited silent mode onto a later normal delegate", async () => {
+    // Inherited silent/wake policy belongs to each queued delegate (annotated
+    // at arm time), not to the per-session hedge. Unioning it at the hedge made
+    // an unrelated normal-mode delayed delegate spawn silently, so its result
+    // was never announced.
+    const sessionKey = "agent:main:hedge-inherited-mode-scope";
+    const chainState = {
+      currentChainCount: 0,
+      chainStartedAt: Date.now(),
+      accumulatedChainTokens: 0,
+    };
+    enqueuePendingDelegate(sessionKey, { task: "silent chain hop", delayMs: 60_000 });
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState,
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      config: continuationConfig(),
+      inheritedSilent: true,
+      inheritedWake: true,
+    });
+
+    // A later, unrelated turn on the same session queues a normal delegate and
+    // dispatches without any inherited policy of its own.
+    enqueuePendingDelegate(sessionKey, { task: "normal announced hop", delayMs: 60_000 });
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState,
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      config: continuationConfig(),
+    });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+
+    const spawnedByTask = new Map(
+      spawnSubagentDirectMock.mock.calls.map(([request]) => [
+        String((request as { task: string }).task),
+        request as Record<string, unknown>,
+      ]),
+    );
+    const silentHop = [...spawnedByTask.entries()].find(([task]) =>
+      task.includes("silent chain hop"),
+    )?.[1];
+    const normalHop = [...spawnedByTask.entries()].find(([task]) =>
+      task.includes("normal announced hop"),
+    )?.[1];
+    expect(silentHop).toMatchObject({ silentAnnounce: true, wakeOnReturn: true });
+    expect(normalHop).toBeDefined();
+    expect(normalHop?.silentAnnounce).toBeUndefined();
+    expect(normalHop?.wakeOnReturn).toBeUndefined();
   });
 });

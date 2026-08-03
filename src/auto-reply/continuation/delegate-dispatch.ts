@@ -102,8 +102,6 @@ export async function dispatchToolDelegates(
           ? { queuedCreatedAtOrBefore: params.queuedCreatedAtOrBefore }
           : {}),
         includeRunningUpdatedAtOrBefore: Date.now(),
-        ...(params.inheritedSilent ? { inheritedSilent: true } : {}),
-        ...(params.inheritedWake ? { inheritedWake: true } : {}),
       },
       dispatchToolDelegates,
     );
@@ -144,6 +142,9 @@ export async function dispatchToolDelegates(
     queuedCreatedAtOrBefore: params.queuedCreatedAtOrBefore,
   });
   if (soonestUnmaturedDueAt !== undefined) {
+    // Inherited silent/wake policy is recorded on each still-queued delegate
+    // here, so the hedge never has to carry one chain's mode at the session
+    // level and leak it onto an unrelated delegate queued by a later turn.
     annotateQueuedDelegatesInheritedPolicy(sessionKey, {
       ...(params.inheritedSilent ? { inheritedSilent: true } : {}),
       ...(params.inheritedWake ? { inheritedWake: true } : {}),
@@ -167,8 +168,6 @@ export async function dispatchToolDelegates(
         ...(params.includeRunningUpdatedAtOrBefore !== undefined
           ? { includeRunningUpdatedAtOrBefore: params.includeRunningUpdatedAtOrBefore }
           : {}),
-        ...(params.inheritedSilent ? { inheritedSilent: true } : {}),
-        ...(params.inheritedWake ? { inheritedWake: true } : {}),
       },
       dispatchToolDelegates,
     );
