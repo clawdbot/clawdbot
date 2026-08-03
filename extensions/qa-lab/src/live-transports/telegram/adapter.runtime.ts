@@ -26,9 +26,7 @@ import {
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type FactoryContext = Parameters<AdapterFactory["create"]>[0];
-type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>> & {
-  cleanupAfterGatewayStop?: () => Promise<void>;
-};
+type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
 
 function renderTelegramQaInboundText(
   input: { text: string; nativeCommand?: { name: string } },
@@ -136,17 +134,17 @@ export async function createTelegramQaTransportAdapter(
           continue;
         }
         const existingMessageId = busMessageIds.get(message.messageId);
-        if (update.edited_message) {
-          if (existingMessageId) {
-            await context.messages.editMessage({
-              accountId,
-              messageId: existingMessageId,
-              text: message.text,
-              timestamp: message.timestamp,
-            });
-          }
+        if (update.edited_message && existingMessageId) {
+          await context.messages.editMessage({
+            accountId,
+            messageId: existingMessageId,
+            text: message.text,
+            timestamp: message.timestamp,
+          });
           continue;
         }
+        // Telegram may expose only the final edit after the adapter resets between
+        // scenarios. Adopt that edit so the live observation cannot disappear.
         const outbound = await context.messages.addOutboundMessage({
           accountId,
           to: `${logicalConversationKind}:${logicalConversationId}`,
@@ -225,6 +223,8 @@ export async function createTelegramQaTransportAdapter(
         sutToken: runtimeEnv.sutToken,
         driverBotId: driverIdentity.id,
         sutAccountId: accountId,
+        // Mention-gating scenarios opt in through the shared transport policy.
+        requireMention: options.transportPolicy?.requireGroupMention === true,
       }),
     waitReady: async ({ gateway, timeoutMs, pollIntervalMs }) =>
       await waitForTelegramChannelRunning(gateway, accountId, {

@@ -151,18 +151,23 @@ function normalizeRestartRecoveryFields(entry: SessionEntry): SessionEntry {
   return next;
 }
 
-function normalizePluginExtensions(entry: SessionEntry): SessionEntry {
-  if (entry.pluginExtensions === undefined) {
+function normalizeLegacyPluginState(
+  entry: SessionEntry,
+  key: "pluginExtensions" | "pluginExtensionSlotKeys",
+  normalizeValue: (value: unknown) => PluginJsonValue | undefined,
+): SessionEntry {
+  const state = entry[key];
+  if (state === undefined) {
     return entry;
   }
-  if (!isRecord(entry.pluginExtensions)) {
+  if (!isRecord(state)) {
     const next = { ...entry };
-    delete next.pluginExtensions;
+    delete next[key];
     return next;
   }
   let changed = false;
-  const normalizedExtensions: Record<string, Record<string, PluginJsonValue>> = {};
-  for (const [rawPluginId, rawPluginState] of Object.entries(entry.pluginExtensions)) {
+  const normalizedState: Record<string, Record<string, PluginJsonValue>> = {};
+  for (const [rawPluginId, rawPluginState] of Object.entries(state)) {
     const pluginId = normalizeRecordKey(rawPluginId);
     if (!pluginId || !isRecord(rawPluginState)) {
       changed = true;
@@ -172,76 +177,43 @@ function normalizePluginExtensions(entry: SessionEntry): SessionEntry {
     const normalizedPluginState: Record<string, PluginJsonValue> = {};
     for (const [rawNamespace, rawValue] of Object.entries(rawPluginState)) {
       const namespace = normalizeRecordKey(rawNamespace);
-      if (!namespace || !isPluginJsonValue(rawValue)) {
+      const value = normalizeValue(rawValue);
+      if (!namespace || value === undefined) {
         changed = true;
         continue;
       }
-      changed ||= namespace !== rawNamespace;
-      normalizedPluginState[namespace] = rawValue;
+      changed ||= namespace !== rawNamespace || value !== rawValue;
+      normalizedPluginState[namespace] = value;
     }
     if (Object.keys(normalizedPluginState).length === 0) {
       changed = true;
       continue;
     }
-    normalizedExtensions[pluginId] = normalizedPluginState;
+    normalizedState[pluginId] = normalizedPluginState;
   }
   if (!changed) {
     return entry;
   }
   const next = { ...entry };
-  if (Object.keys(normalizedExtensions).length > 0) {
-    next.pluginExtensions = normalizedExtensions;
+  if (Object.keys(normalizedState).length > 0) {
+    Object.assign(next, { [key]: normalizedState });
   } else {
-    delete next.pluginExtensions;
+    delete next[key];
   }
   return next;
 }
 
+function normalizePluginExtensions(entry: SessionEntry): SessionEntry {
+  return normalizeLegacyPluginState(entry, "pluginExtensions", (value) =>
+    isPluginJsonValue(value) ? value : undefined,
+  );
+}
+
 function normalizePluginExtensionSlotKeys(entry: SessionEntry): SessionEntry {
-  if (entry.pluginExtensionSlotKeys === undefined) {
-    return entry;
-  }
-  if (!isRecord(entry.pluginExtensionSlotKeys)) {
-    const next = { ...entry };
-    delete next.pluginExtensionSlotKeys;
-    return next;
-  }
-  let changed = false;
-  const normalizedSlotKeys: Record<string, Record<string, string>> = {};
-  for (const [rawPluginId, rawPluginSlots] of Object.entries(entry.pluginExtensionSlotKeys)) {
-    const pluginId = normalizeRecordKey(rawPluginId);
-    if (!pluginId || !isRecord(rawPluginSlots)) {
-      changed = true;
-      continue;
-    }
-    changed ||= pluginId !== rawPluginId;
-    const normalizedPluginSlots: Record<string, string> = {};
-    for (const [rawNamespace, rawSlotKey] of Object.entries(rawPluginSlots)) {
-      const namespace = normalizeRecordKey(rawNamespace);
-      const slotKey = normalizeSessionEntrySlotKey(rawSlotKey);
-      if (!namespace || !slotKey.ok) {
-        changed = true;
-        continue;
-      }
-      changed ||= namespace !== rawNamespace || slotKey.key !== rawSlotKey;
-      normalizedPluginSlots[namespace] = slotKey.key;
-    }
-    if (Object.keys(normalizedPluginSlots).length === 0) {
-      changed = true;
-      continue;
-    }
-    normalizedSlotKeys[pluginId] = normalizedPluginSlots;
-  }
-  if (!changed) {
-    return entry;
-  }
-  const next = { ...entry };
-  if (Object.keys(normalizedSlotKeys).length > 0) {
-    next.pluginExtensionSlotKeys = normalizedSlotKeys;
-  } else {
-    delete next.pluginExtensionSlotKeys;
-  }
-  return next;
+  return normalizeLegacyPluginState(entry, "pluginExtensionSlotKeys", (value) => {
+    const slotKey = normalizeSessionEntrySlotKey(value);
+    return slotKey.ok ? slotKey.key : undefined;
+  });
 }
 
 function stripPersistedSkillsCache(entry: SessionEntry): SessionEntry {

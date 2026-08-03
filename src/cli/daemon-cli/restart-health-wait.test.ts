@@ -35,7 +35,7 @@ describe("restart health", () => {
 
     const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
     const snapshot = await waitForGatewayHealthyRestart({
-      service: { readRuntime } as unknown as GatewayService,
+      service: { readRuntime, readCommand: vi.fn(async () => null) } as unknown as GatewayService,
       port: 18789,
       expectedVersion: "2026.4.24",
       requireRunningService: true,
@@ -284,6 +284,7 @@ describe("restart health", () => {
       readRuntime: vi.fn(async () =>
         ++runtimeReads >= 27 ? { status: "running", pid: 8000 } : { status: "stopped" },
       ),
+      readCommand: vi.fn(async () => null),
     } as unknown as GatewayService;
     inspectPortUsage.mockImplementation(async () =>
       ++portInspections >= 27

@@ -9,6 +9,7 @@ import {
   detectInferenceBackends,
   type InferenceBackendKind,
 } from "../commands/onboard-inference.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import {
@@ -27,6 +28,7 @@ import { probeLocalCommand } from "./probes.js";
 import type {
   SetupInferenceAuthOption,
   SetupInferenceManualProvider,
+  SetupInferencePrepareOption,
 } from "./setup-inference-auth-options.js";
 import { resolveSetupInferenceCandidateBrandId } from "./setup-inference-brand.js";
 import {
@@ -74,9 +76,17 @@ export type SetupInferenceCandidate = {
 
 export type SetupInferenceUnavailableCandidate = {
   id: string;
+  /** Canonical provider identity for clients with bundled brand artwork. */
+  brandId?: string;
   label: string;
   detail: string;
   reason: string;
+  /** Provider-owned interactive sign-in that can replace the unavailable route. */
+  authOptionId?: string;
+  /** Provider-owned manual secret route that can replace the unavailable route. */
+  manualProviderId?: string;
+  icon?: string;
+  website?: string;
 };
 
 export type SetupInferenceDetection = {
@@ -87,6 +97,8 @@ export type SetupInferenceDetection = {
   manualProviders: SetupInferenceManualProvider[];
   /** Interactive provider-owned browser and device-code sign-in methods. */
   authOptions: SetupInferenceAuthOption[];
+  /** Provider-owned app-guided local model setup methods. */
+  prepareOptions?: SetupInferencePrepareOption[];
   /** Curated tools clients can offer when no existing AI access is detected. */
   recommendedInstalls: SetupRecommendedInstall[];
   /** Resolved workspace the setup apply would use (display + default). */
@@ -179,7 +191,8 @@ export type ActivateSetupInferenceParams = {
   signal?: AbortSignal;
   /** Session cancellation gate; interactive credentials must never persist after cancel. */
   isCancelled?: () => boolean;
-  onCommitStarted?: () => void;
+  /** Observe the authored config held by the inference writer before it commits. */
+  onCommitStarted?: (sourceConfig: OpenClawConfig) => void;
   deps?: ActivateSetupInferenceDeps;
 };
 
@@ -233,7 +246,6 @@ export type ActivateSetupInferenceDeps = {
   runEmbeddedAgent?: SetupInferenceRunEmbeddedAgent;
   runCliAgent?: typeof import("../agents/cli-runner.js").runCliAgent;
   ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
-  ensureSelectedAgentHarnessPlugin?: typeof import("../agents/harness/runtime-plugin.js").ensureSelectedAgentHarnessPlugin;
   transformConfigWithPendingPluginInstalls?: typeof import("../plugins/install-record-commit.js").transformConfigWithPendingPluginInstalls;
   refreshPluginRegistryAfterConfigMutation?: typeof import("../plugins/registry-refresh.js").refreshPluginRegistryAfterConfigMutation;
   ensurePluginRegistryLoaded?: typeof import("../plugins/runtime/runtime-registry-loader.js").ensurePluginRegistryLoaded;
@@ -248,6 +260,7 @@ export type ActivateSetupInferenceDeps = {
   resolveCliRuntimeArtifactFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeArtifactFingerprint;
   resolveCliRuntimeOwnerFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeOwnerFingerprint;
   resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
+  resolvePluginMetadataSnapshot?: typeof import("../plugins/plugin-metadata-snapshot.js").resolvePluginMetadataSnapshot;
   readCodexCliActiveApiKey?: typeof readCodexCliActiveApiKey;
   loadPluginRegistrySnapshot?: SystemAgentVerifiedInferenceDeps["loadPluginRegistrySnapshot"];
   fingerprintPluginRuntimeArtifact?: SystemAgentVerifiedInferenceDeps["fingerprintPluginRuntimeArtifact"];

@@ -1,7 +1,7 @@
 // Lists available agents for subagent spawn and focus commands.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { subagentRuns } from "../../../agents/subagent-registry-memory.js";
-import { countPendingDescendantRunsFromRuns } from "../../../agents/subagent-registry-queries.js";
+import { buildSubagentRunReadIndexFromRuns } from "../../../agents/subagent-registry-queries.js";
 import { getSubagentRunsSnapshotForRead } from "../../../agents/subagent-registry-state.js";
 import { getChannelPlugin, normalizeChannelId } from "../../../channels/plugins/index.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
@@ -27,6 +27,7 @@ function supportsConversationBindings(channel: string): boolean {
 export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): CommandHandlerResult {
   const { params, requesterKey, runs } = ctx;
   const runsSnapshot = getSubagentRunsSnapshotForRead(subagentRuns);
+  const readIndex = buildSubagentRunReadIndexFromRuns({ runs: runsSnapshot });
   const channel = resolveCommandSurfaceChannel(params);
   const accountId = resolveChannelAccountId(params);
   const currentConversationBindingsSupported = supportsConversationBindings(channel);
@@ -64,14 +65,13 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
   const numericOrder = [
     ...dedupedRuns.filter(
       (entry) =>
-        !entry.endedAt ||
-        countPendingDescendantRunsFromRuns(runsSnapshot, entry.childSessionKey) > 0,
+        !entry.execution.endedAt || readIndex.countPendingDescendantRuns(entry.childSessionKey) > 0,
     ),
     ...dedupedRuns.filter(
       (entry) =>
-        entry.endedAt &&
-        countPendingDescendantRunsFromRuns(runsSnapshot, entry.childSessionKey) === 0 &&
-        entry.endedAt >= recentCutoff,
+        entry.execution.endedAt &&
+        readIndex.countPendingDescendantRuns(entry.childSessionKey) === 0 &&
+        entry.execution.endedAt >= recentCutoff,
     ),
   ];
   const indexByChildSessionKey = new Map(
@@ -81,8 +81,8 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
   const visibleRuns: typeof dedupedRuns = [];
   for (const entry of dedupedRuns) {
     const visible =
-      !entry.endedAt ||
-      countPendingDescendantRunsFromRuns(runsSnapshot, entry.childSessionKey) > 0 ||
+      !entry.execution.endedAt ||
+      readIndex.countPendingDescendantRuns(entry.childSessionKey) > 0 ||
       resolveSessionBindings(entry.childSessionKey).length > 0;
     if (!visible) {
       continue;

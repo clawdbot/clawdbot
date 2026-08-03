@@ -6,9 +6,14 @@ import { i18n } from "../../i18n/index.ts";
 import type { ChannelWizardStep } from "./wizard-controller.ts";
 import { renderChannelWizard } from "./wizard-view.ts";
 
-function renderStep(step: ChannelWizardStep, busy = true) {
+function renderStep(
+  step: ChannelWizardStep,
+  busy = true,
+  textValue = typeof step.initialValue === "string" ? step.initialValue : "",
+) {
   const container = document.createElement("div");
   const onAnswer = vi.fn();
+  const onClose = vi.fn();
   const onToggleMultiselect = vi.fn();
   document.body.append(container);
   render(
@@ -24,8 +29,12 @@ function renderStep(step: ChannelWizardStep, busy = true) {
       channelLabel: (channelId) => channelId,
       multiselectValues: ["alpha"],
       onToggleMultiselect,
+      textValue,
+      secretVisible: false,
+      onTextInput: vi.fn(),
+      onToggleSecretVisibility: vi.fn(),
       onAnswer,
-      onClose: vi.fn(),
+      onClose,
       whatsappQrDataUrl: null,
       whatsappMessage: null,
       whatsappConnected: null,
@@ -35,7 +44,7 @@ function renderStep(step: ChannelWizardStep, busy = true) {
     }),
     container,
   );
-  return { container, onAnswer, onToggleMultiselect };
+  return { container, onAnswer, onClose, onToggleMultiselect };
 }
 
 describe("renderChannelWizard busy controls", () => {
@@ -64,10 +73,40 @@ describe("renderChannelWizard busy controls", () => {
       confirm.container.querySelectorAll<HTMLButtonElement>(".channels-wizard__footer button"),
     );
     expect(confirmButtons).toHaveLength(2);
+    expect(confirmButtons.map((button) => button.textContent?.trim())).toEqual(["No", "Yes"]);
     expect(confirmButtons.every((button) => button.disabled)).toBe(true);
     confirmButtons.forEach((button) => button.click());
     expect(confirm.onAnswer).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { message: "Installing channel plugin", expectedStatus: "Installing channel plugin" },
+    { message: undefined, expectedStatus: "Working…" },
+  ])(
+    "announces gateway-owned progress and keeps cancellation available",
+    ({ message, expectedStatus }) => {
+      const progress = renderStep({
+        id: "install-progress",
+        type: "progress",
+        executor: "gateway",
+        ...(message ? { message } : {}),
+      });
+
+      const status = progress.container.querySelector<HTMLElement>('[role="status"]');
+      expect(status?.textContent?.trim()).toBe(expectedStatus);
+      expect(status?.getAttribute("aria-live")).toBe("polite");
+      expect(progress.container.querySelectorAll('[role="status"]')).toHaveLength(1);
+
+      const cancel = progress.container.querySelector<HTMLButtonElement>(
+        ".channels-wizard__footer button",
+      );
+      expect(cancel?.textContent?.trim()).toBe("Cancel");
+      expect(progress.container.querySelector(".channels-wizard__footer .primary")).toBeNull();
+      cancel?.click();
+      expect(progress.onClose).toHaveBeenCalledOnce();
+      expect(progress.onAnswer).not.toHaveBeenCalled();
+    },
+  );
 
   it("disables select choices while a step is running", () => {
     const select = renderStep({
@@ -105,16 +144,23 @@ describe("renderChannelWizard busy controls", () => {
   });
 
   it("disables text editing and submission while a step is running", () => {
-    const text = renderStep({
-      id: "text",
-      type: "text",
-      message: "Enter a value",
-      initialValue: "original",
-    });
+    const text = renderStep(
+      {
+        id: "text",
+        type: "text",
+        message: "Enter a value",
+        sensitive: true,
+      },
+      true,
+      "replacement",
+    );
     const input = text.container.querySelector<HTMLInputElement>('input[name="wizard-text"]');
     const submit = text.container.querySelector<HTMLButtonElement>('button[type="submit"]');
+    const toggle = text.container.querySelector<HTMLButtonElement>(".oc-sensitive-toggle");
     expect(input?.disabled).toBe(true);
-    expect(input?.value).toBe("original");
+    expect(input?.type).toBe("password");
+    expect(input?.value).toBe("replacement");
+    expect(toggle?.disabled).toBe(true);
     expect(submit?.disabled).toBe(true);
     submit?.click();
     expect(text.onAnswer).not.toHaveBeenCalled();

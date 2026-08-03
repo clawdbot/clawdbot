@@ -375,8 +375,7 @@ describe("Docker channel promotion", () => {
     const promote = requireJob(workflow, "promote");
 
     expect(releaseWorkflow.concurrency).toEqual({
-      group:
-        "${{ github.event_name == 'workflow_dispatch' && format('docker-release-manual-{0}', inputs.tag) || 'docker-release-publish' }}",
+      group: "docker-release-publish",
       "cancel-in-progress": false,
       queue: "max",
     });
@@ -401,7 +400,7 @@ describe("Docker channel promotion", () => {
     expect(releaseAttestationIndex).toBeGreaterThan(-1);
     expect(releasePromotionIndex).toBeGreaterThan(releaseAttestationIndex);
     expect(releaseSteps[releasePromotionIndex]?.if).toBe(
-      "${{ github.event_name != 'workflow_dispatch' && needs.resolve_release_policy.outputs.channel != 'beta' }}",
+      "${{ needs.resolve_release_policy.outputs.channel != 'beta' }}",
     );
     expect(releaseSteps[releasePromotionIndex]?.run).toContain(
       "node scripts/docker-channel-promote.mjs",

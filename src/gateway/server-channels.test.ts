@@ -12,7 +12,7 @@ import type {
   ChannelId,
   ChannelPlugin,
 } from "../channels/plugins/types.public.js";
-import { formatGatewayChannelsStatusLines } from "../commands/channels/status.js";
+import { formatGatewayChannelsStatusLines } from "../commands/channels/status.runtime.js";
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
 import {
   createSubsystemLogger,
@@ -253,6 +253,7 @@ function createManager(options?: {
   deferStartupAccountStartsUntil?: Promise<void>;
   fillChannelDependencies?: boolean;
   ambientAutostartSuppressedChannelIds?: ReadonlySet<string>;
+  tryRecoverAutostartSuppression?: () => boolean;
   getNativeApprovalRuntime?: () => GatewayNativeApprovalRuntime | undefined;
 }) {
   const log = createSubsystemLogger("gateway/server-channels-test");
@@ -280,6 +281,9 @@ function createManager(options?: {
       : {}),
     ...(options?.ambientAutostartSuppressedChannelIds
       ? { ambientAutostartSuppressedChannelIds: options.ambientAutostartSuppressedChannelIds }
+      : {}),
+    ...(options?.tryRecoverAutostartSuppression
+      ? { tryRecoverAutostartSuppression: options.tryRecoverAutostartSuppression }
       : {}),
     ...(options?.getNativeApprovalRuntime
       ? { getNativeApprovalRuntime: options.getNativeApprovalRuntime }
@@ -533,6 +537,7 @@ describe("server-channels auto restart", () => {
     expect(startAccount).toHaveBeenCalled();
     expect(account?.running).toBe(false);
     expect(account?.restartPending).toBe(true);
+    expect(account?.lifecycle).toBe("recovering");
     expect(account?.lastError).toBe("channel exited without an error");
   });
 
@@ -579,6 +584,9 @@ describe("server-channels auto restart", () => {
 
     await manager.startChannels();
     await flushMicrotasks();
+    expect(
+      manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]?.lifecycle,
+    ).toBe("ready");
     await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
 
     const snapshot = manager.getRuntimeSnapshot();
@@ -586,7 +594,39 @@ describe("server-channels auto restart", () => {
     expect(stopAccount).toHaveBeenCalledTimes(1);
     expect(account?.running).toBe(false);
     expect(account?.connected).toBe(false);
+    expect(account?.lifecycle).toBe("stopped");
     expect(account?.lastError).toBeNull();
+  });
+
+  it("records starting on every start and preserves explicit blocked over connected ready", async () => {
+    const lifecycleAtHandoff: Array<ChannelAccountSnapshot["lifecycle"]> = [];
+    const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
+      lifecycleAtHandoff.push(ctx.getStatus().lifecycle);
+      ctx.setStatus({
+        accountId: DEFAULT_ACCOUNT_ID,
+        connected: true,
+        lifecycle: "blocked",
+        lastError: "identity unavailable",
+      });
+      await new Promise<void>((resolve) => {
+        ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    await flushMicrotasks();
+    expect(lifecycleAtHandoff).toEqual(["starting"]);
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.default).toMatchObject({
+      connected: true,
+      lifecycle: "blocked",
+    });
+
+    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    await flushMicrotasks();
+    expect(lifecycleAtHandoff).toEqual(["starting", "starting"]);
   });
 
   it("keeps a running channel without transport reporting free of a synthetic disconnect", async () => {
@@ -845,15 +885,24 @@ describe("server-channels auto restart", () => {
   });
 
   it("does not auto-restart a channel task exit marked as terminal disconnect", async () => {
+    const lifecycleAtHandoff: Array<ChannelAccountSnapshot["lifecycle"]> = [];
     const startAccount = vi.fn(
       async ({
+        getStatus,
         setStatus,
         accountId,
       }: {
+        getStatus: ChannelGatewayContext["getStatus"];
         setStatus: ChannelGatewayContext["setStatus"];
         accountId: string;
       }) => {
-        setStatus({ accountId, terminalDisconnect: true });
+        lifecycleAtHandoff.push(getStatus().lifecycle);
+        setStatus({
+          accountId,
+          terminalDisconnect: true,
+          lifecycle: "blocked",
+          lastError: "relink required",
+        });
       },
     );
     installTestRegistry(createTestPlugin({ startAccount }));
@@ -864,7 +913,18 @@ describe("server-channels auto restart", () => {
 
     expect(startAccount).toHaveBeenCalledTimes(1);
     const snapshot = manager.getRuntimeSnapshot();
-    expect(snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]?.terminalDisconnect).toBe(true);
+    expect(snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]).toMatchObject({
+      terminalDisconnect: true,
+      running: false,
+      lifecycle: "blocked",
+      lastError: "relink required",
+      restartPending: false,
+    });
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(startAccount).toHaveBeenCalledTimes(2);
+    expect(lifecycleAtHandoff).toEqual(["starting", "starting"]);
   });
 
   it("consumes rejected stop tasks during manual abort", async () => {
@@ -956,6 +1016,7 @@ describe("server-channels auto restart", () => {
     expect(startAccount).toHaveBeenCalledTimes(1);
     expect(account?.running).toBe(false);
     expect(account?.restartPending).toBe(true);
+    expect(account?.lifecycle).toBe("recovering");
     expect(account?.lastError).toContain("channel stop timed out");
     expect(manager.isManuallyStopped("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
 
@@ -1041,6 +1102,7 @@ describe("server-channels auto restart", () => {
     expect(account?.running).toBe(false);
     expect(account?.connected).toBe(false);
     expect(account?.restartPending).toBe(true);
+    expect(account?.lifecycle).toBe("recovering");
     expect(account?.reconnectAttempts).toBe(0);
     expect(account?.lastError).toContain("channel stop timed out");
   });
@@ -1415,6 +1477,7 @@ describe("server-channels auto restart", () => {
     expect(manager.getRuntimeSnapshot().channelAccounts.discord?.default).toMatchObject({
       linked: false,
       running: false,
+      lifecycle: "stopped",
       lastError: "logged out",
     });
     await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
@@ -1670,6 +1733,83 @@ describe("server-channels auto restart", () => {
 
     expect(startAccount).toHaveBeenCalledTimes(1);
     expect(manager.getAutostartSuppression()?.reason).toBe("crash-loop-breaker");
+  });
+
+  it("recovers suppressed autostart without undoing manual stops", async () => {
+    const startAccount = vi.fn(
+      async ({ abortSignal }: ChannelGatewayContext<TestAccount>) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => [DEFAULT_ACCOUNT_ID, "work"],
+      }),
+    );
+    const tryRecover = vi.fn(() => true);
+    const manager = createManager({
+      tryRecoverAutostartSuppression: tryRecover,
+      getRuntimeConfig: () => ({
+        channels: { discord: { healthMonitor: { enabled: false } } },
+      }),
+    });
+    manager.setAutostartSuppression({
+      reason: "crash-loop-breaker",
+      message: "safe mode",
+    });
+
+    await manager.startChannels();
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID, { manual: true });
+    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    await manager.recoverAutostartSuppression();
+    await flushMicrotasks();
+
+    expect(tryRecover).toHaveBeenCalledOnce();
+    expect(manager.getAutostartSuppression()).toBeNull();
+    expect(startAccount.mock.calls.map(([ctx]) => ctx.accountId)).toEqual([
+      DEFAULT_ACCOUNT_ID,
+      "work",
+    ]);
+    expect(manager.isHealthMonitorEnabled("discord", "work")).toBe(false);
+    expect(manager.isManuallyStopped("discord", DEFAULT_ACCOUNT_ID)).toBe(true);
+  });
+
+  it("keeps suppression when persisted recovery is not proven", async () => {
+    const startAccount = vi.fn(async () => {});
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager({ tryRecoverAutostartSuppression: () => false });
+    manager.setAutostartSuppression({
+      reason: "crash-loop-breaker",
+      message: "safe mode",
+    });
+
+    await expect(manager.recoverAutostartSuppression()).resolves.toBe(false);
+
+    expect(manager.getAutostartSuppression()?.reason).toBe("crash-loop-breaker");
+    expect(startAccount).not.toHaveBeenCalled();
+  });
+
+  it("keeps ambient channel suppression after crash-loop recovery", async () => {
+    const startAccount = vi.fn(async () => {});
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager({
+      ambientAutostartSuppressedChannelIds: new Set(["discord"]),
+      tryRecoverAutostartSuppression: () => true,
+    });
+    manager.setAutostartSuppression({
+      reason: "crash-loop-breaker",
+      message: "safe mode",
+    });
+
+    await expect(manager.recoverAutostartSuppression()).resolves.toBe(true);
+
+    expect(manager.getAutostartSuppression()).toBeNull();
+    expect(startAccount).not.toHaveBeenCalled();
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.default?.lastError).toBe(
+      "ambient channel credentials suppressed for dev gateway",
+    );
   });
 
   it("suppresses ambient dev channel autostart while allowing manual starts", async () => {

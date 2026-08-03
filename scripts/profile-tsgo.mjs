@@ -12,8 +12,8 @@ import {
   shouldAcquireLocalHeavyCheckLockForTsgo,
 } from "./lib/local-heavy-check-runtime.mjs";
 import { createManagedCommandInvocation } from "./lib/managed-child-process.mjs";
-
-const repoRoot = path.resolve(import.meta.dirname, "..");
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
+const repoRoot = resolveRepoRoot(import.meta.url);
 const artifactRoot = path.resolve(repoRoot, ".artifacts/tsgo-profile");
 const tsgoPath = resolveRepoToolBinPath("tsgo", { cwd: repoRoot });
 

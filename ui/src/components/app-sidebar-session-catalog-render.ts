@@ -22,9 +22,11 @@ import {
   formatSidebarTimestamp,
   type CatalogBackingSessionDisplay,
   type CatalogSessionMenuRequest,
+  visibleCatalogHosts,
 } from "./app-sidebar-session-catalogs.ts";
 import { renderSidebarSessionSectionHeader } from "./app-sidebar-session-section-header.ts";
 import { icons } from "./icons.ts";
+import { hasProviderBrandIcon, renderProviderBrandIcon } from "./provider-icon.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 
 type SessionCatalogGroupsParams = {
@@ -50,9 +52,15 @@ type SessionCatalogGroupsParams = {
   onFinishSectionDrag: () => void;
   viewMenuOpenCatalogId: string | null;
   creatorFilterActive: boolean;
-  onOpenViewMenu: (trigger: HTMLElement) => void;
+  onOpenViewMenu: (
+    catalogId: string,
+    trigger: HTMLElement,
+    position?: { x: number; y: number },
+  ) => void;
   onLoadMore: (catalogId: string) => void;
   onOpenNewSession?: (agentId: string, target?: NewSessionTarget) => void;
+  newSessionDisabledReason?: string;
+  sectionDragDisabledReason?: string;
   onNavigate?: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
   catalogOpenTarget: "viewer" | "terminal";
   terminalAvailable: boolean;
@@ -118,15 +126,8 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
     const sectionId = `catalog:${catalog.id}`;
     const collapsed = params.collapsedSections.has(sectionId);
     const hosts = catalog.hosts;
-    const visibleHosts: SessionCatalogHost[] = [];
-    for (const host of hosts) {
-      const sessions = host.sessions.filter(
-        (session) => !params.creatorId || session.createdActor?.id === params.creatorId,
-      );
-      if (sessions.length > 0) {
-        visibleHosts.push(sessions.length === host.sessions.length ? host : { ...host, sessions });
-      }
-    }
+    // Catalog providers own host identity; the sidebar only removes hosts with no visible rows.
+    const visibleHosts = visibleCatalogHosts(hosts, params.creatorId);
     const rows = visibleHosts.flatMap((host) =>
       host.sessions.map((session) => ({ host, session })),
     );
@@ -147,7 +148,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
       return nothing;
     }
     const errorMessage = errorMessages.join("; ");
-    const errorHelp = `${errorMessage}. Configure native thread discovery in Settings > Automation > Plugins.`;
+    const errorHelp = t("chat.sidebar.catalogDiscoveryHelp", { error: errorMessage });
     const sectionClass = [
       "sidebar-recent-sessions__group",
       "sidebar-recent-sessions__group--zone-coding",
@@ -163,14 +164,31 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
       <div
         class=${sectionClass}
         data-session-section=${sectionId}
-        @dragover=${(event: DragEvent) => params.onSectionDragOver(event, sectionId)}
-        @dragleave=${(event: DragEvent) => params.onSectionDragLeave(event, sectionId)}
-        @drop=${(event: DragEvent) => params.onSectionDrop(event, sectionId)}
+        @dragover=${params.sectionDragDisabledReason
+          ? nothing
+          : (event: DragEvent) => params.onSectionDragOver(event, sectionId)}
+        @dragleave=${params.sectionDragDisabledReason
+          ? nothing
+          : (event: DragEvent) => params.onSectionDragLeave(event, sectionId)}
+        @drop=${params.sectionDragDisabledReason
+          ? nothing
+          : (event: DragEvent) => params.onSectionDrop(event, sectionId)}
       >
         ${renderSidebarSessionSectionHeader({
           sectionId,
+          disabledReason: params.sectionDragDisabledReason,
           onStartDrag: params.onStartSectionDrag,
           onFinishDrag: params.onFinishSectionDrag,
+          onContextMenu: (event) => {
+            event.preventDefault();
+            const header = event.currentTarget as HTMLElement;
+            const trigger =
+              header.querySelector<HTMLElement>("[data-session-catalog-view-menu]") ?? header;
+            params.onOpenViewMenu(catalog.id, trigger, {
+              x: event.clientX,
+              y: event.clientY,
+            });
+          },
           content: html`
             <button
               type="button"
@@ -180,6 +198,11 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
               title=${hasError ? errorHelp : nothing}
               @click=${() => params.onToggleSection(sectionId)}
             >
+              ${hasProviderBrandIcon(catalog.id)
+                ? renderProviderBrandIcon(catalog.id, {
+                    className: "sidebar-session-catalog-provider-icon",
+                  })
+                : nothing}
               <span class="sidebar-recent-sessions__label-text">${catalog.label}</span>
               <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
                 >${collapsed ? icons.chevronRight : icons.chevronDown}</span
@@ -208,7 +231,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
               aria-expanded=${String(params.viewMenuOpenCatalogId === catalog.id)}
               @click=${(event: MouseEvent) => {
                 event.stopPropagation();
-                params.onOpenViewMenu(event.currentTarget as HTMLElement);
+                params.onOpenViewMenu(catalog.id, event.currentTarget as HTMLElement);
               }}
             >
               ${icons.listFilter}
@@ -217,9 +240,10 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
               ? html`<button
                   type="button"
                   class="sidebar-session-group-actions sidebar-session-sort sidebar-session-new sidebar-session-catalog-new"
-                  title=${`${t("chat.runControls.newSession")} — ${catalog.label}`}
+                  title=${params.newSessionDisabledReason ??
+                  `${t("chat.runControls.newSession")} — ${catalog.label}`}
                   aria-label=${`${t("chat.runControls.newSession")} — ${catalog.label}`}
-                  ?disabled=${!params.connected}
+                  ?disabled=${Boolean(params.newSessionDisabledReason)}
                   @click=${() =>
                     params.onOpenNewSession?.(params.newSessionAgentId, {
                       catalogId: catalog.id,

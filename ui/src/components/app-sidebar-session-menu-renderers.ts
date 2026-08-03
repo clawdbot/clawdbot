@@ -1,7 +1,6 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
-import type { ActorIdentityUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
@@ -26,6 +25,7 @@ export function renderSidebarSessionGroupMenu(params: {
   menu: SidebarSessionGroupMenuState | null;
   trigger: HTMLElement | null;
   connected: boolean;
+  actionDisabledReasons?: Partial<Record<SidebarSessionGroupMenuAction, string>>;
   onAction: (action: SidebarSessionGroupMenuAction, group: string) => void;
   onClose: (restoreFocus: boolean) => void;
 }) {
@@ -46,7 +46,10 @@ export function renderSidebarSessionGroupMenu(params: {
           @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
             event.preventDefault();
             const value = event.detail.item.value;
-            if (value === "rename-group" || value === "new-group" || value === "delete-group") {
+            if (
+              (value === "rename-group" || value === "new-group" || value === "delete-group") &&
+              !params.actionDisabledReasons?.[value]
+            ) {
               params.onAction(value, menu.group);
             }
           }}
@@ -66,12 +69,19 @@ export function renderSidebarSessionGroupMenu(params: {
           <wa-dropdown-item
             class="session-menu__item"
             value="rename-group"
-            ?disabled=${!params.connected}
+            ?disabled=${!params.connected ||
+            Boolean(params.actionDisabledReasons?.["rename-group"])}
+            title=${params.actionDisabledReasons?.["rename-group"] ?? nothing}
           >
             <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.edit}</span>
             <span class="session-menu__text">${t("sessionsView.renameGroupMenu")}</span>
           </wa-dropdown-item>
-          <wa-dropdown-item class="session-menu__item" value="new-group">
+          <wa-dropdown-item
+            class="session-menu__item"
+            value="new-group"
+            ?disabled=${!params.connected || Boolean(params.actionDisabledReasons?.["new-group"])}
+            title=${params.actionDisabledReasons?.["new-group"] ?? nothing}
+          >
             <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.folder}</span>
             <span class="session-menu__text">${t("sessionsView.newGroup")}</span>
           </wa-dropdown-item>
@@ -80,7 +90,9 @@ export function renderSidebarSessionGroupMenu(params: {
             class="session-menu__item session-menu__item--destructive"
             value="delete-group"
             variant="danger"
-            ?disabled=${!params.connected}
+            ?disabled=${!params.connected ||
+            Boolean(params.actionDisabledReasons?.["delete-group"])}
+            title=${params.actionDisabledReasons?.["delete-group"] ?? nothing}
           >
             <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.trash}</span>
             <span class="session-menu__text">${t("sessionsView.deleteGroupMenu")}</span>
@@ -97,9 +109,9 @@ export function renderSidebarCatalogViewMenu(params: {
   grouping: CatalogProjectGrouping;
   creators: readonly SessionCreatorOption[];
   creatorFilterId: string | null;
-  resolveCreatorUser: (creatorId: string) => ActorIdentityUser | undefined;
   onGroupingChange: (grouping: CatalogProjectGrouping) => void;
   onCreatorFilterChange: (creatorId: string | null) => void;
+  onHide: () => void;
   onClose: (restoreFocus: boolean) => void;
 }) {
   const position = params.position;
@@ -128,6 +140,8 @@ export function renderSidebarCatalogViewMenu(params: {
               params.onGroupingChange(value.slice("grouping:".length) as CatalogProjectGrouping);
             } else if (value?.startsWith("creator:")) {
               params.onCreatorFilterChange(value.slice("creator:".length) || null);
+            } else if (value === "hide-catalog") {
+              params.onHide();
             }
           }}
           @keydown=${(event: KeyboardEvent) =>
@@ -194,18 +208,17 @@ export function renderSidebarCatalogViewMenu(params: {
                       <span slot="details" class="session-menu__check" aria-hidden="true"
                         >${params.creatorFilterId === creator.id ? icons.check : nothing}</span
                       >
-                      ${renderSessionOwnerChip(
-                        creator,
-                        "row",
-                        "created",
-                        params.resolveCreatorUser(creator.id),
-                      )}
+                      ${renderSessionOwnerChip(creator, "row", "created")}
                       <span class="session-menu__text">${creator.label ?? creator.id}</span>
                     </wa-dropdown-item>
                   `,
                 )}
               `
             : nothing}
+          <div class="session-menu__separator" role="separator"></div>
+          <wa-dropdown-item class="sidebar-session-sort-menu__item" value="hide-catalog">
+            <span class="session-menu__text">${t("chat.sidebar.hideFromSidebar")}</span>
+          </wa-dropdown-item>
         </wa-dropdown>
       </openclaw-menu-surface>
     `,
@@ -221,7 +234,6 @@ export function renderSidebarSessionSortMenu(params: {
   showCron: boolean;
   creators: readonly SessionCreatorOption[];
   creatorFilterId: string | null;
-  resolveCreatorUser: (creatorId: string) => ActorIdentityUser | undefined;
   onGroupingChange: (grouping: SidebarSessionsGrouping) => void;
   onSortModeChange: (mode: SidebarSessionSortMode) => void;
   onStatusFilterChange: (statusFilter: SidebarSessionStatusFilter) => void;
@@ -372,12 +384,7 @@ export function renderSidebarSessionSortMenu(params: {
                       <span slot="details" class="session-menu__check" aria-hidden="true"
                         >${params.creatorFilterId === creator.id ? icons.check : nothing}</span
                       >
-                      ${renderSessionOwnerChip(
-                        creator,
-                        "row",
-                        "created",
-                        params.resolveCreatorUser(creator.id),
-                      )}
+                      ${renderSessionOwnerChip(creator, "row", "created")}
                       <span class="session-menu__text">${creator.label ?? creator.id}</span>
                     </wa-dropdown-item>
                   `,

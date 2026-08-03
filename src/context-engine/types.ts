@@ -178,6 +178,7 @@ export type ContextEngineInfo = {
   id: string;
   name: string;
   version?: string;
+  acceptedHostParams?: string[];
   /** True when the engine manages its own compaction lifecycle. */
   ownsCompaction?: boolean;
   /**

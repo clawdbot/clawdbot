@@ -26,6 +26,29 @@ class RoomChatCommandOutboxTest {
     database.close()
   }
 
+  private suspend fun ChatCommandOutbox.enqueueResult(
+    text: String,
+    nowMs: Long,
+    gatewayId: String = "gateway-a",
+    sessionKey: String = "main",
+    thinkingLevel: String = "off",
+    ownerAgentId: String = "main",
+    idempotencyKey: String? = null,
+    attachments: List<OutboxAttachmentPayload> = emptyList(),
+    gatedEpoch: Long? = null,
+  ): ChatOutboxEnqueueResult =
+    enqueue(
+      gatewayId = gatewayId,
+      sessionKey = sessionKey,
+      text = text,
+      thinkingLevel = thinkingLevel,
+      nowMs = nowMs,
+      ownerAgentId = ownerAgentId,
+      idempotencyKey = idempotencyKey,
+      attachments = attachments,
+      gatedEpoch = gatedEpoch,
+    )
+
   private suspend fun ChatCommandOutbox.enqueueQueued(
     text: String,
     nowMs: Long,
@@ -33,17 +56,79 @@ class RoomChatCommandOutboxTest {
     sessionKey: String = "main",
     thinkingLevel: String = "off",
     ownerAgentId: String = "main",
-  ): ChatOutboxItem {
-    val result =
-      enqueue(
+    idempotencyKey: String? = null,
+    attachments: List<OutboxAttachmentPayload> = emptyList(),
+    gatedEpoch: Long? = null,
+  ): ChatOutboxItem =
+    (
+      enqueueResult(
+        text = text,
+        nowMs = nowMs,
         gatewayId = gatewayId,
         sessionKey = sessionKey,
-        text = text,
         thinkingLevel = thinkingLevel,
-        nowMs = nowMs,
         ownerAgentId = ownerAgentId,
-      )
-    return (result as ChatOutboxEnqueueResult.Queued).item
+        idempotencyKey = idempotencyKey,
+        attachments = attachments,
+        gatedEpoch = gatedEpoch,
+      ) as ChatOutboxEnqueueResult.Queued
+    ).item
+
+  private suspend fun ChatCommandOutbox.requeueCurrent(
+    item: ChatOutboxItem,
+    nowMs: Long,
+    replacementId: String,
+  ): Int =
+    requeueForRetryIfCurrent(
+      gatewayId = "gateway-a",
+      id = item.id,
+      expectedAttemptVersion = item.attemptVersion,
+      expectedRetryCount = item.retryCount,
+      expectedLastError = item.lastError,
+      nowMs = nowMs,
+      gatedEpoch = null,
+      ownerAgentId = "main",
+      replacementId = replacementId,
+    )
+
+  private suspend fun ChatCommandOutbox.reconcile(
+    scope: ChatOutboxScope,
+    previousState: ChatOutboxBranchState,
+    activeLeafEntryId: String? = null,
+    branchLeafEntryIds: Set<String> = emptySet(),
+    activeTranscriptEntryIds: Set<String> = emptySet(),
+  ): Boolean =
+    reconcileBranchScope(
+      gatewayId = "gateway-a",
+      scope = scope,
+      previousState = previousState,
+      activeLeafEntryId = activeLeafEntryId,
+      branchLeafEntryIds = branchLeafEntryIds,
+      activeTranscriptEntryIds = activeTranscriptEntryIds,
+      lastError = OUTBOX_BRANCH_CHANGED_ERROR,
+    )
+
+  private suspend fun insertLegacyCommand(
+    id: String,
+    status: ChatOutboxStatus,
+    retryCount: Int,
+    lastError: String?,
+  ) {
+    database.outboxDao().insert(
+      OutboxCommandEntity(
+        id = id,
+        gatewayId = "gateway-a",
+        sessionKey = "main",
+        text = "legacy",
+        thinkingLevel = "off",
+        createdAtMs = 10,
+        status = status.dbValue,
+        retryCount = retryCount,
+        lastError = lastError,
+        gatedEpoch = null,
+        ownerAgentId = "main",
+      ),
+    )
   }
 
   @Test
@@ -69,17 +154,14 @@ class RoomChatCommandOutboxTest {
   fun callerSuppliedIdempotencyKeyCanReconcileComposerAdmissionAfterRestart() =
     runTest {
       val result =
-        store.enqueue(
-          gatewayId = "gateway-a",
-          sessionKey = "agent:main:device",
+        store.enqueueQueued(
           text = "send once",
-          thinkingLevel = "off",
           nowMs = 10,
-          ownerAgentId = "main",
+          sessionKey = "agent:main:device",
           idempotencyKey = "composer-command-a",
-        ) as ChatOutboxEnqueueResult.Queued
+        )
 
-      assertEquals("composer-command-a", result.item.id)
+      assertEquals("composer-command-a", result.id)
       assertTrue(store.wasAdmitted("composer-command-a"))
       store.delete("composer-command-a")
       assertTrue(store.wasAdmitted("composer-command-a"))
@@ -91,13 +173,10 @@ class RoomChatCommandOutboxTest {
     runTest {
       repeat(OUTBOX_ADMISSION_RECEIPTS_PER_ROUTING_OWNER + 2) { index ->
         val id = "composer-command-$index"
-        store.enqueue(
-          gatewayId = "gateway-a",
+        store.enqueueQueued(
           sessionKey = "agent:main:device-$index",
           text = "message $index",
-          thinkingLevel = "off",
           nowMs = index.toLong(),
-          ownerAgentId = "main",
           idempotencyKey = id,
         )
         store.delete(id)
@@ -114,24 +193,18 @@ class RoomChatCommandOutboxTest {
   fun activeAdmissionReceiptSurvivesFallbackPruningUntilCommandRetires() =
     runTest {
       val protectedId = "active-checkpoint"
-      store.enqueue(
-        gatewayId = "gateway-a",
+      store.enqueueQueued(
         sessionKey = "agent:main:protected",
         text = "still pending",
-        thinkingLevel = "off",
         nowMs = 0,
-        ownerAgentId = "main",
         idempotencyKey = protectedId,
       )
       repeat(OUTBOX_ADMISSION_RECEIPTS_PER_ROUTING_OWNER + 2) { index ->
         val id = "retired-command-$index"
-        store.enqueue(
-          gatewayId = "gateway-a",
+        store.enqueueQueued(
           sessionKey = "agent:main:device-$index",
           text = "message $index",
-          thinkingLevel = "off",
           nowMs = index.toLong() + 1,
-          ownerAgentId = "main",
           idempotencyKey = id,
         )
         store.delete(id)
@@ -140,13 +213,10 @@ class RoomChatCommandOutboxTest {
       store.delete(protectedId)
       assertTrue(store.wasAdmitted(protectedId))
       val nextId = "next-retired-command"
-      store.enqueue(
-        gatewayId = "gateway-a",
+      store.enqueueQueued(
         sessionKey = "agent:main:next",
         text = "advance the recovery window",
-        thinkingLevel = "off",
         nowMs = 100,
-        ownerAgentId = "main",
         idempotencyKey = nextId,
       )
       store.delete(nextId)
@@ -160,15 +230,7 @@ class RoomChatCommandOutboxTest {
         store.enqueueQueued("m$index", nowMs = index.toLong())
       }
 
-      val refused =
-        store.enqueue(
-          gatewayId = "gateway-a",
-          sessionKey = "main",
-          text = "overflow",
-          thinkingLevel = "off",
-          nowMs = 999,
-          ownerAgentId = "main",
-        )
+      val refused = store.enqueueResult(text = "overflow", nowMs = 999)
 
       assertEquals(ChatOutboxEnqueueResult.QueueFull, refused)
       assertEquals(OUTBOX_MAX_QUEUED, store.load("gateway-a").size)
@@ -227,21 +289,7 @@ class RoomChatCommandOutboxTest {
   @Test
   fun restartRecoveryCreatesAmbiguityStateForRowsWithoutDeliveryMetadata() =
     runTest {
-      database.outboxDao().insert(
-        OutboxCommandEntity(
-          id = "legacy-sending",
-          gatewayId = "gateway-a",
-          sessionKey = "main",
-          text = "legacy",
-          thinkingLevel = "off",
-          createdAtMs = 10,
-          status = ChatOutboxStatus.Sending.dbValue,
-          retryCount = 0,
-          lastError = null,
-          gatedEpoch = null,
-          ownerAgentId = "main",
-        ),
-      )
+      insertLegacyCommand("legacy-sending", ChatOutboxStatus.Sending, retryCount = 0, lastError = null)
 
       store.failSendingAfterRestart()
 
@@ -253,37 +301,18 @@ class RoomChatCommandOutboxTest {
   @Test
   fun legacyAmbiguousFailureBackfillsFreshRetryIdentityEvidence() =
     runTest {
-      database.outboxDao().insert(
-        OutboxCommandEntity(
-          id = "legacy-ambiguous",
-          gatewayId = "gateway-a",
-          sessionKey = "main",
-          text = "legacy",
-          thinkingLevel = "off",
-          createdAtMs = 10,
-          status = ChatOutboxStatus.Failed.dbValue,
-          retryCount = 1,
-          lastError = OUTBOX_DELIVERY_UNCONFIRMED_ERROR,
-          gatedEpoch = null,
-          ownerAgentId = "main",
-        ),
+      insertLegacyCommand(
+        "legacy-ambiguous",
+        ChatOutboxStatus.Failed,
+        retryCount = 1,
+        lastError = OUTBOX_DELIVERY_UNCONFIRMED_ERROR,
       )
       val legacy = store.load("gateway-a").single()
       assertTrue(legacy.hadUnacknowledgedSend)
       store.confirmBranchChange("gateway-a", ChatOutboxScope("main", "main"), "leaf-new", OUTBOX_BRANCH_CHANGED_ERROR)
       val parked = store.load("gateway-a").single()
 
-      store.requeueForRetryIfCurrent(
-        gatewayId = "gateway-a",
-        id = parked.id,
-        expectedAttemptVersion = parked.attemptVersion,
-        expectedRetryCount = parked.retryCount,
-        expectedLastError = parked.lastError,
-        nowMs = 20,
-        gatedEpoch = null,
-        ownerAgentId = "main",
-        replacementId = "legacy-fresh-id",
-      )
+      store.requeueCurrent(parked, nowMs = 20, replacementId = "legacy-fresh-id")
 
       assertEquals("legacy-fresh-id", store.load("gateway-a").single().id)
     }
@@ -355,14 +384,7 @@ class RoomChatCommandOutboxTest {
     runTest {
       assertEquals(
         ChatOutboxEnqueueResult.Unavailable,
-        store.enqueue(
-          gatewayId = " ",
-          sessionKey = "main",
-          text = "hi",
-          thinkingLevel = "off",
-          nowMs = 1,
-          ownerAgentId = "main",
-        ),
+        store.enqueueResult(text = "hi", nowMs = 1, gatewayId = " "),
       )
       assertEquals(emptyList<ChatOutboxItem>(), store.load(" "))
 
@@ -398,17 +420,7 @@ class RoomChatCommandOutboxTest {
 
       assertEquals(
         1,
-        store.requeueForRetryIfCurrent(
-          gatewayId = "gateway-a",
-          id = parkedAccepted.id,
-          expectedAttemptVersion = parkedAccepted.attemptVersion,
-          expectedRetryCount = parkedAccepted.retryCount,
-          expectedLastError = parkedAccepted.lastError,
-          nowMs = 20,
-          gatedEpoch = null,
-          ownerAgentId = "main",
-          replacementId = "fresh-client-id",
-        ),
+        store.requeueCurrent(parkedAccepted, nowMs = 20, replacementId = "fresh-client-id"),
       )
       val retriedAccepted = store.load("gateway-a").single()
       assertEquals("fresh-client-id", retriedAccepted.id)
@@ -418,17 +430,7 @@ class RoomChatCommandOutboxTest {
       val queued = store.enqueueQueued("never dispatched", nowMs = 30)
       store.confirmBranchChange("gateway-a", scope, "leaf-newer", OUTBOX_BRANCH_CHANGED_ERROR)
       val parkedQueued = store.load("gateway-a").single()
-      store.requeueForRetryIfCurrent(
-        gatewayId = "gateway-a",
-        id = parkedQueued.id,
-        expectedAttemptVersion = parkedQueued.attemptVersion,
-        expectedRetryCount = parkedQueued.retryCount,
-        expectedLastError = parkedQueued.lastError,
-        nowMs = 40,
-        gatedEpoch = null,
-        ownerAgentId = "main",
-        replacementId = "unused-replacement",
-      )
+      store.requeueCurrent(parkedQueued, nowMs = 40, replacementId = "unused-replacement")
       val retriedQueued = store.load("gateway-a").single()
       assertEquals(queued.id, retriedQueued.id)
       assertEquals(2, retriedQueued.attemptVersion)
@@ -439,32 +441,18 @@ class RoomChatCommandOutboxTest {
     runTest {
       val bytes = ByteArray(OUTBOX_ATTACHMENT_CHUNK_BYTES + 17) { (it % 251).toByte() }
       val queued =
-        store.enqueue(
-          gatewayId = "gateway-a",
-          sessionKey = "main",
+        store.enqueueQueued(
           text = "attachment retry",
-          thinkingLevel = "off",
           nowMs = 10,
-          ownerAgentId = "main",
           attachments = listOf(payload(bytes, fileName = "proof.jpg")),
-        ) as ChatOutboxEnqueueResult.Queued
-      store.updateStatusIfAttempt(queued.item.id, 1, ChatOutboxStatus.Accepted, 0, null)
+        )
+      store.updateStatusIfAttempt(queued.id, 1, ChatOutboxStatus.Accepted, 0, null)
       store.confirmBranchChange("gateway-a", ChatOutboxScope("main", "main"), "leaf-new", OUTBOX_BRANCH_CHANGED_ERROR)
       val parked = store.load("gateway-a").single()
 
       assertEquals(
         1,
-        store.requeueForRetryIfCurrent(
-          gatewayId = "gateway-a",
-          id = parked.id,
-          expectedAttemptVersion = parked.attemptVersion,
-          expectedRetryCount = parked.retryCount,
-          expectedLastError = parked.lastError,
-          nowMs = 20,
-          gatedEpoch = null,
-          ownerAgentId = "main",
-          replacementId = "fresh-attachment-id",
-        ),
+        store.requeueCurrent(parked, nowMs = 20, replacementId = "fresh-attachment-id"),
       )
 
       val loaded = store.loadAttachments("fresh-attachment-id").single()
@@ -572,17 +560,7 @@ class RoomChatCommandOutboxTest {
       val staleLease = requireNotNull(store.beginSessionMutation("gateway-a", scope, nowMs = 1_000))
       assertTrue(store.demoteSessionMutationToReconciliation("gateway-a", scope, lease = null))
       val reconciliationState = requireNotNull(store.branchState("gateway-a", scope))
-      assertTrue(
-        store.reconcileBranchScope(
-          gatewayId = "gateway-a",
-          scope = scope,
-          previousState = reconciliationState,
-          activeLeafEntryId = null,
-          branchLeafEntryIds = emptySet(),
-          activeTranscriptEntryIds = emptySet(),
-          lastError = OUTBOX_BRANCH_CHANGED_ERROR,
-        ),
-      )
+      assertTrue(store.reconcile(scope, reconciliationState))
       val currentLease = requireNotNull(store.beginSessionMutation("gateway-a", scope, nowMs = 2_000))
 
       assertFalse(
@@ -606,14 +584,12 @@ class RoomChatCommandOutboxTest {
       val advanceState = requireNotNull(store.branchState("gateway-a", advancingScope))
       val advancingRow = store.enqueueQueued("stay active", nowMs = 10, sessionKey = "advance")
       assertTrue(
-        store.reconcileBranchScope(
-          gatewayId = "gateway-a",
-          scope = advancingScope,
-          previousState = advanceState,
+        store.reconcile(
+          advancingScope,
+          advanceState,
           activeLeafEntryId = "leaf-new",
           branchLeafEntryIds = setOf("leaf-new"),
           activeTranscriptEntryIds = setOf("leaf-old", "leaf-new"),
-          lastError = OUTBOX_BRANCH_CHANGED_ERROR,
         ),
       )
       assertEquals(ChatOutboxStatus.Queued, store.load("gateway-a").single { it.id == advancingRow.id }.status)
@@ -624,14 +600,12 @@ class RoomChatCommandOutboxTest {
       val switchState = requireNotNull(store.branchState("gateway-a", switchedScope))
       val switchedRow = store.enqueueQueued("park me", nowMs = 20, sessionKey = "switched")
       assertTrue(
-        store.reconcileBranchScope(
-          gatewayId = "gateway-a",
-          scope = switchedScope,
-          previousState = switchState,
+        store.reconcile(
+          switchedScope,
+          switchState,
           activeLeafEntryId = "leaf-b",
           branchLeafEntryIds = setOf("leaf-a", "leaf-b"),
           activeTranscriptEntryIds = setOf("leaf-b"),
-          lastError = OUTBOX_BRANCH_CHANGED_ERROR,
         ),
       )
       assertEquals(ChatOutboxStatus.Failed, store.load("gateway-a").single { it.id == switchedRow.id }.status)
@@ -645,17 +619,7 @@ class RoomChatCommandOutboxTest {
       val mainState = requireNotNull(store.branchState("gateway-a", mainScope))
       val opsState = requireNotNull(store.branchState("gateway-a", opsScope))
 
-      assertTrue(
-        store.reconcileBranchScope(
-          "gateway-a",
-          mainScope,
-          mainState,
-          activeLeafEntryId = null,
-          branchLeafEntryIds = emptySet(),
-          activeTranscriptEntryIds = emptySet(),
-          lastError = OUTBOX_BRANCH_CHANGED_ERROR,
-        ),
-      )
+      assertTrue(store.reconcile(mainScope, mainState))
       assertTrue(store.confirmBranchChange("gateway-a", mainScope, "main-leaf", OUTBOX_BRANCH_CHANGED_ERROR))
       assertEquals(1, store.branchState("gateway-a", mainScope)?.epoch)
       assertEquals(0, store.branchState("gateway-a", opsScope)?.epoch)
@@ -670,14 +634,12 @@ class RoomChatCommandOutboxTest {
       val admitted = store.enqueueQueued("after snapshot", nowMs = 10)
 
       assertTrue(
-        store.reconcileBranchScope(
-          gatewayId = "gateway-a",
-          scope = scope,
-          previousState = emptyRoot,
+        store.reconcile(
+          scope,
+          emptyRoot,
           activeLeafEntryId = "leaf-current",
           branchLeafEntryIds = setOf("leaf-current"),
           activeTranscriptEntryIds = setOf("leaf-current"),
-          lastError = OUTBOX_BRANCH_CHANGED_ERROR,
         ),
       )
 
@@ -717,21 +679,14 @@ class RoomChatCommandOutboxTest {
   @Test
   fun deleteForSessionRemovesOnlyThatSessionsRows() =
     runTest {
-      store.enqueue(
-        gatewayId = "gateway-a",
-        sessionKey = "main",
+      store.enqueueQueued(
         text = "for main",
-        thinkingLevel = "off",
         nowMs = 10,
-        ownerAgentId = "main",
         idempotencyKey = "main-admission",
       )
       store.enqueueQueued("for other", nowMs = 20, sessionKey = "agent:other:main")
-      store.enqueue(
-        gatewayId = "gateway-a",
-        sessionKey = "main",
+      store.enqueueQueued(
         text = "other owner",
-        thinkingLevel = "off",
         nowMs = 30,
         ownerAgentId = "other",
         idempotencyKey = "other-owner-admission",
@@ -759,26 +714,22 @@ class RoomChatCommandOutboxTest {
       val big = ByteArray(OUTBOX_ATTACHMENT_CHUNK_BYTES + 1234) { (it % 251).toByte() }
       val small = byteArrayOf(5, 4, 3)
       val queued =
-        store.enqueue(
-          gatewayId = "gateway-a",
-          sessionKey = "main",
+        store.enqueueQueued(
           text = "with media",
-          thinkingLevel = "off",
           nowMs = 10,
-          ownerAgentId = "main",
           attachments =
             listOf(
               payload(big, fileName = "big.jpg"),
               payload(small, fileName = "note.m4a", type = "audio", mimeType = "audio/mp4", durationMs = 900L),
             ),
-        ) as ChatOutboxEnqueueResult.Queued
+        )
 
       val loadedItem = store.load("gateway-a").single()
       assertEquals(listOf("big.jpg", "note.m4a"), loadedItem.attachments.map { it.fileName })
       assertEquals(listOf(big.size.toLong(), small.size.toLong()), loadedItem.attachments.map { it.byteLength })
       assertEquals(900L, loadedItem.attachments[1].durationMs)
 
-      val loaded = store.loadAttachments(queued.item.id)
+      val loaded = store.loadAttachments(queued.id)
       assertTrue(big.contentEquals(loaded[0].bytes))
       assertTrue(small.contentEquals(loaded[1].bytes))
     }
@@ -788,17 +739,54 @@ class RoomChatCommandOutboxTest {
     runTest {
       val oversized = ByteArray((OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES + 1).toInt())
       val refused =
-        store.enqueue(
-          gatewayId = "gateway-a",
-          sessionKey = "main",
+        store.enqueueResult(
           text = "too big",
-          thinkingLevel = "off",
           nowMs = 10,
-          ownerAgentId = "main",
           attachments = listOf(payload(oversized)),
         )
       assertEquals(ChatOutboxEnqueueResult.AttachmentsTooLarge, refused)
       assertTrue(store.load("gateway-a").isEmpty())
+    }
+
+  @Test
+  fun videoCommandsUseServerAttachmentCapWithoutRaisingOtherMediaCaps() =
+    runTest {
+      val aboveDefaultCap = ByteArray((OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES + 1L).toInt())
+      val video =
+        store.enqueueResult(
+          text = "video",
+          nowMs = 10,
+          attachments = listOf(payload(aboveDefaultCap, type = "video", mimeType = "video/mp4")),
+        )
+      val document =
+        store.enqueueResult(
+          text = "document",
+          nowMs = 11,
+          attachments = listOf(payload(aboveDefaultCap, type = "file", mimeType = "application/pdf")),
+        )
+
+      assertTrue(video is ChatOutboxEnqueueResult.Queued)
+      assertEquals(ChatOutboxEnqueueResult.AttachmentsTooLarge, document)
+      assertEquals(20L * 1024L * 1024L, OUTBOX_MAX_VIDEO_COMMAND_ATTACHMENT_BYTES)
+    }
+
+  @Test
+  fun mixedVideoCommandKeepsNonVideoAggregateCap() =
+    runTest {
+      val document = ByteArray(5 * 1024 * 1024)
+      val refused =
+        store.enqueueResult(
+          text = "mixed",
+          nowMs = 10,
+          attachments =
+            listOf(
+              payload(document, fileName = "one.pdf", type = "file", mimeType = "application/pdf"),
+              payload(document, fileName = "two.pdf", type = "file", mimeType = "application/pdf"),
+              payload(byteArrayOf(1), fileName = "clip.mp4", type = "video", mimeType = "video/mp4"),
+            ),
+        )
+
+      assertEquals(ChatOutboxEnqueueResult.AttachmentsTooLarge, refused)
     }
 
   @Test
@@ -809,13 +797,9 @@ class RoomChatCommandOutboxTest {
       var index = 0
       while (true) {
         val result =
-          store.enqueue(
-            gatewayId = "gateway-a",
-            sessionKey = "main",
+          store.enqueueResult(
             text = "bulk $index",
-            thinkingLevel = "off",
             nowMs = index.toLong(),
-            ownerAgentId = "main",
             attachments = listOf(payload(chunk)),
           )
         if (result !is ChatOutboxEnqueueResult.Queued) {
@@ -830,13 +814,9 @@ class RoomChatCommandOutboxTest {
       // Deleting a queued row releases its bytes, so admission recovers.
       store.delete(stored.first())
       val retried =
-        store.enqueue(
-          gatewayId = "gateway-a",
-          sessionKey = "main",
+        store.enqueueResult(
           text = "fits again",
-          thinkingLevel = "off",
           nowMs = 999,
-          ownerAgentId = "main",
           attachments = listOf(payload(chunk)),
         )
       assertTrue(retried is ChatOutboxEnqueueResult.Queued)
@@ -845,18 +825,7 @@ class RoomChatCommandOutboxTest {
   @Test
   fun conditionalDeleteNeverRemovesAClaimedRow() =
     runTest {
-      val first =
-        (
-          store.enqueue(
-            gatewayId = "gateway-a",
-            sessionKey = "main",
-            text = "delete queued",
-            thinkingLevel = "off",
-            nowMs = 1,
-            ownerAgentId = "main",
-            idempotencyKey = "rollback-receipt",
-          ) as ChatOutboxEnqueueResult.Queued
-        ).item
+      val first = store.enqueueQueued(text = "delete queued", nowMs = 1, idempotencyKey = "rollback-receipt")
       assertTrue(store.wasAdmitted("rollback-receipt"))
       assertTrue(store.deleteIfQueued(first.id))
       assertTrue(store.load("gateway-a").isEmpty())
@@ -873,55 +842,45 @@ class RoomChatCommandOutboxTest {
     runTest {
       val bytes = byteArrayOf(1, 2, 3)
       val queued =
-        store.enqueue(
-          gatewayId = "gateway-a",
-          sessionKey = "main",
+        store.enqueueQueued(
           text = "confirmed",
-          thinkingLevel = "off",
           nowMs = 10,
-          ownerAgentId = "main",
           attachments = listOf(payload(bytes)),
-        ) as ChatOutboxEnqueueResult.Queued
-      store.updateStatus(queued.item.id, ChatOutboxStatus.Accepted, retryCount = 0, lastError = null)
+        )
+      store.updateStatus(queued.id, ChatOutboxStatus.Accepted, retryCount = 0, lastError = null)
       val keep = store.enqueueQueued("kept", nowMs = 20)
 
-      assertEquals(1, store.confirmDelivered(setOf(queued.item.id, "missing-row")))
+      assertEquals(1, store.confirmDelivered(setOf(queued.id, "missing-row")))
 
       assertEquals(listOf(keep.id), store.load("gateway-a").map { it.id })
-      assertTrue(store.loadAttachments(queued.item.id).isEmpty())
+      assertTrue(store.loadAttachments(queued.id).isEmpty())
     }
 
   @Test
   fun clearGatewayAndSessionDeleteAlsoDropAttachmentBytes() =
     runTest {
       val a =
-        store.enqueue(
-          gatewayId = "gateway-a",
-          sessionKey = "main",
+        store.enqueueQueued(
           text = "a",
-          thinkingLevel = "off",
           nowMs = 10,
-          ownerAgentId = "main",
           attachments = listOf(payload(byteArrayOf(1))),
-        ) as ChatOutboxEnqueueResult.Queued
+        )
       val b =
-        store.enqueue(
-          gatewayId = "gateway-b",
+        store.enqueueQueued(
           sessionKey = "other",
           text = "b",
-          thinkingLevel = "off",
           nowMs = 20,
-          ownerAgentId = "main",
+          gatewayId = "gateway-b",
           attachments = listOf(payload(byteArrayOf(2))),
-        ) as ChatOutboxEnqueueResult.Queued
+        )
 
       store.deleteForSession("gateway-b", "other", "main")
       store.clearGateway("gateway-a")
 
       assertTrue(store.load("gateway-a").isEmpty())
       assertTrue(store.load("gateway-b").isEmpty())
-      assertTrue(store.loadAttachments(a.item.id).isEmpty())
-      assertTrue(store.loadAttachments(b.item.id).isEmpty())
+      assertTrue(store.loadAttachments(a.id).isEmpty())
+      assertTrue(store.loadAttachments(b.id).isEmpty())
     }
 
   @Test
@@ -936,22 +895,19 @@ class RoomChatCommandOutboxTest {
   fun retryAndExactSessionDeletionCanonicalizeOwnerAgentIds() =
     runTest {
       val queued =
-        store.enqueue(
-          gatewayId = "gateway-a",
-          sessionKey = "main",
+        store.enqueueQueued(
           text = "mixed owner",
-          thinkingLevel = "off",
           nowMs = 10,
           ownerAgentId = "Main",
-        ) as ChatOutboxEnqueueResult.Queued
+        )
       assertEquals("main", store.load("gateway-a").single().ownerAgentId)
-      store.updateStatus(queued.item.id, ChatOutboxStatus.Failed, retryCount = 1, lastError = "retry")
+      store.updateStatus(queued.id, ChatOutboxStatus.Failed, retryCount = 1, lastError = "retry")
 
       assertEquals(
         1,
         store.requeueForRetry(
           gatewayId = "gateway-a",
-          id = queued.item.id,
+          id = queued.id,
           nowMs = 20,
           gatedEpoch = null,
           ownerAgentId = "MAIN",
@@ -967,19 +923,15 @@ class RoomChatCommandOutboxTest {
   fun gatedEpochSurvivesPersistenceAndRetryRestamping() =
     runTest {
       val queued =
-        store.enqueue(
-          gatewayId = "gateway-a",
-          sessionKey = "main",
+        store.enqueueQueued(
           text = "/clear",
-          thinkingLevel = "off",
           nowMs = 10,
-          ownerAgentId = "main",
           gatedEpoch = 7L,
-        ) as ChatOutboxEnqueueResult.Queued
+        )
       assertEquals(7L, store.load("gateway-a").single().gatedEpoch)
 
-      store.updateStatus(queued.item.id, ChatOutboxStatus.Failed, retryCount = 0, lastError = OUTBOX_CONNECTION_CHANGED_ERROR)
-      assertEquals(1, store.requeueForRetry(gatewayId = "gateway-a", id = queued.item.id, nowMs = 20, gatedEpoch = 9L))
+      store.updateStatus(queued.id, ChatOutboxStatus.Failed, retryCount = 0, lastError = OUTBOX_CONNECTION_CHANGED_ERROR)
+      assertEquals(1, store.requeueForRetry(gatewayId = "gateway-a", id = queued.id, nowMs = 20, gatedEpoch = 9L))
       assertEquals(9L, store.load("gateway-a").single().gatedEpoch)
     }
 

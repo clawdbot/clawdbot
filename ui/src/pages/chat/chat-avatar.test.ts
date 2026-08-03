@@ -86,6 +86,22 @@ describe("renderChatAvatar", () => {
     expect(textAvatar?.tagName).toBe("DIV");
     expect(textAvatar?.textContent?.trim()).toBe("AB");
   });
+
+  it("swaps a failing local user image to initials instead of a broken image", () => {
+    const container = document.createElement("div");
+    render(
+      renderChatAvatar("user", undefined, { name: "Buns", avatar: "/avatar/user" }),
+      container,
+    );
+    const slot = container.querySelector<HTMLElement>(".chat-avatar-slot");
+    const image = slot?.querySelector("img");
+    expect(image?.getAttribute("src")).toBe("/avatar/user");
+    expect(slot?.classList.contains("is-fallback")).toBe(false);
+
+    image?.dispatchEvent(new Event("error"));
+    expect(slot?.classList.contains("is-fallback")).toBe(true);
+    expect(slot?.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe("B");
+  });
 });
 
 describe("refreshChatAvatar", () => {
@@ -406,5 +422,40 @@ describe("attributed sender avatars", () => {
     // A later successful load for a reused DOM part clears the error state.
     image?.dispatchEvent(new Event("load"));
     expect(slot?.classList.contains("is-fallback")).toBe(false);
+  });
+
+  it("keeps a missing same-origin sender avatar on initials across rerenders", async () => {
+    const gatewayOrigin = globalThis.location.origin;
+    setAvatarGatewayOrigin(gatewayOrigin);
+    const fetchAvatar = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(null, { status: 404 }));
+    const container = document.createElement("div");
+    const sender = {
+      id: "dd7c98e2-f51d-4590-b588-fa0682e165b7",
+      name: "hrudolph",
+    };
+    const renderSender = () =>
+      render(renderChatAvatar("user", undefined, undefined, "", null, sender), container);
+
+    renderSender();
+    expect(container.querySelector(".chat-avatar-slot")?.classList.contains("is-fallback")).toBe(
+      true,
+    );
+    expect(container.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe("H");
+    await vi.waitFor(() => {
+      expect(fetchAvatar).toHaveBeenCalledOnce();
+      expect(container.querySelector(".chat-avatar-slot img")?.hasAttribute("src")).toBe(false);
+    });
+    expect(fetchAvatar).toHaveBeenCalledWith(
+      `${gatewayOrigin}/api/users/${sender.id}/avatar`,
+      expect.objectContaining({ credentials: "include", signal: expect.any(AbortSignal) }),
+    );
+
+    renderSender();
+    expect(container.querySelector(".chat-avatar-slot")?.classList.contains("is-fallback")).toBe(
+      true,
+    );
+    expect(container.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe("H");
   });
 });

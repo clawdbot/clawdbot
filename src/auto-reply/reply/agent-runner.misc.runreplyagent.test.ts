@@ -181,6 +181,7 @@ vi.mock("../../cli/command-secret-gateway.js", () => ({
 // Dedicated suites cover these sidecars; misc runner cases keep them inert to avoid unrelated graphs.
 vi.mock("../../cli/command-secret-targets.js", () => ({
   getAgentRuntimeCommandSecretTargetIds: () => new Set<string>(),
+  getAgentRuntimeOptionalCommandSecretPaths: () => new Set<string>(),
   getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
 }));
 
@@ -3313,6 +3314,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     strandedReplyRetry?: boolean;
     sendPolicyDenied?: boolean;
     isHeartbeat?: boolean;
+    onDeliberateSilentTerminalReply?: () => void;
     onObservedReplyDelivery?: () => Promise<void> | void;
     replyOperation?: ReturnType<typeof createReplyOperation>;
     turnAdoptionLifecycle?: FollowupRun["turnAdoptionLifecycle"];
@@ -3428,10 +3430,17 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       resolvedBlockStreamingBreak: "message_end",
       shouldInjectGroupIntro: false,
       typingMode: "instant",
-      ...(params.isHeartbeat || params.onObservedReplyDelivery
+      ...(params.isHeartbeat ||
+      params.onDeliberateSilentTerminalReply ||
+      params.onObservedReplyDelivery
         ? {
             opts: {
               ...(params.isHeartbeat ? { isHeartbeat: true } : {}),
+              ...(params.onDeliberateSilentTerminalReply
+                ? {
+                    onDeliberateSilentTerminalReply: params.onDeliberateSilentTerminalReply,
+                  }
+                : {}),
               ...(params.onObservedReplyDelivery
                 ? { onObservedReplyDelivery: params.onObservedReplyDelivery }
                 : {}),
@@ -3614,10 +3623,13 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     // Assistant went silent (NO_REPLY), but a verbose/usage metadata payload
     // survives in finalPayloads. The warn must key off the assistant text, not
     // the payload bundle, so no private-final warning should fire.
+    const onDeliberateSilentTerminalReply = vi.fn();
     await runPrivateFinalCase({
       finalAssistantText: "no_reply",
+      onDeliberateSilentTerminalReply,
       payloadText: "Auto-compaction complete (count 1).",
     });
+    expect(onDeliberateSilentTerminalReply).toHaveBeenCalledOnce();
     expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
   });

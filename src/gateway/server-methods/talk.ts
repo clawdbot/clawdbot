@@ -15,15 +15,6 @@ import {
   validateTalkModeParams,
   validateTalkSpeakParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  withSpeakerSelectionCompat,
-  withSpeakerSelectionFallbackCompat,
-} from "../../../packages/speech-core/speaker.js";
-import {
-  CODE_HEAVY_SPOKEN_FALLBACK,
-  isCodeHeavySpeechText,
-} from "../../../packages/speech-core/src/speech-text.js";
-import { getVoiceProviderConfig } from "../../../packages/speech-core/voice-models.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
 import {
@@ -55,11 +46,17 @@ import {
   listSpeechProviders,
 } from "../../tts/provider-registry.js";
 import {
+  withSpeakerSelectionCompat,
+  withSpeakerSelectionFallbackCompat,
+} from "../../tts/speaker.js";
+import { CODE_HEAVY_SPOKEN_FALLBACK, isCodeHeavySpeechText } from "../../tts/speech-text.js";
+import {
   getResolvedSpeechProviderConfig,
   resolveTtsConfig,
   synthesizeSpeech,
   type TtsDirectiveOverrides,
 } from "../../tts/tts.js";
+import { getVoiceProviderConfig } from "../../tts/voice-models.js";
 import { ADMIN_SCOPE, READ_SCOPE, TALK_SECRETS_SCOPE } from "../operator-scopes.js";
 import { resolveConfiguredSecretInputString } from "../resolve-configured-secret-input-string.js";
 import { formatForLog } from "../ws-log.js";
@@ -246,7 +243,7 @@ function buildTalkCatalog(config: OpenClawConfig) {
   const activeTranscriptionProvider = transcriptionSelection.activeProvider;
   const realtimeConfig = buildTalkRealtimeConfig(config);
   const realtimeSurface =
-    realtimeConfig.transport === "gateway-relay" ? "bridge" : "browser-session";
+    realtimeConfig.transport === "gateway-relay" ? "gateway-relay" : "browser-session";
   // Mirror talk.client.create's resolution inputs (agent scope + top-level model
   // override) so catalog readiness matches what session creation will actually do;
   // diverging here previously reported GPT-Live over OAuth as unconfigured.

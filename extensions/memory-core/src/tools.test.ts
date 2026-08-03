@@ -18,6 +18,7 @@ import {
   setResolvedMemoryBackend,
   setMemorySearchImpl,
   setMemorySearchManagerImpl,
+  setMemoryStatusDirty,
 } from "./memory-tool-manager.test-mocks.js";
 import { applyProjectRanking } from "./memory/project-ranking.js";
 import {
@@ -246,6 +247,30 @@ describe("memory_search unavailable payloads", () => {
       "memory/semantic.md",
     ]);
     expect(details.results.map((entry) => entry.score)).toEqual([1, 1, 1, 2]);
+  });
+
+  it("excludes annotation carriers from surfaced search snippets", async () => {
+    setMemorySearchImpl(async () => [
+      {
+        path: "MEMORY.md",
+        startLine: 1,
+        endLine: 1,
+        score: 1,
+        snippet:
+          "Keep the gateway local. <!-- trigger: gateway setup --> <!-- importance: 9 --> <!-- project: alpha-key -->",
+        source: "memory" as const,
+      },
+    ]);
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+
+    const result = await tool.execute("clean-snippet", { query: "gateway", corpus: "memory" });
+    const details = result.details as { results: Array<{ snippet: string }> };
+    expect(details.results[0]?.snippet).toBe("Keep the gateway local.");
   });
 
   it("passes the host local-service hook to tool memory managers", async () => {
@@ -954,6 +979,27 @@ describe("memory_search unavailable payloads", () => {
     expect(searchCalls).toBe(2);
   });
 
+  it("qualifies empty results when the index remains dirty after retry", async () => {
+    setMemoryStatusDirty(true);
+    setMemorySearchImpl(async () => []);
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+
+    const result = await tool.execute("dirty-index", { query: "hidden codeword" });
+
+    expect(result.details).toMatchObject({
+      results: [],
+      stale: true,
+      warning: "Memory index is dirty. Search results may be incomplete.",
+      action: "Run: openclaw memory status --index --agent main",
+    });
+    expect(getMemorySyncMockCalls()).toBe(1);
+  });
+
   it("keeps the zero-hit bootstrap retry for one-shot qmd searches", async () => {
     setMemoryBackend("qmd");
     let searchCalls = 0;
@@ -1415,7 +1461,7 @@ describe("memory_search corpus labels", () => {
             startLine: 2,
             endLine: 2,
             score: 0.9,
-            snippet: "foreign fact",
+            snippet: "second active fact",
             source: "memory" as const,
             projectKey: "github.com/acme/Beta",
           },
@@ -1428,22 +1474,36 @@ describe("memory_search corpus labels", () => {
             source: "memory" as const,
             projectKey: "github.com/acme/Alpha",
           },
+          {
+            path: "MEMORY.md",
+            startLine: 3,
+            endLine: 3,
+            score: 0.85,
+            snippet: "foreign fact",
+            source: "memory" as const,
+            projectKey: "github.com/acme/Gamma",
+          },
         ],
         opts?.activeProjectKeys,
       );
     });
     const tool = createMemorySearchToolOrThrow({
       config: { memory: { citations: "off" } },
-      activeProjectKeys: ["github.com/acme/Alpha"],
+      activeProjectKeys: ["github.com/acme/Beta", "github.com/acme/Alpha"],
     });
 
     const result = await tool.execute("project-ranked-search", { query: "fact" });
     const details = result.details as { results: Array<{ snippet: string; score: number }> };
 
-    expect(details.results.map((entry) => entry.snippet)).toEqual(["active fact", "foreign fact"]);
-    expect(activeProjectKeys).toEqual(["github.com/acme/Alpha"]);
-    expect(details.results[0]?.score).toBeCloseTo(0.92);
-    expect(details.results[1]?.score).toBeCloseTo(0.81);
+    expect(details.results.map((entry) => entry.snippet)).toEqual([
+      "second active fact",
+      "active fact",
+      "foreign fact",
+    ]);
+    expect(activeProjectKeys).toEqual(["github.com/acme/Beta", "github.com/acme/Alpha"]);
+    expect(details.results[0]?.score).toBeCloseTo(1.035);
+    expect(details.results[1]?.score).toBeCloseTo(0.92);
+    expect(details.results[2]?.score).toBeCloseTo(0.765);
   });
 
   it.each(["sessions", "all"] as const)(

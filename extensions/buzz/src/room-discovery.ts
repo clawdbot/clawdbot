@@ -1,5 +1,6 @@
-import { Relay, type Event, type Filter } from "nostr-tools";
-import { authenticateBuzzRelay, createBuzzAuthSigner, parseBuzzAuthTag } from "./relay-auth.js";
+import type { Event, Filter, Relay } from "nostr-tools";
+import { connectAuthenticatedBuzzRelaySession, parseBuzzAuthTag } from "./relay-auth.js";
+import { openBuzzRelaySubscription } from "./relay-subscription.js";
 import { BUZZ_ROOM_MEMBERSHIP_KIND, parseBuzzRoomMembershipEvent } from "./room-membership.js";
 import { BUZZ_CHANNEL_ID_PATTERN } from "./target.js";
 import { decodeBuzzPrivateKey, resolveBuzzPublicKey } from "./types.js";
@@ -28,9 +29,10 @@ async function queryRelay(params: {
     const events: Event[] = [];
     const state: {
       settled: boolean;
+      receivedEose: boolean;
       timeout?: ReturnType<typeof setTimeout>;
-      subscription?: ReturnType<Relay["subscribe"]>;
-    } = { settled: false };
+      subscription?: ReturnType<Relay["prepareSubscription"]>;
+    } = { settled: false, receivedEose: false };
     const finish = (error?: unknown) => {
       if (state.settled) {
         return;
@@ -40,7 +42,9 @@ async function queryRelay(params: {
         clearTimeout(state.timeout);
       }
       params.signal?.removeEventListener("abort", onAbort);
-      state.subscription?.close("query complete");
+      if (state.receivedEose) {
+        state.subscription?.close("query complete");
+      }
       if (error !== undefined) {
         reject(
           error instanceof Error ? error : new Error("Buzz room query failed", { cause: error }),
@@ -51,20 +55,32 @@ async function queryRelay(params: {
     };
     const onAbort = () => finish(params.signal?.reason ?? new Error("Buzz room query aborted"));
     params.signal?.addEventListener("abort", onAbort, { once: true });
-    state.timeout = setTimeout(
-      () => finish(new Error("Timed out querying Buzz room membership")),
-      params.timeoutMs,
-    );
-    state.subscription = params.relay.subscribe([params.filter], {
-      onevent: (event) => events.push(event),
-      oneose: () => finish(),
-      onclose: (reason) => {
-        if (reason !== "query complete") {
-          finish(new Error(`Buzz room query closed: ${reason}`));
-        }
-      },
-    });
-    if (state.settled) {
+    state.timeout = setTimeout(() => {
+      finish(new Error("Timed out querying Buzz room membership"));
+      params.relay.close();
+    }, params.timeoutMs);
+    try {
+      state.subscription = openBuzzRelaySubscription(params.relay, [params.filter], {
+        onevent: (event) => events.push(event),
+        oneose: () => {
+          state.receivedEose = true;
+          if (state.settled) {
+            state.subscription?.close("query complete");
+          } else {
+            finish();
+          }
+        },
+        onclose: (reason) => {
+          if (reason !== "query complete") {
+            finish(new Error(`Buzz room query closed: ${reason}`));
+          }
+        },
+      });
+    } catch (error) {
+      finish(error);
+      return;
+    }
+    if (state.settled && state.receivedEose) {
       state.subscription.close("query complete");
     }
   });
@@ -72,6 +88,7 @@ async function queryRelay(params: {
 
 export async function discoverBuzzRoomsOnRelay(params: {
   relay: Relay;
+  relayPublicKey: string;
   publicKey: string;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -81,6 +98,7 @@ export async function discoverBuzzRoomsOnRelay(params: {
     relay: params.relay,
     filter: {
       kinds: [BUZZ_ROOM_MEMBERSHIP_KIND],
+      authors: [params.relayPublicKey],
       "#p": [params.publicKey],
       limit: 1000,
     },
@@ -90,7 +108,7 @@ export async function discoverBuzzRoomsOnRelay(params: {
   const roomIds = [
     ...new Set(
       membershipEvents
-        .map(parseBuzzRoomMembershipEvent)
+        .map((event) => parseBuzzRoomMembershipEvent(event, params.relayPublicKey))
         .filter((membership) => membership?.roles.get(params.publicKey) === "bot")
         .map((membership) => membership?.roomId)
         .filter((roomId): roomId is string => Boolean(roomId?.match(BUZZ_CHANNEL_ID_PATTERN))),
@@ -102,26 +120,38 @@ export async function discoverBuzzRoomsOnRelay(params: {
 
   const metadataEvents = await queryRelay({
     relay: params.relay,
-    filter: { kinds: [METADATA_KIND], "#d": roomIds, limit: roomIds.length },
+    filter: {
+      kinds: [METADATA_KIND],
+      authors: [params.relayPublicKey],
+      "#d": roomIds,
+      limit: roomIds.length,
+    },
     timeoutMs,
     signal: params.signal,
   });
   const latestMetadata = new Map<string, Event>();
   for (const event of metadataEvents) {
     const roomId = tagValue(event, "d")?.toLowerCase();
+    const current = roomId ? latestMetadata.get(roomId) : undefined;
     if (
       event.kind !== METADATA_KIND ||
+      event.pubkey.toLowerCase() !== params.relayPublicKey ||
       !roomId ||
       !roomIds.includes(roomId) ||
-      (latestMetadata.get(roomId)?.created_at ?? -1) >= event.created_at
+      (current &&
+        (current.created_at > event.created_at ||
+          (current.created_at === event.created_at && current.id <= event.id)))
     ) {
       continue;
     }
     latestMetadata.set(roomId, event);
   }
 
-  return roomIds.map((id) => {
+  return roomIds.flatMap((id) => {
     const metadata = latestMetadata.get(id);
+    if (metadata?.tags.some((tag) => tag[0] === "archived" && tag[1] === "true")) {
+      return [];
+    }
     const name = metadata ? tagValue(metadata, "name")?.trim() : undefined;
     const about = metadata ? tagValue(metadata, "about")?.trim() : undefined;
     const room: BuzzDiscoveredRoom = {
@@ -131,7 +161,7 @@ export async function discoverBuzzRoomsOnRelay(params: {
     if (about) {
       room.about = about;
     }
-    return room;
+    return [room];
   });
 }
 
@@ -149,27 +179,26 @@ export async function discoverBuzzRooms(params: {
   // Status callers must not wait for a fresh timeout at every relay phase.
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const signal = params.signal ? AbortSignal.any([params.signal, timeoutSignal]) : timeoutSignal;
-  const relay = new Relay(params.relayUrl, { enableReconnect: false });
-  const signAuth = createBuzzAuthSigner({
+  const { relay, relayPublicKey } = await connectAuthenticatedBuzzRelaySession({
+    relayUrl: params.relayUrl,
     secretKey,
     authTag: parseBuzzAuthTag(params.authTag ?? ""),
+    signal,
   });
 
   try {
-    await relay.connect({ abort: signal });
-    // Buzz authorizes historical membership and metadata reads only after NIP-42.
-    await authenticateBuzzRelay({ relay, signAuth, signal });
-    relay.onauth = signAuth;
-
     // Buzz's relay publishes authenticated kind-39002 membership lists for room
     // discovery. Require the explicit Bot role before setup or probes accept a room.
     return await discoverBuzzRoomsOnRelay({
       relay,
+      relayPublicKey,
       publicKey,
       timeoutMs,
       signal,
     });
   } finally {
-    relay.close();
+    if (relay.connected) {
+      relay.close();
+    }
   }
 }

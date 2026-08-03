@@ -4,7 +4,7 @@ import {
   formatInboundEnvelope,
   resolveEnvelopeFormatOptions,
   toHistoryMediaEntries,
-  toInboundMediaFacts,
+  toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/conversation-runtime";
@@ -417,7 +417,7 @@ export async function buildDiscordMessageProcessContext(params: {
       authorized: commandAuthorized,
       body: preflightAudioTranscript ?? baseText,
     },
-    media: toInboundMediaFacts(mediaList, {
+    media: await toInboundMediaFactsWithMetadata(mediaList, {
       transcribed: (_media, index) => index === preflightAudioIndex,
     }),
     supplemental: {
@@ -443,7 +443,7 @@ export async function buildDiscordMessageProcessContext(params: {
                 );
                 return isContextAborted(abortSignal)
                   ? []
-                  : toInboundMediaFacts(referencedReplyMediaList);
+                  : await toInboundMediaFactsWithMetadata(referencedReplyMediaList);
               },
             }
           : undefined,

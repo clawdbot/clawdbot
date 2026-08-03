@@ -672,27 +672,39 @@ async function loadMarketplace(params: {
     return undefined;
   };
 
+  // Resolve aliases against one snapshot so a cycle cannot retain a plugin lifecycle lease.
   const knownMarketplaces = await readClaudeKnownMarketplaces();
-  const known = knownMarketplaces[params.source];
-  if (known) {
+  const visitedKnownMarketplaces = new Set<string>();
+  let source = params.source;
+
+  while (true) {
+    const known = knownMarketplaces[source];
+    if (!known) {
+      break;
+    }
+    if (visitedKnownMarketplaces.has(source)) {
+      return {
+        ok: false,
+        error: `known marketplace source cycle: ${[...visitedKnownMarketplaces, source].join(" -> ")}`,
+      };
+    }
+    visitedKnownMarketplaces.add(source);
+
     if (known.installLocation) {
       const local = await resolveLocalMarketplaceSource(known.installLocation);
       if (local?.ok) {
-        return await loadResolvedLocalMarketplace(local, params.source);
+        return await loadResolvedLocalMarketplace(local, source);
       }
     }
 
     const normalizedSource = normalizeEntrySource(known.source);
-    if (normalizedSource.ok) {
-      return await loadMarketplace({
-        source: marketplaceEntrySourceToInput(normalizedSource.source),
-        logger: params.logger,
-        timeoutMs: params.timeoutMs,
-      });
+    if (!normalizedSource.ok) {
+      break;
     }
+    source = marketplaceEntrySourceToInput(normalizedSource.source);
   }
 
-  const local = await resolveLocalMarketplaceSource(params.source);
+  const local = await resolveLocalMarketplaceSource(source);
   if (local?.ok === false) {
     return local;
   }
@@ -702,7 +714,7 @@ async function loadMarketplace(params: {
   }
 
   const cloned = await cloneMarketplaceRepo({
-    source: params.source,
+    source,
     timeoutMs: params.timeoutMs,
     logger: params.logger,
   });

@@ -197,7 +197,17 @@ function formatRawCatalogLabel(entry: ModelCatalogEntry): string {
 }
 
 function resolveCatalogDisplayName(entry: ModelCatalogEntry): string {
-  return entry.alias?.trim() || entry.name.trim();
+  const name = entry.name.trim();
+  const alias = entry.alias?.trim();
+  if (!name || !alias) {
+    return name || alias || "";
+  }
+  if (alias.toLowerCase() === name.toLowerCase()) {
+    return name;
+  }
+  // Aliases are selectable metadata, not a replacement for model identity.
+  // Preserve richer custom labels only when they already contain the full name.
+  return alias.toLowerCase().includes(name.toLowerCase()) ? alias : `${name} · ${alias}`;
 }
 
 function createQualifiedCatalogKey(entry: ModelCatalogEntry): string {

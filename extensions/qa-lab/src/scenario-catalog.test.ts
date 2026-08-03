@@ -141,14 +141,14 @@ describe("qa scenario catalog", () => {
     expect((discoveryConfig?.requiredFiles as string[] | undefined)?.[0]).toBe(
       "repo/qa/scenarios/index.yaml",
     );
-    expect(fallbackConfig?.gracefulFallbackAny as string[] | undefined).toContain(
-      "will not reveal",
-    );
+    expect(fallbackConfig).not.toHaveProperty("gracefulFallbackAny");
     const fallbackFlow = JSON.stringify(
       readQaScenarioById("memory-failure-fallback").execution.flow,
     );
     expect(fallbackFlow).toContain("liveTurnTimeoutMs(env, 180000)");
     expect(fallbackFlow).toContain('"replacePaths":["tools.deny"]');
+    expect(fallbackFlow).toContain("!tools.has('memory_search')");
+    expect(fallbackFlow).toContain("outbound.text.trim().length > 0");
     expect(bundledSkill.title).toBe("Bundled plugin skill runtime");
     expect(bundledSkillConfig?.pluginId).toBe("open-prose");
     expect(bundledSkillConfig?.expectedSkillName).toBe("prose");
@@ -219,21 +219,25 @@ describe("qa scenario catalog", () => {
     ).toEqual([]);
   });
 
-  it("uses only graceful gateway restart for Matrix replay dedupe", () => {
+  it("uses graceful restart and isolation for Matrix replay dedupe", () => {
     const scenario = requireFlowScenario(readQaScenarioById("matrix-restart-replay-dedupe"));
+    const staleSync = requireFlowScenario(readQaScenarioById("matrix-stale-sync-replay-dedupe"));
 
     expect(flowContainsCall(scenario.execution.flow, "env.gateway.restart")).toBe(true);
     expect(flowContainsCall(scenario.execution.flow, "env.gateway.restartAfterStateMutation")).toBe(
       false,
     );
+    expect(staleSync.execution.suiteIsolation).toBe("isolated");
   });
 
   it("loads scenario-declared gateway runtime options from YAML", () => {
     const scenario = readQaScenarioById("control-ui-qa-channel-image-roundtrip");
     const otelStdout = readQaScenarioById("otel-stdout-log-smoke");
+    const blockedSlack = readQaScenarioById("slack-blocked-lifecycle-no-restart");
 
     expect(scenario.gatewayRuntime?.forwardHostHome).toBe(true);
     expect(otelStdout.gatewayRuntime?.preserveDebugArtifacts).toBe(true);
+    expect(blockedSlack.gatewayRuntime?.allowUnhealthyStartup).toBe(true);
   });
 
   it.each([
@@ -641,20 +645,6 @@ describe("qa scenario catalog", () => {
       requiredProvider: "openai",
       requiredModel: "gpt-5.4",
     });
-    const longContextFlow = JSON.stringify(
-      readQaScenarioById("long-context-progress-watchdog").execution.flow,
-    );
-    expect(longContextFlow).toContain("originalCodexPluginEnabled");
-    expect(longContextFlow).not.toContain(
-      "originalPluginAllow === undefined ? null : originalPluginAllow",
-    );
-    expect(longContextFlow).not.toContain("{ ...originalCodexPluginEntry, enabled:");
-    expect(readQaScenarioExecutionConfig("long-context-progress-watchdog")).toMatchObject({
-      requiredProviderMode: "live-frontier",
-      harnessRuntime: "codex",
-    });
-    expect(readQaScenarioById("long-context-progress-watchdog").plugins).toBeUndefined();
-    expect(readQaScenarioById("long-context-progress-watchdog").gatewayConfigPatch).toBeUndefined();
   });
 
   it("loads the QA bus tool trace visibility harness scenario", () => {
@@ -699,7 +689,7 @@ describe("qa scenario catalog", () => {
     expect(scenario.execution.flow).toBeUndefined();
   });
 
-  it("accepts the update.run producer's blocked evidence without destructive opt-in", async () => {
+  it("keeps the update.run producer blocked without destructive opt-in", async () => {
     const outputDir = await fs.promises.mkdtemp(
       path.join(os.tmpdir(), "openclaw-update-run-blocked-"),
     );
@@ -717,7 +707,7 @@ describe("qa scenario catalog", () => {
       });
 
       expect(result.results[0]).toMatchObject({
-        status: "pass",
+        status: "blocked",
         producerEvidence: {
           entries: [
             {

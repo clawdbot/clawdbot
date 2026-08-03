@@ -116,6 +116,26 @@ export type DoctorSessionSqliteTargetReport = {
   restore?: DoctorSessionSqliteRestoreReport;
 };
 
+export function createDoctorSessionSqliteTargetReport(
+  values: Pick<DoctorSessionSqliteTargetReport, "agentId" | "sqlitePath" | "storePath"> &
+    Partial<Omit<DoctorSessionSqliteTargetReport, "agentId" | "sqlitePath" | "storePath">>,
+): DoctorSessionSqliteTargetReport {
+  return {
+    archivedTranscriptFiles: [],
+    archivedUnreferencedJsonlFiles: [],
+    importedEntries: 0,
+    importedTranscriptEvents: 0,
+    issues: [],
+    legacyEntries: 0,
+    referencedTranscriptFiles: 0,
+    sqliteEntries: 0,
+    unreferencedJsonlFiles: [],
+    validatedEntries: 0,
+    validatedTranscriptEvents: 0,
+    ...values,
+  };
+}
+
 export type DoctorSessionSqliteReport = {
   migrationRun?: {
     failureReportJsonPath?: string;
@@ -142,3 +162,34 @@ export type DoctorSessionSqliteReport = {
     validatedTranscriptEvents: number;
   };
 };
+
+export function sumDoctorSessionSqliteTargets(
+  targets: DoctorSessionSqliteTargetReport[],
+  value: (target: DoctorSessionSqliteTargetReport) => number,
+): number {
+  return targets.reduce((total, target) => total + value(target), 0);
+}
+
+export function createDoctorSessionSqliteTotals(
+  targets: DoctorSessionSqliteTargetReport[],
+  values: Partial<
+    Omit<DoctorSessionSqliteReport["totals"], "issues" | "sqliteEntries" | "targets">
+  > = {},
+): DoctorSessionSqliteReport["totals"] {
+  const { archivedLegacyStoreFiles, reclaimedBytes } = values;
+  return {
+    ...(archivedLegacyStoreFiles === undefined ? {} : { archivedLegacyStoreFiles }),
+    archivedTranscriptFiles: values.archivedTranscriptFiles ?? 0,
+    archivedUnreferencedJsonlFiles: values.archivedUnreferencedJsonlFiles ?? 0,
+    importedEntries: values.importedEntries ?? 0,
+    importedTranscriptEvents: values.importedTranscriptEvents ?? 0,
+    issues: sumDoctorSessionSqliteTargets(targets, (target) => target.issues.length),
+    legacyEntries: values.legacyEntries ?? 0,
+    ...(reclaimedBytes === undefined ? {} : { reclaimedBytes }),
+    sqliteEntries: sumDoctorSessionSqliteTargets(targets, (target) => target.sqliteEntries),
+    targets: targets.length,
+    unreferencedJsonlFiles: values.unreferencedJsonlFiles ?? 0,
+    validatedEntries: values.validatedEntries ?? 0,
+    validatedTranscriptEvents: values.validatedTranscriptEvents ?? 0,
+  };
+}

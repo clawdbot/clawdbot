@@ -188,6 +188,7 @@ describe("executeAgentTurn: CLI durable commentary", () => {
         itemId: "commentary-durable-1",
         kind: "preamble",
         progressText: "The durable findings live here.",
+        suppressDurableProgress: true,
       });
     });
     expect(result.kind).toBe("success");

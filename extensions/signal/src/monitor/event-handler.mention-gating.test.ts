@@ -24,7 +24,13 @@ function getCapturedCtx() {
 function getGroupHistoryEntries(
   groupHistories: Map<
     string,
-    Array<{ sender?: string; body?: string; media?: HistoryMediaEntry[] }>
+    Array<{
+      sender?: string;
+      body?: string;
+      media?: HistoryMediaEntry[];
+      timestamp?: number;
+      messageId?: string;
+    }>
   >,
   groupId = "g1",
 ) {
@@ -249,6 +255,27 @@ describe("signal mention gating", () => {
     const entry = expectDefined(entries[0], "Signal group history entry");
     expect(entry.sender).toBe("Alice");
     expect(entry.body).toBe("hello from alice");
+  });
+
+  it("keeps the canonical data-message timestamp in skipped group history", async () => {
+    const { handler, groupHistories } = createMentionGatedHistoryHandler();
+    const timestamp = 1700000000123;
+
+    await handler(
+      createSignalReceiveEvent({
+        timestamp: undefined,
+        dataMessage: {
+          timestamp,
+          message: "history without a mention",
+          attachments: [],
+          groupInfo: { groupId: "g1", groupName: "Test Group" },
+        },
+      }),
+    );
+
+    const entry = expectDefined(getGroupHistoryEntries(groupHistories)[0], "Signal history entry");
+    expect(entry.timestamp).toBe(timestamp);
+    expect(entry.messageId).toBe(String(timestamp));
   });
 
   it("records edited target reply authors for skipped group messages", async () => {

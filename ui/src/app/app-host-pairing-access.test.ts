@@ -19,7 +19,11 @@ type PairingSidebar = HTMLElement & {
 
 type PairingAuth = { role: string; scopes?: string[] };
 
-function createPairingShell(params: { auth: PairingAuth | null; connected?: boolean }) {
+function createPairingShell(params: {
+  auth: PairingAuth | null;
+  connected?: boolean;
+  setupCode?: string;
+}) {
   const snapshot: ApplicationGatewaySnapshot = {
     client: { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient,
     phase: params.connected === false ? "stopped" : "connected",
@@ -47,10 +51,17 @@ function createPairingShell(params: { auth: PairingAuth | null; connected?: bool
         approvalErrors: new Map(),
         approvalNowMs: 0,
         approvalBusy: false,
-        devicePairSetupOpen: false,
+        devicePairSetupOpen: Boolean(params.setupCode),
         devicePairSetupLoading: false,
         devicePairSetupError: null,
-        devicePairSetup: null,
+        devicePairSetup: params.setupCode
+          ? {
+              setupCode: params.setupCode,
+              gatewayUrl: "wss://gateway.example.test",
+              auth: "token",
+              urlSource: "test",
+            }
+          : null,
         devicePairSetupAccess: "full",
         devicePairPendingCount: 0,
         updateAvailable: null,
@@ -82,12 +93,14 @@ function createPairingShell(params: { auth: PairingAuth | null; connected?: bool
     return sidebar;
   };
 
-  return { snapshot, openDevicePairSetup, renderSidebar };
+  return { snapshot, openDevicePairSetup, renderSidebar, container };
 }
 
 afterEach(() => {
   document.body.replaceChildren();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  Reflect.deleteProperty(document, "execCommand");
 });
 
 describe("application shell pairing access", () => {
@@ -136,5 +149,41 @@ describe("application shell pairing access", () => {
     });
 
     expect(renderSidebar().canPairDevice).toBe(false);
+  });
+
+  it("shows a visible accessible error when a mobile setup code cannot be copied", async () => {
+    const writeText = vi.fn().mockRejectedValue(new DOMException("Clipboard access denied"));
+    const execCommand = vi.fn(() => false);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    Object.defineProperty(document, "execCommand", { configurable: true, value: execCommand });
+    const schedule = vi.spyOn(window, "setTimeout");
+    const { container, renderSidebar } = createPairingShell({
+      auth: { role: "operator", scopes: ["operator.pairing"] },
+      setupCode: "pair-mobile-secret",
+    });
+    renderSidebar();
+    const pairing = container.querySelector<HTMLElement>(".device-pair-setup");
+    if (!pairing) {
+      throw new Error("Expected the application shell to render its mobile pairing dialog");
+    }
+    document.body.append(pairing);
+    const button = pairing.querySelector<HTMLButtonElement>(".device-pair-setup__actions button");
+
+    button?.click();
+
+    await vi.waitFor(() => expect(button?.textContent?.trim()).toBe("Copy failed"));
+    expect(button?.getAttribute("aria-label")).toBe("Copy failed");
+    expect(button?.querySelector("svg")).not.toBeNull();
+    expect(writeText).toHaveBeenCalledWith("pair-mobile-secret");
+    expect(execCommand).toHaveBeenCalledWith("copy");
+
+    const reset = schedule.mock.calls.find(([, delay]) => delay === 2_000)?.[0];
+    if (typeof reset !== "function") {
+      throw new Error("Expected the failed copy feedback to schedule its reset");
+    }
+    reset();
+
+    expect(button?.textContent?.trim()).toBe("Copy setup code");
+    expect(button?.getAttribute("aria-label")).toBe("Copy setup code");
   });
 });

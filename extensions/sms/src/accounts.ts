@@ -7,7 +7,7 @@ import {
   resolveAccountEntry,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
-import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
@@ -41,7 +41,9 @@ function parseTextChunkLimit(raw: unknown): number {
     return raw;
   }
   if (typeof raw === "string" && /^\d+$/.test(raw.trim())) {
-    return parseStrictInteger(raw.trim()) ?? DEFAULT_TEXT_CHUNK_LIMIT;
+    // Positive like the numeric branch: a zero limit makes chunkSmsPlainText
+    // in send.ts emit one Twilio send per character.
+    return parseStrictPositiveInteger(raw.trim()) ?? DEFAULT_TEXT_CHUNK_LIMIT;
   }
   return DEFAULT_TEXT_CHUNK_LIMIT;
 }

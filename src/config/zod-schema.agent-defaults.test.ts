@@ -454,6 +454,22 @@ describe("agent defaults schema", () => {
     expect(agent.heartbeat?.timeoutSeconds).toBe(45);
   });
 
+  it("rejects invalid heartbeat activeHours without an explicit cadence", () => {
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({
+        heartbeat: { activeHours: { start: "99:99", end: "17:00" } },
+      }),
+      "heartbeat.activeHours.start",
+    );
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({
+        id: "ops",
+        heartbeat: { activeHours: { start: "09:00", end: "not-a-time" } },
+      }),
+      "heartbeat.activeHours.end",
+    );
+  });
+
   it("accepts per-agent TTS overrides", () => {
     const agent = AgentEntrySchema.parse({
       id: "reader",

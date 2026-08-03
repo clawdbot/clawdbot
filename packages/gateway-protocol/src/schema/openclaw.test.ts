@@ -23,6 +23,21 @@ describe("OpenClaw chat params protocol", () => {
     ).toBe(true);
   });
 
+  it("accepts a typed wizard answer and rejects unknown answer fields", () => {
+    expect(
+      validateSystemAgentChatParams({
+        sessionId: "session-1",
+        wizardAnswer: { stepId: "channel", value: "twitch" },
+      }),
+    ).toBe(true);
+    expect(
+      validateSystemAgentChatParams({
+        sessionId: "session-1",
+        wizardAnswer: { stepId: "channel", value: "twitch", display: "Twitch" },
+      }),
+    ).toBe(false);
+  });
+
   it("rejects unsafe page ids and unknown context fields", () => {
     expect(validateSystemAgentChatParams({ ...base, context: { page: "channels?tab=all" } })).toBe(
       false,
@@ -99,16 +114,39 @@ describe("OpenClaw setup detection protocol", () => {
           website: "https://ollama.com/download",
         },
       ],
+      unavailableCandidates: [
+        {
+          id: "gemini-cli",
+          brandId: "google-gemini-cli",
+          label: "Gemini CLI",
+          detail: "installed; login status unavailable",
+          reason: "Reconnect through OpenClaw or use a Gemini API key.",
+          authOptionId: "google-gemini-cli",
+          manualProviderId: "gemini-api-key",
+        },
+      ],
       manualProviders: [
         {
           id: "ollama",
           brandId: "ollama",
+          groupLabel: "Ollama",
           label: "Ollama",
           icon: "https://cdn.simpleicons.org/ollama",
           website: "https://ollama.com/download",
         },
       ],
       authOptions: [],
+      prepareOptions: [
+        {
+          id: "lmstudio",
+          brandId: "lmstudio",
+          label: "LM Studio",
+          hint: "Local/self-hosted LM Studio server",
+          actionLabel: "Connect server",
+          icon: "https://cdn.simpleicons.org/lmstudio",
+          website: "https://lmstudio.ai/download",
+        },
+      ],
       recommendedInstalls: [
         {
           id: "ollama",
@@ -128,9 +166,13 @@ describe("OpenClaw setup detection protocol", () => {
       Value.Check(SystemAgentSetupDetectResultSchema, {
         ...result,
         candidates: result.candidates.map(({ brandId: _brandId, ...candidate }) => candidate),
-        manualProviders: result.manualProviders.map(
-          ({ brandId: _brandId, ...provider }) => provider,
+        unavailableCandidates: result.unavailableCandidates.map(
+          ({ brandId: _brandId, ...candidate }) => candidate,
         ),
+        manualProviders: result.manualProviders.map(
+          ({ brandId: _brandId, groupLabel: _groupLabel, ...provider }) => provider,
+        ),
+        prepareOptions: result.prepareOptions.map(({ brandId: _brandId, ...option }) => option),
         recommendedInstalls: result.recommendedInstalls.map(
           ({ brandId: _brandId, ...install }) => install,
         ),
@@ -140,6 +182,7 @@ describe("OpenClaw setup detection protocol", () => {
       Value.Check(SystemAgentSetupDetectResultSchema, {
         ...result,
         recommendedInstalls: undefined,
+        prepareOptions: undefined,
       }),
     ).toBe(true);
     expect(

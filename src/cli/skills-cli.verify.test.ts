@@ -297,7 +297,7 @@ describe("skills verify CLI", () => {
       signature: { status: "unsigned" },
     });
 
-    await runCommand(["skills", "verify", "agentreceipt"]);
+    await runCommand(["skills", "verify", "agentreceipt", "--json"]);
 
     expect(mocks.fetchClawHubSkillVerificationMock).toHaveBeenCalledWith({
       slug: "agentreceipt",

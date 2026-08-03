@@ -1,11 +1,13 @@
 // Msteams tests cover token plugin behavior.
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { generateKeyPairSync } from "node:crypto";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MSTeamsConfig } from "../runtime-api.js";
 import { setMSTeamsRuntime } from "./runtime.js";
+import { loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
 import { readAccessToken } from "./token-response.js";
 import {
@@ -141,6 +143,119 @@ describe("token – federated credentials (certificate)", () => {
       authType: "federated",
     } satisfies MSTeamsConfig;
     expect(hasConfiguredMSTeamsCredentials(cfg)).toBe(false);
+  });
+
+  it("ignores blank certificate settings", () => {
+    process.env.MSTEAMS_CERTIFICATE_PATH = "   ";
+    const cfg = {
+      appId: "app-id",
+      tenantId: "tenant-id",
+      authType: "federated",
+      certificatePath: "   ",
+    } satisfies MSTeamsConfig;
+
+    expect(hasConfiguredMSTeamsCredentials(cfg)).toBe(false);
+    expect(resolveMSTeamsCredentials(cfg)).toBeUndefined();
+  });
+
+  it("falls back to env certificate settings without changing path bytes", () => {
+    process.env.MSTEAMS_CERTIFICATE_PATH = "  /env/cert.pem  ";
+    process.env.MSTEAMS_CERTIFICATE_THUMBPRINT = "environment-thumbprint";
+    process.env.MSTEAMS_MANAGED_IDENTITY_CLIENT_ID = "environment-managed-identity";
+    const cfg = {
+      appId: "app-id",
+      tenantId: "tenant-id",
+      authType: "federated",
+      certificatePath: "   ",
+      certificateThumbprint: "  configured-thumbprint  ",
+      managedIdentityClientId: "  configured-managed-identity  ",
+    } satisfies MSTeamsConfig;
+
+    expect(hasConfiguredMSTeamsCredentials(cfg)).toBe(true);
+    expect(resolveMSTeamsCredentials(cfg)).toEqual({
+      type: "federated",
+      appId: "app-id",
+      tenantId: "tenant-id",
+      certificatePath: "  /env/cert.pem  ",
+      certificateThumbprint: "  configured-thumbprint  ",
+      useManagedIdentity: undefined,
+      managedIdentityClientId: "  configured-managed-identity  ",
+    });
+  });
+
+  it("opens the exact environment certificate path when the configured path is blank", async () => {
+    const certificateDirectory = mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-msteams-real-certificate-"),
+    );
+    const certificatePath = path.join(certificateDirectory, "  certificate.pem");
+
+    try {
+      const { privateKey } = generateKeyPairSync("rsa", {
+        modulusLength: 2048,
+        publicKeyEncoding: { type: "spki", format: "pem" },
+        privateKeyEncoding: { type: "pkcs8", format: "pem" },
+      });
+      writeFileSync(certificatePath, privateKey, { mode: 0o600 });
+      process.env.MSTEAMS_CERTIFICATE_PATH = certificatePath;
+
+      const cfg = {
+        appId: "app-id",
+        tenantId: "tenant-id",
+        authType: "federated",
+        certificatePath: "   ",
+      } satisfies MSTeamsConfig;
+
+      expect(hasConfiguredMSTeamsCredentials(cfg)).toBe(true);
+      const credentials = resolveMSTeamsCredentials(cfg);
+      expect(credentials).toMatchObject({
+        type: "federated",
+        certificatePath,
+      });
+      if (!credentials) {
+        throw new Error("expected configured Microsoft Teams certificate credentials");
+      }
+
+      const { app } = await loadMSTeamsSdkWithAuth(credentials);
+      expect(app.tokenManager).toBeDefined();
+    } finally {
+      rmSync(certificateDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves configured nonblank certificate path bytes and precedence", () => {
+    process.env.MSTEAMS_CERTIFICATE_PATH = "/environment/certificate.pem";
+    const certificatePath = "  /configured/certificate.pem  ";
+    const cfg = {
+      appId: "app-id",
+      tenantId: "tenant-id",
+      authType: "federated",
+      certificatePath,
+    } satisfies MSTeamsConfig;
+
+    expect(hasConfiguredMSTeamsCredentials(cfg)).toBe(true);
+    expect(resolveMSTeamsCredentials(cfg)).toMatchObject({ certificatePath });
+  });
+
+  it("keeps managed identity configured when the optional certificate path is blank", () => {
+    const cfg = {
+      appId: "app-id",
+      tenantId: "tenant-id",
+      authType: "federated",
+      certificatePath: "   ",
+      useManagedIdentity: true,
+      managedIdentityClientId: "  configured-managed-identity  ",
+    } satisfies MSTeamsConfig;
+
+    expect(hasConfiguredMSTeamsCredentials(cfg)).toBe(true);
+    expect(resolveMSTeamsCredentials(cfg)).toEqual({
+      type: "federated",
+      appId: "app-id",
+      tenantId: "tenant-id",
+      certificatePath: undefined,
+      certificateThumbprint: undefined,
+      useManagedIdentity: true,
+      managedIdentityClientId: "  configured-managed-identity  ",
+    });
   });
 
   it("resolves federated credentials with certificate from config", () => {

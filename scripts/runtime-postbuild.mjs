@@ -1,11 +1,15 @@
 // Generates postbuild runtime artifacts: plugin metadata, SDK aliases, stable
 // runtime aliases, static assets, and compatibility chunks for live upgrades.
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
+import { buildSync } from "esbuild";
 import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mjs";
+import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { escapeRegExp } from "./lib/regexp.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   copyStaticExtensionAssets,
   copyStaticExtensionAssetsToRuntimeOverlay,
@@ -18,12 +22,38 @@ import { writeOfficialChannelCatalog } from "./write-official-channel-catalog.mj
 /** @internal Shared repository-script contract. */
 export { listStaticExtensionAssetOutputs };
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const ROOT = resolveRepoRoot(import.meta.url);
 const ROOT_RUNTIME_ALIAS_PATTERN = /^(?<base>.+\.(?:runtime|contract))-[A-Za-z0-9_-]+\.js$/u;
 const ROOT_STABLE_RUNTIME_ALIAS_PATTERN = /^.+\.(?:runtime|contract)\.js$/u;
 const ROOT_RUNTIME_IMPORT_SPECIFIER_PATTERN =
   /(["'])\.\/([^"']+\.(?:runtime|contract)-[A-Za-z0-9_-]+\.js)\1/gu;
 const OFFICIAL_CHANNEL_CATALOG_OUTPUT = "dist/channel-catalog.json";
+const EXPORT_HTML_SOURCE_DIR = "src/auto-reply/reply/export-html";
+const EXPORT_HTML_OUTPUT_DIR = "dist/export-html";
+const EXPORT_HTML_OUTPUTS = [
+  `${EXPORT_HTML_OUTPUT_DIR}/template.css`,
+  `${EXPORT_HTML_OUTPUT_DIR}/template.html`,
+  `${EXPORT_HTML_OUTPUT_DIR}/template.js`,
+  `${EXPORT_HTML_OUTPUT_DIR}/vendor/highlight.min.js`,
+  `${EXPORT_HTML_OUTPUT_DIR}/vendor/marked.min.js`,
+];
+const EXPORT_HTML_VENDOR_ENTRYPOINTS = [
+  {
+    fileName: "marked.min.js",
+    packageEntry: "marked",
+    packageName: "marked",
+    globalName: "marked",
+    licenseFile: "LICENSE",
+  },
+  {
+    fileName: "highlight.min.js",
+    packageEntry: "highlight.js/lib/common",
+    packageName: "highlight.js",
+    globalName: "hljs",
+    footer: "hljs = hljs.default || hljs;",
+    licenseFile: "LICENSE",
+  },
+];
 const LEGACY_ROOT_RUNTIME_COMPAT_ALIASES = [
   // v2026.4.29 dispatch lazy chunks. Package updates used to replace the
   // dist tree before the live gateway had restarted, so an already-loaded old
@@ -284,10 +314,80 @@ function listLegacyRootRuntimeCompatOutputs(params = {}) {
 export function listCoreRuntimePostBuildOutputs(params = {}) {
   return [
     ...listOfficialChannelCatalogOutputs(),
+    ...listExportHtmlTemplateOutputs(params),
     ...listStableRootRuntimeAliasOutputs(params),
     ...listLegacyRootRuntimeCompatOutputs(params),
     ...listLegacyCliExitCompatOutputs(params),
   ].toSorted((left, right) => left.localeCompare(right));
+}
+
+/** Builds deterministic browser globals from the pinned workspace packages. */
+export function generateExportHtmlVendorAssets(params = {}) {
+  const rootDir = path.resolve(params.rootDir ?? ROOT);
+  const resolveFromRoot = createRequire(path.join(rootDir, "package.json")).resolve;
+  return Object.fromEntries(
+    EXPORT_HTML_VENDOR_ENTRYPOINTS.map(
+      ({ fileName, packageEntry, packageName, globalName, footer, licenseFile }) => {
+        const result = buildSync({
+          absWorkingDir: rootDir,
+          bundle: true,
+          entryPoints: [packageEntry],
+          footer: footer ? { js: footer } : undefined,
+          format: "iife",
+          globalName,
+          legalComments: "inline",
+          logLevel: "silent",
+          minify: true,
+          platform: "browser",
+          target: "es2018",
+          write: false,
+        });
+        const output = result.outputFiles?.[0];
+        if (!output || result.outputFiles?.length !== 1) {
+          throw new Error(`Expected one generated export-html asset for ${packageEntry}`);
+        }
+        const packageRoot = path.dirname(resolveFromRoot(`${packageName}/package.json`));
+        const license = fs.readFileSync(path.join(packageRoot, licenseFile), "utf8").trimEnd();
+        if (license.includes("*/")) {
+          throw new Error(`Cannot embed ${packageName} license in a JavaScript comment`);
+        }
+        return [fileName, `/*!\n${license}\n*/\n${output.text}`];
+      },
+    ),
+  );
+}
+
+export function listExportHtmlTemplateOutputs(params = {}) {
+  const rootDir = params.rootDir ?? ROOT;
+  const fsImpl = params.fs ?? fs;
+  const hasSource = fsImpl.existsSync(path.join(rootDir, EXPORT_HTML_SOURCE_DIR));
+  const hasBuiltAssets = fsImpl.existsSync(path.join(rootDir, EXPORT_HTML_OUTPUT_DIR));
+  return hasSource || hasBuiltAssets ? [...EXPORT_HTML_OUTPUTS] : [];
+}
+
+/** Copies authored templates and generates dependency-owned browser payloads. */
+export function copyExportHtmlTemplates(params = {}) {
+  const rootDir = path.resolve(params.rootDir ?? ROOT);
+  const fsImpl = params.fs ?? fs;
+  const sourceDir = path.join(rootDir, EXPORT_HTML_SOURCE_DIR);
+  if (!fsImpl.existsSync(sourceDir)) {
+    return;
+  }
+  const outputDir = path.join(rootDir, EXPORT_HTML_OUTPUT_DIR);
+  assertRealOutputRoot(path.join(rootDir, "dist"), { fs: fsImpl });
+  fsImpl.rmSync(outputDir, { recursive: true, force: true });
+  fsImpl.mkdirSync(outputDir, { recursive: true });
+  for (const entry of fsImpl.readdirSync(sourceDir, { withFileTypes: true })) {
+    if (!entry.isFile() || entry.name.endsWith(".test.ts")) {
+      continue;
+    }
+    fsImpl.copyFileSync(path.join(sourceDir, entry.name), path.join(outputDir, entry.name));
+  }
+  const vendorDir = path.join(outputDir, "vendor");
+  fsImpl.mkdirSync(vendorDir, { recursive: true });
+  for (const [fileName, contents] of Object.entries(generateExportHtmlVendorAssets({ rootDir }))) {
+    fsImpl.writeFileSync(path.join(vendorDir, fileName), contents);
+  }
 }
 
 const RUNTIME_CHUNK_DEFAULT_EXPORT_PATTERN =
@@ -337,6 +437,9 @@ export function writeStableRootRuntimeAliases(params = {}) {
   const rootDir = params.rootDir ?? ROOT;
   const distDir = path.join(rootDir, "dist");
   const fsImpl = params.fs ?? fs;
+  // Alias rewrites delete files under dist; fail closed on a symlinked root
+  // so a stale alias removal cannot land inside the link target.
+  assertRealOutputRoot(distDir, { fs: fsImpl });
   const candidatesByAlias = collectStableRootRuntimeAliasCandidates({ distDir, fs: fsImpl });
 
   for (const [aliasFileName, candidates] of candidatesByAlias) {
@@ -544,6 +647,13 @@ function shouldCopyStaticExtensionAssets(params) {
  * Runs every runtime postbuild phase after the main dist build.
  */
 export function runRuntimePostBuild(params = {}) {
+  const rootDir = path.resolve(params.rootDir ?? params.cwd ?? params.repoRoot ?? ROOT);
+  const fsImpl = params.fs ?? fs;
+  const phaseParams = { ...params, cwd: rootDir, repoRoot: rootDir, rootDir };
+  // Postbuild phases share both roots. Validate the whole mutation set before
+  // any phase runs so a later unsafe root cannot leave earlier output changed.
+  assertRealOutputRoot(path.join(rootDir, "dist"), { fs: fsImpl });
+  assertRealOutputRoot(path.join(rootDir, "dist-runtime"), { fs: fsImpl });
   const timingsSetting = params.timings ?? process.env.OPENCLAW_RUNTIME_POSTBUILD_TIMINGS;
   const timingsEnabled = timingsSetting !== "0" && timingsSetting !== false;
   // Per-phase lines are debug detail; default output is one summary line so a
@@ -574,24 +684,25 @@ export function runRuntimePostBuild(params = {}) {
       `runtime-postbuild: ${phaseTimings.length} phases completed in ${totalMs}ms (slowest: ${slowest.label} ${slowest.durationMs}ms)`,
     );
   };
-  runPhase("bundled plugin metadata", () => copyBundledPluginMetadata(params));
-  runPhase("official channel catalog", () => writeOfficialChannelCatalog(params));
-  runPhase("bundled plugin runtime overlay", () => stageBundledPluginRuntime(params));
+  runPhase("bundled plugin metadata", () => copyBundledPluginMetadata(phaseParams));
+  runPhase("official channel catalog", () => writeOfficialChannelCatalog(phaseParams));
+  runPhase("export HTML assets", () => copyExportHtmlTemplates(phaseParams));
+  runPhase("bundled plugin runtime overlay", () => stageBundledPluginRuntime(phaseParams));
   runPhase("static extension assets", () => {
-    if (!shouldCopyStaticExtensionAssets(params)) {
+    if (!shouldCopyStaticExtensionAssets(phaseParams)) {
       return;
     }
-    const staticAssetParams = {
-      rootDir: ROOT,
-      ...params,
-    };
-    copyStaticExtensionAssets(staticAssetParams);
-    copyStaticExtensionAssetsToRuntimeOverlay(staticAssetParams);
+    copyStaticExtensionAssets(phaseParams);
+    copyStaticExtensionAssetsToRuntimeOverlay(phaseParams);
   });
-  runPhase("stable root runtime imports", () => rewriteRootRuntimeImportsToStableAliases(params));
-  runPhase("stable root runtime aliases", () => writeStableRootRuntimeAliases(params));
-  runPhase("legacy root runtime compat aliases", () => writeLegacyRootRuntimeCompatAliases(params));
-  runPhase("legacy CLI exit compat chunks", () => writeLegacyCliExitCompatChunks(params));
+  runPhase("stable root runtime imports", () =>
+    rewriteRootRuntimeImportsToStableAliases(phaseParams),
+  );
+  runPhase("stable root runtime aliases", () => writeStableRootRuntimeAliases(phaseParams));
+  runPhase("legacy root runtime compat aliases", () =>
+    writeLegacyRootRuntimeCompatAliases(phaseParams),
+  );
+  runPhase("legacy CLI exit compat chunks", () => writeLegacyCliExitCompatChunks(phaseParams));
   logSummary();
 }
 

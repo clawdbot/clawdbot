@@ -17,6 +17,7 @@ export type SessionPlacementAdmissionProvider = {
     claim: LocalTurnPlacementClaim,
     params: SessionPlacementTurnParams,
     runLocal: () => Promise<EmbeddedAgentRunResult>,
+    onAdmitted?: () => void,
   ) => Promise<EmbeddedAgentRunResult>;
 };
 
@@ -62,12 +63,27 @@ export async function withSessionPlacementTurnAdmission(
   claim: LocalTurnPlacementClaim,
   params: SessionPlacementTurnParams,
   task: () => Promise<EmbeddedAgentRunResult>,
+  onAdmitted?: () => void,
 ): Promise<EmbeddedAgentRunResult> {
+  let admitted = false;
+  const admitTurn = () => {
+    if (admitted) {
+      return;
+    }
+    admitted = true;
+    onAdmitted?.();
+  };
+  // Providers may execute locally or remotely; both must release queue ownership
+  // only when their actual execution path has acquired its placement claim.
+  const runAdmittedLocalTurn = () => {
+    admitTurn();
+    return task();
+  };
   const provider = state.provider;
   if (!provider) {
-    return await task();
+    return await runAdmittedLocalTurn();
   }
-  return await provider.executeTurn(claim, params, task);
+  return await provider.executeTurn(claim, params, runAdmittedLocalTurn, admitTurn);
 }
 
 export async function withLocalSessionPlacementTurnAdmission<T>(

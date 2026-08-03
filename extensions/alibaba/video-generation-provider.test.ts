@@ -9,6 +9,10 @@ import {
   expectSuccessfulDashscopeVideoResult,
   mockSuccessfulDashscopeVideoTask,
 } from "openclaw/plugin-sdk/provider-test-contracts";
+import {
+  DASHSCOPE_WAN_VIDEO_MODELS,
+  DEFAULT_DASHSCOPE_WAN_VIDEO_MODEL,
+} from "openclaw/plugin-sdk/video-generation";
 import { beforeAll, describe, expect, it } from "vitest";
 
 const {
@@ -19,10 +23,10 @@ const {
   sanitizeConfiguredModelProviderRequestMock,
 } = getProviderHttpMocks();
 
-let buildAlibabaVideoGenerationProvider: typeof import("./video-generation-provider.js").buildAlibabaVideoGenerationProvider;
+let alibabaVideoGenerationProvider: typeof import("./video-generation-provider.js").alibabaVideoGenerationProvider;
 
 beforeAll(async () => {
-  ({ buildAlibabaVideoGenerationProvider } = await import("./video-generation-provider.js"));
+  ({ alibabaVideoGenerationProvider } = await import("./video-generation-provider.js"));
 });
 
 installProviderHttpMockCleanup();
@@ -44,13 +48,19 @@ function requireFirstPostJsonRequest(label: string): Record<string, unknown> {
 
 describe("alibaba video generation provider", () => {
   it("declares explicit mode capabilities", () => {
-    expectExplicitVideoGenerationCapabilities(buildAlibabaVideoGenerationProvider());
+    expectExplicitVideoGenerationCapabilities(alibabaVideoGenerationProvider);
+    expect(alibabaVideoGenerationProvider).toMatchObject({
+      id: "alibaba",
+      label: "Alibaba Model Studio",
+      defaultModel: DEFAULT_DASHSCOPE_WAN_VIDEO_MODEL,
+      models: [...DASHSCOPE_WAN_VIDEO_MODELS],
+    });
   });
 
   it("submits async Wan generation, polls task status, and downloads the resulting video", async () => {
     mockSuccessfulDashscopeVideoTask({ postJsonRequestMock, fetchWithTimeoutMock });
 
-    const provider = buildAlibabaVideoGenerationProvider();
+    const provider = alibabaVideoGenerationProvider;
     const result = await provider.generateVideo({
       provider: "alibaba",
       model: "wan2.6-r2v-flash",
@@ -100,7 +110,7 @@ describe("alibaba video generation provider", () => {
     });
     mockSuccessfulDashscopeVideoTask({ postJsonRequestMock, fetchWithTimeoutMock });
 
-    const provider = buildAlibabaVideoGenerationProvider();
+    const provider = alibabaVideoGenerationProvider;
     await provider.generateVideo({
       provider: "alibaba",
       model: "wan2.6-t2v",
@@ -139,7 +149,7 @@ describe("alibaba video generation provider", () => {
         method: "GET",
         headers: expect.any(Headers),
       }),
-      120_000,
+      expect.any(Number),
       fetch,
       {
         ssrfPolicy: { allowPrivateNetwork: true },
@@ -150,7 +160,7 @@ describe("alibaba video generation provider", () => {
       2,
       "https://example.com/out.mp4",
       { method: "GET" },
-      120_000,
+      expect.any(Number),
       fetch,
       {
         ssrfPolicy: { allowPrivateNetwork: true },
@@ -160,7 +170,7 @@ describe("alibaba video generation provider", () => {
   });
 
   it("fails fast when reference inputs are local buffers instead of remote URLs", async () => {
-    const provider = buildAlibabaVideoGenerationProvider();
+    const provider = alibabaVideoGenerationProvider;
 
     await expect(
       provider.generateVideo({

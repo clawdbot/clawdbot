@@ -1,6 +1,6 @@
 // Session patch tests cover model/provider edits, subagent patching, provider
 // aliases, model catalog validation, and rejected invalid patch payloads.
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/index.js";
 import { resetProviderAuthAliasMapCacheForTest } from "../agents/provider-auth-aliases.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -16,9 +16,18 @@ import { applySessionsPatchToStore } from "./sessions-patch.js";
 const acpSessionMetaMocks = vi.hoisted(() => ({
   readAcpSessionMetaForEntry: vi.fn(),
 }));
+const providerThinkingMocks = vi.hoisted(() => ({
+  resolveProviderThinkingProfile:
+    vi.fn<typeof import("../plugins/provider-thinking.js").resolveProviderThinkingProfile>(),
+}));
 
 vi.mock("../acp/runtime/session-meta.js", () => ({
   readAcpSessionMetaForEntry: acpSessionMetaMocks.readAcpSessionMetaForEntry,
+}));
+
+// This suite owns patch projection; provider policy artifacts have dedicated contract coverage.
+vi.mock("../plugins/provider-thinking.js", () => ({
+  resolveProviderThinkingProfile: providerThinkingMocks.resolveProviderThinkingProfile,
 }));
 
 const SUBAGENT_MODEL = "synthetic/hf:moonshotai/Kimi-K2.7-Code";
@@ -256,6 +265,32 @@ function createAllowlistedAnthropicModelCfg(): OpenClawConfig {
 }
 
 describe("gateway sessions patch", () => {
+  beforeEach(() => {
+    providerThinkingMocks.resolveProviderThinkingProfile.mockReset();
+    providerThinkingMocks.resolveProviderThinkingProfile.mockImplementation(
+      ({ provider, context }) => {
+        if (provider !== "openai") {
+          return undefined;
+        }
+        if (context.modelId === "gpt-5.5") {
+          return {
+            levels: (["off", "minimal", "low", "medium", "high", "xhigh"] as const).map((id) => ({
+              id,
+            })),
+          };
+        }
+        if (context.modelId === "gpt-5.6-luna") {
+          const levels =
+            context.agentRuntime === "openclaw"
+              ? (["off", "minimal", "low", "medium", "high", "max", "ultra"] as const)
+              : (["off", "minimal", "low", "medium", "high", "max"] as const);
+          return { levels: levels.map((id) => ({ id })) };
+        }
+        return undefined;
+      },
+    );
+  });
+
   afterEach(() => {
     acpSessionMetaMocks.readAcpSessionMetaForEntry.mockReset();
     resetProviderAuthAliasMapCacheForTest();
@@ -658,6 +693,56 @@ describe("gateway sessions patch", () => {
     );
 
     expect(entry.fastMode).toBe("auto");
+  });
+
+  test("sets, replaces, clears, and normalizes tool overrides", async () => {
+    const store = mainStoreEntry({});
+    const set = expectPatchOk(
+      await runPatch({
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          toolOverrides: {
+            mcpServers: { zeta: false, alpha: true },
+            mcpToolsDeny: { zeta: [], alpha: ["write", "read", "write"] },
+            skills: {},
+            webSearch: true,
+          },
+        },
+      }),
+    );
+    expect(set.toolOverrides).toEqual({
+      mcpServers: { alpha: true, zeta: false },
+      mcpToolsDeny: { alpha: ["read", "write"] },
+    });
+
+    const replaced = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, toolOverrides: { skills: { release: false } } },
+      }),
+    );
+    expect(replaced.toolOverrides).toEqual({ skills: { release: false } });
+
+    const normalizedEmpty = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, toolOverrides: { mcpToolsDeny: { docs: [] } } },
+      }),
+    );
+    expect(normalizedEmpty.toolOverrides).toBeUndefined();
+
+    store[MAIN_SESSION_KEY] = {
+      ...normalizedEmpty,
+      toolOverrides: { webSearch: false },
+    };
+    const cleared = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, toolOverrides: null },
+      }),
+    );
+    expect(cleared.toolOverrides).toBeUndefined();
   });
 
   test("persists verboseLevel=full", async () => {

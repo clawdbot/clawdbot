@@ -6,8 +6,9 @@
 import crypto from "node:crypto";
 import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-events.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
@@ -595,7 +596,8 @@ export function scheduleMediaGenerationTaskCompletion<
       });
     }
   };
-  params.scheduleBackgroundWork(runBackgroundWork);
+  // Detached completion needs its own transcript lock after the parent attempt exits.
+  params.scheduleBackgroundWork(() => runWithoutOwnedSessionTranscriptWrites(runBackgroundWork));
 }
 
 async function wakeMediaGenerationTaskCompletion(params: {
@@ -662,17 +664,19 @@ async function wakeMediaGenerationTaskCompletion(params: {
     sourceTool: params.toolName,
     requesterIsSubagent: false,
     expectsCompletionMessage: true,
-    durableGeneratedMediaHandoff: true,
     bestEffortDeliver: true,
     directIdempotencyKey: announceId,
   });
   if (delivery.delivered) {
     return { status: "delivered" };
   }
-  if (delivery.reason === "completion_handoff_pending") {
+  if (
+    delivery.disposition === "session_queued" ||
+    delivery.reason === "completion_handoff_pending"
+  ) {
     return { status: "pending" };
   }
-  if (delivery.terminal) {
+  if (delivery.disposition === "ambiguous") {
     log.warn("Media generation completion delivery stopped after terminal fallback", {
       taskId: params.handle.taskId,
       runId: params.handle.runId,

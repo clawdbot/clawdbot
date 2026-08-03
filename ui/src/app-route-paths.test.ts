@@ -2,17 +2,341 @@
 import type { RouteLocation, RouterHistory } from "@openclaw/uirouter";
 import { describe, expect, it, vi } from "vitest";
 import {
+  agentRouteFromPath,
   inferBasePathFromPathname,
   memoryTabFromPath,
   pathForMemoryTab,
+  pathForAgentPanel,
   pathForPluginsHubTab,
+  pathForWorkboardBoard,
   pluginsHubTabFromPath,
   routeIdFromPath,
+  type RouteId,
   type MemoryRouteTab,
   type PluginsHubRouteTab,
 } from "./app-route-paths.ts";
 import { createApplicationRouter, startApplicationRouter } from "./app-routes.ts";
 import type { ApplicationContext } from "./app/context.ts";
+import type { AgentsPanel } from "./lib/agents/panels.ts";
+
+const AGENT_PANEL_CASES = [
+  "overview",
+  "files",
+  "tools",
+  "skills",
+  "channels",
+  "cron",
+  "memory",
+] as const satisfies readonly AgentsPanel[];
+
+const DYNAMIC_STARTUP_CASES = [
+  {
+    label: "agent panel",
+    routeId: "agents",
+    location: {
+      pathname: pathForAgentPanel("team.writer", "tools"),
+      search: "?probe=1",
+      hash: "#catalog",
+    },
+  },
+  {
+    label: "chat session",
+    routeId: "chat",
+    location: {
+      pathname: "/chat/main/01JSESSIONA",
+      search: "?probe=1",
+      hash: "#message",
+    },
+  },
+  {
+    label: "dashboard session",
+    routeId: "dashboard",
+    location: {
+      pathname: "/dashboard/main/01JSESSIONA",
+      search: "?probe=1",
+      hash: "#dashboard",
+    },
+  },
+  {
+    label: "workboard board",
+    routeId: "workboard",
+    location: {
+      pathname: pathForWorkboardBoard("ops.v2"),
+      search: "?agent=main",
+      hash: "#queue",
+    },
+  },
+  {
+    label: "Memory tab",
+    routeId: "memory",
+    location: {
+      pathname: pathForMemoryTab("settings"),
+      search: "?probe=1",
+      hash: "#memory-backend",
+    },
+  },
+  {
+    label: "Plugins tab",
+    routeId: "plugins",
+    location: {
+      pathname: pathForPluginsHubTab("discover"),
+      search: "?query=calendar",
+      hash: "#featured",
+    },
+  },
+] as const satisfies readonly {
+  label: string;
+  routeId: RouteId;
+  location: RouteLocation;
+}[];
+
+describe("Dynamic route startup bridge", () => {
+  it.each(DYNAMIC_STARTUP_CASES)(
+    "loads the $label once while publishing its real location",
+    async ({ routeId, location: initialLocation }) => {
+      let location: RouteLocation = { ...initialLocation };
+      const history: RouterHistory = {
+        location: () => location,
+        push: vi.fn((next: RouteLocation) => {
+          location = next;
+        }),
+        replace: vi.fn((next: RouteLocation) => {
+          location = next;
+        }),
+        listen: () => () => undefined,
+      };
+      const router = createApplicationRouter();
+      const route = router.getRoute(routeId);
+      if (!route) {
+        throw new Error(`Route missing: ${routeId}`);
+      }
+      const loader = vi.fn(async () => ({ routeId }));
+      const originalLoader = route.loader;
+      const originalComponent = route.component;
+      try {
+        route.loader = loader;
+        route.component = async () => ({ render: () => null });
+
+        await startApplicationRouter(router, history, "", {
+          basePath: "",
+        } as unknown as ApplicationContext);
+
+        expect(loader).toHaveBeenCalledOnce();
+        expect(router.getState().location).toEqual(initialLocation);
+        expect(router.getState().matches[0]?.location).toEqual(initialLocation);
+      } finally {
+        router.stop();
+        route.loader = originalLoader;
+        route.component = originalComponent;
+      }
+    },
+  );
+
+  it("loads a later dynamic history destination exactly once", async () => {
+    let location: RouteLocation = {
+      pathname: "/chat/main/01JSESSIONA",
+      search: "",
+      hash: "#first",
+    };
+    let historyListener: ((next: RouteLocation) => void) | undefined;
+    const history: RouterHistory = {
+      location: () => location,
+      push: vi.fn((next: RouteLocation) => {
+        location = next;
+      }),
+      replace: vi.fn((next: RouteLocation) => {
+        location = next;
+      }),
+      listen: (listener) => {
+        historyListener = listener;
+        return () => {
+          historyListener = undefined;
+        };
+      },
+    };
+    const router = createApplicationRouter();
+    const route = router.getRoute("chat");
+    if (!route) {
+      throw new Error("Chat route missing");
+    }
+    const loader = vi.fn(async () => ({}));
+    const originalLoader = route.loader;
+    const originalComponent = route.component;
+    try {
+      route.loader = loader;
+      route.component = async () => ({ render: () => null });
+
+      await startApplicationRouter(router, history, "", {
+        basePath: "",
+      } as unknown as ApplicationContext);
+      expect(loader).toHaveBeenCalledOnce();
+
+      location = {
+        pathname: "/chat/main/01JSESSIONB",
+        search: "?probe=1",
+        hash: "#second",
+      };
+      historyListener?.(location);
+
+      await vi.waitFor(() => {
+        expect(loader).toHaveBeenCalledTimes(2);
+        expect(router.getState().location).toEqual(location);
+      });
+    } finally {
+      router.stop();
+      route.loader = originalLoader;
+      route.component = originalComponent;
+    }
+  });
+});
+
+describe("Agent panel route paths", () => {
+  it.each(AGENT_PANEL_CASES)("round-trips the %s panel with an encoded agent id", (panel) => {
+    const pathname = pathForAgentPanel("team.writer", panel);
+    expect(pathname).toBe(`/settings/agents/team%2Ewriter/${panel}`);
+    expect(agentRouteFromPath(pathname)).toEqual({
+      agentId: "team.writer",
+      panel,
+      panelSegment: panel,
+      invalidPanel: false,
+    });
+    expect(routeIdFromPath(pathname)).toBe("agents");
+  });
+
+  it("round-trips the agent default panel without an explicit segment", () => {
+    const pathname = pathForAgentPanel("research", null, "/ui");
+    expect(pathname).toBe("/ui/settings/agents/research");
+    expect(agentRouteFromPath(pathname, "/ui")).toEqual({
+      agentId: "research",
+      panel: "files",
+      panelSegment: null,
+      invalidPanel: false,
+    });
+    expect(inferBasePathFromPathname(pathname)).toBe("/ui");
+  });
+
+  it("falls back unknown panel segments to the default panel", () => {
+    expect(agentRouteFromPath("/settings/agents/research/unknown")).toEqual({
+      agentId: "research",
+      panel: "files",
+      panelSegment: null,
+      invalidPanel: true,
+    });
+    expect(routeIdFromPath("/settings/agents/research/unknown")).toBe("agents");
+  });
+
+  it("rejects malformed, slash-containing, and nested agent paths", () => {
+    expect(() => pathForAgentPanel("agent/child")).toThrow("Invalid agent id");
+    expect(() => pathForAgentPanel(".")).toThrow("Invalid agent id");
+    expect(() => pathForAgentPanel("..")).toThrow("Invalid agent id");
+    expect(agentRouteFromPath("/settings/agents/agent%2Fchild")).toBeNull();
+    expect(agentRouteFromPath("/settings/agents/%")).toBeNull();
+    expect(agentRouteFromPath("/settings/agents/research/tools/extra")).toBeNull();
+  });
+
+  it("publishes the real dynamic pathname after the exact-match startup bridge", async () => {
+    let location: RouteLocation = {
+      pathname: "/settings/agents/team%2Ewriter/tools",
+      search: "?probe=1",
+      hash: "#catalog",
+    };
+    const push = vi.fn((next: RouteLocation) => {
+      location = next;
+    });
+    const replace = vi.fn((next: RouteLocation) => {
+      location = next;
+    });
+    const history: RouterHistory = {
+      location: () => location,
+      push,
+      replace,
+      listen: () => () => undefined,
+    };
+    const router = createApplicationRouter();
+    const agentsRoute = router.getRoute("agents");
+    if (!agentsRoute) {
+      throw new Error("Agents route missing");
+    }
+    agentsRoute.component = async () => ({ render: () => null });
+    const agentsList = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "agent",
+      agents: [{ id: "main" }, { id: "team.writer" }],
+    };
+    const context = {
+      basePath: "",
+      gateway: { snapshot: { phase: "stopped", client: null } },
+      agents: {
+        state: { agentsList, agentsError: null },
+        ensureList: () => Promise.resolve(agentsList),
+      },
+    } as unknown as ApplicationContext;
+
+    await startApplicationRouter(router, history, "", context);
+
+    expect(router.getState().location).toEqual(location);
+    expect(router.getState().matches[0]?.location).toEqual(location);
+    expect(location.pathname).toBe("/settings/agents/team%2Ewriter/tools");
+    expect(location.search).toBe("?probe=1");
+    expect(location.hash).toBe("#catalog");
+    expect(push).not.toHaveBeenCalled();
+    expect(replace).not.toHaveBeenCalled();
+    router.stop();
+  });
+
+  it("normalizes an invalid panel once before the startup bridge", async () => {
+    let location: RouteLocation = {
+      pathname: "/settings/agents/main/unknown",
+      search: "?probe=1",
+      hash: "#agents",
+    };
+    const push = vi.fn((next: RouteLocation) => {
+      location = next;
+    });
+    const replace = vi.fn((next: RouteLocation) => {
+      location = next;
+    });
+    const history: RouterHistory = {
+      location: () => location,
+      push,
+      replace,
+      listen: () => () => undefined,
+    };
+    const router = createApplicationRouter();
+    const agentsRoute = router.getRoute("agents");
+    if (!agentsRoute) {
+      throw new Error("Agents route missing");
+    }
+    agentsRoute.component = async () => ({ render: () => null });
+    const agentsList = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "agent",
+      agents: [{ id: "main" }],
+    };
+    const context = {
+      basePath: "",
+      gateway: { snapshot: { phase: "stopped", client: null } },
+      agents: {
+        state: { agentsList, agentsError: null },
+        ensureList: () => Promise.resolve(agentsList),
+      },
+    } as unknown as ApplicationContext;
+
+    await startApplicationRouter(router, history, "", context);
+
+    expect(replace).toHaveBeenCalledOnce();
+    expect(replace).toHaveBeenCalledWith({
+      pathname: "/settings/agents/main",
+      search: "?probe=1",
+      hash: "#agents",
+    });
+    expect(push).not.toHaveBeenCalled();
+    expect(location.pathname).toBe("/settings/agents/main");
+    router.stop();
+  });
+});
 
 describe("Memory tab route paths", () => {
   it.each([

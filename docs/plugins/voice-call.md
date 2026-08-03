@@ -264,7 +264,7 @@ Current runtime behavior:
 - Voice Call exposes the shared `openclaw_agent_consult` realtime tool by default. The realtime model can call it when the caller asks for deeper reasoning, current information, or normal OpenClaw tools.
 - `realtime.consultPolicy` optionally adds guidance for when the realtime model should call `openclaw_agent_consult`.
 - `realtime.agentContext.enabled` is default-off. When enabled, Voice Call injects a bounded agent identity and selected workspace-file capsule into the realtime provider instructions at session setup.
-- `realtime.fastContext.enabled` is default-off. When enabled, Voice Call first searches indexed memory/session context for the consult question and returns those snippets to the realtime model within `realtime.fastContext.timeoutMs` before falling back to the full consult agent only if `realtime.fastContext.fallbackToConsult` is true.
+- `realtime.fastContext.enabled` is default-off. When enabled, Voice Call first searches indexed memory/session context for the consult question and returns authorized snippets to the realtime model within `realtime.fastContext.timeoutMs` before falling back to the full consult agent only if `realtime.fastContext.fallbackToConsult` is true. The active memory plugin authorizes session-transcript hits; plugins without that capability fail closed for session hits while ordinary memory hits remain available.
 - If `realtime.provider` points at an unregistered provider, or no realtime voice provider is registered at all, Voice Call logs a warning and skips realtime media instead of failing the whole plugin.
 - `inboundPolicy` must not be `"disabled"` when `realtime.enabled` is true; `validateProviderConfig` rejects that combination.
 - Consult session keys reuse the stored call session when available, then fall back to the configured `sessionScope` (`per-phone` by default, or `per-call` for isolated calls).
@@ -905,7 +905,7 @@ openclaw logs --follow
 
 Common causes:
 
-- `publicUrl` points at a different path than `serve.path`.
+- `publicUrl` does not match the public webhook URL configured with the provider. A reverse proxy may map that public path to a different `serve.path`, but `publicUrl` must remain the provider-facing URL.
 - The tunnel URL changed after the Gateway started.
 - A proxy forwards the request but strips or rewrites host/proto headers.
 - Firewall or DNS routes the public hostname somewhere other than the Gateway.
@@ -919,8 +919,10 @@ under your control.
 
 ### Signature verification fails
 
-Provider signatures are checked against the public URL OpenClaw reconstructs
-from the incoming request. If signatures fail:
+Twilio and Plivo URL signatures use `publicUrl` when it is configured: its
+scheme, host, and path are preserved, while the request query is applied.
+Without `publicUrl`, OpenClaw reconstructs the URL from the request. Telnyx
+signatures do not include the request URL. If signatures fail:
 
 - Confirm the provider webhook URL exactly matches `publicUrl`, including scheme, host, and path.
 - For ngrok free-tier URLs, update `publicUrl` when the tunnel hostname changes.

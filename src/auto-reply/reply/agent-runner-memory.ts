@@ -7,6 +7,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
@@ -37,7 +38,6 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../../config/sessions.js";
-import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   readRecentSessionTranscriptActiveEvents,
   readSessionTranscriptActiveStats,
@@ -49,7 +49,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import { logVerbose } from "../../globals.js";
 import { isAbortError } from "../../infra/abort-signal.js";
-import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
+import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveMemoryFlushPlan } from "../../plugins/memory-state.js";
 import { CommandLane } from "../../process/lanes.js";
@@ -166,7 +167,6 @@ const memoryDeps = {
   incrementCompactionCount,
   updateSessionEntry: updateSessionEntryDefault,
   emitAgentEvent,
-  resolveSessionLogPath,
   randomUUID: () => crypto.randomUUID(),
   now: () => Date.now(),
 };
@@ -183,7 +183,6 @@ function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDeps>): v
     incrementCompactionCount,
     updateSessionEntry: updateSessionEntryDefault,
     emitAgentEvent,
-    resolveSessionLogPath,
     randomUUID: () => crypto.randomUUID(),
     now: () => Date.now(),
     ...overrides,
@@ -295,7 +294,7 @@ function resolveFollowupAgentRuntimeId(params: FollowupRuntimeParams): string {
     cfg: params.cfg,
     provider: params.followupRun.run.provider,
     modelId: params.followupRun.run.model,
-    agentId: params.followupRun.run.agentId,
+    agentId: params.followupRun.run.agentId ?? resolveDefaultAgentId(params.cfg),
     sessionKey:
       params.runtimePolicySessionKey ??
       params.sessionKey ??
@@ -364,41 +363,8 @@ type SessionTranscriptUsageSnapshot = {
 // Keep a generous near-threshold window so large assistant outputs still trigger
 // transcript reads in time to flip memory-flush gating when needed.
 const TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS = 8192;
-const TRANSCRIPT_TAIL_CHUNK_BYTES = 64 * 1024;
 const SQLITE_USAGE_TAIL_MAX_EVENTS = 512;
 const FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN = 4;
-
-function parseUsageFromTranscriptLine(line: string): ReturnType<typeof normalizeUsage> | undefined {
-  const trimmed = line.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(trimmed) as {
-      message?: { usage?: UsageLike };
-      usage?: UsageLike;
-    };
-    const usageRaw = parsed.message?.usage ?? parsed.usage;
-    const usage = normalizeUsage(usageRaw);
-    if (usage && hasNonzeroUsage(usage)) {
-      return usage;
-    }
-  } catch {
-    // ignore bad lines
-  }
-  return undefined;
-}
-
-function resolveSessionLogPath(
-  _sessionId?: string,
-  _sessionEntry?: SessionEntry,
-  _sessionKey?: string,
-  _opts?: { agentId?: string; storePath?: string },
-): string | undefined {
-  // Runtime session rows carry SQLite identity only. Tests may inject an artifact
-  // resolver to cover explicit exported JSONL inputs, but runtime never infers one.
-  return undefined;
-}
 
 function deriveTranscriptUsageSnapshot(
   snapshot:
@@ -433,10 +399,11 @@ function deriveTranscriptUsageSnapshot(
   };
 }
 
-function readLatestNonzeroUsageFromTranscriptEvents(
+function readLatestNonzeroUsageSnapshotFromTranscriptEvents(
   events: readonly unknown[],
-): ReturnType<typeof normalizeUsage> | undefined {
+): { usage: NonNullable<ReturnType<typeof normalizeUsage>>; trailingBytes: number } | undefined {
   const activeEvents = selectSessionTranscriptLeafControlledPath(events) ?? events;
+  let trailingBytes = 0;
   for (const event of activeEvents.toReversed()) {
     if (!event || typeof event !== "object" || Array.isArray(event)) {
       continue;
@@ -451,28 +418,72 @@ function readLatestNonzeroUsageFromTranscriptEvents(
         : undefined;
     const usage = normalizeUsage(message?.usage ?? record.usage);
     if (usage && hasNonzeroUsage(usage)) {
-      return usage;
+      return { usage, trailingBytes };
+    }
+    if (message) {
+      // Count later conversation content, not session metadata, when projecting
+      // context growth since the most recent authoritative provider usage.
+      trailingBytes += Buffer.byteLength(JSON.stringify(message), "utf8") + 1;
     }
   }
   return undefined;
 }
 
+function readActiveTurnTaintFromTranscriptEvents(events: readonly unknown[]): {
+  boundaryFound: boolean;
+  tainted: boolean;
+} {
+  const activeEvents = selectSessionTranscriptLeafControlledPath(events) ?? events;
+  for (const event of activeEvents.toReversed()) {
+    if (!event || typeof event !== "object" || Array.isArray(event)) {
+      continue;
+    }
+    const message = (event as { message?: unknown }).message;
+    if (!message || typeof message !== "object" || Array.isArray(message)) {
+      continue;
+    }
+    const record = message as Record<string, unknown>;
+    if (record.role === "user") {
+      return { boundaryFound: true, tainted: false };
+    }
+    const metadata = record["__openclaw"];
+    if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+      continue;
+    }
+    const openClaw = metadata as { resultContentSource?: unknown; turnTainted?: unknown };
+    if (openClaw.turnTainted === true || openClaw.resultContentSource === "network") {
+      return { boundaryFound: false, tainted: true };
+    }
+  }
+  return { boundaryFound: false, tainted: false };
+}
+
 function readSqliteSessionLogSnapshot(
   scope: { agentId?: string; sessionId: string; sessionKey?: string; storePath: string },
-  options: { includeByteSize: boolean; includeUsage: boolean },
+  options: { includeByteSize: boolean; includeTurnTaint?: boolean; includeUsage: boolean },
 ): SessionLogSnapshot {
   const snapshot: SessionLogSnapshot = {};
   try {
     if (options.includeByteSize) {
       snapshot.byteSize = readSessionTranscriptActiveStats(scope).sizeBytes;
     }
-    if (options.includeUsage) {
+    if (options.includeUsage || options.includeTurnTaint) {
       const events = readRecentSessionTranscriptActiveEvents(scope, SQLITE_USAGE_TAIL_MAX_EVENTS);
-      snapshot.usage = deriveTranscriptUsageSnapshot({
-        usage: readLatestNonzeroUsageFromTranscriptEvents(events),
-      });
+      if (options.includeUsage) {
+        snapshot.usage = deriveTranscriptUsageSnapshot(
+          readLatestNonzeroUsageSnapshotFromTranscriptEvents(events),
+        );
+      }
+      if (options.includeTurnTaint) {
+        const scan = readActiveTurnTaintFromTranscriptEvents(events);
+        snapshot.turnTainted =
+          scan.tainted || (!scan.boundaryFound && events.length >= SQLITE_USAGE_TAIL_MAX_EVENTS);
+      }
     }
   } catch {
+    if (options.includeTurnTaint) {
+      snapshot.turnTainted = true;
+    }
     return snapshot;
   }
   return snapshot;
@@ -480,6 +491,7 @@ function readSqliteSessionLogSnapshot(
 
 type SessionLogSnapshot = {
   byteSize?: number;
+  turnTainted?: boolean;
   usage?: SessionTranscriptUsageSnapshot;
 };
 
@@ -505,151 +517,28 @@ async function appendPostCompactionRefreshPrompt(params: {
     .join("\n\n");
 }
 
-async function readSessionLogSnapshot(params: {
+function readSessionLogSnapshot(params: {
   agentId?: string;
   sessionId?: string;
-  sessionEntry?: SessionEntry;
   sessionKey?: string;
-  opts?: { agentId?: string; storePath?: string };
+  storePath?: string;
   includeByteSize: boolean;
+  includeTurnTaint?: boolean;
   includeUsage: boolean;
-}): Promise<SessionLogSnapshot> {
-  const logPath = memoryDeps.resolveSessionLogPath(
-    params.sessionId,
-    params.sessionEntry,
-    params.sessionKey,
-    params.opts,
-  );
-  const sqliteMarker = logPath ? parseSqliteSessionFileMarker(logPath) : undefined;
-  if (logPath && !sqliteMarker) {
-    return await readFileSessionLogSnapshot(logPath, params);
-  }
-  const agentId =
-    params.agentId ?? params.opts?.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
-  if (params.sessionId && params.opts?.storePath && agentId) {
+}): SessionLogSnapshot {
+  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
+  if (params.sessionId && params.storePath && agentId) {
     return readSqliteSessionLogSnapshot(
       {
         agentId,
         sessionId: params.sessionId,
         ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-        storePath: params.opts.storePath,
+        storePath: params.storePath,
       },
       params,
     );
   }
-  if (sqliteMarker) {
-    return readSqliteSessionLogSnapshot(sqliteMarker, params);
-  }
-  return {};
-}
-
-async function readFileSessionLogSnapshot(
-  logPath: string,
-  params: { includeByteSize: boolean; includeUsage: boolean },
-): Promise<SessionLogSnapshot> {
-  const snapshot: SessionLogSnapshot = {};
-  let usageScan: SessionLogUsageScan | undefined;
-
-  if (params.includeUsage) {
-    try {
-      usageScan = await readLastNonzeroUsageFromSessionLog(logPath);
-      snapshot.usage = deriveTranscriptUsageSnapshot(usageScan);
-    } catch {
-      snapshot.usage = undefined;
-    }
-  }
-
-  if (params.includeByteSize) {
-    const scannedSize = usageScan?.byteSize;
-    if (typeof scannedSize === "number" && Number.isFinite(scannedSize) && scannedSize >= 0) {
-      snapshot.byteSize = Math.floor(scannedSize);
-      return snapshot;
-    }
-    snapshot.byteSize = await readSessionLogByteSize(logPath);
-  }
-
-  return snapshot;
-}
-
-type SessionLogUsageScan = {
-  usage?: ReturnType<typeof normalizeUsage>;
-  trailingBytes?: number;
-  byteSize: number;
-};
-
-async function readSessionLogByteSize(logPath: string): Promise<number | undefined> {
-  let handle: fs.promises.FileHandle | undefined;
-  try {
-    handle = await fs.promises.open(logPath, "r");
-    const stat = await handle.stat();
-    const size = Math.floor(stat.size);
-    return Number.isFinite(size) && size >= 0 ? size : undefined;
-  } catch {
-    return undefined;
-  } finally {
-    await handle?.close();
-  }
-}
-
-async function readLastNonzeroUsageFromSessionLog(logPath: string): Promise<SessionLogUsageScan> {
-  const handle = await fs.promises.open(logPath, "r");
-  try {
-    const stat = await handle.stat();
-    let position = stat.size;
-    let leadingPartial = "";
-    while (position > 0) {
-      const chunkSize = Math.min(TRANSCRIPT_TAIL_CHUNK_BYTES, position);
-      const start = position - chunkSize;
-      const buffer = Buffer.allocUnsafe(chunkSize);
-      const { bytesRead } = await handle.read(buffer, 0, chunkSize, start);
-      if (bytesRead <= 0) {
-        break;
-      }
-      const chunk = buffer.toString("utf-8", 0, bytesRead);
-      const appendedPartialBytes = Buffer.byteLength(leadingPartial, "utf8");
-      const combined = `${chunk}${leadingPartial}`;
-      const lines = combined.split(/\n+/);
-      const firstLine = lines.shift() ?? "";
-      if (start > 0) {
-        leadingPartial = firstLine;
-      } else {
-        leadingPartial = "";
-        lines.unshift(firstLine);
-      }
-      const suffixBytesBeforeChunk = stat.size - position;
-      const suffixBytesOutsideCombined = Math.max(0, suffixBytesBeforeChunk - appendedPartialBytes);
-      for (let i = lines.length - 1; i >= 0; i -= 1) {
-        const usage = parseUsageFromTranscriptLine(lines[i] ?? "");
-        if (usage) {
-          const trailingLines = lines.slice(i + 1);
-          const trailingBytesInChunk = estimatePostUsageTrailingBytes(trailingLines);
-          return {
-            usage,
-            trailingBytes: suffixBytesOutsideCombined + trailingBytesInChunk,
-            byteSize: stat.size,
-          };
-        }
-      }
-      position = start;
-    }
-    const usage = parseUsageFromTranscriptLine(leadingPartial);
-    return usage
-      ? {
-          usage,
-          trailingBytes: Math.max(0, stat.size - Buffer.byteLength(leadingPartial, "utf8")),
-          byteSize: stat.size,
-        }
-      : { byteSize: stat.size };
-  } finally {
-    await handle.close();
-  }
-}
-
-function estimatePostUsageTrailingBytes(lines: string[]): number {
-  if (!lines.some((line) => line.trim())) {
-    return 0;
-  }
-  return Buffer.byteLength(lines.join("\n"), "utf8") + lines.length;
+  return params.includeTurnTaint ? { turnTainted: true } : {};
 }
 
 type TranscriptTokenEstimate = {
@@ -662,7 +551,6 @@ type TranscriptTokenEstimate = {
 async function estimatePromptTokensFromSessionTranscript(params: {
   agentId?: string;
   sessionId?: string;
-  sessionEntry?: SessionEntry;
   sessionKey?: string;
   storePath?: string;
 }): Promise<TranscriptTokenEstimate | undefined> {
@@ -671,12 +559,11 @@ async function estimatePromptTokensFromSessionTranscript(params: {
     return undefined;
   }
   try {
-    const snapshot = await readSessionLogSnapshot({
+    const snapshot = readSessionLogSnapshot({
       agentId: params.agentId,
       sessionId,
-      sessionEntry: params.sessionEntry,
       sessionKey: params.sessionKey,
-      opts: { agentId: params.agentId, storePath: params.storePath },
+      storePath: params.storePath,
       includeByteSize: true,
       includeUsage: true,
     });
@@ -802,13 +689,10 @@ export async function runPreflightCompactionIfNeeded(params: {
   if (!compactionSessionKey) {
     return entry ?? params.sessionEntry;
   }
-  const keyAgentId = resolveAgentIdFromSessionKey(
-    compactionSessionKey,
-    params.followupRun.run.agentId,
-  );
+  const configuredAgentId = params.followupRun.run.agentId ?? resolveDefaultAgentId(params.cfg);
   const compactionAgentId = isUnscopedSessionKeySentinel(compactionSessionKey)
-    ? (params.followupRun.run.agentId ?? keyAgentId ?? "main")
-    : (keyAgentId ?? params.followupRun.run.agentId ?? "main");
+    ? configuredAgentId
+    : resolveAgentIdFromSessionKey(compactionSessionKey, configuredAgentId);
   const compactionStorePath = resolveSessionStorePathForScope({
     agentId: compactionAgentId,
     sessionKey: compactionSessionKey,
@@ -863,18 +747,16 @@ export async function runPreflightCompactionIfNeeded(params: {
       : await estimatePromptTokensFromSessionTranscript({
           agentId: compactionAgentId,
           sessionId: entry.sessionId,
-          sessionEntry: entry,
           sessionKey: compactionSessionKey,
           storePath: compactionStorePath,
         });
   const transcriptSizeSnapshot =
     shouldCheckActiveTranscriptBytes && transcriptUsageTokens?.transcriptByteSize === undefined
-      ? await readSessionLogSnapshot({
+      ? readSessionLogSnapshot({
           agentId: compactionAgentId,
           sessionId: entry.sessionId,
-          sessionEntry: entry,
           sessionKey: compactionSessionKey,
-          opts: { agentId: compactionAgentId, storePath: compactionStorePath },
+          storePath: compactionStorePath,
           includeByteSize: true,
           includeUsage: false,
         })
@@ -984,15 +866,6 @@ export async function runPreflightCompactionIfNeeded(params: {
   };
   try {
     await notifyStartCompaction();
-    const sessionFile =
-      memoryDeps.resolveSessionLogPath(entry.sessionId, entry, compactionSessionKey, {
-        agentId: compactionAgentId,
-        storePath: compactionStorePath,
-      }) ?? normalizeOptionalString(compactionSessionKey);
-    if (!sessionFile) {
-      await notifyTerminalCompaction("skipped");
-      return entry ?? params.sessionEntry;
-    }
     const result = await deps.compactEmbeddedAgentSession({
       sessionId: entry.sessionId,
       sessionKey: compactionSessionKey,
@@ -1014,7 +887,7 @@ export async function runPreflightCompactionIfNeeded(params: {
       senderUsername: params.followupRun.run.senderUsername,
       senderE164: params.followupRun.run.senderE164,
       inputProvenance: params.followupRun.run.inputProvenance,
-      sessionFile,
+      sessionFile: compactionSessionKey,
       workspaceDir: params.followupRun.run.workspaceDir,
       cwd: params.followupRun.run.cwd,
       agentDir: params.followupRun.run.agentDir,
@@ -1228,14 +1101,19 @@ export async function runMemoryFlushIfNeeded(params: {
     Number.isFinite(forceFlushTranscriptBytes) &&
     forceFlushTranscriptBytes > 0,
   );
-  const shouldReadSessionLog = shouldReadTranscript || shouldCheckTranscriptSizeForForcedFlush;
+  const shouldReadTurnTaint = Boolean(
+    canAttemptFlush && entry && memoryFlushPlan.recordWriteProvenance,
+  );
+  const shouldReadSessionLog =
+    shouldReadTranscript || shouldCheckTranscriptSizeForForcedFlush || shouldReadTurnTaint;
   const sessionLogSnapshot = shouldReadSessionLog
-    ? await readSessionLogSnapshot({
+    ? readSessionLogSnapshot({
+        agentId: params.followupRun.run.agentId,
         sessionId: params.followupRun.run.sessionId,
-        sessionEntry: entry,
         sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
-        opts: { agentId: params.followupRun.run.agentId, storePath: params.storePath },
+        storePath: params.storePath,
         includeByteSize: shouldCheckTranscriptSizeForForcedFlush,
+        includeTurnTaint: shouldReadTurnTaint,
         includeUsage: shouldReadTranscript,
       })
     : undefined;
@@ -1361,6 +1239,9 @@ export async function runMemoryFlushIfNeeded(params: {
       sessionKey: params.sessionKey,
       ...(activeSessionEntry?.sessionId ? { sessionId: activeSessionEntry.sessionId } : {}),
       verboseLevel: params.resolvedVerboseLevel,
+      isControlUiVisible: false,
+      projectSessionActive: false,
+      projectSessionLifecycle: false,
     });
   }
   let memoryCompactionCompleted = false;
@@ -1449,6 +1330,7 @@ export async function runMemoryFlushIfNeeded(params: {
           provider,
           modelId: model,
           level: params.followupRun.run.thinkLevel,
+          catalog: params.followupRun.run.thinkingCatalog,
           agentId: params.followupRun.run.agentId,
           sessionKey:
             params.runtimePolicySessionKey ??
@@ -1517,7 +1399,10 @@ export async function runMemoryFlushIfNeeded(params: {
         relativePath: memoryFlushWritePath,
         contentBefore: memoryFlushContentBefore,
         contentAfter: await readMemoryFlushContent(),
-        originClass: params.followupRun.run.senderIsOwner ? "agent" : "untrusted",
+        originClass:
+          params.followupRun.run.senderIsOwner && sessionLogSnapshot?.turnTainted !== true
+            ? "agent"
+            : "untrusted",
         observedAt: memoryDeps.now(),
       });
     }

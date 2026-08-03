@@ -3,13 +3,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import {
-  pinActivePluginHttpRouteRegistry,
-  pinActivePluginSessionExtensionRegistry,
-  releasePinnedPluginHttpRouteRegistry,
-  releasePinnedPluginSessionExtensionRegistry,
-  setActivePluginRegistry,
-} from "../plugins/runtime.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   authorizeOperatorScopesForMethod,
   isGatewayMethodClassified,
@@ -41,8 +35,6 @@ function setPluginGatewayMethodScope(
 }
 
 afterEach(() => {
-  releasePinnedPluginHttpRouteRegistry();
-  releasePinnedPluginSessionExtensionRegistry();
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
@@ -69,6 +61,8 @@ describe("method scope resolution", () => {
     ["sessions.send", ["operator.write"]],
     ["sessions.abort", ["operator.write"]],
     ["tasks.cancel", ["operator.write"]],
+    ["tasks.retry", ["operator.write"]],
+    ["tasks.dismiss", ["operator.write"]],
     ["tools.invoke", ["operator.write"]],
     ["sessions.messages.subscribe", ["operator.read"]],
     ["sessions.messages.unsubscribe", ["operator.read"]],
@@ -91,27 +85,28 @@ describe("method scope resolution", () => {
     ["environments.status", ["operator.read"]],
     ["diagnostics.stability", ["operator.read"]],
     ["skills.curator.status", ["operator.read"]],
+    ["hooks.status", ["operator.read"]],
     ["skills.curator.pin", ["operator.admin"]],
     ["skills.curator.unpin", ["operator.admin"]],
     ["skills.curator.restore", ["operator.admin"]],
     ["node.pair.approve", ["operator.pairing"]],
     ["poll", ["operator.write"]],
-    ["talk.client.create", ["operator.write"]],
-    ["talk.client.transcript", ["operator.write"]],
-    ["talk.client.close", ["operator.write"]],
-    ["talk.client.toolCall", ["operator.write"]],
-    ["talk.client.steer", ["operator.write"]],
-    ["talk.session.create", ["operator.write"]],
-    ["talk.session.join", ["operator.write"]],
-    ["talk.session.appendAudio", ["operator.write"]],
-    ["talk.session.startTurn", ["operator.write"]],
-    ["talk.session.endTurn", ["operator.write"]],
-    ["talk.session.cancelTurn", ["operator.write"]],
-    ["talk.session.cancelOutput", ["operator.write"]],
-    ["talk.session.acknowledgeMark", ["operator.write"]],
-    ["talk.session.submitToolResult", ["operator.write"]],
-    ["talk.session.steer", ["operator.write"]],
-    ["talk.session.close", ["operator.write"]],
+    ["talk.client.create", ["operator.talk"]],
+    ["talk.client.transcript", ["operator.talk"]],
+    ["talk.client.close", ["operator.talk"]],
+    ["talk.client.toolCall", ["operator.talk"]],
+    ["talk.client.steer", ["operator.talk"]],
+    ["talk.session.create", ["operator.talk"]],
+    ["talk.session.join", ["operator.talk"]],
+    ["talk.session.appendAudio", ["operator.talk"]],
+    ["talk.session.startTurn", ["operator.talk"]],
+    ["talk.session.endTurn", ["operator.talk"]],
+    ["talk.session.cancelTurn", ["operator.talk"]],
+    ["talk.session.cancelOutput", ["operator.talk"]],
+    ["talk.session.acknowledgeMark", ["operator.talk"]],
+    ["talk.session.submitToolResult", ["operator.talk"]],
+    ["talk.session.steer", ["operator.talk"]],
+    ["talk.session.close", ["operator.talk"]],
     ["update.status", ["operator.admin"]],
     ["config.schema", ["operator.admin"]],
     ["config.patch", ["operator.admin"]],
@@ -157,13 +152,18 @@ describe("method scope resolution", () => {
       resolveLeastPrivilegeOperatorScopesForMethod("node.invoke", { command: "browser.proxy" }),
     ).toEqual(["operator.admin"]);
     expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("node.invoke", {
+        command: "browser.proxy.upload.v1",
+      }),
+    ).toEqual(["operator.admin"]);
+    expect(
       authorizeOperatorScopesForMethod("node.invoke", ["operator.write"], {
         command: "fs.listDir",
       }),
     ).toEqual({ allowed: false, missingScope: "operator.admin" });
     expect(
       resolveLeastPrivilegeOperatorScopesForMethod("node.invoke", {
-        command: "browser.proxy",
+        command: "browser.proxy.upload.v1",
         params: { method: "POST", path: "/profiles/create" },
       }),
     ).toEqual(["operator.write"]);
@@ -186,6 +186,19 @@ describe("method scope resolution", () => {
         includeSecrets: true,
       }),
     ).toEqual({ allowed: true });
+  });
+
+  it("accepts dedicated Talk access and preserves operator.write compatibility", () => {
+    expect(authorizeOperatorScopesForMethod("talk.client.create", ["operator.talk"])).toEqual({
+      allowed: true,
+    });
+    expect(authorizeOperatorScopesForMethod("talk.client.create", ["operator.write"])).toEqual({
+      allowed: true,
+    });
+    expect(authorizeOperatorScopesForMethod("talk.client.create", ["operator.read"])).toEqual({
+      allowed: false,
+      missingScope: "operator.talk",
+    });
   });
 
   it("requires admin only when DM pairing approval bootstraps a command owner", () => {
@@ -301,50 +314,6 @@ describe("method scope resolution", () => {
         actionId: "approve",
       }),
     ).toEqual({ allowed: false, missingScope: "operator.approvals" });
-  });
-
-  it("keeps session action scopes pinned when an agent replaces the active registry", () => {
-    const gatewayRegistry = createEmptyPluginRegistry();
-    gatewayRegistry.sessionActions = [
-      {
-        pluginId: "scope-plugin",
-        pluginName: "Scope Plugin",
-        source: "gateway",
-        action: {
-          id: "approve",
-          requiredScopes: ["operator.approvals"],
-          handler: () => ({ result: { owner: "gateway" } }),
-        },
-      },
-    ];
-    setActivePluginRegistry(gatewayRegistry);
-    pinActivePluginSessionExtensionRegistry(gatewayRegistry);
-
-    const scopedRegistry = createEmptyPluginRegistry();
-    scopedRegistry.sessionActions = [
-      {
-        pluginId: "scope-plugin",
-        pluginName: "Scope Plugin",
-        source: "agent",
-        action: {
-          id: "approve",
-          requiredScopes: ["operator.read"],
-          handler: () => ({ result: { owner: "agent" } }),
-        },
-      },
-    ];
-    setActivePluginRegistry(scopedRegistry);
-
-    const params = { pluginId: "scope-plugin", actionId: "approve" };
-    expect(resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction", params)).toEqual([
-      "operator.approvals",
-    ]);
-    expect(
-      authorizeOperatorScopesForMethod("plugins.sessionAction", ["operator.read"], params),
-    ).toEqual({ allowed: false, missingScope: "operator.approvals" });
-    expect(
-      authorizeOperatorScopesForMethod("plugins.sessionAction", ["operator.approvals"], params),
-    ).toEqual({ allowed: true });
   });
 
   it("resolves sessions.patch to write scope for chat-organization fields only", () => {
@@ -647,40 +616,6 @@ describe("method scope resolution", () => {
     ]);
   });
 
-  it("keeps gateway method scopes pinned when an agent replaces the active registry", () => {
-    const method = "fixture.gateway.inspect";
-    const gatewayRegistry = createEmptyPluginRegistry();
-    gatewayRegistry.gatewayHandlers[method] = pluginHandler;
-    gatewayRegistry.gatewayMethodDescriptors.push(
-      createPluginGatewayMethodDescriptor({
-        pluginId: "gateway-fixture",
-        name: method,
-        handler: pluginHandler,
-        scope: "operator.admin",
-      }),
-    );
-    setActivePluginRegistry(gatewayRegistry);
-    pinActivePluginHttpRouteRegistry(gatewayRegistry);
-
-    const scopedRegistry = createEmptyPluginRegistry();
-    scopedRegistry.gatewayHandlers[method] = pluginHandler;
-    scopedRegistry.gatewayMethodDescriptors.push(
-      createPluginGatewayMethodDescriptor({
-        pluginId: "agent-fixture",
-        name: method,
-        handler: pluginHandler,
-        scope: "operator.read",
-      }),
-    );
-    setActivePluginRegistry(scopedRegistry);
-
-    expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual(["operator.admin"]);
-    expect(authorizeOperatorScopesForMethod(method, ["operator.read"])).toEqual({
-      allowed: false,
-      missingScope: "operator.admin",
-    });
-  });
-
   it("keeps reserved admin namespaces admin-only even if a plugin scope is narrower", () => {
     setPluginGatewayMethodScope(RESERVED_ADMIN_PLUGIN_METHOD, "operator.read");
 
@@ -708,7 +643,7 @@ describe("operator scope authorization", () => {
     });
   });
 
-  it("allows operator.write clients to use unified Talk sessions", () => {
+  it("allows operator.talk and legacy operator.write clients to use unified Talk sessions", () => {
     for (const method of [
       "talk.client.create",
       "talk.client.transcript",
@@ -727,12 +662,15 @@ describe("operator scope authorization", () => {
       "talk.session.steer",
       "talk.session.close",
     ]) {
+      expect(authorizeOperatorScopesForMethod(method, ["operator.talk"])).toEqual({
+        allowed: true,
+      });
       expect(authorizeOperatorScopesForMethod(method, ["operator.write"])).toEqual({
         allowed: true,
       });
       expect(authorizeOperatorScopesForMethod(method, ["operator.read"])).toEqual({
         allowed: false,
-        missingScope: "operator.write",
+        missingScope: "operator.talk",
       });
     }
   });
@@ -884,6 +822,7 @@ describe("core gateway method classification", () => {
   it("exposes skill proposal methods through the core gateway registry", () => {
     for (const method of [
       "skills.proposals.list",
+      "skills.proposals.events.list",
       "skills.proposals.inspect",
       "skills.proposals.historyStatus",
     ]) {
@@ -899,6 +838,7 @@ describe("core gateway method classification", () => {
       "skills.proposals.create",
       "skills.proposals.update",
       "skills.proposals.revise",
+      "skills.proposals.evaluate",
       "skills.proposals.historyScan",
       "skills.proposals.apply",
       "skills.proposals.reject",

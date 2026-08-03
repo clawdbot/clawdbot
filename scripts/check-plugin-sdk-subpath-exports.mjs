@@ -3,16 +3,15 @@
 // Verifies plugin SDK subpath exports and generated entrypoint metadata.
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { normalizeRepoPath, visitModuleSpecifiers } from "./lib/guard-inventory-utils.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectTypeScriptFilesFromRoots,
   resolveSourceRoots,
   toLine,
 } from "./lib/ts-guard-utils.mjs";
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = resolveRepoRoot(import.meta.url);
 const scanRoots = resolveSourceRoots(repoRoot, [
   "src",
   "packages",
@@ -48,11 +47,7 @@ function readPrivateLocalOnlySubpaths() {
 }
 
 function parsePluginSdkSubpath(specifier) {
-  if (!specifier.startsWith("openclaw/plugin-sdk/")) {
-    return null;
-  }
-  const subpath = specifier.slice("openclaw/plugin-sdk/".length);
-  return subpath || null;
+  return specifier.match(/^@?openclaw\/plugin-sdk\/(.+)$/u)?.[1] ?? null;
 }
 
 function isGeneratedBuildArtifact(filePath) {
@@ -153,9 +148,14 @@ async function collectViolations() {
       });
     }
 
-    visitModuleSpecifiers(ts, sourceFile, ({ kind, node, specifier, specifierNode }) => {
-      push(kind, node, specifierNode, specifier);
-    });
+    visitModuleSpecifiers(
+      ts,
+      sourceFile,
+      ({ kind, node, specifier, specifierNode }) => {
+        push(kind, node, specifierNode, specifier);
+      },
+      { includeCommonJs: true, includeImportTypes: true },
+    );
   }
 
   return violations.toSorted(compareEntries);

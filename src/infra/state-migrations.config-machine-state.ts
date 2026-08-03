@@ -1,8 +1,10 @@
 // Imports machine-owned openclaw.json values into the shared SQLite state store.
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { compareOpenClawVersions } from "../config/version.js";
 import {
   importConfigMachineState,
+  readConfigMachineState,
   updateConfigMachineState,
 } from "../state/config-machine-state.js";
 import {
@@ -13,12 +15,6 @@ import {
 
 const BUNDLED_DISCOVERY_STATE_CUTOVER_VERSION = "2026.7.2";
 
-function record(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 /** Preserve retired machine-owned config fields before Doctor strips them. */
 export function migrateLegacyConfigMachineState(params: {
   config: OpenClawConfig;
@@ -26,8 +22,8 @@ export function migrateLegacyConfigMachineState(params: {
 }): { changes: string[]; warnings: string[] } {
   const raw = params.config as Record<string, unknown>;
   const entries: Array<readonly [string, unknown]> = [];
-  const controlUi = record(record(raw.gateway)?.controlUi);
-  const meta = record(raw.meta);
+  const controlUi = asOptionalRecord(asOptionalRecord(raw.gateway)?.controlUi);
+  const meta = asOptionalRecord(raw.meta);
   if (
     isLegacyControlUiDeviceAuthMigrationInput({
       disabledDeviceAuth: controlUi?.dangerouslyDisableDeviceAuth === true,
@@ -45,9 +41,11 @@ export function migrateLegacyConfigMachineState(params: {
   if (meta && Object.hasOwn(meta, "lastTouchedAt")) {
     entries.push(["config.lastTouchedAt", meta.lastTouchedAt]);
   }
-  const installs = record(record(record(raw.hooks)?.internal)?.installs);
+  const installs = asOptionalRecord(
+    asOptionalRecord(asOptionalRecord(raw.hooks)?.internal)?.installs,
+  );
   const hasInstalls = Boolean(installs && Object.keys(installs).length > 0);
-  const plugins = record(raw.plugins);
+  const plugins = asOptionalRecord(raw.plugins);
   if (plugins && Object.hasOwn(plugins, "bundledDiscovery")) {
     entries.push(["plugins.bundledDiscovery", plugins.bundledDiscovery]);
   } else if (
@@ -57,13 +55,28 @@ export function migrateLegacyConfigMachineState(params: {
       compareOpenClawVersions(meta.lastTouchedVersion, BUNDLED_DISCOVERY_STATE_CUTOVER_VERSION) ===
         -1)
   ) {
-    entries.push(["plugins.bundledDiscovery", "compat"]);
+    // Only infer compat when the canonical SQLite row does not already exist.
+    // Beta versions (e.g. 2026.7.2-beta.5) are treated by SemVer as older than
+    // the cutover release (2026.7.2), so the inference re-fires on every new
+    // CLI process.  Checking for an existing canonical value here avoids
+    // re-reporting the already-preserved state as a Doctor change.
+    let hasCanonicalState = false;
+    try {
+      hasCanonicalState =
+        readConfigMachineState("plugins.bundledDiscovery", { env: params.env }) !== undefined;
+    } catch {
+      // SQLite temporarily unavailable — fall through to infer compat;
+      // importConfigMachineState below will handle it.
+    }
+    if (!hasCanonicalState) {
+      entries.push(["plugins.bundledDiscovery", "compat"]);
+    }
   }
-  const tts = record(raw.tts);
+  const tts = asOptionalRecord(raw.tts);
   if (tts && Object.hasOwn(tts, "prefsPath")) {
     entries.push(["tts.prefsPath", tts.prefsPath]);
   }
-  const cron = record(raw.cron);
+  const cron = asOptionalRecord(raw.cron);
   if (cron && Object.hasOwn(cron, "store")) {
     entries.push(["cron.store", cron.store]);
   }

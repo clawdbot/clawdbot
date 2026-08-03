@@ -8,6 +8,10 @@ export type RpcAttachmentInput = {
   mimeType?: unknown;
   fileName?: unknown;
   content?: unknown;
+  sizeBytes?: unknown;
+  durationMs?: unknown;
+  width?: unknown;
+  height?: unknown;
   source?: unknown;
 };
 
@@ -24,6 +28,10 @@ function normalizeAttachmentContent(content: unknown): string | undefined {
     return Buffer.from(content).toString("base64");
   }
   return undefined;
+}
+
+function normalizeAttachmentNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 /** Convert permissive RPC attachment payloads into the bounded chat attachment shape. */
@@ -44,12 +52,20 @@ export function normalizeRpcAttachmentsToChatAttachments(
           typeof sourceRecord?.media_type === "string" ? sourceRecord.media_type : undefined;
         const sourceContent =
           sourceType === "base64" ? normalizeAttachmentContent(sourceRecord?.data) : undefined;
+        const sizeBytes = normalizeAttachmentNumber(a?.sizeBytes);
+        const durationMs = normalizeAttachmentNumber(a?.durationMs);
+        const width = normalizeAttachmentNumber(a?.width);
+        const height = normalizeAttachmentNumber(a?.height);
 
         return {
           type: typeof a?.type === "string" ? a.type : undefined,
           mimeType: typeof a?.mimeType === "string" ? a.mimeType : sourceMimeType,
           fileName: typeof a?.fileName === "string" ? a.fileName : undefined,
           content: normalizeAttachmentContent(a?.content) ?? sourceContent,
+          ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+          ...(durationMs !== undefined ? { durationMs } : {}),
+          ...(width !== undefined ? { width } : {}),
+          ...(height !== undefined ? { height } : {}),
         };
       })
       .filter((a) => a.content) ?? []

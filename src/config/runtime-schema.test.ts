@@ -303,6 +303,128 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     expect(channelProps).toHaveProperty("matrix");
   });
 
+  it("projects strict heartbeat visibility for external channels and their accounts", () => {
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "external-chat",
+          origin: "workspace",
+          channels: ["external-chat"],
+          channelConfigs: {
+            "external-chat": {
+              schema: {
+                type: "object",
+                properties: {
+                  endpoint: { type: "string" },
+                  accounts: {
+                    type: "object",
+                    additionalProperties: {
+                      type: "object",
+                      properties: { endpoint: { type: "string" } },
+                      additionalProperties: false,
+                    },
+                  },
+                },
+                additionalProperties: false,
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const result = loadGatewayRuntimeConfigSchema();
+    const schema = result.schema as { properties?: Record<string, unknown> };
+    const channels = schema.properties?.channels as { properties?: Record<string, unknown> };
+    const heartbeatVisibility = {
+      type: "object",
+      properties: {
+        showOk: { type: "boolean" },
+        showAlerts: { type: "boolean" },
+        useIndicator: { type: "boolean" },
+      },
+      additionalProperties: false,
+    };
+
+    expect(channels.properties?.["external-chat"]).toMatchObject({
+      additionalProperties: false,
+      properties: {
+        heartbeatVisibility,
+        accounts: {
+          additionalProperties: {
+            additionalProperties: false,
+            properties: { heartbeatVisibility },
+          },
+        },
+      },
+    });
+  });
+
+  it("projects canonical heartbeats into composed schemas and referenced open accounts", () => {
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "external-chat",
+          origin: "workspace",
+          channels: ["external-chat"],
+          channelConfigs: {
+            "external-chat": {
+              schema: {
+                $defs: { Account: {} },
+                anyOf: [
+                  { type: "object", additionalProperties: true },
+                  {
+                    type: "object",
+                    properties: {
+                      accounts: {
+                        type: "object",
+                        additionalProperties: { $ref: "#/$defs/Account" },
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                ],
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const result = loadGatewayRuntimeConfigSchema();
+    const schema = result.schema as { properties?: Record<string, unknown> };
+    const channels = schema.properties?.channels as { properties?: Record<string, unknown> };
+    const heartbeatVisibility = {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        showOk: { type: "boolean" },
+        showAlerts: { type: "boolean" },
+        useIndicator: { type: "boolean" },
+      },
+    };
+
+    const projected = channels.properties?.["external-chat"] as Record<string, unknown>;
+    expect(projected).toMatchObject({
+      properties: { heartbeatVisibility },
+      anyOf: [
+        { additionalProperties: true, properties: { heartbeatVisibility } },
+        {
+          additionalProperties: false,
+          properties: {
+            heartbeatVisibility,
+            accounts: {
+              additionalProperties: { properties: { heartbeatVisibility } },
+            },
+          },
+        },
+      ],
+    });
+    expect(projected.$defs).toEqual({ Account: {} });
+  });
+
   it("reuses the current gateway plugin metadata snapshot for config schema requests", () => {
     mockGetCurrentPluginMetadataSnapshot.mockReturnValueOnce({
       manifestRegistry: {

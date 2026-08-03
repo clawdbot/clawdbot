@@ -15,9 +15,10 @@ import {
   type OAuthCredentials,
   type OAuthProviderId,
 } from "../../llm/oauth.js";
+import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
 import {
   formatProviderAuthProfileApiKeyWithPlugin,
-  refreshProviderOAuthCredentialWithPlugin,
+  resolveProviderOAuthCredentialWithPlugin,
 } from "../../plugins/provider-runtime.runtime.js";
 import { secretRefKey } from "../../secrets/ref-contract.js";
 import { resolveAuthProfileSecretOwnerId } from "../../secrets/runtime-auth-profile-owner.js";
@@ -181,19 +182,26 @@ type ResolveApiKeyForProfileParams = {
   profileId: string;
   agentDir?: string;
   forceRefresh?: boolean;
+  allowProfileFallback?: boolean;
 };
 
 type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
 
 async function refreshOAuthCredential(
   credential: OAuthCredential,
+  context: { cfg?: OpenClawConfig } = {},
 ): Promise<OAuthCredentials | null> {
-  const pluginRefreshed = await refreshProviderOAuthCredentialWithPlugin({
+  const pluginResult = await resolveProviderOAuthCredentialWithPlugin({
     provider: credential.provider,
-    context: credential,
+    config: context.cfg,
+    credential,
+    refresh: true,
   });
-  if (pluginRefreshed) {
-    return pluginRefreshed;
+  if (pluginResult.status === "available") {
+    return pluginResult.credential;
+  }
+  if (pluginResult.status === "configured-unavailable") {
+    throw new OAuthProviderConfiguredUnavailableError(credential.provider);
   }
 
   if (credential.provider === "chutes") {
@@ -215,8 +223,9 @@ async function refreshOAuthCredential(
 /** Refresh one OAuth credential and merge provider-returned token fields. */
 export async function refreshOAuthCredentialForRuntime(params: {
   credential: OAuthCredential;
+  cfg?: OpenClawConfig;
 }): Promise<OAuthCredential | null> {
-  const refreshed = await refreshOAuthCredential(params.credential);
+  const refreshed = await refreshOAuthCredential(params.credential, { cfg: params.cfg });
   return refreshed
     ? {
         ...params.credential,
@@ -524,12 +533,15 @@ export async function resolveApiKeyForProfile(
       }
       refreshedStore = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
     }
-    const fallbackProfileId = suggestOAuthProfileIdForLegacyDefault({
-      cfg,
-      store: refreshedStore,
-      provider: cred.provider,
-      legacyProfileId: profileId,
-    });
+    const fallbackProfileId =
+      params.allowProfileFallback === false
+        ? null
+        : suggestOAuthProfileIdForLegacyDefault({
+            cfg,
+            store: refreshedStore,
+            provider: cred.provider,
+            legacyProfileId: profileId,
+          });
     if (fallbackProfileId && fallbackProfileId !== profileId) {
       try {
         const fallbackResolved = await tryResolveOAuthProfile({

@@ -49,7 +49,6 @@ function writeInstallIndex(params: { stateDir: string; pluginDir: string }): voi
           startup: {
             sidecar: false,
             memory: false,
-            deferConfiguredChannelFullLoadUntilAfterListen: false,
             agentHarnesses: [],
           },
           compat: [],
@@ -108,7 +107,7 @@ describe("manifest model id normalization", () => {
     }
   });
 
-  it("reflects manifest and state-dir changes without a prepared snapshot", () => {
+  it("reflects manifest edits and state directory changes without a prepared snapshot", () => {
     const stateDirA = makeTempDir();
     const pluginDirA = path.join(stateDirA, "extensions", "normalizer");
     writeInstallIndex({ stateDir: stateDirA, pluginDir: pluginDirA });

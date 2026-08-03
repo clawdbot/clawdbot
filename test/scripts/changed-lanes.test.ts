@@ -300,7 +300,7 @@ describe("scripts/changed-lanes", () => {
     });
 
     expect(result.status).toBe(0);
-    expect(result.stderr).toContain("delegating to Blacksmith Testbox");
+    expect(result.stderr).toContain("delegating through Crabbox workload routing");
     expect(result.stderr).not.toContain("ambiguous argument");
   });
 
@@ -334,7 +334,7 @@ describe("scripts/changed-lanes", () => {
     );
 
     expect(result.status).toBe(0);
-    expect(result.stderr).toContain("delegating to Blacksmith Testbox");
+    expect(result.stderr).toContain("delegating through Crabbox workload routing");
   });
 
   it.each([
@@ -348,7 +348,10 @@ describe("scripts/changed-lanes", () => {
       name: "rejects unknown changed check options before treating them as paths",
       script: "scripts/check-changed.mjs",
       option: "--dr-run",
-      expected: { stderr: "Unknown option: --dr-run", excludes: ["[check:changed]"] },
+      expected: {
+        stderr: "Unknown option: --dr-run\n[check:changed] FAILED (exit 1)",
+        excludes: [],
+      },
     },
   ])("$name", ({ script, option, expected }) => {
     const result = runRepoScript(script, [option], {
@@ -804,6 +807,48 @@ describe("scripts/changed-lanes", () => {
     }
   });
 
+  it("keeps manifest-declared generated browser assets out of targeted extension lint", () => {
+    const generatedAsset = "extensions/browser/chrome-extension/modules/copilot-runtime.js";
+    const result = detectChangedLanes([
+      generatedAsset,
+      "packages/gateway-client/src/protocol-client.ts",
+    ]);
+    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
+
+    expect(result.lanes.extensions).toBe(true);
+    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:extensions");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("lint:extensions");
+    expect(
+      plan.commands
+        .filter((command) => command.args[0] === "scripts/run-oxlint.mjs")
+        .flatMap((command) => command.args),
+    ).not.toContain(generatedAsset);
+  });
+
+  it("still lints extension source alongside its generated browser asset", () => {
+    const generatedAsset = "extensions/browser/chrome-extension/modules/copilot-runtime.js";
+    const source = "extensions/browser/scripts/copilot-runtime-entry.ts";
+    const result = detectChangedLanes([generatedAsset, source]);
+    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
+
+    expect(plan.commands).toContainEqual(
+      expect.objectContaining({
+        name: "lint extension changed file",
+        args: [
+          "scripts/run-oxlint.mjs",
+          "--tsconfig",
+          "config/tsconfig/oxlint.extensions.json",
+          source,
+        ],
+      }),
+    );
+    expect(
+      plan.commands
+        .filter((command) => command.args[0] === "scripts/run-oxlint.mjs")
+        .flatMap((command) => command.args),
+    ).not.toContain(generatedAsset);
+  });
+
   it.each([
     {
       owner: "core",
@@ -911,6 +956,7 @@ describe("scripts/changed-lanes", () => {
 
     expect(shouldRunControlUiI18nVerify(result.paths)).toBe(true);
     expect(plan.commands.map((command) => command.args[0])).toContain("lint:ui:i18n");
+    expect(shouldRunControlUiI18nVerify(["ui/config/control-ui-locales.ts"])).toBe(true);
     expect(shouldRunControlUiI18nVerify(["scripts/lib/example.ts"])).toBe(false);
   });
 
@@ -1098,16 +1144,8 @@ describe("scripts/changed-lanes", () => {
     expect(buildChangedCheckCrabboxArgs(["--base", "origin/main", "--head", "HEAD"])).toEqual([
       "scripts/crabbox-wrapper.mjs",
       "run",
-      "--provider",
-      "blacksmith-testbox",
-      "--blacksmith-org",
-      "openclaw",
-      "--blacksmith-workflow",
-      ".github/workflows/ci-check-testbox.yml",
-      "--blacksmith-job",
-      "check",
-      "--blacksmith-ref",
-      "main",
+      "--workload",
+      "ci-fast",
       "--idle-timeout",
       "90m",
       "--ttl",
@@ -2076,7 +2114,7 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
     expect(plan.commands).toContainEqual(
       expect.objectContaining({
-        name: "Canvas A2UI native resource sync",
+        name: "Canvas A2UI native resource generation",
         bin: "node",
         args: ["scripts/sync-native-a2ui.mjs", "--check"],
       }),
@@ -2095,7 +2133,7 @@ describe("scripts/changed-lanes", () => {
     expect(shouldRunCanvasA2uiNativeResourceCheck(result.paths)).toBe(true);
     expect(plan.commands).toContainEqual(
       expect.objectContaining({
-        name: "Canvas A2UI native resource sync",
+        name: "Canvas A2UI native resource generation",
         bin: "node",
         args: ["scripts/sync-native-a2ui.mjs", "--check"],
       }),
@@ -2114,7 +2152,26 @@ describe("scripts/changed-lanes", () => {
     expect(shouldRunCanvasA2uiNativeResourceCheck(result.paths)).toBe(true);
     expect(plan.commands).toContainEqual(
       expect.objectContaining({
-        name: "Canvas A2UI native resource sync",
+        name: "Canvas A2UI native resource generation",
+        bin: "node",
+        args: ["scripts/sync-native-a2ui.mjs", "--check"],
+      }),
+    );
+  });
+
+  it.each([
+    "apps/android/app/build.gradle.kts",
+    "apps/ios/project.yml",
+    "apps/linux/src-tauri/build.rs",
+    "apps/linux/src-tauri/src/canvas.rs",
+  ])("checks native A2UI ownership when %s changes", (ownerPath) => {
+    const result = detectChangedLanes([ownerPath]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(shouldRunCanvasA2uiNativeResourceCheck(result.paths)).toBe(true);
+    expect(plan.commands).toContainEqual(
+      expect.objectContaining({
+        name: "Canvas A2UI native resource generation",
         bin: "node",
         args: ["scripts/sync-native-a2ui.mjs", "--check"],
       }),

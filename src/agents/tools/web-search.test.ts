@@ -16,6 +16,10 @@ import { mergeScopedSearchConfig } from "./web-search-provider-config.js";
 import { createWebSearchTool } from "./web-search.js";
 
 describe("web_search tool schema", () => {
+  it("omits the managed tool when the session disables web search", () => {
+    expect(createWebSearchTool({ enabled: false })).toBeNull();
+  });
+
   it("marks query as required for model tool-call schemas", () => {
     const tool = createWebSearchTool();
     const parameters = tool?.parameters as { required?: unknown } | undefined;

@@ -167,7 +167,7 @@ export class McpAppView extends LitElement {
         return null;
       }
       if (!client) {
-        throw new Error("MCP App gateway unavailable");
+        throw new Error(t("mcpApp.errors.gatewayUnavailable"));
       }
       return this.setupResources({ client, sessionKey, viewId }, signal);
     },
@@ -302,7 +302,7 @@ export class McpAppView extends LitElement {
       const mount = this.mount.value;
       signal.throwIfAborted();
       if (!mount) {
-        throw new Error("MCP App mount unavailable");
+        throw new Error(t("mcpApp.errors.mountUnavailable"));
       }
       const iframe = document.createElement("iframe");
       iframe.title = this.title || t("mcpApp.title");
@@ -331,7 +331,7 @@ export class McpAppView extends LitElement {
       const proxyReady = new Promise<void>((resolve, reject) => {
         const timeout = window.setTimeout(() => {
           cleanupProxyReady();
-          reject(new Error("MCP App sandbox timed out"));
+          reject(new Error(t("mcpApp.errors.sandboxTimedOut")));
         }, 15_000);
         const onMessage = (event: MessageEvent) => {
           if (
@@ -358,7 +358,7 @@ export class McpAppView extends LitElement {
       await proxyReady;
       signal.throwIfAborted();
       if (!iframe.contentWindow) {
-        throw new Error("MCP App sandbox unavailable");
+        throw new Error(t("mcpApp.errors.sandboxUnavailable"));
       }
 
       const bridge = new OpenClawAppBridge(
@@ -455,7 +455,7 @@ export class McpAppView extends LitElement {
           initialized,
           new Promise<never>((_, reject) => {
             initializationTimeout = window.setTimeout(
-              () => reject(new Error("MCP App initialization timed out")),
+              () => reject(new Error(t("mcpApp.errors.initializationTimedOut"))),
               15_000,
             );
           }),
@@ -503,7 +503,7 @@ export class McpAppView extends LitElement {
               ? error.message
               : typeof error === "string"
                 ? error
-                : "request failed",
+                : t("mcpApp.errors.requestFailed"),
         })
       : null;
     return html`<div ${ref(this.mount)} class="mount"></div>

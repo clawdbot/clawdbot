@@ -30,9 +30,15 @@ import { updateMcpAppModelContext } from "./mcp-app-model-context.js";
 vi.mock("./embedded-agent-mcp.js", () => ({
   loadEmbeddedAgentMcpConfig: (params: {
     cfg?: { mcp?: { servers?: Record<string, unknown> } };
+    toolOverrides?: { mcpServers?: Record<string, boolean> };
   }) => ({
     diagnostics: [],
-    mcpServers: params.cfg?.mcp?.servers ?? {},
+    mcpServers: Object.fromEntries(
+      Object.entries(params.cfg?.mcp?.servers ?? {}).filter(([name]) => {
+        const overrides = params.toolOverrides?.mcpServers;
+        return !(overrides && Object.hasOwn(overrides, name) && overrides[name] === false);
+      }),
+    ),
   }),
 }));
 
@@ -69,18 +75,23 @@ async function writeListToolsMcpServer(params: {
   exitOnListCall?: number;
   listToolsMethodNotFound?: boolean;
   listToolsJsonRpcErrorMessage?: string;
+  toolPageCursors?: Array<string | null>;
   callToolIsError?: boolean;
   callToolJsonRpcError?: boolean;
   callToolJsonRpcErrorCode?: number;
   callToolResult?: CallToolResult;
   resourcePageDelayMs?: number;
   resourcePageCount?: number;
+  resourcePageCursors?: Array<string | null>;
   resourceListJsonRpcError?: boolean;
   resourceReadJsonRpcError?: boolean;
+  promptPageDelayMs?: number;
+  promptPageCursors?: Array<string | null>;
 }): Promise<void> {
   await writeExecutable(
     params.filePath,
     `#!/usr/bin/env node
+import { appendFileSync } from "node:fs";
 import fs from "node:fs/promises";
 
 const logPath = ${JSON.stringify(params.logPath)};
@@ -98,6 +109,7 @@ const notifyListChangedAfterFirstList = ${params.notifyListChangedAfterFirstList
 const exitOnListCall = ${params.exitOnListCall ?? 0};
 const listToolsMethodNotFound = ${params.listToolsMethodNotFound === true};
 const listToolsJsonRpcErrorMessage = ${JSON.stringify(params.listToolsJsonRpcErrorMessage)};
+const toolPageCursors = ${JSON.stringify(params.toolPageCursors)};
 const tools = ${JSON.stringify(
       params.tools ?? [
         {
@@ -113,12 +125,16 @@ const callToolJsonRpcErrorCode = ${params.callToolJsonRpcErrorCode ?? -32000};
 const callToolResult = ${JSON.stringify(params.callToolResult)};
 const resourcePageDelayMs = ${params.resourcePageDelayMs ?? 0};
 const resourcePageCount = ${params.resourcePageCount ?? 1};
+const resourcePageCursors = ${JSON.stringify(params.resourcePageCursors)};
 const resourceListJsonRpcError = ${params.resourceListJsonRpcError === true};
 const resourceReadJsonRpcError = ${params.resourceReadJsonRpcError === true};
+const promptPageDelayMs = ${params.promptPageDelayMs ?? 0};
+const promptPageCursors = ${JSON.stringify(params.promptPageCursors)};
 
 let buffer = "";
 let listCount = 0;
 let resourceListCount = 0;
+let promptListCount = 0;
 let pendingTimer;
 let keepAlive;
 let database;
@@ -141,7 +157,7 @@ if (hangToolCallsUntilRestartMarkerPath) {
   }
 }
 function log(line) {
-  void fs.appendFile(logPath, line + "\\n", "utf8").catch(() => {});
+  appendFileSync(logPath, line + "\\n", "utf8");
 }
 function send(message) {
   process.stdout.write(JSON.stringify(message) + "\\n");
@@ -177,6 +193,7 @@ function handle(message) {
   }
   if (message.method === "tools/list") {
     listCount += 1;
+    log("tools/list cursor " + JSON.stringify(message.params?.cursor));
     if (listCount === exitOnListCall) {
       log("exit tools/list " + listCount);
       process.exit(1);
@@ -205,13 +222,19 @@ function handle(message) {
       return;
     }
     const currentListCount = listCount;
+    const toolPageCursor = toolPageCursors?.[currentListCount - 1];
     log("delay tools/list " + delayMs);
     pendingTimer = setTimeout(() => {
       send({
         jsonrpc: "2.0",
         id: message.id,
         result: {
-          tools,
+          tools: toolPageCursors
+            ? tools.map((tool) => ({ ...tool, name: tool.name + "-" + currentListCount }))
+            : tools,
+          ...(toolPageCursor !== undefined && toolPageCursor !== null
+            ? { nextCursor: toolPageCursor }
+            : {}),
         },
       });
       if (notifyListChangedAfterFirstList && currentListCount === 1) {
@@ -247,6 +270,7 @@ function handle(message) {
   }
   if (message.method === "resources/list") {
     resourceListCount += 1;
+    log("resources/list cursor " + JSON.stringify(message.params?.cursor));
     if (resourceListJsonRpcError) {
       send({
         jsonrpc: "2.0",
@@ -256,17 +280,40 @@ function handle(message) {
       return;
     }
     setTimeout(() => {
+      const resourcePageCursor = resourcePageCursors?.[resourceListCount - 1];
       send({
         jsonrpc: "2.0",
         id: message.id,
         result: {
-          resources: [],
-          ...(resourceListCount < resourcePageCount
-            ? { nextCursor: String(resourceListCount) }
-            : {}),
+          resources: resourcePageCursors
+            ? [{ uri: "memo://page-" + resourceListCount, name: "page-" + resourceListCount }]
+            : [],
+          ...(resourcePageCursor !== undefined && resourcePageCursor !== null
+            ? { nextCursor: resourcePageCursor }
+            : resourceListCount < resourcePageCount
+              ? { nextCursor: String(resourceListCount) }
+              : {}),
         },
       });
     }, resourcePageDelayMs);
+    return;
+  }
+  if (message.method === "prompts/list") {
+    promptListCount += 1;
+    log("prompts/list cursor " + JSON.stringify(message.params?.cursor));
+    setTimeout(() => {
+      const promptPageCursor = promptPageCursors?.[promptListCount - 1];
+      send({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          prompts: [{ name: "prompt-" + promptListCount }],
+          ...(promptPageCursor !== undefined && promptPageCursor !== null
+            ? { nextCursor: promptPageCursor }
+            : {}),
+        },
+      });
+    }, promptPageDelayMs);
     return;
   }
   if (message.method === "resources/read") {
@@ -1301,6 +1348,73 @@ describe("session MCP runtime", () => {
     }
   });
 
+  it("applies session tool denials to listed and synthetic MCP tools", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-session-deny-");
+    const serverPath = path.join(tempDir, "session-deny.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      capabilities: { tools: {}, resources: {} },
+      tools: [
+        { name: "search_docs", inputSchema: { type: "object", properties: {} } },
+        { name: "read_docs", inputSchema: { type: "object", properties: {} } },
+      ],
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-tool-deny",
+      sessionKey: "agent:test:session-tool-deny",
+      workspaceDir: tempDir,
+      cfg: {
+        mcp: {
+          servers: { docs: { command: process.execPath, args: [serverPath] } },
+        },
+      },
+      toolOverrides: {
+        mcpToolsDeny: { docs: ["read_docs", "resources_read"] },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["search_docs"]);
+      expect(catalog.sessionDeniedTools).toMatchObject([
+        { serverName: "docs", toolName: "read_docs", deniedBySession: true },
+      ]);
+      expect(catalog.servers.docs?.toolCount).toBe(1);
+
+      const materialized = await materializeBundleMcpToolsForRun({ runtime });
+      expect(materialized.tools.map((tool) => tool.name)).toEqual([
+        "docs__resources_list",
+        "docs__search_docs",
+      ]);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("does not read inherited properties as MCP tool denials", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-own-deny-");
+    const serverPath = path.join(tempDir, "own-deny.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({ filePath: serverPath, logPath });
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-own-deny",
+      workspaceDir: tempDir,
+      cfg: { mcp: { servers: { constructor: { command: process.execPath, args: [serverPath] } } } },
+      toolOverrides: { mcpToolsDeny: { docs: ["slow_tool"] } },
+    });
+
+    try {
+      expect((await runtime.getCatalog()).tools.map((tool) => tool.toolName)).toEqual([
+        "slow_tool",
+      ]);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
   it("does not split a surrogate pair at the MCP metadata text limit", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-utf16-metadata-"));
     const serverPath = path.join(tempDir, "utf16-metadata.mjs");
@@ -2099,7 +2213,115 @@ process.on("SIGINT", shutdown);`,
     }
   });
 
-  it("gives each paginated resource request its own timeout", async () => {
+  it("loads tool pages after an empty opaque cursor", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-tool-empty-cursor-");
+    const serverPath = path.join(tempDir, "tool-pages.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      toolPageCursors: ["", null],
+    });
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-tool-empty-cursor",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: { servers: { paged: { command: process.execPath, args: [serverPath] } } },
+      },
+    });
+
+    try {
+      await expect(runtime.getCatalog()).resolves.toMatchObject({
+        tools: [{ toolName: "slow_tool-1" }, { toolName: "slow_tool-2" }],
+      });
+      await waitForFileText(logPath, 'tools/list cursor ""', LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("isolates a cyclic tool catalog while a healthy bundle MCP sibling survives", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-tool-cycle-");
+    const loopingPath = path.join(tempDir, "looping.mjs");
+    const loopingLogPath = path.join(tempDir, "looping.log");
+    const healthyPath = path.join(tempDir, "healthy.mjs");
+    const healthyLogPath = path.join(tempDir, "healthy.log");
+    await writeListToolsMcpServer({
+      filePath: loopingPath,
+      logPath: loopingLogPath,
+      toolPageCursors: ["same", "same"],
+    });
+    await writeListToolsMcpServer({ filePath: healthyPath, logPath: healthyLogPath });
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-tool-cycle",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            looping: { command: process.execPath, args: [loopingPath] },
+            healthy: { command: process.execPath, args: [healthyPath] },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+      expect(catalog.tools.map((tool) => `${tool.serverName}:${tool.toolName}`)).toEqual([
+        "healthy:slow_tool",
+      ]);
+      expect(
+        catalog.diagnostics?.find((entry) => entry.serverName === "looping")?.message,
+      ).toContain("repeated pagination cursor");
+      await waitForFileText(healthyLogPath, "recv tools/list", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("loads resource and prompt pages after empty opaque cursors", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-utility-empty-cursor-");
+    const serverPath = path.join(tempDir, "utility-pages.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      capabilities: { resources: {}, prompts: {} },
+      listToolsMethodNotFound: true,
+      resourcePageCursors: ["", null],
+      promptPageCursors: ["", null],
+    });
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-utility-empty-cursor",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: { servers: { paged: { command: process.execPath, args: [serverPath] } } },
+      },
+    });
+
+    try {
+      await runtime.getCatalog();
+      const listResources = runtime.listResources;
+      const listPrompts = runtime.listPrompts;
+      if (!listResources || !listPrompts) {
+        throw new Error("Expected test runtime to expose resource and prompt utilities");
+      }
+      await expect(listResources("paged")).resolves.toMatchObject([
+        { uri: "memo://page-1" },
+        { uri: "memo://page-2" },
+      ]);
+      await expect(listPrompts("paged")).resolves.toMatchObject([
+        { name: "prompt-1" },
+        { name: "prompt-2" },
+      ]);
+      await waitForFileText(logPath, 'resources/list cursor ""', LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+      await waitForFileText(logPath, 'prompts/list cursor ""', LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("bounds the complete paginated resource listing by one absolute timeout", async () => {
     const tempDir = tempDirTracker.make("bundle-mcp-resource-pages-");
     const serverPath = path.join(tempDir, "resource-pages.mjs");
     const logPath = path.join(tempDir, "server.log");
@@ -2133,7 +2355,9 @@ process.on("SIGINT", shutdown);`,
       if (!runtime.listResources) {
         throw new Error("Expected test runtime to expose resource utilities");
       }
-      await expect(runtime.listResources("paged")).resolves.toEqual([]);
+      await expect(runtime.listResources("paged")).rejects.toThrow(
+        "MCP resource listing timed out after 150ms",
+      );
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -2983,6 +3207,21 @@ describe("requester-scoped MCP connection resolution", () => {
     expect(
       resolveSessionMcpConfigSummary({ workspaceDir: "/workspace", cfg: cfg as never }).fingerprint,
     ).toBe(staticRuntime.configFingerprint);
+
+    const toolOverrides = { mcpServers: { shared: false } };
+    const overriddenSummary = resolveSessionMcpConfigSummary({
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      toolOverrides,
+    });
+    const overriddenRuntime = await manager.getOrCreate({
+      sessionId: "session-parity-overridden",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      toolOverrides,
+    });
+    expect(overriddenSummary.serverNames).toEqual(["user-mail"]);
+    expect(overriddenSummary.fingerprint).toBe(overriddenRuntime.configFingerprint);
 
     // With a resolver registered, tools.effective peeks the bare static-partition
     // runtime; summary parity keeps it from reporting stale-config forever.
@@ -4605,6 +4844,296 @@ process.stdin.on("end", () => {
       expect(elapsed).toBeLessThan(1_000);
 
       await fs.rm(tempDir, { recursive: true, force: true });
+    },
+  );
+
+  it(
+    "does not recycle a stateless streamable-http server on HTTP 404",
+    { timeout: 15_000 },
+    async () => {
+      let initializeCount = 0;
+      const callSessionIds: Array<string | undefined> = [];
+      const server = http.createServer((req, res) => {
+        if (req.method === "GET") {
+          res.writeHead(405).end();
+          return;
+        }
+        if (req.method !== "POST") {
+          res.writeHead(405).end();
+          return;
+        }
+
+        let body = "";
+        req.on("data", (chunk: Buffer) => {
+          body += chunk.toString();
+        });
+        req.on("end", () => {
+          const message = JSON.parse(body) as {
+            id?: number | string;
+            method?: string;
+            params?: { protocolVersion?: string };
+          };
+          if (message.method === "notifications/initialized") {
+            res.writeHead(202).end();
+            return;
+          }
+          if (message.method === "tools/call") {
+            const sessionId = req.headers["mcp-session-id"];
+            callSessionIds.push(typeof sessionId === "string" ? sessionId : undefined);
+            res.writeHead(404).end("Session not found");
+            return;
+          }
+
+          res.setHeader("content-type", "application/json");
+          if (message.method === "initialize") {
+            initializeCount += 1;
+            res.writeHead(200).end(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: message.id,
+                result: {
+                  protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
+                  capabilities: { tools: {} },
+                  serverInfo: { name: "stateless-404-server", version: "1.0.0" },
+                },
+              }),
+            );
+            return;
+          }
+          if (message.method === "tools/list") {
+            res.writeHead(200).end(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: message.id,
+                result: {
+                  tools: [{ name: "probe", description: "probe", inputSchema: { type: "object" } }],
+                },
+              }),
+            );
+            return;
+          }
+          res.writeHead(405).end();
+        });
+      });
+
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address() as { port: number };
+      let runtime: SessionMcpRuntime | undefined;
+
+      try {
+        runtime = await getOrCreateSessionMcpRuntime({
+          sessionId: "session-stateless-streamable-http-404",
+          sessionKey: "agent:test:session-stateless-streamable-http-404",
+          workspaceDir: "/workspace",
+          cfg: {
+            mcp: {
+              servers: {
+                stateless: {
+                  url: `http://127.0.0.1:${address.port}/mcp`,
+                  transport: "streamable-http",
+                },
+              },
+            },
+          },
+        });
+
+        expect((await runtime.getCatalog()).tools).toHaveLength(1);
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          await expect(runtime.callTool("stateless", "probe", {})).rejects.toThrow(
+            "Session not found",
+          );
+        }
+        await expect(runtime.callTool("stateless", "probe", {})).rejects.toThrow(
+          'bundle-mcp server "stateless" is paused after repeated tool failures',
+        );
+        expect(initializeCount).toBe(1);
+        expect(callSessionIds).toEqual([undefined, undefined, undefined]);
+        expect(runtime.peekCatalog()?.diagnostics).toBeUndefined();
+      } finally {
+        await runtime?.dispose();
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
+
+  it(
+    "reconnects a stateful streamable-http server after its session expires",
+    { timeout: 15_000 },
+    async () => {
+      let activeServerSessionId: string | undefined;
+      let initializeCount = 0;
+      const callAttempts: Array<{ attempt: unknown; sessionId: string | undefined }> = [];
+      const staleTerminations: string[] = [];
+      const invalidAuthHeaders: Array<string | undefined> = [];
+
+      const server = http.createServer((req, res) => {
+        const authHeader = req.headers["x-mcp-recovery"];
+        if (authHeader !== "proof") {
+          invalidAuthHeaders.push(Array.isArray(authHeader) ? authHeader.join(",") : authHeader);
+          res.writeHead(401).end();
+          return;
+        }
+        if (req.method === "GET") {
+          res.writeHead(405).end();
+          return;
+        }
+        if (req.method === "DELETE") {
+          const sessionId = req.headers["mcp-session-id"];
+          if (typeof sessionId === "string" && sessionId !== activeServerSessionId) {
+            staleTerminations.push(sessionId);
+            res.writeHead(404).end("Session not found");
+            return;
+          }
+          res.writeHead(204).end();
+          return;
+        }
+        if (req.method !== "POST") {
+          res.writeHead(405).end();
+          return;
+        }
+
+        let body = "";
+        req.on("data", (chunk: Buffer) => {
+          body += chunk.toString();
+        });
+        req.on("end", () => {
+          const message = JSON.parse(body) as {
+            id?: number | string;
+            method?: string;
+            params?: { arguments?: { attempt?: unknown }; protocolVersion?: string };
+          };
+          if (message.method === "initialize") {
+            initializeCount += 1;
+            activeServerSessionId = `server-session-${initializeCount}`;
+            res.setHeader("mcp-session-id", activeServerSessionId);
+            res.setHeader("content-type", "application/json");
+            res.writeHead(200).end(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: message.id,
+                result: {
+                  protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
+                  capabilities: { tools: {} },
+                  serverInfo: { name: "stateful-recovery-server", version: "1.0.0" },
+                },
+              }),
+            );
+            return;
+          }
+
+          const requestSessionId = req.headers["mcp-session-id"];
+          const sessionId = typeof requestSessionId === "string" ? requestSessionId : undefined;
+          if (message.method === "tools/call") {
+            callAttempts.push({ attempt: message.params?.arguments?.attempt, sessionId });
+          }
+          if (!sessionId || sessionId !== activeServerSessionId) {
+            res.writeHead(404).end("Session not found");
+            return;
+          }
+          if (message.method === "notifications/initialized") {
+            res.writeHead(202).end();
+            return;
+          }
+          res.setHeader("mcp-session-id", sessionId);
+          res.setHeader("content-type", "application/json");
+          if (message.method === "tools/list") {
+            res.writeHead(200).end(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: message.id,
+                result: {
+                  tools: [{ name: "probe", description: "probe", inputSchema: { type: "object" } }],
+                },
+              }),
+            );
+            return;
+          }
+          if (message.method === "tools/call") {
+            res.writeHead(200).end(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: message.id,
+                result: {
+                  content: [{ type: "text", text: `recovered ${sessionId}` }],
+                },
+              }),
+            );
+            return;
+          }
+          res.writeHead(405).end();
+        });
+      });
+
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address() as { port: number };
+      let runtime: SessionMcpRuntime | undefined;
+
+      try {
+        runtime = await getOrCreateSessionMcpRuntime({
+          sessionId: "session-stateful-streamable-http-recovery",
+          sessionKey: "agent:test:session-stateful-streamable-http-recovery",
+          workspaceDir: "/workspace",
+          cfg: {
+            mcp: {
+              servers: {
+                stateful: {
+                  url: `http://127.0.0.1:${address.port}/mcp`,
+                  transport: "streamable-http",
+                  headers: { "x-mcp-recovery": "proof" },
+                },
+              },
+            },
+          },
+        });
+
+        expect((await runtime.getCatalog()).tools).toHaveLength(1);
+        await expect(
+          runtime.callTool("stateful", "probe", { attempt: "before" }),
+        ).resolves.toMatchObject({
+          content: [{ type: "text", text: "recovered server-session-1" }],
+        });
+
+        // Restart invalidates the server-side session without closing the HTTP
+        // transport. A failed mutating request must never be silently replayed.
+        activeServerSessionId = undefined;
+        await expect(runtime.callTool("stateful", "probe", { attempt: "expired" })).rejects.toThrow(
+          "Session not found",
+        );
+        expect(runtime.peekCatalog()?.diagnostics).toEqual([
+          expect.objectContaining({ serverName: "stateful" }),
+        ]);
+
+        await runtime.getCatalog();
+        await waitForPredicate(
+          () => initializeCount === 2 && !runtime?.peekCatalog()?.diagnostics?.length,
+          "stateful MCP server to replace its expired HTTP session",
+          LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+        );
+
+        await expect(
+          runtime.callTool("stateful", "probe", { attempt: "after" }),
+        ).resolves.toMatchObject({
+          content: [{ type: "text", text: "recovered server-session-2" }],
+        });
+        expect(callAttempts).toEqual([
+          { attempt: "before", sessionId: "server-session-1" },
+          { attempt: "expired", sessionId: "server-session-1" },
+          { attempt: "after", sessionId: "server-session-2" },
+        ]);
+        expect(staleTerminations).toEqual(["server-session-1"]);
+        expect(invalidAuthHeaders).toEqual([]);
+      } finally {
+        await runtime?.dispose();
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
     },
   );
 

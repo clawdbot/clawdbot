@@ -24,7 +24,7 @@ describe("gateway network client", () => {
     expect(signal).toBeInstanceOf(AbortSignal);
     const requestSignal = signal as AbortSignal;
     return new Promise((_, reject) => {
-      const rejectWithReason = () => reject(requestSignal.reason);
+      const rejectWithReason = () => reject(requestSignal.reason as Error);
       if (requestSignal.aborted) {
         rejectWithReason();
         return;
@@ -207,7 +207,14 @@ describe("gateway network client", () => {
     expect(Date.now() - startedAt).toBeLessThan(500);
     expect(bodySignal?.aborted).toBe(true);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(String(fetchImpl.mock.calls[1]?.[0])).toContain("/healthz");
+    const request = fetchImpl.mock.calls[1]?.[0];
+    const requestUrl =
+      request instanceof Request
+        ? request.url
+        : request instanceof URL
+          ? request.href
+          : (request ?? "");
+    expect(requestUrl).toContain("/healthz");
   });
 
   it("bounds a stalled post-restart admin request by the client deadline", async () => {

@@ -7,7 +7,7 @@ import {
   type ResolvedMSTeamsAccount,
 } from "./channel-config.js";
 import { MSTeamsChannelConfigSchema } from "./config-schema.js";
-import { msteamsSetupAdapter, msteamsSetupContract } from "./setup-core.js";
+import { msteamsSetupContract } from "./setup-core.js";
 import { msteamsSetupWizard } from "./setup-surface.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
@@ -35,6 +35,5 @@ export const msteamsSetupPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
       }),
   },
   setupWizard: msteamsSetupWizard,
-  setup: msteamsSetupAdapter,
   setupContract: msteamsSetupContract,
 };

@@ -21,13 +21,15 @@ describe("scripts/check", () => {
   });
 
   it("rejects unknown args before running check stages", () => {
-    const result = runCheck("--bogus");
+    for (const args of [["--bogus"], ["bogus", "--help"]]) {
+      const result = runCheck(...args);
 
-    expect(result.status).toBe(2);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("unknown argument: --bogus");
-    expect(result.stderr).toContain("Usage: node scripts/check.mjs");
-    expect(result.stderr).not.toContain("[check]");
+      expect(result.status).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(`unknown argument: ${args[0]}`);
+      expect(result.stderr).toContain("Usage: node scripts/check.mjs");
+      expect(result.stderr).not.toContain("[check]");
+    }
   });
 
   it("runs pnpm commands through the managed child runner", async () => {

@@ -14,6 +14,7 @@ import type {
 } from "../packages/gateway-protocol/src/index.js";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { applySharedChannelFieldHelp } from "../src/config/schema.channel-field-help.js";
+import { buildBaseHints } from "../src/config/schema.hints.js";
 import { applyConfigTierHints, applyResolvedConfigTierHints } from "../src/config/schema.tiers.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
 import {
@@ -833,16 +834,33 @@ function buildConfigMocks(options: { swarmEnabled?: boolean } = {}) {
       },
     },
   };
+  const get = {
+    path: "~/.openclaw/openclaw.json",
+    exists: true,
+    raw: `${JSON.stringify(config, null, 2)}\n`,
+    hash: "mock-config-hash",
+    appliedConfigHash: "mock-config-hash",
+    valid: true,
+    config,
+    issues: [],
+  };
+  const writeAck = { ok: true, path: get.path, hash: get.hash, config };
   return {
-    get: {
-      path: "~/.openclaw/openclaw.json",
-      exists: true,
-      raw: `${JSON.stringify(config, null, 2)}\n`,
-      hash: "mock-config-hash",
-      appliedConfigHash: "mock-config-hash",
-      valid: true,
-      config,
-      issues: [],
+    get,
+    set: writeAck,
+    apply: {
+      ...writeAck,
+      sentinel: {
+        persisted: true,
+        payload: {
+          kind: "config-apply",
+          status: "ok",
+          ts: 0,
+          message: null,
+          doctorHint: "openclaw doctor --non-interactive",
+          stats: { mode: "config.apply", root: get.path, requiresRestart: false },
+        },
+      },
     },
     schema: {
       schema,
@@ -851,7 +869,9 @@ function buildConfigMocks(options: { swarmEnabled?: boolean } = {}) {
       uiHints: applySharedChannelFieldHelp(
         applyResolvedConfigTierHints(
           schema,
-          applyConfigTierHints({}, { includePluginOwnedChannels: true }),
+          // Seed with base hints so the mock carries the gateway's labels,
+          // help, and docsUrl metadata instead of bare tier scaffolding.
+          applyConfigTierHints(buildBaseHints(), { includePluginOwnedChannels: true }),
         ),
       ),
       version: "mock-config-schema",
@@ -1443,6 +1463,7 @@ async function createChatPickerScenario(
       "openclaw.chat.history",
       "sessions.diff",
       "sessions.files.set",
+      "sessions.catalog.list",
       "system.info",
     ],
     historyMessages: buildScrollableChatHistory(baseTime),
@@ -1520,6 +1541,72 @@ async function createChatPickerScenario(
       // Custom session group catalog so the sidebar's category zone (and its
       // drag-reordering against built-in sections) is exercised in the mock.
       "sessions.groups.list": { groups: [{ name: "Research", position: 0 }] },
+      // Coding session catalogs so the sidebar's catalog sections (header
+      // right-click menu, hide/restore preference) are exercised in the mock.
+      "sessions.catalog.list": {
+        catalogs: [
+          {
+            id: "codex",
+            label: "Codex",
+            capabilities: { continueSession: true, archive: false },
+            hosts: [
+              {
+                hostId: "gateway",
+                label: "This Mac",
+                kind: "gateway",
+                connected: true,
+                sessions: [
+                  {
+                    threadId: "codex-thread-1",
+                    name: "Release checklist sweep",
+                    cwd: "/Users/demo/projects/openclaw",
+                    status: "idle",
+                    updatedAt: baseTime - 10 * 60_000,
+                    archived: false,
+                    canContinue: true,
+                    canArchive: false,
+                  },
+                  {
+                    threadId: "codex-thread-2",
+                    name: "Sidebar context-menu proof",
+                    cwd: "/Users/demo/projects/openclaw",
+                    status: "idle",
+                    updatedAt: baseTime - 45 * 60_000,
+                    archived: false,
+                    canContinue: true,
+                    canArchive: false,
+                  },
+                ],
+              },
+            ],
+          },
+          {
+            id: "claude-code",
+            label: "Claude Code",
+            capabilities: { continueSession: true, archive: false },
+            hosts: [
+              {
+                hostId: "gateway",
+                label: "This Mac",
+                kind: "gateway",
+                connected: true,
+                sessions: [
+                  {
+                    threadId: "claude-thread-1",
+                    name: "Docs refresh",
+                    cwd: "/Users/demo/projects/peekaboo",
+                    status: "idle",
+                    updatedAt: baseTime - 30 * 60_000,
+                    archived: false,
+                    canContinue: true,
+                    canArchive: false,
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
       "system.info": {
         machineName: "Peters-Mac-Studio",
         hostname: "peters-mac-studio.local",
@@ -1617,6 +1704,8 @@ async function createChatPickerScenario(
       // config.set/config.apply are served statefully by the mock gateway
       // (raw persists, hash advances) because config.get ships a raw fixture.
       "config.get": configMocks.get,
+      "config.set": configMocks.set,
+      "config.apply": configMocks.apply,
       "config.schema": configMocks.schema,
       "openclaw.chat.history": custodianHistory,
       "openclaw.changes.list": custodianChanges,
@@ -2332,6 +2421,7 @@ const server = await createServer({
       commit: "0123456789abcdef0123456789abcdef01234567",
       commitAt: "2026-07-10T11:22:33.000Z",
       builtAt: "2026-07-10T12:34:56.000Z",
+      release: false,
       buildId: "mock",
     }),
   },

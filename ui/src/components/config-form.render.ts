@@ -37,6 +37,7 @@ type ConfigFormProps = {
   isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
   onToggleSensitivePath?: (path: Array<string | number>) => void;
   onPatch: (path: Array<string | number>, value: unknown) => void;
+  onRemove?: (path: Array<string | number>) => void;
 };
 
 function renderAdvancedDivider(onHideAdvanced: (() => void) | undefined) {
@@ -45,7 +46,8 @@ function renderAdvancedDivider(onHideAdvanced: (() => void) | undefined) {
     ${onHideAdvanced
       ? html`<button
           type="button"
-          class="config-advanced-divider__toggle"
+          class="config-advanced-divider__toggle config-show-advanced active"
+          aria-pressed="true"
           @click=${() => onHideAdvanced()}
         >
           ${t("common.hideAdvanced")}
@@ -91,7 +93,8 @@ export function renderConfigTierGroups(params: {
           : html`
               <button
                 type="button"
-                class="config-advanced-ghost"
+                class="config-advanced-ghost config-show-advanced"
+                aria-pressed="false"
                 @click=${() => params.onShowAdvanced()}
               >
                 <span class="config-advanced-ghost__count">
@@ -229,11 +232,13 @@ export function renderConfigForm(props: ConfigFormProps) {
         unsupported,
         disabled: props.disabled ?? false,
         showLabel: false,
+        showHeaderMeta: true,
         searchCriteria,
         revealSensitive: props.revealSensitive ?? false,
         isSensitivePathRevealed: props.isSensitivePathRevealed,
         onToggleSensitivePath: props.onToggleSensitivePath,
         onPatch: props.onPatch,
+        onRemove: props.onRemove,
       });
     return html`
       <section class="settings-section" id=${params.id}>

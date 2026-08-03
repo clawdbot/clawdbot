@@ -2,6 +2,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import { configureSqliteConnectionPragmas } from "../../infra/sqlite-wal.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -16,6 +17,7 @@ import {
   openSessionEntryReadView,
   upsertSessionEntry,
 } from "./session-accessor.js";
+import { readSqliteSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 
 const parseSessionEntryCalls = vi.hoisted(() => vi.fn());
@@ -187,6 +189,47 @@ describe("SQLite session entry cache", () => {
     expect(firstParseCount).toBe(2);
     expect(parseSessionEntryCalls).toHaveBeenCalledTimes(firstParseCount);
     expect(second).toEqual(first);
+  });
+
+  it("keeps same-path caches isolated by live connection", async () => {
+    const scope = createSessionScope("connection-identity");
+    await upsertSessionEntry(scope, {
+      label: "connection-identity",
+      sessionId: "connection-identity",
+      updatedAt: 1,
+    });
+    const primary = openOpenClawAgentDatabase(scope);
+    const first = listSessionEntries({ ...scope, clone: false });
+    const alternate = new DatabaseSync(primary.path, { readOnly: true });
+
+    try {
+      parseSessionEntryCalls.mockClear();
+      const alternateSnapshot = readSqliteSessionEntryCache(
+        { agentId: primary.agentId, db: alternate },
+        { cache: true },
+      );
+      expect(alternateSnapshot.entries.get(scope.sessionKey)?.label).toBe("connection-identity");
+      const alternateEntry = alternateSnapshot.entries.get(scope.sessionKey);
+      expect(parseSessionEntryCalls).toHaveBeenCalledOnce();
+
+      parseSessionEntryCalls.mockClear();
+      const second = listSessionEntries({ ...scope, clone: false });
+
+      expect(second[0]?.entry).toBe(first[0]?.entry);
+      expect(parseSessionEntryCalls).not.toHaveBeenCalled();
+
+      parseSessionEntryCalls.mockClear();
+      const alternateAgain = readSqliteSessionEntryCache(
+        { agentId: primary.agentId, db: alternate },
+        { cache: true },
+      );
+
+      expect(alternateAgain.entries.get(scope.sessionKey)).toBe(alternateEntry);
+      expect(parseSessionEntryCalls).not.toHaveBeenCalled();
+    } finally {
+      clearNodeSqliteKyselyCacheForDatabase(alternate);
+      alternate.close();
+    }
   });
 
   it("reuses parsed entries and list projections after a same-connection non-entry write", async () => {
@@ -412,7 +455,7 @@ describe("SQLite session entry cache", () => {
     expect(listProjectionCalls).toHaveBeenCalledTimes(2);
   });
 
-  it("fully reloads after a tracked same-process upsert", async () => {
+  it("patches only the tracked row after a same-process upsert", async () => {
     const scope = createSessionScope("write-through");
     const siblingScope = { ...scope, sessionKey: "agent:main:write-through-sibling" };
     await upsertSessionEntry(scope, {
@@ -425,17 +468,53 @@ describe("SQLite session entry cache", () => {
       sessionId: "write-through-sibling",
       updatedAt: 1,
     });
-    listSessionEntries({ ...scope, clone: false, projection: "list" });
+    const before = listSessionEntries({ ...scope, clone: false, projection: "list" });
+    const siblingBefore = before.find((row) => row.sessionKey === siblingScope.sessionKey)?.entry;
 
+    parseSessionEntryCalls.mockClear();
+    listProjectionCalls.mockClear();
     await upsertSessionEntry(scope, { label: "projection-probe-after", updatedAt: 2 });
     parseSessionEntryCalls.mockClear();
     listProjectionCalls.mockClear();
+    const after = listSessionEntries({ ...scope, clone: false, projection: "list" });
 
-    expect(listSessionEntries({ ...scope, clone: false, projection: "list" })[0]?.entry.label).toBe(
+    expect(after.find((row) => row.sessionKey === scope.sessionKey)?.entry.label).toBe(
       "projection-probe-after",
     );
-    expect(parseSessionEntryCalls).toHaveBeenCalledTimes(2);
-    expect(listProjectionCalls).toHaveBeenCalledTimes(2);
+    expect(after.find((row) => row.sessionKey === siblingScope.sessionKey)?.entry).toBe(
+      siblingBefore,
+    );
+    expect(parseSessionEntryCalls).not.toHaveBeenCalled();
+    expect(listProjectionCalls).toHaveBeenCalledOnce();
+  });
+
+  it("adds a tracked upsert to a warm snapshot without reparsing siblings", async () => {
+    const scope = createSessionScope("write-through-insert");
+    await upsertSessionEntry(scope, {
+      label: "projection-probe-existing",
+      sessionId: "write-through-existing",
+      updatedAt: 1,
+    });
+    const existing = listSessionEntries({ ...scope, clone: false, projection: "list" })[0]?.entry;
+    const insertedScope = { ...scope, sessionKey: "agent:main:write-through-inserted" };
+
+    parseSessionEntryCalls.mockClear();
+    listProjectionCalls.mockClear();
+    await upsertSessionEntry(insertedScope, {
+      label: "projection-probe-inserted",
+      sessionId: "write-through-inserted",
+      updatedAt: 2,
+    });
+    parseSessionEntryCalls.mockClear();
+    listProjectionCalls.mockClear();
+    const after = listSessionEntries({ ...scope, clone: false, projection: "list" });
+
+    expect(after.map((row) => row.sessionKey)).toEqual(
+      [scope.sessionKey, insertedScope.sessionKey].toSorted(),
+    );
+    expect(after.find((row) => row.sessionKey === scope.sessionKey)?.entry).toBe(existing);
+    expect(parseSessionEntryCalls).not.toHaveBeenCalled();
+    expect(listProjectionCalls).toHaveBeenCalledOnce();
   });
 
   it("does not let a tracked write mask an earlier raw connection write", async () => {
@@ -465,7 +544,7 @@ describe("SQLite session entry cache", () => {
       label: "tracked-after",
       sessionId: "tracked",
     });
-    expect(parseSessionEntryCalls).toHaveBeenCalledTimes(2);
+    expect(parseSessionEntryCalls).toHaveBeenCalledOnce();
   });
 
   it("invalidates cached keys when transcript creation inserts a placeholder node", async () => {
@@ -517,7 +596,7 @@ describe("SQLite session entry cache", () => {
 
     parseSessionEntryCalls.mockClear();
     const borrowedAfter = openSessionEntryReadView(scope).get(scope.sessionKey);
-    expect(borrowedAfter).toBe(borrowedBefore);
+    expect(borrowedAfter).toStrictEqual(borrowedBefore);
     expect(borrowedAfter?.label).toBe("before");
     expect(parseSessionEntryCalls).not.toHaveBeenCalled();
   });
@@ -535,8 +614,8 @@ describe("SQLite session entry cache", () => {
 
     const view = openSessionEntryReadView(scope);
     const first = view.get(scope.sessionKey);
-    expect(view.get(scope.sessionKey)).toBe(first);
-    expect(view.entries()[0]?.entry).toBe(first);
+    expect(view.get(scope.sessionKey)).toStrictEqual(first);
+    expect(view.entries()[0]?.entry).toStrictEqual(first);
   });
 
   it("honors latest reads after an untracked own-connection write", async () => {

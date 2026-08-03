@@ -219,6 +219,18 @@ describe("runEmbeddedAgentViaCliBackendIfEligible gate", () => {
     expect(runCliAgent).not.toHaveBeenCalled();
   });
 
+  it("keeps message-tool-only source replies on the embedded delivery owner", async () => {
+    expect(
+      await runGate({
+        sourceReplyDeliveryMode: "message_tool_only",
+        toolsAllow: ["message"],
+        messageChannel: "telegram",
+        currentChannelId: "telegram:source-chat",
+      }),
+    ).toBeUndefined();
+    expect(runCliAgent).not.toHaveBeenCalled();
+  });
+
   it("dispatches claude-cli runs with subscription (oauth) credentials", async () => {
     expect(await runGate({ agentDir: "/agents/main", workspaceDir: "/workspace" })).toBeDefined();
     expect(ensureAuthProfileStore).toHaveBeenCalledWith("/agents/main", expect.anything());
@@ -433,6 +445,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
           name: "mcp__openclaw__memory_search",
           result: { content: [] },
           isError: false,
+          resultContentSource: "network",
         },
       });
       // Soft tool failures must surface as isError like the native path.
@@ -515,6 +528,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
           toolCallId: "call-1",
           result: { content: [] },
           isError: false,
+          resultContentSource: "network",
         },
       });
       return cliRunResult();
@@ -540,7 +554,11 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
       }),
     );
     expect(transcriptRecorder.noteToolEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ phase: "result", toolName: "memory_search" }),
+      expect.objectContaining({
+        phase: "result",
+        toolName: "memory_search",
+        resultContentSource: "network",
+      }),
     );
     expect(transcriptRecorder.finalize).toHaveBeenCalledWith("recall summary");
   });

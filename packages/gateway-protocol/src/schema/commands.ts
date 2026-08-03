@@ -88,6 +88,8 @@ export const CommandEntrySchema = closedObject({
   description: Type.String({ maxLength: COMMAND_DESCRIPTION_MAX_LENGTH }),
   category: Type.Optional(CommandCategorySchema),
   source: CommandSourceSchema,
+  /** Whether a skill command is also present in the model-visible skill catalog. */
+  skillModelVisible: Type.Optional(Type.Boolean()),
   scope: CommandScopeSchema,
   acceptsArgs: Type.Boolean(),
   args: Type.Optional(Type.Array(CommandArgSchema, { maxItems: COMMAND_ARGS_MAX_ITEMS })),

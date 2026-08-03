@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { listSessionEntries } from "../config/sessions/session-accessor.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -27,6 +28,9 @@ function insertSessionRow(
       "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
     )
     .run(sessionKey, String(entry.sessionId), JSON.stringify(entry), Number(entry.updatedAt));
+  database.db
+    .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+    .run(sessionKey);
   const legacyContext = entry.deliveryContext as Record<string, unknown> | undefined;
   database.db
     .prepare(
@@ -56,6 +60,14 @@ function readEntryJson(env: NodeJS.ProcessEnv, sessionKey: string): string {
     .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
     .get(sessionKey) as { entry_json: string };
   return row.entry_json;
+}
+
+function readEntryValidity(env: NodeJS.ProcessEnv, sessionKey: string): number {
+  const database = openOpenClawAgentDatabase({ agentId: "main", env });
+  const row = database.db
+    .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
+    .get(sessionKey) as { entry_valid: number };
+  return row.entry_valid;
 }
 
 describe("doctor canonical session delivery state", () => {
@@ -125,6 +137,37 @@ describe("doctor canonical session delivery state", () => {
         accountId: "current-bot",
       });
     }
+  });
+
+  it("keeps rewritten delivery rows valid for normal session reads", () => {
+    const stateDir = fs.realpathSync(tempDirs.make("openclaw-delivery-validity-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const sessionKey = "agent:main:delivery-validity";
+    insertSessionRow(env, sessionKey, {
+      sessionId: "delivery-validity-session",
+      updatedAt: 10,
+      deliveryContext: { channel: "telegram", to: "recipient" },
+    });
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    database.db
+      .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+      .run(sessionKey);
+
+    expect(repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env })).toEqual({
+      found: 1,
+      repaired: 1,
+      scannedStores: 1,
+    });
+    expect(readEntryValidity(env, sessionKey)).toBe(1);
+    closeOpenClawAgentDatabasesForTest();
+    expect(listSessionEntries({ agentId: "main", env })).toMatchObject([
+      { sessionKey, entry: { sessionId: "delivery-validity-session", updatedAt: 10 } },
+    ]);
+    expect(repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env })).toEqual({
+      found: 0,
+      repaired: 0,
+      scannedStores: 1,
+    });
   });
 
   it("preserves shipped last-route precedence over stale explicit context", () => {
@@ -261,11 +304,15 @@ describe("doctor canonical session delivery state", () => {
       updatedAt: 10,
       deliveryContext: { channel: "telegram", to: "-1001" },
     });
-    openOpenClawAgentDatabase({ agentId: "main", env })
-      .db.prepare(
-        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
-      )
-      .run("agent:main:invalid", "invalid-session", "null", 20);
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const insertInvalid = database.db.prepare(
+      "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+    );
+    insertInvalid.run("agent:main:invalid", "invalid-session", "null", 20);
+    const invalidObjectJson = JSON.stringify({
+      deliveryContext: { channel: "telegram", to: "recipient" },
+    });
+    insertInvalid.run("agent:main:invalid-object", "invalid-object-session", invalidObjectJson, 30);
 
     expect(repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env })).toEqual({
       found: 1,
@@ -273,6 +320,12 @@ describe("doctor canonical session delivery state", () => {
       scannedStores: 1,
     });
     expect(readEntryJson(env, "agent:main:invalid")).toBe("null");
+    expect(readEntryJson(env, "agent:main:invalid-object")).toBe(invalidObjectJson);
+    expect(readEntryValidity(env, "agent:main:invalid-object")).toBe(0);
+    closeOpenClawAgentDatabasesForTest();
+    expect(() => listSessionEntries({ agentId: "main", env })).toThrow(
+      /invalid persisted session row requires repair/u,
+    );
   });
 
   it("migrates a copied realistic store without touching the source or canonical row bytes", () => {
@@ -351,6 +404,8 @@ describe("doctor canonical session delivery state", () => {
       repaired: 3,
       scannedStores: 1,
     });
+    closeOpenClawAgentDatabasesForTest();
+    expect(listSessionEntries({ agentId: "main", env: copiedEnv })).toHaveLength(4);
     expect(repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env: copiedEnv })).toEqual({
       found: 0,
       repaired: 0,

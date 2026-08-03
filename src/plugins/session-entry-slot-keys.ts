@@ -32,6 +32,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "completionOwnerSessionKey",
   "spawnedWorkspaceDir",
   "spawnedCwd",
+  "sessionDiffBaseline",
   "worktree",
   "parentSessionKey",
   "createdVia",
@@ -73,6 +74,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "thinkingLevel",
   "cronRunContinuation",
   "fastMode",
+  "toolOverrides",
   "verboseLevel",
   "traceLevel",
   "reasoningLevel",
@@ -161,6 +163,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "hookExternalContentSource",
   "acp",
   "quotaSuspension",
+  "pendingTranscriptRepair",
   "visibility",
 ] as const satisfies ReadonlyArray<
   keyof SessionEntry | "__proto__" | "constructor" | "prototype" | "sessionFile" | "transcriptPath"

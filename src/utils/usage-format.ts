@@ -17,6 +17,7 @@ import { resolveStateDir } from "../config/paths.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
   modelCatalogPricingFingerprint,
   resolveCatalogModelPricing,
@@ -293,12 +294,7 @@ function loadModelsJsonCostIndex(options?: {
         normalizedEntries: null,
         rawEntries: null,
       };
-      if (modelsJsonCostCacheByAgentDir.size >= MODELS_JSON_COST_CACHE_LIMIT) {
-        const oldestAgentDir = modelsJsonCostCacheByAgentDir.keys().next().value;
-        if (oldestAgentDir !== undefined) {
-          modelsJsonCostCacheByAgentDir.delete(oldestAgentDir);
-        }
-      }
+      pruneMapToMaxSize(modelsJsonCostCacheByAgentDir, MODELS_JSON_COST_CACHE_LIMIT - 1);
       modelsJsonCostCacheByAgentDir.set(agentDir, modelsJsonCostCache);
     }
 
@@ -565,17 +561,6 @@ export function resolveModelCostConfig(params: {
     return undefined;
   }
   const agentDir = resolveCostAgentDir(params.config, params.agentDir);
-  if (params.allowPluginNormalization !== false) {
-    const catalogPricing = resolveCatalogModelPricing({
-      config: params.config,
-      provider: params.provider ?? "",
-      model: params.model ?? "",
-    });
-    if (catalogPricing) {
-      return normalizeResolvedPricing(catalogPricing);
-    }
-  }
-
   // Favor direct configured keys first so local pricing/status lookups stay
   // synchronous and do not drag plugin/provider discovery into the hot path.
   const rawModelsJsonCost = loadModelsJsonCostIndex({
@@ -611,6 +596,15 @@ export function resolveModelCostConfig(params: {
         return configuredCost;
       }
     }
+  }
+
+  const catalogPricing = resolveCatalogModelPricing({
+    config: params.config,
+    provider: params.provider ?? "",
+    model: params.model ?? "",
+  });
+  if (catalogPricing) {
+    return normalizeResolvedPricing(catalogPricing);
   }
 
   const hostedPricing = resolveHostedModelPricing({

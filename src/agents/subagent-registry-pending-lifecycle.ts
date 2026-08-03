@@ -15,6 +15,7 @@ type PendingLifecycleTerminal = {
   endedAt: number;
   startedAt?: number;
   error?: string;
+  terminalReply?: SubagentCompletionRequest["terminalReply"];
 };
 
 export function createPendingLifecycleScheduler(params: {
@@ -39,7 +40,13 @@ export function createPendingLifecycleScheduler(params: {
 
   function schedule(
     kind: PendingLifecycleKind,
-    scheduleParams: { runId: string; endedAt: number; startedAt?: number; error?: string },
+    scheduleParams: {
+      runId: string;
+      endedAt: number;
+      startedAt?: number;
+      error?: string;
+      terminalReply?: SubagentCompletionRequest["terminalReply"];
+    },
   ) {
     clearKind(scheduleParams.runId);
     const timer = setTimeout(() => {
@@ -54,8 +61,9 @@ export function createPendingLifecycleScheduler(params: {
       }
       if (
         kind === "error"
-          ? entry.endedReason === SUBAGENT_ENDED_REASON_COMPLETE || entry.outcome?.status === "ok"
-          : entry.outcome?.status === "ok" || entry.pauseReason === "sessions_yield"
+          ? entry.endedReason === SUBAGENT_ENDED_REASON_COMPLETE ||
+            entry.execution.outcome?.status === "ok"
+          : entry.execution.outcome?.status === "ok" || entry.pauseReason === "sessions_yield"
       ) {
         return;
       }
@@ -70,6 +78,7 @@ export function createPendingLifecycleScheduler(params: {
           accountId: entry.requesterOrigin?.accountId,
           triggerCleanup: true,
           startedAt: pending.startedAt,
+          terminalReply: pending.terminalReply,
         },
         `lifecycle-${kind}-grace`,
       );

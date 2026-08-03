@@ -1,13 +1,8 @@
-import { getRootOptionAwareCommandPath } from "openclaw/plugin-sdk/cli-argv";
+import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 
-/** Every Zoom meetings action emits one JSON result on stdout. */
-function isZoomMeetingsMachineOutput(params: { argv: readonly string[] }): boolean {
-  return getRootOptionAwareCommandPath(params.argv, 2).length === 2;
-}
-
-export const ZOOM_MEETINGS_CLI_DESCRIPTOR = {
-  name: "zoommeetings",
+export const ZOOM_MEETINGS_CLI_METADATA = MeetingPlatformAdapter.createCliMetadata({
+  commandName: "zoommeetings",
   description: "Join and manage Zoom meeting guests",
-  hasSubcommands: true,
-  machineOutput: isZoomMeetingsMachineOutput,
-} as const;
+  id: "zoom-meetings",
+  name: "Zoom meetings",
+});

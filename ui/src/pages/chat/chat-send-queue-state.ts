@@ -3,7 +3,11 @@ import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity
 import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import type { QueuedChatStorageMode } from "./chat-outbox-drain.ts";
-import { updateQueuedMessageForSession, updateVolatileQueuedMessage } from "./chat-queue.ts";
+import {
+  keepVolatileQueuedMessage,
+  updateQueuedMessageForSession,
+  updateVolatileQueuedMessage,
+} from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { recordChatSendTiming, schedulePendingSendPaintTiming } from "./chat-send-timing.ts";
 import { getPendingChatPickerPatch } from "./chat-session.ts";
@@ -52,7 +56,7 @@ export function enqueuePendingSendMessage(
     ...(skillWorkshopRevision ? { skillWorkshopRevision } : {}),
     ...(replyToId ? { replyToId } : {}),
   };
-  host.chatQueue = [...host.chatQueue, pending];
+  keepVolatileQueuedMessage(host, host.sessionKey, pending, pending.agentId);
   recordChatSendTiming(host, pending, "pending-visible", submittedAtMs);
   if (sendState === "waiting-model" || sendState === "waiting-reconnect") {
     recordChatSendTiming(host, pending, sendState, submittedAtMs);
@@ -70,6 +74,18 @@ export function reconnectSafeQueuedSendState(
   return host.connected && host.client ? "waiting-idle" : "waiting-reconnect";
 }
 
+export function captureChatConnectionOwner(
+  host: Pick<ChatHost, "client" | "connected" | "connectionEpoch">,
+  requireConnected = true,
+): () => boolean {
+  const client = host.client;
+  const connectionEpoch = host.connectionEpoch;
+  return () =>
+    (!requireConnected || host.connected) &&
+    host.client === client &&
+    host.connectionEpoch === connectionEpoch;
+}
+
 export function updateQueuedSendItem(
   host: ChatHost,
   storageMode: QueuedChatStorageMode,
@@ -78,8 +94,22 @@ export function updateQueuedSendItem(
   update: (item: ChatQueueItem) => ChatQueueItem,
 ): ChatQueueItem | null {
   return storageMode === "memory"
-    ? updateVolatileQueuedMessage(host, id, update)
+    ? updateVolatileQueuedMessage(host, id, update, { retryable: true })
     : updateQueuedMessageForSession(host, sessionKey, id, update);
+}
+
+export function deliveryStateWriter(
+  host: ChatHost,
+  storageMode: QueuedChatStorageMode,
+  sessionKey: string,
+  id: string,
+) {
+  return (sendState: ChatQueueItem["sendState"], sendError?: string) =>
+    updateQueuedSendItem(host, storageMode, sessionKey, id, (item) => ({
+      ...item,
+      sendError,
+      sendState,
+    }));
 }
 
 export function canSendVolatileQueueItem(

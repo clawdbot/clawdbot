@@ -1,8 +1,10 @@
 // Scans packaged dist JavaScript for relative imports and missing closure entries.
+import { createRequire } from "node:module";
 import path from "node:path";
-import ts from "typescript";
 import { visitModuleSpecifiers } from "./guard-inventory-utils.mjs";
 
+const require = createRequire(import.meta.url);
+const ts = require("typescript");
 const JS_DIST_FILE_RE = /^dist\/.*\.(?:cjs|js|mjs)$/u;
 
 function normalizePackagePath(value) {

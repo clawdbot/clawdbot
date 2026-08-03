@@ -8,7 +8,6 @@ import type {
 } from "../../../app/native-gateways.runtime.ts";
 import { isNativeWebChromeHost } from "../../../app/native-web-chrome.ts";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
-import type { ActorIdentityUser } from "../../../app/user-profile.ts";
 import {
   COMMAND_PALETTE_OPEN_EVENT,
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
@@ -33,7 +32,6 @@ type ChatPaneHeaderProps = {
   title: string;
   session: GatewaySessionRow | undefined;
   showOwnerChip?: boolean;
-  ownerUser?: ActorIdentityUser;
   catalog: boolean;
   editing: boolean;
   renameValue: string;
@@ -45,7 +43,7 @@ type ChatPaneHeaderProps = {
   platform: string | null;
   canReveal: boolean;
   copiedAction: ChatPaneHeaderAction | null;
-  canRename: boolean;
+  renameDisabledReason?: string;
   terminalAction: TemplateResult | typeof nothing;
   discussionAction: TemplateResult | typeof nothing;
   diffAction: TemplateResult | typeof nothing;
@@ -179,7 +177,7 @@ function renderGatewayPicker(props: ChatPaneHeaderProps) {
       ${snapshot.gateways.map((gateway) => {
         const selected = gateway.id === snapshot.currentId;
         return html`<wa-dropdown-item
-          class="chat-pane__gateway-item"
+          class="chat-pane__gateway-menu-item chat-pane__gateway-item"
           type="checkbox"
           role="menuitemradio"
           aria-checked=${String(selected)}
@@ -214,11 +212,14 @@ function renderGatewayPicker(props: ChatPaneHeaderProps) {
       })}
       <div class="chat-pane__gateway-divider" role="separator"></div>
       <wa-dropdown-item
+        class="chat-pane__gateway-menu-item"
         ?disabled=${setPrimaryDisabled}
         @click=${() => !setPrimaryDisabled && capability.setPrimary(current.id)}
         >${t("chat.sessionHeader.gatewayPicker.setPrimary")}</wa-dropdown-item
       >
-      <wa-dropdown-item @click=${() => capability.openSettings()}
+      <wa-dropdown-item
+        class="chat-pane__gateway-menu-item"
+        @click=${() => capability.openSettings()}
         >${t("chat.sessionHeader.gatewayPicker.openSettings")}</wa-dropdown-item
       >
     </wa-dropdown>
@@ -298,8 +299,12 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             }}
             @blur=${props.onCommitRename}
           />`
-        : props.catalog || !props.session || !props.canRename
-          ? html`<span class="chat-pane__session-title" title=${props.title}>${props.title}</span>`
+        : props.catalog || !props.session || props.renameDisabledReason
+          ? html`<span
+              class="chat-pane__session-title"
+              title=${props.renameDisabledReason ?? props.title}
+              >${props.title}</span
+            >`
           : html`<button
               class="chat-pane__session-title chat-pane__session-title-button"
               type="button"
@@ -313,7 +318,6 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         props.showOwnerChip ? props.session?.createdActor : undefined,
         "header",
         "created",
-        props.ownerUser,
       )}
       ${!props.catalog && props.workspaceLabel
         ? html`

@@ -1,5 +1,5 @@
 // Shared TypeScript AST and source-file helpers for guard scripts.
-import { existsSync, promises as fs } from "node:fs";
+import { promises as fs } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,25 +13,6 @@ function getTypeScript() {
 }
 
 const baseTestSuffixes = [".test.ts", ".test-utils.ts", ".test-harness.ts", ".e2e-harness.ts"];
-
-/**
- * Resolves the repository root by walking upward from the caller module.
- */
-export function resolveRepoRoot(importMetaUrl) {
-  // Walk up from the caller's directory until we find the repo root (.git).
-  // This handles callers at any depth (scripts/*.mjs, scripts/lib/*.mjs, etc.)
-  // instead of assuming a fixed number of parent traversals.
-  let dir = path.dirname(fileURLToPath(importMetaUrl));
-  const { root } = path.parse(dir);
-  while (dir !== root) {
-    if (existsSync(path.join(dir, ".git"))) {
-      return dir;
-    }
-    dir = path.dirname(dir);
-  }
-  // Fallback: two levels up (original behavior).
-  return path.resolve(path.dirname(fileURLToPath(importMetaUrl)), "..", "..");
-}
 
 /**
  * Converts repo-relative source roots into absolute paths.
@@ -49,10 +30,14 @@ function isTestLikeTypeScriptFile(filePath, options = {}) {
  * Recursively collects TypeScript files under a file or directory target.
  */
 export async function collectTypeScriptFiles(targetPath, options = {}) {
+  const fileExtensions = options.fileExtensions ?? [".ts"];
   const includeTests = options.includeTests ?? false;
   const extraTestSuffixes = options.extraTestSuffixes ?? [];
   const skipNodeModules = options.skipNodeModules ?? true;
+  const skipDirectories = options.skipDirectories ?? [];
   const ignoreMissing = options.ignoreMissing ?? false;
+  const isSourceFile = (filePath) =>
+    fileExtensions.some((extension) => filePath.endsWith(extension));
 
   let stat;
   try {
@@ -71,7 +56,7 @@ export async function collectTypeScriptFiles(targetPath, options = {}) {
   }
 
   if (stat.isFile()) {
-    if (!targetPath.endsWith(".ts")) {
+    if (!isSourceFile(targetPath)) {
       return [];
     }
     if (!includeTests && isTestLikeTypeScriptFile(targetPath, { extraTestSuffixes })) {
@@ -85,13 +70,16 @@ export async function collectTypeScriptFiles(targetPath, options = {}) {
   for (const entry of entries) {
     const entryPath = path.join(targetPath, entry.name);
     if (entry.isDirectory()) {
-      if (skipNodeModules && entry.name === "node_modules") {
+      if (
+        (skipNodeModules && entry.name === "node_modules") ||
+        skipDirectories.includes(entry.name)
+      ) {
         continue;
       }
       out.push(...(await collectTypeScriptFiles(entryPath, options)));
       continue;
     }
-    if (!entry.isFile() || !entryPath.endsWith(".ts")) {
+    if (!entry.isFile() || !isSourceFile(entryPath)) {
       continue;
     }
     if (!includeTests && isTestLikeTypeScriptFile(entryPath, { extraTestSuffixes })) {

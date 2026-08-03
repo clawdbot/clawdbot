@@ -26,6 +26,8 @@ describe("media store", () => {
       await tempHome.restore();
     } catch {
       // ignore cleanup failures in tests
+    } finally {
+      vi.resetModules();
     }
   });
 

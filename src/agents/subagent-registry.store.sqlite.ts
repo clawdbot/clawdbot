@@ -3,31 +3,77 @@
  * store preserves typed columns for hot delivery state while retaining the
  * normalized payload JSON for forward-compatible record hydration.
  */
-import type { Insertable, Selectable, Updateable } from "kysely";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sql, type Insertable, type Selectable, type Updateable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
-import type {
-  PendingFinalDeliveryPayload,
-  RequesterSettleWakeState,
-  SubagentCompletionDeliveryState,
-  SubagentCompletionState,
-  SubagentExecutionState,
-  SubagentRunRecord,
-} from "./subagent-registry.types.js";
+import type { SubagentRunReadRecord, SubagentRunRecord } from "./subagent-registry.types.js";
 
 type SubagentRunsTable = OpenClawStateKyselyDatabase["subagent_runs"];
 type SubagentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "subagent_runs">;
 type SubagentRunSqliteRow = Selectable<SubagentRunsTable>;
-type SubagentRunSqliteInsert = Insertable<SubagentRunsTable>;
+type BoundSubagentRunRecord = Insertable<SubagentRunsTable>;
+type SubagentRunSqliteInsert = BoundSubagentRunRecord;
 type SubagentRunSqliteUpdate = Updateable<SubagentRunsTable>;
+type SubagentRunReadSqliteRow = Pick<
+  SubagentRunSqliteRow,
+  | "run_id"
+  | "child_session_key"
+  | "controller_session_key"
+  | "requester_session_key"
+  | "model"
+  | "run_timeout_seconds"
+  | "created_at"
+  | "started_at"
+  | "session_started_at"
+  | "accumulated_runtime_ms"
+  | "ended_at"
+  | "ended_reason"
+  | "cleanup_completed_at"
+> & {
+  generation: number | null;
+  outcome_status: string | null;
+  delivery_status: string | null;
+  delivery_suspended_at: number | null;
+};
+type CanonicalSubagentRunRecord = SubagentRunRecord &
+  Required<Pick<SubagentRunRecord, "completion" | "delivery">>;
+const EXECUTION_STATUSES = new Set("queued running interrupted terminal".split(" "));
+const DELIVERY_STATUSES = new Set(
+  "not_required pending in_progress delivered failed suspended discarded".split(" "),
+);
 
-/** Converts undefined to null so optional record fields round-trip through sqlite columns. */
+function hasStateStatus(
+  value: unknown,
+  statuses: ReadonlySet<string>,
+): value is Record<string, unknown> {
+  return isRecord(value) && typeof value.status === "string" && statuses.has(value.status);
+}
+
+function hasCanonicalDeliveryState(value: unknown): value is Record<string, unknown> {
+  return (
+    hasStateStatus(value, DELIVERY_STATUSES) &&
+    !("handoffLeaseId" in value || "handoffLeasedAt" in value || "handoffInjectedAt" in value)
+  );
+}
+
+function isCanonicalSubagentRunRecord(value: unknown): value is CanonicalSubagentRunRecord {
+  return (
+    isRecord(value) &&
+    hasStateStatus(value.execution, EXECUTION_STATUSES) &&
+    isRecord(value.completion) &&
+    typeof value.completion.required === "boolean" &&
+    hasCanonicalDeliveryState(value.delivery)
+  );
+}
+
 function jsonStringify(value: unknown): string | null {
   return value === undefined ? null : JSON.stringify(value);
 }
@@ -47,230 +93,44 @@ function boolToSqlite(value: boolean | undefined): number | null {
   return value === undefined ? null : value ? 1 : 0;
 }
 
-function sqliteBool(value: number | null): boolean | undefined {
-  return value == null ? undefined : value !== 0;
-}
-
 function normalizeFiniteNumber(value: number | null): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function createDeliveryFromTypedColumns(
-  row: SubagentRunSqliteRow,
-  fallback: SubagentCompletionDeliveryState | undefined,
-): SubagentCompletionDeliveryState | undefined {
-  // Typed delivery columns are authoritative for retry/delivered state while
-  // payload_json keeps compatibility with older fields during migration.
-  const delivery = fallback ? { ...fallback } : undefined;
-  const payload = parseJson(row.pending_final_delivery_payload_json) as
-    | PendingFinalDeliveryPayload
-    | undefined;
-  const status =
-    row.expects_completion_message === 0
-      ? "not_required"
-      : row.pending_final_delivery
-        ? "pending"
-        : delivery?.status;
-  if (!status && row.completion_announced_at == null && row.last_announce_delivery_error == null) {
-    return delivery;
-  }
-  return {
-    status: status ?? "pending",
-    ...delivery,
-    ...(payload ? { payload } : {}),
-    ...(normalizeFiniteNumber(row.pending_final_delivery_created_at) !== undefined
-      ? { createdAt: row.pending_final_delivery_created_at ?? undefined }
-      : {}),
-    ...(normalizeFiniteNumber(row.pending_final_delivery_last_attempt_at) !== undefined
-      ? { lastAttemptAt: row.pending_final_delivery_last_attempt_at ?? undefined }
-      : {}),
-    ...(normalizeFiniteNumber(row.pending_final_delivery_attempt_count) !== undefined
-      ? { attemptCount: row.pending_final_delivery_attempt_count ?? undefined }
-      : {}),
-    ...(row.pending_final_delivery_last_error !== null
-      ? { lastError: row.pending_final_delivery_last_error }
-      : {}),
-    ...(row.completion_announced_at !== null && row.expects_completion_message === 1
-      ? {
-          status: "delivered",
-          announcedAt: row.completion_announced_at,
-          deliveredAt: delivery?.deliveredAt ?? row.completion_announced_at,
-        }
-      : row.completion_announced_at !== null
-        ? { announcedAt: row.completion_announced_at }
-        : {}),
-    ...(row.expects_completion_message === 0 ? { status: "not_required" } : {}),
-  };
-}
-
-function createRequesterSettleWakeFromTypedColumns(
-  row: SubagentRunSqliteRow,
-  fallback: RequesterSettleWakeState | undefined,
-): RequesterSettleWakeState | undefined {
-  const fallbackStatus =
-    fallback?.status === "pending" || fallback?.status === "dispatching"
-      ? fallback.status
-      : undefined;
-  const status =
-    row.requester_settle_wake_status === "pending" ||
-    row.requester_settle_wake_status === "dispatching"
-      ? row.requester_settle_wake_status
-      : fallbackStatus;
-  if (!status) {
-    return undefined;
-  }
-  const parsedBatchRunIds = parseJson(row.requester_settle_wake_batch_run_ids_json);
-  const batchRunIds = Array.isArray(parsedBatchRunIds)
-    ? parsedBatchRunIds.filter(
-        (value): value is string => typeof value === "string" && Boolean(value),
-      )
-    : fallback?.batchRunIds;
-  return {
-    ...fallback,
-    status,
-    attemptCount:
-      normalizeFiniteNumber(row.requester_settle_wake_attempt_count) ?? fallback?.attemptCount ?? 0,
-    ...(normalizeFiniteNumber(row.requester_settle_wake_replay_count) !== undefined
-      ? { replayCount: row.requester_settle_wake_replay_count ?? undefined }
-      : fallback?.replayCount !== undefined
-        ? { replayCount: fallback.replayCount }
-        : {}),
-    ...(normalizeFiniteNumber(row.requester_settle_wake_next_attempt_at) !== undefined
-      ? { nextAttemptAt: row.requester_settle_wake_next_attempt_at ?? undefined }
-      : fallback?.nextAttemptAt !== undefined
-        ? { nextAttemptAt: fallback.nextAttemptAt }
-        : {}),
-    ...(batchRunIds && batchRunIds.length > 0 ? { batchRunIds } : {}),
-    ...(row.requester_settle_wake_last_error !== null
-      ? { lastError: row.requester_settle_wake_last_error }
-      : {}),
-    ...(sqliteBool(row.requester_settle_wake_retire_after) !== undefined
-      ? { retireAfterSettle: sqliteBool(row.requester_settle_wake_retire_after) }
-      : {}),
-  };
-}
-
 /** Rehydrates one sqlite row into the normalized subagent run record shape. */
 function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRecord | null {
-  const payload = (parseJson(row.payload_json) as Partial<SubagentRunRecord> | undefined) ?? {};
-  const requesterOrigin =
-    (parseJson(row.requester_origin_json) as SubagentRunRecord["requesterOrigin"] | undefined) ??
-    payload.requesterOrigin;
-  const outcome =
-    (parseJson(row.outcome_json) as SubagentRunRecord["outcome"] | undefined) ?? payload.outcome;
-  const completion: SubagentCompletionState | undefined = {
-    ...(payload.completion ?? { required: row.expects_completion_message === 1 }),
-    required: payload.completion?.required ?? row.expects_completion_message === 1,
-    ...(row.frozen_result_text !== null ? { resultText: row.frozen_result_text } : {}),
-    ...(row.frozen_result_captured_at !== null
-      ? { capturedAt: row.frozen_result_captured_at }
-      : {}),
-    ...(row.fallback_frozen_result_text !== null
-      ? { fallbackResultText: row.fallback_frozen_result_text }
-      : {}),
-    ...(row.fallback_frozen_result_captured_at !== null
-      ? { fallbackCapturedAt: row.fallback_frozen_result_captured_at }
-      : {}),
-  };
-  const execution: SubagentExecutionState | undefined = payload.execution
-    ? {
-        ...payload.execution,
-        ...(row.started_at !== null ? { startedAt: row.started_at } : {}),
-        ...(row.ended_at !== null ? { status: "terminal", endedAt: row.ended_at, outcome } : {}),
-      }
-    : undefined;
-  const delivery = createDeliveryFromTypedColumns(row, payload.delivery);
-  const requesterSettleWake = createRequesterSettleWakeFromTypedColumns(
-    row,
-    payload.requesterSettleWake,
-  );
-  const structured = parseJson(row.swarm_structured_json);
-  const outputSchema = parseJson(row.swarm_output_schema_json);
-  const usage = parseJson(row.swarm_usage_json) as
-    | { inputTokens: number; outputTokens: number }
-    | undefined;
-  const collectorStatus =
-    row.swarm_completion_status === "done" ||
-    row.swarm_completion_status === "failed" ||
-    row.swarm_completion_status === "killed" ||
-    row.swarm_completion_status === "timeout"
-      ? row.swarm_completion_status
-      : undefined;
-  const record = normalizeSubagentRunState({
-    ...payload,
-    runId: row.run_id,
-    childSessionKey: row.child_session_key,
-    ...(row.controller_session_key ? { controllerSessionKey: row.controller_session_key } : {}),
-    requesterSessionKey: row.requester_session_key,
-    ...(requesterOrigin ? { requesterOrigin: normalizeDeliveryContext(requesterOrigin) } : {}),
-    requesterDisplayKey: row.requester_display_key,
-    task: row.task,
-    cleanup: row.cleanup === "delete" ? "delete" : "keep",
-    ...(row.task_name ? { taskName: row.task_name } : {}),
-    ...(row.label ? { label: row.label } : {}),
-    ...(row.model ? { model: row.model } : {}),
-    ...(row.agent_dir ? { agentDir: row.agent_dir } : {}),
-    ...(row.workspace_dir ? { workspaceDir: row.workspace_dir } : {}),
-    ...(row.run_timeout_seconds !== null ? { runTimeoutSeconds: row.run_timeout_seconds } : {}),
-    ...(row.spawn_mode === "session" || row.spawn_mode === "run"
-      ? { spawnMode: row.spawn_mode }
-      : {}),
-    createdAt: row.created_at,
-    ...(row.started_at !== null ? { startedAt: row.started_at } : {}),
-    ...(row.session_started_at !== null ? { sessionStartedAt: row.session_started_at } : {}),
-    ...(row.accumulated_runtime_ms !== null
-      ? { accumulatedRuntimeMs: row.accumulated_runtime_ms }
-      : {}),
-    ...(row.ended_at !== null ? { endedAt: row.ended_at } : {}),
-    ...(outcome ? { outcome } : {}),
-    ...(row.archive_at_ms !== null ? { archiveAtMs: row.archive_at_ms } : {}),
-    ...(row.cleanup_completed_at !== null ? { cleanupCompletedAt: row.cleanup_completed_at } : {}),
-    ...(sqliteBool(row.cleanup_handled) !== undefined
-      ? { cleanupHandled: sqliteBool(row.cleanup_handled) }
-      : {}),
-    ...(row.suppress_announce_reason === "steer-restart" ||
-    row.suppress_announce_reason === "killed"
-      ? { suppressAnnounceReason: row.suppress_announce_reason }
-      : {}),
-    ...(sqliteBool(row.expects_completion_message) !== undefined
-      ? { expectsCompletionMessage: sqliteBool(row.expects_completion_message) }
-      : {}),
-    ...(row.ended_reason
-      ? { endedReason: row.ended_reason as SubagentRunRecord["endedReason"] }
-      : {}),
-    ...(row.pause_reason === "sessions_yield" ? { pauseReason: row.pause_reason } : {}),
-    ...(sqliteBool(row.wake_on_descendant_settle) !== undefined
-      ? { wakeOnDescendantSettle: sqliteBool(row.wake_on_descendant_settle) }
-      : {}),
-    ...(execution ? { execution } : {}),
-    completion,
-    ...(row.ended_hook_emitted_at !== null
-      ? { endedHookEmittedAt: row.ended_hook_emitted_at }
-      : {}),
-    ...(delivery ? { delivery } : {}),
-    ...(requesterSettleWake ? { requesterSettleWake } : {}),
-    ...(sqliteBool(row.swarm_collector) !== undefined
-      ? { collect: sqliteBool(row.swarm_collector) }
-      : {}),
-    ...(row.swarm_group_id ? { groupId: row.swarm_group_id } : {}),
-    ...(outputSchema ? { outputSchema: outputSchema as Record<string, unknown> } : {}),
-    ...(collectorStatus
-      ? {
-          collectorCompletion: {
-            status: collectorStatus,
-            ...(structured !== undefined ? { structured } : {}),
-            ...(row.swarm_schema_error ? { schemaError: row.swarm_schema_error } : {}),
-            ...(usage ? { usage } : {}),
-          },
-        }
-      : {}),
-  });
+  const payload = parseJson(row.payload_json);
+  // SQLite shipped after nested state became canonical; unowned rows are transient.
+  if (!isCanonicalSubagentRunRecord(payload)) {
+    return null;
+  }
+  // This module owns every production write and commits indexed columns with
+  // this complete payload atomically; rehydrating both created competing state.
+  payload.runId = row.run_id;
+  payload.childSessionKey = row.child_session_key;
+  payload.requesterSessionKey = row.requester_session_key;
+  const controllerSessionKey = row.controller_session_key?.trim();
+  if (controllerSessionKey) {
+    payload.controllerSessionKey = controllerSessionKey;
+  } else {
+    delete payload.controllerSessionKey;
+  }
+  if (payload.requesterOrigin) {
+    payload.requesterOrigin = normalizeDeliveryContext(payload.requesterOrigin);
+  }
+  if (payload.expectsCompletionMessage === false) {
+    payload.delivery.status = "not_required";
+  }
+  const record = normalizeSubagentRunState(payload);
   return record.runId && record.childSessionKey && record.requesterSessionKey ? record : null;
 }
 
-/** Flattens a normalized subagent run into typed sqlite columns plus payload_json. */
-function subagentRunRecordToSqliteInsert(entry: SubagentRunRecord): SubagentRunSqliteInsert {
+/** Canonically serializes a run before an outer transaction acquires the write lock. */
+export function bindSubagentRunRecord(entry: SubagentRunRecord): BoundSubagentRunRecord {
   const normalized = normalizeSubagentRunState(structuredClone(entry));
+  if (!isCanonicalSubagentRunRecord(normalized)) {
+    throw new Error("subagent run is missing canonical nested state");
+  }
   const delivery = normalized.delivery;
   const completion = normalized.completion;
   const requesterSettleWake = normalized.requesterSettleWake;
@@ -291,11 +151,11 @@ function subagentRunRecordToSqliteInsert(entry: SubagentRunRecord): SubagentRunS
     run_timeout_seconds: normalized.runTimeoutSeconds ?? null,
     spawn_mode: normalized.spawnMode ?? null,
     created_at: normalized.createdAt,
-    started_at: normalized.startedAt ?? null,
+    started_at: normalized.execution.startedAt ?? null,
     session_started_at: normalized.sessionStartedAt ?? null,
     accumulated_runtime_ms: normalized.accumulatedRuntimeMs ?? null,
-    ended_at: normalized.endedAt ?? null,
-    outcome_json: jsonStringify(normalized.outcome),
+    ended_at: normalized.execution.endedAt ?? null,
+    outcome_json: jsonStringify(normalized.execution.outcome),
     archive_at_ms: normalized.archiveAtMs ?? null,
     cleanup_completed_at: normalized.cleanupCompletedAt ?? null,
     cleanup_handled: boolToSqlite(normalized.cleanupHandled),
@@ -339,84 +199,221 @@ function subagentRunRecordToSqliteInsert(entry: SubagentRunRecord): SubagentRunS
   };
 }
 
+/** Upserts a prebound run on the exact supplied shared-state handle. */
+export function upsertSubagentRunRowInDatabase(
+  database: OpenClawStateDatabase,
+  row: BoundSubagentRunRecord,
+): void {
+  const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(database.db);
+  executeSqliteQuerySync(
+    database.db,
+    stateDb
+      .insertInto("subagent_runs")
+      .values(row)
+      .onConflict((conflict) =>
+        conflict.column("run_id").doUpdateSet(subagentRunRecordToSqliteUpdate(row)),
+      ),
+  );
+}
+
 function subagentRunRecordToSqliteUpdate(values: SubagentRunSqliteInsert): SubagentRunSqliteUpdate {
   const { run_id: _runId, ...update } = values;
   return update;
 }
 
-function readSubagentRegistryRows(): SubagentRunSqliteRow[] {
+function writeSubagentRunValues(
+  values: readonly SubagentRunSqliteInsert[],
+  deleteRunIds?: readonly string[],
+  retainedRunIds?: readonly string[],
+): void {
+  if (values.length === 0 && deleteRunIds?.length === 0 && retainedRunIds === undefined) {
+    return;
+  }
+  runOpenClawStateWriteTransaction((database) => {
+    const { db } = database;
+    const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
+    for (const row of values) {
+      upsertSubagentRunRowInDatabase(database, row);
+    }
+    if (retainedRunIds !== undefined) {
+      const deleteQuery =
+        retainedRunIds.length === 0
+          ? stateDb.deleteFrom("subagent_runs")
+          : stateDb.deleteFrom("subagent_runs").where("run_id", "not in", retainedRunIds);
+      executeSqliteQuerySync(db, deleteQuery);
+      return;
+    }
+    if (deleteRunIds && deleteRunIds.length > 0) {
+      executeSqliteQuerySync(
+        db,
+        stateDb.deleteFrom("subagent_runs").where("run_id", "in", deleteRunIds),
+      );
+    }
+  });
+}
+
+type SubagentRegistryReadScope =
+  | { kind: "controller"; sessionKey: string }
+  | { kind: "child"; sessionKey: string };
+
+function readSubagentRegistryRows(scope?: SubagentRegistryReadScope): SubagentRunSqliteRow[] {
+  const { db } = openOpenClawStateDatabase();
+  const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
+  let query = stateDb.selectFrom("subagent_runs").selectAll();
+  if (scope?.kind === "child") {
+    query = query.where("child_session_key", "=", scope.sessionKey);
+  } else if (scope?.kind === "controller") {
+    // The writer trims controller keys; older null/empty rows belong to their requester.
+    query = query.where((eb) =>
+      eb.or([
+        eb("controller_session_key", "=", scope.sessionKey),
+        eb.and([
+          eb.or([eb("controller_session_key", "is", null), eb("controller_session_key", "=", "")]),
+          eb("requester_session_key", "=", scope.sessionKey),
+        ]),
+      ]),
+    );
+  }
+  return executeSqliteQuerySync(db, query.orderBy("created_at", "asc").orderBy("run_id", "asc"))
+    .rows;
+}
+
+function subagentPayloadJsonValue<T>(path: string) {
+  return /* kysely-allow-raw: SQLite JSON1 projects bounded fields from the canonical payload column. */ sql<T>`json_extract(payload_json, ${path})`;
+}
+
+function canonicalSubagentPayloadFilter() {
+  return /* kysely-allow-raw: Keep projection eligibility identical to the full canonical payload parser. */ sql<boolean>`json_valid(payload_json)
+    AND json_type(payload_json, '$.execution') = 'object'
+    AND json_extract(payload_json, '$.execution.status')
+      IN ('queued', 'running', 'interrupted', 'terminal')
+    AND json_type(payload_json, '$.completion') = 'object'
+    AND json_type(payload_json, '$.completion.required') IN ('true', 'false')
+    AND json_type(payload_json, '$.delivery') = 'object'
+    AND json_extract(payload_json, '$.delivery.status')
+      IN (
+        'not_required',
+        'pending',
+        'in_progress',
+        'delivered',
+        'failed',
+        'suspended',
+        'discarded'
+      )
+    AND json_type(payload_json, '$.delivery.handoffLeaseId') IS NULL
+    AND json_type(payload_json, '$.delivery.handoffLeasedAt') IS NULL
+    AND json_type(payload_json, '$.delivery.handoffInjectedAt') IS NULL`;
+}
+
+function readSubagentSessionListRows(): SubagentRunReadSqliteRow[] {
   const { db } = openOpenClawStateDatabase();
   const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
   return executeSqliteQuerySync(
     db,
     stateDb
       .selectFrom("subagent_runs")
-      .selectAll()
+      .select([
+        "run_id",
+        "child_session_key",
+        "controller_session_key",
+        "requester_session_key",
+        "model",
+        "run_timeout_seconds",
+        "created_at",
+        "started_at",
+        "session_started_at",
+        "accumulated_runtime_ms",
+        "ended_at",
+        "ended_reason",
+        "cleanup_completed_at",
+        subagentPayloadJsonValue<number | null>("$.generation").as("generation"),
+        subagentPayloadJsonValue<string | null>("$.execution.outcome.status").as("outcome_status"),
+        subagentPayloadJsonValue<string | null>("$.delivery.status").as("delivery_status"),
+        subagentPayloadJsonValue<number | null>("$.delivery.suspendedAt").as(
+          "delivery_suspended_at",
+        ),
+      ])
+      // Keep the projection aligned with the canonical full-registry row filter
+      // without transferring and parsing the retained payload in JavaScript.
+      .where(canonicalSubagentPayloadFilter())
       .orderBy("created_at", "asc")
       .orderBy("run_id", "asc"),
-  ).rows;
+  ).rows as SubagentRunReadSqliteRow[];
+}
+
+function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunReadRecord | null {
+  const runId = row.run_id.trim();
+  const childSessionKey = row.child_session_key.trim();
+  const requesterSessionKey = row.requester_session_key.trim();
+  if (!runId || !childSessionKey || !requesterSessionKey) {
+    return null;
+  }
+  const outcomeStatus =
+    row.outcome_status === "ok" ||
+    row.outcome_status === "error" ||
+    row.outcome_status === "timeout" ||
+    row.outcome_status === "unknown"
+      ? row.outcome_status
+      : undefined;
+  const deliveryStatus = DELIVERY_STATUSES.has(row.delivery_status ?? "")
+    ? (row.delivery_status as NonNullable<SubagentRunRecord["delivery"]>["status"])
+    : undefined;
+  const startedAt = normalizeFiniteNumber(row.started_at);
+  const endedAt = normalizeFiniteNumber(row.ended_at);
+  return Object.fromEntries(
+    Object.entries({
+      runId,
+      childSessionKey,
+      controllerSessionKey: row.controller_session_key?.trim() || undefined,
+      requesterSessionKey,
+      model: row.model || undefined,
+      generation: normalizeFiniteNumber(row.generation),
+      createdAt: row.created_at,
+      execution: {
+        ...(startedAt !== undefined ? { startedAt } : {}),
+        ...(endedAt !== undefined ? { endedAt } : {}),
+        ...(outcomeStatus ? { outcome: { status: outcomeStatus } } : {}),
+      },
+      sessionStartedAt: normalizeFiniteNumber(row.session_started_at),
+      accumulatedRuntimeMs: normalizeFiniteNumber(row.accumulated_runtime_ms),
+      runTimeoutSeconds: normalizeFiniteNumber(row.run_timeout_seconds),
+      endedReason: row.ended_reason || undefined,
+      cleanupCompletedAt: normalizeFiniteNumber(row.cleanup_completed_at),
+      delivery: deliveryStatus
+        ? {
+            status: deliveryStatus,
+            ...(normalizeFiniteNumber(row.delivery_suspended_at) !== undefined
+              ? { suspendedAt: row.delivery_suspended_at ?? undefined }
+              : {}),
+          }
+        : undefined,
+    }).filter(([, value]) => value !== undefined),
+  ) as SubagentRunReadRecord;
+}
+
+function loadScopedSubagentRuns(scope: SubagentRegistryReadScope): SubagentRunRecord[] {
+  const key = scope.sessionKey.trim();
+  if (!key) {
+    return [];
+  }
+  return readSubagentRegistryRows({ ...scope, sessionKey: key }).flatMap((row) => {
+    const run = rowToSubagentRunRecord(row);
+    return run ? [run] : [];
+  });
 }
 
 /** Loads runs controlled by one session, preserving the legacy requester fallback. */
 export function loadSubagentRunsForControllerFromSqlite(
   controllerSessionKey: string,
 ): SubagentRunRecord[] {
-  const key = controllerSessionKey.trim();
-  if (!key) {
-    return [];
-  }
-  const { db } = openOpenClawStateDatabase();
-  const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
-  const rows = executeSqliteQuerySync(
-    db,
-    stateDb
-      .selectFrom("subagent_runs")
-      .selectAll()
-      // The write boundary canonicalizes controller keys; null/empty retains legacy fallback.
-      .where((eb) =>
-        eb.or([
-          eb("controller_session_key", "=", key),
-          eb.and([
-            eb.or([
-              eb("controller_session_key", "is", null),
-              eb("controller_session_key", "=", ""),
-            ]),
-            eb("requester_session_key", "=", key),
-          ]),
-        ]),
-      )
-      .orderBy("created_at", "asc")
-      .orderBy("run_id", "asc"),
-  ).rows;
-  return rows.flatMap((row) => {
-    const run = rowToSubagentRunRecord(row);
-    return run ? [run] : [];
-  });
+  return loadScopedSubagentRuns({ kind: "controller", sessionKey: controllerSessionKey });
 }
 
 /** Loads all persisted generations for one child session through its existing index. */
 export function loadSubagentRunsForChildSessionFromSqlite(
   childSessionKey: string,
 ): SubagentRunRecord[] {
-  const key = childSessionKey.trim();
-  if (!key) {
-    return [];
-  }
-  const { db } = openOpenClawStateDatabase();
-  const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
-  const rows = executeSqliteQuerySync(
-    db,
-    stateDb
-      .selectFrom("subagent_runs")
-      .selectAll()
-      .where("child_session_key", "=", key)
-      .orderBy("created_at", "asc")
-      .orderBy("run_id", "asc"),
-  ).rows;
-  return rows.flatMap((row) => {
-    const run = rowToSubagentRunRecord(row);
-    return run ? [run] : [];
-  });
+  return loadScopedSubagentRuns({ kind: "child", sessionKey: childSessionKey });
 }
 
 /** Loads the canonical subagent registry from shared SQLite state. */
@@ -433,28 +430,43 @@ export function loadSubagentRegistryFromSqlite(): Map<string, SubagentRunRecord>
   return runs;
 }
 
+/** Loads only the canonical fields needed to build session-list topology metadata. */
+export function loadSubagentSessionListRunsFromSqlite(): Map<string, SubagentRunReadRecord> {
+  const runs = new Map<string, SubagentRunReadRecord>();
+  for (const row of readSubagentSessionListRows()) {
+    const entry = rowToSubagentRunReadRecord(row);
+    if (entry) {
+      runs.set(entry.runId, entry);
+    }
+  }
+  return runs;
+}
+
 /** Saves the complete subagent run snapshot to sqlite and prunes rows not in the snapshot. */
 export function saveSubagentRegistryToSqlite(runs: Map<string, SubagentRunRecord>): void {
-  runOpenClawStateWriteTransaction(({ db }) => {
-    const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
-    const runIds: string[] = [];
-    for (const entry of runs.values()) {
-      const values = subagentRunRecordToSqliteInsert(entry);
-      runIds.push(values.run_id);
-      executeSqliteQuerySync(
-        db,
-        stateDb
-          .insertInto("subagent_runs")
-          .values(values)
-          .onConflict((conflict) =>
-            conflict.column("run_id").doUpdateSet(subagentRunRecordToSqliteUpdate(values)),
-          ),
-      );
+  const values = [...runs.values()].map(bindSubagentRunRecord);
+  writeSubagentRunValues(
+    values,
+    undefined,
+    values.map((row) => row.run_id),
+  );
+}
+
+/** Persists only named run mutations, deleting names absent from the current registry. */
+export function saveSubagentRegistryChangesToSqlite(
+  runs: Map<string, SubagentRunRecord>,
+  changedRunIds: readonly string[],
+): void {
+  const runIds = [...new Set(changedRunIds.map((runId) => runId.trim()).filter(Boolean))];
+  const values: SubagentRunSqliteInsert[] = [];
+  const deleteRunIds: string[] = [];
+  for (const runId of runIds) {
+    const entry = runs.get(runId);
+    if (entry) {
+      values.push(bindSubagentRunRecord(entry));
+    } else {
+      deleteRunIds.push(runId);
     }
-    const deleteQuery =
-      runIds.length === 0
-        ? stateDb.deleteFrom("subagent_runs")
-        : stateDb.deleteFrom("subagent_runs").where("run_id", "not in", runIds);
-    executeSqliteQuerySync(db, deleteQuery);
-  });
+  }
+  writeSubagentRunValues(values, deleteRunIds);
 }

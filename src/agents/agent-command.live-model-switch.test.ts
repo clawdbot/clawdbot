@@ -30,6 +30,7 @@ import {
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "./internal-runtime-context.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
+import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
@@ -95,6 +96,12 @@ const state = vi.hoisted(() => ({
   resolveSupportedThinkingLevelMock: vi.fn(({ level }: { level?: string }) => level),
   resolveThinkingDefaultMock: vi.fn((_args: unknown) => "low"),
   loadManifestModelCatalogMock: vi.fn(() => []),
+  loadPreparedModelCatalogSnapshotMock: vi.fn(
+    async (): Promise<ModelCatalogSnapshot> => ({
+      entries: [],
+      routeVariants: [],
+    }),
+  ),
   buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]): unknown => ({
     prompt: "",
     skills: [],
@@ -127,6 +134,7 @@ vi.mock("./command/attempt-execution.runtime.js", () => ({
   emitAcpLifecycleEnd: (...args: unknown[]) => state.emitAcpLifecycleEndMock(...args),
   emitAcpLifecycleError: (...args: unknown[]) => state.emitAcpLifecycleErrorMock(...args),
   emitAcpLifecycleStart: vi.fn(),
+  emitAcpPromptSubmitted: vi.fn(),
   emitAcpRuntimeEvent: vi.fn(),
   persistCliTurnTranscript: (...args: unknown[]) => state.persistCliTurnTranscriptMock(...args),
   persistAcpTurnTranscript: (...args: unknown[]) => state.persistAcpTurnTranscriptMock(...args),
@@ -348,14 +356,16 @@ vi.mock("../infra/agent-events.js", () => ({
   assertAgentRunLifecycleGenerationCurrent: (...args: unknown[]) =>
     state.assertLifecycleCurrentMock(...args),
   captureAgentRunLifecycleGeneration: () => "test-generation",
-  clearAgentRunContext: (...args: unknown[]) => state.clearAgentRunContextMock(...args),
   emitAgentEvent: (...args: unknown[]) => state.emitAgentEventMock(...args),
   getAgentEventLifecycleGeneration: () => "test-generation",
   isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
   onAgentEvent: vi.fn(),
   registerAgentEventLifecycleRotationHandler: vi.fn(),
-  registerAgentRunContext: (...args: unknown[]) => state.registerAgentRunContextMock(...args),
   withAgentRunLifecycleGeneration: (_generation: string, run: () => unknown) => run(),
+}));
+vi.mock("../infra/agent-run-registry.js", () => ({
+  clearAgentRunContext: (...args: unknown[]) => state.clearAgentRunContextMock(...args),
+  registerAgentRunContext: (...args: unknown[]) => state.registerAgentRunContextMock(...args),
 }));
 
 vi.mock("../infra/outbound/session-context.js", () => ({
@@ -527,6 +537,10 @@ vi.mock("./lanes.js", () => ({
 
 vi.mock("./model-catalog.js", () => ({
   loadManifestModelCatalog: state.loadManifestModelCatalogMock,
+}));
+
+vi.mock("./model-catalog.runtime.js", () => ({
+  loadPreparedModelCatalogSnapshot: state.loadPreparedModelCatalogSnapshotMock,
 }));
 
 vi.mock("./model-selection.js", () => ({
@@ -840,6 +854,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.resolveThinkingDefaultMock.mockReturnValue("low");
     state.resolveAgentSkillsFilterMock.mockReturnValue(undefined);
     state.loadManifestModelCatalogMock.mockReturnValue([]);
+    state.loadPreparedModelCatalogSnapshotMock.mockResolvedValue({
+      entries: [],
+      routeVariants: [],
+    });
     state.hasLegacyAutoFallbackWithoutOriginMock.mockReturnValue(false);
     state.isModelSelectionLockedMock.mockImplementation(
       (entry: unknown) =>
@@ -882,6 +900,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         },
         finalizeRaw: () => text,
         finalize: () => text,
+        finalizeReplySnapshot: () => ({ disposition: "visible" as const, text }),
       };
     });
     state.buildAcpResultMock.mockImplementation((params: { payloadText?: string }) => ({
@@ -2230,15 +2249,42 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         defaults: {
           model: { primary: "openai/gpt-5.6-sol" },
           models: {
-            "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+            "openai/gpt-5.6-sol": {
+              agentRuntime: { id: "codex" },
+              params: { thinking: "off" },
+            },
             "openai/gpt-5.6-terra": { agentRuntime: { id: "codex" } },
           },
         },
       },
     };
     state.resolveThinkingDefaultMock.mockImplementation((args: unknown) => {
-      const { model } = args as { model?: string };
-      return model === "gpt-5.6-terra" ? "medium" : "low";
+      const { model, catalog } = args as {
+        model?: string;
+        catalog?: Array<{ provider: string; id: string; reasoning?: boolean }>;
+      };
+      if (model === "gpt-5.6-terra") {
+        expect(catalog).toEqual([
+          expect.objectContaining({
+            provider: "openai",
+            id: "gpt-5.6-terra",
+            reasoning: true,
+          }),
+        ]);
+        return "medium";
+      }
+      return "low";
+    });
+    state.loadPreparedModelCatalogSnapshotMock.mockResolvedValue({
+      entries: [
+        {
+          provider: "OpenAI",
+          id: "gpt-5.6-terra",
+          name: "GPT 5.6 Terra",
+          reasoning: true,
+        },
+      ],
+      routeVariants: [],
     });
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
       await params.run(params.provider, params.model);
@@ -2259,12 +2305,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     expectRecordFields(mockCallArg(state.runAgentAttemptMock, 0), {
       modelOverride: "gpt-5.6-sol",
-      resolvedThinkLevel: "low",
+      resolvedThinkLevel: "off",
     });
     expectRecordFields(mockCallArg(state.runAgentAttemptMock, 1), {
       modelOverride: "gpt-5.6-terra",
       resolvedThinkLevel: "medium",
     });
+    expect(state.loadPreparedModelCatalogSnapshotMock).toHaveBeenCalledTimes(1);
   });
 
   it("persists and clears current run delivery context for restart recovery", async () => {
@@ -3321,6 +3368,98 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
   });
 
+  it("hydrates live catalog metadata before validating an explicit thinking level", async () => {
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          thinkingDefault: "low",
+          model: { primary: "openai/gpt-5.4" },
+          models: {
+            "openai/*": {},
+            "ollama/*": {},
+          },
+        },
+      },
+    };
+    state.loadManifestModelCatalogMock.mockReturnValue([]);
+    state.loadPreparedModelCatalogSnapshotMock.mockResolvedValue({
+      entries: [
+        {
+          provider: "OLLAMA",
+          id: "minimax-m3:cloud",
+          name: "minimax-m3:cloud",
+          reasoning: true,
+        },
+      ],
+      routeVariants: [],
+    });
+    state.isThinkingLevelSupportedMock.mockImplementation((args: unknown) => {
+      const { catalog, level } = args as {
+        catalog?: Array<{ reasoning?: boolean }>;
+        level?: string;
+      };
+      return level === "off" || catalog?.some((entry) => entry.reasoning === true) === true;
+    });
+    setupSuccessfulAttempt("ollama", "minimax-m3:cloud");
+
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      model: "ollama/minimax-m3:cloud",
+      thinking: "medium",
+      allowModelOverride: true,
+    });
+
+    expect(state.loadPreparedModelCatalogSnapshotMock).toHaveBeenCalledWith({
+      config: state.runtimeConfigMock,
+      agentId: "default",
+      workspaceDir: "/tmp/workspace",
+    });
+    const thinkingArgs = requireRecord(
+      mockCallArg(state.isThinkingLevelSupportedMock),
+      "thinking args",
+    );
+    expect(thinkingArgs.level).toBe("medium");
+    expect(thinkingArgs.catalog).toEqual([
+      expect.objectContaining({
+        provider: "ollama",
+        id: "minimax-m3:cloud",
+        reasoning: true,
+      }),
+    ]);
+  });
+
+  it("does not hydrate live catalog metadata when the selected model config disables thinking", async () => {
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {
+            "openai/*": {},
+            "ollama/minimax-m3:cloud": {
+              params: { thinking: "off" },
+            },
+          },
+        },
+      },
+    };
+    state.loadManifestModelCatalogMock.mockReturnValue([]);
+    setupSuccessfulAttempt("ollama", "minimax-m3:cloud");
+
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      model: "ollama/minimax-m3:cloud",
+      allowModelOverride: true,
+    });
+
+    expect(state.loadPreparedModelCatalogSnapshotMock).not.toHaveBeenCalled();
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
+      modelOverride: "minimax-m3:cloud",
+      resolvedThinkLevel: "off",
+    });
+  });
+
   it("resolves explicit model aliases before thinking validation", async () => {
     state.runtimeConfigMock = {
       agents: {
@@ -4248,6 +4387,28 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(transcriptParams.transcriptBody).toContain("A background task completed.");
     expect(transcriptParams.transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
     expect(transcriptParams.transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
+  });
+
+  it("marks ACP execution start when the prompt is submitted", async () => {
+    setupAcpSession();
+    const onExecutionStarted = vi.fn();
+    state.acpRunTurnMock.mockImplementationOnce(async (params: unknown) => {
+      const callbacks = params as {
+        onLifecycle?: (event: { type: string; at: number }) => void;
+        onEvent?: (event: unknown) => void;
+      };
+      expect(onExecutionStarted).not.toHaveBeenCalled();
+      callbacks.onLifecycle?.({ type: "prompt_submitted", at: Date.now() });
+      callbacks.onEvent?.({ type: "done", stopReason: "end_turn" });
+    });
+
+    await agentCommand({
+      message: "ACP execution boundary",
+      sessionKey: "agent:main:main",
+      onExecutionStarted,
+    });
+
+    expect(onExecutionStarted).toHaveBeenCalledTimes(1);
   });
 
   it("keeps session provenance for internal ACP turns", async () => {

@@ -9,6 +9,8 @@ import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../m
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
+import { prepareExecApprovalContinuationForAttempt } from "./attempt-exec-approval-continuation.js";
+import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-tool-policy.js";
 import { runEmbeddedAttemptWithBackend } from "./backend.js";
 import {
   EMBEDDED_RUN_LANE_HEARTBEAT_MS,
@@ -84,6 +86,7 @@ type AttemptControl = {
   laneTaskReleaseController: AbortController;
   noteLaneTaskProgress: () => void;
   onToolOutcome: ToolOutcomeObserver;
+  isTurnTainted: () => boolean;
   allocateToolOutcomeOrdinal: (toolCallId?: string) => number;
   onToolStreamBoundary: NonNullable<EmbeddedRunAttemptParams["onToolStreamBoundary"]>;
   onRunProgress: NonNullable<EmbeddedRunAttemptParams["onRunProgress"]>;
@@ -172,11 +175,31 @@ export async function dispatchEmbeddedRunAttempt(input: {
   };
 
   let cancellationRequested = false;
+  const preparedExecApprovalContinuation = prepareExecApprovalContinuationForAttempt({
+    prompt: runtime.prompt,
+    transcriptPrompt: params.transcriptPrompt,
+    promptRange: params.execApprovalContinuationPromptRange,
+    transcriptPromptRange: params.execApprovalContinuationTranscriptPromptRange,
+    contextTokenBudget: runtime.contextTokenBudget,
+    modelContextWindow: runtime.model.contextWindow,
+    modelMaxTokens: runtime.model.maxTokens,
+    userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+  });
   const promptMedia = await preparePluginHarnessPromptImages({
     runParams: params,
     runtime,
     pluginHarnessOwnsTransport: control.pluginHarnessOwnsTransport,
   });
+  // Plugin harnesses own their tool materialization, so the host cannot attest
+  // a message tool. Finalize conservatively instead of leaking phantom guidance.
+  const pluginHarnessPrompt =
+    control.pluginHarnessOwnsTransport && params.finalizePromptForResolvedTools
+      ? applyResolvedToolPromptFinalizer({
+          prompt: preparedExecApprovalContinuation.prompt,
+          activeToolNames: [],
+          finalize: params.finalizePromptForResolvedTools,
+        })
+      : undefined;
   const attemptParams: EmbeddedRunAttemptParams = {
     operation: "attempt",
     sessionId: runtime.sessionId,
@@ -189,6 +212,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     messageChannel: params.messageChannel,
     messageProvider: params.messageProvider,
     clientCaps: params.clientCaps,
+    toolBindings: params.toolBindings,
     chatType: params.chatType,
     agentAccountId: params.agentAccountId,
     messageTo: params.messageTo,
@@ -225,6 +249,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     agentDir: runtime.agentDir,
     preparedModelRuntime: runtime.preparedModelRuntime,
     config: params.config,
+    toolOverrides: params.toolOverrides,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     ...(runtime.contextEngine
       ? {
@@ -234,8 +259,13 @@ export async function dispatchEmbeddedRunAttempt(input: {
         }
       : {}),
     skillsSnapshot: params.skillsSnapshot,
-    prompt: runtime.prompt,
-    transcriptPrompt: params.transcriptPrompt,
+    prompt: pluginHarnessPrompt ?? preparedExecApprovalContinuation.prompt,
+    transcriptPrompt:
+      pluginHarnessPrompt !== undefined && params.transcriptPrompt === undefined
+        ? preparedExecApprovalContinuation.prompt
+        : preparedExecApprovalContinuation.transcriptPrompt,
+    finalizePromptForResolvedTools:
+      pluginHarnessPrompt === undefined ? params.finalizePromptForResolvedTools : undefined,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
     skipPreparedUserTurnMessage: runtime.skipPreparedUserTurnMessage,
     currentInboundEventKind: params.currentInboundEventKind,
@@ -253,6 +283,8 @@ export async function dispatchEmbeddedRunAttempt(input: {
     delegationCapability: resolveDelegationCapability({
       fallbackActive: runtime.fallbackActive,
       inputProvenance: params.inputProvenance,
+      disableTools: params.disableTools,
+      toolsAllow: params.toolsAllow,
     }),
     isFinalFallbackAttempt: params.isFinalFallbackAttempt,
     agentHarnessId: runtime.agentHarnessId,
@@ -287,6 +319,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     agentId: runtime.agentId,
     thinkLevel: runtime.thinkLevel,
     onToolOutcome: control.onToolOutcome,
+    isTurnTainted: control.isTurnTainted,
     allocateToolOutcomeOrdinal: control.allocateToolOutcomeOrdinal,
     onToolStreamBoundary: control.onToolStreamBoundary,
     onRunProgress: control.onRunProgress,
@@ -372,6 +405,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     swarmCollector: params.swarmCollector,
     swarmOutputSchema: params.swarmOutputSchema,
     forceRestartSafeTools: params.forceRestartSafeTools,
+    forceCodeModeTools: params.forceCodeModeTools,
     forceMessageTool: params.forceMessageTool,
     enableHeartbeatTool: params.enableHeartbeatTool,
     forceHeartbeatTool: params.forceHeartbeatTool,

@@ -8,6 +8,7 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.PendingAssistantAutoSend
 import ai.openclaw.app.R
 import ai.openclaw.app.SHARED_AUDIO_DOCUMENT_MIME_TYPES
+import ai.openclaw.app.SHARED_VIDEO_MIME_TYPES
 import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.ChatMessage
@@ -33,6 +34,8 @@ import ai.openclaw.app.chat.resolveChatComposerOwner
 import ai.openclaw.app.chat.resolveGatewayDefaultAgentId
 import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.gateway.GatewayLoadedImage
+import ai.openclaw.app.gateway.GatewayLoadedMedia
+import ai.openclaw.app.gateway.GatewayMediaKind
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.joinedNativeText
 import ai.openclaw.app.i18n.nativeString
@@ -71,6 +74,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -108,12 +112,14 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -136,12 +142,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.key.onPreInterceptKeyBeforeSoftKeyboard
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -150,6 +159,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -189,6 +199,14 @@ internal fun resolveInitialChatLoadSessionKey(
   if (current.isNotEmpty() && current != "main" && current != main) return null
   return main
 }
+
+/** Reserves a viewport strip so the jump-to-latest target never covers chat content. */
+internal fun chatReaderListBottomInset(showJumpToLatest: Boolean): Dp =
+  if (showJumpToLatest) {
+    56.dp
+  } else {
+    0.dp
+  }
 
 internal enum class ChatComposerTrailingAction {
   StartTalk,
@@ -244,6 +262,8 @@ internal fun shouldUseUserMessageDisclosure(
 fun ChatScreen(
   viewModel: MainViewModel,
   talkActive: Boolean,
+  showSidebarButton: Boolean,
+  onOpenSidebar: () -> Unit,
   onToggleTalk: () -> Unit,
   onOpenSessions: () -> Unit,
   onOpenDashboard: (String) -> Unit,
@@ -296,6 +316,7 @@ fun ChatScreen(
   val micCooldown by viewModel.micCooldown.collectAsState()
   val talkModeEnabled by viewModel.talkModeEnabled.collectAsState()
   val talkModeListening by viewModel.talkModeListening.collectAsState()
+  val inlineMediaPlaybackBlocked = messageSpeechState != null || talkModeEnabled || talkModeListening
   val thinkingSupported =
     chatThinkingSupported(
       selection = thinkingLevelSelection,
@@ -445,7 +466,7 @@ fun ChatScreen(
           }
       }
     }
-  val pickAudioOrDocument =
+  val pickMediaOrDocument =
     rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
       val lease = filePickerOwnerCheckpoint.consume() ?: return@rememberLauncherForActivityResult
       if (uri == null) {
@@ -466,7 +487,7 @@ fun ChatScreen(
       ) {
         listOfNotNull(
           try {
-            loadPickedAudioOrDocumentAttachment(resolver, uri)
+            loadPickedMediaOrDocumentAttachment(resolver, uri)
           } catch (err: CancellationException) {
             throw err
           } catch (_: Throwable) {
@@ -628,6 +649,8 @@ fun ChatScreen(
   ) {
     ChatHeader(
       sessionTitle = currentSessionTitle(sessionKey = sessionKey, sessions = sessions),
+      showSidebarButton = showSidebarButton,
+      onOpenSidebar = onOpenSidebar,
       healthOk = healthOk,
       pendingRunCount = pendingRunCount,
       newChatEnabled = newChatEnabled,
@@ -743,8 +766,10 @@ fun ChatScreen(
       },
       speechState = messageSpeechState,
       onToggleListen = viewModel::toggleChatMessageSpeech,
+      inlineMediaPlaybackBlocked = inlineMediaPlaybackBlocked,
       resolveInlineWidgetResource = viewModel::resolveInlineWidgetResource,
       loadImageArtifact = viewModel::loadChatImageArtifact,
+      loadMediaArtifact = viewModel::loadChatMediaArtifact,
       modifier = Modifier.weight(1f),
     )
 
@@ -793,7 +818,13 @@ fun ChatScreen(
         if (!viewModel.isCurrentChatComposerOwner(composerOwner)) return@ChatComposer
         val authorizationId = composerState.beginMediaAcquisition(composerOwner) ?: return@ChatComposer
         filePickerOwnerCheckpoint.begin(composerOwner, authorizationId)
-        pickAudioOrDocument.launch(SHARED_AUDIO_DOCUMENT_MIME_TYPES)
+        pickMediaOrDocument.launch(SHARED_AUDIO_DOCUMENT_MIME_TYPES)
+      },
+      onPickVideo = {
+        if (!viewModel.isCurrentChatComposerOwner(composerOwner)) return@ChatComposer
+        val authorizationId = composerState.beginMediaAcquisition(composerOwner) ?: return@ChatComposer
+        filePickerOwnerCheckpoint.begin(composerOwner, authorizationId)
+        pickMediaOrDocument.launch(SHARED_VIDEO_MIME_TYPES)
       },
       onRemoveAttachment = { id -> composerState.removeAttachments(composerOwner, setOf(id)) },
       voiceNoteState = voiceNoteState,
@@ -1066,6 +1097,8 @@ internal fun canStartNewChat(
 @Composable
 private fun ChatHeader(
   sessionTitle: String,
+  showSidebarButton: Boolean,
+  onOpenSidebar: () -> Unit,
   healthOk: Boolean,
   pendingRunCount: Int,
   newChatEnabled: Boolean,
@@ -1088,6 +1121,13 @@ private fun ChatHeader(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+      if (showSidebarButton) {
+        HeaderIcon(
+          icon = Icons.Default.Menu,
+          contentDescription = nativeString("Show Sidebar"),
+          onClick = onOpenSidebar,
+        )
+      }
       OpenClawMascot(modifier = Modifier.size(25.dp))
       Text(
         text = nativeString("OpenClaw"),
@@ -1263,8 +1303,10 @@ private fun ChatMessageList(
   onForkMessage: (String) -> Unit,
   speechState: MessageSpeechState?,
   onToggleListen: (String, String) -> Unit,
+  inlineMediaPlaybackBlocked: Boolean,
   resolveInlineWidgetResource: suspend (String, ChatWidgetResource?) -> ChatWidgetResource?,
   loadImageArtifact: suspend (String) -> GatewayLoadedImage?,
+  loadMediaArtifact: suspend (String, GatewayMediaKind, Boolean) -> GatewayLoadedMedia?,
   modifier: Modifier = Modifier,
 ) {
   val baseTimeline =
@@ -1316,7 +1358,10 @@ private fun ChatMessageList(
 
   Box(modifier = modifier.fillMaxWidth()) {
     LazyColumn(
-      modifier = Modifier.fillMaxSize(),
+      modifier =
+        Modifier
+          .fillMaxSize()
+          .padding(bottom = chatReaderListBottomInset(readerScroll.showJumpToLatest)),
       state = readerScroll.listState,
       reverseLayout = true,
       verticalArrangement = Arrangement.spacedBy(5.dp),
@@ -1338,9 +1383,11 @@ private fun ChatMessageList(
               onForkMessage = onForkMessage,
               speechState = speechState,
               onToggleListen = onToggleListen,
+              inlineMediaPlaybackBlocked = inlineMediaPlaybackBlocked,
               inlineWidgetResolverReady = healthOk,
               resolveInlineWidgetResource = resolveInlineWidgetResource,
               loadImageArtifact = loadImageArtifact,
+              loadMediaArtifact = loadMediaArtifact,
             )
           is ChatTimelineItem.OutboxCommand ->
             ChatOutboxBubble(
@@ -1382,9 +1429,11 @@ private fun ChatMessageList(
               onForkMessage = onForkMessage,
               speechState = null,
               onToggleListen = onToggleListen,
+              inlineMediaPlaybackBlocked = inlineMediaPlaybackBlocked,
               inlineWidgetResolverReady = healthOk,
               resolveInlineWidgetResource = resolveInlineWidgetResource,
               loadImageArtifact = loadImageArtifact,
+              loadMediaArtifact = loadMediaArtifact,
             )
           ChatTimelineItem.Thinking -> {
             val run = workingRun
@@ -1632,9 +1681,11 @@ private fun ChatBubble(
   onForkMessage: (String) -> Unit,
   speechState: MessageSpeechState?,
   onToggleListen: (String, String) -> Unit,
+  inlineMediaPlaybackBlocked: Boolean,
   inlineWidgetResolverReady: Boolean,
   resolveInlineWidgetResource: suspend (String, ChatWidgetResource?) -> ChatWidgetResource?,
   loadImageArtifact: suspend (String) -> GatewayLoadedImage?,
+  loadMediaArtifact: suspend (String, GatewayMediaKind, Boolean) -> GatewayLoadedMedia?,
 ) {
   val normalizedRole = role.trim().lowercase(Locale.US)
   val isUser = normalizedRole == "user"
@@ -1650,7 +1701,7 @@ private fun ChatBubble(
           visible
         }
         "canvas" -> normalizedRole == "assistant" && part.widget != null
-        else -> part.isAudioAttachment()
+        else -> part.isAudioAttachment() || part.isVideoAttachment()
       }
     }
   val omittedImageCount = (visibleImageCount - 4).coerceAtLeast(0)
@@ -1716,7 +1767,19 @@ private fun ChatBubble(
             when {
               part.type == "text" && !collapsibleUserText -> ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
               part.type == "text" -> Unit
-              part.isAudioAttachment() -> VoiceNoteMessageRow(durationMs = part.durationMs)
+              part.isAudioAttachment() && part.hasPlayableMediaArtifact() ->
+                ChatAudioPlayerCard(
+                  content = part,
+                  playbackBlocked = inlineMediaPlaybackBlocked,
+                  loadMedia = loadMediaArtifact,
+                )
+              part.isVideoAttachment() && part.hasPlayableMediaArtifact() ->
+                ChatVideoPlayerCard(
+                  content = part,
+                  playbackBlocked = inlineMediaPlaybackBlocked,
+                  loadMedia = loadMediaArtifact,
+                )
+              part.isAudioAttachment() || part.isVideoAttachment() -> ChatMediaAttachmentLabel(content = part)
               part.type == "image" ->
                 if (!part.base64.isNullOrBlank()) {
                   ChatBase64Image(
@@ -2013,6 +2076,7 @@ private fun ChatComposer(
   onOpenModelPicker: () -> Unit,
   onPickImages: () -> Unit,
   onPickAudioOrDocument: () -> Unit,
+  onPickVideo: () -> Unit,
   onRemoveAttachment: (String) -> Unit,
   voiceNoteState: VoiceNoteRecorderState,
   voiceNoteElapsedMs: Long,
@@ -2131,6 +2195,7 @@ private fun ChatComposer(
           onValueChange = onValueChange,
           onPickImages = onPickImages,
           onPickAudioOrDocument = onPickAudioOrDocument,
+          onPickVideo = onPickVideo,
           onStartVoiceNote = onStartVoiceNote,
           recordVoiceNoteEnabled = recordVoiceNoteEnabled,
           dictationActive = dictationActive,
@@ -2575,6 +2640,7 @@ private fun ChatInputPill(
   onValueChange: (String) -> Unit,
   onPickImages: () -> Unit,
   onPickAudioOrDocument: () -> Unit,
+  onPickVideo: () -> Unit,
   onStartVoiceNote: () -> Unit,
   recordVoiceNoteEnabled: Boolean,
   dictationActive: Boolean,
@@ -2608,6 +2674,11 @@ private fun ChatInputPill(
       Surface(onClick = onPickAudioOrDocument, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = ClawTheme.colors.surfaceRaised, contentColor = ClawTheme.colors.text) {
         Box(contentAlignment = Alignment.Center) {
           Icon(imageVector = Icons.Default.AttachFile, contentDescription = nativeString("Attachment"), modifier = Modifier.size(20.dp))
+        }
+      }
+      Surface(onClick = onPickVideo, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = ClawTheme.colors.surfaceRaised, contentColor = ClawTheme.colors.text) {
+        Box(contentAlignment = Alignment.Center) {
+          Icon(imageVector = Icons.Default.Videocam, contentDescription = nativeString("Attach video"), modifier = Modifier.size(20.dp))
         }
       }
       Box(modifier = Modifier.weight(1f)) {
@@ -2736,6 +2807,10 @@ private fun AttachmentChip(
   attachment: PendingAttachment,
   onRemove: () -> Unit,
 ) {
+  val videoThumbnail =
+    remember(attachment.videoThumbnailBase64) {
+      attachment.videoThumbnailBase64?.let(::decodeBase64Bitmap)
+    }
   Surface(
     shape = RoundedCornerShape(ClawTheme.radii.pill),
     color = ClawTheme.colors.surfaceRaised,
@@ -2749,6 +2824,17 @@ private fun AttachmentChip(
     ) {
       if (attachment.mimeType.startsWith("audio/")) {
         Icon(imageVector = Icons.Default.Mic, contentDescription = null, modifier = Modifier.size(14.dp), tint = ClawTheme.colors.textMuted)
+      } else if (attachment.mimeType.startsWith("video/")) {
+        if (videoThumbnail != null) {
+          Image(
+            bitmap = videoThumbnail.asImageBitmap(),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.size(28.dp).clip(RoundedCornerShape(5.dp)),
+          )
+        } else {
+          Icon(imageVector = Icons.Default.Videocam, contentDescription = null, modifier = Modifier.size(14.dp), tint = ClawTheme.colors.textMuted)
+        }
       }
       Text(
         text =

@@ -159,7 +159,7 @@ const configMocks = vi.hoisted(() => ({
   loadConfig: vi.fn<
     () => {
       browser: Record<string, unknown>;
-      gateway?: { nodes?: { browser?: { node?: string } } };
+      gateway?: { nodes?: { browser?: { node?: string; mode?: "off" | "auto" | "manual" } } };
       agents?: { defaults?: { imageMaxDimensionPx?: number } };
     }
   >(() => ({ browser: {} })),
@@ -356,7 +356,7 @@ function mockSingleBrowserProxyNode() {
       displayName: "Browser Node",
       connected: true,
       caps: ["browser"],
-      commands: ["browser.proxy"],
+      commands: ["browser.proxy", "browser.proxy.upload.v1"],
     },
   ]);
 }
@@ -619,6 +619,10 @@ function blockBrowserNodeGateway(count = 1): () => void {
 }
 
 describe("browser tool output schema", () => {
+  it("marks browser results as network content", () => {
+    expect(createBrowserTool().resultContentSource).toBe("network");
+  });
+
   it("accepts snapshot details", async () => {
     const tool = createBrowserTool();
     const result = await tool.execute?.("call-1", {
@@ -1959,6 +1963,33 @@ describe("browser tool snapshot maxChars", () => {
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
+  it("does not fall back to the host when a configured browser node is disconnected", async () => {
+    configMocks.loadConfig.mockReturnValue({
+      browser: {},
+      gateway: { nodes: { browser: { node: "node-1" } } },
+    });
+    const tool = createBrowserTool();
+
+    await expect(tool.execute?.("call-1", { action: "status" })).rejects.toThrow(
+      "No connected browser-capable nodes.",
+    );
+    expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("honors a configured browser node in manual routing mode", async () => {
+    mockSingleBrowserProxyNode();
+    configMocks.loadConfig.mockReturnValue({
+      browser: {},
+      gateway: { nodes: { browser: { mode: "manual", node: "node-1" } } },
+    });
+
+    await createBrowserTool().execute?.("call-1", { action: "status" });
+
+    expect(lastNodeInvokeCall().request.nodeId).toBe("node-1");
+    expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+  });
+
   it('allows profile="user" with target="node"', async () => {
     mockSingleBrowserProxyNode();
     setResolvedBrowserProfiles({
@@ -3287,6 +3318,57 @@ describe("browser tool extract", () => {
   beforeEach(resetBrowserToolMocks);
   afterEach(() => vi.restoreAllMocks());
 
+  const runToolBinding = {
+    kind: "tab" as const,
+    tabId: 17,
+    target: "host" as const,
+    profile: "openclaw",
+    targetId: "target-a",
+  };
+
+  it("extracts from the trusted tab in a tab-bound run", async () => {
+    const tool = createBrowserTool({ agentId: "work", runToolBinding });
+
+    const result = await tool.execute?.("call-bound-extract", {
+      action: "extract",
+      query: "When does the release ship?",
+    });
+
+    expect(browserActionsMocks.browserPageContent).toHaveBeenCalledWith(undefined, {
+      targetId: "target-a",
+      profile: "openclaw",
+      timeoutMs: 60_000,
+      signal: undefined,
+    });
+    expect(toolCommonMocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "work",
+        useUtilityModel: true,
+        allowMissingApiKeyModes: ["aws-sdk"],
+      }),
+    );
+    expect(result?.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("Friday."),
+    });
+  });
+
+  it("rejects extraction from a foreign tab before browser or model access", async () => {
+    const tool = createBrowserTool({ agentId: "work", runToolBinding });
+
+    await expect(
+      tool.execute?.("call-bound-extract-escape", {
+        action: "extract",
+        query: "When does the release ship?",
+        targetId: "target-b",
+      }),
+    ).rejects.toThrow("cannot override its run-bound tab target");
+
+    expect(browserActionsMocks.browserPageContent).not.toHaveBeenCalled();
+    expect(toolCommonMocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+    expect(toolCommonMocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+  });
+
   it("captures, converts, and answers with the configured agent model", async () => {
     toolCommonMocks.sanitizeHtml.mockResolvedValueOnce("<main>Ships Friday.</main>");
     toolCommonMocks.htmlToMarkdown.mockReturnValueOnce({ text: "Ships **Friday**." });
@@ -3516,6 +3598,36 @@ describe("browser tool upload inbound media fallback (#83544)", () => {
         ref: "file-input-1",
       }),
     ).rejects.toThrow("path outside allowed directories");
+  });
+
+  it("surfaces pending remote-upload approval from the selected node", async () => {
+    const inboundPath = "/home/user/.openclaw/media/inbound/report.pdf";
+    pathValidationMocks.resolveExistingUploadPaths.mockResolvedValue({
+      ok: true,
+      paths: [inboundPath],
+    });
+    nodesUtilsMocks.listNodes.mockResolvedValue([
+      {
+        nodeId: "node-1",
+        displayName: "Browser Node",
+        connected: true,
+        caps: ["browser"],
+        commands: ["browser.proxy"],
+        approvalState: "pending-reapproval",
+        pendingDeclaredCommands: ["browser.proxy", "browser.proxy.upload.v1"],
+      },
+    ]);
+
+    const tool = createBrowserTool();
+    await expect(
+      tool.execute?.("call-upload-pending", {
+        action: "upload",
+        target: "node",
+        paths: [inboundPath],
+        ref: "file-input-1",
+      }),
+    ).rejects.toThrow("remote upload transfer is pending approval");
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

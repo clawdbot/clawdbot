@@ -97,6 +97,8 @@ vi.mock("../skills/research/autocapture.js", () => ({
 
 vi.mock("../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
+  resolveModelOverridePolicy: vi.fn(),
+  setTtsMachinePrefsPathResolver: vi.fn(),
 }));
 
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
@@ -3296,7 +3298,7 @@ describe("runCliAgent reliability", () => {
           skills: {
             workshop: {
               autonomous: {
-                enabled: true,
+                mode: "propose",
               },
             },
           },

@@ -76,6 +76,7 @@ export function resolveGatewayScopedTools(params: {
   accountId?: string;
   inboundEventKind?: InboundEventKind;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  sourceReplyOnly?: boolean;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   requireExplicitMessageTarget?: boolean;
   agentTo?: string;
@@ -164,7 +165,7 @@ export function resolveGatewayScopedTools(params: {
     groupId: params.groupId,
     groupChannel: params.groupChannel,
     groupSpace: params.groupSpace,
-    accountId: params.accountId ?? null,
+    accountId: params.scheduledToolPolicy?.ownerAccountId ?? params.accountId ?? null,
     senderId,
     senderName: params.senderName,
     senderUsername: params.senderUsername,
@@ -177,6 +178,7 @@ export function resolveGatewayScopedTools(params: {
           : "always"
         : "when-sender-id",
     groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
+    requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
   });
   const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
   const sandboxRuntime = resolveSandboxRuntimeStatus({
@@ -192,7 +194,14 @@ export function resolveGatewayScopedTools(params: {
   const gatewayToolsCfg = params.cfg.gateway?.tools;
   const defaultGatewayDeny =
     surface === "http"
-      ? DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter((name) => !gatewayToolsCfg?.allow?.includes(name))
+      ? DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter(
+          // Config allow entries may use legacy tool names (e.g. "cron");
+          // normalize both sides so they still lift the matching default deny.
+          (name) =>
+            !gatewayToolsCfg?.allow?.some(
+              (allowed) => normalizeToolName(allowed) === normalizeToolName(name),
+            ),
+        )
       : [];
   const ownerOnlyGatewayDeny =
     params.senderIsOwner === false || (surface === "http" && params.senderIsOwner !== true)
@@ -245,6 +254,7 @@ export function resolveGatewayScopedTools(params: {
     agentAccountId: params.accountId,
     inboundEventKind: params.inboundEventKind,
     sourceReplyDeliveryMode,
+    sourceReplyOnly: params.sourceReplyOnly,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     agentTo: params.agentTo,
     agentThreadId: params.agentThreadId,

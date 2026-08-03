@@ -31,6 +31,7 @@ import {
   requestDevicePairing,
   verifyDeviceToken,
 } from "../infra/device-pairing.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { captureAuthenticatedNodePairingState } from "../infra/node-pairing-state.js";
 import {
   approveNodePairing,
@@ -254,17 +255,11 @@ function createChallengeStore() {
           challenges.delete(oldest[0]);
         }
       }
-      while (challenges.size >= MAX_PENDING_CHALLENGES) {
-        const oldest = challenges.keys().next().value;
-        if (typeof oldest !== "string") {
-          break;
-        }
-        challenges.delete(oldest);
-      }
+      pruneMapToMaxSize(challenges, MAX_PENDING_CHALLENGES - 1);
       const nonce = randomBytes(24).toString("base64url");
       const expiresAtMs = current + CHALLENGE_TTL_MS;
       challenges.set(nonce, { clientKey, expiresAtMs });
-      return { nonce, expiresAtMs };
+      return { nonce, ts: current, expiresAtMs };
     },
     consume: (nonce: string, clientKey: string, current: number) => {
       const challenge = challenges.get(nonce);
@@ -353,7 +348,8 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
   };
 
   const sendQueuedEvent = (res: ServerResponse, queued: QueuedNodeEvent): boolean => {
-    if (res.writableEnded) {
+    // The socket can be destroyed before its response receives the close event.
+    if (res.destroyed || res.socket?.destroyed || res.writableEnded) {
       return false;
     }
     try {

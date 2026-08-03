@@ -58,7 +58,7 @@ type ConnectAuth = {
   password?: string;
 };
 
-type GatewayAuthSurface = "http" | "ws-control-ui";
+type GatewayAuthSurface = "http" | "http-user-profile-avatar" | "ws-control-ui";
 
 /** Inputs needed to authorize one HTTP or websocket gateway connection. */
 type AuthorizeGatewayConnectParams = {
@@ -84,6 +84,7 @@ type AuthorizeGatewayConnectParams = {
   browserOriginPolicy?: {
     requestHost?: string;
     origin?: string;
+    fetchSite?: string;
     allowedOrigins?: string[];
     allowHostHeaderOriginFallback?: boolean;
   };
@@ -324,7 +325,7 @@ function authorizeTrustedProxy(params: {
 }
 
 function shouldAllowTailscaleHeaderAuth(authSurface: GatewayAuthSurface): boolean {
-  return authSurface === "ws-control-ui";
+  return authSurface === "ws-control-ui" || authSurface === "http-user-profile-avatar";
 }
 
 function authorizeHttpBrowserOrigin(params: {
@@ -332,20 +333,30 @@ function authorizeHttpBrowserOrigin(params: {
   browserOriginPolicy?: AuthorizeGatewayConnectParams["browserOriginPolicy"];
   isLocalClient: boolean;
   reason: string;
+  requireSameOriginFetchWithoutOrigin?: boolean;
+  allowWildcardOrigin?: boolean;
 }): { ok: false; reason: string } | null {
-  if (params.authSurface !== "http") {
+  if (params.authSurface === "ws-control-ui") {
     return null;
   }
 
   const origin = params.browserOriginPolicy?.origin?.trim();
   if (!origin) {
-    return null;
+    return params.requireSameOriginFetchWithoutOrigin &&
+      normalizeLowercaseStringOrEmpty(params.browserOriginPolicy?.fetchSite) !== "same-origin"
+      ? { ok: false, reason: params.reason }
+      : null;
   }
 
   const originCheck = checkBrowserOrigin({
     requestHost: params.browserOriginPolicy?.requestHost,
     origin,
-    allowedOrigins: params.browserOriginPolicy?.allowedOrigins,
+    allowedOrigins:
+      params.allowWildcardOrigin === false
+        ? params.browserOriginPolicy?.allowedOrigins?.filter(
+            (candidate) => normalizeLowercaseStringOrEmpty(candidate) !== "*",
+          )
+        : params.browserOriginPolicy?.allowedOrigins,
     allowHostHeaderOriginFallback: params.browserOriginPolicy?.allowHostHeaderOriginFallback,
     isLocalClient: params.isLocalClient,
   });
@@ -366,13 +377,13 @@ function authorizeTrustedProxyBrowserOrigin(params: {
   });
 }
 
-function authorizeTokenAuth(params: {
+async function authorizeTokenAuth(params: {
   authToken?: string;
   connectToken?: string;
   limiter?: AuthRateLimiter;
   ip?: string;
   rateLimitScope: string;
-}): GatewayAuthResult {
+}): Promise<GatewayAuthResult> {
   if (!params.authToken) {
     return { ok: false, reason: "token_missing_config" };
   }
@@ -383,20 +394,20 @@ function authorizeTokenAuth(params: {
     return { ok: false, reason: "token_missing" };
   }
   if (!safeEqualSecret(params.connectToken, params.authToken)) {
-    params.limiter?.recordFailure(params.ip, params.rateLimitScope);
+    await params.limiter?.recordFailureAndDelay(params.ip, params.rateLimitScope);
     return { ok: false, reason: "token_mismatch" };
   }
   params.limiter?.reset(params.ip, params.rateLimitScope);
   return { ok: true, method: "token" };
 }
 
-function authorizePasswordAuth(params: {
+async function authorizePasswordAuth(params: {
   authPassword?: string;
   connectPassword?: string;
   limiter?: AuthRateLimiter;
   ip?: string;
   rateLimitScope: string;
-}): GatewayAuthResult {
+}): Promise<GatewayAuthResult> {
   if (!params.authPassword) {
     return { ok: false, reason: "password_missing_config" };
   }
@@ -405,7 +416,7 @@ function authorizePasswordAuth(params: {
     return { ok: false, reason: "password_missing" };
   }
   if (!safeEqualSecret(params.connectPassword, params.authPassword)) {
-    params.limiter?.recordFailure(params.ip, params.rateLimitScope);
+    await params.limiter?.recordFailureAndDelay(params.ip, params.rateLimitScope);
     return { ok: false, reason: "password_mismatch" };
   }
   params.limiter?.reset(params.ip, params.rateLimitScope);
@@ -499,7 +510,7 @@ async function authorizeGatewayConnectCore(
       if (rateLimitResult) {
         return rateLimitResult;
       }
-      return authorizePasswordAuth({
+      return await authorizePasswordAuth({
         authPassword: auth.password,
         connectPassword: connectAuth.password,
         limiter,
@@ -534,6 +545,22 @@ async function authorizeGatewayConnectCore(
     !localDirect &&
     !hasExplicitSharedSecretAuth(connectAuth)
   ) {
+    if (authSurface === "http-user-profile-avatar") {
+      // Same-origin <img> loads may omit Origin, but Fetch Metadata still identifies
+      // their source. Ambient identity accepts that omission only for same-origin loads,
+      // and wildcard CORS never grants ambient identity.
+      const originResult = authorizeHttpBrowserOrigin({
+        authSurface,
+        browserOriginPolicy: params.browserOriginPolicy,
+        isLocalClient: localDirect,
+        reason: "origin_not_allowed",
+        requireSameOriginFetchWithoutOrigin: true,
+        allowWildcardOrigin: false,
+      });
+      if (originResult) {
+        return originResult;
+      }
+    }
     const tailscaleCheck = await resolveVerifiedTailscaleUser({
       req,
       tailscaleWhois,
@@ -549,7 +576,7 @@ async function authorizeGatewayConnectCore(
   }
 
   if (auth.mode === "token") {
-    return authorizeTokenAuth({
+    return await authorizeTokenAuth({
       authToken: auth.token,
       connectToken: connectAuth?.token,
       limiter,
@@ -559,7 +586,7 @@ async function authorizeGatewayConnectCore(
   }
 
   if (auth.mode === "password") {
-    return authorizePasswordAuth({
+    return await authorizePasswordAuth({
       authPassword: auth.password,
       connectPassword: connectAuth?.password,
       limiter,
@@ -568,7 +595,7 @@ async function authorizeGatewayConnectCore(
     });
   }
 
-  limiter?.recordFailure(ip, rateLimitScope);
+  await limiter?.recordFailureAndDelay(ip, rateLimitScope);
   return { ok: false, reason: "unauthorized" };
 }
 
@@ -579,6 +606,16 @@ export async function authorizeHttpGatewayConnect(
   return authorizeGatewayConnect({
     ...params,
     authSurface: "http",
+  });
+}
+
+/** Authorize the read-only profile avatar route, including verified Tailscale identity. */
+export async function authorizeUserProfileAvatarHttpGatewayConnect(
+  params: Omit<AuthorizeGatewayConnectParams, "authSurface">,
+): Promise<GatewayAuthResult> {
+  return authorizeGatewayConnect({
+    ...params,
+    authSurface: "http-user-profile-avatar",
   });
 }
 

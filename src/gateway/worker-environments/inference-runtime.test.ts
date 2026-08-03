@@ -177,6 +177,8 @@ function setup(entry: SessionEntry = sessionEntry) {
   } = {};
   const preparedModelRuntime = {
     agentDir: "/gateway-agent",
+    activeProjectKeys: [],
+    allowGatewaySubagentBinding: true,
     workspaceDir: WORKSPACE,
     config,
     metadataSnapshot: { plugins: [] } as never,
@@ -232,9 +234,10 @@ function setup(entry: SessionEntry = sessionEntry) {
   const acquireRuntimeLease = vi.fn<Deps["acquireRuntimeLease"]>(async (runtimeParams) => {
     scope.agentDir = runtimeParams.agentDir;
     scope.catalogWorkspace = WORKSPACE;
-    leasedPreparedModelRuntime = { ...preparedModelRuntime, agentDir: runtimeParams.agentDir };
+    const leased = { ...preparedModelRuntime, agentDir: runtimeParams.agentDir };
+    leasedPreparedModelRuntime = leased;
     return {
-      snapshot: leasedPreparedModelRuntime,
+      snapshot: leased,
       release: releaseRuntime,
     };
   });

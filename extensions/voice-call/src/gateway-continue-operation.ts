@@ -69,7 +69,7 @@ type VoiceCallContinueOperationResultPayload =
 type VoiceCallContinueOperationRequest = {
   rt: VoiceCallRuntime;
   callId: string;
-  message: string;
+  run: () => Promise<{ success: true; transcript?: string }>;
 };
 
 /** Create a process-local operation store for gateway continue-call polling. */
@@ -115,23 +115,11 @@ export function createVoiceCallContinueOperationStore(params: {
       pollTimeoutMs,
     });
 
-    void request.rt.manager
-      .continueCall(request.callId, request.message)
+    void request
+      .run()
       .then((result) => {
         const current = operations.get(operationId);
         if (!current || current.status !== "pending") {
-          return;
-        }
-        if (!result.success) {
-          operations.set(operationId, {
-            operationId,
-            status: "failed",
-            callId: request.callId,
-            startedAtMs,
-            completedAtMs: Date.now(),
-            pollTimeoutMs,
-            error: result.error || "continue failed",
-          });
           return;
         }
         operations.set(operationId, {

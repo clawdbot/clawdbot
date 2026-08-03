@@ -6,6 +6,7 @@
  */
 import os from "node:os";
 import path from "node:path";
+import { mergeSsrFPolicies } from "openclaw/plugin-sdk/ssrf-policy";
 import {
   normalizeOptionalString,
   normalizeOptionalTrimmedStringList,
@@ -236,26 +237,20 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
   const rawPolicy = cfg?.ssrfPolicy as BrowserSsrFPolicyCompat | undefined;
   const allowPrivateNetwork = rawPolicy?.allowPrivateNetwork;
   const dangerouslyAllowPrivateNetwork = rawPolicy?.dangerouslyAllowPrivateNetwork;
-  const allowedHostnames = normalizeStringList(rawPolicy?.allowedHostnames);
   const hasExplicitPrivateSetting =
     allowPrivateNetwork !== undefined || dangerouslyAllowPrivateNetwork !== undefined;
-  const resolvedAllowPrivateNetwork =
-    dangerouslyAllowPrivateNetwork === true || allowPrivateNetwork === true;
-
-  if (!resolvedAllowPrivateNetwork && !hasExplicitPrivateSetting && !allowedHostnames) {
-    // Keep the default policy object present so CDP guards still enforce
-    // fail-closed private-network checks on unconfigured installs.
-    return {};
+  const resolved = mergeSsrFPolicies({
+    ...rawPolicy,
+    allowedHostnames: normalizeStringList(rawPolicy?.allowedHostnames),
+  });
+  if (resolved && hasExplicitPrivateSetting) {
+    delete resolved.allowPrivateNetwork;
+    resolved.dangerouslyAllowPrivateNetwork =
+      allowPrivateNetwork === true || dangerouslyAllowPrivateNetwork === true;
   }
-
-  return {
-    ...(resolvedAllowPrivateNetwork ||
-    dangerouslyAllowPrivateNetwork === false ||
-    allowPrivateNetwork === false
-      ? { dangerouslyAllowPrivateNetwork: resolvedAllowPrivateNetwork }
-      : {}),
-    ...(allowedHostnames ? { allowedHostnames } : {}),
-  };
+  // Keep an explicit strict object so every browser guard stays fail-closed
+  // even when the operator leaves the shared policy unconfigured.
+  return resolved ?? (hasExplicitPrivateSetting ? { dangerouslyAllowPrivateNetwork: false } : {});
 }
 
 function ensureDefaultProfile(
@@ -317,10 +312,31 @@ function resolveExtensionRelayPorts(
     .filter(([, profile]) => profile.driver === "extension" && profile.cdpPort == null)
     .map(([name]) => name)
     .toSorted();
+  // Explicit ports can belong to any profile driver. Reserve them before
+  // allocation so an extension relay cannot bind another profile's listener.
+  const reservedPorts = new Set(
+    Object.values(profiles)
+      .map((profile) => profile.cdpPort)
+      .filter((port): port is number => typeof port === "number"),
+  );
   const ports: Record<string, number> = {};
-  names.forEach((name, index) => {
-    ports[name] = defaultPort - index;
-  });
+  const minimumPort = defaultPort - EXTENSION_RELAY_PORT_OFFSET;
+  let nextPort = defaultPort;
+  for (const name of names) {
+    while (nextPort > minimumPort && reservedPorts.has(nextPort)) {
+      nextPort -= 1;
+    }
+    // The control port sits below this band; crossing it would silently
+    // collide with browser control instead of creating an extension relay.
+    if (nextPort <= minimumPort) {
+      throw new Error(
+        "No available extension relay ports in the reserved browser relay port range",
+      );
+    }
+    ports[name] = nextPort;
+    reservedPorts.add(nextPort);
+    nextPort -= 1;
+  }
   return ports;
 }
 

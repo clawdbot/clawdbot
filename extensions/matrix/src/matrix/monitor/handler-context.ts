@@ -1,7 +1,7 @@
 import {
   buildChannelInboundEventContext,
   createChannelInboundEnvelopeBuilder,
-  toInboundMediaFacts,
+  toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   evaluateSupplementalContextVisibility,
@@ -238,7 +238,7 @@ export async function resolveMatrixInboundContext(config: {
       },
       groupSystemPrompt: isRoom ? groupSystemPrompt : undefined,
     },
-    media: toInboundMediaFacts(
+    media: await toInboundMediaFactsWithMetadata(
       media
         ? [
             {
@@ -302,7 +302,6 @@ export async function resolveMatrixInboundContext(config: {
     extra: {
       GroupSubject: isRoom ? (roomName ?? roomId) : undefined,
       GroupId: isRoom ? roomId : undefined,
-      GroupChannel: isRoom ? roomId : undefined,
       ...locationPayload?.context,
       CommandSource: "text" as const,
       NativeDirectUserId: isDirectMessage ? senderId : undefined,
@@ -334,7 +333,6 @@ export async function resolveMatrixInboundContext(config: {
         isDirect: isDirectMessage,
         isGroup: isRoom,
         isMentionableGroup: isRoom,
-        requireMention: shouldRequireMention,
         canDetectMention,
         effectiveWasMentioned,
         shouldBypassMention,

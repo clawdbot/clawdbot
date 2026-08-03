@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../lib/session-pull-requests.ts";
 import {
   createContext,
   createGateway,
@@ -43,35 +45,44 @@ describe("AppSidebar session indicators", () => {
         };
       }
     }
-    const request = vi.fn((_method: string, params: { sessionKey: string }) =>
-      Promise.resolve({
-        pullRequests: [
-          {
-            number: 1,
-            owner: "openclaw",
-            repo: "openclaw",
-            branch: "feature/test",
-            title: "Test",
-            url: "https://example.test/pr/1",
-            state: params.sessionKey.endsWith("open-pr") ? "open" : "merged",
-          },
-        ],
-        rateLimited: false,
-      }),
-    );
-    const gatewayHarness = createGatewayHarness({
-      request,
-      requestSessionPullRequests: (params: { sessionKey: string }) =>
-        request("controlUi.sessionPullRequests", params),
-    } as unknown as GatewayBrowserClient);
+    const request = vi.fn(() => Promise.resolve({ subscribed: true }));
+    const gatewayHarness = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
     gatewayHarness.publish({
       hello: {
-        features: { methods: ["controlUi.sessionPullRequests"] },
+        features: { methods: [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD] },
       } as ApplicationGatewaySnapshot["hello"],
     });
     const { sidebar } = await mountSidebar(gatewayHarness.gateway, sessions.sessions);
     sidebar.connected = true;
     await sidebar.updateComplete;
+    await waitForFast(() => {
+      expect(request).toHaveBeenCalledWith(
+        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+        expect.objectContaining({ sessionKeys: expect.arrayContaining(keys.slice(2)) }),
+      );
+    });
+    gatewayHarness.publishEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+      sessions: Object.fromEntries(
+        keys.slice(2).map((key) => [
+          key,
+          {
+            pullRequests: [
+              {
+                number: 1,
+                owner: "openclaw",
+                repo: "openclaw",
+                branch: "feature/test",
+                title: "Test",
+                url: "https://example.test/pr/1",
+                state: key.endsWith("open-pr") ? "open" : "merged",
+              },
+            ],
+            rateLimited: false,
+            status: "ready",
+          },
+        ]),
+      ),
+    });
 
     await waitForFast(() => {
       expect(sidebar.querySelector('[data-session-pr-state="open"]')).not.toBeNull();

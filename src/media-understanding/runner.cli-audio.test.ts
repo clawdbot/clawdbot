@@ -8,13 +8,22 @@ import { withTempDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { CLI_OUTPUT_MAX_BUFFER } from "./defaults.constants.js";
 import { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
-import { createSafeAudioFixtureBuffer, withAudioFixture } from "./runner.test-utils.js";
+import {
+  createSafeAudioFixtureBuffer,
+  withAudioFixture,
+  withMediaFixture,
+} from "./runner.test-utils.js";
 import type { MediaAttachment } from "./types.js";
 
 const runExecMock = vi.hoisted(() => vi.fn());
+const runFfmpegMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../process/exec.js", () => ({
   runExec: (...args: unknown[]) => runExecMock(...args),
+}));
+
+vi.mock("../media/media-services.js", () => ({
+  runFfmpeg: (...args: unknown[]) => runFfmpegMock(...args),
 }));
 
 let runCliEntry: typeof import("./runner.entries.js").runCliEntry;
@@ -120,6 +129,7 @@ describe("media-understanding CLI audio entry", () => {
 
   beforeEach(() => {
     runExecMock.mockReset().mockResolvedValue({ stdout: "cli transcript" });
+    runFfmpegMock.mockReset();
   });
 
   afterEach(() => {
@@ -183,6 +193,38 @@ describe("media-understanding CLI audio entry", () => {
       timeoutMs: 60_000,
       maxBuffer: CLI_OUTPUT_MAX_BUFFER,
     });
+  });
+
+  it.each([
+    { source: "model entry", entryLanguage: "de", configLanguage: "fr", expected: "de" },
+    {
+      source: "capability default",
+      entryLanguage: undefined,
+      configLanguage: "fr",
+      expected: "fr",
+    },
+  ])("applies the configured $source language to CLI templating", async (testCase) => {
+    await withAudioFixture("openclaw-cli-language", async ({ ctx, media, cache }) => {
+      await runCliEntry({
+        capability: "audio",
+        entry: {
+          type: "cli",
+          command: "mock-transcriber",
+          args: ["--language", "{{Language}}", "--file", "{{MediaPath}}"],
+          language: testCase.entryLanguage,
+        },
+        cfg: {
+          tools: { media: { audio: { language: testCase.configLanguage } } },
+        } as OpenClawConfig,
+        ctx,
+        attachment: requireFirstAttachment(media),
+        cache,
+        config: { language: testCase.configLanguage } as never,
+      });
+    });
+
+    const [, args] = requireFirstRunExecCall();
+    expect(args).toEqual(["--language", testCase.expected, "--file", expect.any(String)]);
   });
 
   it.each([
@@ -272,6 +314,47 @@ describe("media-understanding CLI audio entry", () => {
     const result = await runAudioEntry(testCase);
 
     expect(result?.text).toBe("file transcript");
+  });
+
+  it("removes the CLI scratch directory when audio conversion fails", async () => {
+    let scratchDir = "";
+    runFfmpegMock.mockImplementationOnce(async (args: string[]) => {
+      const outputPath = args.at(-1);
+      if (!outputPath) {
+        throw new Error("expected ffmpeg output path");
+      }
+      scratchDir = path.dirname(outputPath);
+      throw new Error("ffmpeg conversion failed");
+    });
+
+    await withMediaFixture(
+      {
+        filePrefix: "openclaw-cli-whisper-conversion-failure",
+        extension: "mp3",
+        mediaType: "audio/mpeg",
+        fileContents: createSafeAudioFixtureBuffer(),
+      },
+      async ({ ctx, media, cache }) => {
+        await expect(
+          runCliEntry({
+            capability: "audio",
+            entry: {
+              type: "cli",
+              command: "whisper-cli",
+              args: ["-otxt", "-of", "{{OutputBase}}", "{{MediaPath}}"],
+            },
+            cfg: { tools: { media: { audio: {} } } } as OpenClawConfig,
+            ctx,
+            attachment: requireFirstAttachment(media),
+            cache,
+            config: {} as never,
+          }),
+        ).rejects.toThrow("ffmpeg conversion failed");
+      },
+    );
+
+    expect(scratchDir).not.toBe("");
+    await expect(fs.stat(scratchDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("records the backend observed during a whisper.cpp model run", async () => {

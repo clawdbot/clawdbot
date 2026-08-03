@@ -919,6 +919,48 @@ describe("discord component interactions", () => {
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { visibility: "private", ephemeral: true },
+    { visibility: "public", ephemeral: false },
+    { visibility: "default-private", ephemeral: undefined },
+  ])(
+    "sends $visibility plugin replies as new messages after component acknowledgment",
+    async ({ ephemeral }) => {
+      registerDiscordComponentEntries({
+        entries: [createButtonEntry({ callbackData: "codex:approve" })],
+        modals: [],
+      });
+      dispatchPluginInteractiveHandlerMock.mockImplementation(async (params: unknown) => {
+        const typedParams = params as {
+          onMatched: () => Promise<void>;
+          respond: { reply: (payload: { text: string; ephemeral?: boolean }) => Promise<void> };
+        };
+        await typedParams.onMatched();
+        await typedParams.respond.reply({
+          text: "Plugin result",
+          ...(ephemeral === undefined ? {} : { ephemeral }),
+        });
+        return { matched: true, handled: true, duplicate: false };
+      });
+
+      const acknowledge = vi.fn().mockResolvedValue(undefined);
+      const followUp = vi.fn().mockResolvedValue(undefined);
+      const reply = vi.fn().mockResolvedValue(undefined);
+      const button = createDiscordComponentButton(createComponentContext());
+      const { interaction } = createComponentButtonInteraction({ acknowledge, followUp, reply });
+
+      await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+      expect(acknowledge).toHaveBeenCalledTimes(1);
+      expect(followUp).toHaveBeenCalledWith({
+        content: "Plugin result",
+        ephemeral: ephemeral ?? true,
+      });
+      expect(reply).not.toHaveBeenCalled();
+      expect(dispatchReplyMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("lets plugin Discord interactions clear components after acknowledging", async () => {
     registerDiscordComponentEntries({
       entries: [createButtonEntry({ callbackData: "codex:approve" })],

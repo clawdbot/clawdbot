@@ -5,6 +5,7 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ChatType } from "../../channels/chat-type.js";
+import type { SessionToolOverrides } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js";
@@ -13,6 +14,7 @@ import type { SkillSnapshot } from "../../skills/types.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../bash-tools.exec-types.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/types.js";
+import type { TrustedSubagentCompletionHandoff } from "../subagent-announce-handoff.js";
 
 export type CompactEmbeddedAgentSessionParams = {
   sessionId: string;
@@ -51,8 +53,8 @@ export type CompactEmbeddedAgentSessionParams = {
   /** Parent session key for subagent policy inheritance. */
   spawnedBy?: string | null;
   inputProvenance?: InputProvenance;
-  /** Trusted in-process subagent-completion handoff; never derived from public input. */
-  trustedInternalHandoff?: boolean;
+  /** Consumed in-process subagent-completion capability; never derived from public input. */
+  trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   sessionFile: string;
   /** Optional caller-observed live prompt tokens used for compaction diagnostics. */
   currentTokenCount?: number;
@@ -61,6 +63,7 @@ export type CompactEmbeddedAgentSessionParams = {
   cwd?: string;
   agentDir?: string;
   config?: OpenClawConfig;
+  toolOverrides?: SessionToolOverrides;
   skillsSnapshot?: SkillSnapshot;
   senderIsOwner?: boolean;
   provider?: string;

@@ -402,16 +402,19 @@ export function projectAgentRunAttemptTerminal(terminal: AgentRunAttemptTerminal
   };
 }
 
+const AGENT_RUN_TERMINAL_CLASSIFICATION = {
+  completed: "success",
+  hard_timeout: "timeout",
+  timed_out: "timeout",
+  cancelled: "cancellation",
+  aborted: "cancellation",
+  blocked: "failure",
+  abandoned: "failure",
+  failed: "failure",
+} as const;
+
 /** Normalized terminal reason for an agent run. */
-type AgentRunTerminalReason =
-  | "completed"
-  | "hard_timeout"
-  | "timed_out"
-  | "cancelled"
-  | "aborted"
-  | "blocked"
-  | "abandoned"
-  | "failed";
+type AgentRunTerminalReason = keyof typeof AGENT_RUN_TERMINAL_CLASSIFICATION;
 
 /** Normalized terminal outcome for an agent run. */
 export type AgentRunTerminalOutcome = {
@@ -425,6 +428,11 @@ export type AgentRunTerminalOutcome = {
   startedAt?: number;
   endedAt?: number;
 };
+
+/** Collapses terminal reasons into the four projections shared by run consumers. */
+export function classifyAgentRunTerminalOutcome(outcome: Pick<AgentRunTerminalOutcome, "reason">) {
+  return AGENT_RUN_TERMINAL_CLASSIFICATION[outcome.reason];
+}
 
 /** Raw terminal input collected from run wait/liveness/timeout paths. */
 type AgentRunTerminalInput = {
@@ -440,6 +448,11 @@ type AgentRunTerminalInput = {
 
 /** Terminal wait input where pending/unknown status may still be present. */
 type AgentRunTerminalWaitInput = Omit<AgentRunTerminalInput, "status"> & {
+  status?: unknown;
+};
+
+type AgentRunLifecycleTerminalData = Omit<AgentRunTerminalWaitInput, "status"> & {
+  aborted?: unknown;
   status?: unknown;
 };
 
@@ -547,6 +560,64 @@ export function buildAgentRunTerminalOutcome(
       ? { endedAt: asFiniteTimestamp(input.endedAt) }
       : {}),
   };
+}
+
+/** Builds the canonical outcome directly from a terminal lifecycle event. */
+export function buildAgentRunTerminalOutcomeFromLifecycleEvent(input: {
+  phase: "end" | "error";
+  data?: AgentRunLifecycleTerminalData;
+  abortSignal?: AbortSignal;
+  startedAt?: unknown;
+  endedAt?: unknown;
+}): AgentRunTerminalOutcome {
+  const data = input.data;
+  const abortFields =
+    typeof data?.aborted === "boolean"
+      ? {}
+      : resolveAgentRunAbortLifecycleFields(input.abortSignal);
+  const stopReason = asNonEmptyString(data?.stopReason) ?? abortFields.stopReason;
+  const timeoutPhase = normalizeAgentRunTimeoutPhase(data?.timeoutPhase);
+  const lifecycleStatus = asNonEmptyString(data?.status)?.toLowerCase();
+  // Bare `aborted` is cancellation; timeout needs a structured status, stop
+  // reason, or phase so legacy lifecycle gaps cannot turn user stops into timeouts.
+  const timedOut =
+    stopReason === "timeout" ||
+    timeoutPhase !== undefined ||
+    lifecycleStatus === "timeout" ||
+    lifecycleStatus === "timed_out";
+  const aborted =
+    data?.aborted === true || abortFields.aborted === true || lifecycleStatus === "aborted";
+  const cancellationStatus =
+    lifecycleStatus === "cancelled" ||
+    lifecycleStatus === "canceled" ||
+    lifecycleStatus === "aborted";
+  const cancelled = cancellationStatus || aborted;
+  const failed =
+    input.phase === "error" ||
+    lifecycleStatus === "error" ||
+    lifecycleStatus === "failed" ||
+    stopReason === "error";
+  const normalizedStopReason =
+    !timedOut &&
+    cancelled &&
+    !isAbortedAgentStopReason(stopReason) &&
+    !isCancellationStopReason(stopReason) &&
+    (stopReason === undefined || cancellationStatus)
+      ? aborted
+        ? "aborted"
+        : "stop"
+      : stopReason;
+  const outcome = buildAgentRunTerminalOutcome({
+    status: timedOut ? "timeout" : cancelled || failed ? "error" : "ok",
+    error: data?.error,
+    stopReason: normalizedStopReason,
+    livenessState: data?.livenessState,
+    timeoutPhase,
+    providerStarted: data?.providerStarted,
+    startedAt: input.startedAt ?? data?.startedAt,
+    endedAt: input.endedAt ?? data?.endedAt,
+  });
+  return stopReason && outcome.stopReason !== stopReason ? { ...outcome, stopReason } : outcome;
 }
 
 function hasRestartAbortReason(value: unknown): boolean {

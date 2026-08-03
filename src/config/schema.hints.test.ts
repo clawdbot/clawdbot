@@ -8,9 +8,11 @@ import { buildSecretInputSchema } from "../plugin-sdk/secret-input-schema.js";
 import { buildBaseHints, testApi } from "./schema.hints.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import { OpenClawSchema } from "./zod-schema.js";
+import { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
-const { collectMatchingSchemaPaths, mapSensitivePaths, SECTION_DOCS_URLS } = testApi;
+const { collectMatchingSchemaPaths, mapSensitivePaths, SECTION_DOCS_URLS, SECTIONS_WITHOUT_DOCS } =
+  testApi;
 const BUNDLED_CHANNEL_HINT_PREFIXES = [
   "channels.discord",
   "channels.imessage",
@@ -23,6 +25,18 @@ const BUNDLED_CHANNEL_HINT_PREFIXES = [
 ] as const;
 
 describe("section docs URLs", () => {
+  it("accounts for every root config section", () => {
+    const sectionsWithDocsDecisions = new Set([
+      ...Object.keys(SECTION_DOCS_URLS),
+      ...SECTIONS_WITHOUT_DOCS,
+    ]);
+    const undecidedSections = Object.keys(OpenClawSchemaShape).filter(
+      (section) => !sectionsWithDocsDecisions.has(section),
+    );
+
+    expect(undecidedSections).toEqual([]);
+  });
+
   it("maps every URL to an existing task-oriented docs page", () => {
     const hints = buildBaseHints();
     const docsOrigin = "https://docs.openclaw.ai";

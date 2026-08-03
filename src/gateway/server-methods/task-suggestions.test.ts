@@ -3,8 +3,10 @@ import { managedWorktrees } from "../../agents/worktrees/service.js";
 import {
   abandonTaskSuggestionAcceptance,
   beginTaskSuggestionAcceptance,
+  completeTaskSuggestionAcceptance,
 } from "../task-suggestion-registry.js";
-import { sessionsHandlers } from "./sessions.js";
+import { sessionCreateHandlers } from "./sessions-create.js";
+import { sessionDeleteHandlers } from "./sessions-delete.js";
 import { taskSuggestionsHandlers } from "./task-suggestions.js";
 import type { RespondFn } from "./types.js";
 
@@ -92,7 +94,7 @@ describe("task suggestion gateway methods", () => {
     expect(empty.response?.[1]).toEqual({ suggestions: [] });
   });
 
-  it("accepts a suggestion once and replays the created session key", async () => {
+  it("preserves accepted-session replay when successful admission expires a pending suggestion", async () => {
     const created = await call("taskSuggestions.create", {
       title: "Remove stale adapter",
       prompt: "Delete src/example.ts and update its tests.",
@@ -104,7 +106,7 @@ describe("task suggestion gateway methods", () => {
     const taskId = (requirePayload(created) as { taskId: string }).taskId;
     let sessionKey = "";
     const createSession = vi
-      .spyOn(sessionsHandlers, "sessions.create")
+      .spyOn(sessionCreateHandlers, "sessions.create")
       .mockImplementation(async ({ params, respond }) => {
         expect(params).toMatchObject({
           agentId: "main",
@@ -120,6 +122,38 @@ describe("task suggestion gateway methods", () => {
       });
 
     const first = await call("taskSuggestions.accept", { taskId });
+    for (let index = 0; index < 100; index += 1) {
+      requirePayload(
+        await call("taskSuggestions.create", {
+          title: `Pending follow up ${index}`,
+          prompt: `Complete pending follow-up task ${index}.`,
+          tldr: "The operator has not accepted this follow-up.",
+          cwd: "/repo",
+          sessionKey: "agent:main:main",
+        }),
+      );
+    }
+
+    const previous = await call("taskSuggestions.list", {});
+    const pending = (requirePayload(previous) as { suggestions: Array<{ id: string }> })
+      .suggestions;
+    const oldestPending = pending.at(-1);
+    expect(oldestPending).toBeDefined();
+    const admitted = await call("taskSuggestions.create", {
+      title: "Latest follow up",
+      prompt: "Preserve the accepted task while admitting new work.",
+      tldr: "Evict only the oldest pending follow-up.",
+      cwd: "/repo",
+      sessionKey: "agent:main:main",
+    });
+    expect(admitted.response?.[0]).toBe(true);
+    expect(admitted.broadcast).toHaveBeenNthCalledWith(
+      1,
+      "task.suggestion",
+      { action: "resolved", taskId: oldestPending?.id, resolution: "expired" },
+      { dropIfSlow: true },
+    );
+
     const retry = await call("taskSuggestions.accept", { taskId });
 
     expect(first.response?.[1]).toEqual({ taskId, key: sessionKey });
@@ -130,6 +164,49 @@ describe("task suggestion gateway methods", () => {
       { action: "resolved", taskId, resolution: "accepted" },
       { dropIfSlow: true },
     );
+  });
+
+  it("admits new work when every bounded registry entry has already been accepted", async () => {
+    const acceptedTaskIds: string[] = [];
+    const createSession = vi
+      .spyOn(sessionCreateHandlers, "sessions.create")
+      .mockImplementation(async ({ params, respond }) => {
+        respond(true, { key: (params as { key: string }).key, runStarted: true }, undefined);
+      });
+
+    for (let index = 0; index < 100; index += 1) {
+      const created = await call("taskSuggestions.create", {
+        title: `Accepted follow up ${index}`,
+        prompt: `Complete accepted follow-up task ${index}.`,
+        tldr: "This follow-up already created its managed task session.",
+        cwd: "/repo",
+        sessionKey: "agent:main:main",
+      });
+      const taskId = (requirePayload(created) as { taskId: string }).taskId;
+      const accepted = await call("taskSuggestions.accept", { taskId });
+      expect(accepted.response?.[1]).toMatchObject({ taskId });
+      acceptedTaskIds.push(taskId);
+    }
+
+    const replacement = await call("taskSuggestions.create", {
+      title: "Latest follow up",
+      prompt: "Keep accepting new suggestions after earlier tasks completed.",
+      tldr: "Accepted-session replay is bounded best-effort state.",
+      cwd: "/repo",
+      sessionKey: "agent:main:main",
+    });
+
+    expect(replacement.response?.[0]).toBe(true);
+    expect(replacement.broadcast).toHaveBeenCalledTimes(1);
+    expect(replacement.broadcast).toHaveBeenCalledWith(
+      "task.suggestion",
+      expect.objectContaining({ action: "created" }),
+      { dropIfSlow: true },
+    );
+    const oldestRetry = await call("taskSuggestions.accept", { taskId: acceptedTaskIds[0] });
+    expect(oldestRetry.response?.[0]).toBe(false);
+    expect(oldestRetry.response?.[2]).toMatchObject({ code: "INVALID_REQUEST" });
+    expect(createSession).toHaveBeenCalledTimes(100);
   });
 
   it("coalesces concurrent acceptance requests", async () => {
@@ -146,7 +223,7 @@ describe("task suggestion gateway methods", () => {
       release = resolve;
     });
     const createSession = vi
-      .spyOn(sessionsHandlers, "sessions.create")
+      .spyOn(sessionCreateHandlers, "sessions.create")
       .mockImplementation(async ({ params, respond }) => {
         await gate;
         respond(true, { key: (params as { key: string }).key, runStarted: true }, undefined);
@@ -173,7 +250,7 @@ describe("task suggestion gateway methods", () => {
     });
     const taskId = (requirePayload(created) as { taskId: string }).taskId;
     let sessionKey = "";
-    vi.spyOn(sessionsHandlers, "sessions.create").mockImplementation(
+    vi.spyOn(sessionCreateHandlers, "sessions.create").mockImplementation(
       async ({ params, respond }) => {
         sessionKey = (params as { key: string }).key;
         respond(
@@ -188,7 +265,7 @@ describe("task suggestion gateway methods", () => {
       },
     );
     const deleteSession = vi
-      .spyOn(sessionsHandlers, "sessions.delete")
+      .spyOn(sessionDeleteHandlers, "sessions.delete")
       .mockImplementation(async ({ params, respond }) => {
         expect(params).toEqual({
           key: sessionKey,
@@ -227,12 +304,12 @@ describe("task suggestion gateway methods", () => {
     });
     const taskId = (requirePayload(created) as { taskId: string }).taskId;
     let sessionKey = "";
-    vi.spyOn(sessionsHandlers, "sessions.create").mockImplementation(async ({ params }) => {
+    vi.spyOn(sessionCreateHandlers, "sessions.create").mockImplementation(async ({ params }) => {
       sessionKey = (params as { key: string }).key;
       throw new Error("initial dispatch failed");
     });
     const deleteSession = vi
-      .spyOn(sessionsHandlers, "sessions.delete")
+      .spyOn(sessionDeleteHandlers, "sessions.delete")
       .mockImplementation(async ({ params, respond }) => {
         expect(params).toMatchObject({ key: sessionKey, agentId: "main" });
         respond(true, { ok: true, deleted: true }, undefined);
@@ -257,10 +334,10 @@ describe("task suggestion gateway methods", () => {
       agentId: "main",
     });
     const taskId = (requirePayload(created) as { taskId: string }).taskId;
-    vi.spyOn(sessionsHandlers, "sessions.create").mockRejectedValue(
+    vi.spyOn(sessionCreateHandlers, "sessions.create").mockRejectedValue(
       new Error("initial dispatch failed"),
     );
-    vi.spyOn(sessionsHandlers, "sessions.delete").mockImplementation(async ({ respond }) => {
+    vi.spyOn(sessionDeleteHandlers, "sessions.delete").mockImplementation(async ({ respond }) => {
       respond(false, undefined, { code: "UNAVAILABLE", message: "still active" });
     });
     vi.spyOn(managedWorktrees, "findLiveByOwner").mockReturnValue({ id: "wt_partial" } as never);
@@ -348,7 +425,6 @@ describe("task suggestion gateway methods", () => {
   });
 
   it("broadcasts when the bounded registry expires a pending suggestion", async () => {
-    const taskIds: string[] = [];
     for (let index = 0; index < 100; index += 1) {
       const created = await call("taskSuggestions.create", {
         title: `Follow up ${index}`,
@@ -357,9 +433,14 @@ describe("task suggestion gateway methods", () => {
         cwd: "/repo",
         sessionKey: "agent:main:main",
       });
-      taskIds.push((requirePayload(created) as { taskId: string }).taskId);
+      requirePayload(created);
     }
 
+    const previous = await call("taskSuggestions.list", {});
+    const pending = (requirePayload(previous) as { suggestions: Array<{ id: string }> })
+      .suggestions;
+    const oldestPending = pending.at(-1);
+    expect(oldestPending).toBeDefined();
     const replacement = await call("taskSuggestions.create", {
       title: "Latest follow up",
       prompt: "Complete the latest follow-up task.",
@@ -372,11 +453,80 @@ describe("task suggestion gateway methods", () => {
     expect(replacement.broadcast).toHaveBeenNthCalledWith(
       1,
       "task.suggestion",
-      { action: "resolved", taskId: taskIds[0], resolution: "expired" },
+      { action: "resolved", taskId: oldestPending?.id, resolution: "expired" },
       { dropIfSlow: true },
     );
     const listed = await call("taskSuggestions.list", {});
-    expect((requirePayload(listed) as { suggestions: unknown[] }).suggestions).toHaveLength(100);
+    expect((requirePayload(listed) as { suggestions: unknown[] }).suggestions).toHaveLength(
+      pending.length,
+    );
+  });
+
+  it("rejects impossible byte admission without evicting accepted or pending suggestions", async () => {
+    const acceptingTaskIds: string[] = [];
+    const largePrompt = "🦀".repeat(16_000);
+
+    try {
+      for (let index = 0; index < 32; index += 1) {
+        const created = await call("taskSuggestions.create", {
+          title: `Running follow up ${index}`,
+          prompt: largePrompt,
+          tldr: "This accepted task is still starting.",
+          cwd: "/repo",
+          sessionKey: "agent:main:main",
+        });
+        const taskId = (requirePayload(created) as { taskId: string }).taskId;
+        expect(beginTaskSuggestionAcceptance(taskId).status).toBe("claimed");
+        acceptingTaskIds.push(taskId);
+      }
+
+      const accepted = await call("taskSuggestions.create", {
+        title: "Preserve accepted task",
+        prompt: "Keep its accepted result available for retries.",
+        tldr: "A rejected admission must not discard completed results.",
+        cwd: "/repo",
+        sessionKey: "agent:main:main",
+      });
+      const acceptedTaskId = (requirePayload(accepted) as { taskId: string }).taskId;
+      expect(beginTaskSuggestionAcceptance(acceptedTaskId).status).toBe("claimed");
+      completeTaskSuggestionAcceptance(acceptedTaskId, "agent:main:dashboard:accepted");
+
+      const pending = await call("taskSuggestions.create", {
+        title: "Keep this follow up",
+        prompt: "Do not discard this pending task.",
+        tldr: "The operator has not accepted it yet.",
+        cwd: "/repo",
+        sessionKey: "agent:main:main",
+      });
+      const pendingTaskId = (requirePayload(pending) as { taskId: string }).taskId;
+      const rejected = await call("taskSuggestions.create", {
+        title: "One oversized follow up",
+        prompt: largePrompt,
+        tldr: "This valid task cannot fit beside protected tasks.",
+        cwd: "/repo",
+        sessionKey: "agent:main:main",
+      });
+
+      expect(rejected.response?.[0]).toBe(false);
+      expect(rejected.response?.[2]).toMatchObject({
+        code: "UNAVAILABLE",
+        message: "task suggestion registry is busy",
+        retryable: true,
+      });
+      expect(rejected.broadcast).not.toHaveBeenCalled();
+      expect(beginTaskSuggestionAcceptance(acceptedTaskId)).toEqual({
+        status: "accepted",
+        sessionKey: "agent:main:dashboard:accepted",
+      });
+      const listed = await call("taskSuggestions.list", {});
+      expect(
+        (requirePayload(listed) as { suggestions: Array<{ id: string }> }).suggestions,
+      ).toEqual([expect.objectContaining({ id: pendingTaskId })]);
+    } finally {
+      for (const taskId of acceptingTaskIds) {
+        expect(abandonTaskSuggestionAcceptance(taskId)).toBe(true);
+      }
+    }
   });
 
   it("rejects a new suggestion when every bounded registry entry is accepting", async () => {

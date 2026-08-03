@@ -25,6 +25,11 @@ export function createMemoryRuntime(host: MemoryCoreRuntimeHost = {}): MemoryPlu
     resolveMemoryBackendConfig(params) {
       return resolveMemoryBackendConfig(params);
     },
+    async authorizeSearchHits(params) {
+      const { filterMemorySearchHitsBySessionVisibility } =
+        await import("./session-search-visibility.js");
+      return await filterMemorySearchHitsBySessionVisibility(params);
+    },
     async closeAllMemorySearchManagers() {
       await closeAllMemorySearchManagers();
     },

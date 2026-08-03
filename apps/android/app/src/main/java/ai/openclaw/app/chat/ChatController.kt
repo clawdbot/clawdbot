@@ -2,6 +2,8 @@ package ai.openclaw.app.chat
 
 import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.gateway.GatewayLoadedImage
+import ai.openclaw.app.gateway.GatewayLoadedMedia
+import ai.openclaw.app.gateway.GatewayMediaKind
 import ai.openclaw.app.gateway.GatewayRequestDefinitiveFailure
 import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
@@ -57,7 +59,7 @@ internal const val SESSION_LIST_FETCH_LIMIT = 200
 private val QUESTION_REFRESH_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000L)
 private val SWARM_REFRESH_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000L)
 private const val SESSION_EDITOR_MAX_BASE64_CHARS = ((OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES + 2) / 3) * 4
-private val MANAGED_IMAGE_PATH_REGEX =
+private val MANAGED_MEDIA_PATH_REGEX =
   Regex("^/api/chat/media/outgoing/[^/]+/([0-9a-fA-F-]{36})/full(?:\\?.*)?$")
 
 internal fun chatOutboxQueueFailureText(): NativeText = ChatController.queueFailureText()
@@ -120,6 +122,14 @@ class ChatController internal constructor(
     agentId: String?,
     artifactId: String,
   ) -> GatewayLoadedImage? = { _, _, _, _ -> null },
+  private val loadGatewayMediaArtifact: suspend (
+    gatewayId: String?,
+    sessionKey: String,
+    agentId: String?,
+    artifactId: String,
+    kind: GatewayMediaKind,
+    playbackRendition: Boolean,
+  ) -> GatewayLoadedMedia? = { _, _, _, _, _, _ -> null },
   private val commandOutbox: ChatCommandOutbox? = null,
   private val recordModelRecent: (String) -> Unit = {},
   private val onSessionDeleted: (ChatSessionDeletion) -> Unit = {},
@@ -154,6 +164,9 @@ class ChatController internal constructor(
     loadGatewayImageArtifact = { gatewayId, sessionKey, agentId, artifactId ->
       session.loadImageArtifact(gatewayId, sessionKey, agentId, artifactId)
     },
+    loadGatewayMediaArtifact = { gatewayId, sessionKey, agentId, artifactId, kind, playbackRendition ->
+      session.loadMediaArtifact(gatewayId, sessionKey, agentId, artifactId, kind, playbackRendition)
+    },
     commandOutbox = commandOutbox,
     recordModelRecent = recordModelRecent,
     onSessionDeleted = onSessionDeleted,
@@ -168,6 +181,24 @@ class ChatController internal constructor(
       sessionKey,
       resolveAgentIdForSessionKey(sessionKey),
       normalizedArtifactId,
+    )
+  }
+
+  suspend fun loadMediaArtifact(
+    artifactId: String,
+    kind: GatewayMediaKind,
+    playbackRendition: Boolean,
+  ): GatewayLoadedMedia? {
+    val normalizedArtifactId = artifactId.trim().takeIf(String::isNotEmpty) ?: return null
+    if (kind == GatewayMediaKind.Image) return null
+    val sessionKey = normalizeRequestedSessionKey(_sessionKey.value)
+    return loadGatewayMediaArtifact(
+      currentCacheScope()?.gatewayId,
+      sessionKey,
+      resolveAgentIdForSessionKey(sessionKey),
+      normalizedArtifactId,
+      kind,
+      playbackRendition,
     )
   }
 
@@ -6671,7 +6702,7 @@ internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
         text = obj["text"].asStringOrNull() ?: obj["content"].asStringOrNull(),
       )
 
-    "image", "audio" -> {
+    "image", "audio", "video" -> {
       val type = obj["type"].asStringOrNull() ?: "image"
       val inlineContent = obj["content"].asStringOrNull()?.takeIf { it.isNotBlank() }
       val url = obj["url"].asStringOrNull()
@@ -6679,25 +6710,44 @@ internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
         type = type,
         mimeType = obj["mimeType"].asStringOrNull(),
         fileName = obj["fileName"].asStringOrNull(),
-        artifactId = obj["artifactId"].asStringOrNull() ?: managedImageArtifactId(url),
+        artifactId =
+          obj["artifactId"].asStringOrNull()
+            ?: if (type == "image") managedImageArtifactId(url) else managedMediaArtifactId(url),
         url = url,
         openUrl = obj["openUrl"].asStringOrNull(),
         alt = obj["alt"].asStringOrNull(),
         width = obj["width"].asLongOrNull()?.toInt(),
         height = obj["height"].asLongOrNull()?.toInt(),
         sizeBytes = obj["sizeBytes"].asLongOrNull(),
-        base64 = inlineContent?.takeIf { type != "image" || it.length <= CHAT_IMAGE_MAX_BASE64_CHARS },
+        base64 = inlineContent?.takeIf { type == "image" && it.length <= CHAT_IMAGE_MAX_BASE64_CHARS },
+        durationMs = obj["durationMs"].asLongOrNull(),
+        playback = obj["playback"].asStringOrNull()?.takeIf { it == "native" || it == "transcode" },
       )
     }
 
     "attachment" -> {
       val attachment = obj["attachment"].asObjectOrNull() ?: return null
       val mimeType = attachment["mimeType"].asStringOrNull()
-      if (attachment["kind"].asStringOrNull() != "audio" && mimeType?.startsWith("audio/") != true) return null
+      val type =
+        when {
+          attachment["kind"].asStringOrNull() == "audio" || mimeType?.startsWith("audio/") == true -> "audio"
+          attachment["kind"].asStringOrNull() == "video" || mimeType?.startsWith("video/") == true -> "video"
+          else -> return null
+        }
+      val url = attachment["url"].asStringOrNull()
       ChatMessageContent(
-        type = "audio",
+        type = type,
         mimeType = mimeType,
-        fileName = attachment["label"].asStringOrNull(),
+        fileName = attachment["fileName"].asStringOrNull() ?: attachment["label"].asStringOrNull(),
+        artifactId = attachment["artifactId"].asStringOrNull() ?: managedMediaArtifactId(url),
+        url = url,
+        openUrl = attachment["openUrl"].asStringOrNull(),
+        alt = attachment["alt"].asStringOrNull(),
+        width = attachment["width"].asLongOrNull()?.toInt(),
+        height = attachment["height"].asLongOrNull()?.toInt(),
+        sizeBytes = attachment["sizeBytes"].asLongOrNull(),
+        durationMs = attachment["durationMs"].asLongOrNull(),
+        playback = attachment["playback"].asStringOrNull()?.takeIf { it == "native" || it == "transcode" },
       )
     }
 
@@ -6730,13 +6780,22 @@ internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
 }
 
 internal fun managedImageArtifactId(rawUrl: String?): String? {
+  val attachmentId = managedMediaAttachmentId(rawUrl) ?: return null
+  return "artifact_managed_image_$attachmentId"
+}
+
+internal fun managedMediaArtifactId(rawUrl: String?): String? {
+  val attachmentId = managedMediaAttachmentId(rawUrl) ?: return null
+  return "artifact_managed_media_$attachmentId"
+}
+
+private fun managedMediaAttachmentId(rawUrl: String?): String? {
   val match =
     rawUrl
       ?.trim()
-      ?.let(MANAGED_IMAGE_PATH_REGEX::matchEntire)
+      ?.let(MANAGED_MEDIA_PATH_REGEX::matchEntire)
       ?: return null
-  val attachmentId = runCatching { UUID.fromString(match.groupValues[1]).toString() }.getOrNull() ?: return null
-  return "artifact_managed_image_$attachmentId"
+  return runCatching { UUID.fromString(match.groupValues[1]).toString() }.getOrNull()
 }
 
 internal fun parseChatMessageContents(obj: JsonObject): List<ChatMessageContent> {

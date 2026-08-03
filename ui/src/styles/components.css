@@ -1128,6 +1128,136 @@ openclaw-session-owner-chip {
   box-shadow: var(--focus-ring);
 }
 
+/* Carapace Sensitive Input adapted to the Control UI token contract. */
+.oc-sensitive-input {
+  position: relative;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  align-items: stretch;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  box-shadow: inset 0 1px 0 var(--card-highlight);
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.oc-sensitive-input:hover:not(:has(input:disabled)) {
+  border-color: var(--border-strong);
+}
+
+.oc-sensitive-input:focus-within {
+  border-color: var(--ring);
+  box-shadow: var(--focus-ring);
+}
+
+.oc-sensitive-input > input {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  box-shadow: none;
+}
+
+.oc-sensitive-input > input:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.oc-sensitive-input > input::placeholder {
+  color: var(--muted);
+}
+
+.oc-sensitive-mask {
+  position: absolute;
+  z-index: 1;
+  inset: 0 44px 0 0;
+  display: flex;
+  overflow: hidden;
+  align-items: center;
+  padding: 0 12px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.oc-sensitive-mask[hidden] {
+  display: none;
+}
+
+.oc-sensitive-mask > span {
+  display: block;
+  will-change: transform;
+}
+
+.oc-sensitive-input[data-sensitive-mask-ready="true"][data-revealed="false"] > input {
+  color: transparent;
+  caret-color: var(--text);
+}
+
+.oc-sensitive-input[data-sensitive-mask-ready="true"][data-revealed="false"] > input::selection {
+  color: transparent;
+}
+
+.oc-sensitive-toggle {
+  position: relative;
+  z-index: 2;
+  display: inline-grid;
+  width: 44px;
+  min-width: 44px;
+  height: 100%;
+  min-height: 44px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid var(--input);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.oc-sensitive-toggle:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.oc-sensitive-toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.oc-sensitive-toggle:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -3px;
+}
+
+.oc-sensitive-toggle svg {
+  width: 16px;
+  height: 16px;
+}
+
+@media (forced-colors: active) {
+  .oc-sensitive-mask {
+    display: none;
+  }
+
+  .oc-sensitive-input[data-sensitive-mask-ready="true"][data-revealed="false"] > input {
+    color: CanvasText;
+  }
+}
+
 .field select {
   appearance: none;
   padding-right: 36px;
@@ -2522,6 +2652,14 @@ openclaw-chat-session-rail {
   color: var(--text);
 }
 
+.data-table-sort-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  letter-spacing: inherit;
+  text-transform: inherit;
+}
+
 .data-table-sort-icon {
   display: inline-flex;
   vertical-align: middle;
@@ -3685,48 +3823,10 @@ td.data-table-key-col {
   color: var(--muted);
 }
 
-.agent-tabs {
+.agent-file-tabs {
   display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  padding-bottom: 2px;
-  border-bottom: 1px solid var(--border);
-}
-
-.agent-tab {
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  padding: 6px 12px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--muted);
-  background: transparent;
-  transition:
-    border-color var(--duration-fast) ease,
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-}
-
-.agent-tab:hover {
-  color: var(--text);
-  background: var(--bg-hover);
-}
-
-.agent-tab.active {
-  background: var(--accent-subtle);
-  border-color: color-mix(in srgb, var(--accent) 25%, transparent);
-  color: var(--accent);
-}
-
-.agent-tab-count {
-  margin-left: 4px;
-  font-size: 12px; /* was 10px */
-  font-weight: 700;
-  opacity: 0.7;
-}
-
-.agent-tab--missing {
-  opacity: 0.5;
+  align-items: flex-end;
+  gap: var(--space-2);
 }
 
 .agent-tab-add {
@@ -3742,15 +3842,6 @@ td.data-table-key-col {
 .agent-tab-add:hover {
   color: var(--text);
   border-color: var(--accent);
-}
-
-.agent-tab-badge {
-  margin-left: 4px;
-  font-size: 12px; /* was 9px */
-  font-weight: 700;
-  text-transform: uppercase;
-  color: var(--warn);
-  opacity: 0.8;
 }
 
 .agent-identity-editor {
@@ -5794,7 +5885,72 @@ td.data-table-key-col {
   color: #4285f4;
 }
 
+.provider-brand-icon[data-provider-icon="llamacpp"],
+.provider-brand-icon[data-provider-icon="lmstudio"],
+.provider-brand-icon[data-provider-icon="ollama"] {
+  color: var(--text-strong);
+}
+
 .provider-brand-icon[data-provider-icon="opencode"],
 .provider-brand-icon[data-provider-icon="opencodego"] {
   color: var(--text-strong);
+}
+/* Shared working-claw motion: chat and settings use the same body flex and
+   jaw snip timing so the brand activity signal stays consistent. */
+@keyframes chatWorkingClawFlex {
+  0%,
+  6% {
+    transform: rotate(0deg);
+  }
+
+  10% {
+    transform: rotate(-4deg);
+  }
+
+  16% {
+    transform: rotate(3deg);
+  }
+
+  22%,
+  26% {
+    transform: rotate(-4deg);
+  }
+
+  32% {
+    transform: rotate(3deg);
+  }
+
+  42%,
+  100% {
+    transform: rotate(0deg);
+  }
+}
+
+@keyframes chatWorkingClawSnip {
+  0%,
+  6% {
+    transform: rotate(-10deg);
+  }
+
+  10% {
+    transform: rotate(-26deg);
+  }
+
+  16% {
+    transform: rotate(4deg);
+  }
+
+  22%,
+  26% {
+    transform: rotate(-24deg);
+  }
+
+  32% {
+    transform: rotate(4deg);
+  }
+
+  42%,
+  100% {
+    transform: rotate(-10deg);
+  }
 }

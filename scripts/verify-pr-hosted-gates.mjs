@@ -2,6 +2,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { execGhApiRead, plainGhEnv } from "./lib/plain-gh.mjs";
 
@@ -31,14 +32,6 @@ const MAX_CI_REUSE_CANDIDATES = 5;
 const CI_REUSE_RUN_LIST_LIMIT = 50;
 const GIT_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
-function readOptionValue(argv, index, optionName) {
-  const value = argv[index + 1];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`Expected ${optionName} <value>.`);
-  }
-  return value;
-}
-
 export function parseArgs(argv) {
   const args = {
     repo: "",
@@ -48,49 +41,44 @@ export function parseArgs(argv) {
     output: "",
     changelogOnly: false,
   };
-  const seen = new Set();
-  const setOnce = (flag, key, value) => {
-    if (seen.has(flag)) {
-      throw new Error(`${flag} was provided more than once.`);
-    }
-    seen.add(flag);
-    args[key] = value;
-  };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    switch (arg) {
-      case "--repo":
-        setOnce(arg, "repo", readOptionValue(argv, index, arg));
-        index += 1;
-        break;
-      case "--sha":
-        setOnce(arg, "sha", readOptionValue(argv, index, arg));
-        index += 1;
-        break;
-      case "--pr": {
-        const value = Number(readOptionValue(argv, index, arg));
-        if (!Number.isSafeInteger(value) || value <= 0) {
-          throw new Error("Expected --pr <positive-integer>.");
-        }
-        setOnce(arg, "pr", value);
-        index += 1;
-        break;
-      }
-      case "--recent-sha":
-        setOnce(arg, "recentSha", readOptionValue(argv, index, arg));
-        index += 1;
-        break;
-      case "--output":
-        setOnce(arg, "output", readOptionValue(argv, index, arg));
-        index += 1;
-        break;
-      case "--changelog-only":
-        setOnce(arg, "changelogOnly", true);
-        break;
-      default:
+  parseFlagArgs(
+    argv,
+    args,
+    [
+      ...[
+        ["--repo", "repo"],
+        ["--sha", "sha"],
+        ["--recent-sha", "recentSha"],
+        ["--output", "output"],
+      ].map(([flag, key]) =>
+        stringFlag(flag, key, {
+          allowInline: false,
+          missingValueMessage: `Expected ${flag} <value>.`,
+          rejectShortOptions: true,
+        }),
+      ),
+      stringFlag("--pr", "pr", {
+        allowInline: false,
+        missingValueMessage: "Expected --pr <value>.",
+        rejectShortOptions: true,
+        transform(value) {
+          const parsed = Number(value);
+          if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+            throw new Error("Expected --pr <positive-integer>.");
+          }
+          return parsed;
+        },
+      }),
+      booleanFlag("--changelog-only", "changelogOnly"),
+    ],
+    {
+      duplicateOptionMessage: (flag) => `${flag} was provided more than once.`,
+      ignoreDoubleDash: false,
+      onUnhandledArg(arg) {
         throw new Error(`Unknown option: ${arg}`);
-    }
-  }
+      },
+    },
+  );
   if (!args.repo || !args.sha || !args.pr || !args.output) {
     throw new Error(
       "Usage: node scripts/verify-pr-hosted-gates.mjs --repo <owner/repo> --sha <sha> --pr <number> [--recent-sha <sha>] --output <path>",

@@ -3,15 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import type { PluginRegistry } from "./registry-types.js";
+import { getActivePluginRegistry, requireActivePluginRegistry } from "./runtime.js";
 
-type ResolvedPluginRuntimeArtifact = { source: string; rootDir: string };
 type PluginRuntimeArtifactEntryKind = "runtime" | "setup";
 
-// Pin one physical path per plugin id and logical entry for this runtime lifecycle.
-// Registry surfaces may disagree on artifact preference, but hooks and tools must
-// share one evaluated module instance so register() runs once.
-const resolvedPluginRuntimeArtifacts = new Map<string, ResolvedPluginRuntimeArtifact>();
-
+// Pin one physical path per plugin id and logical entry within one installed registry.
 function safeRealpathOrResolve(value: string): string {
   try {
     return fs.realpathSync(value);
@@ -21,7 +18,7 @@ function safeRealpathOrResolve(value: string): string {
 }
 
 export function clearPluginRuntimeArtifactResolutionMemo(): void {
-  resolvedPluginRuntimeArtifacts.clear();
+  getActivePluginRegistry()?.pluginRuntimeArtifacts.clear();
 }
 
 /** Canonical packaged runtime replaces staging-only dist-runtime artifacts. */
@@ -175,12 +172,15 @@ export function resolvePluginRuntimeArtifact(params: {
   origin: PluginOrigin;
   preferBuiltPluginArtifacts: boolean;
   packageManifest?: OpenClawPackageManifest;
+  registry?: PluginRegistry;
 }): { source: string; rootDir: string } {
   const rootDir = resolveCanonicalDistRuntimeSource(safeRealpathOrResolve(params.rootDir));
   const source = resolveCanonicalDistRuntimeSource(safeRealpathOrResolve(params.source));
   const memoKey = JSON.stringify([params.pluginId, rootDir, params.entryKind]);
-  const cached = resolvedPluginRuntimeArtifacts.get(memoKey);
+  const targetRegistry = params.registry ?? requireActivePluginRegistry();
+  const cached = targetRegistry.pluginRuntimeArtifacts.get(memoKey);
   if (cached) {
+    targetRegistry.pluginRuntimeArtifacts.set(memoKey, cached);
     return { ...cached };
   }
 
@@ -189,6 +189,6 @@ export function resolvePluginRuntimeArtifact(params: {
     source: resolveCanonicalDistRuntimeSource(preferred.source),
     rootDir: resolveCanonicalDistRuntimeSource(preferred.rootDir),
   };
-  resolvedPluginRuntimeArtifacts.set(memoKey, resolved);
+  targetRegistry.pluginRuntimeArtifacts.set(memoKey, resolved);
   return { ...resolved };
 }

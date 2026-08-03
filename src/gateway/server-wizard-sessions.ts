@@ -12,7 +12,7 @@ export function createWizardSessionTracker(options?: { now?: () => number }) {
 
   const findRunningWizard = (): string | null => {
     for (const [id, session] of wizardSessions) {
-      if (session.getStatus() === "running") {
+      if (!session.isSettled()) {
         terminalSince.delete(id);
         return id;
       }
@@ -34,7 +34,7 @@ export function createWizardSessionTracker(options?: { now?: () => number }) {
     if (!session) {
       return;
     }
-    if (session.getStatus() === "running") {
+    if (!session.isSettled()) {
       return;
     }
     wizardSessions.delete(id);

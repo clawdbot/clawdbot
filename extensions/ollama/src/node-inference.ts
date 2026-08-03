@@ -24,9 +24,11 @@ import {
   buildOllamaBaseUrlSsrFPolicy,
   enrichOllamaCompletionModels,
   enrichOllamaModelsWithContext,
+  fetchLoadedOllamaModelNames,
   fetchOllamaModels,
   isOllamaCloudModel,
   resolveOllamaApiBase,
+  throwIfOllamaRequestAborted,
 } from "./provider-models.js";
 
 const OLLAMA_NODE_INFERENCE_CAPABILITY = "local-inference";
@@ -111,6 +113,7 @@ async function requestOllamaJson<T>(params: {
   path: string;
   timeoutMs: number;
   init?: RequestInit;
+  signal?: AbortSignal;
 }): Promise<T> {
   const apiBase = resolveOllamaApiBase(params.baseUrl);
   let response: Response;
@@ -121,12 +124,14 @@ async function requestOllamaJson<T>(params: {
       init: params.init,
       // Guard-owned timeoutMs also bounds DNS/proxy preflight; init.signal does not.
       timeoutMs: params.timeoutMs,
+      ...(params.signal ? { signal: params.signal } : {}),
       policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
       auditContext: `ollama-node-inference${params.path}`,
     });
     response = guarded.response;
     release = guarded.release;
   } catch (error) {
+    throwIfOllamaRequestAborted(params.signal);
     throw new Error(`Ollama is unavailable at ${apiBase}: ${errorMessage(error)}`, {
       cause: error,
     });
@@ -152,42 +157,21 @@ async function requestOllamaJson<T>(params: {
   }
 }
 
-async function fetchLoadedModelNames(baseUrl: string): Promise<Set<string>> {
-  try {
-    const data = await requestOllamaJson<{ models?: Array<{ name?: unknown; model?: unknown }> }>({
-      baseUrl,
-      path: "/api/ps",
-      timeoutMs: 5000,
-    });
-    return new Set(
-      (data.models ?? [])
-        .map((model) =>
-          typeof model.name === "string"
-            ? model.name.trim()
-            : typeof model.model === "string"
-              ? model.model.trim()
-              : "",
-        )
-        .filter(Boolean),
-    );
-  } catch {
-    // Model discovery still works against Ollama versions without /api/ps.
-    return new Set();
-  }
-}
-
 async function discoverOllamaNodeModels(
   baseUrl = OLLAMA_DEFAULT_BASE_URL,
+  signal?: AbortSignal,
 ): Promise<OllamaModelsPayload> {
   const apiBase = resolveOllamaApiBase(baseUrl);
-  const discovered = await fetchOllamaModels(apiBase);
+  const discovered = await fetchOllamaModels(apiBase, signal ? { signal } : undefined);
   if (!discovered.reachable) {
     throw new Error(`Ollama is not running at ${apiBase}`);
   }
   const localModels = discovered.models.filter(
     (model) => !model.remote_host?.trim() && !isOllamaCloudModel(model.name),
   );
-  const loadedNames = await fetchLoadedModelNames(apiBase);
+  const loaded = await fetchLoadedOllamaModelNames(apiBase, signal ? { signal } : undefined);
+  // Model discovery still works against Ollama versions without /api/ps.
+  const loadedNames = new Set(loaded.models);
   // Probe loaded models before the bounded catalog can hide already-runnable node models.
   const prioritizedModels = localModels.toSorted(
     (left, right) => Number(loadedNames.has(right.name)) - Number(loadedNames.has(left.name)),
@@ -196,6 +180,7 @@ async function discoverOllamaNodeModels(
   // failed or legacy show probes must never expose unrunnable remote commands.
   const models = await enrichOllamaCompletionModels(apiBase, prioritizedModels, {
     requireCompletionCapability: true,
+    ...(signal ? { signal } : {}),
   });
   const rows = models
     .map((model): NodeModel => {
@@ -246,6 +231,7 @@ async function runOllamaNodeChat(params: {
   temperature?: number;
   maxTokens: number;
   timeoutMs: number;
+  signal?: AbortSignal;
 }): Promise<OllamaChatPayload> {
   const apiBase = resolveOllamaApiBase(params.baseUrl);
   const deadlineMs = performance.now() + params.timeoutMs;
@@ -256,7 +242,10 @@ async function runOllamaNodeChat(params: {
     }
     return remainingMs;
   };
-  const discovered = await fetchOllamaModels(apiBase, { timeoutMs: remainingTimeoutMs() });
+  const discovered = await fetchOllamaModels(apiBase, {
+    timeoutMs: remainingTimeoutMs(),
+    ...(params.signal ? { signal: params.signal } : {}),
+  });
   const localModel = discovered.models.find(
     (model) =>
       model.name === params.model && !model.remote_host?.trim() && !isOllamaCloudModel(model.name),
@@ -264,6 +253,7 @@ async function runOllamaNodeChat(params: {
   const [model] = localModel
     ? await enrichOllamaModelsWithContext(apiBase, [localModel], {
         timeoutMs: remainingTimeoutMs(),
+        ...(params.signal ? { signal: params.signal } : {}),
       })
     : [];
   if (!discovered.reachable || model?.capabilities?.includes("completion") !== true) {
@@ -288,6 +278,7 @@ async function runOllamaNodeChat(params: {
     baseUrl: params.baseUrl,
     path: "/api/chat",
     timeoutMs: remainingTimeoutMs(),
+    ...(params.signal ? { signal: params.signal } : {}),
     init: {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -335,12 +326,13 @@ export function createOllamaNodeHostCommands(options?: {
     {
       command: OLLAMA_MODELS_COMMAND,
       cap: OLLAMA_NODE_INFERENCE_CAPABILITY,
-      handle: async () => JSON.stringify(await discoverOllamaNodeModels(baseUrl)),
+      handle: async (_paramsJSON, _io, context) =>
+        JSON.stringify(await discoverOllamaNodeModels(baseUrl, context?.signal)),
     },
     {
       command: OLLAMA_CHAT_COMMAND,
       cap: OLLAMA_NODE_INFERENCE_CAPABILITY,
-      handle: async (paramsJSON) => {
+      handle: async (paramsJSON, _io, context) => {
         const params = readNodeCommandParams(paramsJSON);
         const model = readStringParam(params, "model", { required: true });
         const prompt = readStringParam(params, "prompt", { required: true, trim: false });
@@ -375,6 +367,7 @@ export function createOllamaNodeHostCommands(options?: {
             temperature,
             maxTokens,
             timeoutMs,
+            ...(context?.signal ? { signal: context.signal } : {}),
           }),
         );
       },
@@ -423,13 +416,16 @@ async function invokeNode(
   command: string,
   params: Record<string, unknown>,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
+  throwIfOllamaRequestAborted(signal);
   const raw = await api.runtime.nodes.invoke({
     nodeId,
     command,
     params,
     timeoutMs,
     scopes: ["operator.write"],
+    ...(signal ? { signal } : {}),
   });
   return parseInvokePayload(raw);
 }
@@ -461,7 +457,8 @@ const ollamaNodeInferenceToolDefinition = {
 export function createOllamaNodeInferenceTool(api: OpenClawPluginApi): AnyAgentTool {
   return {
     ...ollamaNodeInferenceToolDefinition,
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, signal) => {
+      throwIfOllamaRequestAborted(signal);
       const params = asRecord(args) ?? {};
       const action = readStringParam(params, "action", { required: true });
       const nodeQuery = readStringParam(params, "node");
@@ -481,6 +478,7 @@ export function createOllamaNodeInferenceTool(api: OpenClawPluginApi): AnyAgentT
                 OLLAMA_MODELS_COMMAND,
                 {},
                 DISCOVERY_TRANSPORT_TIMEOUT_MS,
+                signal,
               );
               const result: Record<string, unknown> = { nodeId: node.nodeId, ok: true };
               if (node.displayName) {
@@ -488,6 +486,7 @@ export function createOllamaNodeInferenceTool(api: OpenClawPluginApi): AnyAgentT
               }
               return Object.assign(result, payload);
             } catch (error) {
+              throwIfOllamaRequestAborted(signal);
               const result: Record<string, unknown> = {
                 nodeId: node.nodeId,
                 ok: false,
@@ -553,6 +552,7 @@ export function createOllamaNodeInferenceTool(api: OpenClawPluginApi): AnyAgentT
         OLLAMA_CHAT_COMMAND,
         commandParams,
         timeoutMs,
+        signal,
       );
       return jsonResult({
         nodeId: node.nodeId,

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import {
@@ -19,6 +19,10 @@ import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { loadTaskRegistryStateFromSqlite } from "../tasks/task-registry.store.sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { VERSION } from "../version.js";
+import {
+  findOpenClawStateDatabaseSchemaMigrationRequiredError,
+  OpenClawStateDatabaseSchemaMigrationRequiredError,
+} from "./openclaw-state-db-schema-migration-required.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
@@ -48,9 +52,27 @@ type StateDbTestDatabase = Pick<
 >;
 
 const stateDbTempDirs: string[] = [];
+let canonicalStateDatabaseTemplatePath: string | undefined;
 
 function createTempStateDir(): string {
   return makeTempDir(stateDbTempDirs, "openclaw-state-db-");
+}
+
+function expectStateSchemaMigrationRequired(
+  run: () => unknown,
+  expected: {
+    kind: OpenClawStateDatabaseSchemaMigrationRequiredError["kind"];
+    pathname: string;
+  },
+): void {
+  let caught: unknown;
+  try {
+    run();
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(OpenClawStateDatabaseSchemaMigrationRequiredError);
+  expect(findOpenClawStateDatabaseSchemaMigrationRequiredError(caught)).toMatchObject(expected);
 }
 
 function replaceManagedImageRecordsWithLegacyTable(
@@ -397,9 +419,13 @@ function createLegacyAuditStateDatabase(stateDir: string): string {
 }
 
 function createCanonicalAuditStateDatabase(stateDir: string): string {
-  const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
-  const databasePath = database.path;
-  closeOpenClawStateDatabaseForTest();
+  if (!canonicalStateDatabaseTemplatePath) {
+    throw new Error("canonical state database template was not initialized");
+  }
+  // These cases own post-initialization schema drift; fresh creation and migrations stay real below.
+  const databasePath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir });
+  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+  fs.copyFileSync(canonicalStateDatabaseTemplatePath, databasePath);
   return databasePath;
 }
 
@@ -1006,6 +1032,14 @@ function runConcurrentSchemaProbe(params: {
   }
   return JSON.parse(resultLine) as string[];
 }
+
+beforeAll(() => {
+  const stateDir = createTempStateDir();
+  canonicalStateDatabaseTemplatePath = openOpenClawStateDatabase({
+    env: { OPENCLAW_STATE_DIR: stateDir },
+  }).path;
+  closeOpenClawStateDatabaseForTest();
+});
 
 afterAll(() => {
   cleanupTempDirs(stateDbTempDirs);
@@ -1957,6 +1991,79 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     );
   });
 
+  it("classifies the released agent registry primary key as Doctor-repairable", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(`
+      ALTER TABLE agent_databases RENAME TO agent_databases_current;
+      CREATE TABLE agent_databases (
+        agent_id TEXT NOT NULL PRIMARY KEY,
+        path TEXT NOT NULL,
+        schema_version INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL,
+        size_bytes INTEGER
+      );
+      INSERT INTO agent_databases (
+        agent_id,
+        path,
+        schema_version,
+        last_seen_at,
+        size_bytes
+      )
+      SELECT
+        agent_id,
+        path,
+        schema_version,
+        last_seen_at,
+        size_bytes
+      FROM agent_databases_current;
+      DROP TABLE agent_databases_current;
+    `);
+    legacy.close();
+
+    expectStateSchemaMigrationRequired(() => openOpenClawStateDatabase(options), {
+      kind: "agent-databases-composite-primary-key",
+      pathname: databasePath,
+    });
+  });
+
+  it("keeps an unrecognized agent registry schema fail-closed and nonrepairable", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const malformed = new DatabaseSync(databasePath);
+    malformed.exec(`
+      DROP TABLE agent_databases;
+      CREATE TABLE agent_databases (
+        agent_id TEXT NOT NULL PRIMARY KEY,
+        path TEXT NOT NULL,
+        schema_version INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL
+      );
+    `);
+    malformed.close();
+
+    let caught: unknown;
+    try {
+      openOpenClawStateDatabase(options);
+    } catch (error) {
+      caught = error;
+    }
+    expect(findOpenClawStateDatabaseSchemaMigrationRequiredError(caught)).toBeUndefined();
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toContain(
+      "noncanonical agent database registry schema that cannot be repaired automatically",
+    );
+  });
+
   it("migrates the released audit ledger to message-compatible attribution exactly once", () => {
     const stateDir = createTempStateDir();
     const databasePath = createLegacyAuditStateDatabase(stateDir);
@@ -1966,7 +2073,10 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       { kind: "audit-events-v2", path: databasePath },
       { kind: "strict-tables-v3", path: databasePath },
     ]);
-    expect(() => openOpenClawStateDatabase(options)).toThrow(/legacy audit event schema/);
+    expectStateSchemaMigrationRequired(() => openOpenClawStateDatabase(options), {
+      kind: "audit-events-v2",
+      pathname: databasePath,
+    });
 
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [
@@ -2720,6 +2830,17 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       withOpenClawStateStartupMigrationCheckpointDatabase(checkpointCallback, options),
     ).toThrow(/integrity_check failed.*missing from index unsafe_index_records_value/iu);
     expect(checkpointCallback).not.toHaveBeenCalled();
+  });
+
+  it("configures checkpoint lock waits before schema mutation", () => {
+    const stateDir = createTempStateDir();
+
+    withOpenClawStateStartupMigrationCheckpointDatabase(
+      (db) => {
+        expect(readSqliteNumberPragma(db, "busy_timeout")).toBe(OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
+      },
+      { env: { OPENCLAW_STATE_DIR: stateDir } },
+    );
   });
 
   it("runs full integrity before a pending state schema migration", () => {

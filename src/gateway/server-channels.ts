@@ -88,6 +88,7 @@ function sanitizeAbortedTaskStatusPatch(
   delete next.reconnectAttempts;
   delete next.lastStartAt;
   delete next.lastStopAt;
+  delete next.lifecycle;
 
   // A stale task may still emit a late "connected" heartbeat after the gateway
   // has already aborted it and marked restart recovery pending. Do not let that
@@ -220,6 +221,7 @@ type ChannelManagerOptions = {
   deferStartupAccountStartsUntil?: Promise<void>;
   getNativeApprovalRuntime?: () => GatewayNativeApprovalRuntime | undefined;
   ambientAutostartSuppressedChannelIds?: ReadonlySet<string>;
+  tryRecoverAutostartSuppression?: () => boolean;
 };
 
 type StopChannelOptions = {
@@ -258,6 +260,7 @@ export type ChannelManager = {
   stopChannel: (channel: ChannelId, accountId?: string, opts?: StopChannelOptions) => Promise<void>;
   setAutostartSuppression: (suppression: ChannelAutostartSuppression | null) => void;
   getAutostartSuppression: () => ChannelAutostartSuppression | null;
+  recoverAutostartSuppression: () => Promise<boolean>;
   setAmbientAutostartSuppressedChannelIds: (channelIds: ReadonlySet<string>) => void;
   isAmbientAutostartSuppressed: (channelId: string) => boolean;
   markChannelLoggedOut: (channelId: ChannelId, cleared: boolean, accountId?: string) => void;
@@ -386,7 +389,20 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   ): ChannelAccountSnapshot => {
     const store = getStore(channelId);
     const current = getRuntime(channelId, accountId);
-    const next = { ...current, ...patch, accountId };
+    // Terminal channel diagnosis survives task cleanup and late status patches.
+    // Only the gateway-owned start transition proves a new lifecycle began.
+    const lifecycle =
+      current.lifecycle === "blocked" &&
+      current.terminalDisconnect === true &&
+      patch.lifecycle !== "starting"
+        ? "blocked"
+        : (patch.lifecycle ??
+          (patch.restartPending === true
+            ? "recovering"
+            : patch.connected === true
+              ? "ready"
+              : undefined));
+    const next = { ...current, ...patch, ...(lifecycle ? { lifecycle } : {}), accountId };
     store.runtimes.set(accountId, next);
     return next;
   };
@@ -412,6 +428,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     return setRuntime(channelId, accountId, {
       accountId,
       running: false,
+      lifecycle: patch.restartPending === true ? "recovering" : "stopped",
       ...(typeof current.connected === "boolean" ? { connected: false } : {}),
       ...patch,
     });
@@ -462,7 +479,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     }
     const { preserveRestartAttempts = false, preserveManualStop = false } = optsValue;
     const cfg = getRuntimeConfig();
-    resetDirectoryCache({ channel: channelId, accountId });
+    resetDirectoryCache({ cfg, channel: channelId, accountId });
     const store = getStore(channelId);
     const accountIds = accountId
       ? [accountId]
@@ -707,6 +724,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             enabled: true,
             ...(linkState === "linked" ? { linked: true } : {}),
             running: true,
+            lifecycle: "starting",
             restartPending: false,
             lastStartAt: Date.now(),
             lastError: null,
@@ -776,6 +794,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                         isCurrentTask()
                           ? setRuntimeFromTaskStatus(channelId, id, next, abort.signal)
                           : getRuntime(channelId, id),
+                      invalidateDirectoryCache: () =>
+                        resetDirectoryCache({ cfg, channel: channelId, accountId: id }),
                       ...(channelRuntimeForTask ? { channelRuntime: channelRuntimeForTask } : {}),
                     }),
                   ).finally(recordDuration);
@@ -799,6 +819,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           const trackedPromise = task
             .then(() => {
               if (abort.signal.aborted || manuallyStopped.has(rKey) || !isCurrentTask()) {
+                return;
+              }
+              if (getRuntime(channelId, id).terminalDisconnect) {
+                // Terminal status carries the operator-facing diagnosis and restart policy.
+                // Do not replace it with a generic clean-exit error before policy consumes it.
                 return;
               }
               const message = "channel exited without an error";
@@ -1156,7 +1181,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     }
   };
 
-  const startChannels = async () => {
+  const startChannelsWithOptions = async (startOptions: StartChannelOptions = {}) => {
     let releaseAccountStarts: (() => void) | undefined;
     const deferAccountStartUntil =
       opts.deferStartupAccountStartsUntil ??
@@ -1174,11 +1199,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         tasks: [...listChannelPlugins()].map((plugin) => async () => {
           try {
             await measureStartup(`channels.${plugin.id}.start`, () =>
-              startChannelInternal(
-                plugin.id,
-                undefined,
-                deferAccountStartUntil ? { deferAccountStartUntil } : {},
-              ),
+              startChannelInternal(plugin.id, undefined, {
+                ...startOptions,
+                ...(deferAccountStartUntil ? { deferAccountStartUntil } : {}),
+              }),
             );
           } catch (err) {
             ensureChannelLog(plugin.id).error?.(
@@ -1190,6 +1214,19 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     } finally {
       releaseAccountStarts?.();
     }
+  };
+
+  const startChannels = async () => await startChannelsWithOptions();
+
+  const recoverAutostartSuppression = async (): Promise<boolean> => {
+    if (!autostartSuppression || !opts.tryRecoverAutostartSuppression?.()) {
+      return false;
+    }
+    autostartSuppression = null;
+    // Recovery resumes the autostart attempt that safe mode deferred. Preserve
+    // explicit operator stops while still covering health-monitor opt-outs.
+    await startChannelsWithOptions({ preserveManualStop: true });
+    return true;
   };
 
   const markChannelLoggedOut = (channelId: ChannelId, cleared: boolean, accountId?: string) => {
@@ -1205,17 +1242,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         cfg,
       });
     const current = getRuntime(channelId, resolvedId);
-    const next: ChannelAccountSnapshot = {
-      accountId: resolvedId,
+    setStoppedRuntime(channelId, resolvedId, {
       ...(cleared ? { linked: false } : {}),
-      running: false,
       restartPending: false,
       lastError: cleared ? "logged out" : current.lastError,
-    };
-    if (typeof current.connected === "boolean") {
-      next.connected = false;
-    }
-    setRuntime(channelId, resolvedId, next);
+    });
   };
 
   const getRuntimeSnapshot = (): ChannelRuntimeSnapshot => {
@@ -1288,6 +1319,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       autostartSuppression = suppression;
     },
     getAutostartSuppression: () => autostartSuppression,
+    recoverAutostartSuppression,
     setAmbientAutostartSuppressedChannelIds: (channelIds) => {
       ambientAutostartSuppressedChannelIds = new Set(channelIds);
     },

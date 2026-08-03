@@ -22,7 +22,10 @@ type GatewayRequestContextClient = GatewayClient & {
 
 type GatewayRequestContextParams = {
   deps: GatewayRequestContext["deps"];
-  runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader">;
+  runtimeState: Pick<
+    GatewayServerLiveState,
+    "cronState" | "configReloader" | "controlUiSessionPullRequests" | "sessionViewerPresence"
+  >;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
   sessionCompanion: SessionCompanionService;
   sessionObserver: SessionObserverService;
@@ -39,6 +42,7 @@ type GatewayRequestContextParams = {
   listSessionPendingApprovals: GatewayRequestContext["listSessionPendingApprovals"];
   loadGatewayModelCatalog: GatewayRequestContext["loadGatewayModelCatalog"];
   loadGatewayModelCatalogSnapshot: GatewayRequestContext["loadGatewayModelCatalogSnapshot"];
+  readPreparedGatewayModelCatalog?: GatewayRequestContext["readPreparedGatewayModelCatalog"];
   getHealthCache: GatewayRequestContext["getHealthCache"];
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
   logHealth: GatewayRequestContext["logHealth"];
@@ -160,6 +164,8 @@ export function createGatewayRequestContext(
       return params.runtimeState.cronState.storePath;
     },
     getRuntimeConfig: params.getRuntimeConfig,
+    controlUiSessionPullRequests: params.runtimeState.controlUiSessionPullRequests,
+    sessionViewerPresence: params.runtimeState.sessionViewerPresence,
     sessionCompanion: params.sessionCompanion,
     sessionObserver: params.sessionObserver,
     notifyPluginMetadataChanged: () =>
@@ -179,6 +185,9 @@ export function createGatewayRequestContext(
     listSessionPendingApprovals: params.listSessionPendingApprovals,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,
     loadGatewayModelCatalogSnapshot: params.loadGatewayModelCatalogSnapshot,
+    ...(params.readPreparedGatewayModelCatalog
+      ? { readPreparedGatewayModelCatalog: params.readPreparedGatewayModelCatalog }
+      : {}),
     getHealthCache: params.getHealthCache,
     refreshHealthSnapshot: params.refreshHealthSnapshot,
     logHealth: params.logHealth,
@@ -315,7 +324,12 @@ export function createGatewayRequestContext(
     unsubscribeSessionEvents: params.unsubscribeSessionEvents,
     subscribeSessionMessageEvents: params.subscribeSessionMessageEvents,
     unsubscribeSessionMessageEvents: params.unsubscribeSessionMessageEvents,
-    unsubscribeAllSessionEvents: params.unsubscribeAllSessionEvents,
+    unsubscribeAllSessionEvents: (connId) => {
+      params.unsubscribeAllSessionEvents(connId);
+      // PR replace-sets share this websocket cleanup boundary with session events.
+      params.runtimeState.controlUiSessionPullRequests?.unsubscribe(connId);
+      params.runtimeState.sessionViewerPresence?.unsubscribe(connId);
+    },
     getSessionEventSubscriberConnIds: params.getSessionEventSubscriberConnIds,
     registerToolEventRecipient: params.registerToolEventRecipient,
     dedupe: params.dedupe,

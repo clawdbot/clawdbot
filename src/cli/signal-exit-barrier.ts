@@ -1,9 +1,17 @@
+import { resolveGlobalSet } from "../shared/global-singleton.js";
+
 type SignalExitBarrier = () => Promise<void>;
 
 // Gates let bounded mutations finish before signal cleanup begins; barriers
 // then prevent one cleanup from exiting while another still owns state.
-const activeBarriers = new Set<SignalExitBarrier>();
-const activeGates = new Set<Promise<void>>();
+const activeBarriers = resolveGlobalSet<SignalExitBarrier>(
+  Symbol.for("openclaw.signalExitBarriers"),
+  "close-and-restart",
+);
+const activeGates = resolveGlobalSet<Promise<void>>(
+  Symbol.for("openclaw.signalExitGates"),
+  "close-and-restart",
+);
 
 export function registerSignalExitGate(gate: Promise<void>): () => void {
   activeGates.add(gate);

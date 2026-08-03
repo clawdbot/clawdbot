@@ -1,10 +1,11 @@
 import type { RouteLocation } from "@openclaw/uirouter";
-import { definePage } from "@openclaw/uirouter";
-import { html } from "lit";
-import { routePageSpec } from "../../app-route-paths.ts";
+import { definePage, redirect } from "@openclaw/uirouter";
+import { html, nothing } from "lit";
+import { pathForRoute, routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ConfigPageId } from "./config-sections.ts";
-import { configRouteData, type ConfigRouteData } from "./route-data.ts";
+import { configRouteData, configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
+import { SETTINGS_SEARCH_TARGETS } from "./settings-targets.ts";
 
 function loadConfigRoute(context: ApplicationContext, location: RouteLocation) {
   const primaryLoad = context.runtimeConfig.ensureLoaded();
@@ -15,8 +16,10 @@ function loadConfigRoute(context: ApplicationContext, location: RouteLocation) {
 function configPage(id: ConfigPageId) {
   return definePage({
     ...routePageSpec(id),
-    loaderDeps: (_context: ApplicationContext, location: RouteLocation) =>
-      `${location.pathname}\u0000${location.search}\u0000${location.hash}`,
+    loaderDeps: (_context: ApplicationContext, location: RouteLocation) => {
+      const route = configRouteData(location);
+      return `${route.pathname}\u0000${route.search}\u0000${route.hash}`;
+    },
     loader: (context: ApplicationContext, { location }) => loadConfigRoute(context, location),
     component: () =>
       import("./config-page.ts").then(() => ({
@@ -28,8 +31,27 @@ function configPage(id: ConfigPageId) {
   });
 }
 
+const removedGeneralRedirectPage = definePage({
+  ...routePageSpec("config"),
+  loaderDeps: (_context: ApplicationContext, location: RouteLocation) =>
+    `${location.pathname}\u0000${location.search}\u0000${location.hash}`,
+  loader: (context: ApplicationContext, { location }) => {
+    const target =
+      configTargetIdFromHash(location.hash) === "settings-general-model"
+        ? SETTINGS_SEARCH_TARGETS.modelBehavior
+        : SETTINGS_SEARCH_TARGETS.appearanceLanguage;
+    return redirect({
+      pathname: pathForRoute(target.routeId, context.basePath),
+      search: "search" in target ? target.search : "",
+      hash: target.hash,
+    });
+  },
+  // Redirect routes still require a module by contract, but never render page content.
+  component: async () => ({ header: true, render: () => nothing }),
+});
+
 export const pages = [
-  configPage("config"),
+  removedGeneralRedirectPage,
   configPage("communications"),
   configPage("appearance"),
   configPage("notifications"),

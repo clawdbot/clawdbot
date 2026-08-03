@@ -5,6 +5,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
 import { applyDerivedTags } from "./schema.tags.js";
 import { applyResolvedConfigTierHints } from "./schema.tiers.js";
+import { validateConfigObjectRaw } from "./validation.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
@@ -255,6 +256,55 @@ describe("config schema", () => {
           nodeHost: { mcp: { servers: { [serverName]: { command: "server" } } } },
         }),
       ).toThrow(/MCP server name must be non-empty and must not have surrounding whitespace/);
+    }
+  });
+
+  it("rejects the reserved __proto__ MCP server name without tightening other names", () => {
+    for (const raw of [
+      '{"mcp":{"servers":{"__proto__":{"command":"server"}}}}',
+      '{"nodeHost":{"mcp":{"servers":{"__proto__":{"command":"server"}}}}}',
+    ]) {
+      const result = OpenClawSchema.safeParse(JSON.parse(raw));
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues).toContainEqual(
+          expect.objectContaining({
+            message: 'MCP server name "__proto__" is reserved; rename the server',
+          }),
+        );
+      }
+    }
+
+    for (const serverName of ["docs", "_internal"]) {
+      expect(
+        OpenClawSchema.safeParse({
+          mcp: { servers: { [serverName]: { command: "server" } } },
+          nodeHost: { mcp: { servers: { [serverName]: { command: "server" } } } },
+        }).success,
+      ).toBe(true);
+    }
+  });
+
+  it("rejects reserved MCP server names from the pre-normalization config", () => {
+    const sourceRaw = JSON.parse('{"mcp":{"servers":{"__proto__":{"command":"server"}}}}');
+    const result = validateConfigObjectRaw({ mcp: { servers: {} } }, { sourceRaw });
+
+    expect(result).toEqual({
+      ok: false,
+      issues: [
+        expect.objectContaining({
+          path: "mcp.servers.__proto__",
+          message: 'MCP server name "__proto__" is reserved; rename the server',
+        }),
+      ],
+    });
+
+    const directResult = validateConfigObjectRaw(sourceRaw);
+    expect(directResult.ok).toBe(false);
+    if (!directResult.ok) {
+      expect(
+        directResult.issues.filter((issue) => issue.path === "mcp.servers.__proto__"),
+      ).toHaveLength(1);
     }
   });
 
@@ -653,6 +703,44 @@ describe("config schema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("accepts plain web fetch header strings but rejects non-string and SecretRef values", () => {
+    const parsed = ToolsSchema.parse({
+      web: {
+        fetch: {
+          headers: {
+            "X-Routing-Target": "staging",
+            "X-Presence-Flag": "",
+          },
+        },
+      },
+    });
+
+    expect(parsed?.web?.fetch?.headers).toEqual({
+      "X-Routing-Target": "staging",
+      "X-Presence-Flag": "",
+    });
+    expect(
+      ToolsSchema.safeParse({
+        web: { fetch: { headers: { "X-Routing-Target": 42 } } },
+      }).success,
+    ).toBe(false);
+    expect(
+      ToolsSchema.safeParse({
+        web: {
+          fetch: {
+            headers: {
+              "X-Routing-Target": {
+                source: "env",
+                provider: "default",
+                id: "WEB_FETCH_ROUTING_TARGET",
+              },
+            },
+          },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
   it("keeps top-level subagent tools schema limited to tool policy", () => {
     expect(
       ToolsSchema.safeParse({
@@ -947,6 +1035,8 @@ describe("config schema", () => {
       web: {
         fetch: {
           ssrfPolicy: {
+            dangerouslyAllowPrivateNetwork: true,
+            allowedHostnames: ["127.0.0.1"],
             allowRfc2544BenchmarkRange: true,
             allowIpv6UniqueLocalRange: true,
           },
@@ -955,6 +1045,8 @@ describe("config schema", () => {
     });
 
     expect(parsed?.web?.fetch?.ssrfPolicy).toEqual({
+      dangerouslyAllowPrivateNetwork: true,
+      allowedHostnames: ["127.0.0.1"],
       allowRfc2544BenchmarkRange: true,
       allowIpv6UniqueLocalRange: true,
     });

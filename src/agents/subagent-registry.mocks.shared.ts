@@ -26,3 +26,6 @@ vi.mock("../infra/agent-events.js", () => ({
   onAgentEvent: sharedMocks.onAgentEvent,
   registerAgentEventLifecycleRotationHandler: vi.fn(),
 }));
+vi.mock("../infra/agent-run-registry.js", () => ({
+  getAgentRunContext: () => undefined,
+}));

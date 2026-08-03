@@ -38,9 +38,13 @@ vi.mock("../../session.js", () => ({
   formatError: (err: unknown) => String(err),
 }));
 
-vi.mock("../deliver-reply.js", () => ({
-  deliverWebReply: vi.fn(async () => {}),
-}));
+vi.mock("../deliver-reply.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../deliver-reply.js")>();
+  return {
+    ...actual,
+    deliverWebReply: vi.fn(async () => {}),
+  };
+});
 
 vi.mock("../loggers.js", () => ({
   whatsappInboundLog: { info: () => {}, debug: () => {} },
@@ -88,38 +92,41 @@ vi.mock("./runtime-api.js", () => ({
   type: undefined,
 }));
 
-vi.mock("./inbound-dispatch.js", () => ({
-  buildWhatsAppInboundContext: (params: {
-    bodyForAgent?: string;
-    combinedBody: string;
-    commandAuthorized?: boolean;
-    commandBody?: string;
-    msg: WebInboundMsg;
-    mediaTranscribedIndexes?: number[];
-    rawBody?: string;
-    transcript?: string;
-  }) => ({
-    Body: params.combinedBody,
-    BodyForAgent: params.bodyForAgent ?? params.msg.payload.body,
-    CommandAuthorized: params.commandAuthorized,
-    CommandBody: params.commandBody ?? params.msg.payload.body,
-    MediaPath: params.msg.payload.media?.path,
-    MediaType: params.msg.payload.media?.type,
-    MediaTranscribedIndexes: params.mediaTranscribedIndexes,
-    RawBody: params.rawBody ?? params.msg.payload.body,
-    Transcript: params.transcript,
-  }),
-  createWhatsAppReplyPlan: vi.fn((params: { replyResolver?: unknown }) => ({
-    dispatcherOptions: {},
-    delivery: { deliver: async () => {} },
-    replyOptions: {},
-    replyResolver: params.replyResolver,
-    finalize: () => true,
-  })),
-  resolveWhatsAppDmRouteTarget: () => "+15550000002",
-  resolveWhatsAppResponsePrefix: () => undefined,
-  updateWhatsAppMainLastRoute: () => {},
-}));
+vi.mock("./inbound-dispatch.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./inbound-dispatch.js")>();
+  return {
+    ...actual,
+    prepareWhatsAppInboundContext: async (
+      params: Parameters<typeof actual.prepareWhatsAppInboundContext>[0],
+    ) => {
+      const prepared = await actual.prepareWhatsAppInboundContext(params);
+      return {
+        ...prepared,
+        ctxPayload: {
+          Body: params.combinedBody,
+          BodyForAgent: params.bodyForAgent ?? params.msg.payload.body,
+          CommandAuthorized: params.command?.authorization.kind === "authorized",
+          CommandBody: params.command?.body ?? params.msg.payload.body,
+          MediaPath: params.msg.payload.media?.path,
+          MediaType: params.msg.payload.media?.type,
+          MediaTranscribedIndexes: params.mediaTranscribedIndexes,
+          RawBody: params.rawBody ?? params.msg.payload.body,
+          Transcript: params.transcript,
+        },
+      };
+    },
+    createWhatsAppReplyPlan: vi.fn((params: { replyResolver?: unknown }) => ({
+      dispatcherOptions: {},
+      delivery: { deliver: async () => {} },
+      replyOptions: {},
+      replyResolver: params.replyResolver,
+      finalize: () => true,
+    })),
+    resolveWhatsAppDmRouteTarget: () => "+15550000002",
+    resolveWhatsAppResponsePrefix: () => undefined,
+    updateWhatsAppMainLastRoute: () => {},
+  };
+});
 
 import { createWhatsAppReplyPlan } from "./inbound-dispatch.js";
 import { processMessage } from "./process-message.js";
@@ -301,61 +308,57 @@ describe("processMessage audio preflight transcription", () => {
     });
   });
 
-  it("keeps the empty caption and audio fact when transcription fails", async () => {
-    transcribeFirstAudioMock.mockRejectedValueOnce(new Error("provider unavailable"));
+  it.each([
+    {
+      name: "keeps the empty caption and audio fact when transcription fails",
+      arrange: () =>
+        transcribeFirstAudioMock.mockRejectedValueOnce(new Error("provider unavailable")),
+    },
+    {
+      name: "keeps the empty caption when transcription returns undefined",
+      arrange: () => transcribeFirstAudioMock.mockResolvedValueOnce(undefined),
+    },
+  ])("$name", async ({ arrange }) => {
+    arrange();
 
     await processMessage(makeParams());
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
-
-    expectContextFields(firstDispatchContext(), {
-      Body: "",
-      BodyForAgent: "",
-    });
+    expectContextFields(firstDispatchContext(), { Body: "", BodyForAgent: "" });
   });
 
-  it("keeps the empty caption when transcription returns undefined", async () => {
-    transcribeFirstAudioMock.mockResolvedValueOnce(undefined);
-
-    await processMessage(makeParams());
-
-    expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
-
-    expectContextFields(firstDispatchContext(), {
-      Body: "",
-      BodyForAgent: "",
-    });
-  });
-
-  it("does not call transcribeFirstAudio when mediaType is not audio", async () => {
-    await processMessage(
-      makeParams({ body: "<media:image>", mediaType: "image/jpeg", mediaPath: "/tmp/img.jpg" }),
-    );
+  it.each([
+    {
+      name: "does not call transcribeFirstAudio when mediaType is not audio",
+      overrides: {
+        body: "<media:image>",
+        mediaType: "image/jpeg",
+        mediaPath: "/tmp/img.jpg",
+      },
+      assertEmptyBody: false,
+    },
+    {
+      name: "does not call transcribeFirstAudio when audio has a caption",
+      overrides: { body: "hello there", mediaType: "audio/ogg; codecs=opus" },
+      assertEmptyBody: false,
+    },
+    {
+      name: "does not call transcribeFirstAudio when mediaPath is absent",
+      overrides: { mediaPath: undefined },
+      assertEmptyBody: false,
+    },
+    {
+      name: "does not call transcribeFirstAudio when msg.mediaType is absent",
+      overrides: { mediaType: undefined, mediaPath: "/tmp/voice.ogg" },
+      assertEmptyBody: true,
+    },
+  ])("$name", async ({ overrides, assertEmptyBody }) => {
+    await processMessage(makeParams(overrides));
 
     expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
-  });
-
-  it("does not call transcribeFirstAudio when audio has a caption", async () => {
-    await processMessage(makeParams({ body: "hello there", mediaType: "audio/ogg; codecs=opus" }));
-
-    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
-  });
-
-  it("does not call transcribeFirstAudio when mediaPath is absent", async () => {
-    await processMessage(makeParams({ mediaPath: undefined }));
-
-    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
-  });
-
-  it("does not call transcribeFirstAudio when msg.mediaType is absent", async () => {
-    await processMessage(makeParams({ mediaType: undefined, mediaPath: "/tmp/voice.ogg" }));
-
-    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
-
-    // Empty body passes through without a classified audio fact.
-    expectContextFields(firstDispatchContext(), {
-      Body: "",
-    });
+    if (assertEmptyBody) {
+      expectContextFields(firstDispatchContext(), { Body: "" });
+    }
   });
 
   it("does not use transcript body for command detection", async () => {

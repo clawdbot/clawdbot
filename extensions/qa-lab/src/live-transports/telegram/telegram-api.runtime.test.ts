@@ -76,6 +76,7 @@ describe("Telegram QA API boundary", () => {
         sutToken: "placeholder",
         driverBotId: 1,
         sutAccountId: "sut",
+        requireMention: true,
       },
     );
 
@@ -96,6 +97,28 @@ describe("Telegram QA API boundary", () => {
             },
           },
         },
+      },
+    });
+  });
+
+  it("disables mention gating only inside the exact leased QA group", () => {
+    const config = buildTelegramQaConfig(
+      {},
+      {
+        groupId: "-100123",
+        sutToken: "placeholder",
+        driverBotId: 1,
+        sutAccountId: "sut",
+        requireMention: false,
+      },
+    );
+
+    expect(config.channels?.telegram?.groups).toBeUndefined();
+    expect(config.channels?.telegram?.accounts?.sut?.groups).toEqual({
+      "-100123": {
+        groupPolicy: "allowlist",
+        allowFrom: ["1"],
+        requireMention: false,
       },
     });
   });

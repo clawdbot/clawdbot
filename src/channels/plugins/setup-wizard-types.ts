@@ -120,12 +120,14 @@ export type ChannelSetupWizardCredential = {
   }) => OpenClawConfig | Promise<OpenClawConfig>;
 };
 
-/** Declarative non-secret text step that can depend on resolved credentials. */
+/** Declarative text step that can depend on resolved credentials. */
 export type ChannelSetupWizardTextInput = {
   /** Plugin-owned key written into the runtime setup input. */
   inputKey: string;
   message: string;
   placeholder?: string;
+  /** Mask input and keep any configured value server-side. */
+  sensitive?: boolean;
   required?: boolean;
   applyEmptyValue?: boolean;
   helpTitle?: string;

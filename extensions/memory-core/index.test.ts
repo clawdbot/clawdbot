@@ -10,8 +10,10 @@ import { buildPromptSection } from "./src/prompt-section.js";
 
 const closeMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => {}));
 const getMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => null));
+const authorizeSearchHitsMock = vi.hoisted(() => vi.fn(async ({ hits }) => hits));
 const createMemoryRuntimeMock = vi.hoisted(() =>
   vi.fn((_host: MemoryCoreRuntimeHost = {}) => ({
+    authorizeSearchHits: authorizeSearchHitsMock,
     closeAllMemorySearchManagers: vi.fn(async () => {}),
     closeMemorySearchManager: closeMemorySearchManagerMock,
     getMemorySearchManager: getMemorySearchManagerMock,
@@ -146,6 +148,27 @@ describe("memory-core plugin runtime registration", () => {
     expect(toolNames).toContain("intent");
     expect(hooks).toContain("before_prompt_build");
     expect(subagentRun).not.toHaveBeenCalled();
+  });
+
+  it("scopes both reply hooks to scheduled turns across three registrations", () => {
+    for (let cycle = 1; cycle <= 3; cycle += 1) {
+      const replyHookTriggers: unknown[] = [];
+      plugin.register(
+        createTestPluginApi({
+          runtime: hostRuntime,
+          on(hookName, _handler, options) {
+            if (hookName === "before_agent_reply") {
+              replyHookTriggers.push(options?.eligibleTriggers);
+            }
+          },
+        }),
+      );
+
+      expect(replyHookTriggers, `cycle ${cycle}`).toEqual([
+        ["heartbeat", "cron"],
+        ["heartbeat", "cron"],
+      ]);
+    }
   });
 
   it("hides intent create, list, and cancel from non-owner turns", () => {
@@ -292,6 +315,42 @@ describe("memory-core plugin runtime registration", () => {
 
     await runtime.getMemorySearchManager({ cfg, agentId: "main" });
 
+    expect(createMemoryRuntimeMock).toHaveBeenCalledWith({
+      acquireLocalService: hostRuntime.llm.acquireLocalService,
+      withLease: expect.any(Function),
+    });
+  });
+
+  it("forwards search-hit authorization through the registered memory runtime", async () => {
+    const runtime = registerMemoryCoreRuntime();
+    const cfg = {} as OpenClawConfig;
+    const hits = [
+      {
+        source: "sessions" as const,
+        path: "sessions/private.jsonl",
+        startLine: 1,
+        endLine: 1,
+        score: 1,
+        snippet: "private",
+      },
+    ];
+
+    await expect(
+      runtime.authorizeSearchHits?.({
+        cfg,
+        agentId: "main",
+        requesterSessionKey: "agent:main:voice:15550001234",
+        sandboxed: false,
+        hits,
+      }),
+    ).resolves.toEqual(hits);
+    expect(authorizeSearchHitsMock).toHaveBeenCalledWith({
+      cfg,
+      agentId: "main",
+      requesterSessionKey: "agent:main:voice:15550001234",
+      sandboxed: false,
+      hits,
+    });
     expect(createMemoryRuntimeMock).toHaveBeenCalledWith({
       acquireLocalService: hostRuntime.llm.acquireLocalService,
       withLease: expect.any(Function),

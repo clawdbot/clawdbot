@@ -3,9 +3,7 @@
 import { html, nothing } from "lit";
 import "../../styles/channels.css";
 import type {
-  ChannelAccountSnapshot,
   ChannelsStatusSnapshot,
-  ChannelUiMetaEntry,
   DiscordStatus,
   GoogleChatStatus,
   IMessageStatus,
@@ -24,6 +22,7 @@ import {
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { resolveChannelAccounts } from "../../lib/channels/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { renderChannelArt } from "./hub-meta.ts";
 import { renderChannelDetail } from "./view.detail.ts";
@@ -118,6 +117,10 @@ export function renderChannels(props: ChannelsProps) {
       channelLabel: (channelId) => resolveChannelLabel(props.snapshot, channelId),
       multiselectValues: props.wizardMultiselect,
       onToggleMultiselect: props.onWizardToggleMultiselect,
+      textValue: props.wizardTextValue,
+      secretVisible: props.wizardSecretVisible,
+      onTextInput: props.onWizardTextInput,
+      onToggleSecretVisibility: props.onWizardToggleSecretVisibility,
       onAnswer: props.onWizardAnswer,
       onClose: props.onWizardClose,
       whatsappQrDataUrl: props.whatsappQrDataUrl,
@@ -156,26 +159,23 @@ function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): ChannelKe
   return ["whatsapp", "telegram", "discord", "googlechat", "slack", "signal", "imessage", "nostr"];
 }
 
-function resolveChannelMetaMap(
-  snapshot: ChannelsStatusSnapshot | null,
-): Record<string, ChannelUiMetaEntry> {
-  if (!snapshot?.channelMeta?.length) {
-    return {};
-  }
-  return Object.fromEntries(snapshot.channelMeta.map((entry) => [entry.id, entry]));
-}
-
 function resolveChannelLabel(snapshot: ChannelsStatusSnapshot | null, key: string): string {
-  const meta = resolveChannelMetaMap(snapshot)[key];
-  return meta?.label ?? snapshot?.channelLabels?.[key] ?? key;
+  const labels = snapshot?.channelLabels;
+  return (
+    snapshot?.channelMeta?.find((entry) => entry.id === key)?.label ??
+    (labels && Object.hasOwn(labels, key) ? labels[key] : undefined) ??
+    key
+  );
 }
 
 function resolveChannelDetailLabel(
   snapshot: ChannelsStatusSnapshot | null,
   key: string,
 ): string | null {
-  const meta = resolveChannelMetaMap(snapshot)[key];
-  const detail = meta?.detailLabel ?? snapshot?.channelDetailLabels?.[key] ?? null;
+  const labels = snapshot?.channelDetailLabels;
+  const detail =
+    snapshot?.channelMeta?.find((entry) => entry.id === key)?.detailLabel ??
+    (labels && Object.hasOwn(labels, key) ? labels[key] : null);
   return detail && detail !== resolveChannelLabel(snapshot, key) ? detail : null;
 }
 
@@ -184,8 +184,9 @@ function resolveRowState(key: ChannelKey, props: ChannelsProps): ChannelCardStat
   const lastError =
     typeof displayState.status?.lastError === "string" && displayState.status.lastError.trim()
       ? displayState.status.lastError
-      : (props.snapshot?.channelAccounts?.[key] ?? []).find((account) => account.lastError)
-          ?.lastError;
+      : resolveChannelAccounts(props.snapshot?.channelAccounts, key).find(
+          (account) => account.lastError,
+        )?.lastError;
   if (lastError) {
     return "attention";
   }
@@ -209,10 +210,10 @@ function rowStatus(state: ChannelCardState) {
 }
 
 function lastActivityLine(key: ChannelKey, props: ChannelsProps): string | null {
-  const accounts: ChannelAccountSnapshot[] = props.snapshot?.channelAccounts?.[key] ?? [];
-  const lastInbound = accounts
-    .map((account) => account.lastInboundAt ?? 0)
-    .reduce((a, b) => Math.max(a, b), 0);
+  const lastInbound = resolveChannelAccounts(props.snapshot?.channelAccounts, key).reduce(
+    (latest, account) => Math.max(latest, account.lastInboundAt ?? 0),
+    0,
+  );
   if (!lastInbound) {
     return null;
   }

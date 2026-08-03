@@ -1,47 +1,53 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  buildSessionEntry,
-  listSessionTranscriptCorpusEntriesForAgent,
-  sessionPathForFile,
-  type SessionTranscriptCorpusEntry,
-} from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import { listSessionTranscriptCorpusEntriesForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
-import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { SessionIngestionFileState } from "./dreaming-ingestion-state.js";
 import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-narrative.js";
+import { previewGroundedRemMarkdown } from "./rem-evidence.js";
+import type {
+  SessionBackfillDay,
+  SessionBackfillExecution,
+  SessionBackfillResult,
+} from "./session-backfill-contract.js";
+import {
+  drainSessionBackfill,
+  markSessionBackfillRewindBaseline,
+  normalizeSessionBackfillSelection,
+  recordSessionBackfillRewindBatch,
+  resetSessionBackfillIngestionState,
+  rewindSessionBackfillIngestionState,
+} from "./session-backfill-lifecycle.js";
 import {
   SESSION_INGESTION_MAX_MESSAGES_PER_FILE,
   SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP,
   SESSION_INGESTION_MIN_MESSAGES_PER_FILE,
-  SESSION_INGESTION_MIN_SNIPPET_CHARS,
   SESSION_INGESTION_SCORE,
+  SESSION_CORPUS_RELATIVE_DIR,
   appendSessionCorpusLines,
-  buildSessionFileScopeKey,
-  buildSessionRenderedLine,
-  buildSqliteDreamingSessionPath,
-  buildSessionStateKey,
-  hashSessionMessageId,
+  foreignSessionIngestionSource,
   mergeTrackedMessageHashes,
-  normalizeSessionCorpusSnippet,
   readSessionIngestionState,
+  scanSessionIngestionSource,
+  sessionIngestionSourceFromCorpus,
   trimTrackedSessionScopes,
   writeSessionIngestionState,
-  type SessionIngestionMessage,
-} from "./dreaming-phases.js";
-import { previewGroundedRemMarkdown } from "./rem-evidence.js";
+  type SessionIngestionCandidate,
+  type SessionIngestionSource,
+} from "./session-ingestion.js";
 import {
   readShortTermRecallEntries,
   recordGroundedShortTermCandidates,
   removeGroundedShortTermCandidates,
 } from "./short-term-promotion.js";
 
-const DEFAULT_SESSION_BACKFILL_LIMIT_DAYS = 92;
 const SESSION_BACKFILL_QUERY_PREFIX = "__dreaming_session_backfill__";
-const SESSION_CORPUS_RELATIVE_DIR = path.join("memory", ".dreams", "session-corpus");
 const TOP_CANDIDATE_LIMIT = 5;
-const MEMORY_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const MAX_SESSION_BACKFILL_APPLY_BATCHES = 10_000;
+
+export { normalizeSessionBackfillSelection } from "./session-backfill-lifecycle.js";
+export type { SessionBackfillResult } from "./session-backfill-contract.js";
 
 export type MemorySessionBackfillOptions = {
   agent?: string;
@@ -55,30 +61,7 @@ export type MemorySessionBackfillOptions = {
   json?: boolean;
 };
 
-type SessionBackfillSource = {
-  agentId: string;
-  absolutePath: string;
-  foreign: boolean;
-  sessionPath: string;
-  stateKey: string;
-  scope: string;
-  legacyScope?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  storePath?: string;
-  updatedAtMs?: number;
-  generatedByDreamingNarrative?: boolean;
-  generatedByCronRun?: boolean;
-  sessionKind: "interactive";
-};
-
-type SessionBackfillCandidate = SessionIngestionMessage & {
-  hash: string;
-  contentIndex: number;
-  legacyHash?: string;
-  lineNumber: number;
-  scope: string;
-};
+type SessionBackfillCandidate = SessionIngestionCandidate;
 
 type SessionBackfillScan = {
   candidates: SessionBackfillCandidate[];
@@ -89,43 +72,6 @@ type SessionBackfillScan = {
   scannedEndIndex: number;
   size: number;
   stateKey: string;
-};
-
-type SessionBackfillCollection = {
-  byDay: Map<string, SessionBackfillCandidate[]>;
-  scans: SessionBackfillScan[];
-};
-
-type SessionBackfillDay = {
-  day: string;
-  candidateCount: number;
-  topCandidates: string[];
-};
-
-export type SessionBackfillResult = {
-  agentId: string;
-  workspaceDir: string;
-  applied: boolean;
-  rem: boolean;
-  days: SessionBackfillDay[];
-  candidateCount: number;
-  stagedEntries: number;
-  writtenDiaryEntries: number;
-  replacedDiaryEntries: number;
-  rollback?: {
-    removedDiaryEntries: number;
-    removedStagedEntries: number;
-  };
-};
-
-type SessionBackfillContinuation = {
-  advanced: boolean;
-  hasMore: boolean;
-};
-
-type SessionBackfillExecution = {
-  result: SessionBackfillResult;
-  continuation: SessionBackfillContinuation;
 };
 
 export type RunSessionBackfillParams = {
@@ -142,122 +88,25 @@ export type RunSessionBackfillParams = {
   timezone?: string;
 };
 
-function normalizeMemoryDay(value: string | undefined, flag: string): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  const day = value.trim();
-  if (!MEMORY_DAY_RE.test(day)) {
-    throw new Error(`${flag} must use YYYY-MM-DD.`);
-  }
-  const parsed = new Date(`${day}T00:00:00.000Z`);
-  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== day) {
-    throw new Error(`${flag} must be a valid calendar day.`);
-  }
-  return day;
-}
-
-function resolveLimitDays(value: number | undefined): number {
-  if (value === undefined) {
-    return DEFAULT_SESSION_BACKFILL_LIMIT_DAYS;
-  }
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new Error("--limit-days must be a positive integer.");
-  }
-  return value;
-}
-
-export function normalizeSessionBackfillSelection(
-  params: Pick<RunSessionBackfillParams, "from" | "to" | "limitDays">,
-  labels: { from: string; to: string; limitDays: string } = {
-    from: "--from",
-    to: "--to",
-    limitDays: "--limit-days",
-  },
-): { from?: string; to?: string; limitDays: number } {
-  const from = normalizeMemoryDay(params.from, labels.from);
-  const to = normalizeMemoryDay(params.to, labels.to);
-  if (from !== undefined && to !== undefined && from > to) {
-    throw new Error(`${labels.from} must not be after ${labels.to}.`);
-  }
-  let limitDays: number;
-  try {
-    limitDays = resolveLimitDays(params.limitDays);
-  } catch {
-    throw new Error(`${labels.limitDays} must be a positive integer.`);
-  }
-  return {
-    ...(from !== undefined ? { from } : {}),
-    ...(to !== undefined ? { to } : {}),
-    limitDays,
-  };
-}
-
-function sourceFromCorpusEntry(entry: SessionTranscriptCorpusEntry): SessionBackfillSource | null {
-  if (
-    entry.sessionKind !== "interactive" ||
-    entry.generatedByDreamingNarrative ||
-    entry.generatedByCronRun
-  ) {
-    return null;
-  }
-  const sessionPath =
-    entry.transcriptSource === "sqlite"
-      ? buildSqliteDreamingSessionPath(entry.agentId, entry.sessionId)
-      : sessionPathForFile(entry.sessionFile);
-  return {
-    agentId: entry.agentId,
-    absolutePath: entry.sessionFile,
-    foreign: false,
-    sessionPath,
-    stateKey: buildSessionStateKey(entry.agentId, sessionPath),
-    scope:
-      entry.transcriptSource === "sqlite"
-        ? `${entry.agentId}:${sessionPath}`
-        : buildSessionFileScopeKey(entry.agentId, entry.sessionFile),
-    ...(entry.transcriptSource === "sqlite"
-      ? { legacyScope: `${entry.agentId}:${entry.sessionId}` }
-      : {}),
-    ...(entry.transcriptSource === "sqlite" ? { sessionId: entry.sessionId } : {}),
-    ...(entry.sessionKey ? { sessionKey: entry.sessionKey } : {}),
-    ...(entry.storePath ? { storePath: entry.storePath } : {}),
-    ...(entry.updatedAtMs !== undefined ? { updatedAtMs: entry.updatedAtMs } : {}),
-    ...(entry.generatedByDreamingNarrative
-      ? { generatedByDreamingNarrative: entry.generatedByDreamingNarrative }
-      : {}),
-    ...(entry.generatedByCronRun ? { generatedByCronRun: entry.generatedByCronRun } : {}),
-    sessionKind: "interactive",
-  };
-}
-
-function sourceFromArchiveFile(agentId: string, archiveFile: string): SessionBackfillSource {
-  const absolutePath = path.resolve(archiveFile);
-  const sessionPath = sessionPathForFile(absolutePath);
-  return {
-    agentId,
-    absolutePath,
-    foreign: true,
-    sessionPath,
-    stateKey: `session-backfill:${absolutePath.replaceAll("\\", "/")}`,
-    // Foreign files do not inherit canonical session identity from a matching basename.
-    scope: `archive:${agentId}:${absolutePath.replaceAll("\\", "/")}`,
-    sessionKind: "interactive",
-  };
-}
-
 async function listSessionBackfillSources(params: {
   agentId: string;
   archiveFiles: string[];
-}): Promise<SessionBackfillSource[]> {
+}): Promise<SessionIngestionSource[]> {
   const corpus = await listSessionTranscriptCorpusEntriesForAgent(params.agentId, {
     includeRetainedSqlite: true,
   });
   const sources = corpus
-    .map(sourceFromCorpusEntry)
-    .filter((entry): entry is SessionBackfillSource => entry !== null);
+    .map(sessionIngestionSourceFromCorpus)
+    .filter(
+      (entry): entry is SessionIngestionSource =>
+        entry !== null &&
+        !entry.buildOptions.generatedByDreamingNarrative &&
+        !entry.buildOptions.generatedByCronRun,
+    );
   const canonicalPaths = new Set(sources.map((entry) => path.resolve(entry.absolutePath)));
   for (const archiveFile of params.archiveFiles) {
-    const source = sourceFromArchiveFile(params.agentId, archiveFile);
+    // Foreign files do not inherit canonical session identity from a matching basename.
+    const source = foreignSessionIngestionSource(params.agentId, archiveFile);
     if (!canonicalPaths.has(source.absolutePath)) {
       sources.push(source);
       canonicalPaths.add(source.absolutePath);
@@ -268,14 +117,6 @@ async function listSessionBackfillSources(params: {
       ? a.absolutePath.localeCompare(b.absolutePath)
       : a.sessionPath.localeCompare(b.sessionPath),
   );
-}
-
-function candidateDayInRange(
-  day: string,
-  from: string | undefined,
-  to: string | undefined,
-): boolean {
-  return (from === undefined || day >= from) && (to === undefined || day <= to);
 }
 
 function compareSessionBackfillCandidates(
@@ -295,13 +136,13 @@ function compareSessionBackfillCandidates(
 }
 
 async function collectSessionBackfillCandidates(params: {
-  sources: SessionBackfillSource[];
+  sources: SessionIngestionSource[];
   files: Record<string, SessionIngestionFileState>;
   seenMessages: Record<string, string[]>;
   from?: string;
   to?: string;
   timezone?: string;
-}): Promise<SessionBackfillCollection> {
+}) {
   const candidates: SessionBackfillCandidate[] = [];
   const scans: SessionBackfillScan[] = [];
   const perFileCap = Math.min(
@@ -313,108 +154,38 @@ async function collectSessionBackfillCandidates(params: {
   );
 
   for (const source of params.sources) {
-    const entry = await buildSessionEntry(source.absolutePath, {
-      agentId: source.agentId,
-      sessionKind: source.sessionKind,
-      ...(source.generatedByDreamingNarrative !== undefined
-        ? { generatedByDreamingNarrative: source.generatedByDreamingNarrative }
-        : {}),
-      ...(source.generatedByCronRun !== undefined
-        ? { generatedByCronRun: source.generatedByCronRun }
-        : {}),
-      ...(source.sessionKey !== undefined ? { sessionKey: source.sessionKey } : {}),
-      ...(source.sessionId !== undefined ? { sessionId: source.sessionId } : {}),
-      ...(source.storePath !== undefined ? { storePath: source.storePath } : {}),
-      ...(source.updatedAtMs !== undefined ? { updatedAtMs: source.updatedAtMs } : {}),
-    });
-    if (!entry || entry.generatedByDreamingNarrative || entry.generatedByCronRun) {
-      continue;
-    }
-    const seen = new Set(params.seenMessages[source.scope] ?? []);
-    const legacySeen = source.legacyScope
-      ? new Set(params.seenMessages[source.legacyScope] ?? [])
-      : undefined;
-    const lines = entry.content.length > 0 ? entry.content.split("\n") : [];
-    const previous = params.files[source.stateKey];
-    const unchanged =
-      previous?.mtimeMs === Math.floor(entry.mtimeMs) &&
-      previous.size === Math.floor(entry.size) &&
-      previous.contentHash === entry.hash &&
-      previous.lineCount === lines.length;
-    const startIndex = unchanged ? Math.min(previous.lastContentLine, lines.length) : 0;
-    const sourceCandidates: SessionBackfillCandidate[] = [];
-    let progressBlockIndex: number | undefined;
-    let scannedEndIndex = startIndex;
-    for (let index = startIndex; index < lines.length; index += 1) {
-      scannedEndIndex = index + 1;
-      const snippet = normalizeSessionCorpusSnippet(lines[index] ?? "");
-      if (snippet.length < SESSION_INGESTION_MIN_SNIPPET_CHARS) {
-        continue;
-      }
-      const lineNumber = entry.lineMap[index] ?? index + 1;
-      const timestampMs = entry.messageTimestampsMs[index] ?? 0;
-      const parsedProvenance = entry.lineProvenance[index] ?? {
-        originClass: "untrusted" as const,
-        sessionKind: "interactive" as const,
-        observedAt: timestampMs || entry.mtimeMs,
-      };
-      // Foreign JSONL is caller-controlled, so embedded owner metadata is not
-      // authenticated. Only the canonical session store can establish trust.
-      const provenance = source.foreign
-        ? { ...parsedProvenance, originClass: "untrusted" as const }
-        : parsedProvenance;
+    const scan = await scanSessionIngestionSource({
+      source,
+      previous: params.files[source.stateKey],
+      seenMessages: params.seenMessages,
+      timezone: params.timezone,
+      verifyContent: true,
+      classifyDay: (day) =>
+        (params.from === undefined || day >= params.from) &&
+        (params.to === undefined || day <= params.to)
+          ? "include"
+          : "block",
       // Canonical parsing emits `agent` only inside an authenticated owner
       // turn; replies to non-owner input retain the turn's untrusted taint.
-      if (provenance.originClass !== "owner" && provenance.originClass !== "agent") {
-        continue;
-      }
-      const day = formatMemoryDreamingDay(
-        timestampMs > 0 ? timestampMs : entry.mtimeMs,
-        params.timezone,
-      );
-      if (!candidateDayInRange(day, params.from, params.to)) {
-        progressBlockIndex ??= index;
-        continue;
-      }
-      const dedupeBasis = timestampMs > 0 ? `ts:${Math.floor(timestampMs)}` : `line:${lineNumber}`;
-      const hash = hashSessionMessageId(`${source.scope}\n${dedupeBasis}\n${snippet}`);
-      const legacyHash = source.legacyScope
-        ? hashSessionMessageId(`${source.legacyScope}\n${dedupeBasis}\n${snippet}`)
-        : undefined;
-      if (seen.has(hash) || (legacyHash !== undefined && legacySeen?.has(legacyHash))) {
-        continue;
-      }
-      const rendered = buildSessionRenderedLine({
-        agentId: source.agentId,
-        sessionPath: source.sessionPath,
-        lineNumber,
-        snippet,
-      });
-      const candidate = {
-        contentIndex: index,
-        day,
-        hash,
-        ...(legacyHash ? { legacyHash } : {}),
-        lineNumber,
-        provenance,
-        rendered,
-        scope: source.scope,
-        snippet,
-      } satisfies SessionBackfillCandidate;
-      sourceCandidates.push(candidate);
-      seen.add(hash);
+      acceptProvenance: (provenance) =>
+        provenance.originClass === "owner" || provenance.originClass === "agent",
+    });
+    if (scan.status !== "scanned" || !scan.fileState) {
+      continue;
     }
     candidates.push(
-      ...sourceCandidates.toSorted(compareSessionBackfillCandidates).slice(0, perFileCap),
+      ...scan.candidates.toSorted(compareSessionBackfillCandidates).slice(0, perFileCap),
     );
     scans.push({
-      candidates: sourceCandidates,
-      contentHash: entry.hash,
-      lineCount: lines.length,
-      mtimeMs: Math.floor(entry.mtimeMs),
-      ...(progressBlockIndex !== undefined ? { progressBlockIndex } : {}),
-      scannedEndIndex,
-      size: Math.floor(entry.size),
+      candidates: scan.candidates,
+      contentHash: scan.fileState.contentHash,
+      lineCount: scan.fileState.lineCount,
+      mtimeMs: scan.fileState.mtimeMs,
+      ...(scan.progressBlockIndex !== undefined
+        ? { progressBlockIndex: scan.progressBlockIndex }
+        : {}),
+      scannedEndIndex: scan.scannedEndIndex,
+      size: scan.fileState.size,
       stateKey: source.stateKey,
     });
   }
@@ -601,11 +372,20 @@ async function executeSessionBackfillCore(
   if (params.rollback) {
     // Backfill diary markers and grounded-only candidates are a shared artifact
     // class with rem-backfill; the stable removal APIs intentionally clear both.
-    // Ingestion cursors and hashes remain: rollback must not re-ingest tracked messages.
     const [diary, staged] = await Promise.all([
       removeBackfillDiaryEntries({ workspaceDir }),
       removeGroundedShortTermCandidates({ workspaceDir }),
     ]);
+    const rewind = await rewindSessionBackfillIngestionState({
+      workspaceDir,
+      agentId: params.agentId,
+    });
+    if (!rewind.completeCoverage && (diary.removed > 0 || staged.removed > 0)) {
+      // Applies from before the rewind journal shipped have no owned offsets to restore.
+      // Without this agent-scoped reset, rollback deletes artifacts but re-apply finds nothing.
+      await resetSessionBackfillIngestionState({ workspaceDir, agentId: params.agentId });
+    }
+    await markSessionBackfillRewindBaseline({ workspaceDir, agentId: params.agentId });
     return {
       result: {
         agentId: params.agentId,
@@ -680,6 +460,17 @@ async function executeSessionBackfillCore(
   }
 
   if (params.apply) {
+    await recordSessionBackfillRewindBatch({
+      workspaceDir,
+      candidates: selectedDays.flatMap((day) =>
+        day.candidates.map((candidate) => ({
+          contentIndex: candidate.contentIndex,
+          hash: candidate.hash,
+          scope: candidate.scope,
+          stateKey: candidate.stateKey,
+        })),
+      ),
+    });
     if (selectedDays.length > 0) {
       stagedEntries = await applySessionBackfillDays({
         workspaceDir,
@@ -733,11 +524,24 @@ export async function executeSessionBackfill(
   return (await executeSessionBackfillCore(params)).result;
 }
 
+// The CLI owns drain-to-completion. Cursor-driven clients must keep using
+// executeSessionBackfillBatch so one request remains one bounded transaction.
+export async function runSessionBackfill(
+  params: RunSessionBackfillParams,
+): Promise<SessionBackfillResult> {
+  if (!params.apply || params.rollback) {
+    return (await executeSessionBackfillCore(params)).result;
+  }
+
+  return await drainSessionBackfill({
+    executeBatch: () => executeSessionBackfillCore(params),
+    maxBatches: MAX_SESSION_BACKFILL_APPLY_BATCHES,
+    topCandidateLimit: TOP_CANDIDATE_LIMIT,
+  });
+}
+
 export async function executeSessionBackfillBatch(
   params: RunSessionBackfillParams,
 ): Promise<SessionBackfillExecution> {
   return await executeSessionBackfillCore(params);
 }
-
-// Preserve the CLI-facing name while every caller shares the same executor.
-export { executeSessionBackfill as runSessionBackfill };

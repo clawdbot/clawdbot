@@ -1,11 +1,8 @@
 /** SQLite column codec for mutable cron runtime state. */
+import { safeParseJson } from "@openclaw/normalization-core";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CronJobState } from "../types.js";
-import {
-  booleanToInteger,
-  integerToBoolean,
-  normalizeNumber,
-  parseJsonObject,
-} from "./scalar-codec.js";
+import { booleanToInteger, integerToBoolean, normalizeNumber } from "./scalar-codec.js";
 import type { CronJobInsert, CronJobRow } from "./schema.js";
 
 /** Maps mutable cron runtime state into normalized SQLite columns. */
@@ -49,7 +46,7 @@ export function stateFromRow(row: CronJobRow): CronJobState {
   return {
     // Keep unknown runtime fields from state_json while letting indexed columns
     // win for fields that SQLite updates independently during hot-path writes.
-    ...parseJsonObject<CronJobState>(row.state_json, {}),
+    ...(asRecord(safeParseJson(row.state_json)) as CronJobState),
     ...(row.next_run_at_ms != null ? { nextRunAtMs: normalizeNumber(row.next_run_at_ms) } : {}),
     ...(row.running_at_ms != null ? { runningAtMs: normalizeNumber(row.running_at_ms) } : {}),
     ...(row.last_run_at_ms != null ? { lastRunAtMs: normalizeNumber(row.last_run_at_ms) } : {}),

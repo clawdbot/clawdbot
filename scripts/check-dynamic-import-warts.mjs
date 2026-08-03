@@ -4,12 +4,8 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
-import {
-  collectTypeScriptFilesFromRoots,
-  resolveRepoRoot,
-  runAsScript,
-  toLine,
-} from "./lib/ts-guard-utils.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
+import { collectTypeScriptFilesFromRoots, runAsScript, toLine } from "./lib/ts-guard-utils.mjs";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
 const defaultRoots = [path.join(repoRoot, "src"), path.join(repoRoot, "extensions")];

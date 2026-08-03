@@ -558,38 +558,41 @@ describe("node.invoke approval bypass", () => {
     }
   });
 
-  test("rejects browser.proxy persistent profile mutations before forwarding", async () => {
-    let sawInvoke = false;
-    const node = await connectLinuxNode(
-      () => {
-        sawInvoke = true;
-      },
-      undefined,
-      ["browser.proxy"],
-    );
-    const ws = await connectOperator(["operator.write"]);
-    try {
-      const nodeId = await getConnectedNodeIdForTest(ws);
-      const res = await rpcReq(ws, "node.invoke", {
-        nodeId,
-        command: "browser.proxy",
-        params: {
-          method: "POST",
-          path: "/profiles/create",
-          body: { name: "poc", cdpUrl: "http://127.0.0.1:9222" },
+  test.each(["browser.proxy", "browser.proxy.upload.v1"])(
+    "rejects %s persistent profile mutations before forwarding",
+    async (command) => {
+      let sawInvoke = false;
+      const node = await connectLinuxNode(
+        () => {
+          sawInvoke = true;
         },
-        idempotencyKey: crypto.randomUUID(),
-      });
-      expect(res.ok).toBe(false);
-      expect(res.error?.message ?? "").toContain(
-        "node.invoke cannot mutate persistent browser profiles via browser.proxy",
+        undefined,
+        [command],
       );
-      await expectNoForwardedInvoke(() => sawInvoke);
-    } finally {
-      ws.close();
-      node.stop();
-    }
-  });
+      const ws = await connectOperator(["operator.write"]);
+      try {
+        const nodeId = await getConnectedNodeIdForTest(ws);
+        const res = await rpcReq(ws, "node.invoke", {
+          nodeId,
+          command,
+          params: {
+            method: "POST",
+            path: "/profiles/create",
+            body: { name: "poc", cdpUrl: "http://127.0.0.1:9222" },
+          },
+          idempotencyKey: crypto.randomUUID(),
+        });
+        expect(res.ok).toBe(false);
+        expect(res.error?.message ?? "").toContain(
+          `node.invoke cannot mutate persistent browser profiles via ${command}`,
+        );
+        await expectNoForwardedInvoke(() => sawInvoke);
+      } finally {
+        ws.close();
+        node.stop();
+      }
+    },
+  );
 
   test("requires admin scope for direct browser.proxy node.invoke", async () => {
     let sawInvoke = false;

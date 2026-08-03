@@ -1,6 +1,7 @@
 import type {
   SessionApprovalReplay,
   SystemAgentChatQuestion,
+  WizardAnswer,
 } from "../../../packages/gateway-protocol/src/index.js";
 // Shared server-method types define the client, context, response, and handler
 // contracts used by every gateway RPC method module.
@@ -11,7 +12,6 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { CliDeps } from "../../cli/deps.types.js";
-import type { HealthSummary } from "../../commands/health.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   PluginApprovalRequest,
@@ -19,6 +19,7 @@ import type {
 } from "../../infra/plugin-approvals.js";
 import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
 import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
 import type { WizardSession } from "../../wizard/session.js";
@@ -26,6 +27,7 @@ import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
+import type { HealthSummary } from "../health/types.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import type { NodeRegistry } from "../node-registry.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
@@ -93,13 +95,15 @@ export type GatewayClient = {
     agentRuntimeIdentity?: AgentRuntimeIdentity;
     pluginRuntimeOwnerId?: string;
     agentRunTracking?: "plugin_subagent";
+    /** Host-captured requester lineage for opt-in plugin subagent completion delivery. */
+    pluginSubagentRequester?: PluginSubagentRequesterContext;
     /** Host-owned exact media set for a scoped automatic recovery delivery. */
     internalDeliveryMediaUrls?: string[];
     internalDeliverySuppressText?: boolean;
     /** Plugin-owned tools authorized for this internal subagent run. */
     runtimePluginToolGrant?: RuntimePluginToolGrant;
-    /** In-process subagent-completion handoff eligible for verified policy inheritance. */
-    delegatedToolPolicyHandoff?: true;
+    /** Opaque in-process subagent-completion capability; never accepted from wire params. */
+    delegatedToolPolicyHandoffId?: string;
   };
 };
 
@@ -133,6 +137,12 @@ type GatewaySystemAgentSession = {
       sensitive?: boolean;
       question?: SystemAgentChatQuestion;
     }>;
+    answerWizard: (answer: WizardAnswer) => Promise<{
+      text: string;
+      action: "none" | "exit" | "open-tui" | "open-setup";
+      sensitive?: boolean;
+      question?: SystemAgentChatQuestion;
+    }>;
     seedHistory: (turns: readonly SystemAgentHistoryTurn[]) => void;
     historyLength: () => number;
     historySince: (index: number) => SystemAgentHistoryTurn[];
@@ -158,6 +168,12 @@ export type GatewayRequestContext = {
   cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
+  controlUiSessionPullRequests?: ReturnType<
+    typeof import("../control-ui-session-pr-subscriptions.js").createControlUiSessionPullRequestSubscriptions
+  >;
+  sessionViewerPresence?: ReturnType<
+    typeof import("../session-viewer-presence.js").createSessionViewerPresenceDeclarations
+  >;
   sessionCompanion?: import("../session-companion.js").SessionCompanionService;
   sessionObserver?: SessionObserverService;
   notifyPluginMetadataChanged: () => void;
@@ -196,6 +212,11 @@ export type GatewayRequestContext = {
     readOnly?: boolean;
     workspaceDir?: string;
   }) => Promise<GatewayModelCatalogSnapshot>;
+  readPreparedGatewayModelCatalog?: (params?: {
+    agentId?: string;
+    agentDir?: string;
+    workspaceDir?: string;
+  }) => Promise<ModelCatalogEntry[] | undefined>;
   getHealthCache: () => HealthSummary | null;
   refreshHealthSnapshot: (opts?: {
     probe?: boolean;
@@ -314,6 +335,8 @@ export type GatewayRequestOptions = {
   respond: RespondFn;
   context: GatewayRequestContext;
   methodRegistry?: GatewayMethodRegistryView;
+  /** In-process caller lifetime; never serialized into a Gateway request frame. */
+  signal?: AbortSignal;
 };
 
 /** Commit-time guard captured by the pre-dispatch session participation check. */
@@ -331,6 +354,8 @@ export type GatewayRequestHandlerOptions = {
   respond: RespondFn;
   context: GatewayRequestContext;
   sessionMutationAuthorization?: SessionMutationAuthorization;
+  /** In-process caller lifetime; absent for ordinary transport requests. */
+  signal?: AbortSignal;
 };
 
 /** Single gateway method implementation. */

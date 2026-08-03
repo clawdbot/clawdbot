@@ -426,6 +426,7 @@ import Testing
         self.clearTLSFingerprint(stableID: stableID)
 
         let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
         let staleProblem = GatewayConnectionProblem(
             kind: .pairingRequired,
             owner: .gateway,
@@ -434,7 +435,7 @@ import Testing
             requestId: "stale-request",
             retryable: true,
             pauseReconnect: true)
-        appModel._test_applyOperatorGatewayConnectionProblem(staleProblem)
+        appModel.applyOperatorGatewayConnectionProblem(staleProblem)
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
@@ -444,7 +445,9 @@ import Testing
         await controller.connectManual(host: host, port: port, useTLS: true)
 
         #expect(controller.pendingTrustPrompt == nil)
-        #expect(appModel.lastGatewayProblem == nil)
+        #expect(appModel.lastGatewayProblem == staleProblem)
+        #expect(!appModel.gatewayPairingPaused)
+        #expect(appModel.gatewayPairingRequestId == nil)
         #expect(appModel.gatewayStatusText.contains("TLS fingerprint verification timed out"))
         #expect(appModel.gatewayStatusText.contains("\(host):\(port)"))
     }

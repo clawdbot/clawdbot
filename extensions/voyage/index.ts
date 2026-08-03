@@ -5,7 +5,7 @@ import { voyageMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter
 export default definePluginEntry({
   id: "voyage",
   name: "Voyage Embeddings",
-  description: "Bundled Voyage memory embedding provider plugin",
+  description: "Voyage memory embedding provider plugin",
   register(api) {
     api.registerMemoryEmbeddingProvider(voyageMemoryEmbeddingProviderAdapter);
   },

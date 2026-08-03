@@ -36,7 +36,8 @@ function appendClawHubHint(output: string, json?: boolean): string {
   if (json) {
     return output;
   }
-  return `${output}\n\nTip: use \`openclaw skills search\`, \`openclaw skills install\`, and \`openclaw skills update\` for ClawHub-backed skills.`;
+  const command = formatCliCommand("openclaw skills");
+  return `${output}\n\nTip: use \`${command} search\`, \`${command} install\`, and \`${command} update\` for ClawHub-backed skills.`;
 }
 
 function formatSkillStatus(skill: SkillStatusEntry): string {
@@ -432,7 +433,7 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
     }
     if (commandVisible.length > 0) {
       lines.push(
-        `  ${theme.muted("Available as command:")} people, scripts, or cron jobs can call the skill explicitly.`,
+        `  ${theme.muted("Available as command:")} people, scripts, or automations can call the skill explicitly.`,
       );
     }
     if (promptHidden.length > 0) {

@@ -288,6 +288,7 @@ async function installPluginFromPackageDir(
     manifestName: plugin.manifestName,
     version: plugin.version,
     extensions: plugin.extensions,
+    setup: plugin.setup,
     targetDir: preparedTarget.targetPath,
     extensionsDir: params.extensionsDir,
     logger,

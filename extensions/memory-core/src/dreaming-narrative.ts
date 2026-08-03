@@ -1,8 +1,5 @@
 // Memory Core plugin module implements dreaming narrative behavior.
 import { createHash } from "node:crypto";
-import type { Dirent } from "node:fs";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import {
   extractErrorCode,
@@ -12,12 +9,14 @@ import {
   SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
 } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
-import { resolveStateDir } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { cleanupSessionLifecycleArtifacts } from "openclaw/plugin-sdk/session-store-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import pLimit from "p-limit";
 import { readDreamsFile, resolveDreamsPath, updateDreamsFile } from "./dreaming-dreams-file.js";
+import {
+  DREAMING_SESSION_KEY_PREFIX,
+  scrubDreamingNarrativeArtifacts,
+} from "./dreaming-session-cleanup.js";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -102,9 +101,7 @@ const NARRATIVE_MESSAGE_FETCH_LIMIT = 5;
 // A completed run can reach the session reader before the final assistant text
 // is visible, so retry briefly before falling back to synthetic diary text.
 const NARRATIVE_MESSAGE_SETTLE_DELAYS_MS = [50, 150, 300, 750] as const;
-const DREAMING_SESSION_KEY_PREFIX = "dreaming-narrative-";
-const DREAMING_TRANSCRIPT_RUN_MARKER = '"runId":"dreaming-narrative-';
-const DREAMING_ORPHAN_MIN_AGE_MS = 300_000;
+const DREAMING_SESSION_OWNER_KEY = "memory-core-v2";
 const DIARY_START_MARKER = "<!-- openclaw:dreaming:diary:start -->";
 const DIARY_END_MARKER = "<!-- openclaw:dreaming:diary:end -->";
 const BACKFILL_ENTRY_MARKER = "openclaw:dreaming:backfill-entry";
@@ -299,7 +296,9 @@ function buildNarrativeSessionKey(params: {
   phase: NarrativePhaseData["phase"];
 }): string {
   const workspaceHash = buildNarrativeWorkspaceHash(params.workspaceDir);
-  return `agent:${params.agentId}:${DREAMING_SESSION_KEY_PREFIX}${params.phase}-${workspaceHash}`;
+  // Keep the plugin owner in the stable key so rows created before plugin ownership was
+  // persisted cannot be reused by a memory-core run that is then forbidden to delete them.
+  return `agent:${params.agentId}:${DREAMING_SESSION_KEY_PREFIX}${DREAMING_SESSION_OWNER_KEY}-${params.phase}-${workspaceHash}`;
 }
 
 // ── Prompt building ────────────────────────────────────────────────────
@@ -811,47 +810,6 @@ async function appendNarrativeEntry(params: {
 
 // ── Orchestrator ───────────────────────────────────────────────────────
 
-async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
-  const cfg = getRuntimeConfig();
-  const agentsDir = path.join(resolveStateDir(), "agents");
-  let agentEntries: Dirent[];
-  try {
-    agentEntries = await fs.readdir(agentsDir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-
-  let prunedEntries = 0;
-  let archivedOrphans = 0;
-
-  for (const agentEntry of agentEntries) {
-    if (!agentEntry.isDirectory()) {
-      continue;
-    }
-
-    try {
-      const result = await cleanupSessionLifecycleArtifacts({
-        agentId: agentEntry.name,
-        archiveRemovedEntryTranscripts: false,
-        sessionStore: cfg.session?.store,
-        sessionKeySegmentPrefix: DREAMING_SESSION_KEY_PREFIX,
-        transcriptContentMarker: DREAMING_TRANSCRIPT_RUN_MARKER,
-        orphanTranscriptMinAgeMs: DREAMING_ORPHAN_MIN_AGE_MS,
-      });
-      prunedEntries += result.removedEntries;
-      archivedOrphans += result.archivedTranscriptArtifacts;
-    } catch {
-      continue;
-    }
-  }
-
-  if (prunedEntries > 0 || archivedOrphans > 0) {
-    logger.info(
-      `memory-core: dreaming cleanup scrubbed ${prunedEntries} stale session entr${prunedEntries === 1 ? "y" : "ies"} and archived ${archivedOrphans} orphan transcript${archivedOrphans === 1 ? "" : "s"}.`,
-    );
-  }
-}
-
 export type DreamNarrativeRequest = {
   /** Agent that owns this workspace; the narrative session lives in its SQLite store. */
   agentId: string;
@@ -864,7 +822,13 @@ export type DreamNarrativeRequest = {
   logger: Logger;
 };
 
-async function generateAndAppendDreamNarrative(params: DreamNarrativeRequest): Promise<void> {
+export type DreamNarrativeOutcome =
+  | { status: "completed" | "pending" | "skipped" }
+  | { status: "degraded"; error: string };
+
+async function generateAndAppendDreamNarrative(
+  params: DreamNarrativeRequest,
+): Promise<DreamNarrativeOutcome> {
   // `runDreamNarrative` is the only entry point and already dropped empty narrative data.
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
   const runKey = buildNarrativeRunKey({
@@ -878,6 +842,7 @@ async function generateAndAppendDreamNarrative(params: DreamNarrativeRequest): P
     phase: params.data.phase,
   });
   const message = buildNarrativePrompt(params.data);
+  let cleanupFailure: string | undefined;
   await withNarrativeSessionLock(sessionKey, async () => {
     const attempts: Array<{ sessionKey: string; runId: string | null }> = [];
     let successfulSessionKey: string | null = null;
@@ -896,8 +861,9 @@ async function generateAndAppendDreamNarrative(params: DreamNarrativeRequest): P
             await params.subagent.deleteSession({ sessionKey: attemptSessionKey });
           } catch (preCleanupErr) {
             if (!isRequestScopedSubagentRuntimeError(preCleanupErr)) {
+              cleanupFailure = formatErrorMessage(preCleanupErr);
               params.logger.warn(
-                `memory-core: narrative pre-cleanup failed for ${params.data.phase} phase: ${formatErrorMessage(preCleanupErr)}`,
+                `memory-core: narrative pre-cleanup failed for ${params.data.phase} phase: ${cleanupFailure}`,
               );
             }
           }
@@ -1032,19 +998,26 @@ async function generateAndAppendDreamNarrative(params: DreamNarrativeRequest): P
         try {
           await params.subagent.deleteSession({ sessionKey: attempt.sessionKey });
         } catch (cleanupErr) {
+          cleanupFailure = formatErrorMessage(cleanupErr);
           params.logger.warn(
-            `memory-core: narrative session cleanup failed for ${params.data.phase} phase: ${formatErrorMessage(cleanupErr)}`,
+            `memory-core: narrative session cleanup failed for ${params.data.phase} phase: ${cleanupFailure}`,
           );
         }
       }
 
-      await scrubDreamingNarrativeArtifacts(params.logger).catch((scrubErr: unknown) => {
+      await scrubDreamingNarrativeArtifacts({
+        agentId: params.agentId,
+        config: getRuntimeConfig(),
+        logger: params.logger,
+      }).catch((scrubErr: unknown) => {
+        cleanupFailure = formatErrorMessage(scrubErr);
         params.logger.warn(
-          `memory-core: dreaming cleanup scrub failed for ${params.data.phase} phase: ${formatErrorMessage(scrubErr)}`,
+          `memory-core: dreaming cleanup scrub failed for ${params.data.phase} phase: ${cleanupFailure}`,
         );
       });
     }
   });
+  return cleanupFailure ? { status: "degraded", error: cleanupFailure } : { status: "completed" };
 }
 
 // ── Detached narrative concurrency limit ───────────────────────────────
@@ -1060,13 +1033,24 @@ async function generateAndAppendDreamNarrative(params: DreamNarrativeRequest): P
 const DETACHED_NARRATIVE_CONCURRENCY = 3;
 const detachedNarrativeLimit = pLimit(DETACHED_NARRATIVE_CONCURRENCY);
 
-function runDetachedNarrativeJob(job: () => Promise<void>): void {
+function runDetachedNarrativeJob(params: {
+  job: () => Promise<DreamNarrativeOutcome>;
+  logger: Logger;
+  phase: NarrativePhaseData["phase"];
+  workspaceDir: string;
+}): void {
   queueMicrotask(() => {
-    void detachedNarrativeLimit(job).catch(() => {
-      // Detached narratives intentionally swallow errors — callers (cron
-      // sweeps) cannot recover, and surfacing here would only cause noisy
-      // unhandled rejections. Logging happens inside the job itself.
-    });
+    void detachedNarrativeLimit(params.job)
+      .then((outcome) => {
+        if (outcome.status === "degraded") {
+          params.logger.warn(
+            `memory-core: detached dreaming narrative degraded for ${params.phase} phase [workspace=${params.workspaceDir}]: ${outcome.error}`,
+          );
+        }
+      })
+      .catch(() => {
+        // Unexpected failures are logged by the narrative job before reaching this boundary.
+      });
   });
 }
 
@@ -1077,28 +1061,35 @@ function runDetachedNarrativeJob(job: () => Promise<void>): void {
  */
 export async function runDreamNarrative(
   params: Omit<DreamNarrativeRequest, "agentId"> & { agentId?: string; detached?: boolean },
-): Promise<void> {
+): Promise<DreamNarrativeOutcome> {
   const { agentId, detached, ...rest } = params;
   // Nothing to narrate is a no-op on every path; checking ownership first would let an
   // ownerless empty sweep append a diary entry for material that never existed.
   if (rest.data.snippets.length === 0 && !rest.data.promotions?.length) {
-    return;
+    return { status: "skipped" };
   }
   // Narrative sessions are stored per agent, so an ownerless sweep cannot start one.
   // Write the local diary fallback instead of skipping the entry without a trace, and
   // keep it on the same dispatch so a detached cron sweep never awaits a diary write.
   const job = agentId
     ? () => generateAndAppendDreamNarrative({ ...rest, agentId })
-    : () =>
-        appendFallbackNarrativeEntry({
+    : async () => {
+        await appendFallbackNarrativeEntry({
           ...rest,
           nowMs: Number.isFinite(rest.nowMs) ? (rest.nowMs as number) : Date.now(),
           reason: "the dreaming sweep has no owning agent id",
         });
+        return { status: "completed" as const };
+      };
   if (detached) {
-    runDetachedNarrativeJob(job);
-    return;
+    runDetachedNarrativeJob({
+      job,
+      logger: rest.logger,
+      phase: rest.data.phase,
+      workspaceDir: rest.workspaceDir,
+    });
+    return { status: "pending" };
   }
-  await job();
+  return await job();
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

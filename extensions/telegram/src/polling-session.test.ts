@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { Bot } from "grammy";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS as TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
 import {
@@ -50,6 +51,7 @@ async function waitForTelegramTestState<T>(assertion: () => T | Promise<T>): Pro
 const runMock = vi.hoisted(() => vi.fn());
 const createTelegramBotMock = vi.hoisted(() => vi.fn());
 const isRecoverableTelegramNetworkErrorMock = vi.hoisted(() => vi.fn(() => true));
+const isTelegramAuthenticationErrorMock = vi.hoisted(() => vi.fn(() => false));
 const computeBackoffMock = vi.hoisted(() =>
   vi.fn((_policy: { initialMs: number }, _attempt: number) => 0),
 );
@@ -66,6 +68,7 @@ vi.mock("./bot.js", () => ({
 
 vi.mock("./network-errors.js", () => ({
   isRecoverableTelegramNetworkError: isRecoverableTelegramNetworkErrorMock,
+  isTelegramAuthenticationError: isTelegramAuthenticationErrorMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/delivery-queue-runtime", () => ({
@@ -307,6 +310,13 @@ function makeIsolatedBot(params?: {
       config: { use: vi.fn() },
     },
     init: vi.fn(params?.init ?? (async () => undefined)),
+    botInfo: {
+      id: 123,
+      is_bot: true,
+      first_name: "OpenClaw",
+      username: "openclaw_bot",
+      has_topics_enabled: false,
+    } as NonNullable<ConstructorParameters<typeof TelegramPollingSession>[0]["botInfo"]>,
     handleUpdate: vi.fn(params?.handleUpdate ?? (async () => undefined)),
     stop: vi.fn(params?.stop ?? (async () => undefined)),
   };
@@ -481,6 +491,7 @@ function createPollingSession(params: {
   stallThresholdMs?: number;
   setStatus?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
   isolatedIngress?: ConstructorParameters<typeof TelegramPollingSession>[0]["isolatedIngress"];
+  botInfo?: ConstructorParameters<typeof TelegramPollingSession>[0]["botInfo"];
 }) {
   return new TelegramPollingSession({
     token: "tok",
@@ -497,6 +508,7 @@ function createPollingSession(params: {
     stallThresholdMs: params.stallThresholdMs,
     setStatus: params.setStatus,
     isolatedIngress: params.isolatedIngress,
+    ...(params.botInfo ? { botInfo: params.botInfo } : {}),
     ...(params.createTelegramTransport
       ? { createTelegramTransport: params.createTelegramTransport }
       : {}),
@@ -848,6 +860,7 @@ describe("TelegramPollingSession", () => {
     runMock.mockReset();
     createTelegramBotMock.mockReset();
     isRecoverableTelegramNetworkErrorMock.mockReset().mockReturnValue(true);
+    isTelegramAuthenticationErrorMock.mockReset().mockReturnValue(false);
     computeBackoffMock.mockReset().mockReturnValue(0);
     sleepWithAbortMock.mockReset().mockResolvedValue(undefined);
     drainPendingDeliveriesMock.mockReset().mockResolvedValue(undefined);
@@ -866,6 +879,7 @@ describe("TelegramPollingSession", () => {
   it("uses backoff helpers for recoverable polling retries", async () => {
     const abort = new AbortController();
     const recoverableError = new Error("recoverable polling error");
+    const setStatus = vi.fn();
     const botStop = vi.fn(async () => undefined);
     const runnerStop = vi.fn(async () => undefined);
     const bot = {
@@ -911,6 +925,7 @@ describe("TelegramPollingSession", () => {
       persistUpdateId: async () => undefined,
       log: () => undefined,
       telegramTransport: undefined,
+      setStatus,
     });
 
     await session.runUntilAbort();
@@ -930,6 +945,7 @@ describe("TelegramPollingSession", () => {
       1,
     );
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
+    expect(statusPatches(setStatus)).toContainEqual({ lifecycle: "recovering" });
   });
 
   it("resets restart backoff after a healthy polling cycle", () => {
@@ -1126,6 +1142,99 @@ describe("TelegramPollingSession", () => {
       }
     });
   });
+
+  it.each([
+    {
+      name: "preserves a cached bot without making another getMe request",
+      seeded: true,
+      topicsEnabled: false,
+      expectedGetMeCalls: 0,
+      expectedLaneKey: "telegram:1234",
+    },
+    {
+      name: "initializes an uncached bot with exactly one getMe request",
+      seeded: false,
+      topicsEnabled: true,
+      expectedGetMeCalls: 1,
+      expectedLaneKey: "telegram:1234:topic:42",
+    },
+  ])(
+    "shares the installed grammY bot capability snapshot: $name",
+    async ({ seeded, topicsEnabled, expectedGetMeCalls, expectedLaneKey }) => {
+      await withTempSpool(async (tempDir) => {
+        const abort = new AbortController();
+        const worker = createListeningIngressWorker();
+        const botInfo = {
+          id: 123,
+          is_bot: true,
+          first_name: "OpenClaw",
+          username: "openclaw_bot",
+          has_topics_enabled: topicsEnabled,
+        } as NonNullable<ConstructorParameters<typeof TelegramPollingSession>[0]["botInfo"]>;
+        const bot = new Bot("tok", seeded ? { botInfo } : undefined);
+        const getMe = vi.spyOn(bot.api, "getMe").mockResolvedValue(botInfo);
+        vi.spyOn(bot.api, "deleteWebhook").mockResolvedValue(true);
+        vi.spyOn(bot, "stop").mockResolvedValue(undefined);
+        let releaseHandler: (() => void) | undefined;
+        const handlerCompleted = new Promise<void>((resolve) => {
+          releaseHandler = resolve;
+        });
+        const handleUpdate = vi.spyOn(bot, "handleUpdate").mockImplementation(async () => {
+          await handlerCompleted;
+        });
+        createTelegramBotMock.mockReturnValueOnce(bot);
+        const session = createPollingSession({
+          abortSignal: abort.signal,
+          ...(seeded ? { botInfo } : {}),
+          isolatedIngress: {
+            enabled: true,
+            spoolDir: tempDir,
+            createWorker: worker.createWorker,
+            drainIntervalMs: 10,
+          },
+        });
+        const runPromise = session.runUntilAbort();
+        try {
+          await waitForTelegramTestState(() => expect(worker.hasListener()).toBe(true));
+          worker.emit({
+            type: "update",
+            requestId: "topic-capability-1",
+            update: {
+              update_id: 143,
+              message: {
+                chat: { id: 1234, type: "private" },
+                message_thread_id: 42,
+                text: "installed bot capability snapshot",
+              },
+            },
+            queued: 1,
+          });
+          await waitForTelegramTestState(() =>
+            expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("topic-capability-1", {
+              ok: true,
+              updateId: 143,
+            }),
+          );
+          await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledOnce());
+          const { database, kysely } = openTelegramSpoolTestKysely(tempDir);
+          const rows = executeSqliteQuerySync(
+            database.db,
+            kysely
+              .selectFrom("channel_ingress_events")
+              .select(["lane_key", "status"])
+              .where("event_id", "=", String(143).padStart(16, "0")),
+          ).rows;
+          expect(rows).toMatchObject([{ lane_key: expectedLaneKey, status: "claimed" }]);
+          expect(getMe).toHaveBeenCalledTimes(expectedGetMeCalls);
+          expect(bot.botInfo).toBe(botInfo);
+        } finally {
+          releaseHandler?.();
+          abort.abort();
+          await runPromise;
+        }
+      });
+    },
+  );
 
   it("spools, persists the actual update id, then acknowledges", async () => {
     await withTempSpool(async (tempDir) => {
@@ -3507,6 +3616,7 @@ describe("TelegramPollingSession", () => {
         listener?.({
           type: "poll-error",
           message: "Unauthorized",
+          errorCode: 401,
           finishedAt: Date.now(),
         });
         throw new Error("Telegram ingress worker exited with code 1");
@@ -3532,7 +3642,10 @@ describe("TelegramPollingSession", () => {
       expectLogExcludes(log, "isolated polling ingress failed");
       expect(
         statusPatches(setStatus).some(
-          (patch) => patch.connected === false && patch.lastError === "Unauthorized",
+          (patch) =>
+            patch.connected === false &&
+            patch.lifecycle === "blocked" &&
+            patch.lastError === "Unauthorized",
         ),
       ).toBe(true);
     } finally {
@@ -4130,6 +4243,7 @@ describe("TelegramPollingSession", () => {
     expect(connectedPatch?.lastConnectedAt).toBeTypeOf("number");
     expect(connectedPatch?.lastEventAt).toBeTypeOf("number");
     expect(connectedPatch?.lastTransportActivityAt).toBeTypeOf("number");
+    expect(connectedPatch?.lifecycle).toBe("ready");
     expect(connectedPatch?.lastError).toBeNull();
     expect(connectedPatch?.lastConnectedAt).toBe(connectedPatch?.lastEventAt);
     expect(connectedPatch?.lastTransportActivityAt).toBe(connectedPatch?.lastEventAt);
@@ -4312,6 +4426,7 @@ describe("TelegramPollingSession", () => {
 
     expect(runMock).toHaveBeenCalledTimes(2);
     expectPollingConnectedPatch(statusPatches(setStatus).find((patch) => patch.connected === true));
+    expect(statusPatches(setStatus)).toContainEqual({ lifecycle: "recovering" });
     const disconnectedPatches = statusPatches(setStatus).filter(
       (patch) => patch.connected === false,
     );
@@ -4377,7 +4492,9 @@ describe("TelegramPollingSession", () => {
       expect(
         statusPatches(setStatus).some(
           (patch) =>
-            patch.connected === false && String(patch.lastError).includes("Polling stall detected"),
+            patch.connected === false &&
+            patch.lifecycle === "recovering" &&
+            String(patch.lastError).includes("Polling stall detected"),
         ),
       ).toBe(true);
     } finally {
@@ -4413,7 +4530,9 @@ describe("TelegramPollingSession", () => {
     expect(
       statusPatches(setStatus).some(
         (patch) =>
-          patch.connected === false && String(patch.lastError).includes("Another OpenClaw gateway"),
+          patch.connected === false &&
+          patch.lifecycle === "recovering" &&
+          String(patch.lastError).includes("Another OpenClaw gateway"),
       ),
     ).toBe(true);
   });

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -10,12 +11,22 @@ import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/se
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeBackfillDiaryEntries } from "./dreaming-narrative.js";
 import {
+  clearMemoryCoreWorkspaceNamespace,
+  SESSION_BACKFILL_REWIND_NAMESPACE,
+} from "./dreaming-state.js";
+import {
+  markSessionBackfillRewindBaseline,
+  resetSessionBackfillIngestionState,
+  rewindSessionBackfillIngestionState,
+} from "./session-backfill-lifecycle.js";
+import {
   executeSessionBackfill,
   executeSessionBackfillBatch,
   runSessionBackfill,
 } from "./session-backfill.js";
+import { writeSessionIngestionState } from "./session-ingestion.js";
 import { readShortTermRecallEntries } from "./short-term-promotion.js";
-import { createMemoryCoreTestHarness } from "./test-helpers.js";
+import { createMemoryCoreTestHarness, dreamingTestState } from "./test-helpers.js";
 
 const harness = createMemoryCoreTestHarness();
 
@@ -83,6 +94,19 @@ async function createIsolatedWorkspace(prefix: string): Promise<string> {
   return workspaceDir;
 }
 
+function hashStagedContent(
+  entries: Awaited<ReturnType<typeof readShortTermRecallEntries>>,
+): string {
+  const content = entries
+    .map((entry) => ({
+      claimHash: entry.claimHash,
+      provenance: entry.provenance,
+      snippet: entry.snippet,
+    }))
+    .toSorted((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  return createHash("sha256").update(JSON.stringify(content)).digest("hex");
+}
+
 afterEach(() => {
   vi.unstubAllEnvs();
   clearRuntimeConfigSnapshot();
@@ -90,8 +114,8 @@ afterEach(() => {
 });
 
 describe("runSessionBackfill", () => {
-  it("keeps the CLI export on the canonical shared executor", () => {
-    expect(runSessionBackfill).toBe(executeSessionBackfill);
+  it("keeps CLI draining separate from the single-batch executor", () => {
+    expect(runSessionBackfill).not.toBe(executeSessionBackfill);
   });
 
   it("keeps REM preview mode mutually exclusive with apply", async () => {
@@ -190,6 +214,38 @@ describe("runSessionBackfill", () => {
     expect(exhausted.continuation).toEqual({ advanced: false, hasMore: false });
   });
 
+  it("drains at least three internal batches in one CLI executor invocation", async () => {
+    const workspaceDir = await createIsolatedWorkspace("cli-drain-");
+    await seedCanonicalTranscript(
+      "cli-drain",
+      ["2026-01-01", "2026-01-02", "2026-01-03"].map((day) => ({
+        role: "user" as const,
+        content: `CLI drain note for ${day}`,
+        timestamp: `${day}T12:00:00.000Z`,
+        owner: true,
+      })),
+    );
+
+    const applied = await runSessionBackfill({
+      agentId: "main",
+      workspaceDir,
+      apply: true,
+      limitDays: 1,
+      timezone: "UTC",
+    });
+    const preview = await runSessionBackfill({
+      agentId: "main",
+      workspaceDir,
+      limitDays: 1,
+      timezone: "UTC",
+    });
+
+    expect(applied.batchCount).toBe(3);
+    expect(applied.batches?.map((batch) => batch.candidates)).toEqual([1, 1, 1]);
+    expect(applied.candidateCount).toBe(3);
+    expect(preview.candidateCount).toBe(0);
+  });
+
   it("does not advance the cursor past messages excluded by a date range", async () => {
     const workspaceDir = await createIsolatedWorkspace("range-cursor-");
     await seedCanonicalTranscript("range-cursor", [
@@ -247,8 +303,9 @@ describe("runSessionBackfill", () => {
         timezone: "UTC",
       });
 
-    expect((await run()).candidateCount).toBe(80);
-    expect((await run()).candidateCount).toBe(20);
+    const drained = await run();
+    expect(drained.candidateCount).toBe(100);
+    expect(drained.batchCount).toBe(2);
     expect((await run()).candidateCount).toBe(0);
     const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     expect(dreams.match(/openclaw:dreaming:backfill-entry/g)).toHaveLength(2);
@@ -461,6 +518,7 @@ describe("runSessionBackfill", () => {
       timezone: "UTC",
     });
     const afterFirst = await readShortTermRecallEntries({ workspaceDir });
+    const firstContentHash = hashStagedContent(afterFirst);
 
     // Count-level proof stays stable across the sibling claim-key implementation.
     expect(first.stagedEntries).toBe(1);
@@ -494,15 +552,172 @@ describe("runSessionBackfill", () => {
     expect(await fs.readFile(dreamsPath, "utf-8")).not.toContain(
       "openclaw:dreaming:backfill-entry",
     );
+    const reapplied = await runSessionBackfill({
+      agentId: "main",
+      workspaceDir,
+      apply: true,
+      nowMs: Date.parse("2026-03-02T12:00:00.000Z"),
+      timezone: "UTC",
+    });
+    const afterReapply = await readShortTermRecallEntries({ workspaceDir });
+    expect(reapplied.candidateCount).toBe(2);
+    expect(hashStagedContent(afterReapply)).toBe(firstContentHash);
+  });
+
+  it("resets agent ingestion state when legacy staged entries have no rewind journal", async () => {
+    const workspaceDir = await createIsolatedWorkspace("legacy-rollback-");
+    await seedCanonicalTranscript("legacy", [
+      {
+        role: "user",
+        content: "The preferred terminal is Ghostty",
+        timestamp: "2026-04-01T10:00:00.000Z",
+        owner: true,
+      },
+    ]);
+    const applyParams = {
+      agentId: "main",
+      workspaceDir,
+      apply: true,
+      nowMs: Date.parse("2026-04-02T12:00:00.000Z"),
+      timezone: "UTC",
+    } as const;
+
+    await runSessionBackfill(applyParams);
+    const firstContentHash = hashStagedContent(await readShortTermRecallEntries({ workspaceDir }));
+    await clearMemoryCoreWorkspaceNamespace({
+      namespace: SESSION_BACKFILL_REWIND_NAMESPACE,
+      workspaceDir,
+    });
+
+    const rollback = await runSessionBackfill({
+      agentId: "main",
+      workspaceDir,
+      rollback: true,
+    });
+    const preview = await runSessionBackfill({
+      agentId: "main",
+      workspaceDir,
+      timezone: "UTC",
+    });
+    const reapplied = await runSessionBackfill(applyParams);
+    const afterReapply = await readShortTermRecallEntries({ workspaceDir });
+
+    expect(rollback.rollback).toEqual({
+      removedDiaryEntries: 1,
+      removedStagedEntries: 1,
+    });
+    expect(preview.candidateCount).toBe(1);
+    expect(reapplied.candidateCount).toBe(1);
+    expect(hashStagedContent(afterReapply)).toBe(firstContentHash);
+
+    const stateAfterReapply = await dreamingTestState.readSessionIngestionState(workspaceDir);
+    const scope = Object.keys(stateAfterReapply.seenMessages)[0];
+    if (!scope) {
+      throw new Error("Expected re-applied session ingestion scope");
+    }
+    await writeSessionIngestionState(workspaceDir, {
+      ...stateAfterReapply,
+      seenMessages: {
+        ...stateAfterReapply.seenMessages,
+        [scope]: [...(stateAfterReapply.seenMessages[scope] ?? []), "later-live"],
+      },
+    });
+    await runSessionBackfill({ agentId: "main", workspaceDir, rollback: true });
     expect(
-      (
-        await runSessionBackfill({
-          agentId: "main",
-          workspaceDir,
-          apply: true,
-          timezone: "UTC",
-        })
-      ).candidateCount,
-    ).toBe(0);
+      (await dreamingTestState.readSessionIngestionState(workspaceDir)).seenMessages[scope],
+    ).toEqual(["later-live"]);
+  });
+
+  it("resets mixed legacy state when later journal rows do not prove complete coverage", async () => {
+    const workspaceDir = await createIsolatedWorkspace("mixed-legacy-rollback-");
+    const applyParams = {
+      agentId: "main",
+      workspaceDir,
+      apply: true,
+      nowMs: Date.parse("2026-05-03T12:00:00.000Z"),
+      timezone: "UTC",
+    } as const;
+    await seedCanonicalTranscript("legacy-mixed", [
+      {
+        role: "user",
+        content: "The preferred shell is zsh",
+        timestamp: "2026-05-01T10:00:00.000Z",
+        owner: true,
+      },
+    ]);
+    await runSessionBackfill(applyParams);
+    await clearMemoryCoreWorkspaceNamespace({
+      namespace: SESSION_BACKFILL_REWIND_NAMESPACE,
+      workspaceDir,
+    });
+    await seedCanonicalTranscript("journaled-mixed", [
+      {
+        role: "user",
+        content: "The preferred pager is less",
+        timestamp: "2026-05-02T10:00:00.000Z",
+        owner: true,
+      },
+    ]);
+    await runSessionBackfill(applyParams);
+    const firstContentHash = hashStagedContent(await readShortTermRecallEntries({ workspaceDir }));
+
+    await runSessionBackfill({ agentId: "main", workspaceDir, rollback: true });
+    const preview = await runSessionBackfill({ agentId: "main", workspaceDir, timezone: "UTC" });
+    const reapplied = await runSessionBackfill(applyParams);
+
+    expect(preview.candidateCount).toBe(2);
+    expect(reapplied.candidateCount).toBe(2);
+    expect(hashStagedContent(await readShortTermRecallEntries({ workspaceDir }))).toBe(
+      firstContentHash,
+    );
+  });
+
+  it("keeps other agents' archived scopes when resetting an agent named archive", async () => {
+    const workspaceDir = await createIsolatedWorkspace("archive-agent-reset-");
+    const fileState = {
+      mtimeMs: 1,
+      size: 1,
+      contentHash: "hash",
+      lineCount: 1,
+      lastContentLine: 1,
+    };
+    await writeSessionIngestionState(workspaceDir, {
+      version: 3,
+      files: {
+        "archive:sessions/archive/own": fileState,
+        "main:sessions/main/other": fileState,
+      },
+      seenMessages: {
+        "archive:sessions/archive/own": ["own-live"],
+        "archive:archive:/tmp/own.jsonl": ["own-archive"],
+        "archive:main:/tmp/other.jsonl": ["other-archive"],
+        "main:sessions/main/other": ["other-live"],
+      },
+    });
+
+    await resetSessionBackfillIngestionState({ workspaceDir, agentId: "archive" });
+
+    expect(await dreamingTestState.readSessionIngestionState(workspaceDir)).toEqual({
+      version: 3,
+      files: { "main:sessions/main/other": fileState },
+      seenMessages: {
+        "archive:main:/tmp/other.jsonl": ["other-archive"],
+        "main:sessions/main/other": ["other-live"],
+      },
+    });
+  });
+
+  it("does not share a clean rewind baseline across agents", async () => {
+    const workspaceDir = await createIsolatedWorkspace("agent-baseline-");
+    await markSessionBackfillRewindBaseline({ workspaceDir, agentId: "main" });
+
+    expect(await rewindSessionBackfillIngestionState({ workspaceDir, agentId: "other" })).toEqual({
+      completeCoverage: false,
+      rewoundCandidates: 0,
+    });
+    expect(await rewindSessionBackfillIngestionState({ workspaceDir, agentId: "main" })).toEqual({
+      completeCoverage: true,
+      rewoundCandidates: 0,
+    });
   });
 });

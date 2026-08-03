@@ -12,9 +12,13 @@ import {
   validateWizardStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OnboardOptions } from "../../commands/onboard-types.js";
-import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { createNonExitingRuntime, ExitError, type RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
-import { WizardSession } from "../../wizard/session.js";
+import {
+  sanitizeWizardStepForClient,
+  WizardSession,
+  type WizardStep,
+} from "../../wizard/session.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -45,11 +49,28 @@ export const runDefaultChannelSetupWizard: ChannelSetupWizardRunner = async (...
   return runChannelsSetupWizard(...args);
 };
 
+async function runHostedWizard(run: (runtime: RuntimeEnv) => Promise<void>): Promise<void> {
+  try {
+    await run(createNonExitingRuntime());
+  } catch (error) {
+    // Hosted wizards share the Gateway process; a successful CLI-style exit
+    // must complete only its session, while failures remain session errors.
+    if (error instanceof ExitError && error.code === 0) {
+      return;
+    }
+    throw error;
+  }
+}
+
 function readWizardStatus(session: WizardSession) {
   return {
     status: session.getStatus(),
     error: session.getError(),
   };
+}
+
+function sanitizeWizardResultForClient<T extends { step?: WizardStep }>(result: T): T {
+  return result.step ? { ...result, step: sanitizeWizardStepForClient(result.step) } : result;
 }
 
 /** Resolves a live wizard session or sends the public not-found error. */
@@ -88,26 +109,31 @@ export const wizardHandlers: GatewayRequestHandlers = {
     const session =
       flow === "channels"
         ? new WizardSession((prompter, _signal, wizardSession) =>
-            context.channelWizardRunner(
-              {
-                channel: readStringValue(params.channel),
-                onConfigured: (accounts) => wizardSession.setConfiguredAccounts(accounts),
-                // Durable effects (plugin installs, config commit) must finish
-                // even if the client cancels mid-write.
-                beforePersistentEffect: async () => wizardSession.lockCancellation(),
-              },
-              defaultRuntime,
-              prompter,
+            runHostedWizard((runtime) =>
+              context.channelWizardRunner(
+                {
+                  channel: readStringValue(params.channel),
+                  onConfigured: (accounts) => wizardSession.setConfiguredAccounts(accounts),
+                  // Durable effects (plugin installs, config commit) must finish
+                  // even if the client cancels mid-write.
+                  beforePersistentEffect: async () => wizardSession.lockCancellation(),
+                },
+                runtime,
+                prompter,
+              ),
             ),
           )
         : new WizardSession((prompter) =>
-            context.wizardRunner(
-              {
-                mode: params.mode,
-                workspace: readStringValue(params.workspace),
-              },
-              defaultRuntime,
-              prompter,
+            runHostedWizard((runtime) =>
+              context.wizardRunner(
+                {
+                  mode: params.mode,
+                  workspace: readStringValue(params.workspace),
+                  installDaemon: params.installDaemon,
+                },
+                runtime,
+                prompter,
+              ),
             ),
           );
     context.wizardSessions.set(sessionId, session);
@@ -117,7 +143,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
       // clients get a clean not-found response for stale session ids.
       context.purgeWizardSession(sessionId);
     }
-    respond(true, { sessionId, ...result }, undefined);
+    respond(true, { sessionId, ...sanitizeWizardResultForClient(result) }, undefined);
   },
   "wizard.next": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateWizardNextParams, "wizard.next", respond)) {
@@ -137,7 +163,14 @@ export const wizardHandlers: GatewayRequestHandlers = {
       try {
         const validationError = await session.answer(answer.stepId ?? "", answer.value);
         if (validationError) {
-          respond(true, { ...(await session.next()), error: validationError }, undefined);
+          respond(
+            true,
+            {
+              ...sanitizeWizardResultForClient(await session.next()),
+              error: validationError,
+            },
+            undefined,
+          );
           return;
         }
       } catch (err) {
@@ -151,7 +184,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
       // wizard.start's immediate-completion path.
       context.purgeWizardSession(sessionId);
     }
-    respond(true, result, undefined);
+    respond(true, sanitizeWizardResultForClient(result), undefined);
   },
   "wizard.cancel": ({ params, respond, context }) => {
     if (!assertValidParams(params, validateWizardCancelParams, "wizard.cancel", respond)) {
@@ -164,8 +197,10 @@ export const wizardHandlers: GatewayRequestHandlers = {
     }
     const cancelled = session.cancel();
     const status = readWizardStatus(session);
-    if (cancelled || status.status !== "running") {
-      context.wizardSessions.delete(sessionId);
+    if (cancelled) {
+      void session.whenSettled().then(() => context.purgeWizardSession(sessionId));
+    } else {
+      context.purgeWizardSession(sessionId);
     }
     respond(true, status, undefined);
   },
@@ -179,9 +214,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
       return;
     }
     const status = readWizardStatus(session);
-    if (status.status !== "running") {
-      context.wizardSessions.delete(sessionId);
-    }
+    context.purgeWizardSession(sessionId);
     respond(true, status, undefined);
   },
 };

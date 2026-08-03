@@ -1,5 +1,6 @@
 // Line plugin module implements monitor behavior.
 import type { webhook } from "@line/bot-sdk";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -53,6 +54,7 @@ interface MonitorLineProviderOptions {
   abortSignal?: AbortSignal;
   webhookUrl?: string;
   webhookPath?: string;
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }
 
 interface LineProviderMonitor {
@@ -120,6 +122,7 @@ export async function monitorLineProvider(
     runtime,
     abortSignal,
     webhookPath,
+    statusSink,
   } = opts;
   const resolvedAccountId = accountId ?? resolveDefaultLineAccountId(config);
   const token = channelAccessToken.trim();
@@ -376,6 +379,8 @@ export async function monitorLineProvider(
           if (body.events && body.events.length > 0) {
             logVerbose(`line: received ${body.events.length} webhook events`);
             await match.target.bot.handleWebhook(body);
+            // Only a committed event is adopted; signed LINE verification pings must stay unmarked.
+            res.setHeader("x-openclaw-delivery-accepted", "durable");
           }
           res.statusCode = 200;
           res.setHeader("Content-Type", "application/json");
@@ -407,6 +412,13 @@ export async function monitorLineProvider(
   });
 
   logVerbose(`line: registered webhook handler at ${normalizedPath}`);
+  statusSink?.({
+    connected: true,
+    lifecycle: "ready",
+    lastConnectedAt: Date.now(),
+    lastError: null,
+    terminalDisconnect: undefined,
+  });
 
   let stopped = false;
   let stopPromise: Promise<void> | undefined;
@@ -420,7 +432,9 @@ export async function monitorLineProvider(
     stopped = true;
     logVerbose(`line: stopping provider for account ${resolvedAccountId}`);
     unregisterHttp();
-    stopPromise = bot.stop();
+    stopPromise = bot.stop().finally(() => {
+      statusSink?.({ running: false, connected: false, lifecycle: "stopped" });
+    });
     return stopPromise;
   };
   const stopOnAbort = () => void stopHandler();

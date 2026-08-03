@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   decodeSessionArchiveBytes,
   encodeSessionArchiveContent,
@@ -24,15 +25,19 @@ import {
   unregisterOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db-registry.js";
 import { assertOpenClawAgentSchemaContains } from "../state/openclaw-agent-db-schema-helpers.js";
-import { migrateOpenClawAgentDatabaseToMediaPrerequisiteSchema } from "../state/openclaw-agent-db-schema.js";
+import {
+  ensureOpenClawAgentDatabaseSchema,
+  migrateOpenClawAgentDatabaseToMediaPrerequisiteSchema,
+} from "../state/openclaw-agent-db-schema.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.generated.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import { VERSION } from "../version.js";
+import { repairGatewayAgentMediaMigrationStartupFailures } from "./gateway-boot-lifecycle.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -83,10 +88,6 @@ type ArchiveSourceSnapshot = {
   sha256: string;
   size: number;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function transformTranscriptEvent(event: TranscriptEvent): {
   changed: boolean;
@@ -344,6 +345,14 @@ function migrateRegisteredDatabase(params: {
         `${params.pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${userVersion}`,
       );
     }
+    if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION) {
+      // Doctor can encounter a current-version database before newly additive schema exists.
+      // Converge it through the canonical agent-schema owner before media validation.
+      ensureOpenClawAgentDatabaseSchema(database, {
+        agentId: params.agentId,
+        path: params.pathname,
+      });
+    }
     // Remove after 2026-10-12: drop the v15-to-v16 media cutover once schema 16 is the support floor.
     if (userVersion === PREVIOUS_MEDIA_SCHEMA_VERSION) {
       repairCanonicalSqliteIndexes(database, params.pathname, OPENCLAW_AGENT_SCHEMA_SQL, {
@@ -598,6 +607,7 @@ export function migrateLegacyMediaPersistence(
   }
 
   const seenPaths = new Set<string>();
+  let databaseMigrationFailed = false;
   const archiveDirectories = new Set<string>();
   for (const entry of registered) {
     const pathname = path.resolve(entry.path);
@@ -652,7 +662,20 @@ export function migrateLegacyMediaPersistence(
         );
       }
     } catch (error) {
+      databaseMigrationFailed = true;
       warnings.push(`Skipped media persistence migration for ${pathname}: ${String(error)}`);
+    }
+  }
+
+  if (!databaseMigrationFailed && seenPaths.size > 0) {
+    const repairedFailures = repairGatewayAgentMediaMigrationStartupFailures({
+      databasePaths: [...seenPaths],
+      env,
+    });
+    if (repairedFailures > 0) {
+      changes.push(
+        `Repaired ${repairedFailures} gateway startup failure ${repairedFailures === 1 ? "record" : "records"} after media migration.`,
+      );
     }
   }
 

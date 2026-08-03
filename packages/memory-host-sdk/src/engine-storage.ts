@@ -17,6 +17,7 @@ export {
   remapChunkLines,
   runWithConcurrency,
   splitCuratedMarkdownEntries,
+  stripMemoryAnnotationCarriers,
   type CuratedMarkdownEntry,
   type CuratedProjectAnnotations,
   type MemoryChunk,
@@ -32,6 +33,7 @@ export {
   type MemoryReadResult,
 } from "./host/read-file-shared.js";
 export { resolveMemoryBackendConfig } from "./host/backend-config.js";
+export { resolveMemorySearchStaleness } from "./host/types.js";
 export type {
   ResolvedMemoryBackendConfig,
   ResolvedQmdConfig,
@@ -55,11 +57,12 @@ export {
   dropMemoryPathFtsTriggers,
   ensureMemoryChunkProvenance,
   ensureMemoryIndexSchema,
-  ensureMemoryRecallMetadataColumns,
+  ensureMemoryRecallMetadataSchema,
   ensureMemoryPathFtsTriggers,
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_CHUNKS_TABLE,
   MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
+  MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_META_TABLE,
   MEMORY_INDEX_PATHS_FTS_TABLE,

@@ -123,11 +123,10 @@ describe("loginOpenAICodexDeviceCode", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(fetchMock).toHaveBeenCalledOnce();
-    const rejected = expect(login).rejects.toThrow(
-      "OpenAI device code user code request timed out after 30000ms",
-    );
-    await vi.advanceTimersByTimeAsync(30_000);
-    await rejected;
+    await Promise.all([
+      expect(login).rejects.toThrow("OpenAI device code user code request timed out after 30000ms"),
+      vi.advanceTimersByTimeAsync(30_000),
+    ]);
   });
 
   it("still honors caller cancellation during an active device-code request", async () => {

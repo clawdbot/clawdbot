@@ -70,7 +70,7 @@
     },
     {
       "source": "/concepts/qa-matrix",
-      "destination": "/concepts/qa-e2e-automation#matrix-smoke-lanes"
+      "destination": "/concepts/qa-e2e-automation#matrix-live-lane"
     },
     {
       "source": "/plugins/reference/qa-matrix",
@@ -1110,6 +1110,7 @@
                 "group": "Hosting",
                 "pages": [
                   "install/azure",
+                  "install/daytona",
                   "install/digitalocean",
                   "install/docker-vm-runtime",
                   "install/exe-dev",
@@ -1519,6 +1520,7 @@
                   "providers/deepseek",
                   "providers/ds4",
                   "providers/elevenlabs",
+                  "providers/fish-audio",
                   "providers/fal",
                   "providers/featherless",
                   "providers/fireworks",
@@ -1724,6 +1726,7 @@
                 "pages": [
                   "gateway/remote",
                   "gateway/remote-gateway-readme",
+                  "gateway/stable-https-url",
                   "gateway/tailscale"
                 ]
               },
@@ -1746,6 +1749,7 @@
                     "group": "Media capabilities",
                     "pages": [
                       "nodes/media-understanding",
+                      "nodes/media-playback",
                       "nodes/images",
                       "nodes/audio",
                       "nodes/camera",

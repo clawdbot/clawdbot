@@ -22,7 +22,7 @@ vi.mock("../../config/sessions.js", async (importOriginal) => ({
     resolveExistingAgentSessionStoreTargetsSyncMock(...args),
 }));
 
-import { sessionsHandlers } from "./sessions.js";
+import { sessionReadHandlers } from "./sessions-read.js";
 
 let cfg: Record<string, unknown> = {
   agents: { list: [{ id: "main", default: true }, { id: "work" }] },
@@ -35,8 +35,8 @@ async function callSearch(
 ): Promise<ReturnType<typeof vi.fn>> {
   const respond = vi.fn();
   await expectDefined(
-    sessionsHandlers["sessions.search"],
-    'sessionsHandlers["sessions.search"] test invariant',
+    sessionReadHandlers["sessions.search"],
+    'sessionReadHandlers["sessions.search"] test invariant',
   )({
     req: { id: "req-search" } as never,
     params,

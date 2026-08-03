@@ -41,6 +41,38 @@ function linkRequiredShellTools(bin: string) {
 describe("install-cli.sh", () => {
   const script = readFileSync(SCRIPT_PATH, "utf8");
 
+  it("rejects a git checkout without a commit before updating it", () => {
+    const result = runInstallCliShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      tmp="$(mktemp -d)"
+      repo="$tmp/repo"
+      mkdir -p "$repo/.git"
+      ensure_git() { :; }
+      ensure_pnpm() { :; }
+      ensure_pnpm_binary_for_scripts() { :; }
+      git() {
+        [[ "$1" == "--git-dir=$repo/.git" ]] &&
+          [[ "$2" == "--work-tree=$repo" ]] &&
+          [[ "$3" == "rev-parse" ]] &&
+          [[ "$4" == "--verify" ]] &&
+          [[ "$5" == "--quiet" ]] &&
+          [[ "$6" == "HEAD^{commit}" ]] &&
+          return 1
+        return 99
+      }
+
+      set +e
+      (install_openclaw_from_git "$repo")
+      status="$?"
+      set -e
+      [[ "$status" -eq 1 ]]
+      [[ -d "$repo/.git" ]]
+    `);
+
+    expect(result.status).toBe(0);
+  });
+
   it("bounds stalled curl downloads and propagates timeout failures", () => {
     const result = runInstallCliShell(`
       set -euo pipefail

@@ -9,6 +9,7 @@ import type {
   SignalReactionNotificationMode,
 } from "openclaw/plugin-sdk/config-contracts";
 import {
+  canonicalizeBase64,
   detectMime,
   estimateBase64DecodedBytes,
   saveMediaBuffer,
@@ -47,7 +48,8 @@ import { isSignalNativeApprovalHandlerConfigured } from "./approval-native.js";
 import { addSignalApprovalReactionHintToStructuredPayload } from "./approval-reactions.js";
 import { signalRpcRequest, signalCheck } from "./client-adapter.js";
 import type { SignalTransportKind } from "./client-adapter.js";
-import { formatSignalDaemonExit, spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
+import { createSignalDaemonLifecycle } from "./daemon-lifecycle.js";
+import { spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
 import { isSignalSenderAllowed, type resolveSignalSender } from "./identity.js";
 import { createSignalEventHandler } from "./monitor/event-handler.js";
 import type {
@@ -60,7 +62,11 @@ import { materializeSignalPresentationFallback } from "./presentation-fallback.j
 import { registerSignalReactionTargetsForDeliveredPayload } from "./reaction-targets.js";
 import { sendMessageSignal } from "./send.js";
 import { startSignalIngressMonitor, type SignalIngressMonitor } from "./signal-ingress.js";
-import { runSignalSseLoop } from "./sse-reconnect.js";
+import {
+  publishSignalRecovering,
+  runSignalSseLoop,
+  type SignalStatusSink,
+} from "./sse-reconnect.js";
 
 export type MonitorSignalOpts = {
   runtime?: RuntimeEnv;
@@ -85,6 +91,7 @@ export type MonitorSignalOpts = {
   mediaMaxMb?: number;
   reconnectPolicy?: Partial<BackoffPolicy>;
   waitForTransportReady?: typeof waitForTransportReady;
+  statusSink?: SignalStatusSink;
 };
 
 function createSignalMonitorTaskRunner(runtime: RuntimeEnv) {
@@ -104,49 +111,6 @@ function createSignalMonitorTaskRunner(runtime: RuntimeEnv) {
         await Promise.allSettled(inFlight);
       }
     },
-  };
-}
-
-function createSignalDaemonLifecycle(params: { abortSignal?: AbortSignal }) {
-  let daemonHandle: SignalDaemonHandle | null = null;
-  let daemonStopRequested = false;
-  let daemonStopPromise: Promise<void> | undefined;
-  let daemonExitError: Error | undefined;
-  const daemonAbortController = new AbortController();
-  const abortSignal = params.abortSignal
-    ? AbortSignal.any([params.abortSignal, daemonAbortController.signal])
-    : daemonAbortController.signal;
-  const stop = (): Promise<void> => {
-    if (daemonStopPromise) {
-      return daemonStopPromise;
-    }
-    daemonStopRequested = true;
-    if (!daemonAbortController.signal.aborted) {
-      daemonAbortController.abort(
-        params.abortSignal?.reason ?? new Error("Signal monitor stopped"),
-      );
-    }
-    daemonStopPromise = daemonHandle?.stop() ?? Promise.resolve();
-    return daemonStopPromise;
-  };
-  const attach = (handle: SignalDaemonHandle) => {
-    daemonHandle = handle;
-    void handle.exited.then((exit) => {
-      if (daemonStopRequested || params.abortSignal?.aborted) {
-        return;
-      }
-      daemonExitError = new Error(formatSignalDaemonExit(exit));
-      if (!daemonAbortController.signal.aborted) {
-        daemonAbortController.abort(daemonExitError);
-      }
-    });
-  };
-  const getExitError = () => daemonExitError;
-  return {
-    attach,
-    stop,
-    getExitError,
-    abortSignal,
   };
 }
 
@@ -182,26 +146,31 @@ function isSignalReactionMessage(
 function shouldEmitSignalReactionNotification(params: {
   mode?: SignalReactionNotificationMode;
   account?: string | null;
+  accountUuid?: string | null;
   targets?: SignalReactionTarget[];
   sender?: ReturnType<typeof resolveSignalSender> | null;
   allowlist?: string[];
 }) {
-  const { mode, account, targets, sender, allowlist } = params;
+  const { mode, account, accountUuid, targets, sender, allowlist } = params;
   const effectiveMode = mode ?? "own";
   if (effectiveMode === "off") {
     return false;
   }
   if (effectiveMode === "own") {
-    const accountId = account?.trim();
-    if (!accountId || !targets || targets.length === 0) {
+    const accountId = normalizeOptionalString(account);
+    const normalizedAccountUuid = normalizeOptionalString(accountUuid);
+    if ((!accountId && !normalizedAccountUuid) || !targets || targets.length === 0) {
       return false;
     }
-    const normalizedAccount = normalizeE164(accountId);
+    const normalizedAccount = accountId ? normalizeE164(accountId) : undefined;
     return targets.some((target) => {
       if (target.kind === "uuid") {
-        return accountId === target.id || accountId === `uuid:${target.id}`;
+        // UUID-only reaction payloads omit the phone identity carried by account.
+        return [accountId, normalizedAccountUuid].some(
+          (candidate) => candidate === target.id || candidate === `uuid:${target.id}`,
+        );
       }
-      return normalizedAccount === target.id;
+      return Boolean(normalizedAccount) && normalizedAccount === target.id;
     });
   }
   if (effectiveMode === "allowlist") {
@@ -315,7 +284,11 @@ async function fetchAttachment(params: {
       `Signal attachment ${attachment.id} exceeds ${(params.maxBytes / (1024 * 1024)).toFixed(0)}MB limit`,
     );
   }
-  const buffer = Buffer.from(result.data, "base64");
+  const canonicalData = canonicalizeBase64(result.data);
+  if (!canonicalData) {
+    throw new Error(`Signal attachment ${attachment.id} returned malformed base64 data`);
+  }
+  const buffer = Buffer.from(canonicalData, "base64");
   const originalFilename = normalizeOptionalString(attachment.filename ?? undefined);
   const contentType =
     normalizeOptionalString(attachment.contentType ?? undefined) ??
@@ -697,6 +670,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       timeoutMs: 0,
       transportKind,
       policy: opts.reconnectPolicy,
+      statusSink: opts.statusSink,
       onEvent: (event) =>
         monitorTaskRunner.runTask(async () => await ingressMonitor?.receive(event)),
     });
@@ -708,6 +682,9 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     const daemonExitError = daemonLifecycle.getExitError();
     if (opts.abortSignal?.aborted && !daemonExitError) {
       return;
+    }
+    if (daemonExitError) {
+      publishSignalRecovering(opts.statusSink, daemonExitError.message);
     }
     throw err;
   } finally {

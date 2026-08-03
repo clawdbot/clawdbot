@@ -14,7 +14,8 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
-import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { applyXaiOAuthConfig, XAI_OAUTH_DEFAULT_MODEL_REF } from "./onboard.js";
 import { xaiUserAgent } from "./src/xai-user-agent.js";
 
 const PROVIDER_ID = "xai";
@@ -113,12 +114,6 @@ function requireTrustedXaiOAuthEndpoint(endpoint: string, label: string): string
   return endpoint;
 }
 
-function readStringRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
 async function readResponseBody(response: Response): Promise<XaiOAuthResponseBody> {
   const buffer = await readResponseWithLimit(response, XAI_OAUTH_RESPONSE_MAX_BYTES, {
     onOverflow: ({ maxBytes }) => new Error(`xAI OAuth response exceeds ${maxBytes} bytes`),
@@ -136,8 +131,8 @@ async function readResponseBody(response: Response): Promise<XaiOAuthResponseBod
 async function readJsonResponse(response: Response, context: string): Promise<unknown> {
   const body = await readResponseBody(response);
   if (!response.ok) {
-    const errorText =
-      readStringRecord(body.json).error_description ?? readStringRecord(body.json).error;
+    const json = asOptionalRecord(body.json);
+    const errorText = json?.error_description ?? json?.error;
     throw new Error(
       `${context} failed (${response.status})${typeof errorText === "string" ? `: ${errorText}` : ""}`,
     );
@@ -155,7 +150,7 @@ async function fetchXaiOAuthDiscoveryDocument(
     },
     signal: xaiOAuthFetchSignal(options.signal),
   });
-  return readStringRecord(await readJsonResponse(response, "xAI OAuth discovery"));
+  return asOptionalRecord(await readJsonResponse(response, "xAI OAuth discovery")) ?? {};
 }
 
 async function fetchXaiOAuthDiscovery(
@@ -198,7 +193,7 @@ function parseXaiOAuthTokenResponse(
   now: () => number,
   options: { requireRefreshToken?: boolean } = {},
 ): XaiOAuthTokenResponse {
-  const json = readStringRecord(value);
+  const json = asOptionalRecord(value) ?? {};
   const accessToken = json.access_token;
   if (typeof accessToken !== "string" || accessToken.trim().length === 0) {
     throw new Error("xAI OAuth token response is missing access_token");
@@ -238,7 +233,7 @@ function deriveExpiresFromJwt(token: string | undefined): number | undefined {
 }
 
 function parseXaiOAuthErrorResponse(value: unknown): XaiOAuthErrorResponse {
-  const json = readStringRecord(value);
+  const json = asOptionalRecord(value) ?? {};
   const error = typeof json.error === "string" ? json.error : undefined;
   const errorDescription =
     typeof json.error_description === "string" ? json.error_description : undefined;
@@ -380,7 +375,7 @@ async function requestXaiDeviceCode(
       signal: xaiOAuthFetchSignal(params.signal),
     },
   );
-  const json = readStringRecord(await readJsonResponse(response, "xAI device code request"));
+  const json = asOptionalRecord(await readJsonResponse(response, "xAI device code request")) ?? {};
   const deviceCode = json.device_code;
   const userCode = json.user_code;
   const verificationUri = json.verification_uri;
@@ -536,7 +531,7 @@ function decodeJwtPayload(token: string | undefined): Record<string, unknown> {
     return {};
   }
   try {
-    return readStringRecord(JSON.parse(Buffer.from(part, "base64url").toString("utf8")));
+    return asOptionalRecord(JSON.parse(Buffer.from(part, "base64url").toString("utf8"))) ?? {};
   } catch {
     return {};
   }
@@ -651,14 +646,14 @@ async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<ProviderAut
     progress.stop("xAI OAuth complete");
     return buildOauthProviderAuthResult({
       providerId: PROVIDER_ID,
-      defaultModel: XAI_DEFAULT_MODEL_REF,
+      defaultModel: XAI_OAUTH_DEFAULT_MODEL_REF,
       access: tokens.accessToken,
       refresh: tokens.refreshToken,
       expires: tokens.expires,
       email: identity.email,
       displayName: identity.displayName,
       profileName: identity.email ?? identity.accountId,
-      configPatch: applyXaiConfig(ctx.config),
+      configPatch: applyXaiOAuthConfig(ctx.config),
       credentialExtra: {
         tokenEndpoint: discovery.tokenEndpoint,
         deviceAuthorizationEndpoint: discovery.deviceAuthorizationEndpoint,

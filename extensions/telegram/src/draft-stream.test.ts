@@ -122,6 +122,49 @@ function createForceNewMessageHarness(params: { throttleMs?: number } = {}) {
 }
 
 describe("createTelegramDraftStream", () => {
+  it("materializes only the newest lazy partial in a throttle window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const api = createMockDraftApi();
+      const stream = createDraftStream(api, { throttleMs: 250 });
+      let materializeCount = 0;
+
+      for (let index = 1; index <= 24; index += 1) {
+        stream.updateLazy(() => {
+          materializeCount += 1;
+          return `partial ${index}`;
+        });
+      }
+
+      expect(materializeCount).toBe(0);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(materializeCount).toBe(1);
+      expectPreviewSend(api, "partial 24");
+
+      vi.setSystemTime(500);
+      stream.updateLazy(() => {
+        materializeCount += 1;
+        return undefined;
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(materializeCount).toBe(2);
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
+      expect(api.editMessageText).not.toHaveBeenCalled();
+
+      stream.updateLazy(() => {
+        materializeCount += 1;
+        return "visible after empty";
+      });
+      await vi.advanceTimersByTimeAsync(250);
+      expect(materializeCount).toBe(3);
+      expectPreviewEdit(api, "visible after empty");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reports the provider response after the first preview becomes durable", async () => {
     const api = createMockDraftApi(async () => ({ message_id: 101, message_thread_id: 99 }));
     const onProviderMessage = vi.fn();
@@ -309,6 +352,75 @@ describe("createTelegramDraftStream", () => {
     expect(api.sendMessage).toHaveBeenCalledWith(123, "<b>Shelling</b>\n🧠 <i>Thinking</i>", {
       parse_mode: "HTML",
     });
+  });
+
+  it("disables link previews on the streamed send and on every edit", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      linkPreview: false,
+      thread: { id: 42, scope: "dm" },
+      replyToMessageId: 411,
+      replyToMode: "all",
+    });
+
+    stream.update("see https://example.com");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "see https://example.com", {
+      message_thread_id: 42,
+      reply_parameters: {
+        message_id: 411,
+        allow_sending_without_reply: true,
+      },
+      link_preview_options: { is_disabled: true },
+    });
+
+    // The edit matters as much as the send: Telegram re-enables the preview on
+    // any edit that omits the field, and finalization skips the edit when the
+    // streamed draft already equals the final text.
+    stream.update("see https://example.com now");
+    await stream.flush();
+
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "see https://example.com now", {
+      link_preview_options: { is_disabled: true },
+    });
+  });
+
+  it("keeps parse_mode alongside disabled link previews on the HTML transport", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      linkPreview: false,
+      renderText: (text) => ({ text: `<i>${text}</i>`, parseMode: "HTML" }),
+    });
+
+    stream.update("https://example.com");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "<i>https://example.com</i>", {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+
+    stream.update("https://example.com/two");
+    await stream.flush();
+
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "<i>https://example.com/two</i>", {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+  });
+
+  it("omits link_preview_options entirely when linkPreview is not disabled", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api);
+
+    stream.update("see https://example.com");
+    await stream.flush();
+    stream.update("see https://example.com now");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "see https://example.com", {});
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "see https://example.com now");
   });
 
   it("finalizeToPreview edits the live window message in place without deleting", async () => {

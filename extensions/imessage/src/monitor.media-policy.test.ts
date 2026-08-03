@@ -1,5 +1,6 @@
 // Imessage tests cover monitor.media policy plugin behavior.
 import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
+import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -41,7 +42,11 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
     ...actual,
     createChannelInboundDebouncer: vi.fn((opts) => ({
       debouncer: {
-        enqueue: async (entry: unknown) => await opts.onFlush([entry]),
+        enqueue: async (entry: unknown) =>
+          await opts.onFlush([entry], createTestInboundDebounceFlush).completion,
+        flushKey: async () => {},
+        cancelKey: () => false,
+        drain: async () => {},
       },
     })),
     shouldDebounceTextInbound: vi.fn(() => false),

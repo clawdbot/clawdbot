@@ -34,7 +34,7 @@ function findLegacyAgentCommandCallLines(content, fileName = "source.ts") {
 /**
  * Runs the ingress owner-context guard.
  */
-export async function main() {
+async function main() {
   await runCallsiteGuard({
     importMetaUrl: import.meta.url,
     sourceRoots,

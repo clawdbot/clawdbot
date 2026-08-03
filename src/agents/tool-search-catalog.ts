@@ -1,3 +1,5 @@
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { generateSecureToken } from "../infra/secure-random.js";
 import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
@@ -32,6 +34,10 @@ const catalogToolIdentities = new WeakMap<object, number>();
 const untrustedSchemaIdentities = new WeakMap<object, number>();
 let nextCatalogToolIdentity = 1;
 let nextUntrustedSchemaIdentity = 1;
+
+export function getReusableCatalogSnapshotCountForTest(): number {
+  return reusableCatalogSnapshots.size;
+}
 
 function reusableCatalogKey(input: {
   sessionId?: string;
@@ -127,6 +133,7 @@ function restoreToolSearchCatalog(params: {
 }): void {
   const next = {
     entries: params.entries,
+    counterScope: generateSecureToken(12),
     searchCount: 0,
     describeCount: 0,
     callCount: 0,
@@ -147,13 +154,7 @@ function rememberReusableCatalog(key: string | undefined, catalog: ToolSearchCat
     reusableCatalogSnapshots.delete(key);
   }
   reusableCatalogSnapshots.set(key, { entries: catalog.entries, fingerprint });
-  while (reusableCatalogSnapshots.size > MAX_REUSABLE_CATALOG_SNAPSHOTS) {
-    const oldestKey = reusableCatalogSnapshots.keys().next().value;
-    if (!oldestKey) {
-      break;
-    }
-    reusableCatalogSnapshots.delete(oldestKey);
-  }
+  pruneMapToMaxSize(reusableCatalogSnapshots, MAX_REUSABLE_CATALOG_SNAPSHOTS);
 }
 
 function classifyTool(tool: CatalogTool): {
@@ -280,6 +281,9 @@ function registerToolSearchCatalog(params: {
   }
   const next = {
     entries: Array.from(byId.values()).toSorted((a, b) => a.id.localeCompare(b.id)),
+    // Appended client tools extend the same counter lifetime. A replacement
+    // gets a new scope so telemetry consumers never infer resets from values.
+    counterScope: prior?.counterScope ?? generateSecureToken(12),
     searchCount: prior?.searchCount ?? 0,
     describeCount: prior?.describeCount ?? 0,
     callCount: prior?.callCount ?? 0,
@@ -305,6 +309,30 @@ export function clearToolSearchCatalog(params: {
       reusableCatalogSnapshots.delete(snapshotKey);
     }
   }
+}
+
+/** Restricts a run-scoped catalog to an already-resolved set of concrete tool names. */
+export function restrictToolSearchCatalog(params: {
+  catalogRef?: ToolSearchCatalogRef;
+  allowedToolNames: ReadonlySet<string>;
+  baselineEntries?: readonly ToolSearchCatalogEntry[];
+}): number {
+  const current = params.catalogRef?.current;
+  if (!current) {
+    return 0;
+  }
+  const entries = (params.baselineEntries ?? current.entries).filter((entry) =>
+    params.allowedToolNames.has(entry.name),
+  );
+  if (
+    entries.length === current.entries.length &&
+    entries.every((entry, index) => entry === current.entries[index])
+  ) {
+    return entries.length;
+  }
+  current.entries = entries;
+  catalogFingerprints.set(current, catalogEntriesFingerprint(entries));
+  return entries.length;
 }
 
 export function resolveCatalog(ctx: ToolSearchToolContext): ToolSearchCatalogSession {
@@ -410,7 +438,12 @@ export function applyToolCatalogCompaction(
     };
   }
 
-  const reusableKey = reusableCatalogKey(params);
+  // Hook-wrapped entries carry run context and have fresh executable identities, so
+  // their snapshots cannot be reused and would only retain the completed run.
+  const hasHookBoundEntry = catalog.some((entry) =>
+    isToolWrappedWithBeforeToolCallHook(entry.tool as AnyAgentTool),
+  );
+  const reusableKey = hasHookBoundEntry ? undefined : reusableCatalogKey(params);
   const reusableSnapshot = reusableKey ? reusableCatalogSnapshots.get(reusableKey) : undefined;
   if (reusableSnapshot?.fingerprint === incomingFingerprint) {
     restoreToolSearchCatalog({

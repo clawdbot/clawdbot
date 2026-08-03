@@ -216,7 +216,9 @@ dashboards, compiled digests, and wiki-native tools (`wiki_status`,
 
 `memory-wiki` does not replace the active memory plugin; the active memory
 plugin still owns recall, promotion, and dreaming. `memory-wiki` adds a
-provenance-rich knowledge layer beside it.
+provenance-rich knowledge layer beside it. You can browse the compiled wiki
+in the Control UI under Memory → Dreams → Diary → **Memory Wiki**
+([details](/plugins/memory-wiki#browsing-the-wiki-in-the-control-ui)).
 
 <CardGroup cols={1}>
 <Card title="Memory Wiki" icon="book" href="/plugins/memory-wiki">

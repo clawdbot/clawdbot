@@ -6,8 +6,9 @@ import {
   sortPromptCacheToolsByName,
   splitSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
+import { stableStringify } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { stableStringify } from "../stable-stringify.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { NormalizedUsage } from "../usage.js";
 
 type PromptCacheChangeCode =
@@ -169,10 +170,7 @@ function setTracker(key: string, tracker: PromptCacheTracker): void {
   if (trackers.has(key)) {
     trackers.delete(key);
   } else if (trackers.size >= MAX_TRACKERS) {
-    const oldestKey = trackers.keys().next().value;
-    if (typeof oldestKey === "string") {
-      trackers.delete(oldestKey);
-    }
+    pruneMapToMaxSize(trackers, MAX_TRACKERS - 1);
   }
   trackers.set(key, tracker);
 }

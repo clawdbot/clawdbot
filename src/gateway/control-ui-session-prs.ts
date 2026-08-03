@@ -5,6 +5,7 @@ import nodePath from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { runGit } from "../agents/worktrees/git.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type {
   ControlUiSessionBranch,
@@ -88,24 +89,6 @@ type LoadSessionPullRequestDeps = SessionPullRequestLocalGitDeps & {
     params: ControlUiSessionPullRequestsParams,
   ) => Promise<SessionPullRequestGitContext | null>;
 };
-
-export function parseControlUiSessionPullRequestsParams(
-  value: unknown,
-): ControlUiSessionPullRequestsParams | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const sessionKey = typeof value.sessionKey === "string" ? value.sessionKey.trim() : "";
-  if (!sessionKey) {
-    return null;
-  }
-  const agentId = typeof value.agentId === "string" ? value.agentId.trim() : "";
-  return {
-    sessionKey,
-    ...(agentId ? { agentId } : {}),
-    ...(value.refresh === true ? { refresh: true } : {}),
-  };
-}
 
 /** Resolves the checkout root without spawning Git. */
 function resolveSessionPullRequestGitRoot(
@@ -687,12 +670,6 @@ async function cachedBranchPullRequests(
   );
   branchCache.delete(key);
   branchCache.set(key, entry);
-  while (branchCache.size > CACHE_LIMIT) {
-    const oldestKey = branchCache.keys().next().value as string | undefined;
-    if (!oldestKey) {
-      break;
-    }
-    branchCache.delete(oldestKey);
-  }
+  pruneMapToMaxSize(branchCache, CACHE_LIMIT);
   return promise;
 }

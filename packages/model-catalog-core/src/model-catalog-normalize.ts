@@ -1,4 +1,5 @@
 // Model Catalog Core helper module supports model catalog normalize behavior.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeOptionalTrimmedStringList,
@@ -42,11 +43,6 @@ const MODEL_CATALOG_STATUSES = new Set(["available", "preview", "deprecated", "d
 const MODEL_CATALOG_API_SET = new Set<string>(MODEL_CATALOG_APIS);
 const DEFAULT_MODEL_INPUT: ModelCatalogInput[] = ["text"];
 const DEFAULT_MODEL_STATUS: ModelCatalogStatus = "available";
-
-/** Narrow unknown catalog payloads to plain records. */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /** Reject object keys that can mutate prototypes when copied into records. */
 function isBlockedObjectKey(key: string): boolean {

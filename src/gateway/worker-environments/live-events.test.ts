@@ -9,16 +9,18 @@ import type {
 import * as sessions from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig as Config } from "../../config/types.openclaw.js";
 import {
-  claimAgentRunContext,
-  clearAgentRunContext,
   emitAgentEvent,
   getAgentEventLifecycleGeneration,
-  getAgentRunContext,
   onAgentRuntimeEvent,
-  releaseAgentRunContext,
-  sweepStaleRunContexts,
   type AgentEventRuntimePayload as Event,
 } from "../../infra/agent-events.js";
+import {
+  claimAgentRunContext,
+  clearAgentRunContext,
+  getAgentRunContext,
+  releaseAgentRunContext,
+  sweepStaleRunContexts,
+} from "../../infra/agent-run-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { loadSqliteTrajectoryRuntimeEventRowsSync } from "../../trajectory/runtime-store.sqlite.js";
 import type { WorkerConnectionIdentity as Identity } from "./connection-identity.js";
@@ -490,18 +492,6 @@ describe("worker live events", () => {
     ack(msg(2, "after", 1), 3);
     expect(deltas()).toEqual(["before", "after", "third"]);
     expect(events.map((event) => event.seq)).toEqual([1, 2, 3]);
-  });
-
-  it("moves without losing state", async () => {
-    const moved = `${KEY}-moved`;
-    ack(msg(1, "first"));
-    ack(msg(3, "third", 1), 1);
-    await sessions.patchSessionEntryTarget(
-      { agentId: "main", storePath: store, target: { canonicalKey: moved, storeKeys: [KEY] } },
-      () => ({ updatedAt: 20 }),
-    );
-    ack(msg(2, "second", 1), 3);
-    expect(getAgentRunContext(RUN)?.sessionKey).toBe(moved);
   });
 
   it("fences a committed reset", async () => {

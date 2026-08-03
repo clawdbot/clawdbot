@@ -101,7 +101,7 @@ Separate iOS and macOS Periphery workflows enforce a zero-findings dead-code pol
 - **CI workflow edits** validate the Node CI graph, workflow linting, and the Windows lane (`ci.yml` executes it), but do not force iOS, Android, or macOS native builds by themselves; those platform lanes stay scoped to platform source changes.
 - **Workflow Sanity** runs `actionlint`, `zizmor` over all workflow YAML files, the composite-action interpolation guard, and the conflict-marker guard. The PR-scoped `security-fast` job also runs `zizmor` over changed workflow files so workflow security findings fail early in the main CI graph.
 - **Docs on `main` pushes** are checked by the standalone `Docs` workflow with the same ClawHub docs mirror used by CI, so mixed code+docs pushes do not also queue the CI `check-docs` shard. Pull requests and manual CI still run `check-docs` from CI when docs changed.
-- **TUI PTY** runs in the `checks-node-core-runtime-tui-pty` Linux Node shard for TUI changes. The shard runs `test/vitest/vitest.tui-pty.config.ts` with `OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1`, so it covers both the deterministic `TuiBackend` fixture lane and the slower `tui --local` smoke that mocks only the external model endpoint.
+- **TUI PTY** splits by runtime ownership. The Linux Node shard runs the deterministic source-level `TuiBackend` fixture lane. The `build-artifacts` job reruns `test/vitest/vitest.tui-pty.config.ts` with `OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1` and `OPENCLAW_TUI_PTY_USE_BUILT_CLI=1`, so the slower `tui --local` smoke exercises the exact-head built CLI while mocking only the external model endpoint.
 - **CI routing-only edits, the small set of core-test fixtures the fast task runs directly, and narrow plugin contract helper edits** use a fast Node-only manifest path: `preflight`, `security-fast`, and only the fast lanes the change touches — a single `checks-fast-core` CI-routing task, the two plugin contract shards, or both. That path skips build artifacts, Node 22 compatibility, channel contracts, full core shards, bundled-plugin shards, and additional guard matrices.
 - **Windows Node checks** are scoped to Windows-specific process/path wrappers, npm/pnpm/UI runner helpers, package manager config, and the CI workflow surfaces that execute that lane; unrelated source, plugin, install-smoke, and test-only changes stay on the Linux Node lanes.
 
@@ -344,6 +344,12 @@ intentionally want the broad advisory provider/media matrix. Stable and full
 release checks always run the exhaustive live/E2E and Docker release-path soak;
 the beta profile can opt in with `run_release_soak=true`.
 
+`fail_fast` defaults to `false`: the umbrella waits for each dispatched child
+workflow and reports its independent failures together. Set `fail_fast=true`
+only when cancelling a child after its first failed job is more useful than the
+complete failure inventory. In Release Checks, this also enables the Matrix QA
+CLI's own first-scenario cancellation.
+
 - `beta` keeps the fastest OpenAI/core release-critical lanes.
 - `stable` adds the stable provider/backend set.
 - `full` runs the broad advisory provider/media matrix.
@@ -567,8 +573,6 @@ QA Lab has dedicated CI lanes outside the main smart-scoped workflow. Agentic pa
 - The `QA-Lab - All Lanes` workflow runs nightly on `main` and on manual dispatch; it fans out mock parity plus live Matrix, Telegram, Discord, WhatsApp, and Slack jobs. Live jobs use the `qa-live-shared` environment; Telegram, Discord, WhatsApp, and Slack use Convex leases, while Matrix provisions disposable local credentials.
 
 Scheduled, manual, and release Matrix checks use the deterministic mock provider so the live transport contract is isolated from model latency and normal provider-plugin startup. Telegram release checks use the same deterministic model boundary. The live transport gateway disables memory search because QA parity covers memory behavior separately; provider connectivity is covered by the separate live model, native provider, and Docker provider suites.
-
-Scheduled, manual, and release Matrix gates use the shared QA Lab suite host and live adapter. Default membership comes from flow scenarios that explicitly declare Matrix channel eligibility; the runner and workflow keep no curated profile or scenario-id list. CI distributes that catalog-derived selection across five deterministic balanced shards so membership is order-independent and each job stays within its timeout. Focused local runs repeat `--scenario <id>`.
 
 `OpenClaw Release Checks` also runs the release-critical QA Lab lanes before release approval; its QA parity gate runs the candidate and baseline packs as parallel lane jobs, then downloads both artifacts into a small report job for the final parity comparison.
 

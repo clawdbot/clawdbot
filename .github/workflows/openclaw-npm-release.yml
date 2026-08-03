@@ -185,6 +185,17 @@ jobs:
         id: preflight_cache_key
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      # setup-node-env may restore a broader build-all snapshot. Clear every
+      # preflight cache output first so actions/cache cannot overlay stale or
+      # private-QA artifacts that are absent from this release build.
+      - name: Clean preflight build outputs before cache restore
+        run: |
+          set -euo pipefail
+          rm -rf -- dist dist-runtime packages/*/dist
+          find extensions -type f -path '*/src/host/*' \
+            \( -name '.bundle.hash' -o -name '*.bundle.js' \) \
+            -delete
+
       - name: Restore preflight build outputs
         id: dist_build_cache
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -199,6 +210,8 @@ jobs:
 
       - name: Build
         if: steps.dist_build_cache.outputs.cache-hit != 'true'
+        env:
+          OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1"
         run: pnpm build
 
       - name: Pack publishable core packages
@@ -244,6 +257,8 @@ jobs:
 
       - name: Build Control UI
         if: steps.dist_build_cache.outputs.cache-hit != 'true'
+        env:
+          OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1"
         run: pnpm ui:build
 
       - name: Save preflight build outputs

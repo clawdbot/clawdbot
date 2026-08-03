@@ -278,6 +278,7 @@ describe("fetchWithSsrFGuard hardening", () => {
           autoSelectFamilyAttemptTimeout: 300,
         },
         clientFactory: expect.any(Function),
+        proxyTunnel: true,
         proxyTls: {
           autoSelectFamily: true,
           autoSelectFamilyAttemptTimeout: 300,
@@ -722,6 +723,7 @@ describe("fetchWithSsrFGuard hardening", () => {
       factory: expect.any(Function),
       uri: "http://proxy.example:7890",
       clientFactory: expect.any(Function),
+      proxyTunnel: true,
       proxyTls: {
         autoSelectFamily: true,
         autoSelectFamilyAttemptTimeout: 300,
@@ -1634,6 +1636,67 @@ describe("fetchWithSsrFGuard hardening", () => {
   });
 
   it.each([
+    { name: "the default loopback policy", mode: undefined, routing: "direct" },
+    { name: "gateway-only loopback policy", mode: "gateway-only", routing: "direct" },
+    { name: "explicit proxy loopback policy", mode: "proxy", routing: "proxy" },
+    { name: "explicit blocked loopback policy", mode: "block", routing: "blocked" },
+  ] satisfies Array<{
+    name: string;
+    mode: ManagedProxyLoopbackMode | undefined;
+    routing: "direct" | "proxy" | "blocked";
+  }>)(
+    "applies $name to the real dashboard document-readiness consumer",
+    async ({ mode, routing }) => {
+      vi.stubEnv("OPENCLAW_PROXY_LOOPBACK_MODE", "");
+      installManagedProxyRuntime(mode);
+      vi.stubEnv("NO_PROXY", "127.0.0.1");
+      vi.stubEnv("no_proxy", "127.0.0.1");
+      const fetchImpl = vi.fn(
+        async () => new Response(null, { status: 200, headers: { "content-type": "text/html" } }),
+      );
+      const lookupFn = createLoopbackLookup();
+      const { waitForControlUiDocument } = await import("../../commands/control-ui-handoff.js");
+
+      const readiness = await waitForControlUiDocument({
+        url: "http://127.0.0.1:18789/dashboard/",
+        deps: {
+          fetch: async (request) =>
+            await fetchConfiguredLocalOriginWithSsrFGuard({ ...request, fetchImpl, lookupFn }),
+        },
+      });
+
+      expect(lookupFn).toHaveBeenCalledWith("127.0.0.1", { all: true });
+      if (routing === "blocked") {
+        expect(readiness).toEqual({
+          ready: false,
+          reason: expect.stringContaining("blocked by proxy.loopbackMode"),
+        });
+        expect(fetchImpl).not.toHaveBeenCalled();
+        expect(agentCtor).not.toHaveBeenCalled();
+        expect(envHttpProxyAgentCtor).not.toHaveBeenCalled();
+        return;
+      }
+
+      expect(readiness).toEqual({ ready: true });
+      expect(fetchImpl).toHaveBeenCalledOnce();
+      expect(getFirstRequestInit(fetchImpl).method).toBe("HEAD");
+      if (routing === "direct") {
+        expect(agentCtor).toHaveBeenCalledOnce();
+        expect(envHttpProxyAgentCtor).not.toHaveBeenCalled();
+        return;
+      }
+
+      expect(agentCtor).not.toHaveBeenCalled();
+      expect(envHttpProxyAgentCtor).toHaveBeenCalledOnce();
+      const options = requireRecord(
+        firstMockCall(envHttpProxyAgentCtor)?.[0],
+        "managed proxy options",
+      );
+      expect(options.noProxy).toBe("");
+    },
+  );
+
+  it.each([
     {
       name: "localhost when any resolved address is public",
       url: "http://localhost:11434/api/embed",
@@ -1706,6 +1769,39 @@ describe("fetchWithSsrFGuard hardening", () => {
       expectedEnvProxyCalls: 1,
       expectedFinalUrl: testCase.expectedFinalUrl,
     });
+  });
+
+  it("forces managed loopback proxy routing despite NO_PROXY while preserving target TLS", async () => {
+    installManagedProxyRuntime("proxy");
+    vi.stubEnv("NO_PROXY", "127.0.0.1");
+    vi.stubEnv("no_proxy", "127.0.0.1");
+    const checkServerIdentity = vi.fn();
+    const fetchImpl = vi.fn(async () => okResponse());
+    const baseUrl = "https://127.0.0.1:18789";
+
+    const result = await fetchConfiguredLocalOriginWithSsrFGuard({
+      url: `${baseUrl}/dashboard/`,
+      configuredLocalOriginBaseUrl: baseUrl,
+      fetchImpl,
+      lookupFn: createLoopbackLookup(),
+      policy: { allowedOrigins: [baseUrl] },
+      dispatcherPolicy: {
+        mode: "direct",
+        connect: { ca: "gateway-certificate", checkServerIdentity },
+      },
+    });
+
+    expect(agentCtor).not.toHaveBeenCalled();
+    expect(envHttpProxyAgentCtor).toHaveBeenCalledOnce();
+    const options = requireRecord(
+      firstMockCall(envHttpProxyAgentCtor)?.[0],
+      "managed proxy options",
+    );
+    expect(options.noProxy).toBe("");
+    expect(options.requestTls).toEqual({ ca: "gateway-certificate", checkServerIdentity });
+    expect(requireRecord(options.proxyTls, "managed proxy TLS options")).not.toHaveProperty("ca");
+    expect(process.env.http_proxy).toBe("http://127.0.0.1:7890");
+    await result.release();
   });
 
   it("ignores hidden managed-proxy bypass markers on the public guarded fetch helper", async () => {
