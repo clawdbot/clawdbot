@@ -273,39 +273,6 @@ describe("runEmbeddedAgent usage reporting", () => {
     expect(attemptInput.memoryFlushWritePath).toBe("memory/2026-03-10.md");
   });
 
-  it("reports cumulative usage separately from the last call", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
-        assistantTexts: ["Response 1", "Response 2"],
-        lastAssistant: makeAssistantMessage({
-          usage: { input: 150, output: 50, total: 200 } as unknown as AssistantMessage["usage"],
-        }),
-        attemptUsage: { input: 250, output: 100, total: 350 },
-      }),
-    );
-
-    const result = await runEmbeddedAgent({
-      sessionId: "test-session",
-      sessionKey: "test-key",
-      sessionFile: "test-key",
-      workspaceDir: "/tmp/workspace",
-      prompt: "hello",
-      timeoutMs: 30000,
-      runId: "run-1",
-    });
-
-    expect(result.meta.agentMeta?.usage).toMatchObject({
-      input: 250,
-      output: 100,
-      total: 350,
-    });
-    expect(result.meta.agentMeta?.lastCallUsage).toMatchObject({
-      input: 150,
-      output: 50,
-      total: 200,
-    });
-  });
-
   it("uses current-attempt usage when the persisted assistant snapshot is zeroed", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({

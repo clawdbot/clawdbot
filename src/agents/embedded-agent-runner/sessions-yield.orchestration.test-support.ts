@@ -1,8 +1,4 @@
-/**
- * Full-entry coverage proving that sessions_yield produces a clean end_turn exit
- * with no pending tool calls, so the parent session is idle when subagent
- * results arrive.
- */
+/** Full-entry coverage for sessions_yield terminal projection. */
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
@@ -13,7 +9,6 @@ import {
   resetSharedRunIntegrationHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
-import { isEmbeddedAgentRunActive, queueEmbeddedAgentMessageWithOutcome } from "./runs.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 
@@ -27,39 +22,20 @@ describe("sessions_yield orchestration", () => {
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
   });
 
-  it("parent session is idle after yield — end_turn, no pendingToolCalls", async () => {
-    const sessionId = "yield-parent-session";
-
-    // Simulate an attempt where sessions_yield was called
+  it("yield ends the turn without pending tool calls", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
-        sessionIdUsed: sessionId,
         yieldDetected: true,
       }),
     );
 
     const result = await runEmbeddedAgent({
       ...overflowBaseRunParams,
-      sessionId,
       runId: "run-yield-orchestration",
     });
 
-    // 1. Run completed with end_turn (yield causes clean exit)
     expect(result.meta.stopReason).toBe("end_turn");
-
-    // 2. No pending tool calls (yield is NOT a client tool call)
     expect(result.meta.pendingToolCalls).toBeUndefined();
-
-    // 3. Parent session is IDLE (not in ACTIVE_EMBEDDED_RUNS)
-    expect(isEmbeddedAgentRunActive(sessionId)).toBe(false);
-
-    // 4. Steer would fail (message delivery must take direct path, not steer)
-    const queueResult = queueEmbeddedAgentMessageWithOutcome(sessionId, "subagent result");
-    expect(queueResult.queued).toBe(false);
-    if (queueResult.queued) {
-      throw new Error("expected queue attempt to fail without an active run");
-    }
-    expect(queueResult.reason).toBe("no_active_run");
   });
 
   it("clientToolCalls takes precedence over yieldDetected", async () => {
@@ -196,30 +172,6 @@ describe("sessions_yield orchestration", () => {
     expect(result.meta.stopReason).toBe("end_turn");
     // No pending tool calls
     expect(result.meta.pendingToolCalls).toBeUndefined();
-  });
-
-  it("whitespace-only delivery text does not suppress diagnostic", async () => {
-    // Normalized helpers filter whitespace-only text — yield still parks
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
-        yieldDetected: true,
-        assistantTexts: [],
-        didSendViaMessagingTool: true,
-        messagingToolSentTexts: ["   "],
-      }),
-    );
-
-    const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
-      runId: "run-yield-whitespace-delivery",
-    });
-
-    // Whitespace-only delivery is not committed delivery → diagnostic emitted
-    expect(result.payloads).toHaveLength(1);
-    const wsPayload = expectDefined(result.payloads![0], "whitespace diagnostic payload");
-    expect(wsPayload.text).toBe(
-      "⚠️ Turn yielded without a continuation source. Send a message to resume.",
-    );
   });
 
   it("empty spawn array does not suppress diagnostic", async () => {

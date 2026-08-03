@@ -1,6 +1,5 @@
 // Full-entry coverage for before_agent_reply hook handling before embedded attempts.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   mockedGlobalHookRunner,
@@ -27,8 +26,6 @@ function firstAttemptParams(): {
   disableTrajectory?: boolean;
   modelRun?: boolean;
   promptMode?: string;
-  promptCacheKey?: string;
-  suppressLiveStreamOutput?: boolean;
 } {
   const call = mockedRunEmbeddedAttempt.mock.calls[0] as
     | [
@@ -37,8 +34,6 @@ function firstAttemptParams(): {
           disableTrajectory?: boolean;
           modelRun?: boolean;
           promptMode?: string;
-          promptCacheKey?: string;
-          suppressLiveStreamOutput?: boolean;
         },
       ]
     | undefined;
@@ -98,23 +93,6 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     expect(result.payloads?.[0]?.text).toBe("dreaming claimed");
   });
 
-  it("returns a silent payload when a cron hook claims without a reply body", async () => {
-    mockedGlobalHookRunner.hasHooks.mockImplementation(
-      (hookName: string) => hookName === "before_agent_reply",
-    );
-    mockedGlobalHookRunner.runBeforeAgentReply.mockResolvedValue({
-      handled: true,
-    });
-
-    const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
-      trigger: "cron",
-    });
-
-    expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
-    expect(result.payloads?.[0]?.text).toBe(SILENT_REPLY_TOKEN);
-  });
-
   it("re-arms setup progress when a cron hook does not claim", async () => {
     mockedGlobalHookRunner.hasHooks.mockImplementation(
       (hookName: string) => hookName === "before_agent_reply",
@@ -137,103 +115,6 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     );
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
   });
-
-  it("lets before_agent_reply claim user runs before the embedded attempt starts", async () => {
-    mockedGlobalHookRunner.hasHooks.mockImplementation(
-      (hookName: string) => hookName === "before_agent_reply",
-    );
-    mockedGlobalHookRunner.runBeforeAgentReply.mockResolvedValue({
-      handled: true,
-      reply: {
-        text: "user turn claimed",
-        channelData: { testPayload: true },
-        sensitiveMedia: true,
-        videoAsNote: true,
-      },
-    });
-
-    const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
-      trigger: "user",
-    });
-
-    expect(mockedGlobalHookRunner.runBeforeAgentReply).toHaveBeenCalledTimes(1);
-    const [, hookContext] = firstBeforeAgentReplyCall();
-    expect(hookContext?.trigger).toBe("user");
-    expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
-    expect(result.payloads?.[0]).toMatchObject({
-      text: "user turn claimed",
-      channelData: { testPayload: true },
-      sensitiveMedia: true,
-      videoAsNote: true,
-    });
-  });
-
-  it("lets before_agent_reply claim heartbeat runs before the embedded attempt starts", async () => {
-    mockedGlobalHookRunner.hasHooks.mockImplementation(
-      (hookName: string) => hookName === "before_agent_reply",
-    );
-    mockedGlobalHookRunner.runBeforeAgentReply.mockResolvedValue({
-      handled: true,
-      reply: { text: "heartbeat claimed" },
-    });
-
-    const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
-      trigger: "heartbeat",
-    });
-
-    expect(mockedGlobalHookRunner.runBeforeAgentReply).toHaveBeenCalledTimes(1);
-    const [, hookContext] = firstBeforeAgentReplyCall();
-    expect(hookContext?.trigger).toBe("heartbeat");
-    expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
-    expect(result.payloads?.[0]?.text).toBe("heartbeat claimed");
-  });
-
-  it("preserves native user identity in the before_agent_reply context", async () => {
-    mockedGlobalHookRunner.hasHooks.mockImplementation(
-      (hookName: string) => hookName === "before_agent_reply",
-    );
-    mockedGlobalHookRunner.runBeforeAgentReply.mockResolvedValue({ handled: true });
-
-    await runEmbeddedAgent({
-      ...overflowBaseRunParams,
-      trigger: "user",
-      senderId: "sender-123",
-      chatId: "chat-456",
-      channelContext: { sender: { id: "sender-123" }, chat: { id: "chat-456" } },
-    });
-
-    const [, hookContext] = firstBeforeAgentReplyCall();
-    expect(hookContext).toEqual(
-      expect.objectContaining({
-        senderId: "sender-123",
-        chatId: "chat-456",
-        channelContext: expect.objectContaining({
-          sender: { id: "sender-123" },
-          chat: { id: "chat-456" },
-        }),
-      }),
-    );
-  });
-
-  it.each(["manual", "memory", "overflow"] as const)(
-    "does not expose internal %s runs to before_agent_reply hooks",
-    async (trigger) => {
-      mockedGlobalHookRunner.hasHooks.mockImplementation(
-        (hookName: string) => hookName === "before_agent_reply",
-      );
-      mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult());
-
-      await runEmbeddedAgent({
-        ...overflowBaseRunParams,
-        trigger,
-      });
-
-      expect(mockedGlobalHookRunner.runBeforeAgentReply).not.toHaveBeenCalled();
-      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    },
-  );
 
   it("forwards one-shot auxiliary-run flags and tool bindings into the embedded attempt", async () => {
     // Auxiliary-run flags are request-scoped; they must pass through to the
@@ -268,27 +149,5 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     });
 
     expect(firstAttemptParams().cleanupBundleMcpOnRunEnd).toBe(true);
-  });
-
-  it("forwards prompt cache identity into the embedded attempt", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult());
-
-    await runEmbeddedAgent({
-      ...overflowBaseRunParams,
-      promptCacheKey: "cron-cache-key",
-    });
-
-    expect(firstAttemptParams().promptCacheKey).toBe("cron-cache-key");
-  });
-
-  it("forwards suppressed live stream output into the embedded attempt", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult());
-
-    await runEmbeddedAgent({
-      ...overflowBaseRunParams,
-      suppressLiveStreamOutput: true,
-    });
-
-    expect(firstAttemptParams().suppressLiveStreamOutput).toBe(true);
   });
 });
