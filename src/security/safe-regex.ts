@@ -299,7 +299,7 @@ function tokenizePattern(source: string, flags: string): PatternToken[] {
         kind: "simple-token",
         source: atom,
         zeroWidth: atom === "\\b" || atom === "\\B",
-        opaque: flags.includes("v") && (atom.startsWith("\\p{") || atom.startsWith("\\P{")),
+        opaque: flags.includes("v") && vPropertyMayContainStrings(atom),
         ambiguousWhenRepeated: flags.includes("v") && vPropertyMayContainStrings(atom),
         backreferenceKey: /^\\[1-9]\d*$/.test(atom)
           ? `index:${Number.parseInt(atom.slice(1), 10)}`

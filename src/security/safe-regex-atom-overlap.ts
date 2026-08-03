@@ -103,7 +103,11 @@ const ALL_GENERAL_CATEGORIES_MASK = 2 ** 30 - 1;
 
 function parseUnicodePropertyAtom(
   source: string,
-): { kind: "category"; mask: number } | { kind: "binary"; name: string; negated: boolean } | null {
+):
+  | { kind: "category"; mask: number }
+  | { kind: "binary"; name: string; negated: boolean }
+  | { kind: "script"; name: string; negated: boolean }
+  | null {
   const match = source.match(/^\\([pP])\{([^}]+)\}$/);
   if (!match) {
     return null;
@@ -125,6 +129,14 @@ function parseUnicodePropertyAtom(
       kind: "category",
       mask: negated ? ALL_GENERAL_CATEGORIES_MASK ^ categoryMask : categoryMask,
     };
+  }
+  if (
+    (propertyName === "sc" || propertyName === "script") &&
+    // Unicode script aliases are four letters. Restrict disjointness proofs to
+    // canonical long names so equivalent aliases still fail closed.
+    value.length > 4
+  ) {
+    return { kind: "script", name: value, negated };
   }
   return separator < 0 ? { kind: "binary", name: value, negated } : null;
 }
@@ -151,6 +163,12 @@ function unicodePropertiesAreProvablyDisjoint(left: string, right: string, flags
       }
     }
     return (leftMask & rightMask) === 0;
+  }
+  if (!flags.includes("i") && leftProperty.kind === "script" && rightProperty.kind === "script") {
+    if (leftProperty.name === rightProperty.name) {
+      return leftProperty.negated !== rightProperty.negated;
+    }
+    return !leftProperty.negated && !rightProperty.negated;
   }
   return (
     !flags.includes("i") &&
