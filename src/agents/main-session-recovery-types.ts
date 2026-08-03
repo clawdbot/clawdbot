@@ -1,7 +1,12 @@
 import type {
   InternalSessionEntry as SessionEntry,
+  MainRestartRecoveryState,
   RestartRecoveryRun,
 } from "../config/sessions.js";
+
+type MainSessionRecoveryExecutionIdentity = NonNullable<
+  MainRestartRecoveryState["executionIdentity"]
+>;
 
 export type MainSessionRecoveryObservation = {
   sessionId: string;
@@ -15,6 +20,8 @@ export type MainSessionRecoveryReservation = {
   lifecycleGeneration: string;
   runId: string;
   attempt: number;
+  executionIdentity: MainSessionRecoveryExecutionIdentity;
+  executionIdentityMode: "capture" | "retry-reference";
 };
 
 export type MainSessionRecoveryOwnerClaim = {
@@ -85,6 +92,7 @@ export type MainSessionRecoveryCommand =
       now: number;
       observation: MainSessionRecoveryObservation;
       runId: string;
+      executionIdentity: MainSessionRecoveryExecutionIdentity;
     }
   | {
       kind: "cancel_reservation" | "abandon_reservation";

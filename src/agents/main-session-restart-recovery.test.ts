@@ -1205,6 +1205,19 @@ describe("main-session-restart-recovery", () => {
       status: "running",
     });
     expect(pending?.mainRestartRecovery?.reservation).toBeUndefined();
+    const executionIdentity = pending?.mainRestartRecovery?.executionIdentity;
+    expect(executionIdentity).toMatchObject({
+      tokenVersion: 1,
+      contextId: expect.any(String),
+      executionId: expect.any(String),
+      runId: firstRecoveryRunId,
+      createdAt: expect.any(Number),
+    });
+    const firstRequest = vi.mocked(callGateway).mock.calls[0]?.[0];
+    expect(firstRequest).toBeDefined();
+    expect((firstRequest!.params as Record<string, unknown>).internalExecutionIdentityRetry).toBe(
+      false,
+    );
 
     await expectRecovery({ recovered: 1, failed: 0, skipped: 0 }, {});
     const runIds = vi
@@ -1216,13 +1229,22 @@ describe("main-session-restart-recovery", () => {
       )
       .filter((runId) => runId !== undefined);
     expect(runIds).toEqual([firstRecoveryRunId, firstRecoveryRunId]);
-    expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+    const recovered = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+    expect(recovered).toMatchObject({
       abortedLastRun: false,
-      mainRestartRecovery: { chargedAttempts: 2 },
+      mainRestartRecovery: { chargedAttempts: 2, executionIdentity },
       restartRecoveryDeliveryRunId: firstRecoveryRunId,
       restartRecoveryDeliverySourceRunId: "control-ui-run",
       status: "running",
     });
+    const agentRequests = vi
+      .mocked(callGateway)
+      .mock.calls.map(([request]) => request)
+      .filter((request) => request.method === "agent");
+    expect(agentRequests[1]).toBeDefined();
+    expect(
+      (agentRequests[1]!.params as Record<string, unknown>).internalExecutionIdentityRetry,
+    ).toBe(true);
   });
 
   it("retries reservation cleanup after a transient session-store failure", async () => {

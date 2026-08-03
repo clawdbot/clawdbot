@@ -260,6 +260,7 @@ enum class GatewayMethod(
   BoardEvent("board.event"),
   AuditList("audit.list"),
   AuditActivityList("audit.activity.list"),
+  AuditRunInspect("audit.run.inspect"),
   UsersList("users.list"),
   UsersSelf("users.self"),
   UsersLinkEmail("users.linkEmail"),

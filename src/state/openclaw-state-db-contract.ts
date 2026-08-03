@@ -8,6 +8,7 @@ export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
 // Added after v6 shipped. These tables stay optional until their feature-local
 // lazy ensures run; fold them into the next natural schema-version bump.
 export const LAZY_ADDITIVE_STATE_TABLES = [
+  "execution_identity_contexts",
   "model_catalog_remote",
   "sidebar_sections",
   "skill_workshop_proposal_events",
@@ -15,6 +16,7 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   "skill_workshop_proposal_rollbacks",
   "skill_workshop_proposals",
 ] as const;
+export const LAZY_ADDITIVE_STATE_INDEXES = ["execution_identity_contexts_run_created_idx"] as const;
 /** Maximum time one synchronous SQLite call may wait for a lock. */
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 5_000;
 /** User-facing guide for schema refusals; lives here so error sites avoid import cycles. */

@@ -46,6 +46,7 @@ import {
 import { repairAuditEventsSchema } from "./openclaw-state-db-audit-migration.js";
 import {
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
+  LAZY_ADDITIVE_STATE_INDEXES,
   LAZY_ADDITIVE_STATE_TABLES,
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   OPENCLAW_STATE_SCHEMA_VERSION,
@@ -217,6 +218,15 @@ function executeCanonicalStateSchema(
       throw new Error(`lazy additive state schema block is missing for ${tableName}`);
     }
     eagerSchema = `${eagerSchema.slice(0, start)}${eagerSchema.slice(end + endMarker.length)}`;
+  }
+  for (const indexName of LAZY_ADDITIVE_STATE_INDEXES) {
+    const startMarker = `CREATE INDEX IF NOT EXISTS ${indexName}`;
+    const start = eagerSchema.indexOf(startMarker);
+    const end = start >= 0 ? eagerSchema.indexOf(";", start) : -1;
+    if (start < 0 || end < 0) {
+      throw new Error(`lazy additive state schema index is missing for ${indexName}`);
+    }
+    eagerSchema = `${eagerSchema.slice(0, start)}${eagerSchema.slice(end + 1)}`;
   }
   database.exec(eagerSchema);
 }

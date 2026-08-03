@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
+import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
@@ -445,6 +446,7 @@ export async function resumeMainSession(params: {
         now: Date.now(),
         observation: params.observation,
         runId: recoveryRunId,
+        executionIdentity: createExecutionIdentityAdmissionToken(recoveryRunId),
       },
       requireWriteSuccess: true,
       shouldContinue: params.shouldContinue,
@@ -511,6 +513,7 @@ export async function resumeMainSession(params: {
       ...(params.sessionWorkAdmissionHandoffId
         ? { internalRuntimeHandoffId: params.sessionWorkAdmissionHandoffId }
         : {}),
+      internalExecutionIdentityRetry: reservation.executionIdentityMode === "retry-reference",
       idempotencyKey: recoveryRunId,
       deliver:
         Boolean(deliveryContext) &&

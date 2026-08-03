@@ -8,6 +8,13 @@ import { projectMainSessionRecoveryLifecycle } from "./main-session-recovery-lif
 import { transitionMainSessionRecovery } from "./main-session-recovery-state.js";
 
 const sessionKey = "agent:main:main";
+const executionIdentity = (runId: string) => ({
+  tokenVersion: 1 as const,
+  contextId: `context-${runId}`,
+  executionId: `execution-${runId}`,
+  runId,
+  createdAt: 1,
+});
 
 function recoveryState(
   overrides: Partial<MainRestartRecoveryState> = {},
@@ -173,11 +180,16 @@ describe("main session recovery state", () => {
       now: 200,
       observation: { sessionId: "session-1", cycleId: "cycle-1", revision: 1 },
       runId: "recovery-1",
+      executionIdentity: executionIdentity("recovery-1"),
     });
     expect(prepared.kind).toBe("reserved");
     if (prepared.kind !== "reserved") {
       throw new Error("expected reservation");
     }
+    expect(prepared.reservation).toMatchObject({
+      executionIdentity: executionIdentity("recovery-1"),
+      executionIdentityMode: "capture",
+    });
 
     expect(
       transitionMainSessionRecovery(entry, {
@@ -187,6 +199,7 @@ describe("main session recovery state", () => {
         now: 201,
         observation: { sessionId: "session-1", cycleId: "cycle-1", revision: 1 },
         runId: "recovery-2",
+        executionIdentity: executionIdentity("recovery-2"),
       }),
     ).toEqual({ kind: "rejected", reason: "stale_revision" });
     expect(entry.mainRestartRecovery?.reservation).toMatchObject({
@@ -211,6 +224,7 @@ describe("main session recovery state", () => {
       },
     });
     expect(entry.mainRestartRecovery?.reservation).toBeUndefined();
+    expect(entry.mainRestartRecovery?.executionIdentity).toBeUndefined();
     expect(observe(entry, "generation-1")).toEqual({ status: "blocked" });
   });
 
@@ -357,6 +371,7 @@ describe("main session recovery state", () => {
       now: 200,
       observation: { sessionId: "session-1", cycleId: "cycle-1", revision: 1 },
       runId: "recovery-1",
+      executionIdentity: executionIdentity("recovery-1"),
     });
     if (prepared.kind !== "reserved") {
       throw new Error("expected reservation");
@@ -373,6 +388,29 @@ describe("main session recovery state", () => {
     expect(observe(entry, "generation-1")).toMatchObject({
       status: "recoverable",
       nextAttempt: 2,
+    });
+    const retry = transitionMainSessionRecovery(entry, {
+      kind: "prepare_attempt",
+      attempt: 2,
+      lifecycleGeneration: "generation-1",
+      now: 300,
+      observation: {
+        sessionId: "session-1",
+        cycleId: "cycle-1",
+        revision: entry.mainRestartRecovery!.revision,
+      },
+      runId: "recovery-1",
+      executionIdentity: {
+        ...executionIdentity("replacement"),
+        runId: "recovery-1",
+      },
+    });
+    expect(retry).toMatchObject({
+      kind: "reserved",
+      reservation: {
+        executionIdentity: executionIdentity("recovery-1"),
+        executionIdentityMode: "retry-reference",
+      },
     });
   });
 
@@ -613,6 +651,7 @@ describe("main session recovery state", () => {
         now: 500,
         observation: oldObservation,
         runId: "stale-run",
+        executionIdentity: executionIdentity("stale-run"),
       }),
     ).toEqual({ kind: "rejected", reason: "stale_cycle" });
   });

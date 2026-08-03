@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveAgentRestartRecoveryChannelContext } from "./agent-restart-recovery-context.js";
+import {
+  resolveAgentRestartRecoveryChannelContext,
+  resolveAgentRestartRecoveryExecutionIdentityAdmission,
+} from "./agent-restart-recovery-context.js";
 
 const matchingParams = {
   canUseInternalRuntimeHandoff: true,
@@ -81,5 +84,62 @@ describe("resolveAgentRestartRecoveryChannelContext", () => {
     expect(
       resolveAgentRestartRecoveryChannelContext({ ...matchingParams, ...override }),
     ).toBeUndefined();
+  });
+});
+
+describe("resolveAgentRestartRecoveryExecutionIdentityAdmission", () => {
+  const token = {
+    tokenVersion: 1 as const,
+    contextId: "context-1",
+    executionId: "execution-1",
+    runId: "recovery-run-1",
+    createdAt: 1,
+  };
+
+  it("rehydrates the durable token for capture and exact retry without runtime reconstruction", () => {
+    const sessionEntry = {
+      ...matchingParams.sessionEntry,
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 1,
+        chargedAttempts: 1,
+        executionIdentity: token,
+      },
+    };
+    expect(
+      resolveAgentRestartRecoveryExecutionIdentityAdmission({
+        isRestartRecoveryResumeRun: true,
+        retryOnly: false,
+        runId: token.runId,
+        sessionEntry,
+      }),
+    ).toEqual({ token, retryOnly: false });
+    expect(
+      resolveAgentRestartRecoveryExecutionIdentityAdmission({
+        isRestartRecoveryResumeRun: true,
+        retryOnly: true,
+        runId: token.runId,
+        sessionEntry,
+      }),
+    ).toEqual({ token, retryOnly: true });
+  });
+
+  it("returns no token for ordinary runs and refuses lost recovery evidence", () => {
+    expect(
+      resolveAgentRestartRecoveryExecutionIdentityAdmission({
+        isRestartRecoveryResumeRun: false,
+        retryOnly: false,
+        runId: token.runId,
+        sessionEntry: matchingParams.sessionEntry,
+      }),
+    ).toBeUndefined();
+    expect(() =>
+      resolveAgentRestartRecoveryExecutionIdentityAdmission({
+        isRestartRecoveryResumeRun: true,
+        retryOnly: true,
+        runId: token.runId,
+        sessionEntry: matchingParams.sessionEntry,
+      }),
+    ).toThrow("token is unavailable");
   });
 });
