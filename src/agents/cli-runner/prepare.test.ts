@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerContextEngineForOwner } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
+import { buildPromptBuildDropMarker } from "../../plugins/hook-prompt-build-drop-marker.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
   clearMemoryPluginState,
@@ -1911,7 +1912,7 @@ describe("prepareCliRunContext", () => {
     expect(promptContext?.senderId).toBe("user-789");
   });
 
-  it("preserves the base prompt when prompt-build hooks fail", async () => {
+  it("marks the prompt but preserves the base ask when prompt-build hooks fail", async () => {
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
       runBeforePromptBuild: vi.fn(async () => {
@@ -1922,7 +1923,10 @@ describe("prepareCliRunContext", () => {
 
     const context = await fixture.prepare({});
 
-    expect(context.params.prompt).toBe("latest ask");
+    // The lost contribution is named in-prompt; the raw error text is not.
+    expect(context.params.prompt).toBe(
+      `${buildPromptBuildDropMarker({ reason: "failed" })}\n\nlatest ask`,
+    );
     expect(context.systemPrompt).toContain("You are a personal assistant running inside OpenClaw.");
     expect(context.systemPrompt).toContain("Current model identity: test-cli/test-model.");
     expect(context.systemPrompt).not.toContain("hook exploded");

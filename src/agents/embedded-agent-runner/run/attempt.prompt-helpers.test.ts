@@ -36,6 +36,7 @@ vi.mock("../../music-generation-task-status.js", () => musicGenerationTaskStatus
 vi.mock("../../video-generation-task-status.js", () => videoGenerationTaskStatusMocks);
 vi.mock("../../../plugins/host-hook-state.js", () => hostHookStateMocks);
 
+import { buildPromptBuildDropMarker } from "../../../plugins/hook-prompt-build-drop-marker.js";
 import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-skip.js";
 import {
   forgetPromptBuildDrainCacheForRun,
@@ -285,6 +286,33 @@ describe("resolvePromptBuildHookResult drain cache", () => {
     expect(result.toolsAllow).toEqual([]);
     expect(runBeforePromptBuild).toHaveBeenCalledOnce();
     forgetPromptBuildDrainCacheForRun("tools-allow-run");
+  });
+
+  it("marks the prompt when the whole prompt-build dispatch throws", async () => {
+    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockReset();
+    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockResolvedValue({
+      queuedInjections: [],
+      prependContext: "queued injection",
+    });
+
+    const result = await resolvePromptBuildHookResult({
+      config: {},
+      prompt: "what is ready?",
+      messages: [],
+      hookCtx: { runId: "dispatch-throw-run", sessionKey: "agent:main:main" },
+      hookRunner: {
+        hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+        runBeforePromptBuild: vi.fn(async () => {
+          throw new Error("dispatch exploded");
+        }),
+      },
+    });
+
+    // Surviving contributions still land; the marker stands in for the lost one.
+    expect(result.prependContext).toBe(
+      `queued injection\n\n${buildPromptBuildDropMarker({ reason: "failed" })}`,
+    );
+    forgetPromptBuildDrainCacheForRun("dispatch-throw-run");
   });
 
   it("does not drain global injections or heartbeat contributions for commitment-only runs", async () => {

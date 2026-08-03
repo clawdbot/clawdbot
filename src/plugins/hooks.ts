@@ -25,6 +25,7 @@ import {
   isHookDecision,
 } from "./hook-decision-types.js";
 import { cloneHookIsolationValue, HookIsolationError } from "./hook-isolation.js";
+import { buildPromptBuildDropMarker } from "./hook-prompt-build-drop-marker.js";
 import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-registry.types.js";
 import type {
   PluginHookAfterCompactionEvent,
@@ -198,6 +199,11 @@ const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, 
   skill_proposal_evaluate: 120_000,
 };
 
+// Distinguishes a budget overrun from a handler throw so callers that surface
+// drops to the model (see buildPromptBuildDropMarker) can name the right reason
+// instead of matching on the timeout message text.
+class HookTimeoutError extends Error {}
+
 function deepFreezeHookValue<T>(value: T, seen = new WeakSet<object>()): T {
   if ((typeof value !== "object" && typeof value !== "function") || value === null) {
     return value;
@@ -224,6 +230,15 @@ type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
   shouldStop?: (result: TResult) => boolean;
   terminalLabel?: string;
   onTerminal?: (params: { hookName: K; pluginId: string; result: TResult }) => void;
+  /**
+   * Substitute result merged in place of a handler whose contribution was
+   * dropped, so a fail-open discard leaves a recorded fact instead of a hole
+   * that downstream consumers cannot distinguish from "nothing to contribute".
+   */
+  dropReplacementResult?: (params: {
+    pluginId: string;
+    reason: "failed" | "timed-out";
+  }) => TResult | undefined;
 };
 
 type PluginTargetedInboundClaimOutcome =
@@ -651,7 +666,7 @@ export function createHookRunner(
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
-        reject(new Error(`timed out after ${timeoutMs}ms`));
+        reject(new HookTimeoutError(`timed out after ${timeoutMs}ms`));
       }, timeoutMs);
       if (optionsResult.unref) {
         timer.unref?.();
@@ -779,7 +794,18 @@ export function createHookRunner(
         if (err instanceof HookIsolationError) {
           throw err;
         }
+        // handleHookError rethrows for fail-closed hooks, so the replacement is
+        // only reached on the fail-open path where the drop would be silent.
         handleHookError({ hookName, pluginId: hook.pluginId, error: err });
+        const replacement = policy.dropReplacementResult?.({
+          pluginId: hook.pluginId,
+          reason: err instanceof HookTimeoutError ? "timed-out" : "failed",
+        });
+        if (replacement !== undefined) {
+          result = policy.mergeResults
+            ? policy.mergeResults(result, replacement, hook)
+            : replacement;
+        }
       }
     }
 
@@ -951,7 +977,10 @@ export function createHookRunner(
     ctx: PluginHookAgentContext,
   ): Promise<PluginHookBeforePromptBuildResult | undefined> {
     if (beforePromptBuildDispatch.getStore()?.active) {
-      return undefined;
+      // Reaching here means a handler is mid-flight, so at least one handler is
+      // registered and every one of them is being skipped. No single plugin owns
+      // the loss, so the nested prompt gets one dispatch-level marker.
+      return { prependContext: buildPromptBuildDropMarker({ reason: "reentrant" }) };
     }
     const token = { active: true };
     return await beforePromptBuildDispatch.run(token, async () => {
@@ -960,7 +989,14 @@ export function createHookRunner(
           "before_prompt_build",
           event,
           ctx,
-          { mergeResults: mergeBeforePromptBuild },
+          {
+            mergeResults: mergeBeforePromptBuild,
+            // Prompt-build hooks are the agent's injected work queue. A dropped
+            // contribution must be visible in the prompt, not log-only.
+            dropReplacementResult: ({ pluginId, reason }) => ({
+              prependContext: buildPromptBuildDropMarker({ reason, pluginId }),
+            }),
+          },
         );
       } finally {
         token.active = false;

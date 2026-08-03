@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildPromptBuildDropMarker } from "../../plugins/hook-prompt-build-drop-marker.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -138,5 +139,36 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
     expect(heartbeatHandler).not.toHaveBeenCalled();
     expect(promptHandler).toHaveBeenCalledTimes(1);
     expect(result.prompt).toBe("turn policy\n\ndue commitment");
+  });
+
+  // Harness runtimes assemble the prompt here rather than through the embedded
+  // runner, so the drop marker has to survive this seam too. Driven through the
+  // real hook runner so the fail-open discard is the one being observed.
+  it("marks the harness prompt when a prompt-build handler throws", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_prompt_build",
+          handler: () => {
+            throw new Error("hook exploded");
+          },
+          pluginId: "beads",
+        },
+      ]),
+    );
+
+    const result = await resolveAgentHarnessBeforePromptBuildResult({
+      prompt: "what is ready?",
+      developerInstructions: "base instructions",
+      messages: [],
+      ctx: { trigger: "heartbeat", agentId: "agent-1", sessionKey: "session-1" },
+    });
+
+    const marker = buildPromptBuildDropMarker({ reason: "failed", pluginId: "beads" });
+    expect(result.prompt).toBe(`${marker}\n\nwhat is ready?`);
+    expect(result.promptInputRange).toEqual({
+      start: marker.length + 2,
+      end: marker.length + 2 + "what is ready?".length,
+    });
   });
 });

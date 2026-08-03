@@ -8,6 +8,7 @@ import type {
   ContextEngineRuntimeContext,
   ContextEngineSessionTarget,
 } from "../../../context-engine/types.js";
+import { buildPromptBuildDropMarker } from "../../../plugins/hook-prompt-build-drop-marker.js";
 import { drainPluginNextTurnInjectionContext } from "../../../plugins/host-hook-state.js";
 import { buildPluginAgentTurnPrepareContext } from "../../../plugins/host-hooks.js";
 import type {
@@ -171,9 +172,11 @@ export async function resolvePromptBuildHookResult(params: {
           },
           params.hookCtx,
         )
-        .catch((hookErr: unknown) => {
+        .catch((hookErr: unknown): PluginHookBeforePromptBuildResult => {
           log.warn(`before_prompt_build hook failed: ${String(hookErr)}`);
-          return undefined;
+          // A dispatch-level throw loses every contribution; surface it in the
+          // prompt so the agent does not read a silently incomplete context.
+          return { prependContext: buildPromptBuildDropMarker({ reason: "failed" }) };
         })
     : undefined;
   return {

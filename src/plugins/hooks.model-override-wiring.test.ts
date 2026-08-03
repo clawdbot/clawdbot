@@ -6,6 +6,7 @@
  * 2. before_prompt_build receives session messages and prepends prompt context
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildPromptBuildDropMarker } from "./hook-prompt-build-drop-marker.js";
 import { createHookRunner } from "./hooks.js";
 import { addTestHook, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-fixtures.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
@@ -159,7 +160,7 @@ describe("model override pipeline wiring", () => {
       });
     });
 
-    it("skips timed-out handlers and continues", async () => {
+    it("marks a timed-out handler and continues with the surviving contribution", async () => {
       vi.useFakeTimers();
       try {
         addBeforePromptBuildHook(
@@ -186,7 +187,14 @@ describe("model override pipeline wiring", () => {
         );
         await vi.advanceTimersByTimeAsync(5);
 
-        await expect(resultPromise).resolves.toEqual({ prependContext: "fast" });
+        // The timeout is still fail-open, but the discarded contribution is now
+        // named in the prompt instead of only in the log.
+        await expect(resultPromise).resolves.toMatchObject({
+          prependContext: `${buildPromptBuildDropMarker({
+            reason: "timed-out",
+            pluginId: "slow-plugin",
+          })}\n\nfast`,
+        });
         expect(logger.error).toHaveBeenCalledWith(
           "[hooks] before_prompt_build handler from slow-plugin failed: timed out after 5ms",
         );

@@ -5,6 +5,7 @@
  * compaction while keeping hook failures non-fatal.
  */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { buildPromptBuildDropMarker } from "../../plugins/hook-prompt-build-drop-marker.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookBeforePromptBuildResult } from "../../plugins/types.js";
 import { joinPresentTextSegments } from "../../shared/text/join-segments.js";
@@ -75,10 +76,14 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
       : undefined;
 
   const promptBuildResult = hookRunner?.hasHooks("before_prompt_build")
-    ? await hookRunner.runBeforePromptBuild(promptEvent, hookCtx).catch((error: unknown) => {
-        log.warn(`before_prompt_build hook failed: ${String(error)}`);
-        return undefined;
-      })
+    ? await hookRunner
+        .runBeforePromptBuild(promptEvent, hookCtx)
+        .catch((error: unknown): PluginHookBeforePromptBuildResult => {
+          log.warn(`before_prompt_build hook failed: ${String(error)}`);
+          // Mirrors the embedded runner: a dispatch-level throw loses every
+          // contribution, so the prompt must say so rather than look complete.
+          return { prependContext: buildPromptBuildDropMarker({ reason: "failed" }) };
+        })
     : undefined;
   const systemPrompt = resolvePromptBuildSystemPrompt({
     developerInstructions: params.developerInstructions,

@@ -112,6 +112,14 @@ instead of continuing without a policy decision.
 logged and shutdown continues so plugin cleanup cannot consume the Gateway
 process watchdog.
 
+`before_prompt_build` uses a 15-second default per handler and fails open, but
+the discard is never silent. When a handler throws, exceeds its budget, or the
+whole dispatch is skipped because a handler started a nested prompt build,
+OpenClaw prepends a one-line `[context-lost]` marker naming the plugin and the
+reason to the prompt it was going to contribute to. Plugins inject the agent's
+work queue through this hook, so a prompt that lost a contribution has to say so
+rather than look complete. Surviving handlers' contributions are unaffected.
+
 Outbound modifying hooks `message_sending` and `reply_payload_sending` use a
 15-second default per handler. If one times out, OpenClaw logs the plugin error
 and continues with the latest payload so the serialized delivery lane can
