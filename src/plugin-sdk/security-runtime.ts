@@ -1,7 +1,4 @@
-/**
- * @deprecated Broad public SDK barrel. Prefer focused security/SSRF/secret
- * subpaths and avoid adding new imports here.
- */
+/** Public security runtime helpers for plugin-side trust boundaries. */
 
 import { statRegularFileSync as inspectRegularFileSync } from "../infra/fs-safe.js";
 
