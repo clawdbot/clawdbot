@@ -137,9 +137,11 @@ describe("gateway RPC wire contracts", () => {
       emitHeartbeatEvent({ status: "skipped", reason: "qa-wire-ordering" });
       const secondHeartbeats = await Promise.all(secondHeartbeatPromises);
 
-      for (let index = 0; index < clients.length; index += 1) {
-        const first = firstHeartbeats[index];
+      for (const [index, first] of firstHeartbeats.entries()) {
         const second = secondHeartbeats[index];
+        if (!second) {
+          throw new Error(`missing second heartbeat for client ${index}`);
+        }
         expect(first).toMatchObject({
           type: "event",
           event: "heartbeat",
