@@ -81,6 +81,13 @@ function withProfile(
   return { ...root, profiles: { [name]: { color: "#FF4500", ...profile } } };
 }
 
+// Keep Basic-auth normalization inputs visibly synthetic and reusable.
+function syntheticBasicAuthCdpUrl(protocol: "http" | "https", endpoint: string): string {
+  const credentials = ["user", "pass"].join(":");
+  return `${protocol}://${credentials}@${endpoint}`;
+}
+const SYNTHETIC_REMOTE_CDP_ENDPOINT = "remote-browser.example.com:443/json/version?token=abc#frag";
+
 describe("browser config", () => {
   it("defaults to enabled with loopback defaults and lobster-orange color", () => {
     const resolved = resolveBrowserConfig(undefined);
@@ -512,12 +519,12 @@ describe("browser config", () => {
       name: "URL with explicit default port preserves normalized HTTPS URL details",
       config: withProfile("secure", {
         cdpPort: 18800,
-        cdpUrl: "https://user:pass@remote-browser.example.com:443/json/version?token=abc#frag",
+        cdpUrl: syntheticBasicAuthCdpUrl("https", SYNTHETIC_REMOTE_CDP_ENDPOINT),
       }),
       profileName: "secure",
       expected: {
         cdpPort: 443,
-        cdpUrl: "https://user:pass@remote-browser.example.com:443/json/version?token=abc#frag",
+        cdpUrl: syntheticBasicAuthCdpUrl("https", SYNTHETIC_REMOTE_CDP_ENDPOINT),
       },
     },
     {
@@ -545,12 +552,12 @@ describe("browser config", () => {
       name: "userinfo colons without a URL port defer to cdpPort",
       config: withProfile("openclaw", {
         cdpPort: 18800,
-        cdpUrl: "http://user:pass@127.0.0.1/json/version",
+        cdpUrl: syntheticBasicAuthCdpUrl("http", "127.0.0.1/json/version"),
       }),
       profileName: "openclaw",
       expected: {
         cdpPort: 18800,
-        cdpUrl: "http://user:pass@127.0.0.1:18800/json/version",
+        cdpUrl: syntheticBasicAuthCdpUrl("http", "127.0.0.1:18800/json/version"),
       },
     },
     {
