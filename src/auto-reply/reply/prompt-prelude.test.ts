@@ -225,6 +225,41 @@ describe("buildReplyPromptEnvelope", () => {
     );
   });
 
+  it("uses completed transcripts when room-event command text is stale", () => {
+    const sessionCtx = finalizeInboundContext({
+      Body: "[Audio]",
+      BodyStripped: "[Audio]",
+      CommandBody: "[Audio]",
+      Provider: "discord",
+      ChatType: "group",
+      InboundEventKind: "room_event",
+      MessageSid: "voice-123",
+      SenderName: "Alice",
+    });
+    sessionCtx.Transcript = "Please stop the current task";
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "[Audio]",
+      hasUserBody: true,
+      inboundUserContext: "Conversation context:",
+      isBareSessionReset: false,
+      startupAction: "new",
+      inboundEventKind: "room_event",
+    });
+
+    expect(envelope.transcriptCommandBody).toBe(
+      "#voice-123 Alice: Please stop the current task",
+    );
+    expect(envelope.currentInboundContext?.text).toContain(
+      "Current event:\n#voice-123 Alice: Please stop the current task",
+    );
+    expect(envelope.currentInboundContext?.text).not.toContain(
+      "Current event:\n#voice-123 Alice: [Audio]",
+    );
+  });
+
   it("uses the raw current body for room-event current event text", () => {
     const sessionCtx = finalizeInboundContext({
       Body: "[Chat history]\nAlice: old context\n\nBob: current note",

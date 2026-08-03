@@ -138,6 +138,8 @@ function formatRoomEventLine(ctx: TemplateContext, body: string): string {
 
 function resolveRoomEventBody(params: ReplyPromptEnvelopeBaseParams): string {
   return (
+    normalizeOptionalString(params.ctx.Transcript) ??
+    normalizeOptionalString(params.sessionCtx.Transcript) ??
     normalizeOptionalString(params.ctx.commandText) ??
     normalizeOptionalString(params.sessionCtx.commandText) ??
     (params.hasUserBody ? params.baseBody.trim() : undefined) ??
