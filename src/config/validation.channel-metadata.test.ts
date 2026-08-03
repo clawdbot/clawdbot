@@ -666,7 +666,10 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
     (composition) => {
       const registry = createExternalFeishuSchemaRegistry();
       const plugin = expectDefined(registry.plugins[0], "external Feishu plugin manifest");
-      const channel = expectDefined(plugin.channelConfigs?.feishu, "external Feishu channel config");
+      const channel = expectDefined(
+        plugin.channelConfigs?.feishu,
+        "external Feishu channel config",
+      );
       channel.schema = {
         [composition]: [
           {
