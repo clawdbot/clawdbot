@@ -2276,7 +2276,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS = [
   ],
   [/^scripts\/lib\/plugin-sdk-entries\.mjs$/u, pluginSdkEntryOwners],
   [
-    /^scripts\/lib\/official-external-channel-catalog\.json$/u,
+    /^scripts\/lib\/official-external-channel-(?:catalog|seed)\.json$/u,
     [
       "src/plugins/official-external-plugin-catalog.test.ts",
       releaseCheck,

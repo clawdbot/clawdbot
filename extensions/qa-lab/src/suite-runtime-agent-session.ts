@@ -43,6 +43,7 @@ type QaSessionTranscriptSeedParams = {
 
 const SESSION_STORE_LOCK_RETRY_DELAYS_MS = [1_000, 3_000, 5_000] as const;
 const SESSION_STORE_FTS_SETTLE_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000] as const;
+const MAX_SUCCESSFUL_TOOL_CALL_EVENTS = 64;
 
 type QaSessionTranscriptSummary = {
   assistantMirrors?: Array<{ identity: string; text: string }>;
@@ -51,6 +52,7 @@ type QaSessionTranscriptSummary = {
   eventCursor: number;
   userMessageCount: number;
   successfulToolCallCounts: Record<string, number>;
+  successfulToolCallEvents?: Array<{ name: string; timestamp: number; toolCallId: string }>;
   finalText: string;
   hasDirectReplySelfMessage: boolean;
   lastAssistantContentTypes?: string[];
@@ -120,6 +122,9 @@ function summarizeSessionTranscriptEvents(
   const assistantToolCallCounts: Record<string, number> = {};
   const completedToolCallCounts: Record<string, number> = {};
   const successfulToolCallCounts: Record<string, number> = {};
+  const successfulToolCallEvents: NonNullable<
+    QaSessionTranscriptSummary["successfulToolCallEvents"]
+  > = [];
   const assistantToolNamesByCallId = new Map<string, string>();
   const completedToolCallIds = new Set<string>();
   const successfulToolCallIds = new Set<string>();
@@ -162,6 +167,17 @@ function summarizeSessionTranscriptEvents(
       ) {
         successfulToolCallIds.add(toolCallId);
         successfulToolCallCounts[toolName] = (successfulToolCallCounts[toolName] ?? 0) + 1;
+        if (typeof message.timestamp === "number" && Number.isFinite(message.timestamp)) {
+          // Keep owner-authenticated result chronology bounded for long-lived QA sessions.
+          if (successfulToolCallEvents.length === MAX_SUCCESSFUL_TOOL_CALL_EVENTS) {
+            successfulToolCallEvents.shift();
+          }
+          successfulToolCallEvents.push({
+            name: toolName,
+            timestamp: message.timestamp,
+            toolCallId,
+          });
+        }
       }
       continue;
     }
@@ -207,6 +223,7 @@ function summarizeSessionTranscriptEvents(
     eventCursor,
     userMessageCount,
     successfulToolCallCounts,
+    ...(successfulToolCallEvents.length > 0 ? { successfulToolCallEvents } : {}),
     finalText,
     hasDirectReplySelfMessage: scanner.findings().length > 0,
     ...(lastAssistantContentTypes.length > 0 ? { lastAssistantContentTypes } : {}),

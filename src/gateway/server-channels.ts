@@ -728,10 +728,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             restartPending: false,
             lastStartAt: Date.now(),
             lastError: null,
-            // Runtime rows are patch-merged, so a dead-ingress verdict from the
-            // previous lifecycle would outlive the condition it described. Every
-            // start re-proves ingress, so every start must clear it first.
+            // Runtime rows are patch-merged; prior ingress or terminal verdicts
+            // must not poison a new lifecycle before its plugin reports status.
             ingressUnavailable: undefined,
+            terminalDisconnect: undefined,
             reconnectAttempts: preserveRestartAttempts ? (restarts.get(rKey)?.attempts ?? 0) : 0,
           });
           const task = Promise.resolve().then(async () => {

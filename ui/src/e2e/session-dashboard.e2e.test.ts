@@ -9,6 +9,7 @@ import { SANDBOX_HOST_PATH } from "../../../src/agents/sandbox-host.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import {
   canRunPlaywrightChromium,
+  controlUiBundledSettingsStorageKey,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -139,26 +140,29 @@ const pluginWidgetBoardSnapshot = {
 };
 
 async function showDashboard(page: Page): Promise<void> {
-  await page.addInitScript((key) => {
-    const settingsKey = "openclaw.control.settings.v1:ws://127.0.0.1:18789";
-    const settings = JSON.parse(localStorage.getItem(settingsKey) ?? "{}") as Record<
-      string,
-      unknown
-    >;
-    const boardSessionViews =
-      settings.boardSessionViews && typeof settings.boardSessionViews === "object"
-        ? (settings.boardSessionViews as Record<string, unknown>)
-        : {};
-    const savedView = boardSessionViews[key];
-    settings.boardSessionViews = {
-      ...boardSessionViews,
-      [key]: {
-        activeTabId: "main",
-        ...(savedView && typeof savedView === "object" ? savedView : {}),
-      },
-    };
-    localStorage.setItem(settingsKey, JSON.stringify(settings));
-  }, sessionKey);
+  const settingsKey = controlUiBundledSettingsStorageKey(server.baseUrl);
+  await page.addInitScript(
+    ({ key, storageKey }) => {
+      const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}") as Record<
+        string,
+        unknown
+      >;
+      const boardSessionViews =
+        settings.boardSessionViews && typeof settings.boardSessionViews === "object"
+          ? (settings.boardSessionViews as Record<string, unknown>)
+          : {};
+      const savedView = boardSessionViews[key];
+      settings.boardSessionViews = {
+        ...boardSessionViews,
+        [key]: {
+          activeTabId: "main",
+          ...(savedView && typeof savedView === "object" ? savedView : {}),
+        },
+      };
+      localStorage.setItem(storageKey, JSON.stringify(settings));
+    },
+    { key: sessionKey, storageKey: settingsKey },
+  );
 }
 
 function workboardConfigSnapshot(enabled = true) {

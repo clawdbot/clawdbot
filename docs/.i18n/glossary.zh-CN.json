@@ -388,6 +388,10 @@
     "target": "微信"
   },
   {
+    "source": "WeCom",
+    "target": "企业微信"
+  },
+  {
     "source": "Weixin",
     "target": "微信"
   },

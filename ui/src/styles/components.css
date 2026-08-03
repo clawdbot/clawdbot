@@ -1128,6 +1128,136 @@ openclaw-session-owner-chip {
   box-shadow: var(--focus-ring);
 }
 
+/* Carapace Sensitive Input adapted to the Control UI token contract. */
+.oc-sensitive-input {
+  position: relative;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  align-items: stretch;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  box-shadow: inset 0 1px 0 var(--card-highlight);
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.oc-sensitive-input:hover:not(:has(input:disabled)) {
+  border-color: var(--border-strong);
+}
+
+.oc-sensitive-input:focus-within {
+  border-color: var(--ring);
+  box-shadow: var(--focus-ring);
+}
+
+.oc-sensitive-input > input {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  box-shadow: none;
+}
+
+.oc-sensitive-input > input:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.oc-sensitive-input > input::placeholder {
+  color: var(--muted);
+}
+
+.oc-sensitive-mask {
+  position: absolute;
+  z-index: 1;
+  inset: 0 44px 0 0;
+  display: flex;
+  overflow: hidden;
+  align-items: center;
+  padding: 0 12px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.oc-sensitive-mask[hidden] {
+  display: none;
+}
+
+.oc-sensitive-mask > span {
+  display: block;
+  will-change: transform;
+}
+
+.oc-sensitive-input[data-sensitive-mask-ready="true"][data-revealed="false"] > input {
+  color: transparent;
+  caret-color: var(--text);
+}
+
+.oc-sensitive-input[data-sensitive-mask-ready="true"][data-revealed="false"] > input::selection {
+  color: transparent;
+}
+
+.oc-sensitive-toggle {
+  position: relative;
+  z-index: 2;
+  display: inline-grid;
+  width: 44px;
+  min-width: 44px;
+  height: 100%;
+  min-height: 44px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid var(--input);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.oc-sensitive-toggle:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.oc-sensitive-toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.oc-sensitive-toggle:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -3px;
+}
+
+.oc-sensitive-toggle svg {
+  width: 16px;
+  height: 16px;
+}
+
+@media (forced-colors: active) {
+  .oc-sensitive-mask {
+    display: none;
+  }
+
+  .oc-sensitive-input[data-sensitive-mask-ready="true"][data-revealed="false"] > input {
+    color: CanvasText;
+  }
+}
+
 .field select {
   appearance: none;
   padding-right: 36px;

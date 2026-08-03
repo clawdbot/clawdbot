@@ -303,6 +303,127 @@ describeControlUiE2e("Control UI custodian event nudge mocked Gateway E2E", () =
     }
   });
 
+  it("renders rich wizard controls and sends typed answers", async () => {
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "openclaw.chat"],
+      methodResponses: {
+        "openclaw.chat": {
+          sessionId: "e2e-rich-wizard",
+          reply: "Choose a channel.",
+          action: "none",
+          wizardInputPending: true,
+          step: {
+            id: "channel",
+            type: "select",
+            message: "Which channel?",
+            options: ["Discord", "Slack", "Telegram", "WhatsApp", "Twitch"].map((label) => ({
+              label,
+              value: label.toLowerCase(),
+            })),
+          },
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}custodian`);
+      await page.getByLabel("Twitch").waitFor();
+      expect(await page.locator("openclaw-option-card").count()).toBe(0);
+      expect(await page.locator(".agent-chat__composer-shell").count()).toBe(0);
+
+      await gateway.setMethodResponse("openclaw.chat", {
+        sessionId: "e2e-rich-wizard",
+        reply: "Choose features.",
+        action: "none",
+        wizardInputPending: true,
+        step: {
+          id: "features",
+          type: "multiselect",
+          message: "Which features?",
+          options: [
+            { label: "Chat", value: "chat" },
+            { label: "Moderation", value: "moderation" },
+            { label: "Announcements", value: "announcements" },
+          ],
+        },
+      });
+      await page.getByLabel("Twitch").check();
+      await page.getByRole("button", { name: "Continue" }).click();
+      await page.getByLabel("Announcements").waitFor();
+
+      await gateway.setMethodResponse("openclaw.chat", {
+        sessionId: "e2e-rich-wizard",
+        reply: "Enter the secret.",
+        action: "none",
+        sensitive: true,
+        wizardInputPending: true,
+        step: {
+          id: "secret",
+          type: "text",
+          message: "Twitch client secret",
+          sensitive: true,
+        },
+      });
+      await page.getByLabel("Chat").check();
+      await page.getByLabel("Announcements").check();
+      await page.getByRole("button", { name: "Continue" }).click();
+      const secretInput = page.getByRole("textbox", {
+        name: "Twitch client secret",
+      });
+      await secretInput.waitFor();
+      expect(await secretInput.getAttribute("type")).toBe("password");
+      await page.getByRole("button", { name: "Reveal value" }).click();
+      expect(await secretInput.getAttribute("type")).toBe("text");
+      await page.getByRole("button", { name: "Hide value" }).click();
+      expect(await secretInput.getAttribute("type")).toBe("password");
+
+      await gateway.setMethodResponse("openclaw.chat", {
+        sessionId: "e2e-rich-wizard",
+        reply: "Setup complete.",
+        action: "none",
+      });
+      await secretInput.fill("fake-client-secret");
+      await page.getByRole("button", { name: "Submit" }).click();
+      await page.getByText("Setup complete.").waitFor();
+
+      const requests = await gateway.getRequests("openclaw.chat");
+      expect(requests.map((request) => request.params)).toEqual([
+        expect.objectContaining({ sessionId: expect.any(String) }),
+        expect.objectContaining({
+          wizardAnswer: { stepId: "channel", value: "twitch" },
+        }),
+        expect.objectContaining({
+          wizardAnswer: { stepId: "features", value: ["chat", "announcements"] },
+        }),
+        expect.objectContaining({
+          wizardAnswer: { stepId: "secret", value: "fake-client-secret" },
+        }),
+      ]);
+      expect(
+        requests
+          .slice(1)
+          .every(
+            (request) =>
+              typeof request.params === "object" &&
+              request.params !== null &&
+              !Object.hasOwn(request.params, "message"),
+          ),
+      ).toBe(true);
+      expect(await page.getByText("Sensitive reply sent").count()).toBe(1);
+      expect(await page.getByText("fake-client-secret").count()).toBe(0);
+      expect(await page.locator(".agent-chat__composer-shell").count()).toBe(1);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("stays silent during onboarding", async () => {
     const context = await browser.newContext({
       locale: "en-US",

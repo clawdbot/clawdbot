@@ -17,6 +17,7 @@ import { runSystemAgentTurnWithDeps } from "./agent-turn.test-support.js";
 import { classifySystemAgentApprovalText } from "./approval-intent.js";
 import {
   SystemAgentChatEngine as RuntimeSystemAgentChatEngine,
+  SystemAgentWizardAnswerError,
   type SystemAgentChatEngineOptions,
 } from "./chat-engine.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
@@ -3260,6 +3261,292 @@ describe("OpenClaw agent loop backends", () => {
 
     expect(runCliAgent).toHaveBeenCalledOnce();
     expect(reply.text).toContain("planner fallback reply");
+  });
+});
+
+describe("OpenClaw chat wizard step payload", () => {
+  // `action` is missing on purpose: no production path or prompter method emits
+  // a step of that type, so it is unreachable through this seam. The protocol
+  // round-trip test in packages/gateway-protocol covers it instead.
+  const cases: Array<{
+    name: string;
+    run: (prompter: WizardPrompter) => Promise<void>;
+    /** Undefined means no step awaits an answer when the reply is built. */
+    step: Record<string, unknown> | undefined;
+  }> = [
+    {
+      name: "text",
+      // openUrl binds to the next created step, so this proves the fields the
+      // card projection drops (placeholder/initialValue/sensitive/externalUrl).
+      // It is optional on the prompter contract; a prompter without it would
+      // fail the step assertion below on the missing externalUrl.
+      run: async (prompter) => {
+        await prompter.openUrl?.("https://example.com/auth");
+        await prompter.text({
+          message: "Bot token",
+          initialValue: "seed-token",
+          placeholder: "123:abc",
+          sensitive: true,
+        });
+      },
+      // initialValue is absent on purpose: the prompt below seeds one, but a
+      // sensitive step's prefilled value is the secret and must not cross to
+      // chat-result consumers. Everything else survives verbatim.
+      step: {
+        id: expect.any(String),
+        type: "text",
+        message: "Bot token",
+        placeholder: "123:abc",
+        sensitive: true,
+        executor: "client",
+        externalUrl: "https://example.com/auth",
+      },
+    },
+    {
+      name: "select",
+      run: async (prompter) => {
+        // Option values avoid "telegram" so tryAutoSelectChannel cannot answer
+        // this step for us and null the bridge's awaited step.
+        await prompter.select({
+          message: "DM mode",
+          options: [
+            { value: "alpha", label: "Alpha", hint: "First" },
+            { value: "beta", label: "Beta" },
+          ],
+          initialValue: "beta",
+        });
+      },
+      step: {
+        id: expect.any(String),
+        type: "select",
+        message: "DM mode",
+        options: [
+          { value: "alpha", label: "Alpha", hint: "First" },
+          { value: "beta", label: "Beta" },
+        ],
+        initialValue: "beta",
+        executor: "client",
+      },
+    },
+    {
+      name: "confirm",
+      run: async (prompter) => {
+        await prompter.confirm({ message: "Enable delegated auth?", initialValue: false });
+      },
+      step: {
+        id: expect.any(String),
+        type: "confirm",
+        message: "Enable delegated auth?",
+        initialValue: false,
+        executor: "client",
+      },
+    },
+    {
+      name: "multiselect",
+      run: async (prompter) => {
+        await prompter.multiselect({
+          message: "Features",
+          options: [
+            { value: "alerts", label: "Alerts" },
+            { value: "logs", label: "Logs" },
+          ],
+        });
+      },
+      step: {
+        id: expect.any(String),
+        type: "multiselect",
+        message: "Features",
+        options: [
+          { value: "alerts", label: "Alerts" },
+          { value: "logs", label: "Logs" },
+        ],
+        executor: "client",
+      },
+    },
+    {
+      // Informational steps are auto-answered by the pump before the reply is
+      // built, so they render as prose with no control. Absent `step` here is
+      // the contract, not a gap.
+      name: "note",
+      run: async (prompter) => {
+        await prompter.note("Open the provider console first.");
+      },
+      step: undefined,
+    },
+    {
+      name: "progress",
+      run: async (prompter) => {
+        prompter.progress("Linking your account");
+      },
+      step: undefined,
+    },
+  ];
+
+  it.each(cases)("carries the awaited $name step on the chat reply", async ({ run, step }) => {
+    useTempStateDir();
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await run(prompter);
+      },
+    });
+
+    const reply = await engine.handle("connect telegram");
+
+    if (step) {
+      expect(reply.step).toEqual(step);
+    } else {
+      expect(reply.step).toBeUndefined();
+    }
+  });
+
+  it("strips a sensitive step's prefilled value but keeps a plain one", async () => {
+    useTempStateDir();
+    const makeEngine = (sensitive: boolean) =>
+      new SystemAgentChatEngine({
+        surface: "gateway",
+        runAgentTurn: async () => null,
+        planWithAssistant: async () => null,
+        deps: { loadOverview: fakeOverviewLoader() },
+        runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+          await prompter.text({
+            message: "Bot token",
+            initialValue: "123456:REAL-SECRET",
+            ...(sensitive ? { sensitive: true } : {}),
+          });
+        },
+      });
+
+    const secret = await makeEngine(true).handle("connect telegram");
+    expect(secret.step?.sensitive).toBe(true);
+    expect(secret.step).not.toHaveProperty("initialValue");
+    expect(JSON.stringify(secret)).not.toContain("REAL-SECRET");
+
+    // Redaction is scoped to sensitive steps; ordinary prefill still reaches
+    // clients, otherwise every edit-in-place prompt would lose its default.
+    const plain = await makeEngine(false).handle("connect telegram");
+    expect(plain.step?.initialValue).toBe("123456:REAL-SECRET");
+  });
+
+  it("omits the wizard step outside an awaiting hosted wizard", async () => {
+    useTempStateDir();
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => ({ text: "*click* Everything looks healthy." }),
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({ message: "Bot token" });
+      },
+    });
+
+    const ordinary = await engine.handle("how is my setup looking?");
+    expect(ordinary.step).toBeUndefined();
+
+    const awaiting = await engine.handle("connect telegram");
+    expect(awaiting.step?.type).toBe("text");
+
+    const done = await engine.handle("123:abc");
+    expect(done.text).toContain("telegram is configured");
+    expect(done.step).toBeUndefined();
+  });
+
+  it("submits a typed answer directly and records the server-owned option label", async () => {
+    useTempStateDir();
+    let selected: unknown;
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        selected = await prompter.select({
+          message: "Choose one",
+          options: [
+            { value: "alpha", label: "Alpha" },
+            { value: "beta", label: "Beta" },
+          ],
+        });
+      },
+    });
+
+    const prompt = await engine.handle("connect telegram");
+    const stepId = expectDefined(prompt.step?.id, "expected an active wizard step");
+    await engine.answerWizard({ stepId, value: "beta" });
+
+    expect(selected).toBe("beta");
+    expect(engine.historySince(0)).toContainEqual({ role: "user", text: "Beta" });
+  });
+
+  it("rejects a stale structured answer without changing the active step", async () => {
+    useTempStateDir();
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({ message: "Bot token" });
+      },
+    });
+
+    const prompt = await engine.handle("connect telegram");
+    await expect(
+      engine.answerWizard({ stepId: "stale-step", value: "ignored" }),
+    ).rejects.toBeInstanceOf(SystemAgentWizardAnswerError);
+    const stepId = expectDefined(prompt.step?.id, "expected an active wizard step");
+    const done = await engine.answerWizard({ stepId, value: "123:abc" });
+
+    expect(done.step).toBeUndefined();
+    expect(JSON.stringify(engine.historySince(0))).not.toContain("ignored");
+  });
+
+  it("redacts a sensitive structured answer from engine history", async () => {
+    useTempStateDir();
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({ message: "Bot token", sensitive: true });
+      },
+    });
+
+    const prompt = await engine.handle("connect telegram");
+    const stepId = expectDefined(prompt.step?.id, "expected an active wizard step");
+    await engine.answerWizard({ stepId, value: "raw-secret-value" });
+
+    expect(engine.historySince(0)).toContainEqual({ role: "user", text: "<redacted secret>" });
+    expect(JSON.stringify(engine.historySince(0))).not.toContain("raw-secret-value");
+  });
+
+  it("keeps the numbered text grammar for text-only wizard clients", async () => {
+    useTempStateDir();
+    let selected: unknown;
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        selected = await prompter.select({
+          message: "Choose one",
+          options: [
+            { value: "alpha", label: "Alpha" },
+            { value: "beta", label: "Beta" },
+          ],
+        });
+      },
+    });
+
+    await engine.handle("connect telegram");
+    await engine.handle("2");
+
+    expect(selected).toBe("beta");
   });
 });
 

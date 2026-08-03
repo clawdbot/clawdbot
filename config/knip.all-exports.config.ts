@@ -44,6 +44,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/non-isolated-runner.ts!",
   "test/vitest/*-runtime.ts!",
   "test/vitest/vitest*.config.ts!",
+  "test/vitest/vitest*.setup.ts!",
+  "test/vitest/vitest*.global-setup.ts!",
   // Test drivers and Docker fixtures are executed by path from package scripts
   // and the test-project registry.
   "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts!",

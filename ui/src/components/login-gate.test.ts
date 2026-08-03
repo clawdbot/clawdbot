@@ -39,6 +39,7 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  Reflect.deleteProperty(document, "execCommand");
 });
 
 describe("login gate failure recovery", () => {
@@ -98,5 +99,74 @@ describe("login gate failure recovery", () => {
       "Approve the pending browser/device request from that list.",
       "Reconnect after the approval completes.",
     ]);
+  });
+
+  it.each(["click", "Enter", " ", "nested button"])(
+    "surfaces denied gateway-command copying from the %s interaction",
+    async (interaction) => {
+      const writeText = vi.fn().mockRejectedValue(new DOMException("Clipboard access denied"));
+      const execCommand = vi.fn(() => false);
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      Object.defineProperty(document, "execCommand", { configurable: true, value: execCommand });
+      const element = await mountFailure("WebSocket connection failed", null);
+      const command = element.querySelector<HTMLElement>(".login-gate__command");
+      const button = command?.querySelector<HTMLButtonElement>(".chat-copy-btn");
+
+      if (interaction === "nested button") {
+        button?.click();
+      } else if (interaction === "click") {
+        command?.click();
+      } else {
+        command?.dispatchEvent(
+          new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: interaction }),
+        );
+      }
+
+      await vi.waitFor(() => expect(button?.getAttribute("aria-label")).toBe("Copy failed"));
+      expect(button?.dataset.error).toBe("1");
+      expect(writeText).toHaveBeenCalledOnce();
+      expect(execCommand).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("keeps the latest command-copy feedback until its own reset", async () => {
+    const writeText = vi
+      .fn()
+      .mockRejectedValueOnce(new DOMException("Clipboard access denied"))
+      .mockResolvedValueOnce(undefined);
+    const execCommand = vi.fn(() => false);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    Object.defineProperty(document, "execCommand", { configurable: true, value: execCommand });
+    const schedule = vi.spyOn(window, "setTimeout");
+    const element = await mountFailure("WebSocket connection failed", null);
+    const command = element.querySelector<HTMLElement>(".login-gate__command");
+    const button = command?.querySelector<HTMLButtonElement>(".chat-copy-btn");
+
+    command?.click();
+    await vi.waitFor(() => expect(button?.getAttribute("aria-label")).toBe("Copy failed"));
+    const failedReset = schedule.mock.calls.find(([, delay]) => delay === 2_000)?.[0];
+    if (typeof failedReset !== "function") {
+      throw new Error("Expected the failed copy feedback to schedule its reset");
+    }
+
+    command?.click();
+    await vi.waitFor(() => expect(button?.getAttribute("aria-label")).toBe("Copied!"));
+    expect(button?.dataset.error).toBeUndefined();
+    expect(button?.dataset.copied).toBe("1");
+
+    failedReset();
+    expect(button?.getAttribute("aria-label")).toBe("Copied!");
+    expect(button?.dataset.copied).toBe("1");
+
+    const successfulReset = schedule.mock.calls.find(([, delay]) => delay === 1_500)?.[0];
+    if (typeof successfulReset !== "function") {
+      throw new Error("Expected the successful copy feedback to schedule its reset");
+    }
+    successfulReset();
+
+    expect(button?.getAttribute("aria-label")).toBe("Copy command");
+    expect(button?.dataset.copied).toBeUndefined();
+    expect(writeText).toHaveBeenCalledTimes(2);
+    expect(execCommand).toHaveBeenCalledOnce();
   });
 });

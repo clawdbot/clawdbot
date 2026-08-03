@@ -732,6 +732,7 @@ export async function downloadSlackFile(
         url_private_download: file.url_private_download,
       },
     ],
+    client,
     token,
     maxBytes: opts.maxBytes,
   });

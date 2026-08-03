@@ -664,8 +664,8 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         const parent = parentConversationId?.trim();
         const child = conversationId.trim();
         return parent && parent !== child
-          ? { to: normalizeSlackMessagingTarget(`channel:${parent}`), threadId: child }
-          : { to: normalizeSlackMessagingTarget(`channel:${child}`) };
+          ? { to: normalizeSlackMessagingTarget(parent), threadId: child }
+          : { to: normalizeSlackMessagingTarget(child) };
       },
       resolveSessionTarget: ({ id }) => {
         // Session identities stay folded; send.ts restores unambiguous IDs at the API boundary.

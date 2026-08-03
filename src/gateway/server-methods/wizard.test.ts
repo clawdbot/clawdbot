@@ -8,6 +8,37 @@ import { createWizardSessionTracker } from "../server-wizard-sessions.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { type SetupWizardRunner, wizardHandlers } from "./wizard.js";
 
+function createWizardContext(
+  wizardRunner: NonNullable<GatewayRequestHandlerOptions["context"]>["wizardRunner"],
+) {
+  const wizardSessions = new Map();
+  return {
+    wizardSessions,
+    wizardRunner,
+    findRunningWizard: () => undefined,
+    purgeWizardSession: (sessionId: string) => wizardSessions.delete(sessionId),
+  };
+}
+
+function readSuccessfulResponse(respond: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  expect(respond).toHaveBeenCalledOnce();
+  const [ok, result] = respond.mock.calls[0] ?? [];
+  expect(ok).toBe(true);
+  expect(result).toBeDefined();
+  return result as Record<string, unknown>;
+}
+
+async function invokeWizard(
+  method: "wizard.start" | "wizard.next",
+  params: Record<string, unknown>,
+  context: ReturnType<typeof createWizardContext>,
+): Promise<Record<string, unknown>> {
+  const respond = vi.fn();
+  const handler = expectDefined(wizardHandlers[method], `wizardHandlers[${method}] test invariant`);
+  await handler({ params, respond, context } as never);
+  return readSuccessfulResponse(respond);
+}
+
 describe("wizard session lookup", () => {
   it.each([
     { method: "wizard.next", params: { sessionId: "expired" } },
@@ -207,6 +238,56 @@ describe("wizard setup ownership", () => {
     expect(respond.mock.calls[0]?.[1]).toMatchObject({ done: false, status: "running" });
 
     for (const session of tracker.wizardSessions.values()) {
+      session.cancel();
+    }
+  });
+});
+
+describe("wizard step serialization", () => {
+  it("strips a sensitive initial value from wizard.start", async () => {
+    const context = createWizardContext(async (_opts, _runtime, prompter) => {
+      await prompter.text({
+        message: "Bot token",
+        sensitive: true,
+        initialValue: "123456:REAL-SECRET",
+      });
+    });
+    const result = await invokeWizard("wizard.start", {}, context);
+    expect(result.step).toMatchObject({ sensitive: true });
+    expect(result.step).not.toHaveProperty("initialValue");
+    for (const session of context.wizardSessions.values()) {
+      session.cancel();
+    }
+  });
+
+  it("keeps a plain default but strips the next sensitive one from wizard.next", async () => {
+    const context = createWizardContext(async (_opts, _runtime, prompter) => {
+      await prompter.text({
+        message: "Display name",
+        initialValue: "OpenClaw",
+      });
+      await prompter.text({
+        message: "Bot token",
+        sensitive: true,
+        initialValue: "123456:REAL-SECRET",
+      });
+    });
+    const startResult = await invokeWizard("wizard.start", {}, context);
+    expect(startResult.step).toMatchObject({ initialValue: "OpenClaw" });
+    const sessionId = startResult.sessionId;
+    expect(typeof sessionId).toBe("string");
+
+    const params = {
+      sessionId,
+      answer: {
+        stepId: (startResult.step as { id: string }).id,
+        value: "Renamed",
+      },
+    };
+    const nextResult = await invokeWizard("wizard.next", params, context);
+    expect(nextResult.step).toMatchObject({ sensitive: true });
+    expect(nextResult.step).not.toHaveProperty("initialValue");
+    for (const session of context.wizardSessions.values()) {
       session.cancel();
     }
   });

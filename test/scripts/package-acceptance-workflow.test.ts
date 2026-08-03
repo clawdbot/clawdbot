@@ -3175,7 +3175,7 @@ describe("package artifact reuse", () => {
     );
     const requireBuzz = workflowStep(buzzJob, "Require requested Buzz QA runner");
     expect(requireBuzz.if).toBe(
-      "always() && steps.resolve_buzz.outcome == 'success' && steps.resolve_buzz.outputs.available != 'true'",
+      "always() && inputs.expected_sha == '' && steps.resolve_buzz.outcome == 'success' && steps.resolve_buzz.outputs.available != 'true'",
     );
     expect(requireBuzz.run).toContain(
       "The selected ref does not declare the requested Buzz QA runner.",

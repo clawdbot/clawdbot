@@ -249,4 +249,46 @@ describe("resolveNonInteractiveApiKey", () => {
     const [profileParams] = resolveApiKeyForProfile.mock.calls[0] ?? [];
     expect(profileParams?.profileId).toBe("custom-models-custom-local:default");
   });
+
+  it("retains existing profile reuse in secret-ref mode without inventing an env reference", async () => {
+    const runtime = createRuntime();
+    authStore.profiles["custom-models-custom-local:default"] = {
+      type: "api_key",
+      provider: "custom-models-custom-local",
+      key: "fixture-profile-key",
+    };
+    resolveEnvApiKey.mockReturnValue(null);
+
+    const result = await resolveNonInteractiveApiKey({
+      provider: "custom-models-custom-local",
+      cfg: {},
+      flagName: "--custom-api-key",
+      envVar: "CUSTOM_API_KEY",
+      runtime: runtime as never,
+      secretInputMode: "ref",
+    });
+
+    expect(result).toEqual({ key: "fixture-profile-key", source: "profile" });
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("keeps intentionally keyless providers optional in secret-ref mode", async () => {
+    const runtime = createRuntime();
+    resolveEnvApiKey.mockReturnValue(null);
+
+    const result = await resolveNonInteractiveApiKey({
+      provider: "custom-models-custom-local",
+      cfg: {},
+      flagName: "--custom-api-key",
+      envVar: "CUSTOM_API_KEY",
+      runtime: runtime as never,
+      required: false,
+      secretInputMode: "ref",
+    });
+
+    expect(result).toBeNull();
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
 });

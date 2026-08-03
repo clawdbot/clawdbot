@@ -1621,6 +1621,41 @@ kill -TERM "$$"`,
     expect(runCommand).toHaveBeenCalledTimes(1);
   });
 
+  it("fails boundedly when Windows background polling loses guest transport", async () => {
+    const retries: string[] = [];
+    let donePolls = 0;
+    const runCommand = vi.fn((_command: string, args: string[], options?: { input?: string }) => {
+      const command = args.at(-1) ?? "";
+      if (options?.input) {
+        return { status: 0, stderr: "", stdout: "" };
+      }
+      if (args.includes("--current-user")) {
+        return { status: 0, stderr: "", stdout: "started\n" };
+      }
+      if (args.includes("cmd.exe") && command.includes("echo wait")) {
+        donePolls++;
+        return { status: 124, stderr: "", stdout: "" };
+      }
+      return { status: 0, stderr: "", stdout: "" };
+    });
+
+    await expect(
+      runWindowsBackgroundPowerShell({
+        label: "ref-onboard",
+        onLaunchRetry: (message) => retries.push(message),
+        pollIntervalMs: 1,
+        runCommand,
+        script: "Write-Output ok",
+        timeoutMs: 720_000,
+        vmName: "Windows 11",
+      }),
+    ).rejects.toThrow("ref-onboard done poll failed after 3 consecutive guest transport errors");
+
+    expect(donePolls).toBe(3);
+    expect(retries).toHaveLength(3);
+    expect(retries.at(-1)).toContain("transport failure 3/3");
+  });
+
   it("returns timed-out host command status when check is disabled", () => {
     const result = runNode("process.stdout.write('partial'); setTimeout(() => {}, 1000);", {
       check: false,
@@ -1703,6 +1738,52 @@ kill -TERM "$$"`,
       } finally {
         if (grandchildPid && isProcessAlive(grandchildPid)) {
           process.kill(grandchildPid, "SIGKILL");
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "settles timed host commands when an escaped descendant retains child pipes",
+    () => {
+      const tempDir = makeTempDir(tempDirs, "openclaw-parallels-host-command-pipes-");
+      const grandchildPidPath = join(tempDir, "grandchild.pid");
+      let grandchildPid = 0;
+      const grandchildScript = [
+        "const { writeFileSync } = require('node:fs');",
+        "writeFileSync(process.env.GRANDCHILD_PID_PATH, String(process.pid));",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const parentScript = [
+        "const { spawn } = require('node:child_process');",
+        `const child = spawn(process.execPath, ['-e', ${JSON.stringify(grandchildScript)}], {`,
+        "  detached: true,",
+        "  env: process.env,",
+        "  stdio: ['ignore', 'inherit', 'inherit'],",
+        "});",
+        "child.unref();",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const startedAt = Date.now();
+
+      try {
+        const result = run(process.execPath, ["-e", parentScript], {
+          check: false,
+          env: {
+            ...process.env,
+            GRANDCHILD_PID_PATH: grandchildPidPath,
+          },
+          quiet: true,
+          timeoutMs: 100,
+        });
+
+        expect(result.status).toBe(124);
+        expect(Date.now() - startedAt).toBeLessThan(2_000);
+        grandchildPid = Number.parseInt(readFileSync(grandchildPidPath, "utf8"), 10);
+        expect(Number.isInteger(grandchildPid)).toBe(true);
+      } finally {
+        if (grandchildPid && isProcessAlive(grandchildPid)) {
+          process.kill(-grandchildPid, "SIGKILL");
         }
       }
     },

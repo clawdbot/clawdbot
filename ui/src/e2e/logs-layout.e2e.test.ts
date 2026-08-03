@@ -4,6 +4,7 @@ import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
+  controlUiBundledSettingsStorageKey,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -58,11 +59,8 @@ describeControlUiE2e("Control UI logs native app layout E2E", () => {
         : {}),
     });
     const page = await context.newPage();
-    await page.addInitScript(() => {
-      localStorage.setItem(
-        "openclaw.control.settings.v1:ws://127.0.0.1:18789",
-        JSON.stringify({ textScale: 125, themeMode: "dark" }),
-      );
+    await page.addInitScript((settingsKey) => {
+      localStorage.setItem(settingsKey, JSON.stringify({ textScale: 125, themeMode: "dark" }));
       const nativeWindow = window as Window & {
         __OPENCLAW_NATIVE_WEB_CHROME__?: boolean;
         __OPENCLAW_NATIVE_HISTORY__?: { canGoBack: boolean; canGoForward: boolean };
@@ -82,7 +80,7 @@ describeControlUiE2e("Control UI logs native app layout E2E", () => {
       } else {
         document.addEventListener("DOMContentLoaded", stamp);
       }
-    });
+    }, controlUiBundledSettingsStorageKey(server.baseUrl));
     await installMockGateway(page, {
       methodResponses: {
         "logs.tail": {

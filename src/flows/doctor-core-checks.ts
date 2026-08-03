@@ -43,6 +43,7 @@ import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { detectSkillWorkshopToolPolicyDiagnostic } from "../skills/workshop/tool-policy-diagnostic.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
+import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
 import type { SplitHealthCheckInput } from "./health-check-runner-types.js";
 import type {
   HealthCheck,
@@ -639,6 +640,7 @@ function noteTextToFinding(params: {
   checkId: string;
   severity: HealthFinding["severity"];
   text: string;
+  target?: string;
 }): HealthFinding {
   const lines = params.text.split("\n");
   const first = normalizeDoctorNoteLine(lines[0] ?? params.text);
@@ -647,6 +649,7 @@ function noteTextToFinding(params: {
     checkId: params.checkId,
     severity: params.severity,
     message: first,
+    ...(params.target ? { target: params.target } : {}),
     ...(rest ? { fixHint: rest } : {}),
   };
 }
@@ -1240,15 +1243,22 @@ function createWorkspaceSuggestionsCheck(
     defaultEnabled: false,
     source: "doctor",
     async detect(ctx) {
-      const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
-      const notes = await deps.collectWorkspaceSuggestionNotes(workspaceDir);
-      return notes.map((text) =>
-        noteTextToFinding({
-          checkId: "core/doctor/workspace-suggestions",
-          severity: "info",
-          text,
+      const scopes = resolveDoctorWorkspaceSuggestionScopes(ctx.cfg);
+      const findings = await Promise.all(
+        scopes.map(async ({ agentId, workspaceDir, labelAgent }) => {
+          const prefix = labelAgent ? `Agent "${agentId}": ` : "";
+          const notes = await deps.collectWorkspaceSuggestionNotes(workspaceDir);
+          return notes.map((text) =>
+            noteTextToFinding({
+              checkId: "core/doctor/workspace-suggestions",
+              severity: "info",
+              text: `${prefix}${text}`,
+              ...(labelAgent ? { target: agentId } : {}),
+            }),
+          );
         }),
       );
+      return findings.flat();
     },
   };
 }
