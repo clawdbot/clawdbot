@@ -22,12 +22,14 @@ const execFile = promisify(execFileCallback);
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/gateway-ssh-tunnels.ts";
 const STATUS_TIMEOUT_MS = 8_000;
 const PROCESS_TIMEOUT_MS = 10_000;
-const KNOWN_HOSTS_LOCK_TIMEOUT_MS = 30_000;
-const KNOWN_HOSTS_LOCK_RETRY_MS = 50;
 const TEST_TOKEN = "qa-gateway-ssh-token";
+const SSH_NAMESPACE_MARKER = "OPENCLAW_QA_SSH_NAMESPACE";
 
 type ProducerOptions = {
   artifactBase: string;
+  fixtureProcessPath?: string;
+  fixtureReadyPath?: string;
+  fixtureRoot?: string;
   repoRoot: string;
 };
 
@@ -53,20 +55,9 @@ type StatusPayload = {
   warnings?: StatusWarning[];
 };
 
-type KnownHostsBackup = {
-  existed: boolean;
-  mode?: number;
-  value: Buffer;
-};
-
-type KnownHostsLock = {
-  release: () => Promise<void>;
-  waitMs: number;
-};
-
 type IsolatedSshd = {
   clientKeyPath: string;
-  knownHostsLockWaitMs: number;
+  knownHostsPath: string;
   port: number;
   setKnownHost: (mode: "correct" | "wrong") => Promise<void>;
   stop: () => Promise<void>;
@@ -207,83 +198,10 @@ async function readPublicKeyLine(filePath: string) {
   return `${keyType} ${key}`;
 }
 
-async function backupKnownHosts(filePath: string): Promise<KnownHostsBackup> {
-  try {
-    const [value, stat] = await Promise.all([fs.readFile(filePath), fs.stat(filePath)]);
-    return { existed: true, mode: stat.mode, value };
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT") {
-      throw error;
-    }
-    return { existed: false, value: Buffer.alloc(0) };
-  }
-}
-
-async function restoreKnownHosts(filePath: string, backup: KnownHostsBackup) {
-  if (!backup.existed) {
-    await fs.rm(filePath, { force: true });
-    return;
-  }
-  await fs.writeFile(filePath, backup.value);
-  if (backup.mode !== undefined) {
-    await fs.chmod(filePath, backup.mode);
-  }
-}
-
-async function acquireKnownHostsLock(lockPath: string): Promise<KnownHostsLock> {
-  const startedAt = Date.now();
-  const deadlineAt = startedAt + KNOWN_HOSTS_LOCK_TIMEOUT_MS;
-  while (true) {
-    try {
-      const handle = await fs.open(lockPath, "wx", 0o600);
-      let released = false;
-      const release = async () => {
-        if (released) {
-          return;
-        }
-        released = true;
-        try {
-          await handle.close();
-        } finally {
-          await fs.rm(lockPath, { force: true });
-        }
-      };
-      try {
-        await handle.writeFile(`${process.pid}\n`, "utf8");
-      } catch (error) {
-        await release();
-        throw error;
-      }
-      return {
-        release,
-        waitMs: Date.now() - startedAt,
-      };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-        throw error;
-      }
-      if (Date.now() >= deadlineAt) {
-        throw new Error(
-          `timed out waiting for shared OpenSSH known-hosts lock after ${KNOWN_HOSTS_LOCK_TIMEOUT_MS}ms`,
-        );
-      }
-      await new Promise((resolve) => {
-        setTimeout(resolve, KNOWN_HOSTS_LOCK_RETRY_MS);
-      });
-    }
-  }
-}
-
-function withoutTargetKnownHost(existing: Buffer, targetPrefix: string) {
-  return existing
-    .toString("utf8")
-    .split(/\r?\n/)
-    .filter((line) => line && !line.startsWith(targetPrefix))
-    .join("\n");
-}
-
-async function startIsolatedSshd(root: string): Promise<IsolatedSshd> {
+async function startIsolatedSshd(
+  root: string,
+  onTrustPrepared?: () => Promise<void>,
+): Promise<IsolatedSshd> {
   const sshd = await resolveBinary(
     ["/usr/sbin/sshd", "/usr/local/sbin/sshd", "/opt/homebrew/sbin/sshd"],
     "daemon (sshd)",
@@ -344,71 +262,18 @@ async function startIsolatedSshd(root: string): Promise<IsolatedSshd> {
     "utf8",
   );
 
-  const systemHome = os.userInfo().homedir;
-  const sshDir = path.join(systemHome, ".ssh");
-  const knownHostsPath = path.join(sshDir, "known_hosts");
-  const lockPath = path.join(sshDir, ".openclaw-qa-known-hosts.lock");
+  const knownHostsPath = path.join(root, "known_hosts");
   const targetPrefix = `[127.0.0.1]:${port} `;
   const hostKeyLine = `${targetPrefix}${await readPublicKeyLine(hostKeyPath)}`;
   const wrongHostKeyLine = `${targetPrefix}${await readPublicKeyLine(wrongHostKeyPath)}`;
-  const sshDirExisted = await fs
-    .stat(sshDir)
-    .then(() => true)
-    .catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") {
-        return false;
-      }
-      throw error;
-    });
-  await fs.mkdir(sshDir, { recursive: true, mode: 0o700 });
-  let knownHostsLock: KnownHostsLock;
-  try {
-    knownHostsLock = await acquireKnownHostsLock(lockPath);
-  } catch (error) {
-    if (!sshDirExisted) {
-      await fs.rmdir(sshDir).catch(() => {});
-    }
-    throw error;
-  }
-  let knownHostsBackup: KnownHostsBackup;
-  try {
-    knownHostsBackup = await backupKnownHosts(knownHostsPath);
-  } catch (error) {
-    await knownHostsLock.release();
-    if (!sshDirExisted) {
-      await fs.rmdir(sshDir).catch(() => {});
-    }
-    throw error;
-  }
-  const retainedKnownHosts = withoutTargetKnownHost(knownHostsBackup.value, targetPrefix);
   const setKnownHost = async (mode: "correct" | "wrong") => {
     const line = mode === "correct" ? hostKeyLine : wrongHostKeyLine;
-    const content = retainedKnownHosts ? `${retainedKnownHosts}\n${line}\n` : `${line}\n`;
-    await fs.writeFile(knownHostsPath, content, { mode: 0o600 });
-  };
-  let restored = false;
-  const restoreHostState = async () => {
-    if (restored) {
-      return;
-    }
-    restored = true;
-    try {
-      await restoreKnownHosts(knownHostsPath, knownHostsBackup);
-    } finally {
-      await knownHostsLock.release();
-      if (!sshDirExisted) {
-        await fs.rmdir(sshDir).catch(() => {});
-      }
-    }
+    await fs.writeFile(knownHostsPath, `${line}\n`, { mode: 0o600 });
   };
 
-  try {
-    await setKnownHost("correct");
-    await runPrivileged(sshd, ["-t", "-f", configPath]);
-  } catch (error) {
-    await restoreHostState();
-    throw error;
-  }
+  await setKnownHost("correct");
+  await runPrivileged(sshd, ["-t", "-f", configPath]);
+  await onTrustPrepared?.();
 
   const invocation = privilegedInvocation(sshd, ["-D", "-e", "-f", configPath]);
   const child = spawn(invocation.command, invocation.args, {
@@ -423,32 +288,28 @@ async function startIsolatedSshd(root: string): Promise<IsolatedSshd> {
   let stopPromise: Promise<void> | undefined;
   const stop = async () => {
     stopPromise ??= (async () => {
-      try {
-        if (child.exitCode === null && child.signalCode === null) {
-          child.kill("SIGTERM");
-          await waitForExit(child, 2_000);
-        }
-        if (await canConnect(port)) {
-          const pid = (await fs.readFile(pidPath, "utf8").catch(() => "")).trim();
-          if (/^[1-9]\d*$/.test(pid)) {
-            await runPrivileged("/bin/kill", ["-TERM", pid]).catch(() => {});
-            await waitForPortState(port, false, 2_000).catch(() => {});
-          }
-        }
-        if (child.exitCode === null && child.signalCode === null) {
-          child.kill("SIGKILL");
-          await waitForExit(child, 2_000);
-        }
-        if (await canConnect(port)) {
-          const pid = (await fs.readFile(pidPath, "utf8").catch(() => "")).trim();
-          if (/^[1-9]\d*$/.test(pid)) {
-            await runPrivileged("/bin/kill", ["-KILL", pid]).catch(() => {});
-          }
-        }
-        await waitForPortState(port, false);
-      } finally {
-        await restoreHostState();
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGTERM");
+        await waitForExit(child, 2_000);
       }
+      if (await canConnect(port)) {
+        const pid = (await fs.readFile(pidPath, "utf8").catch(() => "")).trim();
+        if (/^[1-9]\d*$/.test(pid)) {
+          await runPrivileged("/bin/kill", ["-TERM", pid]).catch(() => {});
+          await waitForPortState(port, false, 2_000).catch(() => {});
+        }
+      }
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+        await waitForExit(child, 2_000);
+      }
+      if (await canConnect(port)) {
+        const pid = (await fs.readFile(pidPath, "utf8").catch(() => "")).trim();
+        if (/^[1-9]\d*$/.test(pid)) {
+          await runPrivileged("/bin/kill", ["-KILL", pid]).catch(() => {});
+        }
+      }
+      await waitForPortState(port, false);
     })();
     await stopPromise;
   };
@@ -474,11 +335,116 @@ async function startIsolatedSshd(root: string): Promise<IsolatedSshd> {
 
   return {
     clientKeyPath,
-    knownHostsLockWaitMs: knownHostsLock.waitMs,
+    knownHostsPath,
     port,
     setKnownHost,
     stop,
   };
+}
+
+async function runInSshNamespace(options: ProducerOptions): Promise<QaEvidenceSummaryJson> {
+  if (process.platform !== "linux") {
+    throw new Error("Gateway SSH tunnel QA requires a Linux Testbox mount namespace");
+  }
+  const ssh = await resolveBinary(["/usr/bin/ssh", "/bin/ssh"], "client (ssh)");
+  const mount = await resolveBinary(["/usr/bin/mount", "/bin/mount"], "mount utility");
+  const unshare = await resolveBinary(["/usr/bin/unshare", "/bin/unshare"], "unshare utility");
+  const namespaceDir = path.join(options.artifactBase, ".ssh-namespace");
+  const realSshPath = path.join(namespaceDir, "system-ssh");
+  const wrapperPath = path.join(namespaceDir, "ssh");
+  await fs.mkdir(namespaceDir, { recursive: true, mode: 0o700 });
+  await fs.writeFile(realSshPath, "", { mode: 0o700 });
+  await fs.writeFile(
+    wrapperPath,
+    [
+      "#!/bin/sh",
+      ': "${OPENCLAW_QA_REAL_SSH:?missing system SSH path}"',
+      ': "${OPENCLAW_QA_SSH_KNOWN_HOSTS:?missing isolated known-hosts path}"',
+      'exec "$OPENCLAW_QA_REAL_SSH" -F /dev/null -o "UserKnownHostsFile=$OPENCLAW_QA_SSH_KNOWN_HOSTS" -o GlobalKnownHostsFile=/dev/null -o UpdateHostKeys=no "$@"',
+      "",
+    ].join("\n"),
+    { mode: 0o700 },
+  );
+
+  const childSource = `
+import { pathToFileURL } from "node:url";
+const modulePath = process.env.OPENCLAW_QA_PRODUCER_PATH;
+const rawOptions = process.env.OPENCLAW_QA_PRODUCER_OPTIONS;
+if (!modulePath || !rawOptions) {
+  throw new Error("missing namespaced producer configuration");
+}
+const { runGatewaySshTunnels } = await import(pathToFileURL(modulePath).href);
+const evidence = await runGatewaySshTunnels(JSON.parse(rawOptions));
+process.exitCode = evidence.entries[0]?.result.status === "pass" ? 0 : 1;
+`;
+  const shellScript = `
+set -eu
+${mount} --bind "$1" "$2"
+${mount} --bind "$3" "$1"
+export ${SSH_NAMESPACE_MARKER}=1
+export OPENCLAW_QA_REAL_SSH="$2"
+export OPENCLAW_QA_PRODUCER_PATH="$4"
+export OPENCLAW_QA_PRODUCER_OPTIONS="$5"
+shift 5
+exec "$@"
+`;
+  const invocation = privilegedInvocation(unshare, [
+    "--mount",
+    "--propagation",
+    "private",
+    "/bin/sh",
+    "-c",
+    shellScript,
+    "openclaw-qa-ssh-namespace",
+    ssh,
+    realSshPath,
+    wrapperPath,
+    path.join(options.repoRoot, SOURCE_PATH),
+    JSON.stringify(options),
+    process.execPath,
+    "--import",
+    "tsx",
+    "--input-type=module",
+    "--eval",
+    childSource,
+  ]);
+  const child = spawn(invocation.command, invocation.args, {
+    cwd: options.repoRoot,
+    detached: true,
+    env: process.env,
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  if (options.fixtureProcessPath && child.pid) {
+    await fs.writeFile(options.fixtureProcessPath, `${child.pid}\n`, "utf8");
+  }
+  let stderr = "";
+  child.stderr?.setEncoding("utf8");
+  child.stderr?.on("data", (chunk) => {
+    stderr += String(chunk);
+  });
+
+  try {
+    const { code, signal } = await new Promise<{
+      code: number | null;
+      signal: NodeJS.Signals | null;
+    }>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", (code, signal) => resolve({ code, signal }));
+    });
+    const evidencePath = path.join(options.artifactBase, QA_EVIDENCE_FILENAME);
+    const evidence = await fs
+      .readFile(evidencePath, "utf8")
+      .then((value) => JSON.parse(value) as QaEvidenceSummaryJson)
+      .catch(() => undefined);
+    if (evidence) {
+      return evidence;
+    }
+    throw new Error(
+      `namespaced Gateway SSH tunnel producer exited ${code ?? "null"}/${signal ?? "none"}: ${stderr.trim()}`,
+    );
+  } finally {
+    await fs.rm(namespaceDir, { force: true, recursive: true });
+  }
 }
 
 function requireStatusPayload(value: unknown): StatusPayload {
@@ -544,6 +510,9 @@ function sanitizeDiagnostic(text: string, roots: readonly string[]) {
 export async function runGatewaySshTunnels(
   options: ProducerOptions,
 ): Promise<QaEvidenceSummaryJson> {
+  if (process.env[SSH_NAMESPACE_MARKER] !== "1") {
+    return await runInSshNamespace(options);
+  }
   await fs.mkdir(options.artifactBase, { recursive: true });
   const writer = createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
@@ -564,8 +533,9 @@ export async function runGatewaySshTunnels(
     },
   });
   const startedAt = Date.now();
-  // openclaw-temp-dir: standalone producer removes the complete fixture root in finally
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-ssh-"));
+  // openclaw-temp-dir: normal runs remove the fixture root; the SIGKILL test tracks its injected root
+  const root =
+    options.fixtureRoot ?? (await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-ssh-")));
   const homeDir = path.join(root, "home");
   const stateDir = path.join(root, "state");
   const configPath = path.join(root, "openclaw.json");
@@ -575,6 +545,17 @@ export async function runGatewaySshTunnels(
   try {
     await fs.mkdir(homeDir, { recursive: true });
     await fs.mkdir(stateDir, { recursive: true });
+    const fixtureReadyPath = options.fixtureReadyPath;
+    const isolatedSshd = await startIsolatedSshd(
+      root,
+      fixtureReadyPath
+        ? async () => {
+            await fs.writeFile(fixtureReadyPath, "ready\n", "utf8");
+            await new Promise<void>(() => {});
+          }
+        : undefined,
+    );
+    sshd = isolatedSshd;
     const gatewayPort = await reserveLoopbackPort();
     await fs.writeFile(
       configPath,
@@ -606,13 +587,13 @@ export async function runGatewaySshTunnels(
         OPENCLAW_SKIP_CRON: "1",
         OPENCLAW_SKIP_GMAIL_WATCHER: "1",
         OPENCLAW_SKIP_PROVIDERS: "1",
+        OPENCLAW_QA_SSH_KNOWN_HOSTS: isolatedSshd.knownHostsPath,
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
       },
       async () => {
         clearRuntimeConfigSnapshot();
         clearConfigCache();
-        sshd = await startIsolatedSshd(root);
         gateway = await startGatewayServer(gatewayPort, {
           auth: { mode: "token", token: TEST_TOKEN },
           bind: "loopback",
@@ -622,8 +603,8 @@ export async function runGatewaySshTunnels(
 
         const success = await runGatewayStatus({
           gatewayPort,
-          identityPath: sshd.clientKeyPath,
-          sshPort: sshd.port,
+          identityPath: isolatedSshd.clientKeyPath,
+          sshPort: isolatedSshd.port,
         });
         const successTarget = success.payload.targets?.find((entry) => entry.kind === "sshTunnel");
         if (!successTarget) {
@@ -643,11 +624,11 @@ export async function runGatewaySshTunnels(
         }
         await waitForPortState(Number(localPort), false);
 
-        await sshd.setKnownHost("wrong");
+        await isolatedSshd.setKnownHost("wrong");
         const hostKeyFailure = await runGatewayStatus({
           gatewayPort,
-          identityPath: sshd.clientKeyPath,
-          sshPort: sshd.port,
+          identityPath: isolatedSshd.clientKeyPath,
+          sshPort: isolatedSshd.port,
         });
         const hostKeyWarning = requireWarning(hostKeyFailure.payload, "ssh_tunnel_failed");
         if (
@@ -659,12 +640,12 @@ export async function runGatewaySshTunnels(
           throw new Error("gateway status did not expose the strict host-key rejection");
         }
 
-        await sshd.setKnownHost("correct");
-        await sshd.stop();
+        await isolatedSshd.setKnownHost("correct");
+        await isolatedSshd.stop();
         const unreachable = await runGatewayStatus({
           gatewayPort,
-          identityPath: sshd.clientKeyPath,
-          sshPort: sshd.port,
+          identityPath: isolatedSshd.clientKeyPath,
+          sshPort: isolatedSshd.port,
         });
         const unreachableWarning = requireWarning(unreachable.payload, "ssh_tunnel_failed");
         if (
@@ -681,8 +662,8 @@ export async function runGatewaySshTunnels(
             root,
             options.repoRoot,
           ]),
-          knownHostsLockWaitMs: sshd.knownHostsLockWaitMs,
-          sshdPort: sshd.port,
+          knownHostsIsolated: true,
+          sshdPort: isolatedSshd.port,
           tunnelPort: localPort,
           unreachableDiagnostic: sanitizeDiagnostic(unreachableWarning.message ?? "", [
             root,
@@ -693,11 +674,13 @@ export async function runGatewaySshTunnels(
     );
 
     await fs.writeFile(summaryPath, `${JSON.stringify(result, null, 2)}\n`, "utf8");
-    writer.appendLog("pass: real SSH tunnel, cleanup, host-key, and unreachable diagnostics\n");
+    writer.appendLog(
+      "pass: real SSH tunnel, isolated trust, cleanup, host-key, and unreachable diagnostics\n",
+    );
     return await writer.write({
       artifacts: [{ kind: "summary", filePath: summaryPath }],
       details:
-        "Reached the authenticated Gateway through real OpenSSH, observed tunnel cleanup, and surfaced host-key and unreachable-daemon diagnostics.",
+        "Reached the authenticated Gateway through real OpenSSH with scenario-owned host trust, observed tunnel cleanup, and surfaced host-key and unreachable-daemon diagnostics.",
       durationMs: Math.max(1, Date.now() - startedAt),
       status: "pass",
     });
