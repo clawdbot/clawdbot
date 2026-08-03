@@ -15,6 +15,7 @@ const DOCKER_E2E_PACKAGE_HELPER_PATH = "scripts/lib/docker-e2e-package.sh";
 const DOCKER_E2E_IMAGE_HELPER_PATH = "scripts/lib/docker-e2e-image.sh";
 const DOCKER_E2E_SCENARIOS_PATH = "scripts/lib/docker-e2e-scenarios.mjs";
 const COMPOSE_SETUP_E2E_PATH = "scripts/e2e/compose-setup.sh";
+const CLI_INSTALLER_DISTRIBUTION_E2E_PATH = "scripts/e2e/cli-installer-distribution-docker.sh";
 const DOCKER_PACKAGE_INSTALL_E2E_PATH = "scripts/e2e/docker-package-install.sh";
 const INSTALL_E2E_RUNNER_PATH = "scripts/docker/install-sh-e2e/run.sh";
 const CLEANUP_DOCKER_SMOKE_PATH = "scripts/test-cleanup-docker.sh";
@@ -3518,8 +3519,8 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     expect(composeRunner).toContain('docker_e2e_docker_cmd rm -f "$CLI_NAME"');
 
     const packageRunner = readFileSync(DOCKER_PACKAGE_INSTALL_E2E_PATH, "utf8");
-    expect(packageRunner).not.toMatch(/(^|\n)\s*docker rm -f "\$CONTAINER_NAME"/u);
-    expect(packageRunner).toContain('docker_e2e_docker_cmd rm -f "$CONTAINER_NAME"');
+    expect(packageRunner).not.toMatch(/(^|\n)\s*docker rm -f/u);
+    expect(packageRunner).toContain("docker_e2e_docker_cmd rm -f");
     expect(packageRunner).toContain(
       'DOCKER_RUN_TIMEOUT="${OPENCLAW_DOCKER_PACKAGE_INSTALL_RUN_TIMEOUT:-120s}"',
     );
@@ -3532,6 +3533,66 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
         'node --import tsx "$ROOT_DIR/scripts/e2e/lib/docker-artifact-proof/write-identities.ts"',
       );
     }
+  });
+
+  it("executes each CLI distribution boundary instead of promoting metadata", () => {
+    const installerRunner = readFileSync(CLI_INSTALLER_DISTRIBUTION_E2E_PATH, "utf8");
+    const packageRunner = readFileSync(DOCKER_PACKAGE_INSTALL_E2E_PATH, "utf8");
+    const updateRunner = readFileSync(UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH, "utf8");
+
+    expectTextToIncludeAll(packageRunner, [
+      "npm install -g --prefix /tmp/openclaw-proof",
+      "pnpm add --global --allow-build=openclaw",
+      "bun@1.3.14",
+      'test "$(command -v openclaw)" = "/tmp/openclaw-proof/bin/openclaw"',
+      'test "$(command -v openclaw)" = "$PNPM_HOME/openclaw"',
+      "OPENCLAW_BUN_GLOBAL_SMOKE_PROOF_PATH",
+      'BUN_HARNESS_DIR="$(mktemp -d',
+      "chmod -R a+rX",
+      '-v "$BUN_HARNESS_DIR:/repo:ro"',
+      '--container "npm=$NPM_PROOF_CONTAINER"',
+      '--container "pnpm=$PNPM_PROOF_CONTAINER"',
+      '--container "bun=$BUN_PROOF_CONTAINER"',
+    ]);
+    expect(packageRunner).not.toContain('-v "$ROOT_DIR:/repo:ro"');
+    expectTextToIncludeAll(installerRunner, [
+      "bash /tmp/install.sh",
+      "--version file:/tmp/openclaw-current.tgz",
+      'source "$HOME/.bashrc"',
+      "hash -r",
+      "bash /tmp/openclaw-source/scripts/install-cli.sh",
+      "--install-method git",
+      "--prefix /tmp/openclaw-prefix",
+      "--node-version 24.15.0",
+      "apt-get install -y --no-install-recommends curl",
+      "command -v curl >/dev/null",
+      'chmod 0555 "$SOURCE_PROOF_SCRIPT"',
+      'SOURCE_MEMORY="${OPENCLAW_CLI_INSTALLER_SOURCE_MEMORY:-16g}"',
+      '--memory "$SOURCE_MEMORY"',
+      "runuser -u appuser",
+      'test -r "$0"',
+      'test -x "$0"',
+      'grep -Fq "/tmp/openclaw-source/dist/entry.js" "$prefix_cli"',
+      "openclaw update status --json",
+      "expected git install kind",
+    ]);
+    expect(installerRunner.match(/--memory "\$SOURCE_MEMORY"/gu)).toHaveLength(1);
+    expect(installerRunner.indexOf('--memory "$SOURCE_MEMORY"')).toBeGreaterThan(
+      installerRunner.indexOf('echo "==> install-cli.sh dedicated-prefix source-checkout proof"'),
+    );
+    expectTextToIncludeAll(updateRunner, [
+      "openclaw update --channel beta",
+      'OPENCLAW_NPM_REGISTRY_DIST_TAGS="latest=0.0.0,beta=$package_version"',
+      "OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org",
+      "assert-update beta",
+      "assert-config-channel beta",
+      "assert-installed-version",
+      "assert-status-kind package",
+      "openclaw update --channel dev",
+      "openclaw update --channel stable",
+    ]);
+    expect(updateRunner).toContain("openclaw update --channel beta --yes --json --no-restart");
+    expect(updateRunner).not.toContain("openclaw update --channel beta --tag");
   });
 
   it("routes the gateway network client through the timeout-aware run helper", () => {
@@ -3856,6 +3917,7 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
       "Package $package_version must support gateway install --wrapper.",
     );
     expect(updateChannel).toContain("assert-config-channel dev");
+    expect(updateChannel).toContain("assert-config-channel beta");
     expect(updateChannelAssertions).toContain("expected persisted update.channel ${channel}");
     expect(pluginsAssertions).toContain("expected modern installRecords in installed plugin index");
   });
@@ -4346,7 +4408,8 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     ]);
 
     expectTextToIncludeAll(npmRegistry, [
-      '"dist-tags": { latest: entry.latestVersion }',
+      "OPENCLAW_NPM_REGISTRY_DIST_TAGS",
+      "Object.fromEntries(distTagOverrides)",
       "existing.latestVersion = version",
       "packageArgs.length % 3",
     ]);
