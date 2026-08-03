@@ -4,7 +4,10 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { getPluginToolMeta } from "../plugins/tools.js";
-import { wrapExternalContent } from "../security/external-content.js";
+import {
+  truncateSanitizedExternalContent,
+  wrapExternalContent,
+} from "../security/external-content.js";
 import { levenshteinDistance } from "../shared/levenshtein-distance.js";
 import {
   getBeforeToolCallFailureDisposition,
@@ -16,7 +19,10 @@ import { runWithToolExecutionValidation } from "./agent-tools.execution-validati
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
-import { formatToolExecutionErrorMessage } from "./tool-result-error.js";
+import {
+  isTrustedToolExecutionPreflightError,
+  protectNetworkToolExecutionError,
+} from "./tool-result-error.js";
 import {
   compactToolSearchCatalogEntry,
   resolveCatalog,
@@ -649,6 +655,7 @@ export class ToolSearchRuntime {
         : entry.tool;
     const runExecution = async () => {
       const parentToolCallId = options?.parentToolCallId ?? toolCallId;
+      const signal = options?.signal ?? this.ctx.abortSignal;
       const networkInvocation =
         entry.tool.resultContentSource === "network"
           ? (this.networkInvocations.get(parentToolCallId) ?? { active: 0, observed: false })
@@ -666,7 +673,7 @@ export class ToolSearchRuntime {
           toolCallId,
           parentToolCallId: options?.parentToolCallId,
           input: normalizedInput,
-          signal: options?.signal ?? this.ctx.abortSignal,
+          signal,
           onUpdate: options?.onUpdate,
           acceptResultBeforeProjection,
         });
@@ -678,7 +685,9 @@ export class ToolSearchRuntime {
         if (
           networkInvocation &&
           !preExecutionBlocked &&
-          getBeforeToolCallFailureDisposition(error) === undefined
+          getBeforeToolCallFailureDisposition(error) === undefined &&
+          !isTrustedToolExecutionPreflightError(error) &&
+          !(signal?.aborted && error === signal.reason)
         ) {
           // Guest code can catch page-controlled errors and return their text.
           networkInvocation.observed = true;
@@ -717,7 +726,11 @@ export function formatToolSearchControlResult<T>(
   if (!runtime?.hasNetworkContent(parentToolCallId) || content?.type !== "text") {
     return result;
   }
-  const text = wrapExternalContent(content.text, { source: "api" });
+  const bounded = truncateSanitizedExternalContent(content.text, 20_000);
+  const modelText = bounded.truncated
+    ? `${truncateSanitizedExternalContent(content.text, 19_988).text}\n[truncated]`
+    : bounded.text;
+  const text = wrapExternalContent(modelText, { source: "api" });
   return { ...result, content: [{ ...content, text }] };
 }
 
@@ -731,38 +744,12 @@ export function formatToolSearchControlError(
   if (
     !runtime?.hasNetworkContent(parentToolCallId) ||
     getBeforeToolCallFailureDisposition(error) !== undefined ||
+    isTrustedToolExecutionPreflightError(error) ||
     (signal?.aborted && error === signal.reason)
   ) {
     return error;
   }
-  const message = formatToolExecutionErrorMessage(error, "Tool Search call failed.");
-  // Error coercion traverses inherited causes; shadow them before preserving safe identity.
-  const protectedError = new Error(wrapExternalContent(message, { source: "api" }));
-  Object.defineProperty(protectedError, "cause", { value: undefined });
-  try {
-    if (error instanceof Error) {
-      const prototype = Object.getPrototypeOf(error) as object;
-      const safeTypes = [TypeError, RangeError, ReferenceError, SyntaxError, URIError, EvalError];
-      if (safeTypes.some((kind) => prototype === kind.prototype)) {
-        Object.setPrototypeOf(protectedError, prototype);
-      }
-      for (const key of ["name", "code", "status"] as const) {
-        const value: unknown = Object.getOwnPropertyDescriptor(error, key)?.value;
-        const valid =
-          key === "status"
-            ? typeof value === "number" && Number.isSafeInteger(value)
-            : typeof value === "string" &&
-              /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(value) &&
-              (key === "name" || value === value.toUpperCase());
-        if (valid) {
-          Object.defineProperty(protectedError, key, { configurable: true, value });
-        }
-      }
-    }
-  } catch {
-    // Hostile reflection must never replace the already-protected network error.
-  }
-  return protectedError;
+  return protectNetworkToolExecutionError(error, "Tool Search call failed.", signal);
 }
 
 function unwrapToolResultValue(result: AgentToolResult<unknown>): unknown {

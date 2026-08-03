@@ -29,7 +29,11 @@ export {
   expandAllowFromWithAccessGroups,
   parseAccessGroupAllowFromEntry,
 } from "./access-groups.js";
-export { wrapExternalContent, wrapWebContent } from "../security/external-content.js";
+export {
+  truncateSanitizedExternalContent,
+  wrapExternalContent,
+  wrapWebContent,
+} from "../security/external-content.js";
 export { compileSafeRegexDetailed } from "../security/safe-regex.js";
 export type { SafeRegexRejectReason } from "../security/safe-regex.js";
 export {
