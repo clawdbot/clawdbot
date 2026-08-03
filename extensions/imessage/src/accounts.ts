@@ -96,6 +96,7 @@ export function resolveIMessageAccount(params: {
   const merged = mergeIMessageAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const configured = Boolean(
+    merged.enabled === true ||
     merged.cliPath?.trim() ||
     merged.dbPath?.trim() ||
     merged.service ||
