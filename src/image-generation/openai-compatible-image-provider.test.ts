@@ -188,8 +188,16 @@ describe("OpenAI-compatible image provider helper", () => {
     const cfg = {
       models: {
         providers: {
-          sample: { apiKey: "sample-config-key", models: [] },
-          "different-http-provider": { apiKey: "wrong-owner-key", models: [] },
+          sample: {
+            apiKey: "sample-config-key",
+            baseUrl: "https://sample.example/v1/",
+            models: [],
+          },
+          "different-http-provider": {
+            apiKey: "wrong-owner-key",
+            baseUrl: "https://different-http-provider.example/v1/",
+            models: [],
+          },
         },
       },
     };
