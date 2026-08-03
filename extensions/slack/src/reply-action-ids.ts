@@ -9,6 +9,10 @@ export const SLACK_CALLBACK_SELECT_ACTION_ID = "openclaw:callback_select";
 export const SLACK_APPROVAL_BUTTON_ACTION_ID = "openclaw:approval_button";
 export const SLACK_APPROVAL_SELECT_ACTION_ID = "openclaw:approval_select";
 export const SLACK_QUESTION_BUTTON_ACTION_ID = "openclaw:question_button";
+// Keep accepted display blocks plugin-private; string-keyed receipts are serialized.
+export const SLACK_QUESTION_FINALIZATION_BLOCKS: unique symbol = Symbol(
+  "slackQuestionFinalizationBlocks",
+);
 
 export function isSlackQuestionActionId(actionId: string): boolean {
   return (

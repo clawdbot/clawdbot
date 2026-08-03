@@ -36,6 +36,7 @@ vi.mock("./send.js", async (importOriginal) => ({
 
 import { slackPlugin } from "./channel.js";
 import { slackOutbound } from "./outbound-adapter.js";
+import { SLACK_QUESTION_FINALIZATION_BLOCKS } from "./reply-action-ids.js";
 import { sendMessageSlack } from "./send.js";
 
 function jsonRoundTrip<T>(value: T): T {
@@ -104,7 +105,10 @@ describe("Slack question finalization", () => {
           channel: "slack",
           messageId: "55",
           channelId: "C123",
-          meta: { slackQuestionActionIds: ["openclaw:question_button:1:1"] },
+          meta: {
+            slackQuestionActionIds: ["openclaw:question_button:1:1"],
+            [SLACK_QUESTION_FINALIZATION_BLOCKS]: [],
+          },
         },
       ],
     });
@@ -173,7 +177,10 @@ describe("Slack question finalization", () => {
           channel: "slack",
           messageId: "actual-question",
           channelId: "C123",
-          meta: { slackQuestionActionIds: [questionActionId] },
+          meta: {
+            slackQuestionActionIds: [questionActionId],
+            [SLACK_QUESTION_FINALIZATION_BLOCKS]: [],
+          },
         },
       ],
     });
@@ -328,6 +335,7 @@ describe("Slack question finalization", () => {
     const client = createSlackSendTestClient();
     let messageCount = 0;
     let questionMessageId: string | undefined;
+    let acceptedQuestionBlocks: Array<{ elements?: unknown[]; type?: string }> | undefined;
     let trailingMessageId: string | undefined;
     client.chat.postMessage = vi.fn(async (request: unknown) => {
       const blocks = (request as { blocks?: Array<{ elements?: unknown[]; type?: string }> })
@@ -347,6 +355,7 @@ describe("Slack question finalization", () => {
       );
       if (hasQuestion) {
         questionMessageId = ts;
+        acceptedQuestionBlocks = blocks;
       } else if (questionMessageId) {
         trailingMessageId = ts;
       }
@@ -394,6 +403,10 @@ describe("Slack question finalization", () => {
     expect(hoisted.update).toHaveBeenCalledWith(
       expect.objectContaining({ channelId: "C123", messageTs: questionMessageId }),
     );
+    expect(hoisted.update.mock.calls[0]?.[0]?.blocks).toEqual([
+      ...(acceptedQuestionBlocks ?? []).filter((block) => block.type !== "actions"),
+      { type: "context", elements: [{ type: "mrkdwn", text: "Answered: One" }] },
+    ]);
     expect(
       client.chat.postMessage.mock.calls.filter(([request]) =>
         (request as { blocks?: Array<{ elements?: Array<{ action_id?: string }> }> }).blocks?.some(

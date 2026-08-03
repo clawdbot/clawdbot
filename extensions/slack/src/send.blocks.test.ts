@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createSlackSendTestClient } from "./blocks.test-helpers.js";
 import { SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT } from "./limits.js";
+import { SLACK_QUESTION_FINALIZATION_BLOCKS } from "./reply-action-ids.js";
 import {
   clearSlackThreadParticipationCache,
   hasSlackThreadParticipation,
@@ -379,6 +380,7 @@ describe("sendMessageSlack blocks", () => {
       client,
       onDeliveryResult,
       blocks: [
+        { type: "section", text: { type: "mrkdwn", text: "Private displayed question" } },
         {
           type: "actions",
           elements: [
@@ -397,11 +399,18 @@ describe("sendMessageSlack blocks", () => {
       ],
     });
 
-    expect(result.meta).toEqual({ slackQuestionActionIds: [questionActionId] });
+    expect(result.meta).toMatchObject({ slackQuestionActionIds: [questionActionId] });
+    expect(result.meta?.[SLACK_QUESTION_FINALIZATION_BLOCKS]).toEqual([
+      { type: "section", text: { type: "mrkdwn", text: "Private displayed question" } },
+    ]);
+    expect(Object.keys(result.meta ?? {})).toEqual(["slackQuestionActionIds"]);
+    expect(JSON.parse(JSON.stringify(result.meta))).toEqual({
+      slackQuestionActionIds: [questionActionId],
+    });
     expect(onDeliveryResult).toHaveBeenCalledWith(
       expect.objectContaining({
         messageId: "171234.567",
-        meta: { slackQuestionActionIds: [questionActionId] },
+        meta: expect.objectContaining({ slackQuestionActionIds: [questionActionId] }),
       }),
     );
   });
@@ -434,17 +443,27 @@ describe("sendMessageSlack blocks", () => {
     const delivered = onDeliveryResult.mock.calls.map(([result]) => result);
     expect(delivered.length).toBeGreaterThan(1);
     expect(delivered.filter((result) => result.meta)).toEqual([
-      expect.objectContaining({ meta: { slackQuestionActionIds: [questionActionId] } }),
+      expect.objectContaining({
+        meta: expect.objectContaining({ slackQuestionActionIds: [questionActionId] }),
+      }),
     ]);
     expect(
       delivered.some((result) => result.receipt.parts[0]?.kind === "card" && !result.meta),
     ).toBe(true);
     const questionDelivery = delivered.find((delivery) => delivery.meta);
     expect(questionDelivery?.messageId).not.toBe(aggregateResult.messageId);
-    expect(aggregateResult.meta).toEqual({
+    expect(JSON.parse(JSON.stringify(aggregateResult.meta))).toEqual({
       slackQuestionActionIds: [questionActionId],
       slackQuestionMessageId: questionDelivery?.messageId,
     });
+    expect(aggregateResult.meta?.[SLACK_QUESTION_FINALIZATION_BLOCKS]).toBe(
+      questionDelivery?.meta?.[SLACK_QUESTION_FINALIZATION_BLOCKS],
+    );
+    expect(
+      aggregateResult.meta?.[SLACK_QUESTION_FINALIZATION_BLOCKS]?.some(
+        (block) => block.type === "actions" || block.type === "data_table",
+      ),
+    ).toBe(false);
   });
 
   it("includes sibling block text in top-level fallback for raw block sends", async () => {

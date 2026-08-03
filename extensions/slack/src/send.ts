@@ -49,7 +49,10 @@ import {
   isSlackInvalidBlocksError,
 } from "./native-data-blocks.js";
 import { buildSlackNativeDataDeliveryPlan } from "./native-data-fallback.js";
-import { resolveSlackQuestionActionIds } from "./reply-action-ids.js";
+import {
+  resolveSlackQuestionActionIds,
+  SLACK_QUESTION_FINALIZATION_BLOCKS,
+} from "./reply-action-ids.js";
 import { recordSlackThreadParticipation } from "./sent-thread-cache.js";
 import { canonicalizeSlackApiTargetId, parseSlackTarget } from "./target-parsing.js";
 import { normalizeSlackThreadTsCandidate, resolveSlackThreadTsValue } from "./thread-ts.js";
@@ -262,7 +265,11 @@ export type SlackSendResult = {
   channelId: string;
   receipt: MessageReceipt;
   threadTs?: string;
-  meta?: { slackQuestionActionIds: string[]; slackQuestionMessageId?: string };
+  meta?: {
+    slackQuestionActionIds: string[];
+    slackQuestionMessageId?: string;
+    [SLACK_QUESTION_FINALIZATION_BLOCKS]?: (Block | KnownBlock)[];
+  };
 };
 
 export async function updateMessageSlack(params: {
@@ -1119,9 +1126,19 @@ async function sendMessageSlackQueuedInner(params: {
   ) => {
     // Fallback can split blocks across several sends; identify controls on the
     // actual posted card so uploads and text chunks cannot steal finalization.
+    // Preserve only accepted display blocks; actions contain private callback data.
     const slackQuestionActionIds = resolveSlackQuestionActionIds(deliveredBlocks);
     const deliveryResult = slackQuestionActionIds.length
-      ? { ...result, meta: { ...result.meta, slackQuestionActionIds } }
+      ? {
+          ...result,
+          meta: {
+            ...result.meta,
+            slackQuestionActionIds,
+            [SLACK_QUESTION_FINALIZATION_BLOCKS]: deliveredBlocks!.filter(
+              (block) => block.type !== "actions",
+            ),
+          },
+        }
       : result;
     await opts.onDeliveryResult?.(deliveryResult);
     return deliveryResult;

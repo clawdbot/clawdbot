@@ -27,7 +27,10 @@ import {
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 import { SLACK_PRESENTATION_CAPABILITIES } from "./presentation.js";
-import { resolveSlackQuestionActionIds } from "./reply-action-ids.js";
+import {
+  resolveSlackQuestionActionIds,
+  SLACK_QUESTION_FINALIZATION_BLOCKS,
+} from "./reply-action-ids.js";
 import {
   parseSlackReplyBlockSegments,
   resolveSlackReplyBlockResolution,
@@ -35,7 +38,7 @@ import {
   type SlackReplyBlockResolution,
   type SlackReplyBlockSegment,
 } from "./reply-blocks.js";
-import type { SlackSendIdentity } from "./send.js";
+import type { SlackSendIdentity, SlackSendResult } from "./send.js";
 import { resolveSlackThreadTsValue } from "./thread-ts.js";
 
 type SlackSendFn = typeof import("./send.runtime.js").sendMessageSlack;
@@ -371,8 +374,10 @@ export const slackOutbound: ChannelOutboundAdapter = {
           (actionId) => typeof actionId === "string" && questionActionIds.includes(actionId),
         ),
     );
-    const deliveryBlocks = deliveryMessage?.blocks;
-    if (!deliveryMessage || !deliveryBlocks || !result?.messageId) {
+    const deliveredDisplayBlocks = (result?.meta as SlackSendResult["meta"] | undefined)?.[
+      SLACK_QUESTION_FINALIZATION_BLOCKS
+    ];
+    if (!deliveryMessage || !deliveredDisplayBlocks || !result?.messageId) {
       return;
     }
     const channelId = result.channelId;
@@ -392,7 +397,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
         const { updateMessageSlack } = await loadSlackSendRuntime();
         const escapedStatusLine = escapeSlackMrkdwn(statusLine);
         const blocks = [
-          ...deliveryBlocks.filter((block) => block.type !== "actions"),
+          ...deliveredDisplayBlocks,
           { type: "context", elements: [{ type: "mrkdwn", text: escapedStatusLine }] },
         ];
         await updateMessageSlack({
