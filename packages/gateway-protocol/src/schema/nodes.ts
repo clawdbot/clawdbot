@@ -137,6 +137,21 @@ export const NodePendingAckParamsSchema = closedObject({
 /** Requests detailed metadata for one paired node. */
 export const NodeDescribeParamsSchema = closedObject({ nodeId: NonEmptyString });
 
+/** Reads the Gateway-authoritative pairing snapshot for one approved node device. */
+export const NodePairingSnapshotParamsSchema = closedObject({ nodeId: NonEmptyString });
+
+/** Non-secret pairing facts that bind a node surface to its current device key. */
+export const NodePairingSnapshotResultSchema = closedObject({
+  nodeId: NonEmptyString,
+  publicKeySha256: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+  pairingGenerationKey: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+  paired: Type.Literal(true),
+  nodeSurfaceApproved: Type.Literal(true),
+  observedAt: Type.String({ format: "date-time" }),
+  gatewayVersion: NonEmptyString,
+  gatewayRuntimeStamp: NonEmptyString,
+});
+
 /** Invokes a command on a paired node; idempotency allows safe retries. */
 export const NodeInvokeParamsSchema = closedObject({
   nodeId: NonEmptyString,
@@ -252,6 +267,8 @@ export type NodeRenameParams = Static<typeof NodeRenameParamsSchema>;
 export type NodeListParams = Static<typeof NodeListParamsSchema>;
 export type NodePendingAckParams = Static<typeof NodePendingAckParamsSchema>;
 export type NodeDescribeParams = Static<typeof NodeDescribeParamsSchema>;
+export type NodePairingSnapshotParams = Static<typeof NodePairingSnapshotParamsSchema>;
+export type NodePairingSnapshotResult = Static<typeof NodePairingSnapshotResultSchema>;
 export type NodeInvokeParams = Static<typeof NodeInvokeParamsSchema>;
 export type NodeInvokeResultParams = Static<typeof NodeInvokeResultParamsSchema>;
 export type NodeInvokeProgressParams = Static<typeof NodeInvokeProgressParamsSchema>;

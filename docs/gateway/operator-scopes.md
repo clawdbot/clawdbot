@@ -66,6 +66,8 @@ approved or mutated:
   operator device can only mint or preserve scopes the caller already holds.
 - `node.pair.approve` is reachable with `operator.pairing`, then derives extra
   approval scopes from the pending node's declared command list.
+- `node.pairing.snapshot` requires `operator.pairing`; it exposes an
+  authority-bearing pairing-generation key, so `operator.read` is insufficient.
 - `chat.send` is a write-scoped method, but the `/config set` and
   `/config unset` chat commands require `operator.admin` on top of that,
   regardless of the caller's chat-send scope.
@@ -108,6 +110,8 @@ non-operator roles is admin-only even when those sessions can otherwise use
 For paired-device token sessions, management is self-scoped unless the caller
 has `operator.admin`: a non-admin caller sees only its own pairing entries, and
 can approve, reject, rotate, revoke, or remove only its own device entry.
+The same rule applies to `node.pairing.snapshot`: a non-admin paired-device
+caller can read only its own approved node snapshot.
 
 ## Node pairing approvals
 

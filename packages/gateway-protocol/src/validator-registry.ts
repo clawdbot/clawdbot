@@ -81,6 +81,8 @@ import {
   SystemInfoResultSchema,
   NodePendingAckParamsSchema,
   NodeDescribeParamsSchema,
+  NodePairingSnapshotParamsSchema,
+  NodePairingSnapshotResultSchema,
   NodeInvokeParamsSchema,
   NodeInvokeResultParamsSchema,
   NodeInvokeProgressParamsSchema,
@@ -440,6 +442,8 @@ export const validateSystemInfoParams = lazyCompile(SystemInfoParamsSchema);
 export const validateSystemInfoResult = lazyCompile(SystemInfoResultSchema);
 export const validateNodePendingAckParams = lazyCompile(NodePendingAckParamsSchema);
 export const validateNodeDescribeParams = lazyCompile(NodeDescribeParamsSchema);
+export const validateNodePairingSnapshotParams = lazyCompile(NodePairingSnapshotParamsSchema);
+export const validateNodePairingSnapshotResult = lazyCompile(NodePairingSnapshotResultSchema);
 export const validateNodeInvokeParams = lazyCompile(NodeInvokeParamsSchema);
 export const validateNodeInvokeResultParams = lazyCompile(NodeInvokeResultParamsSchema);
 export const validateNodeInvokeProgressParams = lazyCompile(NodeInvokeProgressParamsSchema);

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   ErrorCodes,
   errorShape,
@@ -6,12 +7,15 @@ import {
   validateNodePairListParams,
   validateNodePairRejectParams,
   validateNodePairRemoveParams,
+  validateNodePairingSnapshotParams,
   validateNodeRenameParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { normalizeDevicePublicKeyBase64Url } from "../../infra/device-identity.js";
 import {
   getPairedDevice,
   listApprovedPairedDeviceRoles,
   removePairedDeviceRole,
+  resolveNodePairingGeneration,
 } from "../../infra/device-pairing.js";
 import { captureNodePairingState } from "../../infra/node-pairing-state.js";
 import {
@@ -21,6 +25,7 @@ import {
   rejectNodePairing,
   renamePairedNode,
 } from "../../infra/node-pairing.js";
+import { resolveRuntimeServiceVersion } from "../../version.js";
 import {
   resolveNodePairingCommandAllowlist,
   normalizeDeclaredNodeCommands,
@@ -28,6 +33,7 @@ import {
 import { clearRemovedNodeRuntimeState } from "../node-runtime-state.js";
 import { invalidateNodeWakeState } from "../node-wake-state.js";
 import { PAIRING_SCOPE } from "../operator-scopes.js";
+import { getGatewayProcessInstanceId } from "../process-instance.js";
 import {
   deniesCrossDeviceManagement,
   pairedDeviceHasNonOperatorRole,
@@ -216,6 +222,74 @@ async function removePairedDeviceBackedNode(params: {
 }
 
 export const nodePairingHandlers: GatewayRequestHandlers = {
+  "node.pairing.snapshot": async ({ params, respond, client, context }) => {
+    if (!validateNodePairingSnapshotParams(params)) {
+      respondInvalidParams({
+        respond,
+        method: "node.pairing.snapshot",
+        validator: validateNodePairingSnapshotParams,
+      });
+      return;
+    }
+    const nodeId = (params as { nodeId: string }).nodeId.trim();
+    if (!nodeId) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
+      return;
+    }
+    const authz = resolveDeviceManagementAuthz(client, nodeId);
+    if (deniesCrossDeviceManagement(authz)) {
+      context.logGateway.warn(
+        `node pairing snapshot denied node=${authz.normalizedTargetDeviceId} reason=device-ownership-mismatch`,
+      );
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "node pairing snapshot denied"),
+      );
+      return;
+    }
+    await respondUnavailableOnThrow(respond, async () => {
+      const device = await getPairedDevice(nodeId);
+      const generation = resolveNodePairingGeneration(device);
+      const normalizedPublicKey = device
+        ? normalizeDevicePublicKeyBase64Url(device.publicKey)
+        : null;
+      const publicKeyBytes = normalizedPublicKey
+        ? Buffer.from(normalizedPublicKey, "base64url")
+        : null;
+      const publicKeySha256 =
+        publicKeyBytes?.length === 32
+          ? createHash("sha256").update(publicKeyBytes).digest("hex")
+          : null;
+      // Device ids are public-key hashes. Keep that binding explicit here so a
+      // malformed historical row cannot produce an authoritative snapshot.
+      if (
+        !device ||
+        !generation ||
+        !publicKeySha256 ||
+        device.deviceId !== nodeId ||
+        generation.nodeId !== nodeId ||
+        publicKeySha256 !== nodeId
+      ) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
+        return;
+      }
+      respond(
+        true,
+        {
+          nodeId,
+          publicKeySha256,
+          pairingGenerationKey: generation.key,
+          paired: true,
+          nodeSurfaceApproved: true,
+          observedAt: new Date().toISOString(),
+          gatewayVersion: resolveRuntimeServiceVersion(process.env),
+          gatewayRuntimeStamp: getGatewayProcessInstanceId(),
+        },
+        undefined,
+      );
+    });
+  },
   "node.pair.list": async ({ params, respond, client }) => {
     if (!validateNodePairListParams(params)) {
       respondInvalidParams({

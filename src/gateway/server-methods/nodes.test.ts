@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   approveDevicePairing,
+  getPairedDevice,
   listDevicePairing,
   requestDevicePairing,
   revokeDeviceToken,
@@ -25,6 +27,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { pairDeviceIdentity } from "../device-authz.test-helpers.js";
 import { drainNodePendingWork, enqueueNodePendingWork } from "../node-pending-work.js";
 import {
   captureNodeWakeLifecycle,
@@ -268,6 +271,197 @@ async function readPaired(stateDir: string): Promise<Record<string, unknown>> {
   const { paired } = await listDevicePairing(stateDir);
   return Object.fromEntries(paired.map((device) => [device.deviceId, device]));
 }
+
+describe("nodeHandlers node.pairing.snapshot", () => {
+  it("returns only canonical non-secret pairing facts for an approved node surface", async () => {
+    await createState("node-pairing-snapshot");
+    const pairedNode = await pairDeviceIdentity({
+      name: "node-pairing-snapshot",
+      role: "node",
+      scopes: [],
+      clientId: "openclaw-android",
+      clientMode: "node",
+    });
+    const pending = await requestNodePairing({ nodeId: pairedNode.identity.deviceId });
+    await approveNodePairing(pending.request.requestId, { callerScopes: ["operator.pairing"] });
+    const device = await getPairedDevice(pairedNode.identity.deviceId);
+    const publicKeyBytes = Buffer.from(pairedNode.publicKey, "base64url");
+    const { opts } = createOptions({ nodeId: pairedNode.identity.deviceId });
+
+    await expectDefined(
+      nodeHandlers["node.pairing.snapshot"],
+      'nodeHandlers["node.pairing.snapshot"] test invariant',
+    )(opts);
+
+    const payload = opts.respond.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        nodeId: pairedNode.identity.deviceId,
+        publicKeySha256: createHash("sha256").update(publicKeyBytes).digest("hex"),
+        paired: true,
+        nodeSurfaceApproved: true,
+        pairingGenerationKey: expect.stringMatching(/^[a-f0-9]{64}$/),
+        observedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+        gatewayVersion: expect.any(String),
+        gatewayRuntimeStamp: expect.any(String),
+      }),
+      undefined,
+    );
+    expect(payload).not.toHaveProperty("publicKey");
+    expect(payload).not.toHaveProperty("token");
+    expect(JSON.stringify(payload)).not.toContain(device?.publicKey ?? "");
+    expect(JSON.stringify(payload)).not.toContain(device?.tokens?.node?.token ?? "");
+  });
+
+  it("fails closed for unknown and unapproved node records", async () => {
+    const state = await createState("node-pairing-snapshot-fail-closed");
+    const unknown = createOptions({ nodeId: "unknown-node" });
+    await expectDefined(
+      nodeHandlers["node.pairing.snapshot"],
+      'nodeHandlers["node.pairing.snapshot"] test invariant',
+    )(unknown.opts);
+    expect(unknown.opts.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "unknown nodeId" }),
+    );
+
+    const nodeId = "node-pairing-snapshot-unapproved";
+    await pairAndroidNodeDevice(state.stateDir, nodeId);
+    const unapproved = createOptions({ nodeId });
+    await expectDefined(
+      nodeHandlers["node.pairing.snapshot"],
+      'nodeHandlers["node.pairing.snapshot"] test invariant',
+    )(unapproved.opts);
+    expect(unapproved.opts.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "unknown nodeId" }),
+    );
+  });
+
+  it("rejects whitespace-only node ids and revoked node roles", async () => {
+    await createState("node-pairing-snapshot-whitespace-revoked");
+    const whitespace = createOptions({ nodeId: "   " });
+    await expectDefined(
+      nodeHandlers["node.pairing.snapshot"],
+      'nodeHandlers["node.pairing.snapshot"] test invariant',
+    )(whitespace.opts);
+    expect(whitespace.opts.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "nodeId required" }),
+    );
+
+    const revokedNode = await pairDeviceIdentity({
+      name: "node-pairing-snapshot-revoked-role",
+      role: "node",
+      scopes: [],
+    });
+    const pending = await requestNodePairing({ nodeId: revokedNode.identity.deviceId });
+    await approveNodePairing(pending.request.requestId, { callerScopes: ["operator.pairing"] });
+    const revoked = await revokeDeviceToken({
+      deviceId: revokedNode.identity.deviceId,
+      role: "node",
+    });
+    expect(revoked.ok).toBe(true);
+
+    const snapshot = createOptions({ nodeId: revokedNode.identity.deviceId });
+    await expectDefined(
+      nodeHandlers["node.pairing.snapshot"],
+      'nodeHandlers["node.pairing.snapshot"] test invariant',
+    )(snapshot.opts);
+    expect(snapshot.opts.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "unknown nodeId" }),
+    );
+  });
+
+  it("fails closed for malformed keys and key-to-node-id mismatches", async () => {
+    const state = await createState("node-pairing-snapshot-key-id-mismatch");
+    const malformed = await pairDeviceIdentity({
+      name: "node-pairing-snapshot-malformed",
+      role: "node",
+      scopes: [],
+    });
+    const malformedPending = await requestNodePairing({ nodeId: malformed.identity.deviceId });
+    await approveNodePairing(malformedPending.request.requestId, {
+      callerScopes: ["operator.pairing"],
+    });
+    await withPairedDeviceRecords(state.stateDir, (pairedByDeviceId) => {
+      const device = pairedByDeviceId[malformed.identity.deviceId];
+      if (device) {
+        device.publicKey = "not-an-ed25519-key";
+      }
+      return { value: undefined, persist: true };
+    });
+    const malformedSnapshot = createOptions({ nodeId: malformed.identity.deviceId });
+    await expectDefined(
+      nodeHandlers["node.pairing.snapshot"],
+      'nodeHandlers["node.pairing.snapshot"] test invariant',
+    )(malformedSnapshot.opts);
+    expect(malformedSnapshot.opts.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "unknown nodeId" }),
+    );
+
+    const mismatched = await pairDeviceIdentity({
+      name: "node-pairing-snapshot-mismatched-key",
+      role: "node",
+      scopes: [],
+    });
+    const mismatchedPending = await requestNodePairing({ nodeId: mismatched.identity.deviceId });
+    await approveNodePairing(mismatchedPending.request.requestId, {
+      callerScopes: ["operator.pairing"],
+    });
+    await withPairedDeviceRecords(state.stateDir, (pairedByDeviceId) => {
+      const device = pairedByDeviceId[mismatched.identity.deviceId];
+      if (device) {
+        device.publicKey = malformed.publicKey;
+      }
+      return { value: undefined, persist: true };
+    });
+    const mismatchedSnapshot = createOptions({ nodeId: mismatched.identity.deviceId });
+    await expectDefined(
+      nodeHandlers["node.pairing.snapshot"],
+      'nodeHandlers["node.pairing.snapshot"] test invariant',
+    )(mismatchedSnapshot.opts);
+    expect(mismatchedSnapshot.opts.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "unknown nodeId" }),
+    );
+  });
+
+  it("denies a device-token caller a foreign node snapshot", async () => {
+    await createState("node-pairing-snapshot-cross-device");
+    const node = await pairDeviceIdentity({
+      name: "node-pairing-snapshot-cross-device",
+      role: "node",
+      scopes: [],
+    });
+    const pending = await requestNodePairing({ nodeId: node.identity.deviceId });
+    await approveNodePairing(pending.request.requestId, { callerScopes: ["operator.pairing"] });
+    const crossDevice = createOptions(
+      { nodeId: node.identity.deviceId },
+      {
+        client: createClient(["operator.pairing"], "other-device", { isDeviceTokenAuth: true }),
+      },
+    );
+    await expectDefined(
+      nodeHandlers["node.pairing.snapshot"],
+      'nodeHandlers["node.pairing.snapshot"] test invariant',
+    )(crossDevice.opts);
+    expect(crossDevice.opts.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "node pairing snapshot denied" }),
+    );
+  });
+});
 
 describe("nodeHandlers node.pair.approve", () => {
   it("promotes the first surface only for the same authenticated pairing identity", async () => {

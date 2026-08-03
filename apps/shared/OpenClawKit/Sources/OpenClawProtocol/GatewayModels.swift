@@ -3408,6 +3408,62 @@ public struct NodeDescribeParams: Codable, Sendable {
     }
 }
 
+public struct NodePairingSnapshotParams: Codable, Sendable {
+    public let nodeid: String
+
+    public init(
+        nodeid: String)
+    {
+        self.nodeid = nodeid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case nodeid = "nodeId"
+    }
+}
+
+public struct NodePairingSnapshotResult: Codable, Sendable {
+    public let nodeid: String
+    public let publickeysha256: String
+    public let pairinggenerationkey: String
+    public let paired: Bool
+    public let nodesurfaceapproved: Bool
+    public let observedat: String
+    public let gatewayversion: String
+    public let gatewayruntimestamp: String
+
+    public init(
+        nodeid: String,
+        publickeysha256: String,
+        pairinggenerationkey: String,
+        paired: Bool,
+        nodesurfaceapproved: Bool,
+        observedat: String,
+        gatewayversion: String,
+        gatewayruntimestamp: String)
+    {
+        self.nodeid = nodeid
+        self.publickeysha256 = publickeysha256
+        self.pairinggenerationkey = pairinggenerationkey
+        self.paired = paired
+        self.nodesurfaceapproved = nodesurfaceapproved
+        self.observedat = observedat
+        self.gatewayversion = gatewayversion
+        self.gatewayruntimestamp = gatewayruntimestamp
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case nodeid = "nodeId"
+        case publickeysha256 = "publicKeySha256"
+        case pairinggenerationkey = "pairingGenerationKey"
+        case paired
+        case nodesurfaceapproved = "nodeSurfaceApproved"
+        case observedat = "observedAt"
+        case gatewayversion = "gatewayVersion"
+        case gatewayruntimestamp = "gatewayRuntimeStamp"
+    }
+}
+
 public struct NodeInvokeParams: Codable, Sendable {
     public let nodeid: String
     public let command: String

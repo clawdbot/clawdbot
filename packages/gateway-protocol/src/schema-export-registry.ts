@@ -112,6 +112,8 @@ export {
   NodePairRejectParamsSchema,
   NodePairRemoveParamsSchema,
   NodeListParamsSchema,
+  NodePairingSnapshotParamsSchema,
+  NodePairingSnapshotResultSchema,
   NodePluginToolDescriptorSchema,
   NodePluginToolsUpdateParamsSchema,
   NodeSkillDescriptorSchema,

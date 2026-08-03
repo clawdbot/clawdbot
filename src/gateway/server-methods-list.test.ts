@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   createCoreGatewayMethodDescriptors,
   listCoreGatewayMethodNames,
+  resolveCoreOperatorGatewayMethodScope,
   STARTUP_UNAVAILABLE_GATEWAY_METHODS,
 } from "./methods/core-descriptors.js";
 import { GATEWAY_AUX_METHODS } from "./server-aux-methods.js";
@@ -46,6 +47,11 @@ describe("GATEWAY_EVENTS", () => {
 });
 
 describe("listGatewayMethods", () => {
+  it("classifies pairing snapshots outside the operator.read surface", () => {
+    expect(listGatewayMethods()).toContain("node.pairing.snapshot");
+    expect(resolveCoreOperatorGatewayMethodScope("node.pairing.snapshot")).toBe("operator.pairing");
+  });
+
   it("advertises plugin surface refresh for capability rotation", () => {
     expect(listGatewayMethods()).toContain("plugin.surface.refresh");
     expect(listGatewayMethods()).toContain("node.pluginSurface.refresh");
@@ -66,7 +72,7 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-27)).toEqual([
+    expect(listGatewayMethods().slice(-28)).toEqual([
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
@@ -94,6 +100,7 @@ describe("listGatewayMethods", () => {
       "memory.search",
       "skills.proposals.events.list",
       "skills.proposals.evaluate",
+      "node.pairing.snapshot",
     ]);
     const methods = listGatewayMethods();
     expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
@@ -159,7 +166,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-34)).toEqual([
+    expect(coreMethods.slice(-35)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -194,6 +201,7 @@ describe("listGatewayMethods", () => {
       "memory.search",
       "skills.proposals.events.list",
       "skills.proposals.evaluate",
+      "node.pairing.snapshot",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);

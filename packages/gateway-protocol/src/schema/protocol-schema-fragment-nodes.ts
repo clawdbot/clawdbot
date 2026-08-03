@@ -15,6 +15,8 @@ export const NodeProtocolSchemas = {
   NodeSkillsUpdateParams: nodes.NodeSkillsUpdateParamsSchema,
   NodePendingAckParams: nodes.NodePendingAckParamsSchema,
   NodeDescribeParams: nodes.NodeDescribeParamsSchema,
+  NodePairingSnapshotParams: nodes.NodePairingSnapshotParamsSchema,
+  NodePairingSnapshotResult: nodes.NodePairingSnapshotResultSchema,
   ...nodeInvoke.NodeInvokeProtocolSchemas,
   NodeEventParams: nodes.NodeEventParamsSchema,
   NodeEventResult: nodes.NodeEventResultSchema,

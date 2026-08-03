@@ -802,6 +802,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "node.rename",
       "node.list",
       "node.describe",
+      "node.pairing.snapshot",
       "plugin.surface.refresh",
       "node.pluginSurface.refresh",
       "node.pluginTools.update",

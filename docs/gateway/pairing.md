@@ -72,6 +72,15 @@ Methods:
   `operator.pairing` may remove non-operator node rows; a device-token caller
   revoking its **own** node role on a mixed-role device additionally needs
   `operator.admin`.
+- `node.pairing.snapshot` - return a Gateway-authoritative snapshot for one
+  approved node device (`operator.pairing`). It contains the node id, the
+  SHA-256 digest of the canonical raw Ed25519 public-key bytes, the current
+  pairing-generation key, approval facts, ISO-8601 Gateway observation time,
+  Gateway version, and a process-instance stamp (stable only for one Gateway
+  process). The generation key is an explicit anti-replay contract derived by
+  the canonical pairing-generation helper; it contains no raw token or key
+  material. Device-token callers are limited to their own device unless they
+  hold `operator.admin`.
 - `node.rename` - rename a paired node's operator-facing display name.
 
 Removed in 2026.7: `node.pair.request` and `node.pair.verify`. Pending

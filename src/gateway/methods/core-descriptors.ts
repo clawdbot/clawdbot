@@ -491,6 +491,9 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
     since: "2026.7",
     controlPlaneWrite: true,
   },
+  // A pairing-generation key is authority-bearing state, not ordinary node telemetry.
+  // Keep additive methods at the tail so older advertised method indices remain stable.
+  { name: "node.pairing.snapshot", scope: "operator.pairing", since: "2026.7" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(
