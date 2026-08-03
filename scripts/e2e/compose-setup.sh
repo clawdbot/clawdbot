@@ -96,6 +96,7 @@ if [ "$(docker inspect --format '{{.State.Health.Status}}' "$GATEWAY_ID")" != "h
   exit 1
 fi
 
+"${COMPOSE[@]}" exec -T openclaw-gateway sh -lc 'node dist/index.js gateway health --token "$OPENCLAW_GATEWAY_TOKEN"'
 "${COMPOSE[@]}" exec -T openclaw-gateway node dist/index.js gateway health --token "$TOKEN" --json >"$PROJECT_DIR/gateway-health.json"
 assert_gateway_health_json "gateway service" "$PROJECT_DIR/gateway-health.json"
 "${COMPOSE[@]}" run -T --no-deps --name "$CLI_NAME" openclaw-cli gateway health --token "$TOKEN" --json >"$PROJECT_DIR/cli-health.json"
@@ -111,7 +112,8 @@ node --import tsx "$ROOT_DIR/scripts/e2e/lib/docker-artifact-proof/write-identit
   --container "cli=$CLI_NAME" \
   --detail "gateway:openclawVersion=$GATEWAY_VERSION" \
   --detail "gateway:health=healthy" \
-  --detail "gateway:healthCommand=passed" \
-  --detail "cli:healthCommand=passed"
+  --detail "gateway:documentedHealthCommand=passed" \
+  --detail "gateway:healthJsonEnvelope=passed" \
+  --detail "cli:healthJsonEnvelope=passed"
 
 echo "Docker Compose setup proof passed."

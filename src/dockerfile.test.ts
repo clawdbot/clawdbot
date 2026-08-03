@@ -47,7 +47,7 @@ describe("Dockerfile", () => {
     expect(compose).not.toContain("127.0.0.1:18789/healthz");
   });
 
-  it("uses the authenticated gateway health command in Compose guidance and proof", async () => {
+  it("executes the documented Compose health command and validates JSON envelopes", async () => {
     const docs = await readFile(dockerInstallDocsPath, "utf8");
     const composeSetup = await readFile(composeSetupScriptPath, "utf8");
     const gatewayHealthCommand =
@@ -55,9 +55,15 @@ describe("Dockerfile", () => {
 
     expect(docs).toContain(`docker compose exec openclaw-gateway sh -lc '${gatewayHealthCommand}'`);
     expect(docs).not.toContain('node dist/index.js health --token "$OPENCLAW_GATEWAY_TOKEN"');
+    expect(composeSetup).toContain(
+      `"\${COMPOSE[@]}" exec -T openclaw-gateway sh -lc '${gatewayHealthCommand}'`,
+    );
     expect(composeSetup.match(/gateway health --token "\$TOKEN" --json/g)).toHaveLength(2);
     expect(composeSetup).toContain('assert_gateway_health_json "gateway service"');
     expect(composeSetup).toContain('assert_gateway_health_json "CLI sidecar"');
+    expect(composeSetup).toContain('--detail "gateway:documentedHealthCommand=passed"');
+    expect(composeSetup).toContain('--detail "gateway:healthJsonEnvelope=passed"');
+    expect(composeSetup).toContain('--detail "cli:healthJsonEnvelope=passed"');
     expect(composeSetup).not.toContain('dist/index.js health --token "$TOKEN"');
     expect(composeSetup).toContain('-v "$PROJECT_DIR:/target"');
     expect(composeSetup).toContain("rm -rf /target/* /target/.[!.]* /target/..?*");
