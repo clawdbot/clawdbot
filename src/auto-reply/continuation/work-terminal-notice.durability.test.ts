@@ -7,6 +7,11 @@
 // a terminal row, discard all process-local state, reload from disk, and then
 // assert through the production recovery/delivery/acknowledgement path.
 import { describe, expect, it, vi } from "vitest";
+import { resolveStorePath } from "../../config/sessions.js";
+import {
+  appendTranscriptMessage,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { deliverQueuedSessionDelivery } from "../../gateway/server-restart-sentinel.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { scheduleSessionDelivery } from "../../infra/session-delivery-queue-runtime.js";
@@ -159,6 +164,48 @@ function restorePendingNoticeFlag(): void {
 function simulateGatewayRestart(): void {
   drainSystemEventEntries(SESSION_KEY);
   reloadTaskFlowRegistryFromStore();
+}
+
+const SESSION_ID = "session-terminal-notice-1";
+
+/** Create the real session entry prepareFormattedSystemEvents resolves. */
+async function seedSessionEntry(stateDir: string): Promise<void> {
+  await replaceSessionEntry(
+    { storePath: resolveStorePath(stateDir, { agentId: "main" }), sessionKey: SESSION_KEY },
+    {
+      sessionKey: SESSION_KEY,
+      sessionId: SESSION_ID,
+      updatedAt: Date.now(),
+      status: "done",
+    } as never,
+  );
+}
+
+/**
+ * Persist a user turn that records the adopted delivery ids, exactly as the
+ * transcript recorder does, WITHOUT acking the queue rows — the crash window
+ * between transcript adoption and queue settlement.
+ */
+async function persistAdoptedTurnWithoutQueueAck(
+  stateDir: string,
+  deliveryIds: readonly string[],
+): Promise<void> {
+  await appendTranscriptMessage(
+    {
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+      agentId: "main",
+      storePath: resolveStorePath(stateDir, { agentId: "main" }),
+    } as never,
+    {
+      message: {
+        role: "user",
+        content: "adopted turn",
+        timestamp: Date.now(),
+        __openclaw: { sessionDeliveryAckIds: [...deliveryIds] },
+      },
+    } as never,
+  );
 }
 
 function silentLog() {
@@ -438,6 +485,87 @@ describe("continuation_work terminal notice durability", () => {
 
       expect(listPendingTerminalNoticeWork()).toEqual([]);
       expect(await loadPendingSessionDeliveries(stateDir)).toHaveLength(1);
+    });
+  });
+
+  it("reconciles an already-adopted ack id after a crash before queue settlement", async () => {
+    await withDurableState(async (stateDir) => {
+      await seedSessionEntry(stateDir);
+      terminalizeWithPendingNotice();
+      await drainPendingTerminalNotices(realDeps(stateDir));
+      simulateGatewayRestart();
+      await runProductionDeliveryRecovery(stateDir);
+
+      const prepared = await preparePrompt(stateDir);
+      const deliveryIds = prepared.managedDeliveries.map((delivery) => delivery.id);
+      expect(deliveryIds).toHaveLength(1);
+
+      // The turn is durably adopted, then the process dies BEFORE the queue ack.
+      await persistAdoptedTurnWithoutQueueAck(stateDir, deliveryIds);
+      simulateGatewayRestart();
+      await runProductionDeliveryRecovery(stateDir);
+      expect(await loadPendingSessionDeliveries(stateDir)).toHaveLength(1);
+
+      // Preparation must recognise the already-adopted id: settle it, and keep
+      // it out of the prompt rather than injecting the outcome a second time.
+      const replay = await preparePrompt(stateDir);
+      expect(
+        replay.blocks.some((block) => block.text.includes("continue_work permanently failed")),
+      ).toBe(false);
+      expect(replay.managedDeliveries).toEqual([]);
+      expect(await loadPendingSessionDeliveries(stateDir)).toEqual([]);
+    });
+  });
+
+  it("treats an inconclusive enqueue status as a failed handoff", async () => {
+    await withDurableState(async (stateDir) => {
+      vi.useFakeTimers();
+      try {
+        terminalizeWithPendingNotice();
+        const [owed] = listPendingTerminalNoticeWork();
+        if (!owed) {
+          throw new Error("expected a pending terminal notice");
+        }
+
+        let inconclusive = true;
+        const scheduled: string[] = [];
+        const wakes: unknown[] = [];
+        const deps = {
+          ...realDeps(stateDir),
+          enqueueSessionDeliveryWithStatus: (async (payload, dir) => {
+            const result = await enqueueSessionDeliveryWithStatus(payload, dir);
+            return inconclusive ? { id: result.id, status: "unknown" as const } : result;
+          }) as typeof enqueueSessionDeliveryWithStatus,
+          scheduleSessionDelivery: async (id: string) => {
+            scheduled.push(id);
+            return true;
+          },
+          requestHeartbeatNow: (() => {
+            wakes.push(true);
+          }) as typeof requestHeartbeatNow,
+        };
+
+        expect(await deliverPendingTerminalNoticeWithRetry(owed, deps)).toBe(false);
+
+        // Unknown status must not clear the flag, surface, schedule, or wake.
+        expect(listPendingTerminalNoticeWork()).toHaveLength(1);
+        expect(peekSystemEvents(SESSION_KEY)).toEqual([]);
+        expect(scheduled).toEqual([]);
+        expect(wakes).toEqual([]);
+
+        // The bounded retry resolves it once the read is conclusive again.
+        inconclusive = false;
+        await vi.advanceTimersByTimeAsync(TERMINAL_NOTICE_RETRY_DELAYS_MS[0]);
+        await vi.waitFor(() => {
+          expect(listPendingTerminalNoticeWork()).toEqual([]);
+        });
+        expect(await pendingDeliveryTexts(stateDir)).toEqual([
+          CONTINUATION_WORK_RETRY_EXHAUSTED_NOTICE,
+        ]);
+      } finally {
+        resetTerminalNoticeRetriesForTests();
+        vi.useRealTimers();
+      }
     });
   });
 

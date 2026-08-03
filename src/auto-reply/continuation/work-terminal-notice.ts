@@ -102,21 +102,30 @@ export async function deliverPendingTerminalNotice(
     },
     deps.stateDir,
   );
-  if (!clearPendingTerminalNotice(pending)) {
-    // Another drain won the clear. The deterministic idempotency key means it
-    // owns THIS row, not a duplicate — acknowledging here would complete the
-    // winner's only durable record before the prompt ever consumed it. Leave it
-    // alone; a completed tombstone already makes re-enqueue a no-op.
-    return false;
+  if (enqueued.status === "unknown") {
+    // The authoritative read was inconclusive, so this row may already be a
+    // completed tombstone. Surfacing now could duplicate a settled outcome, and
+    // clearing the flag would discard the only restart backstop. Treat it as a
+    // failed handoff: keep the obligation and let the bounded retry re-resolve.
+    throw new Error(`continuation terminal notice enqueue status unresolved for ${enqueued.id}`);
   }
   if (enqueued.status === "completed") {
     // A tombstone already settled this key: the outcome was delivered and
     // adopted on an earlier pass, and the durable enqueue above was a no-op.
     // Releasing the stale flag is the whole job — emitting another in-memory
     // event or wake here would surface a second copy of a settled outcome.
-    log.info(
-      `[continuation:work-terminal-notice-already-settled] flowId=${work.flowId} session=${pending.sessionKey} deliveryId=${enqueued.id}`,
-    );
+    if (clearPendingTerminalNotice(pending)) {
+      log.info(
+        `[continuation:work-terminal-notice-already-settled] flowId=${work.flowId} session=${pending.sessionKey} deliveryId=${enqueued.id}`,
+      );
+    }
+    return false;
+  }
+  if (!clearPendingTerminalNotice(pending)) {
+    // Another drain won the clear. The deterministic idempotency key means it
+    // owns THIS row, not a duplicate — acknowledging here would complete the
+    // winner's only durable record before the prompt ever consumed it. Leave it
+    // alone; a completed tombstone already makes re-enqueue a no-op.
     return false;
   }
   deps.enqueueSystemEvent(CONTINUATION_WORK_RETRY_EXHAUSTED_NOTICE, {

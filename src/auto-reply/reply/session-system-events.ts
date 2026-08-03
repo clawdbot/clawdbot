@@ -280,8 +280,14 @@ export async function prepareFormattedSystemEvents(params: {
     readConsistency: "latest",
     hydrateSkillPromptRefs: false,
   })?.sessionId;
+  // Adoption-scoped events settle only after the turn is durably adopted, so a
+  // crash between the transcript write and the queue ack leaves an ack id that
+  // IS already adopted but whose row is still pending. Both kinds must consult
+  // the transcript, or a plain adoption-scoped notice would be re-injected.
   const hasManagedDelivery = selected.some(
-    (event) => event.delegateArtifactReceipt && event.sessionDeliveryAckId,
+    (event) =>
+      event.sessionDeliveryAckId &&
+      (event.delegateArtifactReceipt || event.sessionDeliveryAwaitsTurnAdoption),
   );
   const adoptedDeliveryIds =
     currentSessionId && hasManagedDelivery
@@ -488,12 +494,59 @@ export async function prepareFormattedSystemEvents(params: {
   for (const settlement of terminalManagedSettlements) {
     await settleManagedDelivery(params.sessionKey, settlement);
   }
+  // Classify adoption-scoped deliveries BEFORE the prompt is assembled: an id
+  // the persisted turn already adopted must be settled and excluded, not
+  // re-injected.
+  const adoptionScopedDeliveries: PreparedManagedSystemEventDelivery[] = [];
+  const seenAdoptionScopedIds = new Set<string>();
+  const alreadyAdoptedAckIds: { id: string; stateDir?: string }[] = [];
+  // Keyed by ack id, not object identity: consumeSelectedSystemEventEntries
+  // returns different instances than the peeked entries classified here.
+  const excludedAdoptedAckIds = new Set<string>();
+  for (const event of selected) {
+    if (event.delegateArtifactReceipt || !event.sessionDeliveryAwaitsTurnAdoption) {
+      continue;
+    }
+    const id = normalizeOptionalString(event.sessionDeliveryAckId);
+    if (!id || seenAdoptionScopedIds.has(id)) {
+      continue;
+    }
+    seenAdoptionScopedIds.add(id);
+    const stateDir = normalizeOptionalString(event.sessionDeliveryAckStateDir);
+    if (adoptedDeliveryIds.has(id)) {
+      // The persisted turn already adopted this id; only the queue ack was lost.
+      // Settle it and keep it out of this prompt so a restart cannot surface the
+      // same outcome twice.
+      alreadyAdoptedAckIds.push({ id, ...(stateDir ? { stateDir } : {}) });
+      excludedAdoptedAckIds.add(id);
+      continue;
+    }
+    adoptionScopedDeliveries.push({
+      id,
+      acknowledge: async () => {
+        await ackSessionDelivery(id, stateDir);
+      },
+    });
+  }
+  for (const ack of alreadyAdoptedAckIds) {
+    try {
+      await ackSessionDelivery(ack.id, ack.stateDir);
+    } catch (error) {
+      defaultRuntime.log(
+        `[session-system-events] failed to settle already-adopted session delivery ${ack.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
   const queued = consumeSelectedSystemEventEntries(
     params.sessionKey,
     selected.filter((event) => !event.delegateArtifactReceipt && !deferredManagedEvents.has(event)),
   ).map(refreshManagedEvent);
   const deliverable = queued.filter(
-    (event) => !event.expectedSessionId || event.expectedSessionId === currentSessionId,
+    (event) =>
+      !(event.sessionDeliveryAckId && excludedAdoptedAckIds.has(event.sessionDeliveryAckId)) &&
+      (!event.expectedSessionId || event.expectedSessionId === currentSessionId),
   );
   const pendingManagedEvents = selected
     .filter((event) => pendingManagedKeys.has(managedKey(event) ?? ""))
@@ -506,31 +559,18 @@ export async function prepareFormattedSystemEvents(params: {
       stateDir?: string;
     }
   >();
-  // Events that opted into adoption-scoped settlement are NOT acked here:
-  // prompt preparation is not adoption, and a crash or admission failure after
-  // this point would otherwise complete the durable row with nothing delivered.
-  // They ride out as managed deliveries and are acknowledged by
-  // settleManagedSystemEventsAfterTurnAdoption once the turn is durably adopted.
-  const adoptionScopedDeliveries: PreparedManagedSystemEventDelivery[] = [];
-  const seenAdoptionScopedIds = new Set<string>();
-  for (const event of selected.filter((entry) => !entry.delegateArtifactReceipt)) {
+  // Adoption-scoped events are NOT acked here: prompt preparation is not
+  // adoption, and a crash or admission failure after this point would otherwise
+  // complete the durable row with nothing delivered. They were classified above
+  // and settle via settleManagedSystemEventsAfterTurnAdoption.
+  for (const event of selected.filter(
+    (entry) => !entry.delegateArtifactReceipt && !entry.sessionDeliveryAwaitsTurnAdoption,
+  )) {
     const id = normalizeOptionalString(event.sessionDeliveryAckId);
     if (!id) {
       continue;
     }
     const stateDir = normalizeOptionalString(event.sessionDeliveryAckStateDir);
-    if (event.sessionDeliveryAwaitsTurnAdoption) {
-      if (!seenAdoptionScopedIds.has(id)) {
-        seenAdoptionScopedIds.add(id);
-        adoptionScopedDeliveries.push({
-          id,
-          acknowledge: async () => {
-            await ackSessionDelivery(id, stateDir);
-          },
-        });
-      }
-      continue;
-    }
     const dedupeKey = `${id}\u0000${stateDir ?? ""}`;
     sessionDeliveryAcks.set(dedupeKey, {
       id,

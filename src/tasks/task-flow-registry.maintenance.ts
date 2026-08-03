@@ -17,6 +17,29 @@ import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 
 const TASK_FLOW_RETENTION_MS = 7 * 24 * 60 * 60_000;
 
+/**
+ * State key a controller sets to declare that a terminal row still owns an
+ * unfulfilled durable obligation and must outlive normal retention.
+ *
+ * Pruning a terminal row is normally safe because the row is only a record. It
+ * is NOT safe when the row is the last durable pointer to work the system still
+ * owes someone: continuation's terminal `continue_work` notice keeps its
+ * restart backstop here after bounded handoff retries fail. The marker is
+ * generic and read structurally so `src/tasks/` stays free of feature imports;
+ * the owning controller clears it once the obligation is handed off.
+ */
+const PENDING_OBLIGATION_STATE_KEYS = ["terminalNoticePending"] as const;
+
+function hasUnfulfilledDurableObligation(flow: TaskFlowRecord): boolean {
+  const state = flow.stateJson;
+  if (!state || typeof state !== "object" || Array.isArray(state)) {
+    return false;
+  }
+  return PENDING_OBLIGATION_STATE_KEYS.some(
+    (key) => (state as Record<string, unknown>)[key] !== undefined,
+  );
+}
+
 /** Counts task-flow registry maintenance actions without exposing individual records. */
 type TaskFlowRegistryMaintenanceSummary = {
   reconciled: number;
@@ -55,6 +78,9 @@ function shouldPruneFlow(flow: TaskFlowRecord, now: number): boolean {
     return false;
   }
   if (hasActiveLinkedTasks(flow.flowId)) {
+    return false;
+  }
+  if (hasUnfulfilledDurableObligation(flow)) {
     return false;
   }
   return now - resolveTerminalAt(flow) >= TASK_FLOW_RETENTION_MS;
