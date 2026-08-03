@@ -446,6 +446,7 @@ async function executeAgentTurnInternalWithRetryState(
   const terminalFailurePayload = terminalRunFailed
     ? buildTerminalAgentRunFailureReplyPayload({
         isHeartbeat: params.isHeartbeat,
+        visibleReplyDelivered: false,
         sessionCtx: params.sessionCtx,
         cfg: params.followupRun.run.config,
       })

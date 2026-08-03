@@ -12,6 +12,7 @@ import {
   isReplyPayloadStatusNotice,
   type ReplyPayload,
 } from "../reply-payload.js";
+import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
 import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
 import {
@@ -31,6 +32,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     ctx,
     deliveryChannel,
     dispatcher,
+    failDispatchReplyOperation,
     flushPendingCommentaryProgress,
     getDispatchAbortOperation,
     getDispatchAbortSignal,
@@ -64,6 +66,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     wrapProgressCallback,
   } = state;
   let deliberateSilentTerminalReply = false;
+  let didDeliverVisiblePartialReply = false;
   const replyResult = await runWithDispatchLifecycleAdmission(
     async () =>
       await runWithDispatchAbortSignal(
@@ -89,7 +92,13 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 shouldSuppressToolErrorWarnings: state.shouldSuppressToolErrorWarnings,
                 typingPolicy: typing.typingPolicy,
                 suppressTyping: typing.suppressTyping,
-                onPartialReply: wrapProgressCallback(params.replyOptions?.onPartialReply),
+                onPartialReply: wrapProgressCallback(params.replyOptions?.onPartialReply, {
+                  onVisible: (payload) => {
+                    if (hasOutboundReplyContent(payload, { trimText: true })) {
+                      didDeliverVisiblePartialReply = true;
+                    }
+                  },
+                }),
                 onReasoningStream: wrapProgressCallback(params.replyOptions?.onReasoningStream),
                 streamReasoningInNonStreamModes:
                   params.replyOptions?.streamReasoningInNonStreamModes,
@@ -491,7 +500,21 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
           ),
         trackDispatchLifecycleWork,
       ),
-  );
+  ).catch((error: unknown) => {
+    if (
+      params.replyOptions?.isHeartbeat === true ||
+      !didDeliverVisiblePartialReply ||
+      isDispatchOperationAborted()
+    ) {
+      throw error;
+    }
+    failDispatchReplyOperation(error);
+    return buildTerminalAgentRunFailureReplyPayload({
+      visibleReplyDelivered: true,
+      sessionCtx: ctx,
+      cfg: replyConfig,
+    });
+  });
   const sessionMetadataChanges = takeCommandSessionMetadataChanges(ctx);
   notifySessionMetadataChanges(sessionMetadataChanges);
   const finalDispatchAcquisition = await state.ensureDispatchReplyOperation("dispatch");
