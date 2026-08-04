@@ -6,7 +6,6 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   countSessionLogMentions,
-  countSessionLogToolResults,
   countSystemPromptChars,
   outputText,
   outputToolNames,
@@ -128,7 +127,7 @@ describe("tool search gateway e2e fetch helper", () => {
 });
 
 describe("tool search gateway e2e session log scanner", () => {
-  it("counts typed JSONL tool results without treating prompt text as a call", async () => {
+  it("counts JSONL mentions without treating prompt text as a call", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tool-search-log-"));
     try {
       const sessionsDir = path.join(stateDir, "agents", "qa", "sessions");
@@ -172,9 +171,6 @@ describe("tool search gateway e2e session log scanner", () => {
         fake_plugin_tool_17: 2,
         tool_search_code: 0,
       });
-      await expect(
-        countSessionLogToolResults({ sessionsDir, toolName: "fake_plugin_tool_17" }),
-      ).resolves.toBe(1);
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
@@ -248,9 +244,6 @@ describe("tool search gateway e2e session log scanner", () => {
         quoted_call: 1,
         tool_search_code: 1,
       });
-      await expect(
-        countSessionLogToolResults({ sessionsDir, toolName: "fake_plugin_tool_17" }),
-      ).resolves.toBe(1);
     } finally {
       db.close();
       await fs.rm(stateDir, { recursive: true, force: true });

@@ -303,36 +303,6 @@ function sessionLogScanText(line: string): string | null {
   }
 }
 
-function sessionLogToolResultName(line: string): string | null {
-  const trimmed = line.trim();
-  if (!trimmed) {
-    return null;
-  }
-  try {
-    const record = JSON.parse(trimmed) as unknown;
-    if (!record || typeof record !== "object") {
-      return null;
-    }
-    const event = record as {
-      message?: unknown;
-      role?: unknown;
-      toolName?: unknown;
-      name?: unknown;
-    };
-    const message =
-      event.message && typeof event.message === "object"
-        ? (event.message as { role?: unknown; toolName?: unknown; name?: unknown })
-        : event;
-    if (message.role !== "toolResult" && message.role !== "tool") {
-      return null;
-    }
-    const name = message.toolName ?? message.name;
-    return typeof name === "string" ? name : null;
-  } catch {
-    return null;
-  }
-}
-
 function resolveAgentSqlitePathFromSessionsDir(sessionsDir: string): string | null {
   if (path.basename(sessionsDir) !== "sessions") {
     return null;
@@ -396,19 +366,6 @@ export async function countSessionLogMentions(params: {
     }
   });
   return counts;
-}
-
-export async function countSessionLogToolResults(params: {
-  sessionsDir: string;
-  toolName: string;
-}): Promise<number> {
-  let count = 0;
-  await visitSessionLogEvents(params.sessionsDir, (eventJson) => {
-    if (sessionLogToolResultName(eventJson) === params.toolName) {
-      count += 1;
-    }
-  });
-  return count;
 }
 
 export function subtractMentionCounts(
