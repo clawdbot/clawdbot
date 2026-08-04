@@ -96,6 +96,7 @@ type ToolsEffectiveState = {
 type AgentsProps = {
   access: {
     canCreateAgent: boolean;
+    canPatchConfig: boolean;
     canUpdateConfig: boolean;
     canUpdateIdentity: boolean;
     canWriteFiles: boolean;
@@ -364,6 +365,7 @@ export function renderAgents(props: AgentsProps) {
                       configSaving: props.config.saving,
                       configDirty: props.config.dirty,
                       filter: props.agentSkills.filter,
+                      canPatchConfig: props.access.canPatchConfig,
                       canUpdateConfig: props.access.canUpdateConfig,
                       onFilterChange: props.onSkillsFilterChange,
                       onRefresh: props.onSkillsRefresh,

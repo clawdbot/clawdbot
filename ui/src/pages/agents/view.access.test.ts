@@ -13,6 +13,7 @@ describe("renderAgents access", () => {
         createAgentViewTestProps({
           access: {
             canCreateAgent: false,
+            canPatchConfig: false,
             canUpdateConfig: false,
             canUpdateIdentity: false,
             canWriteFiles: false,

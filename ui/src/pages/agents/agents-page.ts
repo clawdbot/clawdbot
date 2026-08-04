@@ -62,7 +62,7 @@ import {
   syncAgentsCanonicalLocation,
 } from "./route-navigation.ts";
 import type { AgentsRouteData } from "./route.ts";
-import { loadAgentSkills } from "./skills.ts";
+import { clearAgentSkillFilter, loadAgentSkills } from "./skills.ts";
 import { renderAgents } from "./view.ts";
 
 const AGENTS_DOCS_URL = "https://docs.openclaw.ai/concepts/multi-agent";
@@ -841,6 +841,35 @@ class AgentsPage
     void this.context.runtimeConfig.refresh({ discardPendingChanges: true });
   }
 
+  private clearAgentSkills(agentId: string) {
+    if (!this.canCall("config.patch", "operator.admin")) {
+      return;
+    }
+    const client = this.client;
+    const generation = this.requestGeneration;
+    const agents = this.context.agents;
+    const runtimeConfig = this.context.runtimeConfig;
+    if (!client) {
+      return;
+    }
+    const canDispatch = () =>
+      this.context.runtimeConfig === runtimeConfig &&
+      this.isCurrentRequest(client, generation, agentId, { agents }) &&
+      this.canCall("config.patch", "operator.admin");
+    void clearAgentSkillFilter(runtimeConfig, agentId, canDispatch).then((updated) => {
+      if (!canDispatch()) {
+        return;
+      }
+      if (!updated) {
+        this.agentSkillsError =
+          runtimeConfig.state.lastError ?? t("agents.skillsPanel.updateError");
+        return;
+      }
+      this.agentSkillsError = null;
+      void loadAgentSkills(this, agentId);
+    });
+  }
+
   private runCronJobNow(jobId: string) {
     if (!this.canCall("cron.run", "operator.admin")) {
       return;
@@ -858,6 +887,7 @@ class AgentsPage
     const config = currentConfigObject(configState);
     const access = {
       canCreateAgent: this.canCall("openclaw.chat", "operator.admin"),
+      canPatchConfig: this.canCall("config.patch", "operator.admin"),
       canUpdateConfig: this.canCall("config.set", "operator.admin"),
       canUpdateIdentity: this.canCall("agents.update", "operator.admin"),
       canWriteFiles: this.canCall("agents.files.set", "operator.admin"),
@@ -1067,15 +1097,7 @@ class AgentsPage
             }
             this.context.runtimeConfig.patchForm([...target.path, "skills"], [...next]);
           },
-          onAgentSkillsClear: (agentId) => {
-            if (!this.canCall("config.set", "operator.admin")) {
-              return;
-            }
-            const target = this.context.runtimeConfig.agentEntry(agentId);
-            if (target) {
-              this.context.runtimeConfig.removeFormValue([...target.path, "skills"]);
-            }
-          },
+          onAgentSkillsClear: (agentId) => this.clearAgentSkills(agentId),
           onAgentSkillsDisableAll: (agentId) => {
             if (!this.canCall("config.set", "operator.admin")) {
               return;
