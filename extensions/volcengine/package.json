@@ -7,6 +7,9 @@
     "url": "https://github.com/openclaw/openclaw"
   },
   "type": "module",
+  "dependencies": {
+    "ws": "8.21.1"
+  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },
