@@ -1,7 +1,7 @@
 // BTW inline message component renders compact aside messages in chat.
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { theme } from "../theme/theme.js";
-import { sanitizeRenderableText } from "../tui-formatters.js";
+import { sanitizeRenderableLine, sanitizeRenderableText } from "../tui-formatters.js";
 import { AssistantMessageComponent } from "./assistant-message.js";
 
 // Inline overlay message for BTW follow-up answers inside the chat log.
@@ -20,7 +20,7 @@ export class BtwInlineMessage extends Container {
 
   /** Replaces the current BTW content without reallocating the host component. */
   setResult(params: BtwInlineMessageParams) {
-    const question = sanitizeRenderableText(params.question);
+    const question = sanitizeRenderableLine(params.question);
     const text = sanitizeRenderableText(params.text);
     this.clear();
     this.addChild(new Spacer(1));

@@ -14,11 +14,16 @@ scenario:
     - Wrapped URLs retain their complete copy-safe OSC 8 target.
     - ANSI, OSC, clipboard, and C1 payloads cannot reach raw terminal frames.
     - Printable text surrounding hostile terminal controls remains visible.
-    - Selector labels, descriptions, and footer fields render as sanitized one-line copies while preserving printable Unicode markers.
+    - Selector labels, descriptions, footer fields, connection status, BTW questions, and complete headers collapse CR, LF, and tab payloads to sanitized one-line copies while preserving printable Unicode and RTL isolation.
+    - Hostile selected session and agent identity fields cannot inject controls through the header while their stored identity remains raw.
+    - Live tool titles sanitize their final display string before trusted styling, and control-only system output renders a neutral visible fallback.
     - Model and session selections pass exact unmodified backend values to patchSession and loadHistory.
   codeRefs:
+    - src/tui/components/btw-inline-message.ts
+    - src/tui/components/chat-log.ts
     - src/tui/components/filterable-select-list.ts
     - src/tui/components/searchable-select-list.ts
+    - src/tui/components/tool-execution.ts
     - src/tui/tui-pty-harness.e2e.test.ts
     - src/tui/tui.ts
     - src/tui/tui-formatters.ts

@@ -3,7 +3,7 @@ import { Box, Container, Markdown, Spacer, Text, truncateToWidth } from "@earend
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatToolDetail, resolveToolDisplay } from "../../agents/tool-display.js";
 import { markdownTheme, theme } from "../theme/theme.js";
-import { sanitizeRenderableText } from "../tui-formatters.js";
+import { sanitizeRenderableLine, sanitizeRenderableText } from "../tui-formatters.js";
 
 // Rendering model for live tool calls in the chat log.
 type ToolResultContent = {
@@ -176,7 +176,9 @@ export class ToolExecutionComponent extends Container {
       name: this.toolName,
       args: this.args,
     });
-    const title = `${display.emoji} ${display.label}${this.isPartial ? " (running)" : ""}`;
+    const title = sanitizeRenderableLine(
+      `${display.emoji} ${display.label}${this.isPartial ? " (running)" : ""}`,
+    );
     this.header.setText(theme.toolTitle(theme.bold(title)));
 
     const argLine = formatArgs(this.toolName, this.args);

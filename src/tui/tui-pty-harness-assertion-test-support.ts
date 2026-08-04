@@ -1,6 +1,7 @@
 // Shared assertions and exercises for the fake-backend TUI PTY harness.
 import { readFile } from "node:fs/promises";
 import { expect } from "vitest";
+import { formatTuiFooter, sanitizeRenderableLine } from "./tui-formatters.js";
 import { sleep, type PtyRun } from "./tui-pty-test-support.js";
 
 export type FixtureLogEntry = {
@@ -63,45 +64,21 @@ export function objectFieldEquals(entry: FixtureLogEntry, field: string, value: 
 
 type StartTuiPtyFixture = Parameters<typeof exerciseFragmentedUnicodePrompt>[0];
 type StartedTuiPtyFixture = Awaited<ReturnType<StartTuiPtyFixture>>;
-type TerminalAttackPayload = { text: string; markers: string[]; attacks: string[] };
-
-function buildTerminalAttackPayload(tag: string): TerminalAttackPayload {
-  const attacks = [
-    "\x1b[38;5;201m",
-    "\x1b[3J",
-    `\x1b]0;${tag}_OSC_TITLE_PAYLOAD\x07`,
-    `\x1b]52;c;${tag}_OSC52_PAYLOAD\x07`,
-    "\u009b3J",
-    `\u009d0;${tag}_C1_TITLE_PAYLOAD\u009c`,
-  ];
-  const markers = Array.from(
-    { length: 14 },
-    (_, index) => `${tag}${index.toString(16).toUpperCase()}`,
-  );
-  return {
-    text: [
-      markers[0],
-      ...attacks.map(
-        (attack, index) => `${markers[index * 2 + 1]}${attack}${markers[index * 2 + 2]}`,
-      ),
-      `${markers[13]} café 東京 👩🏽‍💻`,
-    ].join(" "),
-    markers,
-    attacks: attacks.map((attack, index) => `${attack}${markers[index * 2 + 2]}`),
-  };
-}
+type TerminalAttackPayload = {
+  text: string;
+  markers: string[];
+  attacks: string[];
+};
 
 function buildCompactTerminalAttackPayload(tag: string, attack: string): TerminalAttackPayload {
-  const markers = [`${tag}a`, `${tag}b`];
+  const markers = [`${tag}a`, `${tag}b`, `${tag}c`, `${tag}d`];
+  const lineBreakAttack = `\r\n${markers[2]}`;
+  const tabAttack = "\tשלום";
   return {
-    text: `${markers[0]}${attack}${markers[1]} café 東京 👩🏽‍💻`,
+    text: `${markers[0]}${attack}${markers[1]} café 東京 👩🏽‍💻${lineBreakAttack} مرحبا${tabAttack} ${markers[3]}`,
     markers,
-    attacks: [`${attack}${markers[1]}`],
+    attacks: [attack, lineBreakAttack, tabAttack],
   };
-}
-
-function compactPayloadVisibleText(payload: TerminalAttackPayload) {
-  return `${payload.markers.join("")} café 東京 👩🏽‍💻`;
 }
 
 async function assertTerminalAttackSanitized(
@@ -113,6 +90,7 @@ async function assertTerminalAttackSanitized(
   const visible = fixture.run.visibleOutput();
   expect(payload.markers.every((marker) => visible.includes(marker))).toBe(true);
   expect(visible).toContain("café 東京 👩🏽‍💻");
+  expect(visible).toContain("مرحبا שלום");
   const raw = fixture.run.output();
   for (const attack of payload.attacks) {
     expect(raw).not.toContain(attack);
@@ -120,13 +98,29 @@ async function assertTerminalAttackSanitized(
   expect(raw).not.toContain("\uFFFD");
 }
 
-function hasStatusFrame(raw: string, marker: string, status: RegExp) {
+async function assertTerminalAttackPrefixSanitized(
+  fixture: StartedTuiPtyFixture,
+  payload: TerminalAttackPayload,
+  timeoutMs: number,
+) {
+  await fixture.run.waitForOutput(payload.markers[1] ?? "", timeoutMs);
+  const visible = fixture.run.visibleOutput();
+  expect(payload.markers.slice(0, 2).every((marker) => visible.includes(marker))).toBe(true);
+  const raw = fixture.run.output();
+  for (const attack of payload.attacks) {
+    expect(raw).not.toContain(attack);
+  }
+  expect(raw).not.toContain("\uFFFD");
+}
+
+function hasStatusFrame(raw: string, markers: string[], status: RegExp) {
   return raw
     .split("\x1b[?2026h")
     .slice(1)
     .some((chunk) => {
       const frame = chunk.split("\x1b[?2026l", 1)[0] ?? "";
-      return frame.includes(marker) && status.test(frame);
+      const visibleFrame = sanitizeRenderableLine(frame);
+      return markers.every((marker) => visibleFrame.includes(marker)) && status.test(visibleFrame);
     });
 }
 
@@ -134,16 +128,17 @@ async function exerciseSelectorOutputSafety(
   startFixture: StartTuiPtyFixture,
   startupTimeoutMs: number,
 ) {
-  const modelValue = buildCompactTerminalAttackPayload("t08mv", "\x1b[3J");
+  const modelValue = buildCompactTerminalAttackPayload("t08mv", "\x1b[777;888H");
   const modelName = buildCompactTerminalAttackPayload("t08mn", "\x1b]52;c;t08_model_clipboard\x07");
   const sessionTitle = buildCompactTerminalAttackPayload("t08st", "\x1b]0;t08_session_title\x07");
   const sessionPreview = buildCompactTerminalAttackPayload(
     "t08sp",
     "\u009d0;t08_session_preview\u009c",
   );
-  const sessionDisplay = buildCompactTerminalAttackPayload("t08sd", "\x1b[38;5;202m");
+  const sessionDisplay = buildCompactTerminalAttackPayload("t08sd", "\x1b[777\u0001m");
+  const sessionKey = buildCompactTerminalAttackPayload("t08sk", "\u009b777;888h");
   const selectedModel = `fixture-provider/${modelValue.text}`;
-  const selectedSessionKey = "agent:main:t08-session-key-café-東京";
+  const selectedSessionKey = `agent:main:${sessionKey.text}`;
   const fixture = await startFixture({
     env: {
       OPENCLAW_TUI_PTY_COLS: "180",
@@ -163,8 +158,8 @@ async function exerciseSelectorOutputSafety(
     await fixture.run.waitForOutput("local ready", startupTimeoutMs);
     await fixture.run.write("\u000c", { delay: false });
     await fixture.waitForLogEntry((entry) => entry.method === "listModels");
-    await assertTerminalAttackSanitized(fixture, modelValue, 5_000);
-    await assertTerminalAttackSanitized(fixture, modelName, 5_000);
+    await assertTerminalAttackPrefixSanitized(fixture, modelValue, 5_000);
+    await assertTerminalAttackPrefixSanitized(fixture, modelName, 5_000);
 
     await fixture.run.write("\x1b[B", { delay: false });
     await fixture.run.write("\r", { delay: false });
@@ -174,16 +169,22 @@ async function exerciseSelectorOutputSafety(
     );
     expect(modelPatch.payload).toMatchObject({ model: selectedModel });
     await fixture.run.waitForOutput(
-      `session main (Main) | fixture-provider/${compactPayloadVisibleText(modelValue)} | deliver:off`,
+      formatTuiFooter({
+        agentLabel: `main (${sessionDisplay.text})`,
+        sessionLabel: "main (Main)",
+        sessionInfo: { model: selectedModel, contextTokens: 128 },
+        deliver: false,
+      }),
       5_000,
     );
+    await assertTerminalAttackSanitized(fixture, modelValue, 5_000);
 
     await fixture.run.write("\u0010", { delay: false });
     await fixture.waitForLogEntry(
       (entry) => entry.method === "listSessions" && objectFieldEquals(entry, "purpose", "picker"),
     );
-    await assertTerminalAttackSanitized(fixture, sessionTitle, 5_000);
-    await assertTerminalAttackSanitized(fixture, sessionPreview, 5_000);
+    await assertTerminalAttackPrefixSanitized(fixture, sessionTitle, 5_000);
+    await assertTerminalAttackPrefixSanitized(fixture, sessionPreview, 5_000);
 
     await fixture.run.write("\x1b[B", { delay: false });
     await fixture.run.write("\r", { delay: false });
@@ -193,8 +194,22 @@ async function exerciseSelectorOutputSafety(
         objectFieldEquals(entry, "sessionKey", selectedSessionKey),
     );
     expect(historyLoad.payload).toMatchObject({ sessionKey: selectedSessionKey });
+    await assertTerminalAttackSanitized(fixture, sessionKey, 5_000);
+    const expectedAgentLabel = `main (${sessionDisplay.text})`;
+    const expectedSessionLabel = `${sessionKey.text} (${sessionDisplay.text})`;
     await fixture.run.waitForOutput(
-      `session t08-session-key-café-東京 (${compactPayloadVisibleText(sessionDisplay)}) | fixture-provider/${compactPayloadVisibleText(modelValue)} | deliver:off`,
+      sanitizeRenderableLine(
+        `openclaw tui pty fixture - pty-fixture://local - agent ${expectedAgentLabel} - session ${sessionKey.text}`,
+      ),
+      5_000,
+    );
+    await fixture.run.waitForOutput(
+      formatTuiFooter({
+        agentLabel: expectedAgentLabel,
+        sessionLabel: expectedSessionLabel,
+        sessionInfo: { model: selectedModel, contextTokens: 128 },
+        deliver: false,
+      }),
       5_000,
     );
     await assertTerminalAttackSanitized(fixture, sessionDisplay, 5_000);
@@ -240,13 +255,20 @@ async function exerciseGatewayOutputSafety(
   startFixture: StartTuiPtyFixture,
   startupTimeoutMs: number,
 ) {
-  const gatewayPayload = buildTerminalAttackPayload("T08G");
-  const idlePayload = buildTerminalAttackPayload("T08I");
+  const systemAttacks = [
+    "\x1b[?7776h",
+    "\x1b[777;887H",
+    "\x1b]0;t08_system_title\x07",
+    "\x1b]52;c;t08_system_clipboard\x07",
+    "\u009b777;887H",
+    "\u009d0;t08_system_c1\u009c",
+  ];
+  const idlePayload = buildCompactTerminalAttackPayload("T08I", "\x1b[?7775h");
   const fixture = await startFixture({
     env: {
       OPENCLAW_TUI_PTY_COLS: "30",
       OPENCLAW_TUI_PTY_ROWS: "18",
-      OPENCLAW_TUI_PTY_GATEWAY_STATUS: gatewayPayload.text,
+      OPENCLAW_TUI_PTY_GATEWAY_STATUS: systemAttacks.join(""),
       OPENCLAW_TUI_PTY_DISCONNECT_REASON: idlePayload.text,
     },
   });
@@ -257,14 +279,14 @@ async function exerciseGatewayOutputSafety(
     await fixture.run.write("/gateway-status\r", { delay: false });
     await fixture.waitForLogEntry((entry) => entry.method === "getGatewayStatus");
     await fixture.waitForLogEntry((entry) => entry.method === "disconnect");
-    await assertTerminalAttackSanitized(fixture, gatewayPayload, startupTimeoutMs);
+    await fixture.run.waitForOutput("(no output)", startupTimeoutMs);
     await assertTerminalAttackSanitized(fixture, idlePayload, startupTimeoutMs);
+    const raw = fixture.run.output();
+    for (const attack of systemAttacks) {
+      expect(raw).not.toContain(attack);
+    }
     expect(
-      hasStatusFrame(
-        fixture.run.output().slice(outputOffset),
-        idlePayload.markers[0] ?? "",
-        /\| idle/u,
-      ),
+      hasStatusFrame(fixture.run.output().slice(outputOffset), idlePayload.markers, /\| idle/u),
     ).toBe(true);
 
     const helpOffset = fixture.run.visibleOutput().length;
@@ -279,12 +301,47 @@ async function exerciseGatewayOutputSafety(
   }
 }
 
+async function exerciseInteractiveOutputSafety(
+  startFixture: StartTuiPtyFixture,
+  startupTimeoutMs: number,
+) {
+  const btwPayload = buildCompactTerminalAttackPayload("T08B", "\u009b776;889H");
+  const toolPayload = buildCompactTerminalAttackPayload("T08T", "\x1b]0;t08_tool_title\x07");
+  const fixture = await startFixture({
+    env: {
+      OPENCLAW_TUI_PTY_BTW_QUESTION: btwPayload.text,
+      OPENCLAW_TUI_PTY_COLS: "72",
+      OPENCLAW_TUI_PTY_MODEL: "fixture-provider/fixture-model",
+      OPENCLAW_TUI_PTY_ROWS: "20",
+      OPENCLAW_TUI_PTY_TOOL_NAME: toolPayload.text,
+      OPENCLAW_TUI_PTY_VERBOSE_LEVEL: "on",
+    },
+  });
+
+  try {
+    await fixture.run.waitForOutput("local ready", startupTimeoutMs);
+    await fixture.run.write("/btw picker focus proof\r", { delay: false });
+    await fixture.waitForLogEntry((entry) => entry.method === "pickerSideResult");
+    await assertTerminalAttackSanitized(fixture, btwPayload, startupTimeoutMs);
+    await fixture.run.write("\r", { delay: false });
+    await sleep(25);
+
+    await fixture.run.write("tool chronology proof\r", { delay: false });
+    await fixture.waitForLogEntry((entry) => entry.method === "toolChronologyComplete");
+    await assertTerminalAttackSanitized(fixture, toolPayload, startupTimeoutMs);
+    await fixture.run.waitForOutput("PTY_AFTER_TOOL", startupTimeoutMs);
+  } finally {
+    await fixture.cleanup();
+  }
+}
+
 export async function exerciseTerminalOutputSafety(
   startFixture: StartTuiPtyFixture,
   startupTimeoutMs: number,
 ) {
   await Promise.all([
     exerciseGatewayOutputSafety(startFixture, startupTimeoutMs),
+    exerciseInteractiveOutputSafety(startFixture, startupTimeoutMs),
     exerciseSelectorOutputSafety(startFixture, startupTimeoutMs),
   ]);
 }

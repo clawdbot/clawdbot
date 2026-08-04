@@ -10,6 +10,7 @@ import {
   formatTuiFooter,
   formatTuiErrorMessage,
   isCommandMessage,
+  sanitizeRenderableLine,
   sanitizeRenderableText,
 } from "./tui-formatters.js";
 
@@ -72,17 +73,21 @@ describe("formatTuiFooter", () => {
       "\u009d0;footer-c1-title\u009c",
     ];
     const footer = formatTuiFooter({
-      agentLabel: `agent-start${attacks[0]}agent-end\n東京`,
-      sessionLabel: `session-start${attacks[2]}session-end\r\ncafé`,
+      agentLabel: `agent-start${attacks[0]}agent-end\nمرحبا`,
+      sessionLabel: `session-start${attacks[2]}session-end\r\nשלום`,
       sessionInfo: {
         model: `provider/model-start${attacks[1]}middle${attacks[3]}${attacks[4]}${attacks[5]}model-end\tUnicode`,
       },
       deliver: true,
     });
 
-    expect(footer).toContain("agent-startagent-end 東京");
-    expect(footer).toContain("session-startsession-end café");
+    expect(footer).toContain("agent-startagent-end");
+    expect(footer).toContain("مرحبا");
+    expect(footer).toContain("session-startsession-end");
+    expect(footer).toContain("שלום");
     expect(footer).toContain("model-startmiddlemodel-end Unicode");
+    expect(footer).toContain("\u2067");
+    expect(footer).toContain("\u2069");
     expect(footer).not.toMatch(/[\r\n\t]/u);
     for (const attack of attacks) {
       expect(footer).not.toContain(attack);
@@ -884,5 +889,13 @@ describe("sanitizeRenderableText", () => {
     const sanitized = sanitizeRenderableText(input);
 
     expect(sanitized).toContain("[binary data omitted]");
+  });
+});
+
+describe("sanitizeRenderableLine", () => {
+  it("preserves RTL isolation while collapsing carriage returns, newlines, and tabs", () => {
+    expect(sanitizeRenderableLine("left\r\nمرحبا\tשלום right")).toBe(
+      "left \u2067مرحبا שלום right\u2069",
+    );
   });
 });

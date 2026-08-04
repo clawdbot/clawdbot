@@ -82,4 +82,25 @@ describe("ToolExecutionComponent", () => {
 
     expect(component.render(80).map(normalizeTestText).join("\n")).toContain("tool output line 30");
   });
+
+  it.each([
+    { route: "live", complete: false },
+    { route: "history", complete: true },
+  ])("sanitizes a hostile $route tool title before trusted styling", ({ complete }) => {
+    const attack = "\x1b]52;c;T08TOOLCLIPBOARD\x07";
+    const toolName = `T08TOOLA${attack}T08TOOLB\r\nمرحبا\tשלום`;
+    const component = new ToolExecutionComponent(toolName, {});
+    if (complete) {
+      component.setResult({ content: [] });
+    }
+
+    const raw = component.render(120).join("\n");
+    const rendered = normalizeTestText(raw);
+    expect(rendered).toContain("T08TOOLAT08TOOLB");
+    expect(rendered).toContain("مرحبا שלום");
+    expect(raw).toContain("\u2067");
+    expect(raw).toContain("\u2069");
+    expect(raw).not.toContain(attack);
+    expect(raw).not.toContain("\r\nمرحبا\tשלום");
+  });
 });

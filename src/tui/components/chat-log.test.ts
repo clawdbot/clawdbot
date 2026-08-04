@@ -36,7 +36,7 @@ describe("ChatLog", () => {
 
   it("coalesces consecutive repeatable system messages", () => {
     const chatLog = new ChatLog(20);
-    const rawText = "no active \x1b[38;5;201mrun\x1b[0m";
+    const rawText = "\x1b[?7777h\x1b]52;c;T08_CHAT_LOG_ONLY_CONTROLS\x07";
 
     chatLog.addSystem(rawText, { coalesceConsecutive: true });
     chatLog.addSystem(rawText, { coalesceConsecutive: true });
@@ -45,19 +45,19 @@ describe("ChatLog", () => {
     const raw = chatLog.render(120).join("\n");
     const rendered = normalizeTestText(raw);
     expect(chatLog.children.length).toBe(1);
-    expect(rendered).toContain("no active run x3");
-    expect(raw).not.toContain("\x1b[38;5;201m");
+    expect(rendered).toContain("(no output) x3");
+    expect(raw).not.toContain(rawText);
   });
 
   it("does not coalesce distinct raw system messages that sanitize identically", () => {
     const chatLog = new ChatLog(20);
 
-    chatLog.addSystem("same\x1b[38;5;201m", { coalesceConsecutive: true });
-    chatLog.addSystem("same\x1b[38;5;202m", { coalesceConsecutive: true });
+    chatLog.addSystem("\x1b[?7776h", { coalesceConsecutive: true });
+    chatLog.addSystem("\u009b777;888H", { coalesceConsecutive: true });
 
     const rendered = normalizeTestText(chatLog.render(120).join("\n"));
     expect(chatLog.children.length).toBe(2);
-    expect(rendered.match(/\bsame\b/g)).toHaveLength(2);
+    expect(rendered.match(/\(no output\)/g)).toHaveLength(2);
     expect(rendered).not.toContain("x2");
   });
 
@@ -885,12 +885,12 @@ describe("ChatLog", () => {
     const secondAttack = "\u009d0;T08_PENDING_SECOND\u009c";
 
     chatLog.addPendingSystem("run-1", `first ${firstAttack}notice`);
-    chatLog.addPendingSystem("run-1", `second ${secondAttack}notice`);
+    chatLog.addPendingSystem("run-1", secondAttack);
 
     const raw = chatLog.render(120).join("\n");
     const rendered = normalizeTestText(raw);
     expect(rendered).not.toContain("first notice");
-    expect(rendered).toContain("second notice");
+    expect(rendered).toContain("(no output)");
     expect(raw).not.toContain(firstAttack);
     expect(raw).not.toContain(secondAttack);
     expect(chatLog.children.length).toBe(1);

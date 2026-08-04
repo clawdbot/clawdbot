@@ -164,7 +164,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
               const data = {
                 phase: "start",
                 toolCallId: "pty-chronology-tool",
-                name: "read_file",
+                name: process.env.OPENCLAW_TUI_PTY_TOOL_NAME ?? "read_file",
                 args: { path: "chronology-proof.txt" },
               };
               this.onEvent?.({ event: "agent", payload: { runId, sessionKey: opts.sessionKey, stream: "tool", data } });
@@ -184,7 +184,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
                   kind: "btw",
                   runId,
                   sessionKey: opts.sessionKey,
-                  question: "picker focus proof",
+                  question: process.env.OPENCLAW_TUI_PTY_BTW_QUESTION ?? "picker focus proof",
                   text: "PTY_SIDE_OK",
                 },
               });
@@ -474,7 +474,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
             defaultId: "main",
             mainKey: "main",
             scope: "per-sender",
-            agents: [{ id: "main", name: "Main" }],
+            agents: [{ id: "main", name: enablePickerFixture ? pickerSessionDisplayName : "Main" }],
           };
         }
 

@@ -46,7 +46,7 @@ import { createEventHandlers } from "./tui-event-handlers.js";
 import {
   formatTuiErrorMessage,
   formatTuiFooter,
-  sanitizeRenderableText,
+  sanitizeRenderableLine,
 } from "./tui-formatters.js";
 import {
   buildTuiLastSessionScopeKey,
@@ -967,11 +967,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     const sessionLabel = formatSessionKey(currentSessionKey);
     const agentLabel = formatAgentLabel(state.currentAgentId);
     const title = opts.title ?? "openclaw tui";
-    header.setText(
-      theme.header(
-        `${title} - ${client.connection.url} - agent ${agentLabel} - session ${sessionLabel}`,
-      ),
-    );
+    const text = `${title} - ${client.connection.url} - agent ${agentLabel} - session ${sessionLabel}`;
+    header.setText(theme.header(sanitizeRenderableLine(text)));
   };
 
   let statusText: Text | null = null;
@@ -1139,7 +1136,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   };
 
   const setConnectionStatus = (text: string, ttlMs?: number) => {
-    state.connectionStatus = sanitizeRenderableText(text);
+    state.connectionStatus = sanitizeRenderableLine(text);
     renderStatus();
     if (state.statusTimeout) {
       stopStatusTimeout();

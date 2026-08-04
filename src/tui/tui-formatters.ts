@@ -260,7 +260,7 @@ export function sanitizeRenderableText(text: string): string {
 }
 
 export function sanitizeRenderableLine(text: string): string {
-  return stripControlChars(stripAnsi(text)).replace(/\s+/gu, " ").trim();
+  return sanitizeRenderableText(text).replace(/\s+/gu, " ").trim();
 }
 
 /** Render error causes without exposing secrets or terminal control sequences. */

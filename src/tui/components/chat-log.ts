@@ -197,7 +197,8 @@ export class ChatLog extends Container {
 
   private formatSystemText(text: string, count = 1) {
     const sanitized = sanitizeRenderableText(text);
-    return theme.system(count > 1 ? `${sanitized} x${count}` : sanitized);
+    const visible = sanitized.trim() || (text ? "(no output)" : "");
+    return theme.system(count > 1 ? `${visible} x${count}` : visible);
   }
 
   private createSystemMessage(text: string): RepeatableSystemMessage {

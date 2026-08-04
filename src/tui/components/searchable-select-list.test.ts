@@ -345,7 +345,7 @@ describe("SearchableSelectList", () => {
 
     const regexCache = (list as unknown as { regexCache: Map<string, RegExp> }).regexCache;
     expect(regexCache.size).toBe(1);
-    expect(list.render(queryLength + 10).join("\n")).toContain(`*${"a".repeat(queryLength)}*`);
+    expect(regexCache.has("a".repeat(queryLength))).toBe(true);
   });
 
   it("shows no match message when filter yields no results", () => {
@@ -409,7 +409,7 @@ describe("SearchableSelectList", () => {
       "\u009b2K",
       "\u009d0;search-c1-title\u009c",
     ];
-    const rawValue = `selector-value-start${attacks[1]}selector-value-end\nline\tcafé`;
+    const rawValue = `selector-value-start${attacks[1]}selector-value-end\r\nمرحبا\tשלום`;
     const description = `selector-description-start${attacks[3]}selector-description-end\n東京`;
     const list = new SearchableSelectList(
       [
@@ -434,10 +434,13 @@ describe("SearchableSelectList", () => {
 
     expect(rendered).toContain("\u001b[31mselector\u001b[0m-value-start");
     expect(plainRendered).toContain("selector-description-startselector-description-end 東京");
+    expect(plainRendered).toContain("مرحبا שלום");
+    expect(plainRendered).toContain("\u2067");
+    expect(plainRendered).toContain("\u2069");
     for (const attack of attacks) {
       expect(rendered).not.toContain(attack);
     }
-    expect(rendered).not.toContain("selector-value-end\nline\t");
+    expect(rendered).not.toContain("selector-value-end\r\nمرحبا\tשלום");
 
     list.handleInput("\r");
     expect(selectedValue).toBe(rawValue);

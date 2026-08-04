@@ -26,38 +26,47 @@ describe("btw inline message", () => {
     const nextTextAttack = "\u009d0;T08_BTW_TITLE\u009c";
     const url = "https://example.test/tui/btw?copy=caf%C3%A9";
     const message = new BtwInlineMessage({
-      question: `first ${firstQuestionAttack}`,
-      text: `${firstTextAttack}**first café** ${url}`,
+      question: `first ${firstQuestionAttack}\r\nمرحبا\tשלום`,
+      text: `${firstTextAttack}**first café**\nsecond body ${url}`,
     });
 
-    let raw = message.render(140).join("\n");
+    let lines = message.render(140);
+    let raw = lines.join("\n");
     let rendered = normalizeTestText(raw);
     expect(rendered).toContain("BTW: first question");
+    expect(rendered).toContain("مرحبا שלום");
     expect(rendered).toContain("first café");
+    expect(rendered).toContain("second body");
+    expect(lines[1]).toContain("\u2067");
+    expect(lines[1]).toContain("\u2069");
+    expect(lines[1]).not.toMatch(/[\r\n\t]/u);
     expect(raw).toContain(`\x1b]8;;${url}\x07`);
     expect(raw).not.toContain(firstQuestionAttack);
     expect(raw).not.toContain(firstTextAttack);
 
     message.setResult({
-      question: `next ${nextQuestionAttack}`,
+      question: `next ${nextQuestionAttack}\r\nשלום\tمرحبا`,
       text: `${nextTextAttack}**next 東京** ${url}`,
     });
 
-    raw = message.render(140).join("\n");
+    lines = message.render(140);
+    raw = lines.join("\n");
     rendered = normalizeTestText(raw);
     expect(rendered).toContain("BTW: next question");
+    expect(rendered).toContain("שלום مرحبا");
     expect(rendered).toContain("next 東京");
     expect(rendered).not.toContain("first question");
     expect(rendered).not.toContain("first café");
     expect(raw).not.toContain(nextQuestionAttack);
     expect(raw).not.toContain(nextTextAttack);
+    expect(lines[1]).not.toMatch(/[\r\n\t]/u);
   });
 
   it("sanitizes BTW error questions and text before applying trusted themes", () => {
     const questionAttack = "\x1b]0;T08_BTW_QUESTION_TITLE\x07";
     const errorAttack = "\u009b3Jretry";
     const message = new BtwInlineMessage({
-      question: `why ${questionAttack}failed?`,
+      question: `why ${questionAttack}failed?\r\nمرحبا\tשלום`,
       text: `${errorAttack} safely café`,
       isError: true,
     });
@@ -65,6 +74,7 @@ describe("btw inline message", () => {
     const raw = message.render(100).join("\n");
     const rendered = normalizeTestText(raw);
     expect(rendered).toContain("BTW: why failed?");
+    expect(rendered).toContain("مرحبا שלום");
     expect(rendered).toContain("retry safely café");
     expect(raw).not.toContain(questionAttack);
     expect(raw).not.toContain(errorAttack);
