@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parse as parseDotEnv } from "dotenv";
+import { parseEnvironmentFileLine } from "../daemon/systemd.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveConfigDir } from "../utils.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
@@ -71,6 +72,57 @@ export function readDotEnvFile(params: {
     const key = normalizeEnvVarKey(rawKey, { portable: true });
     if (key && (params.entryFilter?.(key, value) ?? true)) {
       entries.push({ key, value });
+    }
+  }
+  return { filePath: params.filePath, entries };
+}
+
+/**
+ * Read a systemd EnvironmentFile using the canonical systemd grammar.
+ *
+ * Unlike dotenv files, systemd EnvironmentFiles use their own escaping rules:
+ * double-quoted values unescape only \", \\, \`, and \$; single-quoted
+ * values are literal except for the closing quote; backslash outside quotes
+ * escapes the following character.
+ */
+export function readSystemdEnvironmentFile(params: {
+  entryFilter?: (key: string, value: string) => boolean;
+  filePath: string;
+  quiet?: boolean;
+}): LoadedDotEnvFile | null {
+  let content: string;
+  try {
+    const resolved = fs.realpathSync(params.filePath);
+    const { buffer } = readRegularFileSync({
+      filePath: resolved,
+      maxBytes: MAX_DOTENV_FILE_BYTES,
+    });
+    content = buffer.toString("utf8");
+  } catch (error) {
+    if (!params.quiet) {
+      const code =
+        error && typeof error === "object" && "code" in error ? String(error.code) : undefined;
+      if (code !== "ENOENT") {
+        logger.warn(`Failed to read ${params.filePath}: ${String(error)}`, { error });
+      }
+      if (error instanceof Error && error.message?.startsWith("File exceeds")) {
+        logger.warn(
+          `skipping oversized systemd env file (max ${MAX_DOTENV_FILE_BYTES} bytes): ${params.filePath}`,
+        );
+      }
+    }
+    return null;
+  }
+
+  const entries: DotEnvEntry[] = [];
+  for (const line of content.split(/\r?\n/)) {
+    const parsed = parseEnvironmentFileLine(line);
+    if (!parsed) {
+      continue;
+    }
+    const key = normalizeEnvVarKey(parsed.key, { portable: true });
+    if (key && (params.entryFilter?.(key, parsed.value) ?? true)) {
+      entries.push({ key, value: parsed.value });
     }
   }
   return { filePath: params.filePath, entries };
@@ -166,9 +218,11 @@ export function loadGlobalRuntimeDotEnvFiles(opts?: GlobalRuntimeDotEnvOptions) 
 
   // Also load systemd env files from the state directory so CLI commands (e.g. status)
   // can resolve env-based SecretRefs when the gateway is not reachable locally.
+  // These use the canonical systemd EnvironmentFile grammar, not dotenv parsing,
+  // because the service writer escapes $, \, `, and " using systemd-specific rules.
   const stateEnvDir = path.dirname(stateEnvPath);
   for (const filename of ["gateway.systemd.env", "node.systemd.env"]) {
-    const systemdEnv = readDotEnvFile({
+    const systemdEnv = readSystemdEnvironmentFile({
       entryFilter: opts?.entryFilter,
       filePath: path.join(stateEnvDir, filename),
       quiet,

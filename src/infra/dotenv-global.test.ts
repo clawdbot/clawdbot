@@ -2,7 +2,11 @@ import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadGlobalRuntimeDotEnvFiles, readDotEnvFile } from "./dotenv-global.js";
+import {
+  loadGlobalRuntimeDotEnvFiles,
+  readDotEnvFile,
+  readSystemdEnvironmentFile,
+} from "./dotenv-global.js";
 
 const logWarnSpy = vi.hoisted(() => vi.fn());
 
@@ -78,6 +82,57 @@ describe("readDotEnvFile", () => {
   });
 });
 
+describe("readSystemdEnvironmentFile", () => {
+  it("reads a systemd env file with unescaped values", () => {
+    const filePath = tmpFile("gateway.systemd.env", "API_KEY=secret\nOTHER_KEY=value\n");
+    const result = readSystemdEnvironmentFile({ filePath });
+    expect(result).not.toBeNull();
+    expect(result!.entries).toContainEqual({ key: "API_KEY", value: "secret" });
+    expect(result!.entries).toContainEqual({ key: "OTHER_KEY", value: "value" });
+  });
+
+  it("decodes systemd-escaped special characters", () => {
+    // The service writer escapes \, ", `, $ inside double quotes.
+    // These deserialize to the literal character.
+    const filePath = tmpFile("gateway.systemd.env", 'TOKEN="abc\\$def\\\\ghi\\"jkl\\`mno"\n');
+    const result = readSystemdEnvironmentFile({ filePath });
+    expect(result).not.toBeNull();
+    expect(result!.entries).toContainEqual({
+      key: "TOKEN",
+      value: 'abc$def\\ghi"jkl`mno',
+    });
+  });
+
+  it("decodes single-quoted values literally", () => {
+    // systemd single-quoted values are literal.
+    const filePath = tmpFile("gateway.systemd.env", "PLAIN='literal$value'\n");
+    const result = readSystemdEnvironmentFile({ filePath });
+    expect(result).not.toBeNull();
+    expect(result!.entries).toContainEqual({
+      key: "PLAIN",
+      value: "literal$value",
+    });
+  });
+
+  it("skips comments and blank lines", () => {
+    const filePath = tmpFile("gateway.systemd.env", "# comment\n; also comment\n\nKEY=value\n");
+    const result = readSystemdEnvironmentFile({ filePath });
+    expect(result).not.toBeNull();
+    expect(result!.entries).toHaveLength(1);
+    expect(result!.entries).toContainEqual({ key: "KEY", value: "value" });
+  });
+
+  it("returns null for a missing file (quiet)", () => {
+    const d = tmpDir();
+    const result = readSystemdEnvironmentFile({
+      filePath: join(d, "nonexistent.env"),
+      quiet: true,
+    });
+    expect(result).toBeNull();
+    expect(logWarnSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe("loadGlobalRuntimeDotEnvFiles", () => {
   it("loads env vars from gateway.systemd.env and node.systemd.env", () => {
     const d = tmpDir();
@@ -139,9 +194,47 @@ describe("loadGlobalRuntimeDotEnvFiles", () => {
       expect(process.env.EXISTING_VAR).toBe("already-set");
     } finally {
       if (saved !== undefined) {
-        process.env[saved] = saved;
+        process.env.EXISTING_VAR = saved;
       } else {
         delete process.env.EXISTING_VAR;
+      }
+    }
+  });
+
+  it("decodes systemd-escaped token values from systemd env files", () => {
+    const d = tmpDir();
+    const stateEnvPath = join(d, ".env");
+    writeFileSync(stateEnvPath, "", "utf8");
+    // Simulate a token the service writer would produce:
+    // It escapes \, ", `, $ inside double quotes.
+    writeFileSync(
+      join(d, "gateway.systemd.env"),
+      'GATEWAY_TOKEN="abc\\$def\\\\ghi\\"jkl\\`mno"\nMISSING_FILE_TOKEN=from-gateway-systemd\n',
+      "utf8",
+    );
+    writeFileSync(join(d, "node.systemd.env"), "NODE_KEY=node-val\n", "utf8");
+
+    const savedEnvKeys = new Set(["GATEWAY_TOKEN", "MISSING_FILE_TOKEN", "NODE_KEY"]);
+    const savedEnv: Record<string, string | undefined> = {};
+    try {
+      for (const key of savedEnvKeys) {
+        savedEnv[key] = process.env[key];
+        delete process.env[key];
+      }
+
+      loadGlobalRuntimeDotEnvFiles({ stateEnvPath, quiet: true });
+
+      // The escaped token should decode to the literal characters.
+      expect(process.env.GATEWAY_TOKEN).toBe('abc$def\\ghi"jkl`mno');
+      expect(process.env.MISSING_FILE_TOKEN).toBe("from-gateway-systemd");
+      expect(process.env.NODE_KEY).toBe("node-val");
+    } finally {
+      for (const key of savedEnvKeys) {
+        if (savedEnv[key] !== undefined) {
+          process.env[key] = savedEnv[key];
+        } else {
+          delete process.env[key];
+        }
       }
     }
   });

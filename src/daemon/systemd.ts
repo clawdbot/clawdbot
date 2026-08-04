@@ -627,7 +627,7 @@ function decodeSystemdEnvironmentFileValue(rawValue: string): {
   return { value: decoded, literalDollar };
 }
 
-function parseEnvironmentFileLine(
+export function parseEnvironmentFileLine(
   rawLine: string,
 ): { key: string; value: string; literalShellReference: boolean } | null {
   const trimmedStart = rawLine.trimStart();
