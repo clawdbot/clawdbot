@@ -1021,14 +1021,9 @@ describe("media store", () => {
         expectedExtractedFilename: "report.txt",
       },
       {
-        name: "sanitizes unsafe characters in original filename",
-        originalFilename: "my<file>:test.txt",
-        expectedIdPattern: /^myfiletest---[a-f0-9-]{36}\.txt$/,
-      },
-      {
-        name: "underscores characters outside the portable charset",
-        originalFilename: "my file!.txt",
-        expectedIdPattern: /^my_file---[a-f0-9-]{36}\.txt$/,
+        name: "strips Windows-invalid and underscores non-portable characters",
+        originalFilename: "my <file>:test!.txt",
+        expectedIdPattern: /^my_filetest---[a-f0-9-]{36}\.txt$/,
       },
       {
         name: "truncates long original filenames",
