@@ -46,7 +46,7 @@ import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-iden
 import type { SqliteSessionEntryMaintenancePlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   applySqliteSessionEntryMaintenance,
-  finalizeSqliteSessionEntryMaintenancePlansBestEffort,
+  finalizeSqliteSessionEntryMaintenancePlansAfterWriterReleaseBestEffort,
 } from "./session-accessor.sqlite-maintenance.js";
 import {
   createFallbackSessionEntry,
@@ -535,13 +535,13 @@ async function patchSqliteSessionEntrySnapshot<TSnapshot>(
   params: SqliteSessionEntrySnapshotPatchParams<TSnapshot>,
 ): Promise<SessionEntry | null> {
   const { options, resolved, sessionKey } = params;
-  return await runExclusiveSqliteSessionWrite(resolved, async () => {
+  const committed = await runExclusiveSqliteSessionWrite(resolved, async () => {
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
     const prepared = params.readSnapshot(database);
     const existing = params.existingEntry(prepared);
     const writeBase = existing ?? options.fallbackEntry;
     if (!writeBase) {
-      return null;
+      return { maintenancePlans: [], result: null };
     }
     const patch = await params.update(cloneSessionEntry(writeBase), {
       existingEntry: existing ? cloneSessionEntry(existing) : undefined,
@@ -601,14 +601,20 @@ async function patchSqliteSessionEntrySnapshot<TSnapshot>(
       result = cloneSessionEntry(next);
     }, toDatabaseOptions(resolved));
     emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
-    finalizeSqliteSessionEntryMaintenancePlansBestEffort(resolved, maintenancePlans);
-    kickSessionHistoryDiskBudgetMaintenance({
-      ...(resolved.agentId ? { agentId: resolved.agentId } : {}),
-      storePath: params.storePath,
-      ...(options.maintenanceConfig ? { maintenanceConfig: options.maintenanceConfig } : {}),
-    });
-    return result;
+    return { maintenancePlans, result };
   });
+  // Worker materialization runs after the initial write releases the lane;
+  // final deletion reacquires it and revalidates every planned row.
+  await finalizeSqliteSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
+    resolved,
+    committed.maintenancePlans,
+  );
+  kickSessionHistoryDiskBudgetMaintenance({
+    ...(resolved.agentId ? { agentId: resolved.agentId } : {}),
+    storePath: params.storePath,
+    ...(options.maintenanceConfig ? { maintenanceConfig: options.maintenanceConfig } : {}),
+  });
+  return committed.result;
 }
 
 /** Forks one parent SQLite transcript into a new child transcript. */

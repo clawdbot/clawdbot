@@ -745,6 +745,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",
@@ -791,6 +792,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",
@@ -859,6 +861,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",
@@ -911,6 +914,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",
@@ -963,6 +967,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",
@@ -1014,6 +1019,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",

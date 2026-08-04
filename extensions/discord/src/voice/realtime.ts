@@ -89,6 +89,8 @@ const DISCORD_REALTIME_FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
 const DISCORD_REALTIME_DUPLICATE_ERROR_SUPPRESS_MS = 60_000;
 const DISCORD_REALTIME_CONTROL_SPEECH_DEDUPE_MS = 5_000;
 const DISCORD_REALTIME_OUTPUT_PLAYBACK_WATCHDOG_MARGIN_MS = 1_500;
+const DISCORD_REALTIME_MAX_RETAINED_EXACT_SPEECH_MESSAGES = 32;
+const DISCORD_REALTIME_MAX_RETAINED_EXACT_SPEECH_BYTES = 32 * 1024;
 const DISCORD_REALTIME_CANCELLATION_RACE_DETAIL = "Cancellation failed: no active response found";
 const DISCORD_REALTIME_WAKE_ACKS = ["Yeah.", "Mm-hmm.", "Got it.", "One sec."];
 const discordRealtimeTalkPayload = () => ({});
@@ -388,6 +390,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       mode: Exclude<DiscordVoiceMode, "stt-tts">;
       bootstrapContextInstructions?: string;
       getHumanParticipantCount?: () => number;
+      onTerminalError: (error: Error) => void;
       runAgentTurn: (params: VoiceRealtimeAgentTurnParams) => Promise<string>;
     },
   ) {
@@ -992,6 +995,36 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
 
   private enqueueExactSpeechMessage(text: string): void {
     if (this.stopped || !text.trim()) {
+      return;
+    }
+    const retainedMessages =
+      this.queuedExactSpeechMessages.length + (this.activeExactSpeechMessage ? 1 : 0);
+    const retainedBytes =
+      this.queuedExactSpeechMessages.reduce(
+        (total, message) => total + Buffer.byteLength(message, "utf8"),
+        0,
+      ) + Buffer.byteLength(this.activeExactSpeechMessage ?? "", "utf8");
+    const incomingBytes = Buffer.byteLength(text, "utf8");
+    if (
+      retainedMessages >= DISCORD_REALTIME_MAX_RETAINED_EXACT_SPEECH_MESSAGES ||
+      retainedBytes + incomingBytes > DISCORD_REALTIME_MAX_RETAINED_EXACT_SPEECH_BYTES
+    ) {
+      // Completed speech cannot be silently dropped. Overflow terminally retires
+      // this session before late provider or playback events can drain stale work.
+      this.stopped = true;
+      this.bridgeReady = false;
+      this.outputBackpressure = undefined;
+      this.talkback.close();
+      this.queuedExactSpeechMessages = [];
+      this.exactSpeechResponseActive = false;
+      this.exactSpeechAudioStarted = false;
+      this.activeExactSpeechMessage = undefined;
+      this.clearOutputAudio("exact-speech-overflow");
+      this.params.onTerminalError(
+        new Error(
+          `Discord realtime exact speech overflow: retained=${retainedMessages} retainedBytes=${retainedBytes} incomingBytes=${incomingBytes}`,
+        ),
+      );
       return;
     }
     if (!this.bridgeReady || this.exactSpeechResponseActive || this.hasInterruptibleOutputAudio()) {

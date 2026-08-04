@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { TUI_PTY_ASSISTANT_FIXTURE_SCRIPT } from "./tui-pty-assistant-fixture-test-support.js";
 import { TUI_PTY_GAP_HISTORY_FIXTURE_SCRIPT } from "./tui-pty-gap-fixture-test-support.js";
+import { TUI_PTY_RENDERING_FIXTURE_SCRIPT } from "./tui-pty-rendering-test-support.js";
 import { TUI_PTY_RESET_FIXTURE } from "./tui-pty-reset-fixture-test-support.js";
 import { TUI_PTY_SESSION_SUBSCRIPTION_FIXTURE_SCRIPT } from "./tui-pty-subscription-fixture-test-support.js";
 
@@ -25,7 +26,8 @@ export async function writeTuiPtyFixtureScript(dir: string) {
   await writeFile(
     scriptPath,
     `
-      import { appendFileSync, existsSync } from "node:fs";
+      import { appendFileSync, existsSync, watch } from "node:fs";
+      import { dirname } from "node:path";
       import { buildEmbeddedRunPayloads } from ${JSON.stringify(payloadsModuleUrl)};
       import { getReplyPayloadMetadata } from ${JSON.stringify(replyPayloadModuleUrl)};
       import { normalizeReplyPayloadsForDelivery } from ${JSON.stringify(outboundPayloadsModuleUrl)};
@@ -117,6 +119,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
 
       ${TUI_PTY_GAP_HISTORY_FIXTURE_SCRIPT}
       ${TUI_PTY_ASSISTANT_FIXTURE_SCRIPT}
+      ${TUI_PTY_RENDERING_FIXTURE_SCRIPT}
 
       class FixtureBackend implements TuiBackend {
         connection = { url: "pty-fixture://local" };
@@ -158,31 +161,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
               cause: new Error(escape + "[31mAuthorization: Bearer sk-abcdefghijklmnopqrstuv" + escape + "[0m"),
             });
           }
-          if (opts.message === "tool chronology proof") {
-            setTimeout(() => {
-              const emitAssistant = (state, text) => {
-                const message = {
-                  role: "assistant",
-                  content: [{ type: "text", text }],
-                  timestamp: Date.now(),
-                };
-                this.onEvent?.({ event: "chat", payload: { runId, sessionKey: opts.sessionKey, state, message } });
-              };
-              emitAssistant("delta", "PTY_BEFORE_TOOL");
-              const data = {
-                phase: "start",
-                toolCallId: "pty-chronology-tool",
-                name: process.env.OPENCLAW_TUI_PTY_TOOL_NAME ?? "read_file",
-                args: { path: "chronology-proof.txt" },
-              };
-              this.onEvent?.({ event: "agent", payload: { runId, sessionKey: opts.sessionKey, stream: "tool", data } });
-              const completeText = "PTY_BEFORE_TOOL\\n\\nPTY_AFTER_TOOL";
-              emitAssistant("delta", completeText);
-              emitAssistant("final", completeText);
-              record("toolChronologyComplete", { runId });
-            }, 0);
-            return { runId };
-          }
+          if (startRenderingFixture(this, opts.message, runId, opts.sessionKey)) return { runId };
           if (opts.message === "/btw picker focus proof") {
             queueMicrotask(() => {
               record("pickerSideResult", { runId, sessionKey: opts.sessionKey });
@@ -225,50 +204,6 @@ export async function writeTuiPtyFixtureScript(dir: string) {
                 });
               }, delayMs);
             }
-            return { runId };
-          }
-          if (opts.message === "burst streaming proof") {
-            const tokens = Array.from({ length: 128 }, (_, index) =>
-              "T" + String(index).padStart(3, "0"),
-            );
-            setTimeout(() => {
-              for (let index = 0; index < tokens.length; index += 1) {
-                this.onEvent?.({
-                  event: "chat",
-                  payload: {
-                    runId,
-                    sessionKey: opts.sessionKey,
-                    state: "delta",
-                    message: {
-                      role: "assistant",
-                      content: [
-                        {
-                          type: "text",
-                          text: "PTY_STREAM_BURST: " + tokens.slice(0, index + 1).join(" "),
-                        },
-                      ],
-                      timestamp: Date.now(),
-                    },
-                  },
-                });
-              }
-              this.onEvent?.({
-                event: "chat",
-                payload: {
-                  runId,
-                  sessionKey: opts.sessionKey,
-                  state: "final",
-                  message: {
-                    role: "assistant",
-                    content: [
-                      { type: "text", text: "PTY_STREAM_BURST: " + tokens.join(" ") },
-                    ],
-                    timestamp: Date.now(),
-                  },
-                },
-              });
-              record("streamBurstComplete", { count: tokens.length });
-            }, 0);
             return { runId };
           }
           if (opts.message === "history gap proof") { return beginGapHistoryRecovery(this, runId, opts.sessionKey); }

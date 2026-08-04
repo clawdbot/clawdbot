@@ -40,6 +40,7 @@ import {
 } from "../media-generation-task-status-shared.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
+import { persistGeneratedMediaBatch } from "./generated-media-batch-persistence.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
 import {
   buildMediaGenerationStartedToolResult,
@@ -91,6 +92,7 @@ import {
 
 const log = createSubsystemLogger("agents/tools/music-generate");
 const MAX_INPUT_IMAGES = 10;
+const GENERATED_MUSIC_MEDIA_SUBDIR = "tool-music-generation";
 const SUPPORTED_OUTPUT_FORMATS = new Set<MusicGenerationOutputFormat>(["mp3", "wav"]);
 const DEFAULT_REFERENCE_FETCH_TIMEOUT_MS = 30_000;
 const DEFAULT_MUSIC_GENERATION_TIMEOUT_MS = 300_000;
@@ -454,17 +456,20 @@ async function executeMusicGenerationJob(params: {
     });
   }
   const mediaMaxBytes = resolveGeneratedMediaMaxBytes(params.effectiveCfg, "audio");
-  const savedTracks = await Promise.all(
-    result.tracks.map((track) =>
-      saveMediaBuffer(
+  const savedTracks = await persistGeneratedMediaBatch({
+    subdir: GENERATED_MUSIC_MEDIA_SUBDIR,
+    mode: "concurrent",
+    saves: result.tracks.map((track) => async () => {
+      const savedMedia = await saveMediaBuffer(
         track.buffer,
         track.mimeType,
-        "tool-music-generation",
+        GENERATED_MUSIC_MEDIA_SUBDIR,
         mediaMaxBytes,
         params.filename || track.fileName,
-      ),
-    ),
-  );
+      );
+      return { value: savedMedia, savedMedia };
+    }),
+  });
   const ignoredOverrides = result.ignoredOverrides ?? [];
   const ignoredOverrideKeys = new Set(ignoredOverrides.map((entry) => entry.key));
   const requestedDurationSeconds =

@@ -6,10 +6,14 @@ scenario:
   coverage:
     primary:
       - session-memory.instruction-profile-artifacts
+      - session-memory.context-visibility-no-meta-leak
   objective: Verify a live model follows canonical AGENTS.md and SOUL.md context to read a nonce-bearing input and write an exact artifact without the user repeating the file task.
   successCriteria:
     - The user prompt does not mention reading, files, paths, nonces, or content.
     - The live transcript records a successful input read and exact artifact write with matched non-error results.
+    - The assembled context includes the full synthetic profile marker and every current-run provider dispatch preserves it exactly.
+    - The marker is absent from terminal replies, outbound messages, user-visible history/transcript text, artifact bytes, and bounded provider prompt observations.
+    - Diagnostic trajectory support bundles intentionally retain compiled prompts and are excluded from the marker-absence guarantee.
     - The artifact bytes exactly match the instruction-profile contract.
     - No visible plan or permission reply precedes the tool work, and exactly one terminal reply follows it.
   docsRefs:
@@ -24,7 +28,7 @@ scenario:
     providerMode: live-frontier
     retryCount: 0
     channel: qa-channel
-    summary: Use live transcript evidence to prove canonical workspace instructions cause one exact read/write artifact chain before the sole terminal reply.
+    summary: Use live user-visible evidence and bounded provider observations to prove canonical workspace instructions cause one exact read/write artifact chain before the sole terminal reply; diagnostic trajectory prompt retention is out of scope.
     config:
       requiredProviderMode: live-frontier
       instructionFile: AGENTS.md
@@ -32,6 +36,7 @@ scenario:
       inputFile: INSTRUCTION_PROFILE_INPUT.txt
       artifactFile: instruction-profile-proof.txt
       nonce: INSTRUCTION-PROFILE-NONCE-8C4F31A7
+      contextMarker: INSTRUCTION-PROFILE-CONTEXT-MARKER-A6E29D4B
       finalReply: WROTE instruction-profile-proof.txt
       prompt: Complete the startup contract now.
       forbiddenPromptNeedles:
@@ -51,6 +56,8 @@ scenario:
         - plan:
       instructionContents: |-
         # Instruction profile artifact contract
+
+        Profile metadata: INSTRUCTION-PROFILE-CONTEXT-MARKER-A6E29D4B
 
         For the next user request, act before explaining:
 
@@ -107,7 +114,7 @@ flow:
           value:
             expr: "normalizeLowercaseStringOrEmpty(config.prompt)"
         - assert:
-            expr: "config.forbiddenPromptNeedles.every((needle) => !normalizedPrompt.includes(normalizeLowercaseStringOrEmpty(needle)))"
+            expr: "config.forbiddenPromptNeedles.every((needle) => !normalizedPrompt.includes(normalizeLowercaseStringOrEmpty(needle))) && !config.prompt.includes(config.contextMarker)"
             message:
               expr: "`user prompt repeated hidden instruction-profile inputs: ${config.prompt}`"
         - set: sessionKey
@@ -117,6 +124,7 @@ flow:
           value:
             expr: "state.getSnapshot().messages.length"
         - call: runAgentPrompt
+          saveAs: turn
           args:
             - ref: env
             - sessionKey:
@@ -149,9 +157,43 @@ flow:
             - ref: env
             - ref: sessionKey
         - assert:
-            expr: "transcript.assistantToolCallCounts.read === 1 && transcript.completedToolCallCounts.read === 1 && transcript.successfulToolCallCounts.read === 1 && transcript.assistantToolCallCounts.write === 1 && transcript.completedToolCallCounts.write === 1 && transcript.successfulToolCallCounts.write === 1 && String(transcript.finalText ?? '').trim() === config.finalReply"
+            expr: "transcript.assistantToolCallCounts.read === 1 && transcript.completedToolCallCounts.read === 1 && transcript.successfulToolCallCounts.read === 1 && transcript.assistantToolCallCounts.write === 1 && transcript.completedToolCallCounts.write === 1 && transcript.successfulToolCallCounts.write === 1 && String(transcript.finalText ?? '').trim() === config.finalReply && !String(transcript.finalText ?? '').includes(config.contextMarker)"
             message:
               expr: "`live transcript did not persist one successful read/write chain and final: ${JSON.stringify(transcript)}`"
+        - call: runQaCli
+          saveAs: trajectoryExport
+          args:
+            - ref: env
+            - - sessions
+              - export-trajectory
+              - --session-key
+              - ref: sessionKey
+              - --output
+              - expr: "`context-no-meta-${randomUUID().slice(0, 8)}`"
+              - --json
+            - json: true
+              timeoutMs: 30000
+        - set: promptsCapture
+          value:
+            expr: "JSON.parse(await fs.readFile(path.join(trajectoryExport.outputDir, 'prompts.json'), 'utf8'))"
+        - set: instructionProfileReport
+          value:
+            expr: "promptsCapture.systemPromptReport?.injectedWorkspaceFiles?.find((entry) => path.basename(String(entry.path ?? '')) === config.instructionFile)"
+        - set: trajectoryEvents
+          value:
+            expr: "(await fs.readFile(path.join(trajectoryExport.outputDir, 'events.jsonl'), 'utf8')).split(/\\r?\\n/u).filter((line) => line.trim()).map((line) => JSON.parse(line))"
+        - set: providerPromptEvidence
+          value:
+            expr: "trajectoryEvents.filter((event) => event.type === 'provider.prompt.observed' && event.runId === turn.started.runId).map((event) => event.data)"
+        - call: fs.rm
+          args:
+            - expr: trajectoryExport.outputDir
+            - recursive: true
+              force: true
+        - assert:
+            expr: "config.instructionContents.includes(config.contextMarker) && instructionProfileReport?.missing === false && instructionProfileReport?.truncated === false && instructionProfileReport?.rawChars === config.instructionContents.trimEnd().length && instructionProfileReport?.injectedChars === config.instructionContents.trimEnd().length && providerPromptEvidence.length > 0 && providerPromptEvidence.every((entry) => ['responses-sdk', 'native-codex-websocket', 'native-codex-sse'].includes(entry?.egress) && ['initial', 'encrypted-content-retry'].includes(entry?.payloadVariant) && ['instructions', 'input.developer', 'input.system'].includes(entry?.promptSource) && Number.isInteger(entry?.expectedChars) && entry.expectedChars > 0 && entry.observedChars === entry.expectedChars && entry.matchesAssembledPrompt === true && Object.keys(entry).toSorted().join(',') === 'egress,expectedChars,matchesAssembledPrompt,observedChars,payloadVariant,promptSource') && !JSON.stringify(providerPromptEvidence).includes(config.contextMarker)"
+            message:
+              expr: "`current-run provider prompt evidence mismatch: ${JSON.stringify({ runId: turn.started.runId, instructionProfileReport, providerPromptEvidence })}`"
         - call: waitForCondition
           saveAs: historyEvidence
           args:
@@ -181,15 +223,17 @@ flow:
                     const writeResult = writeCall && results.find((result) => result.messageIndex > writeCall.messageIndex && result.callId === writeCall.id && result.name === 'write' && result.isError === false);
                     const hasToolItem = (message) => message?.role === 'toolResult' || (Array.isArray(message?.content) && message.content.some((item) => ['toolCall', 'toolUse', 'tool_use', 'toolResult', 'tool_result'].includes(item?.type)));
                     const textOfMessage = (message) => textOf(message?.content) || String(message?.text ?? '');
+                    const historyMarkerLeak = JSON.stringify(history).includes(config.contextMarker);
                     const visibleAssistant = messages.flatMap((message, messageIndex) => message?.role === 'assistant' && message.phase !== 'commentary' && !message.openclawMessageToolMirror && !message.openclawDeliveryMirror && !(message.provider === 'openclaw' && ['delivery-mirror', 'gateway-injected'].includes(message.model)) && !hasToolItem(message) && textOfMessage(message).trim()
                       ? [{ messageIndex, text: textOfMessage(message).trim() }]
                       : []);
+                    const visibleMarkerLeak = visibleAssistant.some((message) => message.text.includes(config.contextMarker));
                     const firstCallIndex = calls.length > 0 ? Math.min(...calls.map((call) => call.messageIndex)) : -1;
                     const visibleBeforeTools = visibleAssistant.filter((message) => firstCallIndex >= 0 && message.messageIndex < firstCallIndex);
                     const forbiddenVisible = visibleBeforeTools.some((message) => [...config.permissionNeedles, ...config.planNeedles].some((needle) => normalizeLowercaseStringOrEmpty(message.text).includes(normalizeLowercaseStringOrEmpty(needle))));
                     const final = visibleAssistant.find((message) => writeResult && message.messageIndex > writeResult.messageIndex && message.text === config.finalReply);
-                    return readCall && readResult && writeCall && writeResult && visibleBeforeTools.length === 0 && !forbiddenVisible && visibleAssistant.length === 1 && final
-                      ? { history, readCall, readResult, writeCall, writeResult, visibleBeforeTools, visibleAssistant, final }
+                    return readCall && readResult && writeCall && writeResult && visibleBeforeTools.length === 0 && !forbiddenVisible && !historyMarkerLeak && !visibleMarkerLeak && visibleAssistant.length === 1 && final
+                      ? { history, readCall, readResult, writeCall, writeResult, visibleBeforeTools, visibleAssistant, historyMarkerLeak, visibleMarkerLeak, final }
                       : undefined;
                   })()
             - expr: liveTurnTimeoutMs(env, 30000)
@@ -198,11 +242,11 @@ flow:
           value:
             expr: "state.getSnapshot().messages.slice(outboundStartIndex).filter((message) => message.direction === 'outbound' && message.conversation.id === 'qa-operator' && !message.deleted)"
         - assert:
-            expr: "outboundMessages.length === 1 && String(outboundMessages[0]?.text ?? '').trim() === config.finalReply"
+            expr: "outboundMessages.length === 1 && String(outboundMessages[0]?.text ?? '').trim() === config.finalReply && !JSON.stringify(outboundMessages).includes(config.contextMarker)"
             message:
               expr: "`instruction-profile flow emitted an early plan/permission reply or multiple finals: ${JSON.stringify(outboundMessages)}`"
         - assert:
-            expr: "artifact === config.nonce && Buffer.byteLength(artifact, 'utf8') === Buffer.byteLength(config.nonce, 'utf8')"
+            expr: "artifact === config.nonce && !artifact.includes(config.contextMarker) && Buffer.byteLength(artifact, 'utf8') === Buffer.byteLength(config.nonce, 'utf8')"
             message:
               expr: "`artifact bytes differed from the instructed nonce: ${JSON.stringify(artifact)}`"
-      detailsExpr: "JSON.stringify({ verdict: 'PASS', scenario: 'instruction-profile-artifact-followthrough-live', provider: env.providerMode, sessionKey, promptRepeatedHiddenTerms: config.forbiddenPromptNeedles.filter((needle) => normalizedPrompt.includes(normalizeLowercaseStringOrEmpty(needle))), read: { callId: historyEvidence.readCall.id, resultCallId: historyEvidence.readResult.callId, path: historyEvidence.readCall.args.path, noncePresent: historyEvidence.readResult.text.includes(config.nonce) }, write: { callId: historyEvidence.writeCall.id, resultCallId: historyEvidence.writeResult.callId, path: historyEvidence.writeCall.args.path, exactArgs: historyEvidence.writeCall.args.content === config.nonce }, artifactBytes: Buffer.byteLength(artifact, 'utf8'), visibleBeforeTools: historyEvidence.visibleBeforeTools.length, terminalReplies: historyEvidence.visibleAssistant.length, outboundFinals: outboundMessages.length }, null, 2)"
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', scenario: 'instruction-profile-artifact-followthrough-live', provider: env.providerMode, sessionKey, runId: turn.started.runId, diagnosticTrajectoryPromptRetentionExcluded: true, promptRepeatedHiddenTerms: config.forbiddenPromptNeedles.filter((needle) => normalizedPrompt.includes(normalizeLowercaseStringOrEmpty(needle))), providerContextMarker: instructionProfileReport?.missing === false && instructionProfileReport?.truncated === false && instructionProfileReport?.injectedChars === config.instructionContents.trimEnd().length, providerPromptObservations: providerPromptEvidence, read: { callId: historyEvidence.readCall.id, resultCallId: historyEvidence.readResult.callId, path: historyEvidence.readCall.args.path, noncePresent: historyEvidence.readResult.text.includes(config.nonce) }, write: { callId: historyEvidence.writeCall.id, resultCallId: historyEvidence.writeResult.callId, path: historyEvidence.writeCall.args.path, exactArgs: historyEvidence.writeCall.args.content === config.nonce }, artifactBytes: Buffer.byteLength(artifact, 'utf8'), visibleBeforeTools: historyEvidence.visibleBeforeTools.length, terminalReplies: historyEvidence.visibleAssistant.length, historyMarkerLeak: historyEvidence.historyMarkerLeak, visibleMarkerLeak: historyEvidence.visibleMarkerLeak, outboundFinals: outboundMessages.length }, null, 2)"
