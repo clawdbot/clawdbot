@@ -275,88 +275,6 @@ export type SpeakOptions = {
   listenAfterPlayback?: boolean;
 };
 
-/** Default maximum characters per TTS chunk. Overridable via VOICECALL_TTS_CHUNK_CHARS. */
-const DEFAULT_TTS_CHUNK_CHARS = 320;
-const MIN_TTS_CHUNK_CHARS = 80;
-
-/**
- * Whether long-reply TTS chunking is enabled. Disabled by default so behavior
- * is unchanged unless a user opts in via VOICECALL_TTS_CHUNK_ENABLED
- * (accepts 1/true/yes/on, case-insensitive). When disabled, `speak()` sends the
- * full reply as a single synthesis request, exactly as before.
- */
-function isTtsChunkingEnabled(): boolean {
-  const raw = (process.env.VOICECALL_TTS_CHUNK_ENABLED ?? "").trim().toLowerCase();
-  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
-}
-
-/**
- * Split text into chunks small enough for a single TTS synthesis request.
- *
- * Long replies synthesized as one request can exceed the provider synthesis
- * timeout and get dropped silently. Splitting on sentence boundaries (and, for
- * an over-long single sentence, on clause punctuation then words) keeps each
- * chunk under `maxLen` so it synthesizes and plays back reliably. Chunks are
- * played back-to-back, preserving the full reply. Short text passes through as a
- * single chunk unchanged.
- */
-export function chunkTextForTts(text: string, maxLen: number): string[] {
-  const clean = (text ?? "").trim();
-  if (!clean) return [];
-  if (clean.length <= maxLen) return [clean];
-
-  const sentences = clean.match(/[^.!?。！？]+[.!?。！？]+\s*|[^.!?。！？]+$/g) || [clean];
-  const chunks: string[] = [];
-  let buf = "";
-  const pushBuf = () => {
-    const t = buf.trim();
-    if (t) chunks.push(t);
-    buf = "";
-  };
-  // Split a single over-long sentence on clause punctuation, then on words.
-  const hardSplit = (s: string) => {
-    const parts = s.match(/[^,，;；]+[,，;；]+\s*|[^,，;；]+$/g) || [s];
-    let local = "";
-    for (const p of parts) {
-      if (p.length > maxLen) {
-        if (local.trim()) {
-          chunks.push(local.trim());
-          local = "";
-        }
-        const words = p.split(/(\s+)/);
-        let w = "";
-        for (const tok of words) {
-          if ((w + tok).length > maxLen && w.trim()) {
-            chunks.push(w.trim());
-            w = "";
-          }
-          w += tok;
-        }
-        if (w.trim()) local = w;
-      } else if ((local + p).length > maxLen) {
-        if (local.trim()) chunks.push(local.trim());
-        local = p;
-      } else {
-        local += p;
-      }
-    }
-    if (local.trim()) chunks.push(local.trim());
-  };
-  for (const s of sentences) {
-    if (s.length > maxLen) {
-      pushBuf();
-      hardSplit(s);
-    } else if ((buf + s).length > maxLen) {
-      pushBuf();
-      buf = s;
-    } else {
-      buf += s;
-    }
-  }
-  pushBuf();
-  return chunks.length ? chunks : [clean];
-}
-
 export async function speak(
   ctx: SpeakContext,
   callId: CallId,
@@ -386,40 +304,13 @@ export async function speak(
       resolveVoiceCallEffectiveConfig(ctx.config, numberRouteKey).config,
     );
     const playbackOptions = options?.listenAfterPlayback ? { listenAfterPlayback: true } : {};
-    const chunkLimit = Math.max(
-      MIN_TTS_CHUNK_CHARS,
-      Number(process.env.VOICECALL_TTS_CHUNK_CHARS) || DEFAULT_TTS_CHUNK_CHARS,
-    );
-    // reply as a single request (original behavior).
-    let chunks = isTtsChunkingEnabled() ? chunkTextForTts(text, chunkLimit) : [text ?? ""];
-    if (!chunks.length) chunks = [text ?? ""];
-    if (chunks.length > 1) {
-      console.log(
-        `[voice-call] TTS chunking: ${(text ?? "").length} chars -> ${chunks.length} chunks [${chunks
-          .map((c) => c.length)
-          .join(", ")}] (callId=${callId})`,
-      );
-    }
-    for (let i = 0; i < chunks.length; i++) {
-      const isLast = i === chunks.length - 1;
-      const chunk = chunks[i];
-      if (chunks.length > 1) {
-        const preview = chunk.length > 60 ? `${chunk.slice(0, 60)}…` : chunk;
-        console.log(
-          `[voice-call] TTS chunk ${i + 1}/${chunks.length} (${chunk.length} chars${
-            isLast && options?.listenAfterPlayback ? ", listenAfter" : ""
-          }): "${preview}"`,
-        );
-      }
-      // Only the final chunk re-opens the mic; earlier chunks play back-to-back.
-      await provider.playTts({
-        callId,
-        providerCallId,
-        text: chunk,
-        voice,
-        ...(isLast ? playbackOptions : {}),
-      });
-    }
+    await provider.playTts({
+      callId,
+      providerCallId,
+      text,
+      voice,
+      ...playbackOptions,
+    });
 
     addTranscriptEntry(call, "bot", text);
     persistCallRecord(ctx.storePath, call);
