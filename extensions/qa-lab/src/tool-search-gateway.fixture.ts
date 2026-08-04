@@ -37,6 +37,7 @@ type LaneResult = {
   providerToolOutputSnippet: string;
   providerToolSearchResult?: unknown;
   providerDeclaredToolCount: number;
+  providerDeclaredToolNames: string[];
   providerDirectoryContainsTarget: boolean;
   providerPlannedTools: string[];
   gatewayOutputToolNames: string[];
@@ -520,6 +521,11 @@ export async function runToolSearchGatewayLane(params: {
     providerDeclaredToolCount: Array.isArray(lastRequest.body?.tools)
       ? lastRequest.body.tools.length
       : 0,
+    providerDeclaredToolNames: Array.isArray(lastRequest.body?.tools)
+      ? lastRequest.body.tools.flatMap((tool) =>
+          isRecord(tool) && typeof tool.name === "string" ? [tool.name] : [],
+        )
+      : [],
     providerDirectoryContainsTarget:
       providerPromptText.includes("### Deferred Tool Schemas") &&
       providerPromptText.includes(`- ${params.fixture.targetTool}`),
@@ -618,7 +624,8 @@ export function assertToolSearchLaneResults(params: {
 }
 
 export function assertToolSearchBatchLaneResult(params: {
-  tools: LaneResultSummary & Pick<LaneResult, "status" | "sessionLogTargetToolResults">;
+  tools: LaneResultSummary &
+    Pick<LaneResult, "status" | "sessionLogTargetToolResults" | "providerDeclaredToolNames">;
   targetTool: string;
 }) {
   const { targetTool, tools } = params;
@@ -631,15 +638,18 @@ export function assertToolSearchBatchLaneResult(params: {
         mentions: tools.sessionLogToolMentions,
         targetToolResults: tools.sessionLogTargetToolResults,
         declaredToolCount: tools.providerDeclaredToolCount,
+        declaredToolNames: tools.providerDeclaredToolNames,
         directoryContainsTarget: tools.providerDirectoryContainsTarget,
       },
       null,
       2,
     );
   assert(tools.status === "completed", `structured lane did not complete successfully: ${debug()}`);
+  const structuredControlTools = new Set(["tool_search", "tool_describe", "tool_call"]);
   assert(
-    tools.providerDeclaredToolCount === 3 && tools.providerDirectoryContainsTarget,
-    `structured lane did not expose its bounded directory with exactly three control tools: ${debug()}`,
+    [...structuredControlTools].every((name) => tools.providerDeclaredToolNames.includes(name)) &&
+      tools.providerDirectoryContainsTarget,
+    `structured lane did not expose its bounded directory with all three control tools: ${debug()}`,
   );
   assert(
     tools.providerPlannedTools.filter((name) => name === "tool_search").length === 1 &&

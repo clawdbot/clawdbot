@@ -445,6 +445,7 @@ describe("tool search gateway e2e lane assertions", () => {
           sessionLogTargetToolResults: 1,
           gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
           providerDeclaredToolCount: 3,
+          providerDeclaredToolNames: ["tool_search", "tool_describe", "tool_call"],
           providerDirectoryContainsTarget: true,
           providerPlannedTools: ["tool_search", "tool_call"],
           providerRawBytes: 4_000,
@@ -486,6 +487,7 @@ describe("tool search gateway e2e lane assertions", () => {
           sessionLogTargetToolResults: 1,
           gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
           providerDeclaredToolCount: 3,
+          providerDeclaredToolNames: ["tool_search", "tool_describe", "tool_call"],
           providerDirectoryContainsTarget: true,
           providerPlannedTools: ["tool_search", "tool_search", "tool_call"],
           providerRawBytes: 4_000,
@@ -600,6 +602,7 @@ describe("tool search gateway e2e lane assertions", () => {
             sessionLogTargetToolResults: 1,
             gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
             providerDeclaredToolCount: 3,
+            providerDeclaredToolNames: ["tool_search", "tool_describe", "tool_call"],
             providerDirectoryContainsTarget: true,
             providerPlannedTools: plannedTools,
             providerRawBytes: 4_000,
@@ -614,12 +617,16 @@ describe("tool search gateway e2e lane assertions", () => {
 
   it.each([
     {
-      label: "exposes an extra provider tool",
-      declaredToolCount: 4,
+      label: "omits a control tool",
+      declaredToolNames: ["tool_search", "tool_call"],
       directoryContainsTarget: true,
     },
-    { label: "omits the target directory", declaredToolCount: 3, directoryContainsTarget: false },
-  ])("rejects structured proof that $label", ({ declaredToolCount, directoryContainsTarget }) => {
+    {
+      label: "omits the target directory",
+      declaredToolNames: ["tool_search", "tool_describe", "tool_call"],
+      directoryContainsTarget: false,
+    },
+  ])("rejects structured proof that $label", ({ declaredToolNames, directoryContainsTarget }) => {
     const result = {
       results: [
         { query: targetTool, candidates: [{ name: targetTool }] },
@@ -637,7 +644,8 @@ describe("tool search gateway e2e lane assertions", () => {
           targetToolIdentity,
           sessionLogTargetToolResults: 1,
           gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
-          providerDeclaredToolCount: declaredToolCount,
+          providerDeclaredToolCount: declaredToolNames.length,
+          providerDeclaredToolNames: declaredToolNames,
           providerDirectoryContainsTarget: directoryContainsTarget,
           providerPlannedTools: ["tool_search", "tool_call"],
           providerRawBytes: 4_000,
@@ -645,9 +653,7 @@ describe("tool search gateway e2e lane assertions", () => {
           sessionLogToolMentions: { tool_search: 1, tool_call: 1, [targetTool]: 1 },
         },
       }),
-    ).toThrow(
-      "structured lane did not expose its bounded directory with exactly three control tools",
-    );
+    ).toThrow("structured lane did not expose its bounded directory with all three control tools");
   });
 
   it("rejects structured proof without a typed target tool result", () => {
@@ -669,6 +675,7 @@ describe("tool search gateway e2e lane assertions", () => {
           sessionLogTargetToolResults: 0,
           gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
           providerDeclaredToolCount: 3,
+          providerDeclaredToolNames: ["tool_search", "tool_describe", "tool_call"],
           providerDirectoryContainsTarget: true,
           providerPlannedTools: ["tool_search", "tool_call"],
           providerRawBytes: 4_000,
@@ -698,6 +705,7 @@ describe("tool search gateway e2e lane assertions", () => {
           sessionLogTargetToolResults: 1,
           gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
           providerDeclaredToolCount: 3,
+          providerDeclaredToolNames: ["tool_search", "tool_describe", "tool_call"],
           providerDirectoryContainsTarget: true,
           providerPlannedTools: ["tool_search", "tool_call"],
           providerRawBytes: 4_000,
