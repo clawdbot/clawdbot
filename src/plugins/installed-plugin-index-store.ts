@@ -93,6 +93,7 @@ const InstalledPluginIndexRecordSchema = z.object({
   manifestPath: z.string(),
   manifestHash: z.string(),
   doctorContractHash: z.string().optional(),
+  doctorContractFile: InstalledPluginFileSignatureSchema.optional(),
   manifestFile: InstalledPluginFileSignatureSchema.optional(),
   format: z.string().optional(),
   bundleFormat: z.string().optional(),

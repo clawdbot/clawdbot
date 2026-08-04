@@ -246,12 +246,23 @@ describe("installed plugin index persistence", () => {
       candidates: [candidate],
       env,
     });
-    const firstHash = first.plugins[0]?.doctorContractHash;
+    const firstPlugin = first.plugins[0];
+    const firstHash = firstPlugin?.doctorContractHash;
+    const firstFile = firstPlugin?.doctorContractFile;
     expect(firstHash).toMatch(/^[a-f0-9]{64}$/u);
-    expect(
-      requirePersisted(await readPersistedInstalledPluginIndex({ stateDir })).plugins[0]
-        ?.doctorContractHash,
-    ).toBe(firstHash);
+    expect(firstFile).toEqual({
+      size: fs.statSync(contractPath).size,
+      mtimeMs: fs.statSync(contractPath).mtimeMs,
+      ctimeMs: fs.statSync(contractPath).ctimeMs,
+    });
+    expectPluginFields(
+      requirePersisted(await readPersistedInstalledPluginIndex({ stateDir })),
+      "demo",
+      {
+        doctorContractHash: firstHash,
+        doctorContractFile: firstFile,
+      },
+    );
 
     fs.writeFileSync(
       contractPath,
@@ -264,13 +275,20 @@ describe("installed plugin index persistence", () => {
       candidates: [candidate],
       env,
     });
-    const secondHash = second.plugins[0]?.doctorContractHash;
+    const secondPlugin = second.plugins[0];
+    const secondHash = secondPlugin?.doctorContractHash;
+    const secondFile = secondPlugin?.doctorContractFile;
     expect(secondHash).toMatch(/^[a-f0-9]{64}$/u);
     expect(secondHash).not.toBe(firstHash);
-    expect(
-      requirePersisted(await readPersistedInstalledPluginIndex({ stateDir })).plugins[0]
-        ?.doctorContractHash,
-    ).toBe(secondHash);
+    expect(secondFile).not.toEqual(firstFile);
+    expectPluginFields(
+      requirePersisted(await readPersistedInstalledPluginIndex({ stateDir })),
+      "demo",
+      {
+        doctorContractHash: secondHash,
+        doctorContractFile: secondFile,
+      },
+    );
   });
 
   it("strips retired startup fields from persisted indexes", async () => {

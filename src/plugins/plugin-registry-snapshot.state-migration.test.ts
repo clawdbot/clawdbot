@@ -90,6 +90,11 @@ describe("persisted plugin registry Doctor contract freshness", () => {
     const persistedPlugin = requirePlugin(persisted, pluginId);
     expect(persisted.registrySource).toBe("persisted");
     expect(persistedPlugin.doctorContractHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(persistedPlugin.doctorContractFile).toMatchObject({
+      size: expect.any(Number),
+      mtimeMs: expect.any(Number),
+      ctimeMs: expect.any(Number),
+    });
     const checkpoint = {
       env,
       version: "2026.7.1",
@@ -137,6 +142,7 @@ module.exports = {
     expect(refreshedPlugin.manifestHash).toBe(persistedPlugin.manifestHash);
     expect(refreshedPlugin.packageJson?.hash).toBe(persistedPlugin.packageJson?.hash);
     expect(refreshedPlugin.doctorContractHash).not.toBe(persistedPlugin.doctorContractHash);
+    expect(refreshedPlugin.doctorContractFile).not.toEqual(persistedPlugin.doctorContractFile);
     expect(refreshedIdentity.pluginMigrationFingerprint).not.toBe(
       checkpoint.identity.pluginMigrationFingerprint,
     );

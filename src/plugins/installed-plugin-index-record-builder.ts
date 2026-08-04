@@ -262,6 +262,9 @@ export function buildInstalledPluginIndexRecords(params: {
           required: false,
         })
       : undefined;
+    const doctorContractFile = doctorContractPath
+      ? safeFileSignature(doctorContractPath)
+      : undefined;
     const manifestFile = hasOptionalMissingPluginManifestFile(record)
       ? undefined
       : safeFileSignature(record.manifestPath);
@@ -284,6 +287,7 @@ export function buildInstalledPluginIndexRecords(params: {
       manifestPath: record.manifestPath,
       manifestHash,
       ...(doctorContractHash ? { doctorContractHash } : {}),
+      ...(doctorContractFile ? { doctorContractFile } : {}),
       ...(manifestFile ? { manifestFile } : {}),
       source: record.source,
       rootDir: record.rootDir,

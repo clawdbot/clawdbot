@@ -1008,6 +1008,86 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
   });
 
+  it("trusts unchanged Doctor contract signatures without rehashing", () => {
+    const tempRoot = makeTempDir();
+    const bundledRoot = path.join(tempRoot, "dist", "extensions");
+    const rootDir = path.join(bundledRoot, "demo");
+    const stateDir = path.join(tempRoot, "state");
+    const contractPath = path.join(rootDir, "doctor-contract-api.ts");
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_VERSION: "2026.4.26",
+      VITEST: "true",
+    };
+    const config = {};
+    writeBundledPlugin(rootDir, "demo", "index.js");
+    fs.writeFileSync(contractPath, 'export const marker = "aaaa";\n', "utf8");
+    const index = loadInstalledPluginIndex({ config, env });
+    const plugin = requirePluginRecord(index.plugins, "demo");
+    expect(plugin.doctorContractFile).toEqual(fileSignature(contractPath));
+    const persistedPlugin = { ...plugin, doctorContractHash: "stale-contract-hash" };
+    writePersistedInstalledPluginIndexSync(
+      { ...index, plugins: [persistedPlugin, ...index.plugins.slice(1)] },
+      { stateDir },
+    );
+
+    const result = loadPluginRegistrySnapshotWithMetadata({ config, env, stateDir });
+
+    expect(result.source).toBe("persisted");
+    expect(result.snapshot.plugins[0]?.doctorContractHash).toBe("stale-contract-hash");
+  });
+
+  it("rehashes Doctor contracts from persisted indexes without file signatures", () => {
+    const tempRoot = makeTempDir();
+    const rootDir = path.join(tempRoot, "workspace");
+    const stateDir = path.join(tempRoot, "state");
+    const contractPath = path.join(rootDir, "doctor-contract-api.ts");
+    const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+    const config = { plugins: { load: { paths: [rootDir] } } };
+    writePackagePlugin(rootDir);
+    fs.writeFileSync(contractPath, 'export const marker = "aaaa";\n', "utf8");
+    const index = loadInstalledPluginIndex({ config, env });
+    const plugin = requirePluginRecord(index.plugins, "demo");
+    const { doctorContractFile: _doctorContractFile, ...legacyPlugin } = plugin;
+    writePersistedInstalledPluginIndexSync(
+      {
+        ...index,
+        plugins: [
+          { ...legacyPlugin, doctorContractHash: "stale-contract-hash" },
+          ...index.plugins.slice(1),
+        ],
+      },
+      { stateDir },
+    );
+
+    const result = loadPluginRegistrySnapshotWithMetadata({ config, env, stateDir });
+
+    expect(result.source).toBe("derived");
+    expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
+    expect(result.snapshot.plugins[0]?.doctorContractHash).not.toBe("stale-contract-hash");
+  });
+
+  it("detects same-size same-mtime Doctor contract replacements", () => {
+    const tempRoot = makeTempDir();
+    const rootDir = path.join(tempRoot, "workspace");
+    const stateDir = path.join(tempRoot, "state");
+    const contractPath = path.join(rootDir, "doctor-contract-api.ts");
+    const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+    const config = { plugins: { load: { paths: [rootDir] } } };
+    writePackagePlugin(rootDir);
+    fs.writeFileSync(contractPath, 'export const marker = "aaaa";\n', "utf8");
+    const index = loadInstalledPluginIndex({ config, env });
+    writePersistedInstalledPluginIndexSync(index, { stateDir });
+
+    replaceFilePreservingSizeAndMtime(contractPath, 'export const marker = "bbbb";\n');
+
+    const result = loadPluginRegistrySnapshotWithMetadata({ config, env, stateDir });
+
+    expect(result.source).toBe("derived");
+    expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
+  });
+
   it("detects same-size same-mtime package.json replacements", () => {
     const tempRoot = makeTempDir();
     const rootDir = path.join(tempRoot, "workspace");
@@ -1133,15 +1213,50 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     };
     const config = { plugins: { entries: { whatsapp: { enabled: false } } } };
     writeBundledPlugin(pluginRoot, "whatsapp", "index.js");
+    fs.writeFileSync(
+      path.join(pluginRoot, "doctor-contract-api.ts"),
+      "export const stateMigrations = [];\n",
+      "utf8",
+    );
     const index = loadInstalledPluginIndex({ config, env, stateDir });
+    const persistedPlugin = requirePluginRecord(index.plugins, "whatsapp");
+    expect(persistedPlugin.doctorContractHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(persistedPlugin.doctorContractFile).toBeDefined();
     writePersistedInstalledPluginIndexSync(index, { stateDir });
     fs.rmSync(pluginRoot, { recursive: true });
 
     const result = loadPluginRegistrySnapshotWithMetadata({ config, env, stateDir });
 
     expect(result.source).toBe("persisted");
+    expect(result.diagnostics).toEqual([]);
     expect(result.snapshot.plugins.map((plugin) => plugin.pluginId)).toEqual(["whatsapp"]);
     expect(result.snapshot.plugins[0]?.enabled).toBe(false);
+    expect(result.snapshot.plugins[0]?.doctorContractHash).toBe(persistedPlugin.doctorContractHash);
+  });
+
+  it("invalidates disabled installed records when their Doctor contract disappears", () => {
+    const tempRoot = makeTempDir();
+    const bundledRoot = path.join(tempRoot, "dist", "extensions");
+    const pluginRoot = path.join(bundledRoot, "whatsapp");
+    const stateDir = path.join(tempRoot, "state");
+    const contractPath = path.join(pluginRoot, "doctor-contract-api.ts");
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_VERSION: "2026.4.26",
+      VITEST: "true",
+    };
+    const config = { plugins: { entries: { whatsapp: { enabled: false } } } };
+    writeBundledPlugin(pluginRoot, "whatsapp", "index.js");
+    fs.writeFileSync(contractPath, "export const stateMigrations = [];\n", "utf8");
+    const index = loadInstalledPluginIndex({ config, env, stateDir });
+    writePersistedInstalledPluginIndexSync(index, { stateDir });
+    fs.rmSync(contractPath);
+
+    const result = loadPluginRegistrySnapshotWithMetadata({ config, env, stateDir });
+
+    expect(result.source).toBe("derived");
+    expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
   });
 
   it("keeps missing disabled inventory beside unchanged configured plugins", () => {

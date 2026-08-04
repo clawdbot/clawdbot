@@ -117,6 +117,7 @@ export type InstalledPluginIndexRecord = {
   manifestHash: string;
   /** Hash of the doctor-contract artifact selected by the runtime resolver. */
   doctorContractHash?: string;
+  doctorContractFile?: InstalledPluginFileSignature;
   manifestFile?: InstalledPluginFileSignature;
   format?: PluginManifestRecord["format"];
   bundleFormat?: PluginManifestRecord["bundleFormat"];

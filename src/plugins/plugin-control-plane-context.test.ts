@@ -6,7 +6,11 @@ import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-con
 
 function createIndex(
   pluginId: string,
-  options: { doctorContractHash?: string; generatedAtMs?: number } = {},
+  options: {
+    doctorContractFile?: InstalledPluginIndex["plugins"][number]["doctorContractFile"];
+    doctorContractHash?: string;
+    generatedAtMs?: number;
+  } = {},
 ): InstalledPluginIndex {
   return {
     version: 1,
@@ -23,6 +27,7 @@ function createIndex(
         manifestPath: `/plugins/${pluginId}/openclaw.plugin.json`,
         manifestHash: `${pluginId}-manifest-hash`,
         ...(options.doctorContractHash ? { doctorContractHash: options.doctorContractHash } : {}),
+        ...(options.doctorContractFile ? { doctorContractFile: options.doctorContractFile } : {}),
         rootDir: `/plugins/${pluginId}`,
         origin: "global",
         enabled: true,
@@ -86,6 +91,11 @@ describe("plugin control-plane context", () => {
       doctorContractHash: "contract-a",
       generatedAtMs: 2,
     });
+    const retimedContractIndex = createIndex("demo", {
+      doctorContractHash: "contract-a",
+      doctorContractFile: { size: 10, mtimeMs: 20, ctimeMs: 30 },
+      generatedAtMs: 1,
+    });
     const resolveControlPlaneFingerprint = (index: InstalledPluginIndex) =>
       resolvePluginControlPlaneFingerprint({
         config: { plugins: { allow: ["demo"] } },
@@ -101,9 +111,13 @@ describe("plugin control-plane context", () => {
     expect(resolveInstalledManifestRegistryIndexFingerprint(regeneratedIndex)).toBe(
       inventoryFingerprint,
     );
+    expect(resolveInstalledManifestRegistryIndexFingerprint(retimedContractIndex)).toBe(
+      inventoryFingerprint,
+    );
 
     const controlPlaneFingerprint = resolveControlPlaneFingerprint(baseIndex);
     expect(resolveControlPlaneFingerprint(changedContractIndex)).not.toBe(controlPlaneFingerprint);
     expect(resolveControlPlaneFingerprint(regeneratedIndex)).toBe(controlPlaneFingerprint);
+    expect(resolveControlPlaneFingerprint(retimedContractIndex)).toBe(controlPlaneFingerprint);
   });
 });

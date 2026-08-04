@@ -74,7 +74,12 @@ function resolvePluginRegistryContent(
     plugins: content.plugins
       .filter((plugin) => !excludedPlugins?.has(plugin.pluginId))
       .map((plugin) => {
-        const { manifestFile: _manifestFile, packageJson, ...record } = plugin;
+        const {
+          doctorContractFile: _doctorContractFile,
+          manifestFile: _manifestFile,
+          packageJson,
+          ...record
+        } = plugin;
         if (!packageJson) {
           return record;
         }
@@ -212,12 +217,18 @@ function isContainedPluginPath(
   return Boolean(root && target && isPathInside(root, target));
 }
 
-function hasStaleDoctorContractFile(plugin: InstalledPluginIndexRecord): boolean {
+function hasStaleDoctorContractFile(
+  plugin: InstalledPluginIndexRecord,
+  rootExists: boolean,
+): boolean {
+  if (!rootExists && !plugin.enabled) {
+    return false;
+  }
   const contractPath = resolvePluginDoctorContractArtifactPath(plugin.rootDir);
   return contractPath
     ? !plugin.doctorContractHash ||
-        !fileContentMatches(contractPath, plugin.doctorContractHash, undefined, false)
-    : plugin.doctorContractHash !== undefined;
+        !fileContentMatches(contractPath, plugin.doctorContractHash, plugin.doctorContractFile)
+    : plugin.doctorContractHash !== undefined || plugin.doctorContractFile !== undefined;
 }
 
 function hasStalePersistedPluginFiles(index: InstalledPluginIndex): boolean {
@@ -226,7 +237,8 @@ function hasStalePersistedPluginFiles(index: InstalledPluginIndex): boolean {
     if (!isContainedPluginPath(plugin.rootDir, plugin.rootDir, realpathCache)) {
       return true;
     }
-    if (!fs.existsSync(plugin.rootDir) && plugin.enabled) {
+    const rootExists = fs.existsSync(plugin.rootDir);
+    if (!rootExists && plugin.enabled) {
       return true;
     }
     for (const artifactPath of [plugin.source, plugin.setupSource, plugin.manifestPath]) {
@@ -252,7 +264,7 @@ function hasStalePersistedPluginFiles(index: InstalledPluginIndex): boolean {
         return true;
       }
     }
-    if (hasStaleDoctorContractFile(plugin)) {
+    if (hasStaleDoctorContractFile(plugin, rootExists)) {
       return true;
     }
     if (!plugin.packageJson) {
