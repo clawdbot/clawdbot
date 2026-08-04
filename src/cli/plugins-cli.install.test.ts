@@ -1273,8 +1273,23 @@ describe("plugins cli install", () => {
       plugins: [{ id: "alpha", kind: "provider" }],
       diagnostics: [],
     });
+    const alphaRoot = cliInstallPath("alpha");
     loadPluginManifestRegistry.mockReturnValue({
-      plugins: [{ id: "alpha", kind: "memory" }],
+      plugins: [
+        {
+          id: "alpha",
+          kind: "memory",
+          origin: "global",
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          rootDir: alphaRoot,
+          source: `${alphaRoot}/index.js`,
+          manifestPath: `${alphaRoot}/openclaw.plugin.json`,
+        },
+      ],
       diagnostics: [],
     });
     applyExclusiveSlotSelection.mockReturnValue({

@@ -72,6 +72,82 @@ describe("createTelegramBot fetch abort", () => {
     expect(observedSignal.aborted).toBe(true);
   });
 
+  it("keeps the getChat deadline active until its response body settles", async () => {
+    vi.useFakeTimers();
+    let observedSignal: AbortSignal | undefined;
+    let bodyController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const fetchSpy = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      observedSignal = init?.signal ?? undefined;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            bodyController = controller;
+            observedSignal?.addEventListener(
+              "abort",
+              () => controller.error(observedSignal?.reason),
+              { once: true },
+            );
+          },
+        }),
+        { headers: { "content-type": "application/json" }, status: 200 },
+      );
+    });
+    const { clientFetch } = createWrappedTelegramClientFetch(fetchSpy as typeof fetch);
+
+    const response = (await clientFetch(
+      "https://api.telegram.org/bot123456:ABC/getChat",
+    )) as Response;
+    const body = response.json();
+    void body.catch(() => undefined);
+
+    try {
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(observedSignal?.aborted).toBe(true);
+      await expect(body).rejects.toThrow("Telegram getchat timed out after 15000ms");
+    } finally {
+      if (!observedSignal?.aborted) {
+        bodyController?.error(new Error("test cleanup"));
+      }
+      await body.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["shutdown", "request"] as const)(
+    "keeps %s cancellation attached while a response body is being read",
+    async (cancellationSource) => {
+      let observedSignal: AbortSignal | undefined;
+      const fetchSpy = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        observedSignal = init?.signal ?? undefined;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              observedSignal?.addEventListener(
+                "abort",
+                () => controller.error(observedSignal?.reason),
+                { once: true },
+              );
+            },
+          }),
+        );
+      });
+      const { clientFetch, shutdown } = createWrappedTelegramClientFetch(fetchSpy as typeof fetch);
+      const request = new AbortController();
+      const response = (await clientFetch("https://api.telegram.org/bot123456:ABC/getChat", {
+        signal: request.signal,
+      })) as Response;
+      const body = response.text();
+      void body.catch(() => undefined);
+
+      const cancellation = cancellationSource === "shutdown" ? shutdown : request;
+      cancellation.abort(new Error(`${cancellationSource} cancelled`));
+
+      expect(observedSignal?.aborted).toBe(true);
+      await expect(body).rejects.toThrow(`${cancellationSource} cancelled`);
+    },
+  );
+
   it("tags wrapped Telegram fetch failures with the Bot API method", async () => {
     const fetchError = Object.assign(new TypeError("fetch failed"), {
       cause: Object.assign(new Error("connect timeout"), {
@@ -257,9 +333,14 @@ describe("createTelegramBot fetch abort", () => {
 
   it("retries Telegram 421 responses after forcing transport fallback", async () => {
     const forceFallback = vi.fn(() => true);
+    const cancelMisdirectedBody = vi.fn();
     const fetchSpy = vi
       .fn()
-      .mockResolvedValueOnce(new Response("Misdirected Request", { status: 421 }))
+      .mockResolvedValueOnce(
+        new Response(new ReadableStream<Uint8Array>({ cancel: cancelMisdirectedBody }), {
+          status: 421,
+        }),
+      )
       .mockResolvedValueOnce(new Response("{}", { status: 200 }));
     const { clientFetch } = createWrappedTelegramClientFetchWithTransport({
       fetch: fetchSpy as typeof fetch,
@@ -272,6 +353,7 @@ describe("createTelegramBot fetch abort", () => {
     expect((result as Response).status).toBe(200);
     expect(forceFallback).toHaveBeenCalledWith("misdirected-request");
     expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(cancelMisdirectedBody).toHaveBeenCalledOnce();
   });
 
   it("retries Telegram 421 fetch errors after forcing transport fallback", async () => {

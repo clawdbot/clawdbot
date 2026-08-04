@@ -361,11 +361,11 @@ export function resolveUninstallChannelConfigKeys(
   return keys;
 }
 
-function loadPathMatchesInstallSourcePath(loadPath: string, sourcePath: string): boolean {
-  if (loadPath === sourcePath) {
+function loadPathMatchesInstallPath(loadPath: string, installPath: string): boolean {
+  if (loadPath === installPath) {
     return true;
   }
-  return resolveComparablePath(loadPath) === resolveComparablePath(sourcePath);
+  return resolveComparablePath(loadPath) === resolveComparablePath(installPath);
 }
 
 function resolveComparablePath(value: string): string {
@@ -435,17 +435,23 @@ export function removePluginFromConfig(
     actions.denylist = true;
   }
 
-  // Remove linked path from load.paths (for source === "path" plugins)
+  // Remove exact tracked install paths without consuming parent, child, or prefix matches.
   let load = pluginsConfig.load;
-  if (installRecord?.source === "path" && installRecord.sourcePath) {
-    const sourcePath = installRecord.sourcePath;
+  const trackedInstallPaths = [
+    installRecord?.installPath,
+    installRecord?.source === "path" ? installRecord.sourcePath : undefined,
+  ].filter((value): value is string => Boolean(value));
+  if (trackedInstallPaths.length > 0) {
     const loadPaths = load?.paths;
     if (
       Array.isArray(loadPaths) &&
-      loadPaths.some((p) => loadPathMatchesInstallSourcePath(p, sourcePath))
+      loadPaths.some((p) =>
+        trackedInstallPaths.some((installPath) => loadPathMatchesInstallPath(p, installPath)),
+      )
     ) {
       const nextLoadPaths = loadPaths.filter(
-        (p) => !loadPathMatchesInstallSourcePath(p, sourcePath),
+        (p) =>
+          !trackedInstallPaths.some((installPath) => loadPathMatchesInstallPath(p, installPath)),
       );
       load = nextLoadPaths.length > 0 ? { ...load, paths: nextLoadPaths } : undefined;
       actions.loadPath = true;

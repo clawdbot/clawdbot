@@ -14,10 +14,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
-import {
-  HEARTBEAT_RUN_SCOPE,
-  type ReplyOptionsWithHeartbeatRunScope,
-} from "../../infra/heartbeat-run-scope.js";
+import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
 import {
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
@@ -26,11 +23,11 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
-import type { GetReplyOptions } from "../types.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
 } from "./agent-runner-failure-copy.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   enqueueFollowupRun,
   refreshQueuedFollowupSession,
@@ -48,10 +45,6 @@ import { bindReplyOperationTyping } from "./reply-run-typing.js";
 import { consumeReplyUsageState } from "./reply-usage-state.js";
 import { buildChannelSourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createMockTypingController } from "./test-helpers.js";
-
-type ReplyOptionsWithOperationRunState = {
-  [REPLY_OPERATION_RUN_STATE]?: ReplyOperationRunState;
-};
 
 type AgentRunParams = {
   sessionId?: string;
@@ -268,7 +261,7 @@ beforeEach(() => {
 });
 
 function createMinimalRun(params?: {
-  opts?: GetReplyOptions & ReplyOptionsWithOperationRunState & ReplyOptionsWithHeartbeatRunScope;
+  opts?: InternalGetReplyOptions;
   resolvedVerboseLevel?: "off" | "on";
   sessionStore?: Record<string, SessionEntry>;
   sessionEntry?: SessionEntry;
@@ -3690,6 +3683,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   it.each([
     {
       label: "NO_REPLY",
+      pendingContinuation: false,
       result: {
         payloads: [{ text: "NO_REPLY" }],
         meta: { finalAssistantVisibleText: "NO_REPLY" },
@@ -3697,22 +3691,30 @@ describe("runReplyAgent typing (heartbeat)", () => {
     },
     {
       label: "accepted child spawn",
+      pendingContinuation: false,
       result: {
         payloads: [],
         meta: {},
         acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:child" }],
       },
     },
-    { label: "yielded continuation", result: { payloads: [], meta: { yielded: true } } },
+    {
+      label: "yielded continuation",
+      pendingContinuation: true,
+      result: { payloads: [], meta: { yielded: true } },
+    },
     {
       label: "pending tool continuation",
+      pendingContinuation: true,
       result: { payloads: [], meta: { pendingToolCalls: [{ name: "hosted_tool" }] } },
     },
-  ])("keeps successful $label completions silent", async ({ result }) => {
+  ])("keeps successful $label completions silent", async ({ result, pendingContinuation }) => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce(result);
-    const { run } = createMinimalRun();
+    const onPendingContinuation = vi.fn();
+    const { run } = createMinimalRun({ opts: { onPendingContinuation } });
 
     await expect(run()).resolves.toBeUndefined();
+    expect(onPendingContinuation).toHaveBeenCalledTimes(pendingContinuation ? 1 : 0);
   });
 
   it.each([

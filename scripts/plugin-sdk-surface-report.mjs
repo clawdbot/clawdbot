@@ -218,7 +218,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: shared inbound-event delivery correlation factory for channel plugins.
       // +1: canonical webhook route identity for plugin-owned target registries.
       // +3: canonical ready, blocked, and stopped channel lifecycle patch factories.
-      4829,
+      // +1: bounded external-content sanitizer for plugin-owned untrusted projections.
+      4830,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -264,7 +265,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: shared inbound-event delivery correlation factory for channel plugins.
       // +1: canonical webhook route identity for plugin-owned target registries.
       // +3: canonical ready, blocked, and stopped channel lifecycle patch factories.
-      2906,
+      // +1: bounded external-content sanitizer for plugin-owned untrusted projections.
+      2907,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

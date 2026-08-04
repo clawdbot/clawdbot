@@ -14,6 +14,7 @@ import { OLLAMA_DEFAULT_API_KEY } from "./src/discovery-shared.js";
 const promptAndConfigureOllamaMock = vi.hoisted(() =>
   vi.fn(async () => ({
     credential: "ollama-local",
+    defaultModel: "ollama/qwen-tool",
     config: {
       models: {
         providers: {
@@ -65,6 +66,10 @@ vi.mock("./api.js", () => ({
   fetchOllamaModels: fetchOllamaModelsMock,
   resolveOllamaApiBase: (baseUrl?: string) =>
     (baseUrl ?? "http://127.0.0.1:11434").replace(/\/+$/, "").replace(/\/v1$/i, ""),
+  resolveOllamaSetupDefaultBaseUrl: (env: NodeJS.ProcessEnv = process.env) =>
+    ["1", "true", "yes", "on"].includes(env.OPENCLAW_DOCKER_SETUP?.trim().toLowerCase() ?? "")
+      ? "http://host.docker.internal:11434"
+      : "http://127.0.0.1:11434",
   buildOllamaProvider: buildOllamaProviderMock,
   queryOllamaModelShowInfo: queryOllamaModelShowInfoMock,
   buildOllamaModelDefinition: buildOllamaModelDefinitionMock,
@@ -514,7 +519,7 @@ describe("ollama plugin", () => {
     expect(registerTool).toHaveBeenCalledWith(expect.objectContaining({ name: "node_inference" }));
   });
 
-  it("does not preselect a default model during provider auth setup", async () => {
+  it("returns the exact model selected during provider auth setup", async () => {
     const provider = registerProvider();
 
     const result = await provider.auth[0].run({
@@ -543,7 +548,7 @@ describe("ollama plugin", () => {
         },
       },
     });
-    expect(result.defaultModel).toBeUndefined();
+    expect(result.defaultModel).toBe("ollama/qwen-tool");
   });
 
   it("discovers and prepares a loaded tool-capable model without pulling it", async () => {
@@ -591,6 +596,37 @@ describe("ollama plugin", () => {
     expect(ensureOllamaModelPulledMock).not.toHaveBeenCalled();
   });
 
+  it("detects a reachable Ollama service without requiring a suitable model", async () => {
+    const provider = registerProvider();
+    fetchOllamaModelsMock.mockResolvedValue({ reachable: true, models: [] });
+
+    await expect(
+      provider.auth[0].appGuidedSetup?.detectAvailability?.({ config: {}, env: {} }),
+    ).resolves.toBe(true);
+    expect(fetchOllamaModelsMock).toHaveBeenCalledWith("http://127.0.0.1:11434", {});
+  });
+
+  it("does not mark an unreachable Ollama service as available", async () => {
+    const provider = registerProvider();
+    fetchOllamaModelsMock.mockResolvedValue({ reachable: false, models: [] });
+
+    await expect(
+      provider.auth[0].appGuidedSetup?.detectAvailability?.({ config: {}, env: {} }),
+    ).resolves.toBe(false);
+  });
+
+  it("uses the Docker host default for availability detection during Docker setup", async () => {
+    const provider = registerProvider();
+    fetchOllamaModelsMock.mockResolvedValue({ reachable: true, models: [] });
+
+    await provider.auth[0].appGuidedSetup?.detectAvailability?.({
+      config: {},
+      env: { OPENCLAW_DOCKER_SETUP: "1" },
+    });
+
+    expect(fetchOllamaModelsMock).toHaveBeenCalledWith("http://host.docker.internal:11434", {});
+  });
+
   it("does not auto-detect installed models that are not loaded", async () => {
     const provider = registerProvider();
     fetchLoadedOllamaModelNamesMock.mockResolvedValue({ reachable: true, models: [] });
@@ -600,6 +636,72 @@ describe("ollama plugin", () => {
     ).resolves.toBeNull();
 
     expect(buildOllamaProviderMock).not.toHaveBeenCalled();
+    expect(queryOllamaModelShowInfoMock).not.toHaveBeenCalled();
+  });
+
+  it("prepares the exact configured model even when it is installed but idle", async () => {
+    const provider = registerProvider();
+    const config = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://127.0.0.1:11434",
+            api: "ollama" as const,
+            models: [
+              {
+                id: "qwen-tool",
+                name: "qwen-tool",
+                reasoning: false,
+                input: ["text"] as const,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 32_768,
+                maxTokens: 8_192,
+                compat: { supportsTools: true },
+              },
+            ],
+          },
+        },
+      },
+    };
+    fetchLoadedOllamaModelNamesMock.mockResolvedValue({ reachable: true, models: [] });
+    mockDiscoveredOllamaProvider([
+      { id: "qwen-tool", name: "qwen-tool", compat: { supportsTools: true } },
+    ]);
+
+    await expect(
+      provider.auth[0].appGuidedSetup?.prepare({
+        config,
+        env: {},
+        modelRef: "ollama/qwen-tool",
+      }),
+    ).resolves.toMatchObject({
+      defaultModel: "ollama/qwen-tool",
+      configPatch: {
+        models: {
+          providers: {
+            ollama: {
+              models: [expect.objectContaining({ id: "qwen-tool" })],
+            },
+          },
+        },
+      },
+    });
+    expect(fetchLoadedOllamaModelNamesMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an explicit installed model that setup did not configure", async () => {
+    const provider = registerProvider();
+    mockDiscoveredOllamaProvider([
+      { id: "other-model", name: "other-model", compat: { supportsTools: true } },
+    ]);
+
+    await expect(
+      provider.auth[0].appGuidedSetup?.prepare({
+        config: {},
+        env: {},
+        modelRef: "ollama/other-model",
+      }),
+    ).resolves.toBeNull();
     expect(queryOllamaModelShowInfoMock).not.toHaveBeenCalled();
   });
 
@@ -792,17 +894,20 @@ describe("ollama plugin", () => {
 
   it("honors the Ollama discovery opt-out during app-guided detection", async () => {
     const provider = registerProvider();
+    const context = {
+      config: {
+        plugins: { entries: { ollama: { config: { discovery: { enabled: false } } } } },
+      },
+      env: {},
+    };
 
-    await expect(
-      provider.auth[0].appGuidedSetup?.detect({
-        config: {
-          plugins: { entries: { ollama: { config: { discovery: { enabled: false } } } } },
-        },
-        env: {},
-      }),
-    ).resolves.toBeNull();
+    await expect(provider.auth[0].appGuidedSetup?.detect(context)).resolves.toBeNull();
+    await expect(provider.auth[0].appGuidedSetup?.detectAvailability?.(context)).resolves.toBe(
+      false,
+    );
     expect(fetchLoadedOllamaModelNamesMock).not.toHaveBeenCalled();
     expect(buildOllamaProviderMock).not.toHaveBeenCalled();
+    expect(fetchOllamaModelsMock).not.toHaveBeenCalled();
   });
 
   it("pulls the model the user actually selected", async () => {

@@ -7,6 +7,7 @@ export const uiIsolatedTestFiles = [
   "ui/src/app/router-outlet.test.ts",
   "ui/src/components/resizable-divider.test.ts",
   "ui/src/components/viewer-facepile.test.ts",
+  "ui/src/pages/agents/memory/memory-panel.test.ts",
   "ui/src/pages/chat/chat-pane-board.test.ts",
   "ui/src/pages/chat/chat-pane-history.test.ts",
   "ui/src/pages/chat/chat-pane-identity.test.ts",
@@ -17,8 +18,10 @@ export const uiIsolatedTestFiles = [
   "ui/src/pages/chat/chat-pane.session-discussion.test.ts",
   "ui/src/pages/chat/chat-pane.test.ts",
   "ui/src/pages/chat/components/chat-thread.measure.test.ts",
+  "ui/src/pages/config/config-page.custom-theme.test.ts",
   "ui/src/pages/config/memory-mutation-owner.test.ts",
   "ui/src/pages/config/memory-page.test.ts",
+  "ui/src/pages/sessions/sessions-page.archived.test.ts",
   "ui/src/pages/workboard/view.test.ts",
 ];
 

@@ -1036,6 +1036,46 @@ describe("printDaemonStatus", () => {
     expect(logged).not.toContain("Warm-up: launch agents");
   });
 
+  it("does not combine diagnostic-only service state with the active probe target", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          targetRole: "diagnostic-only",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 18900,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18900",
+        },
+        port: {
+          port: 18900,
+          status: "free",
+          listeners: [],
+          hints: [],
+        },
+        rpc: {
+          ok: false,
+          error: "connect ECONNREFUSED 127.0.0.1:18900",
+          url: "ws://127.0.0.1:18900",
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expectMockLineContains(runtime.log, "Runtime: running");
+    const output = [...runtime.log.mock.calls, ...runtime.error.mock.calls].flat().join("\n");
+    expect(output).not.toContain("Warm-up: launch agents");
+    expect(output).not.toContain("service appears running");
+  });
+
   it("keeps the warm-up hint (not owns-port guidance) when healthy is reachability-only and a stale gateway PID is still held", () => {
     // inspectGatewayRestart can set healthy from reachability after ownership failed,
     // while still returning non-empty staleGatewayPids. That must not be treated as

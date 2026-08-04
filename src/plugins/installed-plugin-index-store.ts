@@ -1,5 +1,6 @@
 /** Persists, inspects, and refreshes the installed plugin index in the state database. */
 import { existsSync } from "node:fs";
+import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
@@ -49,6 +50,10 @@ export type InstalledPluginIndexStoreInspection = {
   current: InstalledPluginIndex;
 };
 
+export type InstalledPluginIndexWriteLease = {
+  assertOwnedInTransaction(database: DatabaseSync): void;
+};
+
 const StringArraySchema = z.array(z.string());
 const INSTALLED_PLUGIN_INDEX_SQLITE_KEY = "installed-plugin-index";
 
@@ -92,6 +97,8 @@ const InstalledPluginIndexRecordSchema = z.object({
     .optional(),
   manifestPath: z.string(),
   manifestHash: z.string(),
+  doctorContractHash: z.string().optional(),
+  doctorContractFile: InstalledPluginFileSignatureSchema.optional(),
   manifestFile: InstalledPluginFileSignatureSchema.optional(),
   format: z.string().optional(),
   bundleFormat: z.string().optional(),
@@ -269,6 +276,7 @@ function readPersistedInstalledPluginIndexFromSqlite(
 function writePersistedInstalledPluginIndexToSqlite(
   index: InstalledPluginIndex,
   options: InstalledPluginIndexStoreOptions = {},
+  lease?: InstalledPluginIndexWriteLease,
 ): void {
   assertWritableInstalledPluginIndexStoreOptions(options);
   const persisted = {
@@ -278,6 +286,7 @@ function writePersistedInstalledPluginIndexToSqlite(
   };
   const now = Date.now();
   runOpenClawStateWriteTransaction(({ db }) => {
+    lease?.assertOwnedInTransaction(db);
     db.prepare(
       `
         INSERT INTO installed_plugin_index (
@@ -346,6 +355,20 @@ export function writePersistedInstalledPluginIndexSync(
 ): string {
   const filePath = resolveInstalledPluginIndexStorePath(options);
   writePersistedInstalledPluginIndexToSqlite(index, options);
+  clearPluginMetadataLifecycleCaches();
+  clearLoadInstalledPluginIndexInstallRecordsCache();
+  return filePath;
+}
+
+export function writePersistedInstalledPluginIndexWithLeaseSync(
+  index: InstalledPluginIndex,
+  options: InstalledPluginIndexStoreOptions & {
+    lease: InstalledPluginIndexWriteLease;
+  },
+): string {
+  const { lease, ...storeOptions } = options;
+  const filePath = resolveInstalledPluginIndexStorePath(storeOptions);
+  writePersistedInstalledPluginIndexToSqlite(index, storeOptions, lease);
   clearPluginMetadataLifecycleCaches();
   clearLoadInstalledPluginIndexInstallRecordsCache();
   return filePath;

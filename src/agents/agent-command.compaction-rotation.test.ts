@@ -380,12 +380,40 @@ describe("agentCommand compaction transcript rotation", () => {
       providerOverride: "tui-pty-mock",
       modelOverride: "gpt-5.5",
       pluginsEnabled: false,
+      userTurnTranscriptRecorder: { message: { __openclaw: { senderIsOwner: true } } },
     });
     expect(state.normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalledWith(
       expect.objectContaining({ provider: "tui-pty-mock" }),
     );
     expect(state.loadManifestModelCatalogMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    [true, "external_user", true],
+    [true, "inter_session", false],
+    [true, "internal_system", false],
+    [false, "external_user", false],
+  ] as const)(
+    "preserves human transcript ownership for %s/%s",
+    async (senderIsOwner, kind, owner) => {
+      const inputProvenance = { kind, sourceTool: "test" };
+      state.runAgentAttemptMock.mockResolvedValueOnce(
+        makeResult({ sessionId: "owned", text: "ok" }),
+      );
+      await agentCommand({
+        message: "remember",
+        sessionId: "owned",
+        senderIsOwner,
+        inputProvenance,
+      });
+      expect(state.runAgentAttemptMock.mock.calls[0]?.[0]).toMatchObject({
+        opts: { senderIsOwner, inputProvenance },
+        userTurnTranscriptRecorder: {
+          message: { provenance: inputProvenance, __openclaw: { senderIsOwner: owner } },
+        },
+      });
+    },
+  );
 
   it("keeps SQLite session state on the rotated successor", async () => {
     const storePath = requireStorePath();

@@ -93,8 +93,9 @@ type TelegramPollingSessionOpts = {
   botInfo?: Parameters<typeof createTelegramBot>[0]["botInfo"];
   abortSignal?: AbortSignal;
   runnerOptions: RunOptions<unknown>;
-  getLastUpdateId: () => number | null;
-  persistUpdateId: (updateId: number) => Promise<void>;
+  getAcceptedUpdateId: () => number | null;
+  getCommittedUpdateId: () => number | null;
+  persistUpdateId: (updateId: number) => void | Promise<void>;
   log: (line: string) => void;
   /** Pre-resolved Telegram transport to reuse across bot instances */
   telegramTransport?: TelegramTransport;
@@ -292,11 +293,13 @@ export class TelegramPollingSession {
       ? this.opts.abortSignal
       : cycleAbortSignal;
     const telegramTransport = this.#transportState.acquireForNextCycle();
-    const persistedLastUpdateId = this.opts.getLastUpdateId();
-    const lastUpdateId = this.opts.isolatedIngress?.enabled ? null : persistedLastUpdateId;
+    const committedUpdateId = this.opts.getCommittedUpdateId();
+    const lastUpdateId = this.opts.isolatedIngress?.enabled
+      ? null
+      : this.opts.getAcceptedUpdateId();
     const updateOffset = {
       lastUpdateId,
-      persistenceFloorUpdateId: persistedLastUpdateId,
+      persistenceFloorUpdateId: committedUpdateId,
       // In isolated mode the offset is persisted as soon as the update is
       // durably spooled (see #runIsolatedIngressCycle), so the bot's update
       // tracker does not need to persist it again after dispatch.
@@ -414,7 +417,7 @@ export class TelegramPollingSession {
     const worker = workerFactory({
       token: this.opts.token,
       accountId: this.opts.accountId,
-      initialUpdateId: this.opts.getLastUpdateId(),
+      initialUpdateId: this.opts.getCommittedUpdateId(),
       spoolDir,
       apiRoot: ingress.apiRoot,
       timeoutSeconds: ingress.timeoutSeconds,
@@ -526,7 +529,8 @@ export class TelegramPollingSession {
           `[telegram][diag] isolated polling worker update received updateId=${updateIdHint} queued=${message.queued}`,
         );
         // The worker waits for this request's ACK before emitting the next update.
-        // Keep spool, offset persistence, and ACK on that single ordered path.
+        // The committed spool enqueue is the ACK boundary; offset persistence is
+        // monotonic catch-up and must not stall intake during a state-store outage.
         void (async () => {
           let updateId: number;
           try {
@@ -547,16 +551,15 @@ export class TelegramPollingSession {
             return;
           }
 
-          try {
-            await this.opts.persistUpdateId(updateId);
-            this.opts.log(
-              `[telegram][diag] isolated polling offset persisted updateId=${updateId}`,
-            );
-          } catch (err: unknown) {
-            this.opts.log(
-              `[telegram] isolated polling offset persist failed updateId=${updateId}: ${formatErrorMessage(err)}`,
-            );
-          }
+          const offsetPersistence = this.opts.persistUpdateId(updateId);
+          void Promise.resolve(offsetPersistence).catch((err: unknown) => {
+            if (!this.opts.abortSignal?.aborted) {
+              this.opts.log(
+                `[telegram] isolated polling offset persist failed updateId=${updateId}: ${formatErrorMessage(err)}`,
+              );
+            }
+          });
+          this.opts.log(`[telegram][diag] isolated polling offset queued updateId=${updateId}`);
           ackSpooledUpdate(message.requestId, { ok: true, updateId });
           requestImmediateDrain();
         })();
