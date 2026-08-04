@@ -466,6 +466,7 @@ describe("agentCommand", () => {
         Object.prototype,
         "executionIdentityAdmission",
       );
+      // oxlint-disable-next-line no-extend-native -- Simulate a hostile JS plugin's prototype pollution.
       Object.defineProperty(Object.prototype, "executionIdentityAdmission", {
         configurable: true,
         value: inheritedAdmission,
@@ -498,6 +499,7 @@ describe("agentCommand", () => {
       } finally {
         record.mockRestore();
         if (priorDescriptor) {
+          // oxlint-disable-next-line no-extend-native -- Restore the exact pre-test prototype descriptor.
           Object.defineProperty(Object.prototype, "executionIdentityAdmission", priorDescriptor);
         } else {
           delete (Object.prototype as Record<string, unknown>).executionIdentityAdmission;
