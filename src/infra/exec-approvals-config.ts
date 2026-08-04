@@ -157,12 +157,12 @@ function isValidPersistedExecApprovals(value: unknown): value is ExecApprovalsFi
 export function tryParsePersistedExecApprovals(raw: string): ExecApprovalsFile | null {
   try {
     const parsed = JSON.parse(raw) as unknown;
-    // Older OpenClaw versions wrote null for unused optional fields (e.g.
-    // lastUsedAt: null, lastUsedCommand: null). The validator accepts absent
-    // (undefined) but rejects null, which blocks migration on upgrade. Normalize
-    // null → undefined for optional fields before validation so legacy files
-    // migrate cleanly (#118242).
-    const normalized = normalizeLegacyNullOptionalFields(parsed);
+    // Older OpenClaw versions wrote null for unused allowlist usage metadata
+    // (lastUsedAt, lastUsedCommand, lastResolvedPath). The validator accepts
+    // absent (undefined) but rejects null, which blocked migration on upgrade.
+    // Normalize null → undefined for those metadata fields before validation so
+    // legacy files migrate cleanly (#118242).
+    const normalized = normalizeLegacyAllowlistUsageMetadata(parsed);
     if (isValidPersistedExecApprovals(normalized)) {
       return normalizeExecApprovalsInternal(normalized);
     }
@@ -172,23 +172,52 @@ export function tryParsePersistedExecApprovals(raw: string): ExecApprovalsFile |
   return null;
 }
 
+const LEGACY_ALLOWLIST_USAGE_METADATA_KEYS = new Set([
+  "lastUsedAt",
+  "lastUsedCommand",
+  "lastResolvedPath",
+]);
+
 /**
- * Recursively converts null-valued optional fields to undefined in legacy exec
- * approvals data. Only touches fields the validator treats as optional; required
- * fields (pattern, version) are left untouched.
+ * Normalizes null-valued usage metadata in legacy exec-approvals allowlist
+ * entries to absent. Scoped strictly to the metadata fields older versions
+ * emitted as null for never-used entries — other null-valued fields (security,
+ * ask, socket) are deliberately left null so the validator still rejects them
+ * as malformed rather than silently falling back to runtime defaults.
  */
-function normalizeLegacyNullOptionalFields(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(normalizeLegacyNullOptionalFields);
-  }
-  if (!isPlainObject(value)) {
+function normalizeLegacyAllowlistUsageMetadata(value: unknown): unknown {
+  if (!isPlainObject(value) || !isPlainObject(value.agents)) {
     return value;
   }
-  const result: Record<string, unknown> = {};
-  for (const [key, val] of Object.entries(value)) {
-    result[key] = val === null ? undefined : normalizeLegacyNullOptionalFields(val);
+  const agents: Record<string, unknown> = {};
+  for (const [agentId, agentValue] of Object.entries(value.agents)) {
+    if (!isPlainObject(agentValue) || !Array.isArray(agentValue.allowlist)) {
+      agents[agentId] = agentValue;
+      continue;
+    }
+    agents[agentId] = {
+      ...agentValue,
+      allowlist: agentValue.allowlist.map(normalizeAllowlistEntryUsageMetadata),
+    };
   }
-  return result;
+  return { ...value, agents };
+}
+
+function normalizeAllowlistEntryUsageMetadata(entry: unknown): unknown {
+  if (!isPlainObject(entry)) {
+    return entry;
+  }
+  let changed = false;
+  const result: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(entry)) {
+    if (LEGACY_ALLOWLIST_USAGE_METADATA_KEYS.has(key) && val === null) {
+      result[key] = undefined;
+      changed = true;
+    } else {
+      result[key] = val;
+    }
+  }
+  return changed ? result : entry;
 }
 
 function normalizeAllowlistPattern(value: string | undefined): string | null {

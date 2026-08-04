@@ -491,4 +491,43 @@ describe("tryParsePersistedExecApprovals normalizes legacy null optional fields 
     });
     expect(tryParsePersistedExecApprovals(raw)).toBeNull();
   });
+
+  it("still rejects null security/ask policy fields after metadata normalization", () => {
+    // #118524 ClawSweeper P1: normalization must stay scoped to allowlist usage
+    // metadata. A null security/ask field is malformed policy that must NOT
+    // silently fall back to runtime defaults — null !== absent.
+    const raw = JSON.stringify({
+      version: 1,
+      defaults: { security: null, ask: "off" },
+      agents: {
+        main: {
+          allowlist: [{ pattern: "npm test", lastUsedAt: null }],
+        },
+      },
+    });
+    expect(tryParsePersistedExecApprovals(raw)).toBeNull();
+  });
+
+  it("still rejects null socket fields after metadata normalization", () => {
+    const raw = JSON.stringify({
+      version: 1,
+      socket: { path: null },
+      agents: {},
+    });
+    expect(tryParsePersistedExecApprovals(raw)).toBeNull();
+  });
+
+  it("still rejects null agent-level policy fields after metadata normalization", () => {
+    const raw = JSON.stringify({
+      version: 1,
+      agents: {
+        main: {
+          security: null,
+          ask: null,
+          allowlist: [{ pattern: "npm test" }],
+        },
+      },
+    });
+    expect(tryParsePersistedExecApprovals(raw)).toBeNull();
+  });
 });
