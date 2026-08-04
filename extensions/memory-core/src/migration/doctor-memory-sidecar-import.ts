@@ -156,6 +156,21 @@ function assertLegacyDerivedRowsCopied(db: DatabaseSync, query: string, tableNam
   }
 }
 
+// Only the chunks anti-join may be skipped this way, and only into an empty canonical table.
+// Legacy and canonical chunks declare identical column types and both key on `id`, so the
+// copy cannot coerce a value or collapse two rows: equal counts then prove every legacy row
+// landed unchanged. Do NOT extend this to meta or files — files.mtime is INTEGER in the
+// legacy sidecar and REAL in the canonical schema, so a value above 2^53 is rewritten in
+// transit while the counts still match, and the anti-join must stay to catch it.
+function legacyRowCountsMatch(
+  db: DatabaseSync,
+  schema: string,
+  legacyTable: string,
+  canonicalTable: string,
+): boolean {
+  return tableRowCount(db, "main", canonicalTable) === tableRowCount(db, schema, legacyTable);
+}
+
 function assertLegacyVectorRowsReferenceChunks(db: DatabaseSync, schema: string): void {
   const row = db
     .prepare(
@@ -346,6 +361,7 @@ function copyLegacyMemoryIndexRows(
   schema: string,
   options: { copyVectorRows: boolean },
 ): void {
+  const chunksStartedEmpty = tableRowCount(db, "main", MEMORY_INDEX_CHUNKS_TABLE) === 0;
   db.exec(`
     INSERT OR IGNORE INTO main.${MEMORY_INDEX_META_TABLE} (key, value)
     SELECT key, value FROM ${schema}.meta;
@@ -383,25 +399,30 @@ function copyLegacyMemoryIndexRows(
      )`,
     "files",
   );
-  assertLegacyDerivedRowsCopied(
-    db,
-    `SELECT COUNT(*) AS missing
-     FROM ${schema}.chunks AS legacy
-     WHERE NOT EXISTS (
-       SELECT 1 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS canonical
-       WHERE canonical.id = legacy.id
-         AND canonical.path IS legacy.path
-         AND canonical.source IS legacy.source
-         AND canonical.start_line IS legacy.start_line
-         AND canonical.end_line IS legacy.end_line
-         AND canonical.hash IS legacy.hash
-         AND canonical.model IS legacy.model
-         AND canonical.text IS legacy.text
-         AND canonical.embedding IS legacy.embedding
-         AND canonical.updated_at IS legacy.updated_at
-     )`,
-    "chunks",
-  );
+  if (
+    !chunksStartedEmpty ||
+    !legacyRowCountsMatch(db, schema, "chunks", MEMORY_INDEX_CHUNKS_TABLE)
+  ) {
+    assertLegacyDerivedRowsCopied(
+      db,
+      `SELECT COUNT(*) AS missing
+       FROM ${schema}.chunks AS legacy
+       WHERE NOT EXISTS (
+         SELECT 1 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS canonical
+         WHERE canonical.id = legacy.id
+           AND canonical.path IS legacy.path
+           AND canonical.source IS legacy.source
+           AND canonical.start_line IS legacy.start_line
+           AND canonical.end_line IS legacy.end_line
+           AND canonical.hash IS legacy.hash
+           AND canonical.model IS legacy.model
+           AND canonical.text IS legacy.text
+           AND canonical.embedding IS legacy.embedding
+           AND canonical.updated_at IS legacy.updated_at
+       )`,
+      "chunks",
+    );
+  }
   copyLegacyMemoryFtsRows(db, schema);
   if (options.copyVectorRows) {
     copyLegacyMemoryVectorRows(db, schema);
@@ -425,7 +446,8 @@ function copyLegacyMemoryIndexRows(
       FROM ${schema}.embedding_cache;
     `);
     // Matching cache keys are derived rows. Validate shape before deciding whether the
-    // entire stale sidecar should yield to the canonical index.
+    // entire stale sidecar should yield to the canonical index. This checks embedding
+    // shape, not just copy completeness, so the row-count shortcut must not skip it.
     assertLegacyDerivedRowsCopied(
       db,
       `SELECT COUNT(*) AS missing

@@ -398,6 +398,17 @@ function readMemoryRows(agentPath: string) {
   }
 }
 
+// Which copy proof ran is only observable through the SQL the import prepares: the
+// empty-canonical path must never prepare the per-row anti-join over text/embedding.
+const CHUNK_BLOB_ANTI_JOIN_SQL = "canonical.text IS legacy.text";
+
+// vi.spyOn keeps the original implementation, so the import still runs for real while the
+// spy records every statement it prepares.
+function recordPreparedSql(): (needle: string) => boolean {
+  const spy = vi.spyOn(DatabaseSync.prototype, "prepare");
+  return (needle) => spy.mock.calls.some(([sql]) => sql.includes(needle));
+}
+
 function readMemoryCacheRows(agentPath: string) {
   const db = new DatabaseSync(agentPath);
   try {
@@ -2085,6 +2096,50 @@ describe("memory-core doctor dreaming migration", () => {
     });
     await expect(fs.access(legacyPath)).rejects.toThrow();
     await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+  });
+
+  it("verifies an empty-canonical sidecar import by row count instead of chunk blobs", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await writeLegacyMemorySidecar(legacyPath);
+    const preparedSql = recordPreparedSql();
+
+    try {
+      const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
+
+      expect(result.warnings).toEqual([]);
+      expect(preparedSql(CHUNK_BLOB_ANTI_JOIN_SQL)).toBe(false);
+      expect(readMemoryRows(agentPath)).toEqual({
+        sources: [{ path: "MEMORY.md", source: "memory", hash: "" }],
+        chunks: [{ id: "chunk-1", text: "remember this" }],
+        cache: [{ provider: "openai", hash: "chunk-hash" }],
+      });
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("keeps the per-row copy verification when canonical memory index rows already exist", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await writeLegacyMemorySidecar(legacyPath);
+    await createUnrelatedCanonicalMemoryIndex(agentPath);
+    const preparedSql = recordPreparedSql();
+
+    try {
+      const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
+
+      expect(result.warnings).toEqual([]);
+      expect(preparedSql(CHUNK_BLOB_ANTI_JOIN_SQL)).toBe(true);
+      expect(readMemoryRows(agentPath).chunks).toEqual([
+        { id: "canonical-other-chunk", text: "canonical unrelated memory" },
+        { id: "chunk-1", text: "remember this" },
+      ]);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it("archives conflicting custom derived indexes without creating a retry copy", async () => {
