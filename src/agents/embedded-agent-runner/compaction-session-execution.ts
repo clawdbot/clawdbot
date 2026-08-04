@@ -560,6 +560,19 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     } finally {
       await runtime.disposeToolRuntimes();
       await sessionLock.release();
+      // #118625: subagent announces that gave up while this compaction held
+      // the session write-lock can now be redriven since the lock is free.
+      if (params.sessionKey) {
+        try {
+          const { redriveSuspendedSubagentCompletionsForRequester } =
+            await import("../subagent-completion-redrive.runtime.js");
+          await redriveSuspendedSubagentCompletionsForRequester(params.sessionKey);
+        } catch (redriveError) {
+          log.warn(
+            `[compaction] failed to redrive suspended subagent completions: ${String(redriveError)}`,
+          );
+        }
+      }
     }
   } catch (err) {
     const reason = resolveCompactionFailureReason({

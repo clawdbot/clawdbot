@@ -41,6 +41,7 @@ import {
   resolveModelAsyncMock,
   resolveModelMock,
   resolveSandboxContextMock,
+  redriveSuspendedSubagentCompletionsForRequesterMock,
   resolveSessionAgentIdMock,
   resolveSessionAgentIdsMock,
   rotateTranscriptAfterCompactionMock,
@@ -356,6 +357,33 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
     expect(lockOptions.sessionFile).not.toBe(TEST_SESSION_KEY);
     expect(lockOptions).not.toHaveProperty("allowReentrant");
+  });
+
+  it("redrives suspended subagent completions after releasing the session write-lock", async () => {
+    redriveSuspendedSubagentCompletionsForRequesterMock.mockResolvedValueOnce({
+      matched: 1,
+      redriven: 1,
+    });
+
+    const result = await compactEmbeddedAgentSessionDirect(wrappedCompactionArgs());
+
+    expect(result).toMatchObject({ ok: true, compacted: true });
+    expect(redriveSuspendedSubagentCompletionsForRequesterMock).toHaveBeenCalledWith(
+      TEST_SESSION_KEY,
+    );
+  });
+
+  it("still reports success when the post-compaction redrive fails", async () => {
+    redriveSuspendedSubagentCompletionsForRequesterMock.mockRejectedValueOnce(
+      new Error("redrive boom"),
+    );
+
+    const result = await compactEmbeddedAgentSessionDirect(wrappedCompactionArgs());
+
+    expect(result).toMatchObject({ ok: true, compacted: true });
+    expect(redriveSuspendedSubagentCompletionsForRequesterMock).toHaveBeenCalledWith(
+      TEST_SESSION_KEY,
+    );
   });
 
   it("reuses the matching logical writer lock during direct compaction", async () => {
