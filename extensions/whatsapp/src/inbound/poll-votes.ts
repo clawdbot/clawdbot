@@ -2,7 +2,6 @@
 import { createHash } from "node:crypto";
 import type { proto } from "baileys";
 import { decryptPollVote, getKeyAuthor, jidNormalizedUser } from "baileys";
-import type Long from "long";
 import { fireAndForgetBoundedHook } from "openclaw/plugin-sdk/hook-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
@@ -57,12 +56,21 @@ function buildPollOptionHashMap(pollCreationMessage: proto.IMessage): Map<string
   return map;
 }
 
-function toTimestampMs(value: number | Long | null | undefined): number | undefined {
+/**
+ * `senderTimestampMs` is typed by baileys as `number | Long | null` (Long from
+ * the `long` package, protobuf's 64-bit int representation). Matched
+ * structurally here instead of importing the `Long` type, since `long` is
+ * only ever reachable transitively through baileys — not worth a direct
+ * dependency declaration for a single type annotation.
+ */
+type LongLike = { toNumber(): number };
+
+function toTimestampMs(value: number | LongLike | null | undefined): number | undefined {
   if (typeof value === "number") {
     return Number.isFinite(value) ? value : undefined;
   }
-  if (value && typeof (value as { toNumber?: () => number }).toNumber === "function") {
-    return (value as { toNumber: () => number }).toNumber();
+  if (value && typeof value.toNumber === "function") {
+    return value.toNumber();
   }
   return undefined;
 }
