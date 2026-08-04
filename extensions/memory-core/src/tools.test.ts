@@ -6,12 +6,15 @@ import {
 } from "openclaw/plugin-sdk/memory-host-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  getCloseMemorySearchManagerMockCalls,
   getMemoryCloseMockCalls,
   getMemorySearchManagerMockCalls,
   getMemorySearchManagerMockConfigs,
   getMemorySearchManagerMockParams,
   getMemorySyncMockCalls,
+  getRefreshMemorySearchManagerMockCalls,
   resetMemoryToolMockState,
+  setCloseMemorySearchManagerImpl,
   setMemoryBackend,
   setMemoryCloseImpl,
   setMemoryCustomStatus,
@@ -19,6 +22,7 @@ import {
   setMemorySearchImpl,
   setMemorySearchManagerImpl,
   setMemoryStatusDirty,
+  setRefreshMemorySearchManagerImpl,
 } from "./memory-tool-manager.test-mocks.js";
 import { applyProjectRanking } from "./memory/project-ranking.js";
 import {
@@ -1150,7 +1154,7 @@ describe("memory_search unavailable payloads", () => {
     expect(getMemorySyncMockCalls()).toBe(0);
   });
 
-  it("returns unavailable metadata when the index identity is paused", async () => {
+  it("returns unavailable when the index identity stays paused after manager refresh", async () => {
     let searchCalls = 0;
     setMemorySearchImpl(async () => {
       searchCalls += 1;
@@ -1179,8 +1183,205 @@ describe("memory_search unavailable payloads", () => {
       action:
         "Tell the user to run: openclaw memory status --index or openclaw memory index --force.",
     });
+    // One search before refresh, one after reacquire; still paused → unavailable.
+    expect(searchCalls).toBe(2);
+    expect(getRefreshMemorySearchManagerMockCalls()).toBe(1);
+    expect(getCloseMemorySearchManagerMockCalls()).toBe(1);
+    expect(getMemorySearchManagerMockCalls()).toBe(2);
+    expect(getMemorySyncMockCalls()).toBe(0);
+  });
+
+  it("refreshes once when the index identity is stale, then recovers", async () => {
+    let searchCalls = 0;
+    setMemorySearchImpl(async () => {
+      searchCalls += 1;
+      if (searchCalls <= 1) {
+        return [];
+      }
+      return [
+        {
+          path: "MEMORY.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Recovered result after manager refresh.",
+          source: "memory" as const,
+        },
+      ];
+    });
+    const reason = "index was built for provider openai, expected ollama";
+    setMemoryCustomStatus({
+      indexIdentity: {
+        status: "mismatched",
+        reason,
+      },
+    });
+    setCloseMemorySearchManagerImpl(() => {
+      setMemoryCustomStatus(undefined);
+    });
+
+    const beforeRefreshCalls = getMemorySearchManagerMockCalls();
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+    const result = await tool.execute("stale-identity-refresh", {
+      query: "hidden thread codename",
+    });
+
+    expect((result.details as { results?: Array<{ path: string }> }).results?.[0]?.path).toBe(
+      "MEMORY.md",
+    );
+    expect(searchCalls).toBe(2);
+    expect(getRefreshMemorySearchManagerMockCalls()).toBe(1);
+    expect(getCloseMemorySearchManagerMockCalls()).toBe(1);
+    expect(getMemorySearchManagerMockCalls()).toBe(beforeRefreshCalls + 2);
+    expect(getMemorySyncMockCalls()).toBe(0);
+  });
+
+  it("skips forced sync for corpus=sessions zero-hit searches", async () => {
+    let searchCalls = 0;
+    setMemorySearchImpl(async () => {
+      searchCalls += 1;
+      return [];
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+    const result = await tool.execute("sessions-zero-hit", {
+      query: "nonexistent topic",
+      corpus: "sessions",
+    });
+
+    const details = result.details as { results?: unknown[]; error?: string };
+    expect(details.results).toEqual([]);
     expect(searchCalls).toBe(1);
     expect(getMemorySyncMockCalls()).toBe(0);
+  });
+
+  it("uses refreshed manager backend for post-refresh zero-hit recovery policy", async () => {
+    let searchCalls = 0;
+    setMemorySearchImpl(async () => {
+      searchCalls += 1;
+      return [];
+    });
+    setMemoryCustomStatus({
+      indexIdentity: {
+        status: "mismatched",
+        reason: "index was built for provider openai, expected ollama",
+      },
+    });
+    setCloseMemorySearchManagerImpl(() => {
+      setMemoryCustomStatus(undefined);
+      setMemoryBackend("qmd");
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off", backend: "qmd" },
+      },
+    });
+    const result = await tool.execute("builtin-to-qmd-policy", {
+      query: "no matches",
+    });
+
+    const details = result.details as { results?: unknown[]; error?: string };
+    expect(details.error).toBeUndefined();
+    expect(details.results).toEqual([]);
+    expect(searchCalls).toBe(2);
+    expect(getRefreshMemorySearchManagerMockCalls()).toBe(1);
+    expect(getMemorySyncMockCalls()).toBe(0);
+  });
+
+  it("surfaces reacquisition failure as paused unavailable without a retry loop", async () => {
+    let searchCalls = 0;
+    setMemorySearchImpl(async () => {
+      searchCalls += 1;
+      return [];
+    });
+    const reason = "index was built for provider openai, expected ollama";
+    setMemoryCustomStatus({
+      indexIdentity: {
+        status: "mismatched",
+        reason,
+      },
+    });
+    setRefreshMemorySearchManagerImpl(async () => ({
+      error: "manager reacquisition failed",
+    }));
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+    const result = await tool.execute("reacquire-fail", { query: "hidden thread codename" });
+
+    expectUnavailableMemorySearchDetails(result.details, {
+      error: reason,
+      warning:
+        "Tell the user: memory search is paused because the memory index was built with a different embedding provider/model/settings.",
+      action:
+        "Tell the user to run: openclaw memory status --index or openclaw memory index --force.",
+    });
+    expect(searchCalls).toBe(1);
+    expect(getRefreshMemorySearchManagerMockCalls()).toBe(1);
+    expect(getMemorySearchManagerMockCalls()).toBe(1);
+    expect(getMemorySyncMockCalls()).toBe(0);
+  });
+
+  it("routes concurrent stale-identity recoveries through owner refresh", async () => {
+    let searchCalls = 0;
+    setMemorySearchImpl(async () => {
+      searchCalls += 1;
+      if (searchCalls <= 2) {
+        return [];
+      }
+      return [
+        {
+          path: "MEMORY.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "healthy concurrent result",
+          source: "memory" as const,
+        },
+      ];
+    });
+    setMemoryCustomStatus({
+      indexIdentity: {
+        status: "mismatched",
+        reason: "index was built for provider openai, expected ollama",
+      },
+    });
+    setCloseMemorySearchManagerImpl(() => {
+      setMemoryCustomStatus(undefined);
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+    const [first, second] = await Promise.all([
+      tool.execute("concurrent-a", { query: "hidden thread codename" }),
+      tool.execute("concurrent-b", { query: "hidden thread codename" }),
+    ]);
+
+    const firstPath = (first.details as { results?: Array<{ path: string }> }).results?.[0]?.path;
+    const secondPath = (second.details as { results?: Array<{ path: string }> }).results?.[0]?.path;
+    expect(firstPath ?? secondPath).toBe("MEMORY.md");
+    expect(getRefreshMemorySearchManagerMockCalls()).toBeGreaterThanOrEqual(1);
+    expect(getCloseMemorySearchManagerMockCalls()).toBe(getRefreshMemorySearchManagerMockCalls());
   });
 
   it("returns structured search debug metadata for qmd results", async () => {
