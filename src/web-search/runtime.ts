@@ -432,7 +432,11 @@ function resolveSharedWebSearchParameters(
   }
 
   const concretePropertyMaps = propertyMaps as Record<string, unknown>[];
-  const sharedPropertyNames = Object.keys(concretePropertyMaps[0]).filter((name) =>
+  const selectedPropertyMap = concretePropertyMaps[0];
+  if (!selectedPropertyMap) {
+    throw new Error("Automatic web_search fallback has no parameter properties.");
+  }
+  const sharedPropertyNames = Object.keys(selectedPropertyMap).filter((name) =>
     concretePropertyMaps.every((properties) =>
       Object.prototype.hasOwnProperty.call(properties, name),
     ),
