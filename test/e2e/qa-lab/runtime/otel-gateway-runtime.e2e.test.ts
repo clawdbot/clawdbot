@@ -219,7 +219,7 @@ describe("diagnostics-otel gateway runtime", () => {
             (span) => span.traceId === toolError.traceId,
           );
           const runs = sameTrace.filter((span) => span.name === "openclaw.run");
-          const harness = sameTrace.find((span) => span.name === "openclaw.harness.run");
+          const harnesses = sameTrace.filter((span) => span.name === "openclaw.harness.run");
           const modelCalls = sameTrace.filter((span) => span.name === "openclaw.model.call");
           const terminal = sameTrace.find(
             (span) =>
@@ -227,8 +227,8 @@ describe("diagnostics-otel gateway runtime", () => {
               span.attributes["openclaw.channel"] === "qa-channel" &&
               span.attributes["openclaw.outcome"] === "completed",
           );
-          return runs.length >= 2 && harness && modelCalls.length >= 2 && terminal
-            ? { harness, modelCalls, runs, sameTrace, terminal, toolError }
+          return runs.length >= 2 && harnesses.length >= 2 && modelCalls.length >= 2 && terminal
+            ? { harnesses, modelCalls, runs, sameTrace, terminal, toolError }
             : undefined;
         },
         45_000,
@@ -247,11 +247,11 @@ describe("diagnostics-otel gateway runtime", () => {
 
       const failureSpansById = indexSpansById(failureEvidence.sameTrace);
       expect(failureEvidence.terminal.parentSpanId).toBeFalsy();
-      expect(expectResolvedParent(failureEvidence.harness, failureSpansById)).toBe(
-        failureEvidence.terminal,
-      );
+      for (const harness of failureEvidence.harnesses) {
+        expect(expectResolvedParent(harness, failureSpansById)).toBe(failureEvidence.terminal);
+      }
       for (const run of failureEvidence.runs) {
-        expect(expectResolvedParent(run, failureSpansById)).toBe(failureEvidence.harness);
+        expect(expectResolvedParent(run, failureSpansById).name).toBe("openclaw.harness.run");
       }
       for (const modelCall of failureEvidence.modelCalls) {
         expect(expectResolvedParent(modelCall, failureSpansById).name).toBe("openclaw.run");
@@ -277,18 +277,20 @@ describe("diagnostics-otel gateway runtime", () => {
           span.attributes["openclaw.channel"] === "qa-channel" &&
           span.attributes["openclaw.outcome"] === "completed",
       );
-      const successHarness = successTrace.find((span) => span.name === "openclaw.harness.run");
+      const successHarnesses = successTrace.filter((span) => span.name === "openclaw.harness.run");
       const successRuns = successTrace.filter((span) => span.name === "openclaw.run");
       const successModelCalls = successTrace.filter((span) => span.name === "openclaw.model.call");
       expect(successTerminal).toBeDefined();
-      expect(successHarness).toBeDefined();
+      expect(successHarnesses.length).toBeGreaterThanOrEqual(1);
       expect(successRuns.length).toBeGreaterThanOrEqual(1);
       expect(successModelCalls.length).toBeGreaterThanOrEqual(1);
       const successSpansById = indexSpansById(successTrace);
       expect(successTerminal?.parentSpanId).toBeFalsy();
-      expect(expectResolvedParent(successHarness!, successSpansById)).toBe(successTerminal);
+      for (const harness of successHarnesses) {
+        expect(expectResolvedParent(harness, successSpansById)).toBe(successTerminal);
+      }
       for (const run of successRuns) {
-        expect(expectResolvedParent(run, successSpansById)).toBe(successHarness);
+        expect(expectResolvedParent(run, successSpansById).name).toBe("openclaw.harness.run");
       }
       for (const modelCall of successModelCalls) {
         expect(expectResolvedParent(modelCall, successSpansById).name).toBe("openclaw.run");
