@@ -22,19 +22,28 @@ afterEach(async () => {
 
 describe("doctor gateway startup recovery producer", () => {
   it("isolates doctor commands from host lifecycle and credential policy", () => {
-    const env = testing.commandEnv("qa-doctor-policy", {
-      OPENCLAW_CONFIG_PATH: "/tmp/host-config.json",
-      OPENCLAW_GATEWAY_TOKEN: "host-token",
-      OPENCLAW_SERVICE_REPAIR_POLICY: "external",
-      PATH: "/usr/bin",
-    });
+    const accountHome = path.join("/home", "qa-account");
+    const env = testing.commandEnv(
+      "qa-doctor-policy",
+      {
+        HOME: "/tmp/sandbox-home",
+        OPENCLAW_CONFIG_PATH: "/tmp/host-config.json",
+        OPENCLAW_GATEWAY_TOKEN: "host-token",
+        OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+        OPENCLAW_STATE_DIR: "/tmp/host-state",
+        PATH: "/usr/bin",
+      },
+      accountHome,
+    );
 
     expect(env).toMatchObject({
+      HOME: accountHome,
+      OPENCLAW_CONFIG_PATH: path.join(accountHome, ".openclaw-qa-doctor-policy", "openclaw.json"),
       OPENCLAW_PROFILE: "qa-doctor-policy",
       OPENCLAW_SKIP_CHANNELS: "1",
+      OPENCLAW_STATE_DIR: path.join(accountHome, ".openclaw-qa-doctor-policy"),
       PATH: "/usr/bin",
     });
-    expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();
     expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
     expect(env.OPENCLAW_SERVICE_REPAIR_POLICY).toBeUndefined();
   });

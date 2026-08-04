@@ -109,10 +109,18 @@ export function resolveSystemdRecoveryPermission(
   };
 }
 
-function commandEnv(profile: string, baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+function commandEnv(
+  profile: string,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+  accountHome: string = os.userInfo().homedir,
+): NodeJS.ProcessEnv {
+  const stateDir = path.join(accountHome, `.openclaw-${profile}`);
   const env: NodeJS.ProcessEnv = {
     ...baseEnv,
+    HOME: accountHome,
+    OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
     OPENCLAW_PROFILE: profile,
+    OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_SKIP_CHANNELS: "1",
     OPENCLAW_SKIP_PROVIDERS: "1",
     OPENCLAW_SKIP_GMAIL_WATCHER: "1",
@@ -123,8 +131,6 @@ function commandEnv(profile: string, baseEnv: NodeJS.ProcessEnv = process.env): 
   };
   for (const key of [
     "OPENCLAW_HOME",
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_CONFIG_PATH",
     "OPENCLAW_SYSTEMD_UNIT",
     "OPENCLAW_GATEWAY_TOKEN",
     "OPENCLAW_GATEWAY_PASSWORD",
@@ -461,8 +467,8 @@ async function runSystemdRecovery(
   appendLog: (chunk: unknown) => void,
 ): Promise<RecoveryResult> {
   const profile = `qa-doctor-${randomUUID().slice(0, 8)}`;
-  const env = commandEnv(profile);
-  const home = os.homedir();
+  const home = os.userInfo().homedir;
+  const env = commandEnv(profile, process.env, home);
   const stateDir = path.join(home, `.openclaw-${profile}`);
   const configPath = path.join(stateDir, "openclaw.json");
   const unit = `openclaw-gateway-${profile}.service`;
@@ -614,10 +620,16 @@ async function runSystemdRecovery(
       assertCommandSucceeded(result, "cleanup systemctl daemon-reload");
     },
     async () => {
+      if (!installed) {
+        return;
+      }
       const result = await runSystemctl(options, profile, ["stop", unit], env);
       assertCommandSucceeded(result, `cleanup systemctl stop ${unit}`);
     },
     async () => {
+      if (!installed) {
+        return;
+      }
       const result = await runSystemctl(options, profile, ["reset-failed", unit], env);
       assertCommandSucceeded(result, `cleanup systemctl reset-failed ${unit}`);
     },
