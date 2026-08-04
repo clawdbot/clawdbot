@@ -13,6 +13,7 @@ import {
 } from "./tui-pty-test-support.js";
 
 export type FixtureLogEntry = { method: string; payload?: unknown };
+type FixtureLogPredicate = (entry: FixtureLogEntry) => boolean;
 
 export const COMPACT_TERMINAL_SIZES = [
   [64, 18],
@@ -38,7 +39,7 @@ export async function readFixtureLog(logPath: string): Promise<FixtureLogEntry[]
 
 export async function waitForFixtureLogEntry(
   logPath: string,
-  predicate: (entry: FixtureLogEntry) => boolean,
+  predicate: FixtureLogPredicate,
   timeoutMs: number,
   readPtyOutput?: () => string,
 ) {
@@ -67,8 +68,14 @@ export function objectFieldEquals(entry: FixtureLogEntry, field: string, value: 
   return Object.hasOwn(payload, field) && payload[field] === value;
 }
 
-type StartTuiPtyFixture = Parameters<typeof exerciseFragmentedUnicodePrompt>[0];
-type StartedTuiPtyFixture = Awaited<ReturnType<StartTuiPtyFixture>>;
+type StartedTuiPtyFixture = {
+  run: PtyRun;
+  logPath: string;
+  waitForLogEntry: (predicate: FixtureLogPredicate, timeoutMs?: number) => Promise<FixtureLogEntry>;
+  cleanup: () => Promise<void>;
+};
+type TuiPtyFixtureOptions = { env?: NodeJS.ProcessEnv };
+export type StartTuiPtyFixture = (opts?: TuiPtyFixtureOptions) => Promise<StartedTuiPtyFixture>;
 type TerminalAttackPayload = {
   text: string;
   markers: string[];
@@ -261,31 +268,43 @@ function parseTerminalState(
     : undefined;
 }
 
+function authenticatedRowText(cells: PtyTestScreen["cells"][number]) {
+  return cells
+    .slice(0, cells.findLastIndex((cell) => cell.authenticated) + 1)
+    .map((cell) => (cell.text === "" || cell.authenticated ? cell.text : STALE_CELL_SENTINEL))
+    .join("")
+    .trimEnd();
+}
+
 export function synchronizedFrameRows(raw: string, dimensions: PtyTerminalDimensions): string[][] {
   const screen = parseTerminalState(raw, dimensions);
   if (!screen) {
     return [];
   }
-  const rows = screen.cells.map((row) =>
-    row
-      .map((cell) => cell.text)
-      .join("")
-      .trimEnd(),
-  );
+  const rows = screen.cells.map(authenticatedRowText);
   while (rows.length > 1 && rows.at(-1) === "") {
     rows.pop();
   }
   return [rows];
 }
 
-function screenHasRow(screen: PtyTestScreen, predicate: (row: string) => boolean) {
-  return screen.cells.some((cells) => {
-    const authoredRow = cells
-      .map((cell) => (cell.text === "" || cell.authenticated ? cell.text : STALE_CELL_SENTINEL))
-      .join("")
-      .trimEnd();
-    return predicate(authoredRow);
+export async function waitForSynchronizedFrameRows(
+  run: PtyRun,
+  predicate: (rows: string[]) => boolean,
+  timeoutMs: number,
+) {
+  return await waitFor({
+    timeoutMs,
+    read: () => {
+      const rows = synchronizedFrameRows(run.output(), run).at(0);
+      return rows && predicate(rows) ? rows : null;
+    },
+    onTimeout: () => new Error(`expected completed synchronized frame\n${run.output()}`),
   });
+}
+
+function screenHasRow(screen: PtyTestScreen, predicate: (row: string) => boolean) {
+  return screen.cells.some((cells) => predicate(authenticatedRowText(cells)));
 }
 
 function latestFrameHasRow(
@@ -693,11 +712,7 @@ export async function exerciseTerminalOutputSafety(
 
 /** Proves fixture-local fragmentation preserves a Unicode prompt through the real TUI loop. */
 export async function exerciseFragmentedUnicodePrompt(
-  startFixture: (opts: { env?: NodeJS.ProcessEnv }) => Promise<{
-    run: PtyRun;
-    waitForLogEntry: (predicate: (entry: FixtureLogEntry) => boolean) => Promise<FixtureLogEntry>;
-    cleanup: () => Promise<void>;
-  }>,
+  startFixture: StartTuiPtyFixture,
   startupTimeoutMs: number,
 ) {
   const fixture = await startFixture({

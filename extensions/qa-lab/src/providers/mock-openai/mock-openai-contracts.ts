@@ -8,6 +8,10 @@ import { writeJson } from "../shared/http-json.js";
 export type ResponsesInputItem = Record<string, unknown>;
 
 export type MockOpenAiRequestKind = "agent-initial" | "compaction-summary" | "tool-continuation";
+export type MockCompactionSummaryFaultMode =
+  | "none"
+  | "empty-output-once"
+  | "reasoning-only-output-once";
 
 type MockOpenAiRequestOutcome = "success" | "error";
 
@@ -127,6 +131,7 @@ export type MockOpenAiRequestSnapshot = {
   providerVariant: MockOpenAiProviderVariant;
   imageInputCount: number;
   requestKind: MockOpenAiRequestKind;
+  compactionSummaryFaultMode: MockCompactionSummaryFaultMode;
   outcome: MockOpenAiRequestOutcome;
   errorCode?: string;
   rawByteLength: number;

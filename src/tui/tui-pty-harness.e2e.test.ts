@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { exerciseTuiCommandSurface } from "./tui-pty-command-surfaces-test-support.js";
 import {
   approveWorkspaceSkill,
   COMPACT_TERMINAL_SIZES,
@@ -901,14 +902,14 @@ describe.sequential("TUI PTY harness", () => {
     STARTUP_TEST_TIMEOUT_MS,
   );
 
-  it(
-    "renders slash command help",
-    async () => {
-      await fixture.run.write("/help\r", { delay: false });
-      // prettier-ignore
-      for (const text of ["Slash commands:", "/help", "/verbose <on|off|full>", "/reasoning <on|off|stream>", "/goal", "/goal start <objective>", "/btw <side question>", "/queue", "/stop", "/exit"]) { await fixture.run.waitForOutput(text); }
-    },
-    TEST_TIMEOUT_MS,
+  it.each([
+    ["lists and executes slash commands through authenticated real PTY frames", "slash-commands"],
+    ["selects model and session pickers through authenticated real PTY frames", "pickers"],
+    ["updates settings through an authenticated real PTY overlay", "settings"],
+  ] as const)(
+    "%s",
+    (_name, surface) => exerciseTuiCommandSurface(startTuiFixture, surface, STARTUP_TIMEOUT_MS),
+    STARTUP_TEST_TIMEOUT_MS,
   );
 
   it(
