@@ -5,6 +5,7 @@
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { hasConfiguredWebSearchCredential } from "../../plugins/web-search-credential-presence.js";
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
@@ -98,18 +99,19 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function hasConfiguredWebSearchProviderSignal(config?: OpenClawConfig): boolean {
-  const pluginEntries = config?.plugins?.entries ?? {};
-  const hasPluginSearchConfig = Object.values(pluginEntries).some((entry) => {
-    const pluginConfig = asRecord(entry?.config);
-    return asRecord(pluginConfig?.webSearch) !== null;
-  });
-  if (hasPluginSearchConfig) {
+  const resolvedConfig = config ?? {};
+  if (
+    hasConfiguredWebSearchCredential({
+      config: resolvedConfig,
+      env: process.env,
+    })
+  ) {
     return true;
   }
 
   // Gemini web search explicitly accepts the Google model provider API key as
   // a credential fallback, even when plugin-owned web-search config is absent.
-  return asRecord(config?.models?.providers?.google)?.apiKey !== undefined;
+  return asRecord(resolvedConfig.models?.providers?.google)?.apiKey !== undefined;
 }
 
 function shouldResolveWebSearchModelParameters(params: {

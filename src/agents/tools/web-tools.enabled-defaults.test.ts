@@ -21,6 +21,7 @@ const runWebSearchCalls = vi.hoisted(
     }>,
 );
 const resolveWebSearchDefinitionCalls = vi.hoisted(() => [] as Array<{ config?: unknown }>);
+const configuredWebSearchCredentialSignal = vi.hoisted(() => ({ current: false }));
 const activeSecretsRuntimeSnapshot = vi.hoisted(() => ({
   current: null as null | { config: unknown },
 }));
@@ -47,6 +48,10 @@ function readConfiguredSearchProvider(config: unknown): string | undefined {
 
 vi.mock("../../secrets/runtime-state.js", () => ({
   getActiveSecretsRuntimeConfigSnapshot: () => activeSecretsRuntimeSnapshot.current,
+}));
+
+vi.mock("../../plugins/web-search-credential-presence.js", () => ({
+  hasConfiguredWebSearchCredential: () => configuredWebSearchCredentialSignal.current,
 }));
 
 vi.mock("../../web-search/runtime.js", async () => {
@@ -127,6 +132,7 @@ beforeEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
   clearActiveRuntimeWebToolsMetadata();
   activeSecretsRuntimeSnapshot.current = null;
+  configuredWebSearchCredentialSignal.current = false;
   runWebSearchCalls.length = 0;
   resolveWebSearchDefinitionCalls.length = 0;
 });
@@ -135,6 +141,7 @@ afterEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
   clearActiveRuntimeWebToolsMetadata();
   activeSecretsRuntimeSnapshot.current = null;
+  configuredWebSearchCredentialSignal.current = false;
 });
 
 describe("web tools defaults", () => {
@@ -155,6 +162,15 @@ describe("web tools defaults", () => {
       properties: { query: { type: "string" } },
     });
     expect(resolveWebSearchDefinitionCalls).toHaveLength(0);
+  });
+
+  it("resolves metadata-free credential candidates without an active registration", () => {
+    configuredWebSearchCredentialSignal.current = true;
+    const tool = createWebSearchTool({ config: {} });
+
+    void tool?.parameters;
+
+    expect(resolveWebSearchDefinitionCalls).toHaveLength(1);
   });
 
   it("disables web_fetch when explicitly disabled", () => {
