@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/gateway-runtime";
 import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
 import { createSmsIngressSpool, type SmsIngressLog } from "./ingress-spool.js";
+import { resolveTwilioStatusCallbackUrl } from "./public-webhook-url.js";
 import type { ResolvedSmsAccount } from "./types.js";
 import { createSmsWebhookHandler, type SmsWebhookHandlerParams } from "./webhook.js";
 
@@ -72,6 +73,13 @@ export function collectSmsStartupWarnings(account: ResolvedSmsAccount): string[]
   if (!account.publicWebhookUrl && !account.dangerouslyDisableSignatureValidation) {
     warnings.push(
       "- SMS: publicWebhookUrl is required for Twilio signature validation. Set dangerouslyDisableSignatureValidation=true only for local testing.",
+    );
+  } else if (
+    account.publicWebhookUrl &&
+    !resolveTwilioStatusCallbackUrl(account.publicWebhookUrl)
+  ) {
+    warnings.push(
+      "- SMS: publicWebhookUrl must be a properly encoded absolute HTTP(S) URL with a valid hostname, no embedded credentials, and remain within OpenClaw's 4,000-character callback safety limit; OpenClaw will omit the per-message delivery callback until fixed.",
     );
   }
   if (account.dmPolicy === "allowlist" && account.allowFrom.length === 0) {

@@ -2,7 +2,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { registerPluginHttpRoute as registerPluginHttpRouteType } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { startSmsGatewayAccount } from "./gateway.js";
+import { collectSmsStartupWarnings, startSmsGatewayAccount } from "./gateway.js";
 import type { SmsChannelRuntime } from "./inbound.js";
 import type { ResolvedSmsAccount } from "./types.js";
 
@@ -453,5 +453,18 @@ describe("startSmsGatewayAccount", () => {
     releasePause?.();
     await replacement;
     expect(stopSmsIngress).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("collectSmsStartupWarnings", () => {
+  it("reports an unusable public webhook URL without disabling outbound SMS", () => {
+    expect(
+      collectSmsStartupWarnings({
+        ...createAccount("default"),
+        publicWebhookUrl: "https://sms_gateway.example.com/webhooks/sms",
+      }),
+    ).toContain(
+      "- SMS: publicWebhookUrl must be a properly encoded absolute HTTP(S) URL with a valid hostname, no embedded credentials, and remain within OpenClaw's 4,000-character callback safety limit; OpenClaw will omit the per-message delivery callback until fixed.",
+    );
   });
 });

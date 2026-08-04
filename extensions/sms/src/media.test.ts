@@ -1,13 +1,17 @@
 // Sms tests cover outbound MMS media hosting behavior.
 import fs from "node:fs";
 import path from "node:path";
-import type { unlinkIfExists as unlinkIfExistsType } from "openclaw/plugin-sdk/media-runtime";
+import {
+  MediaFetchError,
+  type unlinkIfExists as unlinkIfExistsType,
+} from "openclaw/plugin-sdk/media-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { loadWebMedia as loadWebMediaType } from "openclaw/plugin-sdk/web-media";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -80,7 +84,8 @@ const TWILIO_MMS_FILENAME_CASES = [
 vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia: loadWebMediaMock,
 }));
-vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   unlinkIfExists: unlinkIfExistsMock,
 }));
 
@@ -594,6 +599,141 @@ describe("SMS inbound MMS materialization", () => {
     unlinkIfExistsMock.mockClear();
   });
 
+  async function expectInboundMediaFailure(error: MediaFetchError, retryable: boolean) {
+    const pending = materializeSmsInboundMedia({
+      account: createAccount(),
+      msg: {
+        accountSid: ACCOUNT_SID,
+        from: "+15551234567",
+        to: "+15557654321",
+        body: "keep this caption",
+        messageSid: MESSAGE_SID,
+        media: [{ url: twilioMediaUrl(), contentType: "image/jpeg" }],
+      },
+      mediaRuntime: {
+        media: {
+          saveRemoteMedia: async () => {
+            throw error;
+          },
+        },
+      } as never,
+    });
+
+    if (retryable) {
+      await expect(pending).rejects.toBe(error);
+    } else {
+      await expect(pending).resolves.toMatchObject({
+        body: "keep this caption\n\n[1 Twilio MMS attachment unavailable]",
+        media: [],
+      });
+    }
+  }
+
+  it.each([
+    [408, true],
+    [429, true],
+    [500, true],
+    [502, true],
+    [503, true],
+    [504, true],
+    [400, false],
+    [401, false],
+    [403, false],
+    [404, false],
+    [410, false],
+  ] as const)("classifies Twilio HTTP %i before durable adoption", async (status, retryable) => {
+    await expectInboundMediaFailure(
+      new MediaFetchError("http_error", `Twilio returned ${status}`, { status }),
+      retryable,
+    );
+  });
+
+  it.each([
+    {
+      name: "nested connection reset",
+      cause: new Error("fetch failed", {
+        cause: Object.assign(new Error("reset"), { code: "ECONNRESET" }),
+      }),
+      retryable: true,
+    },
+    {
+      name: "nested host unreachable",
+      cause: new Error("fetch failed", {
+        cause: Object.assign(new Error("host unreachable"), { code: "EHOSTUNREACH" }),
+      }),
+      retryable: true,
+    },
+    {
+      name: "Undici DNS resolve failure",
+      cause: Object.assign(new Error("DNS resolve failed"), {
+        code: "UND_ERR_DNS_RESOLVE_FAILED",
+      }),
+      retryable: true,
+    },
+    {
+      name: "media request deadline",
+      cause: new DOMException("timed out", "TimeoutError"),
+      retryable: true,
+    },
+    {
+      name: "aggregate network failure",
+      cause: new AggregateError(
+        [Object.assign(new Error("timed out"), { code: "ETIMEDOUT" })],
+        "all addresses failed",
+      ),
+      retryable: true,
+    },
+    {
+      name: "blocked SSRF with nested transient error",
+      cause: Object.assign(new SsrFBlockedError("blocked private address"), {
+        cause: Object.assign(new Error("reset"), { code: "ECONNRESET" }),
+      }),
+      retryable: false,
+    },
+    {
+      name: "aggregate containing blocked SSRF and transient failure",
+      cause: new AggregateError(
+        [
+          Object.assign(new Error("reset"), { code: "ECONNRESET" }),
+          new SsrFBlockedError("blocked private address"),
+        ],
+        "mixed failures",
+      ),
+      retryable: false,
+    },
+    {
+      name: "local storage permission",
+      cause: Object.assign(new Error("permission denied"), { code: "EACCES" }),
+      retryable: false,
+    },
+  ])("classifies $name without poisoning a sender lane", async ({ cause, retryable }) => {
+    await expectInboundMediaFailure(
+      new MediaFetchError("fetch_failed", "download failed", { cause }),
+      retryable,
+    );
+  });
+
+  it.each(["reason", "original", "error", "data"] as const)(
+    "does not retry when .$field contains an SSRF denial",
+    async (field) => {
+      const cause = Object.assign(
+        new Error("fetch failed", {
+          cause: Object.assign(new Error("reset"), { code: "ECONNRESET" }),
+        }),
+        { [field]: new SsrFBlockedError("blocked private address") },
+      );
+
+      await expectInboundMediaFailure(
+        new MediaFetchError("fetch_failed", "download failed", { cause }),
+        false,
+      );
+    },
+  );
+
+  it("keeps oversized MMS visible without retrying its sender lane", async () => {
+    await expectInboundMediaFailure(new MediaFetchError("max_bytes", "too large"), false);
+  });
+
   it("keeps the message visible when declared attachments exceed the download bound", async () => {
     const saveRemoteMedia = vi.fn();
 
@@ -786,43 +926,51 @@ describe("SMS inbound MMS materialization", () => {
     expect(saveRemoteMedia).not.toHaveBeenCalled();
   });
 
-  it("cleans already-saved files when a later attachment aborts the batch", async () => {
-    const abortController = new AbortController();
-    const abortReason = new Error("SMS ingress claim superseded");
-    const saveRemoteMedia = vi
-      .fn()
-      .mockResolvedValueOnce({
-        path: "/tmp/first.jpg",
-        size: 128,
-        contentType: "image/jpeg",
-      })
-      .mockImplementationOnce(async () => {
-        abortController.abort(abortReason);
-        throw abortReason;
-      });
+  it.each(["claim cancellation", "retryable provider failure"])(
+    "cleans already-saved files when a later attachment ends with %s",
+    async (failureKind) => {
+      const abortController = new AbortController();
+      const abortReason =
+        failureKind === "claim cancellation"
+          ? new Error("SMS ingress claim superseded")
+          : new MediaFetchError("http_error", "Twilio temporarily unavailable", { status: 503 });
+      const saveRemoteMedia = vi
+        .fn()
+        .mockResolvedValueOnce({
+          path: "/tmp/first.jpg",
+          size: 128,
+          contentType: "image/jpeg",
+        })
+        .mockImplementationOnce(async () => {
+          if (failureKind === "claim cancellation") {
+            abortController.abort(abortReason);
+          }
+          throw abortReason;
+        });
 
-    await expect(
-      materializeSmsInboundMedia({
-        account: createAccount(),
-        msg: {
-          accountSid: ACCOUNT_SID,
-          from: "+15551234567",
-          to: "+15557654321",
-          body: "photos",
-          messageSid: MESSAGE_SID,
-          media: [
-            { url: twilioMediaUrl(), contentType: "image/jpeg" },
-            { url: twilioMediaUrl({ mediaSid: OTHER_MEDIA_SID }), contentType: "image/jpeg" },
-          ],
-        },
-        mediaRuntime: { media: { saveRemoteMedia } } as never,
-        abortSignal: abortController.signal,
-      }),
-    ).rejects.toBe(abortReason);
+      await expect(
+        materializeSmsInboundMedia({
+          account: createAccount(),
+          msg: {
+            accountSid: ACCOUNT_SID,
+            from: "+15551234567",
+            to: "+15557654321",
+            body: "photos",
+            messageSid: MESSAGE_SID,
+            media: [
+              { url: twilioMediaUrl(), contentType: "image/jpeg" },
+              { url: twilioMediaUrl({ mediaSid: OTHER_MEDIA_SID }), contentType: "image/jpeg" },
+            ],
+          },
+          mediaRuntime: { media: { saveRemoteMedia } } as never,
+          abortSignal: abortController.signal,
+        }),
+      ).rejects.toBe(abortReason);
 
-    expect(unlinkIfExistsMock).toHaveBeenCalledOnce();
-    expect(unlinkIfExistsMock).toHaveBeenCalledWith("/tmp/first.jpg");
-  });
+      expect(unlinkIfExistsMock).toHaveBeenCalledOnce();
+      expect(unlinkIfExistsMock).toHaveBeenCalledWith("/tmp/first.jpg");
+    },
+  );
 
   it("exposes idempotent cleanup for successfully materialized files", async () => {
     const result = await materializeSmsInboundMedia({

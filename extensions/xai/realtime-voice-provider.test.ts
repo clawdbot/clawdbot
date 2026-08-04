@@ -1,6 +1,7 @@
 // Xai tests cover realtime voice provider plugin behavior.
 import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { XAI_REALTIME_MAX_PENDING_PLAYBACK_MARKS } from "./realtime-voice-config.js";
 import { buildXaiRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
 const { FakeWebSocket, isProviderAuthProfileConfiguredMock, resolveApiKeyForProviderMock } =
@@ -1254,6 +1255,44 @@ describe("buildXaiRealtimeVoiceProvider", () => {
 
     bridge.acknowledgeMark?.(markName);
     expect(parseSent(socket).slice(-1)).toEqual([{ type: "response.create" }]);
+  });
+
+  it("fails the session when playback marks exceed their ownership bound", async () => {
+    vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
+    const onAudio = vi.fn();
+    const onClose = vi.fn();
+    const onError = vi.fn();
+    const onMark = vi.fn();
+    const bridge = createTestBridge({ onAudio, onClose, onError, onMark });
+    const socket = await openRealtimeBridge(bridge);
+    const delta = Buffer.from("assistant audio").toString("base64");
+
+    socket.emitServer({ type: "response.created" });
+    for (let index = 0; index < XAI_REALTIME_MAX_PENDING_PLAYBACK_MARKS; index += 1) {
+      socket.emitServer({ type: "response.output_audio.delta", delta });
+    }
+    socket.emitServer({ type: "response.output_audio.delta", delta });
+
+    expect(onAudio).toHaveBeenCalledTimes(XAI_REALTIME_MAX_PENDING_PLAYBACK_MARKS);
+    expect(onMark).toHaveBeenCalledTimes(XAI_REALTIME_MAX_PENDING_PLAYBACK_MARKS);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: `xAI realtime voice playback mark limit exceeded (${XAI_REALTIME_MAX_PENDING_PLAYBACK_MARKS})`,
+      }),
+    );
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledWith("error");
+    expect(socket.closed).toBe(true);
+
+    socket.emitServer({ type: "response.output_audio.delta", delta });
+    bridge.close();
+    expect(onAudio).toHaveBeenCalledTimes(XAI_REALTIME_MAX_PENDING_PLAYBACK_MARKS);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    await expect(bridge.connect()).rejects.toThrow(
+      `xAI realtime voice playback mark limit exceeded (${XAI_REALTIME_MAX_PENDING_PLAYBACK_MARKS})`,
+    );
   });
 
   it("preserves pending parallel tool calls across resumed reconnects", async () => {

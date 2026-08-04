@@ -3,6 +3,7 @@ import { createHmac } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveTwilioStatusCallbackUrl } from "./public-webhook-url.js";
 import {
   buildTwilioInboundMessage,
   listTwilioIncomingPhoneNumbers,
@@ -313,7 +314,7 @@ describe("Twilio SMS helpers", () => {
           messagingServiceSid: "",
           defaultTo: "",
           webhookPath: "/webhooks/sms",
-          publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+          publicWebhookUrl: "https://gateway.example.com/webhooks/sms#rp=4xx",
           dangerouslyDisableSignatureValidation: false,
           dmPolicy: "pairing",
           allowFrom: [],
@@ -341,7 +342,113 @@ describe("Twilio SMS helpers", () => {
     expect(body.get("From")).toBe("+15557654321");
     expect(body.get("To")).toBe("+15551234567");
     expect(body.get("Body")).toBe("hello");
+    expect(body.get("StatusCallback")).toBe(
+      "https://gateway.example.com/webhooks/sms#rp=4xx,ct,rt,5xx&rt=5000&rc=1",
+    );
   });
+
+  it("opts delivery commits into bounded connection, timeout, and 5xx retries", () => {
+    const callbackUrl = resolveTwilioStatusCallbackUrl("https://gateway.example.com/webhooks/sms");
+    const overrides = new URLSearchParams(callbackUrl.split("#")[1]);
+
+    expect(overrides.get("rp")?.split(",")).toEqual(["ct", "rt", "5xx"]);
+    expect(overrides.get("rp")?.split(",")).not.toContain("4xx");
+    expect(overrides.get("rt")).toBe("5000");
+    expect(overrides.get("rc")).toBe("1");
+  });
+
+  it.each([
+    [
+      "accepts an absolute HTTP callback URL",
+      "http://gateway.example.com/webhooks/sms",
+      "http://gateway.example.com/webhooks/sms#rp=ct,rt,5xx&rt=5000&rc=1",
+    ],
+    [
+      "preserves the query and existing retry policy",
+      "https://gateway.example.com/webhooks/sms?tenant=support#rp=4xx",
+      "https://gateway.example.com/webhooks/sms?tenant=support#rp=4xx,ct,rt,5xx&rt=5000&rc=1",
+    ],
+    [
+      "preserves an all-failures policy and configured retry count",
+      "https://gateway.example.com/webhooks/sms#rt=5000&rp=all&rc=3",
+      "https://gateway.example.com/webhooks/sms#rt=5000&rp=all&rc=3",
+    ],
+    [
+      "preserves a configured read timeout",
+      "https://gateway.example.com/webhooks/sms#rt=1200&rp=ct",
+      "https://gateway.example.com/webhooks/sms#rt=1200&rp=ct,rt,5xx&rc=1",
+    ],
+    [
+      "repairs an invalid read timeout",
+      "https://gateway.example.com/webhooks/sms#rt=16000",
+      "https://gateway.example.com/webhooks/sms#rt=5000&rp=ct,rt,5xx&rc=1",
+    ],
+    [
+      "repairs a disabled retry count without replacing other overrides",
+      "https://gateway.example.com/webhooks/sms#e=singapore&rc=0",
+      "https://gateway.example.com/webhooks/sms#e=singapore&rc=1&rp=ct,rt,5xx&rt=5000",
+    ],
+  ])("%s", (_name, publicWebhookUrl, expected) => {
+    expect(resolveTwilioStatusCallbackUrl(publicWebhookUrl)).toBe(expected);
+  });
+
+  it("omits the delivery callback when no public webhook URL is configured", () => {
+    expect(resolveTwilioStatusCallbackUrl("   ")).toBe("");
+  });
+
+  it("enforces OpenClaw's defensive 4,000-character status callback cap", () => {
+    const prefix = "https://gateway.example.com/webhooks/sms?x=";
+    const suffix = "#rp=ct,rt,5xx&rt=5000&rc=1";
+    const paddingLength = 4_000 - prefix.length - suffix.length;
+    const atLimit = `${prefix}${"a".repeat(paddingLength)}`;
+
+    expect(resolveTwilioStatusCallbackUrl(atLimit)).toHaveLength(4_000);
+    expect(resolveTwilioStatusCallbackUrl(`${atLimit}a`)).toBe("");
+  });
+
+  it.each([
+    ["relative", "placeholder"],
+    ["malformed", "https://"],
+    ["missing authority slashes", "https:gateway.example.com/webhooks/sms"],
+    ["single authority slash", "https:/gateway.example.com/webhooks/sms"],
+    ["backslash", String.raw`https://gateway.example.com\webhooks\sms`],
+    ["invalid percent escape", "https://gateway.example.com/webhooks/sms?x=%ZZ"],
+    ["raw query pipe", "https://gateway.example.com/webhooks/sms?x=|"],
+    ["raw query caret", "https://gateway.example.com/webhooks/sms?x=^"],
+    ["raw query backtick", "https://gateway.example.com/webhooks/sms?x=`"],
+    ["raw query braces", "https://gateway.example.com/webhooks/sms?x={}"],
+    ["percent-encoded hostname", "https://%65xample.com/webhooks/sms"],
+    ["invalid hostname", "https://sms_gateway.example.com/webhooks/sms"],
+    ["single-label hostname", "http://gateway/webhooks/sms"],
+    ["localhost", "http://localhost/webhooks/sms"],
+    ["IPv4 loopback", "http://127.0.0.1/webhooks/sms"],
+    ["legacy numeric IPv4 loopback", "http://2130706433/webhooks/sms"],
+    ["unspecified IPv4", "http://0.0.0.0/webhooks/sms"],
+    ["private IPv4", "http://10.0.0.1/webhooks/sms"],
+    ["carrier-grade NAT IPv4", "http://100.64.0.1/webhooks/sms"],
+    ["link-local IPv4", "http://169.254.169.254/webhooks/sms"],
+    ["IPv6 loopback", "http://[::1]/webhooks/sms"],
+    ["private IPv6", "http://[fd00::1]/webhooks/sms"],
+  ])(
+    "keeps text sending available with a %s public webhook URL",
+    async (_name, publicWebhookUrl) => {
+      const fetchImpl = vi.fn<typeof fetch>(
+        async () => new Response(JSON.stringify({ sid: "SM-no-callback" }), { status: 201 }),
+      );
+
+      await expect(
+        sendSmsViaTwilio({
+          account: createAccount({ publicWebhookUrl }),
+          to: "+15551234567",
+          text: "hello",
+          fetchImpl,
+        }),
+      ).resolves.toMatchObject({ sid: "SM-no-callback" });
+
+      const body = readUrlEncodedRequestBody(fetchImpl.mock.calls[0]?.[1]);
+      expect(body.has("StatusCallback")).toBe(false);
+    },
+  );
 
   it("marks dispatch immediately before the Twilio POST", async () => {
     const events: string[] = [];
@@ -619,6 +726,9 @@ describe("Twilio SMS helpers", () => {
     expect(body.get("MessagingServiceSid")).toBe("MG123");
     expect(body.get("To")).toBe("+15551234567");
     expect(body.get("Body")).toBe("hello");
+    expect(body.get("StatusCallback")).toBe(
+      "https://gateway.example.com/webhooks/sms#rp=ct,rt,5xx&rt=5000&rc=1",
+    );
   });
 
   it("prefers an explicit from number when both sender options are resolved", async () => {

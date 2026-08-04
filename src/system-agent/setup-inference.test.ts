@@ -2636,6 +2636,120 @@ describe("activateSetupInference", () => {
     }
   });
 
+  it("runs provider-owned local setup from an app-guided discovery choice", async () => {
+    const { stateDir, initialConfig } = await createMainAgentFixture();
+    const runAuth = vi.fn(async () => ({
+      profiles: [
+        {
+          profileId: "ollama:default",
+          credential: {
+            type: "api_key" as const,
+            provider: "ollama",
+            key: "ollama-local",
+          },
+        },
+      ],
+      configPatch: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://127.0.0.1:11434",
+              api: "ollama" as const,
+              apiKey: "ollama-local",
+              models: [],
+            },
+          },
+        },
+      },
+    }));
+    const detect = vi.fn(async () => ({
+      modelRef: "ollama/qwen3.5:4b",
+      detail: "qwen3.5:4b at http://127.0.0.1:11434",
+    }));
+    const prepare = vi.fn(async () => ({
+      profiles: [],
+      defaultModel: "ollama/qwen3.5:4b",
+      configPatch: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://127.0.0.1:11434",
+              api: "ollama" as const,
+              apiKey: "ollama-local",
+              models: [],
+            },
+          },
+        },
+      },
+    }));
+    const provider: ProviderPlugin = {
+      id: "ollama",
+      label: "Ollama",
+      pluginId: "ollama",
+      auth: [
+        {
+          id: "local",
+          label: "Ollama",
+          kind: "custom",
+          run: runAuth,
+          appGuidedSetup: { detect, prepare },
+        },
+      ],
+    };
+    const runEmbeddedAgent = vi.fn(
+      async (params: SuccessfulRunParams & { authProfileId?: string }) =>
+        successfulRun("ollama", "qwen3.5:4b", params),
+    );
+    const configHarness = createConfigTransformHarness(initialConfig);
+
+    try {
+      const result = await activateSetupInference({
+        kind: "provider-auth",
+        authChoice: "ollama",
+        workspace: "/tmp/openclaw-workspace",
+        prompter: { note: vi.fn(async () => {}) } as never,
+        deps: {
+          readConfigFileSnapshot: mockConfigSnapshot(initialConfig, {
+            includeMetadata: true,
+          }),
+          resolvePluginProviders: () => [provider],
+          resolveManifestProviderAuthChoice: () => ({
+            pluginId: "ollama",
+            providerId: "ollama",
+            methodId: "local",
+            choiceId: "ollama",
+            choiceLabel: "Ollama",
+            appGuidedDiscovery: true,
+          }),
+          runEmbeddedAgent: runEmbeddedAgent as never,
+          transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+        },
+      });
+
+      expect(result).toMatchObject({ ok: true, modelRef: "ollama/qwen3.5:4b" });
+      expect(runAuth).toHaveBeenCalledOnce();
+      expect(detect).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: expect.objectContaining({
+            models: {
+              providers: {
+                ollama: expect.objectContaining({
+                  baseUrl: "http://127.0.0.1:11434",
+                  apiKey: "ollama-local",
+                }),
+              },
+            },
+          }),
+        }),
+      );
+      expect(prepare).toHaveBeenCalledWith(
+        expect.objectContaining({ modelRef: "ollama/qwen3.5:4b" }),
+      );
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
+
   it("does not probe or persist an interactive login after session cancellation", async () => {
     const runAuth = vi.fn(async () => ({ profiles: [], defaultModel: "openai/gpt-5.5" }));
     const runEmbeddedAgent = vi.fn();

@@ -35,6 +35,7 @@ import {
   resolveSmsAccount,
 } from "./accounts.js";
 import { SmsChannelConfigSchema } from "./config-schema.js";
+import { listRecentSmsDeliveryRecords } from "./delivery-observations.js";
 import { collectSmsStartupWarnings, startSmsGatewayAccount } from "./gateway.js";
 import type { SmsChannelRuntime } from "./inbound.js";
 import {
@@ -472,7 +473,16 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount, SmsProbe> = createChat
           },
         };
       },
-      probeAccount: async ({ account, timeoutMs }) => await probeSmsAccount({ account, timeoutMs }),
+      probeAccount: async ({ account, timeoutMs }) => {
+        const startedAt = Date.now();
+        const deliveryRecords = await listRecentSmsDeliveryRecords(account);
+        const elapsedMs = Math.max(0, Date.now() - startedAt);
+        return await probeSmsAccount({
+          account,
+          timeoutMs: Math.max(1, timeoutMs - elapsedMs),
+          options: { deliveryRecords },
+        });
+      },
       formatCapabilitiesProbe: ({ probe }) => formatSmsProbeLines(probe),
       buildCapabilitiesDiagnostics: async ({ account }) => ({
         lines: collectSmsStartupWarnings(account).map((text) => ({ text, tone: "warn" })),

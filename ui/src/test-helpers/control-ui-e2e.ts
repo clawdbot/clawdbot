@@ -447,15 +447,13 @@ function controlUiE2ePreviewConfigPlugin(): Plugin {
   };
 }
 
-export async function startBundledControlUiE2eServer(outDir: string): Promise<ControlUiE2eServer> {
-  const [{ build, preview }, { default: controlUiViteConfig }] = await Promise.all([
-    import("vite"),
-    import("../../vite.config.ts"),
-  ]);
-  const port = await resolveAvailableLoopbackPort();
+function createBundledControlUiE2eConfig(
+  controlUiViteConfig: (options: { outDir?: string }) => InlineConfig,
+  outDir: string,
+): InlineConfig {
   const config = controlUiViteConfig({ outDir });
   const uiRoot = path.join(resolveRepoRoot(), "ui");
-  const sharedConfig: InlineConfig = {
+  return {
     ...config,
     base: "/",
     configFile: false,
@@ -468,7 +466,60 @@ export async function startBundledControlUiE2eServer(outDir: string): Promise<Co
     logLevel: "error" as const,
     root: uiRoot,
   };
-  await build(sharedConfig);
+}
+
+export async function buildProductionControlUiE2e(outDir: string, buildId: string): Promise<void> {
+  // Keep the production config outside Vitest, but write directly to the
+  // caller-owned output so concurrent E2E builds cannot replace its worker.
+  const repoRoot = resolveRepoRoot();
+  const uiRoot = path.join(repoRoot, "ui");
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    NODE_ENV: "production",
+    OPENCLAW_CONTROL_UI_BUILD_ID: buildId,
+  };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("VITEST")) {
+      delete env[key];
+    }
+  }
+  const result = spawnSync(
+    process.execPath,
+    ["--import", "tsx", fileURLToPath(import.meta.url), "--production-build", outDir],
+    {
+      cwd: uiRoot,
+      encoding: "utf8",
+      env,
+      maxBuffer: 10 * 1024 * 1024,
+    },
+  );
+  if (result.status !== 0) {
+    throw new Error(
+      `Production Control UI build failed (exit ${result.status ?? "unknown"}):\n${result.stderr || result.stdout}`,
+    );
+  }
+}
+
+async function runProductionControlUiBuild(outDir: string): Promise<void> {
+  const [{ build }, { default: controlUiViteConfig }] = await Promise.all([
+    import("vite"),
+    import("../../vite.config.ts"),
+  ]);
+  await build({
+    ...controlUiViteConfig({ outDir }),
+    configFile: false,
+    logLevel: "error",
+    root: path.join(resolveRepoRoot(), "ui"),
+  });
+}
+
+async function startBuiltControlUiE2eServer(outDir: string): Promise<ControlUiE2eServer> {
+  const [{ preview }, { default: controlUiViteConfig }] = await Promise.all([
+    import("vite"),
+    import("../../vite.config.ts"),
+  ]);
+  const port = await resolveAvailableLoopbackPort();
+  const sharedConfig = createBundledControlUiE2eConfig(controlUiViteConfig, outDir);
   const server = await preview({
     ...sharedConfig,
     plugins: [...(sharedConfig.plugins ?? []), controlUiE2ePreviewConfigPlugin()],
@@ -487,6 +538,23 @@ export async function startBundledControlUiE2eServer(outDir: string): Promise<Co
     await server.close().catch(() => {});
     throw error;
   }
+}
+
+export async function startBundledControlUiE2eServer(outDir: string): Promise<ControlUiE2eServer> {
+  const [{ build }, { default: controlUiViteConfig }] = await Promise.all([
+    import("vite"),
+    import("../../vite.config.ts"),
+  ]);
+  await build(createBundledControlUiE2eConfig(controlUiViteConfig, outDir));
+  return startBuiltControlUiE2eServer(outDir);
+}
+
+export async function startProductionControlUiE2eServer(
+  outDir: string,
+  buildId: string,
+): Promise<ControlUiE2eServer> {
+  await buildProductionControlUiE2e(outDir, buildId);
+  return startBuiltControlUiE2eServer(outDir);
 }
 
 async function resolveAvailableLoopbackPort(): Promise<number> {
@@ -2052,5 +2120,13 @@ function createMockGatewayControls(page: Page, defaultSessionKey: string): MockG
       return request;
     },
   };
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const [command, outDir] = process.argv.slice(2);
+  if (command !== "--production-build" || !outDir) {
+    throw new Error("Usage: control-ui-e2e.ts --production-build <out-dir>");
+  }
+  await runProductionControlUiBuild(outDir);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
