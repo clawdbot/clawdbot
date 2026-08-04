@@ -238,6 +238,13 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(execTool.description).toContain('"javascript" or "typescript"');
     expect(execTool.description).toContain("never a shell command");
     expect(execTool.description).toContain("do not retry failed shell source");
+    expect(execTool.description).toContain("`setTimeout` and `setInterval`");
+    expect(execTool.description).toContain("unavailable in the QuickJS guest");
+    expect(execTool.description).toContain("asynchronous terminal output");
+    expect(execTool.description).toContain("separate tool turns");
+    expect(execTool.description).toContain("`await yield_control(...)`");
+    expect(execTool.description).toContain("resume the returned run with `wait`");
+    expect(execTool.description).toContain("never invent sleep or timer globals");
     const nodesGuidance =
       "- nodes: paired Gateway nodes; nodes.list(), (await nodes.get(id)).invoke(command, params)";
     expect(execTool.description).toContain(nodesGuidance);
