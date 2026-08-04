@@ -27,7 +27,7 @@ describe("qa compaction scenario catalog", () => {
     expect(scenario.gatewayConfigPatch).toMatchObject({
       agents: { defaults: { compaction: { mode: "default" } } },
     });
-    expect(flow).toContain("OPENCLAW_QA_FORCE_RUNTIME === 'openclaw'");
+    expect(flow).toContain("env.runtimeId === 'openclaw'");
     expect(flow).toContain("initialRequests[0].errorCode === 'context_length_exceeded'");
     expect(flow).toContain("initialRequests.length === 2");
     expect(flow).toContain("compactionSummaryRequests.length === 2");
@@ -85,7 +85,7 @@ describe("qa compaction scenario catalog", () => {
       | undefined;
     expect(firstAction).toBeDefined();
     const conditional = firstAction?.if as Record<string, unknown> | undefined;
-    expect(conditional?.expr).toBe("env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME === 'codex'");
+    expect(conditional?.expr).toBe("env.runtimeId === 'codex'");
     expect(conditional?.["then"]).toMatchObject([
       {
         call: "qaImport",
@@ -115,7 +115,7 @@ describe("qa compaction scenario catalog", () => {
     expect(flow).toContain("new qaErrors.QaSuiteScenarioSkipError");
     expect(flow).toContain("seedQaSessionTranscript");
     expect(flow).toContain("sessions.compaction.branch");
-    expect(flow).toContain("OPENCLAW_QA_FORCE_RUNTIME");
+    expect(flow).toContain("env.runtimeId");
     expect(flow).toContain('"transcriptToolName":"write"');
     expect(flow).toContain('"requireSuccessfulTranscriptToolResult":true');
     expect(flow).toContain("outbound.text === config.finalMarker");
