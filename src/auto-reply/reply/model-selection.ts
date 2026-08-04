@@ -1,7 +1,7 @@
 /** Model selection state for reply runs, including catalog and override handling. */
 import {
+  classifyStaleAutoFallbackOriginOverride,
   hasLegacyAutoFallbackWithoutOrigin,
-  isStaleAutoFallbackOriginOverride,
   resolveAgentConfig,
   resolveAgentDir,
   resolveDefaultAgentId,
@@ -244,7 +244,8 @@ export async function createModelSelectionState(params: {
       modelKey(normalizedDirectOverride.provider, normalizedDirectOverride.model);
   const staleAutoFallbackOriginOverride =
     directStoredModelOverride?.source === "session" &&
-    isStaleAutoFallbackOriginOverride(sessionEntry, primaryProvider, primaryModel);
+    classifyStaleAutoFallbackOriginOverride(sessionEntry, primaryProvider, primaryModel) ===
+      "clear-override";
   const staleDirectStoredOverride =
     staleHeartbeatAutoFallbackOverride ||
     staleLegacyOpenAICodexAutoOverride ||

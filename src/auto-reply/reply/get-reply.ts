@@ -2,8 +2,8 @@
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  classifyStaleAutoFallbackOriginOverride,
   hasLegacyAutoFallbackWithoutOrigin,
-  isStaleAutoFallbackOriginOverride,
   matchesStaleAutoFallbackOriginRepairSnapshot,
   resolveAutoFallbackPrimaryProbe,
   resolveAgentConfig,
@@ -703,39 +703,57 @@ export async function getReplyFromConfig(
       : null;
   const primaryProvider = resolvedChannelModelOverride?.ref.provider ?? defaultProvider;
   const primaryModel = resolvedChannelModelOverride?.ref.model ?? defaultModel;
-  // A provably polluted fallback origin (recorded as the fallback override itself
-  // instead of the configured primary) prevents the snap-back probe from firing.
+  // A stale fallback origin (provably polluted when it equals the override, or the
+  // canonical #92776 three-distinct state) prevents the snap-back probe from firing.
   // Repair it in place before the probe check so this turn can retry the primary.
+  const staleAutoFallbackOriginRepairKind = classifyStaleAutoFallbackOriginOverride(
+    sessionEntry,
+    primaryProvider,
+    primaryModel,
+  );
   if (
     sessionEntry &&
     sessionStore &&
     sessionKey &&
     sessionEntryHandle &&
     !sessionModelSelectionLocked &&
-    isStaleAutoFallbackOriginOverride(sessionEntry, primaryProvider, primaryModel)
+    staleAutoFallbackOriginRepairKind
   ) {
-    const { updateSessionEntry } = await import("../../config/sessions/session-accessor.js");
-    const originPatch = {
-      modelOverrideFallbackOriginProvider: primaryProvider,
-      modelOverrideFallbackOriginModel: primaryModel,
-    };
+    const { loadSessionEntryReadOnly, updateSessionEntry } =
+      await import("../../config/sessions/session-accessor.js");
+    const originPatch = prepareRepairedReplySessionEntry({
+      primaryProvider,
+      primaryModel,
+    });
     const nextEntry = { ...sessionEntry, ...originPatch };
     if (storePath) {
       const observedSnapshot = sessionEntry;
       let comparedEntry: SessionEntry | undefined;
-      const persistedEntry = await updateSessionEntry(
-        { storePath, sessionKey },
-        (entry) => {
-          comparedEntry = entry;
-          return matchesStaleAutoFallbackOriginRepairSnapshot(entry, observedSnapshot)
-            ? originPatch
-            : null;
-        },
-        { skipMaintenance: true, takeCacheOwnership: true },
-      );
-      // The persisted comparison owns selection freshness. Publish its updated
-      // result, or refresh the cache from the entry that rejected this repair.
-      sessionEntry = persistedEntry ?? comparedEntry ?? nextEntry;
+      try {
+        const persistedEntry = await updateSessionEntry(
+          { storePath, sessionKey },
+          (entry) => {
+            comparedEntry = entry;
+            if (!matchesStaleAutoFallbackOriginRepairSnapshot(entry, observedSnapshot)) {
+              return null;
+            }
+            return originPatch;
+          },
+          { skipMaintenance: true, takeCacheOwnership: true },
+        );
+        // The persisted comparison owns selection freshness. Publish its updated
+        // result, or refresh the cache from the entry that rejected this repair.
+        sessionEntry = persistedEntry ?? comparedEntry ?? nextEntry;
+      } catch (error) {
+        // An interleaved write changed the row between preparation and commit. Adopt
+        // the newer persisted state rather than failing the turn; it is authoritative.
+        if (isSqliteSessionMutationConflictError(error)) {
+          const reloaded = await loadSessionEntryReadOnly({ storePath, sessionKey });
+          sessionEntry = reloaded ?? nextEntry;
+        } else {
+          throw error;
+        }
+      }
     } else {
       sessionEntry = nextEntry;
     }
@@ -1198,4 +1216,27 @@ export async function getReplyFromConfig(
   logResolverTiming("completed", "prepared_reply");
   return replyResult;
 }
+
+function prepareRepairedReplySessionEntry(params: {
+  primaryProvider: string;
+  primaryModel: string;
+}): Partial<SessionEntry> {
+  // The reply path conservatively repairs only the origin metadata. Clearing the
+  // override here would fight the existing primary-probe scheduling; updating the
+  // origin lets the probe fire on this turn while preserving the fallback pin.
+  return {
+    modelOverrideFallbackOriginProvider: params.primaryProvider,
+    modelOverrideFallbackOriginModel: params.primaryModel,
+  };
+}
+
+function isSqliteSessionMutationConflictError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    error.name === "SqliteSessionMutationConflictError"
+  );
+}
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

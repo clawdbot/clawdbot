@@ -2101,8 +2101,9 @@ describe("createModelSelectionState auto-failover overrides", () => {
       model: "minimax/minimax-m2.7",
     });
 
-    // Origin differs from the current primary but also differs from the override,
-    // so this is a legitimate changed-primary mismatch guard, not pollution.
+    // Origin differs from both the current primary and the override (three-distinct
+    // state). The repair kind is "repair-origin", not "clear-override", so the
+    // fallback override is preserved here and the origin is repaired elsewhere.
     expect(state.provider).toBe("openrouter");
     expect(state.model).toBe("minimax/minimax-m2.7");
     expect(state.resetModelOverride).toBe(false);
