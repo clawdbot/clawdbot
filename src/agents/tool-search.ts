@@ -93,6 +93,34 @@ type ToolSearchBatchGroup = {
 };
 const MAX_BATCH_CANDIDATE_DESCRIPTION_CHARS = 180;
 const MAX_BATCH_CANDIDATE_DESCRIPTION_SCAN_CHARS = MAX_BATCH_CANDIDATE_DESCRIPTION_CHARS * 4;
+const MAX_BATCH_CANDIDATE_METADATA_CHARS = 2_000;
+
+function hasBoundedBatchCandidateMetadata(candidate: ToolSearchCandidate): boolean {
+  const metadata = [
+    candidate.id,
+    candidate.source,
+    candidate.sourceName,
+    candidate.name,
+    candidate.label,
+    candidate.input,
+    candidate.output,
+    candidate.mcp?.serverName,
+    candidate.mcp?.safeServerName,
+    candidate.mcp?.toolName,
+    candidate.mcp?.operation,
+  ];
+  let total = 0;
+  for (const value of metadata) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    total += value.length;
+    if (total > MAX_BATCH_CANDIDATE_METADATA_CHARS) {
+      return false;
+    }
+  }
+  return true;
+}
 
 function compactBatchCandidate(candidate: ToolSearchCandidate): ToolSearchCandidate {
   // Remote catalog descriptions are untrusted. Bound the scanned prefix before
@@ -122,11 +150,18 @@ function boundToolSearchBatchResponse(results: ToolSearchBatchGroup[]): {
   results: ToolSearchBatchGroup[];
   truncated?: true;
 } {
-  const bounded: ToolSearchBatchGroup[] = results.map((result) => ({
-    ...result,
-    candidates: result.candidates.map(compactBatchCandidate),
-  }));
-  let truncated = false;
+  const bounded: ToolSearchBatchGroup[] = results.map((result) => {
+    const candidates = result.candidates
+      .filter(hasBoundedBatchCandidateMetadata)
+      .map(compactBatchCandidate);
+    const groupTruncated = candidates.length < result.candidates.length;
+    return {
+      ...result,
+      candidates,
+      ...(groupTruncated ? { truncated: true as const } : {}),
+    };
+  });
+  let truncated = bounded.some((result) => result.truncated);
   const render = () => ({ results: bounded, ...(truncated ? { truncated: true as const } : {}) });
   while (JSON.stringify(render(), null, 2).length > MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS) {
     const removable = bounded

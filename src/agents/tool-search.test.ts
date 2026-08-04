@@ -525,6 +525,51 @@ describe("Tool Search", () => {
     }
   });
 
+  it("drops oversized untrusted candidate metadata before batch serialization", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const config = {
+      tools: { toolSearch: { enabled: true, mode: "tools", maxSearchLimit: 10 } },
+    } as never;
+    applyToolSearchCatalog({
+      tools: [
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
+        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
+        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
+        mcpPluginTool("remote_large_label", "oversized metadata"),
+      ],
+      config,
+      catalogRef,
+    });
+    const remoteEntry = expectDefined(
+      catalogRef.current?.entries.find((entry) => entry.name === "remote_large_label"),
+      "remote metadata catalog entry",
+    );
+    remoteEntry.label = "m".repeat(20_000);
+
+    const clientTool = fakeTool(`client_large_name_${"n".repeat(20_000)}`, "oversized metadata");
+    addClientToolsToToolSearchCatalog({ tools: [clientTool], config, catalogRef });
+    const searchTool = expectDefined(
+      createToolSearchTools({ config, catalogRef }).find(
+        (tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME,
+      ),
+      "untrusted metadata search tool",
+    );
+
+    const result = resultDetails(
+      await searchTool.execute("call-repeated-huge-metadata", {
+        queries: Array.from({ length: 16 }, () => ({
+          query: "oversized metadata",
+          limit: 2,
+        })),
+      }),
+    );
+    expect(JSON.stringify(result, null, 2).length).toBeLessThanOrEqual(4_000);
+    expect(result.truncated).toBe(true);
+    for (const group of result.results as Array<{ candidates: unknown[]; truncated?: true }>) {
+      expect(group).toEqual({ candidates: [], query: expect.any(String), truncated: true });
+    }
+  });
+
   it("searches batch queries independently while preserving scalar results", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const shared = pluginTool(

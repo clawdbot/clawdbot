@@ -7,6 +7,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   countSessionLogMentions,
+  countSessionLogToolResults,
   countSystemPromptChars,
   fetchQaFixtureJson,
   outputText,
@@ -40,6 +41,7 @@ type LaneResult = {
   gatewayOutputToolNames: string[];
   gatewayOutputText: string;
   sessionLogToolMentions: Record<string, number>;
+  sessionLogTargetToolResults: number;
   targetToolIdentity: {
     source: string;
     pluginId: string;
@@ -153,6 +155,13 @@ async function countToolSearchSessionLogMentions(params: { stateDir: string; tar
       tool_call: "tool_call",
       [params.targetTool]: params.targetTool,
     },
+  });
+}
+
+async function countTargetToolResults(params: { stateDir: string; targetTool: string }) {
+  return countSessionLogToolResults({
+    sessionsDir: path.join(params.stateDir, "agents", "qa", "sessions"),
+    toolName: params.targetTool,
   });
 }
 
@@ -416,6 +425,10 @@ export async function runToolSearchGatewayLane(params: {
     stateDir,
     targetTool: params.fixture.targetTool,
   });
+  const targetToolResultsBefore = await countTargetToolResults({
+    stateDir,
+    targetTool: params.fixture.targetTool,
+  });
   const requestCursorBefore = readQaMockRequestCursor(
     await fetchJson(qaMockRequestCursorUrl(providerBaseUrl)),
   );
@@ -487,6 +500,10 @@ export async function runToolSearchGatewayLane(params: {
     stateDir,
     targetTool: params.fixture.targetTool,
   });
+  const targetToolResultsAfter = await countTargetToolResults({
+    stateDir,
+    targetTool: params.fixture.targetTool,
+  });
   return {
     lane: params.lane,
     status: typeof responseStatus === "string" ? responseStatus : "",
@@ -511,6 +528,7 @@ export async function runToolSearchGatewayLane(params: {
     gatewayOutputToolNames: outputToolNames(response),
     gatewayOutputText: outputText(response),
     sessionLogToolMentions: subtractMentionCounts(mentionCountsAfter, mentionCountsBefore),
+    sessionLogTargetToolResults: targetToolResultsAfter - targetToolResultsBefore,
     targetToolIdentity,
   };
 }
@@ -599,7 +617,7 @@ export function assertToolSearchLaneResults(params: {
 }
 
 export function assertToolSearchBatchLaneResult(params: {
-  tools: LaneResultSummary & Pick<LaneResult, "status">;
+  tools: LaneResultSummary & Pick<LaneResult, "status" | "sessionLogTargetToolResults">;
   targetTool: string;
 }) {
   const { targetTool, tools } = params;
@@ -610,6 +628,7 @@ export function assertToolSearchBatchLaneResult(params: {
         toolOutput: tools.providerToolOutputSnippet,
         output: truncateUtf16Safe(tools.gatewayOutputText, 300),
         mentions: tools.sessionLogToolMentions,
+        targetToolResults: tools.sessionLogTargetToolResults,
       },
       null,
       2,
@@ -645,7 +664,7 @@ export function assertToolSearchBatchLaneResult(params: {
   assert(
     tools.gatewayOutputText.includes("FAKE_PLUGIN_OK") &&
       tools.gatewayOutputText.includes(targetTool) &&
-      (tools.sessionLogToolMentions[targetTool] ?? 0) > 0,
+      tools.sessionLogTargetToolResults > 0,
     `structured lane did not call ${targetTool}: ${debug()}`,
   );
   assert(
@@ -656,5 +675,10 @@ export function assertToolSearchBatchLaneResult(params: {
   assert(
     !tools.providerPlannedTools.includes(targetTool),
     `structured lane exposed direct provider tool ${targetTool}: ${debug()}`,
+  );
+  assert(
+    tools.targetToolIdentity.source === "plugin" &&
+      tools.targetToolIdentity.pluginId === FAKE_PLUGIN_ID,
+    `tools.effective did not attribute ${targetTool} to plugin ${FAKE_PLUGIN_ID}: ${debug()}`,
   );
 }

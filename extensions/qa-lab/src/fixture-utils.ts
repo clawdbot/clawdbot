@@ -303,19 +303,34 @@ function sessionLogScanText(line: string): string | null {
   }
 }
 
-async function countNeedlesInFile(filePath: string, needles: Record<string, string>) {
-  const text = await fs.readFile(filePath, "utf8").catch(() => "");
-  const counts = createCounts(needles);
-  for (const line of text.split(/\r?\n/u)) {
-    const scanText = sessionLogScanText(line);
-    if (scanText === null) {
-      continue;
-    }
-    for (const [key, needle] of Object.entries(needles)) {
-      counts[key] = (counts[key] ?? 0) + countOccurrences(scanText, needle);
-    }
+function sessionLogToolResultName(line: string): string | null {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return null;
   }
-  return counts;
+  try {
+    const record = JSON.parse(trimmed) as unknown;
+    if (!record || typeof record !== "object") {
+      return null;
+    }
+    const event = record as {
+      message?: unknown;
+      role?: unknown;
+      toolName?: unknown;
+      name?: unknown;
+    };
+    const message =
+      event.message && typeof event.message === "object"
+        ? (event.message as { role?: unknown; toolName?: unknown; name?: unknown })
+        : event;
+    if (message.role !== "toolResult" && message.role !== "tool") {
+      return null;
+    }
+    const name = message.toolName ?? message.name;
+    return typeof name === "string" ? name : null;
+  } catch {
+    return null;
+  }
 }
 
 function resolveAgentSqlitePathFromSessionsDir(sessionsDir: string): string | null {
@@ -325,11 +340,25 @@ function resolveAgentSqlitePathFromSessionsDir(sessionsDir: string): string | nu
   return path.join(path.dirname(sessionsDir), "agent", "openclaw-agent.sqlite");
 }
 
-function countNeedlesInSqliteTranscriptEvents(
-  sqlitePath: string,
-  needles: Record<string, string>,
-): Record<string, number> {
-  const counts = createCounts(needles);
+async function visitSessionLogEvents(
+  sessionsDir: string,
+  visit: (eventJson: string) => void,
+): Promise<void> {
+  const files = await fs.readdir(sessionsDir, { recursive: true }).catch(() => []);
+  for (const file of files) {
+    if (typeof file !== "string" || !file.endsWith(".jsonl")) {
+      continue;
+    }
+    const text = await fs.readFile(path.join(sessionsDir, file), "utf8").catch(() => "");
+    for (const line of text.split(/\r?\n/u)) {
+      visit(line);
+    }
+  }
+
+  const sqlitePath = resolveAgentSqlitePathFromSessionsDir(sessionsDir);
+  if (!sqlitePath) {
+    return;
+  }
   let db: DatabaseSync | null = null;
   try {
     db = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
@@ -337,46 +366,19 @@ function countNeedlesInSqliteTranscriptEvents(
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'transcript_events'")
       .get();
     if (!hasTranscriptEvents) {
-      return counts;
+      return;
     }
     const rows = db.prepare("SELECT event_json FROM transcript_events ORDER BY session_id, seq");
     for (const row of rows.iterate() as Iterable<{ event_json?: unknown }>) {
-      if (typeof row.event_json !== "string") {
-        continue;
-      }
-      const scanText = sessionLogScanText(row.event_json);
-      if (scanText === null) {
-        continue;
-      }
-      for (const [key, needle] of Object.entries(needles)) {
-        counts[key] = (counts[key] ?? 0) + countOccurrences(scanText, needle);
+      if (typeof row.event_json === "string") {
+        visit(row.event_json);
       }
     }
-    return counts;
   } catch {
-    return counts;
+    return;
   } finally {
     db?.close();
   }
-}
-
-async function countNeedlesInSqliteTranscriptStore(
-  sessionsDir: string,
-  needles: Record<string, string>,
-): Promise<Record<string, number>> {
-  const sqlitePath = resolveAgentSqlitePathFromSessionsDir(sessionsDir);
-  if (!sqlitePath) {
-    return createCounts(needles);
-  }
-  try {
-    const stat = await fs.stat(sqlitePath);
-    if (!stat.isFile()) {
-      return createCounts(needles);
-    }
-  } catch {
-    return createCounts(needles);
-  }
-  return countNeedlesInSqliteTranscriptEvents(sqlitePath, needles);
 }
 
 export async function countSessionLogMentions(params: {
@@ -384,27 +386,29 @@ export async function countSessionLogMentions(params: {
   needles: Record<string, string>;
 }): Promise<Record<string, number>> {
   const counts = createCounts(params.needles);
-  const files = await fs.readdir(params.sessionsDir, { recursive: true }).catch(() => []);
-  for (const file of files) {
-    if (typeof file !== "string" || !file.endsWith(".jsonl")) {
-      continue;
+  await visitSessionLogEvents(params.sessionsDir, (eventJson) => {
+    const scanText = sessionLogScanText(eventJson);
+    if (scanText === null) {
+      return;
     }
-    const fileCounts = await countNeedlesInFile(
-      path.join(params.sessionsDir, file),
-      params.needles,
-    );
-    for (const [key, count] of Object.entries(fileCounts)) {
-      counts[key] = (counts[key] ?? 0) + count;
+    for (const [key, needle] of Object.entries(params.needles)) {
+      counts[key] = (counts[key] ?? 0) + countOccurrences(scanText, needle);
     }
-  }
-  const sqliteCounts = await countNeedlesInSqliteTranscriptStore(
-    params.sessionsDir,
-    params.needles,
-  );
-  for (const [key, count] of Object.entries(sqliteCounts)) {
-    counts[key] = (counts[key] ?? 0) + count;
-  }
+  });
   return counts;
+}
+
+export async function countSessionLogToolResults(params: {
+  sessionsDir: string;
+  toolName: string;
+}): Promise<number> {
+  let count = 0;
+  await visitSessionLogEvents(params.sessionsDir, (eventJson) => {
+    if (sessionLogToolResultName(eventJson) === params.toolName) {
+      count += 1;
+    }
+  });
+  return count;
 }
 
 export function subtractMentionCounts(
