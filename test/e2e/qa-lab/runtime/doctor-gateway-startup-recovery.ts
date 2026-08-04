@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import net, { type Server } from "node:net";
+import net, { type Server, type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -46,6 +46,7 @@ type GatewayHealthJson = {
 type ForeignListener = {
   previousProcessTitle: string;
   server: Server;
+  sockets: Set<Socket>;
   listening: boolean;
 };
 
@@ -283,7 +284,12 @@ async function getFreePort(): Promise<number> {
 async function listen(port: number): Promise<ForeignListener> {
   const previousProcessTitle = process.title;
   process.title = "qa-port-listener";
-  const server = net.createServer((socket) => socket.destroy());
+  const sockets = new Set<Socket>();
+  const server = net.createServer((socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+    socket.destroy();
+  });
   try {
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
@@ -293,7 +299,7 @@ async function listen(port: number): Promise<ForeignListener> {
     process.title = previousProcessTitle;
     throw error;
   }
-  return { previousProcessTitle, server, listening: true };
+  return { previousProcessTitle, server, sockets, listening: true };
 }
 
 async function closeServer(listener: ForeignListener | undefined): Promise<void> {
@@ -303,7 +309,9 @@ async function closeServer(listener: ForeignListener | undefined): Promise<void>
   try {
     await new Promise<void>((resolve, reject) => {
       listener.server.close((error) => (error ? reject(error) : resolve()));
-      listener.server.closeAllConnections();
+      for (const socket of listener.sockets) {
+        socket.destroy();
+      }
     });
     listener.listening = false;
   } finally {
