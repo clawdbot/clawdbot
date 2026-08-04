@@ -8,11 +8,11 @@ scenario:
     primary:
       - cli.port-and-startup-diagnosis
       - cli.restart-guidance
-  objective: Prove that the real doctor CLI diagnoses a foreign TCP listener and recovers an installed gateway after systemd reaches its restart limit.
+  objective: Prove that the real doctor CLI diagnoses a foreign TCP listener and a systemd restart limit, then hands recovery to the explicit gateway restart command.
   successCriteria:
     - Doctor reports the configured gateway port when a real foreign TCP listener owns it.
     - Doctor recognizes a real failed systemd unit that exhausted StartLimitBurst and emits restart guidance.
-    - Removing the test-owned crash override and running doctor repair restores independently verified gateway status and health.
+    - Removing the test-owned crash override and running the guided gateway restart restores independently verified gateway status and health.
     - Cleanup removes the exact listener, unit override, installed profile service, and profile state.
   docsRefs:
     - docs/cli/doctor.md
@@ -26,7 +26,7 @@ scenario:
   execution:
     kind: script
     path: test/e2e/qa-lab/runtime/doctor-gateway-startup-recovery.ts
-    summary: On an explicitly enabled systemd host, exercise real TCP port ownership, a named-profile start limit, doctor guidance, repair, independent health verification, and exact-unit cleanup.
+    summary: On an explicitly enabled systemd host, exercise real TCP port ownership, a named-profile start limit, doctor guidance, explicit gateway restart, independent health verification, and exact-unit cleanup.
     allowBlockedEvidence: true
     timeoutMs: 480000
     args:
