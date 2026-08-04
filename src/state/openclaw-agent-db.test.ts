@@ -339,6 +339,28 @@ function downgradeCurrentAgentDatabaseToV13(databasePath: string): void {
   }
 }
 
+/** Downgrades the current agent DB to the v14 shape (no entry_valid, no session_key_contract). */
+function downgradeCurrentAgentDatabaseToV14(databasePath: string): void {
+  const { DatabaseSync } = requireNodeSqlite();
+  const database = new DatabaseSync(databasePath);
+  try {
+    database.exec(`
+      PRAGMA foreign_keys = OFF;
+      PRAGMA legacy_alter_table = OFF;
+      DROP TRIGGER IF EXISTS session_nodes_entry_valid_after_insert;
+      DROP TRIGGER IF EXISTS session_nodes_entry_valid_after_entry_update;
+      DROP TRIGGER IF EXISTS session_nodes_entry_valid_after_identity_update;
+      DROP INDEX IF EXISTS idx_agent_session_nodes_entry_valid_pending;
+      ALTER TABLE session_nodes DROP COLUMN entry_valid;
+      DROP TABLE IF EXISTS session_key_contract;
+      PRAGMA user_version = 14;
+      UPDATE schema_meta SET schema_version = 14 WHERE meta_key = 'primary';
+    `);
+  } finally {
+    database.close();
+  }
+}
+
 function readRegisteredAgentDatabaseLastSeenAt(params: {
   agentId: string;
   env?: NodeJS.ProcessEnv;
@@ -1206,6 +1228,87 @@ describe("openclaw agent database", () => {
         .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
         .get(),
     ).toEqual({ schema_version: OPENCLAW_AGENT_SCHEMA_VERSION });
+  });
+
+  it("migrates a genuine v14 database that lacks entry_valid and session_key_contract", () => {
+    expect(OPENCLAW_AGENT_SCHEMA_VERSION).toBe(16);
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const opened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    const databasePath = opened.path;
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    downgradeCurrentAgentDatabaseToV14(databasePath);
+
+    // Seed a genuine v14 session: session_nodes row (no entry_valid column),
+    // session_windows row, and a transcript_events row.
+    const { DatabaseSync } = requireNodeSqlite();
+    const v14 = new DatabaseSync(databasePath);
+    try {
+      v14.exec(`
+        INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, status, created_at, created_via)
+        VALUES ('agent:worker-1:v14', 'v14-session', '{"sessionId":"v14-session","updatedAt":100,"status":"done"}', 100, 'done', 100, 'operator');
+        INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at, status, display_name)
+        VALUES ('v14-session', 'agent:worker-1:v14', 'conversation', 100, 100, 'done', 'v14');
+        INSERT INTO transcript_events (session_id, seq, event_json, created_at)
+        VALUES ('v14-session', 0, '{"type":"message","id":"m1","sessionId":"v14-session"}', 100);
+      `);
+    } finally {
+      v14.close();
+    }
+
+    const reopened = migrateAndOpenLegacyAgentDatabaseForTest({ agentId: "worker-1", env });
+    try {
+      expect(readSqliteNumberPragma(reopened.db, "user_version")).toBe(
+        OPENCLAW_AGENT_SCHEMA_VERSION,
+      );
+      expect(
+        reopened.db
+          .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+          .get(),
+      ).toEqual({ schema_version: OPENCLAW_AGENT_SCHEMA_VERSION });
+
+      // v15 additions are present after the migration.
+      const nodeColumns = new Set(
+        (
+          reopened.db.prepare("PRAGMA table_info(session_nodes)").all() as Array<{ name: string }>
+        ).map((column) => column.name),
+      );
+      expect(nodeColumns.has("entry_valid")).toBe(true);
+      expect(
+        reopened.db
+          .prepare(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_key_contract'",
+          )
+          .get(),
+      ).toBeTruthy();
+
+      // Sessions and transcripts are retained.
+      expect(
+        reopened.db
+          .prepare(
+            "SELECT session_key, current_session_id, entry_json FROM session_nodes WHERE session_key = 'agent:worker-1:v14'",
+          )
+          .get(),
+      ).toMatchObject({
+        session_key: "agent:worker-1:v14",
+        current_session_id: "v14-session",
+      });
+      expect(
+        reopened.db
+          .prepare("SELECT session_id FROM session_windows WHERE session_id = 'v14-session'")
+          .get(),
+      ).toEqual({ session_id: "v14-session" });
+      expect(
+        reopened.db
+          .prepare(
+            "SELECT count(*) AS count FROM transcript_events WHERE session_id = 'v14-session'",
+          )
+          .get(),
+      ).toEqual({ count: 1 });
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+    }
   });
 
   it("migrates v13 session entries, routes, and generations into nodes and windows", () => {

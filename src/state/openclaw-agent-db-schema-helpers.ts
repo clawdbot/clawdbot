@@ -23,6 +23,7 @@ import {
 } from "./openclaw-agent-board-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
+import { ensureSessionEntryValidityProjection } from "./openclaw-agent-db-session-migrations.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   AGENT_V14_ADDITIVE_SCHEMA_SQL,
@@ -114,6 +115,23 @@ function repairAndAssertAgentSchemaGroup(
   assertOpenClawAgentSchemaContains(database, pathname, schemaSql);
 }
 
+const SESSION_KEY_CONTRACT_SCHEMA_START = "CREATE TABLE IF NOT EXISTS session_key_contract (";
+const SESSION_KEY_CONTRACT_SCHEMA_END = "CREATE TABLE IF NOT EXISTS session_windows (";
+
+/**
+ * Ensures the session-key contract table. Shared by steady-state opens and the
+ * v14 migration path: current-schema canonical-index validation assumes the
+ * table exists even though a genuine v14 database predates it.
+ */
+export function ensureSessionKeyContractSchemaInTransaction(db: DatabaseSync): void {
+  const start = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(SESSION_KEY_CONTRACT_SCHEMA_START);
+  const end = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(SESSION_KEY_CONTRACT_SCHEMA_END, start);
+  if (start === -1 || end === -1) {
+    throw new Error("OpenClaw agent session-key contract schema markers are missing.");
+  }
+  db.exec(OPENCLAW_AGENT_SCHEMA_SQL.slice(start, end)); // sqlite-allow-raw -- Idempotent additive lazy ensure.
+}
+
 export function repairAndAssertOpenClawAgentV14SchemaForMigration(
   database: DatabaseSync,
   options: { agentId: string; pathname: string },
@@ -137,6 +155,16 @@ export function repairAndAssertOpenClawAgentV14SchemaForMigration(
       `OpenClaw agent database ${options.pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match 14; repair the ownership metadata before migrating it.`,
     );
   }
+
+  // v15 added the session validity projection (entry_valid) and key contract.
+  // A genuine v14 database has neither, but AGENT_V14_CORE_SCHEMA_SQL is derived
+  // from the current schema and carries idx_agent_session_nodes_entry_valid_pending
+  // (WHERE entry_valid = 0) plus the key-contract table. Repairing canonical
+  // indexes before installing these throws "no such column: entry_valid" and
+  // rolls back the whole migration transaction, so the known v15 additions must
+  // exist first.
+  ensureSessionEntryValidityProjection(database);
+  ensureSessionKeyContractSchemaInTransaction(database);
 
   // v14 always owned the core schema. Board and collaboration groups were
   // lazy, but a partially present group still has to be complete and canonical.
