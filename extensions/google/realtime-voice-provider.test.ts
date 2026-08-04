@@ -1840,7 +1840,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       onClearAudio: vi.fn(),
     });
     // 20ms of PCM16 @ 24 kHz = 480 bytes. On main with rate=1, this would
-    // allocate ~9.6 MB (8000/1 * 240 samples * 2 bytes) before mulaw conversion.
+    // allocate ~3.84 MB (8000/1 * 240 samples * 2 bytes) before mulaw conversion.
     const pcm24k = Buffer.alloc(480);
 
     await bridge.connect();
@@ -1857,7 +1857,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     const output = requireFirstAudio(onAudio);
     // G711 ULAW output is 8 kHz mulaw (1 byte/sample). With normalized 24 kHz
     // input, resamplePcm downsamples 240 samples → 80 samples → 80 bytes mulaw.
-    // On main with rate=1, output would be ~9.6 MB — the fix bounds it to ≤ 80.
+    // On main with rate=1, output would be ~3.84 MB — the fix bounds it to ≤ 80.
     expect(output.length).toBeLessThanOrEqual(pcm24k.length);
     expect(output.length).toBeGreaterThan(0);
   });
