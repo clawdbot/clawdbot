@@ -215,8 +215,6 @@ export async function reconcilePendingFinalDeliveryAfterSettlement(params: {
       const relevantDeliveries = pendingPayloadSet
         ? params.deliveries.filter((delivery) => pendingPayloadSet.has(delivery.payload))
         : params.deliveries;
-      const ownsEveryPendingPayload =
-        !pendingPayloadSet || relevantDeliveries.length === pendingPayloadSet.size;
       const failedBeforeDeliver = relevantDeliveries.filter(
         (delivery) => delivery.outcome === "failed-before-deliver",
       );
@@ -227,7 +225,15 @@ export async function reconcilePendingFinalDeliveryAfterSettlement(params: {
       ) {
         return null;
       }
-      if (pendingPayloadSet && ownsEveryPendingPayload && failedBeforeDeliver.length > 0) {
+      // Data safety: a pending payload with no delivery entry (e.g. content
+      // block-deduped because it was already visible) must not cause a
+      // separately failed-before-deliver payload to be dropped with the whole
+      // marker. Keep the marker whenever anything failed before delivery and
+      // we cannot map the pending payloads, or narrow it to the failed ones.
+      if (!pendingPayloadSet && failedBeforeDeliver.length > 0) {
+        return null;
+      }
+      if (pendingPayloadSet && failedBeforeDeliver.length > 0) {
         const retryText = buildPendingFinalDeliveryRetryText(
           failedBeforeDeliver.map((delivery) => delivery.payload),
         );

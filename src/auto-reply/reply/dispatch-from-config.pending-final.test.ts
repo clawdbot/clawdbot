@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
-import type { ReplyPayload } from "../reply-payload.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import { setReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
 import {
   capturePendingFinalDeliveryIdentity,
   clearPendingFinalDeliveryAfterSuccess,
@@ -169,5 +169,58 @@ describe("pending final delivery restart proof", () => {
     expect(
       loadSessionEntry({ sessionKey, storePath })?.restartRecoveryTerminalRunIds,
     ).toBeUndefined();
+  });
+
+  it("retains the pending final when some payloads failed before delivery and others were block-deduped", async () => {
+    // Three intent payloads are pending; A delivered, B failed before deliver
+    // (proven not sent), C was block-deduped (no delivery entry). The marker
+    // must be retained with B's text — not cleared, or B is permanently lost.
+    const payloadA = setReplyPayloadMetadata(
+      { text: "reply A" },
+      { pendingFinalDeliveryIntentId: "intent-1", pendingFinalDeliveryRetryText: "retry A" },
+    );
+    const payloadB = setReplyPayloadMetadata(
+      { text: "reply B" },
+      { pendingFinalDeliveryIntentId: "intent-1", pendingFinalDeliveryRetryText: "retry B" },
+    );
+    const payloadC = setReplyPayloadMetadata(
+      { text: "reply C" },
+      { pendingFinalDeliveryIntentId: "intent-1", pendingFinalDeliveryRetryText: "retry C" },
+    );
+    await replaceSessionEntry(
+      { storePath, sessionKey },
+      {
+        sessionId: "session",
+        status: "running",
+        startedAt: 10,
+        updatedAt: Date.now(),
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "retry A\n\nretry B\n\nretry C",
+          createdAt: 1,
+          intentId: "intent-1",
+        },
+      },
+    );
+    const identity = capturePendingFinalDeliveryIdentity({
+      intentId: "intent-1",
+      sessionKey,
+      storePath,
+    });
+
+    await reconcilePendingFinalDeliveryAfterSettlement({
+      deliveries: [
+        { outcome: "delivered", payload: payloadA },
+        { outcome: "failed-before-deliver", payload: payloadB },
+      ],
+      identity,
+      replies: [payloadA, payloadB, payloadC],
+      sessionKey,
+      storePath,
+    });
+
+    const entry = loadSessionEntry({ sessionKey, storePath });
+    expect(entry?.pendingFinalDelivery?.kind).toBe("replayable");
+    expect(entry?.pendingFinalDelivery?.text).toContain("retry B");
   });
 });
