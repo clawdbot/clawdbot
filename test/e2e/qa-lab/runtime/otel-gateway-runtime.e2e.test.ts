@@ -7,7 +7,7 @@ import {
   startQaGatewayChild,
   startQaMockOpenAiServer,
 } from "../../../../extensions/qa-lab/api.js";
-import { startLocalOtlpReceiver } from "./otel-test-support.js";
+import { type CapturedSpan, startLocalOtlpReceiver } from "./otel-test-support.js";
 
 async function startOtlpReceiver() {
   const receiver = startLocalOtlpReceiver();
@@ -44,6 +44,20 @@ async function waitFor<T>(
       context === undefined ? "" : `: ${JSON.stringify(context)}`
     }`,
   );
+}
+
+function indexSpansById(spans: CapturedSpan[]): Map<string, CapturedSpan> {
+  return new Map(spans.flatMap((span) => (span.spanId ? ([[span.spanId, span]] as const) : [])));
+}
+
+function expectResolvedParent(
+  span: CapturedSpan,
+  spansById: ReadonlyMap<string, CapturedSpan>,
+): CapturedSpan {
+  expect(span.parentSpanId).toBeTruthy();
+  const parent = span.parentSpanId ? spansById.get(span.parentSpanId) : undefined;
+  expect(parent).toBeDefined();
+  return parent!;
 }
 
 describe("diagnostics-otel gateway runtime", () => {
@@ -204,7 +218,7 @@ describe("diagnostics-otel gateway runtime", () => {
           const sameTrace = activeReceiver.capturedSpans.filter(
             (span) => span.traceId === toolError.traceId,
           );
-          const run = sameTrace.find((span) => span.name === "openclaw.run");
+          const runs = sameTrace.filter((span) => span.name === "openclaw.run");
           const harness = sameTrace.find((span) => span.name === "openclaw.harness.run");
           const modelCalls = sameTrace.filter((span) => span.name === "openclaw.model.call");
           const terminal = sameTrace.find(
@@ -213,8 +227,8 @@ describe("diagnostics-otel gateway runtime", () => {
               span.attributes["openclaw.channel"] === "qa-channel" &&
               span.attributes["openclaw.outcome"] === "completed",
           );
-          return run && harness && modelCalls.length >= 2 && terminal
-            ? { harness, modelCalls, run, sameTrace, terminal, toolError }
+          return runs.length >= 2 && harness && modelCalls.length >= 2 && terminal
+            ? { harness, modelCalls, runs, sameTrace, terminal, toolError }
             : undefined;
         },
         45_000,
@@ -231,14 +245,20 @@ describe("diagnostics-otel gateway runtime", () => {
         }),
       );
 
-      expect(failureEvidence.toolError.parentSpanId).toBeTruthy();
-      expect(failureEvidence.harness.parentSpanId).toBeTruthy();
-      expect(failureEvidence.modelCalls.every((span) => span.parentSpanId)).toBe(true);
-      expect(
-        failureEvidence.sameTrace.filter((span) => span.name === "openclaw.run").length,
-      ).toBeGreaterThanOrEqual(2);
-      expect(failureEvidence.run.spanId).toBeTruthy();
-      expect(failureEvidence.terminal.spanId).toBeTruthy();
+      const failureSpansById = indexSpansById(failureEvidence.sameTrace);
+      expect(failureEvidence.terminal.parentSpanId).toBeFalsy();
+      expect(expectResolvedParent(failureEvidence.harness, failureSpansById)).toBe(
+        failureEvidence.terminal,
+      );
+      for (const run of failureEvidence.runs) {
+        expect(expectResolvedParent(run, failureSpansById)).toBe(failureEvidence.harness);
+      }
+      for (const modelCall of failureEvidence.modelCalls) {
+        expect(expectResolvedParent(modelCall, failureSpansById).name).toBe("openclaw.run");
+      }
+      expect(expectResolvedParent(failureEvidence.toolError, failureSpansById).name).toBe(
+        "openclaw.run",
+      );
 
       const successEvidence = activeReceiver.capturedSpans.find(
         (span) =>
@@ -251,25 +271,29 @@ describe("diagnostics-otel gateway runtime", () => {
       const successTrace = activeReceiver.capturedSpans.filter(
         (span) => span.traceId === successEvidence?.traceId,
       );
-      expect(successTrace.some((span) => span.name === "openclaw.run")).toBe(true);
-      expect(
-        successTrace.some(
-          (span) => span.name === "openclaw.harness.run" && Boolean(span.parentSpanId),
-        ),
-      ).toBe(true);
-      expect(
-        successTrace.some(
-          (span) => span.name === "openclaw.model.call" && Boolean(span.parentSpanId),
-        ),
-      ).toBe(true);
-      expect(
-        successTrace.some(
-          (span) =>
-            span.name === "openclaw.message.processed" &&
-            span.attributes["openclaw.channel"] === "qa-channel" &&
-            span.attributes["openclaw.outcome"] === "completed",
-        ),
-      ).toBe(true);
+      const successTerminal = successTrace.find(
+        (span) =>
+          span.name === "openclaw.message.processed" &&
+          span.attributes["openclaw.channel"] === "qa-channel" &&
+          span.attributes["openclaw.outcome"] === "completed",
+      );
+      const successHarness = successTrace.find((span) => span.name === "openclaw.harness.run");
+      const successRuns = successTrace.filter((span) => span.name === "openclaw.run");
+      const successModelCalls = successTrace.filter((span) => span.name === "openclaw.model.call");
+      expect(successTerminal).toBeDefined();
+      expect(successHarness).toBeDefined();
+      expect(successRuns.length).toBeGreaterThanOrEqual(1);
+      expect(successModelCalls.length).toBeGreaterThanOrEqual(1);
+      const successSpansById = indexSpansById(successTrace);
+      expect(successTerminal?.parentSpanId).toBeFalsy();
+      expect(expectResolvedParent(successHarness!, successSpansById)).toBe(successTerminal);
+      for (const run of successRuns) {
+        expect(expectResolvedParent(run, successSpansById)).toBe(successHarness);
+      }
+      for (const modelCall of successModelCalls) {
+        expect(expectResolvedParent(modelCall, successSpansById).name).toBe("openclaw.run");
+      }
+      expect(expectResolvedParent(successEvidence!, successSpansById).name).toBe("openclaw.run");
     } finally {
       await settleCleanup(
         async () => {
