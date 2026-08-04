@@ -11,6 +11,10 @@ import { redactRegisteredSecretValues } from "../logging/secret-redaction-regist
 
 export const REDACTED_CAPTURE_HEADER_VALUE = "[REDACTED]";
 
+export function redactCaptureText(value: string): string {
+  return redactRegisteredSecretValues(value, () => REDACTED_CAPTURE_HEADER_VALUE);
+}
+
 const SENSITIVE_CAPTURE_HEADER_NAMES = new Set([
   "authorization",
   "proxy-authorization",
@@ -45,6 +49,63 @@ function isSensitiveCaptureHeaderName(name: string): boolean {
   return SENSITIVE_CAPTURE_HEADER_NAME_FRAGMENTS.some((fragment) => normalized.includes(fragment));
 }
 
+export type CaptureHeaderInputLimits = {
+  maxEntries: number;
+  maxNameChars: number;
+  maxValueChars: number;
+  maxTotalValueChars: number;
+};
+
+export function redactedCaptureHeadersBounded(
+  headers: Headers | Record<string, string | string[] | undefined> | undefined,
+  limits: CaptureHeaderInputLimits,
+): { headers: Record<string, string>; truncated: boolean } {
+  const entries = headers instanceof Headers ? headers.entries() : Object.entries(headers ?? {});
+  const redacted: Record<string, string> = {};
+  let processedEntries = 0;
+  let retainedValueChars = 0;
+  let truncated = false;
+  for (const [name, value] of entries) {
+    if (processedEntries >= limits.maxEntries) {
+      truncated = true;
+      break;
+    }
+    processedEntries += 1;
+    if (name.length > limits.maxNameChars) {
+      truncated = true;
+      continue;
+    }
+    if (isSensitiveCaptureHeaderName(name)) {
+      redacted[name] = REDACTED_CAPTURE_HEADER_VALUE;
+      continue;
+    }
+    const remainingTotalChars = limits.maxTotalValueChars - retainedValueChars;
+    const maxAdmittedValueChars = Math.min(limits.maxValueChars, remainingTotalChars);
+    let valueChars = 0;
+    let valueTooLarge = false;
+    if (Array.isArray(value)) {
+      for (const [index, part] of value.entries()) {
+        valueChars += part.length + (index > 0 ? 2 : 0);
+        if (valueChars > maxAdmittedValueChars) {
+          valueTooLarge = true;
+          break;
+        }
+      }
+    } else {
+      valueChars = value?.length ?? 0;
+      valueTooLarge = valueChars > maxAdmittedValueChars;
+    }
+    if (valueTooLarge) {
+      truncated = true;
+      continue;
+    }
+    const flattened = Array.isArray(value) ? value.join(", ") : (value ?? "");
+    redacted[name] = redactCaptureText(flattened);
+    retainedValueChars += valueChars;
+  }
+  return { headers: redacted, truncated };
+}
+
 export function redactedCaptureHeaders(
   headers: Headers | Record<string, string | string[] | undefined> | undefined,
   additionalSensitiveNames?: Iterable<string>,
@@ -68,7 +129,7 @@ export function redactedCaptureHeaders(
       continue;
     }
     const flattened = Array.isArray(value) ? value.join(", ") : (value ?? "");
-    redacted[name] = redactRegisteredSecretValues(flattened, () => REDACTED_CAPTURE_HEADER_VALUE);
+    redacted[name] = redactCaptureText(flattened);
   }
   return redacted;
 }

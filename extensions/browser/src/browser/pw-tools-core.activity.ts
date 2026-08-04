@@ -1,3 +1,4 @@
+import { snapshotBoundedNetworkRequests } from "./pw-network-capture.js";
 /**
  * Activity inspection helpers that expose observed page errors, network
  * requests, and console messages from Playwright page state.
@@ -33,7 +34,7 @@ export async function getNetworkRequestsViaPlaywright(opts: {
 }): Promise<{ requests: BrowserNetworkRequest[] }> {
   const page = await getPageForTargetId(opts);
   const state = ensurePageState(page);
-  const raw = [...state.requests];
+  const raw = snapshotBoundedNetworkRequests(state.requests);
   const filter = typeof opts.filter === "string" ? opts.filter.trim() : "";
   const requests = filter ? raw.filter((r) => r.url.includes(filter)) : raw;
   if (opts.clear) {

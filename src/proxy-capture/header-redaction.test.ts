@@ -2,13 +2,26 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
-import { redactedCaptureHeaders } from "./header-redaction.js";
+import {
+  redactCaptureText,
+  redactedCaptureHeaders,
+  redactedCaptureHeadersBounded,
+} from "./header-redaction.js";
 
 afterEach(() => {
   resetSecretRedactionRegistryForTest();
 });
 
 describe("redactedCaptureHeaders", () => {
+  it("fully redacts registered secrets in capture text", () => {
+    const secret = "registered-secret-with-visible-edges";
+    registerSecretValueForRedaction(secret);
+    const redacted = redactCaptureText(`before ${secret} after`);
+    expect(redacted).toBe("before [REDACTED] after");
+    expect(redacted).not.toContain(secret.slice(0, 6));
+    expect(redacted).not.toContain(secret.slice(-4));
+  });
+
   it("redacts credential-bearing header names regardless of case", () => {
     const redacted = redactedCaptureHeaders({
       Authorization: "Bearer live-token",
@@ -21,6 +34,27 @@ describe("redactedCaptureHeaders", () => {
       COOKIE: "[REDACTED]",
       "X-Api-Key": "[REDACTED]",
       "content-type": "application/json",
+    });
+  });
+
+  it("bounds header inputs before redacting ordinary values", () => {
+    const captured = redactedCaptureHeadersBounded(
+      {
+        authorization: "x".repeat(10_000),
+        "x-oversized": "x".repeat(101),
+        "x-visible": "kept",
+        "x-after-limit": "omitted",
+      },
+      {
+        maxEntries: 3,
+        maxNameChars: 40,
+        maxValueChars: 100,
+        maxTotalValueChars: 100,
+      },
+    );
+    expect(captured).toEqual({
+      headers: { authorization: "[REDACTED]", "x-visible": "kept" },
+      truncated: true,
     });
   });
 

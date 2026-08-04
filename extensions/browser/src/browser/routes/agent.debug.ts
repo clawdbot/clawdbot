@@ -7,6 +7,8 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PwAiModule } from "../pw-ai-module.js";
+import { boundNetworkRequestsPayload } from "../pw-network-capture.js";
+import type { BrowserNetworkRequest } from "../pw-session.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
   readBody,
@@ -32,6 +34,7 @@ async function sendPlaywrightDebugCollection(params: {
   ctx: BrowserRouteContext;
   targetId?: string;
   feature: string;
+  boundNetworkPayload?: boolean;
   collect: (ctx: { cdpUrl: string; targetId: string; pw: PwAiModule }) => Promise<object>;
 }): Promise<void> {
   await withPlaywrightRouteContext({
@@ -44,7 +47,14 @@ async function sendPlaywrightDebugCollection(params: {
     run: async ({ cdpUrl, tab, pw, resolveTabUrl }) => {
       const result = await params.collect({ cdpUrl, targetId: tab.targetId, pw });
       const url = await resolveTabUrl(tab.url);
-      params.res.json({ ...browserDebugTargetPayload(tab.targetId, url), ...result });
+      const payload = { ...browserDebugTargetPayload(tab.targetId, url), ...result };
+      params.res.json(
+        params.boundNetworkPayload
+          ? boundNetworkRequestsPayload(
+              payload as typeof payload & { requests: BrowserNetworkRequest[] },
+            )
+          : payload,
+      );
     },
   });
 }
@@ -107,6 +117,7 @@ export function registerBrowserAgentDebugRoutes(
       ctx,
       targetId,
       feature: "network requests",
+      boundNetworkPayload: true,
       collect: async ({ cdpUrl, targetId: targetIdLocal, pw }) =>
         await pw.getNetworkRequestsViaPlaywright({
           cdpUrl,

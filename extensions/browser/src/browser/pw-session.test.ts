@@ -1,4 +1,5 @@
 // Browser tests cover pw session plugin behavior.
+import { Buffer } from "node:buffer";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -6,6 +7,12 @@ import type { Frame, Page } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
 import { createDownloadCaptureForPage } from "./pw-download-capture.js";
+import {
+  boundNetworkRequestsPayload,
+  MAX_NETWORK_CAPTURE_BYTES,
+  networkCaptureByteLength,
+  snapshotBoundedNetworkRequests,
+} from "./pw-network-capture.js";
 import {
   beginActionDownloadCaptureOnPage,
   ensurePageState,
@@ -764,21 +771,32 @@ describe("pw-session ensurePageState", () => {
     expect(isDownloadStartingNavigationError(new Error("Navigation failed"))).toBe(false);
   });
 
-  it("tracks page errors and network requests (best-effort)", () => {
+  it("tracks page errors and network request details (best-effort)", () => {
     const { page, handlers } = fakePage();
     const state = ensurePageState(page);
 
     const req = {
-      method: () => "GET",
-      url: () => "https://example.com/api",
+      method: () => "POST",
+      url: () => "https://example.com/api?token=test-secret-credential-value",
       resourceType: () => "xhr",
-      failure: () => ({ errorText: "net::ERR_FAILED" }),
+      headers: () => ({
+        authorization: "Bearer test-secret-credential-value",
+        "content-type": "application/json",
+        "user-agent": "OpenClaw test",
+      }),
+      postData: () => '{"name":"item","password":"test-secret-credential-value"}',
+      failure: () => ({ errorText: "net::ERR_FAILED Bearer test-secret-credential-value" }),
     } as unknown as import("playwright-core").Request;
 
     const resp = {
       request: () => req,
       status: () => 500,
+      statusText: () => "Internal Server Error",
       ok: () => false,
+      headers: () => ({
+        "content-type": "application/json",
+        "set-cookie": "session=test-secret-credential-value",
+      }),
     } as unknown as import("playwright-core").Response;
 
     handlers.get("request")?.[0]?.(req);
@@ -788,12 +806,177 @@ describe("pw-session ensurePageState", () => {
 
     expect(state.errors.at(-1)?.message).toBe("boom");
     const request = state.requests.at(-1);
-    expect(request?.method).toBe("GET");
-    expect(request?.url).toBe("https://example.com/api");
+    expect(request?.method).toBe("POST");
+    expect(request?.url).toContain("https://example.com/api?token=");
+    expect(request?.url).not.toContain("test-secret-credential-value");
     expect(request?.resourceType).toBe("xhr");
+    expect(request?.requestHeaders).toEqual({
+      authorization: "[REDACTED]",
+      "content-type": "application/json",
+      "user-agent": "OpenClaw test",
+    });
+    expect(request?.requestBody).toContain('"name":"item"');
+    expect(request?.requestBody).not.toContain("test-secret-credential-value");
     expect(request?.status).toBe(500);
+    expect(request?.statusText).toBe("Internal Server Error");
     expect(request?.ok).toBe(false);
-    expect(request?.failureText).toBe("net::ERR_FAILED");
+    expect(request?.responseHeaders).toEqual({
+      "content-type": "application/json",
+      "set-cookie": "[REDACTED]",
+    });
+    expect(request?.failureText).toContain("net::ERR_FAILED");
+    expect(request?.failureText).not.toContain("test-secret-credential-value");
+  });
+
+  it("bounds captured network request bodies", () => {
+    const { page, handlers } = fakePage();
+    const state = ensurePageState(page);
+    const requestBody = `prefix-${"x".repeat(64_000)}`;
+    const req = {
+      method: () => "POST",
+      url: () => "https://example.com/upload",
+      resourceType: () => "fetch",
+      headers: () => ({}),
+      postData: () => requestBody,
+    } as unknown as import("playwright-core").Request;
+
+    handlers.get("request")?.[0]?.(req);
+
+    const request = state.requests.at(-1);
+    expect(request?.requestBody).toHaveLength(64_000);
+    expect(request?.requestBody).toBe(requestBody.slice(0, 64_000));
+    expect(request?.requestBodyTruncated).toBe(true);
+  });
+
+  it("omits request bodies that exceed the bounded redaction input", () => {
+    const { page, handlers } = fakePage();
+    const state = ensurePageState(page);
+    const req = {
+      method: () => "POST",
+      url: () => "https://example.com/oversized",
+      resourceType: () => "fetch",
+      headers: () => ({}),
+      postData: () => "x".repeat(300_000),
+    } as unknown as import("playwright-core").Request;
+
+    handlers.get("request")?.[0]?.(req);
+
+    expect(state.requests.at(-1)?.requestBody).toBe("[OMITTED: exceeds capture limit]");
+    expect(state.requests.at(-1)?.requestBodyTruncated).toBe(true);
+    expect(state.requests.at(-1)?.requestBodyOmitted).toBe(true);
+  });
+
+  it("enforces one aggregate byte budget across captured requests", () => {
+    const { page, handlers } = fakePage();
+    const state = ensurePageState(page);
+
+    for (let index = 0; index < 20; index += 1) {
+      const req = {
+        method: () => "POST",
+        url: () => `https://example.com/upload/${index}`,
+        resourceType: () => "fetch",
+        headers: () => ({ "x-request-index": String(index) }),
+        postData: () => "x".repeat(64_000),
+      } as unknown as import("playwright-core").Request;
+      handlers.get("request")?.[0]?.(req);
+    }
+
+    expect(state.requests.length).toBeLessThan(20);
+    expect(state.requests.at(-1)?.url).toBe("https://example.com/upload/19");
+    expect(networkCaptureByteLength(state.requests)).toBeLessThanOrEqual(MAX_NETWORK_CAPTURE_BYTES);
+  });
+
+  it("bounds captured header maps and marks omitted values", () => {
+    const { page, handlers } = fakePage();
+    const state = ensurePageState(page);
+    const req = {
+      method: () => "GET",
+      url: () => "https://example.com/headers",
+      resourceType: () => "fetch",
+      headers: () => ({ "x-huge": "x".repeat(70_000), "x-small": "kept" }),
+      postData: () => null,
+    } as unknown as import("playwright-core").Request;
+
+    handlers.get("request")?.[0]?.(req);
+
+    expect(state.requests.at(-1)?.requestHeaders).toEqual({ "x-small": "kept" });
+    expect(state.requests.at(-1)?.requestHeadersTruncated).toBe(true);
+    expect(networkCaptureByteLength(state.requests)).toBeLessThanOrEqual(MAX_NETWORK_CAPTURE_BYTES);
+  });
+
+  it("reapplies the aggregate budget when response details arrive", () => {
+    const { page, handlers } = fakePage();
+    const state = ensurePageState(page);
+    const requests: import("playwright-core").Request[] = [];
+    for (let index = 0; index < 16; index += 1) {
+      const req = {
+        method: () => "POST",
+        url: () => `https://example.com/response-budget/${index}`,
+        resourceType: () => "fetch",
+        headers: () => ({}),
+        postData: () => "x".repeat(60_000),
+      } as unknown as import("playwright-core").Request;
+      requests.push(req);
+      handlers.get("request")?.[0]?.(req);
+    }
+    const retainedBeforeResponse = state.requests.length;
+    const lastRequest = requests.at(-1);
+    const resp = {
+      request: () => lastRequest,
+      status: () => 200,
+      statusText: () => "OK",
+      ok: () => true,
+      headers: () => ({ "x-response-detail": "y".repeat(60_000) }),
+    } as unknown as import("playwright-core").Response;
+
+    handlers.get("response")?.[0]?.(resp);
+
+    expect(state.requests.length).toBeLessThan(retainedBeforeResponse);
+    expect(state.requests.at(-1)?.responseHeaders?.["x-response-detail"]).toHaveLength(60_000);
+    expect(networkCaptureByteLength(state.requests)).toBeLessThanOrEqual(MAX_NETWORK_CAPTURE_BYTES);
+  });
+
+  it("returns a detached aggregate-bounded network snapshot", () => {
+    const { page, handlers } = fakePage();
+    const state = ensurePageState(page);
+    const req = {
+      method: () => "POST",
+      url: () => "https://example.com/snapshot",
+      resourceType: () => "fetch",
+      headers: () => ({ "x-request-detail": "before" }),
+      postData: () => "x".repeat(64_000),
+    } as unknown as import("playwright-core").Request;
+    handlers.get("request")?.[0]?.(req);
+
+    const snapshot = snapshotBoundedNetworkRequests(state.requests);
+    const retained = expectDefined(state.requests[0]);
+    const retainedHeaders = expectDefined(retained.requestHeaders);
+    retainedHeaders["x-request-detail"] = "after";
+
+    expect(snapshot[0]?.requestHeaders?.["x-request-detail"]).toBe("before");
+    expect(networkCaptureByteLength(snapshot)).toBeLessThanOrEqual(MAX_NETWORK_CAPTURE_BYTES);
+  });
+
+  it("bounds the complete network endpoint payload", () => {
+    const requests = Array.from({ length: 20 }, (_, index) => ({
+      id: `r${index}`,
+      timestamp: new Date(0).toISOString(),
+      method: "POST",
+      url: `https://example.com/${index}`,
+      requestBody: "x".repeat(64_000),
+    }));
+    const payload = boundNetworkRequestsPayload({
+      ok: true as const,
+      targetId: "target-1",
+      url: `https://example.com/?token=${"x".repeat(300_000)}`,
+      requests,
+    });
+
+    expect(Buffer.byteLength(JSON.stringify(payload), "utf8")).toBeLessThanOrEqual(
+      MAX_NETWORK_CAPTURE_BYTES,
+    );
+    expect(payload.url).toBe("[OMITTED: exceeds capture limit]");
+    expect(payload.requests.at(-1)?.id).toBe("r19");
   });
 
   it("drops state on page close", () => {

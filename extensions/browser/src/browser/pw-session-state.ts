@@ -3,6 +3,12 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import type { ConsoleMessage, Dialog, Frame, Page, Request, Response } from "playwright-core";
 import { saveBrowserDownload, type BrowserDownloadCaptureOptions } from "./pw-download-capture.js";
 import {
+  captureNetworkFailure,
+  captureNetworkRequest,
+  captureNetworkResponse,
+  retainBoundedNetworkRequests,
+} from "./pw-network-capture.js";
+import {
   MAX_CONSOLE_MESSAGES,
   MAX_NETWORK_REQUESTS,
   MAX_PAGE_ERRORS,
@@ -258,16 +264,10 @@ export function ensurePageState(page: Page): PageState {
       state.nextRequestId += 1;
       const id = `r${state.nextRequestId}`;
       state.requestIds.set(req, id);
-      state.requests.push({
-        id,
-        timestamp: new Date().toISOString(),
-        method: req.method(),
-        url: req.url(),
-        resourceType: req.resourceType(),
-      });
-      if (state.requests.length > MAX_NETWORK_REQUESTS) {
-        state.requests.shift();
-      }
+      state.requests = retainBoundedNetworkRequests(
+        [...state.requests, captureNetworkRequest(req, id)],
+        MAX_NETWORK_REQUESTS,
+      );
     });
     page.on("response", (resp: Response) => {
       const req = resp.request();
@@ -279,8 +279,12 @@ export function ensurePageState(page: Page): PageState {
       if (!rec) {
         return;
       }
-      rec.status = resp.status();
-      rec.ok = resp.ok();
+      state.requests = retainBoundedNetworkRequests(
+        state.requests.map((request) =>
+          request.id === id ? captureNetworkResponse(request, resp) : request,
+        ),
+        MAX_NETWORK_REQUESTS,
+      );
     });
     page.on("requestfailed", (req: Request) => {
       const id = state.requestIds.get(req);
@@ -291,8 +295,12 @@ export function ensurePageState(page: Page): PageState {
       if (!rec) {
         return;
       }
-      rec.failureText = req.failure()?.errorText;
-      rec.ok = false;
+      state.requests = retainBoundedNetworkRequests(
+        state.requests.map((request) =>
+          request.id === id ? captureNetworkFailure(request, req.failure()?.errorText) : request,
+        ),
+        MAX_NETWORK_REQUESTS,
+      );
     });
     page.on("dialog", (dialog: Dialog) => {
       observeDialog(state, dialog);

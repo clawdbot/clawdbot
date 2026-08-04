@@ -22,11 +22,23 @@ export type BrowserNetworkRequest = {
   id: string;
   timestamp: string;
   method: string;
+  methodTruncated?: boolean;
   url: string;
+  urlTruncated?: boolean;
   resourceType?: string;
+  requestHeaders?: Record<string, string>;
+  requestHeadersTruncated?: boolean;
+  requestBody?: string;
+  requestBodyTruncated?: boolean;
+  requestBodyOmitted?: boolean;
   status?: number;
+  statusText?: string;
+  statusTextTruncated?: boolean;
   ok?: boolean;
+  responseHeaders?: Record<string, string>;
+  responseHeadersTruncated?: boolean;
   failureText?: string;
+  failureTextTruncated?: boolean;
 };
 
 /** Observed browser dialog record tracked for agent-visible state. */

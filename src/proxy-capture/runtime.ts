@@ -3,12 +3,9 @@ import { isUtf8 } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { URL } from "node:url";
 import { normalizeRequestInitHeadersForFetch } from "../infra/fetch-headers.js";
-import {
-  hasRegisteredSecretValuesForRedaction,
-  redactRegisteredSecretValues,
-} from "../logging/secret-redaction-registry.js";
+import { hasRegisteredSecretValuesForRedaction } from "../logging/secret-redaction-registry.js";
 import { resolveDebugProxySettings, type DebugProxySettings } from "./env.js";
-import { redactedCaptureHeaders, REDACTED_CAPTURE_HEADER_VALUE } from "./header-redaction.js";
+import { redactCaptureText, redactedCaptureHeaders } from "./header-redaction.js";
 import {
   closeDebugProxyCaptureStore,
   getDebugProxyCaptureStore,
@@ -180,8 +177,7 @@ function redactCaptureUrl(rawUrl: string): string {
   } catch {
     return "https://redacted.invalid/%5BREDACTED%5D";
   }
-  const redactComponent = (value: string) =>
-    redactRegisteredSecretValues(value, () => REDACTED_CAPTURE_HEADER_VALUE);
+  const redactComponent = (value: string) => redactCaptureText(value);
   const decodeComponent = (value: string) => {
     try {
       return decodeURIComponent(value);
@@ -233,10 +229,6 @@ function redactCaptureUrl(rawUrl: string): string {
   return redactComponent(serialized) === serialized
     ? serialized
     : `${url.protocol}//redacted.invalid/%5BREDACTED%5D`;
-}
-
-function redactCaptureText(value: string): string {
-  return redactRegisteredSecretValues(value, () => REDACTED_CAPTURE_HEADER_VALUE);
 }
 
 function redactCapturePayload(value: string | Buffer | null | undefined): string | Buffer | null {
