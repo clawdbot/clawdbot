@@ -1145,7 +1145,14 @@ export function handleToolExecutionStart(
       stream: "tool",
       data: toolStartEventData,
     });
-    ctx.params.trajectoryRecorder?.recordEvent("tool.call", toolStartEventData);
+    // Persisted rows use the canonical `arguments` field the trajectory export
+    // consumes (markInvokedSkills); the live tool stream keeps its `args` contract.
+    ctx.params.trajectoryRecorder?.recordEvent("tool.call", {
+      phase: "start",
+      name: toolName,
+      toolCallId,
+      arguments: toolStartEventData.args,
+    });
     const itemData: AgentItemEventData = {
       itemId: buildToolItemId(toolCallId),
       phase: "start",

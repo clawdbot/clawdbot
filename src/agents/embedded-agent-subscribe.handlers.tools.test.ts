@@ -3520,12 +3520,16 @@ describe("tool trajectory recording", () => {
     );
 
     expect(recorded.map((entry) => entry.type)).toEqual(["tool.call", "tool.result"]);
-    expect(requireRecorded(recorded, "tool.call")).toEqual(startEvent.data);
-    expectRecordFields(requireRecorded(recorded, "tool.call"), "recorded tool.call", {
+    const liveArgs = (startEvent.data as { args?: unknown }).args;
+    expect(liveArgs).toEqual({
+      sessionKey: "agent:main:worker",
+      message: "please review the patch",
+    });
+    expect(requireRecorded(recorded, "tool.call")).toEqual({
       phase: "start",
       name: "sessions_send",
       toolCallId: "tool-delegation-1",
-      args: { sessionKey: "agent:main:worker", message: "please review the patch" },
+      arguments: liveArgs,
     });
     expect(requireRecorded(recorded, "tool.result")).toEqual({
       ...resultEvent.data,
@@ -3563,7 +3567,7 @@ describe("tool trajectory recording", () => {
       args: { apiKey: "sk-1234567890abcdefXYZ", model: "gpt-4" },
     });
 
-    const serialized = JSON.stringify(requireRecorded(recorded, "tool.call").args);
+    const serialized = JSON.stringify(requireRecorded(recorded, "tool.call").arguments);
     expect(serialized).not.toContain("sk-1234567890abcdefXYZ");
     expect(serialized).toContain("gpt-4");
   });

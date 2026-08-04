@@ -1869,6 +1869,10 @@ describe("exportTrajectoryBundle", () => {
                 id: "weather",
                 filePath: path.join(tmpDir, "skills", "weather", "SKILL.md"),
               },
+              {
+                id: "deploy",
+                filePath: path.join(tmpDir, "skills", "deploy", "SKILL.md"),
+              },
             ],
           },
           prompting: {
@@ -1914,6 +1918,25 @@ describe("exportTrajectoryBundle", () => {
             completedCount: 1,
             activeCount: 0,
           },
+        },
+      },
+      {
+        // Pins the persisted native-runner tool.call shape: skill invocation
+        // detection must consume the canonical `arguments` field it records.
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "session-1",
+        source: "runtime",
+        type: "tool.call",
+        ts: "2026-04-22T08:00:04.000Z",
+        seq: 6,
+        sourceSeq: 6,
+        sessionId: "session-1",
+        data: {
+          phase: "start",
+          name: "read",
+          toolCallId: "native-tool-1",
+          arguments: { path: path.join(tmpDir, "skills", "deploy", "SKILL.md") },
         },
       },
     ];
@@ -1984,6 +2007,8 @@ describe("exportTrajectoryBundle", () => {
     };
     expect(metadata.skills?.entries?.[0]?.id).toBe("weather");
     expect(metadata.skills?.entries?.[0]?.invoked).toBe(true);
+    expect(metadata.skills?.entries?.[1]?.id).toBe("deploy");
+    expect(metadata.skills?.entries?.[1]?.invoked).toBe(true);
     const prompts = fs.readFileSync(path.join(outputDir, "prompts.json"), "utf8");
     const artifacts = fs.readFileSync(path.join(outputDir, "artifacts.json"), "utf8");
     const systemPrompt = fs.readFileSync(path.join(outputDir, "system-prompt.txt"), "utf8");

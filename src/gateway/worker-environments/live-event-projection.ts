@@ -74,7 +74,13 @@ export function recordWorkerLiveTrajectoryEvent(
   let recorded = false;
   if (event.kind === "tool") {
     if (event.payload.phase === "start") {
-      recorder.recordEvent("tool.call", data);
+      // Persisted rows use the canonical `arguments` field the trajectory export
+      // consumes; the live worker event keeps its `args` contract.
+      const { args, ...call } = data;
+      recorder.recordEvent("tool.call", {
+        ...call,
+        ...(args === undefined ? {} : { arguments: args }),
+      });
       recorded = true;
     } else if (event.payload.phase === "result") {
       recorder.recordEvent("tool.result", {
