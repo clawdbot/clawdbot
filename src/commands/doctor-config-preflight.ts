@@ -29,6 +29,11 @@ import { resolveHomeDir } from "../utils.js";
 import { noteIncludeConfinementWarning } from "./doctor-config-analysis.js";
 import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
 import {
+  needsRefreshedPluginIndexPersistence,
+  persistRefreshedPluginIndex,
+  type DoctorConfigPreflightPluginSnapshotRead,
+} from "./doctor-config-preflight-plugin-index.js";
+import {
   formatStartupPluginVerificationFailure,
   refreshStartupPluginQuarantine,
   runStartupUpgradeConvergence,
@@ -263,6 +268,7 @@ export async function runDoctorConfigPreflight(
   let startupMigrationEnv = process.env;
   let shouldRecordStateCheckpoint = false;
   let shouldRecordStartupCheckpoint = false;
+  let shouldPersistRefreshedPluginIndex: boolean;
   let migrationCheckpointIdentity: MigrationCheckpointIdentity | null = null;
   let skipPristineStartupStateMigrations = options.skipPristineStartupStateMigrations === true;
   let skipPristineCoreStateMigrations =
@@ -274,12 +280,23 @@ export async function runDoctorConfigPreflight(
   const cronCodexRuntimePolicyTargets: CronCodexRuntimePolicyTarget[] = [];
   let doctorMediaPersistenceAttempted = false;
   let legacyConfigMigrationComplete = false;
-  let configSnapshotRead:
-    | {
-        snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
-        pluginMigrationFingerprint: string | null;
+  let configSnapshotRead: DoctorConfigPreflightPluginSnapshotRead | undefined;
+  const ensureStartupMigrationLease = () => {
+    if (startupMigrationLease || !migrationCheckpoint) {
+      return;
+    }
+    startupMigrationLease = migrationCheckpoint.acquireStartupMigrationLease({
+      env: startupMigrationEnv,
+    });
+    startupMigrationHeartbeat = setInterval(() => {
+      try {
+        startupMigrationLease?.heartbeat();
+      } catch (error) {
+        startupMigrationHeartbeatError = error;
       }
-    | undefined;
+    }, 60_000);
+    startupMigrationHeartbeat.unref?.();
+  };
   const noteStartupStateMigrationResult = (result: {
     changes: string[];
     warnings: string[];
@@ -316,6 +333,9 @@ export async function runDoctorConfigPreflight(
           snapshot: addDoctorLegacyIssues(result.snapshot),
           pluginMigrationFingerprint:
             result.pluginMetadataSnapshot?.configFingerprint?.trim() || null,
+          ...(result.pluginMetadataSnapshot
+            ? { pluginMetadataSnapshot: result.pluginMetadataSnapshot }
+            : {}),
         };
       }
       return {
@@ -376,19 +396,13 @@ export async function runDoctorConfigPreflight(
           env: startupMigrationEnv,
           identity: migrationCheckpointIdentity,
         });
-      startupMigrationLease =
-        shouldRecordStateCheckpoint || shouldRecordStartupCheckpoint
-          ? migrationCheckpoint.acquireStartupMigrationLease({ env: startupMigrationEnv })
-          : undefined;
-      if (startupMigrationLease) {
-        startupMigrationHeartbeat = setInterval(() => {
-          try {
-            startupMigrationLease?.heartbeat();
-          } catch (error) {
-            startupMigrationHeartbeatError = error;
-          }
-        }, 60_000);
-        startupMigrationHeartbeat.unref?.();
+      shouldPersistRefreshedPluginIndex = needsRefreshedPluginIndexPersistence(configSnapshotRead);
+      if (
+        shouldRecordStateCheckpoint ||
+        shouldRecordStartupCheckpoint ||
+        shouldPersistRefreshedPluginIndex
+      ) {
+        ensureStartupMigrationLease();
       }
     }
     // A current state checkpoint proves this root already completed every automatic migration.
@@ -475,8 +489,16 @@ export async function runDoctorConfigPreflight(
         pluginMigrationFingerprint: configSnapshotRead.pluginMigrationFingerprint,
       });
     }
+    shouldPersistRefreshedPluginIndex =
+      migrationCheckpoint !== undefined && needsRefreshedPluginIndexPersistence(configSnapshotRead);
+    if (shouldPersistRefreshedPluginIndex) {
+      ensureStartupMigrationLease();
+    }
     const freshConfigGuardRequired =
-      stateMigrations !== undefined || shouldRecordStateCheckpoint || shouldRecordStartupCheckpoint;
+      stateMigrations !== undefined ||
+      shouldRecordStateCheckpoint ||
+      shouldRecordStartupCheckpoint ||
+      shouldPersistRefreshedPluginIndex;
     const freshConfigGuardAllowed =
       !freshConfigGuardRequired ||
       !stateMigrationsAllowed ||
@@ -588,6 +610,41 @@ export async function runDoctorConfigPreflight(
           activeStateMigrations.migrateLegacyMediaPersistence({ env: process.env }),
         ),
       );
+    }
+    if (
+      shouldPersistRefreshedPluginIndex &&
+      stateMigrationsAllowed &&
+      freshConfigGuardAllowed &&
+      startupMigrationWarnings.length === 0 &&
+      snapshot.valid
+    ) {
+      const persistedSnapshotRead = await persistRefreshedPluginIndex({
+        env: startupMigrationEnv,
+        measure: measurePreflightStep,
+        readSnapshot: readConfigSnapshotForPreflight,
+        snapshotRead: configSnapshotRead,
+      });
+      const persistedBaseConfig =
+        persistedSnapshotRead.snapshot.sourceConfig ?? persistedSnapshotRead.snapshot.config ?? {};
+      const persistedIdentity = resolveMigrationCheckpointIdentity({
+        snapshot: persistedSnapshotRead.snapshot,
+        baseConfig: persistedBaseConfig,
+        pluginMigrationFingerprint: persistedSnapshotRead.pluginMigrationFingerprint,
+      });
+      if (
+        !migrationCheckpointIdentity ||
+        !persistedIdentity ||
+        migrationCheckpointIdentity.effectiveConfigFingerprint !==
+          persistedIdentity.effectiveConfigFingerprint ||
+        migrationCheckpointIdentity.pluginDoctorConfigFingerprint !==
+          persistedIdentity.pluginDoctorConfigFingerprint
+      ) {
+        throw new Error(
+          'OpenClaw config identity changed while persisting the refreshed plugin registry; refusing to write the migration checkpoint. Run "openclaw doctor --fix" and retry.',
+        );
+      }
+      configSnapshotRead = persistedSnapshotRead;
+      migrationCheckpointIdentity = persistedIdentity;
     }
     if (
       (shouldRecordStateCheckpoint || shouldRecordStartupCheckpoint) &&
