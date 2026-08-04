@@ -259,8 +259,10 @@ on pinned current `main` as the exact command and validation contract.
 4. Require the tip still equals the frozen SHA, then create signed `vYYYY.M.P`.
    Never move or delete a final tag; later source changes need a new patch.
 5. Require the saved validation run to be complete and successful, bind its
-   manifest target SHA and attempt to the tag, and require either the canonical
-   branch or a trusted main-pinned `release-ci/*` harness. Reject narrow reruns.
+   manifest target SHA and attempt to the tag, and accept a direct run from the
+   canonical branch, a direct current-`main` run whose workflow SHA is still
+   reachable from main, or a trusted main-pinned `release-ci/*` harness. Reject
+   narrow reruns.
 6. Dispatch `plugin-npm-release.yml` from the same branch with
    `publish_scope=all-publishable`, the full release SHA as `ref`, and
    `npm_dist_tag=extended-stable`. Require complete exact-version and selector
@@ -270,8 +272,9 @@ on pinned current `main` as the exact command and validation contract.
    from the canonical branch. For a workflow-only recovery after the candidate
    is immutable, dispatch trusted current `main` with
    `release_candidate_branch=extended-stable/YYYY.M.33`; it still publishes the
-   tag checkout and requires the prepared tarball plus every evidence identity
-   to match the candidate SHA.
+   tag checkout and accepts canonical-branch, current-main, or trusted-pinned
+   validation evidence; the prepared tarball and every evidence identity must
+   still match the candidate SHA.
 8. From a clean current-`main` checkout, run
    `node --import tsx scripts/openclaw-npm-postpublish-verify.ts YYYY.M.P`.
    Verify signatures, provenance, inventories, exact versions, and selectors.

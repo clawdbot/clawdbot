@@ -159,6 +159,9 @@ describe("minimal npm extended-stable workflow", () => {
     expect(recheck.env?.NPM_WORKFLOW_REF).toBe(validate.env?.NPM_WORKFLOW_REF);
     expect(releaseDocs).toContain("--ref main");
     expect(releaseDocs).toContain("-f release_candidate_branch=extended-stable/YYYY.M.33");
+    expect(releaseDocs).toContain("canonical candidate branch directly");
+    expect(releaseDocs).toContain("workflow SHA is reachable from current `main`");
+    expect(releaseDocs).toContain("trusted main-pinned harness");
   });
 
   it("accepts arbitrary SHA preflight targets and exercises every publishable plugin package", () => {
