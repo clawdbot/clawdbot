@@ -74,7 +74,6 @@ function createFixture() {
   const contextGuards = {
     getAfterTurnCheckpoint: vi.fn(() => null),
     remove: vi.fn(),
-    takePendingMidTurnPrecheckRequest: vi.fn(() => null),
   };
   const cacheTrace = { kind: "cache-trace" };
   const anthropicPayloadLogger = { kind: "payload-logger" };
@@ -286,7 +285,6 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     expect(guardInput.getPrePromptMessageCount()).toBe(7);
     expect(guardInput.getPromptCache()).toEqual({ cacheRead: 3 });
     expect(guardInput.getPromptCacheRetention()).toBe("long");
-    expect(guardInput.getSystemPrompt()).toBe("updated prompt");
   });
 
   it("publishes every cleanup owner before a later transport failure", async () => {

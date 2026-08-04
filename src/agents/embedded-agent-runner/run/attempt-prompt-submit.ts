@@ -6,20 +6,26 @@ import type { ImageContent } from "../../../llm/types.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { ackPendingAgentSteeringItems } from "../../subagent-registry.js";
+import { log } from "../logger.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
 import { updateActiveEmbeddedRunSnapshot } from "../runs.js";
 import type {
   getEmbeddedSessionPromptState,
   ToolResultPromptProjectionState,
 } from "../session-prompt-state.js";
-import { hasSessionUserTurnBeenSent, markSessionUserTurnsSent } from "../session-prompt-state.js";
-import { truncateOversizedToolResultsInMessages } from "../tool-result-truncation.js";
+import {
+  hasSessionUserTurnBeenSent,
+  markSessionUserTurnsSent,
+  replaceToolResultPromptProjectionState,
+} from "../session-prompt-state.js";
 import { snapshotRecentMessages } from "./attempt-context-summary.js";
 import {
   installModelPromptTransform,
   installRuntimeContextMessageForPrompt,
 } from "./attempt.llm-boundary.js";
-import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
+import { wrapStreamFnWithContextTransform } from "./message-transform-stream-wrapper.js";
+import { MidTurnPrecheckSignal } from "./midturn-precheck.js";
+import { admitProviderPrompt } from "./provider-prompt-admission.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -56,12 +62,14 @@ export async function submitEmbeddedAttemptPrompt(input: {
   images: ImageContent[];
   leasedSteering?: SteeringLease;
   modelPrompt: string;
+  midTurnPrecheckEnabled: boolean;
   onFinalPromptText: (prompt: string) => void;
   onSteeringAcknowledged: () => void;
   prependContext?: string;
   promptActiveSession: PromptActiveSession;
   runtimeContextMessage?: RuntimeContextCustomMessage;
   runtimeOnly: boolean;
+  reserveTokens: number;
   sessionPromptState: ReturnType<typeof getEmbeddedSessionPromptState>;
   systemPrompt: string;
   toolResultAggregateMaxChars: number;
@@ -79,18 +87,32 @@ export async function submitEmbeddedAttemptPrompt(input: {
 
   const installProviderPromptHistoryTransform = (): (() => void) => {
     const baseStreamFn = activeSession.agent.streamFn;
-    const providerPromptStreamFn = wrapStreamFnWithMessageTransform(baseStreamFn, (messages) => {
-      const providerPromptHistoryTruncation = truncateOversizedToolResultsInMessages(
-        messages,
-        input.contextTokenBudget,
-        input.toolResultMaxChars,
-        input.toolResultAggregateMaxChars,
+    let providerCalls = 0;
+    const providerPromptStreamFn = wrapStreamFnWithContextTransform(baseStreamFn, (context) => {
+      const admission = admitProviderPrompt({
+        context,
+        contextTokenBudget: input.contextTokenBudget,
+        midTurnPrecheckEnabled: input.midTurnPrecheckEnabled && providerCalls > 0,
+        reserveTokens: input.reserveTokens,
+        toolResultAggregateMaxChars: input.toolResultAggregateMaxChars,
+        toolResultMaxChars: input.toolResultMaxChars,
+        projectionState: input.toolResultPromptProjectionState,
+      });
+      if (admission.status === "recovery_required") {
+        log.info(
+          `[context-overflow-midturn-precheck] provider context requires recovery ` +
+            `route=${admission.request.route} ` +
+            `estimatedPromptTokens=${admission.request.estimatedPromptTokens} ` +
+            `promptBudgetBeforeReserve=${admission.request.promptBudgetBeforeReserve}`,
+        );
+        throw new MidTurnPrecheckSignal(admission.request);
+      }
+      replaceToolResultPromptProjectionState(
         input.toolResultPromptProjectionState,
+        admission.projectionState,
       );
-      const providerMessages =
-        providerPromptHistoryTruncation.messages !== messages
-          ? providerPromptHistoryTruncation.messages
-          : messages;
+      providerCalls += 1;
+      const providerMessages = admission.context.messages as AgentMessage[];
       // Mark the current turn sent at provider dispatch so late media appends
       // instead of rewriting its prompt-cache slot (#99495).
       markSessionUserTurnsSent(input.sessionPromptState, providerMessages);
@@ -101,7 +123,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
       ) {
         recorder.markSentToProvider?.();
       }
-      return providerMessages;
+      return admission.context;
     });
     activeSession.agent.streamFn = providerPromptStreamFn;
     return () => {

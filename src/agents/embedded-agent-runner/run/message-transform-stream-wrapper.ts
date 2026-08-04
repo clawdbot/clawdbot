@@ -8,32 +8,38 @@ import type { AgentMessage } from "../../runtime/index.js";
  * Stream wrapper for applying message transforms immediately before provider dispatch.
  */
 type MessageTransform = (messages: AgentMessage[], model: unknown) => AgentMessage[];
+type StreamContext = Parameters<StreamFn>[1];
+type ContextTransform = (context: StreamContext, model: unknown) => StreamContext;
+
+/** Wraps a stream function with a complete provider-context transform. */
+export function wrapStreamFnWithContextTransform(
+  streamFn: StreamFn,
+  transform: ContextTransform,
+): StreamFn {
+  return (model, context, options) => streamFn(model, transform(context, model), options);
+}
 
 /** Wraps a stream function with a conditional message-list transform. */
 export function wrapStreamFnWithMessageTransform(
   streamFn: StreamFn,
   transform: MessageTransform,
 ): StreamFn {
-  return (model, context, options) => {
+  return wrapStreamFnWithContextTransform(streamFn, (context, model) => {
     const messages = (context as unknown as { messages?: unknown })?.messages;
     if (!Array.isArray(messages)) {
-      return streamFn(model, context, options);
+      return context;
     }
 
     const nextMessages = transform(messages as AgentMessage[], model);
     if (nextMessages === messages) {
-      return streamFn(model, context, options);
+      return context;
     }
 
-    return streamFn(
-      // Clone the context instead of mutating it so callers can reuse the original assembled
-      // context for logging, replay, or retry comparisons.
-      model,
-      {
-        ...(context as unknown as Record<string, unknown>),
-        messages: nextMessages,
-      } as typeof context,
-      options,
-    );
-  };
+    // Clone the context instead of mutating it so callers can reuse the original assembled
+    // context for logging, replay, or retry comparisons.
+    return {
+      ...(context as unknown as Record<string, unknown>),
+      messages: nextMessages,
+    } as typeof context;
+  });
 }

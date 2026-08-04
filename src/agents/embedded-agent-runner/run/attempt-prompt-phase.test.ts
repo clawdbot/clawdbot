@@ -50,7 +50,6 @@ vi.mock("./attempt-prompt-preflight.js", () => ({
 vi.mock("./attempt-transcript-helpers.js", () => ({
   removeTrailingMidTurnPrecheckAssistantError: mocks.removeTrailingPrecheckError,
 }));
-
 import { runEmbeddedAttemptPromptPhase } from "./attempt-prompt-phase.js";
 
 type PromptPhaseInput = Parameters<typeof runEmbeddedAttemptPromptPhase>[0];
@@ -245,7 +244,6 @@ function createFixture() {
       markYieldAborted,
       readYieldState: () => yieldState,
       stopAcceptingSteerMessages,
-      takePendingMidTurnPrecheckRequest: () => undefined,
     },
   } as unknown as PromptPhaseInput;
 

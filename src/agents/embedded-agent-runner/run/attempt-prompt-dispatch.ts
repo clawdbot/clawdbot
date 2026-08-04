@@ -119,7 +119,10 @@ export async function dispatchEmbeddedAttemptPrompt(input: {
       activeSession,
       contextTokenBudget: promptContext.contextTokenBudget,
       images: imageResult.images,
+      midTurnPrecheckEnabled:
+        attempt.config?.agents?.defaults?.compaction?.midTurnPrecheck?.enabled === true,
       modelPrompt: promptContext.promptForModel,
+      reserveTokens,
       ...(promptContext.runtimeContextMessageForCurrentTurn
         ? { runtimeContextMessage: promptContext.runtimeContextMessageForCurrentTurn }
         : {}),

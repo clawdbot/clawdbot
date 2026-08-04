@@ -141,7 +141,6 @@ describe("normalizeEmbeddedRunAttempt", () => {
     if (result.action !== "retry") {
       throw new Error(`expected retry, got ${result.action}`);
     }
-    expect(result.retryKind).toBe("recovery");
     expect(state.continueFromCurrentTranscript).not.toHaveBeenCalled();
   });
 
@@ -164,47 +163,7 @@ describe("normalizeEmbeddedRunAttempt", () => {
     if (result.action !== "retry") {
       throw new Error(`expected retry, got ${result.action}`);
     }
-    expect(result.retryKind).toBe("recovery");
     expect(state.continueFromCurrentTranscript).toHaveBeenCalledOnce();
-  });
-
-  it("marks a successful no-op mid-turn retry as a progress continuation", async () => {
-    const state = makePromptState();
-    const attempt = makeAttempt({
-      route: "truncate_tool_results_only",
-      source: "mid-turn",
-      handled: true,
-      truncatedCount: 0,
-    });
-    attempt.toolMetas = [{ toolName: "read", isError: false }];
-
-    const result = await normalizeEmbeddedRunAttempt(makeNormalizationInput(attempt, state));
-
-    expect(result.action).toBe("retry");
-    if (result.action !== "retry") {
-      throw new Error(`expected retry, got ${result.action}`);
-    }
-    expect(result.retryKind).toBe("progress_continuation");
-    expect(state.continueFromCurrentTranscript).toHaveBeenCalledOnce();
-  });
-
-  it("keeps a failed no-op mid-turn retry in the recovery budget", async () => {
-    const state = makePromptState();
-    const attempt = makeAttempt({
-      route: "truncate_tool_results_only",
-      source: "mid-turn",
-      handled: true,
-      truncatedCount: 0,
-    });
-    attempt.toolMetas = [{ toolName: "read", isError: true }];
-
-    const result = await normalizeEmbeddedRunAttempt(makeNormalizationInput(attempt, state));
-
-    expect(result.action).toBe("retry");
-    if (result.action !== "retry") {
-      throw new Error(`expected retry, got ${result.action}`);
-    }
-    expect(result.retryKind).toBe("recovery");
   });
 
   it("keeps replay state unsafe after a later clean attempt", async () => {

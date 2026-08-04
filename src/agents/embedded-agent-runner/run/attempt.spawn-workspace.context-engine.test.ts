@@ -48,7 +48,6 @@ import {
   buildEmbeddedSubscriptionParams,
   cleanupEmbeddedAttemptResources,
 } from "./attempt.subscription-cleanup.js";
-import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 
 const hoisted = getHoisted();
 const embeddedSessionId = "embedded-session";
@@ -61,11 +60,6 @@ beforeAll(async () => {
 });
 type AfterTurnPromptCacheCall = { runtimeContext?: { promptCache?: Record<string, unknown> } };
 type TrajectoryEvent = { type?: string; data?: Record<string, unknown> };
-type ToolResultGuardInstallParams = {
-  midTurnPrecheck?: {
-    onMidTurnPrecheck?: (request: MidTurnPrecheckRequest) => void;
-  };
-};
 type MockCallSource = {
   mock: {
     calls: ArrayLike<ReadonlyArray<unknown>>;
@@ -3256,109 +3250,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(flushMock).toHaveBeenCalledTimes(1);
     expect(disposeMock).toHaveBeenCalledTimes(1);
     expect(releaseMock).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("runEmbeddedAttempt context engine mid-turn precheck integration", () => {
-  const sessionKey = "agent:main:guildchat:channel:midturn-precheck";
-  const tempPaths: string[] = [];
-
-  beforeEach(() => {
-    resetEmbeddedAttemptHarness();
-    clearMemoryPluginState();
-  });
-
-  afterEach(async () => {
-    await cleanupTempPaths(tempPaths);
-    clearMemoryPluginState();
-    vi.restoreAllMocks();
-  });
-
-  it("keeps mid-turn precheck out of the context-engine-owned compaction hook", async () => {
-    await createContextEngineAttemptRunner({
-      contextEngine: {
-        ...createContextEngineBootstrapAndAssemble(),
-        info: { ownsCompaction: true },
-      },
-      sessionKey,
-      tempPaths,
-      attemptOverrides: {
-        config: {
-          agents: {
-            defaults: {
-              compaction: {
-                mode: "safeguard",
-                midTurnPrecheck: { enabled: true },
-              },
-            },
-          },
-        } as OpenClawConfig,
-      },
-    });
-
-    const loopHookParams = mockParams(
-      hoisted.installContextEngineLoopHookMock,
-      0,
-      "context engine loop hook params",
-    );
-    expect(loopHookParams.midTurnPrecheck).toBeUndefined();
-  });
-
-  it("recovers when the runtime persists the mid-turn precheck as an assistant error", async () => {
-    hoisted.installToolResultContextGuardMock.mockImplementation((...args: unknown[]) => {
-      const params = args[0] as ToolResultGuardInstallParams;
-      params.midTurnPrecheck?.onMidTurnPrecheck?.({
-        route: "compact_only",
-        estimatedPromptTokens: 9000,
-        promptBudgetBeforeReserve: 7000,
-        overflowTokens: 2000,
-        toolResultReducibleChars: 0,
-        toolResultAggregateBudgetChars: 10_000,
-        effectiveReserveTokens: 1000,
-      });
-      return () => {};
-    });
-
-    const syntheticRuntimeError = {
-      role: "assistant",
-      content: [{ type: "text", text: "" }],
-      stopReason: "error",
-      errorMessage: "Context overflow: prompt too large for the model (mid-turn precheck).",
-      timestamp: 3,
-    } as unknown as AgentMessage;
-
-    const result = await createContextEngineAttemptRunner({
-      contextEngine: createContextEngineBootstrapAndAssemble(),
-      sessionKey,
-      tempPaths,
-      attemptOverrides: {
-        config: {
-          agents: {
-            defaults: {
-              compaction: {
-                mode: "safeguard",
-                midTurnPrecheck: { enabled: true },
-              },
-            },
-          },
-        } as OpenClawConfig,
-      },
-      sessionMessages: [seedMessage],
-      sessionPrompt: async (session) => {
-        session.messages = [...session.messages, syntheticRuntimeError];
-      },
-    });
-
-    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBe("precheck");
-    expect(result.preflightRecovery).toEqual({
-      route: "compact_only",
-      source: "mid-turn",
-      estimatedPromptTokens: 9000,
-      promptBudgetBeforeReserve: 7000,
-      overflowTokens: 2000,
-      toolResultAggregateBudgetChars: 10_000,
-    });
-    expect(result.messagesSnapshot).toEqual([seedMessage]);
   });
 });
 

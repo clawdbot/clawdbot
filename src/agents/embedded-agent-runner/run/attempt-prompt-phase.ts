@@ -102,7 +102,6 @@ export async function runEmbeddedAttemptPromptPhase(input: {
       "yieldAbortSettled" | "yieldDetected" | "yieldMessage"
     >;
     stopAcceptingSteerMessages: () => void;
-    takePendingMidTurnPrecheckRequest: () => MidTurnPrecheckRequest | null | undefined;
   };
 }): Promise<{ promptStartedAt: number }> {
   const { activeSession, attempt, sessionManager } = input;
@@ -129,15 +128,11 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     leasedSteering = undefined;
   };
   const handleMidTurnPrecheckRequest = (request: MidTurnPrecheckRequest) => {
+    removeTrailingMidTurnPrecheckAssistantError({ activeSession, sessionManager });
     const outcome = handleEmbeddedAttemptMidTurnPrecheck({
       attempt,
       request,
-      sessionAgentId: input.context.sessionAgentId,
-      sessionManager,
       prePromptMessageCount: input.lifecycle.getPrePromptMessageCount(),
-      replaceSessionMessages: (messages) => {
-        activeSession.agent.state.messages = messages;
-      },
     });
     patchState({
       preflightRecovery: outcome.preflightRecovery,
@@ -328,18 +323,6 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     log.debug(
       `embedded run prompt end: runId=${attempt.runId} sessionId=${attempt.sessionId} durationMs=${Date.now() - promptStartedAt}`,
     );
-  }
-
-  const pendingMidTurnPrecheckRequest = input.lifecycle.takePendingMidTurnPrecheckRequest();
-  if (pendingMidTurnPrecheckRequest) {
-    await input.withOwnedSessionWriteLock(() => {
-      removeTrailingMidTurnPrecheckAssistantError({ activeSession, sessionManager });
-      const state = input.lifecycle.readState();
-      if (!state.preflightRecovery && state.promptErrorSource !== "precheck") {
-        patchState({ promptError: null, promptErrorSource: null });
-        handleMidTurnPrecheckRequest(pendingMidTurnPrecheckRequest);
-      }
-    });
   }
 
   return { promptStartedAt };

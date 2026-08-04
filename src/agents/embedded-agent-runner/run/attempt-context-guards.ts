@@ -11,7 +11,6 @@ import type { guardSessionManager } from "../../session-tool-result-guard-wrappe
 import type { AgentSession } from "../../sessions/index.js";
 import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
-import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
@@ -19,13 +18,11 @@ import {
 import {
   pruneExpiredCacheTtlToolResults,
   resolveCacheTtlPruningSettings,
-  resolveLiveToolResultMaxChars,
 } from "../tool-result-truncation.js";
 import { repairAttemptToolUseResultPairing } from "./attempt-transcript-helpers.js";
 import { buildLoopPromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import { buildAfterTurnRuntimeContext } from "./attempt.prompt-helpers.js";
 import { installHistoryImagePruneContextTransform } from "./history-image-prune.js";
-import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 type PromptCacheRetention = Parameters<typeof buildLoopPromptCacheInfo>[0]["retention"];
@@ -43,18 +40,15 @@ export function installEmbeddedAttemptContextGuards(input: {
   getPrePromptMessageCount: () => number;
   getPromptCache: () => EmbeddedRunAttemptResult["promptCache"];
   getPromptCacheRetention: () => PromptCacheRetention;
-  getSystemPrompt: () => string;
   isOpenAIResponsesApi: boolean;
   repairToolUseResultPairing: boolean;
   sessionAgentId: string;
   sessionManager: ReturnType<typeof guardSessionManager>;
   settingsManager: AgentSession["settingsManager"];
-  toolResultPromptProjectionState: ToolResultPromptProjectionState;
   sandbox?: SandboxContext | null;
 }): {
   getAfterTurnCheckpoint: () => number | null;
   remove: () => void;
-  takePendingMidTurnPrecheckRequest: () => MidTurnPrecheckRequest | null;
 } {
   const { activeContextEngine, activeSession, attempt, settingsManager } = input;
   const contextTokenBudget = Math.max(
@@ -66,28 +60,7 @@ export function installEmbeddedAttemptContextGuards(input: {
         DEFAULT_CONTEXT_TOKENS,
     ),
   );
-  const toolResultMaxChars = resolveLiveToolResultMaxChars({
-    contextWindowTokens: contextTokenBudget,
-  });
-  let pendingMidTurnPrecheckRequest: MidTurnPrecheckRequest | null = null;
   let afterTurnCheckpoint: number | null = null;
-  const midTurnPrecheckOptions =
-    attempt.config?.agents?.defaults?.compaction?.midTurnPrecheck?.enabled === true
-      ? {
-          midTurnPrecheck: {
-            enabled: true,
-            contextTokenBudget,
-            reserveTokens: () => settingsManager.getCompactionReserveTokens(),
-            toolResultMaxChars,
-            getSystemPrompt: input.getSystemPrompt,
-            getPrePromptMessageCount: input.getPrePromptMessageCount,
-            projectionState: input.toolResultPromptProjectionState,
-            onMidTurnPrecheck: (request: MidTurnPrecheckRequest) => {
-              pendingMidTurnPrecheckRequest = request;
-            },
-          },
-        }
-      : {};
 
   const contextPruning = attempt.config?.agents?.defaults?.contextPruning;
   // Disabled pruning must not resolve provider hooks and cold-load plugin metadata.
@@ -182,7 +155,6 @@ export function installEmbeddedAttemptContextGuards(input: {
     const removeToolResultGuard = installToolResultContextGuard({
       agent: activeSession.agent,
       contextWindowTokens: contextTokenBudget,
-      ...midTurnPrecheckOptions,
     });
     removeLoopGuard = () => {
       removeToolResultGuard();
@@ -192,7 +164,6 @@ export function installEmbeddedAttemptContextGuards(input: {
     removeLoopGuard = installToolResultContextGuard({
       agent: activeSession.agent,
       contextWindowTokens: contextTokenBudget,
-      ...midTurnPrecheckOptions,
     });
   }
 
@@ -231,11 +202,6 @@ export function installEmbeddedAttemptContextGuards(input: {
       removeHistoryImagePruneContextTransform();
       removeLoopGuard();
       activeSession.agent.transformContext = previousCacheTtlTransform;
-    },
-    takePendingMidTurnPrecheckRequest: () => {
-      const request = pendingMidTurnPrecheckRequest;
-      pendingMidTurnPrecheckRequest = null;
-      return request;
     },
   };
 }

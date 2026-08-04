@@ -3,14 +3,8 @@
  */
 import type { AssembleResult } from "../../../context-engine/types.js";
 import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import type { SessionManager } from "../../sessions/index.js";
 import { log } from "../logger.js";
-import {
-  resolveLiveToolResultMaxChars,
-  truncateOversizedToolResultsInSessionManager,
-} from "../tool-result-truncation.js";
 import type { AttemptContextEngine } from "./attempt.context-engine-helpers.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt.llm-boundary.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
@@ -57,17 +51,16 @@ function buildPreflightRecoveryBudgetSnapshot(snapshot: PreflightRecoveryBudgetS
 }
 
 export function handleEmbeddedAttemptMidTurnPrecheck(input: {
-  attempt: AttemptPromptPreflightParams & Pick<EmbeddedRunAttemptParams, "contextTokenBudget">;
+  attempt: AttemptPromptPreflightParams;
   request: MidTurnPrecheckRequest;
-  sessionAgentId: string;
-  sessionManager: SessionManager;
   prePromptMessageCount: number;
-  replaceSessionMessages: (messages: AgentMessage[]) => void;
 }): {
   preflightRecovery: NonNullable<EmbeddedRunAttemptResult["preflightRecovery"]>;
-  promptError?: Error;
+  promptError: Error;
 } {
   const { attempt, request } = input;
+  const recoveryRoute =
+    request.route === "truncate_tool_results_only" ? "compact_then_truncate" : request.route;
   const logMidTurnPrecheck = (route: string, extra?: string) => {
     log.warn(
       `[context-overflow-midturn-precheck] sessionKey=${attempt.sessionKey ?? attempt.sessionId} ` +
@@ -83,76 +76,12 @@ export function handleEmbeddedAttemptMidTurnPrecheck(input: {
     );
   };
 
-  if (request.route === "truncate_tool_results_only") {
-    const contextTokenBudget = attempt.contextTokenBudget ?? DEFAULT_CONTEXT_TOKENS;
-    const toolResultMaxChars = resolveLiveToolResultMaxChars({
-      contextWindowTokens: contextTokenBudget,
-    });
-    const truncationResult = truncateOversizedToolResultsInSessionManager({
-      sessionManager: input.sessionManager,
-      contextWindowTokens: contextTokenBudget,
-      maxCharsOverride: toolResultMaxChars,
-      aggregateMaxCharsOverride: request.toolResultAggregateBudgetChars,
-      sessionFile: attempt.sessionFile,
-      sessionId: attempt.sessionId,
-      sessionKey: attempt.sessionKey,
-      agentId: input.sessionAgentId,
-    });
-    if (truncationResult.truncated) {
-      const preflightRecovery = {
-        route: "truncate_tool_results_only" as const,
-        source: "mid-turn" as const,
-        ...buildPreflightRecoveryBudgetSnapshot(request),
-        handled: true as const,
-        truncatedCount: truncationResult.truncatedCount,
-      };
-      input.replaceSessionMessages(input.sessionManager.buildSessionContext().messages);
-      logMidTurnPrecheck(
-        request.route,
-        `handled=true truncatedCount=${truncationResult.truncatedCount}`,
-      );
-      return { preflightRecovery };
-    }
-
-    if (truncationResult.reason === "no oversized or aggregate tool results") {
-      const preflightRecovery = {
-        route: "truncate_tool_results_only" as const,
-        source: "mid-turn" as const,
-        ...buildPreflightRecoveryBudgetSnapshot(request),
-        handled: true as const,
-        truncatedCount: 0,
-      };
-      // The mid-turn estimate sees the in-memory prompt view, while persisted
-      // recovery may already have capped the same tool results. Retry without
-      // manufacturing compaction when the persisted branch has nothing to trim.
-      logMidTurnPrecheck(
-        request.route,
-        `handled=true truncatedCount=0 truncateSkippedReason=${truncationResult.reason}`,
-      );
-      return { preflightRecovery };
-    }
-
-    const preflightRecovery = {
-      route: "compact_only" as const,
-      source: "mid-turn" as const,
-      ...buildPreflightRecoveryBudgetSnapshot(request),
-    };
-    logMidTurnPrecheck(
-      "compact_only",
-      `truncateFallbackReason=${truncationResult.reason ?? "unknown"}`,
-    );
-    return {
-      preflightRecovery,
-      promptError: new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT),
-    };
-  }
-
   const preflightRecovery = {
-    route: request.route,
+    route: recoveryRoute,
     source: "mid-turn" as const,
     ...buildPreflightRecoveryBudgetSnapshot(request),
   };
-  logMidTurnPrecheck(request.route);
+  logMidTurnPrecheck(recoveryRoute);
   return {
     preflightRecovery,
     promptError: new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT),

@@ -7,6 +7,7 @@ import {
   getEmbeddedSessionPromptState,
 } from "../session-prompt-state.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
+import { MidTurnPrecheckSignal } from "./midturn-precheck.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 const sessionId = "attempt-prompt-submit-test";
@@ -41,10 +42,12 @@ function createBaseInput() {
     contextTokenBudget: 8_000,
     images: [] as ImageContent[],
     modelPrompt: "model prompt",
+    midTurnPrecheckEnabled: false,
     onFinalPromptText: vi.fn(),
     onSteeringAcknowledged: vi.fn(),
     prependContext: "prepend context",
     runtimeOnly: false,
+    reserveTokens: 1_000,
     sessionPromptState,
     systemPrompt: "system prompt",
     toolResultAggregateMaxChars: 8_000,
@@ -199,5 +202,45 @@ describe("submitEmbeddedAttemptPrompt", () => {
     expect(
       originalHugeResult?.role === "toolResult" ? originalHugeResult.content : undefined,
     ).toEqual([{ type: "text", text: oversized }]);
+  });
+
+  it("routes pressure from the complete provider context before dispatch", async () => {
+    const { activeSession } = createSession();
+    const input = createBaseInput();
+    const providerDispatch = vi.fn(() => undefined as never);
+    activeSession.agent.streamFn = providerDispatch as unknown as StreamFn;
+
+    await expect(
+      submitEmbeddedAttemptPrompt({
+        ...input,
+        activeSession,
+        contextTokenBudget: 4_000,
+        midTurnPrecheckEnabled: true,
+        reserveTokens: 1_000,
+        promptActiveSession: async () => {
+          await activeSession.agent.streamFn(
+            {} as never,
+            { messages: activeSession.messages } as never,
+            {} as never,
+          );
+          await activeSession.agent.streamFn(
+            {} as never,
+            {
+              messages: activeSession.messages,
+              tools: [
+                {
+                  name: "large_tool",
+                  description: "x".repeat(30_000),
+                  parameters: { type: "object", properties: {} },
+                },
+              ],
+            } as never,
+            {} as never,
+          );
+        },
+      }),
+    ).rejects.toBeInstanceOf(MidTurnPrecheckSignal);
+
+    expect(providerDispatch).toHaveBeenCalledOnce();
   });
 });

@@ -27,7 +27,6 @@ import {
   type createIdleTimeoutBreakerState,
 } from "./idle-timeout-breaker.js";
 import { resolveReplayInvalidFlag } from "./incomplete-turn.js";
-import { resolveRunRetryKind, type RunRetryKind } from "./retry-budget.js";
 import { handleRetryLimitExhaustion } from "./retry-limit.js";
 import type { dispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
 import {
@@ -66,7 +65,6 @@ export async function normalizeEmbeddedRunAttempt(input: {
   | { action: "complete"; result: EmbeddedAgentRunResult }
   | {
       action: "retry";
-      retryKind: RunRetryKind;
       bootstrapPromptWarningSignaturesSeen: string[];
       lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       replayState: ReplayState;
@@ -261,14 +259,8 @@ export async function normalizeEmbeddedRunAttempt(input: {
     if (retryingFromTranscript) {
       sessionPromptState.continueFromCurrentTranscript();
     }
-    const retryKind = resolveRunRetryKind({
-      preflightRecovery,
-      retryingFromTranscript,
-      toolMetas: attempt.toolMetas,
-    });
     return {
       action: "retry",
-      retryKind,
       bootstrapPromptWarningSignaturesSeen,
       lastRunPromptUsage,
       replayState,

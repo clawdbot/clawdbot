@@ -175,13 +175,11 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     getPrePromptMessageCount: () => state.prePromptMessageCount,
     getPromptCache: () => state.promptCache,
     getPromptCacheRetention: () => promptCacheRetentionRef.current,
-    getSystemPrompt: () => state.systemPromptText,
     isOpenAIResponsesApi,
     repairToolUseResultPairing: transcriptPolicy.repairToolUseResultPairing,
     sessionAgentId: input.sessionManager.sessionAgentId,
     sessionManager,
     settingsManager,
-    toolResultPromptProjectionState,
     sandbox: input.transport.sandbox,
   });
   input.lifecycle.onContextGuardsInstalled(contextGuards.remove);

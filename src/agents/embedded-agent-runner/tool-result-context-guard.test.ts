@@ -1,5 +1,4 @@
-// Tool-result context guard tests cover live replay truncation, mid-turn
-// prechecks, and context-engine loop hooks for oversized tool outputs.
+// Tool-result context guard tests cover live replay truncation and context-engine loop hooks.
 
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
@@ -8,7 +7,6 @@ import type { ContextEngine, ContextEngineRuntimeSettings } from "../../context-
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
-import { MidTurnPrecheckSignal } from "./run/midturn-precheck.js";
 import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
@@ -110,38 +108,6 @@ async function applyGuardToContext(
   installToolResultContextGuard({
     agent,
     contextWindowTokens,
-  });
-  return await agent.transformContext?.(contextForNextCall, new AbortController().signal);
-}
-
-async function applyMidTurnPrecheckGuardToContext(
-  agent: { transformContext?: (messages: AgentMessage[], signal: AbortSignal) => unknown },
-  contextForNextCall: AgentMessage[],
-  options: {
-    contextWindowTokens?: number;
-    contextTokenBudget?: number;
-    reserveTokens?: number;
-    toolResultMaxChars?: number;
-    prePromptMessageCount?: number;
-    systemPrompt?: string;
-  } = {},
-) {
-  // Mid-turn precheck simulates a new tool result being appended after the
-  // original prompt fence; it raises structured signals instead of mutating history.
-  const contextWindowTokens = options.contextWindowTokens ?? options.contextTokenBudget ?? 20_000;
-  installToolResultContextGuard({
-    agent,
-    contextWindowTokens,
-    midTurnPrecheck: {
-      enabled: true,
-      contextTokenBudget: options.contextTokenBudget ?? contextWindowTokens,
-      reserveTokens: () => options.reserveTokens ?? 10_000,
-      toolResultMaxChars: options.toolResultMaxChars,
-      getSystemPrompt: () => options.systemPrompt,
-      ...(options.prePromptMessageCount !== undefined
-        ? { getPrePromptMessageCount: () => options.prePromptMessageCount as number }
-        : {}),
-    },
   });
   return await agent.transformContext?.(contextForNextCall, new AbortController().signal);
 }
@@ -412,68 +378,6 @@ describe("installToolResultContextGuard", () => {
     ).toBe(text);
   });
 
-  it("raises a structured mid-turn precheck signal after a new tool result overflows", async () => {
-    // The signal carries route metadata so the run loop can compact/truncate
-    // without guessing from a generic overflow error.
-    const agent = makeGuardableAgent();
-    const contextForNextCall = [
-      makeUser("prompt already in history"),
-      makeToolResult("call_big", "x".repeat(80_000)),
-    ];
-
-    try {
-      await applyMidTurnPrecheckGuardToContext(agent, contextForNextCall, {
-        contextWindowTokens: 200_000,
-        contextTokenBudget: 20_000,
-        reserveTokens: 12_000,
-        toolResultMaxChars: 16_000,
-        prePromptMessageCount: 1,
-      });
-      throw new Error("expected mid-turn precheck signal");
-    } catch (err) {
-      expect(err).toBeInstanceOf(MidTurnPrecheckSignal);
-      const signal = err as MidTurnPrecheckSignal;
-      expect(signal.name).toBe("MidTurnPrecheckSignal");
-      expect(signal.request.route).toBe("compact_then_truncate");
-      expect(typeof signal.request.overflowTokens).toBe("number");
-      expect(typeof signal.request.toolResultReducibleChars).toBe("number");
-    }
-  });
-
-  it("does not run mid-turn precheck when no new tool result was appended", async () => {
-    const agent = makeGuardableAgent();
-    const contextForNextCall = [makeUser("u".repeat(80_000))];
-
-    const transformed = await applyMidTurnPrecheckGuardToContext(agent, contextForNextCall, {
-      contextWindowTokens: 200_000,
-      contextTokenBudget: 20_000,
-      reserveTokens: 12_000,
-      prePromptMessageCount: 0,
-    });
-
-    expect(transformed).toBe(contextForNextCall);
-  });
-
-  it("uses compact_only route when mid-turn overflow is not reducible by tool truncation", async () => {
-    const agent = makeGuardableAgent();
-    const contextForNextCall = [
-      makeUser("u".repeat(80_000)),
-      makeToolResult("call_small", "small output"),
-    ];
-
-    try {
-      await applyMidTurnPrecheckGuardToContext(agent, contextForNextCall, {
-        contextWindowTokens: 200_000,
-        contextTokenBudget: 20_000,
-        reserveTokens: 12_000,
-        prePromptMessageCount: 1,
-      });
-      throw new Error("expected mid-turn precheck signal");
-    } catch (err) {
-      expect(err).toBeInstanceOf(MidTurnPrecheckSignal);
-      expect((err as MidTurnPrecheckSignal).request.route).toBe("compact_only");
-    }
-  });
   it("does not count tool-result details toward the context budget", async () => {
     const agent = makeGuardableAgent();
     const contextForNextCall = [
@@ -617,47 +521,6 @@ describe("installContextEngineLoopHook", () => {
     });
   }
 
-  function installOwnsCompactionHookWithGuard(
-    agent: ReturnType<typeof makeGuardableAgent>,
-    engine: MockedEngine,
-    options: {
-      prePromptCount?: number;
-      contextWindowTokens?: number;
-      contextTokenBudget?: number;
-      reserveTokens?: number;
-      toolResultMaxChars?: number;
-      projectionState?: {
-        replacements: Map<string, AgentMessage>;
-        frozen: Set<string>;
-        ambiguousBaseKeys: Set<string>;
-        sourceTextByKey: Map<string, string[]>;
-      };
-    } = {},
-  ): () => void {
-    // Install engine assembly before the generic guard to prove owner compaction
-    // can resolve pressure before fallback truncation checks run.
-    const removeEngineHook = installHook(agent, engine, options.prePromptCount);
-    const removeGuard = installToolResultContextGuard({
-      agent,
-      contextWindowTokens: options.contextWindowTokens ?? 200_000,
-      midTurnPrecheck: {
-        enabled: true,
-        contextTokenBudget: options.contextTokenBudget ?? 20_000,
-        reserveTokens: () => options.reserveTokens ?? 12_000,
-        toolResultMaxChars: options.toolResultMaxChars,
-        projectionState: options.projectionState,
-        getSystemPrompt: () => "sys",
-        ...(options.prePromptCount !== undefined
-          ? { getPrePromptMessageCount: () => options.prePromptCount as number }
-          : {}),
-      },
-    });
-    return () => {
-      removeGuard();
-      removeEngineHook();
-    };
-  }
-
   async function callAfterInitialToolResult(
     agent: ReturnType<typeof makeGuardableAgent>,
     options: { includeSecondUser?: boolean; firstResultText?: string } = {},
@@ -687,152 +550,6 @@ describe("installContextEngineLoopHook", () => {
     expect(transformed).toBe(messages);
     expect(engine.afterTurn).not.toHaveBeenCalled();
     expect(engine.assemble).not.toHaveBeenCalled();
-  });
-
-  it("keeps the pressure guard active around ownsCompaction loop assembly", async () => {
-    const agent = makeGuardableAgent();
-    const engine = makeMockEngine();
-    installOwnsCompactionHookWithGuard(agent, engine, {
-      prePromptCount: 1,
-      contextWindowTokens: 200_000,
-      contextTokenBudget: 20_000,
-      reserveTokens: 12_000,
-      toolResultMaxChars: 16_000,
-    });
-
-    const messages = [makeUser("first"), makeToolResult("call_1", "x".repeat(80_000))];
-
-    await expect(callTransform(agent, messages)).rejects.toBeInstanceOf(MidTurnPrecheckSignal);
-    expect(engine.afterTurn).toHaveBeenCalledTimes(1);
-    expect(engine.assemble).toHaveBeenCalledTimes(1);
-  });
-
-  it("lets ownsCompaction assembly resolve pressure before the generic guard checks", async () => {
-    const agent = makeGuardableAgent();
-    const compactedView = [makeUser("compacted")];
-    const engine = makeMockEngine({
-      assemble: async () => ({ messages: compactedView, estimatedTokens: 0 }),
-    });
-    installOwnsCompactionHookWithGuard(agent, engine, {
-      prePromptCount: 1,
-      contextWindowTokens: 200_000,
-      contextTokenBudget: 20_000,
-      reserveTokens: 12_000,
-      toolResultMaxChars: 16_000,
-    });
-
-    const messages = [makeUser("first"), makeToolResult("call_1", "x".repeat(80_000))];
-    const transformed = await callTransform(agent, messages);
-
-    expect(transformed).toBe(compactedView);
-    expect(engine.afterTurn).toHaveBeenCalledTimes(1);
-    expect(engine.assemble).toHaveBeenCalledTimes(1);
-  });
-
-  it("uses raw tool results as the recovery budget when ownsCompaction assembly still overflows", async () => {
-    const agent = makeGuardableAgent();
-    const engine = makeMockEngine({
-      assemble: async () => ({
-        messages: [makeUser("assembled summary ".repeat(5_000))],
-        estimatedTokens: 20_000,
-      }),
-    });
-    installOwnsCompactionHookWithGuard(agent, engine, {
-      prePromptCount: 1,
-      contextWindowTokens: 200_000,
-      contextTokenBudget: 20_000,
-      reserveTokens: 12_000,
-      toolResultMaxChars: 16_000,
-    });
-
-    const messages = [makeUser("first"), makeToolResult("call_1", "x".repeat(80_000))];
-
-    try {
-      await callTransform(agent, messages);
-      throw new Error("expected mid-turn precheck signal");
-    } catch (err) {
-      expect(err).toBeInstanceOf(MidTurnPrecheckSignal);
-      const request = (err as MidTurnPrecheckSignal).request;
-      expect(request.route).not.toBe("compact_only");
-      expect(request.toolResultReducibleChars).toBeGreaterThan(0);
-      expect(request.toolResultAggregateBudgetChars).toBeGreaterThan(0);
-    }
-    expect(engine.afterTurn).toHaveBeenCalledTimes(1);
-    expect(engine.assemble).toHaveBeenCalledTimes(1);
-  });
-
-  it("tightens an assembled-view truncation budget using raw tool results", async () => {
-    const agent = makeGuardableAgent();
-    const engine = makeMockEngine({
-      assemble: async () => ({
-        messages: [
-          makeUser("summary ".repeat(3_000)),
-          makeToolResult("assembled", "y".repeat(50_000)),
-        ],
-        estimatedTokens: 20_000,
-      }),
-    });
-    installOwnsCompactionHookWithGuard(agent, engine, {
-      prePromptCount: 1,
-      contextWindowTokens: 200_000,
-      contextTokenBudget: 20_000,
-      reserveTokens: 12_000,
-      toolResultMaxChars: 16_000,
-    });
-
-    const messages = [makeUser("first"), makeToolResult("call_1", "x".repeat(80_000))];
-
-    try {
-      await callTransform(agent, messages);
-      throw new Error("expected mid-turn precheck signal");
-    } catch (err) {
-      expect(err).toBeInstanceOf(MidTurnPrecheckSignal);
-      const request = (err as MidTurnPrecheckSignal).request;
-      expect(request.route).not.toBe("compact_only");
-      expect(request.toolResultAggregateBudgetChars).toBeDefined();
-    }
-  });
-
-  it("recovers an oversized owner-assembled tool tail in memory without rewriting history", async () => {
-    const agent = makeGuardableAgent();
-    const assembledMessages = [
-      makeUser("assembled summary"),
-      ...Array.from({ length: 12 }, (_, index) =>
-        makeToolResult(`call_${index}`, String(index % 10).repeat(30_000)),
-      ),
-    ];
-    const engine = makeMockEngine({
-      assemble: async () => ({ messages: assembledMessages, estimatedTokens: 200_000 }),
-    });
-    const projectionState = {
-      replacements: new Map<string, AgentMessage>(),
-      frozen: new Set<string>(),
-      ambiguousBaseKeys: new Set<string>(),
-      sourceTextByKey: new Map<string, string[]>(),
-    };
-    installOwnsCompactionHookWithGuard(agent, engine, {
-      prePromptCount: 1,
-      contextWindowTokens: 200_000,
-      contextTokenBudget: 200_000,
-      reserveTokens: 36_000,
-      toolResultMaxChars: 64_000,
-      projectionState,
-    });
-
-    const rawMessages = [
-      makeUser("first"),
-      ...Array.from({ length: 12 }, (_, index) =>
-        makeToolResult(`call_${index}`, String(index % 10).repeat(30_000)),
-      ),
-    ];
-    const transformed = (await callTransform(agent, rawMessages)) as AgentMessage[];
-
-    expect(transformed).not.toBe(assembledMessages);
-    expect(transformed.some((message) => getToolResultText(message).length < 30_000)).toBe(true);
-    expect(
-      assembledMessages.slice(1).every((message) => getToolResultText(message).length === 30_000),
-    ).toBe(true);
-    expect(projectionState.replacements.size).toBeGreaterThan(0);
   });
 
   it("processes the first call when messages already exceed the pre-prompt baseline", async () => {

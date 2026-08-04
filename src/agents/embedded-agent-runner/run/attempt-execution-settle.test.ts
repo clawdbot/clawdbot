@@ -108,7 +108,6 @@ function createFixture() {
     cacheTrace,
     contextGuards: {
       getAfterTurnCheckpoint: vi.fn(() => 2),
-      takePendingMidTurnPrecheckRequest: vi.fn(() => null),
     },
     preparedUserTurnMessage: {
       role: "user",

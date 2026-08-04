@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../../runtime/index.js";
-import { SessionManager } from "../../sessions/index.js";
 import {
   handleEmbeddedAttemptMidTurnPrecheck,
   prepareEmbeddedAttemptPromptPreflight,
@@ -39,21 +38,12 @@ function makeToolResultMessage(text: string): AgentMessage {
   } as AgentMessage;
 }
 
-function createSessionManagerWithMessage(message: AgentMessage): SessionManager {
-  const sessionManager = SessionManager.inMemory();
-  sessionManager.appendMessage(message as Parameters<typeof sessionManager.appendMessage>[0]);
-  return sessionManager;
-}
-
 describe("attempt prompt preflight", () => {
   it("routes a mid-turn compaction request with its measured budget", () => {
     const outcome = handleEmbeddedAttemptMidTurnPrecheck({
       attempt,
       request,
-      sessionAgentId: "test",
-      sessionManager: SessionManager.inMemory(),
       prePromptMessageCount: 4,
-      replaceSessionMessages: vi.fn(),
     });
 
     expect(outcome).toEqual({
@@ -69,73 +59,15 @@ describe("attempt prompt preflight", () => {
     });
   });
 
-  it("admits a retry without changing history when persisted truncation cannot help", () => {
-    const toolResult = makeToolResultMessage("already capped tool output");
-    const sessionManager = createSessionManagerWithMessage(toolResult);
-    const messagesBefore = sessionManager.buildSessionContext().messages;
-    const replaceSessionMessages = vi.fn();
+  it("routes obsolete truncate-only signals through compaction without changing history", () => {
     const outcome = handleEmbeddedAttemptMidTurnPrecheck({
       attempt,
       request: { ...request, route: "truncate_tool_results_only" },
-      sessionAgentId: "test",
-      sessionManager,
       prePromptMessageCount: 4,
-      replaceSessionMessages,
     });
 
-    expect(outcome.preflightRecovery).toEqual(
-      expect.objectContaining({
-        route: "truncate_tool_results_only",
-        source: "mid-turn",
-        handled: true,
-        truncatedCount: 0,
-      }),
-    );
-    expect(outcome.promptError).toBeUndefined();
-    expect(replaceSessionMessages).not.toHaveBeenCalled();
-    expect(sessionManager.buildSessionContext().messages).toEqual(messagesBefore);
-  });
-
-  it("keeps the compaction fallback when persisted truncation cannot inspect history", () => {
-    const outcome = handleEmbeddedAttemptMidTurnPrecheck({
-      attempt,
-      request: { ...request, route: "truncate_tool_results_only" },
-      sessionAgentId: "test",
-      sessionManager: SessionManager.inMemory(),
-      prePromptMessageCount: 4,
-      replaceSessionMessages: vi.fn(),
-    });
-
-    expect(outcome.preflightRecovery.route).toBe("compact_only");
-    expect(outcome.promptError?.message).toBe(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
-  });
-
-  it("handles successful mid-turn tool-result truncation without a prompt error", () => {
-    const sessionManager = createSessionManagerWithMessage(
-      makeToolResultMessage("large tool output ".repeat(5_000)),
-    );
-    const replaceSessionMessages = vi.fn();
-    const outcome = handleEmbeddedAttemptMidTurnPrecheck({
-      attempt: { ...attempt, contextTokenBudget: 100 },
-      request: { ...request, route: "truncate_tool_results_only" },
-      sessionAgentId: "test",
-      sessionManager,
-      prePromptMessageCount: 4,
-      replaceSessionMessages,
-    });
-
-    expect(outcome.promptError).toBeUndefined();
-    expect(outcome.preflightRecovery).toEqual(
-      expect.objectContaining({
-        route: "truncate_tool_results_only",
-        source: "mid-turn",
-        handled: true,
-        truncatedCount: 1,
-      }),
-    );
-    expect(replaceSessionMessages).toHaveBeenCalledWith(
-      sessionManager.buildSessionContext().messages,
-    );
+    expect(outcome.preflightRecovery.route).toBe("compact_then_truncate");
+    expect(outcome.promptError.message).toBe(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
   });
 
   it("records heuristic pressure without short-circuiting the provider attempt", async () => {

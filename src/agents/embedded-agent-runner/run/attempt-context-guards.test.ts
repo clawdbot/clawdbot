@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession } from "../../sessions/index.js";
-import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 
 const hoisted = vi.hoisted(() => ({
   installContextEngineLoopHook: vi.fn(),
@@ -77,32 +76,15 @@ describe("installEmbeddedAttemptContextGuards", () => {
     hoisted.readLastCacheTtlTimestamp.mockReturnValue(null);
   });
 
-  it("tracks mid-turn requests and restores attempt-local transforms", async () => {
+  it("installs and restores attempt-local transforms", async () => {
     const input = createInput();
     const originalTransform = input.activeSession.agent.transformContext;
     const guards = installEmbeddedAttemptContextGuards(input as never);
     const guardOptions = hoisted.installToolResultContextGuard.mock.calls[0]?.[0];
-    const request: MidTurnPrecheckRequest = {
-      route: "compact_then_truncate",
-      estimatedPromptTokens: 1_200,
-      promptBudgetBeforeReserve: 1_024,
-      overflowTokens: 176,
-      toolResultReducibleChars: 800,
-      toolResultAggregateBudgetChars: 4_000,
-      effectiveReserveTokens: 64,
-    };
-    guardOptions.midTurnPrecheck.onMidTurnPrecheck(request);
-
-    expect(guards.takePendingMidTurnPrecheckRequest()).toBe(request);
-    expect(guards.takePendingMidTurnPrecheckRequest()).toBeNull();
     expect(guardOptions).toMatchObject({
       contextWindowTokens: 1_024,
-      midTurnPrecheck: {
-        enabled: true,
-        contextTokenBudget: 1_024,
-        toolResultMaxChars: expect.any(Number),
-      },
     });
+    expect(guardOptions).not.toHaveProperty("midTurnPrecheck");
 
     const messages: AgentMessage[] = [
       { role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 },

@@ -247,14 +247,19 @@ export function estimateLlmBoundaryTokenPressure(params: {
   messages: AgentMessage[];
   systemPrompt?: string;
   prompt: string;
+  tools?: unknown[];
 }): number {
   const historyTokens = params.messages.reduce(
     (sum, message) => sum + estimateMessageTokenPressure(message),
     0,
   );
+  const toolTokens = (params.tools ?? []).reduce(
+    (sum, tool) => sum + MESSAGE_BOUNDARY_OVERHEAD_TOKENS + estimateJsonPayloadTokenPressure(tool),
+    0,
+  );
   return Math.max(
     0,
-    Math.ceil((historyTokens + estimateRenderedPromptTokens(params)) * SAFETY_MARGIN),
+    Math.ceil((historyTokens + toolTokens + estimateRenderedPromptTokens(params)) * SAFETY_MARGIN),
   );
 }
 

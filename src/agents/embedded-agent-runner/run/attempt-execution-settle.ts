@@ -300,7 +300,6 @@ export async function runEmbeddedAttemptSettledPhase(
         },
         readYieldState: input.lifecycle.readYieldState,
         stopAcceptingSteerMessages,
-        takePendingMidTurnPrecheckRequest: contextGuards.takePendingMidTurnPrecheckRequest,
       },
     });
 
