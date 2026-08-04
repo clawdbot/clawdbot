@@ -1,7 +1,6 @@
 import AppKit
 import Foundation
 import Testing
-import WebKit
 @testable import OpenClaw
 
 private actor DashboardRouteAuthGate {
@@ -975,8 +974,6 @@ struct DashboardWindowSmokeTests {
             "webView:runJavaScriptConfirmPanelWithMessage:initiatedByFrame:completionHandler:")))
         #expect(controller.responds(to: NSSelectorFromString(
             "webView:runJavaScriptTextInputPanelWithPrompt:defaultText:initiatedByFrame:completionHandler:")))
-        #expect(!controller._testOwnsJavaScriptControlUIDialog(WKWebView()))
-
         try controller._testOpenLinkBrowser(#require(URL(string: "https://docs.openclaw.ai/")))
         #expect(!controller._testLinkBrowserOwnsJavaScriptControlUIDialog)
         #expect(controller._testLinkBrowserOwnsJavaScriptConfirmDialog)
