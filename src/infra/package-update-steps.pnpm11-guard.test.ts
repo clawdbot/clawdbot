@@ -787,6 +787,7 @@ describe("pnpm 11 isolated install preflight", () => {
 
       const failed = await runGlobalPackageUpdateSteps(updateParams);
       expect(failed.failedStep?.name).toBe("pnpm package postinstall");
+      expect(failed.packageSwapCompleted).toBe(false);
       await expect(
         fs.readFile(path.join(packageRoot, ".openclaw-lifecycle-pending"), "utf8"),
       ).resolves.toBe("pending\n");

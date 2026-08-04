@@ -1041,7 +1041,6 @@ export async function runGlobalPackageUpdateSteps(params: {
         failedStep: replacementStep,
       };
     }
-    packageSwapCompleted = finalInstallStep.exitCode === 0 && !stagedInstall;
     const livePackageRoot =
       refreshedPnpmPackageRoot ??
       params.installTarget.packageRoot ??
@@ -1192,6 +1191,12 @@ export async function runGlobalPackageUpdateSteps(params: {
           (step.name === "global install verify" || step.name === "global install swap") &&
           step.exitCode !== 0,
       );
+      // Defer the recovery flag until lifecycle and verification pass.
+      // A later failure must not return a true flag that would allow failed-update
+      // recovery to bypass the older-binary guard for an unverified installation.
+      if (!failedVerifyOrSwap && !stagedInstall) {
+        packageSwapCompleted = true;
+      }
       const postVerifyStep = failedVerifyOrSwap
         ? null
         : verifiedPackageRoot
