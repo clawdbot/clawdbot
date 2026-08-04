@@ -292,6 +292,7 @@ export type DaemonStatus = {
     loaded: boolean;
     loadedText: string;
     notLoadedText: string;
+    targetRole?: "target" | "diagnostic-only";
     command?: {
       programArguments: string[];
       workingDirectory?: string;
@@ -616,6 +617,7 @@ export async function gatherDaemonStatus(
     commandProgramArguments: targetServiceCommand?.programArguments,
     rpcUrlOverride: opts.rpc.url,
   });
+  const serviceTargetsProbe = useNativeServiceTargetContext && !probeUrlOverride;
   const shouldInspectLocalGateway = daemonCfg.gateway?.mode !== "remote" && !probeUrlOverride;
   const windowsFirewall =
     opts.deep === true && shouldInspectLocalGateway
@@ -723,7 +725,7 @@ export async function gatherDaemonStatus(
     rpcAuthWarning = undefined;
   }
   const health =
-    opts.probe && useNativeServiceTargetContext && loaded && rpc?.ok !== true
+    opts.probe && serviceTargetsProbe && loaded && rpc?.ok !== true
       ? await loadRestartHealthModule()
           .then(({ inspectGatewayRestart }) =>
             inspectGatewayRestart({
@@ -787,6 +789,7 @@ export async function gatherDaemonStatus(
       loaded,
       loadedText: service.loadedText,
       notLoadedText: service.notLoadedText,
+      targetRole: serviceTargetsProbe ? "target" : "diagnostic-only",
       command,
       runtime,
       configAudit,

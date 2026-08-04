@@ -593,8 +593,11 @@ describe("gatherDaemonStatus", () => {
   });
 
   it("does not force local TLS fingerprint when probe URL is explicitly overridden", async () => {
-    setTestEnvValue("OPENCLAW_GATEWAY_PORT", "18900");
-    isDefaultInstallIdentity.mockReturnValue(false);
+    callGatewayStatusProbe.mockResolvedValueOnce({
+      ok: false,
+      url: "wss://override.example:18790",
+      error: "connect ECONNREFUSED override.example:18790",
+    });
 
     const status = await gatherDaemonStatus({
       rpc: { url: "wss://override.example:18790" },
@@ -613,6 +616,8 @@ describe("gatherDaemonStatus", () => {
     expect(status.rpc?.url).toBe("wss://override.example:18790");
     expect(loadInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
     expect(status.pluginVersionDrift).toBeUndefined();
+    expect(status.service.targetRole).toBe("diagnostic-only");
+    expect(inspectGatewayRestart).not.toHaveBeenCalled();
   });
 
   it("keeps the standalone gateway default when no native service target exists", async () => {
@@ -628,6 +633,7 @@ describe("gatherDaemonStatus", () => {
 
     expect(status.gateway?.probeUrl).toBe("ws://127.0.0.1:18789");
     expect((callArg(callGatewayStatusProbe) as { url?: string }).url).toBe("ws://127.0.0.1:18789");
+    expect(status.service.targetRole).toBe("target");
   });
 
   it.each([
@@ -650,6 +656,11 @@ describe("gatherDaemonStatus", () => {
       resolveGatewayPort.mockImplementation((_cfg?: unknown, env?: unknown) =>
         Number((env as NodeJS.ProcessEnv | undefined)?.OPENCLAW_GATEWAY_PORT ?? 18789),
       );
+      callGatewayStatusProbe.mockResolvedValueOnce({
+        ok: false,
+        url: "ws://127.0.0.1:18900",
+        error: "connect ECONNREFUSED 127.0.0.1:18900",
+      });
 
       const status = await gatherDaemonStatus({
         rpc: {},
@@ -674,6 +685,7 @@ describe("gatherDaemonStatus", () => {
       };
       expect(authInput.cfg).toBe(cliLoadedConfig);
       expect(authInput.env?.OPENCLAW_GATEWAY_PORT).toBe("18900");
+      expect(status.service.targetRole).toBe("diagnostic-only");
       expect(inspectGatewayRestart).not.toHaveBeenCalled();
     },
   );
