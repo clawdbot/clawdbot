@@ -309,6 +309,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected sessionPullRequests: ControlUiSessionPullRequest[] = [];
   protected sessionPullRequestsBranch: ControlUiSessionBranch | undefined;
   protected sessionPullRequestsRateLimited = false;
+  protected sessionPullRequestsKey: string | undefined;
   protected sessionPullRequestsExpanded = false;
   protected dismissedSessionPullRequestIds: ReadonlySet<string> = new Set();
   protected readonly dismissedWorkspaceConflictRefs = new Map<string, string>();

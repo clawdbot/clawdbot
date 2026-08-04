@@ -123,6 +123,7 @@ export abstract class ChatPaneSession extends ChatPaneSharing {
       this.sessionPullRequests = [];
       this.sessionPullRequestsBranch = undefined;
       this.sessionPullRequestsRateLimited = false;
+      this.sessionPullRequestsKey = undefined;
       this.requestUpdate();
       return;
     }
@@ -132,6 +133,7 @@ export abstract class ChatPaneSession extends ChatPaneSharing {
       this.sessionPullRequests = [];
       this.sessionPullRequestsBranch = undefined;
       this.sessionPullRequestsRateLimited = false;
+      this.sessionPullRequestsKey = undefined;
       this.requestUpdate();
       return;
     }
@@ -147,15 +149,23 @@ export abstract class ChatPaneSession extends ChatPaneSharing {
       store.refresh(pullRequestKey);
     }
     const result = store.get(pullRequestKey);
-    if (
-      !result ||
-      result.status === "unavailable" ||
-      !this.isConnectionScopeCurrent(scope) ||
-      sessionKey !== scope.state.sessionKey
-    ) {
+    const scopeCurrent =
+      this.isConnectionScopeCurrent(scope) && sessionKey === scope.state.sessionKey;
+    if (!result || result.status === "unavailable" || !scopeCurrent) {
+      // Chips still showing a previous session must not linger while the new
+      // session's snapshot is missing or unavailable. Only clear on a stable
+      // scope so a mid-refresh session switch cannot wipe valid state.
+      if (scopeCurrent && this.sessionPullRequestsKey !== sessionKey) {
+        this.sessionPullRequests = [];
+        this.sessionPullRequestsBranch = undefined;
+        this.sessionPullRequestsRateLimited = false;
+        this.sessionPullRequestsKey = sessionKey;
+        this.requestUpdate();
+      }
       return;
     }
     this.sessionPullRequests = result.pullRequests;
+    this.sessionPullRequestsKey = sessionKey;
     if (!result.rateLimited || result.pullRequests.length > 0) {
       scope.context.sessions.setPullRequestSummary(
         sessionKey,
@@ -174,6 +184,7 @@ export abstract class ChatPaneSession extends ChatPaneSharing {
     this.sessionPullRequests = [];
     this.sessionPullRequestsBranch = undefined;
     this.sessionPullRequestsRateLimited = false;
+    this.sessionPullRequestsKey = undefined;
     this.sessionPullRequestsExpanded = false;
     this.dismissedSessionPullRequestIds = new Set();
   }

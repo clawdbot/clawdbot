@@ -77,6 +77,35 @@ describe("chat pane pushed pull request state", () => {
     expect(pane.sessionPullRequests).toEqual([expect.objectContaining({ number: 2 })]);
   });
 
+  it("clears the previous session's PR chips when the new session's snapshot is unavailable", async () => {
+    const { pane, state, emitGatewayEvent } = createPullRequestPane({
+      capturePullRequestEpoch: vi.fn(() => Symbol("pr-refresh")),
+      setPullRequestSummary: vi.fn(),
+    } as unknown as SessionCapability);
+
+    await pane.refreshSessionPullRequests();
+    emitSnapshot(emitGatewayEvent, "agent:main:current", {
+      pullRequests: [pullRequest(1, "open")],
+      rateLimited: false,
+      status: "ready",
+    });
+    await pane.refreshSessionPullRequests();
+    expect(pane.sessionPullRequests).toHaveLength(1);
+
+    state.sessionKey = "agent:main:other";
+    await pane.refreshSessionPullRequests();
+    emitSnapshot(emitGatewayEvent, "agent:main:other", {
+      pullRequests: [],
+      rateLimited: false,
+      status: "unavailable",
+    });
+    await pane.refreshSessionPullRequests();
+
+    // The unavailable snapshot must preserve the new session's own (empty)
+    // state, not keep rendering the previous session's chips.
+    expect(pane.sessionPullRequests).toEqual([]);
+  });
+
   it("subscribes and publishes pushed live PR state", async () => {
     const epoch = Symbol("pr-refresh");
     const setPullRequestSummary = vi.fn();
