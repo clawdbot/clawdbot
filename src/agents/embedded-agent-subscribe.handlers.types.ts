@@ -318,6 +318,7 @@ type ToolHandlerParams = Pick<
   | "toolProgressDetail"
   | "sourceReplyDeliveryMode"
   | "onDeliveredMessageToolOnlySourceReply"
+  | "trajectoryRecorder"
 >;
 
 type ToolHandlerState = Pick<

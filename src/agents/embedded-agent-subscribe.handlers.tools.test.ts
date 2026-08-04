@@ -3462,4 +3462,125 @@ describe("control UI credential redaction (issue #72283)", () => {
     );
   });
 });
+describe("tool trajectory recording", () => {
+  type RecordedTrajectoryEvent = { type: string; data?: Record<string, unknown> };
+
+  function attachRecorder(ctx: ToolHandlerContext): RecordedTrajectoryEvent[] {
+    const recorded: RecordedTrajectoryEvent[] = [];
+    ctx.params.trajectoryRecorder = {
+      recordEvent: (type, data) => {
+        recorded.push({ type, ...(data ? { data } : {}) });
+      },
+      flush: async () => {},
+    };
+    return recorded;
+  }
+
+  function requireRecorded(
+    recorded: readonly RecordedTrajectoryEvent[],
+    type: string,
+  ): Record<string, unknown> {
+    const event = recorded.find((entry) => entry.type === type);
+    if (!event?.data) {
+      throw new Error(`expected recorded ${type} event`);
+    }
+    return event.data;
+  }
+
+  afterEach(() => {
+    resetAgentEventsForTest();
+  });
+
+  it("records a delegation tool call and result matching the emitted tool stream", async () => {
+    const events: CapturedAgentEvent[] = [];
+    const unsubscribe = registerAgentEventListener((evt) => events.push(evt as never));
+    const { ctx } = createTestContext();
+    const recorded = attachRecorder(ctx);
+    try {
+      await executeTool(ctx, {
+        toolName: "sessions_send",
+        toolCallId: "tool-delegation-1",
+        args: { sessionKey: "agent:main:worker", message: "please review the patch" },
+        isError: false,
+        result: { content: [{ type: "text", text: "delivered" }] },
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    const startEvent = requireEvent(
+      events,
+      (evt) => evt.stream === "tool" && (evt.data as { phase?: string })?.phase === "start",
+      "tool start",
+    );
+    const resultEvent = requireEvent(
+      events,
+      (evt) => evt.stream === "tool" && (evt.data as { phase?: string })?.phase === "result",
+      "tool result",
+    );
+
+    expect(recorded.map((entry) => entry.type)).toEqual(["tool.call", "tool.result"]);
+    expect(requireRecorded(recorded, "tool.call")).toEqual(startEvent.data);
+    expectRecordFields(requireRecorded(recorded, "tool.call"), "recorded tool.call", {
+      phase: "start",
+      name: "sessions_send",
+      toolCallId: "tool-delegation-1",
+      args: { sessionKey: "agent:main:worker", message: "please review the patch" },
+    });
+    expect(requireRecorded(recorded, "tool.result")).toEqual({
+      ...resultEvent.data,
+      success: true,
+    });
+  });
+
+  it("records a failed tool result as unsuccessful", async () => {
+    const { ctx } = createTestContext();
+    const recorded = attachRecorder(ctx);
+
+    await executeTool(ctx, {
+      toolName: "sessions_send",
+      toolCallId: "tool-delegation-error",
+      args: { sessionKey: "agent:main:worker", message: "ping" },
+      isError: true,
+      result: { content: [{ type: "text", text: "target session not found" }] },
+    });
+
+    expectRecordFields(requireRecorded(recorded, "tool.result"), "recorded tool.result", {
+      name: "sessions_send",
+      toolCallId: "tool-delegation-error",
+      isError: true,
+      success: false,
+    });
+  });
+
+  it("redacts secrets from recorded tool arguments", async () => {
+    const { ctx } = createTestContext();
+    const recorded = attachRecorder(ctx);
+
+    await startTool(ctx, {
+      toolName: "gateway",
+      toolCallId: "tool-trajectory-secret",
+      args: { apiKey: "sk-1234567890abcdefXYZ", model: "gpt-4" },
+    });
+
+    const serialized = JSON.stringify(requireRecorded(recorded, "tool.call").args);
+    expect(serialized).not.toContain("sk-1234567890abcdefXYZ");
+    expect(serialized).toContain("gpt-4");
+  });
+
+  it("runs tool lifecycle handlers without a recorder attached", async () => {
+    const { ctx } = createTestContext();
+    expect(ctx.params.trajectoryRecorder).toBeUndefined();
+
+    await expect(
+      executeTool(ctx, {
+        toolName: "sessions_send",
+        toolCallId: "tool-delegation-no-recorder",
+        args: { sessionKey: "agent:main:worker", message: "ping" },
+        isError: false,
+        result: { content: [{ type: "text", text: "delivered" }] },
+      }),
+    ).resolves.toBeUndefined();
+  });
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

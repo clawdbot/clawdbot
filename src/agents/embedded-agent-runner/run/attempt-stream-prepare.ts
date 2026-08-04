@@ -17,6 +17,7 @@ import {
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
+import type { SubscribeEmbeddedAgentSessionParams } from "../../embedded-agent-subscribe.types.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-hook-helpers.js";
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
@@ -87,6 +88,7 @@ export function prepareEmbeddedAttemptStream(input: {
   sandboxSessionKey: string;
   builtinToolNames: ReadonlySet<string>;
   replaySafeToolNames: ReadonlySet<string>;
+  trajectoryRecorder?: SubscribeEmbeddedAgentSessionParams["trajectoryRecorder"];
 }) {
   const attempt = input.attempt;
   const hookRunner = input.hookRunner;
@@ -259,6 +261,7 @@ export function prepareEmbeddedAttemptStream(input: {
       sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
       hasDeliveredMessageToolOnlySourceReply: input.hasDeliveredSourceReply,
       onDeliveredMessageToolOnlySourceReply: input.markSourceReplyDelivered,
+      ...(input.trajectoryRecorder ? { trajectoryRecorder: input.trajectoryRecorder } : {}),
       onAgentToolResult: attempt.onAgentToolResult,
       observeToolTerminal: attempt.observeToolTerminal,
       onToolResult: attempt.onToolResult,

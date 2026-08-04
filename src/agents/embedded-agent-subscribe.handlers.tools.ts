@@ -1133,17 +1133,19 @@ export function handleToolExecutionStart(
     );
 
     const shouldEmitToolEvents = ctx.shouldEmitToolResult();
+    const toolStartEventData = {
+      phase: "start",
+      name: toolName,
+      toolCallId,
+      args: sanitizeToolArgs(args) as Record<string, unknown>,
+      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+    };
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "tool",
-      data: {
-        phase: "start",
-        name: toolName,
-        toolCallId,
-        args: sanitizeToolArgs(args) as Record<string, unknown>,
-        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-      },
+      data: toolStartEventData,
     });
+    ctx.params.trajectoryRecorder?.recordEvent("tool.call", toolStartEventData);
     const itemData: AgentItemEventData = {
       itemId: buildToolItemId(toolCallId),
       phase: "start",
@@ -1160,13 +1162,7 @@ export function handleToolExecutionStart(
     // Best-effort typing signal; do not block tool summaries on slow emitters.
     emitAgentEventCallbackBestEffort(ctx, {
       stream: "tool",
-      data: {
-        phase: "start",
-        name: toolName,
-        toolCallId,
-        args: sanitizeToolArgs(args) as Record<string, unknown>,
-        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-      },
+      data: toolStartEventData,
     });
 
     if (isExecToolName(toolName)) {
@@ -1645,19 +1641,24 @@ export async function handleToolExecutionEnd(
     emitAgentEventCallbackBestEffort(ctx, planEvent);
   }
 
+  const toolResultEventData = {
+    phase: "result",
+    name: toolName,
+    toolCallId,
+    meta,
+    isError: isToolError,
+    result: eventResult,
+    ...(toolErrorSummary ? { toolErrorSummary } : {}),
+    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+  };
   emitAgentEvent({
     runId: ctx.params.runId,
     stream: "tool",
-    data: {
-      phase: "result",
-      name: toolName,
-      toolCallId,
-      meta,
-      isError: isToolError,
-      result: eventResult,
-      ...(toolErrorSummary ? { toolErrorSummary } : {}),
-      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-    },
+    data: toolResultEventData,
+  });
+  ctx.params.trajectoryRecorder?.recordEvent("tool.result", {
+    ...toolResultEventData,
+    success: !isToolError,
   });
   const endedAt = Date.now();
   const itemId = buildToolItemId(toolCallId);

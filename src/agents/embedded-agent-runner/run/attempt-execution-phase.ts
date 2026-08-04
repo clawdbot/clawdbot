@@ -35,6 +35,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     sessionManager,
     settleTracker: { abortActiveSession, trackPromptSettlePromise },
     state: sessionRuntimeState,
+    trajectoryRecorder,
     transcriptPolicy,
     transport: { effectiveAgentTransport, providerTextTransforms },
   } = sessionRuntime;
@@ -105,6 +106,7 @@ export async function runEmbeddedAttemptExecutionPhase(
       sandboxSessionKey: input.setup.sandboxSessionKey,
       builtinToolNames,
       replaySafeToolNames,
+      ...(trajectoryRecorder ? { trajectoryRecorder } : {}),
     },
     lifecycle: {
       isYieldDetected: () => input.lifecycle.readYieldState().yieldDetected,
