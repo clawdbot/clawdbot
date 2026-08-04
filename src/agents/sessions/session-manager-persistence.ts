@@ -30,6 +30,29 @@ function requireTranscriptEventAppend(
   throw new Error(`${message}: ${cause.code}`, { cause });
 }
 
+/**
+ * Describes the transcript identity a refused append was scoped to.
+ *
+ * `appendTranscriptEventSync` returns `false` rather than throwing when the
+ * session row cannot be matched, so without this the caller can only report
+ * *that* a write was refused, never *which* identity missed. A sessionId
+ * arriving in `sessionKey` is the common cause and is invisible otherwise.
+ */
+function describeTranscriptWriteScope(scope: {
+  agentId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+}): string {
+  const parts = [
+    `sessionKey=${scope.sessionKey ?? "<none>"}`,
+    `sessionId=${scope.sessionId ?? "<none>"}`,
+  ];
+  if (scope.agentId) {
+    parts.push(`agentId=${scope.agentId}`);
+  }
+  return parts.join(" ");
+}
+
 export class SessionManagerPersistence extends SessionManagerCore {
   removeTrailingEntries(
     predicate: (entry: SessionEntry) => boolean,
@@ -167,15 +190,19 @@ export class SessionManagerPersistence extends SessionManagerCore {
           updatedAt: Date.now(),
         })
       ) {
-        throw new Error("Session transcript header was not persisted");
+        throw new Error(
+          `Session transcript header was not persisted: ${describeTranscriptWriteScope(scope)}`,
+        );
       }
       const header = this.fileEntries[0];
       if (!header || header.type !== "session") {
-        throw new Error("Session transcript header was not persisted");
+        throw new Error(
+          `Session transcript header was not persisted: ${describeTranscriptWriteScope(scope)}`,
+        );
       }
       requireTranscriptEventAppend(
         appendTranscriptEventSync(scope, header),
-        "Session transcript header was not persisted",
+        `Session transcript header was not persisted: ${describeTranscriptWriteScope(scope)}`,
       );
       this.persistenceHeaderPending = false;
     }
@@ -183,7 +210,8 @@ export class SessionManagerPersistence extends SessionManagerCore {
     if (leafEntry) {
       requireTranscriptEventAppend(
         appendTranscriptEventSync(scope, entry),
-        `Session transcript leaf control was not persisted: ${leafEntry.id}`,
+        `Session transcript leaf control was not persisted: ${leafEntry.id} ` +
+          describeTranscriptWriteScope(scope),
       );
       return undefined;
     }
@@ -199,7 +227,8 @@ export class SessionManagerPersistence extends SessionManagerCore {
             ? { appendIntent: options.appendIntent }
             : undefined,
         ),
-        `Session transcript entry was not persisted: ${entry.id}`,
+        `Session transcript entry was not persisted: ${entry.id} ` +
+          describeTranscriptWriteScope(scope),
       );
       return undefined;
     }
@@ -215,7 +244,10 @@ export class SessionManagerPersistence extends SessionManagerCore {
     } satisfies Parameters<typeof appendTranscriptMessageSync>[1];
     const result = appendTranscriptMessageSync(scope, appendOptions);
     if (!result) {
-      throw new Error(`Session transcript message was not persisted: ${entry.id}`);
+      throw new Error(
+        `Session transcript message was not persisted: ${entry.id} ` +
+          describeTranscriptWriteScope(scope),
+      );
     }
     if (result.messageId !== entry.id) {
       const idempotencyKey =

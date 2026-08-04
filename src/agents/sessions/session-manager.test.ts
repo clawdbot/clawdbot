@@ -800,9 +800,21 @@ describe("SessionManager.open", () => {
     expect(() => sessionManager.appendModelChange("openai", "gpt-5.5")).toThrow(
       "entry was not persisted",
     );
+    // The refused append must name the identity it was scoped to. Without it the
+    // caller can only report that a write failed, and a mismatched session key
+    // reaches the operator as an unexplained failure.
+    expect(() => sessionManager.appendModelChange("openai", "gpt-5.5")).toThrow(
+      `sessionKey=${sessionKey}`,
+    );
+    expect(() => sessionManager.appendModelChange("openai", "gpt-5.5")).toThrow(
+      `sessionId=${sessionId}`,
+    );
     expect(() =>
       sessionManager.appendMessage({ role: "user", content: "late message", timestamp: 1 }),
     ).toThrow("message was not persisted");
+    expect(() =>
+      sessionManager.appendMessage({ role: "user", content: "late message", timestamp: 1 }),
+    ).toThrow(`sessionKey=${sessionKey}`);
     expect(sessionManager.getEntries()).toEqual(entriesBeforeRejectedAppends);
     expect(sessionManager.getLeafId()).toBe(leafBeforeRejectedAppends);
     expect(sessionManager.getAppendParentId()).toBe(appendParentBeforeRejectedAppends);
