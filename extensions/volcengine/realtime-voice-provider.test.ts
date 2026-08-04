@@ -1,10 +1,10 @@
 import type { RealtimeVoiceBridgeCreateRequest } from "openclaw/plugin-sdk/realtime-voice";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildDoubaoRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 import {
-  buildDoubaoRealtimeVoiceProvider,
   extractDoubaoSpeakableMessage,
   resamplePcm16Mono24kTo16k,
-} from "./realtime-voice-provider.js";
+} from "./realtime-voice-utils.js";
 import {
   DOUBAO_CLIENT_EVENT,
   DOUBAO_SERVER_EVENT,

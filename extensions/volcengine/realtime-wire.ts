@@ -33,7 +33,7 @@ export const DOUBAO_SERVER_EVENT = {
 
 type DoubaoSerialization = "json" | "raw";
 
-export type EncodeDoubaoFrameParams = {
+type EncodeDoubaoFrameParams = {
   messageType: number;
   event: number;
   sessionId?: string;
