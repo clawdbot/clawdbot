@@ -88,15 +88,69 @@ function skillStatus(eligible: boolean) {
   };
 }
 
-function configResponse() {
-  const raw = JSON.stringify(operatorConfig);
+function configResponse(config: Record<string, unknown> = operatorConfig) {
+  const raw = JSON.stringify(config);
   return {
-    config: operatorConfig,
-    sourceConfig: operatorConfig,
+    config,
+    sourceConfig: config,
     hash: "config-hash-1",
     issues: [],
     raw,
     valid: true,
+  };
+}
+
+function memoryStatus() {
+  return {
+    agentId: "main",
+    provider: "builtin",
+    embedding: { ok: true, checked: true },
+    dreaming: {
+      enabled: true,
+      verboseLogging: false,
+      storageMode: "inline",
+      separateReports: false,
+      shortTermCount: 0,
+      recallSignalCount: 0,
+      dailySignalCount: 0,
+      groundedSignalCount: 0,
+      totalSignalCount: 0,
+      phaseSignalCount: 0,
+      lightPhaseHitCount: 0,
+      remPhaseHitCount: 0,
+      promotedTotal: 0,
+      promotedToday: 0,
+      shortTermEntries: [],
+      signalEntries: [],
+      promotedEntries: [],
+      phases: {
+        light: {
+          enabled: true,
+          cron: "0 * * * *",
+          managedCronPresent: true,
+          lookbackDays: 2,
+          limit: 10,
+        },
+        deep: {
+          enabled: true,
+          cron: "0 3 * * *",
+          managedCronPresent: true,
+          limit: 10,
+          minScore: 0.8,
+          minRecallCount: 2,
+          minUniqueQueries: 2,
+          recencyHalfLifeDays: 14,
+        },
+        rem: {
+          enabled: false,
+          cron: "0 5 * * 0",
+          managedCronPresent: false,
+          lookbackDays: 7,
+          limit: 10,
+          minPatternStrength: 0.75,
+        },
+      },
+    },
   };
 }
 
@@ -129,6 +183,15 @@ async function createContext(): Promise<BrowserContext> {
     viewport,
     ...(captureUiProof ? { recordVideo: { dir: proofDir, size: viewport } } : {}),
   });
+}
+
+async function selectAgentOnAgentsPage(page: Page, name: string) {
+  const select = page.locator(".agents-control-select openclaw-agent-select");
+  await select.locator(".agent-select__trigger").click();
+  await select.locator("wa-dropdown-item[data-agent-option]").filter({ hasText: name }).click();
+  await expect
+    .poll(async () => (await select.locator(".agent-select__label").textContent())?.trim())
+    .toBe(name);
 }
 
 async function screenshot(page: Page, name: string) {
@@ -283,21 +346,47 @@ describeControlUiE2e("Control UI operator administration", () => {
       updatedAt: "2026-08-04T08:00:00.000Z",
       scanState: "clean",
     };
+    const readOnlyConfig = {
+      ...operatorConfig,
+      plugins: {
+        slots: { memory: "memory-core" },
+        entries: {
+          "memory-core": { enabled: true, config: { dreaming: { enabled: true } } },
+        },
+      },
+      skills: { workshop: { autonomous: { mode: "auto" } } },
+    };
     const gateway = await installMockGateway(page, {
       featureMethods: [
+        "agents.files.get",
+        "agents.files.list",
         "agents.files.set",
+        "agents.list",
         "agents.update",
         "chat.metadata",
         "chat.startup",
+        "config.get",
         "config.patch",
         "config.set",
+        "doctor.memory.backfillDreamDiary",
+        "doctor.memory.dedupeDreamDiary",
+        "doctor.memory.dreamDiary",
+        "doctor.memory.repairDreamingArtifacts",
+        "doctor.memory.resetDreamDiary",
+        "doctor.memory.resetGroundedShortTerm",
+        "doctor.memory.status",
         "openclaw.chat",
+        "plugins.list",
         "skills.install",
         "skills.proposals.apply",
         "skills.proposals.evaluate",
         "skills.proposals.historyScan",
+        "skills.proposals.historyStatus",
+        "skills.proposals.inspect",
+        "skills.proposals.list",
         "skills.proposals.reject",
         "skills.proposals.requestRevision",
+        "skills.status",
         "skills.update",
       ],
       operatorScopes: ["operator.read"],
@@ -308,7 +397,49 @@ describeControlUiE2e("Control UI operator administration", () => {
           mainKey: "main",
           scope: "agent",
         },
-        "config.get": configResponse(),
+        "agents.files.get": {
+          agentId: "main",
+          workspace: "/tmp/openclaw-e2e/workspace",
+          file: {
+            name: "AGENTS.md",
+            path: "/tmp/openclaw-e2e/workspace/AGENTS.md",
+            content: "# Main agent\n",
+            missing: false,
+          },
+        },
+        "agents.files.list": {
+          agentId: "main",
+          files: [
+            {
+              name: "AGENTS.md",
+              path: "/tmp/openclaw-e2e/workspace/AGENTS.md",
+              missing: false,
+            },
+          ],
+          workspace: "/tmp/openclaw-e2e/workspace",
+        },
+        "config.get": configResponse(readOnlyConfig),
+        "doctor.memory.dreamDiary": {
+          agentId: "main",
+          found: true,
+          path: "DREAMS.md",
+          content: "# Dream Diary\n",
+        },
+        "doctor.memory.status": memoryStatus(),
+        "plugins.list": {
+          plugins: [
+            {
+              id: "memory-core",
+              name: "OpenClaw Memory",
+              installed: true,
+              enabled: true,
+              state: "enabled",
+              kind: ["memory"],
+            },
+          ],
+          diagnostics: [],
+          mutationAllowed: false,
+        },
         "skills.proposals.inspect": {
           content: "Review the proposed skill.",
           record: {
@@ -323,6 +454,13 @@ describeControlUiE2e("Control UI operator administration", () => {
           schema: "openclaw.skill-workshop.proposals-manifest.v1",
           updatedAt: proposal.updatedAt,
         },
+        "skills.proposals.historyStatus": {
+          hasScanned: false,
+          hasMore: true,
+          ideasFound: 0,
+          reviewedSessions: 0,
+          lastScanReviewed: 0,
+        },
         "skills.status": skillStatus(false),
       },
     });
@@ -330,14 +468,64 @@ describeControlUiE2e("Control UI operator administration", () => {
     try {
       await page.goto(`${server.baseUrl}agents`);
       await gateway.waitForRequest("agents.list");
+      await selectAgentOnAgentsPage(page, "Reviewer");
       const setDefault = page.locator(".agents-toolbar-actions button").nth(1);
       await expect.poll(() => setDefault.isDisabled()).toBe(true);
       await setDefault.click({ force: true });
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
       await screenshot(page, "05-read-only-agents.png");
 
+      await page.goto(`${server.baseUrl}settings/agents/main/files`);
+      await gateway.waitForRequest("agents.files.list");
+      await page.locator("openclaw-agents-page").evaluate((element) => {
+        const agentsPage = element as HTMLElement & {
+          agentFileActive: string | null;
+          agentFileContents: Record<string, string>;
+          agentFileDrafts: Record<string, string>;
+          agentFilesList: {
+            agentId: string;
+            files: Array<{ name: string; path: string; missing: boolean }>;
+            workspace: string;
+          };
+          requestUpdate: () => void;
+        };
+        agentsPage.agentFilesList = {
+          agentId: "main",
+          files: [
+            {
+              name: "AGENTS.md",
+              path: "/tmp/openclaw-e2e/workspace/AGENTS.md",
+              missing: false,
+            },
+          ],
+          workspace: "/tmp/openclaw-e2e/workspace",
+        };
+        agentsPage.agentFileActive = "AGENTS.md";
+        agentsPage.agentFileContents = { "AGENTS.md": "# Main agent\n" };
+        agentsPage.agentFileDrafts = { "AGENTS.md": "# Mutated\n" };
+        agentsPage.requestUpdate();
+      });
+      const fileEditor = page.locator(".agent-file-textarea");
+      await expect.poll(() => fileEditor.isDisabled()).toBe(true);
+      const fileSave = page.locator(".agent-file-actions button").filter({ hasText: "Save" });
+      await expect.poll(() => fileSave.isDisabled()).toBe(true);
+      await fileSave.click({ force: true });
+      expect(await gateway.getRequests("agents.files.set")).toHaveLength(0);
+
+      await page.goto(`${server.baseUrl}settings/agents/main/skills`);
+      await waitForRequest(gateway, "skills.status", (params) => params.agentId === "main");
+      const agentSkillsActions = page.locator(".settings-section", { hasText: "Skills" });
+      const disableAll = agentSkillsActions.getByRole("button", { name: "Disable All" });
+      await expect.poll(() => disableAll.isDisabled()).toBe(true);
+      await disableAll.click({ force: true });
+      expect(await gateway.getRequests("config.set")).toHaveLength(0);
+
       await page.goto(`${server.baseUrl}skills`);
       await gateway.waitForRequest("skills.status");
+      const globalSkillToggle = page.locator("wa-switch.settings-toggle").first();
+      await expect.poll(() => globalSkillToggle.getAttribute("disabled")).not.toBeNull();
+      await globalSkillToggle.click({ force: true });
+      expect(await gateway.getRequests("skills.update")).toHaveLength(0);
       await page.getByRole("button", { name: "Open Deploy Helper details" }).click();
       const skillDialog = page.locator("openclaw-modal-dialog", { hasText: "Deploy Helper" });
       const install = skillDialog.getByRole("button", { name: "Install Deploy Helper" });
@@ -352,18 +540,100 @@ describeControlUiE2e("Control UI operator administration", () => {
       const actionButtons = page.locator(".sw-action-bar button");
       const evaluate = actionButtons.nth(0);
       const apply = actionButtons.nth(1);
+      const revise = actionButtons.nth(2);
+      const reject = actionButtons.nth(3);
       await expect.poll(() => apply.isDisabled()).toBe(true);
       await expect.poll(() => evaluate.isDisabled()).toBe(true);
+      await expect.poll(() => revise.isDisabled()).toBe(true);
+      await expect.poll(() => reject.isDisabled()).toBe(true);
       await apply.click({ force: true });
       await evaluate.click({ force: true });
+      await revise.click({ force: true });
+      await reject.click({ force: true });
       expect(await gateway.getRequests("skills.proposals.apply")).toHaveLength(0);
       expect(await gateway.getRequests("skills.proposals.evaluate")).toHaveLength(0);
+      expect(await gateway.getRequests("skills.proposals.requestRevision")).toHaveLength(0);
+      expect(await gateway.getRequests("skills.proposals.reject")).toHaveLength(0);
+      const selfLearning = page.getByRole("checkbox", {
+        name: "Toggle autonomous self-learning",
+      });
+      await expect.poll(() => selfLearning.isDisabled()).toBe(true);
+      await selfLearning.click({ force: true });
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+      const scanHistory = page.getByRole("button", { name: "Find skill ideas" });
+      await expect.poll(() => scanHistory.isDisabled()).toBe(true);
+      await scanHistory.click({ force: true });
+      expect(await gateway.getRequests("skills.proposals.historyScan")).toHaveLength(0);
       await screenshot(page, "07-read-only-workshop.png");
+
+      await page.goto(`${server.baseUrl}settings/agents/main/memory`);
+      await gateway.waitForRequest("doctor.memory.status");
+      const dreamingToggle = page.locator(".dreams__phase-toggle");
+      await expect.poll(() => dreamingToggle.isDisabled()).toBe(true);
+      await dreamingToggle.click({ force: true });
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+      await page.locator("#dreams-tab-advanced").click();
+      const memoryActions = page.locator(".dreams-advanced__actions button");
+      await expect.poll(() => memoryActions.count()).toBe(5);
+      for (const button of await memoryActions.all()) {
+        await expect.poll(() => button.isDisabled()).toBe(true);
+        await button.click({ force: true });
+      }
+      for (const method of [
+        "doctor.memory.backfillDreamDiary",
+        "doctor.memory.dedupeDreamDiary",
+        "doctor.memory.repairDreamingArtifacts",
+        "doctor.memory.resetDreamDiary",
+        "doctor.memory.resetGroundedShortTerm",
+      ]) {
+        expect(await gateway.getRequests(method)).toHaveLength(0);
+      }
 
       await page.goto(`${server.baseUrl}custodian?intent=new-agent`);
       await page.locator("openclaw-custodian-page").waitFor();
       expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
       await screenshot(page, "08-read-only-new-agent.png");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("retains legacy admin mutations when the Gateway omits method metadata", async () => {
+    const context = await createContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      omitFeatureMethods: true,
+      methodResponses: {
+        "agents.list": {
+          agents: agentRoster,
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "config.get": configResponse(),
+        "skills.install": { message: "Installed Deploy Helper" },
+        "skills.status": skillStatus(false),
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}agents`);
+      await gateway.waitForRequest("agents.list");
+      await selectAgentOnAgentsPage(page, "Reviewer");
+      const setDefault = page.locator(".agents-toolbar-actions button").nth(1);
+      await expect.poll(() => setDefault.isEnabled()).toBe(true);
+      await setDefault.click();
+      await gateway.waitForRequest("config.set");
+
+      await page.goto(`${server.baseUrl}skills`);
+      await gateway.waitForRequest("skills.status");
+      await page.getByRole("button", { name: "Open Deploy Helper details" }).click();
+      const install = page
+        .locator("openclaw-modal-dialog", { hasText: "Deploy Helper" })
+        .getByRole("button", { name: "Install Deploy Helper" });
+      await expect.poll(() => install.isEnabled()).toBe(true);
+      await install.click();
+      await gateway.waitForRequest("skills.install");
     } finally {
       await context.close();
     }
