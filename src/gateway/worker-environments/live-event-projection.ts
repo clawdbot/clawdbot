@@ -74,12 +74,11 @@ export function recordWorkerLiveTrajectoryEvent(
   let recorded = false;
   if (event.kind === "tool") {
     if (event.payload.phase === "start") {
-      // Persisted rows use the canonical `arguments` field the trajectory export
-      // consumes; the live worker event keeps its `args` contract.
-      const { args, ...call } = data;
+      // Schema-v1 worker rows already expose `args`; retain it for existing readers
+      // while adding the canonical `arguments` field consumed by trajectory export.
       recorder.recordEvent("tool.call", {
-        ...call,
-        ...(args === undefined ? {} : { arguments: args }),
+        ...data,
+        ...(data.args === undefined ? {} : { arguments: data.args }),
       });
       recorded = true;
     } else if (event.payload.phase === "result") {

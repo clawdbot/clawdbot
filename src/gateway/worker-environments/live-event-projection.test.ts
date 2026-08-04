@@ -20,7 +20,7 @@ function createCapturingRecorder(): {
 }
 
 describe("recordWorkerLiveTrajectoryEvent", () => {
-  it("persists tool starts with the canonical arguments field", () => {
+  it("persists tool starts with additive legacy and canonical argument fields", () => {
     const { recorder, recorded } = createCapturingRecorder();
     const event = {
       kind: "tool",
@@ -28,7 +28,11 @@ describe("recordWorkerLiveTrajectoryEvent", () => {
         phase: "start",
         name: "sessions_send",
         toolCallId: "worker-tool-1",
-        args: { sessionKey: "agent:main:worker", message: "ping" },
+        args: {
+          sessionKey: "agent:main:worker",
+          message: "ping",
+          apiKey: "sk-1234567890abcdefXYZ",
+        },
       },
     } as unknown as WorkerLiveEventParams["event"];
 
@@ -36,11 +40,13 @@ describe("recordWorkerLiveTrajectoryEvent", () => {
 
     expect(recorded).toHaveLength(1);
     expect(recorded[0]?.type).toBe("tool.call");
-    expect(recorded[0]?.data?.arguments).toEqual({
+    const legacyArgs = recorded[0]?.data?.args as Record<string, unknown>;
+    expect(legacyArgs).toMatchObject({
       sessionKey: "agent:main:worker",
       message: "ping",
     });
-    expect(recorded[0]?.data).not.toHaveProperty("args");
+    expect(legacyArgs.apiKey).not.toBe("sk-1234567890abcdefXYZ");
+    expect(recorded[0]?.data?.arguments).toEqual(legacyArgs);
     expect(recorded[0]?.data?.name).toBe("sessions_send");
   });
 
