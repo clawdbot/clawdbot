@@ -48,7 +48,8 @@ export type OpenAIResponsesOptions = BaseOpenAIStreamOptions & {
 
 const PROMPT_OBSERVER = Symbol("openaiResponsesPromptObserver");
 export type ResponsesPromptObservation = {
-  applicationAttempt: "initial" | "encrypted-content-retry";
+  egress: "responses-sdk" | "native-codex-websocket" | "native-codex-sse";
+  payloadVariant: "initial" | "encrypted-content-retry";
   promptSource: "instructions" | "input.developer" | "input.system" | "missing";
   expectedChars: number;
   observedChars: number;
@@ -62,6 +63,12 @@ export const responsesPromptObserver = {
   },
   get(options: object) {
     return Reflect.get(options, PROMPT_OBSERVER) as ResponsesPromptObserver | undefined;
+  },
+  copy(source: object | undefined, target: object): void {
+    const observer = source && responsesPromptObserver.get(source);
+    if (observer) {
+      responsesPromptObserver.set(target, observer);
+    }
   },
 };
 

@@ -11,8 +11,9 @@ scenario:
   successCriteria:
     - The user prompt does not mention reading, files, paths, nonces, or content.
     - The live transcript records a successful input read and exact artifact write with matched non-error results.
-    - The assembled context includes the full synthetic profile marker and every current-run provider request preserves it exactly.
-    - The marker is absent from visible replies, outbound messages, transcript text, and artifact bytes.
+    - The assembled context includes the full synthetic profile marker and every current-run provider dispatch preserves it exactly.
+    - The marker is absent from terminal replies, outbound messages, user-visible history/transcript text, artifact bytes, and bounded provider prompt observations.
+    - Diagnostic trajectory support bundles intentionally retain compiled prompts and are excluded from the marker-absence guarantee.
     - The artifact bytes exactly match the instruction-profile contract.
     - No visible plan or permission reply precedes the tool work, and exactly one terminal reply follows it.
   docsRefs:
@@ -27,7 +28,7 @@ scenario:
     providerMode: live-frontier
     retryCount: 0
     channel: qa-channel
-    summary: Use live transcript evidence to prove canonical workspace instructions cause one exact read/write artifact chain before the sole terminal reply.
+    summary: Use live user-visible evidence and bounded provider observations to prove canonical workspace instructions cause one exact read/write artifact chain before the sole terminal reply; diagnostic trajectory prompt retention is out of scope.
     config:
       requiredProviderMode: live-frontier
       instructionFile: AGENTS.md
@@ -190,7 +191,7 @@ flow:
             - recursive: true
               force: true
         - assert:
-            expr: "config.instructionContents.includes(config.contextMarker) && instructionProfileReport?.missing === false && instructionProfileReport?.truncated === false && instructionProfileReport?.rawChars === config.instructionContents.trimEnd().length && instructionProfileReport?.injectedChars === config.instructionContents.trimEnd().length && providerPromptEvidence.length > 0 && providerPromptEvidence.every((entry) => ['initial', 'encrypted-content-retry'].includes(entry?.applicationAttempt) && ['instructions', 'input.developer', 'input.system'].includes(entry?.promptSource) && Number.isInteger(entry?.expectedChars) && entry.expectedChars > 0 && entry.observedChars === entry.expectedChars && entry.matchesAssembledPrompt === true && Object.keys(entry).toSorted().join(',') === 'applicationAttempt,expectedChars,matchesAssembledPrompt,observedChars,promptSource') && !JSON.stringify(providerPromptEvidence).includes(config.contextMarker)"
+            expr: "config.instructionContents.includes(config.contextMarker) && instructionProfileReport?.missing === false && instructionProfileReport?.truncated === false && instructionProfileReport?.rawChars === config.instructionContents.trimEnd().length && instructionProfileReport?.injectedChars === config.instructionContents.trimEnd().length && providerPromptEvidence.length > 0 && providerPromptEvidence.every((entry) => ['responses-sdk', 'native-codex-websocket', 'native-codex-sse'].includes(entry?.egress) && ['initial', 'encrypted-content-retry'].includes(entry?.payloadVariant) && ['instructions', 'input.developer', 'input.system'].includes(entry?.promptSource) && Number.isInteger(entry?.expectedChars) && entry.expectedChars > 0 && entry.observedChars === entry.expectedChars && entry.matchesAssembledPrompt === true && Object.keys(entry).toSorted().join(',') === 'egress,expectedChars,matchesAssembledPrompt,observedChars,payloadVariant,promptSource') && !JSON.stringify(providerPromptEvidence).includes(config.contextMarker)"
             message:
               expr: "`current-run provider prompt evidence mismatch: ${JSON.stringify({ runId: turn.started.runId, instructionProfileReport, providerPromptEvidence })}`"
         - call: waitForCondition
@@ -248,4 +249,4 @@ flow:
             expr: "artifact === config.nonce && !artifact.includes(config.contextMarker) && Buffer.byteLength(artifact, 'utf8') === Buffer.byteLength(config.nonce, 'utf8')"
             message:
               expr: "`artifact bytes differed from the instructed nonce: ${JSON.stringify(artifact)}`"
-      detailsExpr: "JSON.stringify({ verdict: 'PASS', scenario: 'instruction-profile-artifact-followthrough-live', provider: env.providerMode, sessionKey, runId: turn.started.runId, promptRepeatedHiddenTerms: config.forbiddenPromptNeedles.filter((needle) => normalizedPrompt.includes(normalizeLowercaseStringOrEmpty(needle))), providerContextMarker: instructionProfileReport?.missing === false && instructionProfileReport?.truncated === false && instructionProfileReport?.injectedChars === config.instructionContents.trimEnd().length, providerPromptObservations: providerPromptEvidence, read: { callId: historyEvidence.readCall.id, resultCallId: historyEvidence.readResult.callId, path: historyEvidence.readCall.args.path, noncePresent: historyEvidence.readResult.text.includes(config.nonce) }, write: { callId: historyEvidence.writeCall.id, resultCallId: historyEvidence.writeResult.callId, path: historyEvidence.writeCall.args.path, exactArgs: historyEvidence.writeCall.args.content === config.nonce }, artifactBytes: Buffer.byteLength(artifact, 'utf8'), visibleBeforeTools: historyEvidence.visibleBeforeTools.length, terminalReplies: historyEvidence.visibleAssistant.length, historyMarkerLeak: historyEvidence.historyMarkerLeak, visibleMarkerLeak: historyEvidence.visibleMarkerLeak, outboundFinals: outboundMessages.length }, null, 2)"
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', scenario: 'instruction-profile-artifact-followthrough-live', provider: env.providerMode, sessionKey, runId: turn.started.runId, diagnosticTrajectoryPromptRetentionExcluded: true, promptRepeatedHiddenTerms: config.forbiddenPromptNeedles.filter((needle) => normalizedPrompt.includes(normalizeLowercaseStringOrEmpty(needle))), providerContextMarker: instructionProfileReport?.missing === false && instructionProfileReport?.truncated === false && instructionProfileReport?.injectedChars === config.instructionContents.trimEnd().length, providerPromptObservations: providerPromptEvidence, read: { callId: historyEvidence.readCall.id, resultCallId: historyEvidence.readResult.callId, path: historyEvidence.readCall.args.path, noncePresent: historyEvidence.readResult.text.includes(config.nonce) }, write: { callId: historyEvidence.writeCall.id, resultCallId: historyEvidence.writeResult.callId, path: historyEvidence.writeCall.args.path, exactArgs: historyEvidence.writeCall.args.content === config.nonce }, artifactBytes: Buffer.byteLength(artifact, 'utf8'), visibleBeforeTools: historyEvidence.visibleBeforeTools.length, terminalReplies: historyEvidence.visibleAssistant.length, historyMarkerLeak: historyEvidence.historyMarkerLeak, visibleMarkerLeak: historyEvidence.visibleMarkerLeak, outboundFinals: outboundMessages.length }, null, 2)"

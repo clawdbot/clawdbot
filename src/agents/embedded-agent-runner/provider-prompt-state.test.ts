@@ -73,7 +73,8 @@ describe("provider prompt state", () => {
     const state = getProviderPromptState(runId);
     const recordEvent = vi.fn();
     const observation = {
-      applicationAttempt: "initial",
+      egress: "responses-sdk",
+      payloadVariant: "initial",
       promptSource: "input.developer",
       expectedChars: marker.length,
       observedChars: marker.length,

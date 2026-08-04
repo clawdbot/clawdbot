@@ -1,7 +1,14 @@
+import { zstdDecompressSync } from "node:zlib";
 import type { Context, Model } from "@openclaw/llm-core";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { responsesPromptObserver, type ResponsesPromptObservation } from "../internal/openai.js";
+import {
+  closeOpenAICodexWebSocketSessions,
+  resetOpenAICodexWebSocketStateForTest,
+  streamOpenAICodexResponses,
+  streamSimpleOpenAICodexResponses,
+} from "../providers/openai-chatgpt-responses.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 
 const sdkState = vi.hoisted(() => ({
@@ -63,6 +70,28 @@ function createContext(systemPrompt: string, overrides: Partial<Context> = {}): 
   } as Context;
 }
 
+function createJwt(): string {
+  const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  return `${encode({ alg: "none", typ: "JWT" })}.${encode({
+    "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
+  })}.signature`;
+}
+
+function completedSseResponse(responseId = "resp_test"): Response {
+  return new Response(
+    `data: ${JSON.stringify({
+      type: "response.completed",
+      response: {
+        id: responseId,
+        status: "completed",
+        output: [],
+        usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
+      },
+    })}\n\n`,
+    { status: 200, headers: { "content-type": "text/event-stream" } },
+  );
+}
+
 async function runObservedRequest(params: {
   context: Context;
   model?: Model;
@@ -101,7 +130,11 @@ beforeEach(() => {
   configureAiTransportHost(initialHost);
 });
 
-afterAll(() => {
+afterEach(() => {
+  closeOpenAICodexWebSocketSessions();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  resetOpenAICodexWebSocketStateForTest();
   configureAiTransportHost(initialHost);
 });
 
@@ -118,7 +151,8 @@ describe("OpenAI Responses provider prompt observer", () => {
 
     expect(run.observations).toEqual([
       {
-        applicationAttempt: "initial",
+        egress: "responses-sdk",
+        payloadVariant: "initial",
         promptSource,
         expectedChars: prompt.length,
         observedChars: prompt.length,
@@ -126,26 +160,6 @@ describe("OpenAI Responses provider prompt observer", () => {
       },
     ]);
     expect(JSON.stringify(run.observations)).not.toContain(prompt);
-  });
-
-  it("observes native Codex instructions", async () => {
-    const prompt = "PRIVATE-NATIVE-INSTRUCTIONS";
-    const run = await runObservedRequest({
-      context: createContext(prompt),
-      model: createModel({
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api",
-      }),
-    });
-
-    expect(run.requests[0]?.instructions).toBe(prompt);
-    expect(run.observations[0]).toEqual({
-      applicationAttempt: "initial",
-      promptSource: "instructions",
-      expectedChars: prompt.length,
-      observedChars: prompt.length,
-      matchesAssembledPrompt: true,
-    });
   });
 
   it("observes Azure Responses egress", async () => {
@@ -163,7 +177,8 @@ describe("OpenAI Responses provider prompt observer", () => {
     expect(sdkState.clients).toEqual(["azure"]);
     expect(run.order).toEqual(["observe", "azure.create"]);
     expect(run.observations[0]).toMatchObject({
-      applicationAttempt: "initial",
+      egress: "responses-sdk",
+      payloadVariant: "initial",
       promptSource: "input.developer",
       matchesAssembledPrompt: true,
     });
@@ -234,10 +249,11 @@ describe("OpenAI Responses provider prompt observer", () => {
     });
 
     expect(run.order).toEqual(["observe", "openai.create", "observe", "openai.create"]);
-    expect(run.observations.map((entry) => entry.applicationAttempt)).toEqual([
+    expect(run.observations.map((entry) => entry.payloadVariant)).toEqual([
       "initial",
       "encrypted-content-retry",
     ]);
+    expect(run.observations.every((entry) => entry.egress === "responses-sdk")).toBe(true);
     expect(run.observations.every((entry) => entry.matchesAssembledPrompt)).toBe(true);
     expect(JSON.stringify(run.requests[0])).toContain("encrypted_content");
     expect(JSON.stringify(run.requests[1])).not.toContain("encrypted_content");
@@ -299,5 +315,227 @@ describe("OpenAI Responses provider prompt observer", () => {
     expect(JSON.stringify([...missing.observations, ...mismatch.observations])).not.toContain(
       missingPrompt,
     );
+  });
+
+  it("observes each native WebSocket connection-limit dispatch before send", async () => {
+    const prompt = "PRIVATE-NATIVE-WEBSOCKET-PROMPT";
+    const observations: ResponsesPromptObservation[] = [];
+    const order: string[] = [];
+    const sentRequests: Array<Record<string, unknown>> = [];
+    let connections = 0;
+    class ConnectionLimitWebSocket extends EventTarget {
+      private readonly limitReached = connections++ === 0;
+
+      constructor() {
+        super();
+        queueMicrotask(() => this.dispatchEvent(new Event("open")));
+      }
+
+      send(payload: string): void {
+        order.push("send");
+        sentRequests.push(JSON.parse(payload) as Record<string, unknown>);
+        const event = this.limitReached
+          ? { type: "error", error: { code: "websocket_connection_limit_reached" } }
+          : {
+              type: "response.completed",
+              response: {
+                id: "resp_ws",
+                status: "completed",
+                output: [],
+                usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
+              },
+            };
+        queueMicrotask(() => {
+          this.dispatchEvent(Object.assign(new Event("message"), { data: JSON.stringify(event) }));
+        });
+      }
+
+      close(): void {}
+    }
+    vi.stubGlobal("WebSocket", ConnectionLimitWebSocket);
+    vi.stubGlobal("fetch", vi.fn());
+    const options = { apiKey: createJwt(), transport: "websocket" as const };
+    responsesPromptObserver.set(options, (observation) => {
+      order.push("observe");
+      observations.push(observation);
+    });
+
+    const result = await streamOpenAICodexResponses(
+      createModel({
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.test/backend-api",
+      }),
+      createContext(prompt),
+      options,
+    ).result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(connections).toBe(2);
+    expect(order).toEqual(["observe", "send", "observe", "send"]);
+    expect(sentRequests.map((request) => request.instructions)).toEqual([prompt, prompt]);
+    expect(observations).toEqual([
+      {
+        egress: "native-codex-websocket",
+        payloadVariant: "initial",
+        promptSource: "instructions",
+        expectedChars: prompt.length,
+        observedChars: prompt.length,
+        matchesAssembledPrompt: true,
+      },
+      {
+        egress: "native-codex-websocket",
+        payloadVariant: "initial",
+        promptSource: "instructions",
+        expectedChars: prompt.length,
+        observedChars: prompt.length,
+        matchesAssembledPrompt: true,
+      },
+    ]);
+    expect(JSON.stringify(observations)).not.toContain(prompt);
+  });
+
+  it("forwards the private observer through simple options to final native SSE egress", async () => {
+    const prompt = "PRIVATE-NATIVE-SSE-PROMPT";
+    const observations: ResponsesPromptObservation[] = [];
+    const order: string[] = [];
+    let sentRequest: Record<string, unknown> | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input, init) => {
+        order.push("fetch");
+        const body =
+          typeof init?.body === "string"
+            ? init.body
+            : zstdDecompressSync(init?.body as Uint8Array).toString("utf8");
+        sentRequest = JSON.parse(body) as Record<string, unknown>;
+        return completedSseResponse();
+      }),
+    );
+    const options = {
+      apiKey: createJwt(),
+      transport: "sse" as const,
+      onPayload: async (body: unknown) => {
+        await Promise.resolve();
+        return { ...(body as Record<string, unknown>), finalTransform: true };
+      },
+    };
+    responsesPromptObserver.set(options, (observation) => {
+      order.push("observe");
+      observations.push(observation);
+    });
+
+    const result = await streamSimpleOpenAICodexResponses(
+      createModel({
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.test/backend-api",
+      }),
+      createContext(prompt),
+      options,
+    ).result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(order).toEqual(["observe", "fetch"]);
+    expect(sentRequest).toMatchObject({ instructions: prompt, finalTransform: true });
+    expect(observations).toEqual([
+      {
+        egress: "native-codex-sse",
+        payloadVariant: "initial",
+        promptSource: "instructions",
+        expectedChars: prompt.length,
+        observedChars: prompt.length,
+        matchesAssembledPrompt: true,
+      },
+    ]);
+    expect(JSON.stringify(observations)).not.toContain(prompt);
+  });
+
+  it("observes only SSE when automatic WebSocket fallback happens before send", async () => {
+    const prompt = "PRIVATE-PRE-SEND-FALLBACK-PROMPT";
+    const observations: ResponsesPromptObservation[] = [];
+    class FailingWebSocket {
+      constructor() {
+        throw new Error("websocket connect failed");
+      }
+      send(): void {}
+      close(): void {}
+      addEventListener(): void {}
+      removeEventListener(): void {}
+    }
+    vi.stubGlobal("WebSocket", FailingWebSocket);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => completedSseResponse()),
+    );
+    const options = { apiKey: createJwt(), transport: "auto" as const };
+    responsesPromptObserver.set(options, (observation) => observations.push(observation));
+
+    const result = await streamOpenAICodexResponses(
+      createModel({
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.test/backend-api",
+      }),
+      createContext(prompt),
+      options,
+    ).result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(observations.map((entry) => entry.egress)).toEqual(["native-codex-sse"]);
+  });
+
+  it("observes WebSocket then SSE when fallback happens after send", async () => {
+    const prompt = "PRIVATE-POST-SEND-FALLBACK-PROMPT";
+    const observations: ResponsesPromptObservation[] = [];
+    const order: string[] = [];
+    class SendThenFailWebSocket extends EventTarget {
+      constructor() {
+        super();
+        queueMicrotask(() => this.dispatchEvent(new Event("open")));
+      }
+
+      send(): void {
+        order.push("send");
+        queueMicrotask(() =>
+          this.dispatchEvent(
+            Object.assign(new Event("error"), { message: "connection dropped after send" }),
+          ),
+        );
+      }
+
+      close(): void {}
+    }
+    vi.stubGlobal("WebSocket", SendThenFailWebSocket);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        order.push("fetch");
+        return completedSseResponse();
+      }),
+    );
+    const options = { apiKey: createJwt(), transport: "auto" as const };
+    responsesPromptObserver.set(options, (observation) => {
+      order.push(`observe:${observation.egress}`);
+      observations.push(observation);
+    });
+
+    const result = await streamOpenAICodexResponses(
+      createModel({
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.test/backend-api",
+      }),
+      createContext(prompt),
+      options,
+    ).result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(order).toEqual([
+      "observe:native-codex-websocket",
+      "send",
+      "observe:native-codex-sse",
+      "fetch",
+    ]);
+    expect(observations.map((entry) => entry.egress)).toEqual([
+      "native-codex-websocket",
+      "native-codex-sse",
+    ]);
   });
 });

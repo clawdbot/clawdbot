@@ -299,7 +299,8 @@ const planningEvidenceFixtures = readQaScenarioPack()
 describe("scenario-flow-runner", () => {
   it("ignores stale provider prompt mismatches when the current run matches", async () => {
     const currentObservation = {
-      applicationAttempt: "initial",
+      egress: "responses-sdk",
+      payloadVariant: "initial",
       promptSource: "input.developer",
       expectedChars: 4096,
       observedChars: 4096,
@@ -319,6 +320,36 @@ describe("scenario-flow-runner", () => {
         },
         { type: "provider.prompt.observed", runId: "current-run", data: currentObservation },
       ]),
+    });
+
+    expect(result.status).toBe("pass");
+  });
+
+  it("excludes marker-bearing diagnostic trajectory context from bounded no-leak evidence", async () => {
+    const marker = "INSTRUCTION-PROFILE-CONTEXT-MARKER-A6E29D4B";
+    const trajectoryEvents = [
+      {
+        type: "context.compiled",
+        runId: "current-run",
+        data: { systemPrompt: `diagnostic support context ${marker}` },
+      },
+      {
+        type: "provider.prompt.observed",
+        runId: "current-run",
+        data: {
+          egress: "native-codex-websocket",
+          payloadVariant: "initial",
+          promptSource: "instructions",
+          expectedChars: 4096,
+          observedChars: 4096,
+          matchesAssembledPrompt: true,
+        },
+      },
+    ];
+
+    expect(JSON.stringify(trajectoryEvents)).toContain(marker);
+    const result = await runLoadedScenarioFlow("instruction-profile-artifact-followthrough-live", {
+      flow: readCurrentRunProviderPromptEvidenceFlow(trajectoryEvents),
     });
 
     expect(result.status).toBe("pass");
