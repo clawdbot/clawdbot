@@ -140,6 +140,10 @@ def validate_required_screenshots!(paths)
   UI.user_error!("DELIVER_SCREENSHOTS=1 but screenshots are missing for: #{missing_families.join(', ')}.")
 end
 
+def valid_png_file?(path)
+  File.size?(path) && File.binread(path, PNG_SIGNATURE.bytesize) == PNG_SIGNATURE
+end
+
 def verify_release_ios_screenshot_manifest!(output_directory:, devices:)
   locale_directory = File.join(output_directory, "en-US")
   expected_names = devices.flat_map do |device|
@@ -158,7 +162,7 @@ def verify_release_ios_screenshot_manifest!(output_directory:, devices:)
 
   invalid = expected_names.reject do |name|
     path = File.join(locale_directory, name)
-    File.size?(path) && File.binread(path, PNG_SIGNATURE.bytesize) == PNG_SIGNATURE
+    valid_png_file?(path)
   end
   return if invalid.empty?
 
@@ -2173,6 +2177,12 @@ platform :ios do
       derived_data_path: derived_data_path,
       clear_previous_screenshots: true
     )
+    usage_proof_path = File.join(
+      usage_proof_directory,
+      "en-US",
+      "#{devices.first}-#{USAGE_PROOF_SCREENSHOT_TEST.fetch(:name)}.png"
+    )
+    UI.test_failure!("Invalid iOS Usage proof PNG: #{usage_proof_path}.") unless valid_png_file?(usage_proof_path)
 
     # Snapshot fixes its result bundles under the screenshot root. Keep successful
     # evidence in build/ so Deliver sees only locale directories during validation.
