@@ -7,10 +7,12 @@ import {
   deleteTaskFlowRecordById,
   getTaskFlowRegistryRestoreFailure,
   failFlow,
+  finishFlow,
   getTaskFlowById,
   listTaskFlowRecords,
   requestFlowCancel,
   reloadTaskFlowRegistryFromStore,
+  resolveTaskFlowForLookupToken,
   resumeFlow,
   setFlowWaiting,
   syncFlowFromTaskResult,
@@ -582,5 +584,55 @@ describe("task-flow-registry", () => {
       expect(resumed.flow.flowId).toBe(created.flowId);
       expect(resumed.flow.stateJson).toBeNull();
     });
+  });
+
+  it("resolves owner-key lookups to the newest non-terminal flow, not a newer terminal one", () => {
+    configureTaskFlowRegistryRuntime({
+      store: {
+        loadSnapshot: () => ({ flows: new Map() }),
+        saveSnapshot: () => {},
+      },
+    });
+
+    const olderRunning = createManagedTaskFlow({
+      ownerKey: "agent:main:main",
+      controllerId: "tests/lookup",
+      goal: "Older running flow",
+      status: "running",
+      createdAt: 100,
+      updatedAt: 100,
+    });
+    const newerTerminal = createManagedTaskFlow({
+      ownerKey: "agent:main:main",
+      controllerId: "tests/lookup",
+      goal: "Newer finished flow",
+      status: "succeeded",
+      createdAt: 200,
+      updatedAt: 200,
+    });
+
+    // Direct flow-id lookup always targets the requested flow.
+    expect(resolveTaskFlowForLookupToken(newerTerminal.flowId)?.flowId).toBe(
+      newerTerminal.flowId,
+    );
+
+    // Owner-key lookup must skip the newer terminal flow and hit the live one.
+    expect(resolveTaskFlowForLookupToken("agent:main:main")?.flowId).toBe(
+      olderRunning.flowId,
+    );
+
+    // When the last non-terminal flow finishes, fall back to the newest overall.
+    const finished = finishFlow({
+      flowId: olderRunning.flowId,
+      expectedRevision: olderRunning.revision,
+      endedAt: 300,
+    });
+    expect(finished.applied).toBe(true);
+    if (!finished.applied) {
+      throw new Error("Expected finish update to apply");
+    }
+    expect(resolveTaskFlowForLookupToken("agent:main:main")?.flowId).toBe(
+      newerTerminal.flowId,
+    );
   });
 });

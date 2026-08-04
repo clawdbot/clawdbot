@@ -1,6 +1,7 @@
 // Checks whether a requester can read or mutate task-flow records.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  findLatestActionableTaskFlowForOwnerKey,
   findLatestTaskFlowForOwnerKey,
   getTaskFlowById,
   listTaskFlowsForOwnerKey,
@@ -31,6 +32,19 @@ export function findLatestTaskFlowForOwner(params: {
   return ownerKey ? findLatestTaskFlowForOwnerKey(ownerKey) : undefined;
 }
 
+/**
+ * Resolves the owner-key lookup for `show`/`cancel` to the newest non-terminal
+ * flow the caller owns, falling back to the newest flow overall when every
+ * flow is terminal. Mirrors `findLatestActionableTaskFlowForOwnerKey` under
+ * the caller-owner scope.
+ */
+export function findLatestActionableTaskFlowForOwner(params: {
+  callerOwnerKey: string;
+}): TaskFlowRecord | undefined {
+  const ownerKey = normalizeOptionalString(params.callerOwnerKey);
+  return ownerKey ? findLatestActionableTaskFlowForOwnerKey(ownerKey) : undefined;
+}
+
 export function resolveTaskFlowForLookupTokenForOwner(params: {
   token: string;
   callerOwnerKey: string;
@@ -47,5 +61,5 @@ export function resolveTaskFlowForLookupTokenForOwner(params: {
   if (!normalizedToken || normalizedToken !== normalizedCallerOwnerKey) {
     return undefined;
   }
-  return findLatestTaskFlowForOwner({ callerOwnerKey: normalizedCallerOwnerKey });
+  return findLatestActionableTaskFlowForOwner({ callerOwnerKey: normalizedCallerOwnerKey });
 }

@@ -6,7 +6,10 @@ import {
   listTaskFlowsForOwner,
   resolveTaskFlowForLookupTokenForOwner,
 } from "./task-flow-owner-access.js";
-import { createManagedTaskFlow as createManagedTaskFlowOrNull } from "./task-flow-registry.js";
+import {
+  createManagedTaskFlow as createManagedTaskFlowOrNull,
+  finishFlow,
+} from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
   configureTaskFlowRegistryRuntime,
@@ -21,6 +24,17 @@ function createManagedTaskFlow(
     throw new Error("expected managed TaskFlow creation to succeed");
   }
   return flow;
+}
+
+function requireAppliedFinish(flow: TaskFlowRecord): TaskFlowRecord {
+  const result = finishFlow({
+    flowId: flow.flowId,
+    expectedRevision: flow.revision,
+  });
+  if (!result.applied) {
+    throw new Error(`expected finishFlow to apply, got ${result.reason}`);
+  }
+  return result.flow;
 }
 
 beforeEach(() => {
@@ -110,5 +124,48 @@ describe("task flow owner access", () => {
         callerOwnerKey: "agent:main:other",
       }),
     ).toStrictEqual([]);
+  });
+
+  it("prefers the newest non-terminal flow for owner-key lookups", () => {
+    const running = createManagedTaskFlow({
+      ownerKey: "agent:main:main",
+      controllerId: "tests/owner-access",
+      goal: "Still running flow",
+      status: "running",
+      createdAt: 100,
+      updatedAt: 100,
+    });
+    const newerTerminal = createManagedTaskFlow({
+      ownerKey: "agent:main:main",
+      controllerId: "tests/owner-access",
+      goal: "Newer finished flow",
+      status: "succeeded",
+      createdAt: 200,
+      updatedAt: 200,
+    });
+
+    // The newest flow is terminal, but the older flow is still active, so an
+    // owner-key lookup must resolve to the running flow, not the finished one.
+    expect(
+      resolveTaskFlowForLookupTokenForOwner({
+        token: "agent:main:main",
+        callerOwnerKey: "agent:main:main",
+      })?.flowId,
+    ).toBe(running.flowId);
+    expect(
+      findLatestTaskFlowForOwner({
+        callerOwnerKey: "agent:main:main",
+      })?.flowId,
+    ).toBe(newerTerminal.flowId);
+
+    // When every flow is terminal, the lookup falls back to the newest overall.
+    const finished = requireAppliedFinish(running);
+    expect(
+      resolveTaskFlowForLookupTokenForOwner({
+        token: "agent:main:main",
+        callerOwnerKey: "agent:main:main",
+      })?.flowId,
+    ).toBe(newerTerminal.flowId);
+    expect(finished.flowId).toBe(running.flowId);
   });
 });

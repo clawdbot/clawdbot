@@ -779,12 +779,29 @@ export function findLatestTaskFlowForOwnerKey(ownerKey: string): TaskFlowRecord 
   return flow ? cloneFlowRecord(flow) : undefined;
 }
 
+/**
+ * Resolves an owner-key lookup to the newest non-terminal flow for the owner,
+ * falling back to the newest flow overall only when every flow is terminal.
+ * Owner-key lookups back `show`/`cancel`, which must target a live flow rather
+ * than a finished one; a newer terminal flow must not shadow an older flow
+ * that is still running.
+ */
+export function findLatestActionableTaskFlowForOwnerKey(
+  ownerKey: string,
+): TaskFlowRecord | undefined {
+  const ownerFlows = listTaskFlowsForOwnerKey(ownerKey);
+  const flow =
+    ownerFlows.find((candidate) => !isTerminalTaskFlowStatus(candidate.status)) ??
+    ownerFlows[0];
+  return flow ? cloneFlowRecord(flow) : undefined;
+}
+
 export function resolveTaskFlowForLookupToken(token: string): TaskFlowRecord | undefined {
   const lookup = token.trim();
   if (!lookup) {
     return undefined;
   }
-  return getTaskFlowById(lookup) ?? findLatestTaskFlowForOwnerKey(lookup);
+  return getTaskFlowById(lookup) ?? findLatestActionableTaskFlowForOwnerKey(lookup);
 }
 
 export function listTaskFlowRecords(): TaskFlowRecord[] {
