@@ -92,15 +92,29 @@ type ToolSearchBatchGroup = {
   truncated?: true;
 };
 const MAX_BATCH_CANDIDATE_DESCRIPTION_CHARS = 180;
+const MAX_BATCH_CANDIDATE_DESCRIPTION_SCAN_CHARS = MAX_BATCH_CANDIDATE_DESCRIPTION_CHARS * 4;
 
 function compactBatchCandidate(candidate: ToolSearchCandidate): ToolSearchCandidate {
-  const normalized = candidate.description.replace(/\s+/g, " ").trim();
-  if (normalized.length <= MAX_BATCH_CANDIDATE_DESCRIPTION_CHARS) {
+  // Remote catalog descriptions are untrusted. Bound the scanned prefix before
+  // normalization so repeated batch matches cannot amplify attacker-sized text.
+  const prefix = truncateUtf16Safe(
+    candidate.description,
+    MAX_BATCH_CANDIDATE_DESCRIPTION_SCAN_CHARS,
+  );
+  const normalized = prefix.replace(/\s+/g, " ").trim();
+  if (
+    prefix.length === candidate.description.length &&
+    normalized.length <= MAX_BATCH_CANDIDATE_DESCRIPTION_CHARS
+  ) {
     return { ...candidate, description: normalized };
   }
+  const compacted = truncateUtf16Safe(
+    normalized,
+    MAX_BATCH_CANDIDATE_DESCRIPTION_CHARS - 3,
+  ).trimEnd();
   return {
     ...candidate,
-    description: `${truncateUtf16Safe(normalized, MAX_BATCH_CANDIDATE_DESCRIPTION_CHARS - 3).trimEnd()}...`,
+    description: `${compacted}...`,
   };
 }
 
@@ -273,13 +287,16 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
                 description: "Search query, in English. Describe the capability you need.",
               }),
               limit: Type.Optional(
-                Type.Integer({ minimum: 1, description: "Maximum results for this query." }),
+                Type.Integer({
+                  minimum: 1,
+                  description: `Maximum results for this query. Defaults to ${config.searchDefaultLimit} when omitted.`,
+                }),
               ),
             }),
             {
               minItems: 1,
               maxItems: MAX_TOOL_SEARCH_BATCH_QUERIES,
-              description: `Independent searches. Do not set query when this is present. Their effective limits may total at most ${MAX_TOOL_SEARCH_RESULTS}. The serialized query strings may use at most ${MAX_TOOL_SEARCH_BATCH_QUERY_BYTES} UTF-8 bytes in total.`,
+              description: `Independent searches. Do not set query when this is present. Their effective limits may total at most ${MAX_TOOL_SEARCH_RESULTS}; an omitted item limit counts as ${config.searchDefaultLimit}. The serialized query strings may use at most ${MAX_TOOL_SEARCH_BATCH_QUERY_BYTES} UTF-8 bytes in total.`,
             },
           ),
         ),

@@ -293,7 +293,7 @@ export function readToolSearchRequest(args: unknown, config: ToolSearchConfig): 
   const requestedResults = searches.reduce((total, search) => total + search.limit, 0);
   if (requestedResults > MAX_TOOL_SEARCH_RESULTS) {
     throw new ToolInputError(
-      `batch queries may request at most ${MAX_TOOL_SEARCH_RESULTS} results in total.`,
+      `batch queries resolve to ${requestedResults} results, but may request at most ${MAX_TOOL_SEARCH_RESULTS} in total. An omitted limit counts as ${config.searchDefaultLimit}; set smaller per-query limits and retry.`,
     );
   }
   const serializedQueries = JSON.stringify(searches.map((search) => search.query));

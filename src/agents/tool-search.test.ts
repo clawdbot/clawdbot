@@ -274,12 +274,20 @@ describe("Tool Search", () => {
           { query: "Slack", limit: 26 },
         ],
       }),
-    ).rejects.toThrow("batch queries may request at most 50 results in total");
+    ).rejects.toThrow("resolve to 51 results, but may request at most 50 in total");
     await expect(
       searchTool.execute("call-default-batch-budget", {
         queries: Array.from({ length: 7 }, (_, index) => ({ query: `surface ${index}` })),
       }),
-    ).rejects.toThrow("batch queries may request at most 50 results in total");
+    ).rejects.toThrow(
+      "resolve to 56 results, but may request at most 50 in total. An omitted limit counts as 8; set smaller per-query limits and retry",
+    );
+    expect(JSON.stringify(searchTool.parameters)).toContain(
+      "Their effective limits may total at most 50; an omitted item limit counts as 8",
+    );
+    expect(JSON.stringify(searchTool.parameters)).toContain(
+      "Maximum results for this query. Defaults to 8 when omitted.",
+    );
   });
 
   it("preserves scalar query length compatibility while bounding batch query echo", async () => {
@@ -475,6 +483,45 @@ describe("Tool Search", () => {
       } else {
         expect(group.candidates[0]?.id).toBe(rankedIds[0]);
       }
+    }
+  });
+
+  it("bounds untrusted description work before normalizing repeated batch matches", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const config = {
+      tools: { toolSearch: { enabled: true, mode: "tools", maxSearchLimit: 10 } },
+    } as never;
+    const hugeDescription = `large remote surface ${" ".repeat(2_000_000)}unbounded tail`;
+    applyToolSearchCatalog({
+      tools: [
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
+        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
+        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
+        pluginTool("fake_remote_large", hugeDescription),
+      ],
+      config,
+      catalogRef,
+    });
+    const searchTool = expectDefined(
+      createToolSearchTools({ config, catalogRef }).find(
+        (tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME,
+      ),
+      "untrusted description search tool",
+    );
+
+    const result = resultDetails(
+      await searchTool.execute("call-repeated-huge-description", {
+        queries: Array.from({ length: 16 }, () => ({ query: "large remote surface", limit: 1 })),
+      }),
+    );
+    expect(JSON.stringify(result, null, 2).length).toBeLessThanOrEqual(4_000);
+    expect(JSON.stringify(result)).not.toContain("unbounded tail");
+    const retainedDescriptions = (
+      result.results as Array<{ candidates: Array<{ description: string }> }>
+    ).flatMap((group) => group.candidates.map((candidate) => candidate.description));
+    expect(retainedDescriptions.length).toBeGreaterThan(0);
+    for (const description of retainedDescriptions) {
+      expect(description.length).toBeLessThanOrEqual(180);
     }
   });
 
