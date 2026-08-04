@@ -703,9 +703,9 @@ export async function getReplyFromConfig(
       : null;
   const primaryProvider = resolvedChannelModelOverride?.ref.provider ?? defaultProvider;
   const primaryModel = resolvedChannelModelOverride?.ref.model ?? defaultModel;
-  // A polluted fallback origin (recorded as the chain's failed model instead of the
-  // configured primary) prevents the snap-back probe from firing. Repair it in place
-  // before the probe check so this turn can retry the primary.
+  // A provably polluted fallback origin (recorded as the fallback override itself
+  // instead of the configured primary) prevents the snap-back probe from firing.
+  // Repair it in place before the probe check so this turn can retry the primary.
   if (
     sessionEntry &&
     sessionStore &&

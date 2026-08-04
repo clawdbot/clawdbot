@@ -2090,13 +2090,36 @@ describe("createModelSelectionState auto-failover overrides", () => {
     expect(state.resetModelOverride).toBe(false);
   });
 
-  it("clears stale auto-failover override on normal turn when fallback origin changed", async () => {
+  it("preserves auto-failover override on normal turn when the origin mismatches a changed primary", async () => {
     const { state, sessionStore } = await resolveStateWithOverride({
       providerOverride: "openrouter",
       modelOverride: "minimax/minimax-m2.7",
       modelOverrideSource: "auto",
       modelOverrideFallbackOriginProvider: "openai",
       modelOverrideFallbackOriginModel: "gpt-5.3",
+      provider: "openrouter",
+      model: "minimax/minimax-m2.7",
+    });
+
+    // Origin differs from the current primary but also differs from the override,
+    // so this is a legitimate changed-primary mismatch guard, not pollution.
+    expect(state.provider).toBe("openrouter");
+    expect(state.model).toBe("minimax/minimax-m2.7");
+    expect(state.resetModelOverride).toBe(false);
+    expect(sessionStore[sessionKey]?.providerOverride).toBe("openrouter");
+    expect(sessionStore[sessionKey]?.modelOverride).toBe("minimax/minimax-m2.7");
+    expect(sessionStore[sessionKey]?.modelOverrideSource).toBe("auto");
+    expect(sessionStore[sessionKey]?.modelOverrideFallbackOriginProvider).toBe("openai");
+    expect(sessionStore[sessionKey]?.modelOverrideFallbackOriginModel).toBe("gpt-5.3");
+  });
+
+  it("clears provably polluted auto-failover override when origin equals the override", async () => {
+    const { state, sessionStore } = await resolveStateWithOverride({
+      providerOverride: "openrouter",
+      modelOverride: "minimax/minimax-m2.7",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "openrouter",
+      modelOverrideFallbackOriginModel: "minimax/minimax-m2.7",
       provider: "openrouter",
       model: "minimax/minimax-m2.7",
     });

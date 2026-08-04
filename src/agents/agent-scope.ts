@@ -123,9 +123,11 @@ export function hasLegacyAutoFallbackWithoutOrigin(
   );
 }
 
-/** Detects auto-fallback overrides whose recorded origin no longer matches the current primary.
- *  A polluted origin (e.g. the chain's terminal failed model) prevents the snap-back probe from
- *  firing, so this predicate lets model-selection paths treat the pin as stale and reset it. */
+/** Detects auto-fallback overrides whose recorded origin is provably polluted.
+ *  A legitimate origin records the primary model that was active when the fallback pin was
+ *  created; it is allowed to differ from the current primary when the primary has since changed.
+ *  The only safe proof of pollution is when the recorded origin equals the current fallback
+ *  override itself — a fallback can never originate from the model it fell back to. */
 export function isStaleAutoFallbackOriginOverride(
   entry:
     | Pick<
@@ -154,12 +156,22 @@ export function isStaleAutoFallbackOriginOverride(
   if (!originProvider || !originModel) {
     return false;
   }
+  const overrideProvider = normalizeOptionalString(entry.providerOverride);
+  const overrideModel = normalizeOptionalString(entry.modelOverride);
+  if (!overrideProvider || !overrideModel) {
+    return false;
+  }
   const normalizedPrimaryProvider = normalizeOptionalString(primaryProvider);
   const normalizedPrimaryModel = normalizeOptionalString(primaryModel);
   if (!normalizedPrimaryProvider || !normalizedPrimaryModel) {
     return false;
   }
-  return originProvider !== normalizedPrimaryProvider || originModel !== normalizedPrimaryModel;
+  const originMatchesPrimary =
+    originProvider === normalizedPrimaryProvider && originModel === normalizedPrimaryModel;
+  if (originMatchesPrimary) {
+    return false;
+  }
+  return originProvider === overrideProvider && originModel === overrideModel;
 }
 
 /** Verifies a persisted session entry still matches the automatic-fallback snapshot this turn

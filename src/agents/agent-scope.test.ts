@@ -537,7 +537,7 @@ describe("resolveAgentConfig", () => {
     ).toMatchObject({ provider: "anthropic", model: "claude-sonnet-4-6" });
   });
 
-  it("detects polluted auto-fallback origins that no longer match the primary", () => {
+  it("detects provably polluted auto-fallback origins that equal the override", () => {
     const entry: SessionEntry = {
       sessionId: "session",
       updatedAt: 1,
@@ -545,27 +545,28 @@ describe("resolveAgentConfig", () => {
       modelOverride: "claude-opus-4-7",
       modelOverrideSource: "auto",
       modelOverrideFallbackOriginProvider: "anthropic",
-      modelOverrideFallbackOriginModel: "claude-haiku-4-5",
+      modelOverrideFallbackOriginModel: "claude-opus-4-7",
     };
 
+    // Origin equals the override and differs from the current primary → polluted.
     expect(isStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-opus-4-8")).toBe(true);
-    expect(isStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-opus-4-7")).toBe(true);
-    expect(isStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-haiku-4-5")).toBe(false);
-    expect(isStaleAutoFallbackOriginOverride(entry, "openai", "claude-haiku-4-5")).toBe(true);
+    expect(isStaleAutoFallbackOriginOverride(entry, "openai", "gpt-5.5")).toBe(true);
+    // Origin already matches the primary → nothing to repair.
+    expect(isStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-opus-4-7")).toBe(false);
   });
 
-  it("does not treat user overrides or missing origins as stale origins", () => {
-    const autoEntry: SessionEntry = {
+  it("does not treat user overrides, missing origins, or legitimate primary changes as stale", () => {
+    const pollutedEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: 1,
       providerOverride: "anthropic",
       modelOverride: "claude-opus-4-7",
       modelOverrideSource: "auto",
       modelOverrideFallbackOriginProvider: "anthropic",
-      modelOverrideFallbackOriginModel: "claude-opus-4-8",
+      modelOverrideFallbackOriginModel: "claude-opus-4-7",
     };
     const userEntry: SessionEntry = {
-      ...autoEntry,
+      ...pollutedEntry,
       modelOverrideSource: "user",
     };
     const missingOriginEntry: SessionEntry = {
@@ -575,12 +576,24 @@ describe("resolveAgentConfig", () => {
       modelOverride: "claude-opus-4-7",
       modelOverrideSource: "auto",
     };
+    const changedPrimaryEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-7",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "gpt-5.4",
+    };
 
-    expect(isStaleAutoFallbackOriginOverride(autoEntry, "anthropic", "gpt-5.5")).toBe(true);
     expect(isStaleAutoFallbackOriginOverride(userEntry, "anthropic", "gpt-5.5")).toBe(false);
     expect(isStaleAutoFallbackOriginOverride(missingOriginEntry, "anthropic", "gpt-5.5")).toBe(
       false,
     );
+    // Origin differs from both the override and the current primary → legitimate mismatch guard.
+    expect(
+      isStaleAutoFallbackOriginOverride(changedPrimaryEntry, "anthropic", "claude-opus-4-8"),
+    ).toBe(false);
   });
 
   it("prunes stale and excess primary probe throttle entries", () => {

@@ -17,8 +17,9 @@ function makeSessionEntry(params: Partial<SessionEntry> = {}): SessionEntry {
     providerOverride: "anthropic",
     modelOverride: "claude-fallback",
     modelOverrideSource: "auto",
+    // Provably polluted: the recorded origin equals the fallback override itself.
     modelOverrideFallbackOriginProvider: "anthropic",
-    modelOverrideFallbackOriginModel: "claude-failed",
+    modelOverrideFallbackOriginModel: "claude-fallback",
     ...params,
   };
 }
@@ -82,7 +83,7 @@ describe("repairStaleAutoFallbackOriginOverride", () => {
 
     expect(result.entry.modelOverrideSource).toBe("user");
     expect(result.entry.modelOverrideFallbackOriginProvider).toBe("anthropic");
-    expect(result.entry.modelOverrideFallbackOriginModel).toBe("claude-failed");
+    expect(result.entry.modelOverrideFallbackOriginModel).toBe("claude-fallback");
     expect(result.hasStoredOverride).toBe(true);
   });
 
@@ -105,5 +106,30 @@ describe("repairStaleAutoFallbackOriginOverride", () => {
     });
 
     expect(result.entry).toBe(sessionEntry);
+  });
+
+  it("does not repair a legitimate origin that differs from a changed primary", async () => {
+    const sessionKey = "agent:main:telegram:123";
+    const sessionStore: Record<string, SessionEntry> = {};
+    // Origin differs from both the override and the current primary — this is the
+    // intended mismatch guard for a legitimate primary change, not pollution.
+    const sessionEntry = makeSessionEntry({
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "gpt-5.4",
+    });
+    sessionStore[sessionKey] = sessionEntry;
+
+    const result = await repairStaleAutoFallbackOriginOverride({
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath: undefined,
+      primaryProvider: "anthropic",
+      primaryModel: "claude-opus-4-8",
+    });
+
+    expect(result.entry).toBe(sessionEntry);
+    expect(result.entry.modelOverrideFallbackOriginProvider).toBe("openai");
+    expect(result.entry.modelOverrideFallbackOriginModel).toBe("gpt-5.4");
   });
 });

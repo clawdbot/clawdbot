@@ -383,8 +383,9 @@ export async function createModelSelectionState(params: {
   // Skip stored session model override only when an explicit heartbeat.model
   // was resolved. Heartbeats without heartbeat.model still inherit normal
   // overrides unless a direct auto fallback override is stale for the current
-  // configured default. Polluted fallback-origin metadata is also treated as
-  // stale so the snap-back probe can fire on subsequent turns.
+  // configured default. Provably polluted fallback-origin metadata (origin equal
+  // to the override itself) is also treated as stale so the snap-back probe can
+  // fire on subsequent turns.
   const skipStoredOverride =
     params.skipStoredModelOverride === true ||
     hasOneTurnModelOverride ||

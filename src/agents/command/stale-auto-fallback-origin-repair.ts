@@ -1,8 +1,9 @@
 import { resolveSessionModelOverrideRouteResolution } from "../../config/sessions/model-override-provenance.js";
-/** Atomic repair for automatic-fallback overrides whose recorded origin no longer
- *  matches the configured primary. The write is guarded by the exact observed
- *  snapshot so a concurrent reset, user selection, or newer automatic fallback
- *  does not receive stale origin-clear metadata. */
+/** Atomic repair for automatic-fallback overrides whose recorded origin is provably
+ *  polluted (it equals the current fallback override, which a legitimate origin never
+ *  can). The write is guarded by the exact observed snapshot so a concurrent reset,
+ *  user selection, or newer automatic fallback does not receive stale origin-clear
+ *  metadata. */
 import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
