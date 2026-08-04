@@ -129,13 +129,12 @@ function cloneFlowRecord(record: TaskFlowRecord): TaskFlowRecord {
 }
 
 function normalizeRestoredFlowRecord(record: TaskFlowRecord): TaskFlowRecord {
+  const { controllerId: persistedControllerId, ...restoredRecord } = record;
   const syncMode = record.syncMode === "task_mirrored" ? "task_mirrored" : "managed";
   const controllerId =
-    syncMode === "managed"
-      ? (normalizeOptionalString(record.controllerId) ?? "core/legacy-restored")
-      : undefined;
+    syncMode === "managed" ? normalizeOptionalString(persistedControllerId) : undefined;
   return {
-    ...record,
+    ...restoredRecord,
     syncMode,
     ownerKey: assertFlowOwnerKey(record.ownerKey),
     ...(record.requesterOrigin
@@ -421,7 +420,8 @@ function applyFlowPatch(current: TaskFlowRecord, patch: FlowRecordPatch): TaskFl
     patch.controllerId === undefined
       ? current.controllerId
       : normalizeOptionalString(patch.controllerId);
-  if (current.syncMode === "managed") {
+  // Historical managed flows may have no recorded controller; lifecycle updates must not invent one.
+  if (current.syncMode === "managed" && patch.controllerId !== undefined) {
     assertControllerId(controllerId);
   }
   return {

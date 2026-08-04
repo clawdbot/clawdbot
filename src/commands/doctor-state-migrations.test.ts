@@ -3552,8 +3552,45 @@ describe("doctor legacy state migrations", () => {
         flowId: "legacy-flow",
         ownerKey: "agent:main:legacy-flow",
         syncMode: "managed",
-        controllerId: "core/legacy-restored",
         revision: 0,
+      });
+      expect(flowState.flows.get("legacy-flow")?.controllerId).toBeUndefined();
+      const persistedFlow = openOpenClawStateDatabase()
+        .db.prepare("SELECT controller_id FROM flow_runs WHERE flow_id = ?")
+        .get("legacy-flow") as { controller_id: string | null } | undefined;
+      expect(persistedFlow?.controller_id).toBeNull();
+    });
+  });
+
+  it("preserves an authentic controller while migrating a historical flow sidecar", async () => {
+    const root = await makeTempRoot();
+    const { flowRunsPath } = writeLegacyTaskStateSidecars(root);
+    const legacyDatabase = new (requireNodeSqlite().DatabaseSync)(flowRunsPath);
+    try {
+      legacyDatabase.exec("ALTER TABLE flow_runs ADD COLUMN controller_id TEXT");
+      legacyDatabase
+        .prepare("UPDATE flow_runs SET controller_id = ? WHERE flow_id = ?")
+        .run("plugin/authentic-controller", "legacy-flow");
+    } finally {
+      legacyDatabase.close();
+    }
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain("Migrated 1 task flow sidecar row → shared SQLite state");
+
+    await withStateDir(root, async () => {
+      const restored = loadTaskFlowRegistryStateFromSqlite().flows.get("legacy-flow");
+      expect(restored).toMatchObject({
+        flowId: "legacy-flow",
+        ownerKey: "agent:main:legacy-flow",
+        syncMode: "managed",
+        controllerId: "plugin/authentic-controller",
       });
     });
   });

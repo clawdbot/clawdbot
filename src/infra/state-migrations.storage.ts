@@ -515,10 +515,8 @@ function normalizeLegacyFlowRow(row: Record<string, unknown>): SqliteBindRow {
         ? row.owner_session_key.trim()
         : "";
   const controllerId =
-    syncMode === "managed"
-      ? typeof row.controller_id === "string" && row.controller_id.trim()
-        ? row.controller_id.trim()
-        : "core/legacy-restored"
+    syncMode === "managed" && typeof row.controller_id === "string"
+      ? row.controller_id.trim() || null
       : null;
   return {
     flow_id: legacyBindValue(row.flow_id ?? ""),

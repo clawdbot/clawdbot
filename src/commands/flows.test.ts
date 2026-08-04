@@ -1,6 +1,9 @@
 // Flows command tests cover task creation, task execution, and runtime command output.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createRunningTaskRun as createRunningTaskRunOrNull } from "../tasks/task-executor.js";
 import { createManagedTaskFlow as createManagedTaskFlowOrNull } from "../tasks/task-flow-registry.js";
 import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
@@ -225,6 +228,55 @@ describe("flows commands", () => {
         .join("\n");
       expect(output).toContain(`${"x".repeat(18)}…`);
       expect(output).not.toContain("\uD83D");
+    });
+  });
+
+  it("lists and cancels a restored SQLite flow without inventing its controller", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/original-flow-controller",
+        goal: "Inspect historical flow provenance",
+        status: "running",
+        createdAt: 100,
+        updatedAt: 100,
+      });
+      const database = openOpenClawStateDatabase();
+      const db = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "flow_runs">>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        db.updateTable("flow_runs").set({ controller_id: null }).where("flow_id", "=", flow.flowId),
+      );
+      resetTaskFlowRegistryForTests({ persist: false });
+
+      const jsonRuntime = createRuntime();
+      await flowsListCommand({ json: true }, jsonRuntime);
+      const payload = jsonRoundTrip(vi.mocked(jsonRuntime.writeJson).mock.calls[0]?.[0]);
+
+      expect(payload).toMatchObject({
+        count: 1,
+        flows: [{ flowId: flow.flowId, syncMode: "managed", status: "running" }],
+      });
+      expect(payload.flows[0]).not.toHaveProperty("controllerId");
+
+      const textRuntime = createRuntime();
+      await flowsListCommand({}, textRuntime);
+      const output = vi
+        .mocked(textRuntime.log)
+        .mock.calls.map(([line]) => String(line))
+        .join("\n");
+
+      expect(output).toContain("n/a");
+      expect(output).not.toContain("core/legacy-restored");
+
+      const cancelRuntime = createRuntime();
+      await flowsCancelCommand({ lookup: flow.flowId }, cancelRuntime);
+
+      expect(cancelRuntime.error).not.toHaveBeenCalled();
+      expect(cancelRuntime.exit).not.toHaveBeenCalled();
+      expect(cancelRuntime.log).toHaveBeenCalledWith(
+        `Cancelled ${flow.flowId} (managed) with status cancelled.`,
+      );
     });
   });
 

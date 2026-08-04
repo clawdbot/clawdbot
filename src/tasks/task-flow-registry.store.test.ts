@@ -260,6 +260,71 @@ describe("task-flow-registry store runtime", () => {
     });
   });
 
+  it("preserves unknown managed-flow provenance across SQLite restore and cancellation", async () => {
+    await withFlowRegistryTempDir(async () => {
+      const created = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/original-flow-controller",
+        goal: "Restore an unknown historical flow controller",
+        status: "running",
+      });
+
+      const database = openOpenClawStateDatabase();
+      const db = getNodeSqliteKysely<TaskFlowRegistryTestDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .updateTable("flow_runs")
+          .set({ controller_id: null })
+          .where("flow_id", "=", created.flowId),
+      );
+
+      resetTaskFlowRegistryForTests({ persist: false });
+
+      const restored = getTaskFlowById(created.flowId);
+      expect(restored).toMatchObject({
+        flowId: created.flowId,
+        syncMode: "managed",
+        status: "running",
+      });
+      expect(restored?.controllerId).toBeUndefined();
+
+      const cancellation = requestFlowCancel({
+        flowId: created.flowId,
+        expectedRevision: created.revision,
+        cancelRequestedAt: 444,
+      });
+
+      expect(cancellation).toMatchObject({
+        applied: true,
+        flow: {
+          flowId: created.flowId,
+          revision: created.revision + 1,
+          cancelRequestedAt: 444,
+        },
+      });
+      if (cancellation.applied) {
+        expect(cancellation.flow.controllerId).toBeUndefined();
+      }
+
+      const persistedDatabase = openOpenClawStateDatabase();
+      const persistedDb = getNodeSqliteKysely<TaskFlowRegistryTestDatabase>(persistedDatabase.db);
+      const persisted = executeSqliteQuerySync(
+        persistedDatabase.db,
+        persistedDb
+          .selectFrom("flow_runs")
+          .select(["controller_id", "cancel_requested_at", "revision"])
+          .where("flow_id", "=", created.flowId),
+      ).rows[0];
+
+      expect(persisted).toMatchObject({
+        controller_id: null,
+        cancel_requested_at: 444,
+        revision: created.revision + 1,
+      });
+    });
+  });
+
   it("round-trips explicit json null through sqlite", async () => {
     await withFlowRegistryTempDir(async () => {
       resetTaskFlowRegistryForTests();

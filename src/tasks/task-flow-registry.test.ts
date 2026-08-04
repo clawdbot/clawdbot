@@ -418,7 +418,7 @@ describe("task-flow-registry", () => {
     expect(getTaskFlowById(created.flowId)?.flowId).toBe(created.flowId);
   });
 
-  it("normalizes restored managed flows without a controller id", () => {
+  it("preserves unknown controller provenance when restoring a managed flow", () => {
     configureTaskFlowRegistryRuntime({
       store: {
         loadSnapshot: () => ({
@@ -446,7 +446,25 @@ describe("task-flow-registry", () => {
     const restored = getTaskFlowById("legacy-managed");
     expect(restored?.flowId).toBe("legacy-managed");
     expect(restored?.syncMode).toBe("managed");
-    expect(restored?.controllerId).toBe("core/legacy-restored");
+    expect(restored?.controllerId).toBeUndefined();
+
+    const cancelRequested = requestFlowCancel({
+      flowId: "legacy-managed",
+      expectedRevision: 0,
+      cancelRequestedAt: 20,
+    });
+
+    expect(cancelRequested).toMatchObject({
+      applied: true,
+      flow: {
+        flowId: "legacy-managed",
+        revision: 1,
+        cancelRequestedAt: 20,
+      },
+    });
+    if (cancelRequested.applied) {
+      expect(cancelRequested.flow.controllerId).toBeUndefined();
+    }
   });
 
   it("mirrors one-task flow state from tasks and leaves managed flows alone", async () => {
