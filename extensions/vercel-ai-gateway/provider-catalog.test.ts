@@ -273,6 +273,43 @@ describe("vercel ai gateway provider catalog", () => {
     });
   });
 
+  it("rejects non-finite tier costs and keeps the flat pricing control", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: jsonResponse({
+        data: [
+          {
+            id: "openai/gpt-5.6-overflow",
+            pricing: {
+              input: "0.000001",
+              output: "0.000006",
+              input_tiers: [
+                { cost: Number.MAX_VALUE, min: 0, max: 272_000 },
+                { cost: "0.000002", min: 272_000 },
+              ],
+              output_tiers: [
+                { cost: "0.000006", min: 0, max: 272_000 },
+                { cost: "0.000009", min: 272_000 },
+              ],
+            },
+          },
+        ],
+      }),
+      release: async () => {},
+      finalUrl: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
+    });
+
+    await withLiveDiscovery(async () => {
+      const models = await discoverVercelAiGatewayModels();
+
+      expect(models[0]?.cost).toStrictEqual({
+        input: 1,
+        output: 6,
+        cacheRead: 0,
+        cacheWrite: 0,
+      });
+    });
+  });
+
   it("falls back to the static catalog for malformed successful model list payloads", async () => {
     for (const payload of [[], { data: {} }, { data: [null] }]) {
       clearLiveCatalogCacheForTests();

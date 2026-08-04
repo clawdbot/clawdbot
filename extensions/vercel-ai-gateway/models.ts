@@ -115,10 +115,11 @@ function parsePerMillionCost(value: unknown): number | undefined {
       : typeof value === "string"
         ? parseStrictFiniteNumber(value)
         : undefined;
-  if (numeric === undefined || numeric < 0) {
+  if (numeric === undefined || !Number.isFinite(numeric) || numeric < 0) {
     return undefined;
   }
-  return numeric * 1_000_000;
+  const perMillion = numeric * 1_000_000;
+  return Number.isFinite(perMillion) ? perMillion : undefined;
 }
 
 function toPerMillionCost(value: number | string | undefined): number {
