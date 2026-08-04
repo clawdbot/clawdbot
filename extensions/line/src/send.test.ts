@@ -803,6 +803,43 @@ describe("LINE send helpers", () => {
     expect(tracked.wasCanceled()).toBe(true);
   });
 
+  it("preserves reply rejection status when the LINE error body cannot be read", async () => {
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.error(new Error("provider response body failed"));
+        },
+      }),
+      {
+        status: 503,
+        statusText: "Service Unavailable",
+        headers: { "content-type": "text/plain" },
+      },
+    );
+    const textSpy = vi.spyOn(response, "text").mockRejectedValue(new Error("unbounded"));
+    lineFetchMock.mockResolvedValueOnce(response);
+
+    let caught: unknown;
+    try {
+      await sendModule.sendMessageLine("U123", "Hello", {
+        cfg: LINE_TEST_CFG,
+        replyToken: "reply-token",
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(HTTPFetchError);
+    expect(isChannelPartialDeliveryError(caught)).toBe(false);
+    expect(caught).toMatchObject({
+      status: 503,
+      statusText: "Service Unavailable",
+      body: "",
+    });
+    expect(lineFetchMock).toHaveBeenCalledOnce();
+    expect(textSpy).not.toHaveBeenCalled();
+  });
+
   it("does not misclassify network SyntaxErrors as provider acceptance", async () => {
     const failure = new SyntaxError("upstream network decoder failed");
     lineFetchMock.mockRejectedValueOnce(failure);

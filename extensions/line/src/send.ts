@@ -204,11 +204,14 @@ async function sendLineProviderMessages(
   const acceptedRetryConflict = retryKey !== undefined && response.status === 409;
 
   if (!response.ok && !acceptedRetryConflict) {
+    const body = await readResponseTextLimited(response, LINE_PROVIDER_RESPONSE_MAX_BYTES).catch(
+      () => "",
+    );
     throw new HTTPFetchError(`${response.status} - ${response.statusText}`, {
       status: response.status,
       statusText: response.statusText,
       headers: response.headers,
-      body: await readResponseTextLimited(response, LINE_PROVIDER_RESPONSE_MAX_BYTES),
+      body,
     });
   }
 
