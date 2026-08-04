@@ -1707,11 +1707,11 @@ describe("gateway server chat", () => {
         agents: {
           defaults: {
             model: {
-              primary: "openai/gpt-main",
+              primary: "openai/gpt-5.6-luna",
             },
             models: {
-              "openai/gpt-main": {},
-              "openai/gpt-secondary": {},
+              "openai/gpt-5.6-luna": {},
+              "openai/gpt-5.6-terra": {},
             },
           },
           entries: {
@@ -1723,8 +1723,8 @@ describe("gateway server chat", () => {
             openai: {
               baseUrl: "https://openai.example.com/v1",
               models: [
-                { id: "gpt-main", name: "GPT Main" },
-                { id: "gpt-secondary", name: "GPT Secondary" },
+                { id: "gpt-5.6-luna", name: "GPT-5.6 Luna" },
+                { id: "gpt-5.6-terra", name: "GPT-5.6 Terra" },
               ],
             },
           },
@@ -1750,8 +1750,8 @@ describe("gateway server chat", () => {
       expect(metadata.payload?.commands).toBeUndefined();
       expect(metadata.payload?.models).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ id: "gpt-main", provider: "openai" }),
-          expect.objectContaining({ id: "gpt-secondary", provider: "openai" }),
+          expect.objectContaining({ id: "gpt-5.6-luna", provider: "openai" }),
+          expect.objectContaining({ id: "gpt-5.6-terra", provider: "openai" }),
         ]),
       );
     });
