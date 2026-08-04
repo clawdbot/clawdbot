@@ -528,4 +528,31 @@ describe("applySessionModelSelection", () => {
     expect(effects.refreshQueuedFollowupSession).not.toHaveBeenCalled();
     expect(effects.enqueueSystemEvent).not.toHaveBeenCalled();
   });
+
+  it("keeps a non-picker auth-profile override when switching to a non-default model (#92244)", async () => {
+    const sessionEntry = createEntry({
+      authProfileOverride: "openai:work",
+      authProfileOverrideSource: "cli",
+    });
+    const result = await applySessionModelSelection(
+      createParams({
+        sessionEntry,
+        currentProvider: "anthropic",
+        currentModel: "claude-opus-4-6",
+        request: {
+          provider: "openai",
+          model: "gpt-4o",
+          runtime: { kind: "unchanged" },
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({ status: "applied" });
+    expect(sessionEntry.providerOverride).toBe("openai");
+    expect(sessionEntry.modelOverride).toBe("gpt-4o");
+    // The auth-profile override set by a non-picker source (CLI flag) must
+    // survive a non-default model switch instead of being silently destroyed.
+    expect(sessionEntry.authProfileOverride).toBe("openai:work");
+    expect(sessionEntry.authProfileOverrideSource).toBe("cli");
+  });
 });

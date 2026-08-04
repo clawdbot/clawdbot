@@ -106,6 +106,11 @@ function applySessionModelSelectionToEntry(params: {
     entry: params.entry,
     selection: params.request,
     profileOverride: params.request.profileOverride,
+    // A non-default selection must not silently destroy an auth-profile
+    // override that was set by a non-picker source (session-level override,
+    // CLI flag, another picker). Only an explicit reset to the default model
+    // clears the auth profile override (#92244).
+    preserveAuthProfileOverride: !params.request.isDefault,
     markLiveSwitchPending: params.markLiveSwitchPending,
   });
   const runtimeChange = applyModelRuntimeDirective(params.entry, params.runtime);
