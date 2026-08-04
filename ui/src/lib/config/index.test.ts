@@ -404,6 +404,45 @@ describe("createRuntimeConfigCapability", () => {
     runtimeConfig.dispose();
   });
 
+  it("does not stage a default agent after access downgrades", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          sourceConfig: {
+            agents: {
+              entries: {
+                main: {},
+                reviewer: { default: true },
+              },
+            },
+          },
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      return { hash: "hash-2" };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+    await runtimeConfig.ensureLoaded();
+
+    publish(true, client, {
+      type: "hello-ok",
+      protocol: 1,
+      auth: { role: "operator", scopes: ["operator.read"] },
+      features: { methods: ["config.get", "config.set"] },
+    } as GatewayHelloOk);
+
+    expect(runtimeConfig.stageDefaultAgent("main")).toBe(false);
+    expect(runtimeConfig.state.configFormDirty).toBe(false);
+    expect(runtimeConfig.state.configForm).toEqual({
+      agents: { entries: { main: {}, reviewer: { default: true } } },
+    });
+    runtimeConfig.dispose();
+  });
+
   it("refuses to create blocked agent entry paths", async () => {
     const request = vi.fn(async (method: string) =>
       method === "config.get"

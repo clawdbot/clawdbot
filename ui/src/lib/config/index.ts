@@ -1999,6 +1999,9 @@ export function createRuntimeConfigCapability(
         : Promise.resolve(),
     agentEntry: (agentId, options) => agentConfigEntry(state, agentId, options),
     stageDefaultAgent: (agentId) => {
+      if (!canCallConfigMethod("config.set")) {
+        return false;
+      }
       const changed = stageDefaultAgentConfigEntry(state, agentId);
       publish();
       scheduleAutoSave();
