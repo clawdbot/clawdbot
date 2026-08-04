@@ -8,6 +8,10 @@ const mocks = vi.hoisted(() => ({
   info: vi.fn(),
   postCompactionSideEffects: vi.fn(),
   warn: vi.fn(),
+  clearEmbeddedRunAbandonment: vi.fn(),
+  dropRecoveryCompletions: vi.fn(),
+  flushRecoveryCompletions: vi.fn(),
+  markSessionRecovering: vi.fn(),
 }));
 
 vi.mock("./run/compaction-runtime.js", () => ({
@@ -23,6 +27,13 @@ vi.mock("./logger.js", () => ({
     info: mocks.info,
     warn: mocks.warn,
   },
+}));
+
+vi.mock("./runs.js", () => ({
+  clearEmbeddedRunAbandonment: mocks.clearEmbeddedRunAbandonment,
+  dropRecoveryCompletions: mocks.dropRecoveryCompletions,
+  flushRecoveryCompletions: mocks.flushRecoveryCompletions,
+  markSessionRecovering: mocks.markSessionRecovering,
 }));
 
 type RecoveryInput = Parameters<typeof recoverEmbeddedRunTimeout>[0];
@@ -114,6 +125,10 @@ describe("recoverEmbeddedRunTimeout", () => {
     mocks.info.mockReset();
     mocks.postCompactionSideEffects.mockReset();
     mocks.warn.mockReset();
+    mocks.clearEmbeddedRunAbandonment.mockReset();
+    mocks.dropRecoveryCompletions.mockReset();
+    mocks.flushRecoveryCompletions.mockReset();
+    mocks.markSessionRecovering.mockReset();
   });
 
   it.each([
@@ -241,5 +256,81 @@ describe("recoverEmbeddedRunTimeout", () => {
       agentId: "main",
       sessionFile: "/tmp/rotated.jsonl",
     });
+  });
+
+  // ── Recovery state + deferred-delivery tests ─────────────────────────
+
+  it("marks the session as recovering after guard checks pass", async () => {
+    expect(await recoverEmbeddedRunTimeout(makeInput())).toBe(true);
+
+    // Recovery must be marked BEFORE compaction starts so completions
+    // arriving during the compaction window are buffered, not dropped.
+    expect(mocks.markSessionRecovering).toHaveBeenCalledOnce();
+    expect(mocks.markSessionRecovering).toHaveBeenCalledWith("session-1");
+    const recoverOrder = mocks.markSessionRecovering.mock.invocationCallOrder[0];
+    const compactOrder = mocks.compact.mock.invocationCallOrder[0];
+    expect(recoverOrder).toBeDefined();
+    expect(compactOrder).toBeDefined();
+    expect(recoverOrder!).toBeLessThan(compactOrder!);
+  });
+
+  it("does not mark recovering when guard checks prevent recovery", async () => {
+    expect(
+      await recoverEmbeddedRunTimeout(
+        makeInput({ lastRunPromptUsage: { input: 100_000, total: 100_000 } }),
+      ),
+    ).toBe(false);
+
+    expect(mocks.markSessionRecovering).not.toHaveBeenCalled();
+  });
+
+  it("clears the abandoned marker and flushes buffered completions on successful compaction", async () => {
+    expect(await recoverEmbeddedRunTimeout(makeInput())).toBe(true);
+
+    // Abandonment cleared + buffered completions flushed after success.
+    // Terminal-timeout suppression (#87541) is intact because the abandoned
+    // marker was never cleared during the compaction window.
+    expect(mocks.clearEmbeddedRunAbandonment).toHaveBeenCalledOnce();
+    expect(mocks.clearEmbeddedRunAbandonment).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session-1.jsonl",
+    });
+    expect(mocks.flushRecoveryCompletions).toHaveBeenCalledOnce();
+    expect(mocks.flushRecoveryCompletions).toHaveBeenCalledWith("session-1");
+
+    // Clear and flush happen after compaction.
+    const clearOrder = mocks.clearEmbeddedRunAbandonment.mock.invocationCallOrder[0];
+    const compactOrder = mocks.compact.mock.invocationCallOrder[0];
+    expect(clearOrder!).toBeGreaterThan(compactOrder!);
+  });
+
+  it("drops buffered completions and preserves the abandoned marker when compaction fails", async () => {
+    mocks.compact.mockResolvedValueOnce({
+      result: { ok: false, compacted: false, reason: "nothing to compact" },
+      runtimeContext: {},
+      runtimeSettings: {},
+    });
+
+    expect(await recoverEmbeddedRunTimeout(makeInput())).toBe(false);
+
+    // Compaction failed — the run is terminal. Discard buffered completions,
+    // keep the abandoned marker intact for future delivery suppression.
+    expect(mocks.dropRecoveryCompletions).toHaveBeenCalledOnce();
+    expect(mocks.dropRecoveryCompletions).toHaveBeenCalledWith("session-1");
+    expect(mocks.clearEmbeddedRunAbandonment).not.toHaveBeenCalled();
+    expect(mocks.flushRecoveryCompletions).not.toHaveBeenCalled();
+  });
+
+  it("drops buffered completions when compaction throws", async () => {
+    mocks.compact.mockRejectedValueOnce(new Error("engine crashed"));
+
+    expect(await recoverEmbeddedRunTimeout(makeInput())).toBe(false);
+
+    // Compaction threw — same as failed compaction: drop buffered completions,
+    // keep terminal gate.
+    expect(mocks.dropRecoveryCompletions).toHaveBeenCalledOnce();
+    expect(mocks.dropRecoveryCompletions).toHaveBeenCalledWith("session-1");
+    expect(mocks.clearEmbeddedRunAbandonment).not.toHaveBeenCalled();
   });
 });

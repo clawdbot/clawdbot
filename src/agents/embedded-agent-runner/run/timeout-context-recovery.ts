@@ -2,6 +2,12 @@ import { deriveContextPromptTokens, normalizeUsage } from "../../usage.js";
 import { runPostCompactionSideEffects } from "../compaction-hooks.js";
 import { log } from "../logger.js";
 import {
+  clearEmbeddedRunAbandonment,
+  dropRecoveryCompletions,
+  flushRecoveryCompletions,
+  markSessionRecovering,
+} from "../runs.js";
+import {
   compactEmbeddedRunForRecovery,
   type EmbeddedRunCompactionRecoveryInput,
 } from "./compaction-runtime.js";
@@ -50,6 +56,14 @@ export async function recoverEmbeddedRunTimeout(
     return false;
   }
 
+  // All guard checks passed — this timeout is recoverable. Mark the session
+  // as recovering so subagent completions that land during compaction are
+  // buffered rather than dropped with requester_abandoned. The terminal
+  // abandonment gate (#87541) stays active — we only clear it after
+  // compaction succeeds.
+  const recoverySession = input.getActiveSession();
+  markSessionRecovering(recoverySession.id);
+
   const timeoutDiagId = createCompactionDiagId();
   input.state.timeoutCompactionAttempts += 1;
   log.warn(
@@ -89,6 +103,9 @@ export async function recoverEmbeddedRunTimeout(
     log.warn(
       `[timeout-compaction] compaction did not reduce context for ${input.provider}/${input.modelId}; falling through to normal handling`,
     );
+    // Compaction failed — the run is terminal. Discard any buffered
+    // completions; the abandonment gate stays intact for future deliveries.
+    dropRecoveryCompletions(recoverySession.id);
     return false;
   }
 
@@ -110,6 +127,15 @@ export async function recoverEmbeddedRunTimeout(
   log.info(
     `[timeout-compaction] compaction succeeded for ${input.provider}/${input.modelId}; retrying prompt`,
   );
+  // Compaction succeeded — the run will retry. Clear the terminal
+  // abandonment marker (#87541) so the recovering lane replays without
+  // suppression, then flush buffered completions into the delivery lane.
+  clearEmbeddedRunAbandonment({
+    sessionId: recoverySession.id,
+    sessionKey: input.resolvedSessionKey,
+    sessionFile: recoverySession.file,
+  });
+  flushRecoveryCompletions(recoverySession.id);
   input.armPostCompactionGuard();
   return true;
 }

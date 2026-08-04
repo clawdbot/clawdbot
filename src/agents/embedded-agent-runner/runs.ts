@@ -230,7 +230,7 @@ function clearEmbeddedRunAbandonmentBySessionFile(sessionFile: string | undefine
   }
 }
 
-function clearEmbeddedRunAbandonment(params: {
+export function clearEmbeddedRunAbandonment(params: {
   sessionId?: string;
   sessionKey?: string;
   sessionFile?: string;
@@ -274,6 +274,61 @@ function markEmbeddedRunAbandoned(params: {
     ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(abandonedRun.sessionFile, sessionId);
   }
 }
+
+// ── Timeout recovery state ──────────────────────────────────────────────
+// When a parent run enters recoverable-timeout compaction, the session is
+// marked as "recovering." Completions arriving during recovery are buffered
+// rather than dropped: on success they are flushed into the delivery lane;
+// on failure they are discarded without delivery and the terminal abandonment
+// gate remains in place. This avoids the transient window that #87541 created
+// for genuinely terminal runs while preventing silent completion loss during
+// the compaction + retry interval.
+
+const RECOVERING_SESSIONS = new Set<string>();
+
+export function markSessionRecovering(sessionId: string): void {
+  const normalized = sessionId.trim();
+  if (normalized) {
+    RECOVERING_SESSIONS.add(normalized);
+  }
+}
+
+export function isSessionRecovering(sessionId: string): boolean {
+  return RECOVERING_SESSIONS.has(sessionId.trim());
+}
+
+type RecoveryCompletion = () => Promise<void>;
+const PENDING_RECOVERY_COMPLETIONS = new Map<string, RecoveryCompletion[]>();
+
+export function bufferRecoveryCompletion(sessionId: string, deliver: RecoveryCompletion): void {
+  const normalized = sessionId.trim();
+  if (!normalized) {
+    return;
+  }
+  const buffer = PENDING_RECOVERY_COMPLETIONS.get(normalized) ?? [];
+  buffer.push(deliver);
+  PENDING_RECOVERY_COMPLETIONS.set(normalized, buffer);
+}
+
+export function flushRecoveryCompletions(sessionId: string): void {
+  const normalized = sessionId.trim();
+  const buffer = PENDING_RECOVERY_COMPLETIONS.get(normalized);
+  PENDING_RECOVERY_COMPLETIONS.delete(normalized);
+  RECOVERING_SESSIONS.delete(normalized);
+  if (buffer) {
+    for (const deliver of buffer) {
+      deliver().catch(() => {});
+    }
+  }
+}
+
+export function dropRecoveryCompletions(sessionId: string): void {
+  const normalized = sessionId.trim();
+  PENDING_RECOVERY_COMPLETIONS.delete(normalized);
+  RECOVERING_SESSIONS.delete(normalized);
+}
+
+// ── End recovery state ─────────────────────────────────────────────────
 
 export function markActiveEmbeddedRunAbandoned(params: {
   sessionId: string;
@@ -1016,6 +1071,8 @@ export function setActiveEmbeddedRun(
     clearEmbeddedRunAbortability(previousHandle, { retainFinalizing: true });
   }
   clearEmbeddedRunAbandonment({ sessionId, sessionKey, sessionFile });
+  // Release any completions buffered during timeout recovery.
+  flushRecoveryCompletions(sessionId);
   ACTIVE_EMBEDDED_RUNS.set(sessionId, handle);
   if (handle.runId) {
     ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.set(handle.runId, handle);

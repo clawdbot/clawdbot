@@ -16,9 +16,11 @@ export { createBoundDeliveryRouter } from "../infra/outbound/bound-delivery-rout
 export { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
 export { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 export {
+  bufferRecoveryCompletion,
   formatEmbeddedAgentQueueFailureSummary,
   isEmbeddedAgentRunActive,
   isEmbeddedRunAbandoned,
+  isSessionRecovering,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
 } from "./embedded-agent-runner/runs.js";

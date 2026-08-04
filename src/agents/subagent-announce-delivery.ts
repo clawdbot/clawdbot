@@ -56,10 +56,12 @@ import {
 } from "./internal-event-contract.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";
 import {
+  bufferRecoveryCompletion,
   callGateway,
   dispatchGatewayMethodInProcess,
   isEmbeddedAgentRunActive,
   isEmbeddedRunAbandoned,
+  isSessionRecovering,
   getRuntimeConfig,
   formatEmbeddedAgentQueueFailureSummary,
   loadSessionEntry,
@@ -922,6 +924,31 @@ async function sendSubagentAnnounceDirectly(params: {
       completionRouteRequiresMessageToolDelivery ||
       subagentDirectMessageCompletionRequiresMessageTool;
     const requesterActivity = resolveRequesterSessionActivity(canonicalRequesterSessionKey);
+    // If the requester session is in active timeout recovery, buffer the
+    // completion instead of dropping it. The recovery path will flush on
+    // success (retry ownership confirmed) or drop on failure.
+    if (
+      params.expectsCompletionMessage &&
+      requesterActivity.sessionId &&
+      isSessionRecovering(requesterActivity.sessionId)
+    ) {
+      bufferRecoveryCompletion(requesterActivity.sessionId, async () => {
+        await deliverCompletionDirect({
+          cfg,
+          requesterSessionKey: canonicalRequesterSessionKey,
+          directIdempotencyKey: params.directIdempotencyKey,
+          deliveryTarget,
+          internalEvents: params.internalEvents,
+          onDeliveryResult: params.onDeliveryResult,
+          isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
+        });
+      });
+      return {
+        delivered: false,
+        path: "recovery_pending",
+        reason: "recovery_pending",
+      };
+    }
     if (
       params.expectsCompletionMessage &&
       subagentAnnounceDeliveryDeps.isRequesterSessionAbandoned(
