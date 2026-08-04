@@ -174,6 +174,7 @@ type SessionEventShape = {
   timestamp: string;
   type: string;
 };
+type SendFn = (options?: unknown) => Promise<string>;
 type SendAndWaitFn = (options?: unknown) => Promise<SessionEventShape | undefined>;
 
 type FakeSession = {
@@ -189,6 +190,7 @@ type FakeSession = {
       cancelBackgroundCompaction: ReturnType<typeof vi.fn<() => Promise<{ cancelled: boolean }>>>;
     };
   };
+  send: ReturnType<typeof vi.fn<SendFn>>;
   sendAndWait: ReturnType<typeof vi.fn<SendAndWaitFn>>;
   sessionId: string;
 };
@@ -310,6 +312,7 @@ function createFakeSession(cfg: Record<string, unknown>, id: string): FakeSessio
         })),
       },
     },
+    send: vi.fn<SendFn>(async () => "user-message-id"),
     sendAndWait: vi.fn<SendAndWaitFn>(async () => makeAssistantMessageEvent()),
     sessionId: id,
   };
@@ -1962,6 +1965,61 @@ describe("runCopilotAttempt", () => {
     );
     expect(result.assistantTexts).toEqual(["selected Deep"]);
     expect(queueAgentHarnessMessage("session-1", "late")).toBe(false);
+  });
+
+  it("injects active-run steering and waits for its canonical transcript receipt", async () => {
+    const initialTurn = createDeferred<SessionEventShape | undefined>();
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("user.message", { __eventId: "initial-user", content: "hello" });
+          return initialTurn.promise;
+        });
+        session.send.mockImplementationOnce(async (options) => {
+          const prompt = (options as { prompt?: string }).prompt;
+          session.emit("user.message", {
+            __eventId: "steered-user",
+            content: prompt,
+            delivery: "steering",
+          });
+          return "steered-user";
+        });
+      },
+    });
+    const attempt = runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
+
+    await vi.waitFor(() => {
+      expect(requireSession(sdk).sendAndWait).toHaveBeenCalledTimes(1);
+    });
+    const handle = gatewayQuestionMock.setActiveEmbeddedRun.mock.calls.at(-1)?.[1] as
+      | {
+          queueMessage: (
+            text: string,
+            options?: {
+              deliveryTimeoutMs?: number;
+              waitForTranscriptCommit?: boolean;
+            },
+          ) => Promise<void>;
+          supportsTranscriptCommitWait?: boolean;
+        }
+      | undefined;
+    expect(handle?.supportsTranscriptCommitWait).toBe(true);
+
+    await handle?.queueMessage("change course", {
+      deliveryTimeoutMs: 1_000,
+      waitForTranscriptCommit: true,
+    });
+
+    expect(requireSession(sdk).send).toHaveBeenCalledWith({ prompt: "change course" });
+    expect(transcriptRuntimeMock.appendStrict).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventId: "steered-user",
+        message: expect.objectContaining({ role: "user", content: "change course" }),
+      }),
+    );
+
+    initialTurn.resolve(makeAssistantMessageEvent("done"));
+    await expect(attempt).resolves.toMatchObject({ terminal: { kind: "ok" } });
   });
 
   it("enableSessionTelemetry is omitted from createSession when undefined (SDK default)", async () => {

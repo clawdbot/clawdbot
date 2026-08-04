@@ -403,6 +403,12 @@ export async function runCopilotExecution(context: {
         });
       } catch {}
     }
+    transcriptJournal = createAttemptTranscriptJournal({
+      abortSession: () => session?.abort() ?? Promise.resolve(),
+      attempt: input,
+      messages,
+      sdkSessionId,
+    });
     bridge = attachEventBridge(session, {
       onAssistantDelta: settledToolFinalization ? undefined : input.onAssistantDelta,
       onAgentEvent: settledToolFinalization ? undefined : input.onAgentEvent,
@@ -442,12 +448,7 @@ export async function runCopilotExecution(context: {
       getSdkSessionId: () => sdkSessionId,
       isAborted: () => aborted || transcriptJournal?.hasFailed() === true,
       transcriptProjection: {
-        journal: (transcriptJournal = createAttemptTranscriptJournal({
-          abortSession: () => session?.abort() ?? Promise.resolve(),
-          attempt: input,
-          messages,
-          sdkSessionId,
-        })),
+        journal: transcriptJournal,
         modelRef,
         now,
         resultContentSourceByToolName,
@@ -459,6 +460,8 @@ export async function runCopilotExecution(context: {
       input,
       isAborted: () => aborted,
       isSettled: () => settled,
+      session,
+      transcriptJournal,
       userInputBridge,
     });
     const messageOptions = await createMessageOptions(attemptInput, {

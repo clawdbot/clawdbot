@@ -356,9 +356,13 @@ export async function runReplyAgent(
       typing.cleanup();
       return undefined;
     }
-    // The active runtime still owns the turn but cannot prove transcript adoption.
-    // Keep the inbound message queued so ingress can finalize after a later run.
-    shouldQueueAfterSteerRejection = steerOutcome.reason === "transcript_commit_wait_unsupported";
+    // Admission is not delivery. A vanished/non-streaming owner can safely
+    // fall through now; every rejection from a still-owning runtime must retain
+    // this exact turn as a follow-up.
+    shouldQueueAfterSteerRejection =
+      steerOutcome.reason !== "no_active_run" &&
+      steerOutcome.reason !== "not_streaming" &&
+      steerOutcome.reason !== "stale_run";
     const summary = formatEmbeddedAgentQueueFailureSummary(steerOutcome);
     logVerbose(`queue: active session ${steerSessionId} rejected steering injection: ${summary}`);
   }

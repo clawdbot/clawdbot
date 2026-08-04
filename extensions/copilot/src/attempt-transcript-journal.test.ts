@@ -38,6 +38,7 @@ function createFakeSession(): FakeSession {
     on: vi.fn((eventType: string, handler: (event: SessionEvent) => void) => {
       listeners.set(eventType, [...(listeners.get(eventType) ?? []), handler]);
     }) as FakeSession["on"],
+    send: vi.fn(async () => "sdk-user"),
     sendAndWait: vi.fn(async () => undefined),
     sessionId: "sdk-session",
   };
@@ -211,6 +212,48 @@ describe("Copilot attempt transcript journal", () => {
       "user",
       "assistant",
       "toolResult",
+    ]);
+  });
+
+  it("resolves a steering receipt only after pending tool results and the user turn persist", async () => {
+    const { journal, session } = await createFixture();
+    await journal.persistInitialUser();
+    session.emit(event("user.message", "initial-user", { content: "inspect both files" }));
+    session.emit(
+      event("assistant.message", "assistant-tools", {
+        content: "checking",
+        messageId: "assistant-tools",
+        toolRequests: [{ arguments: {}, name: "read", toolCallId: "call-1" }],
+      }),
+    );
+    session.emit(
+      event("user.message", "steered-user", {
+        content: "change course",
+        delivery: "steering",
+      }),
+    );
+
+    let receiptSettled = false;
+    const receipt = journal.waitForSdkUserPersisted("steered-user").then(() => {
+      receiptSettled = true;
+    });
+    await Promise.resolve();
+    expect(receiptSettled).toBe(false);
+
+    session.emit(
+      event("tool.execution_complete", "tool-result", {
+        result: { content: "done" },
+        success: true,
+        toolCallId: "call-1",
+      }),
+    );
+    await receipt;
+
+    expect(journal.snapshot().messagesSnapshot.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "user",
     ]);
   });
 

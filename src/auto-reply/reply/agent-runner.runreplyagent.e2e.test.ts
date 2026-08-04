@@ -701,7 +701,14 @@ describe("runReplyAgent active steering", () => {
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
-  it("queues a follow-up when transcript-backed steering is unsupported", async () => {
+  it.each([
+    "compacting",
+    "image_input_unsupported",
+    "source_reply_delivery_mode_mismatch",
+    "task_suggestion_delivery_mode_mismatch",
+    "transcript_commit_wait_unsupported",
+    "runtime_rejected",
+  ] as const)("queues a follow-up when active steering fails with %s", async (reason) => {
     state.beforeAgentReplyHasHooksMock.mockImplementation(
       (hookName) => hookName === "before_agent_reply",
     );
@@ -710,8 +717,7 @@ describe("runReplyAgent active steering", () => {
     state.queueEmbeddedAgentMessageMock.mockReturnValueOnce({
       queued: false,
       sessionId: "session",
-      reason: "transcript_commit_wait_unsupported",
-      target: "none",
+      reason,
       gatewayHealth: "live",
     });
     const onAdopted = vi.fn();

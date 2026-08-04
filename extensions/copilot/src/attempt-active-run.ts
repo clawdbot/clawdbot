@@ -4,15 +4,24 @@ import {
   embeddedAgentLog,
   setActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { queueAgentHarnessMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AttemptTranscriptJournal } from "./attempt-transcript-journal.js";
 import type { AttemptParamsLike } from "./attempt-types.js";
 import type { attachEventBridge } from "./event-bridge.js";
+import type { SessionLike } from "./event-bridge.js";
 import type { CopilotUserInputBridge } from "./user-input-bridge.js";
+
+const DEFAULT_STEERING_DELIVERY_TIMEOUT_MS = 120_000;
+type CopilotQueueMessageOptions = Parameters<typeof queueAgentHarnessMessage>[2];
+
 export function registerCopilotActiveRun(params: {
   abortActiveSession: () => void;
   bridge: ReturnType<typeof attachEventBridge> | undefined;
   input: AttemptParamsLike;
   isAborted: () => boolean;
   isSettled: () => boolean;
+  session: SessionLike;
+  transcriptJournal: AttemptTranscriptJournal;
   userInputBridge: CopilotUserInputBridge;
 }) {
   const cancelGatewayQuestionBestEffort = (resolvedBy: string) => {
@@ -25,21 +34,35 @@ export function registerCopilotActiveRun(params: {
   };
   const activeRunHandle = {
     kind: "embedded" as const,
-    queueMessage: async (text: string, options?: { isInboundUserMessage?: boolean }) => {
+    queueMessage: async (text: string, options?: CopilotQueueMessageOptions) => {
       if (
         options?.isInboundUserMessage === true &&
         (await claimPendingAgentQuestionAnswer({
           sessionKey: params.input.sessionKey ?? params.input.sessionId,
           text,
+          persist: options.userTurnTranscriptRecorder
+            ? async () => {
+                await options.userTurnTranscriptRecorder?.persistApproved();
+              }
+            : undefined,
         }))
       ) {
         return;
       }
-      throw new Error("Copilot runtime is not waiting for user input.");
+      const messageId = await params.session.send({ prompt: text });
+      if (options?.waitForTranscriptCommit === true) {
+        await waitForPersistenceReceipt(
+          params.transcriptJournal.waitForSdkUserPersisted(messageId),
+          options.deliveryTimeoutMs,
+        );
+      }
     },
     isStreaming: () => !params.isSettled() && !params.isAborted(),
     isAborted: params.isAborted,
     isCompacting: () => params.bridge?.isCompacting() ?? false,
+    // session.send resolves with the injected user-message id; the journal
+    // receipt resolves only after that exact SDK event reaches canonical history.
+    supportsTranscriptCommitWait: true,
     sourceReplyDeliveryMode: params.input.sourceReplyDeliveryMode,
     cancel: () => {
       cancelGatewayQuestionBestEffort("run-cancel");
@@ -59,4 +82,33 @@ export function registerCopilotActiveRun(params: {
     params.input.sessionFile,
   );
   return activeRunHandle;
+}
+
+async function waitForPersistenceReceipt(
+  receipt: Promise<void>,
+  requestedTimeoutMs: number | undefined,
+): Promise<void> {
+  const timeoutMs =
+    typeof requestedTimeoutMs === "number" &&
+    Number.isFinite(requestedTimeoutMs) &&
+    requestedTimeoutMs > 0
+      ? requestedTimeoutMs
+      : DEFAULT_STEERING_DELIVERY_TIMEOUT_MS;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      receipt,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("Copilot steering transcript receipt timed out")),
+          timeoutMs,
+        );
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
 }
