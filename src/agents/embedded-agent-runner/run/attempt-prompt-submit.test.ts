@@ -171,7 +171,11 @@ describe("submitEmbeddedAttemptPrompt", () => {
     });
 
     expect(streamFn).toHaveBeenCalledOnce();
-    expect(streamFn).toHaveBeenCalledWith(undefined, undefined, undefined);
+    expect(streamFn).toHaveBeenCalledWith(
+      undefined,
+      undefined,
+      expect.objectContaining({ onPayload: expect.any(Function) }),
+    );
   });
 
   it("caps oversized MCP tool results at the provider boundary", async () => {
