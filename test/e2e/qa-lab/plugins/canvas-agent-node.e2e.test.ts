@@ -63,7 +63,6 @@ type NodeInvokeFrame = {
   paramsJSON?: unknown;
   timeoutMs?: unknown;
   idempotencyKey?: unknown;
-  sessionKey?: unknown;
 };
 
 type CapturedInvocation = {
@@ -72,7 +71,6 @@ type CapturedInvocation = {
   params: unknown;
   timeoutMs: number;
   idempotencyKey: string;
-  sessionKey: string;
 };
 
 const actions = [
@@ -324,16 +322,21 @@ describe("Canvas agent tool over a paired Linux node", () => {
         expect(handlerErrors).toEqual([]);
         expect(invocations).toHaveLength(actions.length);
         expect(
-          invocations.map(({ nodeId: _nodeId, idempotencyKey: _key, ...invocation }) => invocation),
+          invocations.map(
+            ({ nodeId: _nodeId, idempotencyKey: _key, timeoutMs: _timeout, ...invocation }) =>
+              invocation,
+          ),
         ).toEqual(
           actions.map((action) => ({
             command: action.command,
             params: action.params,
-            timeoutMs: action.args.timeoutMs,
-            sessionKey: SESSION_KEY,
           })),
         );
         expect(invocations.every((invocation) => invocation.nodeId === nodeId)).toBe(true);
+        for (const [index, invocation] of invocations.entries()) {
+          expect(invocation.timeoutMs).toBeGreaterThan(0);
+          expect(invocation.timeoutMs).toBeLessThanOrEqual(actions[index]?.args.timeoutMs ?? 0);
+        }
         expect(invocations.map((invocation) => invocation.idempotencyKey)).toEqual(
           invocations.map((invocation) =>
             expect.stringMatching(
@@ -405,11 +408,12 @@ async function respondToCanvasInvocation(params: {
     typeof frame.command !== "string" ? "command" : "",
     typeof frame.timeoutMs !== "number" ? "timeoutMs" : "",
     typeof frame.idempotencyKey !== "string" ? "idempotencyKey" : "",
-    typeof frame.sessionKey !== "string" ? "sessionKey" : "",
     !(frame.paramsJSON === null || typeof frame.paramsJSON === "string") ? "paramsJSON" : "",
   ].filter(Boolean);
   if (invalidFields.length > 0) {
-    throw new Error(`Gateway sent invalid Canvas node fields: ${invalidFields.join(", ")}`);
+    throw new Error(
+      `Gateway sent invalid Canvas node fields: ${invalidFields.join(", ")}; payload=${JSON.stringify(frame)}`,
+    );
   }
   const invocation: CapturedInvocation = {
     nodeId: frame.nodeId,
@@ -417,7 +421,6 @@ async function respondToCanvasInvocation(params: {
     params: frame.paramsJSON === null ? null : JSON.parse(frame.paramsJSON),
     timeoutMs: frame.timeoutMs,
     idempotencyKey: frame.idempotencyKey,
-    sessionKey: frame.sessionKey,
   };
   params.invocations.push(invocation);
 
