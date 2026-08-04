@@ -9,6 +9,10 @@ export const NODE_LIFECYCLE_DISPATCH_DRAIN_TIMEOUT_MS = 1_000;
 export class GatewayNodeLifecycleDispatchTracker {
   private active = new Set<Promise<void>>();
 
+  hasActive(): boolean {
+    return this.active.size > 0;
+  }
+
   dispatch(method: string, run: () => Promise<void>): Promise<void> {
     const execution = run();
     if (!NODE_LIFECYCLE_METHODS.has(method)) {

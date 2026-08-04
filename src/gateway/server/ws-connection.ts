@@ -574,11 +574,13 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           // still own asynchronous pairing validation. Retire the socket now, then
           // drain only that admitted chain before rejecting unresolved invokes.
           close();
-          const drained = await nodeLifecycleDispatch.drain();
-          if (!drained) {
-            logGateway.warn(
-              `node lifecycle dispatch drain timed out after ${NODE_LIFECYCLE_DISPATCH_DRAIN_TIMEOUT_MS}ms conn=${connId}`,
-            );
+          if (nodeLifecycleDispatch.hasActive()) {
+            const drained = await nodeLifecycleDispatch.drain();
+            if (!drained) {
+              logGateway.warn(
+                `node lifecycle dispatch drain timed out after ${NODE_LIFECYCLE_DISPATCH_DRAIN_TIMEOUT_MS}ms conn=${connId}`,
+              );
+            }
           }
           currentDisconnectedNodeId = context.nodeRegistry.unregister(connId);
         }

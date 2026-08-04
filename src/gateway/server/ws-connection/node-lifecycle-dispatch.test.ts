@@ -39,10 +39,12 @@ describe("GatewayNodeLifecycleDispatchTracker", () => {
     });
 
     await expect(tracker.dispatch("node.event", async () => undefined)).resolves.toBeUndefined();
+    expect(tracker.hasActive()).toBe(true);
     await expect(tracker.drain(1)).resolves.toBe(false);
 
     releaseResult?.();
     await expect(result).resolves.toBeUndefined();
+    expect(tracker.hasActive()).toBe(false);
     await expect(tracker.drain(1)).resolves.toBe(true);
   });
 });
