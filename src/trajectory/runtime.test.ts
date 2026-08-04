@@ -538,6 +538,49 @@ describe("trajectory runtime", () => {
     ).toBeLessThanOrEqual(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1);
   });
 
+  it("preserves delegation origin when an oversized prompt.submitted is truncated", () => {
+    const writes: string[] = [];
+    const origin = {
+      kind: "inter_session",
+      sourceSessionKey: "agent:main:sender-session",
+      sourceChannel: "discord",
+      sourceTool: "sessions_send",
+    };
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      writer: {
+        filePath: "/tmp/session.trajectory.jsonl",
+        write: (line) => {
+          writes.push(line);
+        },
+        flush: async () => undefined,
+      },
+    });
+
+    expectTrajectoryRuntimeRecorder(recorder).recordEvent("prompt.submitted", {
+      prompt: "handle the escalation",
+      systemPrompt: "x".repeat(32_000),
+      messages: Array.from({ length: 12 }, (_value, index) => ({
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `message-${index} ${"x".repeat(32_000)}`,
+      })),
+      imagesCount: 0,
+      origin,
+    });
+
+    const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
+    expect(parsed.data).toMatchObject({
+      truncated: true,
+      reason: "trajectory-event-size-limit",
+      prompt: "handle the escalation",
+      origin,
+    });
+    expect(
+      Buffer.byteLength(expectDefined(writes[0], "writes[0] test invariant"), "utf8"),
+    ).toBeLessThanOrEqual(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1);
+  });
+
   it("preserves usage on non-final oversized runtime completions", () => {
     const writes: string[] = [];
     const firstUsage = {
