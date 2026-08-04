@@ -1,6 +1,8 @@
 // Telegram tests cover forum reaction topic recovery before authorization and routing.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { defaultTelegramBotDeps } from "./bot-deps.js";
 import { createTelegramHandlerAuthorizationRuntime } from "./bot-handlers.authorization.runtime.js";
 import { registerTelegramReactionHandler } from "./bot-handlers.reaction.runtime.js";
 import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
@@ -37,7 +39,7 @@ function buildTelegramConfig(overrides?: {
         },
       },
     },
-  } as unknown as OpenClawConfig;
+  } as OpenClawConfig;
 }
 
 /**
@@ -46,19 +48,23 @@ function buildTelegramConfig(overrides?: {
  */
 function registerHandler(cfg: OpenClawConfig): ReactionHandler {
   const handlers = new Map<string, ReactionHandler>();
-  const params = {
+  const params: RegisterTelegramHandlerParams = {
     accountId: "default",
     bot: {
       on: (name: string, handler: ReactionHandler) => {
         handlers.set(name, handler);
       },
-    },
+    } as RegisterTelegramHandlerParams["bot"],
     cfg,
+    mediaMaxBytes: 1,
     opts: { token: "tok" },
-    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    runtime: { log: runtimeLog, error: runtimeError },
+    telegramCfg: {},
+    logger: getChildLogger({ module: "telegram/reaction-test" }),
+    runtime: { log: runtimeLog, error: runtimeError, exit: vi.fn() },
     shouldSkipUpdate: () => false,
     resolveGroupPolicy: () => ({ allowlistEnabled: false, allowed: true }),
+    resolveGroupActivation: () => undefined,
+    resolveGroupRequireMention: () => false,
     resolveTelegramGroupConfig: (
       chatId: string | number,
       messageThreadId: number | undefined,
@@ -86,13 +92,15 @@ function registerHandler(cfg: OpenClawConfig): ReactionHandler {
             : groupConfig?.topics?.[String(messageThreadId)],
       };
     },
+    processMessage: vi.fn<RegisterTelegramHandlerParams["processMessage"]>(),
     telegramDeps: {
+      ...defaultTelegramBotDeps,
       getRuntimeConfig: () => cfg,
       wasSentByBot: () => true,
       enqueueSystemEvent,
       readChannelAllowFromStore: async () => [],
     },
-  } as unknown as RegisterTelegramHandlerParams;
+  };
 
   registerTelegramReactionHandler(
     params,

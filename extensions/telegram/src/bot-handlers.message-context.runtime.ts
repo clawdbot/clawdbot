@@ -23,10 +23,10 @@ import {
   buildTelegramReplyChain,
   createTelegramMessageCache,
   isTelegramMessageFromCurrentBot,
+  resolveProviderObservedTelegramThreadId,
   type TelegramCachedMessageNode,
   type TelegramReplyChainEntry,
 } from "./message-cache.js";
-import { parseTelegramMessageThreadId } from "./outbound-params.js";
 import { resolveCompleteTelegramPromptContextProjectionIds } from "./prompt-context-projection.js";
 
 function legacyAssistantTextKey(node: TelegramCachedMessageNode, botUserId?: number) {
@@ -106,7 +106,7 @@ export function createTelegramMessageContextRuntime({
       chatId: params.chatId,
       messageId: String(params.messageId),
     });
-    return parseTelegramMessageThreadId(node?.threadId);
+    return resolveProviderObservedTelegramThreadId(node);
   };
 
   const buildReplyChainForMessage = (msg: Message) =>

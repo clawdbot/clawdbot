@@ -17,15 +17,15 @@ let storeScopeId = 0;
  */
 function createRuntime() {
   storeScopeId += 1;
-  const cfg = {} as OpenClawConfig;
+  const cfg: OpenClawConfig = {};
   return createTelegramMessageContextRuntime({
     cfg,
     accountId: "default",
-    opts: {} as RegisterTelegramHandlerParams["opts"],
-    telegramCfg: {} as RegisterTelegramHandlerParams["telegramCfg"],
+    opts: { token: "test" },
+    telegramCfg: {},
     telegramDeps: {
       resolveStorePath: () => `/tmp/openclaw-telegram-thread-recovery-${storeScopeId}/store.json`,
-    } as unknown as RegisterTelegramHandlerParams["telegramDeps"],
+    } as RegisterTelegramHandlerParams["telegramDeps"],
   });
 }
 
