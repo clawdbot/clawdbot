@@ -3725,7 +3725,9 @@ describe("short-term promotion", () => {
         if (typeof target === "string" && path.resolve(target) === sourcePath) {
           activeSourceReads += 1;
           maxSourceReads = Math.max(maxSourceReads, activeSourceReads);
-          await new Promise((resolve) => setTimeout(resolve, 0));
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 0);
+          });
           try {
             return await realReadFile(target, options as never);
           } finally {
