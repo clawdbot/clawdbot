@@ -173,9 +173,9 @@ export async function generateBearerTokenFromIam(params: {
     return token;
   } catch (error) {
     // Keep retrying the credential chain, but collapse diagnostics until it recovers.
-    if (!iamTokenFailureLogged.has(params.region)) {
+    if (!iamTokenFailureLogged.has(params.region) && log.isEnabled("debug")) {
       iamTokenFailureLogged.add(params.region);
-      log.debug?.("Mantle IAM token generation unavailable", {
+      log.debug("Mantle IAM token generation unavailable", {
         region: params.region,
         error: formatErrorMessage(error),
       });

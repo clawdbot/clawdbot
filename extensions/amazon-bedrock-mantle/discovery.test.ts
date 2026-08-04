@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const discoveryDebugSpy = vi.hoisted(() => vi.fn());
+const discoveryLoggerState = vi.hoisted(() => ({ debugEnabled: true }));
 vi.mock("openclaw/plugin-sdk/core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/core")>();
   return {
@@ -9,7 +10,12 @@ vi.mock("openclaw/plugin-sdk/core", async (importOriginal) => {
     createSubsystemLogger: (subsystem: string) => {
       const logger = actual.createSubsystemLogger(subsystem);
       return subsystem === "bedrock-mantle-discovery"
-        ? { ...logger, debug: discoveryDebugSpy }
+        ? {
+            ...logger,
+            debug: discoveryDebugSpy,
+            isEnabled: (...args: Parameters<typeof logger.isEnabled>) =>
+              args[0] === "debug" ? discoveryLoggerState.debugEnabled : logger.isEnabled(...args),
+          }
         : logger;
     },
   };
@@ -89,6 +95,7 @@ describe("bedrock mantle discovery", () => {
     process.env = { ...originalEnv };
     vi.restoreAllMocks();
     discoveryDebugSpy.mockClear();
+    discoveryLoggerState.debugEnabled = true;
     resetMantleDiscoveryCacheForTest();
     resetIamTokenCacheForTest();
   });
@@ -245,6 +252,32 @@ describe("bedrock mantle discovery", () => {
       "Mantle IAM token generation unavailable",
       { region: "us-east-1", error: "later failure" },
     );
+  });
+
+  it("logs an ongoing IAM token failure after debug becomes enabled", async () => {
+    const tokenProviderFactory = vi.fn(() => {
+      throw new Error("no credentials");
+    });
+
+    discoveryLoggerState.debugEnabled = false;
+    await generateBearerTokenFromIam({
+      region: "us-east-1",
+      tokenProviderFactory,
+    });
+    expect(discoveryDebugSpy).not.toHaveBeenCalled();
+
+    discoveryLoggerState.debugEnabled = true;
+    await generateBearerTokenFromIam({
+      region: "us-east-1",
+      tokenProviderFactory,
+    });
+
+    expect(tokenProviderFactory).toHaveBeenCalledTimes(2);
+    expect(discoveryDebugSpy).toHaveBeenCalledOnce();
+    expect(discoveryDebugSpy).toHaveBeenCalledWith("Mantle IAM token generation unavailable", {
+      region: "us-east-1",
+      error: "no credentials",
+    });
   });
 
   it("skips IAM token generation when plugin discovery is disabled", async () => {
