@@ -564,7 +564,7 @@ const toolsTestState = vi.hoisted(() => {
   return {
     resolveToolsImpl: defaultResolveTools,
     resolveToolsMock: vi.fn((..._args: unknown[]) => defaultResolveTools()),
-    resolveRuntimeModelContextMock: vi.fn(async () => ({})),
+    resolveRuntimeModelContextMock: vi.fn(async (_params: unknown) => ({})),
     threadingContext: {
       currentChannelId: "channel-123",
       currentMessageId: "message-456",
@@ -575,8 +575,8 @@ const toolsTestState = vi.hoisted(() => {
 
 vi.mock("../../agents/tools-effective-inventory.js", () => ({
   resolveEffectiveToolInventory: (...args: unknown[]) => toolsTestState.resolveToolsMock(...args),
-  resolveEffectiveToolInventoryRuntimeModelContextAsync: (...args: unknown[]) =>
-    toolsTestState.resolveRuntimeModelContextMock(...args),
+  resolveEffectiveToolInventoryRuntimeModelContextAsync: (params: unknown) =>
+    toolsTestState.resolveRuntimeModelContextMock(params),
 }));
 
 vi.mock("./agent-runner-utils.js", () => ({
