@@ -80,6 +80,11 @@ export async function executeJobCore(
   if (abortSignal?.aborted) {
     return resolveAbortError();
   }
+  if (job.payload.kind === "wake") {
+    // Wake-only jobs mark the scheduled occurrence without entering any
+    // executable path, including trigger evaluation and target dispatch.
+    return { status: "ok", summary: "wake-only occurrence" };
+  }
   if (options?.streamScheduleKey !== undefined || options?.streamSourceIdentity !== undefined) {
     // Defense in depth over the locked admission checks: stream-origin work must
     // carry both the source definition and logical identity, and both must still

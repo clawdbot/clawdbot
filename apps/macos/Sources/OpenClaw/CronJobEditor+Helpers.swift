@@ -56,7 +56,7 @@ extension CronJobEditor {
             self.agentMessage = message
             self.thinking = thinking ?? ""
             self.timeoutSeconds = timeoutSeconds.map(String.init) ?? ""
-        case .command, .script:
+        case .command, .script, .wake:
             break
         }
 
@@ -88,7 +88,7 @@ extension CronJobEditor {
                 code: 0,
                 userInfo: [
                     NSLocalizedDescriptionKey:
-                        "Command and script cron payloads are read-only in the macOS app; manage them with the CLI.",
+                        "This cron payload is read-only in the macOS app; manage it with the CLI.",
                 ])
         }
         // Gate on-exit saves: the editor has no on-exit schedule form (it falls back to

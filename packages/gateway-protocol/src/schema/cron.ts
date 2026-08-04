@@ -295,6 +295,7 @@ const CronPayloadSchema = Type.Union([
     script: Type.String({ minLength: 1, maxLength: 65_536 }),
     toolsAllow: Type.Array(Type.String()),
   }),
+  closedObject({ kind: Type.Literal("wake") }),
 ]);
 
 /**
@@ -329,6 +330,7 @@ const CronPayloadPatchSchema = Type.Union([
     script: Type.Optional(Type.String({ minLength: 1, maxLength: 65_536 })),
     toolsAllow: Type.Union([Type.Array(Type.String()), Type.Null()]),
   }),
+  closedObject({ kind: Type.Literal("wake") }),
 ]);
 
 /** Failure alert policy for repeated cron run failures. */

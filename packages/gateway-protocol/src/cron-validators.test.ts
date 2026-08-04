@@ -177,6 +177,18 @@ describe("cron protocol validators", () => {
     ]);
   });
 
+  it("accepts only the wake discriminant for wake-only payloads", () => {
+    expectCases(validateCronAddParams, true, [add({ payload: { kind: "wake" } })]);
+    expectCases(validateCronUpdateParams, true, [update({ payload: { kind: "wake" } })]);
+    expectCases(validateCronAddParams, false, [
+      add({ payload: { kind: "wake", message: "must not run" } }),
+      add({ payload: { kind: "wake", toolsAllow: ["exec"] } }),
+    ]);
+    expectCases(validateCronUpdateParams, false, [
+      update({ payload: { kind: "wake", script: "return true" } }),
+    ]);
+  });
+
   it("rejects add params when required scheduling fields are missing", () => {
     const { wakeMode: _wakeMode, ...withoutWakeMode } = minimalAddParams;
     expectCases(validateCronAddParams, false, [withoutWakeMode]);

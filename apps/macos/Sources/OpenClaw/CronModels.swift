@@ -183,6 +183,7 @@ enum CronPayload: Codable, Equatable {
         toolBudget: Int?,
         toolsAllow: [String]?,
         toolsAllowIsDefault: Bool?)
+    case wake
 
     enum CodingKeys: String, CodingKey {
         case kind, text, message, thinking, timeoutSeconds, deliver, channel, provider, to, bestEffortDeliver
@@ -196,13 +197,14 @@ enum CronPayload: Codable, Equatable {
         case .agentTurn: "agentTurn"
         case .command: "command"
         case .script: "script"
+        case .wake: "wake"
         }
     }
 
     var isEditableInMacApp: Bool {
         switch self {
         case .systemEvent, .agentTurn: true
-        case .command, .script: false
+        case .command, .script, .wake: false
         }
     }
 
@@ -240,6 +242,8 @@ enum CronPayload: Codable, Equatable {
                 toolBudget: container.decodeIfPresent(Int.self, forKey: .toolBudget),
                 toolsAllow: container.decodeIfPresent([String].self, forKey: .toolsAllow),
                 toolsAllowIsDefault: container.decodeIfPresent(Bool.self, forKey: .toolsAllowIsDefault))
+        case "wake":
+            self = .wake
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .kind,
@@ -287,6 +291,8 @@ enum CronPayload: Codable, Equatable {
             try container.encodeIfPresent(toolBudget, forKey: .toolBudget)
             try container.encodeIfPresent(toolsAllow, forKey: .toolsAllow)
             try container.encodeIfPresent(toolsAllowIsDefault, forKey: .toolsAllowIsDefault)
+        case .wake:
+            break
         }
     }
 }

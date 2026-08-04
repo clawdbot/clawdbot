@@ -130,6 +130,7 @@ export function registerCronAddCommand(cron: Command) {
       .option("--trigger-script <path|->", "Condition script file, or - for stdin")
       .option("--trigger-once", "Disable after the first successful triggered run", false)
       .option("--system-event <text>", "System event payload (main session)")
+      .option("--wake-only", "Record the scheduled occurrence without running a payload", false)
       .option("--message <text>", "Agent message payload")
       .option("--script <file|->", "Headless script payload file, or - for stdin")
       .option("--script-timeout-seconds <n>", "Script wall-clock timeout seconds")
@@ -241,11 +242,15 @@ export function registerCronAddCommand(cron: Command) {
                 Boolean(message),
                 Boolean(commandShell) || Boolean(commandArgv),
                 Boolean(scriptPath),
+                opts.wakeOnly === true,
               ].filter(Boolean).length;
               if (chosen !== 1) {
                 throw new Error(
-                  "Choose exactly one payload: --system-event, --message, --command, or --script",
+                  "Choose exactly one payload: --system-event, --wake-only, --message, --command, or --script",
                 );
+              }
+              if (opts.wakeOnly === true) {
+                return { kind: "wake" as const };
               }
               if (systemEvent) {
                 return {
@@ -366,9 +371,10 @@ export function registerCronAddCommand(cron: Command) {
             if (
               sessionTarget === "main" &&
               resolvedPayload.kind !== "systemEvent" &&
-              resolvedPayload.kind !== "script"
+              resolvedPayload.kind !== "script" &&
+              resolvedPayload.kind !== "wake"
             ) {
-              throw new Error("Main jobs require --system-event or --script.");
+              throw new Error("Main jobs require --system-event, --script, or --wake-only.");
             }
             if (
               resolvedPayload.kind === "script" &&

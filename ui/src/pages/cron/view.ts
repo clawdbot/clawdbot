@@ -1143,6 +1143,7 @@ function renderMenuItem(
 const CRON_PAYLOAD_CODE_LANGUAGES: Record<CronFormState["payloadKind"], string> = {
   script: "javascript",
   command: "bash",
+  wake: "",
   heartbeat: "",
   systemEvent: "",
   agentTurn: "",
@@ -1153,7 +1154,11 @@ function renderPromptSection(
   ctx: { payloadLocked: boolean; isAgentTurn: boolean },
 ) {
   const lockedPayloadLabel =
-    props.form.payloadKind === "script" ? t("cron.form.script") : t("cron.form.command");
+    props.form.payloadKind === "script"
+      ? t("cron.form.script")
+      : props.form.payloadKind === "wake"
+        ? t("cron.form.wakeOnly")
+        : t("cron.form.command");
   const promptLabel = ctx.payloadLocked
     ? lockedPayloadLabel
     : props.form.payloadKind === "systemEvent"

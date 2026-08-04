@@ -156,6 +156,21 @@ export function bindPayloadColumns(
       ...bindPayloadToolAllowColumns(payload),
     };
   }
+  if (payload.kind === "wake") {
+    return {
+      payload_kind: "wake",
+      payload_message: null,
+      payload_model: null,
+      payload_fallbacks_json: null,
+      payload_thinking: null,
+      payload_timeout_seconds: null,
+      payload_allow_unsafe_external_content: null,
+      payload_external_content_source_json: null,
+      payload_light_context: null,
+      payload_tools_allow_json: null,
+      payload_tools_allow_is_default: null,
+    };
+  }
   if (payload.kind === "command") {
     const {
       timeoutSeconds: _timeoutSeconds,
@@ -267,6 +282,9 @@ export function payloadFromRow(row: CronJobRow): CronPayload | null {
   }
   if (row.payload_kind === "heartbeat") {
     return { kind: "heartbeat" };
+  }
+  if (row.payload_kind === "wake") {
+    return { kind: "wake" };
   }
   if (row.payload_kind === "script") {
     const script = parseScriptPayloadMessage(row.payload_message);

@@ -779,6 +779,25 @@ describe("cron controller", () => {
     expect(patch).not.toHaveProperty("payload");
   });
 
+  it("loads and preserves wake payloads as read-only metadata edits", async () => {
+    const job = createCronJob({
+      id: "job-wake",
+      name: "Host wake",
+      schedule: { kind: "every", everyMs: 600_000 },
+      sessionTarget: "main",
+      payload: { kind: "wake" },
+      delivery: { mode: "none" },
+    });
+    const { state, submit } = createCronEditHarness(job);
+
+    expect(state.cronForm.payloadKind).toBe("wake");
+    expect(state.cronForm.payloadLocked).toBe(true);
+    state.cronForm.name = "Host wake renamed";
+    const patch = requestPatch(await submit());
+    expect(patch.name).toBe("Host wake renamed");
+    expect(patch).not.toHaveProperty("payload");
+  });
+
   it("preserves on-exit schedules when editing Control UI metadata", async () => {
     const job = createCronJob({
       id: "job-on-exit",

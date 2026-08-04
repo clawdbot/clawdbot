@@ -49,6 +49,9 @@ function toolsAllowEqual(
 }
 
 export function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronPayload {
+  if (patch.kind === "wake") {
+    return { kind: "wake" };
+  }
   if (patch.kind !== existing.kind) {
     const next = buildPayloadFromPatch(patch);
     // toolsAllow is shared security state. Kind changes must not silently
@@ -162,6 +165,9 @@ export function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch)
 }
 
 function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
+  if (patch.kind === "wake") {
+    return { kind: "wake" };
+  }
   if (patch.kind === "systemEvent") {
     if (typeof patch.text !== "string" || patch.text.length === 0) {
       throw new Error('cron.update payload.kind="systemEvent" requires text');

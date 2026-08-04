@@ -268,6 +268,8 @@ extension CronSettings {
                         if let toolBudget { StatusPill(text: "\(toolBudget) tools", tint: .secondary) }
                     }
                 }
+            case .wake:
+                StatusPill(text: "wake only · read-only", tint: .secondary)
             }
         }
     }

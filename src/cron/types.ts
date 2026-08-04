@@ -271,6 +271,7 @@ export type CronPayload =
   | (CronAgentTurnPayload & CronPayloadToolAllow)
   | (CronCommandPayload & CronPayloadToolAllow)
   | (CronScriptPayload & CronPayloadToolAllow)
+  | ({ kind: "wake" } & CronPayloadToolAllow)
   // System-owned heartbeat monitor: execution requests an interval heartbeat
   // wake. Gateway-converged only; not accepted from client create/patch APIs.
   | ({ kind: "heartbeat" } & CronPayloadToolAllow);
@@ -281,6 +282,7 @@ export type CronPayloadPatch =
   | (CronAgentTurnPayloadPatch & CronPayloadToolAllowPatch)
   | (CronCommandPayloadPatch & CronPayloadToolAllowPatch)
   | (CronScriptPayloadPatch & CronPayloadToolAllowPatch)
+  | ({ kind: "wake" } & CronPayloadToolAllowPatch)
   // Representable so the service can reject it with a typed boundary error;
   // transports and tools never accept it.
   | ({ kind: "heartbeat" } & CronPayloadToolAllowPatch);

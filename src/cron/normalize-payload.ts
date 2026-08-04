@@ -76,6 +76,8 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
     next.kind = "command";
   } else if (kindRaw === "script") {
     next.kind = "script";
+  } else if (kindRaw === "wake") {
+    return { kind: "wake" };
   } else if (kindRaw) {
     next.kind = kindRaw;
   }

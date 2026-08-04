@@ -30,9 +30,10 @@ export function assertSupportedJobSpec(
     job.sessionTarget === "main" &&
     job.payload.kind !== "systemEvent" &&
     job.payload.kind !== "script" &&
+    job.payload.kind !== "wake" &&
     job.payload.kind !== "heartbeat"
   ) {
-    throw new Error('main cron jobs require payload.kind="systemEvent" or "script"');
+    throw new Error('main cron jobs require payload.kind="systemEvent", "script", or "wake"');
   }
   if (
     job.payload.kind === "script" &&
@@ -50,6 +51,12 @@ export function assertSupportedJobSpec(
     throw new Error(
       'isolated cron jobs require payload.kind="agentTurn", "command", or "script"; script payloads do not support current/session targets',
     );
+  }
+  if (
+    job.payload.kind === "wake" &&
+    (job.schedule.kind === "stream" || job.schedule.kind === "on-exit")
+  ) {
+    throw new Error("wake cron jobs require an at, every, or cron schedule");
   }
 }
 
@@ -84,11 +91,14 @@ export function assertScriptPayloadSupport(
 }
 
 export function assertTriggerSupport(
-  job: Pick<CronJob, "schedule" | "trigger">,
+  job: Pick<CronJob, "schedule" | "trigger" | "payload">,
   opts?: { cronConfig?: CronConfig; requireEnabled?: boolean },
 ) {
   if (!job.trigger) {
     return;
+  }
+  if (job.payload.kind === "wake") {
+    throw new Error("wake cron jobs cannot use condition triggers");
   }
   if (opts?.requireEnabled && opts.cronConfig?.triggers?.enabled !== true) {
     throw new Error("cron triggers are disabled; set cron.triggers.enabled=true");
@@ -179,10 +189,14 @@ export function assertMainSessionAgentId(
   if (!job.agentId) {
     return;
   }
-  // Script payloads run no agent turn; heartbeat monitors only poke the wake
+  // Script and wake payloads run no agent turn; heartbeat monitors only poke the wake
   // bus and the heartbeat runner resolves the owning agent's main session
   // itself, so both are valid for non-default agents.
-  if (job.payload.kind === "script" || job.payload.kind === "heartbeat") {
+  if (
+    job.payload.kind === "script" ||
+    job.payload.kind === "wake" ||
+    job.payload.kind === "heartbeat"
+  ) {
     return;
   }
   const normalized = normalizeAgentId(job.agentId);

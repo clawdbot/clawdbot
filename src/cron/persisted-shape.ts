@@ -119,6 +119,7 @@ export function getInvalidPersistedCronJobReason(
     payloadKind !== "agentTurn" &&
     payloadKind !== "command" &&
     payloadKind !== "script" &&
+    payloadKind !== "wake" &&
     payloadKind !== "heartbeat"
   ) {
     return "invalid-payload";
@@ -153,6 +154,12 @@ export function getInvalidPersistedCronJobReason(
     if (typeof script !== "string" || script.trim().length === 0) {
       return "invalid-payload";
     }
+  }
+  if (
+    payloadKind === "wake" &&
+    (scheduleKind === "stream" || scheduleKind === "on-exit" || Object.hasOwn(candidate, "trigger"))
+  ) {
+    return "invalid-payload";
   }
   return null;
 }

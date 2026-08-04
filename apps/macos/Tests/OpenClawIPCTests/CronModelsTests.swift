@@ -126,6 +126,13 @@ struct CronModelsTests {
         #expect(decoded.isEditableInMacApp == false)
     }
 
+    @Test func `payload wake encodes and decodes read only`() throws {
+        let data = try JSONEncoder().encode(CronPayload.wake)
+        let decoded = try JSONDecoder().decode(CronPayload.self, from: data)
+        #expect(decoded == .wake)
+        #expect(decoded.isEditableInMacApp == false)
+    }
+
     @Test func `job encodes and decodes delete after run`() throws {
         let job = CronJob(
             id: "job-1",

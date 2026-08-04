@@ -179,8 +179,20 @@ Every job carries exactly one payload kind, chosen by flag:
 | Agent message | `--message <text>`                             | A model-backed agent turn                                  |
 | Command       | `--command <shell>` or `--command-argv <json>` | A shell/process on the Gateway host, no model call         |
 | Script        | `--script <file\|->`                           | A headless code-mode script using the owning agent's tools |
+| Wake only     | `--wake-only`                                  | Records the occurrence without running a payload           |
 
 One additional payload kind, `heartbeat`, is system-owned: the gateway converges one heartbeat monitor job per heartbeat-enabled agent (see [Heartbeat](/gateway/heartbeat)). It appears in `automations list --all` but cannot be created or edited through the CLI or API. Heartbeat config is written through to the persisted monitor schedule at startup, on config reload, or by `openclaw doctor --fix`. When automations are disabled, the monitor does not tick and no fallback heartbeat timer runs.
+
+Wake-only jobs are client-owned and target the main session. Their scheduled occurrence completes without evaluating a condition trigger, starting a script or command, enqueuing a system event, requesting a heartbeat, or running a model turn. Use them when an external host observes the schedule and owns the follow-up work:
+
+```bash
+openclaw automations add \
+  --name "External host wake" \
+  --every 5m \
+  --wake-only
+```
+
+Wake-only payloads support `--at`, `--every`, and `--cron`. They cannot use condition triggers, stream schedules, or on-exit schedules because those schedule forms execute or supervise work inside the Gateway.
 
 ### Agent-turn options
 
