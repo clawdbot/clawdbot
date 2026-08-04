@@ -300,6 +300,15 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           cwd: requestContext.cwd,
           modelProvider: requestContext.modelProvider,
           modelId: requestContext.modelId,
+          ...(auth.boundToolAuth
+            ? {
+                authProfileStore: auth.boundToolAuth.store,
+                ...(auth.boundToolAuth.agentDir
+                  ? { authProfileStoreAgentDir: auth.boundToolAuth.agentDir }
+                  : {}),
+                ...(boundGrantToken ? { authProfileStoreCacheKey: boundGrantToken } : {}),
+              }
+            : {}),
           yieldContextCacheKey: yieldContext?.cacheKey,
           onYield: yieldContext?.onYield,
           messageProvider: requestContext.messageProvider,

@@ -1,3 +1,4 @@
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 // MCP loopback runtime scope cache.
 // Resolves Gateway-visible tools for MCP clients with short-lived schema caching.
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
@@ -33,6 +34,9 @@ type CachedScopedTools = {
 
 type McpLoopbackScopeParams = Omit<McpLoopbackRequestContext, "senderIsOwner"> & {
   cfg: OpenClawConfig;
+  authProfileStore?: AuthProfileStore;
+  authProfileStoreAgentDir?: string;
+  authProfileStoreCacheKey?: string;
   senderIsOwner: boolean | undefined;
   yieldContextCacheKey?: string;
   onYield?: (message: string) => Promise<void> | void;
@@ -84,9 +88,15 @@ function resolveMcpLoopbackTools(
   if (includeNodeExecTool) {
     excludeToolNames.delete("exec");
   }
-  const { toolsAllow: _toolsAllow, ...scopeParams } = params;
+  const {
+    toolsAllow: _toolsAllow,
+    authProfileStoreAgentDir,
+    authProfileStoreCacheKey: _authProfileStoreCacheKey,
+    ...scopeParams
+  } = params;
   const scoped = resolveGatewayScopedTools({
     ...scopeParams,
+    agentDir: authProfileStoreAgentDir,
     conversationReadOrigin: "delegated",
     surface: "loopback",
     excludeToolNames,
@@ -175,6 +185,7 @@ export class McpLoopbackToolCache {
       params.cwd ?? "",
       params.modelProvider ?? "",
       params.modelId ?? "",
+      params.authProfileStoreCacheKey ?? "",
       params.yieldContextCacheKey ?? "",
       params.messageProvider ?? "",
       clientCapsCacheKey,

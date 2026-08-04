@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
 import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
@@ -79,9 +80,15 @@ interface McpLoopbackClientGrant {
   readonly context: McpLoopbackRequestContext;
 }
 
+export type McpLoopbackToolAuth = {
+  agentDir?: string;
+  store: AuthProfileStore;
+};
+
 type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
   runtimeOwnerToken: string;
   activeCaptureKey?: string;
+  toolAuth?: McpLoopbackToolAuth;
 };
 
 const DEFAULT_TTL_MS = 60 * 60 * 1000; // 1h
@@ -171,6 +178,7 @@ function sweepExpiredAttachGrants(nowMs: number = Date.now()): number {
 export function mintMcpLoopbackClientGrant(params: {
   context: McpLoopbackRequestContext;
   runtimeOwnerToken: string;
+  toolAuth?: McpLoopbackToolAuth;
 }): McpLoopbackClientGrant {
   const sessionKey = params.context.sessionKey.trim();
   if (!sessionKey) {
@@ -184,6 +192,7 @@ export function mintMcpLoopbackClientGrant(params: {
     token: crypto.randomBytes(32).toString("hex"),
     context: structuredClone({ ...params.context, sessionKey }),
     runtimeOwnerToken,
+    ...(params.toolAuth ? { toolAuth: structuredClone(params.toolAuth) } : {}),
   };
   clientGrantsByToken.set(grant.token, grant);
   return structuredClone({
@@ -233,7 +242,13 @@ export function resolveMcpLoopbackClientGrant(params: {
   token: string;
   runtimeOwnerToken: string;
   captureKey: string;
-}): { context: McpLoopbackRequestContext; captureKey: string } | undefined {
+}):
+  | {
+      context: McpLoopbackRequestContext;
+      captureKey: string;
+      toolAuth?: McpLoopbackToolAuth;
+    }
+  | undefined {
   const grant = clientGrantsByToken.get(params.token);
   if (
     !grant ||
@@ -243,7 +258,13 @@ export function resolveMcpLoopbackClientGrant(params: {
   ) {
     return undefined;
   }
-  return structuredClone({ context: grant.context, captureKey: grant.activeCaptureKey });
+  // Cached tools and OAuth refreshes must share the prepared store for this
+  // grant; cloning on each request would discard refreshed credentials.
+  return {
+    context: structuredClone(grant.context),
+    captureKey: grant.activeCaptureKey,
+    ...(grant.toolAuth ? { toolAuth: grant.toolAuth } : {}),
+  };
 }
 
 export function revokeMcpLoopbackClientGrant(token: string): boolean {
