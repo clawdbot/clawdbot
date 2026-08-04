@@ -317,6 +317,7 @@ export const BUILD_ALL_PROFILES = {
     "runtime-postbuild",
     "build-stamp",
     "runtime-postbuild-stamp",
+    "write-build-info",
     "write-cli-startup-metadata",
   ],
   cliStartup: [

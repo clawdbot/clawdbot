@@ -32,6 +32,7 @@ import {
   resetTelegramReplyFenceForTest as resetTelegramReplyFenceForTests,
 } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
+import { createTelegramUpdateOffsetPersistence } from "./update-offset-persistence.js";
 const resolveSpooledUpdateRetryDelayMs = (
   update: { attempts?: number; lastAttemptAt?: number; lastError?: string; receivedAt: number },
   now?: number,
@@ -490,7 +491,8 @@ function createPollingSession(params: {
   log?: (message: string) => void;
   telegramTransport?: ReturnType<typeof makeTelegramTransport>;
   createTelegramTransport?: () => ReturnType<typeof makeTelegramTransport>;
-  getLastUpdateId?: () => number | null;
+  getAcceptedUpdateId?: () => number | null;
+  getCommittedUpdateId?: () => number | null;
   persistUpdateId?: ConstructorParameters<typeof TelegramPollingSession>[0]["persistUpdateId"];
   stallThresholdMs?: number;
   setStatus?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
@@ -505,7 +507,8 @@ function createPollingSession(params: {
     proxyFetch: undefined,
     abortSignal: params.abortSignal,
     runnerOptions: {},
-    getLastUpdateId: params.getLastUpdateId ?? (() => null),
+    getAcceptedUpdateId: params.getAcceptedUpdateId ?? params.getCommittedUpdateId ?? (() => null),
+    getCommittedUpdateId: params.getCommittedUpdateId ?? (() => null),
     persistUpdateId: params.persistUpdateId ?? (async () => undefined),
     log: params.log ?? (() => undefined),
     telegramTransport: params.telegramTransport,
@@ -803,7 +806,7 @@ function startIsolatedIngressSession(params: {
   handleUpdate: (update: { update_id?: number }) => Promise<void>;
   createWorker?: IsolatedIngressOptions["createWorker"];
   drainIntervalMs?: number;
-  getLastUpdateId?: () => number | null;
+  getCommittedUpdateId?: () => number | null;
   init?: AsyncVoidFn;
   log?: (message: string) => void;
   persistUpdateId?: ConstructorParameters<typeof TelegramPollingSession>[0]["persistUpdateId"];
@@ -822,7 +825,7 @@ function startIsolatedIngressSession(params: {
   createTelegramBotMock.mockReturnValueOnce(bot);
   const session = createPollingSession({
     abortSignal: params.abort.signal,
-    getLastUpdateId: params.getLastUpdateId,
+    getCommittedUpdateId: params.getCommittedUpdateId,
     log: params.log,
     persistUpdateId: params.persistUpdateId,
     stallThresholdMs: params.stallThresholdMs,
@@ -925,7 +928,8 @@ describe("TelegramPollingSession", () => {
       proxyFetch: undefined,
       abortSignal: abort.signal,
       runnerOptions: {},
-      getLastUpdateId: () => null,
+      getAcceptedUpdateId: () => null,
+      getCommittedUpdateId: () => null,
       persistUpdateId: async () => undefined,
       log: () => undefined,
       telegramTransport: undefined,
@@ -1047,7 +1051,8 @@ describe("TelegramPollingSession", () => {
       proxyFetch: undefined,
       abortSignal: abort.signal,
       runnerOptions: {},
-      getLastUpdateId: () => 41,
+      getAcceptedUpdateId: () => 41,
+      getCommittedUpdateId: () => 41,
       persistUpdateId: async () => undefined,
       log: () => undefined,
       telegramTransport: undefined,
@@ -1058,6 +1063,130 @@ describe("TelegramPollingSession", () => {
     // Offset confirmation was removed because it could self-conflict with the runner.
     // OpenClaw middleware still skips duplicates using the persisted update offset.
     expect(bot.api.getUpdates).not.toHaveBeenCalled();
+  });
+
+  it("keeps legacy polling offset progress after a malformed update ID", async () => {
+    const abort = new AbortController();
+    const bot = makeBot();
+    const writes: number[] = [];
+    const onInvalidUpdateId = vi.fn();
+    const offsetPersistence = createTelegramUpdateOffsetPersistence({
+      initialUpdateId: 100,
+      writeUpdateId: async (updateId) => {
+        writes.push(updateId);
+      },
+      onInvalidUpdateId,
+      onRetry: vi.fn(),
+    });
+    createTelegramBotMock.mockReturnValueOnce(bot);
+    mockLongRunningPollingCycle(vi.fn(async () => undefined));
+
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      getAcceptedUpdateId: offsetPersistence.getAcceptedUpdateId,
+      getCommittedUpdateId: offsetPersistence.getCommittedUpdateId,
+      persistUpdateId: offsetPersistence.persistUpdateId,
+    });
+    const runPromise = session.runUntilAbort();
+    try {
+      await waitForTelegramTestState(() => expect(createTelegramBotMock).toHaveBeenCalledOnce());
+
+      const updateOffset = mockObjectArg(createTelegramBotMock, "createTelegramBot").updateOffset;
+      if (!updateOffset || typeof updateOffset !== "object" || !("onUpdateId" in updateOffset)) {
+        throw new Error("Expected legacy polling update-offset callback");
+      }
+      const onUpdateId = updateOffset.onUpdateId;
+      if (typeof onUpdateId !== "function") {
+        throw new Error("Expected legacy polling update-offset callback");
+      }
+
+      onUpdateId(Number.NaN);
+      onUpdateId(101);
+      await waitForTelegramTestState(() => expect(writes).toEqual([101]));
+
+      expect(onInvalidUpdateId).toHaveBeenCalledWith(Number.NaN);
+      expect(offsetPersistence.getCommittedUpdateId()).toBe(101);
+    } finally {
+      abort.abort();
+      await runPromise;
+      await offsetPersistence.stop();
+    }
+  });
+
+  it("seeds a restarted classic polling cycle from accepted progress", async () => {
+    const abort = new AbortController();
+    let releaseWrite: (() => void) | undefined;
+    const write = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    let restartFirstCycle: (() => void) | undefined;
+    const restartSignal = new Promise<void>((resolve) => {
+      restartFirstCycle = resolve;
+    });
+    const offsetPersistence = createTelegramUpdateOffsetPersistence({
+      initialUpdateId: 100,
+      writeUpdateId: async () => await write,
+      onInvalidUpdateId: vi.fn(),
+      onRetry: vi.fn(),
+    });
+    createTelegramBotMock.mockReturnValueOnce(makeBot()).mockReturnValueOnce(makeBot());
+    runMock
+      .mockReturnValueOnce({
+        task: async () => {
+          await restartSignal;
+          throw new Error("restart classic polling");
+        },
+        stop: vi.fn(async () => undefined),
+        isRunning: () => false,
+      })
+      .mockReturnValueOnce({
+        task: async () => {
+          abort.abort();
+        },
+        stop: vi.fn(async () => undefined),
+        isRunning: () => false,
+      });
+
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      getAcceptedUpdateId: offsetPersistence.getAcceptedUpdateId,
+      getCommittedUpdateId: offsetPersistence.getCommittedUpdateId,
+      persistUpdateId: offsetPersistence.persistUpdateId,
+    });
+    const runPromise = session.runUntilAbort();
+    try {
+      await waitForTelegramTestState(() => expect(createTelegramBotMock).toHaveBeenCalledOnce());
+      const firstOffset = mockObjectArg(createTelegramBotMock, "createTelegramBot").updateOffset;
+      if (!firstOffset || typeof firstOffset !== "object" || !("onUpdateId" in firstOffset)) {
+        throw new Error("Expected classic polling update-offset callback");
+      }
+      const onUpdateId = firstOffset.onUpdateId;
+      if (typeof onUpdateId !== "function") {
+        throw new Error("Expected classic polling update-offset callback");
+      }
+      onUpdateId(101);
+
+      expect(offsetPersistence.getAcceptedUpdateId()).toBe(101);
+      expect(offsetPersistence.getCommittedUpdateId()).toBe(100);
+      restartFirstCycle?.();
+      await runPromise;
+
+      const restartedOffset = mockObjectArg(
+        createTelegramBotMock,
+        "createTelegramBot",
+        1,
+      ).updateOffset;
+      expect(restartedOffset).toMatchObject({
+        lastUpdateId: 101,
+        persistenceFloorUpdateId: 100,
+      });
+    } finally {
+      releaseWrite?.();
+      restartFirstCycle?.();
+      abort.abort();
+      await runPromise;
+      await offsetPersistence.stop();
+    }
   });
 
   it("initializes the main-thread bot before draining isolated ingress spool", async () => {
@@ -1254,7 +1383,7 @@ describe("TelegramPollingSession", () => {
         handleUpdate: vi.fn(async () => undefined),
         createWorker: worker.createWorker,
         drainIntervalMs: 60_000,
-        getLastUpdateId: () => 40,
+        getCommittedUpdateId: () => 40,
         persistUpdateId,
       });
       try {
@@ -1316,6 +1445,141 @@ describe("TelegramPollingSession", () => {
       } finally {
         abort.abort();
         await runPromise;
+      }
+    });
+  });
+
+  it("keeps isolated intake moving while the durable offset catches up", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      let releaseOffsetWrite: (() => void) | undefined;
+      const offsetWrite = new Promise<void>((resolve) => {
+        releaseOffsetWrite = resolve;
+      });
+      const handleUpdate = vi.fn(async () => undefined);
+      const worker = createListeningIngressWorker();
+      const { runPromise } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        handleUpdate,
+        createWorker: worker.createWorker,
+        persistUpdateId: vi.fn(async () => await offsetWrite),
+      });
+      try {
+        await waitForTelegramTestState(() => expect(worker.hasListener()).toBe(true));
+        worker.emit({
+          type: "update",
+          requestId: "offset-catching-up",
+          update: { update_id: 44, message: { text: "hello" } },
+          queued: 1,
+        });
+        await waitForTelegramTestState(() =>
+          expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("offset-catching-up", {
+            ok: true,
+            updateId: 44,
+          }),
+        );
+        await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledOnce());
+      } finally {
+        releaseOffsetWrite?.();
+        abort.abort();
+        await runPromise;
+      }
+    });
+  });
+
+  it("recovers offset persistence and suppresses restart replay", async () => {
+    await withTempSpool(async (tempDir) => {
+      let durableUpdateId = 40;
+      const writeUpdateId = vi
+        .fn(async (updateId: number) => {
+          durableUpdateId = updateId;
+        })
+        .mockRejectedValueOnce(new Error("offset store unavailable"));
+      const firstOffsetPersistence = createTelegramUpdateOffsetPersistence({
+        initialUpdateId: durableUpdateId,
+        writeUpdateId,
+        onInvalidUpdateId: vi.fn(),
+        onRetry: vi.fn(),
+      });
+      const handleUpdate = vi.fn(async () => undefined);
+      const firstAbort = new AbortController();
+      const firstWorker = createListeningIngressWorker();
+      const firstSession = startIsolatedIngressSession({
+        abort: firstAbort,
+        spoolDir: tempDir,
+        handleUpdate,
+        createWorker: firstWorker.createWorker,
+        getCommittedUpdateId: firstOffsetPersistence.getCommittedUpdateId,
+        persistUpdateId: firstOffsetPersistence.persistUpdateId,
+      });
+      try {
+        await waitForTelegramTestState(() => expect(firstWorker.hasListener()).toBe(true));
+        firstWorker.emit({
+          type: "update",
+          requestId: "first-delivery",
+          update: { update_id: 42, message: { text: "hello" } },
+          queued: 1,
+        });
+        await waitForTelegramTestState(() =>
+          expect(firstWorker.ackSpooledUpdate).toHaveBeenCalledWith("first-delivery", {
+            ok: true,
+            updateId: 42,
+          }),
+        );
+        await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledOnce());
+        await waitForTelegramTestState(() =>
+          expect(firstOffsetPersistence.getCommittedUpdateId()).toBe(42),
+        );
+        await waitForTelegramTestState(async () =>
+          expect(await pendingUpdateIds(tempDir, "all")).toEqual([]),
+        );
+      } finally {
+        firstAbort.abort();
+        await firstSession.runPromise;
+        await firstOffsetPersistence.stop();
+      }
+
+      expect(writeUpdateId).toHaveBeenCalledTimes(2);
+      expect(durableUpdateId).toBe(42);
+
+      const restartWriteUpdateId = vi.fn(async () => undefined);
+      const restartedOffsetPersistence = createTelegramUpdateOffsetPersistence({
+        initialUpdateId: durableUpdateId,
+        writeUpdateId: restartWriteUpdateId,
+        onInvalidUpdateId: vi.fn(),
+        onRetry: vi.fn(),
+      });
+      const restartAbort = new AbortController();
+      const restartWorker = createListeningIngressWorker();
+      const restartedSession = startIsolatedIngressSession({
+        abort: restartAbort,
+        spoolDir: tempDir,
+        handleUpdate,
+        createWorker: restartWorker.createWorker,
+        getCommittedUpdateId: restartedOffsetPersistence.getCommittedUpdateId,
+        persistUpdateId: restartedOffsetPersistence.persistUpdateId,
+      });
+      try {
+        await waitForTelegramTestState(() => expect(restartWorker.hasListener()).toBe(true));
+        restartWorker.emit({
+          type: "update",
+          requestId: "restart-replay",
+          update: { update_id: 42, message: { text: "hello" } },
+          queued: 1,
+        });
+        await waitForTelegramTestState(() =>
+          expect(restartWorker.ackSpooledUpdate).toHaveBeenCalledWith("restart-replay", {
+            ok: true,
+            updateId: 42,
+          }),
+        );
+        expect(handleUpdate).toHaveBeenCalledOnce();
+        expect(restartWriteUpdateId).not.toHaveBeenCalled();
+      } finally {
+        restartAbort.abort();
+        await restartedSession.runPromise;
+        await restartedOffsetPersistence.stop();
       }
     });
   });
@@ -1498,7 +1762,7 @@ describe("TelegramPollingSession", () => {
         abort,
         spoolDir: tempDir,
         handleUpdate,
-        getLastUpdateId: () => 42,
+        getCommittedUpdateId: () => 42,
       });
       try {
         await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledTimes(1));
@@ -4070,7 +4334,8 @@ describe("TelegramPollingSession", () => {
         proxyFetch: undefined,
         abortSignal: abort.signal,
         runnerOptions: {},
-        getLastUpdateId: () => null,
+        getAcceptedUpdateId: () => null,
+        getCommittedUpdateId: () => null,
         persistUpdateId: async () => undefined,
         log: () => undefined,
         telegramTransport: transport1,
