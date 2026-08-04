@@ -58,8 +58,33 @@ async function startReceiver() {
   return { ...receiver, baseUrl: `http://127.0.0.1:${port}` };
 }
 
-async function settleCleanup(...cleanups: Array<() => Promise<void>>): Promise<void> {
-  const results = await Promise.allSettled(cleanups.map(async (cleanup) => await cleanup()));
+async function runCleanup(
+  label: string,
+  cleanup: () => Promise<void>,
+  timeoutMs = 30_000,
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} cleanup timed out`)), timeoutMs);
+    timer.unref();
+    cleanup().then(
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+async function settleCleanup(
+  ...cleanups: Array<readonly [label: string, cleanup: () => Promise<void>]>
+): Promise<void> {
+  const results = await Promise.allSettled(
+    cleanups.map(async ([label, cleanup]) => await runCleanup(label, cleanup)),
+  );
   const failures = results.flatMap((result) =>
     result.status === "rejected" ? [result.reason] : [],
   );
@@ -293,24 +318,12 @@ describe("managed diagnostics-otel install runtime", () => {
       expect(envOnly.capturedRequests).toHaveLength(0);
     } finally {
       await settleCleanup(
-        async () => {
-          await gateway?.stop();
-        },
-        async () => {
-          await mock?.stop();
-        },
-        async () => {
-          await stopChild(registry?.child);
-        },
-        async () => {
-          await configured.close();
-        },
-        async () => {
-          await envOnly.close();
-        },
-        async () => {
-          await rm(scratch, { recursive: true, force: true });
-        },
+        ["gateway", async () => await gateway?.stop()],
+        ["mock provider", async () => await mock?.stop()],
+        ["fixture registry", async () => await stopChild(registry?.child)],
+        ["configured receiver", async () => await configured.close()],
+        ["environment receiver", async () => await envOnly.close()],
+        ["scratch directory", async () => await rm(scratch, { recursive: true, force: true })],
       );
     }
   }, 180_000);
@@ -357,24 +370,12 @@ describe("managed diagnostics-otel install runtime", () => {
       expect(ignoredConfig.capturedRequests).toHaveLength(0);
     } finally {
       await settleCleanup(
-        async () => {
-          await gateway?.stop();
-        },
-        async () => {
-          await mock?.stop();
-        },
-        async () => {
-          await stopChild(registry?.child);
-        },
-        async () => {
-          await receiver.close();
-        },
-        async () => {
-          await ignoredConfig.close();
-        },
-        async () => {
-          await rm(scratch, { recursive: true, force: true });
-        },
+        ["gateway", async () => await gateway?.stop()],
+        ["mock provider", async () => await mock?.stop()],
+        ["fixture registry", async () => await stopChild(registry?.child)],
+        ["preloaded receiver", async () => await receiver.close()],
+        ["ignored config receiver", async () => await ignoredConfig.close()],
+        ["scratch directory", async () => await rm(scratch, { recursive: true, force: true })],
       );
     }
   }, 180_000);

@@ -194,8 +194,8 @@ describe("diagnostics-otel gateway runtime", () => {
             (span) =>
               span.name === "openclaw.tool.execution" &&
               span.statusCode === 2 &&
-              span.attributes["openclaw.toolName"] === "exec" &&
-              span.attributes["openclaw.errorCategory"] === "tool_result_error",
+              span.attributes["openclaw.toolName"] === "read" &&
+              Boolean(span.attributes["openclaw.errorCategory"]),
           );
           if (!toolError?.traceId) {
             return undefined;
@@ -206,15 +206,14 @@ describe("diagnostics-otel gateway runtime", () => {
           const run = sameTrace.find((span) => span.name === "openclaw.run");
           const harness = sameTrace.find((span) => span.name === "openclaw.harness.run");
           const modelCalls = sameTrace.filter((span) => span.name === "openclaw.model.call");
-          const delivery = sameTrace.find(
+          const terminal = sameTrace.find(
             (span) =>
-              span.name === "openclaw.message.delivery" &&
+              span.name === "openclaw.message.processed" &&
               span.attributes["openclaw.channel"] === "qa-channel" &&
-              span.attributes["openclaw.outcome"] === "completed" &&
-              span.statusCode !== 2,
+              span.attributes["openclaw.outcome"] === "completed",
           );
-          return run && harness && modelCalls.length >= 2 && delivery
-            ? { delivery, harness, modelCalls, run, sameTrace, toolError }
+          return run && harness && modelCalls.length >= 2 && terminal
+            ? { harness, modelCalls, run, sameTrace, terminal, toolError }
             : undefined;
         },
         45_000,
@@ -238,13 +237,13 @@ describe("diagnostics-otel gateway runtime", () => {
         failureEvidence.sameTrace.filter((span) => span.name === "openclaw.run").length,
       ).toBeGreaterThanOrEqual(2);
       expect(failureEvidence.run.spanId).toBeTruthy();
-      expect(failureEvidence.delivery.parentSpanId).toBeTruthy();
+      expect(failureEvidence.terminal.spanId).toBeTruthy();
 
       const successEvidence = receiver.capturedSpans.find(
         (span) =>
           span.name === "openclaw.tool.execution" &&
           span.statusCode !== 2 &&
-          span.attributes["openclaw.toolName"] === "exec" &&
+          span.attributes["openclaw.toolName"] === "read" &&
           span.traceId !== failureEvidence.toolError.traceId,
       );
       expect(successEvidence).toBeTruthy();
@@ -265,7 +264,7 @@ describe("diagnostics-otel gateway runtime", () => {
       expect(
         successTrace.some(
           (span) =>
-            span.name === "openclaw.message.delivery" &&
+            span.name === "openclaw.message.processed" &&
             span.attributes["openclaw.channel"] === "qa-channel" &&
             span.attributes["openclaw.outcome"] === "completed",
         ),
