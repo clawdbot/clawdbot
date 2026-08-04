@@ -89,9 +89,8 @@ const WORKSPACE_FILE_SOURCE_IDENTITY = Symbol("openclaw.workspaceFileSourceIdent
 type WorkspaceFileSourceIdentityCarrier = {
   [WORKSPACE_FILE_SOURCE_IDENTITY]?: WorkspaceFileSourceIdentity;
 };
-// The WeakMap keeps public types unchanged; the private enumerable symbol lets
+// Private enumerable metadata keeps public types and JSON unchanged while
 // ordinary object spreads preserve the source returned by the pinned open.
-const workspaceFileSourceIdentities = new WeakMap<object, WorkspaceFileSourceIdentity>();
 
 /**
  * Read workspace files via boundary-safe open and cache by inode/dev/size/mtime identity.
@@ -108,18 +107,11 @@ function setWorkspaceFileSourceIdentity(
   file: object,
   sourceIdentity: WorkspaceFileSourceIdentity,
 ): void {
-  workspaceFileSourceIdentities.set(file, sourceIdentity);
   (file as WorkspaceFileSourceIdentityCarrier)[WORKSPACE_FILE_SOURCE_IDENTITY] = sourceIdentity;
 }
 
 function getWorkspaceFileSourceIdentity(file: object): WorkspaceFileSourceIdentity | undefined {
-  const sourceIdentity =
-    workspaceFileSourceIdentities.get(file) ??
-    (file as WorkspaceFileSourceIdentityCarrier)[WORKSPACE_FILE_SOURCE_IDENTITY];
-  if (sourceIdentity && !workspaceFileSourceIdentities.has(file)) {
-    workspaceFileSourceIdentities.set(file, sourceIdentity);
-  }
-  return sourceIdentity;
+  return (file as WorkspaceFileSourceIdentityCarrier)[WORKSPACE_FILE_SOURCE_IDENTITY];
 }
 
 export function workspaceFileSourceIdentitiesMatch(left: object, right: object): boolean {
