@@ -14,6 +14,7 @@ import {
 } from "../infra/diagnostic-trace-context.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tools.js";
+import { copyAgentToolParameterAccessor } from "./agent-tool-metadata.js";
 import {
   buildToolContentPrivateData,
   emitSkillUsedDiagnostic,
@@ -604,6 +605,7 @@ export function wrapToolWithBeforeToolCallHook(
   copyPluginToolMeta(tool, wrappedTool);
   copyChannelAgentToolMeta(tool as never, wrappedTool as never);
   copyToolTerminalPresentation(tool, wrappedTool);
+  copyAgentToolParameterAccessor(tool, wrappedTool);
   Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_WRAPPED, {
     value: true,
     enumerable: true,
@@ -645,6 +647,7 @@ export function rewrapToolWithBeforeToolCallHook(
     ...tool,
     execute: sourceTool.execute,
   };
+  copyAgentToolParameterAccessor(tool, rewrapSource);
   delete (rewrapSource as unknown as Record<symbol, unknown>)[BEFORE_TOOL_CALL_WRAPPED];
   copyPluginToolMeta(tool, rewrapSource);
   copyChannelAgentToolMeta(tool as never, rewrapSource as never);

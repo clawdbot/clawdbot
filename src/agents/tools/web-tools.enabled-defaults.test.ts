@@ -7,6 +7,9 @@ import {
   clearActiveRuntimeWebToolsMetadata,
   setActiveRuntimeWebToolsMetadata,
 } from "../../secrets/runtime-web-tools-state.js";
+import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
+import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
+import { normalizeToolParameters } from "../agent-tools.schema.js";
 import { createWebFetchTool, createWebSearchTool } from "./web-tools.js";
 
 const runWebSearchCalls = vi.hoisted(
@@ -285,6 +288,70 @@ describe("web tools defaults", () => {
       diagnostics: [],
     });
     expect(tool?.parameters).toBe(freshParameters);
+  });
+
+  it("keeps the selected provider schema live through agent tool assembly", () => {
+    const registry = createEmptyPluginRegistry();
+    const staleParameters = { type: "object", properties: { stale: { type: "string" } } };
+    const freshParameters = { type: "object", properties: { fresh: { type: "string" } } };
+    for (const [id, modelParameters] of [
+      ["stale", staleParameters],
+      ["fresh", freshParameters],
+    ] as const) {
+      registry.webSearchProviders.push({
+        pluginId: `${id}-search`,
+        pluginName: `${id} Search`,
+        source: "test",
+        provider: {
+          id,
+          label: `${id} Search`,
+          hint: "Runtime provider",
+          envVars: [],
+          placeholder: `${id}-...`,
+          signupUrl: `https://example.com/${id}`,
+          credentialPath: `tools.web.search.${id}.apiKey`,
+          getCredentialValue: () => "configured",
+          setCredentialValue: () => {},
+          modelParameters,
+          createTool: () => ({
+            description: `${id} runtime tool`,
+            parameters: modelParameters,
+            execute: async () => ({ query: "openclaw", results: [] }),
+          }),
+        },
+      });
+    }
+    setActivePluginRegistry(registry);
+    setActiveRuntimeWebToolsMetadata({
+      search: {
+        providerSource: "configured",
+        selectedProvider: "stale",
+        selectedProviderKeySource: "config",
+        diagnostics: [],
+      },
+      fetch: { providerSource: "none", diagnostics: [] },
+      diagnostics: [],
+    });
+    const tool = createWebSearchTool({ lateBindRuntimeConfig: true });
+    if (!tool) {
+      throw new Error("expected web_search tool");
+    }
+    const normalized = normalizeToolParameters(tool);
+    const wrapped = wrapToolWithBeforeToolCallHook(normalized);
+
+    setActiveRuntimeWebToolsMetadata({
+      search: {
+        providerSource: "configured",
+        selectedProvider: "fresh",
+        selectedProviderKeySource: "config",
+        diagnostics: [],
+      },
+      fetch: { providerSource: "none", diagnostics: [] },
+      diagnostics: [],
+    });
+    const definition = toToolDefinitions([wrapped])[0];
+
+    expect(definition?.parameters).toEqual(freshParameters);
   });
 
   it("keeps runtime provider discovery enabled when runtime web_search metadata is missing", async () => {
