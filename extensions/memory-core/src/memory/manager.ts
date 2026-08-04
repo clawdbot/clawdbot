@@ -2190,7 +2190,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         : undefined,
       vector: {
         enabled: this.vector.enabled,
-        storeAvailable: this.vector.available ?? undefined,
+        // When lazy vector init has not run (fast status path), fall back to a
+        // cheap chunks-presence check instead of reporting "unknown" for an
+        // index that is actually built (#92102).
+        storeAvailable: this.vector.available ?? (this.hasIndexedChunks() ? true : undefined),
         semanticAvailable: this.vector.semanticAvailable,
         available: this.vector.semanticAvailable,
         extensionPath: this.vector.extensionPath,
