@@ -714,8 +714,7 @@ export function createMemorySearchTool(options: {
                   rawResults = await searchActiveMemory();
                 }
                 let managerStatus = activeMemory.manager.status();
-                pausedIndexIdentityReason =
-                  resolvePausedMemoryIndexIdentityReason(managerStatus);
+                pausedIndexIdentityReason = resolvePausedMemoryIndexIdentityReason(managerStatus);
                 if (pausedIndexIdentityReason) {
                   // Cached manager may predate a memory index identity change
                   // (e.g. session memory enabled after the gateway cached the
