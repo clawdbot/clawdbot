@@ -1424,6 +1424,8 @@ export function createRuntimeConfigCapability(
   let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let autoSaveInFlight: Promise<unknown> | null = null;
   let autoSaveTrailing = false;
+  let autoSaveDraftConnection: { client: GatewayBrowserClient; epoch: number } | null = null;
+  let autoSaveRequiresExplicitSubmit = false;
   let lastFlightSubmittedRaw: string | null = null;
   let lastFlightAckHash: string | null = null;
   let manualSubmitInFlight: Promise<unknown> | null = null;
@@ -1469,6 +1471,48 @@ export function createRuntimeConfigCapability(
       "operator.admin",
       options,
     );
+  const clearAutoSaveDraftConnection = () => {
+    autoSaveDraftConnection = null;
+    autoSaveRequiresExplicitSubmit = false;
+  };
+  const captureAutoSaveDraftConnection = () => {
+    if (
+      autoSaveRequiresExplicitSubmit ||
+      autoSaveDraftConnection ||
+      !state.client ||
+      !state.connected ||
+      !state.configFormDirty ||
+      state.configFormMode !== "form"
+    ) {
+      return;
+    }
+    autoSaveDraftConnection = {
+      client: state.client,
+      epoch: currentConfigConnectionEpoch(state),
+    };
+  };
+  const bindDraftToExplicitSubmit = () => {
+    if (!state.client || !state.connected || state.configFormMode !== "form") {
+      return;
+    }
+    autoSaveDraftConnection = {
+      client: state.client,
+      epoch: currentConfigConnectionEpoch(state),
+    };
+    autoSaveRequiresExplicitSubmit = false;
+  };
+  const canAutoSaveDraftOnCurrentConnection = () =>
+    !autoSaveRequiresExplicitSubmit &&
+    autoSaveDraftConnection !== null &&
+    autoSaveDraftConnection.client === state.client &&
+    autoSaveDraftConnection.epoch === currentConfigConnectionEpoch(state);
+  const reconcileAutoSaveDraftConnection = () => {
+    if (state.configFormDirty && state.configFormMode === "form") {
+      captureAutoSaveDraftConnection();
+    } else if (autoSaveInFlight === null && manualSubmitInFlight === null) {
+      clearAutoSaveDraftConnection();
+    }
+  };
 
   const publish = () => {
     if (disposed) {
@@ -1532,7 +1576,13 @@ export function createRuntimeConfigCapability(
   const cancelAppliedRefresh = appliedRefresh.cancel;
   const reconcileAppliedRefresh = appliedRefresh.reconcile;
   const runAutoSave = () => {
-    if (disposed || suppressAutoSave || writesSuspended || !canCallConfigMethod("config.set")) {
+    if (
+      disposed ||
+      suppressAutoSave ||
+      writesSuspended ||
+      !canAutoSaveDraftOnCurrentConnection() ||
+      !canCallConfigMethod("config.set")
+    ) {
       return;
     }
     if (autoSaveInFlight ?? manualSubmitInFlight) {
@@ -1565,6 +1615,7 @@ export function createRuntimeConfigCapability(
           return;
         }
         autoSaveInFlight = null;
+        reconcileAutoSaveDraftConnection();
         // One trailing save catches edits (or reverts back to the pre-save
         // value) made while the request was in flight. A still-armed debounce
         // timer owns its own save, and failed flights never self-retry.
@@ -1598,6 +1649,7 @@ export function createRuntimeConfigCapability(
     if (
       disposed ||
       writesSuspended ||
+      !canAutoSaveDraftOnCurrentConnection() ||
       !canCallConfigMethod("config.set") ||
       !state.configFormDirty ||
       state.configFormMode !== "form"
@@ -1754,6 +1806,9 @@ export function createRuntimeConfigCapability(
     state.connected = connected;
     state.applySessionKey = snapshot.sessionKey;
     if (clientChanged || connectionChanged) {
+      const draftBelongsToPreviousConnection =
+        state.configFormMode === "form" &&
+        (state.configFormDirty || autoSaveInFlight !== null || manualSubmitInFlight !== null);
       configLoad = null;
       schemaLoad = null;
       // A dead prior-connection flight must not keep the reconnected owner's
@@ -1764,6 +1819,12 @@ export function createRuntimeConfigCapability(
       invalidateConfigConnection(state);
       cancelScheduledAutoSave();
       cancelAppliedRefresh();
+      if (draftBelongsToPreviousConnection) {
+        // A retained draft belongs to the Gateway connection where the edit
+        // began. Preserve it across replacement, but require an explicit
+        // Save/Apply or reload before the new Gateway may receive it.
+        autoSaveRequiresExplicitSubmit = true;
+      }
       if (autoSaveInFlight !== null || manualSubmitInFlight !== null) {
         // The epoch guard already blocks these flights from mutating state;
         // deregistering releases drain barriers and the trailing-save chain
@@ -1790,15 +1851,12 @@ export function createRuntimeConfigCapability(
       if (state.configAutoSaveStatus === "saving") {
         state.configAutoSaveStatus = "idle";
       }
-      // A reconnect must not strand a dirty draft whose debounce was just
-      // cancelled; reschedule against the new connection. If the file moved
-      // while offline, the save reports a baseHash conflict instead of
-      // clobbering the other writer.
       if (state.connected && state.client) {
         if (hasInterruptedWrite) {
           // The interrupted write may or may not have committed. Fetch the
-          // authoritative snapshot before autosave resumes so an uncertain
-          // flight can't strand a clean-looking draft or retry a stale base.
+          // authoritative snapshot so an uncertain flight cannot leave a
+          // clean-looking draft or a stale base. Replacement connections
+          // never resume autosave for the retained draft.
           const interruptedRaw = interruptedWriteRaw;
           // A revert made while the write was in flight reads clean (the ack
           // never rebased the originals), so the reload below would replace
@@ -1818,9 +1876,6 @@ export function createRuntimeConfigCapability(
               // Reload failed or the connection flipped again: keep the
               // interruption metadata so the NEXT reconnect retries
               // reconciliation instead of silently taking the plain path.
-              // A dirty draft may still reschedule; a stale base surfaces
-              // as a conflict with its Reload recovery, never a clobber.
-              scheduleAutoSave();
               reconcileAppliedRefresh();
               return;
             }
@@ -1837,7 +1892,17 @@ export function createRuntimeConfigCapability(
                 state.configNeedsApply = true;
               }
               if (state.configFormDirty) {
-                state.configDraftBaseHash = freshHash ?? state.configDraftBaseHash;
+                if (serializeFormForSubmit(state) === interruptedRaw) {
+                  // The lost acknowledgement was the only missing event: the
+                  // retained bytes are already authoritative, so no draft
+                  // remains to submit on the replacement connection.
+                  applyConfigSnapshot(state, state.configSnapshot, {
+                    discardPendingChanges: true,
+                  });
+                  clearAutoSaveDraftConnection();
+                } else {
+                  state.configDraftBaseHash = freshHash ?? state.configDraftBaseHash;
+                }
               } else if (
                 draftFormBefore &&
                 draftRawBefore !== null &&
@@ -1855,11 +1920,9 @@ export function createRuntimeConfigCapability(
               }
             }
             publish();
-            scheduleAutoSave();
             reconcileAppliedRefresh();
           });
         } else {
-          scheduleAutoSave();
           reconcileAppliedRefresh();
         }
       }
@@ -1955,16 +2018,19 @@ export function createRuntimeConfigCapability(
       ),
     patchForm: (path, value) => {
       mutate(() => updateConfigFormValue(state, path, value));
+      reconcileAutoSaveDraftConnection();
       scheduleAutoSave();
     },
     removeFormValue: (path) => {
       mutate(() => removeConfigFormValue(state, path));
+      reconcileAutoSaveDraftConnection();
       scheduleAutoSave();
     },
     setRaw: (value) => mutate(() => updateConfigRawValue(state, value)),
     resetDraft: () => {
       cancelScheduledAutoSave();
       mutate(() => resetConfigPendingChanges(state));
+      clearAutoSaveDraftConnection();
       reconcileAppliedRefresh();
     },
     discardDraft: async () => {
@@ -1979,6 +2045,7 @@ export function createRuntimeConfigCapability(
             "config",
             run(() => loadConfig(state, { discardPendingChanges: true })),
           );
+          clearAutoSaveDraftConnection();
         } finally {
           reconcileAppliedRefresh();
         }
@@ -1996,6 +2063,7 @@ export function createRuntimeConfigCapability(
           state.lastError = null;
         }
       });
+      clearAutoSaveDraftConnection();
     },
     setWritesSuspended: (suspended) => {
       if (writesSuspended === suspended) {
@@ -2029,15 +2097,18 @@ export function createRuntimeConfigCapability(
         ? Promise.resolve(false)
         : afterPendingWritesSettled(
             async () => {
+              bindDraftToExplicitSubmit();
               cancelAppliedRefresh();
               try {
-                return await saveConfig(
+                const saved = await saveConfig(
                   state,
                   (info) => {
                     manualFlightInfo = info;
                   },
                   canDispatch,
                 );
+                reconcileAutoSaveDraftConnection();
+                return saved;
               } finally {
                 reconcileAppliedRefresh();
               }
@@ -2051,6 +2122,7 @@ export function createRuntimeConfigCapability(
         ? Promise.resolve(false)
         : afterPendingWritesSettled(
             async () => {
+              bindDraftToExplicitSubmit();
               cancelAppliedRefresh();
               // Checked after the drain: a raw draft whose explicit Save is in
               // flight resolves clean and may apply. A raw draft that is STILL
@@ -2063,7 +2135,9 @@ export function createRuntimeConfigCapability(
                 return false;
               }
               try {
-                return await applyConfig(state, () => canCallConfigMethod("config.apply"));
+                const applied = await applyConfig(state, () => canCallConfigMethod("config.apply"));
+                reconcileAutoSaveDraftConnection();
+                return applied;
               } finally {
                 reconcileAppliedRefresh();
               }
@@ -2082,6 +2156,7 @@ export function createRuntimeConfigCapability(
       }
       const changed = stageDefaultAgentConfigEntry(state, agentId);
       publish();
+      reconcileAutoSaveDraftConnection();
       scheduleAutoSave();
       return changed;
     },
@@ -2253,6 +2328,7 @@ export function createRuntimeConfigCapability(
         client !== null &&
         state.configFormMode === "form" &&
         !writesSuspended &&
+        canAutoSaveDraftOnCurrentConnection() &&
         canCallConfigMethod("config.set");
       const autoFlight = autoSaveInFlight;
       const pendingFlight = autoFlight ?? manualSubmitInFlight;

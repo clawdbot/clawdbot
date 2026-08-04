@@ -1273,9 +1273,12 @@ describe("config form auto-save", () => {
     runtimeConfig.dispose();
   });
 
-  it("reschedules a stranded dirty draft after reconnect", async () => {
+  it("keeps a stranded dirty draft unsaved until an explicit save after replacement", async () => {
     vi.useFakeTimers();
     const server = createConfigServerMock();
+    const replacementClient = {
+      request: server.request,
+    } as unknown as GatewayBrowserClient;
     const { runtimeConfig, publish } = createHarness(
       server.request as GatewayBrowserClient["request"],
     );
@@ -1288,8 +1291,12 @@ describe("config form auto-save", () => {
     expect(server.submissions).toHaveLength(0);
     expect(runtimeConfig.state.configFormDirty).toBe(true);
 
-    publish(true);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+    publish(true, replacementClient);
+    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
+    expect(server.submissions).toHaveLength(0);
+    expect(runtimeConfig.state.configFormDirty).toBe(true);
+
+    await expect(runtimeConfig.save()).resolves.toBe(true);
     expect(server.submissions).toEqual([
       { method: "config.set", raw: '{\n  "count": 2\n}\n', baseHash: "hash-1" },
     ]);
@@ -2785,7 +2792,7 @@ describe("config form auto-save", () => {
     expect(submissions[1]).toEqual({ raw: '{\n  "count": 1\n}\n', baseHash: "hash-2" });
   });
 
-  it("reconciles an uncertain in-flight save after reconnect before autosave resumes", async () => {
+  it("reconciles an uncertain in-flight save without autosaving its trailing draft", async () => {
     vi.useFakeTimers();
     let committedRaw = '{\n  "count": 1\n}\n';
     let hash = "hash-1";
@@ -2809,6 +2816,7 @@ describe("config form auto-save", () => {
           hash = "hash-2";
           return new Promise(() => {});
         }
+        committedRaw = (params as { raw: string }).raw;
         hash = "hash-3";
         return Promise.resolve({ hash });
       }
@@ -2827,9 +2835,14 @@ describe("config form auto-save", () => {
     publish(true);
     // Reconnect fetches the authoritative snapshot; the fresh bytes match the
     // interrupted submission, so the surviving draft is rebased onto the
-    // committed hash instead of false-conflicting against our own write.
+    // committed hash without sending it through the replacement connection.
     await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
 
+    expect(sets).toHaveLength(1);
+    expect(runtimeConfig.state.configFormDirty).toBe(true);
+    expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-2");
+
+    await expect(runtimeConfig.save()).resolves.toBe(true);
     expect(sets).toHaveLength(2);
     expect(sets[1]).toEqual({ raw: '{\n  "count": 3\n}\n', baseHash: "hash-2" });
     expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
@@ -3215,11 +3228,10 @@ describe("config form auto-save", () => {
     // process-local pending state survives instead of silently disappearing.
     expect(runtimeConfig.state.configNeedsApply).toBe(true);
 
-    // …and the still-dirty draft retries against the committed hash.
+    // The matching committed bytes leave no draft to retry on the replacement.
     await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-    expect(sets).toHaveLength(2);
-    expect(sets[1]).toEqual({ raw: '{\n  "count": 2\n}\n', baseHash: "hash-2" });
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
+    expect(sets).toHaveLength(1);
+    expect(runtimeConfig.state.configFormDirty).toBe(false);
     runtimeConfig.dispose();
   });
 
@@ -3276,8 +3288,8 @@ describe("config form auto-save", () => {
     await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
 
     expect(runtimeConfig.state.configNeedsApply).toBe(true);
-    expect(sets).toHaveLength(2);
-    expect(sets[1]).toEqual({ raw: '{\n  "count": 2\n}\n', baseHash: "hash-2" });
+    expect(sets).toHaveLength(1);
+    expect(runtimeConfig.state.configFormDirty).toBe(false);
     runtimeConfig.dispose();
   });
 
@@ -3326,6 +3338,12 @@ describe("config form auto-save", () => {
     publish(true);
     await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
 
+    expect(sets).toHaveLength(1);
+    expect(runtimeConfig.state.configFormDirty).toBe(true);
+    expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-2");
+    expect(runtimeConfig.state.configForm).toEqual({ count: 1 });
+
+    await expect(runtimeConfig.save()).resolves.toBe(true);
     expect(sets).toHaveLength(2);
     expect(sets[1]).toEqual({ raw: '{\n  "count": 1\n}\n', baseHash: "hash-2" });
     expect(runtimeConfig.state.configForm).toEqual({ count: 1 });
