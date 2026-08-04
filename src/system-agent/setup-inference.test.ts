@@ -1267,6 +1267,37 @@ describe("detectSetupInference", () => {
     expect(probeLocalCommand).toHaveBeenCalledWith("opencode");
     expect(probeLocalCommand).not.toHaveBeenCalledWith("agy");
   });
+
+  it("reports incompatible detected CLI backends without offering them for activation", async () => {
+    vi.mocked(detectInferenceBackends).mockResolvedValueOnce([
+      {
+        kind: "claude-cli",
+        modelRef: "claude-cli/claude-opus-5",
+        label: "Claude Code",
+        detail: "logged in",
+        credentials: true,
+        unavailableReason:
+          "Claude Code 2.1.206 or newer is required; found 2.1.205. Run `claude update`, restart OpenClaw, and retry.",
+      },
+    ]);
+
+    const detection = await detectSetupInference({
+      resolveManifestProviderAuthChoices: () => [],
+      probeLocalCommand: vi.fn(async (command) => ({ command, found: false })),
+    });
+
+    expect(detection.candidates).toEqual([]);
+    expect(detection.unavailableCandidates).toEqual([
+      {
+        id: "claude-cli",
+        brandId: "claude",
+        label: "Claude Code",
+        detail: "logged in",
+        reason:
+          "Claude Code 2.1.206 or newer is required; found 2.1.205. Run `claude update`, restart OpenClaw, and retry.",
+      },
+    ]);
+  });
 });
 
 async function runCodexSetupWithFinalConfig(params: {

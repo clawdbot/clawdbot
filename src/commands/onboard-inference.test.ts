@@ -152,6 +152,35 @@ describe("detectInferenceBackends", () => {
     expect(candidates[1]?.credentials).toBeUndefined();
   });
 
+  it("marks an installed Claude Code below the streamed-session floor unavailable", async () => {
+    const candidates = await detectInferenceBackends({
+      env: {},
+      platform: "linux",
+      deps: {
+        probeLocalCommand: async (command) => ({
+          command,
+          found: command === "claude",
+          ...(command === "claude" ? { version: "2.1.205 (Claude Code)" } : {}),
+        }),
+        readClaudeCliCredentials: () => ({ type: "oauth" }),
+        resolveClaudeLiveSessionRequirement: () => ({
+          capability: "msg_lifecycle_v1",
+          minimumVersion: "2.1.206",
+          versionArgs: ["--version"],
+          updateCommand: "claude update",
+        }),
+      },
+    });
+
+    expect(candidates).toMatchObject([
+      {
+        kind: "claude-cli",
+        unavailableReason:
+          "Claude Code 2.1.206 or newer is required; found 2.1.205. Run `claude update`, restart OpenClaw, and retry.",
+      },
+    ]);
+  });
+
   it("keeps a logged-in Gemini CLI after environment keys", async () => {
     const candidates = await detectInferenceBackends({
       env: { OPENAI_API_KEY: "sk-x" },

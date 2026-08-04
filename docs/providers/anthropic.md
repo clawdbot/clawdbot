@@ -91,10 +91,18 @@ OpenClaw release:
 
     <Steps>
       <Step title="Ensure Claude CLI is installed and logged in">
-        Verify with:
+        OpenClaw's streamed session correlation requires Claude Code 2.1.206 or
+        newer. Verify the installed version:
 
         ```bash
         claude --version
+        ```
+
+        If it is older, update Claude Code and restart OpenClaw so the gateway
+        launches the new binary:
+
+        ```bash
+        claude update
         ```
       </Step>
       <Step title="Run onboarding">
@@ -114,6 +122,8 @@ OpenClaw release:
 
     <Note>
     Setup and runtime details for the Claude CLI backend are in [CLI Backends](/gateway/cli-backends).
+    `openclaw doctor` also reports an installed Claude Code version below the
+    supported floor.
     </Note>
 
     <Warning>

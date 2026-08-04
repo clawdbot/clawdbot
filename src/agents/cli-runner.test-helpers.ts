@@ -145,6 +145,7 @@ export type PreparedCliRunContextOverrides = {
   timeoutMs?: number;
   onSuccessfulAuthBinding?: PreparedCliRunContext["params"]["onSuccessfulAuthBinding"];
   runtimeArtifact?: PreparedCliRunContext["backendResolved"]["runtimeArtifact"];
+  liveSessionRequirement?: PreparedCliRunContext["backendResolved"]["liveSessionRequirement"];
 };
 
 export function buildPreparedCliRunContext(
@@ -238,6 +239,7 @@ export function buildPreparedCliRunContext(
         overrides.toolAvailabilityEnforcement ??
         (provider === "google-gemini-cli" ? "prepare-execution" : "execution-args"),
       runtimeArtifact: overrides.runtimeArtifact,
+      liveSessionRequirement: overrides.liveSessionRequirement,
     },
     preparedBackend: {
       backend,

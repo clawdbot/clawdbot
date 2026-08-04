@@ -24,6 +24,8 @@ export type InferenceBackendCandidate = {
    * unknown (e.g. macOS keychain-backed logins we must not prompt for here).
    */
   credentials?: boolean;
+  /** Installed route that setup must explain but never activate automatically. */
+  unavailableReason?: string;
 };
 
 export function detectAmbientInferenceBackends(

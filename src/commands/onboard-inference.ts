@@ -5,6 +5,11 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import {
+  formatCliBackendUpdateGuidance,
+  resolveCliBackendVersionSupport,
+} from "../agents/cli-backend-version-support.js";
+import { resolveCliBackendLiveSessionRequirement } from "../agents/cli-backends.js";
+import {
   readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
   readGeminiCliCredentialsCached,
@@ -45,6 +50,7 @@ type DetectInferenceBackendsDeps = {
   readGeminiCliCredentials?: () => { type: string } | null;
   detectCodexLoginState?: typeof detectCodexLoginState;
   randomInt?: (maxExclusive: number) => number;
+  resolveClaudeLiveSessionRequirement?: typeof resolveCliBackendLiveSessionRequirement;
 };
 
 type DetectInferenceBackendsOptions = {
@@ -224,13 +230,24 @@ export async function detectInferenceBackends(
   const cliCandidates: InferenceBackendCandidate[] = [];
   const subscriptionPromotionEligibleCliKinds = new Set<InferenceBackendKind>();
   if (claudeProbe.found && !claudeProbe.timedOut) {
+    const liveSessionRequirement =
+      (
+        options.deps?.resolveClaudeLiveSessionRequirement ?? resolveCliBackendLiveSessionRequirement
+      )("claude-cli") ?? undefined;
+    const versionSupport = liveSessionRequirement
+      ? resolveCliBackendVersionSupport(claudeProbe.version, liveSessionRequirement)
+      : { status: "unknown" as const };
     const claudeCredential = readClaude();
     const credentials = detectCliCredentialState({
       probe: claudeProbe,
       hasStoredCredentials: claudeCredential !== null,
       platform,
     });
-    if (credentials === true && claudeCredential?.type === "oauth") {
+    if (
+      versionSupport.status !== "unsupported" &&
+      credentials === true &&
+      claudeCredential?.type === "oauth"
+    ) {
       subscriptionPromotionEligibleCliKinds.add("claude-cli");
     }
     cliCandidates.push({
@@ -239,6 +256,15 @@ export async function detectInferenceBackends(
       label: "Claude Code",
       detail: describeCliDetail(credentials, "run `claude auth login`"),
       ...(credentials === undefined ? {} : { credentials }),
+      ...(versionSupport.status === "unsupported" && liveSessionRequirement
+        ? {
+            unavailableReason: formatCliBackendUpdateGuidance({
+              label: "Claude Code",
+              requirement: liveSessionRequirement,
+              version: versionSupport.version,
+            }),
+          }
+        : {}),
     });
   }
   if (codexProbe.found && !codexProbe.timedOut) {

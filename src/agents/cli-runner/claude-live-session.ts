@@ -28,7 +28,10 @@ import {
 } from "../../infra/exec-approvals.js";
 import { BLOCKED_TOOL_CALL_ABORT_FLOOR_MS } from "../../logging/diagnostic-run-activity.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
-import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
+import type {
+  CliBackendConfig,
+  CliBackendLiveSessionRequirement,
+} from "../../plugins/cli-backend.types.js";
 import {
   LEGACY_IMPLICIT_AGENT_ID,
   resolveAgentIdFromSessionKey,
@@ -112,6 +115,8 @@ type ClaudeLiveSession = {
   fingerprint: string;
   systemPromptHash: string;
   systemPromptSwitchCapability: "unknown" | "supported" | "unsupported";
+  liveSessionRequirement?: CliBackendLiveSessionRequirement;
+  liveSessionCapabilityReady: boolean;
   managedRun: ManagedRun;
   providerId: string;
   modelId: string;
@@ -923,6 +928,43 @@ function applyClaudeLiveInputLifecycle(
   }
 }
 
+function applyClaudeLiveSessionRequirement(
+  session: ClaudeLiveSession,
+  parsed: Record<string, unknown>,
+): boolean {
+  const requirement = session.liveSessionRequirement;
+  if (!requirement || parsed.type !== "system" || parsed.subtype !== "init") {
+    return true;
+  }
+  const capabilities = Array.isArray(parsed.capabilities)
+    ? parsed.capabilities.filter((value): value is string => typeof value === "string")
+    : [];
+  if (capabilities.includes(requirement.capability)) {
+    session.liveSessionCapabilityReady = true;
+    return true;
+  }
+  const version =
+    typeof parsed.claude_code_version === "string"
+      ? parsed.claude_code_version.trim() || undefined
+      : undefined;
+  const versionDetail = version ? ` (version ${version})` : "";
+  closeLiveSession(
+    session,
+    "abort",
+    new FailoverError(
+      `The running Claude Code build${versionDetail} did not advertise the required ${requirement.capability} capability. Claude Code ${requirement.minimumVersion} is the first known compatible release. Run \`${requirement.updateCommand}\`, restart OpenClaw, and retry.`,
+      {
+        reason: "format",
+        provider: session.providerId,
+        model: session.modelId,
+        status: resolveFailoverStatus("format"),
+        code: "cli_live_session_unsupported",
+      },
+    ),
+  );
+  return false;
+}
+
 function resetNoOutputTimer(session: ClaudeLiveSession): void {
   const turn = session.currentTurn;
   if (!turn) {
@@ -1318,6 +1360,14 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
     return;
   }
   applyClaudeLiveInputLifecycle(turn, parsed);
+  if (!applyClaudeLiveSessionRequirement(session, parsed)) {
+    return;
+  }
+  // command_lifecycle can precede system/init. Retain the matching start, but
+  // never trust assistant/tool/result records until capability negotiation succeeds.
+  if (!session.liveSessionCapabilityReady) {
+    return;
+  }
   if (!turn.inputStarted) {
     if (!(parsed.type === "system" && parsed.subtype === "init")) {
       turn.hasReplayUnsafeActivity = true;
@@ -1411,6 +1461,9 @@ function handleClaudeStdout(session: ClaudeLiveSession, chunk: string) {
   try {
     for (const line of lines) {
       handleClaudeLiveLine(session, line);
+      if (session.closing) {
+        break;
+      }
     }
   } catch (error) {
     closeLiveSession(session, "abort", error);
@@ -1577,6 +1630,8 @@ async function createClaudeLiveSession(params: {
     fingerprint: params.fingerprint,
     systemPromptHash: params.systemPromptHash,
     systemPromptSwitchCapability: "unknown",
+    liveSessionRequirement: params.context.backendResolved.liveSessionRequirement,
+    liveSessionCapabilityReady: !params.context.backendResolved.liveSessionRequirement,
     managedRun,
     providerId: params.context.params.provider,
     modelId: params.context.modelId,
