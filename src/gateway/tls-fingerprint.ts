@@ -1,3 +1,4 @@
+import { isWssUrl } from "@openclaw/net-policy/url-protocol";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayTlsConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -17,9 +18,6 @@ export async function resolveGatewayConnectionTlsFingerprint(params: {
   if (explicitTlsFingerprint) {
     return explicitTlsFingerprint;
   }
-  if (!params.url.toLowerCase().startsWith("wss://")) {
-    return undefined;
-  }
 
   // Env overrides intentionally retain remote-mode pinning for private-cert deployments.
   // CLI targets and local fallback are distinct trust decisions and must not inherit that pin.
@@ -31,6 +29,9 @@ export async function resolveGatewayConnectionTlsFingerprint(params: {
       : undefined;
   if (remoteTlsFingerprint) {
     return remoteTlsFingerprint;
+  }
+  if (!isWssUrl(params.url)) {
+    return undefined;
   }
 
   const usesConfiguredLocalGateway =

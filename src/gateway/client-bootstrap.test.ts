@@ -149,19 +149,12 @@ describe("resolveGatewayClientBootstrap", () => {
     expect(mockState.loadGatewayTlsRuntime).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      label: "CLI URL overrides",
-      url: "wss://override.example/ws",
+  it("does not inherit the configured remote pin for CLI URL overrides", async () => {
+    const url = "wss://override.example/ws";
+    mockState.buildGatewayConnectionDetails.mockReturnValue({
+      url,
       urlSource: "cli --url",
-    },
-    {
-      label: "plaintext remote URLs",
-      url: "ws://gateway.example/ws",
-      urlSource: "config gateway.remote.url",
-    },
-  ])("does not inherit the configured remote pin for $label", async ({ url, urlSource }) => {
-    mockState.buildGatewayConnectionDetails.mockReturnValue({ url, urlSource });
+    });
 
     const result = await resolveGatewayClientBootstrap({
       config: {
@@ -173,11 +166,35 @@ describe("resolveGatewayClientBootstrap", () => {
           },
         },
       } as never,
-      gatewayUrl: urlSource === "cli --url" ? url : undefined,
+      gatewayUrl: url,
       env: process.env,
     });
 
     expect(result.tlsFingerprint).toBeUndefined();
+    expect(mockState.loadGatewayTlsRuntime).not.toHaveBeenCalled();
+  });
+
+  it("preserves the configured remote pin so plaintext targets fail closed", async () => {
+    const url = "ws://127.0.0.1:18789";
+    mockState.buildGatewayConnectionDetails.mockReturnValue({
+      url,
+      urlSource: "config gateway.remote.url",
+    });
+
+    const result = await resolveGatewayClientBootstrap({
+      config: {
+        gateway: {
+          mode: "remote",
+          remote: {
+            url,
+            tlsFingerprint: "sha256:remote",
+          },
+        },
+      } as never,
+      env: process.env,
+    });
+
+    expect(result.tlsFingerprint).toBe("sha256:remote");
     expect(mockState.loadGatewayTlsRuntime).not.toHaveBeenCalled();
   });
 
