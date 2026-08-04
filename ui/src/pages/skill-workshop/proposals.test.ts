@@ -149,6 +149,33 @@ function clearNoticeTimer(state: SkillWorkshopState): void {
 }
 
 describe("Skill Workshop proposal RPCs", () => {
+  it("does not dispatch proposal mutations with read-only operator access", async () => {
+    const { state, context, request } = createFixture(
+      { skillWorkshopProposals: [proposal()] },
+      {
+        hello: {
+          type: "hello-ok",
+          protocol: 4,
+          auth: { role: "operator", scopes: ["operator.read"] },
+          features: {
+            methods: [
+              "skills.proposals.apply",
+              "skills.proposals.evaluate",
+              "skills.proposals.requestRevision",
+            ],
+          },
+        } as ApplicationGatewaySnapshot["hello"],
+      },
+    );
+
+    await runSkillWorkshopLifecycleAction(state, context, "apply", "proposal-1");
+    await expect(runSkillWorkshopEvaluation(state, context, "proposal-1")).resolves.toBe(false);
+    await expect(requestSkillWorkshopRevision(state, context, "proposal-1", vi.fn())).resolves.toBe(
+      false,
+    );
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("lists proposals with the selected agent id and carries it into the initial inspect", async () => {
     const { state, context, request } = createFixture();
     request.mockImplementation(async (method: string) => {

@@ -5692,6 +5692,27 @@ describe("handleSendChat", () => {
     expect(host.chatMessages).toStrictEqual([]);
   });
 
+  it("does not send queued Skill Workshop revisions with read-only operator access", async () => {
+    const host = makeHost({
+      requestHandlers: {
+        "skills.proposals.requestRevision": {},
+      },
+      hello: {
+        auth: { role: "operator", scopes: ["operator.read"] },
+        features: { methods: ["skills.proposals.requestRevision"] },
+      } as ChatHost["hello"],
+    });
+
+    await handleSendChat(host, "Revise this proposal", {
+      restoreDraft: true,
+      skillWorkshopRevision: { proposalId: "proposal-1" },
+    });
+
+    expect(
+      host.request.mock.calls.filter(([method]) => method === "skills.proposals.requestRevision"),
+    ).toHaveLength(0);
+  });
+
   it("treats slash-like Skill Workshop revision drafts as revision instructions", async () => {
     const sent = createDeferred<unknown>();
 

@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import type { ApplicationGateway } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { redactToolDetail } from "../../lib/browser-redact.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import type { SkillWorkshopHistoryScanResult, SkillWorkshopHistoryScanState } from "./state.ts";
 
 type SkillWorkshopHistoryStatusLoadParams = {
@@ -94,6 +95,11 @@ export async function runSkillWorkshopHistoryScan(params: {
   gateway: ApplicationGateway;
   state: SkillWorkshopHistoryScanState;
 }): Promise<boolean> {
+  if (
+    !canCallGatewayMethod(params.gateway.snapshot, "skills.proposals.historyScan", "operator.admin")
+  ) {
+    return false;
+  }
   let client = params.gateway.snapshot.client;
   if (
     !client ||
@@ -173,6 +179,7 @@ function actionLabel(state: SkillWorkshopHistoryScanState): string {
 
 export function renderSkillWorkshopHistoryScan(params: {
   state: SkillWorkshopHistoryScanState;
+  canScan: boolean;
   onScan: () => void;
 }) {
   const result = params.state.result;
@@ -215,7 +222,7 @@ export function renderSkillWorkshopHistoryScan(params: {
       <div class="sw-history__action">
         <button
           class="sw-btn sw-btn--primary"
-          ?disabled=${params.state.running || params.state.loading}
+          ?disabled=${!params.canScan || params.state.running || params.state.loading}
           @click=${params.onScan}
         >
           ${params.state.loading ? t("skillWorkshop.history.loading") : actionLabel(params.state)}

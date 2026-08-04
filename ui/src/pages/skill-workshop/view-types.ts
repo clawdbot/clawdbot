@@ -9,6 +9,13 @@ import type { SkillWorkshopSelfLearning } from "./self-learning.ts";
 import type { SkillWorkshopHistoryScanState } from "./state.ts";
 
 export type SkillWorkshopProps = {
+  access: {
+    canEvaluate: boolean;
+    canApply: boolean;
+    canRevise: boolean;
+    canReject: boolean;
+    canScanHistory: boolean;
+  };
   loading: boolean;
   error: string | null;
   inspectingKey: string | null;

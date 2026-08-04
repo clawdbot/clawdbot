@@ -5,6 +5,7 @@ import type { ApplicationGateway } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { redactToolDetail } from "../../lib/browser-redact.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -499,6 +500,10 @@ export async function runSkillWorkshopLifecycleAction(
   action: Extract<SkillWorkshopAction, "apply" | "reject">,
   proposalId: string,
 ): Promise<void> {
+  const method = action === "apply" ? "skills.proposals.apply" : "skills.proposals.reject";
+  if (!canCallGatewayMethod(context.gateway.snapshot, method, "operator.admin")) {
+    return;
+  }
   const snapshot = context.gateway.snapshot;
   const client = snapshot.client;
   if (!client || snapshot.phase !== "connected" || state.skillWorkshopActionBusy) {
@@ -509,7 +514,6 @@ export async function runSkillWorkshopLifecycleAction(
   state.skillWorkshopActionNotice = null;
   state.skillWorkshopError = null;
   try {
-    const method = action === "apply" ? "skills.proposals.apply" : "skills.proposals.reject";
     const requestParams = { ...loadedSkillWorkshopAgentParams(state, context), proposalId };
     await client.request(method, requestParams);
     await refreshAfterMutation(state, context, proposalId);
@@ -536,6 +540,11 @@ export async function runSkillWorkshopEvaluation(
   context: SkillWorkshopContext,
   proposalId: string,
 ): Promise<boolean> {
+  if (
+    !canCallGatewayMethod(context.gateway.snapshot, "skills.proposals.evaluate", "operator.admin")
+  ) {
+    return false;
+  }
   const snapshot = context.gateway.snapshot;
   const client = snapshot.client;
   if (!client || snapshot.phase !== "connected" || state.skillWorkshopActionBusy) {
@@ -607,6 +616,15 @@ export async function requestSkillWorkshopRevision(
     agentId: string,
   ) => Promise<void>,
 ): Promise<boolean> {
+  if (
+    !canCallGatewayMethod(
+      context.gateway.snapshot,
+      "skills.proposals.requestRevision",
+      "operator.admin",
+    )
+  ) {
+    return false;
+  }
   if (state.skillWorkshopActionBusy) {
     return false;
   }

@@ -11,6 +11,7 @@ import {
 export type SkillWorkshopSelfLearning = {
   enabled: boolean;
   busy: boolean;
+  canUpdate: boolean;
   error: string | null;
 };
 
@@ -28,9 +29,10 @@ export function resolveSelfLearning(
   runtimeConfig: RuntimeConfigCapability | undefined,
   busy: boolean,
   error: string | null,
+  canUpdate: boolean,
 ): SkillWorkshopSelfLearning | null {
   const config = resolveEditableSnapshotConfig(runtimeConfig?.state.configSnapshot);
-  return config ? { enabled: isSelfLearningEnabled(config), busy, error } : null;
+  return config ? { enabled: isSelfLearningEnabled(config), busy, canUpdate, error } : null;
 }
 
 /** Patch the canonical config key; returns an error message or null on success. */
@@ -76,7 +78,7 @@ export function renderSelfLearningToggle(
         type="checkbox"
         aria-label=${t("skillWorkshop.header.selfLearningAria")}
         .checked=${selfLearning.enabled}
-        ?disabled=${selfLearning.busy}
+        ?disabled=${selfLearning.busy || !selfLearning.canUpdate}
         @change=${(event: Event) => onToggle((event.currentTarget as HTMLInputElement).checked)}
       />
       <span class="sw-revision-session-toggle__track" aria-hidden="true"></span>
@@ -101,7 +103,7 @@ export function renderSelfLearningPitch(
       <button
         type="button"
         class="sw-btn sw-btn--primary ${selfLearning.busy ? "is-busy" : ""}"
-        ?disabled=${selfLearning.busy}
+        ?disabled=${selfLearning.busy || !selfLearning.canUpdate}
         @click=${() => onToggle(true)}
       >
         ${selfLearning.busy

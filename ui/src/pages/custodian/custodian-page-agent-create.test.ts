@@ -117,6 +117,20 @@ describe("custodian new-agent flow", () => {
     expect(request.mock.calls[0]?.[1]).toMatchObject({ welcomeVariant: "new-agent" });
   });
 
+  it("does not start new-agent chat with read-only operator access", async () => {
+    const request = vi.fn();
+    const { context } = createContext(request);
+    context.gateway.snapshot.hello = {
+      ...context.gateway.snapshot.hello!,
+      auth: { role: "operator", scopes: ["operator.read"] },
+    };
+
+    await mountPage(context);
+    await Promise.resolve();
+
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("refreshes the roster and opens the created agent hatch session", async () => {
     const request = vi.fn().mockResolvedValue({
       sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",

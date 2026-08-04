@@ -39,6 +39,26 @@ function deferred<T>() {
 }
 
 describe("Skill Workshop history scan controller", () => {
+  it("does not scan history with read-only operator access", async () => {
+    const request = vi.fn();
+    const appGateway = gateway(request);
+    (appGateway.snapshot as ApplicationGateway["snapshot"]).hello = {
+      type: "hello-ok",
+      protocol: 4,
+      auth: { role: "operator", scopes: ["operator.read"] },
+      features: { methods: ["skills.proposals.historyScan"] },
+    } as ApplicationGateway["snapshot"]["hello"];
+
+    await expect(
+      runSkillWorkshopHistoryScan({
+        agentId: "main",
+        gateway: appGateway,
+        state: createSkillWorkshopHistoryScanState(),
+      }),
+    ).resolves.toBe(false);
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("loads status and starts with the newest window", async () => {
     const request = vi
       .fn()

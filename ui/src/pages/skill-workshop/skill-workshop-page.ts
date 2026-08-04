@@ -9,6 +9,7 @@ import { loadSettings } from "../../app/settings.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
@@ -136,6 +137,15 @@ function renderSkillWorkshopPage(
     state.skillWorkshopMode === "today"
       ? "content--skill-workshop content--skill-workshop-today"
       : "content--skill-workshop";
+  const canCall = (method: string) =>
+    canCallGatewayMethod(context.gateway.snapshot, method, "operator.admin");
+  const access = {
+    canEvaluate: canCall("skills.proposals.evaluate"),
+    canApply: canCall("skills.proposals.apply"),
+    canRevise: canCall("skills.proposals.requestRevision"),
+    canReject: canCall("skills.proposals.reject"),
+    canScanHistory: canCall("skills.proposals.historyScan"),
+  };
 
   return html`
     <section class=${pageClass}>
@@ -211,6 +221,7 @@ function renderSkillWorkshopPage(
             aria-labelledby=${`skill-workshop-mode-tab-${state.skillWorkshopMode}`}
           >
             ${renderSkillWorkshop({
+              access,
               loading: state.skillWorkshopLoading,
               error: state.skillWorkshopError,
               inspectingKey: state.skillWorkshopInspectingKey,
@@ -269,21 +280,33 @@ function renderSkillWorkshopPage(
               onPrev: () => selectRelativeProposal(-1),
               onNext: () => selectRelativeProposal(1),
               onApply: (key) => {
+                if (!canCall("skills.proposals.apply")) {
+                  return;
+                }
                 void runSkillWorkshopLifecycleAction(state, context, "apply", key).finally(
                   requestUpdate,
                 );
                 requestUpdate();
               },
               onEvaluate: (key) => {
+                if (!canCall("skills.proposals.evaluate")) {
+                  return;
+                }
                 void runSkillWorkshopEvaluation(state, context, key).finally(requestUpdate);
                 requestUpdate();
               },
               onRevise: (key) => {
+                if (!canCall("skills.proposals.requestRevision")) {
+                  return;
+                }
                 state.skillWorkshopRevisionKey = key;
                 state.skillWorkshopRevisionDraft = "";
                 requestUpdate();
               },
               onReject: (key) => {
+                if (!canCall("skills.proposals.reject")) {
+                  return;
+                }
                 void runSkillWorkshopLifecycleAction(state, context, "reject", key).finally(
                   requestUpdate,
                 );
@@ -299,7 +322,7 @@ function renderSkillWorkshopPage(
                 requestUpdate();
               },
               onRevisionSubmit: (key) =>
-                onRevisionRequest
+                onRevisionRequest && canCall("skills.proposals.requestRevision")
                   ? void requestSkillWorkshopRevision(
                       state,
                       context,
@@ -632,6 +655,15 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
   }
 
   private readonly handleHistoryScan = () => {
+    if (
+      !canCallGatewayMethod(
+        this.context?.gateway?.snapshot,
+        "skills.proposals.historyScan",
+        "operator.admin",
+      )
+    ) {
+      return;
+    }
     const scope = this.captureSourceScope();
     if (!scope) {
       return;
@@ -653,6 +685,9 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
   };
 
   private async applySelfLearningToggle(enabled: boolean): Promise<void> {
+    if (!canCallGatewayMethod(this.context?.gateway?.snapshot, "config.patch", "operator.admin")) {
+      return;
+    }
     const runtimeConfig = this.context?.runtimeConfig;
     if (!runtimeConfig || this.selfLearningBusy) {
       return;
@@ -696,6 +731,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
               this.context.runtimeConfig,
               this.selfLearningBusy,
               this.selfLearningError,
+              canCallGatewayMethod(this.context.gateway.snapshot, "config.patch", "operator.admin"),
             ),
             onSelfLearningToggle: this.handleSelfLearningToggle,
             onHistoryScan: this.handleHistoryScan,
