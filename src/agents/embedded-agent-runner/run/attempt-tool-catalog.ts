@@ -2,6 +2,11 @@
  * Prepares the attempt-local tool catalog, schema projection, and diagnostics.
  */
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import {
+  type HookContext,
+  isToolWrappedWithBeforeToolCallHook,
+  wrapToolWithBeforeToolCallHook,
+} from "../../agent-tools.before-tool-call.js";
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
 import {
   CODE_MODE_EXEC_TOOL_NAME,
@@ -20,6 +25,7 @@ import {
   type ToolSearchCatalogToolExecutor,
 } from "../../tool-search.js";
 import { applyAgentToolSurfaceCatalog } from "../../tool-surface-plan.js";
+import type { AnyAgentTool } from "../../tools/common.js";
 import { log } from "../logger.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import { collectAttemptExplicitToolAllowlistSources } from "./attempt-tool-allowlist.js";
@@ -31,6 +37,32 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 type PreparedToolBase = ReturnType<typeof prepareEmbeddedAttemptToolBase>;
 type PreparedBundleTools = Awaited<ReturnType<typeof prepareEmbeddedAttemptBundleTools>>;
 type ProviderRuntimeHandle = Parameters<typeof logAgentRuntimeToolDiagnostics>[0]["runtimeHandle"];
+
+/**
+ * Ensure a tool reaching the attempt catalog boundary carries the canonical
+ * before_tool_call wrapper that owns the trusted audit lifecycle.
+ *
+ * Bundle MCP/LSP tools are materialized after the core tool set (see
+ * `prepareEmbeddedAttemptBundleTools`) and reach this boundary without the
+ * wrapper that emits `tool.execution.started` / `finished` / `blocked`, which
+ * the audit projection turns into `tool_action` ledger rows. Core tools are
+ * already wrapped by `createOpenClawCodingTools()`, so the marker check
+ * preserves them as-is; re-wrapping would run plugin authorization and mutation
+ * hooks twice.
+ *
+ * `toToolDefinitions` skips its own `before_tool_call` invocation for wrapped
+ * tools, so moving unwrapped tools onto this wrapper keeps plugin hooks firing
+ * exactly once while adding the audit events they were missing.
+ */
+function ensureAttemptToolAuditLifecycle(
+  tool: AnyAgentTool,
+  hookContext: HookContext | undefined,
+): AnyAgentTool {
+  if (!hookContext || isToolWrappedWithBeforeToolCallHook(tool)) {
+    return tool;
+  }
+  return wrapToolWithBeforeToolCallHook(tool, hookContext);
+}
 
 export function prepareEmbeddedAttemptToolCatalog(input: {
   attempt: EmbeddedRunAttemptParams;
@@ -125,7 +157,10 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
     sessionId: attempt.sessionId,
   });
   effectiveTools = toolSearchSchemaProjection.tools.map((tool) =>
-    wrapEmbeddedAttemptToolWithActivity(tool, attempt.runId),
+    wrapEmbeddedAttemptToolWithActivity(
+      ensureAttemptToolAuditLifecycle(tool, catalogToolHookContext),
+      attempt.runId,
+    ),
   );
   if (toolSearch.compacted && !toolSearch.catalogReused) {
     input.markStage(codeModeControlsEnabledForRun ? "code-mode" : "tool-search");
