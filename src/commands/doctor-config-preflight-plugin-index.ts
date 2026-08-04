@@ -1,4 +1,5 @@
 import type { ConfigFileSnapshot } from "../config/types.js";
+import type { StartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 
@@ -31,20 +32,25 @@ export async function persistRefreshedPluginIndex(params: {
   measure: MeasurePreflightStep;
   readPersistedSnapshot: () => Promise<DoctorConfigPreflightPluginSnapshotRead>;
   snapshotRead: DoctorConfigPreflightPluginSnapshotRead;
+  lease: StartupMigrationLease | undefined;
 }): Promise<DoctorConfigPreflightPluginSnapshotRead> {
   const derivedPluginMetadataSnapshot = params.snapshotRead.pluginMetadataSnapshot;
   if (!derivedPluginMetadataSnapshot || !params.snapshotRead.pluginMigrationFingerprint) {
     throwPluginRegistryPersistenceFailed("derived metadata was incomplete");
   }
-  const { writePersistedInstalledPluginIndexSync } = await params.measure(
+  if (!params.lease) {
+    throwPluginRegistryPersistenceFailed("startup migration lease was not acquired");
+  }
+  const { writePersistedInstalledPluginIndexWithLeaseSync } = await params.measure(
     "plugin-index-store-import",
     loadInstalledPluginIndexStore,
   );
   // The checkpoint certifies the persisted inventory, not a process-local replacement.
   // Write the exact derived index first, then prove a fresh reader can reuse it.
   await params.measure("plugin-index-persistence", () =>
-    writePersistedInstalledPluginIndexSync(derivedPluginMetadataSnapshot.index, {
+    writePersistedInstalledPluginIndexWithLeaseSync(derivedPluginMetadataSnapshot.index, {
       env: params.env,
+      lease: params.lease,
     }),
   );
   const persistedSnapshotRead = await params.readPersistedSnapshot();

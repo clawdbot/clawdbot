@@ -32,6 +32,7 @@ const STARTUP_MIGRATION_LEASE_KEY = "global";
 export const STARTUP_MIGRATION_LEASE_TTL_MS = 5 * 60_000;
 
 export type StartupMigrationLease = {
+  assertOwnedInTransaction: (database: DatabaseSync, params?: { nowMs?: number }) => void;
   heartbeat: (params?: { nowMs?: number }) => void;
   release: () => void;
   readonly owner: string;
@@ -131,6 +132,29 @@ function writeStartupMigrationCheckpointDatabase<T>(
   return withStartupMigrationCheckpointDatabase(env, (db) =>
     runSqliteImmediateTransactionSync(db, () => callback(db)),
   );
+}
+
+function assertStartupMigrationLeaseOwnedInTransaction(params: {
+  database: DatabaseSync;
+  nowMs?: number;
+  owner: string;
+}): void {
+  const stateDb = getNodeSqliteKysely<StartupMigrationCheckpointDatabase>(params.database);
+  const activeLease = executeSqliteQueryTakeFirstSync(
+    params.database,
+    stateDb
+      .selectFrom("state_leases")
+      .select("owner")
+      .where("scope", "=", STARTUP_MIGRATION_LEASE_SCOPE)
+      .where("lease_key", "=", STARTUP_MIGRATION_LEASE_KEY)
+      .where("owner", "=", params.owner)
+      .where("expires_at", ">", params.nowMs ?? Date.now()),
+  );
+  if (!activeLease) {
+    throw new Error(
+      "OpenClaw startup migration lease was lost before startup migrations completed; retry so migrations can run under a fresh lease.",
+    );
+  }
 }
 
 type MigrationCheckpointMetaKey =
@@ -343,6 +367,13 @@ export function acquireStartupMigrationLease(
 
   return {
     owner,
+    assertOwnedInTransaction: (database, assertionParams = {}) => {
+      assertStartupMigrationLeaseOwnedInTransaction({
+        database,
+        owner,
+        nowMs: assertionParams.nowMs,
+      });
+    },
     heartbeat: (heartbeatParams = {}) => {
       const heartbeatNowMs = heartbeatParams.nowMs ?? Date.now();
       const heartbeatExpiresAt = heartbeatNowMs + STARTUP_MIGRATION_LEASE_TTL_MS;
@@ -405,24 +436,8 @@ function recordSuccessfulMigrationCheckpoints(
     return;
   }
   writeStartupMigrationCheckpointDatabase(env, (db) => {
+    params.lease?.assertOwnedInTransaction(db, { nowMs });
     const stateDb = getNodeSqliteKysely<StartupMigrationCheckpointDatabase>(db);
-    if (params.lease) {
-      const activeLease = executeSqliteQueryTakeFirstSync(
-        db,
-        stateDb
-          .selectFrom("state_leases")
-          .select("owner")
-          .where("scope", "=", STARTUP_MIGRATION_LEASE_SCOPE)
-          .where("lease_key", "=", STARTUP_MIGRATION_LEASE_KEY)
-          .where("owner", "=", params.lease.owner)
-          .where("expires_at", ">", nowMs),
-      );
-      if (!activeLease) {
-        throw new Error(
-          "OpenClaw startup migration lease was lost before checkpoint recording; retry so migrations can run under a fresh lease.",
-        );
-      }
-    }
     for (const metaKey of metaKeys) {
       executeSqliteQuerySync(
         db,

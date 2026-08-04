@@ -125,6 +125,7 @@ export type LoadPluginRegistryParams = LoadInstalledPluginIndexParams &
   InstalledPluginIndexStoreOptions & {
     index?: PluginRegistrySnapshot;
     preferPersisted?: boolean;
+    allowCurrent?: boolean;
   };
 
 type GetPluginRecordParams = LoadPluginRegistryParams & {
@@ -133,6 +134,7 @@ type GetPluginRecordParams = LoadPluginRegistryParams & {
 
 function canReuseCurrentPluginMetadataSnapshot(params: LoadPluginRegistryParams): boolean {
   return (
+    params.allowCurrent !== false &&
     params.preferPersisted !== false &&
     params.stateDir === undefined &&
     params.filePath === undefined &&

@@ -7,6 +7,7 @@ import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-
 import {
   closeOpenClawStateDatabaseForTest,
   OPENCLAW_STATE_SCHEMA_VERSION,
+  runOpenClawStateWriteTransaction,
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -24,6 +25,7 @@ import {
   readStartupMigrationVersion,
   recordSuccessfulStateMigrations,
   recordSuccessfulStartupMigrations,
+  STARTUP_MIGRATION_LEASE_TTL_MS,
 } from "./startup-migration-checkpoint.js";
 
 afterEach(() => {
@@ -352,6 +354,32 @@ describe("startup migration checkpoint", () => {
     ).toThrow("startup migration lease was lost");
     expect(readStartupMigrationVersion(env)).toBeNull();
 
+    second.release();
+  });
+
+  it("checks exact lease ownership inside the caller write transaction", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
+    };
+    const nowMs = Date.now();
+    const first = acquireStartupMigrationLease({ env, nowMs, owner: "first" });
+    const second = acquireStartupMigrationLease({
+      env,
+      nowMs: nowMs + STARTUP_MIGRATION_LEASE_TTL_MS + 1,
+      owner: "second",
+    });
+
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        expect(() => first.assertOwnedInTransaction(db)).toThrow(
+          "startup migration lease was lost",
+        );
+        expect(() => second.assertOwnedInTransaction(db)).not.toThrow();
+      },
+      { env },
+    );
+
+    first.release();
     second.release();
   });
 

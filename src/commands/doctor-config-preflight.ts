@@ -621,6 +621,7 @@ export async function runDoctorConfigPreflight(
     ) {
       const persistedSnapshotRead = await persistRefreshedPluginIndex({
         env: startupMigrationEnv,
+        lease: startupMigrationLease,
         measure: measurePreflightStep,
         readPersistedSnapshot: () => readConfigSnapshotForPreflight(false),
         snapshotRead: configSnapshotRead,

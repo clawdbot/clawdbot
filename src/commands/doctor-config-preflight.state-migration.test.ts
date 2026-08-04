@@ -74,7 +74,9 @@ const needsStateMigrationCheckpoint = vi.hoisted(() => vi.fn(() => false));
 const needsStartupMigrationCheckpoint = vi.hoisted(() => vi.fn(() => false));
 const startupMigrationLeaseHeartbeat = vi.hoisted(() => vi.fn());
 const startupMigrationLeaseRelease = vi.hoisted(() => vi.fn());
+const startupMigrationLeaseAssertOwnedInTransaction = vi.hoisted(() => vi.fn());
 const startupMigrationLease = vi.hoisted(() => ({
+  assertOwnedInTransaction: startupMigrationLeaseAssertOwnedInTransaction,
   heartbeat: startupMigrationLeaseHeartbeat,
   owner: "startup-test-owner",
   release: startupMigrationLeaseRelease,
@@ -84,7 +86,7 @@ const acquireStartupMigrationLease = vi.hoisted(() =>
 );
 const recordSuccessfulStateMigrations = vi.hoisted(() => vi.fn());
 const recordSuccessfulStartupMigrations = vi.hoisted(() => vi.fn());
-const writePersistedInstalledPluginIndexSync = vi.hoisted(() => vi.fn());
+const writePersistedInstalledPluginIndexWithLeaseSync = vi.hoisted(() => vi.fn());
 const runPostCorePluginConvergence = vi.hoisted(() =>
   vi.fn(
     async (): Promise<StartupConvergenceResult> => ({
@@ -186,7 +188,7 @@ vi.mock("../infra/startup-migration-checkpoint.js", () => ({
 }));
 
 vi.mock("../plugins/installed-plugin-index-store.js", () => ({
-  writePersistedInstalledPluginIndexSync,
+  writePersistedInstalledPluginIndexWithLeaseSync,
 }));
 
 vi.mock("../cli/update-cli/active-plugin-payload-validation.js", () => ({
@@ -398,10 +400,12 @@ describe("runDoctorConfigPreflight state migration", () => {
     await runDoctorConfigPreflight(stateCheckpointOptions);
 
     const pinnedEnv = acquireStartupMigrationLease.mock.calls[0]?.[0]?.env;
-    expect(writePersistedInstalledPluginIndexSync).toHaveBeenCalledWith(index, {
+    expect(writePersistedInstalledPluginIndexWithLeaseSync).toHaveBeenCalledWith(index, {
       env: pinnedEnv,
+      lease: startupMigrationLease,
     });
-    const writeOrder = writePersistedInstalledPluginIndexSync.mock.invocationCallOrder[0] ?? 0;
+    const writeOrder =
+      writePersistedInstalledPluginIndexWithLeaseSync.mock.invocationCallOrder[0] ?? 0;
     const verificationReadOrder =
       readConfigFileSnapshotWithPluginMetadata.mock.invocationCallOrder[2] ?? 0;
     expect(verificationReadOrder).toBeGreaterThan(writeOrder);

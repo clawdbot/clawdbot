@@ -4,6 +4,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
+  acquireStartupMigrationLease,
+  STARTUP_MIGRATION_LEASE_TTL_MS,
+} from "../infra/startup-migration-checkpoint.js";
+import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
@@ -15,6 +19,7 @@ import {
   refreshPersistedInstalledPluginIndex,
   resolveInstalledPluginIndexStorePath,
   writePersistedInstalledPluginIndex,
+  writePersistedInstalledPluginIndexWithLeaseSync,
 } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -225,6 +230,39 @@ describe("installed plugin index persistence", () => {
     expect(persisted.policyHash).toBe(index.policyHash);
     expectPluginIds(persisted, ["demo"]);
     expectPluginFields(persisted, "demo", { packageBuild: { bundledDist: false } });
+  });
+
+  it("rejects a stale leased write without replacing the successor index", async () => {
+    const stateDir = makeTempDir();
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const nowMs = Date.now();
+    const staleLease = acquireStartupMigrationLease({ env, nowMs, owner: "stale" });
+    const successorLease = acquireStartupMigrationLease({
+      env,
+      nowMs: nowMs + STARTUP_MIGRATION_LEASE_TTL_MS + 1,
+      owner: "successor",
+    });
+    const successorIndex = createIndex({ policyHash: "successor" });
+
+    try {
+      writePersistedInstalledPluginIndexWithLeaseSync(successorIndex, {
+        env,
+        lease: successorLease,
+      });
+
+      expect(() =>
+        writePersistedInstalledPluginIndexWithLeaseSync(createIndex({ policyHash: "stale" }), {
+          env,
+          lease: staleLease,
+        }),
+      ).toThrow("startup migration lease was lost");
+      expect(requirePersisted(await readPersistedInstalledPluginIndex({ env })).policyHash).toBe(
+        "successor",
+      );
+    } finally {
+      staleLease.release();
+      successorLease.release();
+    }
   });
 
   it("hashes and persists resolved doctor contract artifacts", async () => {

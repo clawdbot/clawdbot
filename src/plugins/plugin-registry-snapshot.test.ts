@@ -16,6 +16,7 @@ import {
 } from "./installed-plugin-index.js";
 import { markRetainedManagedNpmInstall } from "./managed-npm-retention.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
+import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -270,6 +271,32 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
       diagnostics: [],
       manifestRegistry: snapshot.manifestRegistry,
     });
+  });
+
+  it("bypasses a derived current snapshot for persisted verification", () => {
+    const rootDir = makeTempDir();
+    const env = {
+      ...createHermeticEnv(rootDir),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    };
+    const config = {};
+    const derived = loadPluginMetadataSnapshot({
+      config,
+      env,
+      preferPersisted: false,
+    });
+    expect(derived.registrySource).toBe("derived");
+    writePersistedInstalledPluginIndexSync(derived.index, { env });
+    setCurrentPluginMetadataSnapshot(derived, { config, env });
+
+    const result = loadPluginRegistrySnapshotWithMetadata({
+      config,
+      env,
+      allowCurrent: false,
+    });
+
+    expect(result.source).toBe("persisted");
+    expect(result.snapshot).toEqual(derived.index);
   });
 
   it("reuses diagnostic current metadata without promoting its registry source", () => {
