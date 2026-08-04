@@ -8,6 +8,7 @@ import {
 import { normalizePluginsConfig } from "../config-state.js";
 import { resolveEffectivePluginIds } from "../effective-plugin-ids.js";
 import { collectConfiguredMemoryEmbeddingProviderIds } from "../gateway-startup-plugin-ids.js";
+import { createInstalledPluginIndexScopeLookup } from "../installed-plugin-index-scope-lookup.js";
 import { loadOpenClawPlugins } from "../loader.js";
 import { hasNonEmptyPluginIdScope } from "../plugin-scope.js";
 import {
@@ -20,9 +21,19 @@ export type PluginRegistryScope = "configured-channels" | "channels" | "memory" 
 function resolveMemoryPluginIds(
   context: ReturnType<typeof resolvePluginRuntimeLoadContext>,
 ): string[] {
-  const pluginIds = new Set(
-    collectConfiguredMemoryEmbeddingProviderIds(context.activationSourceConfig),
-  );
+  const configuredProviderIds = [
+    ...collectConfiguredMemoryEmbeddingProviderIds(context.activationSourceConfig),
+  ];
+  const pluginIds = new Set<string>();
+  if (context.metadataSnapshot) {
+    createInstalledPluginIndexScopeLookup(
+      context.metadataSnapshot.index,
+    ).addProviderContributionOwners(pluginIds, configuredProviderIds);
+  } else {
+    for (const providerId of configuredProviderIds) {
+      pluginIds.add(providerId);
+    }
+  }
   const memoryPluginId = normalizePluginsConfig(context.config.plugins).slots.memory?.trim();
   if (memoryPluginId) {
     pluginIds.add(memoryPluginId);

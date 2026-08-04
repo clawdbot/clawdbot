@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
     vi.fn<typeof import("../../config/plugin-auto-enable.js").applyPluginAutoEnable>(),
   resolvePluginMetadataSnapshot:
     vi.fn<typeof import("../plugin-metadata-snapshot.js").resolvePluginMetadataSnapshot>(),
+  isPluginMetadataSnapshotCompatible:
+    vi.fn<typeof import("../plugin-metadata-snapshot.js").isPluginMetadataSnapshotCompatible>(),
   resolveAgentWorkspaceDir: vi.fn<
     typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir
   >(() => "/resolved-workspace"),
@@ -58,6 +60,9 @@ vi.mock("../plugin-metadata-snapshot.js", () => ({
   resolvePluginMetadataSnapshot: (
     ...args: Parameters<typeof mocks.resolvePluginMetadataSnapshot>
   ) => mocks.resolvePluginMetadataSnapshot(...args),
+  isPluginMetadataSnapshotCompatible: (
+    ...args: Parameters<typeof mocks.isPluginMetadataSnapshotCompatible>
+  ) => mocks.isPluginMetadataSnapshotCompatible(...args),
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
@@ -68,6 +73,28 @@ vi.mock("../../agents/agent-scope.js", () => ({
 }));
 
 import { ensurePluginRegistryLoaded } from "./runtime-registry-loader.js";
+
+function useMemoryProviderOwner(params: {
+  adapterId: string;
+  contract: "embeddingProviders" | "memoryEmbeddingProviders";
+  pluginId: string;
+}): void {
+  mocks.resolvePluginMetadataSnapshot.mockReturnValue({
+    policyHash: "test",
+    index: {
+      installRecords: {},
+      plugins: [
+        {
+          pluginId: params.pluginId,
+          contributions: {
+            contracts: { [params.contract]: [params.adapterId] },
+          },
+        },
+      ],
+    },
+    manifestRegistry: { plugins: [], diagnostics: [] },
+  } as never);
+}
 
 function requireLoadOptions(): Record<string, unknown> {
   const options = mocks.loadOpenClawPlugins.mock.calls[0]?.[0];
@@ -80,6 +107,8 @@ function requireLoadOptions(): Record<string, unknown> {
 describe("ensurePluginRegistryLoaded", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.resolvePluginMetadataSnapshot.mockReturnValue(undefined);
+    mocks.isPluginMetadataSnapshotCompatible.mockReturnValue(true);
     mocks.applyPluginAutoEnable.mockImplementation((params) => ({
       config: params.config ?? {},
       changes: [],
@@ -170,33 +199,102 @@ describe("ensurePluginRegistryLoaded", () => {
     );
   });
 
-  it("keeps explicit memory provider disablement authoritative", () => {
+  it.each([
+    {
+      adapterId: "gemini",
+      contract: "memoryEmbeddingProviders" as const,
+      pluginId: "google",
+    },
+    {
+      adapterId: "local",
+      contract: "embeddingProviders" as const,
+      pluginId: "llama-cpp",
+    },
+  ])("loads the $pluginId owner for the $adapterId memory adapter", (provider) => {
     const config = {
-      memory: { search: { provider: "openai" } },
-      plugins: {
-        allow: ["memory-core"],
-        deny: ["openai"],
-        entries: { openai: { enabled: false } },
-        slots: { memory: "memory-core" },
-      },
+      memory: { search: { provider: provider.adapterId } },
+      plugins: { slots: { memory: "memory-core" } },
     };
-    mocks.collectConfiguredMemoryEmbeddingProviderIds.mockReturnValue(new Set(["openai"]));
+    mocks.collectConfiguredMemoryEmbeddingProviderIds.mockReturnValue(
+      new Set([provider.adapterId]),
+    );
+    useMemoryProviderOwner(provider);
 
     ensurePluginRegistryLoaded({ scope: "memory", config });
 
-    expect(requireLoadOptions()).toEqual(
+    expect(requireLoadOptions().onlyPluginIds).toEqual(
+      [provider.pluginId, "memory-core"].toSorted(),
+    );
+  });
+
+  it("keeps a denied memory provider owner denied", () => {
+    const config = {
+      memory: { search: { provider: "gemini" } },
+      plugins: {
+        allow: ["memory-core"],
+        deny: ["google"],
+        slots: { memory: "memory-core" },
+      },
+    };
+    mocks.collectConfiguredMemoryEmbeddingProviderIds.mockReturnValue(new Set(["gemini"]));
+    useMemoryProviderOwner({
+      adapterId: "gemini",
+      contract: "memoryEmbeddingProviders",
+      pluginId: "google",
+    });
+
+    ensurePluginRegistryLoaded({ scope: "memory", config });
+
+    const options = requireLoadOptions();
+    expect(options.onlyPluginIds).toEqual(["google", "memory-core"]);
+    expect(options.config).toEqual(
       expect.objectContaining({
-        config: expect.objectContaining({
-          plugins: expect.objectContaining({
-            allow: ["memory-core", "openai"],
-            deny: ["openai"],
-            entries: expect.objectContaining({
-              openai: { enabled: false },
-            }),
-          }),
+        plugins: expect.objectContaining({
+          allow: ["memory-core", "google"],
+          deny: ["google"],
         }),
-        onlyPluginIds: ["memory-core", "openai"],
       }),
     );
+  });
+
+  it("keeps an explicitly disabled memory provider owner disabled", () => {
+    const config = {
+      memory: { search: { provider: "local" } },
+      plugins: {
+        entries: { "llama-cpp": { enabled: false } },
+        slots: { memory: "memory-core" },
+      },
+    };
+    mocks.collectConfiguredMemoryEmbeddingProviderIds.mockReturnValue(new Set(["local"]));
+    useMemoryProviderOwner({
+      adapterId: "local",
+      contract: "embeddingProviders",
+      pluginId: "llama-cpp",
+    });
+
+    ensurePluginRegistryLoaded({ scope: "memory", config });
+
+    const options = requireLoadOptions();
+    expect(options.onlyPluginIds).toEqual(["llama-cpp", "memory-core"]);
+    expect(options.config).toEqual(
+      expect.objectContaining({
+        plugins: expect.objectContaining({
+          entries: expect.objectContaining({
+            "llama-cpp": { enabled: false },
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("keeps an empty memory scope empty when no backend is selected", () => {
+    mocks.collectConfiguredMemoryEmbeddingProviderIds.mockReturnValue(new Set());
+
+    ensurePluginRegistryLoaded({
+      scope: "memory",
+      config: { plugins: { slots: { memory: "none" } } },
+    });
+
+    expect(requireLoadOptions().onlyPluginIds).toEqual([]);
   });
 });
