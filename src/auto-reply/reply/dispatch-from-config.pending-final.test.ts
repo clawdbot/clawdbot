@@ -163,4 +163,60 @@ describe("pending final delivery restart proof", () => {
       loadSessionEntry({ sessionKey, storePath })?.restartRecoveryTerminalRunIds,
     ).toBeUndefined();
   });
+
+  it("retains then replays the pending final exactly once after a no-send settlement", async () => {
+    // Recovery-path proof for #118368: a no-send failure settles as
+    // failed-before-deliver, the marker is retained, and the recovery replay
+    // clears it exactly once (identity-matched) so the reply is delivered once.
+    await writePendingFinal("continue");
+    const identity = capturePendingFinalDeliveryIdentity({
+      intentId: "intent-1",
+      sessionKey,
+      storePath,
+    });
+    const payload: ReplyPayload = { text: "hook reply" };
+
+    // 1. No-send settlement → marker retained for recovery.
+    await reconcilePendingFinalDeliveryAfterSettlement({
+      deliveries: [{ outcome: "failed-before-deliver", payload }],
+      identity,
+      replies: [payload],
+      sessionKey,
+      storePath,
+    });
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      pendingFinalDelivery: { kind: "replayable", text: "hook reply", intentId: "intent-1" },
+    });
+
+    // 2. Recovery replay succeeds → marker cleared (the reply is now delivered).
+    await clearPendingFinalDeliveryAfterSuccess({ identity, sessionKey, storePath });
+    expect(loadSessionEntry({ sessionKey, storePath })?.pendingFinalDelivery).toBeUndefined();
+
+    // 3. Exactly once: a second clear with the same identity is a no-op, and the
+    // marker is already gone — nothing is replayed a second time.
+    await clearPendingFinalDeliveryAfterSuccess({ identity, sessionKey, storePath });
+    expect(loadSessionEntry({ sessionKey, storePath })?.pendingFinalDelivery).toBeUndefined();
+  });
+
+  it("clears pending final on visible-send settlement so a no-send replay cannot duplicate", async () => {
+    // A settlement outcome carrying visible-send evidence (failed-deliver) must
+    // NOT retain the marker for replay — that would risk a duplicate delivery.
+    await writePendingFinal("continue");
+    const identity = capturePendingFinalDeliveryIdentity({
+      intentId: "intent-1",
+      sessionKey,
+      storePath,
+    });
+    const payload: ReplyPayload = { text: "hook reply" };
+
+    await reconcilePendingFinalDeliveryAfterSettlement({
+      deliveries: [{ outcome: "failed-deliver", payload }],
+      identity,
+      replies: [payload],
+      sessionKey,
+      storePath,
+    });
+
+    expect(loadSessionEntry({ sessionKey, storePath })?.pendingFinalDelivery).toBeUndefined();
+  });
 });
