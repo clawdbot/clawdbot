@@ -409,6 +409,11 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
       message: imessageMessageAdapter,
       actions: imessageMessageActions,
       approvalCapability: imessageApprovalCapability,
+      // iMessage supports native threaded replies via thread_originator_guid.
+      // Default to "all" so every outbound reply carries the inbound message GUID.
+      threading: {
+        resolveReplyToMode: () => "all",
+      },
     },
     pairing: {
       text: {
