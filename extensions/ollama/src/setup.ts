@@ -42,6 +42,7 @@ import {
   inspectOllamaModelsForSetup,
   mergeUniqueModelNames,
   normalizeOllamaModelName,
+  selectAppGuidedOllamaModelId,
 } from "./setup-model-selection.js";
 import { pullOllamaModel, pullOllamaModelNonInteractive } from "./setup-pull.js";
 
@@ -67,6 +68,7 @@ type OllamaSetupResult = {
   config: OpenClawConfig;
   credential: SecretInput;
   credentialMode?: SecretInputMode;
+  defaultModel?: string;
 };
 
 function isTruthyEnvValue(value: string | undefined): boolean {
@@ -381,9 +383,19 @@ async function promptAndConfigureHostBackedOllama(params: {
     baseUrl,
     prompter: params.prompter,
   });
+  const localDefaultModelId = selectAppGuidedOllamaModelId(
+    [...discoveredModelsByName.values()].map((model) => ({
+      id: model.name,
+      contextWindow: model.contextWindow,
+      supportsTools: model.capabilities?.includes("tools") === true,
+    })),
+  );
+  const cloudDefaultModelId = suggestedModelNames.find(isOllamaCloudModel);
+  const defaultModelId = localDefaultModelId ?? cloudDefaultModelId;
 
   return {
     credential: "ollama-local",
+    ...(defaultModelId ? { defaultModel: `ollama/${defaultModelId}` } : {}),
     config: applyOllamaProviderConfig(
       params.cfg,
       baseUrl,
@@ -432,9 +444,11 @@ export async function promptAndConfigureOllama(params: {
       discoveredModelNames.length > 0
         ? mergeUniqueModelNames(OLLAMA_SUGGESTED_MODELS_CLOUD, discoveredModelNames)
         : OLLAMA_SUGGESTED_MODELS_CLOUD;
+    const defaultModelId = modelNames[0];
     return {
       credential,
       credentialMode,
+      ...(defaultModelId ? { defaultModel: `ollama/${defaultModelId}` } : {}),
       config: applyOllamaProviderConfig(
         params.cfg,
         OLLAMA_CLOUD_BASE_URL,

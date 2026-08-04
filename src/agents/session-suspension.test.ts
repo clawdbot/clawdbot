@@ -353,6 +353,33 @@ describe("session suspension", () => {
     expect(commandQueueMocks.setCommandLaneConcurrency).not.toHaveBeenCalled();
   });
 
+  it("does not let a pending suspension regain ownership after test state resets", async () => {
+    let resolvePatch: (() => void) | undefined;
+    let writtenQuotaSuspension: unknown;
+    sessionAccessorMocks.patchSessionEntry.mockImplementationOnce(async (_scope, update) => {
+      await new Promise<void>((resolve) => {
+        resolvePatch = resolve;
+      });
+      const patch = update({});
+      writtenQuotaSuspension = patch?.quotaSuspension;
+      return patch;
+    });
+
+    const suspension = suspendLane(100, {} as OpenClawConfig, CommandLane.Main);
+    await vi.waitFor(() => {
+      expect(resolvePatch).toBeTypeOf("function");
+    });
+
+    const { resetSessionSuspensionStateForTest } =
+      await import("./session-suspension.test-support.js");
+    resetSessionSuspensionStateForTest();
+    resolvePatch?.();
+    await suspension;
+
+    expect(writtenQuotaSuspension).toBeUndefined();
+    expect(commandQueueMocks.setCommandLaneConcurrency).not.toHaveBeenCalled();
+  });
+
   it("serializes suspension writes so cleanup cannot leave an intermediate write", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);

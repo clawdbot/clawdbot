@@ -59,6 +59,14 @@ const QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT = {
     callCount: 1,
   },
 } as const;
+const QA_COMPACTION_RETRY_PROMPT =
+  "Compaction retry mutating tool check. Current durable context marker: QA-COMPACTION-DURABLE-MARKER. Create compaction-retry-summary.txt.";
+const QA_COMPACTION_RETRY_OVERFLOW_PADDING = "x".repeat(300_000);
+const QA_COMPACTION_EMPTY_RECOVERY_SUMMARY_MARKER = "QA-COMPACTION-EMPTY-RECOVERED-SUMMARY";
+const QA_COMPACTION_REASONING_RECOVERY_SUMMARY_MARKER = "QA-COMPACTION-REASONING-RECOVERED-SUMMARY";
+const QA_COMPACTION_SUMMARY_INSTRUCTIONS = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
+
+Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`;
 
 afterEach(async () => {
   while (cleanups.length > 0) {
@@ -2200,23 +2208,14 @@ describe("qa mock openai server", () => {
     const server = await startMockServer();
 
     const writePlanBody = await expectOpenAiStreamingResponsesText(server, {
-      input: [
-        makeUserInput(
-          "Compaction retry mutating tool check: read COMPACTION_RETRY_CONTEXT.md, then create compaction-retry-summary.txt and keep replay safety explicit.",
-        ),
-        makeToolOutput(
-          "compaction retry evidence block 0000\ncompaction retry evidence block 0001",
-        ),
-      ],
+      input: [makeUserInput(QA_COMPACTION_RETRY_PROMPT)],
     });
     expect(writePlanBody).toContain('"name":"write"');
     expect(writePlanBody).toContain("compaction-retry-summary.txt");
 
     const finalPayload = (await expectOpenAiNonStreamingResponsesJson(server, {
       input: [
-        makeUserInput(
-          "Compaction retry mutating tool check: read COMPACTION_RETRY_CONTEXT.md, then create compaction-retry-summary.txt and keep replay safety explicit.",
-        ),
+        makeUserInput(QA_COMPACTION_RETRY_PROMPT),
         makeToolOutput("Successfully wrote 41 bytes to compaction-retry-summary.txt"),
       ],
     })) as {
@@ -2225,6 +2224,416 @@ describe("qa mock openai server", () => {
     expect(finalPayload.output?.[0]?.content?.[0]?.text).toBe(
       "Protocol note: replay unsafe after write.",
     );
+  });
+
+  it("does not inject compaction overflow below the request-size threshold", async () => {
+    const server = await startMockServer();
+    const runtimeSessionId = "compaction-below-threshold";
+
+    await expectOpenAiNonStreamingResponsesJson(server, {
+      instructions: `Runtime: embedded | sessionId=${runtimeSessionId}`,
+      input: [makeUserInput(QA_COMPACTION_RETRY_PROMPT)],
+    });
+
+    const requests = requireArray(
+      await getJson(server, "/debug/requests"),
+      "compaction requests",
+    ).map((request) => requireRecord(request, "compaction request"));
+    expect(requests).toHaveLength(1);
+    const request = requireRecord(requests[0], "compaction request 0");
+    expect(request).toMatchObject({
+      requestKind: "agent-initial",
+      outcome: "success",
+      plannedToolName: "write",
+    });
+    expect(request.rawByteLength).toEqual(expect.any(Number));
+    expect(Number(request.rawByteLength)).toBeLessThanOrEqual(256 * 1024);
+  });
+
+  it("injects one coded overflow per session before planning", async () => {
+    const server = await startMockServer();
+    const runtimeSessionId = "compaction-one-shot";
+    const body = {
+      model: "gpt-5.6-luna",
+      instructions: `Runtime: embedded | sessionId=${runtimeSessionId}`,
+      input: [
+        makeUserInput(`${QA_COMPACTION_RETRY_PROMPT}\n${QA_COMPACTION_RETRY_OVERFLOW_PADDING}`),
+      ],
+    };
+
+    const first = await postNonStreamingResponses(server, body);
+    expect(first.status).toBe(400);
+    expect(await first.json()).toEqual({
+      error: {
+        type: "invalid_request_error",
+        code: "context_length_exceeded",
+        message: "This model's maximum context length was exceeded.",
+      },
+    });
+
+    const second = await postNonStreamingResponses(server, body);
+    expect(second.status).toBe(200);
+    const requests = requireArray(
+      await getJson(server, "/debug/requests"),
+      "compaction requests",
+    ).map((request) => requireRecord(request, "compaction request"));
+    expect(requests).toHaveLength(2);
+    const firstRequest = requireRecord(requests[0], "compaction request 0");
+    const secondRequest = requireRecord(requests[1], "compaction request 1");
+    expect(firstRequest).toMatchObject({
+      requestKind: "agent-initial",
+      outcome: "error",
+      errorCode: "context_length_exceeded",
+    });
+    expect(firstRequest.plannedToolName).toBeUndefined();
+    expect(secondRequest).toMatchObject({
+      requestKind: "agent-initial",
+      outcome: "success",
+      plannedToolName: "write",
+    });
+  });
+
+  it("tracks compaction overflow injection independently by runtime session", async () => {
+    const server = await startMockServer();
+
+    for (const runtimeSessionId of ["compaction-session-a", "compaction-session-b"]) {
+      const response = await postNonStreamingResponses(server, {
+        model: "gpt-5.6-luna",
+        instructions: `Runtime: embedded | sessionId=${runtimeSessionId}`,
+        input: [
+          makeUserInput(`${QA_COMPACTION_RETRY_PROMPT}\n${QA_COMPACTION_RETRY_OVERFLOW_PADDING}`),
+        ],
+      });
+      expect(response.status).toBe(400);
+    }
+
+    const requests = requireArray(
+      await getJson(server, "/debug/requests"),
+      "compaction requests",
+    ).map((request) => requireRecord(request, "compaction request"));
+    expect(requests).toHaveLength(2);
+    expect(requests.every((request) => request.errorCode === "context_length_exceeded")).toBe(true);
+  });
+
+  it("excludes compaction summary requests from overflow injection", async () => {
+    const server = await startMockServer();
+    const initial = await postNonStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      instructions: "Runtime: embedded | sessionId=compaction-summary",
+      input: [
+        makeUserInput(`${QA_COMPACTION_RETRY_PROMPT}\n${QA_COMPACTION_RETRY_OVERFLOW_PADDING}`),
+      ],
+    });
+    expect(initial.status).toBe(400);
+
+    const response = await postNonStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      instructions: QA_COMPACTION_SUMMARY_INSTRUCTIONS,
+      input: `<conversation>\n[Chunk 1 - oldest messages]\nQA-COMPACTION-BULKY-HISTORICAL-MARKER\n${QA_COMPACTION_RETRY_OVERFLOW_PADDING}\n</conversation>\n\nAdditional focus: preserve exact identifiers and current work.`,
+    });
+
+    expect(response.status).toBe(200);
+    const summary = outputText(await response.json());
+    expect(summary).toContain("## Goal");
+    expect(summary).not.toContain("QA-COMPACTION-DURABLE-MARKER");
+    expect(summary).not.toContain("QA-COMPACTION-BULKY-HISTORICAL-MARKER");
+    const requests = requireArray(
+      await getJson(server, "/debug/requests"),
+      "compaction requests",
+    ).map((request) => requireRecord(request, "compaction request"));
+    expect(requests).toHaveLength(2);
+    const summaryRequest = requireRecord(requests[1], "compaction request 1");
+    expect(summaryRequest).toMatchObject({
+      requestKind: "compaction-summary",
+      outcome: "success",
+    });
+    expect(Number(summaryRequest.rawByteLength)).toBeGreaterThan(256 * 1024);
+    expect(summaryRequest.errorCode).toBeUndefined();
+    expect(summaryRequest.allInputText).toContain("[Chunk 1 - oldest messages]");
+  });
+
+  it.each([
+    {
+      faultMode: "empty-output-once",
+      markerPrefix: "QA-COMPACTION-EMPTY-OUTPUT-ONCE",
+      recoveredMarker: QA_COMPACTION_EMPTY_RECOVERY_SUMMARY_MARKER,
+      reasoningOnly: false,
+    },
+    {
+      faultMode: "reasoning-only-output-once",
+      markerPrefix: "QA-COMPACTION-REASONING-ONLY-OUTPUT-ONCE",
+      recoveredMarker: QA_COMPACTION_REASONING_RECOVERY_SUMMARY_MARKER,
+      reasoningOnly: true,
+    },
+  ] as const)(
+    "injects one coded overflow for $faultMode scenario markers",
+    async ({ markerPrefix }) => {
+      const server = await startMockServer();
+      const body = {
+        model: "gpt-5.6-luna",
+        instructions: `Runtime: embedded | sessionId=compaction-output-${markerPrefix}`,
+        input: [makeUserInput(`${markerPrefix}-http\n${"x".repeat(100_000)}`)],
+      };
+
+      const first = await postNonStreamingResponses(server, body);
+      expect(first.status).toBe(400);
+      expect(await first.json()).toMatchObject({
+        error: { code: "context_length_exceeded" },
+      });
+      expect((await postNonStreamingResponses(server, body)).status).toBe(200);
+
+      const requests = requireArray(
+        await getJson(server, "/debug/requests"),
+        "compaction output overflow requests",
+      ).map((request) => requireRecord(request, "compaction output overflow request"));
+      expect(requests).toHaveLength(2);
+      expect(Number(requests[0]?.rawByteLength)).toBeLessThan(256 * 1024);
+      expect(requests[0]).toMatchObject({
+        requestKind: "agent-initial",
+        compactionSummaryFaultMode: "none",
+        outcome: "error",
+        errorCode: "context_length_exceeded",
+      });
+      expect(requests[1]).toMatchObject({
+        requestKind: "agent-initial",
+        compactionSummaryFaultMode: "none",
+        outcome: "success",
+      });
+    },
+  );
+
+  it.each([
+    {
+      faultMode: "empty-output-once",
+      markerPrefix: "QA-COMPACTION-EMPTY-OUTPUT-ONCE",
+      recoveredMarker: QA_COMPACTION_EMPTY_RECOVERY_SUMMARY_MARKER,
+      reasoningOnly: false,
+    },
+    {
+      faultMode: "reasoning-only-output-once",
+      markerPrefix: "QA-COMPACTION-REASONING-ONLY-OUTPUT-ONCE",
+      recoveredMarker: QA_COMPACTION_REASONING_RECOVERY_SUMMARY_MARKER,
+      reasoningOnly: true,
+    },
+  ] as const)(
+    "scopes $faultMode compaction faults to one scenario session",
+    async ({ faultMode, markerPrefix, recoveredMarker, reasoningOnly }) => {
+      const server = await startMockServer();
+      const requestFor = (session: string) => ({
+        model: "gpt-5.6-luna",
+        instructions: QA_COMPACTION_SUMMARY_INSTRUCTIONS,
+        input: `<conversation>\n${markerPrefix}-${session}\nretain current work\n</conversation>\n\nCreate a structured summary.`,
+      });
+
+      const first = await expectOpenAiNonStreamingResponsesJson(server, requestFor("session-a"));
+      if (reasoningOnly) {
+        expect(JSON.stringify(first)).toContain("reasoning_compaction_summary_fault");
+        expect(JSON.stringify(first)).not.toContain(recoveredMarker);
+      } else {
+        expect(outputText(first)).toBe("");
+      }
+      const recovered = await expectOpenAiNonStreamingResponsesJson(
+        server,
+        requestFor("session-a"),
+      );
+      const recoveredText = outputText(recovered);
+      expect(recoveredText).toContain(recoveredMarker);
+      expect(recoveredText).toContain(`${markerPrefix}-session-a`);
+      expect(recoveredText).toContain("## Decisions");
+      expect(recoveredText).toContain("## Open TODOs");
+      expect(recoveredText).toContain("## Constraints/Rules");
+      expect(recoveredText).toContain("## Pending user asks");
+      expect(recoveredText).toContain("## Exact identifiers");
+      const independent = await expectOpenAiNonStreamingResponsesJson(
+        server,
+        requestFor("session-b"),
+      );
+      if (reasoningOnly) {
+        expect(JSON.stringify(independent)).toContain("reasoning_compaction_summary_fault");
+        expect(JSON.stringify(independent)).not.toContain(recoveredMarker);
+      } else {
+        expect(outputText(independent)).toBe("");
+      }
+
+      const requests = requireArray(
+        await getJson(server, "/debug/requests"),
+        "compaction output fault requests",
+      ).map((request) => requireRecord(request, "compaction output fault request"));
+      expect(requests.map((request) => request.compactionSummaryFaultMode)).toEqual([
+        faultMode,
+        "none",
+        faultMode,
+      ]);
+      expect(requests.every((request) => request.requestKind === "compaction-summary")).toBe(true);
+    },
+  );
+
+  it("classifies developer-role compaction instructions before applying a typed fault", async () => {
+    const server = await startMockServer();
+    const response = await expectOpenAiNonStreamingResponsesJson(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        {
+          role: "developer",
+          content: [{ type: "input_text", text: QA_COMPACTION_SUMMARY_INSTRUCTIONS }],
+        },
+        makeUserInput(
+          "<conversation>QA-COMPACTION-EMPTY-OUTPUT-ONCE-developer-wire</conversation>",
+        ),
+      ],
+    });
+
+    expect(outputText(response)).toBe("");
+    const requests = requireArray(
+      await getJson(server, "/debug/requests"),
+      "developer-role compaction requests",
+    ).map((request) => requireRecord(request, "developer-role compaction request"));
+    expect(requests).toEqual([
+      expect.objectContaining({
+        requestKind: "compaction-summary",
+        compactionSummaryFaultMode: "empty-output-once",
+      }),
+    ]);
+  });
+
+  it("handles staged scalar compaction summaries and promotes the durable merge without state leakage", async () => {
+    const server = await startMockServer();
+    const genericChunkPayload = await expectOpenAiNonStreamingResponsesJson(server, {
+      model: "gpt-5.6-luna",
+      instructions: QA_COMPACTION_SUMMARY_INSTRUCTIONS,
+      input:
+        "<conversation>\n[Chunk 1 - oldest messages]\nunrelated historical context\n</conversation>\n\nAdditional focus: preserve exact identifiers.",
+    });
+    const genericChunkSummary = outputText(genericChunkPayload);
+    expect(genericChunkSummary).toContain("## Goal");
+    expect(genericChunkSummary).not.toContain("QA-COMPACTION-DURABLE-MARKER");
+
+    const scenarioChunkPayload = await expectOpenAiNonStreamingResponsesJson(server, {
+      model: "gpt-5.6-luna",
+      instructions: QA_COMPACTION_SUMMARY_INSTRUCTIONS,
+      input:
+        "<conversation>\n[Chunk 2 - most recent messages]\nQA-COMPACTION-BULKY-HISTORICAL-MARKER\n</conversation>\n\nAdditional focus: preserve exact identifiers.",
+    });
+    const scenarioChunkSummary = outputText(scenarioChunkPayload);
+    expect(scenarioChunkSummary).toContain("## Goal");
+    expect(scenarioChunkSummary).not.toContain("QA-COMPACTION-DURABLE-MARKER");
+    expect(scenarioChunkSummary).not.toContain("QA-COMPACTION-BULKY-HISTORICAL-MARKER");
+
+    const durableChunkPayload = await expectOpenAiNonStreamingResponsesJson(server, {
+      model: "gpt-5.6-luna",
+      instructions: QA_COMPACTION_SUMMARY_INSTRUCTIONS,
+      input: `<conversation>
+Retain QA-COMPACTION-DURABLE-MARKER for the active task.
+</conversation>
+
+Additional focus: preserve QA-COMPACTION-DURABLE-MARKER.`,
+    });
+    const durableChunkSummary = outputText(durableChunkPayload);
+    expect(durableChunkSummary).toContain("QA-COMPACTION-DURABLE-MARKER");
+
+    const promptOnlyChunkPayload = await expectOpenAiNonStreamingResponsesJson(server, {
+      model: "gpt-5.6-luna",
+      instructions: QA_COMPACTION_SUMMARY_INSTRUCTIONS,
+      input: `<conversation>
+Compaction retry mutating tool check. Create compaction-retry-summary.txt.
+</conversation>
+
+Additional focus: preserve current work.`,
+    });
+    const promptOnlyChunkSummary = outputText(promptOnlyChunkPayload);
+    expect(promptOnlyChunkSummary).not.toContain("QA-COMPACTION-DURABLE-MARKER");
+
+    const currentChunkPayload = await expectOpenAiNonStreamingResponsesJson(server, {
+      model: "gpt-5.6-luna",
+      instructions: QA_COMPACTION_SUMMARY_INSTRUCTIONS,
+      input: `<conversation>
+Compaction retry mutating tool check. Current durable context marker: QA-COMPACTION-DURABLE-MARKER.
+Create compaction-retry-summary.txt.
+</conversation>
+
+Additional focus: preserve current work.`,
+    });
+    const currentChunkSummary = outputText(currentChunkPayload);
+    expect(currentChunkSummary).toContain("QA-COMPACTION-DURABLE-MARKER");
+
+    const mergePayload = await expectOpenAiNonStreamingResponsesJson(server, {
+      model: "gpt-5.6-luna",
+      instructions: QA_COMPACTION_SUMMARY_INSTRUCTIONS,
+      input: `<conversation>
+[Chunk 1 - oldest messages]
+${genericChunkSummary}
+[Chunk 2 - most recent messages]
+${scenarioChunkSummary}
+[Chunk 3 - current work]
+${currentChunkSummary}
+</conversation>
+
+<previous-summary>
+${durableChunkSummary}
+</previous-summary>
+
+Update and merge these partial structured summaries.`,
+    });
+    expect(outputText(mergePayload)).toContain("QA-COMPACTION-DURABLE-MARKER");
+
+    const unrelatedPayload = await expectOpenAiNonStreamingResponsesJson(server, {
+      model: "gpt-5.6-luna",
+      instructions: QA_COMPACTION_SUMMARY_INSTRUCTIONS,
+      input:
+        "<conversation>\na later unrelated scenario\n</conversation>\n\nCreate a structured summary.",
+    });
+    expect(outputText(unrelatedPayload)).toContain("## Goal");
+    expect(outputText(unrelatedPayload)).not.toContain("QA-COMPACTION-DURABLE-MARKER");
+
+    const requests = requireArray(
+      await getJson(server, "/debug/requests"),
+      "compaction requests",
+    ).map((request) => requireRecord(request, "compaction request"));
+    expect(requests).toHaveLength(7);
+    expect(
+      requests.every(
+        (request) =>
+          request.requestKind === "compaction-summary" &&
+          request.outcome === "success" &&
+          request.plannedToolName === undefined,
+      ),
+    ).toBe(true);
+  });
+
+  it("plans the write from an OpenClaw compacted retry payload", async () => {
+    const server = await startMockServer();
+    const runtimeSessionId = "compaction-openclaw-retry";
+    const initial = await postNonStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      instructions: `Runtime: embedded | sessionId=${runtimeSessionId}`,
+      input: [
+        makeUserInput(`${QA_COMPACTION_RETRY_PROMPT}\n${QA_COMPACTION_RETRY_OVERFLOW_PADDING}`),
+      ],
+    });
+    expect(initial.status).toBe(400);
+
+    const summaryPayload = await expectOpenAiNonStreamingResponsesJson(server, {
+      model: "gpt-5.6-luna",
+      instructions: QA_COMPACTION_SUMMARY_INSTRUCTIONS,
+      input: [
+        makeUserInput(
+          `<conversation>\n${QA_COMPACTION_RETRY_PROMPT}\nhistorical context only\n</conversation>\n\nAdditional focus: preserve exact identifiers and current work.`,
+        ),
+      ],
+    });
+    const compactedSummary = outputText(summaryPayload);
+    expect(compactedSummary).toContain("QA-COMPACTION-DURABLE-MARKER");
+
+    const writePlan = await expectOpenAiStreamingResponsesText(server, {
+      model: "gpt-5.6-luna",
+      instructions: `Runtime: embedded | sessionId=${runtimeSessionId}`,
+      input: [
+        makeUserInput(compactedSummary),
+        makeUserInput("Continue from the compacted context."),
+      ],
+    });
+    expect(writePlan).toContain('"name":"write"');
+    expect(writePlan).toContain("compaction-retry-summary.txt");
   });
 
   it("finishes a compacted retry after the canonical successful write result", async () => {
@@ -2395,14 +2804,9 @@ describe("qa mock openai server", () => {
   it("keeps compaction retry planning across continuation prompts", async () => {
     const server = await startMockServer();
 
-    const prompt =
-      "Compaction retry mutating tool check: read COMPACTION_RETRY_CONTEXT.md, then create compaction-retry-summary.txt and keep replay safety explicit.";
     const writePlan = await expectOpenAiStreamingResponses(server, {
       input: [
-        makeUserInput(prompt),
-        makeToolOutput(
-          "compaction retry evidence block 0000\ncompaction retry evidence block 0001",
-        ),
+        makeUserInput(QA_COMPACTION_RETRY_PROMPT),
         makeUserInput("Continue after compaction."),
       ],
     });
@@ -2410,9 +2814,7 @@ describe("qa mock openai server", () => {
 
     const contextOnlyWritePlan = await expectOpenAiStreamingResponses(server, {
       input: [
-        makeToolOutput(
-          "compaction retry evidence block 0000\ncompaction retry evidence block 0001",
-        ),
+        makeUserInput(QA_COMPACTION_RETRY_PROMPT),
         makeUserInput("Continue after compaction."),
       ],
     });
@@ -2420,7 +2822,7 @@ describe("qa mock openai server", () => {
 
     const finalReply = await expectOpenAiNonStreamingResponses(server, {
       input: [
-        makeUserInput(prompt),
+        makeUserInput(QA_COMPACTION_RETRY_PROMPT),
         makeToolOutput("Successfully wrote 41 bytes to compaction-retry-summary.txt"),
         makeUserInput("Continue after compaction."),
       ],
@@ -5212,6 +5614,39 @@ describe("qa mock openai server", () => {
 
     const requestLog = requireArray(await getJson(server, "/debug/requests"), "debug requests");
     expect(requireRecord(requestLog[0], "debug request 0").imageInputCount).toBe(1);
+  });
+
+  it("uses current request instructions for image descriptions", async () => {
+    const server = await startMockServer();
+
+    const payload = (await expectNonStreamingResponsesJson(server, {
+      model: "mock-openai/gpt-5.6-luna",
+      input: [
+        makeDeveloperInput("Image understanding check: describe the top and bottom colors."),
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_image",
+              source: {
+                type: "base64",
+                mime_type: "image/png",
+                data: QA_IMAGE_PNG_BASE64,
+              },
+            },
+            {
+              type: "input_text",
+              text: "[media attached: media://inbound/red-top-blue-bottom.png (image/png)]",
+            },
+          ],
+        },
+      ],
+    })) as {
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    };
+    const text = payload.output?.[0]?.content?.[0]?.text ?? "";
+    expect(text.toLowerCase()).toContain("red");
+    expect(text.toLowerCase()).toContain("blue");
   });
 
   it("recognizes OpenAI-compatible image_url parts as image inputs", async () => {

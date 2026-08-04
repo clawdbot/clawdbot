@@ -413,7 +413,7 @@ describe("openclaw.setup", () => {
       async (params) => {
         await params.prompter.note("Model ready", "Ollama");
         await params.beforePersistentEffect();
-        return { config: preparedConfig };
+        return { config: preparedConfig, agentModelOverride: "ollama/qwen3:0.6b" };
       },
     );
     const { wizardSessions, context } = makeWizardContext();
@@ -451,7 +451,11 @@ describe("openclaw.setup", () => {
       }),
     );
     await session.answer(note.step.id, null);
-    await expect(session.next()).resolves.toMatchObject({ done: true, status: "done" });
+    await expect(session.next()).resolves.toMatchObject({
+      done: true,
+      status: "done",
+      preparedModelRef: "ollama/qwen3:0.6b",
+    });
     expect(setupSharedMocks.writeWizardConfigFile).toHaveBeenCalledWith(preparedConfig, {
       allowConfigSizeDrop: false,
       baseSnapshot: expect.objectContaining({ hash: "prepare-base-hash" }),
