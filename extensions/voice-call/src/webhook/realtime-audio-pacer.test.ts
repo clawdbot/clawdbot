@@ -36,6 +36,25 @@ function createSequencedAudio(frameCount: number): Buffer {
   return audio;
 }
 
+/**
+ * The pacer schedules against `performance.now()`, which vitest does not fake by default.
+ * Fake it alongside the timers so paced sends and the fake clock stay in one time domain.
+ */
+function useTelephonyFakeTimers(): void {
+  vi.useFakeTimers({
+    toFake: [
+      "setTimeout",
+      "clearTimeout",
+      "setInterval",
+      "clearInterval",
+      "setImmediate",
+      "clearImmediate",
+      "Date",
+      "performance",
+    ],
+  });
+}
+
 function inspectQueue(pacer: RealtimeAudioPacer): { length: number; head: number } {
   const state = pacer as unknown as { queue: unknown[]; queueHead: number };
   return { length: state.queue.length, head: state.queueHead };
@@ -54,7 +73,7 @@ function runPacedFrames(params: { frameCount: number; overheadMs: number }): {
   let clockMs = 0;
   const pending: Array<{ delayMs: number; fn: () => void }> = [];
   const delaysMs: number[] = [];
-  const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => clockMs);
+  const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => clockMs);
   const timeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
     fn: () => void,
     delayMs?: number,
@@ -116,7 +135,7 @@ describe("RealtimeAudioPacer", () => {
   });
 
   it("paces realtime audio as 20ms telephony frames before marks (Twilio shape)", async () => {
-    vi.useFakeTimers();
+    useTelephonyFakeTimers();
     const sent: unknown[] = [];
     const pacer = new RealtimeAudioPacer({
       serializer: createTwilioSerializer("MZ-test"),
@@ -149,7 +168,7 @@ describe("RealtimeAudioPacer", () => {
   });
 
   it("clears queued audio immediately (Twilio shape)", async () => {
-    vi.useFakeTimers();
+    useTelephonyFakeTimers();
     const sent: unknown[] = [];
     const pacer = new RealtimeAudioPacer({
       serializer: createTwilioSerializer("MZ-test"),
@@ -168,7 +187,7 @@ describe("RealtimeAudioPacer", () => {
   });
 
   it("stops instead of buffering unbounded realtime audio", async () => {
-    vi.useFakeTimers();
+    useTelephonyFakeTimers();
     const sent: unknown[] = [];
     const onBackpressure = vi.fn();
     const pacer = new RealtimeAudioPacer({
@@ -190,7 +209,7 @@ describe("RealtimeAudioPacer", () => {
   });
 
   it("paces audio in Telnyx envelope shape (no streamSid)", async () => {
-    vi.useFakeTimers();
+    useTelephonyFakeTimers();
     const sent: unknown[] = [];
     const pacer = new RealtimeAudioPacer({
       serializer: createTelnyxSerializer(),
@@ -211,7 +230,7 @@ describe("RealtimeAudioPacer", () => {
   });
 
   it("drains the full default audio backlog in order and resets queue storage", async () => {
-    vi.useFakeTimers();
+    useTelephonyFakeTimers();
     const frameCount = 6_000;
     const sentFrames: number[] = [];
     const sentMarks: string[] = [];
@@ -238,7 +257,7 @@ describe("RealtimeAudioPacer", () => {
   });
 
   it("compacts a long queue while preserving pending bytes through clear", async () => {
-    vi.useFakeTimers();
+    useTelephonyFakeTimers();
     const frameCount = 800;
     const sent: string[] = [];
     const pacer = new RealtimeAudioPacer({

@@ -3,8 +3,8 @@
 const TELEPHONY_SAMPLE_RATE = 8_000;
 const TELEPHONY_CHUNK_BYTES = 160;
 const TELEPHONY_CHUNK_MS = 20;
-// Beyond this much clock movement the stream already underran, or the wall clock jumped;
-// restart the cadence from now instead of firing a catch-up burst the carrier would drop.
+// Past this much lateness the stream already underran; restart the cadence from now
+// instead of firing a catch-up burst the carrier jitter buffer would drop.
 const MAX_PACING_CATCHUP_MS = 100;
 const DEFAULT_MAX_QUEUED_AUDIO_BYTES = TELEPHONY_SAMPLE_RATE * 120;
 const QUEUE_COMPACT_HEAD_THRESHOLD = 256;
@@ -38,7 +38,7 @@ export class RealtimeAudioPacer {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private queuedAudioBytes = 0;
   private closed = false;
-  /** Wall time the next audio frame is due, so pacing cannot drift late frame by frame. */
+  /** Monotonic time the next audio frame is due, so pacing cannot drift late frame by frame. */
   private nextSendDeadlineMs: number | null = null;
 
   constructor(
@@ -181,12 +181,15 @@ export class RealtimeAudioPacer {
       // send; a relative sleep adds send and event-loop cost to every frame, and that
       // underfeed accumulates into carrier jitter-buffer concealment.
       const frameDurationMs = item.durationMs || TELEPHONY_CHUNK_MS;
-      const nowMs = Date.now();
-      // Read the same clock the scheduler runs on, and drop the deadline whenever it is
-      // no longer meaningful: a long stall, or a wall-clock jump in either direction.
+      // Monotonic clock: `setTimeout` schedules against libuv's monotonic time, so pacing
+      // must use the same domain. A wall-clock source would let an NTP correction distort
+      // the cadence and reintroduce the artifacts this pacing exists to prevent.
+      const nowMs = performance.now();
+      // Drop the deadline once it is no longer meaningful, i.e. after a stall longer than
+      // the pacing window.
       if (
         this.nextSendDeadlineMs === null ||
-        Math.abs(nowMs - this.nextSendDeadlineMs) > MAX_PACING_CATCHUP_MS
+        nowMs - this.nextSendDeadlineMs > MAX_PACING_CATCHUP_MS
       ) {
         this.nextSendDeadlineMs = nowMs;
       }
