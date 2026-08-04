@@ -21,6 +21,9 @@ const RUN_NODE_PACKAGE_SOURCE_ROOTS = [
   "packages/acp-core/src",
   "packages/terminal-core/src",
   "packages/net-policy/src",
+  "packages/agent-core/src",
+  "packages/llm-core/src",
+  "packages/model-catalog-core/src",
 ];
 
 /** Source roots whose changes require the root dev build pipeline. */

@@ -150,6 +150,9 @@ describe("watch-node script", () => {
       expect(watchPaths).toContain("packages/media-generation-core/src");
       expect(watchPaths).toContain("packages/acp-core/src");
       expect(watchPaths).toContain("packages/net-policy/src");
+      expect(watchPaths).toContain("packages/agent-core/src");
+      expect(watchPaths).toContain("packages/llm-core/src");
+      expect(watchPaths).toContain("packages/model-catalog-core/src");
       expect(watchPaths).toContain("tsdown.config.ts");
       expect(watchOptions.ignoreInitial).toBe(true);
       expect(watchOptions.ignored("src")).toBe(false);
