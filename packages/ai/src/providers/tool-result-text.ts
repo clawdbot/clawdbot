@@ -181,7 +181,7 @@ export function extractToolResultBlockText(block: unknown): string | undefined {
   }
   if (record.type === "text") {
     const text = typeof record.text === "string" ? record.text : "";
-    return text ? sanitizeSurrogates(text) : undefined;
+    return text ? sanitizeSurrogates(redactStructuredTextValue(text)) : undefined;
   }
   const structured = stringifyStructuredBlock(record);
   return structured ? sanitizeSurrogates(truncateProviderToolText(structured)) : undefined;

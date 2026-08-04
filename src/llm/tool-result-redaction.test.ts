@@ -1,75 +1,164 @@
-import { extractToolResultText } from "@openclaw/ai/internal/shared";
-// Proves the OpenClaw redaction contract applies to provider tool-result
-// replay text once the stream facade installs the AI transport host ports.
-import { describe, expect, it } from "vitest";
-// Importing the facade installs the OpenClaw AI transport host ports.
-import "./stream.js";
+import { Agent, type AgentTool } from "openclaw/plugin-sdk/agent-core";
+import { type Model, streamSimple } from "openclaw/plugin-sdk/llm";
+import { Type } from "typebox";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { jsonResult } from "../agents/tools/common.js";
 
-describe("tool result redaction via AI transport host", () => {
-  it("redacts structured secret fields with the shared tool-payload contract", () => {
-    const text = extractToolResultText([
-      {
-        type: "json",
-        apiToken: "api-token-value-1234567890",
-        privateKey: "private-key-value-1234567890",
-        private_key: "private-key-snake-1234567890",
-        key: "generic-key-value-1234567890",
-        keyMaterial: "key-material-value-1234567890",
-        bearerToken: "bearer-token-value-1234567890",
-        bearer_token: "bearer-token-snake-value-1234567890",
-        jwt: "jwt-value-1234567890",
-        session: "session-value-1234567890",
-        code: "code-value-1234567890",
-        error: { code: "ERR_VISIBLE_PROVIDER_CODE" },
-        oauth: { code: "OPAQUEPROVIDERCODE1234567890" },
-        providerError: { error: { code: "ERR_VISIBLE_PROVIDER_NESTED_CODE" } },
-        signature: "signature-value-1234567890",
-        cookie: "cookie-value-1234567890",
-        "set-cookie": "set-cookie-value-1234567890",
-        paymentCredential: "payment-credential-value-1234567890",
-        cardNumber: 4111111111111111,
-        cvc: 123,
-        text: '{"apiToken":"api-token-in-text-1234567890","code":"oauth-code-in-text-1234567890","safe":"ok"}',
-        credential: "live-credential-value",
-        appSecret: "app-secret-value",
-        rawSecret: "raw-secret-value",
-        nested: {
-          token: "nested-token-value",
-          visible: "safe-value",
+const openAiMockState = vi.hoisted(() => ({
+  requests: 0,
+}));
+vi.mock("openai", () => ({
+  default: class MockOpenAI {
+    chat = {
+      completions: {
+        create: () => {
+          const request = openAiMockState.requests++;
+          const usage = { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 };
+          const chunks =
+            request === 0
+              ? [
+                  {
+                    id: "chatcmpl-tool",
+                    choices: [
+                      {
+                        index: 0,
+                        delta: {
+                          role: "assistant",
+                          tool_calls: [
+                            {
+                              index: 0,
+                              id: "call_exec",
+                              type: "function",
+                              function: { name: "exec", arguments: "{}" },
+                            },
+                          ],
+                        },
+                        finish_reason: null,
+                      },
+                    ],
+                  },
+                  {
+                    id: "chatcmpl-tool",
+                    choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+                    usage,
+                  },
+                ]
+              : [
+                  {
+                    id: "chatcmpl-final",
+                    choices: [
+                      {
+                        index: 0,
+                        delta: { role: "assistant", content: "done" },
+                        finish_reason: null,
+                      },
+                    ],
+                  },
+                  {
+                    id: "chatcmpl-final",
+                    choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+                    usage,
+                  },
+                ];
+          return {
+            withResponse: async () => ({
+              data: (async function* () {
+                for (const chunk of chunks) {
+                  yield chunk;
+                }
+              })(),
+              response: new Response(null, { status: 200 }),
+            }),
+          };
         },
       },
-    ]);
+    };
+  },
+}));
 
-    expect(text).toContain('"credential":"');
-    expect(text).toContain('"appSecret":"');
-    expect(text).toContain('"rawSecret":"');
-    expect(text).toContain('"token":"');
-    expect(text).toContain('"visible":"safe-value"');
-    expect(text).toContain('"code":"ERR_VISIBLE_PROVIDER_CODE"');
-    expect(text).toContain('"code":"ERR_VISIBLE_PROVIDER_NESTED_CODE"');
-    expect(text).not.toContain("api-token-value-1234567890");
-    expect(text).not.toContain("private-key-value-1234567890");
-    expect(text).not.toContain("private-key-snake-1234567890");
-    expect(text).not.toContain("generic-key-value-1234567890");
-    expect(text).not.toContain("key-material-value-1234567890");
-    expect(text).not.toContain("bearer-token-value-1234567890");
-    expect(text).not.toContain("bearer-token-snake-value-1234567890");
-    expect(text).not.toContain("jwt-value-1234567890");
-    expect(text).not.toContain("session-value-1234567890");
-    expect(text).not.toContain("code-value-1234567890");
-    expect(text).not.toContain("OPAQUEPROVIDERCODE1234567890");
-    expect(text).not.toContain("signature-value-1234567890");
-    expect(text).not.toContain("cookie-value-1234567890");
-    expect(text).not.toContain("set-cookie-value-1234567890");
-    expect(text).not.toContain("payment-credential-value-1234567890");
-    expect(text).not.toContain("4111111111111111");
-    expect(text).not.toContain('"cvc":123');
-    expect(text).not.toContain("api-token-in-text-1234567890");
-    expect(text).not.toContain("oauth-code-in-text-1234567890");
-    expect(text).toContain('\\"safe\\":\\"ok\\"');
-    expect(text).not.toContain("live-credential-value");
-    expect(text).not.toContain("app-secret-value");
-    expect(text).not.toContain("raw-secret-value");
-    expect(text).not.toContain("nested-token-value");
+const model = {
+  id: "provider-replay-test",
+  name: "Provider replay test",
+  api: "openai-completions",
+  provider: "openai",
+  baseUrl: "https://api.openai.test/v1",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 16_000,
+  maxTokens: 1024,
+} satisfies Model<"openai-completions">;
+
+const fakeSecret = ["qa", "-provider-secret-", "a1b2c3d4e5f6"].join("");
+const safePayload = {
+  password: fakeSecret,
+  nonce: "QA_SAFE_NONCE_A1B2C3D4",
+  status: "completed",
+  cwd: "/workspace",
+  exitCode: 0,
+};
+
+beforeEach(() => {
+  openAiMockState.requests = 0;
+});
+
+describe("tool result redaction via AI transport host", () => {
+  it("redacts real Agent tool output before the provider continuation request", async () => {
+    const providerPayloads: unknown[] = [];
+    const execute = vi.fn(async () => ({
+      content: jsonResult(safePayload).content,
+      details: safePayload,
+    }));
+    const tool = {
+      name: "exec",
+      label: "exec",
+      description: "Return deterministic command evidence.",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute,
+    } satisfies AgentTool;
+    const agent = new Agent({
+      initialState: {
+        model,
+        tools: [tool],
+      },
+      streamFn: streamSimple,
+      getApiKey: () => "test-api-key",
+      onPayload: (payload) => {
+        providerPayloads.push(structuredClone(payload));
+      },
+    });
+
+    await agent.prompt("Run the exec tool once, then answer done.");
+
+    expect(execute).toHaveBeenCalledOnce();
+    expect(providerPayloads).toHaveLength(2);
+    expect(openAiMockState.requests).toBe(2);
+
+    const initialRequest = JSON.stringify(providerPayloads[0]);
+    const continuationRequest = JSON.stringify(providerPayloads[1]);
+    const continuationMessages = (
+      providerPayloads[1] as { messages?: Array<{ content?: unknown; role?: string }> }
+    ).messages;
+    const toolContent = continuationMessages?.find((message) => message.role === "tool")?.content;
+    expect(typeof toolContent).toBe("string");
+    expect(initialRequest).not.toContain(fakeSecret);
+    expect(initialRequest).not.toContain(safePayload.nonce);
+    expect(continuationRequest).not.toContain(fakeSecret);
+    expect(toolContent).toContain('"password"');
+    expect(toolContent).toMatch(/password[^]*?(?:\*\*\*|…|redacted)/i);
+    expect(toolContent).toContain(safePayload.nonce);
+    expect(toolContent).toContain(safePayload.status);
+    expect(toolContent).toContain(safePayload.cwd);
+    expect(toolContent).toContain(String(safePayload.exitCode));
+
+    const toolResults = agent.state.messages.filter((message) => message.role === "toolResult");
+    const finalMessages = agent.state.messages.filter(
+      (message) =>
+        message.role === "assistant" &&
+        message.stopReason === "stop" &&
+        message.content.some((block) => block.type === "text" && block.text === "done"),
+    );
+    expect(toolResults).toHaveLength(1);
+    expect(finalMessages).toHaveLength(1);
   });
 });

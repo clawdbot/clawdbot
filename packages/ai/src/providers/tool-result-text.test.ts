@@ -1,10 +1,24 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
   hasMediaPayload,
   isImageWithMediaPayload,
 } from "./tool-result-text.js";
+
+const initialTransportHost = getAiTransportHost();
+const fakeSecret = ["qa", "-tool-result-secret-", "a1b2c3d4"].join("");
+const safeNonce = "QA_SAFE_NONCE_A1B2C3D4";
+afterEach(() => {
+  configureAiTransportHost(initialTransportHost);
+});
+function installFakeSecretRedactor(): void {
+  configureAiTransportHost({
+    ...initialTransportHost,
+    redactToolPayloadText: (text) => text.replaceAll(fakeSecret, "[redacted]"),
+  });
+}
 
 describe("hasMediaPayload", () => {
   it("requires non-empty inline data instead of media metadata", () => {
@@ -30,6 +44,50 @@ describe("isImageWithMediaPayload", () => {
 });
 
 describe("extractToolResultText", () => {
+  it("redacts secrets in valid JSON text while preserving safe fields", () => {
+    installFakeSecretRedactor();
+    const text = extractToolResultText([
+      {
+        type: "text",
+        text: JSON.stringify({
+          password: fakeSecret,
+          nonce: safeNonce,
+          status: "completed",
+        }),
+      },
+    ]);
+
+    expect(JSON.parse(text)).toEqual({
+      password: "[redacted]",
+      nonce: safeNonce,
+      status: "completed",
+    });
+    expect(text).not.toContain(fakeSecret);
+  });
+
+  it("redacts secrets in plain text while preserving safe evidence", () => {
+    installFakeSecretRedactor();
+    const text = extractToolResultText([
+      {
+        type: "text",
+        text: [
+          `password=${fakeSecret}`,
+          `nonce=${safeNonce}`,
+          "status=completed",
+          "cwd=/workspace",
+          "exitCode=0",
+        ].join("\n"),
+      },
+    ]);
+
+    expect(text).toContain("password=[redacted]");
+    expect(text).toContain(`nonce=${safeNonce}`);
+    expect(text).toContain("status=completed");
+    expect(text).toContain("cwd=/workspace");
+    expect(text).toContain("exitCode=0");
+    expect(text).not.toContain(fakeSecret);
+  });
+
   it("keeps media-only blocks out of provider replay text", () => {
     const text = extractToolResultText([
       { type: "text", text: "summary" },
