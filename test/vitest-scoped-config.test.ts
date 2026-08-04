@@ -848,7 +848,6 @@ describe("scoped vitest configs", () => {
     expect(normalizeConfigPaths(testConfig.setupFiles)).toEqual([
       "test/setup.ts",
       "test/setup.extensions.ts",
-      "test/setup.extension-memory.ts",
       "test/setup-openclaw-runtime.ts",
     ]);
     expect(testConfig.include).toEqual([

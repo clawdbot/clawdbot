@@ -1018,7 +1018,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       const provider = pendingProvider;
       pendingProvider = null;
       if (provider && provider !== this.provider) {
-        void Promise.resolve(provider.close?.()).catch((err: unknown) => {
+        void this.retireProvider(provider).catch((err: unknown) => {
           log.debug(`memory embeddings: failed to close ${label}: ${String(err)}`);
         });
       }

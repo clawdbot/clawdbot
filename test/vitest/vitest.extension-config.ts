@@ -6,7 +6,6 @@ type ExtensionVitestConfigOptions = {
   fileParallelism?: boolean;
   includeOpenClawRuntimeSetup?: boolean;
   isolate?: boolean;
-  setupFiles?: string[];
 };
 
 export function createExtensionVitestConfig(
@@ -24,7 +23,7 @@ export function createExtensionVitestConfig(
       name: `extension-${name}`,
       passWithNoTests: true,
       ...options,
-      setupFiles: ["test/setup.extensions.ts", ...(options.setupFiles ?? [])],
+      setupFiles: ["test/setup.extensions.ts"],
     },
   );
 }

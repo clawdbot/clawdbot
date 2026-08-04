@@ -7,7 +7,6 @@ export function createExtensionMemoryVitestConfig(
 ) {
   return createExtensionVitestConfig("memory", memoryExtensionTestRoots, env, {
     isolate: true,
-    setupFiles: ["test/setup.extension-memory.ts"],
   });
 }
 

@@ -18,7 +18,10 @@ const providerState = vi.hoisted(() => ({
   embedQueryCalls: 0,
   embedBatchCalls: 0,
   creationFailure: null as string | null,
+  embedQueryFailure: false,
   embedQueryGate: null as Promise<void> | null,
+  providerCloseCalls: 0,
+  providerCloseGate: null as Promise<void> | null,
 }));
 
 vi.mock("./embeddings.js", () => ({
@@ -48,10 +51,16 @@ vi.mock("./embeddings.js", () => ({
       provider: {
         id: providerId,
         model,
-        close: async () => {},
+        close: async () => {
+          providerState.providerCloseCalls += 1;
+          await providerState.providerCloseGate;
+        },
         embedQuery: async (_text: string, callOptions?: { signal?: AbortSignal }) => {
           providerState.embedQueryCalls += 1;
           await providerState.embedQueryGate;
+          if (providerState.embedQueryFailure) {
+            throw new Error("primary provider probe failed");
+          }
           const signal = callOptions?.signal;
           if (signal?.aborted) {
             const reason = signal.reason;
@@ -146,7 +155,10 @@ describe("memory manager primary provider recovery", () => {
     providerState.embedQueryCalls = 0;
     providerState.embedBatchCalls = 0;
     providerState.creationFailure = null;
+    providerState.embedQueryFailure = false;
     providerState.embedQueryGate = null;
+    providerState.providerCloseCalls = 0;
+    providerState.providerCloseGate = null;
   });
 
   it("restores the configured primary provider and retires the fallback provider", async () => {
@@ -209,6 +221,38 @@ describe("memory manager primary provider recovery", () => {
     expect(manager.provider?.id).toBe("fallback-provider");
     expect(manager.fallbackFrom).toBe("mock");
     expect(manager.retireProvider).not.toHaveBeenCalled();
+  });
+
+  it("keeps a rejected recovery provider in managed retirement until cleanup finishes", async () => {
+    const manager = createRecoveryHarness();
+    let releaseProviderClose: () => void = () => {};
+    providerState.providerCloseGate = new Promise<void>((resolve) => {
+      releaseProviderClose = resolve;
+    });
+    providerState.embedQueryFailure = true;
+
+    let retirementSettled = false;
+    const retiredProviders: EmbeddingProvider[] = [];
+    manager.retireProvider = async (provider: EmbeddingProvider) => {
+      retiredProviders.push(provider);
+      await provider.close?.();
+      retirementSettled = true;
+    };
+
+    try {
+      await expect(manager.attemptPrimaryProviderRecovery({})).resolves.toBe(false);
+
+      const rejectedProvider = retiredProviders[0];
+      expect(rejectedProvider).toBeDefined();
+      expect(providerState.providerCloseCalls).toBe(1);
+      expect(retirementSettled).toBe(false);
+      expect(manager.provider?.id).toBe("fallback-provider");
+
+      releaseProviderClose();
+      await vi.waitFor(() => expect(retirementSettled).toBe(true));
+    } finally {
+      releaseProviderClose();
+    }
   });
 
   it("lets the initiating caller abort only its wait for shared primary recovery", async () => {
