@@ -861,14 +861,11 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const toolPolicyInheritanceSources = capabilityProfile.policy.inheritancePolicies;
   const shouldInheritEffectiveToolAllowlist =
     toolPolicyInheritanceSources.some(hasRestrictiveAllowPolicy);
-  const sessionsSendToolPolicy =
-    shouldInheritEffectiveToolAllowlist || inheritedToolDenylist.length > 0
-      ? {
-          version: 1 as const,
-          allow: [] as string[],
-          deny: [...inheritedToolDenylist],
-        }
-      : undefined;
+  const sessionsSendToolPolicy = {
+    version: 1 as const,
+    allow: [] as string[],
+    deny: [...inheritedToolDenylist],
+  };
   const cronCreatorToolAllowlist = options?.cronCreatorToolAllowlistRef ?? [];
   const gatewayCallerAccountId =
     options?.scheduledToolPolicy?.ownerAccountId ?? options?.agentAccountId;
@@ -1077,21 +1074,26 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             inheritedToolAllowlist,
             inheritedToolDenylist,
             sessionsSendToolPolicy,
-            sessionsSendRequester: {
-              ...(capabilityProfile.conversation.messageProvider
-                ? { messageProvider: capabilityProfile.conversation.messageProvider }
-                : {}),
-              ...(capabilityProfile.sender.id ? { senderId: capabilityProfile.sender.id } : {}),
-              ...(capabilityProfile.sender.name
-                ? { senderName: capabilityProfile.sender.name }
-                : {}),
-              ...(capabilityProfile.sender.username
-                ? { senderUsername: capabilityProfile.sender.username }
-                : {}),
-              ...(capabilityProfile.sender.e164
-                ? { senderE164: capabilityProfile.sender.e164 }
-                : {}),
-            },
+            sessionsSendRequester:
+              options?.trustedSessionHandoff && options.sessionHandoffRequester
+                ? { ...options.sessionHandoffRequester }
+                : {
+                    ...(capabilityProfile.conversation.messageProvider
+                      ? { messageProvider: capabilityProfile.conversation.messageProvider }
+                      : {}),
+                    ...(capabilityProfile.sender.id
+                      ? { senderId: capabilityProfile.sender.id }
+                      : {}),
+                    ...(capabilityProfile.sender.name
+                      ? { senderName: capabilityProfile.sender.name }
+                      : {}),
+                    ...(capabilityProfile.sender.username
+                      ? { senderUsername: capabilityProfile.sender.username }
+                      : {}),
+                    ...(capabilityProfile.sender.e164
+                      ? { senderE164: capabilityProfile.sender.e164 }
+                      : {}),
+                  },
             onYield: options?.onYield,
             allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
             recordToolPrepStage: options?.recordToolPrepStage,
@@ -1200,11 +1202,9 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     // never filters the mandatory structured_output tool from this turn.
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, authorizedTools);
   }
-  if (sessionsSendToolPolicy) {
-    // sessions_send launches a fresh run, so freeze the caller's final surface
-    // instead of re-resolving sender policy after its trusted ingress facts are gone.
-    replaceWithEffectiveToolAllowlist(sessionsSendToolPolicy.allow, authorizedTools);
-  }
+  // sessions_send launches a fresh run, so freeze every caller's final surface;
+  // even an unrestricted source may encounter target-owned sender restrictions.
+  replaceWithEffectiveToolAllowlist(sessionsSendToolPolicy.allow, authorizedTools);
   replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, authorizedTools, (tool) =>
     getPluginToolMeta(tool),
   );

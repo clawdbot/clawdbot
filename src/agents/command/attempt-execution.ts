@@ -49,6 +49,7 @@ import {
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../tasks/task-status-access.js";
 import { resolveUserPath } from "../../utils.js";
+import { sessionDeliveryOrigin } from "../../utils/delivery-context.shared.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
@@ -732,6 +733,12 @@ export function runAgentAttempt(params: {
         ? ["message"]
         : undefined
     : params.opts.toolsAllow;
+  // The target session owns its configured account. Internal handoff ingress
+  // has no delivery route, so recover the persisted account before tool policy.
+  const handoffTargetAccountId = params.opts.trustedSessionHandoff
+    ? sessionDeliveryOrigin(params.sessionEntry)?.accountId
+    : undefined;
+  const runAgentAccountId = handoffTargetAccountId ?? params.runContext.accountId;
   const disableTools =
     params.opts.modelRun === true ||
     (isSubagentAnnounceHandoff &&
@@ -1020,7 +1027,7 @@ export function runAgentAttempt(params: {
             currentThreadTs: params.runContext.currentThreadTs,
             currentInboundAudio: params.runContext.currentInboundAudio,
             approvalReviewerDeviceId: params.opts.approvalReviewerDeviceId,
-            agentAccountId: params.runContext.accountId,
+            agentAccountId: runAgentAccountId,
             senderId: params.runContext.senderId,
             senderIsOwner: params.opts.senderIsOwner,
             bashElevated: params.opts.bashElevated,
@@ -1032,6 +1039,8 @@ export function runAgentAttempt(params: {
               runtimeToolsAllow,
               params.opts.toolsAllowIsDefault,
             ),
+            trustedSessionHandoff: params.opts.trustedSessionHandoff,
+            sessionHandoffRequester: params.opts.sessionHandoffRequester,
             scheduledToolPolicy: params.opts.scheduledToolPolicy,
             cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
             cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
@@ -1141,7 +1150,7 @@ export function runAgentAttempt(params: {
     trigger: "user",
     messageChannel: params.messageChannel,
     messageProvider: params.opts.messageProvider ?? params.messageChannel,
-    agentAccountId: params.runContext.accountId,
+    agentAccountId: runAgentAccountId,
     messageTo: params.opts.replyTo ?? params.opts.to,
     messageThreadId: params.opts.threadId,
     groupId: params.runContext.groupId,

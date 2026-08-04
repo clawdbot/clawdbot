@@ -1688,6 +1688,41 @@ describe("createOpenClawCodingTools", () => {
     expect(policy?.allow).not.toContain("message");
   });
 
+  it("snapshots unrestricted sources so target-only sender policy can still apply", () => {
+    vi.mocked(createOpenClawTools).mockClear();
+
+    createOpenClawCodingTools({
+      messageProvider: "discord",
+      senderId: "alice",
+    });
+
+    const options = latestCreateOpenClawToolsOptions();
+    expect(options.sessionsSendToolPolicy?.allow).toEqual(
+      expect.arrayContaining(["message", "sessions_send"]),
+    );
+    expect(options.sessionsSendRequester).toEqual({
+      messageProvider: "discord",
+      senderId: "alice",
+    });
+  });
+
+  it("retains the verified requester across chained sessions_send handoffs", () => {
+    vi.mocked(createOpenClawTools).mockClear();
+
+    createOpenClawCodingTools({
+      messageProvider: "internal",
+      runtimeToolAllowlist: ["read", "sessions_send"],
+      trustedSessionHandoff: true,
+      sessionHandoffRequester: { messageProvider: "discord", senderId: "alice" },
+      inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
+    });
+
+    expect(latestCreateOpenClawToolsOptions().sessionsSendRequester).toEqual({
+      messageProvider: "discord",
+      senderId: "alice",
+    });
+  });
+
   it("filters session tools for sub-agent sessions by default", () => {
     const tools = createOpenClawCodingTools({
       sessionKey: "agent:main:subagent:test",

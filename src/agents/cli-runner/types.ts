@@ -22,6 +22,7 @@ import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/sessi
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import type { AgentRuntimeSessionHandoffRequester } from "../../gateway/agent-runtime-identity-token.js";
 import type { ImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
@@ -210,6 +211,10 @@ export type RunCliAgentParams = {
   approvalReviewerDeviceId?: string;
   /** Runtime tool allow-list. CLI harnesses need a backend-owned exact translation. */
   toolsAllow?: string[];
+  /** Verified sessions_send authority for target-owned policy evaluation. */
+  trustedSessionHandoff?: boolean;
+  /** Signed requester facts retained outside CLI-authored input. */
+  sessionHandoffRequester?: AgentRuntimeSessionHandoffRequester;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   /** Exact native plus canonical OpenClaw surface for a selectable CLI backend. */

@@ -412,6 +412,36 @@ describe("resolveConversationCapabilityProfile", () => {
     },
   );
 
+  it("uses the persisted target account for handoff room policy", () => {
+    const profile = resolveConversationCapabilityProfile({
+      config: {
+        channels: {
+          whatsapp: {
+            accounts: {
+              default: { groups: { team: {} } },
+              work: {
+                groups: {
+                  team: { toolsBySender: { "id:alice": { deny: ["exec"] } } },
+                },
+              },
+            },
+          },
+        },
+      },
+      sessionKey: "agent:main:whatsapp:group:team",
+      messageProvider: INTERNAL_MESSAGE_CHANNEL,
+      agentAccountId: "work",
+      groupId: "team",
+      runtimeToolAllowlist: ["exec", "read", "sessions_send"],
+      trustedSessionHandoff: true,
+      sessionHandoffRequester: { messageProvider: "whatsapp", senderId: "alice" },
+      inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
+    });
+
+    expect(profile.policy.groupPolicy).toEqual({ deny: ["exec"] });
+    expect(profile.policy.explicitToolDenylist).toContain("exec");
+  });
+
   it("does not classify the conversation as shared from a dropped caller group id", () => {
     // Non-group session key cannot vouch for the caller-supplied group facts:
     // the trust check drops them, so scope must stay unknown instead of

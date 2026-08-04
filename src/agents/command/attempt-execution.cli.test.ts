@@ -2962,6 +2962,64 @@ describe("CLI attempt execution", () => {
     });
   });
 
+  it("forwards handoff requester authority and the persisted target account to CLI attempts", async () => {
+    const sessionKey = "agent:main:whatsapp:group:team";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-cli-handoff",
+      updatedAt: Date.now(),
+      delivery: {
+        kind: "external",
+        route: { channel: "whatsapp", accountId: "work", target: { to: "group:team" } },
+        context: { channel: "whatsapp", accountId: "work", to: "group:team" },
+        origin: { provider: "whatsapp", accountId: "work", to: "group:team" },
+      },
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("restricted handoff cli"));
+
+    await runAgentAttempt({
+      providerOverride: "claude-cli",
+      originalProvider: "claude-cli",
+      modelOverride: "opus",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "handoff",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-cli-handoff",
+      opts: {
+        toolsAllow: ["read", "sessions_send"],
+        trustedSessionHandoff: true,
+        sessionHandoffRequester: { messageProvider: "discord", senderId: "alice" },
+        inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: { accountId: "default" },
+      spawnedBy: undefined,
+      messageChannel: "internal",
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "claude-cli",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    expectMockArgFields(runCliAgentMock, {
+      agentAccountId: "work",
+      trustedSessionHandoff: true,
+      sessionHandoffRequester: { messageProvider: "discord", senderId: "alice" },
+    });
+  });
+
   it.each(SUBAGENT_ANNOUNCE_DELIVERY_CASES)(
     "bounds CLI subagent completion handoff tools for $name",
     async ({

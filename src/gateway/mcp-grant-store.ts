@@ -10,6 +10,7 @@ import type {
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
+import type { AgentRuntimeSessionHandoffRequester } from "./agent-runtime-identity-token.js";
 
 export type McpLoopbackRequestContext = {
   sessionKey: string;
@@ -43,6 +44,9 @@ export type McpLoopbackRequestContext = {
    * hard enforcement. Unset keeps the full session-scoped surface.
    */
   toolsAllow?: string[];
+  /** Host-stamped sessions_send authority; never accepted from MCP headers. */
+  trustedSessionHandoff?: boolean;
+  sessionHandoffRequester?: AgentRuntimeSessionHandoffRequester;
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   senderIsOwner: boolean;
   /** Capability minted only for Gateway-launched CLI backends. */

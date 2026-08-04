@@ -95,9 +95,11 @@ function resolveMcpLoopbackTools(
     grantToken: _grantToken,
     ...scopeParams
   } = params;
-  const sessionsSendToolPolicy:
-    | AgentRuntimeSessionHandoffContext["inheritedToolPolicy"]
-    | undefined = params.toolsAllow ? { version: 1, allow: [], deny: [] } : undefined;
+  const sessionsSendToolPolicy: AgentRuntimeSessionHandoffContext["inheritedToolPolicy"] = {
+    version: 1,
+    allow: [],
+    deny: [],
+  };
   const scoped = resolveGatewayScopedTools({
     ...scopeParams,
     agentDir: authProfileStoreAgentDir,
@@ -112,9 +114,7 @@ function resolveMcpLoopbackTools(
     mode === "exact"
       ? applyGrantToolsAllow(scoped.tools, params.toolsAllow)
       : applyPolicyToolsAllow(scoped.tools, params.toolsAllow);
-  if (sessionsSendToolPolicy) {
-    replaceWithEffectiveToolAllowlist(sessionsSendToolPolicy.allow, tools);
-  }
+  replaceWithEffectiveToolAllowlist(sessionsSendToolPolicy.allow, tools);
   return {
     agentId: scoped.agentId,
     workspaceDir: scoped.workspaceDir,

@@ -70,6 +70,29 @@ describe("resolveGatewayScopedTools", () => {
     expect(result.tools.some((tool) => tool.name === "message")).toBe(false);
   });
 
+  it("applies target sender policy to CLI-backed sessions_send handoffs", () => {
+    const result = resolveGatewayScopedTools({
+      cfg: {
+        agents: {
+          list: [
+            {
+              id: "target",
+              tools: { toolsBySender: { "id:alice": { deny: ["message"] } } },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      agentId: "target",
+      sessionKey: "agent:target:whatsapp:group:team",
+      messageProvider: "internal",
+      surface: "loopback",
+      trustedSessionHandoff: true,
+      sessionHandoffRequester: { messageProvider: "discord", senderId: "alice" },
+    });
+
+    expect(result.tools.some((tool) => tool.name === "message")).toBe(false);
+  });
+
   it("keeps default-agent credentials out of unbound gateway calls", () => {
     const cfg = {
       agents: { defaults: { imageModel: { primary: "openai/gpt-5.4-mini" } } },
