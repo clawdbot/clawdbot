@@ -1761,6 +1761,22 @@ describe("handleTelegramAction", () => {
     ).rejects.toThrow(/cannot be combined/i);
   });
 
+  it("rejects location sends mixed with presentation text", async () => {
+    await expect(
+      handleTelegramAction(
+        {
+          action: "sendMessage",
+          to: "123456",
+          location: { latitude: 1, longitude: 2 },
+          presentation: {
+            blocks: [{ type: "text", text: "caption" }],
+          },
+        },
+        telegramConfig(),
+      ),
+    ).rejects.toThrow(/cannot be combined/i);
+  });
+
   it("renders presentation text when message content is omitted", async () => {
     await handleTelegramAction(
       {

@@ -556,12 +556,16 @@ export async function handleTelegramAction(
       droppedControls.length > 0 && resolvedContent.hasExplicitContent
         ? appendTelegramDroppedControlFallback(resolvedContent.content, droppedControls)
         : resolvedContent.content;
+    const droppedControlFallback =
+      droppedControls.length > 0 ? renderTelegramDroppedControlFallback(droppedControls) : "";
+    const hasOnlyDroppedControlFallback =
+      !resolvedContent.hasExplicitContent &&
+      droppedControlFallback.length > 0 &&
+      content.trim() === droppedControlFallback.trim();
     const asVideoNote = readBooleanParam(params, "asVideoNote") ?? false;
     if (
       location &&
-      ((resolvedContent.hasExplicitContent && content.trim()) ||
-        mediaUrls.length > 0 ||
-        asVideoNote)
+      ((content.trim() && !hasOnlyDroppedControlFallback) || mediaUrls.length > 0 || asVideoNote)
     ) {
       throw new Error("Telegram location sends cannot be combined with message text or media.");
     }
