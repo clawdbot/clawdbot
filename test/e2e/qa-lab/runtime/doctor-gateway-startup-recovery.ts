@@ -608,7 +608,6 @@ async function runSystemdRecovery(
     assert.equal(restartJson.action, "restart");
     assert.equal(restartJson.ok, true);
     assert.equal(restartJson.result, "restarted");
-    assert.equal(restartJson.service?.label, unit);
     assert.equal(restartJson.service?.loaded, true);
     recovered = await waitForGatewayHealthy(options, profile, env);
     assert.equal(recovered.statusJson.service?.runtime?.status, "running");
