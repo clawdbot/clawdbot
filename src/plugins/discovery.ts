@@ -644,6 +644,56 @@ export function hasDiscoverableInstalledPluginRecords(params: {
   return result.candidates.length > 0;
 }
 
+function isMaterializableInstalledPluginCandidate(params: {
+  candidate: PluginCandidate;
+  env: NodeJS.ProcessEnv;
+  realpathCache: Map<string, string>;
+}): boolean {
+  const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
+    origin: params.candidate.origin,
+    rootDir: params.candidate.rootDir,
+    env: params.env,
+    realpathCache: params.realpathCache,
+  });
+  if ((params.candidate.format ?? "openclaw") === "bundle") {
+    return Boolean(
+      params.candidate.bundleFormat &&
+      loadBundleManifest({
+        rootDir: params.candidate.rootDir,
+        bundleFormat: params.candidate.bundleFormat,
+        rejectHardlinks,
+      }).ok,
+    );
+  }
+  return Boolean(resolveCandidateManifest(params.candidate.rootDir, rejectHardlinks)?.manifest);
+}
+
+/** Returns whether any installed record can cross the manifest registry materialization boundary. */
+export function hasMaterializableInstalledPluginRecords(params: {
+  installRecords?: Record<string, PluginInstallRecord>;
+  ownershipUid?: number | null;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  const result = createDiscoveryResult();
+  const env = params.env ?? process.env;
+  const realpathCache = new Map<string, string>();
+  discoverInstalledPluginRecordsInto({
+    installRecords: params.installRecords,
+    ...(params.ownershipUid !== undefined ? { ownershipUid: params.ownershipUid } : {}),
+    ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+    env,
+    candidates: result.candidates,
+    diagnostics: result.diagnostics,
+    seen: new Set<string>(),
+    realpathCache,
+    packageManifestCache: new Map<string, PackageManifest | null>(),
+  });
+  return result.candidates.some((candidate) =>
+    isMaterializableInstalledPluginCandidate({ candidate, env, realpathCache }),
+  );
+}
+
 function isManagedPluginDir(params: {
   dir: string;
   realpath?: string;

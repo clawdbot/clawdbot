@@ -9,7 +9,7 @@ import { safeParseWithSchema } from "../utils/zod-parse.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
-import { hasDiscoverableInstalledPluginRecords } from "./discovery.js";
+import { hasMaterializableInstalledPluginRecords } from "./discovery.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveCompatRegistryVersion } from "./installed-plugin-index-policy.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-cache.js";
@@ -482,7 +482,7 @@ function hasPotentiallyRecoverableInstallRecord(
       installRecords[pluginId] = record;
     }
   }
-  return hasDiscoverableInstalledPluginRecords({ installRecords, env });
+  return hasMaterializableInstalledPluginRecords({ installRecords, env });
 }
 
 function buildRecoverableInstallRecordRefresh(
