@@ -5,7 +5,12 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { initializePublishedConfigRuntimeEnv, prepareConfigRuntimeEnv } from "./config-env-vars.js";
+import {
+  collectChangedConfigPaths,
+  resolveIncludeWriteBoundary,
+} from "./include-write-boundary.js";
 import { hashConfigIncludeRaw } from "./includes.js";
+import { createConfigIO as createActualConfigIO } from "./io.factory.js";
 import type { ConfigWriteOptions } from "./io.js";
 import {
   ConfigMutationConflictError,
@@ -606,12 +611,14 @@ describe("config mutate helpers", () => {
           path: ["plugins"],
           kind: "single" as const,
           hasSiblingOverrides: false,
+          hasArrayAncestor: false,
           targetPath: "/tmp/nested.json",
         },
         {
           path: [],
           kind: "multiple" as const,
           hasSiblingOverrides: false,
+          hasArrayAncestor: false,
         },
       ],
     } satisfies ConfigFileSnapshot;
@@ -628,6 +635,96 @@ describe("config mutate helpers", () => {
       expectedConfigPath: snapshot.path,
       afterWrite: { mode: "auto" },
     });
+  });
+
+  it("rejects a nested delegate shadowed by a same-path include array", async () => {
+    const home = await suiteRootTracker.make("same-path-include-array");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const delegatePath = path.join(home, ".openclaw", "delegate.json5");
+    const nestedPath = path.join(home, ".openclaw", "nested.json5");
+    const overridePath = path.join(home, ".openclaw", "override.json5");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({ plugins: { $include: ["./delegate.json5", "./override.json5"] } }),
+    );
+    await fs.writeFile(delegatePath, JSON.stringify({ $include: "./nested.json5" }));
+    const nestedRaw = JSON.stringify({ entries: { demo: { enabled: false } } });
+    await fs.writeFile(nestedPath, nestedRaw);
+    await fs.writeFile(overridePath, JSON.stringify({ entries: { demo: { enabled: false } } }));
+    const configIO = createActualConfigIO({
+      env: { ...process.env, OPENCLAW_CONFIG_PATH: configPath },
+      observe: false,
+      pluginValidation: "skip",
+    });
+    const { snapshot, writeOptions } = await configIO.readConfigFileSnapshotForWrite();
+    const nextConfig = { plugins: { entries: { demo: { enabled: true } } } };
+
+    expect(
+      resolveIncludeWriteBoundary({
+        provenance: snapshot.includeProvenance,
+        changed: collectChangedConfigPaths(snapshot.sourceConfig, nextConfig),
+      }),
+    ).toBeNull();
+
+    await expect(
+      replaceConfigFile({
+        baseHash: snapshot.hash,
+        snapshot,
+        writeOptions,
+        nextConfig,
+        io: {
+          readConfigFileSnapshotForWrite: () => configIO.readConfigFileSnapshotForWrite(),
+          writeConfigFile: (config, options) => configIO.writeConfigFile(config, options),
+        },
+      }),
+    ).rejects.toThrow("Config write would flatten $include-owned config");
+
+    await expect(fs.readFile(nestedPath, "utf-8")).resolves.toBe(nestedRaw);
+    const reloaded = await configIO.readConfigFileSnapshot();
+    expect(reloaded.sourceConfig.plugins?.entries?.demo?.enabled).toBe(false);
+  });
+
+  it("writes through an include beneath a numeric object key", async () => {
+    const home = await suiteRootTracker.make("numeric-object-key-include");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const guildPath = path.join(home, ".openclaw", "guild.json5");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        channels: {
+          discord: { guilds: { "123456789": { $include: "./guild.json5" } } },
+        },
+      }),
+    );
+    await fs.writeFile(guildPath, JSON.stringify({ requireMention: true }));
+    const configIO = createActualConfigIO({
+      env: { ...process.env, OPENCLAW_CONFIG_PATH: configPath },
+      observe: false,
+      pluginValidation: "skip",
+    });
+    const { snapshot, writeOptions } = await configIO.readConfigFileSnapshotForWrite();
+    const nextConfig = structuredClone(snapshot.sourceConfig) as OpenClawConfig;
+    nextConfig.channels!.discord!.guilds!["123456789"]!.requireMention = false;
+
+    await replaceConfigFile({
+      baseHash: snapshot.hash,
+      snapshot,
+      writeOptions,
+      nextConfig,
+      io: {
+        readConfigFileSnapshotForWrite: () => configIO.readConfigFileSnapshotForWrite(),
+        writeConfigFile: (config, options) => configIO.writeConfigFile(config, options),
+      },
+    });
+
+    expect(JSON.parse(await fs.readFile(guildPath, "utf-8"))).toEqual({ requireMention: false });
+    await expect(fs.readFile(configPath, "utf-8")).resolves.toContain('"$include":"./guild.json5"');
+    const reloaded = await configIO.readConfigFileSnapshot();
+    expect(reloaded.sourceConfig.channels?.discord?.guilds?.["123456789"]?.requireMention).toBe(
+      false,
+    );
   });
 
   it("uses skipPluginValidation for replace pre-write snapshots", async () => {
@@ -913,6 +1010,7 @@ describe("config mutate helpers", () => {
           path: ["agents", "entries", "alpha"],
           kind: "single" as const,
           hasSiblingOverrides: false,
+          hasArrayAncestor: false,
           targetPath: agentPath,
         },
       ],
@@ -992,6 +1090,7 @@ describe("config mutate helpers", () => {
           path: ["agents", "entries", "alpha"],
           kind: "single" as const,
           hasSiblingOverrides: false,
+          hasArrayAncestor: false,
           targetPath: agentPath,
         },
       ],
@@ -1057,6 +1156,7 @@ describe("config mutate helpers", () => {
           path: ["agents", "entries", "alpha"],
           kind: "single" as const,
           hasSiblingOverrides: false,
+          hasArrayAncestor: false,
           targetPath: "/tmp/agent-alpha.json5",
         },
       ],

@@ -28,6 +28,7 @@ describe("include migration ownership", () => {
               path: ["agents"],
               kind: "single",
               hasSiblingOverrides: false,
+              hasArrayAncestor: false,
               targetPath: path.join(configDir, "agents.json5"),
             },
           ],
@@ -47,13 +48,42 @@ describe("include migration ownership", () => {
               path: ["diagnostics"],
               kind: "single",
               hasSiblingOverrides: false,
+              hasArrayAncestor: false,
               targetPath: diagnosticsPath,
             },
           ],
         },
         configPath: ["diagnostics", "otel", "protocol"],
       }),
-    ).toEqual({ kind: "single-top-level-include", targetPath: diagnosticsPath });
+    ).toEqual({ kind: "single-include", targetPath: diagnosticsPath });
+  });
+
+  it("allows the deepest sole owner in a nested include chain", () => {
+    const otelPath = path.join(configDir, "otel.json5");
+    expect(
+      classifyConfigPathMigrationOwnership({
+        snapshot: {
+          path: configPath,
+          includeProvenance: [
+            {
+              path: ["diagnostics", "otel"],
+              kind: "single",
+              hasSiblingOverrides: false,
+              hasArrayAncestor: false,
+              targetPath: otelPath,
+            },
+            {
+              path: ["diagnostics"],
+              kind: "single",
+              hasSiblingOverrides: false,
+              hasArrayAncestor: false,
+              targetPath: diagnosticsPath,
+            },
+          ],
+        },
+        configPath: ["diagnostics", "otel", "protocol"],
+      }),
+    ).toEqual({ kind: "single-include", targetPath: otelPath });
   });
 
   it.each([
@@ -64,6 +94,7 @@ describe("include migration ownership", () => {
           path: [],
           kind: "single" as const,
           hasSiblingOverrides: false,
+          hasArrayAncestor: false,
           targetPath: path.join(configDir, "root.json5"),
         },
       ],
@@ -76,6 +107,7 @@ describe("include migration ownership", () => {
           path: ["diagnostics"],
           kind: "multiple" as const,
           hasSiblingOverrides: false,
+          hasArrayAncestor: false,
           targetPaths: [
             path.join(configDir, "diagnostics-a.json5"),
             path.join(configDir, "diagnostics-b.json5"),
@@ -88,24 +120,13 @@ describe("include migration ownership", () => {
       ],
     },
     {
-      name: "nested include",
-      includeProvenance: [
-        {
-          path: ["diagnostics", "otel"],
-          kind: "single" as const,
-          hasSiblingOverrides: false,
-          targetPath: path.join(configDir, "otel.json5"),
-        },
-      ],
-      targetPaths: [path.join(configDir, "otel.json5")],
-    },
-    {
       name: "sibling override",
       includeProvenance: [
         {
           path: ["diagnostics"],
           kind: "single" as const,
           hasSiblingOverrides: true,
+          hasArrayAncestor: false,
           targetPath: diagnosticsPath,
         },
       ],
@@ -118,6 +139,7 @@ describe("include migration ownership", () => {
           path: ["diagnostics"],
           kind: "single" as const,
           hasSiblingOverrides: false,
+          hasArrayAncestor: false,
           targetPath: path.resolve(configDir, "..", "external-diagnostics.json5"),
         },
       ],
@@ -130,6 +152,27 @@ describe("include migration ownership", () => {
         configPath: ["diagnostics", "otel", "protocol"],
       }),
     ).toEqual({ kind: "manual", targetPaths });
+  });
+
+  it("requires manual repair below an actual array entry", () => {
+    const targetPath = path.join(configDir, "otel.json5");
+    expect(
+      classifyConfigPathMigrationOwnership({
+        snapshot: {
+          path: configPath,
+          includeProvenance: [
+            {
+              path: ["diagnostics", "0"],
+              kind: "single",
+              hasSiblingOverrides: false,
+              hasArrayAncestor: true,
+              targetPath,
+            },
+          ],
+        },
+        configPath: ["diagnostics", "0", "protocol"],
+      }),
+    ).toEqual({ kind: "manual", targetPaths: [targetPath] });
   });
 
   it("allows one isolated direct top-level string include", () => {

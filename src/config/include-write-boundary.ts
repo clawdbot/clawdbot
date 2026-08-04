@@ -64,12 +64,6 @@ function isPathPrefix(prefix: readonly string[], candidate: readonly string[]): 
   );
 }
 
-function isKeyedPath(candidate: readonly string[]): boolean {
-  // Array-entry includes own a position inside a merged array, which a keyed
-  // subtree write cannot express. Numeric segments stay out of write-through.
-  return candidate.length > 0 && candidate.every((segment) => !/^\d+$/.test(segment));
-}
-
 function isSoleOwner(entry: ConfigIncludeOwnership): boolean {
   // A merged directive or one carrying sibling overrides does not solely own the
   // value it contributes, so its file cannot absorb a write on its own.
@@ -96,13 +90,20 @@ export function resolveIncludeWriteBoundary(params: {
   let best: IncludeWriteBoundary | null = null;
   let bestDepth = 0;
   for (const entry of provenance) {
-    if (!isSoleOwner(entry) || !entry.targetPath || !isKeyedPath(entry.path)) {
+    // Array-entry includes own a position inside a merged array, which a keyed
+    // subtree write cannot express. Numeric object keys remain ordinary keys.
+    if (
+      !isSoleOwner(entry) ||
+      !entry.targetPath ||
+      entry.path.length === 0 ||
+      entry.hasArrayAncestor
+    ) {
       continue;
     }
     const enclosingMerges = provenance.some(
       (candidate) =>
         candidate !== entry &&
-        candidate.path.length < entry.path.length &&
+        candidate.path.length <= entry.path.length &&
         isPathPrefix(candidate.path, entry.path) &&
         !isSoleOwner(candidate),
     );

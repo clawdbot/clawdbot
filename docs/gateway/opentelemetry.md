@@ -63,10 +63,12 @@ Or enable the plugin from the CLI: `openclaw plugins enable diagnostics-otel`.
 including a value supplied through `${VAR}` interpolation, still resolves this
 field to the retired `grpc` value, run
 [`openclaw doctor --fix`](/cli/doctor). Doctor repairs directly authored values
-and a sole internal single-file include that owns the top-level `diagnostics`
-section. For root or array includes, nested include chains, sibling overrides,
-external include targets, or another ambiguous source, Doctor leaves the files
-unchanged and lists the candidate source file or files to edit manually.
+and the deepest internal single-file include that solely owns the changed
+`diagnostics.otel` keys, including an unambiguous nested include chain. For root
+includes, actual array-entry includes, include arrays, sibling overrides,
+same-path or ancestor merges, changes spanning ownership boundaries, external
+include targets, or another ambiguous source, Doctor leaves the files unchanged
+and lists the candidate source file or files to edit manually.
 
 `OTEL_EXPORTER_OTLP_PROTOCOL` is a process-environment fallback used only when
 `diagnostics.otel.protocol` is unset. Doctor does not rewrite process

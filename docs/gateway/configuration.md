@@ -501,12 +501,16 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     - **Sibling keys**: merged after includes (override included values)
     - **Relative paths**: resolved relative to the including file
     - **Path format**: include paths must not contain null bytes and must be strictly shorter than 4096 characters before and after resolution
-    - **OpenClaw-owned writes**: when a write changes only one top-level section
-      backed by a single-file include such as `plugins: { $include: "./plugins.json5" }`,
-      OpenClaw updates that included file and leaves `openclaw.json` intact
-    - **Unsupported write-through**: root includes, include arrays, and includes
-      with sibling overrides fail closed for OpenClaw-owned writes instead of
-      flattening the config
+    - **OpenClaw-owned writes**: when every changed key is owned by one
+      single-file include at an object-key path, OpenClaw updates the deepest
+      owning include and leaves `openclaw.json` intact. This works for both
+      top-level sections such as `plugins: { $include: "./plugins.json5" }` and
+      nested object-map entries.
+    - **Unsupported write-through**: root includes, actual array-entry includes,
+      include arrays, sibling overrides, changes spanning ownership boundaries,
+      and any nested include beneath a merged owner fail closed instead of
+      flattening the config. Numeric object keys are treated as map keys, not
+      array positions.
     - **Confinement**: `$include` paths must resolve under the directory holding
       `openclaw.json`. To share a tree across machines or users, set
       `OPENCLAW_INCLUDE_ROOTS` to a path-list (`:` on POSIX, `;` on Windows) of

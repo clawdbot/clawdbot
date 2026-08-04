@@ -1,5 +1,6 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { resolveIncludeWriteBoundary } from "../../../config/include-write-boundary.js";
 import { INCLUDE_KEY } from "../../../config/includes.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isPathInside } from "../../../infra/path-safety.js";
@@ -18,7 +19,7 @@ export function containsAuthoredInclude(value: unknown): boolean {
 
 type ConfigPathMigrationOwnership =
   | { kind: "direct" }
-  | { kind: "single-top-level-include"; targetPath: string }
+  | { kind: "single-include"; targetPath: string }
   | { kind: "manual"; targetPaths: string[] };
 
 /** Classify whether Doctor can safely persist a migration at one resolved config path. */
@@ -40,18 +41,13 @@ export function classifyConfigPathMigrationOwnership(params: {
       owners.flatMap((owner) => owner.targetPaths ?? (owner.targetPath ? [owner.targetPath] : [])),
     ),
   ].toSorted();
-  const owner = owners[0];
+  const boundary = resolveIncludeWriteBoundary({
+    provenance: params.snapshot.includeProvenance,
+    changed: { paths: [params.configPath], rootChanged: false },
+  });
   const configDir = path.dirname(path.resolve(params.snapshot.path));
-  if (
-    owners.length === 1 &&
-    owner?.path.length === 1 &&
-    owner.path[0] === params.configPath[0] &&
-    owner.kind === "single" &&
-    !owner.hasSiblingOverrides &&
-    owner.targetPath &&
-    isPathInside(configDir, path.resolve(owner.targetPath))
-  ) {
-    return { kind: "single-top-level-include", targetPath: owner.targetPath };
+  if (boundary && isPathInside(configDir, path.resolve(boundary.includePath))) {
+    return { kind: "single-include", targetPath: boundary.includePath };
   }
 
   return { kind: "manual", targetPaths };

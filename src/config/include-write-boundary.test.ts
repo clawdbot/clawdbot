@@ -11,6 +11,7 @@ const alphaInclude = {
   path: ["agents", "entries", "alpha"],
   kind: "single" as const,
   hasSiblingOverrides: false,
+  hasArrayAncestor: false,
   targetPath: "/cfg/alpha.json5",
 };
 
@@ -63,6 +64,7 @@ describe("resolveIncludeWriteBoundary", () => {
       path: ["agents"],
       kind: "single" as const,
       hasSiblingOverrides: false,
+      hasArrayAncestor: false,
       targetPath: "/cfg/agents.json5",
     };
     expect(
@@ -78,6 +80,7 @@ describe("resolveIncludeWriteBoundary", () => {
       path: ["agents"],
       kind: "single" as const,
       hasSiblingOverrides: false,
+      hasArrayAncestor: false,
       targetPath: "/cfg/agents.json5",
     };
     expect(
@@ -99,9 +102,31 @@ describe("resolveIncludeWriteBoundary", () => {
       resolveIncludeWriteBoundary({
         provenance: [
           alphaInclude,
-          { path: ["agents"], kind: "multiple" as const, hasSiblingOverrides: false },
+          {
+            path: ["agents"],
+            kind: "multiple" as const,
+            hasSiblingOverrides: false,
+            hasArrayAncestor: false,
+          },
         ],
         changed: { paths: [["agents", "entries", "alpha", "model"]], rootChanged: false },
+      }),
+    ).toBeNull();
+  });
+
+  it("declines a nested include merged at the same logical path", () => {
+    expect(
+      resolveIncludeWriteBoundary({
+        provenance: [
+          alphaInclude,
+          {
+            path: alphaInclude.path,
+            kind: "multiple" as const,
+            hasSiblingOverrides: false,
+            hasArrayAncestor: false,
+          },
+        ],
+        changed: { paths: [[...alphaInclude.path, "model"]], rootChanged: false },
       }),
     ).toBeNull();
   });
@@ -144,7 +169,12 @@ describe("resolveIncludeWriteBoundary", () => {
       resolveIncludeWriteBoundary({
         provenance: [
           alphaInclude,
-          { path: [], kind: "multiple" as const, hasSiblingOverrides: false },
+          {
+            path: [],
+            kind: "multiple" as const,
+            hasSiblingOverrides: false,
+            hasArrayAncestor: false,
+          },
         ],
         changed: { paths: [["agents", "entries", "alpha", "model"]], rootChanged: false },
       }),
@@ -154,10 +184,31 @@ describe("resolveIncludeWriteBoundary", () => {
   it("declines an array-entry include", () => {
     expect(
       resolveIncludeWriteBoundary({
-        provenance: [{ ...alphaInclude, path: ["agents", "list", "0"] }],
+        provenance: [{ ...alphaInclude, path: ["agents", "list", "0"], hasArrayAncestor: true }],
         changed: { paths: [["agents", "list", "0", "model"]], rootChanged: false },
       }),
     ).toBeNull();
+  });
+
+  it("accepts a numeric object-key include", () => {
+    const numericMapInclude = {
+      ...alphaInclude,
+      path: ["channels", "discord", "guilds", "123456789"],
+      hasArrayAncestor: false,
+      targetPath: "/cfg/guild.json5",
+    };
+    expect(
+      resolveIncludeWriteBoundary({
+        provenance: [numericMapInclude],
+        changed: {
+          paths: [["channels", "discord", "guilds", "123456789", "requireMention"]],
+          rootChanged: false,
+        },
+      }),
+    ).toEqual({
+      boundaryPath: numericMapInclude.path,
+      includePath: "/cfg/guild.json5",
+    });
   });
 
   it("declines a root change and an empty change set", () => {
