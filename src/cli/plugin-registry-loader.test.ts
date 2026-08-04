@@ -1,7 +1,12 @@
 // Plugin registry loader tests cover CLI plugin registry loading and cache reset behavior.
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { measureCliCommandStartup } from "./command-startup-timing.js";
 
 const ensurePluginRegistryLoadedMock = vi.hoisted(() => vi.fn());
+const tempDirs: string[] = [];
 
 vi.mock("./plugin-registry.js", () => ({
   ensurePluginRegistryLoaded: ensurePluginRegistryLoadedMock,
@@ -23,8 +28,10 @@ describe("plugin-registry-loader", () => {
     loggingState.forceConsoleToStderr = false;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     loggingState.forceConsoleToStderr = originalForceStderr;
+    vi.unstubAllEnvs();
+    await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
   it("routes plugin load logs to stderr and restores state", async () => {
@@ -84,5 +91,34 @@ describe("plugin-registry-loader", () => {
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "configured-channels",
     });
+  });
+
+  it("attributes module import separately from runtime loading", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "openclaw-plugin-registry-startup-"));
+    tempDirs.push(dir);
+    const timelinePath = join(dir, "timeline.jsonl");
+    vi.stubEnv("OPENCLAW_DIAGNOSTICS", "timeline");
+    vi.stubEnv("OPENCLAW_DIAGNOSTICS_TIMELINE_PATH", timelinePath);
+
+    await measureCliCommandStartup("plugin-registry", () =>
+      ensureCliPluginRegistryLoaded({
+        scope: "all",
+      }),
+    );
+
+    const events = (await readFile(timelinePath, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const starts = events.filter((event) => event.type === "span.start");
+    const outer = starts.find(
+      (event) => (event.attributes as { stage?: string } | undefined)?.stage === "plugin-registry",
+    );
+    expect(outer).toBeDefined();
+    expect(
+      starts
+        .filter((event) => event.parentSpanId === outer?.spanId)
+        .map((event) => (event.attributes as { stage?: string } | undefined)?.stage),
+    ).toEqual(["plugin-registry-module-import", "plugin-registry-runtime-load"]);
   });
 });
