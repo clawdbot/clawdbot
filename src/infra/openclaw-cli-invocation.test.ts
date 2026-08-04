@@ -106,4 +106,18 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
       cwd: repoRoot,
     });
   });
+
+  it("does not preserve a foreign launcher basename", () => {
+    expect(
+      resolveCurrentOpenClawCliInvocation(commandArgs, {
+        argv1: "/other/openclaw.mjs",
+        cwd: repoRoot,
+        execPath: "/usr/bin/node",
+      }),
+    ).toEqual({
+      command: "/usr/bin/node",
+      args: ["--import", trustedTsxLoader, repoSourceEntry, ...commandArgs],
+      cwd: repoRoot,
+    });
+  });
 });

@@ -70,11 +70,11 @@ export function resolveCurrentOpenClawCliInvocation(
   if (
     entry &&
     entry !== execPath &&
+    entryPackageRoot &&
     (OPENCLAW_CLI_ENTRY_BASENAMES.has(path.basename(entry)) ||
-      (entryPackageRoot &&
-        OPENCLAW_PACKAGE_ENTRY_PATHS.has(
-          path.relative(path.resolve(entryPackageRoot), path.resolve(entry)),
-        )))
+      OPENCLAW_PACKAGE_ENTRY_PATHS.has(
+        path.relative(path.resolve(entryPackageRoot), path.resolve(entry)),
+      ))
   ) {
     return { command: execPath, args: [...execArgv, entry, ...args], cwd: invocationCwd };
   }
