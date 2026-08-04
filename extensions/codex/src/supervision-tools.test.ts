@@ -194,6 +194,33 @@ describe("Codex supervision compatibility tools", () => {
     });
   });
 
+  it("redacts credential-shaped text from the probe failure detail", async () => {
+    requestCodexAppServerJsonMock.mockRejectedValue(
+      new Error("connect failed with token ghp_abcdefghijklmnopqrstuv"),
+    );
+    const tools = createCodexSupervisionTools({
+      getPluginConfig: () => ({
+        supervision: {
+          enabled: true,
+          allowRawTranscripts: true,
+          endpoints: [{ id: "local", transport: "stdio-proxy" }],
+        },
+      }),
+      senderIsOwner: true,
+      env: {},
+    });
+
+    const result = await toolByName(tools, "codex_endpoint_probe").execute("probe", {});
+
+    expect(result).toMatchObject({
+      details: {
+        health: [
+          { endpointId: "local", ok: false, detail: "connect failed with token [redacted]" },
+        ],
+      },
+    });
+  });
+
   it("rejects unauthenticated remote compatibility endpoints before connecting", async () => {
     const tools = createCodexSupervisionTools({
       getPluginConfig: () => ({

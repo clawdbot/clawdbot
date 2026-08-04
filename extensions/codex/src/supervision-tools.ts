@@ -1052,8 +1052,9 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
       description: "Check configured Codex app-server endpoints.",
       parameters: EmptyParamsSchema,
       execute: async () => {
-        const { pluginConfig, endpoints } = current();
+        const { endpoints } = current();
         const health: CodexSupervisorEndpointHealth[] = [];
+        const endpointErrors = new Map<string, string>();
         for (const endpoint of endpoints) {
           try {
             await request(endpoint, "thread/loaded/list", { limit: 1 });
@@ -1062,23 +1063,25 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
             if (error instanceof CodexSupervisionPolicyError) {
               throw error;
             }
-            const includeDetail = resolveToolPolicy(options, pluginConfig).allowRawTranscripts;
-            health.push(
-              includeDetail
-                ? {
-                    endpointId: endpoint.id,
-                    ok: false,
-                    detail: error instanceof Error ? error.message : String(error),
-                  }
-                : { endpointId: endpoint.id, ok: false },
-            );
+            endpointErrors.set(endpoint.id, error instanceof Error ? error.message : String(error));
+            health.push({ endpointId: endpoint.id, ok: false });
           }
         }
-        requireCurrentEndpointSet(options, endpoints);
+        const { pluginConfig: latestConfig } = requireCurrentEndpointSet(options, endpoints);
+        if (resolveToolPolicy(options, latestConfig).allowRawTranscripts) {
+          for (const entry of health) {
+            if (!entry.ok) {
+              const rawMessage = endpointErrors.get(entry.endpointId);
+              if (rawMessage) {
+                entry.detail = redactCodexSupervisionValue(rawMessage) as string;
+              }
+            }
+          }
+        }
         return jsonResult({
           summary: `codex endpoints: ${health.filter((entry) => entry.ok).length}/${health.length} ok`,
           endpoints: endpoints.map((endpoint) =>
-            endpointResult(endpoint, pluginConfig, options.env ?? process.env),
+            endpointResult(endpoint, latestConfig, options.env ?? process.env),
           ),
           health,
         });
