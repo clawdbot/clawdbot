@@ -114,7 +114,13 @@ function resolveMcpLoopbackTools(
     mode === "exact"
       ? applyGrantToolsAllow(scoped.tools, params.toolsAllow)
       : applyPolicyToolsAllow(scoped.tools, params.toolsAllow);
-  replaceWithEffectiveToolAllowlist(sessionsSendToolPolicy.allow, tools);
+  replaceWithEffectiveToolAllowlist(
+    sessionsSendToolPolicy.allow,
+    tools.flatMap((tool) => {
+      const name = readMcpLoopbackToolName(tool);
+      return name ? [{ name }] : [];
+    }),
+  );
   return {
     agentId: scoped.agentId,
     workspaceDir: scoped.workspaceDir,
