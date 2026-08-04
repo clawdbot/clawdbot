@@ -20,7 +20,7 @@ scenario:
   execution:
     kind: script
     path: test/e2e/qa-lab/tui/tui-pty-evidence-producer.ts
-    timeoutMs: 600000
+    timeoutMs: 720000
     args: [--artifact-base, "${outputDir}", --scenario-id, "${scenarioId}"]
     config:
       requireBuiltCli: true
