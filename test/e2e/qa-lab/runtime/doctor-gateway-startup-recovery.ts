@@ -43,6 +43,12 @@ type GatewayHealthJson = {
   ok?: boolean;
 };
 
+type ForeignListener = {
+  previousProcessTitle: string;
+  server: Server;
+  listening: boolean;
+};
+
 type ProducerOptions = {
   artifactBase: string;
   repoRoot: string;
@@ -274,22 +280,35 @@ async function getFreePort(): Promise<number> {
   return address.port;
 }
 
-async function listen(port: number): Promise<Server> {
+async function listen(port: number): Promise<ForeignListener> {
+  const previousProcessTitle = process.title;
+  process.title = "qa-port-listener";
   const server = net.createServer((socket) => socket.destroy());
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(port, "127.0.0.1", resolve);
-  });
-  return server;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(port, "127.0.0.1", resolve);
+    });
+  } catch (error) {
+    process.title = previousProcessTitle;
+    throw error;
+  }
+  return { previousProcessTitle, server, listening: true };
 }
 
-async function closeServer(server: Server | undefined): Promise<void> {
-  if (!server?.listening) {
+async function closeServer(listener: ForeignListener | undefined): Promise<void> {
+  if (!listener?.listening) {
     return;
   }
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      listener.server.close((error) => (error ? reject(error) : resolve()));
+      listener.server.closeAllConnections();
+    });
+    listener.listening = false;
+  } finally {
+    process.title = listener.previousProcessTitle;
+  }
 }
 
 function parseSystemdState(stdout: string): SystemdState {
@@ -423,7 +442,7 @@ async function runSystemdRecovery(
   const dropInPath = path.join(dropInDir, "qa-start-limit.conf");
   const crashWrapper = path.join(stateDir, "qa-start-limit.sh");
   const port = await getFreePort();
-  let foreignListener: Server | undefined;
+  let foreignListener: ForeignListener | undefined;
   let installed = false;
   let startLimit: SystemdState | undefined;
   let recovered: Awaited<ReturnType<typeof waitForGatewayHealthy>> | undefined;
