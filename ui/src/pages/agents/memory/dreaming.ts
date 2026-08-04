@@ -478,7 +478,12 @@ async function runDreamDiaryAction(
     reloadDiary?: boolean;
   },
 ): Promise<boolean> {
-  if (!canCallDreamingMethod(state, method, "operator.write") || state.dreamDiaryActionLoading) {
+  const client = state.client;
+  if (
+    !client ||
+    !canCallDreamingMethod(state, method, "operator.write") ||
+    state.dreamDiaryActionLoading
+  ) {
     return false;
   }
   state.dreamDiaryActionLoading = true;
@@ -487,7 +492,7 @@ async function runDreamDiaryAction(
   state.dreamDiaryActionMessage = null;
   state.dreamDiaryActionArchivePath = null;
   try {
-    const payload = await state.client.request<DoctorMemoryDreamActionPayload>(
+    const payload = await client.request<DoctorMemoryDreamActionPayload>(
       method,
       buildSelectedAgentPayload(state),
     );
