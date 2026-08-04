@@ -1,9 +1,6 @@
 // Mattermost tests cover automatic ack policy and reaction transport.
 import { describe, expect, it, vi } from "vitest";
-import {
-  createMattermostAckReactionRuntime,
-  resolveMattermostReactionEmojiName,
-} from "./ack-reactions.js";
+import { createMattermostAckReactionRuntime } from "./ack-reactions.js";
 import type { MattermostClient } from "./client.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 
@@ -45,23 +42,37 @@ function createRuntime(params: {
   };
 }
 
-describe("resolveMattermostReactionEmojiName", () => {
+describe("createMattermostAckReactionRuntime", () => {
   it.each([
     ["👀", "eyes"],
     [":eyes:", "eyes"],
     ["white_check_mark", "white_check_mark"],
     ["❤️", "heart"],
     ["+1", "+1"],
-  ])("normalizes %s to %s", (input, expected) => {
-    expect(resolveMattermostReactionEmojiName(input)).toBe(expected);
+  ])("normalizes %s to %s", async (input, expected) => {
+    const { request, runtime } = createRuntime({
+      cfg: { messages: { ackReaction: input, ackReactionScope: "all" } },
+    });
+
+    runtime.queueAfterRecord();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+
+    expect(request).toHaveBeenCalledWith("/reactions", {
+      method: "POST",
+      body: JSON.stringify({ user_id: "bot-1", post_id: "post-1", emoji_name: expected }),
+    });
   });
 
-  it.each(["", "🦄", ":eyes", "eyes:", "skin tone"])("rejects invalid name %s", (input) => {
-    expect(resolveMattermostReactionEmojiName(input)).toBeNull();
-  });
-});
+  it.each(["", "🦄", ":eyes", "eyes:", "skin tone"])("rejects invalid name %s", async (input) => {
+    const { request, runtime } = createRuntime({
+      cfg: { messages: { ackReaction: input, ackReactionScope: "all" } },
+    });
 
-describe("createMattermostAckReactionRuntime", () => {
+    runtime.queueAfterRecord();
+    await Promise.resolve();
+
+    expect(request).not.toHaveBeenCalled();
+  });
   it("adds the resolved ack reaction once after recording", async () => {
     const { request, runtime } = createRuntime({});
 

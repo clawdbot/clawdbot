@@ -27,7 +27,7 @@ export type MattermostAckReactionGateFacts = {
 };
 
 /** Mattermost reaction endpoints accept emoji names, not raw Unicode glyphs. */
-export function resolveMattermostReactionEmojiName(raw: string): string | null {
+function resolveMattermostReactionEmojiName(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;
