@@ -269,10 +269,15 @@ Fetch usage-cost summaries from session logs.
 ```bash
 openclaw gateway usage-cost
 openclaw gateway usage-cost --days 7
+openclaw gateway usage-cost --port 18999
 openclaw gateway usage-cost --agent work --json
 openclaw gateway usage-cost --all-agents
 openclaw gateway usage-cost --json
 ```
+
+<ParamField path="--port <port>" type="number">
+  Target a local loopback Gateway on this port. Overrides `OPENCLAW_GATEWAY_URL` and `OPENCLAW_GATEWAY_PORT` for this call. Cannot be combined with `--url`.
+</ParamField>
 
 <ParamField path="--days <days>" type="number" default="30">
   Number of days to include.
