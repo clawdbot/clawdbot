@@ -1088,4 +1088,3 @@ describe("installContextEngineLoopHook", () => {
     expect(engine.assemble).toHaveBeenCalledTimes(1);
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
