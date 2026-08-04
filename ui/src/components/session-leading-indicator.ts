@@ -32,12 +32,12 @@ function renderSessionTrailingState(
   pullRequestState: SessionPullRequestIndicatorState,
 ) {
   const sessionState = renderSessionState(session);
-  if (!session.forkedFromParent && pullRequestState === "none" && sessionState === nothing) {
+  if (!session.hasForkSource && pullRequestState === "none" && sessionState === nothing) {
     return nothing;
   }
   const forkLabel = t("sessionsView.forkSession");
   return html`
-    ${session.forkedFromParent
+    ${session.hasForkSource
       ? html`<span
           class="session-row-fork-indicator"
           role="img"

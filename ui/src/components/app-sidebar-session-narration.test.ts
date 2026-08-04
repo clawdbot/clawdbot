@@ -24,6 +24,7 @@ function runningRow(key: string): SidebarRecentSession {
     cloudWorkerActive: false,
     hasAutomation: false,
     unread: false,
+    hasForkSource: false,
     attention: { kind: "none" },
     startedAt: 1,
     childSessionKeys: [],

@@ -135,7 +135,7 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
         response,
       });
     });
-    const gatewayUrl = server.baseUrl.replace(/^http/u, "ws").replace(/\/$/u, "");
+    const gatewayUrl = `${server.baseUrl.replace(/^http/u, "ws").replace(/\/$/u, "")}/wilfred`;
     await page.addInitScript((sameOriginGatewayUrl) => {
       (
         window as Window & {
@@ -220,7 +220,7 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
       await expect.poll(() => avatarRequests.length).toBe(1);
       expect(avatarRequests[0]).toEqual({
         authorization: "Bearer e2e-device-token",
-        url: expect.stringContaining(`/api/users/${testProfile.id}/avatar?v=2`),
+        url: `${server.baseUrl}wilfred/api/users/${testProfile.id}/avatar?v=2`,
       });
       expect(await sidebarAvatar.getAttribute("src")).toBe(imageUrl);
       expect(
