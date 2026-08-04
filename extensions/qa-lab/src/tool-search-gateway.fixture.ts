@@ -38,6 +38,10 @@ type LaneResult = {
   gatewayOutputToolNames: string[];
   gatewayOutputText: string;
   sessionLogToolMentions: Record<string, number>;
+  targetToolIdentity: {
+    source: string;
+    pluginId: string;
+  };
 };
 
 type LaneResultSummary = Pick<
@@ -48,6 +52,7 @@ type LaneResultSummary = Pick<
   | "providerRawBytes"
   | "gatewayOutputText"
   | "sessionLogToolMentions"
+  | "targetToolIdentity"
 > & {
   providerInputSnippet?: string;
   providerToolOutputSnippet?: string;
@@ -332,6 +337,33 @@ async function configureLane(params: {
   });
 }
 
+async function readTargetToolIdentity(params: {
+  env: QaSuiteRuntimeEnv;
+  sessionKey: string;
+  targetTool: string;
+}) {
+  const payload = (await params.env.gateway.call(
+    "tools.effective",
+    { sessionKey: params.sessionKey },
+    { timeoutMs: liveTurnTimeoutMs(params.env, 90_000) },
+  )) as {
+    groups?: Array<{
+      tools?: Array<{ id?: string; source?: string; pluginId?: string }>;
+    }>;
+  };
+  for (const group of payload.groups ?? []) {
+    for (const tool of group.tools ?? []) {
+      if (tool.id === params.targetTool) {
+        return {
+          source: tool.source?.trim() ?? "",
+          pluginId: tool.pluginId?.trim() ?? "",
+        };
+      }
+    }
+  }
+  throw new Error(`tools.effective did not report ${params.targetTool}`);
+}
+
 export async function stageToolSearchGatewayFixture(params: {
   env: QaSuiteRuntimeEnv;
   targetTool?: string;
@@ -366,6 +398,7 @@ export async function runToolSearchGatewayLane(params: {
   const requestCursorBefore = readQaMockRequestCursor(
     await fetchJson(qaMockRequestCursorUrl(providerBaseUrl)),
   );
+  const sessionKey = `tool-search-gateway-${params.lane}`;
   const response = await fetchJson(
     `${params.env.gateway.baseUrl}/v1/responses`,
     {
@@ -375,7 +408,7 @@ export async function runToolSearchGatewayLane(params: {
         "content-type": "application/json",
         "x-openclaw-scopes": "operator.write",
         "x-openclaw-agent": "qa",
-        "x-openclaw-session-key": `tool-search-gateway-${params.lane}`,
+        "x-openclaw-session-key": sessionKey,
       },
       body: JSON.stringify({
         model: "openclaw/qa",
@@ -415,6 +448,11 @@ export async function runToolSearchGatewayLane(params: {
     .filter((value): value is string => typeof value === "string")
     .join("\n");
   const responseStatus = (response as { status?: unknown }).status;
+  const targetToolIdentity = await readTargetToolIdentity({
+    env: params.env,
+    sessionKey,
+    targetTool: params.fixture.targetTool,
+  });
   const mentionCountsAfter = await countToolSearchSessionLogMentions({
     stateDir,
     targetTool: params.fixture.targetTool,
@@ -442,6 +480,7 @@ export async function runToolSearchGatewayLane(params: {
     gatewayOutputToolNames: outputToolNames(response),
     gatewayOutputText: outputText(response),
     sessionLogToolMentions: subtractMentionCounts(mentionCountsAfter, mentionCountsBefore),
+    targetToolIdentity,
   };
 }
 
@@ -519,4 +558,11 @@ export function assertToolSearchLaneResults(params: {
     !normal.providerPlannedTools.includes("tool_search_code"),
     "normal lane unexpectedly used Tool Search bridge",
   );
+  for (const lane of [normal, code]) {
+    assert(
+      lane.targetToolIdentity.source === "plugin" &&
+        lane.targetToolIdentity.pluginId === FAKE_PLUGIN_ID,
+      `tools.effective did not attribute ${targetTool} to plugin ${FAKE_PLUGIN_ID}: ${laneDebug()}`,
+    );
+  }
 }

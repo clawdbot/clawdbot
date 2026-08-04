@@ -162,7 +162,14 @@ export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedU
   // the live turn) — see https://github.com/openclaw/openclaw/issues/3658.
   const senderMeta = buildUserTurnSenderMeta(params.sender);
   const openClawMeta = {
-    ...(params.senderIsOwner === undefined ? {} : { senderIsOwner: params.senderIsOwner }),
+    // Privileged synthetic handoffs may execute owner tools but never author trusted memory.
+    ...(params.senderIsOwner === undefined
+      ? {}
+      : {
+          senderIsOwner:
+            params.senderIsOwner &&
+            (!params.provenance || params.provenance.kind === "external_user"),
+        }),
     ...senderMeta,
     ...(params.transport ? { transport: params.transport } : {}),
     ...(normalizedMedia.length > 0 ? { media: normalizedMedia } : {}),

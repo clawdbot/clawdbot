@@ -572,10 +572,11 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
       .description("Call a Gateway method")
       .argument("<method>", "Method name (health/status/system-presence/cron.*)")
       .option("--params <json>", "JSON object string for params", "{}")
+      .option("--port <port>", "Local Gateway port")
       .action(async (method, opts, command) => {
         await runGatewayCommand(
           async () => {
-            const rpcOpts = resolveGatewayRpcOptions(opts, command);
+            const rpcOpts = await resolveGatewayRpcOptionsWithLocalPort(opts, command);
             const params = parseGatewayCallParams(String(opts.params ?? "{}"));
             const result = await callGatewayCli(method, rpcOpts, params);
             if (rpcOpts.json) {

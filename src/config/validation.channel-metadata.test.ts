@@ -709,20 +709,23 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
     },
   );
 
-  it.each(["patterned", "composed"] as const)(
+  it.each(["dynamic", "named", "patterned", "composed"] as const)(
     "accepts core-owned heartbeat visibility for %s accounts",
     (shape) => {
       const registry = createExternalFeishuSchemaRegistry();
       const properties = requireExternalFeishuChannelProperties(registry);
       const account = (properties.accounts as Record<string, unknown>).additionalProperties;
-      properties.accounts =
-        shape === "patterned"
-          ? {
-              type: "object",
-              patternProperties: { "^work$": account },
-              additionalProperties: false,
-            }
-          : { allOf: [{ type: "object", additionalProperties: account }] };
+      const accountsByShape = {
+        dynamic: { type: "object", additionalProperties: account },
+        named: { type: "object", properties: { work: account }, additionalProperties: false },
+        patterned: {
+          type: "object",
+          patternProperties: { "^work$": account },
+          additionalProperties: false,
+        },
+        composed: { allOf: [{ type: "object", additionalProperties: account }] },
+      };
+      properties.accounts = accountsByShape[shape];
       mockLoadPluginManifestRegistry.mockReturnValue(registry);
 
       const result = validateConfigObjectRawWithPlugins({
@@ -735,6 +738,7 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
         },
       });
       expect(result.ok).toBe(true);
+      expect(account).not.toHaveProperty("properties.heartbeatVisibility");
     },
   );
 

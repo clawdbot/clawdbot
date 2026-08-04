@@ -89,6 +89,7 @@ function normalizeCoreOwnedChannelSchema(schema: Record<string, unknown>): Recor
       }
       const entries = [
         node.additionalProperties,
+        ...Object.values(isRecord(node.properties) ? node.properties : {}),
         ...Object.values(isRecord(node.patternProperties) ? node.patternProperties : {}),
       ];
       for (const entry of entries) {
