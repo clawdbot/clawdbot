@@ -400,6 +400,10 @@ describe("SkillWorkshopPage lifecycle", () => {
       vi.fn(async () => ({})),
       { sessions },
     );
+    context.gateway.snapshot.hello = {
+      type: "hello-ok",
+      protocol: 4,
+    } as ApplicationGatewaySnapshot["hello"];
     const loadedState = createSkillWorkshopState();
     loadedState.skillWorkshopAgentId = "research";
     loadedState.skillWorkshopLoaded = true;
@@ -437,7 +441,7 @@ describe("SkillWorkshopPage lifecycle", () => {
     expect(context.skillWorkshopRevision.prepare).toHaveBeenCalledWith({
       sessionKey: "agent:research:revision",
       instructions: "revise it",
-      owner: context.gateway.snapshot,
+      owner: context.gateway.snapshot.hello,
       proposalId: "proposal-owner",
       proposalAgentId: "research",
     });

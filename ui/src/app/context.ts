@@ -9,7 +9,7 @@ import type { SessionCapability } from "../lib/sessions/index.ts";
 import type { WorkboardCapability } from "../lib/workboard/capability.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
 import type { ApplicationConfigCapability } from "./config.ts";
-import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
+import type { ApplicationGateway } from "./gateway.ts";
 import type { NativeChatDrafts } from "./native-bridge.ts";
 import type { NativeNotificationsCapability } from "./native-notifications.ts";
 import type { ApplicationOverlays } from "./overlays.ts";
@@ -58,17 +58,15 @@ export type ApplicationNavigationOptions = Partial<
 type SkillWorkshopRevisionHandoff = {
   sessionKey: string;
   instructions: string;
-  owner: ApplicationGatewaySnapshot;
+  /** Stable for ordinary snapshots and session selection; rotates on reconnect. */
+  owner: object;
   proposalId: string;
   proposalAgentId: string;
 };
 
 export type ApplicationSkillWorkshopRevisionHandoff = {
   prepare: (handoff: SkillWorkshopRevisionHandoff) => void;
-  consume: (
-    sessionKey: string,
-    owner: ApplicationGatewaySnapshot | null,
-  ) => SkillWorkshopRevisionHandoff | null;
+  consume: (sessionKey: string, owner: object | null) => SkillWorkshopRevisionHandoff | null;
   clear: (handoff?: SkillWorkshopRevisionHandoff) => void;
 };
 

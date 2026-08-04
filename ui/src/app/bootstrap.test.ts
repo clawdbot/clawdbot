@@ -30,14 +30,9 @@ function deferred<T>() {
 }
 
 describe("createSkillWorkshopRevisionHandoff", () => {
-  it("does not consume a handoff through a replacement snapshot with the same client", () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const owner = {
-      phase: "connected",
-      client,
-      hello: null,
-    } as ApplicationContext["gateway"]["snapshot"];
-    const replacement = { ...owner };
+  it("survives session selection but not a same-client reconnect", () => {
+    const owner = {};
+    const replacementConnection = {};
     const handoff = {
       sessionKey: "agent:main:revision",
       instructions: "Revise the skill.",
@@ -49,16 +44,13 @@ describe("createSkillWorkshopRevisionHandoff", () => {
 
     revisions.prepare(handoff);
 
-    expect(revisions.consume(handoff.sessionKey, replacement)).toBeNull();
     expect(revisions.consume(handoff.sessionKey, owner)).toEqual(handoff);
+    revisions.prepare(handoff);
+    expect(revisions.consume(handoff.sessionKey, replacementConnection)).toBeNull();
   });
 
   it("clears only the handoff that became stale", () => {
-    const owner = {
-      phase: "connected",
-      client: { request: vi.fn() } as unknown as GatewayBrowserClient,
-      hello: null,
-    } as ApplicationContext["gateway"]["snapshot"];
+    const owner = {};
     const stale = {
       sessionKey: "agent:main:stale",
       instructions: "Stale revision.",

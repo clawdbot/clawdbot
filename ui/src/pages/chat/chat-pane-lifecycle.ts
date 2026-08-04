@@ -350,7 +350,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
     }
     const revision = this.context.skillWorkshopRevision.consume(
       expectedSessionKey,
-      this.context.gateway.snapshot,
+      this.context.gateway.snapshot.hello,
     );
     if (!revision) {
       return;
