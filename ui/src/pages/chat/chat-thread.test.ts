@@ -1,16 +1,64 @@
+// @vitest-environment node
 // Control UI tests cover build chat items behavior.
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
-import { extractToolCardsCached as extractToolCards } from "../../lib/chat/tool-cards.ts";
+import * as toolCards from "../../lib/chat/tool-cards.ts";
 import {
+  assistantGroupCanOwnActiveRunStatus,
   buildCachedChatItems,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
+  getExpansionStateVersion,
   getExpandedToolCards,
+  getExpandedUserMessages,
+  persistedMessageEntryId,
   resetChatThreadState,
+  setExpansionState,
   syncToolCardExpansionState,
 } from "./chat-thread.ts";
+import { rememberLiveTerminalRun } from "./terminal-message-identity.ts";
+import { resolveChatProjectionRunId } from "./tool-stream.ts";
+
+const { extractToolCardsCached: extractToolCards } = toolCards;
+
+describe("assistantGroupCanOwnActiveRunStatus", () => {
+  const group = (message: Record<string, unknown>): MessageGroup => ({
+    kind: "group",
+    key: "assistant:1",
+    role: "assistant",
+    timestamp: 1,
+    isStreaming: false,
+    messages: [{ key: "message:1", message }],
+  });
+
+  it("accepts visible replies and rejects forwarded assistant input", () => {
+    expect(assistantGroupCanOwnActiveRunStatus(group({ content: "Reply" }))).toBe(true);
+    expect(
+      assistantGroupCanOwnActiveRunStatus(
+        group({
+          content: "Forwarded input",
+          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        }),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("persistedMessageEntryId", () => {
+  it("rejects optimistic pending bubbles and accepts transcript identities", () => {
+    expect(
+      persistedMessageEntryId({
+        role: "user",
+        __openclaw: { id: "pending-send:1", kind: "pending-send" },
+      }),
+    ).toBeNull();
+    expect(persistedMessageEntryId({ role: "user", __openclaw: { id: "entry-1", seq: 2 } })).toBe(
+      "entry-1",
+    );
+  });
+});
 
 type CachedChatItemsProps = Parameters<typeof buildCachedChatItems>[0];
 type WorkGroupItem = Extract<
@@ -18,8 +66,9 @@ type WorkGroupItem = Extract<
   { kind: "work-group" }
 >;
 
-const SENDER_METADATA_BLOCK =
-  'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n```';
+// Inbound context blocks are stamped with the provenance marker; strippers key
+// on the marker, so display fixtures must carry it to be recognized.
+const SENDER_METADATA_BLOCK = `${markInboundContextLabel("Sender:")}\n\`\`\`json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n\`\`\``;
 
 function createProps(overrides: Partial<CachedChatItemsProps> = {}): CachedChatItemsProps {
   return {
@@ -70,9 +119,411 @@ function messageRecord(group: MessageGroup, index = 0): Record<string, unknown> 
   return requireRecord(group.messages[index]?.message);
 }
 
+describe("assistant commentary grouping", () => {
+  it("keeps user before assistant when the assistant timestamp lags the user timestamp", () => {
+    // Regression for #112943: Gateway clock can lag behind the browser clock,
+    // giving the assistant reply an earlier timestamp than the user prompt.
+    // Stable transcript rows must stay in insertion order; only tool/stream
+    // items get reordered by timestamp.
+    const groups = messageGroups({
+      messages: [
+        { role: "user", content: "User prompt", timestamp: 2_000 },
+        { role: "assistant", content: "Server reply.", timestamp: 1_000 },
+      ],
+    });
+
+    expect(groups.map((group) => group.role)).toEqual(["user", "assistant"]);
+  });
+
+  it("keeps a skewed live tool below its user boundary when it becomes stable", () => {
+    const paneId = "clock-skew-tool-transition";
+    const user = { role: "user", content: "User prompt", timestamp: 2_000 };
+    const tool = {
+      role: "toolResult",
+      runId: "run-active",
+      toolCallId: "call-clock-skew",
+      toolName: "shell",
+      content: "Tool output",
+      timestamp: 1_000,
+    };
+    const liveGroups = messageGroups({
+      paneId,
+      runId: "run-active",
+      messages: [user],
+      toolMessages: [tool],
+    });
+    const stableGroups = messageGroups({ paneId, messages: [user, tool], toolMessages: [] });
+
+    expect(liveGroups.map((group) => group.role)).toEqual(["user", "tool"]);
+    expect(stableGroups.map((group) => group.role)).toEqual(["user", "tool"]);
+    resetChatThreadState(paneId);
+  });
+
+  it("keeps current live work above a future queued user turn when it becomes stable", () => {
+    const paneId = "clock-skew-future-queue-transition";
+    const activeUser = {
+      role: "user",
+      content: "Active prompt",
+      timestamp: 2_000,
+      __openclaw: { idempotencyKey: "run-active:user" },
+    };
+    const liveTool = {
+      role: "toolResult",
+      runId: "run-active",
+      toolCallId: "call-active",
+      toolName: "shell",
+      content: "Current tool output",
+      timestamp: 1_000,
+    };
+    const activeSend = {
+      id: "active-send",
+      text: "Active prompt",
+      createdAt: 2_000,
+      sendRunId: "run-active",
+      sendSubmittedAtMs: 10,
+      sendState: "waiting-model" as const,
+    };
+    const futureSend = {
+      id: "future-send",
+      text: "Future prompt",
+      createdAt: 3_000,
+      sendAttempts: 1,
+      sendRunId: "run-future",
+      sendState: "waiting-reconnect" as const,
+    };
+    const liveGroups = messageGroups({
+      paneId,
+      runId: "run-active",
+      queue: [activeSend, futureSend],
+      toolMessages: [liveTool],
+    });
+    const stableGroups = messageGroups({
+      paneId,
+      messages: [activeUser, liveTool],
+      queue: [futureSend],
+      toolMessages: [],
+    });
+
+    expect(liveGroups.map((group) => group.role)).toEqual(["user", "tool", "user"]);
+    expect(stableGroups.map((group) => group.role)).toEqual(["user", "tool", "user"]);
+    resetChatThreadState(paneId);
+  });
+
+  it("keeps an active stream above a future queued user turn when it becomes stable", () => {
+    const paneId = "clock-skew-stream-queue-transition";
+    const activeUser = {
+      role: "user",
+      content: "Active prompt",
+      timestamp: 2_000,
+      __openclaw: { idempotencyKey: "run-active:user" },
+    };
+    const activeSend = {
+      id: "active-send",
+      text: "Active prompt",
+      createdAt: 2_000,
+      sendRunId: "run-active",
+      sendSubmittedAtMs: 10,
+      sendState: "waiting-model" as const,
+    };
+    const futureSend = {
+      id: "future-send",
+      text: "Future prompt",
+      createdAt: 3_000,
+      sendAttempts: 1,
+      sendRunId: "run-future",
+      sendState: "waiting-reconnect" as const,
+    };
+    const liveItems = buildCachedChatItems(
+      createProps({
+        paneId,
+        queue: [activeSend, futureSend],
+        stream: "Current partial reply",
+        streamStartedAt: 1_000,
+      }),
+    );
+    const stableItems = buildCachedChatItems(
+      createProps({
+        paneId,
+        messages: [
+          activeUser,
+          { role: "assistant", content: "Current partial reply", timestamp: 1_000 },
+        ],
+        queue: [futureSend],
+      }),
+    );
+    const visibleKinds = (items: ReturnType<typeof buildCachedChatItems>) =>
+      items.map((item) => (item.kind === "group" ? item.role : item.kind));
+
+    expect(visibleKinds(liveItems)).toEqual(["user", "stream", "user"]);
+    expect(visibleKinds(stableItems)).toEqual(["user", "assistant", "user"]);
+    resetChatThreadState(paneId);
+  });
+
+  it("keeps current-run segments below their user boundary under clock skew", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        runId: "run-active",
+        messages: [{ role: "user", content: "Current prompt", timestamp: 2_000 }],
+        streamSegments: [{ text: "Current progress", ts: 1_000, runId: "run-active" }],
+      }),
+    );
+
+    expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
+      "user",
+      "stream",
+    ]);
+  });
+
+  it("keeps replayed tool and commentary items inside their older turn", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        runId: "run-current",
+        messages: [
+          {
+            role: "user",
+            content: "Earlier prompt",
+            timestamp: 1_000,
+            __openclaw: { idempotencyKey: "run-earlier:user" },
+          },
+          { role: "assistant", content: "Earlier reply", timestamp: 1_300 },
+          {
+            role: "user",
+            content: "Current prompt",
+            timestamp: 2_000,
+            __openclaw: { idempotencyKey: "run-current:user" },
+          },
+        ],
+        streamSegments: [
+          { text: "Earlier commentary", ts: 500, runId: "run-earlier", itemId: "earlier" },
+          { text: "Current commentary", ts: 1_200, runId: "run-current", itemId: "current" },
+        ],
+        toolMessages: [
+          {
+            role: "toolResult",
+            runId: "run-earlier",
+            toolCallId: "call-earlier",
+            toolName: "shell",
+            content: "Earlier tool output",
+            timestamp: 3_000,
+          },
+        ],
+      }),
+    );
+
+    expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
+      "user",
+      "stream",
+      "assistant",
+      "tool",
+      "user",
+      "stream",
+    ]);
+  });
+
+  it("keeps unmatched legacy replay rows timestamped across older turns", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        runId: "run-current",
+        messages: [
+          { role: "user", content: "First prompt", timestamp: 1_000 },
+          { role: "assistant", content: "First reply", timestamp: 1_300 },
+          { role: "user", content: "Second prompt", timestamp: 2_000 },
+          { role: "assistant", content: "Second reply", timestamp: 2_300 },
+          { role: "user", content: "Current prompt", timestamp: 3_000 },
+        ],
+        toolMessages: [
+          {
+            role: "toolResult",
+            runId: "legacy-unmatched-run",
+            toolCallId: "call-legacy",
+            toolName: "shell",
+            content: "Legacy tool output",
+            timestamp: 1_100,
+          },
+        ],
+      }),
+    );
+
+    expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
+      "user",
+      "tool",
+      "assistant",
+      "user",
+      "assistant",
+      "user",
+    ]);
+  });
+
+  it("keeps a reconnecting current prompt above its retained stream", () => {
+    const paneId = "clock-skew-reconnecting-current-turn";
+    const reconnectingSend = {
+      id: "reconnecting-send",
+      text: "Current prompt",
+      createdAt: 2_000,
+      sendAttempts: 1,
+      sendRunId: "run-active",
+      sendState: "waiting-reconnect" as const,
+    };
+    const items = buildCachedChatItems(
+      createProps({
+        paneId,
+        runId: "run-active",
+        queue: [reconnectingSend],
+        stream: "Retained partial reply",
+        streamStartedAt: 1_000,
+      }),
+    );
+
+    expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
+      "user",
+      "stream",
+    ]);
+    resetChatThreadState(paneId);
+  });
+
+  it("keeps a restored reconnect prompt above its active server tool projection", () => {
+    const reconnectingSend = {
+      id: "reconnecting-send",
+      text: "Current prompt",
+      createdAt: 2_000,
+      sendAttempts: 1,
+      sendRunId: "run-restored",
+      sendState: "waiting-reconnect" as const,
+    };
+    const runId = resolveChatProjectionRunId({
+      activeRunIds: ["run-restored"],
+      queue: [reconnectingSend],
+    });
+    const items = buildCachedChatItems(
+      createProps({
+        runId,
+        queue: [reconnectingSend],
+        toolMessages: [
+          {
+            role: "toolResult",
+            runId: "run-restored",
+            toolCallId: "call-restored",
+            toolName: "shell",
+            content: "Restored tool output",
+            timestamp: 1_000,
+          },
+        ],
+      }),
+    );
+
+    expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
+      "user",
+      "tool",
+    ]);
+  });
+
+  it("keeps a queued current prompt before a terminal delivered ahead of its ACK", () => {
+    const paneId = "terminal-before-send-ack";
+    const terminal = rememberLiveTerminalRun(
+      { role: "assistant", content: "Terminal reply", timestamp: 1_000 },
+      "run-active",
+    );
+    const sending = {
+      id: "sending-current",
+      text: "Current prompt",
+      createdAt: 2_000,
+      sendAttempts: 1,
+      sendRunId: "run-active",
+      sendState: "sending" as const,
+    };
+    const liveItems = buildCachedChatItems(
+      createProps({ paneId, runId: "run-active", messages: [terminal], queue: [sending] }),
+    );
+    const stableItems = buildCachedChatItems(
+      createProps({
+        paneId,
+        messages: [
+          {
+            role: "user",
+            content: "Current prompt",
+            timestamp: 2_000,
+            __openclaw: { idempotencyKey: "run-active:user" },
+          },
+          terminal,
+        ],
+      }),
+    );
+    const roles = (items: ReturnType<typeof buildCachedChatItems>) =>
+      items.filter((item) => item.kind === "group").map((item) => item.role);
+
+    expect(roles(liveItems)).toEqual(["user", "assistant"]);
+    expect(roles(stableItems)).toEqual(["user", "assistant"]);
+    resetChatThreadState(paneId);
+  });
+
+  it("keeps keyed commentary separate from the terminal assistant reply", () => {
+    const groups = messageGroups({
+      messages: [
+        { role: "user", content: "do it", timestamp: 1_000 },
+        {
+          role: "assistant",
+          content: "Checking the workspace.",
+          timestamp: 2_000,
+          openclawStreamFallback: {
+            replacementText: "Checking the workspace.",
+            source: "segment",
+            itemId: "preamble-1",
+          },
+        },
+        {
+          role: "assistant",
+          content: "Inspecting the result.",
+          timestamp: 3_000,
+          openclawStreamFallback: {
+            replacementText: "Inspecting the result.",
+            source: "segment",
+            itemId: "preamble-2",
+          },
+        },
+        { role: "assistant", content: "All done.", timestamp: 4_000 },
+      ],
+    });
+
+    expect(groups.map((group) => group.role)).toEqual(["user", "assistant", "assistant"]);
+    expect(groupAt(groups, 1).messages).toHaveLength(2);
+    expect(groupAt(groups, 2).messages).toHaveLength(1);
+  });
+
+  it("hides durable commentary when the display preference is disabled", () => {
+    const paneId = "commentary-visibility";
+    const messages = [
+      { role: "user", content: "do it", timestamp: 1_000 },
+      {
+        role: "assistant",
+        content: "Checking the workspace.",
+        timestamp: 2_000,
+        openclawStreamFallback: {
+          replacementText: "Checking the workspace.",
+          source: "segment",
+          itemId: "preamble-1",
+        },
+      },
+      { role: "assistant", content: "All done.", timestamp: 3_000 },
+    ];
+
+    const visible = buildCachedChatItems(createProps({ paneId, messages }));
+    const hidden = buildCachedChatItems(
+      createProps({ paneId, messages, persistCommentary: false }),
+    );
+    const restored = buildCachedChatItems(createProps({ paneId, messages }));
+
+    expect(visible.filter((item) => item.kind === "group")).toHaveLength(3);
+    expect(hidden.filter((item) => item.kind === "group")).toHaveLength(2);
+    expect(restored.filter((item) => item.kind === "group")).toHaveLength(3);
+    expect(messages).toHaveLength(3);
+    resetChatThreadState(paneId);
+  });
+});
+
 describe("collapseCompletedTurnWork", () => {
   const collapsedItems = (props: Partial<CachedChatItemsProps>, runWorking = false) =>
     collapseCompletedTurnWork(coalesceStreamRuns(buildCachedChatItems(createProps(props))), {
+      sessionKey: "agent:main:dashboard:test-session",
       runWorking,
     });
 
@@ -107,6 +558,31 @@ describe("collapseCompletedTurnWork", () => {
     expect(work.durationMs).toBe(9_000);
     expect(work.hasError).toBe(false);
     expect(requireGroup(items[2]).role).toBe("assistant");
+  });
+
+  it.each([
+    "agent:main:main",
+    "agent:main:telegram:direct:42",
+    "agent:main::dashboard:malformed",
+    "agent:main:dashboard:session:extra",
+  ])("keeps completed work expanded for non-dashboard session %s", (sessionKey) => {
+    const items = coalesceStreamRuns(
+      buildCachedChatItems(
+        createProps({
+          sessionKey,
+          messages: [
+            { role: "user", content: "do it", timestamp: 1_000 },
+            { role: "assistant", content: "Checking…", timestamp: 2_000 },
+            toolResult("call-1", 3_000),
+            { role: "assistant", content: "All done.", timestamp: 10_000 },
+          ],
+        }),
+      ),
+    );
+
+    const rendered = collapseCompletedTurnWork(items, { sessionKey, runWorking: false });
+
+    expect(rendered.map((item) => item.kind)).toEqual(["group", "group", "group", "group"]);
   });
 
   it("keeps the trailing turn expanded while the run works", () => {
@@ -236,7 +712,11 @@ describe("collapseCompletedTurnWork", () => {
           }),
         ),
       ),
-      { runWorking: false, searchActive: true },
+      {
+        sessionKey: "agent:main:dashboard:test-session",
+        runWorking: false,
+        searchActive: true,
+      },
     );
 
     expect(items.some((item) => item.kind === "work-group")).toBe(false);
@@ -323,6 +803,42 @@ describe("collapseCompletedTurnWork", () => {
 });
 
 describe("buildCachedChatItems row identity", () => {
+  it("keeps an accepted initial send key across local-to-history replacement", () => {
+    resetChatThreadState();
+    const initial = groupAt(
+      messageGroups({
+        messages: [
+          {
+            __openclaw: { idempotencyKey: "initial-send:user", seq: 1 },
+            role: "user",
+            content: "Initial image prompt",
+            timestamp: 1,
+          },
+        ],
+      }),
+      0,
+    );
+    const reconciled = groupAt(
+      messageGroups({
+        messages: [
+          {
+            __openclaw: {
+              id: "persisted-user-message",
+              idempotencyKey: "initial-send:user",
+              seq: 1,
+            },
+            role: "user",
+            content: "Initial image prompt",
+            timestamp: 2,
+          },
+        ],
+      }),
+      0,
+    );
+
+    expect(messageAt(reconciled, 0).key).toBe(messageAt(initial, 0).key);
+  });
+
   it("keeps a persistent message key across live-to-authoritative replacement", () => {
     resetChatThreadState();
     const initial = groupAt(
@@ -539,8 +1055,10 @@ describe("buildCachedChatItems row identity", () => {
 });
 
 describe("buildCachedChatItems working spark", () => {
+  const readingIndicator = (props: Partial<CachedChatItemsProps>) =>
+    buildCachedChatItems(createProps(props)).find((item) => item.kind === "reading-indicator");
   const hasReadingIndicator = (props: Partial<CachedChatItemsProps>) =>
-    buildCachedChatItems(createProps(props)).some((item) => item.kind === "reading-indicator");
+    readingIndicator(props) !== undefined;
   const liveTool = (resultReceived: boolean) => ({
     role: "assistant",
     runId: "engine-run-1",
@@ -635,6 +1153,112 @@ describe("buildCachedChatItems working spark", () => {
     expect(indicator).toMatchObject({ kind: "reading-indicator", startedAt: 1_000 });
   });
 
+  it("keeps one working row from optimistic send through acknowledgement", () => {
+    resetChatThreadState();
+    const sessionKey = "agent:main:working-row";
+    const pendingItems = buildCachedChatItems(
+      createProps({
+        sessionKey,
+        queue: [
+          {
+            id: "queued-send-1",
+            text: "keep the row stable",
+            createdAt: 1_000,
+            sendRunId: "run-1",
+            sendState: "sending",
+            sendSubmittedAtMs: 10,
+          },
+        ],
+        runWorking: true,
+      }),
+    );
+    const pendingIndicator = expectDefined(
+      pendingItems.find((item) => item.kind === "reading-indicator"),
+      "pending working indicator",
+    );
+    const pendingRun = expectDefined(
+      coalesceStreamRuns(pendingItems).find((item) => item.kind === "stream-run"),
+      "pending stream run",
+    );
+
+    const acknowledgedItems = buildCachedChatItems(
+      createProps({
+        sessionKey,
+        runId: "run-1",
+        runWorking: true,
+        stream: "",
+        streamStartedAt: 2_000,
+      }),
+    );
+    const acknowledgedIndicator = expectDefined(
+      acknowledgedItems.find((item) => item.kind === "reading-indicator"),
+      "acknowledged working indicator",
+    );
+    const acknowledgedRun = expectDefined(
+      coalesceStreamRuns(acknowledgedItems).find((item) => item.kind === "stream-run"),
+      "acknowledged stream run",
+    );
+
+    expect(acknowledgedIndicator).toMatchObject({
+      key: pendingIndicator.key,
+      startedAt: pendingIndicator.startedAt,
+    });
+    expect(acknowledgedRun.key).toBe(pendingRun.key);
+
+    const streamingItems = buildCachedChatItems(
+      createProps({
+        sessionKey,
+        runId: "run-1",
+        runWorking: true,
+        stream: "The reply has started.",
+        streamStartedAt: 2_000,
+      }),
+    );
+    const visibleStream = expectDefined(
+      streamingItems.find((item) => item.kind === "stream" && item.isStreaming),
+      "visible live stream",
+    );
+    const streamingIndicator = expectDefined(
+      streamingItems.find((item) => item.kind === "reading-indicator"),
+      "streaming working indicator",
+    );
+    const streamingRun = expectDefined(
+      coalesceStreamRuns(streamingItems).find((item) => item.kind === "stream-run"),
+      "streaming run",
+    );
+
+    expect(visibleStream.key).toBe(pendingIndicator.key);
+    expect(streamingIndicator.key).toBe(pendingIndicator.key);
+    expect(streamingRun).toMatchObject({
+      key: pendingRun.key,
+      parts: [{ kind: "stream" }, { kind: "reading-indicator" }],
+    });
+
+    const nextRunIndicator = expectDefined(
+      readingIndicator({
+        sessionKey,
+        runId: "run-2",
+        runWorking: true,
+        stream: "",
+        streamStartedAt: 3_000,
+      }),
+      "next run working indicator",
+    );
+    const otherSessionIndicator = expectDefined(
+      readingIndicator({
+        sessionKey: "agent:other:working-row",
+        runId: "run-1",
+        runWorking: true,
+        stream: "",
+        streamStartedAt: 2_000,
+      }),
+      "other session working indicator",
+    );
+
+    expect(nextRunIndicator.key).not.toBe(pendingIndicator.key);
+    expect(otherSessionIndicator.key).not.toBe(pendingIndicator.key);
+  });
+
   it("keeps client and engine run identities separate", () => {
     const sessionKey = "agent:main:elapsed-run-namespaces";
     buildCachedChatItems(
@@ -691,11 +1315,24 @@ describe("buildCachedChatItems working spark", () => {
     expect(hasReadingIndicator({ runWorking: true, loading: true })).toBe(false);
   });
 
-  it("does not stack the spark under a visible running tool row", () => {
-    expect(hasReadingIndicator({ runWorking: true, toolMessages: [liveTool(false)] })).toBe(false);
+  it("keeps the non-null empty-stream fallback during initial history loading", () => {
+    expect(hasReadingIndicator({ stream: "", loading: true })).toBe(true);
   });
 
-  it("returns the spark once the running tool resolves", () => {
+  it("does not suppress active telemetry once a live stream exists", () => {
+    const items = buildCachedChatItems(
+      createProps({ runWorking: true, loading: true, stream: "The reply has started." }),
+    );
+
+    expect(items.filter((item) => item.kind === "stream")).toHaveLength(1);
+    expect(items.filter((item) => item.kind === "reading-indicator")).toHaveLength(1);
+  });
+
+  it("keeps the telemetry row beside a visible running tool", () => {
+    expect(hasReadingIndicator({ runWorking: true, toolMessages: [liveTool(false)] })).toBe(true);
+  });
+
+  it("keeps the telemetry row once the running tool resolves", () => {
     expect(hasReadingIndicator({ runWorking: true, toolMessages: [liveTool(true)] })).toBe(true);
   });
 
@@ -718,12 +1355,14 @@ describe("buildCachedChatItems", () => {
           role: "user",
           content: "first",
           senderLabel: "Iris",
+          __openclaw: { senderId: "iris", senderName: "Iris" },
           timestamp: 1000,
         },
         {
           role: "user",
           content: "second",
           senderLabel: "Joaquin De Rojas",
+          __openclaw: { senderId: "joaquin", senderName: "Joaquin De Rojas" },
           timestamp: 1001,
         },
       ],
@@ -731,6 +1370,71 @@ describe("buildCachedChatItems", () => {
 
     expect(groups).toHaveLength(2);
     expect(groups.map((group) => group.senderLabel)).toEqual(["Iris", "Joaquin De Rojas"]);
+    expect(groups.map((group) => group.sender?.id)).toEqual(["iris", "joaquin"]);
+  });
+
+  it("renders non-compaction system messages as notices and skips empty output", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        messages: [
+          { role: "system", content: "Command output\n  indented", timestamp: 1000 },
+          { role: "system", content: "  \n", timestamp: 1001 },
+        ],
+      }),
+    );
+
+    expect(items).toEqual([
+      {
+        kind: "notice",
+        key: expect.any(String),
+        text: "Command output\n  indented",
+        timestamp: 1000,
+      },
+    ]);
+  });
+
+  it("attributes assistant groups to the latest user in multi-sender threads", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: "Alice asks",
+          __openclaw: { senderId: "alice", senderName: "Alice" },
+          timestamp: 1000,
+        },
+        { role: "assistant", content: "For Alice", timestamp: 1001 },
+        {
+          role: "user",
+          content: "Bob asks",
+          __openclaw: { senderId: "bob", senderName: "Bob" },
+          timestamp: 1002,
+        },
+        { role: "user", content: "Local follow-up", timestamp: 1003 },
+        { role: "assistant", content: "For Bob", timestamp: 1004 },
+      ],
+    });
+
+    const assistantGroups = groups.filter((group) => group.role === "assistant");
+    expect(assistantGroups.map((group) => group.replyToSender)).toEqual([
+      { id: "alice", name: "Alice" },
+      undefined,
+    ]);
+  });
+
+  it("does not add reply attribution in a single-sender thread", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: "Alice asks",
+          __openclaw: { senderId: "alice", senderName: "Alice" },
+          timestamp: 1000,
+        },
+        { role: "assistant", content: "For Alice", timestamp: 1001 },
+      ],
+    });
+
+    expect(groups.find((group) => group.role === "assistant")?.replyToSender).toBeUndefined();
   });
 
   it("keeps differently cased user roles in one group", () => {
@@ -1459,6 +2163,181 @@ describe("buildCachedChatItems", () => {
     expect(messageAt(groupAt(groups, 0), 1).duplicateCount).toBeUndefined();
   });
 
+  it("keeps identical user prompts separate when canonical transcript identities differ", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          __openclaw: {
+            id: "canonical-web-user",
+            idempotencyKey: "web-same-text-run:user",
+            seq: 1,
+          },
+          role: "user",
+          content: [{ type: "text", text: "Both clients independently sent the same prompt." }],
+          timestamp: 1,
+        },
+        {
+          __openclaw: {
+            id: "canonical-tui-user",
+            idempotencyKey: "tui-same-text-run:user",
+            seq: 2,
+          },
+          role: "user",
+          content: [{ type: "text", text: "Both clients independently sent the same prompt." }],
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groupAt(groups, 0).role).toBe("user");
+    expect(groupAt(groups, 0).messages).toHaveLength(2);
+    expect(messageRecord(groupAt(groups, 0), 0)["__openclaw"]).toMatchObject({
+      id: "canonical-web-user",
+    });
+    expect(messageRecord(groupAt(groups, 0), 1)["__openclaw"]).toMatchObject({
+      id: "canonical-tui-user",
+    });
+    expect(messageAt(groupAt(groups, 0), 0).duplicateCount).toBeUndefined();
+    expect(messageAt(groupAt(groups, 0), 1).duplicateCount).toBeUndefined();
+  });
+
+  it("keeps imported prompts from distinct CLI sessions separate when provider IDs collide", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Imported clients sent the same prompt." }],
+          timestamp: 1,
+          __openclaw: {
+            id: "provider-local-user",
+            externalId: "provider-local-user",
+            importedFrom: "claude-cli",
+            cliSessionId: "first-cli-session",
+            seq: 1,
+          },
+        },
+        {
+          role: "user",
+          content: [{ type: "text", text: "Imported clients sent the same prompt." }],
+          timestamp: 2,
+          __openclaw: {
+            id: "provider-local-user",
+            externalId: "provider-local-user",
+            importedFrom: "claude-cli",
+            cliSessionId: "second-cli-session",
+            seq: 2,
+          },
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groupAt(groups, 0).messages).toHaveLength(2);
+    expect(messageRecord(groupAt(groups, 0), 0)["__openclaw"]).toMatchObject({
+      cliSessionId: "first-cli-session",
+    });
+    expect(messageRecord(groupAt(groups, 0), 1)["__openclaw"]).toMatchObject({
+      cliSessionId: "second-cli-session",
+    });
+  });
+
+  it("keeps a native prompt separate from a colliding imported provider ID", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Native and imported prompts coincide." }],
+          timestamp: 1,
+          __openclaw: { id: "colliding-user", seq: 1 },
+        },
+        {
+          role: "user",
+          content: [{ type: "text", text: "Native and imported prompts coincide." }],
+          timestamp: 2,
+          __openclaw: {
+            id: "colliding-user",
+            externalId: "colliding-user",
+            importedFrom: "claude-cli",
+            cliSessionId: "imported-cli-session",
+            seq: 2,
+          },
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groupAt(groups, 0).messages).toHaveLength(2);
+    expect(messageRecord(groupAt(groups, 0), 0)["__openclaw"]).toEqual({
+      id: "colliding-user",
+      seq: 1,
+    });
+    expect(messageRecord(groupAt(groups, 0), 1)["__openclaw"]).toMatchObject({
+      cliSessionId: "imported-cli-session",
+    });
+  });
+
+  it("does not guess that incomplete imported source identities are duplicate prompts", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Incomplete imports can share provider IDs." }],
+          timestamp: 1,
+          __openclaw: {
+            id: "incomplete-provider-user",
+            externalId: "incomplete-provider-user",
+            importedFrom: "claude-cli",
+          },
+        },
+        {
+          role: "user",
+          content: [{ type: "text", text: "Incomplete imports can share provider IDs." }],
+          timestamp: 2,
+          __openclaw: {
+            id: "incomplete-provider-user",
+            externalId: "incomplete-provider-user",
+            importedFrom: "claude-cli",
+          },
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groupAt(groups, 0).messages).toHaveLength(2);
+    expect(messageAt(groupAt(groups, 0), 0).duplicateCount).toBeUndefined();
+    expect(messageAt(groupAt(groups, 0), 1).duplicateCount).toBeUndefined();
+  });
+
+  it("collapses a replay of the same canonical user prompt", () => {
+    const metadata = {
+      id: "canonical-replayed-user",
+      idempotencyKey: "replayed-user-run:user",
+      seq: 1,
+    };
+    const groups = messageGroups({
+      messages: [
+        {
+          __openclaw: metadata,
+          role: "user",
+          content: [{ type: "text", text: "This prompt was delivered twice." }],
+          timestamp: 1,
+        },
+        {
+          __openclaw: { ...metadata },
+          role: "user",
+          content: [{ type: "text", text: "This prompt was delivered twice." }],
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groupAt(groups, 0).role).toBe("user");
+    expect(groupAt(groups, 0).messages).toHaveLength(1);
+    expect(messageAt(groupAt(groups, 0), 0).duplicateCount).toBe(2);
+  });
+
   it("keeps same-id user relay copies separate so sender identity is preserved", () => {
     const groups = messageGroups({
       messages: [
@@ -1591,10 +2470,9 @@ describe("buildCachedChatItems", () => {
       }),
     );
 
-    expect(items).toEqual([
+    expect(items).toMatchObject([
       {
         kind: "stream",
-        key: "stream:main:1",
         text: "Visible reply",
         startedAt: 1,
         isStreaming: true,
@@ -1706,6 +2584,48 @@ describe("buildCachedChatItems", () => {
       text: "I will inspect the file.",
     });
     expect(messageRecord(requireGroup(items[1])).toolCallId).toBe("call-read");
+  });
+
+  it("renders one live card when active history contains the same tool call block", () => {
+    const groups = messageGroups({
+      runId: "run-live",
+      messages: [
+        { role: "user", content: "Read the file.", timestamp: 1 },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "I will read it." },
+            {
+              type: "toolCall",
+              id: "call-read",
+              name: "read",
+              arguments: { path: "README.md" },
+            },
+          ],
+          timestamp: 2,
+        },
+      ],
+      toolMessages: [
+        {
+          role: "assistant",
+          runId: "run-live",
+          toolCallId: "call-read",
+          content: [{ type: "toolcall", name: "read", arguments: { path: "README.md" } }],
+          timestamp: 3,
+        },
+      ],
+    });
+
+    const cards = groups.flatMap((group, index) =>
+      group.messages.flatMap((entry) => extractToolCards(entry.message, `restored-${index}`)),
+    );
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ callId: "call-read", name: "read" });
+    expect(
+      groups.some((group) =>
+        firstMessageContent(group).some((block) => requireRecord(block).text === "I will read it."),
+      ),
+    ).toBe(true);
   });
 
   it("keeps same-millisecond stream segments interleaved with their matching tool cards", () => {
@@ -1855,6 +2775,26 @@ describe("buildCachedChatItems", () => {
     expect(messageRecord(groupAt(groups, 0)).content).toBe("still visible");
   });
 
+  it("does not expose malformed tool stream entries to message rendering", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        toolMessages: [
+          null,
+          undefined,
+          {
+            role: "assistant",
+            content: [{ type: "toolcall", name: "heartbeat_respond", arguments: {} }],
+            timestamp: 1,
+          },
+        ],
+      }),
+    );
+
+    const groups = items.filter((item) => item.kind === "group");
+    expect(groups).toHaveLength(1);
+    expect(messageRecord(groupAt(groups, 0)).role).toBe("assistant");
+  });
+
   it("does not collapse duplicate text messages separated by another message", () => {
     const groups = messageGroups({
       messages: [
@@ -1996,11 +2936,16 @@ describe("buildCachedChatItems", () => {
           createdAt: 2,
           sendSubmittedAtMs: 10,
           sendState: "sending",
+          sender: { id: "alice@example.com", name: "Alice Example" },
         },
       ],
     });
 
     expect(groups.map((group) => group.role)).toEqual(["assistant", "user"]);
+    expect(groupAt(groups, 1).sender).toEqual({
+      id: "alice@example.com",
+      name: "Alice Example",
+    });
     expect(messageRecord(groupAt(groups, 1)).content).toStrictEqual([
       { type: "text", text: "first visible send" },
     ]);
@@ -2097,6 +3042,36 @@ describe("buildCachedChatItems", () => {
     expect(messageAt(groupAt(groups, 0), 1).duplicateCount).toBeUndefined();
   });
 
+  it("hides a pending send after history accepts its idempotency key", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: "accepted prompt",
+          timestamp: 1,
+          __openclaw: { idempotencyKey: "accepted-run:user", seq: 1 },
+        },
+      ],
+      queue: [
+        {
+          id: "pending-send-1",
+          text: "accepted prompt",
+          createdAt: 2,
+          sendRunId: "accepted-run",
+          sendSubmittedAtMs: 10,
+          sendState: "sending",
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groupAt(groups, 0).messages).toHaveLength(1);
+    expect(messageRecord(groupAt(groups, 0))["__openclaw"]).toMatchObject({
+      idempotencyKey: "accepted-run:user",
+      seq: 1,
+    });
+  });
+
   it("keeps failed queued sends out of the thread", () => {
     const groups = messageGroups({
       queue: [
@@ -2183,6 +3158,25 @@ describe("buildCachedChatItems", () => {
 
     expect(canvasBlocksIn(groupAt(groups, 0))).toHaveLength(1);
     expect(canvasBlocksIn(groupAt(groups, 1))).toStrictEqual([]);
+  });
+
+  it("keeps a clock-skewed live App preview after the latest user boundary", () => {
+    const groups = messageGroups({
+      messages: [
+        { role: "user", content: "Earlier request", timestamp: 1_000 },
+        { role: "assistant", content: "Earlier response", timestamp: 1_100 },
+        { role: "user", content: "Current request", timestamp: 2_000 },
+      ],
+      toolMessages: [
+        { ...mcpAppResult("mcp-app-skewed", "call-skewed", 900), runId: "run-active" },
+      ],
+      runId: "run-active",
+      showToolCalls: false,
+    });
+
+    expect(groups.map((group) => group.role)).toEqual(["user", "assistant", "user", "assistant"]);
+    expect(canvasBlocksIn(groupAt(groups, 1))).toStrictEqual([]);
+    expect(canvasBlocksIn(groupAt(groups, 3))).toHaveLength(1);
   });
 
   it("keeps a live App preview on an assistant search match", () => {
@@ -2512,7 +3506,7 @@ describe("buildCachedChatItems", () => {
     expect(divider.kind).toBe("divider");
     expect(divider.label).toBe("Compacted history");
     expect(divider.description).toBe(
-      "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
+      "The compacted transcript is preserved as a checkpoint. Open thread checkpoints to branch or restore from that compacted view.",
     );
     const action = requireRecord(divider.action);
     expect(action.kind).toBe("session-checkpoints");
@@ -2546,6 +3540,36 @@ describe("buildCachedChatItems", () => {
 });
 
 describe("tool expansion state", () => {
+  it("skips the tool-card walk when the item array identity is unchanged", () => {
+    resetChatThreadState();
+    const group: MessageGroup = {
+      kind: "group",
+      key: "assistant-stable",
+      role: "assistant",
+      messages: [
+        {
+          key: "assistant-stable",
+          message: { role: "assistant", content: "No tools in this row" },
+        },
+      ],
+      timestamp: 1,
+      isStreaming: false,
+    };
+    const items = [group];
+    const extractSpy = vi.spyOn(toolCards, "extractToolCardsCached");
+    try {
+      syncToolCardExpansionState("identity-stable", items, false);
+      const callsAfterFirstSync = extractSpy.mock.calls.length;
+
+      syncToolCardExpansionState("identity-stable", items, false);
+
+      expect(callsAfterFirstSync).toBeGreaterThan(0);
+      expect(extractSpy).toHaveBeenCalledTimes(callsAfterFirstSync);
+    } finally {
+      extractSpy.mockRestore();
+    }
+  });
+
   it("expands already-visible tool cards when auto-expand turns on", () => {
     resetChatThreadState();
     const group: MessageGroup = {
@@ -2605,6 +3629,462 @@ describe("tool expansion state", () => {
   });
 });
 
+describe("expansion-state render dependencies", () => {
+  it("reads unchanged tool and user expansion maps without locale sorting", () => {
+    resetChatThreadState();
+    const tools = getExpandedToolCards("fast-session");
+    const users = getExpandedUserMessages("fast-session");
+    for (let index = 0; index < 128; index += 1) {
+      setExpansionState(tools, `tool-${127 - index}`, index % 2 === 0);
+      setExpansionState(users, `user-${127 - index}`, index % 2 === 0);
+    }
+    const compare = vi.spyOn(String.prototype, "localeCompare");
+    try {
+      for (let render = 0; render < 3; render += 1) {
+        expect(getExpansionStateVersion(tools)).toBe(tools.size);
+        expect(getExpansionStateVersion(users)).toBe(users.size);
+      }
+      expect(compare.mock.calls.length).toBe(0);
+    } finally {
+      compare.mockRestore();
+    }
+  });
+
+  it("invalidates same-size toggles but keeps no-op updates stable", () => {
+    resetChatThreadState();
+    const cards = getExpandedToolCards("version-session");
+    expect(getExpansionStateVersion(cards)).toBe(0);
+
+    setExpansionState(cards, "card", false);
+    const initializedVersion = getExpansionStateVersion(cards);
+    expect(initializedVersion).toBe(1);
+
+    setExpansionState(cards, "card", false);
+    expect(getExpansionStateVersion(cards)).toBe(initializedVersion);
+
+    setExpansionState(cards, "card", true);
+    expect(getExpansionStateVersion(cards)).toBe(initializedVersion + 1);
+    expect(getExpandedToolCards("version-session").size).toBe(1);
+  });
+
+  it("shares user-message render versions across equivalent session aliases", () => {
+    resetChatThreadState();
+    setExpansionState(getExpandedUserMessages("main"), "user-message", true);
+
+    expect(getExpansionStateVersion(getExpandedUserMessages("main"))).toBe(1);
+    expect(getExpansionStateVersion(getExpandedUserMessages("agent:main:main"))).toBe(1);
+
+    setExpansionState(getExpandedUserMessages("agent:main:main"), "user-message", false);
+    expect(getExpansionStateVersion(getExpandedUserMessages("main"))).toBe(2);
+    expect(getExpandedUserMessages("main").get("user-message")).toBe(false);
+  });
+
+  it("keeps expanded disclosures while transcript search temporarily hides them", () => {
+    resetChatThreadState();
+    const sessionKey = "search-preserves-disclosures";
+    const messages = [
+      { role: "user", content: "hidden user prompt" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "hidden assistant reply" },
+          { type: "toolcall", id: "search-hidden-call", name: "browser.open" },
+        ],
+      },
+      { role: "user", content: "needle" },
+    ];
+    const unfiltered = buildCachedChatItems(createProps({ sessionKey, messages }));
+    syncToolCardExpansionState(sessionKey, unfiltered, false);
+    const tools = getExpandedToolCards(sessionKey);
+    const cardId = expectDefined(
+      [...tools.keys()].find((key) => key.includes(":toolcard:")),
+      "unfiltered transcript tool card",
+    );
+    setExpansionState(tools, cardId, true);
+    const users = getExpandedUserMessages(sessionKey);
+    const hiddenUserGroup = expectDefined(
+      unfiltered.find(
+        (item): item is MessageGroup => item.kind === "group" && item.role === "user",
+      ),
+      "unfiltered transcript user group",
+    );
+    const hiddenUserId = expectDefined(hiddenUserGroup.messages[0]?.key, "hidden user message");
+    setExpansionState(users, hiddenUserId, true);
+
+    const filtered = buildCachedChatItems(
+      createProps({ sessionKey, messages, searchOpen: true, searchQuery: "needle" }),
+    );
+    expect(filtered).not.toBe(unfiltered);
+    expect(filtered.every((item) => item.kind !== "group" || item.role !== "assistant")).toBe(true);
+    syncToolCardExpansionState(sessionKey, filtered, false, true);
+
+    expect(tools.get(cardId)).toBe(true);
+    expect(users.get(hiddenUserId)).toBe(true);
+
+    const restored = buildCachedChatItems(createProps({ sessionKey, messages }));
+    syncToolCardExpansionState(sessionKey, restored, false);
+
+    expect(tools.get(cardId)).toBe(true);
+    expect(users.get(hiddenUserId)).toBe(true);
+  });
+
+  it("prunes cards removed during search when the same visible projection becomes complete", () => {
+    resetChatThreadState();
+    const sessionKey = "search-removes-hidden-card";
+    const group = (key: string): MessageGroup => ({
+      kind: "group",
+      key,
+      role: "assistant",
+      messages: [
+        {
+          key,
+          message: {
+            role: "assistant",
+            content: [{ type: "toolcall", id: `call-${key}`, name: "browser.open" }],
+          },
+        },
+      ],
+      timestamp: 1,
+      isStreaming: false,
+    });
+    const hidden = group("hidden-card");
+    const visible = group("visible-card");
+    const visibleProjection = [visible];
+    syncToolCardExpansionState(sessionKey, [hidden, visible], false);
+    const expanded = getExpandedToolCards(sessionKey);
+    const hiddenCardId = "hidden-card:toolcard:0";
+    setExpansionState(expanded, hiddenCardId, true);
+
+    syncToolCardExpansionState(sessionKey, visibleProjection, false, true);
+    expect(expanded.get(hiddenCardId)).toBe(true);
+    const filteredVersion = getExpansionStateVersion(expanded);
+
+    syncToolCardExpansionState(sessionKey, visibleProjection, false);
+
+    expect(expanded.has(hiddenCardId)).toBe(false);
+    expect(expanded.has("visible-card:toolcard:0")).toBe(true);
+    expect(getExpansionStateVersion(expanded)).toBe(filteredVersion + 1);
+  });
+
+  it("auto-expands retained cards hidden while transcript search is active", () => {
+    resetChatThreadState();
+    const sessionKey = "search-auto-expands-hidden-cards";
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "hidden assistant reply" },
+          { type: "toolcall", id: "hidden-call", name: "browser.open" },
+        ],
+      },
+      { role: "user", content: "another turn" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "needle visible reply" },
+          { type: "toolcall", id: "visible-call", name: "browser.open" },
+        ],
+      },
+    ];
+    const complete = buildCachedChatItems(createProps({ sessionKey, messages }));
+    syncToolCardExpansionState(sessionKey, complete, false);
+    const expanded = getExpandedToolCards(sessionKey);
+    const cardIds = [...expanded.keys()];
+    const hiddenCardId = expectDefined(cardIds[0], "hidden retained card");
+    const visibleCardId = expectDefined(cardIds[1], "visible retained card");
+
+    const filtered = buildCachedChatItems(
+      createProps({ sessionKey, messages, searchOpen: true, searchQuery: "needle" }),
+    );
+    syncToolCardExpansionState(sessionKey, filtered, false, true);
+    expect(expanded.get(hiddenCardId)).toBe(false);
+    expect(expanded.get(visibleCardId)).toBe(false);
+
+    syncToolCardExpansionState(sessionKey, filtered, true, true);
+
+    expect(expanded.get(hiddenCardId)).toBe(true);
+    expect(expanded.get(visibleCardId)).toBe(true);
+    syncToolCardExpansionState(
+      sessionKey,
+      buildCachedChatItems(createProps({ sessionKey, messages })),
+      true,
+    );
+    expect(expanded.get(hiddenCardId)).toBe(true);
+    expect(expanded.get(visibleCardId)).toBe(true);
+  });
+
+  it("prunes expansion state when a tool card leaves the transcript", () => {
+    resetChatThreadState();
+    const group: MessageGroup = {
+      kind: "group",
+      key: "assistant-pruned",
+      role: "assistant",
+      messages: [
+        {
+          key: "assistant-pruned",
+          message: {
+            role: "assistant",
+            content: [{ type: "toolcall", id: "call-pruned", name: "browser.open" }],
+          },
+        },
+      ],
+      timestamp: 1,
+      isStreaming: false,
+    };
+    syncToolCardExpansionState("prune-session", [group], false);
+    const expanded = getExpandedToolCards("prune-session");
+    expect(expanded.has("assistant-pruned:toolcard:0")).toBe(true);
+    const populatedVersion = getExpansionStateVersion(expanded);
+
+    syncToolCardExpansionState("prune-session", [], false);
+
+    expect(expanded.has("assistant-pruned:toolcard:0")).toBe(false);
+    expect(getExpansionStateVersion(expanded)).toBe(populatedVersion + 1);
+  });
+
+  it("drops render versions with evicted and reset session maps", () => {
+    resetChatThreadState();
+    const evicted = getExpandedToolCards("evicted-session");
+    setExpansionState(evicted, "card", true);
+    for (let index = 0; index < 20; index += 1) {
+      getExpandedToolCards(`other-session-${index}`);
+    }
+
+    expect(getExpandedToolCards("evicted-session")).not.toBe(evicted);
+    expect(getExpansionStateVersion(getExpandedToolCards("evicted-session"))).toBe(0);
+
+    setExpansionState(getExpandedUserMessages("reset-session"), "message", true);
+    resetChatThreadState();
+    expect(getExpansionStateVersion(getExpandedUserMessages("reset-session"))).toBe(0);
+  });
+
+  it("keeps mounted disclosure handlers attached to recreated session expansion maps", async () => {
+    resetChatThreadState();
+    const { builtinEnvironments } = await import("vitest/runtime");
+    const fixtureGlobals = ["Request", "URL", "jsdom"] as const;
+    const originalFixtureGlobals = fixtureGlobals.map(
+      (name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const,
+    );
+    const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+    const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+    let environment: Awaited<ReturnType<typeof builtinEnvironments.jsdom.setup>> | undefined;
+
+    try {
+      environment = await builtinEnvironments.jsdom.setup(globalThis, {
+        jsdom: { url: "http://localhost/", pretendToBeVisual: true },
+      });
+      const [{ render }, { ChatTranscriptController, resetChatThreadPresentationState }] =
+        await Promise.all([import("lit"), import("./components/chat-thread.ts")]);
+      const host = {
+        addController() {},
+        removeController() {},
+        requestUpdate() {},
+        updateComplete: Promise.resolve(true),
+      };
+      const sessionKey = "retained-session";
+      const props = {
+        paneId: "retained-pane",
+        sessionKey,
+        loading: false,
+        messages: [
+          { role: "user", content: "long user message ".repeat(100), timestamp: 1 },
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "assistant reply" },
+              { type: "toolcall", id: "retained-call", name: "browser.open" },
+            ],
+            timestamp: 2,
+          },
+        ],
+        toolMessages: [],
+        streamSegments: [],
+        stream: null,
+        streamStartedAt: null,
+        queue: [],
+        showThinking: false,
+        showToolCalls: true,
+        sessions: null,
+        assistantName: "Molty",
+        assistantAvatar: null,
+        onDraftChange() {},
+        onSend() {},
+      };
+      const controller = new ChatTranscriptController(host);
+      const retainedPane = document.createElement("div");
+      document.body.append(retainedPane);
+      render(controller.render(props), retainedPane);
+      const staleTools = getExpandedToolCards(sessionKey);
+      const staleUsers = getExpandedUserMessages(sessionKey);
+      const previousToolVersion = getExpansionStateVersion(staleTools);
+      const previousUserVersion = getExpansionStateVersion(staleUsers);
+
+      for (let index = 0; index < 20; index += 1) {
+        const alternatePane = document.createElement("div");
+        document.body.append(alternatePane);
+        render(
+          new ChatTranscriptController(host).render({
+            ...props,
+            paneId: `alternate-pane-${index}`,
+            sessionKey: `alternate-session-${index}`,
+          }),
+          alternatePane,
+        );
+      }
+
+      render(controller.render(props), retainedPane);
+      const currentTools = getExpandedToolCards(sessionKey);
+      const currentUsers = getExpandedUserMessages(sessionKey);
+      expect(currentTools).not.toBe(staleTools);
+      expect(currentUsers).not.toBe(staleUsers);
+      expect(getExpansionStateVersion(currentTools)).toBe(previousToolVersion);
+      expect(getExpansionStateVersion(currentUsers)).toBe(previousUserVersion);
+      const toolCardId = expectDefined(currentTools.keys().next().value, "retained tool card");
+      expectDefined(
+        retainedPane.querySelector<HTMLButtonElement>(
+          ".chat-group.user .chat-message-disclosure__toggle",
+        ),
+        "mounted user disclosure",
+      ).click();
+      expectDefined(
+        retainedPane.querySelector<HTMLButtonElement>(".chat-tool-msg-summary"),
+        "mounted tool disclosure",
+      ).click();
+
+      expect(currentTools.get(toolCardId)).toBe(true);
+      expect(staleTools.get(toolCardId)).toBe(false);
+      expect(currentUsers.size).toBe(1);
+      expect(staleUsers.size).toBe(0);
+
+      const toolVisibilitySession = "tool-visibility-session";
+      const toolVisibilityProps = {
+        ...props,
+        paneId: "tool-visibility-pane",
+        sessionKey: toolVisibilitySession,
+        messages: [
+          { role: "user", content: "tool visibility prompt", timestamp: 1 },
+          {
+            role: "toolResult",
+            toolCallId: "expanded-tool",
+            toolName: "browser.open",
+            content: "Expanded tool result",
+            timestamp: 2,
+          },
+          { role: "assistant", content: "The first tool completed.", timestamp: 3 },
+          { role: "user", content: "Show the next tool result.", timestamp: 4 },
+          {
+            role: "toolResult",
+            toolCallId: "collapsed-tool",
+            toolName: "browser.open",
+            content: "Collapsed tool result",
+            timestamp: 5,
+          },
+        ],
+      };
+      const toolVisibilityController = new ChatTranscriptController(host);
+      const toolVisibilityPane = document.createElement("div");
+      document.body.append(toolVisibilityPane);
+      render(toolVisibilityController.render(toolVisibilityProps), toolVisibilityPane);
+      const visibilityState = getExpandedToolCards(toolVisibilitySession);
+      const visibilityIds = [...visibilityState.keys()].filter((key) => key.startsWith("toolmsg:"));
+      const expandedToolId = expectDefined(visibilityIds[0], "expanded standalone tool disclosure");
+      const collapsedToolId = expectDefined(
+        visibilityIds[1],
+        "collapsed standalone tool disclosure",
+      );
+      const disclosureButtons = () =>
+        Array.from(
+          toolVisibilityPane.querySelectorAll<HTMLButtonElement>(".chat-tool-msg-summary"),
+        ).filter((button) => !button.closest(".chat-tool-msg-body"));
+      expect(disclosureButtons()).toHaveLength(2);
+      expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
+        "false",
+        "false",
+      ]);
+      expectDefined(disclosureButtons()[0], "first mounted tool disclosure").click();
+      render(toolVisibilityController.render(toolVisibilityProps), toolVisibilityPane);
+      expectDefined(disclosureButtons()[1], "second mounted tool disclosure").click();
+      render(toolVisibilityController.render(toolVisibilityProps), toolVisibilityPane);
+      expectDefined(disclosureButtons()[1], "second mounted tool disclosure").click();
+      render(toolVisibilityController.render(toolVisibilityProps), toolVisibilityPane);
+      expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
+        "true",
+        "false",
+      ]);
+
+      render(
+        toolVisibilityController.render({ ...toolVisibilityProps, showToolCalls: false }),
+        toolVisibilityPane,
+      );
+      expect(disclosureButtons()).toHaveLength(0);
+      render(toolVisibilityController.render(toolVisibilityProps), toolVisibilityPane);
+
+      expect(disclosureButtons()).toHaveLength(2);
+      expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
+        "true",
+        "false",
+      ]);
+      expect(visibilityState.get(expandedToolId)).toBe(true);
+      expect(visibilityState.get(collapsedToolId)).toBe(false);
+      render(
+        toolVisibilityController.render({
+          ...toolVisibilityProps,
+          messages: toolVisibilityProps.messages.filter(
+            (message) => !("toolCallId" in message && message.toolCallId === "expanded-tool"),
+          ),
+        }),
+        toolVisibilityPane,
+      );
+      expect(visibilityState.has(expandedToolId)).toBe(false);
+      expect(visibilityState.get(collapsedToolId)).toBe(false);
+      resetChatThreadPresentationState();
+    } finally {
+      try {
+        if (environment) {
+          try {
+            document.body.replaceChildren();
+            await new Promise<void>((resolve) => {
+              window.setTimeout(resolve, 0);
+            });
+          } finally {
+            await environment.teardown(globalThis);
+          }
+        }
+      } finally {
+        // Vitest assigns these compatibility globals after its own restore snapshot.
+        for (const [name, descriptor] of originalFixtureGlobals) {
+          if (descriptor) {
+            Object.defineProperty(globalThis, name, descriptor);
+          } else {
+            Reflect.deleteProperty(globalThis, name);
+          }
+        }
+        resetChatThreadState();
+      }
+    }
+
+    for (const [name, descriptor] of originalFixtureGlobals) {
+      expect(Object.getOwnPropertyDescriptor(globalThis, name)).toEqual(descriptor);
+    }
+    expect(Object.getOwnPropertyDescriptor(globalThis, "document")).toEqual(originalDocument);
+    expect(Object.getOwnPropertyDescriptor(globalThis, "window")).toEqual(originalWindow);
+  });
+});
+
+describe("user message expansion state", () => {
+  it("keeps disclosure state per session and clears it with thread state", () => {
+    resetChatThreadState();
+    getExpandedUserMessages("main").set("user-message:one", true);
+
+    expect(getExpandedUserMessages("main").get("user-message:one")).toBe(true);
+    expect(getExpandedUserMessages("agent:main:main").get("user-message:one")).toBe(true);
+    expect(getExpandedUserMessages("other").get("user-message:one")).toBeUndefined();
+
+    resetChatThreadState();
+    expect(getExpandedUserMessages("main").get("user-message:one")).toBeUndefined();
+  });
+});
+
 describe("thread item cache", () => {
   it("preserves stable transcript rows while the live stream changes", () => {
     resetChatThreadState();
@@ -2632,6 +4112,37 @@ describe("thread item cache", () => {
         messages: [{ role: "assistant", content: "changed" }],
       }),
     ).not.toBe(first);
+  });
+
+  it("rebuilds the live row when active stream identity changes", () => {
+    resetChatThreadState();
+    const first = buildCachedChatItems(
+      createProps({
+        runId: "run-1",
+        stream: "first reply",
+        streamStartedAt: 10,
+      }),
+    );
+    const firstStream = expectDefined(
+      first.find((item) => item.kind === "stream" && item.isStreaming),
+      "first live stream",
+    );
+
+    const second = buildCachedChatItems(
+      createProps({
+        runId: "run-2",
+        stream: "second reply",
+        streamStartedAt: 20,
+      }),
+    );
+    const secondStream = expectDefined(
+      second.find((item) => item.kind === "stream" && item.isStreaming),
+      "second live stream",
+    );
+
+    expect(second).not.toBe(first);
+    expect(secondStream.key).not.toBe(firstStream.key);
+    expect(secondStream).toMatchObject({ kind: "stream", startedAt: 20 });
   });
 
   it("updates the live stream without rescanning retained history", () => {
@@ -2694,6 +4205,18 @@ describe("thread item cache", () => {
     resetChatThreadState("pane-a");
     expect(buildCachedChatItems({ ...paneA })).not.toBe(paneAItems);
     expect(buildCachedChatItems({ ...paneB })).toBe(paneBItems);
+  });
+
+  it("evicts the least-recently-used session after 20 cached transcripts", () => {
+    resetChatThreadState();
+    const paneId = "pane-lru";
+    const firstInput = createProps({ paneId, sessionKey: "session-0" });
+    const first = buildCachedChatItems(firstInput);
+    for (let index = 1; index <= 20; index += 1) {
+      buildCachedChatItems(createProps({ paneId, sessionKey: `session-${index}` }));
+    }
+
+    expect(buildCachedChatItems(firstInput)).not.toBe(first);
   });
 });
 

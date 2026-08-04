@@ -45,34 +45,7 @@ const routeReply = (
   params: Omit<RouteReplyParams, "replyKind"> & { replyKind?: RouteReplyParams["replyKind"] },
 ) => routeReplyRuntime({ replyKind: "final", ...params });
 
-function compileSlackInteractiveRepliesForTest(
-  payload: Parameters<NonNullable<ChannelMessagingAdapter["transformReplyPayload"]>>[0]["payload"],
-) {
-  const text = payload.text ?? "";
-  if (!text.includes("[[slack_select:") && !text.includes("[[slack_buttons:")) {
-    return payload;
-  }
-  return {
-    ...payload,
-    channelData: {
-      ...payload.channelData,
-      slack: {
-        ...(payload.channelData?.slack as Record<string, unknown> | undefined),
-        blocks: [{ type: "section", text }],
-      },
-    },
-  };
-}
-
 const slackMessaging: ChannelMessagingAdapter = {
-  transformReplyPayload: ({ payload, cfg }) =>
-    (cfg.channels?.slack as { capabilities?: { interactiveReplies?: boolean } } | undefined)
-      ?.capabilities?.interactiveReplies === true
-      ? compileSlackInteractiveRepliesForTest(payload)
-      : payload,
-  enableInteractiveReplies: ({ cfg }) =>
-    (cfg.channels?.slack as { capabilities?: { interactiveReplies?: boolean } } | undefined)
-      ?.capabilities?.interactiveReplies === true,
   hasStructuredReplyPayload: ({ payload }) => {
     const blocks = (payload.channelData?.slack as { blocks?: unknown } | undefined)?.blocks;
     if (typeof blocks === "string") {
@@ -268,7 +241,13 @@ describe("routeReply", () => {
   });
 
   it("suppresses reasoning payloads", async () => {
-    await expectSlackNoDelivery({ text: "step", isReasoning: true });
+    await expect(expectSlackNoDelivery({ text: "step", isReasoning: true })).resolves.toMatchObject(
+      {
+        delivered: false,
+        suppressed: true,
+        reason: "reasoning_payload_not_external",
+      },
+    );
   });
 
   it("drops silent token payloads", async () => {
@@ -573,6 +552,7 @@ describe("routeReply", () => {
 
     expect(res).toEqual({
       ok: true,
+      delivered: false,
       suppressed: true,
       reason: "cancelled_by_reply_payload_sending_hook",
     });
@@ -612,6 +592,7 @@ describe("routeReply", () => {
 
     expect(res).toEqual({
       ok: true,
+      delivered: false,
       suppressed: true,
       reason: "cancelled_by_reply_payload_sending_hook",
     });
@@ -643,6 +624,7 @@ describe("routeReply", () => {
 
     expect(res).toEqual({
       ok: true,
+      delivered: false,
       suppressed: true,
       reason: "empty_after_reply_payload_sending_hook",
     });
@@ -703,7 +685,7 @@ describe("routeReply", () => {
 
   it("applies responsePrefix when routing", async () => {
     const cfg = {
-      messages: { responsePrefix: "[openclaw]" },
+      channels: { slack: { responsePrefix: "[openclaw]" } },
     } as unknown as OpenClawConfig;
     await routeReply({
       payload: { text: "hi" },
@@ -716,7 +698,6 @@ describe("routeReply", () => {
 
   it("interpolates responsePrefix from the routed channel and account", async () => {
     const cfg = {
-      messages: { responsePrefix: "[global]" },
       channels: {
         slack: {
           responsePrefix: "[slack]",
@@ -739,23 +720,6 @@ describe("routeReply", () => {
       cfg,
     });
     expect(lastDeliveryPayload().text).toBe("[anthropic/claude-opus-4-6 think:high] hi");
-  });
-
-  it("routes directive-only Slack replies when interactive replies are enabled", async () => {
-    const cfg = {
-      channels: {
-        slack: {
-          capabilities: { interactiveReplies: true },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    await routeReply({
-      payload: { text: "[[slack_select: Choose one | Alpha:alpha]]" },
-      channel: "slack",
-      to: "channel:C123",
-      cfg,
-    });
-    expect(lastDeliveryPayload().text).toBe("[[slack_select: Choose one | Alpha:alpha]]");
   });
 
   it("does not bypass the empty-reply guard for invalid Slack blocks", async () => {

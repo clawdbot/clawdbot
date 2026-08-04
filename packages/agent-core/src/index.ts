@@ -1,29 +1,27 @@
-// Public agent-core package surface: agent loop, harness, session storage,
-// compaction, execution envs, and utility helpers.
+// Public agent-core package surface: agent loop, compaction, session context,
+// and the focused helpers consumed by OpenClaw.
 export * from "./agent.js";
 export * from "./agent-loop.js";
 export * from "./errors.js";
-export * from "./node.js";
 export * from "./runtime-deps.js";
 export * from "./types.js";
 export * from "./validation.js";
-export * from "./harness/agent-harness.js";
 export * from "./harness/env/kill-tree.js";
 export * from "./harness/messages.js";
 export * from "./harness/prompt-template-arguments.js";
-export * from "./harness/skills.js";
-export * from "./harness/types.js";
-export * from "./harness/session/jsonl-storage.js";
-export * from "./harness/session/memory-storage.js";
-export * from "./harness/session/session.js";
+export { buildSessionContext } from "./harness/session/session.js";
 export { uuidv7 } from "./harness/session/uuid.js";
+export type {
+  BranchSummaryResult,
+  FileOperations,
+  Result,
+  SessionTreeEntry,
+} from "./harness/types.js";
 export {
   type BranchPreparation,
   type BranchPathEntry,
   type BranchSummaryDetails,
   type CollectBranchPathEntriesResult,
-  type CollectEntriesResult,
-  collectEntriesForBranchSummary,
   collectEntriesForBranchSummaryFromBranches,
   generateBranchSummary,
   prepareBranchEntries,

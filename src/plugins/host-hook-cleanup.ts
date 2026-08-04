@@ -317,6 +317,7 @@ export async function runPluginHostCleanup(params: {
       sessionKey: params.sessionKey,
       records: registry.sessionSchedulerJobs,
       preserveJobIds: params.preserveSchedulerJobIds,
+      cleanupOwnerRegistry: registry,
       preserveOwnerRegistry: params.preserveSchedulerOwnerRegistry,
       shouldCleanup,
     });
@@ -341,6 +342,7 @@ export async function runPluginHostCleanup(params: {
       sessionKey: params.sessionKey,
       preserveJobIds: params.preserveSchedulerJobIds,
       excludeJobKeys: registrySchedulerJobKeys,
+      cleanupOwnerRegistry: registry ?? undefined,
       shouldCleanup,
     });
     for (const failure of runtimeSchedulerFailures) {

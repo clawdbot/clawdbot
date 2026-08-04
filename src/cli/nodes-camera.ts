@@ -14,6 +14,7 @@ import {
   asString,
   resolveTempPathParts,
 } from "./nodes-media-utils.js";
+import { publishOutputFileAtomically } from "./output-file.runtime.js";
 
 const MAX_CAMERA_URL_DOWNLOAD_BYTES = 250 * 1024 * 1024;
 const MAX_CAMERA_BASE64_BYTES = MAX_CAMERA_URL_DOWNLOAD_BYTES;
@@ -254,7 +255,13 @@ export async function writeBase64ToFile(
   if (buf.length > maxBytes) {
     throw new Error(`writeBase64ToFile: decoded ${buf.length} bytes, exceeds max ${maxBytes}`);
   }
-  await fs.writeFile(filePath, buf);
+  await fs.stat(path.dirname(filePath));
+  await publishOutputFileAtomically({
+    filePath,
+    writeTemp: async (tempPath) => {
+      await fs.writeFile(tempPath, buf, { flag: "wx" });
+    },
+  });
   return { path: filePath, bytes: buf.length };
 }
 

@@ -197,7 +197,6 @@ describe("canvas host", () => {
     log: (..._args: Parameters<typeof console.log>) => {},
   };
   let createCanvasHostHandler: typeof import("./server.js").createCanvasHostHandler;
-  let startCanvasHost: typeof import("./server.js").startCanvasHost;
   let WebSocketServerClass: typeof import("ws").WebSocketServer;
   let watcherState: ReturnType<typeof createMockWatcherState>;
   let fixtureRoot = "";
@@ -226,7 +225,6 @@ describe("canvas host", () => {
     });
 
   beforeAll(async () => {
-    vi.doUnmock("undici");
     vi.doMock("node:timers", async (importOriginal) => {
       const actual = await importOriginal<typeof import("node:timers")>();
       return {
@@ -241,7 +239,7 @@ describe("canvas host", () => {
     });
     vi.resetModules();
     const serverModule = await import("./server.js");
-    ({ createCanvasHostHandler, startCanvasHost } = serverModule);
+    ({ createCanvasHostHandler } = serverModule);
     const wsModule = await vi.importActual<typeof import("ws")>("ws");
     WebSocketServerClass = wsModule.WebSocketServer;
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-fixtures-"));
@@ -417,60 +415,33 @@ describe("canvas host", () => {
 
     try {
       const call = watcherState.watchCalls.at(-1);
-      expect(call?.root).toBe(await fs.realpath(dir));
+      const watchRoot = call?.root;
+      expect(watchRoot).toBe(await fs.realpath(dir));
+      if (typeof watchRoot !== "string") {
+        throw new TypeError("expected a single Canvas watch root");
+      }
       const ignored = call?.options?.ignored;
       expect(ignored).toBeTypeOf("function");
       const shouldIgnore = ignored as (candidatePath: string) => boolean;
-      expect(shouldIgnore(dir)).toBe(false);
-      expect(shouldIgnore(path.join(dir, "index.html"))).toBe(false);
-      expect(shouldIgnore(path.join(dir, ".draft.html"))).toBe(true);
-      expect(shouldIgnore(path.join(dir, "node_modules", "asset.js"))).toBe(true);
+      expect(shouldIgnore(watchRoot)).toBe(false);
+      expect(shouldIgnore(path.join(watchRoot, "index.html"))).toBe(false);
+      expect(shouldIgnore(path.join(watchRoot, ".draft.html"))).toBe(true);
+      expect(shouldIgnore(path.join(watchRoot, "node_modules", "asset.js"))).toBe(true);
     } finally {
       await handler.close();
     }
   });
 
-  it("serves sandbox-marked documents with a CSP sandbox header and no live reload", async () => {
+  it("leaves managed document requests to the core host", async () => {
     const dir = await createCaseDir();
-    const docDir = path.join(dir, "documents", "widget-1");
-    await fs.mkdir(docDir, { recursive: true });
-    await fs.writeFile(
-      path.join(docDir, "manifest.json"),
-      JSON.stringify({ id: "widget-1", cspSandbox: "scripts" }),
-      "utf8",
-    );
-    await fs.writeFile(path.join(docDir, "index.html"), "<html><body>widget</body></html>", "utf8");
-    const plainDir = path.join(dir, "documents", "plain-1");
-    await fs.mkdir(plainDir, { recursive: true });
-    await fs.writeFile(
-      path.join(plainDir, "manifest.json"),
-      JSON.stringify({ id: "plain-1" }),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(plainDir, "index.html"),
-      "<html><body>plain</body></html>",
-      "utf8",
-    );
     const handler = await createTestCanvasHostHandler(dir);
 
     try {
-      const widget = await captureHandlerResponse(
+      const response = await captureHandlerResponse(
         handler,
         `${CANVAS_HOST_PATH}/documents/widget-1/index.html`,
       );
-      expect(widget.status).toBe(200);
-      // Opaque origin on direct navigation: widget script must not run as the app origin.
-      expect(widget.headers["content-security-policy"]).toBe("sandbox allow-scripts");
-      expect(widget.body).toContain("widget");
-      expect(widget.body).not.toContain(CANVAS_WS_PATH);
-
-      const plain = await captureHandlerResponse(
-        handler,
-        `${CANVAS_HOST_PATH}/documents/plain-1/index.html`,
-      );
-      expect(plain.status).toBe(200);
-      expect(plain.headers["content-security-policy"]).toBeUndefined();
+      expect(response.handled).toBe(false);
     } finally {
       await handler.close();
     }
@@ -529,14 +500,11 @@ describe("canvas host", () => {
     }
   });
 
-  it("serves canvas content from the mounted base path and reuses handlers without double close", async () => {
+  it("serves canvas content from the mounted base path", async () => {
     const dir = await createCaseDir();
     await fs.writeFile(path.join(dir, "index.html"), "<html><body>v1</body></html>", "utf8");
 
     const handler = await createTestCanvasHostHandler(dir);
-
-    const originalClose = handler.close;
-    const closeSpy = vi.fn(async () => originalClose());
 
     try {
       const response = await captureHandlerResponse(handler, `${CANVAS_HOST_PATH}/`);
@@ -550,25 +518,8 @@ describe("canvas host", () => {
 
       const miss = await captureHandlerResponse(handler, "/");
       expect(miss.handled).toBe(false);
-
-      handler.close = closeSpy;
-      const hosted = await startCanvasHost({
-        runtime: quietRuntime,
-        handler,
-        ownsHandler: false,
-        port: 0,
-        listenHost: "127.0.0.1",
-        allowInTests: true,
-      });
-
-      try {
-        expect(hosted.port).toBeGreaterThan(0);
-      } finally {
-        await hosted.close();
-        expect(closeSpy).not.toHaveBeenCalled();
-      }
     } finally {
-      await originalClose();
+      await handler.close();
     }
   });
 

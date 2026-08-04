@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ReefPeerIdentity } from "./friend-types.js";
 import {
   createReefOwnerNoticeHandler,
+  notifyOverdueReefDeliveries,
   processReefInboxEntriesInOrder,
   ReefReceiptNotifier,
 } from "./owner-notice.js";
@@ -455,5 +456,72 @@ describe("ReefReceiptNotifier", () => {
 
     expect(restartedNotify.mock.calls[0]![0]).toMatchObject({ allowResend: false });
     expect(notices.records.get(`${pending.peer}:${pending.id}`)?.phase).toBe("consumed");
+  });
+});
+
+describe("notifyOverdueReefDeliveries", () => {
+  function overdueStore(overdue: Array<{ peer: string; id: string; sentAt: number }>) {
+    const marked = new Set<string>();
+    return {
+      marked,
+      overdueOutboundDeliveries: vi.fn(() => overdue.filter((entry) => !marked.has(entry.id))),
+      markOutboundDeliveryOverdueNotified: vi.fn((_peer: string, id: string) => {
+        if (marked.has(id)) {
+          return false;
+        }
+        marked.add(id);
+        return true;
+      }),
+    };
+  }
+
+  it("wakes the sender agent once per overdue delivery", async () => {
+    const sentAt = Date.now() - 12 * 60_000;
+    const store = overdueStore([{ peer: "clawd", id: "01JZ0000000000000000000150", sentAt }]);
+    const ownerNotice = vi.fn(
+      async (_notice: {
+        text: string;
+        peer?: string;
+        contextKey: string;
+        wakeAgent?: boolean;
+      }) => {},
+    );
+
+    await notifyOverdueReefDeliveries({ trust: store, ownerNotice });
+    await notifyOverdueReefDeliveries({ trust: store, ownerNotice });
+
+    expect(ownerNotice).toHaveBeenCalledOnce();
+    expect(ownerNotice.mock.calls[0]?.[0]).toMatchObject({
+      peer: "clawd",
+      wakeAgent: true,
+      contextKey: "reef:delivery-overdue:clawd:01JZ0000000000000000000150",
+    });
+    expect(ownerNotice.mock.calls[0]?.[0]?.text).toContain("not been confirmed delivered");
+  });
+
+  it("does not mark a delivery notified when dispatch fails, so the next sweep retries", async () => {
+    const store = overdueStore([
+      { peer: "clawd", id: "01JZ0000000000000000000151", sentAt: Date.now() - 20 * 60_000 },
+    ]);
+    const failing = vi.fn(async () => {
+      throw new Error("enqueue failed");
+    });
+
+    await expect(
+      notifyOverdueReefDeliveries({ trust: store, ownerNotice: failing }),
+    ).rejects.toThrow("enqueue failed");
+    expect(store.markOutboundDeliveryOverdueNotified).not.toHaveBeenCalled();
+
+    const ownerNotice = vi.fn(
+      async (_notice: {
+        text: string;
+        peer?: string;
+        contextKey: string;
+        wakeAgent?: boolean;
+      }) => {},
+    );
+    await notifyOverdueReefDeliveries({ trust: store, ownerNotice });
+    expect(ownerNotice).toHaveBeenCalledOnce();
+    expect(store.marked.has("01JZ0000000000000000000151")).toBe(true);
   });
 });

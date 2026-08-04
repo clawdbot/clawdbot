@@ -342,6 +342,38 @@ describe("buildSlackInteractiveBlocks", () => {
 });
 
 describe("buildSlackPresentationBlocks", () => {
+  it("renders question choices with compact private indices", () => {
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    expect(
+      buildSlackPresentationBlocks({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: ["Staging", "Production"].map((label) => ({
+              label,
+              action: { type: "question" as const, questionId, optionValue: label },
+            })),
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        type: "actions",
+        block_id: "openclaw_reply_buttons_1",
+        elements: [
+          expect.objectContaining({
+            action_id: "openclaw:question_button:1:1",
+            value: `slq1:${questionId}:0`,
+          }),
+          expect.objectContaining({
+            action_id: "openclaw:question_button:1:2",
+            value: `slq1:${questionId}:1`,
+          }),
+        ],
+      },
+    ]);
+  });
+
   it("renders presentation blocks in authored order", () => {
     const blocks = buildSlackPresentationBlocks({
       blocks: [

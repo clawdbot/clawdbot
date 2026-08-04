@@ -154,6 +154,11 @@ on:
         required: false
         default: false
         type: boolean
+      telegram_advisory:
+        description: Treat only Telegram acceptance failures as advisory
+        required: false
+        default: false
+        type: boolean
       workflow_ref:
         description: Trusted repo ref for workflow scripts and Docker E2E harness
         required: false
@@ -237,6 +242,11 @@ on:
         description: Unique artifact namespace when shared_image_policy=no-push-artifact
         required: false
         default: package-acceptance
+        type: string
+      candidate_artifact_json:
+        description: Immutable Docker image artifact tuple from Full Release Validation
+        required: false
+        default: ""
         type: string
       suite_profile:
         description: "Acceptance profile: smoke, package, product, full, or custom"
@@ -437,13 +447,14 @@ jobs:
       package_source_sha: ${{ steps.resolve.outputs.package_source_sha }}
       package_sha256: ${{ steps.resolve.outputs.sha256 }}
       package_version: ${{ steps.resolve.outputs.package_version }}
+      published_upgrade_survivor_baseline: ${{ steps.upgrade_survivor_baselines.outputs.baseline }}
       published_upgrade_survivor_baselines: ${{ steps.upgrade_survivor_baselines.outputs.baselines }}
       published_upgrade_survivor_scenarios: ${{ inputs.published_upgrade_survivor_scenarios }}
       telegram_enabled: ${{ steps.profile.outputs.telegram_enabled }}
       telegram_mode: ${{ steps.profile.outputs.telegram_mode }}
     steps:
       - name: Checkout package workflow ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ inputs.workflow_ref }}
           fetch-depth: 0
@@ -455,7 +466,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: ${{ inputs.source == 'ref' && 'true' || 'false' }}
-          install-deps: "false"
+          install-deps: "true"
 
       - name: Validate package artifact input identity
         id: input_artifact
@@ -664,9 +675,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -z "${REQUESTED_BASELINES// }" ]]; then
-            echo "baselines=" >> "$GITHUB_OUTPUT"
-            exit 0
+          fallback_baseline="$FALLBACK_BASELINE"
+          if [[ "$fallback_baseline" == "openclaw@latest" ]]; then
+            fallback_version="$(npm view openclaw@latest version)"
+            [[ "$fallback_version" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]] || {
+              echo "Could not resolve openclaw@latest to an exact release version." >&2
+              exit 1
+            }
+            fallback_baseline="openclaw@${fallback_version}"
           fi
           releases_json=""
           npm_versions_json=""
@@ -679,7 +695,7 @@ jobs:
           fi
           args=(
             --requested "$REQUESTED_BASELINES"
-            --fallback "$FALLBACK_BASELINE"
+            --fallback "$fallback_baseline"
             --github-output "$GITHUB_OUTPUT"
           )
           if [[ -n "$releases_json" ]]; then
@@ -692,6 +708,7 @@ jobs:
             )
           fi
           node scripts/resolve-upgrade-survivor-baselines.mjs "${args[@]}" >/dev/null
+          echo "baseline=$fallback_baseline" >> "$GITHUB_OUTPUT"
 
       - name: Upload package-under-test artifact
         id: upload_package
@@ -719,7 +736,7 @@ jobs:
           SOURCE: ${{ inputs.source }}
           SUITE_PROFILE: ${{ inputs.suite_profile }}
           WORKFLOW_REF: ${{ inputs.workflow_ref }}
-          PUBLISHED_UPGRADE_SURVIVOR_BASELINE: ${{ inputs.published_upgrade_survivor_baseline }}
+          PUBLISHED_UPGRADE_SURVIVOR_BASELINE: ${{ steps.upgrade_survivor_baselines.outputs.baseline }}
           PUBLISHED_UPGRADE_SURVIVOR_BASELINES: ${{ steps.upgrade_survivor_baselines.outputs.baselines }}
           PUBLISHED_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
         shell: bash
@@ -758,11 +775,18 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout package workflow ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ inputs.workflow_ref }}
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Setup package validation dependencies
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+          install-deps: "true"
 
       - name: Download package-under-test artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -804,10 +828,10 @@ jobs:
       include_release_path_suites: ${{ needs.resolve_package.outputs.include_release_path_suites == 'true' }}
       include_openwebui: ${{ needs.resolve_package.outputs.include_openwebui == 'true' }}
       docker_lanes: ${{ needs.resolve_package.outputs.docker_lanes }}
-      published_upgrade_survivor_baseline: ${{ inputs.published_upgrade_survivor_baseline }}
+      published_upgrade_survivor_baseline: ${{ needs.resolve_package.outputs.published_upgrade_survivor_baseline }}
       published_upgrade_survivor_baselines: ${{ needs.resolve_package.outputs.published_upgrade_survivor_baselines }}
       published_upgrade_survivor_scenarios: ${{ needs.resolve_package.outputs.published_upgrade_survivor_scenarios }}
-      allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
+      allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions || false }}
       package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}
       package_artifact_digest: ${{ needs.resolve_package.outputs.package_artifact_digest }}
       package_artifact_id: ${{ needs.resolve_package.outputs.package_artifact_id }}
@@ -820,6 +844,12 @@ jobs:
       include_live_suites: ${{ needs.resolve_package.outputs.include_live_suites == 'true' }}
       live_models_only: false
       shared_image_artifact_namespace: ${{ inputs.shared_image_artifact_namespace }}
+      shared_image_artifact_name: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactName || '' }}
+      shared_image_artifact_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactId || '' }}
+      shared_image_artifact_digest: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactDigest || '' }}
+      shared_image_artifact_run_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactRunId || '' }}
+      shared_image_artifact_run_attempt: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactRunAttempt || '' }}
+      shared_image_archive_sha256: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArchiveSha256 || '' }}
       shared_image_policy: ${{ inputs.shared_image_policy }}
     secrets: &docker_acceptance_secrets
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -888,7 +918,7 @@ jobs:
     if: needs.resolve_package.outputs.telegram_enabled == 'true'
     uses: ./.github/workflows/npm-telegram-beta-e2e.yml
     with:
-      advisory: ${{ inputs.advisory }}
+      advisory: ${{ inputs.advisory || inputs.telegram_advisory }}
       package_spec: ${{ inputs.package_spec }}
       package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}
       package_artifact_digest: ${{ needs.resolve_package.outputs.package_artifact_digest }}
@@ -931,6 +961,7 @@ jobs:
           PACKAGE_TELEGRAM_RESULT: ${{ needs.package_telegram.result }}
           RESOLVE_RESULT: ${{ needs.resolve_package.result }}
           TELEGRAM_ENABLED: ${{ needs.resolve_package.outputs.telegram_enabled }}
+          TELEGRAM_ADVISORY: ${{ inputs.telegram_advisory }}
         shell: bash
         run: |
           set -euo pipefail
@@ -965,7 +996,8 @@ jobs:
               result_failed=true
             fi
             if [[ "$result_failed" == "true" ]]; then
-              if [[ "$ADVISORY" == "true" && "$name" != "resolve_package" ]]; then
+              if [[ ("$ADVISORY" == "true" && "$name" != "resolve_package") ||
+                    ("$TELEGRAM_ADVISORY" == "true" && "$name" == "package_telegram") ]]; then
                 echo "::warning::${name} ended with ${result}; package acceptance is advisory for this caller."
                 continue
               fi

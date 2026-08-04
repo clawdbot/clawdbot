@@ -11,6 +11,7 @@ import { environmentsHandlers, summarizeWorkerEnvironment } from "./environments
 
 vi.mock("../../infra/device-pairing.js", () => ({
   listDevicePairing: vi.fn(),
+  resolveNodePairingState: vi.fn(),
 }));
 
 vi.mock("../../infra/node-pairing.js", () => ({
@@ -32,16 +33,17 @@ type TestWorkerService = {
 function mockContext(
   workerEnvironmentService?: TestWorkerService,
   reconcileActive: (environmentId?: string) => Promise<void> = vi.fn(async () => {}),
-  forceDestroyEnvironment: (environmentId: string) => Promise<TestWorkerRecord> = vi.fn(async () =>
-    workerRecord({ state: "destroyed" }),
-  ),
+  forceDestroyEnvironment: (
+    environmentId: string,
+    onCleanupError?: (error: unknown) => void,
+  ) => Promise<TestWorkerRecord> = vi.fn(async () => workerRecord({ state: "destroyed" })),
 ) {
   return {
     logGateway: {
       warn: vi.fn(),
     },
     nodeRegistry: {
-      listConnected: () => [
+      listConnectedForPairingStates: () => [
         {
           nodeId: "node-live",
           connId: "conn-live",
@@ -122,7 +124,10 @@ async function callEnvironmentMethod(
   options: {
     service?: TestWorkerService;
     reconcileActive?: (environmentId?: string) => Promise<void>;
-    forceDestroyEnvironment?: (environmentId: string) => Promise<TestWorkerRecord>;
+    forceDestroyEnvironment?: (
+      environmentId: string,
+      onCleanupError?: (error: unknown) => void,
+    ) => Promise<TestWorkerRecord>;
   } = {},
 ) {
   const respond = vi.fn();
@@ -461,9 +466,7 @@ describe("environment gateway methods", () => {
 
   it("durably abandons placement ownership before forced destruction", async () => {
     const service = workerService();
-    const forceDestroyEnvironment = vi.fn(
-      async (environmentId: string) => await service.destroy(environmentId),
-    );
+    const forceDestroyEnvironment = vi.fn(async () => workerRecord({ state: "destroyed" }));
 
     const [ok, payload] = await callEnvironmentMethod(
       "environments.destroy",
@@ -473,9 +476,43 @@ describe("environment gateway methods", () => {
 
     expect(ok).toBe(true);
     expect(payload).toMatchObject({ worker: { state: "destroyed" } });
-    expect(forceDestroyEnvironment).toHaveBeenCalledExactlyOnceWith("worker-1");
-    expect(service.destroy).toHaveBeenCalledExactlyOnceWith("worker-1");
+    expect(forceDestroyEnvironment).toHaveBeenCalledExactlyOnceWith(
+      "worker-1",
+      expect.any(Function),
+    );
+    expect(service.destroy).not.toHaveBeenCalled();
     expect(service.destroyUnattached).not.toHaveBeenCalled();
+  });
+
+  it("logs best-effort forced teardown errors without failing the call", async () => {
+    const service = workerService();
+    const forceDestroyEnvironment = vi.fn(
+      async (_environmentId: string, onCleanupError?: (error: unknown) => void) => {
+        onCleanupError?.(new Error("provider stop remains pending"));
+        return workerRecord({ state: "destroying" });
+      },
+    );
+    const context = mockContext(
+      service,
+      vi.fn(async () => {}),
+      forceDestroyEnvironment,
+    );
+    const respond = vi.fn();
+
+    await environmentsHandlers["environments.destroy"]?.({
+      params: { environmentId: "worker-1", force: true },
+      respond,
+      context,
+    } as never);
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ worker: expect.objectContaining({ state: "destroying" }) }),
+      undefined,
+    );
+    expect(context.logGateway.warn).toHaveBeenCalledWith(
+      "worker environment forced teardown cleanup failed: Error: provider stop remains pending",
+    );
   });
 
   it("reconciles active placements before returning destroyed worker state", async () => {

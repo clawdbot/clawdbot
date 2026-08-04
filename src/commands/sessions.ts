@@ -12,11 +12,16 @@ import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
+import {
+  prepareCliProviderClassifier,
+  type CliProviderClassifier,
+} from "../agents/model-selection.js";
 import { resolveRuntimePolicySessionKey } from "../auto-reply/reply/runtime-policy-session-key.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveSessionTotalTokens } from "../config/sessions.js";
-import { listSessionEntries } from "../config/sessions/session-accessor.js";
+import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
@@ -28,6 +33,10 @@ import { classifySessionKind, type SessionKind } from "../sessions/classify-sess
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveAgentRuntimeLabel } from "../status/agent-runtime-label.js";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "../utils/delivery-context.shared.js";
 import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
 import {
   resolveSessionDisplayModelRef,
@@ -50,6 +59,8 @@ type SessionRow = SessionDisplayRow & {
   kind: SessionKind;
   agentRuntime: ReturnType<typeof resolveModelAgentRuntimeMetadata>;
   runtimeLabel: string;
+  /** Carry the prepared identity into JSON/table emission without re-resolving plugin metadata. */
+  displayModelRef: { provider: string; model: string };
   /**
    * True only when the session has persisted ACP runtime metadata. Key-shape
    * alone is not sufficient because ACP bridge sessions (translator.ts) may
@@ -210,9 +221,7 @@ function resolveSessionRuntimeLabel(params: {
   entry: SessionEntry;
   agentRuntime: ReturnType<typeof resolveModelAgentRuntimeMetadata>;
   modelProvider: string;
-  model: string;
-  agentId: string;
-  sessionKey: string;
+  classifyCliProvider: CliProviderClassifier;
 }): string {
   const id = normalizeOptionalLowercaseString(params.agentRuntime.id);
   const resolvedHarness = id && id !== "openclaw" && id !== "auto" ? id : undefined;
@@ -221,6 +230,7 @@ function resolveSessionRuntimeLabel(params: {
     sessionEntry: params.entry,
     resolvedHarness,
     fallbackProvider: params.modelProvider,
+    classifyCliProvider: params.classifyCliProvider,
   });
 }
 
@@ -229,8 +239,15 @@ function formatRuntimeCell(runtimeLabel: string, rich: boolean): string {
   return rich ? theme.info(label) : label;
 }
 
-function toJsonSessionRow(row: SessionRow): Omit<SessionRow, "runtimeLabel"> {
-  const { runtimeLabel, ...jsonRow } = row;
+function resolveSessionStoreDisplayPath(target: { agentId: string; storePath: string }): string {
+  return resolveSqliteTargetFromSessionStorePath(target.storePath, {
+    agentId: target.agentId,
+  }).path;
+}
+
+function toJsonSessionRow(row: SessionRow): Omit<SessionRow, "displayModelRef" | "runtimeLabel"> {
+  const { displayModelRef, runtimeLabel, ...jsonRow } = row;
+  void displayModelRef;
   void runtimeLabel;
   return jsonRow;
 }
@@ -261,21 +278,17 @@ function resolveDisplayRuntimePolicySessionKey(params: {
   entry: SessionEntry;
 }): string | undefined {
   const { cfg, entry, key } = params;
-  const origin = entry.origin;
-  const deliveryContext = entry.deliveryContext;
+  const origin = sessionDeliveryOrigin(entry);
+  const deliveryContext = deliveryContextFromSession(entry);
   const chatType = normalizeChatType(origin?.chatType ?? entry.chatType);
   if (chatType !== "direct") {
     return undefined;
   }
 
   const channel = normalizeOptionalString(
-    origin?.provider ??
-      deliveryContext?.channel ??
-      entry.lastChannel ??
-      entry.channel ??
-      origin?.surface,
+    origin?.provider ?? deliveryContext?.channel ?? origin?.surface,
   );
-  const to = normalizeOptionalString(origin?.to ?? deliveryContext?.to ?? entry.lastTo);
+  const to = normalizeOptionalString(origin?.to ?? deliveryContext?.to);
   const from = normalizeOptionalString(origin?.from);
   const nativeDirectUserId = normalizeOptionalString(origin?.nativeDirectUserId);
   const peerId =
@@ -292,9 +305,7 @@ function resolveDisplayRuntimePolicySessionKey(params: {
       SessionKey: key,
       Provider: channel,
       Surface: normalizeOptionalString(origin?.surface),
-      AccountId: normalizeOptionalString(
-        origin?.accountId ?? deliveryContext?.accountId ?? entry.lastAccountId,
-      ),
+      AccountId: normalizeOptionalString(origin?.accountId ?? deliveryContext?.accountId),
       ChatType: chatType,
       NativeDirectUserId: nativeDirectUserId,
       SenderId: peerId,
@@ -360,8 +371,10 @@ export async function sessionsCommand(
     return;
   }
 
+  const classifyCliProvider = prepareCliProviderClassifier(cfg);
+
   const allRows = targets.flatMap((target) => {
-    return listSessionEntries({ agentId: target.agentId, storePath: target.storePath })
+    return listSessionEntriesReadOnly({ agentId: target.agentId, storePath: target.storePath })
       .filter(({ entry }) => {
         if (activeMinutes === undefined) {
           return true;
@@ -385,7 +398,7 @@ export async function sessionsCommand(
         // ACP rows need stored-key metadata before model/runtime resolution so
         // bridge sessions and true ACP runtime sessions display differently.
         const modelRef = applyAcpModelOverlayIfNeeded(
-          resolveSessionDisplayModelRef(cfg, row),
+          resolveSessionDisplayModelRef(cfg, row, classifyCliProvider),
           acpSessionKey,
           acpRuntime,
         );
@@ -403,6 +416,7 @@ export async function sessionsCommand(
           agentId,
           acpRuntime,
           agentRuntime,
+          displayModelRef: modelRef,
           kind: classifySessionKind(row.key, entry),
           runtimePolicySessionKey: resolveDisplayRuntimePolicySessionKey({
             cfg,
@@ -414,9 +428,7 @@ export async function sessionsCommand(
             entry,
             agentRuntime,
             modelProvider: modelRef.provider,
-            model: modelRef.model,
-            agentId,
-            sessionKey: row.key,
+            classifyCliProvider,
           }),
         });
       });
@@ -429,11 +441,11 @@ export async function sessionsCommand(
     const multi = targets.length > 1;
     const aggregate = aggregateAgents || multi;
     writeRuntimeJson(runtime, {
-      path: aggregate ? null : (targets[0]?.storePath ?? null),
+      path: aggregate || !targets[0] ? null : resolveSessionStoreDisplayPath(targets[0]),
       stores: aggregate
         ? targets.map((target) => ({
             agentId: target.agentId,
-            path: target.storePath,
+            path: resolveSessionStoreDisplayPath(target),
           }))
         : undefined,
       allAgents: aggregateAgents ? true : undefined,
@@ -445,15 +457,7 @@ export async function sessionsCommand(
       sessions: await Promise.all(
         rows.map(async (row) => {
           const r = toJsonSessionRow(row);
-          const modelRef = applyAcpModelOverlayIfNeeded(
-            resolveSessionDisplayModelRef(cfg, r),
-            resolveStoredSessionKeyForAgentStore({
-              cfg,
-              agentId: row.agentId,
-              sessionKey: r.key,
-            }),
-            row.acpRuntime,
-          );
+          const modelRef = row.displayModelRef;
           return {
             ...r,
             totalTokens: resolveSessionTotalTokens(r) ?? null,
@@ -476,8 +480,9 @@ export async function sessionsCommand(
     return;
   }
 
-  if (targets.length === 1 && !aggregateAgents) {
-    runtime.log(info(`Session store: ${targets[0]?.storePath}`));
+  const primaryTarget = targets[0];
+  if (primaryTarget && targets.length === 1 && !aggregateAgents) {
+    runtime.log(info(`Session store: ${resolveSessionStoreDisplayPath(primaryTarget)}`));
   } else {
     runtime.log(
       info(`Session stores: ${targets.length} (${targets.map((t) => t.agentId).join(", ")})`),
@@ -514,15 +519,7 @@ export async function sessionsCommand(
   runtime.log(rich ? theme.heading(header) : header);
 
   for (const row of rows) {
-    const model = applyAcpModelOverlayIfNeeded(
-      resolveSessionDisplayModelRef(cfg, row),
-      resolveStoredSessionKeyForAgentStore({
-        cfg,
-        agentId: row.agentId,
-        sessionKey: row.key,
-      }),
-      row.acpRuntime,
-    ).model;
+    const model = row.displayModelRef.model;
     const contextTokens =
       row.contextTokens ??
       configuredContextTokens ??

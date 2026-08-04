@@ -1,14 +1,11 @@
 // Removes installed plugins and updates plugin index records.
-import { realpathSync } from "node:fs";
+import { lstatSync, realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import {
-  readOpenClawManagedNpmRootOverrides,
-  syncManagedNpmRootPeerDependencies,
-} from "../infra/npm-managed-root.js";
+import { readOpenClawManagedNpmRootOverrides } from "../infra/npm-managed-root.js";
 import { createSafeNpmInstallEnv } from "../infra/safe-package-install.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
@@ -19,6 +16,7 @@ import {
 } from "./install-paths.js";
 import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "./plugin-peer-link.js";
 import { defaultSlotIdForKey, resetPluginSlotsToDefaults } from "./slots.js";
+import { pruneManagedNpmPeerDependenciesAfterUninstall } from "./uninstall-managed-npm.js";
 
 type UninstallActions = {
   entry: boolean;
@@ -80,6 +78,26 @@ export function formatUninstallActionLabels(actions: UninstallActions): string[]
   return UNINSTALL_ACTION_ORDER.flatMap((key) =>
     actions[key] ? [UNINSTALL_ACTION_LABELS[key]] : [],
   );
+}
+
+/** Keep a staged plugin disabled until its managed directory is removed. */
+export function prepareConfigForPendingPluginDirectoryRemoval(
+  config: OpenClawConfig,
+  pluginId: string,
+): OpenClawConfig {
+  return {
+    ...config,
+    plugins: {
+      ...config.plugins,
+      entries: {
+        ...config.plugins?.entries,
+        [pluginId]: {
+          ...config.plugins?.entries?.[pluginId],
+          enabled: false,
+        },
+      },
+    },
+  };
 }
 
 function hasUninstallAction(actions: Omit<UninstallActions, "directory">): boolean {
@@ -343,11 +361,11 @@ export function resolveUninstallChannelConfigKeys(
   return keys;
 }
 
-function loadPathMatchesInstallSourcePath(loadPath: string, sourcePath: string): boolean {
-  if (loadPath === sourcePath) {
+function loadPathMatchesInstallPath(loadPath: string, installPath: string): boolean {
+  if (loadPath === installPath) {
     return true;
   }
-  return resolveComparablePath(loadPath) === resolveComparablePath(sourcePath);
+  return resolveComparablePath(loadPath) === resolveComparablePath(installPath);
 }
 
 function resolveComparablePath(value: string): string {
@@ -417,17 +435,23 @@ export function removePluginFromConfig(
     actions.denylist = true;
   }
 
-  // Remove linked path from load.paths (for source === "path" plugins)
+  // Remove exact tracked install paths without consuming parent, child, or prefix matches.
   let load = pluginsConfig.load;
-  if (installRecord?.source === "path" && installRecord.sourcePath) {
-    const sourcePath = installRecord.sourcePath;
+  const trackedInstallPaths = [
+    installRecord?.installPath,
+    installRecord?.source === "path" ? installRecord.sourcePath : undefined,
+  ].filter((value): value is string => Boolean(value));
+  if (trackedInstallPaths.length > 0) {
     const loadPaths = load?.paths;
     if (
       Array.isArray(loadPaths) &&
-      loadPaths.some((p) => loadPathMatchesInstallSourcePath(p, sourcePath))
+      loadPaths.some((p) =>
+        trackedInstallPaths.some((installPath) => loadPathMatchesInstallPath(p, installPath)),
+      )
     ) {
       const nextLoadPaths = loadPaths.filter(
-        (p) => !loadPathMatchesInstallSourcePath(p, sourcePath),
+        (p) =>
+          !trackedInstallPaths.some((installPath) => loadPathMatchesInstallPath(p, installPath)),
       );
       load = nextLoadPaths.length > 0 ? { ...load, paths: nextLoadPaths } : undefined;
       actions.loadPath = true;
@@ -595,6 +619,15 @@ export function planPluginUninstall(params: UninstallPluginParams): PluginUninst
   };
 }
 
+export function pluginUninstallTargetExists(target: string): boolean {
+  try {
+    lstatSync(target);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ENOENT";
+  }
+}
+
 export async function applyPluginUninstallDirectoryRemoval(
   removal: PluginUninstallDirectoryRemoval | null,
 ): Promise<{ directoryRemoved: boolean; warnings: string[] }> {
@@ -602,11 +635,7 @@ export async function applyPluginUninstallDirectoryRemoval(
     return { directoryRemoved: false, warnings: [] };
   }
 
-  const existed =
-    (await fs
-      .access(removal.target)
-      .then(() => true)
-      .catch(() => false)) ?? false;
+  const existed = pluginUninstallTargetExists(removal.target);
   const warnings: string[] = [];
   if (!existed && removal.cleanup?.kind !== "npm") {
     return { directoryRemoved: false, warnings };
@@ -658,43 +687,13 @@ export async function applyPluginUninstallDirectoryRemoval(
     }
     try {
       const managedOverrides = await readOpenClawManagedNpmRootOverrides();
-      const syncedPeerDependencies = await syncManagedNpmRootPeerDependencies({
+      const warning = await pruneManagedNpmPeerDependenciesAfterUninstall({
         npmRoot: removal.cleanup.npmRoot,
+        packageName: removal.cleanup.packageName,
         managedOverrides,
       });
-      if (syncedPeerDependencies) {
-        const cleanup = await runCommandWithTimeout(
-          [
-            "npm",
-            "install",
-            "--omit=dev",
-            "--omit=peer",
-            "--loglevel=error",
-            "--legacy-peer-deps",
-            "--ignore-scripts",
-            "--no-audit",
-            "--no-fund",
-          ],
-          {
-            cwd: removal.cleanup.npmRoot,
-            timeoutMs: 300_000,
-            env: createSafeNpmInstallEnv(process.env, {
-              legacyPeerDeps: true,
-              npmConfigCwd: removal.cleanup.npmRoot,
-              packageLock: true,
-              quiet: true,
-            }),
-          },
-        );
-        if (cleanup.code !== 0) {
-          warnings.push(
-            `Failed to prune managed peer dependencies after uninstalling ${removal.cleanup.packageName}: ${
-              cleanup.stderr.trim() ||
-              cleanup.stdout.trim() ||
-              `npm exited with code ${cleanup.code}`
-            }`,
-          );
-        }
+      if (warning) {
+        warnings.push(warning);
       }
     } catch (error) {
       warnings.push(

@@ -1,17 +1,26 @@
 // Covers context-engine message filtering, assemble validation, and turn finalization.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
+import { buildMemorySystemPromptAddition } from "../../context-engine/delegate.js";
 import {
   CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
   OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
 } from "../../context-engine/host-compat.js";
-import { registerContextEngine, resolveContextEngine } from "../../context-engine/registry.js";
+import {
+  registerContextEngineForOwner,
+  resolveContextEngine,
+} from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import type {
   ContextEngine,
   ContextEngineRuntimeContext,
   ContextEngineRuntimeSettings,
 } from "../../context-engine/types.js";
+import {
+  clearMemoryPluginState,
+  registerMemoryPromptPreparation,
+  registerTestMemoryPromptBuilder,
+} from "../../plugins/memory-state.test-fixtures.js";
 import { compactContextEngineWithSafetyTimeout } from "../embedded-agent-runner/compaction-safety-timeout.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../internal-runtime-context.js";
 import {
@@ -19,6 +28,15 @@ import {
   bootstrapHarnessContextEngine,
   finalizeHarnessContextEngineTurn,
 } from "./context-engine-lifecycle.js";
+
+function registerTestContextEngine(
+  id: string,
+  factory: Parameters<typeof registerContextEngineForOwner>[1],
+) {
+  return registerContextEngineForOwner(id, factory, `test:${id}`, {
+    allowSameOwnerRefresh: true,
+  });
+}
 
 function textMessage(role: "user" | "assistant", text: string, timestamp: number): AgentMessage {
   return {
@@ -57,7 +75,7 @@ function createContextEngine(overrides: Partial<ContextEngine> = {}): ContextEng
 const sessionParams = {
   sessionIdUsed: "session-1",
   sessionId: "session-1",
-  sessionKey: "agent:main",
+  sessionKey: "agent:main:main",
   sessionFile: "sessions/main.jsonl",
 };
 
@@ -68,6 +86,52 @@ function uniqueConfiguredProofEngineId() {
 }
 
 describe("harness context engine lifecycle", () => {
+  it("scopes async memory preparation to non-legacy assembly with sandbox context", async () => {
+    const prepare = vi.fn(async ({ sandboxed }) => [
+      "## Prepared Memory",
+      `sandboxed=${sandboxed}`,
+      "",
+    ]);
+    registerTestMemoryPromptBuilder(() => ["## Memory Recall", ""]);
+    registerMemoryPromptPreparation("memory-wiki", prepare);
+    const availableTools = new Set(["wiki_search"]);
+    const assemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
+      messages: params.messages,
+      estimatedTokens: 0,
+      systemPromptAddition: buildMemorySystemPromptAddition({
+        availableTools: params.availableTools ?? new Set(),
+        citationsMode: params.citationsMode,
+      }),
+    }));
+
+    try {
+      const result = await assembleHarnessContextEngine({
+        contextEngine: createContextEngine({ assemble }),
+        sessionId: sessionParams.sessionId,
+        sessionKey: "agent:support:main",
+        messages: [textMessage("user", "visible ask", 1)],
+        availableTools,
+        citationsMode: "on",
+        sandboxed: true,
+        modelId: "gpt-test",
+      });
+
+      expect(result?.systemPromptAddition).toBe(
+        "## Memory Recall\n\n## Prepared Memory\nsandboxed=true",
+      );
+      expect(prepare).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "support",
+          agentSessionKey: "agent:support:main",
+          sandboxed: true,
+        }),
+      );
+      expect(buildMemorySystemPromptAddition({ availableTools })).toBe("## Memory Recall");
+    } finally {
+      clearMemoryPluginState();
+    }
+  });
+
   it("keeps hidden runtime-context custom messages out of assemble hooks", async () => {
     const visibleUser = textMessage("user", "visible ask", 1);
     const hiddenRuntimeContext = runtimeContextMessage("hidden runtime context", 2);
@@ -150,7 +214,11 @@ describe("harness context engine lifecycle", () => {
       sessionTarget,
     };
     const engine = createContextEngine({
-      info: { id: engineId, name: "Configured runtime settings proof engine" },
+      info: {
+        id: engineId,
+        name: "Configured runtime settings proof engine",
+        acceptedHostParams: ["runtimeSettings", "runtimeContext", "sessionTarget"],
+      },
       bootstrap: vi.fn(async (params) => {
         captured.push({
           hook: "bootstrap",
@@ -188,7 +256,7 @@ describe("harness context engine lifecycle", () => {
         return { ok: true, compacted: false };
       }),
     });
-    registerContextEngine(engineId, () => engine);
+    registerTestContextEngine(engineId, () => engine);
     const configuredEngine = await resolveContextEngine({
       plugins: { slots: { contextEngine: engineId } },
     });

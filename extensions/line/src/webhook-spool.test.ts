@@ -13,7 +13,11 @@ import {
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLineNodeWebhookHandler } from "./webhook-node.js";
-import { createLineWebhookSpool, LineWebhookTerminalDeliveryError } from "./webhook-spool.js";
+import {
+  createLineWebhookSpool,
+  LineWebhookTerminalDeliveryError,
+  type LineWebhookTurnAdoptionLifecycle,
+} from "./webhook-spool.js";
 
 type SpoolPayload = {
   version: number;
@@ -243,7 +247,10 @@ describe("LINE webhook spool", () => {
       await vi.waitFor(() => expect(firstDeliver).toHaveBeenCalledTimes(1));
 
       let stopSettled = false;
-      const stopping = first.stop().then(() => {
+      const firstStop = first.stop();
+      const secondStop = first.stop();
+      expect(secondStop).toBe(firstStop);
+      const stopping = firstStop.then(() => {
         stopSettled = true;
       });
       await new Promise<void>((resolve) => {
@@ -271,6 +278,192 @@ describe("LINE webhook spool", () => {
       } finally {
         await restarted.stop();
       }
+    });
+  });
+
+  it("disposes after the active-delivery stop grace expires", async () => {
+    await withQueue(async (queue) => {
+      let releaseDelivery = () => {};
+      const deliveryGate = new Promise<void>((resolve) => {
+        releaseDelivery = resolve;
+      });
+      let lateLifecycle: LineWebhookTurnAdoptionLifecycle | undefined;
+      const firstDeliver = vi.fn(
+        async (
+          _event: webhook.Event,
+          _destination: string,
+          control: { turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle },
+        ) => {
+          lateLifecycle = control.turnAdoptionLifecycle;
+          await deliveryGate;
+        },
+      );
+      const firstRuntime = runtime();
+      const first = createLineWebhookSpool({
+        accountId: "default",
+        runtime: firstRuntime,
+        queue,
+        deliver: firstDeliver,
+      });
+      const event = createEvent({ webhookEventId: "event-stop-timeout" });
+
+      first.start();
+      await first.accept(callback(event));
+      await vi.waitFor(() => expect(firstDeliver).toHaveBeenCalledTimes(1));
+
+      vi.useFakeTimers();
+      const stopping = first.stop();
+      let stopSettled = false;
+      void stopping.then(() => {
+        stopSettled = true;
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(4_999);
+        expect(stopSettled).toBe(false);
+        expect(lateLifecycle?.abortSignal.aborted).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        await stopping;
+        expect(firstRuntime.log).toHaveBeenCalledWith(
+          expect.stringContaining("timed out after 5000ms"),
+        );
+        if (!lateLifecycle) {
+          throw new Error("LINE delivery did not expose its adoption lifecycle");
+        }
+        expect(lateLifecycle.abortSignal.aborted).toBe(true);
+        lateLifecycle.onDeferred();
+        await vi.waitFor(async () => expect(await queue.listClaims()).toEqual([]));
+      } finally {
+        vi.useRealTimers();
+      }
+
+      const restartedDeliver = vi.fn(async (_event, _destination, control) => {
+        await control.turnAdoptionLifecycle.onAdopted();
+      });
+      const restarted = createLineWebhookSpool({
+        accountId: "default",
+        runtime: runtime(),
+        queue,
+        deliver: restartedDeliver,
+      });
+      restarted.start();
+      try {
+        await waitForVerdict(queue, "message:message-event-stop-timeout", "completed");
+        expect(restartedDeliver).toHaveBeenCalledTimes(1);
+      } finally {
+        releaseDelivery();
+        await restarted.stop();
+      }
+    });
+  });
+
+  it("waits for claims deferred after an active-delivery stop timeout", async () => {
+    await withQueue(async (queue) => {
+      let releaseDelivery = () => {};
+      const deliveryGate = new Promise<void>((resolve) => {
+        releaseDelivery = resolve;
+      });
+      let deferredLifecycle: LineWebhookTurnAdoptionLifecycle | undefined;
+      let activeLifecycle: LineWebhookTurnAdoptionLifecycle | undefined;
+      const spoolRuntime = runtime();
+      const deliver = vi.fn(
+        async (
+          event: webhook.Event,
+          _destination: string,
+          control: { turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle },
+        ) => {
+          if ((event as webhook.MessageEvent).message.id === "message-event-stop-deferred") {
+            deferredLifecycle = control.turnAdoptionLifecycle;
+            control.turnAdoptionLifecycle.onDeferred();
+            return;
+          }
+          activeLifecycle = control.turnAdoptionLifecycle;
+          await deliveryGate;
+        },
+      );
+      const spool = createLineWebhookSpool({
+        accountId: "default",
+        runtime: spoolRuntime,
+        queue,
+        deliver,
+      });
+
+      spool.start();
+      await spool.accept(callback(createEvent({ webhookEventId: "event-stop-active" })));
+      await spool.accept(
+        callback(createEvent({ webhookEventId: "event-stop-deferred", userId: "user-2" })),
+      );
+      await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(2));
+
+      vi.useFakeTimers();
+      const stopping = spool.stop();
+      let stopSettled = false;
+      void stopping.then(() => {
+        stopSettled = true;
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(spoolRuntime.log).toHaveBeenCalledWith(
+          expect.stringContaining("timed out after 5000ms"),
+        );
+        expect(stopSettled).toBe(false);
+
+        if (!deferredLifecycle || !activeLifecycle) {
+          throw new Error("LINE deliveries did not expose their adoption lifecycles");
+        }
+        activeLifecycle.onDeferred();
+        await deferredLifecycle.onAbandoned();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(stopSettled).toBe(false);
+
+        await activeLifecycle.onAbandoned();
+        releaseDelivery();
+        await stopping;
+        expect(stopSettled).toBe(true);
+        expect(await queue.listClaims()).toEqual([]);
+      } finally {
+        releaseDelivery();
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("waits for deferred claim settlement before disposing on stop", async () => {
+    await withQueue(async (queue) => {
+      let deferredLifecycle: LineWebhookTurnAdoptionLifecycle | undefined;
+      const deliver = vi.fn(async (_event, _destination, control) => {
+        deferredLifecycle = control.turnAdoptionLifecycle;
+        control.turnAdoptionLifecycle.onDeferred();
+      });
+      const spool = createLineWebhookSpool({
+        accountId: "default",
+        runtime: runtime(),
+        queue,
+        deliver,
+      });
+      const event = createEvent({ webhookEventId: "event-stop-deferred" });
+
+      spool.start();
+      await spool.accept(callback(event));
+      await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+
+      let stopSettled = false;
+      const stopping = spool.stop().then(() => {
+        stopSettled = true;
+      });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 50);
+      });
+      expect(stopSettled).toBe(false);
+      expect(await queue.listClaims()).toHaveLength(1);
+
+      if (!deferredLifecycle) {
+        throw new Error("LINE delivery did not expose its deferred lifecycle");
+      }
+      await deferredLifecycle.onAbandoned();
+      await stopping;
+      expect(stopSettled).toBe(true);
+      expect(await queue.listClaims()).toEqual([]);
+      expect(await queue.listPending()).toHaveLength(1);
     });
   });
 

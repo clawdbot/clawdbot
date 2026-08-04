@@ -1,5 +1,5 @@
-// Best-effort Teams web selectors. data-tid values are preferred because Teams
-// uses them extensively; every flow still needs validation against a live tenant.
+// Teams web selectors validated against live guest surfaces.
+// Prefer product-owned ids/data-tids; text remains a fallback for localized drift.
 export const TEAMS_MEETING_SELECTORS = {
   continueInBrowser: [
     '[data-tid="joinOnWeb"]',
@@ -20,27 +20,36 @@ export const TEAMS_MEETING_SELECTORS = {
   microphone: [
     'button[data-tid="toggle-mute"]',
     '[data-tid="toggle-mute"] button',
+    'input[data-tid="toggle-mute"]',
+    '[data-tid="toggle-mute"][role="switch"]',
     'button[data-tid="microphone-button"]',
   ],
   camera: [
     'button[data-tid="toggle-video"]',
     '[data-tid="toggle-video"] button',
+    'input[data-tid="toggle-video"]',
+    '[data-tid="toggle-video"][role="switch"]',
     'button[data-tid="camera-button"]',
   ],
   deviceSettings: [
+    "button#audio-button-configure",
+    'button[aria-label="Open audio options"]',
     'button[data-tid="prejoin-device-settings-button"]',
     'button[data-tid="device-settings-button"]',
     'button[data-tid="audio-device-settings-button"]',
   ],
   microphoneDevice: [
+    'button[data-tid="selected-microphone-display"]',
     '[data-tid="microphone-select"]',
     '[data-tid="audio-device-input"]',
     '[data-tid="device-settings-microphone"] [role="combobox"]',
     'select[data-tid="microphone-select"]',
   ],
+  microphoneDeviceMenu: ['[data-tid="microphone-settings"][role="listbox"]'],
   selectedMicrophoneDevice: ["option:checked", '[role="option"][aria-selected="true"]'],
   audioDeviceOptions: ["option", '[role="option"]'],
   leave: [
+    "button#hangup-button",
     'button[data-tid="call-hangup"]',
     '[data-tid="call-hangup"] button',
     'button[data-tid="hangup-button"]',
@@ -52,6 +61,7 @@ export const TEAMS_MEETING_SELECTORS = {
     'button[data-tid="leave-call-confirm"]',
   ],
   postCall: [
+    'button[data-tid="anon-meeting-end-screen-rejoin-button"]',
     '[data-tid="call-ended-screen"]',
     '[data-tid="post-call-screen"]',
     'button[data-tid="prejoin-rejoin-button"]',
@@ -67,4 +77,15 @@ export const TEAMS_MEETING_SELECTORS = {
     '[data-tid="media-permission-prompt"]',
     '[data-tid="browser-permission-error"]',
   ],
+  moreActions: ['button[aria-label="More"]'],
+  captions: ["button#closed-captions-button", '[role="menuitem"][title*="captions" i]'],
+  captionsOff: [
+    'button[data-tid="closed-captions-turn-off-button"]',
+    "button#captions-panel-dismiss-button",
+  ],
+  captionRenderer: ['[data-tid="closed-caption-renderer-wrapper"]'],
+  captionContent: ['[data-tid="closed-caption-v2-virtual-list-content"]'],
+  captionRows: ['div[role="log"]'],
+  captionAuthor: ['[data-tid="author"]'],
+  captionText: ['[data-tid="closed-caption-text"]'],
 } as const;

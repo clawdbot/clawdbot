@@ -14,6 +14,11 @@ export const GATEWAY_AUX_METHODS = [
   "approval.get",
   "approval.history",
   "approval.resolve",
+  "question.request",
+  "question.waitAnswer",
+  "question.resolve",
+  "question.get",
+  "question.list",
   "secrets.reload",
   "secrets.resolve",
 ] as const;

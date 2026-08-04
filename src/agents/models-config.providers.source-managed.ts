@@ -10,7 +10,7 @@ import {
   resolveNonEnvSecretRefHeaderValueMarker,
   resolveEnvSecretRefHeaderValueMarker,
 } from "./model-auth-markers.js";
-import { normalizeProviderMapKeys } from "./models-config.providers.keys.js";
+import { normalizeProviderMapKeys } from "./models-config.merge.js";
 import type { ProviderConfig, SecretDefaults } from "./models-config.providers.secrets.js";
 
 /**

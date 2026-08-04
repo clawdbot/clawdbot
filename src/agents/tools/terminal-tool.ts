@@ -36,6 +36,35 @@ const TerminalToolSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const TerminalListSessionSchema = Type.Object(
+  {
+    sessionId: Type.String(),
+    agentId: Type.String(),
+    shell: Type.String(),
+    cwd: Type.String(),
+    attached: Type.Boolean(),
+    owner: Type.String({ pattern: "^agent:.+" }),
+    createdAtMs: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+
+const TerminalToolOutputSchema = Type.Union([
+  Type.Object({ sessions: Type.Array(TerminalListSessionSchema) }, { additionalProperties: false }),
+  Type.Object(
+    {
+      ok: Type.Literal(true),
+      sessionId: Type.String(),
+      agentId: Type.String(),
+      cwd: Type.String(),
+      shell: Type.String(),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object({ sessionId: Type.String(), text: Type.String() }, { additionalProperties: false }),
+  Type.Object({ ok: Type.Boolean() }, { additionalProperties: false }),
+]);
+
 type TerminalToolGatewayContext = Pick<
   GatewayRequestContext,
   "isTerminalEnabled" | "resolveTerminalLaunchPolicy" | "terminalSessions"
@@ -117,8 +146,9 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
     label: "Terminal",
     name: "terminal",
     description:
-      "Own terminal on gateway host. open/read/input/close. User sees it in web UI, can type too. read = buffer snapshot.",
+      "Own terminal on gateway host. open/read/input/resize/close/list. User sees it in web UI, can type too. read = buffer snapshot.",
     parameters: TerminalToolSchema,
+    outputSchema: TerminalToolOutputSchema,
     execute: async (_toolCallId, rawArgs, signal) => {
       const params = rawArgs as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });

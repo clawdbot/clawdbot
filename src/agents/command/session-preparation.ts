@@ -1,10 +1,8 @@
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  assertAgentRunLifecycleGenerationCurrent,
-  registerAgentRunContext,
-} from "../../infra/agent-events.js";
+import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
+import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { recordSessionHumanDirectMessage } from "../../sessions/session-state-events.js";
 import { resolveEffectiveAgentSkillFilter } from "../../skills/discovery/agent-filter.js";
@@ -130,6 +128,7 @@ export async function prepareEmbeddedSessionState(params: {
       updatedAt: now,
       sessionStartedAt: entry.sessionStartedAt ?? now,
       lastInteractionAt: now,
+      agentStatus: undefined,
     };
     applyVerboseOverride(next, params.verboseOverride);
     sessionEntry = await persistSessionEntry({

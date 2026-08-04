@@ -1,4 +1,5 @@
 // Gradium provider module implements model/runtime integration.
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -9,8 +10,6 @@ import { asObject, trimToUndefined } from "openclaw/plugin-sdk/speech";
 import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-core";
 import { DEFAULT_GRADIUM_VOICE_ID, GRADIUM_VOICES, normalizeGradiumBaseUrl } from "./shared.js";
 import { gradiumTTS } from "./tts.js";
-
-const DEFAULT_GENERATED_AUDIO_MAX_BYTES = 16 * 1024 * 1024;
 
 type GradiumProviderConfig = {
   apiKey?: string;
@@ -24,7 +23,7 @@ function normalizeGradiumProviderConfig(rawConfig: Record<string, unknown>): Gra
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.providers.gradium.apiKey",
+      path: "tts.providers.gradium.apiKey",
     }),
     baseUrl: normalizeGradiumBaseUrl(trimToUndefined(raw?.baseUrl)),
     voiceId: trimToUndefined(raw?.voiceId) ?? DEFAULT_GRADIUM_VOICE_ID,
@@ -56,16 +55,6 @@ function isGradiumProviderConfigured(config: SpeechProviderConfig): boolean {
     // Provider selection is a predicate; synthesis reports the precise URL error.
     return false;
   }
-}
-
-function resolveGeneratedAudioMaxBytes(req: {
-  cfg: { agents?: { defaults?: { mediaMaxMb?: number } } };
-}): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return DEFAULT_GENERATED_AUDIO_MAX_BYTES;
 }
 
 function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
@@ -117,7 +106,7 @@ export function buildGradiumSpeechProvider(): SpeechProviderPlugin {
         voiceId: trimToUndefined(overrides.voiceId) ?? config.voiceId,
         outputFormat,
         timeoutMs: req.timeoutMs,
-        maxBytes: resolveGeneratedAudioMaxBytes(req),
+        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
       });
       return {
         audioBuffer,
@@ -142,7 +131,7 @@ export function buildGradiumSpeechProvider(): SpeechProviderPlugin {
         voiceId: trimToUndefined(overrides.voiceId) ?? config.voiceId,
         outputFormat,
         timeoutMs: req.timeoutMs,
-        maxBytes: resolveGeneratedAudioMaxBytes(req),
+        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
       });
       return { audioBuffer, outputFormat, sampleRate };
     },

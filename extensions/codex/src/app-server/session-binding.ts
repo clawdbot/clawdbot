@@ -1,7 +1,10 @@
 /** SQLite-backed Codex app-server thread bindings. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  AgentHarnessSessionSupersededError,
+  embeddedAgentLog,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   ensureAuthProfileStore,
   resolveDefaultAgentDir,
@@ -69,6 +72,47 @@ export function sessionBindingIdentity(params: {
     sessionId: params.sessionId,
     ...(sessionKey ? { sessionKey } : {}),
   };
+}
+
+export type CodexRunSessionBindingAuthority = "current" | "ephemeral" | "superseded";
+
+/** Decides whether a run may share the durable stable-key binding owner. */
+export function resolveCodexRunSessionBindingAuthority(params: {
+  identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>;
+  config?: OpenClawConfig;
+  storePath?: string;
+}): CodexRunSessionBindingAuthority {
+  const sessionKey = params.identity.sessionKey?.trim();
+  if (!sessionKey) {
+    return "ephemeral";
+  }
+  try {
+    const storePath =
+      params.storePath?.trim() ||
+      resolveStorePath(params.config?.session?.store, { agentId: params.identity.agentId });
+    const entry = getSessionEntry({
+      agentId: params.identity.agentId,
+      hydrateSkillPromptRefs: false,
+      readConsistency: "latest",
+      sessionKey,
+      storePath,
+    });
+    if (!entry) {
+      return "ephemeral";
+    }
+    return entry.sessionId === params.identity.sessionId ? "current" : "superseded";
+  } catch {
+    return "superseded";
+  }
+}
+
+/** Builds the terminal coordination error used when a newer OpenClaw session owns the binding. */
+export function createCodexSessionGenerationSupersededError(
+  sessionId: string,
+): AgentHarnessSessionSupersededError {
+  return new AgentHarnessSessionSupersededError(
+    `Codex session generation is no longer current: ${sessionId}`,
+  );
 }
 
 const optionalStringSchema = z.string().optional().catch(undefined);
@@ -163,6 +207,7 @@ const threadBindingSchema = z
     threadId: z.string().refine((value) => Boolean(value.trim())),
     clientId: optionalStringSchema,
     cwd: z.string(),
+    rolloutPath: optionalNonBlankStringSchema,
     // Private runtime ownership. Only the supervision catalog creates this
     // marker; public OpenClaw session metadata must never authorize user-home access.
     connectionScope: z.literal("supervision").optional(),
@@ -203,6 +248,7 @@ const threadBindingSchema = z
     dynamicToolsFingerprint: optionalStringSchema,
     dynamicToolsContainDeferred: optionalBooleanSchema,
     webSearchThreadConfigFingerprint: optionalStringSchema,
+    nativeSkillIsolationFingerprint: optionalStringSchema,
     userMcpServersFingerprint: optionalStringSchema,
     mcpServersFingerprint: optionalStringSchema,
     ringZeroConfigFingerprint: optionalStringSchema,
@@ -511,6 +557,9 @@ export type CodexAppServerBindingStore = {
     identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
     expectedPreviousSessionId: string,
   ): Promise<CodexSessionGenerationAdoptionResult>;
+  resetSessionGeneration(
+    identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
+  ): Promise<CodexSessionGenerationRetirementResult>;
   retireSessionGeneration(
     identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
   ): Promise<CodexSessionGenerationRetirementResult>;
@@ -518,11 +567,52 @@ export type CodexAppServerBindingStore = {
   withLease<T>(identity: CodexAppServerBindingIdentity, run: () => Promise<T>): Promise<T>;
 };
 
+/** Carries one prepared run identity through callers that rederive it from public params. */
+export function scopeCodexRunBindingStore(params: {
+  bindingStore: CodexAppServerBindingStore;
+  logicalIdentity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>;
+  physicalIdentity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>;
+}): CodexAppServerBindingStore {
+  const mapSessionIdentity = (
+    identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
+  ) =>
+    identity.agentId === params.logicalIdentity.agentId &&
+    identity.sessionId === params.logicalIdentity.sessionId &&
+    identity.sessionKey?.trim() === params.logicalIdentity.sessionKey?.trim()
+      ? params.physicalIdentity
+      : identity;
+  const mapIdentity = (identity: CodexAppServerBindingIdentity) =>
+    identity.kind === "session" ? mapSessionIdentity(identity) : identity;
+  return {
+    read: (identity) => params.bindingStore.read(mapIdentity(identity)),
+    hasOtherThreadOwner: (threadId, identity) =>
+      params.bindingStore.hasOtherThreadOwner(
+        threadId,
+        identity ? mapIdentity(identity) : undefined,
+      ),
+    mutate: (identity, mutation) => params.bindingStore.mutate(mapIdentity(identity), mutation),
+    prepareSessionGenerationReclaim: (identity) =>
+      params.bindingStore.prepareSessionGenerationReclaim(mapSessionIdentity(identity)),
+    adoptSessionGeneration: (identity, expectedPreviousSessionId) =>
+      params.bindingStore.adoptSessionGeneration(
+        mapSessionIdentity(identity),
+        expectedPreviousSessionId,
+      ),
+    resetSessionGeneration: (identity) =>
+      params.bindingStore.resetSessionGeneration(mapSessionIdentity(identity)),
+    retireSessionGeneration: (identity) =>
+      params.bindingStore.retireSessionGeneration(mapSessionIdentity(identity)),
+    withThreadArchiveFence: (run) => params.bindingStore.withThreadArchiveFence(run),
+    withLease: (identity, run) => params.bindingStore.withLease(mapIdentity(identity), run),
+  };
+}
+
 /** Lets the authoritative OpenClaw session generation claim a stale stable binding row. */
 export async function reclaimCurrentCodexSessionGeneration(params: {
   bindingStore: CodexAppServerBindingStore;
   identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>;
   config?: OpenClawConfig;
+  storePath?: string;
 }): Promise<boolean> {
   const sessionKey = params.identity.sessionKey?.trim();
   if (!sessionKey) {
@@ -536,9 +626,9 @@ export async function reclaimCurrentCodexSessionGeneration(params: {
   // Only a stale stable-key owner needs session-store authority. Resolve it before
   // the second mutation so the session read never runs inside the binding write transaction.
   try {
-    const storePath = resolveStorePath(params.config?.session?.store, {
-      agentId: params.identity.agentId,
-    });
+    const storePath =
+      params.storePath?.trim() ||
+      resolveStorePath(params.config?.session?.store, { agentId: params.identity.agentId });
     const entry = getSessionEntry({
       agentId: params.identity.agentId,
       hydrateSkillPromptRefs: false,
@@ -745,11 +835,16 @@ export function createCodexAppServerBindingStore(
         return { kind: "resolved", result: true };
       }
       const currentSessionId = current.sessionId;
-      if (!currentSessionId || currentSessionId === identity.sessionId) {
+      if (!currentSessionId) {
         return {
           kind: "resolved",
           result: current.state !== "cleared" || current.retired !== true,
         };
+      }
+      if (currentSessionId === identity.sessionId) {
+        return current.state === "cleared" && current.retired === true
+          ? { kind: "verify", expectedPreviousSessionId: currentSessionId }
+          : { kind: "resolved", result: true };
       }
       return { kind: "verify", expectedPreviousSessionId: currentSessionId };
     },
@@ -775,6 +870,24 @@ export function createCodexAppServerBindingStore(
                 return { result: true };
               }
               if (ownsGeneration) {
+                if (
+                  current.state === "cleared" &&
+                  current.retired === true &&
+                  current.sessionId === mutation.expectedPreviousSessionId
+                ) {
+                  // Reset boundaries now retain the OpenClaw session id. The
+                  // authoritative session-store check above proves this fence
+                  // belongs to the previous in-place lifecycle, not live work.
+                  return {
+                    result: true,
+                    next: {
+                      version: 1,
+                      state: "cleared",
+                      sessionId: identity.sessionId,
+                      ...ownedLease,
+                    },
+                  };
+                }
                 return {
                   result: current.state !== "cleared" || current.retired !== true,
                 };
@@ -918,6 +1031,40 @@ export function createCodexAppServerBindingStore(
             next: { ...current, sessionId: targetSessionId },
           };
         });
+      });
+    },
+
+    async resetSessionGeneration(identity) {
+      return await runBindingMutation(async () => {
+        const key = bindingStoreKey(identity);
+        return await transactKey(
+          key,
+          (current, leaseToken) => {
+            if (!current) {
+              return { result: "absent" as const };
+            }
+            if (!ownsStoredSessionGeneration(identity, current)) {
+              return { result: "conflict" as const };
+            }
+            // A retired same-id row may be a deletion fence. Only the authoritative
+            // session-store reclaim path can prove it belongs to an in-place reset.
+            if (current.state === "cleared" && current.retired === true) {
+              return { result: "conflict" as const };
+            }
+            return {
+              result: "applied" as const,
+              next: {
+                version: 1,
+                state: "cleared",
+                ...storedSessionGeneration(identity, current),
+                ...(current.lease && current.lease.token === leaseToken
+                  ? { lease: current.lease }
+                  : {}),
+              },
+            };
+          },
+          leaseContext.getStore()?.has(key) ? undefined : 1,
+        );
       });
     },
 

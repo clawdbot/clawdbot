@@ -20,6 +20,14 @@ export function assertSuspendedProbes(
   health: Record<string, unknown>,
   readiness: Record<string, unknown>,
 ): void;
+export function prepareReadySuspension(
+  options: {
+    deadline: number;
+    requestId: string;
+    rpc: (method: string, params: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  },
+  deps?: { delayImpl?: (ms: number) => Promise<void>; now?: () => number },
+): Promise<Record<string, unknown>>;
 export function runGatewaySuspensionPreRestartClient(
   options: { statePath: string; token: string; url: string; timeoutMs?: number },
   deps?: { fetchImpl?: typeof fetch },
@@ -28,7 +36,6 @@ export function runGatewaySuspensionPostRestartClient(
   options: { statePath: string; token: string; url: string; timeoutMs?: number },
   deps?: { fetchImpl?: typeof fetch },
 ): Promise<void>;
-export function responseError(method: string, response: GatewayFrame): Error;
 export function runGatewayNetworkClient(
   options: { token: string; url: string; timeoutMs?: number },
   deps?: {

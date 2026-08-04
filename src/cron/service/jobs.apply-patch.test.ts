@@ -2,8 +2,8 @@
 import { describe, expect, it } from "vitest";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import { projectCronJobThroughStorageCodec } from "../store/row-codec.js";
-import type { CronJob } from "../types.js";
-import { applyJobPatch } from "./jobs.js";
+import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
+import { applyJobPatch, createJob } from "./jobs.js";
 
 function makeJob(overrides: Partial<CronJob> = {}): CronJob {
   const now = Date.now();
@@ -22,6 +22,110 @@ function makeJob(overrides: Partial<CronJob> = {}): CronJob {
     ...overrides,
   };
 }
+
+describe("applyJobPatch schedule retention", () => {
+  it.each([
+    { schedule: { kind: "every" as const, everyMs: 60_000 }, deleteAfterRun: undefined },
+    { schedule: { kind: "every" as const, everyMs: 60_000 }, deleteAfterRun: false },
+    { schedule: { kind: "cron" as const, expr: "0 * * * *" }, deleteAfterRun: undefined },
+    { schedule: { kind: "cron" as const, expr: "0 * * * *" }, deleteAfterRun: false },
+  ])("defaults $schedule.kind to cleanup when converting it to at", (previous) => {
+    const job = makeJob(previous);
+
+    applyJobPatch(job, { schedule: { kind: "at", at: "2026-07-19T09:00:00.000Z" } });
+
+    expect(job.schedule.kind).toBe("at");
+    expect(job.deleteAfterRun).toBe(true);
+  });
+
+  it("preserves an explicit keep policy when converting a recurring job to at", () => {
+    const job = makeJob({ deleteAfterRun: true });
+
+    applyJobPatch(job, {
+      schedule: { kind: "at", at: "2026-07-19T09:00:00.000Z" },
+      deleteAfterRun: false,
+    });
+
+    expect(job.deleteAfterRun).toBe(false);
+  });
+
+  it.each([
+    { kind: "every" as const, everyMs: 60_000 },
+    { kind: "cron" as const, expr: "0 * * * *" },
+  ])("clears the at-only default when converting to $kind", (schedule) => {
+    const job = makeJob({
+      schedule: { kind: "at", at: "2026-07-19T09:00:00.000Z" },
+      deleteAfterRun: true,
+    });
+
+    applyJobPatch(job, { schedule });
+
+    expect(job.schedule.kind).toBe(schedule.kind);
+    expect(Object.hasOwn(job, "deleteAfterRun")).toBe(false);
+  });
+
+  it.each([
+    {
+      label: "at to at",
+      previous: { kind: "at" as const, at: "2026-07-19T09:00:00.000Z" },
+      next: { kind: "at" as const, at: "2026-07-20T09:00:00.000Z" },
+    },
+    {
+      label: "at to on-exit",
+      previous: { kind: "at" as const, at: "2026-07-19T09:00:00.000Z" },
+      next: { kind: "on-exit" as const, command: "true" },
+    },
+    {
+      label: "on-exit to at",
+      previous: { kind: "on-exit" as const, command: "true" },
+      next: { kind: "at" as const, at: "2026-07-20T09:00:00.000Z" },
+    },
+  ])("preserves one-shot retention for $label", ({ previous, next }) => {
+    const job = makeJob({ schedule: previous, deleteAfterRun: false });
+
+    applyJobPatch(job, { schedule: next });
+
+    expect(job.deleteAfterRun).toBe(false);
+  });
+});
+
+describe("schedule activation ownership", () => {
+  it("ignores caller-supplied activation state during creation", () => {
+    const now = Date.parse("2026-07-30T00:00:00.000Z");
+    const input = {
+      name: "owned activation",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: { scheduleActivatedAtMs: now - 60_000 },
+    } as unknown as CronJobCreate;
+
+    const job = createJob(
+      {
+        deps: {
+          nowMs: () => now,
+          defaultAgentId: "main",
+        },
+      } as never,
+      input,
+    );
+
+    expect(job.state.scheduleActivatedAtMs).toBeUndefined();
+  });
+
+  it("ignores caller-supplied activation state during updates", () => {
+    const job = makeJob({ state: { scheduleActivatedAtMs: 456 } });
+    const patch = {
+      state: { scheduleActivatedAtMs: 123 },
+    } as unknown as CronJobPatch;
+
+    applyJobPatch(job, patch);
+
+    expect(job.state.scheduleActivatedAtMs).toBe(456);
+  });
+});
 
 describe("applyJobPatch delivery merge", () => {
   it("threads explicit delivery threadId patches into delivery", () => {

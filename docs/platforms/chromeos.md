@@ -12,8 +12,9 @@ inside that container exactly like any other Linux install, so the [Linux
 guide](/platforms/linux) applies in full. This page covers the ChromeOS
 specific setup and the gotchas that differ from a plain Linux host.
 
-Node is the recommended runtime; Bun is not recommended (known
-WhatsApp/Telegram issues).
+OpenClaw requires Node because its canonical state store uses `node:sqlite`.
+Bun can install dependencies or run package scripts, but it cannot run the
+OpenClaw CLI or Gateway.
 
 ## Enable the Linux container
 
@@ -62,24 +63,24 @@ filesystem directly, so a Docker image rebuild cannot wipe it.
 
 ## Node version
 
-Debian ships Node 18 by default, which is below the OpenClaw floor of Node
-22.19+ (Node 24 recommended). The installer script pulls a supported Node
-through NodeSource automatically, so a clean container needs no manual step.
+The Node version available in a Crostini container may be below OpenClaw's
+minimum. OpenClaw requires Node 22.22.3+, Node 24.15+, or Node 25.9+; Node 26
+is the recommended default. The installer script detects a missing or
+unsupported Node version and provisions a supported release automatically.
 
 If you installed Node yourself before OpenClaw, upgrade it **before** installing
 OpenClaw:
 
 ```bash
-node -v   # if this shows v18.x, upgrade before continuing
+node -v
 ```
 
 See [Node install guidance](/install/node) for the supported versions.
 
 ## Provider keys and environment variables
 
-The Gateway runs as a **systemd user service**, so it does not inherit
-variables from your interactive shell. A value set with `export VAR=...` in
-your shell profile never reaches the running Gateway.
+The Gateway runs as a **systemd user service**, so an `export VAR=...` in an
+interactive Terminal is not inherited by the already-installed service.
 
 Put provider keys in `~/.openclaw/.env` instead, one per line:
 
@@ -93,17 +94,15 @@ Then restart so the service picks them up:
 openclaw gateway restart
 ```
 
-See [Configuration reference](/gateway/configuration-reference) for the full
-list of environment variables the Gateway reads.
+See [Environment variables](/help/environment) for the full precedence and
+source rules.
 
 ## Crostini is not always on
 
-The Crostini Linux VM runs only while the ChromeOS Linux session is active, and
-a ChromeOS reboot does **not** relaunch it automatically. After a reboot the
-Gateway is not running until the container starts again.
+Do not treat Crostini as an always-on host. After a ChromeOS reboot, open the
+**Terminal** once to start the Linux environment before relying on the Gateway.
 
-Reopen the **Terminal** once after a reboot to bring the container (and with it
-the Gateway user service) back up, then verify:
+Then verify the service:
 
 ```bash
 openclaw gateway status
@@ -116,3 +115,4 @@ openclaw gateway status
 - [Node install guidance](/install/node)
 - [Gateway runbook](/gateway)
 - [Gateway configuration](/gateway/configuration)
+- [Google: Set up Linux on your Chromebook](https://support.google.com/chromebook/answer/9145439)

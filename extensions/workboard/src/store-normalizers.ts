@@ -983,20 +983,66 @@ export function normalizeProofInput(input: WorkboardProofInput, now: number): Wo
   };
 }
 
+function completionProofConflicts(existing: WorkboardProof, completion: WorkboardProof): boolean {
+  return (["label", "command", "url", "note"] as const).some(
+    (field) => completion[field] !== undefined && completion[field] !== existing[field],
+  );
+}
+
+export function appendCompletionProof(
+  existing: readonly WorkboardProof[] | undefined,
+  proof: WorkboardProof,
+  proofId?: string,
+): WorkboardProof[] {
+  const entries = [...(existing ?? [])];
+  if (!proofId) {
+    return [...entries, proof].slice(-MAX_CARD_PROOF);
+  }
+  const index = entries.findIndex((entry) => entry.id === proofId);
+  const pending = index >= 0 ? entries[index] : undefined;
+  if (!pending) {
+    throw new Error(`proof not found: ${proofId}`);
+  }
+  if (proof.status === "unknown") {
+    throw new Error("completion proof status must be passed, failed, or skipped.");
+  }
+  if (completionProofConflicts(pending, proof)) {
+    throw new Error(`completion proof does not match pending proof: ${proofId}`);
+  }
+  if (pending.status !== "unknown") {
+    if (pending.status !== proof.status) {
+      throw new Error(`completion proof status does not match existing proof: ${proofId}`);
+    }
+    return entries.slice(-MAX_CARD_PROOF);
+  }
+  // A proof id is the durable correlation boundary between a separately recorded check and its
+  // completion. Preserve the original evidence identity and timestamp while resolving its status.
+  entries[index] = { ...pending, status: proof.status };
+  return entries.slice(-MAX_CARD_PROOF);
+}
+
 export function normalizeMetadata(
   value: unknown,
   fallback: WorkboardMetadata = {},
-  options: { allowDependencyLinks?: boolean } = {},
+  options: {
+    allowDependencyLinks?: boolean;
+    allowArchivedAt?: boolean;
+    preserveProofId?: string;
+  } = {},
 ): WorkboardMetadata {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return trimMetadataToBudget(fallback);
+    return trimMetadataToBudget(fallback, options);
   }
   const record = value as Record<string, unknown>;
   const stale =
     record.stale && typeof record.stale === "object" && !Array.isArray(record.stale)
       ? (record.stale as Record<string, unknown>)
       : null;
-  const hasArchivedAt = Object.hasOwn(record, "archivedAt");
+  // Archival is a transition owned by archive(), which appends the matching
+  // `archived` event. Callers that cannot produce that event (create) must not
+  // be able to declare it, or the card is excluded from dispatch from the
+  // instant it exists with an event log recording only `created`.
+  const hasArchivedAt = Object.hasOwn(record, "archivedAt") && options.allowArchivedAt !== false;
   const hasStale = Object.hasOwn(record, "stale");
   const hasLifecycleStatusSourceUpdatedAt = Object.hasOwn(record, "lifecycleStatusSourceUpdatedAt");
   const links = Array.isArray(record.links)
@@ -1017,7 +1063,7 @@ export function normalizeMetadata(
             ];
           })()
         : links.slice(-MAX_CARD_LINKS);
-  return trimMetadataToBudget({
+  const normalized = {
     attempts: Array.isArray(record.attempts)
       ? record.attempts
           .map(normalizeAttempt)
@@ -1102,7 +1148,8 @@ export function normalizeMetadata(
       typeof record.failureCount === "number" && Number.isFinite(record.failureCount)
         ? Math.max(0, Math.trunc(record.failureCount))
         : fallback.failureCount,
-  });
+  };
+  return trimMetadataToBudget(normalized, options);
 }
 
 export function normalizeExecution(value: unknown): WorkboardExecution | undefined {
@@ -1260,6 +1307,21 @@ function dropFirst<T>(items: readonly T[] | undefined): T[] | undefined {
   return next.length ? next : undefined;
 }
 
+function dropFirstProofExcept(
+  items: readonly WorkboardProof[] | undefined,
+  preserveProofId: string | undefined,
+): WorkboardProof[] | undefined {
+  if (!items?.length) {
+    return undefined;
+  }
+  const index = preserveProofId ? items.findIndex((proof) => proof.id !== preserveProofId) : 0;
+  if (index < 0) {
+    return items.slice();
+  }
+  const next = items.filter((_, itemIndex) => itemIndex !== index);
+  return next.length ? next : undefined;
+}
+
 function dropFirstNonDependencyLink(
   items: readonly WorkboardLink[] | undefined,
 ): WorkboardLink[] | undefined {
@@ -1289,7 +1351,10 @@ export function appendLinkPreservingDependencies(
   return next.filter((_, index) => index !== dropIndex);
 }
 
-export function trimMetadataToBudget(metadata: WorkboardMetadata): WorkboardMetadata {
+export function trimMetadataToBudget(
+  metadata: WorkboardMetadata,
+  options: { preserveProofId?: string } = {},
+): WorkboardMetadata {
   let next = removeUndefinedMetadataFields(metadata);
   while (metadataByteSize(next) > MAX_CARD_METADATA_BYTES) {
     const currentSize = metadataByteSize(next);
@@ -1302,8 +1367,13 @@ export function trimMetadataToBudget(metadata: WorkboardMetadata): WorkboardMeta
         ...next,
         notifications: dropFirst(next.notifications),
       });
-    } else if (next.proof?.length) {
-      next = removeUndefinedMetadataFields({ ...next, proof: dropFirst(next.proof) });
+    } else if (
+      next.proof?.some((proof) => !options.preserveProofId || proof.id !== options.preserveProofId)
+    ) {
+      next = removeUndefinedMetadataFields({
+        ...next,
+        proof: dropFirstProofExcept(next.proof, options.preserveProofId),
+      });
     } else if (next.artifacts?.length) {
       next = removeUndefinedMetadataFields({ ...next, artifacts: dropFirst(next.artifacts) });
     } else if (next.attachments?.length) {
@@ -1322,8 +1392,13 @@ export function trimMetadataToBudget(metadata: WorkboardMetadata): WorkboardMeta
       }
     } else if (next.comments?.length) {
       next = removeUndefinedMetadataFields({ ...next, comments: dropFirst(next.comments) });
+    } else if (options.preserveProofId) {
+      throw new Error(`card metadata cannot retain proof: ${options.preserveProofId}`);
     }
     if (metadataByteSize(next) >= currentSize) {
+      if (options.preserveProofId) {
+        throw new Error(`card metadata cannot retain proof: ${options.preserveProofId}`);
+      }
       break;
     }
   }

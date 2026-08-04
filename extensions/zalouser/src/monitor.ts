@@ -1,17 +1,24 @@
 import { mergeAllowlist, summarizeMapping } from "openclaw/plugin-sdk/allow-from";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import {
   createChannelInboundEnvelopeBuilder,
+  createChannelPartialDeliveryError,
   implicitMentionKindWhen,
+  isChannelPartialDeliveryError,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import {
+  createMessageReceiptFromOutboundResults,
+  listMessageReceiptPlatformIds,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/core";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 // Zalouser plugin module implements monitor behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
@@ -38,6 +45,7 @@ import {
   findZalouserGroupEntry,
   isZalouserGroupEntryAllowed,
 } from "./group-policy.js";
+import { createZalouserIngressMonitor, type ZalouserIngressLifecycle } from "./ingress.js";
 import { formatZalouserMessageSidFull, resolveZalouserMessageSid } from "./message-sid.js";
 import { getZalouserRuntime } from "./runtime.js";
 import {
@@ -51,6 +59,7 @@ import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
 import {
   listZaloFriends,
   listZaloGroups,
+  resolveZaloOwnUserId,
   resolveZaloGroupContext,
   startZaloListener,
 } from "./zalo-js.js";
@@ -60,11 +69,12 @@ type ZalouserMonitorOptions = {
   config: OpenClawConfig;
   runtime: RuntimeEnv;
   abortSignal: AbortSignal;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
+  ingressQueue?: Parameters<typeof createZalouserIngressMonitor>[0]["queue"];
 };
 
 type ZalouserMonitorResult = {
-  stop: () => void;
+  stop: () => Promise<void>;
 };
 
 const ZALOUSER_TEXT_LIMIT = 2000;
@@ -125,15 +135,6 @@ function normalizeZalouserAllowEntry(entry: string): string {
 
 function normalizeZalouserSender(value: string): string | null {
   return normalizeOptionalLowercaseString(normalizeZalouserAllowEntry(value)) || null;
-}
-
-function resolveInboundQueueKey(message: ZaloInboundMessage): string {
-  const threadId = message.threadId?.trim() || "unknown";
-  if (message.isGroup) {
-    return `group:${threadId}`;
-  }
-  const senderId = message.senderId?.trim();
-  return `direct:${senderId || threadId}`;
 }
 
 function resolveZalouserRouteAccess(params: {
@@ -224,6 +225,7 @@ async function processMessage(
   runtime: RuntimeEnv,
   historyState: ZalouserGroupHistoryState,
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void,
+  turnAdoptionLifecycle?: ZalouserIngressLifecycle,
 ): Promise<void> {
   const pairing = createChannelPairingController({
     core,
@@ -577,6 +579,7 @@ async function processMessage(
     },
     route: {
       agentId: route.agentId,
+      dmScope: route.dmScope,
       accountId: route.accountId,
       routeSessionKey: route.sessionKey,
       dispatchSessionKey: route.sessionKey,
@@ -626,7 +629,7 @@ async function processMessage(
     channel: "zalouser",
     accountId: account.accountId,
     cfg: config,
-    route: { agentId: route.agentId, sessionKey: route.sessionKey },
+    route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
     ctxPayload,
     delivery: {
       preparePayload: (payload) => {
@@ -667,6 +670,9 @@ async function processMessage(
         }
       },
       onError: (err, info) => {
+        if (isChannelPartialDeliveryError(err)) {
+          statusSink?.({ lastOutboundAt: Date.now() });
+        }
         runtime.error(`[${account.accountId}] Zalouser ${info.kind} reply failed: ${String(err)}`);
       },
     },
@@ -676,6 +682,7 @@ async function processMessage(
         runtime.error?.(`zalouser: failed updating session meta: ${String(err)}`);
       },
     },
+    replyOptions: turnAdoptionLifecycle ? { turnAdoptionLifecycle } : undefined,
   });
   if (isGroup && historyKey) {
     channelHistory.clear({
@@ -706,43 +713,46 @@ async function deliverZalouserReply(params: {
   const textChunkLimit = core.channel.text.resolveTextChunkLimit(config, "zalouser", accountId, {
     fallbackLimit: ZALOUSER_TEXT_LIMIT,
   });
-  await deliverTextOrMediaReply({
-    payload,
-    text: reply.text,
-    sendText: async (chunk) => {
-      try {
-        await sendMessageZalouser(chatId, chunk, {
-          profile,
-          isGroup,
-          textMode: "markdown",
-          textChunkMode: chunkMode,
-          textChunkLimit,
-        });
+  const accepted: Awaited<ReturnType<typeof sendMessageZalouser>>[] = [];
+  const sendReplyPart = async (text: string, mediaUrl?: string) => {
+    await sendMessageZalouser(chatId, text, {
+      profile,
+      ...(mediaUrl ? { mediaUrl } : {}),
+      isGroup,
+      textMode: "markdown",
+      textChunkMode: chunkMode,
+      textChunkLimit,
+      onDeliveryResult: (result) => {
+        accepted.push(result);
         visibleReplySent = true;
-      } catch (err) {
-        runtime.error(`Zalouser message send failed: ${String(err)}`);
-      }
-    },
-    sendMedia: async ({ mediaUrl, caption }) => {
-      logVerbose(core, runtime, `Sending media to ${chatId}`);
-      await sendMessageZalouser(chatId, caption ?? "", {
-        profile,
-        mediaUrl,
-        isGroup,
-        textMode: "markdown",
-        textChunkMode: chunkMode,
-        textChunkLimit,
-      });
-      visibleReplySent = true;
-    },
-    onMediaError: (error) => {
-      runtime.error(
-        `Zalouser media send failed: ${
-          error instanceof Error ? error.message : JSON.stringify(error)
-        }`,
-      );
-    },
-  });
+      },
+    });
+    visibleReplySent = true;
+  };
+  try {
+    await deliverTextOrMediaReply({
+      payload,
+      text: reply.text,
+      sendText: sendReplyPart,
+      sendMedia: async ({ mediaUrl, caption }) => {
+        logVerbose(core, runtime, `Sending media to ${chatId}`);
+        await sendReplyPart(caption ?? "", mediaUrl);
+      },
+    });
+  } catch (error) {
+    if (!visibleReplySent) {
+      throw error;
+    }
+    const receipt = createMessageReceiptFromOutboundResults({
+      results: accepted.map((result) => ({ receipt: result.receipt })),
+      kind: reply.hasMedia ? "media" : "text",
+    });
+    throw createChannelPartialDeliveryError(error, {
+      messageIds: listMessageReceiptPlatformIds(receipt),
+      receipt,
+      visibleReplySent: true,
+    });
+  }
   return { visibleReplySent };
 }
 
@@ -754,7 +764,6 @@ export async function monitorZalouserProvider(
   const { abortSignal, statusSink, runtime } = options;
 
   const core = getZalouserRuntime();
-  const inboundQueue = new KeyedAsyncQueue();
   const historyLimit = Math.max(
     0,
     account.config.historyLimit ??
@@ -856,16 +865,38 @@ export async function monitorZalouserProvider(
     runtime.log?.(`zalouser resolve failed; using config entries. ${String(err)}`);
   }
 
+  const ownUserId = await resolveZaloOwnUserId(account.profile);
+  const ingress = createZalouserIngressMonitor({
+    accountId: account.accountId,
+    ownUserId,
+    runtime,
+    ...(options.ingressQueue ? { queue: options.ingressQueue } : {}),
+    dispatch: async (message, lifecycle) => {
+      await processMessage(
+        message,
+        account,
+        config,
+        core,
+        runtime,
+        { historyLimit, groupHistories },
+        statusSink,
+        lifecycle,
+      );
+    },
+  });
+
   let listenerStop: (() => void) | null = null;
   let stopped = false;
+  let stopTask: Promise<void> | undefined;
 
-  const stop = () => {
-    if (stopped) {
-      return;
-    }
-    stopped = true;
-    listenerStop?.();
-    listenerStop = null;
+  const stop = (): Promise<void> => {
+    stopTask ??= (async () => {
+      stopped = true;
+      listenerStop?.();
+      listenerStop = null;
+      await ingress.stop();
+    })();
+    return stopTask;
   };
 
   let settled = false;
@@ -876,8 +907,7 @@ export async function monitorZalouserProvider(
       return;
     }
     settled = true;
-    stop();
-    resolveRun();
+    void stop().then(resolveRun, rejectRun);
   };
 
   const settleFailure = (error: unknown) => {
@@ -885,8 +915,12 @@ export async function monitorZalouserProvider(
       return;
     }
     settled = true;
-    stop();
-    rejectRun(error instanceof Error ? error : new Error(String(error)));
+    const failure = error instanceof Error ? error : new Error(String(error));
+    void stop().then(
+      () => rejectRun(failure),
+      (stopError: unknown) =>
+        rejectRun(stopError instanceof Error ? stopError : new Error(String(stopError))),
+    );
   };
 
   const onAbort = () => {
@@ -900,31 +934,13 @@ export async function monitorZalouserProvider(
       accountId: account.accountId,
       profile: account.profile,
       abortSignal,
-      onMessage: (msg) => {
+      onMessage: async (msg) => {
         if (stopped) {
           return;
         }
         logVerbose(core, runtime, `[${account.accountId}] inbound message`);
         statusSink?.({ lastInboundAt: Date.now() });
-        const queueKey = resolveInboundQueueKey(msg);
-        void inboundQueue
-          .enqueue(queueKey, async () => {
-            if (stopped || abortSignal.aborted) {
-              return;
-            }
-            await processMessage(
-              msg,
-              account,
-              config,
-              core,
-              runtime,
-              { historyLimit, groupHistories },
-              statusSink,
-            );
-          })
-          .catch((err: unknown) => {
-            runtime.error(`[${account.accountId}] Failed to process message: ${String(err)}`);
-          });
+        await ingress.receive(msg);
       },
       onError: (err) => {
         if (stopped || abortSignal.aborted) {
@@ -936,6 +952,7 @@ export async function monitorZalouserProvider(
     });
   } catch (error) {
     abortSignal.removeEventListener("abort", onAbort);
+    await ingress.stop();
     throw error;
   }
 
@@ -943,6 +960,8 @@ export async function monitorZalouserProvider(
   if (stopped) {
     listenerStop();
     listenerStop = null;
+  } else if (!abortSignal.aborted) {
+    statusSink?.(channelReadyPatch());
   }
 
   if (abortSignal.aborted) {

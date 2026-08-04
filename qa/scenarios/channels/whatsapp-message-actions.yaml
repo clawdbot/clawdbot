@@ -3,16 +3,18 @@ scenario:
   id: whatsapp-message-actions
   surface: channels
   coverage:
-    primary: [channels.group-messages]
+    primary:
+      - channels.message-actions
+      - whatsapp.outbound-image
   execution:
-    profiles: { "whatsapp:mock-default": 24 }
     kind: flow
     channel: whatsapp
     timeoutMs: 120000
     retryCount: 1
     suiteIsolation: isolated
-    config: { whatsappScenarioId: whatsapp-message-actions }
 flow:
   module: ./live-transports/whatsapp/scenario-runtime.js
-  call: runWhatsAppMessageActionsScenario
-  args: [{ expr: whatsappScenarioContext }]
+  call: runWhatsAppScenario
+  args:
+    - { expr: whatsappScenarioContext }
+    - { moduleExport: whatsappQaMessageActionsScenario }

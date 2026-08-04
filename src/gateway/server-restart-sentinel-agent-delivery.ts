@@ -31,6 +31,7 @@ import {
   type SessionDeliveryRoute,
 } from "../infra/session-delivery-queue.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizeMediaReferenceForComparison } from "../media/media-reference-comparison.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -173,10 +174,16 @@ async function evaluateQueuedGeneratedMediaAgentResult(params: {
     );
   }
   const expectedMediaUrls = params.entry.expectedMediaUrls ?? [];
-  const deliveredMediaUrls = new Set(collectQueuedDeliveredMediaUrls(params));
-  const missingMediaUrls = expectedMediaUrls.filter((url) => !deliveredMediaUrls.has(url));
-  const provenExpectedMediaUrls = expectedMediaUrls.filter((url) => deliveredMediaUrls.has(url));
-  const ambiguousMediaUrls = new Set(collectAmbiguousAutomaticMediaUrls(params.result));
+  const deliveredMediaUrls = new Set(
+    collectQueuedDeliveredMediaUrls(params).map(normalizeMediaReferenceForComparison),
+  );
+  const isDelivered = (url: string) =>
+    deliveredMediaUrls.has(normalizeMediaReferenceForComparison(url));
+  const missingMediaUrls = expectedMediaUrls.filter((url) => !isDelivered(url));
+  const provenExpectedMediaUrls = expectedMediaUrls.filter(isDelivered);
+  const ambiguousMediaUrls = new Set(
+    collectAmbiguousAutomaticMediaUrls(params.result).map(normalizeMediaReferenceForComparison),
+  );
   const deliveryFailure = getAgentCommandDeliveryFailure(params.result);
   const replySatisfied =
     expectedMediaUrls.length > 0
@@ -251,7 +258,9 @@ async function evaluateQueuedGeneratedMediaAgentResult(params: {
       !hasCompleteAutomaticMediaDeliveryOutcomeEvidence(params.result, missingMediaUrls);
     if (
       incompletePartialFailureEvidence ||
-      missingMediaUrls.some((url) => ambiguousMediaUrls.has(url))
+      missingMediaUrls.some((url) =>
+        ambiguousMediaUrls.has(normalizeMediaReferenceForComparison(url)),
+      )
     ) {
       log.warn("queued generated-media delivery has ambiguous attachment side effects", {
         queueId: params.entry.id,

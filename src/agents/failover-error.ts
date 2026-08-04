@@ -5,7 +5,8 @@
  */
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { formatCliCommand } from "../cli/command-format.js";
-import { readErrorName } from "../infra/errors.js";
+import { isAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
+import { collectErrorGraphCandidates, readErrorName } from "../infra/errors.js";
 import {
   classifyFailoverSignal,
   extractFailoverSignalDetails,
@@ -16,12 +17,21 @@ import {
 } from "./embedded-agent-helpers/errors.js";
 import { isTimeoutErrorMessage } from "./embedded-agent-helpers/errors.js";
 import type { FailoverReason } from "./embedded-agent-helpers/types.js";
+import { AgentHarnessSessionSupersededError } from "./harness/errors.js";
 import { isSessionWriteLockAcquireError } from "./session-write-lock-error.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 const MAX_FAILOVER_CAUSE_DEPTH = 25;
 const MISSING_TOOL_RESULT_REASON = "missing_tool_result";
 const MISSING_TOOL_RESULT_TEXT_RE = /native Codex tool\.call without a matching tool\.result/i;
+
+export type CliTimeoutContext = {
+  mode: "overall" | "no-output";
+  timeoutSeconds: number;
+  observedActivity: boolean;
+  activeToolCount: number;
+  backgroundTaskCount: number;
+};
 
 /** Structured error used to carry model fallback/failover metadata across layers. */
 export class FailoverError extends Error {
@@ -41,6 +51,7 @@ export class FailoverError extends Error {
   readonly sessionId?: string;
   readonly lane?: string;
   readonly suspend?: boolean;
+  readonly cliTimeout?: CliTimeoutContext;
 
   constructor(
     message: string,
@@ -58,6 +69,7 @@ export class FailoverError extends Error {
       lane?: string;
       cause?: unknown;
       suspend?: boolean;
+      cliTimeout?: CliTimeoutContext;
     },
   ) {
     super(message, { cause: params.cause });
@@ -74,6 +86,7 @@ export class FailoverError extends Error {
     this.sessionId = params.sessionId;
     this.lane = params.lane;
     this.suspend = params.suspend;
+    this.cliTimeout = params.cliTimeout;
   }
 }
 
@@ -118,6 +131,50 @@ export function findCliMaxTurnsError(
   return undefined;
 }
 
+function hasCliTimeoutContext(error: FailoverError): error is FailoverError & {
+  cliTimeout: CliTimeoutContext;
+} {
+  const context = error.cliTimeout;
+  return Boolean(
+    context &&
+    (context.mode === "overall" || context.mode === "no-output") &&
+    Number.isFinite(context.timeoutSeconds) &&
+    context.timeoutSeconds >= 0 &&
+    typeof context.observedActivity === "boolean" &&
+    Number.isInteger(context.activeToolCount) &&
+    context.activeToolCount >= 0 &&
+    Number.isInteger(context.backgroundTaskCount) &&
+    context.backgroundTaskCount >= 0,
+  );
+}
+
+export function findCliTimeoutError(
+  err: unknown,
+  seen: Set<object> = new Set(),
+): (FailoverError & { cliTimeout: CliTimeoutContext }) | undefined {
+  if (isFailoverError(err) && hasCliTimeoutContext(err)) {
+    return err;
+  }
+  if (!err || typeof err !== "object" || seen.has(err)) {
+    return undefined;
+  }
+  // Failover summaries and persistence failures can wrap the terminal CLI error.
+  seen.add(err);
+  const candidate = err as { error?: unknown; cause?: unknown; errors?: unknown };
+  const nested = [
+    candidate.error,
+    candidate.cause,
+    ...(Array.isArray(candidate.errors) ? candidate.errors : []),
+  ];
+  for (const value of nested) {
+    const found = findCliTimeoutError(value, seen);
+    if (found) {
+      return found;
+    }
+  }
+  return undefined;
+}
+
 /** Map a failover reason to the closest HTTP-like status code. */
 export function resolveFailoverStatus(reason: FailoverReason): number | undefined {
   switch (reason) {
@@ -135,6 +192,8 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
       return 403;
     case "timeout":
       return 408;
+    case "tls_certificate":
+      return 502;
     case "context_overflow":
       return 413;
     case "format":
@@ -438,6 +497,29 @@ function hasMissingToolResultFailure(err: unknown): boolean {
   return findErrorProperty(err, readMissingToolResultMarker) === true;
 }
 
+function hasStaleAgentRunLifecycleFailure(err: unknown): boolean {
+  return (
+    findErrorProperty(err, (candidate) =>
+      isAgentRunStaleLifecycleError(candidate) ? true : undefined,
+    ) === true
+  );
+}
+
+function hasGatewayDrainingFailure(err: unknown): boolean {
+  return collectErrorGraphCandidates(err, (candidate) => {
+    const errors = candidate.errors;
+    return [candidate.error, candidate.cause, ...(Array.isArray(errors) ? errors : [])];
+  }).some((candidate) => readErrorName(candidate) === "GatewayDrainingError");
+}
+
+function hasDirectProviderFailureIdentity(err: unknown): boolean {
+  if (isFailoverError(err)) {
+    return true;
+  }
+  const signal = normalizeDirectErrorSignal(err);
+  return Boolean(signal.status || signal.code || signal.errorType || signal.provider);
+}
+
 /**
  * True when the error is a local runtime coordination/tool-execution error
  * rather than a provider/model failure. The model fallback chain must abort on
@@ -688,6 +770,9 @@ export function buildFailoverRemediationHint(err: unknown): string | undefined {
   if (!provider) {
     return undefined;
   }
+  if (provider === "google-gemini-cli") {
+    return `Authenticate in Gemini CLI directly, or configure a supported Google API key with: ${formatCliCommand("openclaw configure")}`;
+  }
   const command = buildProviderReauthCommand(provider);
   return command ? `Re-authenticate with: ${command}` : undefined;
 }
@@ -838,6 +923,21 @@ export function resolveModelFallbackError(
   err: unknown,
   context?: FailoverErrorContext,
 ): ModelFallbackErrorResolution {
+  if (err instanceof AgentHarnessSessionSupersededError) {
+    return { kind: "coordination", error: err };
+  }
+  // Gateway admission can fail before any provider turn starts. Preserve that
+  // identity through wrappers and aggregates so fallback cannot blame a model.
+  if (hasGatewayDrainingFailure(err)) {
+    return { kind: "coordination", error: err };
+  }
+  const staleLifecycleFailure = hasStaleAgentRunLifecycleFailure(err);
+  if (
+    staleLifecycleFailure &&
+    (isAgentRunStaleLifecycleError(err) || !hasDirectProviderFailureIdentity(err))
+  ) {
+    return { kind: "coordination", error: err };
+  }
   // A direct takeover remains a coordination failure unless the dedicated
   // cleanup wrapper owns a preserved prompt error. Its message alone must not
   // reclassify session-state loss as a provider failure.
@@ -851,7 +951,8 @@ export function resolveModelFallbackError(
   if (
     hasSessionWriteLockContention(err) ||
     hasEmbeddedAttemptSessionTakeover(err) ||
-    hasMissingToolResultFailure(err)
+    hasMissingToolResultFailure(err) ||
+    staleLifecycleFailure
   ) {
     return { kind: "coordination", error: err };
   }

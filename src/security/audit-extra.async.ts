@@ -3,7 +3,6 @@
  *
  * These functions perform I/O (filesystem, config reads) to detect security issues.
  */
-import fs from "node:fs/promises";
 import path from "node:path";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
 import {
@@ -21,7 +20,8 @@ import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveOAuthDir } from "../config/paths.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { readRegularFile, statRegularFile } from "../infra/fs-safe.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import type { SkillScanFinding } from "../skills/security/scanner.js";
@@ -97,9 +97,29 @@ function expandTilde(p: string, env: NodeJS.ProcessEnv): string | null {
   return null;
 }
 
+const MAX_PLUGIN_MANIFEST_BYTES = 1024 * 1024;
+// Skill file audit reads are bounded like other audit reads; matches the
+// workspace loader's DEFAULT_MAX_SKILL_FILE_BYTES so oversized SKILL.md files
+// cannot force an unbounded read during the code-safety scan.
+const MAX_SKILL_AUDIT_FILE_BYTES = 256_000;
+
 async function readPluginManifestExtensions(pluginPath: string): Promise<string[]> {
   const manifestPath = path.join(pluginPath, "package.json");
-  const raw = await fs.readFile(manifestPath, "utf-8").catch(() => "");
+  const statResult = await statRegularFile(manifestPath);
+  if (statResult.missing) {
+    return [];
+  }
+  if (statResult.stat.size > MAX_PLUGIN_MANIFEST_BYTES) {
+    throw new Error(
+      `Plugin manifest at ${manifestPath} is too large (${statResult.stat.size} bytes, max ${MAX_PLUGIN_MANIFEST_BYTES})`,
+    );
+  }
+
+  const { buffer } = await readRegularFile({
+    filePath: manifestPath,
+    maxBytes: MAX_PLUGIN_MANIFEST_BYTES,
+  });
+  const raw = buffer.toString("utf-8");
   if (!raw.trim()) {
     return [];
   }
@@ -177,7 +197,10 @@ async function getSkillCodeSafetySummary(params: {
       dirPath: params.dirPath,
       summaryCache: params.summaryCache,
     }),
-    fs.readFile(params.skillFilePath, "utf-8"),
+    readRegularFile({
+      filePath: params.skillFilePath,
+      maxBytes: MAX_SKILL_AUDIT_FILE_BYTES,
+    }).then(({ buffer }) => buffer.toString("utf-8")),
     loadSkillScannerModule(),
   ]);
   const skillFindings = [
@@ -619,19 +642,22 @@ export async function collectStateDeepFilesystemFindings(params: {
     }
   }
 
-  const agentIds = Array.isArray(params.cfg.agents?.list)
-    ? params.cfg.agents?.list
-        .map(
-          (a) =>
-            normalizeOptionalString(
-              a && typeof a === "object" ? (a as { id?: unknown }).id : undefined,
-            ) ?? "",
-        )
-        .filter(Boolean)
-    : [];
-  const { resolveDefaultAgentId } = await loadAgentScopeModule();
-  const defaultAgentId = resolveDefaultAgentId(params.cfg);
-  const ids = uniqueStrings([defaultAgentId, ...agentIds]).map((id) => normalizeAgentId(id));
+  const agentScope = await loadAgentScopeModule();
+  const agentIds = agentScope.listAgentEntries(params.cfg).map((agent) => agent.id);
+  let defaultAgentId: string | undefined;
+  if (agentIds.length > 0) {
+    try {
+      defaultAgentId = agentScope.resolveDefaultAgentId(params.cfg);
+    } catch {
+      // Security audits must still inspect known agent stores when a malformed
+      // roster prevents normal default selection; config findings report that defect.
+    }
+  }
+  const ids = uniqueStrings([
+    LEGACY_IMPLICIT_AGENT_ID,
+    ...(defaultAgentId ? [defaultAgentId] : []),
+    ...agentIds,
+  ]).map((id) => normalizeAgentId(id));
 
   for (const agentId of ids) {
     const agentDir = path.join(params.stateDir, "agents", agentId, "agent");
@@ -873,16 +899,26 @@ export async function collectPluginsCodeSafetyFindings(params: {
 export async function collectInstalledSkillsCodeSafetyFindings(params: {
   cfg: OpenClawConfig;
   stateDir: string;
+  workspaceDir?: string;
   summaryCache?: CodeSafetySummaryCache;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
   const pluginExtensionsDir = path.join(params.stateDir, "extensions");
   const scannedSkillDirs = new Set<string>();
-  const [{ listAgentWorkspaceDirs }, { resolveSkillSource }] = await Promise.all([
-    loadAgentWorkspaceDirsModule(),
-    loadSkillSourceModule(),
-  ]);
-  const workspaceDirs = listAgentWorkspaceDirs(params.cfg);
+  const [{ listAgentWorkspaceDirs, listExplicitAgentWorkspaceDirs }, { resolveSkillSource }] =
+    await Promise.all([loadAgentWorkspaceDirsModule(), loadSkillSourceModule()]);
+  const workspaceDirs = new Set(params.workspaceDir ? [params.workspaceDir] : []);
+  try {
+    for (const workspaceDir of listAgentWorkspaceDirs(params.cfg)) {
+      workspaceDirs.add(workspaceDir);
+    }
+  } catch {
+    // Deep audit accepts raw pre-migration and malformed configs. Continue
+    // scanning every entry-authored workspace instead of turning a finding into a crash.
+    for (const workspaceDir of listExplicitAgentWorkspaceDirs(params.cfg)) {
+      workspaceDirs.add(workspaceDir);
+    }
+  }
   const { loadWorkspaceSkillEntries } = await loadSkillsModule();
 
   for (const workspaceDir of workspaceDirs) {

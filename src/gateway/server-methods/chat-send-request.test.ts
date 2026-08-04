@@ -1,5 +1,24 @@
 import { describe, expect, it } from "vitest";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
+import type { GatewayRequestHandlerOptions } from "./types.js";
+
+function copilotClient(caps: string[] = []): NonNullable<GatewayRequestHandlerOptions["client"]> {
+  return {
+    connId: "copilot",
+    pairedClientId: "openclaw-browser-copilot",
+    connect: {
+      role: "operator",
+      scopes: ["operator.read", "operator.write"],
+      caps,
+      client: {
+        id: "openclaw-browser-copilot",
+        version: "test",
+        platform: "chrome",
+        mode: "ui",
+      },
+    },
+  } as unknown as NonNullable<GatewayRequestHandlerOptions["client"]>;
+}
 
 function validParams(overrides: Record<string, unknown> = {}) {
   return {
@@ -76,5 +95,51 @@ describe("normalizeChatSendRequest", () => {
       ok: false,
       error: "system provenance fields require admin scope",
     });
+  });
+
+  it("requires capable copilot runs to carry explicit tool bindings", () => {
+    expect(normalizeChatSendRequest({ params: validParams(), client: copilotClient() })).toEqual({
+      ok: false,
+      error: "browser copilot runs require an explicit browser tool binding",
+    });
+
+    expect(
+      normalizeChatSendRequest({
+        params: validParams({ toolBindings: { unrelated: true } }),
+        client: copilotClient(["run-tool-bindings"]),
+      }),
+    ).toEqual({
+      ok: false,
+      error: "browser copilot runs require an explicit browser tool binding",
+    });
+
+    const toolBindings = { browser: { kind: "tab", tabId: 1, targetId: "target" } };
+    expect(
+      normalizeChatSendRequest({
+        params: validParams({ toolBindings }),
+        client: copilotClient(),
+      }),
+    ).toEqual({ ok: false, error: "run tool bindings require client capability" });
+    expect(
+      normalizeChatSendRequest({
+        params: validParams({ toolBindings }),
+        client: copilotClient(["run-tool-bindings"]),
+      }),
+    ).toMatchObject({ ok: true, value: { p: { toolBindings } } });
+  });
+
+  it("accepts tool bindings only from a server-paired copilot identity", () => {
+    const toolBindings = { browser: { kind: "tab", tabId: 1, targetId: "target" } };
+    const unpaired = copilotClient(["run-tool-bindings"]);
+    unpaired.pairedClientId = undefined;
+    expect(
+      normalizeChatSendRequest({ params: validParams({ toolBindings }), client: unpaired }),
+    ).toEqual({ ok: false, error: "run tool bindings require a paired browser copilot" });
+
+    const otherClient = copilotClient(["run-tool-bindings"]);
+    otherClient.connect.client.id = "openclaw-control-ui";
+    expect(
+      normalizeChatSendRequest({ params: validParams({ toolBindings }), client: otherClient }),
+    ).toEqual({ ok: false, error: "run tool bindings require a paired browser copilot" });
   });
 });

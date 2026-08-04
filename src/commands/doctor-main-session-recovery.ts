@@ -1,6 +1,6 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { inspectMainSessionRecoveryHealth } from "../agents/main-session-recovery-lifecycle.js";
 import { transitionMainSessionRecovery } from "../agents/main-session-recovery-state.js";
+import type { InternalSessionEntry } from "../config/sessions.js";
 import {
   applySessionEntryReplacements,
   listSessionEntries,
@@ -20,8 +20,20 @@ export async function noteMainSessionRecoveryIntegrity(
 ): Promise<number> {
   const entries = listSessionEntries({ agentId: params.agentId, storePath: params.storePath });
   const wedged = entries.flatMap(({ entry, sessionKey }) => {
-    const health = inspectMainSessionRecoveryHealth(entry);
-    return health.status === "tombstoned" ? [{ key: sessionKey, health }] : [];
+    const tombstone = (entry as InternalSessionEntry).mainRestartRecovery?.tombstone;
+    return tombstone
+      ? [
+          {
+            key: sessionKey,
+            health: {
+              reason:
+                tombstone.reason.trim() ||
+                "main-session restart recovery is tombstoned for this session",
+              repair: entry.abortedLastRun === true ? "clear_stale_abort" : null,
+            },
+          },
+        ]
+      : [];
   });
   if (wedged.length === 0) {
     return entries.length;

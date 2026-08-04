@@ -61,8 +61,7 @@ const mocks = vi.hoisted(() => {
     tools: {
       exec: {
         host: "auto",
-        security: "allowlist",
-        ask: "on-miss",
+        mode: "ask",
       },
     },
   };
@@ -226,8 +225,7 @@ describe("exec-policy CLI", () => {
       tools: {
         exec: {
           host: "auto",
-          security: "allowlist",
-          ask: "on-miss",
+          mode: "ask",
         },
       },
     });
@@ -328,13 +326,32 @@ describe("exec-policy CLI", () => {
     });
   });
 
+  it("renders an unstored fresh-install policy as defaults instead of missing", async () => {
+    mocks.readExecApprovalsSnapshot.mockImplementationOnce(() => ({
+      path: "~/.openclaw/state/openclaw.sqlite#exec_approvals_config",
+      exists: false,
+      raw: null,
+      hash: "missing-hash",
+      file: { version: 1, agents: {} },
+    }));
+
+    await runExecPolicyCommand(["exec-policy", "show"]);
+
+    const output = stripAnsi(
+      mocks.defaultRuntime.log.mock.calls.map((call) => String(call[0] ?? "")).join("\n"),
+    );
+    expect(output).toContain("Approvals State");
+    expect(output).toContain("defaults (no stored overrides)");
+    expect(output).not.toContain("Approvals File");
+    expect(output).not.toContain("missing");
+  });
+
   it("marks host=node scopes as node-managed in show output", async () => {
     mocks.setConfig({
       tools: {
         exec: {
           host: "node",
-          security: "allowlist",
-          ask: "on-miss",
+          mode: "ask",
         },
       },
     });
@@ -374,8 +391,7 @@ describe("exec-policy CLI", () => {
 
     expect(mocks.getConfig().tools?.exec).toEqual({
       host: "gateway",
-      security: "full",
-      ask: "off",
+      mode: "full",
     });
     expect(mocks.getApprovals().defaults).toEqual({
       security: "full",
@@ -405,8 +421,7 @@ describe("exec-policy CLI", () => {
 
     expect(mocks.getConfig().tools?.exec).toEqual({
       host: "gateway",
-      security: "full",
-      ask: "off",
+      mode: "full",
     });
     expect(mocks.getApprovals().defaults).toEqual({
       security: "full",
@@ -415,13 +430,28 @@ describe("exec-policy CLI", () => {
     });
   });
 
+  it("derives partial updates from retained legacy config policy", async () => {
+    mocks.setConfig({ tools: { exec: { security: "deny", ask: "always" } } });
+
+    await runExecPolicyCommand(["exec-policy", "set", "--ask", "off", "--json"]);
+
+    expect(mocks.getConfig().tools?.exec).toEqual({ mode: "deny" });
+  });
+
+  it("retains nonrepresentable always-ask policy updates", async () => {
+    mocks.setConfig({ tools: { exec: { mode: "full" } } });
+
+    await runExecPolicyCommand(["exec-policy", "set", "--ask", "always", "--json"]);
+
+    expect(mocks.getConfig().tools?.exec).toEqual({ security: "full", ask: "always" });
+  });
+
   it("sanitizes terminal control content before rendering the text table", async () => {
     mocks.setConfig({
       tools: {
         exec: {
           host: "auto",
-          security: "allowlist\u001B[31m" as unknown as "allowlist",
-          ask: "on-miss",
+          mode: "ask",
         },
       },
     });
@@ -497,8 +527,7 @@ describe("exec-policy CLI", () => {
       tools: {
         exec: {
           host: "node",
-          security: "allowlist",
-          ask: "on-miss",
+          mode: "ask",
         },
       },
     });

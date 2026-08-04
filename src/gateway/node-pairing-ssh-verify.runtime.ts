@@ -1,7 +1,7 @@
 // SSH probe execution for SSH-verified node pairing.
 // Kept as a narrow runtime boundary so gateway tests can mock the probe
 // without touching the eligibility/verification policy.
-import { runCommandWithTimeout } from "../process/exec.js";
+import { runUtf8CommandWithTimeout } from "../process/exec.js";
 
 export type NodeIdentityProbeParams = {
   user: string;
@@ -70,7 +70,7 @@ export async function runNodeIdentityProbe(
   try {
     // PATH-resolved `ssh` keeps Windows OpenSSH working; the gateway process
     // environment is operator-owned, so PATH lookup is not an injection risk.
-    const result = await runCommandWithTimeout(["ssh", ...args], {
+    const result = await runUtf8CommandWithTimeout(["ssh", ...args], {
       maxOutputBytes: MAX_PROBE_OUTPUT_BYTES,
       outputCapture: "head",
       timeoutMs: Math.max(250, params.timeoutMs),

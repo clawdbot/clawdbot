@@ -55,6 +55,18 @@ describe("message-tool-only source replies", () => {
       expected: true,
     },
     {
+      label: "gateway plugin send result",
+      context: createAfterToolCallContext({
+        toolName: "message",
+        args: { action: "send", message: "visible reply" },
+        result: {
+          content: [{ type: "text", text: '{"message":{"id":"qa-message-1"}}' }],
+          details: { message: { id: "qa-message-1" } },
+        },
+      }),
+      expected: true,
+    },
+    {
       label: "hook result delivery evidence",
       context: createAfterToolCallContext({
         toolName: "message",

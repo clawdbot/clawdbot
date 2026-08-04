@@ -7,7 +7,9 @@ import {
   MAX_TIMER_TIMEOUT_MS,
 } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getActiveNodeContext, setActiveNodeContext } from "../infra/active-node-context.js";
+import { WebSocket } from "ws";
+import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
+import { getCurrentActiveNodeContext, setActiveNodeContext } from "../infra/active-node-context.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { listConnectedNodePluginTools } from "./node-plugin-tool-snapshot.js";
@@ -19,6 +21,35 @@ let testNodeHostCommands: NonNullable<
   ReturnType<typeof createEmptyPluginRegistry>["nodeHostCommands"]
 > = [];
 const activeTestRegistries = new Set<NodeRegistry>();
+
+type TestNodeSocket = {
+  readyState: number;
+  bufferedAmount: number;
+  send: ReturnType<typeof vi.fn>;
+  close: ReturnType<typeof vi.fn>;
+};
+
+const NON_OPEN_NODE_SOCKET_STATES = [
+  { state: "connecting", readyState: WebSocket.CONNECTING },
+  { state: "closing", readyState: WebSocket.CLOSING },
+  { state: "closed", readyState: WebSocket.CLOSED },
+];
+
+function createTestNodeSocket(
+  sent: string[] = [],
+  readyState: TestNodeSocket["readyState"] = WebSocket.OPEN,
+): TestNodeSocket {
+  return {
+    readyState,
+    bufferedAmount: 0,
+    send: vi.fn((frame: unknown) => {
+      if (typeof frame === "string") {
+        sent.push(frame);
+      }
+    }),
+    close: vi.fn(),
+  };
+}
 
 function createNodeRegistry(options?: ConstructorParameters<typeof NodeRegistry>[0]): NodeRegistry {
   const registry = new NodeRegistry(options);
@@ -60,15 +91,7 @@ function makeClient(
   return {
     connId,
     usesSharedGatewayAuth: false,
-    socket:
-      opts.socket ??
-      ({
-        send(frame: unknown) {
-          if (typeof frame === "string") {
-            sent.push(frame);
-          }
-        },
-      } as unknown as GatewayWsClient["socket"]),
+    socket: opts.socket ?? (createTestNodeSocket(sent) as unknown as GatewayWsClient["socket"]),
     connect: {
       minProtocol: 1,
       maxProtocol: 1,
@@ -96,6 +119,28 @@ function makeClient(
       sessionCommandsCeiling: opts.sessionCommandsCeiling,
     } as unknown as GatewayWsClient["connect"],
   };
+}
+
+function registerNodeSession(
+  registry: NodeRegistry,
+  client: GatewayWsClient,
+  opts: Partial<Parameters<NodeRegistry["register"]>[1]> = {},
+) {
+  const { pairingIdentity = "identity-a", ...registration } = opts;
+  return registry.register(client, { ...registration, pairingIdentity });
+}
+
+function registerTestNodeSocket(
+  registry: NodeRegistry,
+  socket: TestNodeSocket,
+  sent: string[] = [],
+) {
+  return registerNodeSession(
+    registry,
+    makeClient("conn-1", "node-1", sent, {
+      socket: socket as unknown as GatewayWsClient["socket"],
+    }),
+  );
 }
 
 function registerDemoNodePluginTool(params: {
@@ -151,7 +196,7 @@ function makeConnectivitySocket(emitPong: boolean) {
 
 function registerNode(registry: NodeRegistry, opts: Parameters<typeof makeClient>[3] = {}) {
   const frames: string[] = [];
-  registry.register(makeClient("conn-1", "node-1", frames, opts), {});
+  registerNodeSession(registry, makeClient("conn-1", "node-1", frames, opts), {});
   return frames;
 }
 
@@ -218,6 +263,334 @@ function authorizeSystemRun(registry: NodeRegistry, overrides: Partial<SystemRun
 }
 
 describe("gateway/node-registry", () => {
+  it("rejects registration without an authenticated pairing identity", () => {
+    const registry = new NodeRegistry();
+    const client = makeClient("conn-unbound", "node-unbound");
+
+    expect(() => registry.register(client, {} as never)).toThrow(
+      "node session registration requires pairing identity",
+    );
+    expect(registry.listConnected()).toEqual([]);
+  });
+
+  it("rejects dispatch through an invalidated node connection", async () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    const client = makeClient("conn-invalidated", "node-invalidated", frames);
+    registerNodeSession(registry, client, {});
+    client.invalidated = true;
+
+    expect(registry.get("node-invalidated")).toBeUndefined();
+    expect(registry.listConnected()).toEqual([]);
+    expect(registry.sendEvent("node-invalidated", "node.test", { ok: true })).toBe(false);
+    await expect(
+      registry.invoke({ nodeId: "node-invalidated", command: "system.run" }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "PAIRING_CHANGED" },
+    });
+    expect(frames).toEqual([]);
+  });
+
+  it("rejects generation-mismatched lookup and dispatch without invalidating the session", async () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    const client = makeClient("conn-old-generation", "node-generation", frames);
+    registerNodeSession(registry, client, { pairingGeneration: "generation-a" });
+
+    expect(registry.getForPairingGeneration("node-generation", "generation-b")).toBeUndefined();
+    expect(client.invalidated).not.toBe(true);
+    await expect(
+      registry.invoke({
+        nodeId: "node-generation",
+        expectedPairingGeneration: "generation-b",
+        command: "system.run",
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "PAIRING_CHANGED" },
+    });
+    expect(client.invalidated).not.toBe(true);
+    expect(frames).toEqual([]);
+  });
+
+  it("does not let a stale operation invalidate the valid replacement generation", () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    const replacement = makeClient("conn-replacement", "node-replaced", frames);
+    registerNodeSession(registry, replacement, { pairingGeneration: "generation-b" });
+
+    expect(registry.getForPairingGeneration("node-replaced", "generation-a")).toBeUndefined();
+    expect(replacement.invalidated).not.toBe(true);
+    expect(registry.getForPairingGeneration("node-replaced", "generation-b")?.connId).toBe(
+      "conn-replacement",
+    );
+  });
+
+  it("revalidates the persistent generation immediately before dispatch", async () => {
+    const frames: string[] = [];
+    const resolveCurrentPairingState = vi.fn().mockResolvedValue({
+      identity: "identity-a",
+      generation: "generation-b",
+    });
+    const registry = new NodeRegistry({ resolveCurrentPairingState });
+    const client = makeClient("conn-generation", "node-generation", frames);
+    registerNodeSession(registry, client, {
+      pairingIdentity: "identity-a",
+      pairingGeneration: "generation-a",
+    });
+
+    await expect(
+      registry.invoke({
+        nodeId: "node-generation",
+        expectedConnId: "conn-generation",
+        expectedPairingGeneration: "generation-a",
+        command: "system.run",
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "PAIRING_CHANGED" },
+    });
+    expect(resolveCurrentPairingState).toHaveBeenCalledWith("node-generation");
+    expect(frames).toEqual([]);
+  });
+
+  it("revalidates persistent generation ownership for inbound node RPCs", async () => {
+    const resolveCurrentPairingState = vi.fn().mockResolvedValue({
+      identity: "identity-a",
+      generation: "generation-a",
+    });
+    const registry = createNodeRegistry({ resolveCurrentPairingState });
+    const client = makeClient("conn-generation", "node-generation");
+    registerNodeSession(registry, client, {
+      pairingIdentity: "identity-a",
+      pairingGeneration: "generation-a",
+    });
+
+    await expect(registry.isConnectionCurrentPairingState("conn-generation")).resolves.toBe(true);
+    resolveCurrentPairingState.mockResolvedValue({
+      identity: "identity-a",
+      generation: "generation-b",
+    });
+    await expect(registry.isConnectionCurrentPairingState("conn-generation")).resolves.toBe(false);
+    expect(client.invalidated).toBe(true);
+    expect(resolveCurrentPairingState).toHaveBeenCalledWith("node-generation");
+  });
+
+  it("removes an externally replaced session from connected and active projections", async () => {
+    let currentPairingGeneration = "generation-a";
+    const onPairingInvalidated = vi.fn();
+    const registry = createNodeRegistry({
+      resolveCurrentPairingState: async () => ({
+        identity: "identity-a",
+        generation: currentPairingGeneration,
+      }),
+      onPairingInvalidated,
+    });
+    const client = makeClient("conn-generation", "node-generation", [], {
+      permissions: { accessibility: true },
+    });
+    registerNodeSession(registry, client, {
+      pairingIdentity: "identity-a",
+      pairingGeneration: "generation-a",
+    });
+    registry.updatePresenceActivity({
+      nodeId: "node-generation",
+      connId: "conn-generation",
+      idleSeconds: 0,
+    });
+    expect(registry.getActiveNode()?.nodeId).toBe("node-generation");
+
+    currentPairingGeneration = "generation-b";
+    await expect(registry.listCurrentConnected()).resolves.toEqual([]);
+    expect(registry.getActiveNode()).toBeUndefined();
+    expect(getCurrentActiveNodeContext()).toBeNull();
+    expect(client.invalidated).toBe(true);
+    expect(onPairingInvalidated).toHaveBeenCalledWith({
+      nodeId: "node-generation",
+      connId: "conn-generation",
+    });
+  });
+
+  it("does not invalidate a session promoted while persistent generation is loading", async () => {
+    let resolveLookup: ((value: { identity: string; generation: string }) => void) | undefined;
+    const resolveCurrentPairingState = vi.fn(
+      () =>
+        new Promise<{ identity: string; generation: string }>((resolve) => {
+          resolveLookup = resolve;
+        }),
+    );
+    const onPairingInvalidated = vi.fn();
+    const registry = createNodeRegistry({
+      resolveCurrentPairingState,
+      onPairingInvalidated,
+    });
+    const client = makeClient("conn-generation", "node-generation");
+    registerNodeSession(registry, client, {
+      pairingIdentity: "identity-a",
+      pairingGeneration: "generation-a",
+    });
+
+    const connected = registry.listCurrentConnected();
+    expect(resolveCurrentPairingState).toHaveBeenCalledWith("node-generation");
+    expect(
+      registry.updateSurface(
+        "node-generation",
+        { commands: [] },
+        {
+          expectedConnId: "conn-generation",
+          expectedPairingIdentity: "identity-a",
+          expectedPairingGeneration: "generation-a",
+          nextPairingGeneration: "generation-b",
+        },
+      ),
+    ).not.toBeNull();
+    resolveLookup?.({ identity: "identity-a", generation: "generation-a" });
+
+    await expect(connected).resolves.toEqual([]);
+    expect(registry.get("node-generation")?.pairingGeneration).toBe("generation-b");
+    expect(client.invalidated).not.toBe(true);
+    expect(onPairingInvalidated).not.toHaveBeenCalled();
+  });
+
+  it("revalidates the active node at the prompt projection boundary", () => {
+    let currentPairingGeneration = "generation-a";
+    const registry = createNodeRegistry({
+      isPairingStateCurrent: (_nodeId, expected) =>
+        expected.identity === "identity-a" && expected.generation === currentPairingGeneration,
+    });
+    registerNodeSession(
+      registry,
+      makeClient("conn-generation", "node-generation", [], {
+        permissions: { accessibility: true },
+      }),
+      { pairingIdentity: "identity-a", pairingGeneration: "generation-a" },
+    );
+    registry.updatePresenceActivity({
+      nodeId: "node-generation",
+      connId: "conn-generation",
+      idleSeconds: 0,
+    });
+
+    expect(getCurrentActiveNodeContext()).toMatchObject({
+      nodeId: "node-generation",
+      pairingGeneration: "generation-a",
+    });
+    currentPairingGeneration = "generation-b";
+    expect(getCurrentActiveNodeContext()).toBeNull();
+  });
+
+  it("filters an already-loaded pairing snapshot without invalidating a newer session", () => {
+    const registry = createNodeRegistry();
+    const client = makeClient("conn-generation", "node-generation");
+    registerNodeSession(registry, client, {
+      pairingIdentity: "identity-b",
+      pairingGeneration: "generation-b",
+    });
+
+    expect(
+      registry.listConnectedForPairingStates(
+        new Map([["node-generation", { identity: "identity-a", generation: "generation-a" }]]),
+      ),
+    ).toEqual([]);
+    expect(client.invalidated).not.toBe(true);
+  });
+
+  it("distinguishes a pending surface from a missing paired-device row", () => {
+    const registry = createNodeRegistry();
+    const client = makeClient("conn-pending-surface", "node-pending-surface");
+    registerNodeSession(registry, client, { pairingIdentity: "identity-a" });
+
+    expect(
+      registry.listConnectedForPairingStates(
+        new Map([["node-pending-surface", { identity: "identity-a" }]]),
+      ),
+    ).toHaveLength(1);
+    expect(registry.listConnectedForPairingStates(new Map())).toEqual([]);
+    expect(client.invalidated).not.toBe(true);
+  });
+
+  it("fails closed without invalidating a session when pairing persistence is unavailable", async () => {
+    const registry = createNodeRegistry({
+      resolveCurrentPairingState: async () => {
+        throw new Error("pairing store unavailable");
+      },
+    });
+    const client = makeClient("conn-generation", "node-generation");
+    registerNodeSession(registry, client, {
+      pairingIdentity: "identity-a",
+      pairingGeneration: "generation-a",
+    });
+
+    await expect(registry.listCurrentConnected()).resolves.toEqual([]);
+    expect(client.invalidated).not.toBe(true);
+    expect(registry.listConnected()).toHaveLength(1);
+  });
+
+  it("reconciles stale persistent generations synchronously for prompt projections", () => {
+    let currentPairingGeneration = "generation-a";
+    const onPairingInvalidated = vi.fn();
+    const registry = createNodeRegistry({
+      isPairingStateCurrent: (_nodeId, expected) =>
+        expected.generation === currentPairingGeneration,
+      onPairingInvalidated,
+    });
+    const client = makeClient("conn-generation", "node-generation");
+    registerNodeSession(registry, client, { pairingGeneration: "generation-a" });
+
+    expect(registry.listCurrentConnectedSync()).toHaveLength(1);
+    currentPairingGeneration = "generation-b";
+    expect(registry.listCurrentConnectedSync()).toEqual([]);
+    expect(client.invalidated).toBe(true);
+    expect(onPairingInvalidated).toHaveBeenCalledWith({
+      nodeId: "node-generation",
+      connId: "conn-generation",
+    });
+  });
+
+  it("fails closed synchronously when pairing persistence is unavailable", () => {
+    const registry = createNodeRegistry({
+      isPairingStateCurrent: () => {
+        throw new Error("pairing store unavailable");
+      },
+    });
+    const client = makeClient("conn-generation", "node-generation");
+    registerNodeSession(registry, client, { pairingGeneration: "generation-a" });
+
+    expect(registry.listCurrentConnectedSync()).toEqual([]);
+    expect(client.invalidated).not.toBe(true);
+    expect(registry.listConnected()).toHaveLength(1);
+  });
+
+  it("invalidates a generation-less session after external pairing deletion", async () => {
+    let currentPairingState: { identity: string } | undefined = { identity: "identity-a" };
+    const registry = createNodeRegistry({
+      resolveCurrentPairingState: async () => currentPairingState,
+    });
+    const client = makeClient("conn-pending-surface", "node-pending-surface");
+    registerNodeSession(registry, client, { pairingIdentity: "identity-a" });
+
+    await expect(registry.listCurrentConnected()).resolves.toHaveLength(1);
+    currentPairingState = undefined;
+    await expect(registry.listCurrentConnected()).resolves.toEqual([]);
+    expect(client.invalidated).toBe(true);
+  });
+
+  it("invalidates a generation-less session synchronously after pairing deletion", () => {
+    let pairingExists = true;
+    const registry = createNodeRegistry({
+      isPairingStateCurrent: (_nodeId, expected) =>
+        pairingExists && expected.identity === "identity-a",
+    });
+    const client = makeClient("conn-pending-surface", "node-pending-surface");
+    registerNodeSession(registry, client, { pairingIdentity: "identity-a" });
+
+    expect(registry.listCurrentConnectedSync()).toHaveLength(1);
+    pairingExists = false;
+    expect(registry.listCurrentConnectedSync()).toEqual([]);
+    expect(client.invalidated).toBe(true);
+  });
+
   it("routes ordered input to the pending invoke connection and rejects unknown invokes", async () => {
     const registry = new NodeRegistry();
     const frames = registerNode(registry);
@@ -250,6 +623,44 @@ describe("gateway/node-registry", () => {
     expect(() => registry.sendInvokeInput("missing", { kind: "data", data: "x" })).toThrow(
       "node invoke is not pending",
     );
+
+    controller.abort();
+    await expect(invoke).resolves.toMatchObject({ ok: false, error: { code: "ABORTED" } });
+  });
+
+  it("does not advance streamed input sequence when the node websocket is closing", async () => {
+    const registry = createNodeRegistry();
+    const frames: string[] = [];
+    const socket = createTestNodeSocket(frames);
+    registerTestNodeSocket(registry, socket, frames);
+    const controller = new AbortController();
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "codex.terminal.resume.v1",
+      timeoutMs: 0,
+      signal: controller.signal,
+      onProgress: () => {},
+    });
+    const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+    const invokeId = request.payload?.id ?? "";
+
+    socket.readyState = WebSocket.CLOSING;
+    expect(() => registry.sendInvokeInput(invokeId, { kind: "data", data: "lost" })).toThrow(
+      "failed to send node invoke input",
+    );
+    expect(frames).toHaveLength(1);
+
+    socket.readyState = WebSocket.OPEN;
+    registry.sendInvokeInput(invokeId, { kind: "data", data: "delivered" });
+    expect(JSON.parse(frames[1] ?? "{}")).toMatchObject({
+      event: "node.invoke.input",
+      payload: {
+        id: invokeId,
+        nodeId: "node-1",
+        seq: 0,
+        payloadJSON: JSON.stringify({ kind: "data", data: "delivered" }),
+      },
+    });
 
     controller.abort();
     await expect(invoke).resolves.toMatchObject({ ok: false, error: { code: "ABORTED" } });
@@ -297,14 +708,16 @@ describe("gateway/node-registry", () => {
 
   it("ranks connected nodes by gateway-derived input activity", () => {
     const registry = createTestNodeRegistry();
-    registry.register(
+    registerNodeSession(
+      registry,
       makeClient("conn-1", "node-1", [], {
         displayName: "Desk Mac",
         permissions: { accessibility: true },
       }),
       {},
     );
-    registry.register(
+    registerNodeSession(
+      registry,
       makeClient("conn-2", "node-2", [], {
         displayName: "Laptop",
         permissions: { accessibility: true },
@@ -328,15 +741,16 @@ describe("gateway/node-registry", () => {
     });
 
     expect(registry.getActiveNode()?.nodeId).toBe("node-2");
-    expect(getActiveNodeContext()).toEqual({ nodeId: "node-2" });
+    expect(getCurrentActiveNodeContext()).toEqual({ nodeId: "node-2" });
     expect(registry.unregister("conn-2")).toBe("node-2");
     expect(registry.getActiveNode()?.nodeId).toBe("node-1");
-    expect(getActiveNodeContext()).toEqual({ nodeId: "node-1" });
+    expect(getCurrentActiveNodeContext()).toEqual({ nodeId: "node-1" });
   });
 
   it("recomputes active context when a same-id connection replaces reported presence", () => {
     const registry = createTestNodeRegistry();
-    registry.register(
+    registerNodeSession(
+      registry,
       makeClient("conn-old", "node-1", [], { permissions: { accessibility: true } }),
       {},
     );
@@ -347,20 +761,22 @@ describe("gateway/node-registry", () => {
       observedAtMs: 100_000,
     });
 
-    registry.register(
+    registerNodeSession(
+      registry,
       makeClient("conn-new", "node-1", [], { permissions: { accessibility: true } }),
       {},
     );
 
     expect(registry.getActiveNode()).toBeUndefined();
-    expect(getActiveNodeContext()).toBeNull();
+    expect(getCurrentActiveNodeContext()).toBeNull();
     expect(registry.unregister("conn-old")).toBeNull();
-    expect(getActiveNodeContext()).toBeNull();
+    expect(getCurrentActiveNodeContext()).toBeNull();
   });
 
   it("rejects presence updates from stale node connections", () => {
     const registry = createTestNodeRegistry();
-    registry.register(
+    registerNodeSession(
+      registry,
       makeClient("conn-new", "node-1", [], { permissions: { accessibility: true } }),
       {},
     );
@@ -378,7 +794,8 @@ describe("gateway/node-registry", () => {
 
   it("does not advance a bounded estimate on saturated idle keepalives", () => {
     const registry = createTestNodeRegistry();
-    registry.register(
+    registerNodeSession(
+      registry,
       makeClient("conn-1", "node-1", [], { permissions: { accessibility: true } }),
       {},
     );
@@ -404,7 +821,8 @@ describe("gateway/node-registry", () => {
 
   it("clears reported presence when Accessibility permission is removed", () => {
     const registry = createTestNodeRegistry();
-    registry.register(
+    registerNodeSession(
+      registry,
       makeClient("conn-1", "node-1", [], {
         permissions: { accessibility: true },
         declaredPermissions: { accessibility: true },
@@ -423,12 +841,46 @@ describe("gateway/node-registry", () => {
     expect(registry.get("node-1")?.lastActiveAtMs).toBeUndefined();
     expect(registry.get("node-1")?.presenceUpdatedAtMs).toBeUndefined();
     expect(registry.getActiveNode()).toBeUndefined();
-    expect(getActiveNodeContext()).toBeNull();
+    expect(getCurrentActiveNodeContext()).toBeNull();
+  });
+
+  it("clears presence only for the current connection and selects the next active Mac", () => {
+    const registry = createTestNodeRegistry();
+    registerNodeSession(
+      registry,
+      makeClient("conn-1", "node-1", [], { permissions: { accessibility: true } }),
+      {},
+    );
+    registerNodeSession(
+      registry,
+      makeClient("conn-2", "node-2", [], { permissions: { accessibility: true } }),
+      {},
+    );
+    registry.updatePresenceActivity({
+      nodeId: "node-1",
+      connId: "conn-1",
+      idleSeconds: 10,
+      observedAtMs: 100_000,
+    });
+    registry.updatePresenceActivity({
+      nodeId: "node-2",
+      connId: "conn-2",
+      idleSeconds: 0,
+      observedAtMs: 105_000,
+    });
+
+    expect(registry.clearPresenceActivity({ nodeId: "node-2", connId: "conn-old" })).toBeNull();
+    expect(registry.getActiveNode()?.nodeId).toBe("node-2");
+    expect(registry.clearPresenceActivity({ nodeId: "node-2", connId: "conn-2" })).toBe(true);
+    expect(registry.getActiveNode()?.nodeId).toBe("node-1");
+    expect(getCurrentActiveNodeContext()).toEqual({ nodeId: "node-1" });
+    expect(registry.clearPresenceActivity({ nodeId: "node-2", connId: "conn-2" })).toBe(false);
   });
 
   it("checks node websocket connectivity with ping/pong", async () => {
     const registry = createTestNodeRegistry();
-    registry.register(
+    registerNodeSession(
+      registry,
       makeClient("conn-1", "node-1", [], {
         socket: makeConnectivitySocket(true),
       }),
@@ -438,9 +890,147 @@ describe("gateway/node-registry", () => {
     await expect(registry.checkConnectivity("node-1", 50)).resolves.toEqual({ ok: true });
   });
 
+  it("does not probe an invalidated node connection", async () => {
+    const registry = createTestNodeRegistry();
+    const socket = makeConnectivitySocket(true);
+    const ping = vi.spyOn(socket, "ping");
+    const client = makeClient("conn-invalidated", "node-1", [], { socket });
+    registerNodeSession(registry, client, {});
+    client.invalidated = true;
+
+    await expect(registry.checkConnectivity("node-1", 50)).resolves.toEqual({
+      ok: false,
+      error: { code: "NOT_CONNECTED", message: "node not connected" },
+    });
+    expect(ping).not.toHaveBeenCalled();
+  });
+
+  it("does not report an old websocket as connected after its node reconnects", async () => {
+    const registry = createTestNodeRegistry();
+    const oldSocket = makeConnectivitySocket(false);
+    registerNodeSession(registry, makeClient("conn-old", "node-1", [], { socket: oldSocket }), {});
+
+    const connectivity = registry.checkConnectivity("node-1", 50);
+    const replacement = registerNodeSession(
+      registry,
+      makeClient("conn-new", "node-1", [], { socket: makeConnectivitySocket(true) }),
+      {},
+    );
+    (oldSocket as unknown as EventEmitter).emit("pong");
+
+    await expect(connectivity).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "NOT_CONNECTED",
+        message: "node connection changed during connectivity probe",
+      },
+    });
+    expect(registry.get("node-1")).toBe(replacement);
+    await expect(registry.checkConnectivity("node-1", 50)).resolves.toEqual({ ok: true });
+  });
+
+  it("does not report a replaced polling transport as connected", async () => {
+    const registry = createTestNodeRegistry();
+    let resolveProbe: ((result: { ok: true }) => void) | undefined;
+    const transportProbe = new Promise<{ ok: true }>((resolve) => {
+      resolveProbe = resolve;
+    });
+    registry.registerTransport(
+      makeClient("conn-old", "node-1"),
+      { pairingIdentity: "identity-a" },
+      {
+        send: () => true,
+        sendRaw: () => true,
+        checkConnectivity: () => transportProbe,
+      },
+    );
+
+    const connectivity = registry.checkConnectivity("node-1", 50);
+    const replacement = registerNodeSession(
+      registry,
+      makeClient("conn-new", "node-1", [], { socket: makeConnectivitySocket(true) }),
+      {},
+    );
+    resolveProbe?.({ ok: true });
+
+    await expect(connectivity).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "NOT_CONNECTED",
+        message: "node connection changed during connectivity probe",
+      },
+    });
+    expect(registry.get("node-1")).toBe(replacement);
+  });
+
+  it("keeps connectivity and invocations isolated across repeated node reconnects", async () => {
+    const registry = createTestNodeRegistry();
+    const makeTrackedSocket = (sent: string[]) => {
+      const trackedSocket = makeConnectivitySocket(false);
+      (trackedSocket as unknown as { send: (frame: unknown) => void }).send = (frame) => {
+        if (typeof frame === "string") {
+          sent.push(frame);
+        }
+      };
+      return trackedSocket;
+    };
+    let frames: string[] = [];
+    let socket = makeTrackedSocket(frames);
+    registerNodeSession(registry, makeClient("conn-0", "node-1", frames, { socket }), {});
+
+    for (let attempt = 1; attempt <= 50; attempt += 1) {
+      const previousSocket = socket;
+      const previousFrames = frames;
+      const connectivity = registry.checkConnectivity("node-1", 1_000);
+      const invoke = registry.invoke({
+        nodeId: "node-1",
+        command: "debug.ping",
+        timeoutMs: 0,
+      });
+      const request = JSON.parse(previousFrames[0] ?? "{}") as {
+        payload?: { id?: string };
+      };
+      expect(request.payload?.id).toEqual(expect.any(String));
+
+      frames = [];
+      socket = makeTrackedSocket(frames);
+      const replacement = registerNodeSession(
+        registry,
+        makeClient(`conn-${attempt}`, "node-1", frames, { socket }),
+        {},
+      );
+      (previousSocket as unknown as EventEmitter).emit("pong");
+
+      await expect(connectivity).resolves.toEqual({
+        ok: false,
+        error: {
+          code: "NOT_CONNECTED",
+          message: "node connection changed during connectivity probe",
+        },
+      });
+      await expect(invoke).resolves.toEqual({
+        ok: false,
+        error: {
+          code: "DISCONNECTED",
+          message: "node disconnected (debug.ping)",
+        },
+      });
+      expect(
+        registry.handleInvokeResult({
+          id: request.payload?.id ?? "",
+          nodeId: "node-1",
+          connId: `conn-${attempt - 1}`,
+          ok: true,
+        }),
+      ).toBe(false);
+      expect(registry.get("node-1")).toBe(replacement);
+    }
+  });
+
   it("reports stale node websocket connectivity before invoke timeout", async () => {
     const registry = createTestNodeRegistry();
-    registry.register(
+    registerNodeSession(
+      registry,
       makeClient("conn-1", "node-1", [], {
         socket: makeConnectivitySocket(false),
       }),
@@ -455,20 +1045,19 @@ describe("gateway/node-registry", () => {
     });
   });
 
-  it("keeps a reconnected node when the old connection unregisters", async () => {
+  it("settles zero-timeout invokes when a node reconnects before its old connection closes", async () => {
     const registry = createTestNodeRegistry();
     const oldFrames: string[] = [];
     const newClient = makeClient("conn-new", "node-1");
 
-    registry.register(makeClient("conn-old", "node-1", oldFrames), {});
+    registerNodeSession(registry, makeClient("conn-old", "node-1", oldFrames), {});
     const oldInvoke = registry.invoke({
       nodeId: "node-1",
       command: "system.run",
-      timeoutMs: 1_000,
+      timeoutMs: 0,
     });
-    const oldDisconnected = oldInvoke.catch((err: unknown) => err);
     const oldRequest = JSON.parse(oldFrames[0] ?? "{}") as { payload?: { id?: string } };
-    const newSession = registry.register(newClient, {});
+    const newSession = registerNodeSession(registry, newClient, {});
 
     expect(
       registry.handleInvokeResult({
@@ -478,28 +1067,61 @@ describe("gateway/node-registry", () => {
         ok: true,
       }),
     ).toBe(false);
+    await expect(oldInvoke).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "DISCONNECTED",
+        message: "node disconnected (system.run)",
+      },
+    });
+    expect(registry.get("node-1")).toBe(newSession);
     expect(registry.unregister("conn-old")).toBeNull();
     expect(registry.get("node-1")).toBe(newSession);
-    await expect(oldDisconnected).resolves.toBeInstanceOf(Error);
+  });
+
+  it("settles zero-timeout MCP calls without disconnecting the replacement node", async () => {
+    const registry = createNodeRegistry();
+    registerNodeSession(registry, makeClient("conn-old", "node-1"));
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "mcp.tools.call.v1",
+      timeoutMs: 0,
+    });
+
+    const replacement = registerNodeSession(registry, makeClient("conn-new", "node-1"));
+
+    await expect(invoke).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "MCP_SERVER_UNAVAILABLE",
+        message: "node host disconnected during MCP tool call",
+      },
+    });
+    expect(registry.get("node-1")).toBe(replacement);
+    expect(registry.unregister("conn-old")).toBeNull();
+    expect(registry.get("node-1")).toBe(replacement);
   });
 
   it("rejects invoke when the node connection changed before dispatch", async () => {
     const registry = createNodeRegistry();
     const replacementFrames: string[] = [];
-    registry.register(makeClient("conn-old", "node-1"), {});
-    registry.register(makeClient("conn-new", "node-1", replacementFrames), {});
+    const onDispatchReady = vi.fn();
+    registerNodeSession(registry, makeClient("conn-old", "node-1"), {});
+    registerNodeSession(registry, makeClient("conn-new", "node-1", replacementFrames), {});
 
     await expect(
       registry.invoke({
         nodeId: "node-1",
         expectedConnId: "conn-old",
         command: "system.run",
+        onDispatchReady,
       }),
     ).resolves.toEqual({
       ok: false,
       error: { code: "ROUTE_CHANGED", message: "node connection changed before dispatch" },
     });
     expect(replacementFrames).toEqual([]);
+    expect(onDispatchReady).not.toHaveBeenCalled();
   });
 
   it("matches pending system.run events to the issuing connection", async () => {
@@ -624,6 +1246,28 @@ describe("gateway/node-registry", () => {
     }
   });
 
+  it("returns unavailable without dispatching an invoke to a closing node websocket", async () => {
+    const registry = createNodeRegistry();
+    const frames: string[] = [];
+    const socket = createTestNodeSocket(frames, WebSocket.CLOSING);
+    registerTestNodeSocket(registry, socket, frames);
+    const onDispatchReady = vi.fn();
+
+    await expect(
+      registry.invoke({
+        nodeId: "node-1",
+        command: "debug.ping",
+        timeoutMs: 0,
+        onDispatchReady,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
+    });
+    expect(socket.send).not.toHaveBeenCalled();
+    expect(onDispatchReady).not.toHaveBeenCalled();
+  });
+
   it("forwards the agent session that owns a stateful node invoke", async () => {
     const registry = createNodeRegistry();
     const frames = registerNode(registry);
@@ -649,7 +1293,7 @@ describe("gateway/node-registry", () => {
     await expect(invoke).resolves.toMatchObject({ ok: true });
   });
 
-  it("rejects zero-timeout invokes when the node disconnects", async () => {
+  it("returns a structured result when a zero-timeout invoke disconnects", async () => {
     const registry = createNodeRegistry();
     registerNode(registry);
     const invoke = registry.invoke({
@@ -657,12 +1301,120 @@ describe("gateway/node-registry", () => {
       command: "debug.ping",
       timeoutMs: 0,
     });
-    const disconnected = invoke.catch((error: unknown) => error);
 
     expect(registry.unregister("conn-1")).toBe("node-1");
-    const error = await disconnected;
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toBe("node disconnected (debug.ping)");
+    await expect(invoke).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "DISCONNECTED",
+        message: "node disconnected (debug.ping)",
+      },
+    });
+  });
+
+  it("accepts results before the hard deadline and times out results at the deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const registry = createNodeRegistry();
+    const frames = registerNode(registry);
+    const beforeDispatch = vi.fn();
+
+    const beforeDeadline = registry.invoke({
+      nodeId: "node-1",
+      command: "debug.ping",
+      timeoutMs: 100,
+      onDispatchReady: beforeDispatch,
+    });
+    const beforeRequest = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+    vi.setSystemTime(1_099);
+    expect(
+      registry.handleInvokeResult({
+        id: beforeRequest.payload?.id ?? "",
+        nodeId: "node-1",
+        connId: "conn-1",
+        ok: true,
+      }),
+    ).toBe(true);
+    expect(beforeDispatch).toHaveBeenCalledOnce();
+    await expect(beforeDeadline).resolves.toMatchObject({ ok: true });
+
+    vi.setSystemTime(2_000);
+    const atDeadline = registry.invoke({
+      nodeId: "node-1",
+      command: "debug.ping",
+      timeoutMs: 100,
+    });
+    const atRequest = JSON.parse(frames[1] ?? "{}") as { payload?: { id?: string } };
+    vi.setSystemTime(2_100);
+    const terminalResult = {
+      id: atRequest.payload?.id ?? "",
+      nodeId: "node-1",
+      connId: "conn-1",
+      ok: true,
+    };
+
+    expect(registry.handleInvokeResult(terminalResult)).toBe(false);
+    expect(registry.handleInvokeResult(terminalResult)).toBe(false);
+    await expect(atDeadline).resolves.toEqual({
+      ok: false,
+      error: { code: "TIMEOUT", message: "node invoke timed out" },
+    });
+  });
+
+  it("prefers an elapsed hard deadline when disconnect beats the timer callback", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const registry = createNodeRegistry();
+    registerNode(registry);
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "debug.ping",
+      timeoutMs: 100,
+    });
+
+    vi.setSystemTime(1_100);
+    expect(registry.unregister("conn-1")).toBe("node-1");
+
+    await expect(invoke).resolves.toEqual({
+      ok: false,
+      error: { code: "TIMEOUT", message: "node invoke timed out" },
+    });
+  });
+
+  it("prefers an elapsed hard deadline when abort beats the timer callback", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const registry = createNodeRegistry();
+    registerNode(registry);
+
+    const beforeDeadlineController = new AbortController();
+    const beforeDeadline = registry.invoke({
+      nodeId: "node-1",
+      command: "debug.ping",
+      timeoutMs: 100,
+      signal: beforeDeadlineController.signal,
+    });
+    vi.setSystemTime(1_099);
+    beforeDeadlineController.abort();
+    await expect(beforeDeadline).resolves.toEqual({
+      ok: false,
+      error: { code: "ABORTED", message: "node invoke cancelled" },
+    });
+
+    vi.setSystemTime(2_000);
+    const atDeadlineController = new AbortController();
+    const atDeadline = registry.invoke({
+      nodeId: "node-1",
+      command: "debug.ping",
+      timeoutMs: 100,
+      signal: atDeadlineController.signal,
+    });
+    vi.setSystemTime(2_100);
+    atDeadlineController.abort();
+    await expect(atDeadline).resolves.toEqual({
+      ok: false,
+      error: { code: "TIMEOUT", message: "node invoke timed out" },
+    });
   });
 
   it("orders streamed invoke progress and drops state after the final result", async () => {
@@ -930,12 +1682,17 @@ describe("gateway/node-registry", () => {
       idleTimeoutMs: 100,
       onProgress: () => {},
     });
-    const disconnected = invoke.catch((error: unknown) => error);
     const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
     const invokeId = request.payload?.id ?? "";
 
     expect(registry.unregister("conn-1")).toBe("node-1");
-    await expect(disconnected).resolves.toBeInstanceOf(Error);
+    await expect(invoke).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "DISCONNECTED",
+        message: "node disconnected (agent.cli.claude.run.v1)",
+      },
+    });
     expect(
       registry.handleInvokeProgress({
         invokeId,
@@ -985,6 +1742,79 @@ describe("gateway/node-registry", () => {
         chunk: "late",
       }),
     ).toBe(false);
+  });
+
+  it.each(["mcp.tools.call.v1", "system.run"])(
+    "forwards cancellation of first-party non-streaming %s calls",
+    async (command) => {
+      const registry = createNodeRegistry();
+      const frames = registerNode(registry, { clientId: GATEWAY_CLIENT_IDS.NODE_HOST });
+      const controller = new AbortController();
+      const invoke = registry.invoke({
+        nodeId: "node-1",
+        command,
+        timeoutMs: 1_000,
+        signal: controller.signal,
+      });
+      const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+
+      controller.abort();
+
+      await expect(invoke).resolves.toMatchObject({
+        ok: false,
+        error: { code: "ABORTED" },
+      });
+      expect(JSON.parse(frames[1] ?? "{}")).toMatchObject({
+        event: "node.invoke.cancel",
+        payload: { invokeId: request.payload?.id, nodeId: "node-1" },
+      });
+    },
+  );
+
+  it.each(["mcp.tools.call.v1", "system.run"])(
+    "forwards timeouts of first-party non-streaming %s calls",
+    async (command) => {
+      vi.useFakeTimers();
+      try {
+        const registry = createNodeRegistry();
+        const frames = registerNode(registry, { clientId: GATEWAY_CLIENT_IDS.NODE_HOST });
+        const invoke = registry.invoke({ nodeId: "node-1", command, timeoutMs: 100 });
+        const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+
+        await vi.advanceTimersByTimeAsync(100);
+
+        await expect(invoke).resolves.toMatchObject({
+          ok: false,
+          error: { code: "TIMEOUT" },
+        });
+        expect(JSON.parse(frames[1] ?? "{}")).toMatchObject({
+          event: "node.invoke.cancel",
+          payload: { invokeId: request.payload?.id, nodeId: "node-1" },
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("preserves legacy non-streaming node cancellation behavior", async () => {
+    const registry = createNodeRegistry();
+    const frames = registerNode(registry);
+    const controller = new AbortController();
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      timeoutMs: 1_000,
+      signal: controller.signal,
+    });
+
+    controller.abort();
+
+    await expect(invoke).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ABORTED" },
+    });
+    expect(frames).toHaveLength(1);
   });
 
   it("cancels the node when a streamed progress consumer fails", async () => {
@@ -1270,7 +2100,7 @@ describe("gateway/node-registry", () => {
   it("sends raw event payload JSON without changing the envelope shape", () => {
     const registry = createTestNodeRegistry();
     const frames: string[] = [];
-    registry.register(makeClient("conn-1", "node-1", frames), {});
+    registerNodeSession(registry, makeClient("conn-1", "node-1", frames), {});
     const payload = serializeEventPayload({ foo: "bar" });
     const nullPayload = serializeEventPayload(null);
     const falsePayload = serializeEventPayload(false);
@@ -1309,22 +2139,98 @@ describe("gateway/node-registry", () => {
     ]);
   });
 
+  it.each(NON_OPEN_NODE_SOCKET_STATES)(
+    "rejects normal event sends while the node websocket is $state",
+    ({ readyState }) => {
+      const registry = createTestNodeRegistry();
+      const socket = createTestNodeSocket([], readyState);
+      registerTestNodeSocket(registry, socket);
+
+      expect(registry.sendEvent("node-1", "node.test", { ok: true })).toBe(false);
+      expect(socket.send).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(NON_OPEN_NODE_SOCKET_STATES)(
+    "rejects raw event sends while the node websocket is $state",
+    ({ readyState }) => {
+      const registry = createTestNodeRegistry();
+      const socket = createTestNodeSocket([], readyState);
+      registerTestNodeSocket(registry, socket);
+
+      expect(
+        registry.sendEventRaw("node-1", "node.test", serializeEventPayload({ ok: true })),
+      ).toBe(false);
+      expect(socket.send).not.toHaveBeenCalled();
+    },
+  );
+
+  it("drops a delayed voice-wake snapshot after persistent generation changes", async () => {
+    let resolveCurrent!: (state: { identity: string; generation?: string } | undefined) => void;
+    const currentPairingState = new Promise<{ identity: string; generation?: string } | undefined>(
+      (resolve) => {
+        resolveCurrent = resolve;
+      },
+    );
+    const resolveCurrentPairingState = vi.fn(() => currentPairingState);
+    const registry = createNodeRegistry({ resolveCurrentPairingState });
+    const frames: string[] = [];
+    registerNodeSession(registry, makeClient("conn-1", "node-1", frames), {
+      pairingIdentity: "identity-a",
+      pairingGeneration: "generation-a",
+    });
+
+    const send = registry.sendEventRawForPairingGeneration(
+      "node-1",
+      "generation-a",
+      "voicewake.changed",
+      serializeEventPayload({ triggers: ["openclaw"] }),
+    );
+    await vi.waitFor(() => expect(resolveCurrentPairingState).toHaveBeenCalledTimes(1));
+    resolveCurrent({ identity: "identity-a", generation: "generation-b" });
+
+    await expect(send).resolves.toBe(false);
+    expect(frames).toEqual([]);
+  });
+
+  it("drops a delayed command-free snapshot after pairing identity deletion", async () => {
+    let resolveCurrent!: (state: { identity: string } | undefined) => void;
+    const currentPairingState = new Promise<{ identity: string } | undefined>((resolve) => {
+      resolveCurrent = resolve;
+    });
+    const registry = createNodeRegistry({
+      resolveCurrentPairingState: async () => await currentPairingState,
+    });
+    const frames: string[] = [];
+    registerNodeSession(registry, makeClient("conn-1", "node-1", frames), {
+      pairingIdentity: "identity-a",
+    });
+
+    const send = registry.sendEventForPairingIdentity({
+      nodeId: "node-1",
+      connId: "conn-1",
+      pairingIdentity: "identity-a",
+      event: "voicewake.changed",
+      payload: { triggers: ["openclaw"] },
+    });
+    resolveCurrent(undefined);
+
+    await expect(send).resolves.toBe(false);
+    expect(frames).toEqual([]);
+  });
+
   it("rejects raw event sends when the node socket buffer is saturated", () => {
     resetDiagnosticEventsForTest();
     const diagnosticEvents: unknown[] = [];
     const stopDiagnostics = onDiagnosticEvent((event) => diagnosticEvents.push(event));
     const registry = createTestNodeRegistry();
     const socket = {
+      readyState: WebSocket.OPEN,
       bufferedAmount: MAX_BUFFERED_BYTES + 1,
       send: vi.fn(),
       close: vi.fn(),
     };
-    registry.register(
-      makeClient("conn-1", "node-1", [], {
-        socket: socket as unknown as GatewayWsClient["socket"],
-      }),
-      {},
-    );
+    registerTestNodeSocket(registry, socket);
     const payload = serializeEventPayload({ foo: "bar" });
 
     try {
@@ -1359,7 +2265,7 @@ describe("gateway/node-registry", () => {
       declaredPermissions: { microphone: true, camera: false },
     });
 
-    const session = registry.register(client, {});
+    const session = registerNodeSession(registry, client, {});
     expect(session.caps).toEqual([]);
     expect(session.commands).toEqual([]);
 
@@ -1376,6 +2282,103 @@ describe("gateway/node-registry", () => {
     expect((client.connect as { commands?: string[] }).commands).toEqual(["talk.ptt.start"]);
   });
 
+  it("advances the exact live session with its approved surface generation", () => {
+    const registry = createTestNodeRegistry();
+    const client = makeClient("conn-1", "node-1", [], {
+      declaredCommands: ["device.info"],
+    });
+    registerNodeSession(registry, client, {
+      pairingIdentity: "identity-a",
+      pairingGeneration: "generation-a",
+    });
+
+    const updated = registry.updateSurface(
+      "node-1",
+      { commands: ["device.info"] },
+      {
+        expectedConnId: "conn-1",
+        expectedPairingIdentity: "identity-a",
+        expectedPairingGeneration: "generation-a",
+        nextPairingGeneration: "generation-b",
+      },
+    );
+
+    expect(updated?.pairingGeneration).toBe("generation-b");
+    expect(
+      registry.updateSurface(
+        "node-1",
+        { commands: [] },
+        {
+          expectedConnId: "conn-stale",
+          expectedPairingIdentity: "identity-a",
+          expectedPairingGeneration: "generation-a",
+          nextPairingGeneration: "generation-c",
+        },
+      ),
+    ).toBeNull();
+    expect(registry.get("node-1")?.commands).toEqual(["device.info"]);
+    expect(registry.get("node-1")?.pairingGeneration).toBe("generation-b");
+  });
+
+  it("rebinds active-node presence when a live session advances generations", () => {
+    const registry = createTestNodeRegistry();
+    const client = makeClient("conn-1", "node-1", [], {
+      permissions: { accessibility: true },
+      declaredPermissions: { accessibility: true },
+    });
+    registerNodeSession(registry, client, {
+      pairingIdentity: "identity-a",
+      pairingGeneration: "generation-a",
+    });
+    registry.updatePresenceActivity({
+      nodeId: "node-1",
+      connId: "conn-1",
+      idleSeconds: 0,
+      observedAtMs: 100_000,
+    });
+
+    registry.updateSurface(
+      "node-1",
+      { commands: [], permissions: { accessibility: true } },
+      {
+        expectedConnId: "conn-1",
+        expectedPairingIdentity: "identity-a",
+        expectedPairingGeneration: "generation-a",
+        nextPairingGeneration: "generation-b",
+      },
+    );
+
+    expect(getCurrentActiveNodeContext()).toMatchObject({
+      nodeId: "node-1",
+      pairingGeneration: "generation-b",
+    });
+  });
+
+  it("does not promote a generation-less session from a retired pairing identity", () => {
+    const registry = createTestNodeRegistry();
+    const client = makeClient("conn-1", "node-1", [], {
+      declaredCommands: ["device.info"],
+    });
+    registerNodeSession(registry, client, { pairingIdentity: "identity-a" });
+
+    expect(
+      registry.updateSurface(
+        "node-1",
+        { commands: ["device.info"] },
+        {
+          expectedConnId: "conn-1",
+          expectedPairingIdentity: "identity-b",
+          nextPairingGeneration: "generation-b",
+        },
+      ),
+    ).toBeNull();
+    expect(registry.get("node-1")).toMatchObject({
+      pairingIdentity: "identity-a",
+      commands: [],
+    });
+    expect(registry.get("node-1")?.pairingGeneration).toBeUndefined();
+  });
+
   it("keeps node-hosted plugin tools inside the approved command surface", () => {
     registerDemoNodePluginTool({ name: "demo_echo", command: "demo.echo" });
     const registry = createTestNodeRegistry();
@@ -1383,7 +2386,7 @@ describe("gateway/node-registry", () => {
       commands: ["demo.echo"],
     });
 
-    const session = registry.register(client, {});
+    const session = registerNodeSession(registry, client, {});
     publishNodePluginTools(registry, [
       {
         pluginId: "demo",
@@ -1413,6 +2416,30 @@ describe("gateway/node-registry", () => {
     expect(listConnectedNodePluginTools()).toEqual([]);
   });
 
+  it("retires node-hosted plugin tools immediately when a connection is invalidated", () => {
+    registerDemoNodePluginTool({ name: "demo_echo", command: "demo.echo" });
+    const registry = createTestNodeRegistry();
+    const client = makeClient("conn-1", "node-1", [], { commands: ["demo.echo"] });
+    registerNodeSession(registry, client, {});
+    publishNodePluginTools(registry, [
+      {
+        pluginId: "demo",
+        name: "demo_echo",
+        description: "Echo through the node",
+        command: "demo.echo",
+      },
+    ]);
+    expect(listConnectedNodePluginTools()).toHaveLength(1);
+
+    expect(registry.invalidateConnectionForPairingChange("conn-1", "device-token-revoked")).toBe(
+      true,
+    );
+
+    expect(client.invalidated).toBe(true);
+    expect(client.invalidatedReason).toBe("device-token-revoked");
+    expect(listConnectedNodePluginTools()).toEqual([]);
+  });
+
   it("keeps dangerous node-hosted plugin tools once explicitly approved", () => {
     registerDemoNodePluginTool({
       name: "demo_dangerous",
@@ -1424,7 +2451,7 @@ describe("gateway/node-registry", () => {
       commands: ["demo.dangerous"],
     });
 
-    const session = registry.register(client, {});
+    const session = registerNodeSession(registry, client, {});
     publishNodePluginTools(registry, [
       {
         pluginId: "demo",
@@ -1447,7 +2474,7 @@ describe("gateway/node-registry", () => {
       commands: ["demo.echo"],
     });
 
-    const session = registry.register(client, {});
+    const session = registerNodeSession(registry, client, {});
     publishNodePluginTools(registry, [
       {
         pluginId: "demo",
@@ -1475,7 +2502,7 @@ describe("gateway/node-registry", () => {
       commands: ["system.run"],
     });
 
-    const session = registry.register(client, {});
+    const session = registerNodeSession(registry, client, {});
     publishNodePluginTools(registry, [
       {
         pluginId: "demo",
@@ -1512,7 +2539,7 @@ describe("gateway/node-registry", () => {
       commands: ["demo.echo"],
     });
 
-    const session = registry.register(client, {});
+    const session = registerNodeSession(registry, client, {});
     publishNodePluginTools(registry, [
       {
         pluginId: "demo",
@@ -1548,7 +2575,7 @@ describe("gateway/node-registry", () => {
       declaredCommands: ["demo.echo"],
     });
 
-    const session = registry.register(client, {});
+    const session = registerNodeSession(registry, client, {});
     publishNodePluginTools(registry, [
       {
         pluginId: "demo",
@@ -1573,7 +2600,8 @@ describe("gateway/node-registry", () => {
 
   it("enriches published node tools after matching plugin descriptors load", () => {
     const registry = createTestNodeRegistry();
-    registry.register(
+    registerNodeSession(
+      registry,
       makeClient("conn-1", "node-1", [], {
         commands: ["demo.echo"],
       }),
@@ -1602,7 +2630,8 @@ describe("gateway/node-registry", () => {
 
   it("ignores published node tools when gateway publication is disabled", () => {
     const registry = createNodeRegistry({ nodePluginToolsEnabled: false });
-    registry.register(
+    registerNodeSession(
+      registry,
       makeClient("conn-1", "node-1", [], {
         commands: ["demo.echo"],
       }),
@@ -1626,13 +2655,15 @@ describe("gateway/node-registry", () => {
   it("ignores node plugin tool updates from stale connections", () => {
     registerDemoNodePluginTool({ name: "demo_echo", command: "demo.echo" });
     const registry = createTestNodeRegistry();
-    registry.register(
+    registerNodeSession(
+      registry,
       makeClient("conn-old", "node-1", [], {
         commands: ["demo.echo"],
       }),
       {},
     );
-    registry.register(
+    registerNodeSession(
+      registry,
       makeClient("conn-new", "node-1", [], {
         commands: ["demo.echo"],
       }),
@@ -1655,7 +2686,7 @@ describe("gateway/node-registry", () => {
 
   it("stores bounded node-hosted skill updates on the current session", () => {
     const registry = createTestNodeRegistry();
-    const session = registry.register(makeClient("conn-1", "node-1"), {});
+    const session = registerNodeSession(registry, makeClient("conn-1", "node-1"), {});
 
     const updated = publishNodeSkills(registry, [
       nodeSkill("release-helper"),
@@ -1668,7 +2699,7 @@ describe("gateway/node-registry", () => {
 
   it("enforces node skill count and total-content caps", () => {
     const registry = createTestNodeRegistry();
-    registry.register(makeClient("conn-1", "node-1"), {});
+    registerNodeSession(registry, makeClient("conn-1", "node-1"), {});
 
     const countUpdate = publishNodeSkills(
       registry,
@@ -1689,12 +2720,12 @@ describe("gateway/node-registry", () => {
 
   it("ignores node skills when publication is disabled or the connection is stale", () => {
     const disabled = createNodeRegistry({ nodeSkillsEnabled: false });
-    disabled.register(makeClient("conn-1", "node-1"), {});
+    registerNodeSession(disabled, makeClient("conn-1", "node-1"), {});
     expect(publishNodeSkills(disabled, [nodeSkill("disabled")])?.nodeSkills).toEqual([]);
 
     const registry = createTestNodeRegistry();
-    registry.register(makeClient("conn-old", "node-1"), {});
-    registry.register(makeClient("conn-new", "node-1"), {});
+    registerNodeSession(registry, makeClient("conn-old", "node-1"), {});
+    registerNodeSession(registry, makeClient("conn-new", "node-1"), {});
     expect(publishNodeSkills(registry, [nodeSkill("stale")], "conn-old")).toBeNull();
     expect(registry.get("node-1")?.nodeSkills).toEqual([]);
   });
@@ -1706,7 +2737,7 @@ describe("gateway/node-registry", () => {
       declaredPermissions: { camera: false },
     });
 
-    registry.register(client, {});
+    registerNodeSession(registry, client, {});
     const updated = registry.updateSurface("node-1", {
       caps: [],
       commands: [],
@@ -1730,7 +2761,7 @@ describe("gateway/node-registry", () => {
       sessionCommandsCeiling: ["device.info"],
     });
 
-    registry.register(client, {});
+    registerNodeSession(registry, client, {});
     const updated = registry.updateSurface("node-1", {
       caps: ["canvas", "device"],
       commands: ["canvas.snapshot", "device.info"],

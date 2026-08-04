@@ -7,7 +7,10 @@ import {
   channelIngressRoutes,
   resolveStableChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  bindIngressLifecycleToReplyOptions,
+  resolveChannelStreamingBlockEnabled,
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   normalizeOptionalString,
   normalizeStringEntries,
@@ -124,6 +127,7 @@ export async function handleNextcloudTalkInbound(params: {
   config: CoreConfig;
   runtime: RuntimeEnv;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  turnAdoptionLifecycle?: Parameters<typeof bindIngressLifecycleToReplyOptions>[0];
 }): Promise<void> {
   const { message, account, config, runtime, statusSink } = params;
   const core = getNextcloudTalkRuntime();
@@ -338,6 +342,7 @@ export async function handleNextcloudTalkInbound(params: {
     conversation: { kind: isGroup ? "group" : "direct", id: roomToken, label: fromLabel },
     route: {
       agentId: route.agentId,
+      dmScope: route.dmScope,
       accountId: route.accountId,
       routeSessionKey: route.sessionKey,
     },
@@ -382,6 +387,9 @@ export async function handleNextcloudTalkInbound(params: {
     },
     replyPipeline: {},
     replyOptions: {
+      ...(params.turnAdoptionLifecycle
+        ? bindIngressLifecycleToReplyOptions(params.turnAdoptionLifecycle)
+        : {}),
       skillFilter: roomConfig?.skills,
       disableBlockStreaming:
         typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : undefined,

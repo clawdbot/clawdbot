@@ -6,7 +6,6 @@ export {
   createThreadBindingManager,
   formatThreadBindingDurationLabel,
   getThreadBindingManager,
-  isRecentlyUnboundThreadWebhookMessage,
   listThreadBindingsBySessionKey,
   listThreadBindingsForAccount,
   reconcileAcpThreadBindingsOnStartup,

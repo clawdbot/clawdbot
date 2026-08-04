@@ -1,5 +1,5 @@
 // Extension relay bridge: CDP target synthesis and extension command routing.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ExtensionRelayBridge } from "./relay-bridge.js";
 import type { ExtensionToRelayMessage, RelayToExtensionMessage } from "./relay-protocol.js";
 
@@ -250,7 +250,7 @@ describe("ExtensionRelayBridge", () => {
 
   it("creates a tab inside the group and returns its synthetic target", async () => {
     const bridge = new ExtensionRelayBridge();
-    const { handlers } = wireExtension(bridge);
+    const { socket, handlers } = wireExtension(bridge);
     sendHello(handlers);
 
     const client = new FakeSocket();
@@ -266,7 +266,67 @@ describe("ExtensionRelayBridge", () => {
 
     const response = client.frames().find((frame) => frame.id === 2);
     expect(response?.result).toMatchObject({ targetId: "target-999" });
+    expect(socket.frames().find((frame) => frame.type === "createTab")).toMatchObject({
+      url: "https://new.test",
+      background: true,
+      focus: false,
+    });
   });
+
+  it("preserves an explicit foreground Target.createTarget request", async () => {
+    const bridge = new ExtensionRelayBridge();
+    const { socket, handlers } = wireExtension(bridge);
+    sendHello(handlers);
+
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+    cdp.onMessage(
+      JSON.stringify({
+        id: 1,
+        method: "Target.createTarget",
+        params: { url: "https://foreground.test", background: false },
+      }),
+    );
+    await flush();
+
+    expect(client.frames().find((frame) => frame.id === 1)?.result).toMatchObject({
+      targetId: "target-999",
+    });
+    expect(socket.frames().find((frame) => frame.type === "createTab")).toMatchObject({
+      url: "https://foreground.test",
+      background: false,
+      focus: true,
+    });
+  });
+
+  it.each([true, false])(
+    "honors an explicit Target.createTarget focus=%s request",
+    async (focus) => {
+      const bridge = new ExtensionRelayBridge();
+      const { socket, handlers } = wireExtension(bridge);
+      sendHello(handlers);
+
+      const client = new FakeSocket();
+      const cdp = bridge.attachCdpClientSocket(client);
+      cdp.onMessage(
+        JSON.stringify({
+          id: 1,
+          method: "Target.createTarget",
+          params: { url: "https://focused.test", focus },
+        }),
+      );
+      await flush();
+
+      expect(client.frames().find((frame) => frame.id === 1)?.result).toMatchObject({
+        targetId: "target-999",
+      });
+      expect(socket.frames().find((frame) => frame.type === "createTab")).toMatchObject({
+        url: "https://focused.test",
+        background: false,
+        focus,
+      });
+    },
+  );
 
   it("emits Target.detachedFromTarget when a shared tab leaves the group", async () => {
     const bridge = new ExtensionRelayBridge();
@@ -388,6 +448,123 @@ describe("ExtensionRelayBridge", () => {
     expect(response?.error).toBeTruthy();
   });
 
+  it("delivers a valid page share and acknowledges success", async () => {
+    const onPageShare = vi.fn(async () => undefined);
+    const bridge = new ExtensionRelayBridge({ onPageShare });
+    const { socket, handlers } = wireExtension(bridge);
+    sendHello(handlers);
+    const payload = {
+      url: "https://example.com/article",
+      title: "Example",
+      content: "Article body",
+    };
+
+    handlers.onMessage(JSON.stringify({ type: "pageShare", requestId: 41, payload }));
+    await flush();
+
+    expect(onPageShare).toHaveBeenCalledWith(payload);
+    expect(socket.frames()).toContainEqual({
+      type: "pageShareResult",
+      requestId: 41,
+      ok: true,
+    });
+  });
+
+  it("returns the delivery error when the page-share handler rejects", async () => {
+    const bridge = new ExtensionRelayBridge({
+      onPageShare: async () => {
+        throw new Error("queue unavailable");
+      },
+    });
+    const { socket, handlers } = wireExtension(bridge);
+    sendHello(handlers);
+
+    handlers.onMessage(
+      JSON.stringify({
+        type: "pageShare",
+        requestId: 42,
+        payload: { url: "https://example.com", title: "Example", content: "Body" },
+      }),
+    );
+    await flush();
+
+    expect(socket.frames()).toContainEqual({
+      type: "pageShareResult",
+      requestId: 42,
+      ok: false,
+      error: "queue unavailable",
+    });
+  });
+
+  it("explains that page shares require a gateway-hosted relay", async () => {
+    const bridge = new ExtensionRelayBridge();
+    const { socket, handlers } = wireExtension(bridge);
+    sendHello(handlers);
+
+    handlers.onMessage(
+      JSON.stringify({
+        type: "pageShare",
+        requestId: 43,
+        payload: { url: "https://example.com", title: "Example", content: "Body" },
+      }),
+    );
+    await flush();
+
+    expect(socket.frames()).toContainEqual({
+      type: "pageShareResult",
+      requestId: 43,
+      ok: false,
+      error:
+        "Send to OpenClaw needs the extension relay hosted by the Gateway (pair on the Gateway host or use direct Gateway pairing). Node-hosted relays are not supported yet.",
+    });
+  });
+
+  it("rejects invalid and oversized page-share payloads before delivery", async () => {
+    const onPageShare = vi.fn(async () => undefined);
+    const bridge = new ExtensionRelayBridge({ onPageShare });
+    const { socket, handlers } = wireExtension(bridge);
+    sendHello(handlers);
+
+    handlers.onMessage(
+      JSON.stringify({
+        type: "pageShare",
+        requestId: 44,
+        payload: { url: "https://example.com", title: 7, content: "Body" },
+      }),
+    );
+    handlers.onMessage(
+      JSON.stringify({
+        type: "pageShare",
+        requestId: 45,
+        payload: {
+          url: "https://example.com",
+          title: "Example",
+          content: "c".repeat(200_000),
+          selection: "s".repeat(100_001),
+        },
+      }),
+    );
+    await flush();
+
+    expect(onPageShare).not.toHaveBeenCalled();
+    expect(socket.frames()).toEqual(
+      expect.arrayContaining([
+        {
+          type: "pageShareResult",
+          requestId: 44,
+          ok: false,
+          error: "Invalid page-share payload.",
+        },
+        {
+          type: "pageShareResult",
+          requestId: 45,
+          ok: false,
+          error: "Invalid page-share payload.",
+        },
+      ]),
+    );
+  });
+
   it("requires a hello frame before other extension messages", () => {
     const bridge = new ExtensionRelayBridge();
     const socket = new FakeSocket();
@@ -395,5 +572,67 @@ describe("ExtensionRelayBridge", () => {
     handlers.onMessage(JSON.stringify({ type: "tabs", tabs: [] }));
     expect(socket.closed).toBe(true);
     expect(bridge.extensionConnected).toBe(false);
+  });
+
+  it("answers the Puppeteer connect bootstrap without protocol errors", async () => {
+    // The exact browser-scoped sequence puppeteer.connect() issues before any
+    // page work (chrome-devtools-mcp --browserUrl/--wsEndpoint rides this).
+    const bridge = new ExtensionRelayBridge();
+    const { handlers } = wireExtension(bridge);
+    sendHello(handlers);
+
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+    const bootstrap: Array<{ id: number; method: string; params?: Record<string, unknown> }> = [
+      { id: 1, method: "Browser.getVersion" },
+      { id: 2, method: "Target.setDiscoverTargets", params: { discover: true } },
+      {
+        id: 3,
+        method: "Target.setAutoAttach",
+        params: { autoAttach: true, waitForDebuggerOnStart: false, flatten: true },
+      },
+      { id: 4, method: "Target.getBrowserContexts" },
+    ];
+    for (const message of bootstrap) {
+      cdp.onMessage(JSON.stringify(message));
+    }
+    await flush();
+
+    for (const message of bootstrap) {
+      const response = client.frames().find((frame) => frame.id === message.id);
+      expect(response, `response for ${message.method}`).toBeTruthy();
+      expect(response?.error, `error for ${message.method}`).toBeUndefined();
+    }
+    const contexts = client.frames().find((frame) => frame.id === 4);
+    // Only createBrowserContext-made contexts belong here; the relay drives the
+    // real profile's default context, so the list is always empty (as in Chrome).
+    expect(contexts?.result).toEqual({ browserContextIds: [] });
+  });
+
+  it("lists shared tabs as DevTools-style target descriptors", async () => {
+    const bridge = new ExtensionRelayBridge();
+    const { handlers } = wireExtension(bridge);
+    sendHello(handlers);
+
+    expect(bridge.devtoolsTargetDescriptors()).toEqual([
+      {
+        tabId: 1,
+        url: "https://example.com",
+        title: "Example",
+        active: true,
+        id: "tab-1",
+        type: "page",
+      },
+    ]);
+
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+    cdp.onMessage(
+      JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } }),
+    );
+    await flush();
+
+    // Once the debugger attaches, descriptors carry the live targetId.
+    expect(bridge.devtoolsTargetDescriptors()[0]).toMatchObject({ id: "target-1", type: "page" });
   });
 });

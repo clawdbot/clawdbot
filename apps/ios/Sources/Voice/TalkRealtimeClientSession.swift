@@ -1,17 +1,21 @@
 import Foundation
 
 struct TalkRealtimeClientCreateParams: Encodable {
+    var sessionKey: String?
+    var voiceSessionId: String?
     var mode = "realtime"
     var provider: String?
     var transport = "webrtc"
     var brain = "agent-consult"
     var model: String?
     var voice: String?
+    var capabilities: [String]
 }
 
 struct TalkRealtimeClientSession: Decodable {
     let provider: String
     let transport: String
+    let voiceSessionId: String?
     let clientSecret: String
     let offerUrl: String?
     let offerHeaders: [String: String]?
@@ -24,6 +28,25 @@ struct TalkRealtimeClientSession: Decodable {
     }
 }
 
+enum TalkRealtimeTranscriptRole: String, Encodable {
+    case user
+    case assistant
+}
+
+struct TalkRealtimeTranscriptParams: Encodable {
+    let sessionKey: String
+    let voiceSessionId: String
+    let entryId: String
+    let role: TalkRealtimeTranscriptRole
+    let text: String
+    let timestamp: Double?
+}
+
+struct TalkRealtimeClientCloseParams: Encodable {
+    let sessionKey: String
+    let voiceSessionId: String
+}
+
 struct TalkRealtimeToolCallResponse: Decodable {
     let runId: String?
     let idempotencyKey: String?
@@ -34,6 +57,7 @@ struct TalkRealtimeServerEvent: Decodable {
     let error: TalkRealtimeServerError?
     let itemId: String?
     let item: TalkRealtimeServerItem?
+    let turn: TalkRealtimeServerTurn?
     let callId: String?
     let name: String?
     let delta: String?
@@ -46,6 +70,7 @@ struct TalkRealtimeServerEvent: Decodable {
         case error
         case itemId = "item_id"
         case item
+        case turn
         case callId = "call_id"
         case name
         case delta
@@ -80,9 +105,16 @@ struct TalkRealtimeServerError: Decodable {
     let message: String?
 }
 
+struct TalkRealtimeServerTurn: Decodable {
+    let id: String?
+    let role: String?
+    let transcript: String?
+}
+
 struct TalkRealtimeServerItem: Decodable {
     let id: String?
     let type: String?
+    let text: String?
     let callId: String?
     let name: String?
     let arguments: String?
@@ -90,6 +122,7 @@ struct TalkRealtimeServerItem: Decodable {
     enum CodingKeys: String, CodingKey {
         case id
         case type
+        case text
         case callId = "call_id"
         case name
         case arguments

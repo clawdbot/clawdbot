@@ -52,7 +52,7 @@ async function startBrowserControlServiceUnlocked(): Promise<BrowserServerState 
   );
   if (hasExtensionProfiles) {
     const { ensureExtensionRelayToken } = await import("./browser/extension-relay/relay-auth.js");
-    ensureExtensionRelayToken();
+    await ensureExtensionRelayToken();
     const refreshed = loadBrowserConfigForRuntimeRefresh();
     resolved = resolveBrowserConfig(refreshed.browser, refreshed);
   }

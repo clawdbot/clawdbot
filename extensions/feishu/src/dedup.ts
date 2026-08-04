@@ -1,8 +1,7 @@
-// Feishu inbound replay protection rides the core claimable dedupe: Feishu
-// redelivers events after reconnects/restarts and multi-account groups receive
-// the same event once per bot, so handlers claim a dedupe key before
-// processing, commit once handling is dispatched, and release on retryable
-// failure so the event can be redelivered.
+// PERMANENT logical-identity guard above durable event_id tombstones. Feishu
+// can redeliver one text message with a fresh message_id/event_id (#46778),
+// and multi-account groups receive one logical broadcast per bot account.
+// Queue tombstones cannot cover either twin; claims commit at turn adoption.
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { feishuDedupeState } from "./dedup-state.js";
 
@@ -13,7 +12,7 @@ export type FeishuMessageProcessingClaim = ChannelReplayClaimHandle;
 type FeishuMessageClaim =
   | { kind: "claimed"; handle: FeishuMessageProcessingClaim }
   | { kind: "duplicate" }
-  | { kind: "inflight" }
+  | { kind: "inflight"; pending: Promise<boolean> }
   | { kind: "invalid" };
 
 function dedupeKey(messageId: string | undefined | null): string {
@@ -49,9 +48,6 @@ export async function claimUnprocessedFeishuMessage(params: {
     params.messageId,
     dedupeOptions(params.namespace, params.log),
   );
-  if (claim.kind === "inflight") {
-    return { kind: "inflight" };
-  }
   return claim;
 }
 
@@ -76,16 +72,6 @@ export async function finalizeFeishuMessageProcessing(params: {
     return false;
   }
   return await ("kind" in claim ? claim.handle : claim).commit();
-}
-
-/** Records a handled message so restart/replay cannot dispatch it again; false when already recorded. */
-export async function recordProcessedFeishuMessage(
-  messageId: string | undefined | null,
-  namespace = "global",
-  log?: FeishuDedupeLog,
-): Promise<boolean> {
-  const claim = await feishuDedupeState.guard.claim(messageId, dedupeOptions(namespace, log));
-  return claim.kind === "claimed" ? await claim.handle.commit() : false;
 }
 
 /** Forgets a recorded message so a retryable synthetic event can be handled on redelivery. */

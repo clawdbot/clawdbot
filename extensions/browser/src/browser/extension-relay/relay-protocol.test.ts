@@ -8,6 +8,20 @@ describe("parseExtensionMessage", () => {
     expect(
       parseExtensionMessage(JSON.stringify({ type: "result", seq: 3, result: { ok: true } })),
     ).toMatchObject({ type: "result", seq: 3 });
+    expect(
+      parseExtensionMessage(
+        JSON.stringify({
+          type: "pageShare",
+          requestId: 7,
+          payload: { url: "https://example.com", title: "Example", content: "Body" },
+        }),
+      ),
+    ).toMatchObject({ type: "pageShare", requestId: 7 });
+    // Frame parsing intentionally recognizes only the discriminator. The bridge
+    // owns payload validation and returns a correlated error.
+    expect(parseExtensionMessage(JSON.stringify({ type: "pageShare" }))).toEqual({
+      type: "pageShare",
+    });
   });
 
   it("rejects malformed or unknown frames", () => {

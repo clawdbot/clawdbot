@@ -16,7 +16,11 @@ import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { danger, warn } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { firstDefined, type NormalizedAllowFrom } from "./bot-access.js";
-import { isRecoverableMediaGroupError } from "./bot-handlers.media.js";
+import {
+  hasInboundMedia,
+  isDurablyRetryableInboundMediaError,
+  isRecoverableMediaGroupError,
+} from "./bot-handlers.media.js";
 import type { TelegramHandlerMessageRuntime } from "./bot-handlers.message.runtime.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
 import type { TelegramAmbientTranscriptWatermark } from "./bot-message-context.types.js";
@@ -24,9 +28,17 @@ import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 import type { TelegramSpooledReplayDeferredParticipant } from "./bot-processing-outcome.js";
 import { MEDIA_GROUP_TIMEOUT_MS, type MediaGroupEntry } from "./bot-updates.js";
 import { resolveMedia } from "./bot/delivery.resolve-media.js";
-import { getTelegramTextParts, hasBotMention } from "./bot/helpers.js";
+import {
+  buildTelegramGroupPeerId,
+  buildTelegramThreadParams,
+  getTelegramTextParts,
+  hasBotMention,
+  resolveTelegramPrimaryMedia,
+  resolveTelegramThreadSpec,
+} from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
+import { resolveTelegramGroupIngestEnabled } from "./group-config-helpers.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
 
@@ -58,6 +70,8 @@ type BufferedMediaGroupEntry = MediaGroupEntry &
     spooledReplayParticipants: TelegramSpooledReplayDeferredParticipant[];
   };
 
+type TelegramGroupMediaDisposition = "process" | "skip" | "silent-ingest";
+
 export function createTelegramInboundMediaGroupRuntime(
   params: Pick<
     RegisterTelegramHandlerParams,
@@ -66,7 +80,6 @@ export function createTelegramInboundMediaGroupRuntime(
     | "opts"
     | "runtime"
     | "mediaMaxBytes"
-    | "telegramCfg"
     | "logger"
     | "resolveGroupActivation"
     | "resolveGroupRequireMention"
@@ -79,7 +92,6 @@ export function createTelegramInboundMediaGroupRuntime(
     opts,
     runtime,
     mediaMaxBytes,
-    telegramCfg,
     logger,
     resolveGroupActivation,
     resolveGroupRequireMention,
@@ -102,16 +114,13 @@ export function createTelegramInboundMediaGroupRuntime(
     typeof opts.testTimings?.mediaGroupFlushMs === "number" &&
     Number.isFinite(opts.testTimings.mediaGroupFlushMs)
       ? Math.max(10, Math.floor(opts.testTimings.mediaGroupFlushMs))
-      : typeof telegramCfg.mediaGroupFlushMs === "number" &&
-          Number.isFinite(telegramCfg.mediaGroupFlushMs)
-        ? Math.max(10, Math.floor(telegramCfg.mediaGroupFlushMs))
-        : MEDIA_GROUP_TIMEOUT_MS;
+      : MEDIA_GROUP_TIMEOUT_MS;
   const buffer = new Map<string, BufferedMediaGroupEntry>();
   const queue = new KeyedAsyncQueue();
 
-  const shouldSkipMediaDownloadForUnaddressedMentionGroup = async (
+  const resolveUnaddressedGroupMediaDisposition = async (
     authorization: MediaAuthorization & { ctx: TelegramContext; msg: Message },
-  ): Promise<boolean> => {
+  ): Promise<TelegramGroupMediaDisposition> => {
     const { ctx, msg, chatId, isGroup, isForum, resolvedThreadId, dmThreadId, senderId } =
       authorization;
     const textParts = getTelegramTextParts(msg);
@@ -119,8 +128,12 @@ export function createTelegramInboundMediaGroupRuntime(
     const mayNeedDownload =
       !textParts.text.trim() &&
       Boolean(msg.audio ?? msg.voice ?? documentMime?.startsWith("audio/"));
-    if (!isGroup || mayNeedDownload) {
-      return false;
+    // Media-less messages have nothing to skip-download. They must reach the
+    // canonical mention gate (bot-message-context.body), which records group
+    // history, fires ingest hooks, and settles an explicit skipped result;
+    // consuming them here tombstones the ingress row without any trace.
+    if (!isGroup || !hasInboundMedia(msg) || mayNeedDownload) {
+      return "process";
     }
     const sessionState = resolveTelegramSessionState({
       chatId,
@@ -144,35 +157,15 @@ export function createTelegramInboundMediaGroupRuntime(
       authorization.groupConfig?.requireMention,
       resolveGroupRequireMention(chatId, authorization.authorizationCfg),
     );
-    if (!requireMention) {
-      return false;
-    }
     const botUsername = ctx.me?.username?.trim().toLowerCase();
-    const mentionRegexes = buildMentionRegexes(
-      authorization.authorizationCfg,
-      sessionState.agentId,
-    );
-    const hasAnyMention = textParts.entities.some((entity) => entity.type === "mention");
-    const explicitlyMentioned = botUsername ? hasBotMention(msg, botUsername) : false;
-    const wasMentioned = matchesMentionWithExplicit({
-      text: textParts.text,
-      mentionRegexes,
-      explicit: {
-        hasAnyMention,
-        isExplicitlyMentioned: explicitlyMentioned,
-        canResolveExplicit: Boolean(botUsername),
-      },
-    });
-    const replyToBotMessage = ctx.me?.id != null && msg.reply_to_message?.from?.id === ctx.me.id;
-    const implicitMentionKinds = implicitMentionKindWhen(
-      "reply_to_bot",
-      replyToBotMessage && !isTelegramForumServiceMessage(msg.reply_to_message),
-    );
     const hasControlCommandInMessage = hasControlCommand(
       textParts.text,
       authorization.authorizationCfg,
       { botUsername },
     );
+    if (!requireMention && !hasControlCommandInMessage) {
+      return "process";
+    }
     const commandGate = await resolveTelegramCommandIngressAuthorization({
       accountId,
       cfg: authorization.authorizationCfg,
@@ -190,6 +183,44 @@ export function createTelegramInboundMediaGroupRuntime(
       modeWhenAccessGroupsOff: "allow",
       includeDmAllowForGroupCommands: false,
     });
+    // Command authorization protects both singleton and album downloads;
+    // requiring a mention must never determine whether unauthorized media is fetched.
+    if (commandGate.shouldBlockControlCommand) {
+      logger.info(
+        { chatId, reason: "unauthorized-control-command" },
+        "skipping group command media before download",
+      );
+      return "skip";
+    }
+    if (!requireMention) {
+      return "process";
+    }
+    const mentionRegexes = buildMentionRegexes(
+      authorization.authorizationCfg,
+      sessionState.agentId,
+      {
+        provider: "telegram",
+        conversationId: buildTelegramGroupPeerId(chatId, resolvedThreadId),
+        providerPolicy:
+          authorization.authorizationCfg.channels?.telegram?.accounts?.[accountId]?.mentionPatterns,
+      },
+    );
+    const hasAnyMention = textParts.entities.some((entity) => entity.type === "mention");
+    const explicitlyMentioned = botUsername ? hasBotMention(msg, botUsername) : false;
+    const wasMentioned = matchesMentionWithExplicit({
+      text: textParts.text,
+      mentionRegexes,
+      explicit: {
+        hasAnyMention,
+        isExplicitlyMentioned: explicitlyMentioned,
+        canResolveExplicit: Boolean(botUsername),
+      },
+    });
+    const replyToBotMessage = ctx.me?.id != null && msg.reply_to_message?.from?.id === ctx.me.id;
+    const implicitMentionKinds = implicitMentionKindWhen(
+      "reply_to_bot",
+      replyToBotMessage && !isTelegramForumServiceMessage(msg.reply_to_message),
+    );
     const decision = resolveInboundMentionDecision({
       facts: {
         canDetectMention: Boolean(botUsername) || mentionRegexes.length > 0,
@@ -206,46 +237,109 @@ export function createTelegramInboundMediaGroupRuntime(
       },
     });
     if (decision.shouldSkip) {
+      if (
+        resolveTelegramGroupIngestEnabled({
+          cfg: authorization.authorizationCfg,
+          chatId,
+          accountId,
+          topicConfig: authorization.topicConfig,
+        })
+      ) {
+        return "silent-ingest";
+      }
       logger.info({ chatId, reason: "no-mention" }, "skipping group media before download");
-      return true;
+      return "skip";
     }
-    return false;
+    return "process";
   };
 
   const processMediaGroup = async (entry: BufferedMediaGroupEntry) => {
     try {
       entry.messages.sort((a, b) => a.msg.message_id - b.msg.message_id);
-      const primary =
+      let primary =
         entry.messages.find((item) => item.msg.caption || item.msg.text) ?? entry.messages[0];
       if (!primary) {
         releaseDispatchDedupeClaims(entry.dispatchDedupeClaims);
         settleSpooledReplayParticipants(entry.spooledReplayParticipants, { kind: "skipped" });
         return;
       }
-      if (await shouldSkipMediaDownloadForUnaddressedMentionGroup({ ...entry, ...primary })) {
+      const captionParts = entry.messages
+        .map(({ msg }) => getTelegramTextParts(msg))
+        .filter(({ text }) => text.trim());
+      if (captionParts.length > 1) {
+        const botUsername = primary.ctx.me?.username;
+        const commandCaptionIndex = captionParts.findIndex(({ text }) =>
+          hasControlCommand(text, entry.authorizationCfg, {
+            botUsername,
+          }),
+        );
+        if (commandCaptionIndex > 0) {
+          // Command detection is prefix-based in both ingress and canonical message processing.
+          const [commandCaption] = captionParts.splice(commandCaptionIndex, 1);
+          if (commandCaption) {
+            captionParts.unshift(commandCaption);
+          }
+        }
+        let caption = "";
+        const captionEntities: NonNullable<Message["caption_entities"]> = [];
+        for (const { text, entities } of captionParts) {
+          if (caption) {
+            caption += "\n";
+          }
+          const offset = caption.length;
+          caption += text;
+          for (const entity of entities) {
+            captionEntities.push({ ...entity, offset: entity.offset + offset });
+          }
+        }
+        const combinedMessage = {
+          ...primary.msg,
+          text: undefined,
+          entities: undefined,
+          caption,
+          caption_entities: captionEntities.length ? captionEntities : undefined,
+        } as Message;
+        // Keep grammY context methods/getters while exposing the complete album to every owner.
+        const combinedContext = Object.create(primary.ctx) as TelegramContext;
+        Object.defineProperty(combinedContext, "message", {
+          value: combinedMessage,
+          enumerable: true,
+        });
+        primary = { ctx: combinedContext, msg: combinedMessage };
+      }
+      const mediaDisposition = await resolveUnaddressedGroupMediaDisposition({
+        ...entry,
+        ...primary,
+      });
+      if (mediaDisposition === "skip") {
         releaseDispatchDedupeClaims(entry.dispatchDedupeClaims);
         settleSpooledReplayParticipants(entry.spooledReplayParticipants, { kind: "skipped" });
         return;
       }
       const allMedia: TelegramMediaRef[] = [];
       const selection = new Map<string, "include" | "exclude">();
+      let materializedCount = 0;
       let skippedCount = 0;
       for (const { ctx, msg } of entry.messages) {
         const sourceMessageId = String(msg.message_id);
+        const nativeKind = resolveTelegramPrimaryMedia(msg)?.kind ?? "document";
         let media;
         try {
           media = await resolveMedia({ ctx, maxBytes: mediaMaxBytes, ...mediaRuntimeWithAbort });
         } catch (error) {
           if (
-            mediaRuntimeWithAbort.abortSignal?.aborted &&
-            entry.spooledReplayParticipants.length
+            entry.spooledReplayParticipants.length > 0 &&
+            (mediaRuntimeWithAbort.abortSignal?.aborted ||
+              isDurablyRetryableInboundMediaError(error))
           ) {
             throw error;
           }
           if (!isRecoverableMediaGroupError(error)) {
             throw error;
           }
+          // Classic polling cannot replay a failed album; retain its existing partial-delivery path.
           runtime.log?.(warn(`media group: skipping photo that failed to fetch: ${String(error)}`));
+          allMedia.push({ kind: nativeKind, sourceMessageId });
           selection.set(sourceMessageId, "exclude");
           skippedCount++;
           continue;
@@ -254,16 +348,19 @@ export function createTelegramInboundMediaGroupRuntime(
           allMedia.push({
             path: media.path,
             contentType: media.contentType,
+            kind: media.kind,
             stickerMetadata: media.stickerMetadata,
             sourceMessageId,
           });
+          materializedCount++;
           selection.set(sourceMessageId, "include");
         } else {
+          allMedia.push({ kind: nativeKind, sourceMessageId });
           selection.set(sourceMessageId, "exclude");
           skippedCount++;
         }
       }
-      if (skippedCount > 0) {
+      if (skippedCount > 0 && mediaDisposition !== "silent-ingest") {
         const verb = skippedCount === 1 ? "was" : "were";
         await withTelegramApiErrorLogging({
           operation: "sendMessage",
@@ -271,8 +368,15 @@ export function createTelegramInboundMediaGroupRuntime(
           fn: () =>
             bot.api.sendMessage(
               primary.msg.chat.id,
-              `⚠️ Received ${allMedia.length} of ${entry.messages.length} images — ${skippedCount} could not be fetched and ${verb} skipped.`,
+              `⚠️ Received ${materializedCount} of ${entry.messages.length} images — ${skippedCount} could not be fetched and ${verb} skipped.`,
               {
+                ...buildTelegramThreadParams(
+                  resolveTelegramThreadSpec({
+                    isGroup: entry.isGroup,
+                    isForum: entry.isForum,
+                    messageThreadId: entry.resolvedThreadId ?? entry.dmThreadId,
+                  }),
+                ),
                 reply_parameters: {
                   message_id: primary.msg.message_id,
                   allow_sending_without_reply: true,
@@ -364,5 +468,5 @@ export function createTelegramInboundMediaGroupRuntime(
     return true;
   };
 
-  return { handleMediaGroup, shouldSkipMediaDownloadForUnaddressedMentionGroup };
+  return { handleMediaGroup, resolveUnaddressedGroupMediaDisposition };
 }

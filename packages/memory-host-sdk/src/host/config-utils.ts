@@ -18,6 +18,7 @@ export { splitShellArgs } from "./openclaw-runtime-io.js";
 
 /** Chat shape used by memory send-policy matching. */
 type ChatType = "direct" | "group" | "channel";
+type DmScope = "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
 /** Memory backend selected by user config. */
 export type MemoryBackend = "builtin" | "qmd";
 /** Citation injection behavior for memory search results. */
@@ -54,32 +55,11 @@ export type MemoryQmdIndexPath = {
   pattern?: string;
 };
 
-/** QMD mcporter daemon integration config. */
-export type MemoryQmdMcporterConfig = {
-  enabled?: boolean;
-  serverName?: string;
-  startDaemon?: boolean;
-};
-
 /** QMD session export config. */
 type MemoryQmdSessionConfig = {
   enabled?: boolean;
   exportDir?: string;
   retentionDays?: number;
-};
-
-/** QMD update, debounce, startup, and timeout config. */
-type MemoryQmdUpdateConfig = {
-  interval?: string;
-  debounceMs?: number;
-  onBoot?: boolean;
-  startup?: MemoryQmdStartupMode;
-  startupDelayMs?: number;
-  waitForBootSync?: boolean;
-  embedInterval?: string;
-  commandTimeoutMs?: number;
-  updateTimeoutMs?: number;
-  embedTimeoutMs?: number;
 };
 
 /** Search and injection limits for QMD memory results. */
@@ -93,14 +73,12 @@ type MemoryQmdLimitsConfig = {
 /** Full QMD-backed memory config. */
 export type MemoryQmdConfig = {
   command?: string;
-  mcporter?: MemoryQmdMcporterConfig;
   searchMode?: MemoryQmdSearchMode;
   rerank?: boolean;
   searchTool?: string;
   includeDefaultMemory?: boolean;
   paths?: MemoryQmdIndexPath[];
   sessions?: MemoryQmdSessionConfig;
-  update?: MemoryQmdUpdateConfig;
   limits?: MemoryQmdLimitsConfig;
   scope?: SessionSendPolicyConfig;
 };
@@ -109,12 +87,14 @@ export type MemoryQmdConfig = {
 type MemoryConfig = {
   backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
+  search?: MemorySearchConfig;
   qmd?: MemoryQmdConfig;
 };
 
 /** Per-agent memory search enablement and extra collection paths. */
 type MemorySearchConfig = {
   enabled?: boolean;
+  rememberAcrossConversations?: boolean;
   extraPaths?: string[];
   qmd?: {
     extraCollections?: MemoryQmdIndexPath[];
@@ -124,7 +104,6 @@ type MemorySearchConfig = {
 /** Agent context limits that bound memory file reads. */
 type AgentContextLimitsConfig = {
   memoryGetMaxChars?: number;
-  memoryGetDefaultLines?: number;
 };
 
 /** Secret reference accepted by provider header config. */
@@ -141,7 +120,9 @@ type AgentConfig = {
   id?: string;
   default?: boolean;
   workspace?: string;
-  memorySearch?: MemorySearchConfig;
+  memory?: {
+    search?: MemorySearchConfig;
+  };
   contextLimits?: AgentContextLimitsConfig;
 };
 
@@ -150,11 +131,15 @@ export type OpenClawConfig = {
   agents?: {
     defaults?: {
       workspace?: string;
-      memorySearch?: MemorySearchConfig;
       contextLimits?: AgentContextLimitsConfig;
     };
+    entries?: Record<string, Omit<AgentConfig, "id">>;
     list?: AgentConfig[];
   };
+  session?: {
+    dmScope?: DmScope;
+  };
+  bindings?: unknown[];
   memory?: MemoryConfig;
   models?: {
     providers?: Record<
@@ -167,6 +152,31 @@ export type OpenClawConfig = {
     >;
   };
 };
+
+export function resolveRememberAcrossConversations(cfg: OpenClawConfig, agentId: string): boolean {
+  const defaults = cfg.memory?.search;
+  const overrides = resolveAgentConfig(cfg, agentId)?.memory?.search;
+  const explicit = overrides?.rememberAcrossConversations ?? defaults?.rememberAcrossConversations;
+  if (explicit !== undefined) {
+    return explicit;
+  }
+  // Recall is per-agent/private-shaped, not per-sender. Any DM isolation signals a
+  // multi-user install, where silently recalling across senders would leak context.
+  return (
+    (cfg.session?.dmScope === undefined || cfg.session.dmScope === "main") &&
+    !cfg.bindings?.some((binding) => {
+      if (!binding || typeof binding !== "object") {
+        return false;
+      }
+      const session = (binding as { session?: unknown }).session;
+      return (
+        Boolean(session) &&
+        typeof session === "object" &&
+        (session as { dmScope?: unknown }).dmScope !== undefined
+      );
+    })
+  );
+}
 
 /** Root memory filename used in agent workspaces. */
 export const MEMORY_HOST_ROOT_FILENAME = "MEMORY.md";
@@ -225,6 +235,22 @@ function legacyStateDirs(homedir: () => string): string[] {
   return LEGACY_STATE_DIRNAMES.map((dir) => path.join(homedir(), dir));
 }
 
+function isFastTestRuntimeEnv(env: NodeJS.ProcessEnv): boolean {
+  const isTestRuntime =
+    env.VITEST === "true" ||
+    env.VITEST === "1" ||
+    env.VITEST_POOL_ID !== undefined ||
+    env.VITEST_WORKER_ID !== undefined ||
+    env.NODE_ENV === "test" ||
+    (env !== process.env &&
+      (process.env.VITEST === "true" ||
+        process.env.VITEST === "1" ||
+        process.env.VITEST_POOL_ID !== undefined ||
+        process.env.VITEST_WORKER_ID !== undefined ||
+        process.env.NODE_ENV === "test"));
+  return isTestRuntime && env.OPENCLAW_TEST_FAST === "1";
+}
+
 /** Resolve the current state root while preserving shipped legacy installs when present. */
 function resolveStateDir(
   env: NodeJS.ProcessEnv = process.env,
@@ -236,10 +262,10 @@ function resolveStateDir(
   }
   const effectiveHome = () => resolveRequiredHomeDir(env, homedir);
   const nextDir = path.join(effectiveHome(), NEW_STATE_DIRNAME);
-  if (env.OPENCLAW_TEST_FAST === "1" || fs.existsSync(nextDir)) {
+  if (isFastTestRuntimeEnv(env) || fs.existsSync(nextDir)) {
     return nextDir;
   }
-  // Existing legacy state remains authoritative until an explicit migration creates .openclaw.
+  // Remove after 2026-10-01: drop legacy state-dir precedence once an explicit migration creates .openclaw.
   const existingLegacy = legacyStateDirs(effectiveHome).find((dir) => {
     try {
       return fs.existsSync(dir);
@@ -262,6 +288,9 @@ function resolveDefaultAgentWorkspaceDir(env: NodeJS.ProcessEnv = process.env): 
 
 /** Return configured agent entries after dropping nullish placeholders. */
 function listAgentEntries(cfg: OpenClawConfig): AgentConfig[] {
+  if (cfg.agents?.entries) {
+    return Object.entries(cfg.agents.entries).map(([id, entry]) => Object.assign({ id }, entry));
+  }
   return Array.isArray(cfg.agents?.list)
     ? cfg.agents.list.filter((entry): entry is AgentConfig => Boolean(entry))
     : [];
@@ -327,9 +356,9 @@ export function resolveMemoryHostAgentContextLimits(
 export function resolveMemoryHostSearchPathConfig(
   cfg: OpenClawConfig,
   agentId: string,
-): { enabled: boolean; extraPaths: string[] } | null {
-  const defaults = cfg.agents?.defaults?.memorySearch;
-  const overrides = resolveAgentConfig(cfg, agentId)?.memorySearch;
+): { enabled: boolean; rememberAcrossConversations: boolean; extraPaths: string[] } | null {
+  const defaults = cfg.memory?.search;
+  const overrides = resolveAgentConfig(cfg, agentId)?.memory?.search;
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
   if (!enabled) {
     return null;
@@ -340,6 +369,7 @@ export function resolveMemoryHostSearchPathConfig(
   ]);
   return {
     enabled,
+    rememberAcrossConversations: resolveRememberAcrossConversations(cfg, agentId),
     extraPaths: uniqueStrings(rawPaths),
   };
 }

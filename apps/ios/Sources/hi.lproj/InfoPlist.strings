@@ -1,4 +1,3 @@
-"CFBundleDisplayName" = "$(OPENCLAW_APP_DISPLAY_NAME)";
 /* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
 "NSCalendarsFullAccessUsageDescription" = "जब आप कैलेंडर एक्सेस सक्षम करते हैं, तो OpenClaw इवेंट और शेड्यूलिंग संदर्भ दिखाने के लिए आपके कैलेंडर का उपयोग करता है.";
 /* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
@@ -19,10 +18,10 @@
 "NSMicrophoneUsageDescription" = "OpenClaw माइक्रोफ़ोन का उपयोग रियलटाइम चैट, वॉइस वेक, पुश-टू-टॉक और वॉइस नोट्स के लिए करता है।";
 /* OpenClaw source: "OpenClaw may use motion data to support device-aware interactions and automations." */
 "NSMotionUsageDescription" = "OpenClaw device-aware इंटरैक्शन और ऑटोमेशन का समर्थन करने के लिए motion data का उपयोग कर सकता है.";
-/* OpenClaw source: "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider." */
-"NSHealthShareUsageDescription" = "स्वास्थ्य सारांश चालू करने के बाद, OpenClaw अनुरोधित समेकित डेटा को आपके कॉन्फ़िगर किए गए AI प्रदाता के साथ साझा करने के लिए कदम, नींद, आराम की हृदय गति और वर्कआउट पढ़ता है।";
-/* OpenClaw source: "OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider." */
-"NSHealthUpdateUsageDescription" = "OpenClaw हेल्थ डेटा को लिखता या बदलता नहीं है। Health Summaries आपके कॉन्फ़िगर किए गए AI प्रदाता के साथ अनुरोधित समुच्चय साझा करने के लिए कदम, नींद, विश्राम हृदय गति और वर्कआउट पढ़ता है।";
+/* OpenClaw source: "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider." */
+"NSHealthShareUsageDescription" = "OpenClaw आपके अनुरोधित सारांश बनाने के लिए Apple Health ऐप से आपके कदमों, नींद, आराम की हृदय गति और वर्कआउट को पढ़ता है और उन्हें आपके Gateway के माध्यम से आपके कॉन्फ़िगर किए गए AI प्रदाता को भेजता है।";
+/* OpenClaw source: "OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider." */
+"NSHealthUpdateUsageDescription" = "OpenClaw Apple Health ऐप में कुछ भी नहीं लिखता है। यह आपके अनुरोधित सारांश बनाने के लिए केवल-पढ़ने योग्य डेटा का उपयोग करता है और उन्हें आपके Gateway के माध्यम से आपके कॉन्फ़िगर किए गए AI प्रदाता को भेजता है।";
 /* OpenClaw source: "OpenClaw lets your assistant read photos you allow and lets you choose photos to share." */
 "NSPhotoLibraryUsageDescription" = "OpenClaw आपके असिस्टेंट को आपकी अनुमति वाली फ़ोटो पढ़ने देता है और आपको साझा करने के लिए फ़ोटो चुनने देता है।";
 /* OpenClaw source: "OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access." */

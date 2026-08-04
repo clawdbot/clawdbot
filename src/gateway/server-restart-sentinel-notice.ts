@@ -7,23 +7,38 @@ import {
   isProvenDeliveryNotSentError,
 } from "../infra/delivery-recovery.shared.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { OUTBOUND_DELIVERY_LOG_SCOPE } from "../infra/outbound/deliver-log.js";
+import { prepareOutboundPayloadBatch } from "../infra/outbound/deliver-prepare.js";
+import { stageAndEnqueueOutboundDelivery } from "../infra/outbound/deliver-queue-admission.js";
+import type { OutboundDeliveryResult } from "../infra/outbound/deliver-types.js";
 import { deliverOutboundPayloadsInternal } from "../infra/outbound/deliver.js";
+import { runOutboundDeliveryCommitHooks } from "../infra/outbound/delivery-commit-hooks.js";
+import {
+  withStableDeliveryPreparation,
+  type StableDeliveryPreparationOwner,
+} from "../infra/outbound/delivery-queue-preparation.js";
 import {
   failPendingDelivery,
+  findDeliveryIntentOwner,
   loadPendingDelivery,
   reserveDeliveryAttempt,
 } from "../infra/outbound/delivery-queue-storage.js";
 import {
   ackDelivery,
   drainPendingDeliveries,
-  enqueueDeliveryOnce,
   failDelivery,
   failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend,
   withActiveDeliveryClaim,
 } from "../infra/outbound/delivery-queue.js";
+import {
+  createMessageSentEmitter,
+  type MessageSentEvent,
+} from "../infra/outbound/message-sent-hook.js";
+import { acceptedPreparedOutboundEntries } from "../infra/outbound/prepared-batch.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 
 const log = createSubsystemLogger("gateway/restart-sentinel");
 const RESTART_NOTICE_RECOVERY_DELAY_MS = process.env.VITEST ? 1 : 1_000;
@@ -38,27 +53,106 @@ type RestartSentinelNoticeRoute = {
   threadId?: string;
 };
 
+type RestartSentinelNoticeEnqueueResult = { id: string; created: boolean };
+
+// Duplicate gateway startup paths share the same producer outcome. A caller
+// must not report durable custody while the first producer has no queue row.
+const activeRestartNoticeEnqueues = new Map<string, Promise<RestartSentinelNoticeEnqueueResult>>();
+
 export async function enqueueRestartSentinelNotice(
   params: RestartSentinelNoticeRoute & {
+    cfg: OpenClawConfig;
     message: string;
     sessionKey: string;
     revision: number;
   },
-): Promise<{ id: string; created: boolean }> {
-  return await enqueueDeliveryOnce(
-    {
-      channel: params.channel,
-      to: params.to,
-      accountId: params.accountId,
-      replyToId: params.replyToId,
-      threadId: params.threadId,
-      payloads: [{ text: params.message }],
-      bestEffort: false,
-      completionRetention: "permanent",
-      maxRetries: RESTART_NOTICE_MAX_ATTEMPTS,
-    },
-    `restart-sentinel-notice:${params.sessionKey}:${params.revision}`,
-  );
+): Promise<RestartSentinelNoticeEnqueueResult> {
+  const deliveryIntentId = `restart-sentinel-notice:${params.sessionKey}:${params.revision}`;
+  const active = activeRestartNoticeEnqueues.get(deliveryIntentId);
+  if (active) {
+    await active;
+    return { id: deliveryIntentId, created: false };
+  }
+  const enqueue = enqueueRestartSentinelNoticeOwned(params, deliveryIntentId);
+  activeRestartNoticeEnqueues.set(deliveryIntentId, enqueue);
+  try {
+    return await enqueue;
+  } finally {
+    if (activeRestartNoticeEnqueues.get(deliveryIntentId) === enqueue) {
+      activeRestartNoticeEnqueues.delete(deliveryIntentId);
+    }
+  }
+}
+
+async function enqueueRestartSentinelNoticeOwned(
+  params: RestartSentinelNoticeRoute & {
+    cfg: OpenClawConfig;
+    message: string;
+    sessionKey: string;
+    revision: number;
+  },
+  deliveryIntentId: string,
+): Promise<RestartSentinelNoticeEnqueueResult> {
+  const claim = await withActiveDeliveryClaim(deliveryIntentId, async () => {
+    const preparation = await withStableDeliveryPreparation({
+      id: deliveryIntentId,
+      run: async (owner) =>
+        await enqueueRestartSentinelNoticeClaimed(params, deliveryIntentId, owner),
+    });
+    if (preparation.status === "claimed") {
+      return preparation.value;
+    }
+    if (findDeliveryIntentOwner(deliveryIntentId)) {
+      return { id: deliveryIntentId, created: false };
+    }
+    throw new Error(`Restart sentinel notice has an active producer without durable custody`);
+  });
+  if (claim.status === "claimed") {
+    return claim.value;
+  }
+  if (findDeliveryIntentOwner(deliveryIntentId)) {
+    return { id: deliveryIntentId, created: false };
+  }
+  throw new Error(`Restart sentinel notice has an active producer without durable custody`);
+}
+
+async function enqueueRestartSentinelNoticeClaimed(
+  params: RestartSentinelNoticeRoute & {
+    cfg: OpenClawConfig;
+    message: string;
+    sessionKey: string;
+    revision: number;
+  },
+  deliveryIntentId: string,
+  preparationOwner: StableDeliveryPreparationOwner,
+): Promise<RestartSentinelNoticeEnqueueResult> {
+  const delivery = {
+    cfg: params.cfg,
+    channel: params.channel,
+    to: params.to,
+    accountId: params.accountId,
+    replyToId: params.replyToId,
+    threadId: params.threadId,
+    payloads: [{ text: params.message }],
+    session: buildOutboundSessionContext({ cfg: params.cfg, sessionKey: params.sessionKey }),
+    bestEffort: false,
+    queuePolicy: "required" as const,
+    completionRetention: "permanent" as const,
+    maxRetries: RESTART_NOTICE_MAX_ATTEMPTS,
+    deliveryIntentId,
+  };
+  const preparedBatch = await prepareOutboundPayloadBatch(delivery, {
+    onBeforeFirstModifier: preparationOwner.beforeFirstModifier,
+  });
+  preparationOwner.markPrepared();
+  const queued = await stageAndEnqueueOutboundDelivery(delivery, preparedBatch, {
+    getStablePreparation: preparationOwner.current,
+  });
+  if (!queued?.created) {
+    throw new Error("Restart sentinel notice could not acquire durable queue custody");
+  }
+  preparationOwner.markPublished();
+  return queued;
 }
 
 async function waitForRecoveryDrain(): Promise<void> {
@@ -143,6 +237,28 @@ export async function deliverRestartSentinelNotice(
     queueId: string;
   },
 ): Promise<void> {
+  const messageSentEvents: MessageSentEvent[] = [];
+  const flushTerminalObservers = async (
+    results: readonly OutboundDeliveryResult[],
+    runId?: string,
+  ): Promise<void> => {
+    const { emitMessageSent } = createMessageSentEmitter({
+      hookRunner: getGlobalHookRunner(),
+      channel: params.channel,
+      to: params.to,
+      accountId: params.accountId,
+      sessionKeyForInternalHooks: params.sessionKey,
+      runId,
+      logPrefix: OUTBOUND_DELIVERY_LOG_SCOPE,
+    });
+    for (const event of messageSentEvents) {
+      emitMessageSent(event);
+    }
+    messageSentEvents.length = 0;
+    if (results.length > 0) {
+      await runOutboundDeliveryCommitHooks(results);
+    }
+  };
   const claim = await withActiveDeliveryClaim(params.queueId, async () => {
     try {
       const reservation = await reserveDeliveryAttempt(params.queueId, RESTART_NOTICE_MAX_ATTEMPTS);
@@ -161,6 +277,14 @@ export async function deliverRestartSentinelNotice(
       return false;
     }
     try {
+      const pending = await loadPendingDelivery(params.queueId);
+      if (!pending) {
+        return true;
+      }
+      const session = buildOutboundSessionContext({
+        cfg: params.cfg,
+        sessionKey: params.sessionKey,
+      });
       const send = await sendDurableMessageBatch({
         cfg: params.cfg,
         channel: params.channel,
@@ -168,26 +292,35 @@ export async function deliverRestartSentinelNotice(
         accountId: params.accountId,
         replyToId: params.replyToId,
         threadId: params.threadId,
-        payloads: [{ text: params.message }],
-        session: buildOutboundSessionContext({ cfg: params.cfg, sessionKey: params.sessionKey }),
+        payloads: acceptedPreparedOutboundEntries(pending.preparedBatch).map(
+          (entry) => entry.payload,
+        ),
+        preparedBatch: pending.preparedBatch,
+        session,
         deps: params.deps,
         bestEffort: false,
         skipQueue: true,
         deliveryQueueId: params.queueId,
+        deferCommitHooks: true,
+        onMessageSentEvent: (event) => messageSentEvents.push(event),
       });
       if (send.status === "failed" || send.status === "partial_failed") {
         throw send.error;
       }
       const results = send.status === "sent" ? send.results : [];
-      if (results.length === 0) {
+      if (send.status === "sent" && results.length === 0) {
         throw new Error("outbound delivery returned no results");
       }
       try {
         await ackDelivery(params.queueId);
+        await flushTerminalObservers(results, pending.preparedBatch.runId);
         return true;
       } catch (err) {
         const error = formatErrorMessage(err);
-        await failDeliveryAfterPlatformSend(params.queueId, error).catch(() => undefined);
+        await (results.length > 0 ? failDeliveryAfterPlatformSend : failDelivery)(
+          params.queueId,
+          error,
+        ).catch(() => undefined);
         log.warn(`${params.summary}: outbound delivery ack failed; queued for recovery: ${error}`, {
           channel: params.channel,
           to: params.to,
@@ -205,12 +338,15 @@ export async function deliverRestartSentinelNotice(
         try {
           const pending = await loadPendingDelivery(params.queueId);
           if (pending) {
-            await failPendingDelivery({
+            const settled = await failPendingDelivery({
               id: params.queueId,
               expectedStatus: "pending",
               lastError: error,
               entry: pending,
             });
+            if (settled.status === "failed") {
+              await flushTerminalObservers([], pending.preparedBatch.runId);
+            }
           }
         } catch (persistError) {
           log.warn(

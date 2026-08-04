@@ -1,0 +1,111 @@
+title: Tool-loop global circuit breaker
+
+scenario:
+  id: tool-loop-global-breaker
+  surface: runtime
+  coverage:
+    primary:
+      - automation.no-progress-loop-detection
+    secondary:
+      - agent-runtime.failure-recovery-retry-policy
+  gatewayConfigPatch:
+    tools:
+      loopDetection:
+        enabled: true
+  objective: Verify repeated critical tool-loop vetoes advance through the real agent loop to the global circuit breaker instead of stalling until the turn timeout.
+  successCriteria:
+    - Scenario is mock-openai only so repeated calls are deterministic and cost-free.
+    - The real Gateway agent loop admits 20 identical reads, then records typed loop vetoes while the model keeps retrying.
+    - The 31st read attempt is rejected by the global circuit breaker and the Gateway logs that terminal detector.
+    - The model receives the global-breaker result and returns the exact final marker before the turn timeout.
+  docsRefs:
+    - docs/tools/loop-detection.md
+    - docs/help/testing.md
+  codeRefs:
+    - src/agents/tool-loop-detection.ts
+    - src/agents/tool-loop-no-progress.ts
+    - src/agents/agent-tools.before-tool-call.policy.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
+  execution:
+    kind: flow
+    summary: Drive repeated identical reads through the real Gateway agent loop until typed vetoes reach the global circuit breaker.
+    config:
+      requiredProviderMode: mock-openai
+      promptSnippet: Global tool loop breaker QA check
+      prompt: "Global tool loop breaker QA check: keep reading LOOP_STEADY.txt until the runtime blocks the loop globally, then reply with exactly GLOBAL-LOOP-BREAKER-OK."
+      expectedReply: GLOBAL-LOOP-BREAKER-OK
+      expectedReadAttempts: 31
+      breakerLogNeedle: Global circuit breaker triggered
+      fixtureFile: LOOP_STEADY.txt
+
+flow:
+  steps:
+    - name: reaches the global breaker and finishes the agent turn
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: this seeded scenario is mock-openai only
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - call: fs.writeFile
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, config.fixtureFile)"
+            - steady loop output
+            - utf8
+        - set: logCursor
+          value:
+            expr: markGatewayLogCursor()
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: sessionKey
+          value:
+            expr: "`agent:qa:tool-loop-breaker:${randomUUID().slice(0, 8)}`"
+        - call: runAgentPrompt
+          args:
+            - ref: env
+            - sessionKey:
+                ref: sessionKey
+              message:
+                expr: config.prompt
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 120000)
+        - call: waitForOutboundMessage
+          saveAs: outbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.conversation.id === 'qa-operator' && candidate.text.includes(config.expectedReply)"
+            - expr: liveTurnTimeoutMs(env, 30000)
+        - set: transcript
+          value:
+            expr: "await readSessionTranscriptSummary(env, sessionKey)"
+        - set: scenarioRequests
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet))"
+        - set: readRequests
+          value:
+            expr: "scenarioRequests.filter((request) => request.plannedToolName === 'read')"
+        - set: breakerLog
+          value:
+            expr: "String(readGatewayLogs() ?? '').slice(logCursor)"
+        - set: breakerLine
+          value:
+            expr: "(breakerLog.split('\\n').find((line) => line.includes(config.breakerLogNeedle)) ?? '').trim()"
+        - assert:
+            expr: "outbound.text.includes(config.expectedReply) && transcript.finalText.includes(config.expectedReply)"
+            message:
+              expr: "`agent turn did not finish with ${config.expectedReply}; outbound=${outbound.text} final=${transcript.finalText}`"
+        - assert:
+            expr: "readRequests.length === config.expectedReadAttempts && transcript.assistantToolCallCounts.read === config.expectedReadAttempts"
+            message:
+              expr: "`expected ${config.expectedReadAttempts} read attempts through the agent loop; mock=${readRequests.length} transcript=${String(transcript.assistantToolCallCounts.read ?? 0)}`"
+        - assert:
+            expr: "breakerLog.includes(config.breakerLogNeedle)"
+            message:
+              expr: "`expected Gateway log containing ${config.breakerLogNeedle}`"
+      detailsExpr: "`status=pass reads=${readRequests.length} final=${transcript.finalText.trim()} breaker=${breakerLine}`"

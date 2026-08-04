@@ -9,6 +9,7 @@ type WorkspaceRoot = Awaited<ReturnType<typeof fsSafeRoot>>;
 type WorkspacePathStat = Awaited<ReturnType<WorkspaceRoot["stat"]>>;
 export type WorkspaceDirEntry = WorkspacePathStat & { name: string };
 type WorkspaceFileReadResult = ReadResult & { canonicalPath: string };
+type WorkspaceFilePrefixResult = Pick<ReadResult, "buffer" | "stat"> & { canonicalPath: string };
 
 /** Shared preview cap: keeps file payloads comfortably under client WS limits. */
 export const WORKSPACE_PREVIEW_MAX_BYTES = 256 * 1024;
@@ -82,6 +83,44 @@ export async function readWorkspaceFile(
     if (err instanceof FsSafeError && err.code === "too-large") {
       return "too-large";
     }
+    return undefined;
+  }
+}
+
+/** Reads only a bounded prefix after fs-safe opens and verifies the file identity. */
+export async function readWorkspaceFilePrefix(
+  rootDir: string,
+  browserPath: string,
+  maxBytes: number,
+): Promise<WorkspaceFilePrefixResult | undefined> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+    return undefined;
+  }
+  const workspaceRoot = await openWorkspaceRoot(rootDir);
+  if (!workspaceRoot) {
+    return undefined;
+  }
+  try {
+    const opened = await workspaceRoot.open(browserPath, {
+      hardlinks: "reject",
+      nonBlockingRead: true,
+      symlinks: "reject",
+    });
+    try {
+      const buffer = Buffer.allocUnsafe(Math.min(maxBytes, opened.stat.size));
+      const { bytesRead } = await opened.handle.read(buffer, 0, buffer.byteLength, 0);
+      return {
+        buffer: buffer.subarray(0, bytesRead),
+        canonicalPath: path
+          .relative(workspaceRoot.rootReal, opened.realPath)
+          .split(path.sep)
+          .join("/"),
+        stat: opened.stat,
+      };
+    } finally {
+      await opened.handle.close();
+    }
+  } catch {
     return undefined;
   }
 }

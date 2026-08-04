@@ -1,7 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import { scheduleGatewayIdleTask } from "./server-idle-task.js";
 
 const CONTEXT_CACHE_PREWARM_START_DELAY_MS = 5_000;
+const CONTEXT_CACHE_PREWARM_RETRY_DELAY_MS = 250;
 
 type StartupTrace = {
   measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
@@ -17,7 +19,6 @@ export function scheduleContextCachePrewarm(params: {
   log: { warn: (msg: string) => void };
 }): ContextCachePrewarmHandle {
   let stopped = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
   const warm = async () => {
     if (stopped) {
       return;
@@ -30,25 +31,23 @@ export function scheduleContextCachePrewarm(params: {
 
   // Source-backed provider discovery can consume the main thread. Give
   // readiness probes and immediate client work a clean event-loop window.
-  timer = setTimeout(() => {
-    timer = undefined;
-    void runWithGatewayIndependentRootWorkAdmission(() =>
+  const idleTask = scheduleGatewayIdleTask({
+    delayMs: CONTEXT_CACHE_PREWARM_START_DELAY_MS,
+    retryDelayMs: CONTEXT_CACHE_PREWARM_RETRY_DELAY_MS,
+    isClosing: () => stopped,
+    isBusy: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0,
+    run: () =>
       params.startupTrace
         ? params.startupTrace.measure("post-ready.context-window-cache", warm)
         : warm(),
-    ).catch((err: unknown) => {
-      params.log.warn(`post-ready.context-window-cache failed after gateway ready: ${String(err)}`);
-    });
-  }, CONTEXT_CACHE_PREWARM_START_DELAY_MS);
-  timer.unref?.();
+    log: params.log,
+    errorMessage: "post-ready.context-window-cache failed after gateway ready",
+  });
 
   return {
     stop: () => {
       stopped = true;
-      if (timer) {
-        clearTimeout(timer);
-        timer = undefined;
-      }
+      idleTask.stop();
     },
   };
 }

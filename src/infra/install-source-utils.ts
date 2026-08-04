@@ -14,6 +14,7 @@ import { resolveUserPath } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
 import { applyNpmFreshnessBypassEnv, type NpmProjectInstallEnvOptions } from "./npm-install-env.js";
+import { resolveNpmJsonEntries } from "./npm-registry-spec.js";
 import { withTempWorkspace } from "./private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
@@ -283,7 +284,7 @@ function parseNpmPackJsonOutput(
       continue;
     }
 
-    const entries = Array.isArray(parsed) ? parsed : [parsed];
+    const entries = resolveNpmJsonEntries(parsed);
     let fallback: { filename?: string; metadata: NpmSpecResolution } | null = null;
     for (let i = entries.length - 1; i >= 0; i -= 1) {
       const normalized = normalizeNpmPackEntry(entries[i]);

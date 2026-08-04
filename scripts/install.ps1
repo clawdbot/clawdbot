@@ -409,11 +409,11 @@ function Resolve-PortableNodeDownload {
     $requestTimeouts = Get-WebRequestTimeoutParameters -CommandName "Invoke-RestMethod" -LegacyTimeoutSec 30
     $index = Invoke-RestMethod -Uri "https://nodejs.org/dist/index.json" @requestTimeouts
     $release = $index |
-        Where-Object { $_.version -match '^v24\.' } |
+        Where-Object { $_.version -match '^v26\.' } |
         Select-Object -First 1
 
     if (-not $release -or -not $release.version) {
-        throw "Could not resolve latest Node.js 24 release metadata."
+        throw "Could not resolve latest Node.js 26 release metadata."
     }
 
     $fileKey = "win-$architecture-zip"
@@ -579,7 +579,7 @@ function Install-Node {
     Write-Host ""
     Write-Host "Error: Could not install Node.js automatically." -ForegroundColor Red
     Write-Host ""
-    Write-Host "Please install Node.js 24.15+ manually:" -ForegroundColor Yellow
+    Write-Host "Please install Node.js 26 manually:" -ForegroundColor Yellow
     Write-Host "  https://nodejs.org/en/download/" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "Or install winget (App Installer) from the Microsoft Store." -ForegroundColor Gray
@@ -1459,6 +1459,24 @@ function Install-OpenClaw {
 }
 
 # Install OpenClaw from GitHub
+function Assert-GitCheckoutHasCommit {
+    param([string]$RepoDir)
+
+    $gitDir = Join-Path $RepoDir ".git"
+    if (-not (Test-Path -LiteralPath $gitDir -PathType Container)) {
+        return
+    }
+
+    $hasHead = $false
+    try {
+        git "--git-dir=$gitDir" "--work-tree=$RepoDir" rev-parse --verify --quiet "HEAD^{commit}" 2>$null | Out-Null
+        $hasHead = ($LASTEXITCODE -eq 0)
+    } catch {}
+    if (-not $hasHead) {
+        throw "Git checkout has no commit: $RepoDir. Move or remove this incomplete checkout, then retry."
+    }
+}
+
 function Install-OpenClawFromGit {
     param(
         [string]$RepoDir,
@@ -1471,6 +1489,7 @@ function Install-OpenClawFromGit {
     $repoUrl = "https://github.com/openclaw/openclaw.git"
     Write-Host "[*] Installing OpenClaw from GitHub ($repoUrl)..." -ForegroundColor Yellow
 
+    Assert-GitCheckoutHasCommit -RepoDir $RepoDir
     if (-not (Test-Path $RepoDir)) {
         git clone $repoUrl $RepoDir
     }
@@ -1538,7 +1557,8 @@ function Install-OpenClawFromGit {
             Write-Host "[!] pnpm install failed for the Git checkout" -ForegroundColor Red
             return $false
         }
-        if (-not (& $pnpmCommand ui:build)) {
+        & $pnpmCommand ui:build
+        if ($LASTEXITCODE -ne 0) {
             Write-Host "[!] UI build failed; continuing (CLI may still work)" -ForegroundColor Yellow
         }
         $env:NODE_OPTIONS = Resolve-NodeOptionsWithMinOldSpace -NodeOptions $prevNodeOptions -MinOldSpaceMb 8192

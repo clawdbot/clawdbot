@@ -1,3 +1,4 @@
+import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import type { MessagePresentation } from "../interactive/payload.js";
 
 /**
@@ -7,6 +8,7 @@ import type { MessagePresentation } from "../interactive/payload.js";
 export type BlockReplyPayload = {
   text?: string;
   mediaUrls?: string[];
+  attachments?: ReplyMediaAttachment[];
   audioAsVoice?: boolean;
   trustedLocalMedia?: boolean;
   sensitiveMedia?: boolean;
@@ -18,4 +20,8 @@ export type BlockReplyPayload = {
   replyToCurrent?: boolean;
   /** Portable controls attached to a harness-owned blocking prompt. */
   presentation?: MessagePresentation;
+  /** Runtime-authored text is the fallback for the portable presentation. */
+  presentationTextMode?: "fallback";
+  /** Channel-specific routing metadata for runtime-owned interactions. */
+  channelData?: Record<string, unknown>;
 };

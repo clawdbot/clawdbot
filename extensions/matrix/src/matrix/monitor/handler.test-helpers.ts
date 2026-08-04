@@ -174,7 +174,7 @@ export function createMatrixHandlerTestHarness(
       prepared.markRunComplete();
       prepared.markDispatchIdle();
     }
-  }) as NonNullable<MatrixMonitorHandlerParams["dispatchInboundMessageWithBufferedDispatcher"]>;
+  }) as typeof import("openclaw/plugin-sdk/reply-runtime").dispatchInboundMessageWithBufferedDispatcher;
   const createChannelInboundEnvelopeBuilder = (() => (input: { body: string }) =>
     (options.formatAgentEnvelope ?? (({ body }: { body: string }) => body))({
       body: input.body,
@@ -192,6 +192,7 @@ export function createMatrixHandlerTestHarness(
         updateLastRoute: turn.record?.updateLastRoute,
         onRecordError: turn.record?.onRecordError ?? (() => undefined),
       });
+      await turn.afterRecord?.();
       const dispatchResult = await turn.runDispatch();
       return {
         admission: { kind: "dispatch" as const },
@@ -219,19 +220,34 @@ export function createMatrixHandlerTestHarness(
           ? { admission: preflightResult }
           : (preflightResult ?? {});
       const turn = await params.adapter.resolveTurn(input, eventClass, preflight);
-      if ("runDispatch" in turn) {
-        const preparedTurn =
-          "route" in turn
-            ? ({
-                ...turn,
-                routeSessionKey: turn.route.sessionKey,
-                storePath: "/tmp/matrix-sessions.json",
-                recordInboundSession,
-              } as PreparedInboundReply<unknown>)
-            : turn;
-        return await runPrepared(preparedTurn);
+      if (!("route" in turn) || !("delivery" in turn)) {
+        throw new Error("expected assembled Matrix channel turn plan");
       }
-      throw new Error("matrix test helper only supports prepared turn dispatch");
+      return await runPrepared({
+        channel: turn.channel,
+        accountId: turn.accountId,
+        routeSessionKey: turn.route.sessionKey,
+        storePath: "/tmp/matrix-sessions.json",
+        ctxPayload: turn.ctxPayload,
+        recordInboundSession,
+        afterRecord: turn.afterRecord,
+        record: turn.record,
+        history: turn.history,
+        admission: turn.admission,
+        botLoopProtection: turn.botLoopProtection,
+        runDispatch: async () =>
+          await dispatchInboundMessageWithBufferedDispatcher({
+            ctx: turn.ctxPayload,
+            cfg: turn.cfg,
+            dispatcherOptions: {
+              ...turn.dispatcherOptions,
+              deliver: turn.delivery.deliver,
+              onError: turn.delivery.onError,
+            },
+            replyOptions: turn.replyOptions,
+            replyResolver: turn.replyResolver,
+          }),
+      });
     },
   );
   const dmPolicy = options.dmPolicy ?? "open";
@@ -353,7 +369,6 @@ export function createMatrixHandlerTestHarness(
     createChannelInboundEnvelopeBuilder,
     finalizeInboundContext,
     resolveHumanDelayConfig: options.resolveHumanDelayConfig ?? (() => undefined),
-    dispatchInboundMessageWithBufferedDispatcher,
     historyLimit: options.historyLimit ?? 0,
   });
 

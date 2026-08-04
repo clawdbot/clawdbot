@@ -1,6 +1,7 @@
 const CRON_POSITIVE_DECIMAL_RE = /^(?:\d+(?:\.\d*)?|\.\d+)$/u;
 
 const CRON_EVERY_UNIT_MS = {
+  seconds: 1_000,
   minutes: 60_000,
   hours: 3_600_000,
   days: 86_400_000,

@@ -2,6 +2,12 @@
 import AppKit
 import SwiftUI
 
+extension ChatSessionSidebarModel.Node {
+    fileprivate var outlineChildren: [Self]? {
+        self.children.isEmpty ? nil : self.children
+    }
+}
+
 @MainActor
 struct ChatSessionSidebar: View {
     @Bindable var viewModel: OpenClawChatViewModel
@@ -9,6 +15,12 @@ struct ChatSessionSidebar: View {
     @State private var sessionPendingDeletion: OpenClawChatSessionEntry?
     @State private var sessionPendingRename: OpenClawChatSessionEntry?
     @State private var renameText = ""
+    @State private var groups: [OpenClawChatSessionGroup] = []
+    @State private var groupRefreshNonce = 0
+    @State private var groupLoadFailed = false
+    @State private var inspectedSession: OpenClawChatSessionEntry?
+    @State private var isPresentingNewSessionOptions = false
+    @AppStorage("openclaw.chat.collapsedSessionGroups") private var collapsedSessionGroups = ""
 
     var body: some View {
         let sections = ChatSessionSidebarModel.sections(
@@ -16,11 +28,41 @@ struct ChatSessionSidebar: View {
             currentSessionKey: self.viewModel.sessionKey,
             mainSessionKey: self.viewModel.resolvedMainSessionKey,
             activeAgentID: self.viewModel.activeAgentId,
+            groups: self.groups,
             query: self.query)
         List(selection: self.selectionBinding) {
+            Color.clear
+                .frame(height: 8)
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .accessibilityHidden(true)
             ForEach(sections) { section in
-                if let title = section.title {
-                    Section(title) { self.rows(section.nodes) }
+                if section.id.hasPrefix("group:"), let title = section.title {
+                    Section {
+                        if !self.isGroupCollapsed(title) || !self.query
+                            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        {
+                            self.rows(section.nodes)
+                        }
+                    } header: {
+                        Button {
+                            self.toggleGroupCollapsed(title)
+                        } label: {
+                            HStack {
+                                Image(systemName: self.isGroupCollapsed(title) ? "chevron.right" : "chevron.down")
+                                Text(verbatim: title)
+                                    .font(OpenClawChatTypography.caption)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                } else if let title = section.title {
+                    Section {
+                        self.rows(section.nodes)
+                    } header: {
+                        Text(LocalizedStringKey(title))
+                            .font(OpenClawChatTypography.caption)
+                    }
                 } else {
                     self.rows(section.nodes)
                 }
@@ -30,12 +72,12 @@ struct ChatSessionSidebar: View {
         .searchable(
             text: self.$query,
             placement: .sidebar,
-            prompt: String(localized: "Search sessions"))
+            prompt: String(localized: "Search threads"))
         .overlay {
             if sections.isEmpty {
                 ContentUnavailableView(
                     self.query.isEmpty
-                        ? String(localized: "No Sessions")
+                        ? String(localized: "No Threads")
                         : String(localized: "No Results"),
                     systemImage: "bubble.left.and.bubble.right")
             }
@@ -43,25 +85,50 @@ struct ChatSessionSidebar: View {
         .safeAreaInset(edge: .bottom, spacing: 0) { self.connectionFooter }
         .toolbar {
             ToolbarItem {
-                Button {
-                    Task { await self.viewModel.startNewSession() }
-                } label: {
-                    chatWindowActionLabel("New Session", systemImage: "square.and.pencil")
+                HStack(spacing: 2) {
+                    Button {
+                        Task { await self.viewModel.startNewSession() }
+                    } label: {
+                        chatWindowActionLabel("New Thread", systemImage: "square.and.pencil")
+                    }
+                    .help(String(localized: "New thread"))
+                    Button {
+                        self.isPresentingNewSessionOptions = true
+                    } label: {
+                        Image(systemName: "chevron.down")
+                    }
+                    .help(String(localized: "New thread options"))
+                    .popover(isPresented: self.$isPresentingNewSessionOptions) {
+                        ChatNewSessionOptionsPopover(viewModel: self.viewModel) {
+                            self.isPresentingNewSessionOptions = false
+                        }
+                    }
                 }
-                .help(String(localized: "New session"))
             }
         }
-        .task { self.viewModel.refreshSessions(limit: 200) }
+        .task(id: self.groupRefreshID) {
+            self.viewModel.refreshSessions(limit: 200)
+            do {
+                let groups = try await self.viewModel.fetchSessionGroups()
+                self.groups = groups
+                self.groupLoadFailed = false
+            } catch {
+                self.groupLoadFailed = true
+            }
+        }
         .onChange(of: self.viewModel.healthOK) { previous, current in
             if !previous, current {
                 self.viewModel.refreshSessions(limit: 200)
             }
         }
+        .sheet(item: self.$inspectedSession) { session in
+            ChatSessionInspectorSheet(viewModel: self.viewModel, session: session)
+        }
         .alert(
-            String(localized: "Rename Session"),
+            String(localized: "Rename Thread"),
             isPresented: self.isPresentingRenameAlert)
         {
-            TextField(String(localized: "Session name"), text: self.$renameText)
+            TextField(String(localized: "Thread name"), text: self.$renameText)
             Button(String(localized: "Rename")) {
                 if let session = self.sessionPendingRename {
                     self.viewModel.renameSession(key: session.key, label: self.renameText)
@@ -73,14 +140,14 @@ struct ChatSessionSidebar: View {
             }
         }
         .confirmationDialog(self.deleteDialogTitle, isPresented: self.isPresentingDeleteDialog) {
-                Button(String(localized: "Delete Session"), role: .destructive) {
+                Button(String(localized: "Delete Thread"), role: .destructive) {
                     if let session = self.sessionPendingDeletion {
                         self.viewModel.deleteSession(session.key)
                     }
                     self.sessionPendingDeletion = nil
                 }
             } message: {
-                Text(String(localized: "The session and its transcript are removed from the gateway."))
+                Text(String(localized: "The thread and its transcript are removed from the gateway."))
                     .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
             }
     }
@@ -98,6 +165,12 @@ struct ChatSessionSidebar: View {
                 guard let next, next != self.viewModel.sessionKey else { return }
                 self.viewModel.switchSession(to: next)
             })
+    }
+
+    private var groupRefreshID: String {
+        let categories = self.viewModel.sessions.compactMap(\.category).sorted().joined(separator: "|")
+        let revision = self.viewModel.sessionGroupsRevision
+        return "\(self.viewModel.healthOK)|\(categories)|\(revision)|\(self.groupRefreshNonce)"
     }
 
     private var deleteDialogTitle: String {
@@ -150,17 +223,19 @@ struct ChatSessionSidebar: View {
         if node.badges.runningCount > 0 {
             ProgressView()
                 .controlSize(.small)
-                .accessibilityLabel(String(localized: "Session running"))
+                .accessibilityLabel(String(localized: "Thread running"))
         }
         if node.badges.failedCount > 0 {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(OpenClawChatTheme.warning)
-                .accessibilityLabel(String(localized: "Session failed"))
+                .accessibilityLabel(String(localized: "Thread failed"))
         }
         let isCurrentSession = self.viewModel.matchesCurrentSessionKey(
             incoming: node.session.key,
             current: self.viewModel.sessionKey)
-        if node.hasUnreadDescendant || (node.session.unread == true && !isCurrentSession) {
+        if node.children.contains(where: \.badges.hasUnread) ||
+            (node.session.unread == true && !isCurrentSession)
+        {
             Circle()
                 .fill(.tint)
                 .frame(width: 7, height: 7)
@@ -170,6 +245,12 @@ struct ChatSessionSidebar: View {
 
     @ViewBuilder
     private func contextMenu(for session: OpenClawChatSessionEntry) -> some View {
+        Button {
+            self.inspectedSession = session
+        } label: {
+            self.actionLabel(String(localized: "Get Info…"), systemImage: "info.circle")
+        }
+        Divider()
         Button {
             self.renameText = session.label ?? session.displayName ?? ""
             self.sessionPendingRename = session
@@ -221,9 +302,21 @@ struct ChatSessionSidebar: View {
             Button(role: .destructive) {
                 self.sessionPendingDeletion = session
             } label: {
-                self.actionLabel(String(localized: "Delete Session…"), systemImage: "trash")
+                self.actionLabel(String(localized: "Delete Thread…"), systemImage: "trash")
             }
         }
+    }
+
+    private func isGroupCollapsed(_ name: String) -> Bool {
+        Set(self.collapsedSessionGroups.split(separator: "\u{1F}").map(String.init)).contains(name)
+    }
+
+    private func toggleGroupCollapsed(_ name: String) {
+        var names = Set(self.collapsedSessionGroups.split(separator: "\u{1F}").map(String.init))
+        if !names.insert(name).inserted {
+            names.remove(name)
+        }
+        self.collapsedSessionGroups = names.sorted().joined(separator: "\u{1F}")
     }
 
     private func actionLabel(_ title: String, systemImage: String) -> some View {
@@ -242,7 +335,9 @@ struct ChatSessionSidebar: View {
             let date = Date(timeIntervalSince1970: updatedAt / 1000)
             parts.append(date.formatted(.relative(presentation: .named)))
         }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        return ChatSessionSidebarModel.subtitle(
+            for: session,
+            workSubtitle: parts.isEmpty ? nil : parts.joined(separator: " · "))
     }
 
     private var connectionFooter: some View {
@@ -256,6 +351,15 @@ struct ChatSessionSidebar: View {
                 .font(OpenClawChatTypography.caption)
                 .foregroundStyle(.secondary)
             Spacer(minLength: 0)
+            if self.groupLoadFailed {
+                Button {
+                    self.groupRefreshNonce += 1
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.borderless)
+                .help(String(localized: "Retry thread groups"))
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

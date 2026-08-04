@@ -29,6 +29,7 @@ import {
   openStores,
   finalizeReefIdentityBinding,
   REEF_DELIVERED_NAMESPACE,
+  ReefInboxCursorStore,
   REEF_REPLAY_TTL_MS,
   REEF_REVIEWS_NAMESPACE,
   releaseReefIdentityReservation,
@@ -71,6 +72,23 @@ describe("Reef SQLite state", () => {
     vi.useRealTimers();
     resetPluginStateStoreForTests();
     fs.rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("persists a monotonic inbox cursor for the bound Reef identity", () => {
+    const binding = { handle: "molty", relayUrl: "https://reefwire.ai" };
+    const store = new ReefInboxCursorStore(createRuntime(stateDir), binding);
+
+    expect(store.load()).toBe(0);
+    store.advance(12);
+    store.advance(7);
+
+    expect(new ReefInboxCursorStore(createRuntime(stateDir), binding).load()).toBe(12);
+    expect(() =>
+      new ReefInboxCursorStore(createRuntime(stateDir), {
+        handle: "clawd",
+        relayUrl: "https://reefwire.ai",
+      }).load(),
+    ).toThrow("different identity");
   });
 
   it("does not let an expired audit writer replace a committed successor link", async () => {

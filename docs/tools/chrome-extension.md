@@ -91,12 +91,119 @@ openclaw config set browser.defaultProfile chrome
 - Revoke: click the button again, drag the tab out of the group, or dismiss
   Chrome's debugging banner. The agent loses access to that tab immediately.
 
+### External CDP clients (chrome-devtools-mcp, Puppeteer)
+
+The relay is a standard CDP browser endpoint, so tools other than OpenClaw can
+drive the paired Chrome through it — same consent model (shared tabs only),
+same host-local token, and still no "Allow remote debugging?" prompt. Print the
+endpoint and auth header:
+
+```bash
+openclaw browser extension cdp
+```
+
+For example, Google's [chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp)
+connects with:
+
+```bash
+npx chrome-devtools-mcp --wsEndpoint ws://127.0.0.1:18799/cdp \
+  --wsHeaders '{"Authorization":"Bearer <token>"}'
+```
+
+`openclaw browser extension cdp --json` emits `{ browserUrl, wsEndpoint,
+headers }` for scripting. The token is the same host-local relay secret the
+pairing string carries: treat it as private, and rotate it by deleting
+`credentials/browser-extension-relay.secret` and pairing again.
+
+[mcporter](https://github.com/openclaw/mcporter) needs no wiring at all: when a
+paired relay answers on this host, it transparently rewrites
+`chrome-devtools-mcp --autoConnect` server commands to the relay endpoint, so
+agents calling Chrome DevTools through mcporter skip the remote-debugging
+prompt automatically (set `MCPORTER_DISABLE_CHROME_DEVTOOLS_RELAY=1` there to
+opt out).
+
+### Tab copilot side panel
+
+After pairing the extension, click **Open tab copilot** in its toolbar popup.
+OpenClaw configures `sidepanel.html` for that exact Chrome tab; the manifest has
+no global side-panel path. Each tab therefore gets a separate panel document,
+Gateway session, message subscription, and typed browser-tool binding.
+
+The panel does not place the page URL, title, DOM, or visible text in your
+message. It sends only the text you type. Browser actions carry a separate
+Gateway-authenticated binding containing the Chrome tab and CDP target, and the
+browser tool rejects attempts to replace that target or use browser-wide
+actions. Replies stay in the panel (`deliver: false`); they do not inherit a
+Telegram, Discord, or other channel route.
+
+The copilot is a dedicated paired Gateway device with `operator.read` and
+`operator.write` scopes. On first use, inspect and approve its request:
+
+```bash
+openclaw devices list
+openclaw devices approve <requestId>
+```
+
+The extension retains that device identity and the Gateway-issued device token,
+scoped to the canonical Gateway endpoint that issued them. Pairing a different
+Gateway creates separate identity, token, and session custody; credentials and
+sessions are never reused across endpoints. The extension does not persist the
+Gateway shared secret. A panel can subscribe only to its own tab sessions, and
+the Gateway filters those events before delivery.
+
+If the Gateway connection drops during a run, the extension keeps durable
+custody of that run ID. On reconnect it aborts the unresolved run before
+re-enabling any panel, then reloads transcript history. This fail-closed step
+prevents browser actions from continuing unseen across a delivery gap.
+
+Closing a tab immediately removes its live subscription, aborts any visible
+run, and marks that tab's session archived. If the Gateway is temporarily
+offline, the extension persists the pending archive and retries only when that
+same Gateway endpoint reconnects; it never sends an archive request to a
+different Gateway. After a browser crash, the next launch archives sessions
+left by the previous browser instance. Archived sessions reject new work, while
+their transcripts remain available in session history. Browser-copilot keys are
+thread sessions, so normal age and entry-count maintenance preserves them. The
+per-agent session disk budget still applies (default `10gb`) and may evict the
+oldest sessions under pressure; see [session maintenance](/reference/session-management-compaction#store-maintenance-and-disk-controls).
+
+The side panel currently requires either a Gateway-hosted extension relay or a
+direct remote Gateway relay. A loopback relay on a browser node cannot yet
+provide the node route required by the typed tab binding, so the panel denies
+that topology instead of falling back to browser-wide routing.
+
+## Send a page to OpenClaw
+
+Use **Send page to OpenClaw** in the toolbar popup to share readable page text
+with your main OpenClaw session. You can add an optional note, use the page or
+selection right-click menu, or press `Alt+Shift+S`. OpenClaw prefers your current
+selection when one exists, enqueues the share as a system event, and wakes the
+main session immediately.
+
+The tab does not need to be in the OpenClaw tab group. This is a one-shot,
+explicit share: nothing else on the page is exposed, and it grants no ongoing
+access. Google Docs are exported as plain text with your signed-in browser
+session, without Google API setup. X and Twitter threads are extracted without
+the surrounding interface chrome.
+
+Page text is wrapped in OpenClaw's external-content safety boundary. Your
+optional note stays outside that boundary as your own instruction. Page text
+and selections are capped at about 120,000 characters and include a truncation
+marker when shortened.
+
+Page sharing works when the extension relay is hosted by the Gateway, using
+same-host pairing or direct `wss://` Gateway pairing. Node-hosted relays return
+a clear error for now. To remap the keyboard shortcut, open
+`chrome://extensions/shortcuts`.
+
 ## Remote / cross-machine
 
 Chrome does not have to run on the Gateway host. Three topologies work:
 
 - **Same host** (Gateway + Chrome on one machine): pair on that machine with
   `openclaw browser extension pair`. The relay is loopback-only.
+  If the local Gateway uses TLS, pass its certificate hostname explicitly with
+  `--gateway-url wss://gateway-host.example`; pairing never substitutes a loopback IP.
 - **Direct to a remote Gateway** (Chrome on your laptop, Gateway on a VPS, and
   **nothing else on the laptop**): on the Gateway, run
   `openclaw browser extension pair --gateway-url wss://your-gateway.example.com`.
@@ -134,6 +241,9 @@ extension popup shows **Connected**.
   the bundled extension carries it in the WebSocket subprotocol list instead.
 - The agent can only see and drive tabs in the **OpenClaw tab group**. Your
   other tabs stay private.
+- Side-panel runs are scoped twice: Gateway delivery uses a per-session
+  allowlist, and browser tools enforce the Chrome tab/target binding carried
+  outside the prompt.
 - Compared with the `user` (Chrome MCP) profile, which exposes your whole
   signed-in browser once you approve the remote-debugging prompt, the extension
   keeps the shared surface scoped to a tab group you control at a glance.

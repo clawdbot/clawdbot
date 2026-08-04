@@ -6,9 +6,17 @@ import {
   migrateLegacyWebSearchConfig,
 } from "./legacy-web-search-migrate.js";
 
+type LegacyWebSearchConfig = Omit<OpenClawConfig, "tools"> & {
+  tools?: {
+    web?: {
+      search?: Record<string, unknown>;
+    };
+  };
+};
+
 describe("legacy web search config", () => {
   it("migrates legacy provider config through bundled web search ownership metadata", () => {
-    const res = migrateLegacyWebSearchConfig<OpenClawConfig>({
+    const res = migrateLegacyWebSearchConfig<LegacyWebSearchConfig>({
       tools: {
         web: {
           search: {
@@ -65,14 +73,14 @@ describe("legacy web search config", () => {
   });
 
   it("repairs retired Grok code aliases while preserving current aliases", () => {
-    const retired = migrateLegacyWebSearchConfig<OpenClawConfig>({
+    const retired = migrateLegacyWebSearchConfig<LegacyWebSearchConfig>({
       tools: {
         web: {
           search: { grok: { model: "grok-code-fast-1" } },
         },
       },
     });
-    const current = migrateLegacyWebSearchConfig<OpenClawConfig>({
+    const current = migrateLegacyWebSearchConfig<LegacyWebSearchConfig>({
       tools: {
         web: {
           search: { grok: { model: "grok-latest" } },
@@ -106,10 +114,10 @@ describe("legacy web search config", () => {
           },
         },
       },
-    } satisfies OpenClawConfig;
+    } satisfies LegacyWebSearchConfig;
     const original = structuredClone(input);
 
-    const res = migrateLegacyWebSearchConfig<OpenClawConfig>(input);
+    const res = migrateLegacyWebSearchConfig<LegacyWebSearchConfig>(input);
 
     expect(res.config.plugins?.entries?.xai?.config?.webSearch).toEqual({
       apiKey: "xai-key",
@@ -119,7 +127,7 @@ describe("legacy web search config", () => {
   });
 
   it("preserves unrelated record-valued web search config", () => {
-    const res = migrateLegacyWebSearchConfig<OpenClawConfig>({
+    const res = migrateLegacyWebSearchConfig<LegacyWebSearchConfig>({
       tools: {
         web: {
           search: {
@@ -156,7 +164,7 @@ describe("legacy web search config", () => {
   });
 
   it("drops dangerous record keys while preserving unrelated web search config", () => {
-    const res = migrateLegacyWebSearchConfig<OpenClawConfig>({
+    const res = migrateLegacyWebSearchConfig<LegacyWebSearchConfig>({
       tools: {
         web: {
           search: {

@@ -1,10 +1,6 @@
 /** Tests command registry definitions, native specs, aliases, and argument menus. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  pinActivePluginChannelRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   buildCommandText,
@@ -225,25 +221,29 @@ describe("commands registry", () => {
     ]);
   });
 
-  it("keeps /login text-enabled while limiting native registration to Telegram", () => {
+  it("registers /login natively for Discord, Slack, and Telegram", () => {
     const command = requireChatCommand("login");
     expect(command.textAliases).toEqual(["/login"]);
     expect(command.nativeName).toBe("login");
-    expect(command.nativeProviders).toEqual(["telegram"]);
+    expect(command.nativeProviders).toEqual(["discord", "slack", "telegram"]);
 
     expect(nativeNameSet(listNativeCommandSpecs()).has("login")).toBe(false);
+    for (const provider of ["discord", "slack"] as const) {
+      setActivePluginRegistry(createNativeCommandsRegistry(provider));
+      expect(nativeNameSet(listNativeCommandSpecs({ provider })).has("login")).toBe(true);
+      expect(
+        findCommandByNativeName("login", provider, {
+          includeBundledChannelFallback: false,
+        })?.key,
+      ).toBe("login");
+    }
     expect(
       findCommandByNativeName("login", "telegram", {
         includeBundledChannelFallback: false,
       })?.key,
     ).toBe("login");
     expect(
-      findCommandByNativeName("login", "discord", {
-        includeBundledChannelFallback: false,
-      }),
-    ).toBeUndefined();
-    expect(
-      findCommandByNativeName("login", "slack", {
+      findCommandByNativeName("login", "signal", {
         includeBundledChannelFallback: false,
       }),
     ).toBeUndefined();
@@ -300,6 +300,17 @@ describe("commands registry", () => {
     expect(resolveTextCommand("/learn first line\nsecond line")?.args).toBe(
       "first line\nsecond line",
     );
+  });
+
+  it("registers /loop as a standard tools command with an optional spec", () => {
+    const loop = requireChatCommand("loop");
+    expect(loop.nativeName).toBe("loop");
+    expect(loop.textAliases).toEqual(["/loop"]);
+    expect(loop.category).toBe("tools");
+    expect(loop.tier).toBe("standard");
+    expect(loop.acceptsArgs).toBe(true);
+    expect(requireCommandArg(loop, "spec").required).not.toBe(true);
+    expect(resolveTextCommand("/loop 5m check ci")?.args).toBe("5m check ci");
   });
 
   it("preserves multiline payloads for direct skill slash aliases only when unregistered", () => {
@@ -521,6 +532,7 @@ describe("commands registry", () => {
     expect(detection.exact.has("/commands")).toBe(true);
     expect(detection.exact.has("/skill")).toBe(true);
     expect(detection.exact.has("/learn")).toBe(true);
+    expect(detection.exact.has("/loop")).toBe(true);
     expect(detection.exact.has("/compact")).toBe(true);
     expect(detection.exact.has("/whoami")).toBe(true);
     expect(detection.exact.has("/id")).toBe(true);
@@ -577,61 +589,6 @@ describe("commands registry", () => {
         commandSource: "native",
       }),
     ).toBe(true);
-  });
-
-  it("refreshes dock commands when pinned-empty fallback active registry changes", () => {
-    const pinnedEmptyRegistry = createTestRegistry([]);
-    setActivePluginRegistry(pinnedEmptyRegistry);
-    pinActivePluginChannelRegistry(pinnedEmptyRegistry);
-
-    setActivePluginRegistry(createNativeCommandsRegistry("discord"));
-    const discordCommandKeys = commandKeySet(listChatCommands());
-    expect(discordCommandKeys.has("dock:discord")).toBe(true);
-    expect(discordCommandKeys.has("dock:slack")).toBe(false);
-
-    setActivePluginRegistry(createNativeCommandsRegistry("slack"));
-    const slackCommandKeys = commandKeySet(listChatCommands());
-    expect(slackCommandKeys.has("dock:discord")).toBe(false);
-    expect(slackCommandKeys.has("dock:slack")).toBe(true);
-  });
-
-  it("refreshes text-command gating when pinned-empty fallback active registry changes", () => {
-    const cfg = { commands: { text: false } };
-    const pinnedEmptyRegistry = createTestRegistry([]);
-    setActivePluginRegistry(pinnedEmptyRegistry);
-    pinActivePluginChannelRegistry(pinnedEmptyRegistry);
-
-    setActivePluginRegistry(createNativeCommandsRegistry("discord"));
-    expect(
-      shouldHandleTextCommands({
-        cfg,
-        surface: "discord",
-        commandSource: "text",
-      }),
-    ).toBe(false);
-    expect(
-      shouldHandleTextCommands({
-        cfg,
-        surface: "slack",
-        commandSource: "text",
-      }),
-    ).toBe(true);
-
-    setActivePluginRegistry(createNativeCommandsRegistry("slack"));
-    expect(
-      shouldHandleTextCommands({
-        cfg,
-        surface: "discord",
-        commandSource: "text",
-      }),
-    ).toBe(true);
-    expect(
-      shouldHandleTextCommands({
-        cfg,
-        surface: "slack",
-        commandSource: "text",
-      }),
-    ).toBe(false);
   });
 
   it("normalizes telegram-style command mentions for the current bot", () => {

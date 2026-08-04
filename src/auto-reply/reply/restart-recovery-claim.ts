@@ -4,7 +4,6 @@ import {
   buildRestartRecoveryClaimCleanupPatch,
   hasRestartRecoverySourceClaim,
   hasRestartRecoveryTerminalRun,
-  sameRestartRecoveryTerminalRunIds,
 } from "../../config/sessions/restart-recovery-state.js";
 import type { RestartRecoveryBeforeAgentReplyState } from "../../config/sessions/restart-recovery-types.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -12,8 +11,12 @@ import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
 } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
-import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import { sessionMatchesExpectedTranscriptTurn } from "../../config/sessions/session-transcript-turn-state.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import type {
+  UserTurnTranscriptRecorder,
+  UserTurnTranscriptTarget,
+} from "../../sessions/user-turn-transcript.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 
@@ -31,6 +34,7 @@ type ReplyRestartRecoveryClaimController = {
     };
   }) => Promise<void>;
   clear: () => Promise<void>;
+  confirmRestartRecoveryArmedAfterLeaseLoss: () => Promise<boolean>;
   isArmed: () => boolean;
 };
 
@@ -83,6 +87,8 @@ export async function retireTerminalRestartRecoverySourceClaim(params: {
 function buildExpectedSessionState(entry: SessionEntry): SessionTranscriptTurnExpectedState {
   return {
     abortedLastRun: entry.abortedLastRun,
+    mainRestartRecoveryCycleId: entry.mainRestartRecovery?.cycleId,
+    mainRestartRecoveryRevision: entry.mainRestartRecovery?.revision,
     restartRecoveryBeforeAgentReplyState: entry.restartRecoveryBeforeAgentReplyState,
     restartRecoveryDeliveryReceiptState: entry.restartRecoveryDeliveryReceiptState,
     restartRecoveryDeliveryToolCallId: entry.restartRecoveryDeliveryToolCallId,
@@ -96,39 +102,7 @@ function buildExpectedSessionState(entry: SessionEntry): SessionTranscriptTurnEx
     restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
     restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
     status: entry.status,
-    updatedAt: entry.updatedAt,
   };
-}
-
-function matchesExpectedSessionState(
-  entry: SessionEntry,
-  sessionId: string,
-  expected: SessionTranscriptTurnExpectedState,
-): boolean {
-  return (
-    entry.sessionId === sessionId &&
-    entry.abortedLastRun === expected.abortedLastRun &&
-    entry.restartRecoveryBeforeAgentReplyState === expected.restartRecoveryBeforeAgentReplyState &&
-    entry.restartRecoveryDeliveryReceiptState === expected.restartRecoveryDeliveryReceiptState &&
-    entry.restartRecoveryDeliveryToolCallId === expected.restartRecoveryDeliveryToolCallId &&
-    entry.restartRecoveryDeliveryRequestFingerprint ===
-      expected.restartRecoveryDeliveryRequestFingerprint &&
-    entry.restartRecoveryDeliveryRunId === expected.restartRecoveryDeliveryRunId &&
-    entry.restartRecoveryDeliverySourceRunId === expected.restartRecoveryDeliverySourceRunId &&
-    entry.restartRecoveryRequesterAccountId === expected.restartRecoveryRequesterAccountId &&
-    entry.restartRecoveryRequesterSenderId === expected.restartRecoveryRequesterSenderId &&
-    entry.restartRecoverySameChannelThreadRequired ===
-      expected.restartRecoverySameChannelThreadRequired &&
-    entry.restartRecoverySourceIngress === expected.restartRecoverySourceIngress &&
-    entry.restartRecoverySourceReplyDeliveryMode ===
-      expected.restartRecoverySourceReplyDeliveryMode &&
-    sameRestartRecoveryTerminalRunIds(
-      entry.restartRecoveryTerminalRunIds,
-      expected.restartRecoveryTerminalRunIds,
-    ) &&
-    entry.status === expected.status &&
-    entry.updatedAt === expected.updatedAt
-  );
 }
 
 export function createReplyRestartRecoveryClaimController(params: {
@@ -140,6 +114,12 @@ export function createReplyRestartRecoveryClaimController(params: {
   resolveDeliveryContext: (entry: SessionEntry | undefined) => DeliveryContext | undefined;
   requesterAccountId?: unknown;
   requesterSenderId?: unknown;
+  resolveUserTurnTarget?: (params: {
+    entry: SessionEntry;
+    sessionId: string;
+    sessionKey: string;
+    storePath: string;
+  }) => UserTurnTranscriptTarget | undefined;
   sessionKey?: string;
   setEntry: (entry: SessionEntry) => void;
   sameChannelThreadRequired?: boolean;
@@ -150,6 +130,7 @@ export function createReplyRestartRecoveryClaimController(params: {
   let recoveryRunId: string = randomUUID();
   let recoverySourceRunId: string | undefined;
   let tracked = false;
+  let leaseLossRestartHandoffConfirmed = false;
 
   const persistAdmissionPatch = async (options: {
     entry: SessionEntry;
@@ -162,6 +143,12 @@ export function createReplyRestartRecoveryClaimController(params: {
     const expectedSessionState = buildExpectedSessionState(options.entry);
     if (options.recorder && !options.recorder.hasPersisted()) {
       const result = await options.recorder.persistApproved({
+        target: params.resolveUserTurnTarget?.({
+          entry: options.entry,
+          sessionId: options.sessionId,
+          sessionKey: options.sessionKey,
+          storePath: options.storePath,
+        }),
         expectedSessionId: options.sessionId,
         expectedSessionState,
         sessionLifecyclePatch: options.patch,
@@ -174,7 +161,10 @@ export function createReplyRestartRecoveryClaimController(params: {
     const persisted = await updateSessionEntry(
       { storePath: options.storePath, sessionKey: options.sessionKey },
       (current) =>
-        matchesExpectedSessionState(current, options.sessionId, expectedSessionState)
+        sessionMatchesExpectedTranscriptTurn(
+          { entry: current },
+          { expectedSessionId: options.sessionId, expectedSessionState },
+        )
           ? options.patch
           : null,
     );
@@ -191,7 +181,17 @@ export function createReplyRestartRecoveryClaimController(params: {
     if (!recorder || recorder.hasPersisted()) {
       return;
     }
-    const result = await recorder.persistApproved({ expectedSessionId: sessionId });
+    const entry = params.getEntry();
+    const target =
+      entry && params.sessionKey && params.storePath
+        ? params.resolveUserTurnTarget?.({
+            entry,
+            sessionId,
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+          })
+        : undefined;
+    const result = await recorder.persistApproved({ target, expectedSessionId: sessionId });
     if (!result) {
       throw new Error("session changed before durable user-turn admission");
     }
@@ -370,11 +370,18 @@ export function createReplyRestartRecoveryClaimController(params: {
                 restartRecoveryBeforeAgentReplyState: state,
                 ...(pendingFinalDelivery
                   ? {
-                      pendingFinalDelivery: true,
-                      pendingFinalDeliveryText: pendingFinalDelivery.text,
-                      pendingFinalDeliveryIntentId: pendingFinalDelivery.intentId,
-                      pendingFinalDeliveryContext: pendingFinalDelivery.context,
-                      pendingFinalDeliveryCreatedAt: updatedAt,
+                      pendingFinalDelivery: {
+                        ...(pendingFinalDelivery.text
+                          ? { kind: "replayable" as const, text: pendingFinalDelivery.text }
+                          : { kind: "transport-only" as const }),
+                        createdAt: updatedAt,
+                        ...(pendingFinalDelivery.intentId
+                          ? { intentId: pendingFinalDelivery.intentId }
+                          : {}),
+                        ...(pendingFinalDelivery.context
+                          ? { context: pendingFinalDelivery.context }
+                          : {}),
+                      },
                       // Hook-owned replies are already terminal. A restart may only deliver this
                       // checkpoint; it must never resume the model or broader tool surface.
                       restartRecoveryForceSafeTools: true,
@@ -431,8 +438,43 @@ export function createReplyRestartRecoveryClaimController(params: {
       return true;
     };
 
+  const confirmRestartRecoveryArmedAfterLeaseLoss = async (): Promise<boolean> => {
+    if (!tracked || !params.sessionKey || !params.storePath || !recoverySourceRunId) {
+      return false;
+    }
+    // Lease loss means the replacement may have advanced the authoritative row
+    // past this process's cache. This cold error path performs one latest read.
+    const persisted = loadSessionEntry({
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+      clone: false,
+      hydrateSkillPromptRefs: false,
+      readConsistency: "latest",
+    });
+    if (!persisted || persisted.sessionId !== params.getSessionId()) {
+      return false;
+    }
+    params.setEntry(persisted);
+    const activeHandoff =
+      persisted.abortedLastRun === true &&
+      normalizeOptionalString(persisted.restartRecoveryDeliveryRunId) === recoveryRunId &&
+      hasRestartRecoverySourceClaim(persisted, recoverySourceRunId);
+    // The replacement may finish and clear the active claim before the old
+    // owner observes lease loss. Its terminal source marker proves completion.
+    const completedHandoff = hasRestartRecoveryTerminalRun(persisted, recoverySourceRunId);
+    const armed = activeHandoff || completedHandoff;
+    leaseLossRestartHandoffConfirmed ||= armed;
+    return armed;
+  };
+
   const clear = async (): Promise<void> => {
-    if (!tracked || !params.sessionKey || !params.storePath || params.isRestartAbort()) {
+    if (
+      !tracked ||
+      !params.sessionKey ||
+      !params.storePath ||
+      params.isRestartAbort() ||
+      leaseLossRestartHandoffConfirmed
+    ) {
       return;
     }
     const persisted = await updateSessionEntry(
@@ -458,13 +500,6 @@ export function createReplyRestartRecoveryClaimController(params: {
             abortedLastRun: true,
             endedAt,
             pendingFinalDelivery: undefined,
-            pendingFinalDeliveryText: undefined,
-            pendingFinalDeliveryCreatedAt: undefined,
-            pendingFinalDeliveryLastAttemptAt: undefined,
-            pendingFinalDeliveryAttemptCount: undefined,
-            pendingFinalDeliveryLastError: undefined,
-            pendingFinalDeliveryContext: undefined,
-            pendingFinalDeliveryIntentId: undefined,
             runtimeMs:
               typeof current.startedAt === "number"
                 ? Math.max(0, endedAt - current.startedAt)
@@ -473,9 +508,7 @@ export function createReplyRestartRecoveryClaimController(params: {
             updatedAt: endedAt,
           };
         }
-        const preservesPendingFinal =
-          current.pendingFinalDelivery === true ||
-          normalizeOptionalString(current.pendingFinalDeliveryText) !== undefined;
+        const preservesPendingFinal = current.pendingFinalDelivery !== undefined;
         const completesHandledSilent =
           current.restartRecoveryBeforeAgentReplyState === "handled-silent" &&
           !preservesPendingFinal;
@@ -528,5 +561,12 @@ export function createReplyRestartRecoveryClaimController(params: {
     return persisted?.abortedLastRun === true || params.getEntry()?.abortedLastRun === true;
   };
 
-  return { admitUserTurn, beginBeforeAgentReply, checkpointBeforeAgentReply, clear, isArmed };
+  return {
+    admitUserTurn,
+    beginBeforeAgentReply,
+    checkpointBeforeAgentReply,
+    clear,
+    confirmRestartRecoveryArmedAfterLeaseLoss,
+    isArmed,
+  };
 }

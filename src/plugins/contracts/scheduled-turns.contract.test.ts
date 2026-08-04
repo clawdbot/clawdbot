@@ -24,8 +24,7 @@ import {
 } from "../host-hook-scheduled-turns.js";
 import { loadOpenClawPlugins } from "../loader.js";
 import { clearPluginLoaderCache, makeTempDir, writePlugin } from "../loader.test-fixtures.js";
-import { createEmptyPluginRegistry } from "../registry-empty.js";
-import { setActivePluginRegistry } from "../runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../runtime.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import type { OpenClawPluginApi } from "../types.js";
 
@@ -211,7 +210,7 @@ describe("plugin scheduled turns", () => {
     vi.useRealTimers();
     clearPluginLoaderCache();
     clearPluginHostRuntimeState();
-    setActivePluginRegistry(createEmptyPluginRegistry());
+    resetPluginRuntimeStateForTest();
   });
 
   it("schedules session turns with cron-compatible tagged cleanup metadata", async () => {
@@ -853,6 +852,64 @@ describe("plugin scheduled turns", () => {
     ]);
   });
 
+  it("cleans only dynamic scheduled turns owned by the retiring registry", async () => {
+    const removed: string[] = [];
+    const scheduledIds = ["gateway-owned-job", "retiring-owned-job"];
+    workflowMocks.cronAdd.mockImplementation(async () =>
+      makeCronJob({ id: scheduledIds.shift() ?? "unexpected-job" }),
+    );
+    workflowMocks.cronRemove.mockImplementation(async (id: string) => {
+      removed.push(id);
+      return { ok: true, removed: true };
+    });
+
+    const gatewayFixture = createPluginRegistryFixture();
+    gatewayFixture.registry.registry.plugins.push(
+      createPluginRecord({ id: WORKFLOW_PLUGIN_ID, origin: "bundled" }),
+    );
+    const retiringFixture = createPluginRegistryFixture();
+    retiringFixture.registry.registry.plugins.push(
+      createPluginRecord({ id: WORKFLOW_PLUGIN_ID, origin: "bundled" }),
+    );
+    const replacementFixture = createPluginRegistryFixture();
+
+    await scheduleWorkflowTurn({
+      ownerRegistry: gatewayFixture.registry.registry,
+      schedule: { cron: "* * * * *", tz: "UTC" },
+    });
+    await scheduleWorkflowTurn({
+      ownerRegistry: retiringFixture.registry.registry,
+      schedule: { cron: "* * * * *", tz: "UTC" },
+    });
+
+    await expect(
+      cleanupReplacedPluginHostRegistry({
+        cfg: retiringFixture.config,
+        previousRegistry: retiringFixture.registry.registry,
+        nextRegistry: replacementFixture.registry.registry,
+      }),
+    ).resolves.toMatchObject({ failures: [] });
+    expect(removed).toEqual(["retiring-owned-job"]);
+    expect(listPluginSessionSchedulerJobs(WORKFLOW_PLUGIN_ID)).toEqual([
+      {
+        id: "gateway-owned-job",
+        pluginId: WORKFLOW_PLUGIN_ID,
+        sessionKey: MAIN_SESSION_KEY,
+        kind: "session-turn",
+      },
+    ]);
+
+    await expect(
+      cleanupReplacedPluginHostRegistry({
+        cfg: gatewayFixture.config,
+        previousRegistry: gatewayFixture.registry.registry,
+        nextRegistry: replacementFixture.registry.registry,
+      }),
+    ).resolves.toMatchObject({ failures: [] });
+    expect(removed).toEqual(["retiring-owned-job", "gateway-owned-job"]);
+    expect(listPluginSessionSchedulerJobs(WORKFLOW_PLUGIN_ID)).toEqual([]);
+  });
+
   it("treats already-missing cron jobs as successful scheduled-turn cleanup", async () => {
     const removed: string[] = [];
     workflowMocks.cronAdd.mockResolvedValue(makeCronJob({ id: "already-missing-job" }));
@@ -1042,53 +1099,6 @@ describe("plugin scheduled turns", () => {
     ).resolves.toEqual({ removed: 0, failed: 0 });
     expect(workflowMocks.cronListPage).not.toHaveBeenCalled();
     expect(workflowMocks.cronRemove).not.toHaveBeenCalled();
-  });
-
-  it("wires schedule and unschedule through the plugin API with stale-registry protection", async () => {
-    workflowMocks.cronAdd.mockResolvedValue(makeCronJob({ id: "job-live" }));
-    const { config, registry } = createPluginRegistryFixture({}, { hostServices: { cron } });
-    let capturedApi: OpenClawPluginApi | undefined;
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({
-        id: "scheduler-plugin",
-        name: "Scheduler Plugin",
-        origin: "bundled",
-      }),
-      register(api) {
-        capturedApi = api;
-      },
-    });
-    setActivePluginRegistry(registry.registry);
-
-    const liveHandle = await capturedApi?.session.workflow.scheduleSessionTurn({
-      sessionKey: "agent:main:main",
-      message: "wake",
-      delayMs: 10,
-    });
-    expectSessionTurnHandle(liveHandle, "job-live", "scheduler-plugin");
-    await expect(
-      capturedApi?.session.workflow.unscheduleSessionTurnsByTag({
-        sessionKey: "agent:main:main",
-        tag: "nudge",
-      }),
-    ).resolves.toEqual({ removed: 0, failed: 0 });
-
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    await expect(
-      capturedApi?.session.workflow.scheduleSessionTurn({
-        sessionKey: "agent:main:main",
-        message: "wake",
-        delayMs: 10,
-      }),
-    ).resolves.toBeUndefined();
-    await expect(
-      capturedApi?.session.workflow.unscheduleSessionTurnsByTag({
-        sessionKey: "agent:main:main",
-        tag: "nudge",
-      }),
-    ).resolves.toEqual({ removed: 0, failed: 0 });
   });
 
   it("resolves live cron service for captured plugin scheduled-turn APIs", async () => {

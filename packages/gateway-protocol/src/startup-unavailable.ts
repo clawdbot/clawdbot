@@ -12,7 +12,7 @@ const GATEWAY_STARTUP_RETRY_MIN_MS = 100;
 const GATEWAY_STARTUP_RETRY_MAX_MS = 2_000;
 
 /** Details payload attached to retryable startup-unavailable gateway errors. */
-export type GatewayStartupUnavailableDetails = {
+type GatewayStartupUnavailableDetails = {
   reason: typeof GATEWAY_STARTUP_UNAVAILABLE_REASON;
 };
 

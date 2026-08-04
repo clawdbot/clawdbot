@@ -224,12 +224,20 @@ describeLive("xai live", () => {
     await runXaiLiveCase("web-search", async () => {
       const tool = createWebSearchTool({
         config: {
+          plugins: {
+            entries: {
+              xai: {
+                config: {
+                  webSearch: { model: "grok-4.3" },
+                },
+              },
+            },
+          },
           tools: {
             web: {
               search: {
                 provider: "grok",
                 timeoutSeconds: XAI_WEB_SEARCH_LIVE_TIMEOUT_SECONDS,
-                grok: { model: "grok-4.3" },
               },
             },
           },
@@ -243,11 +251,10 @@ describeLive("xai live", () => {
       });
 
       const details = (result.details ?? {}) as {
+        kind?: "answer" | "error";
         provider?: string;
-        model?: string;
         content?: string;
-        citations?: string[];
-        inlineCitations?: Array<unknown>;
+        citations?: Array<{ url: string; title?: string }>;
         error?: string;
         message?: string;
       };
@@ -267,14 +274,10 @@ describeLive("xai live", () => {
       }
 
       expect(details.error, details.message).toBeUndefined();
+      expect(details.kind).toBe("answer");
       expect(details.provider).toBe("grok");
-      expect(details.model).toBe("grok-4.3");
       expect(details.content?.trim().length ?? 0).toBeGreaterThan(0);
-
-      const citationCount =
-        (Array.isArray(details.citations) ? details.citations.length : 0) +
-        (Array.isArray(details.inlineCitations) ? details.inlineCitations.length : 0);
-      expect(citationCount).toBeGreaterThan(0);
+      expect(details.citations?.length ?? 0).toBeGreaterThan(0);
     });
   }, 90_000);
 });

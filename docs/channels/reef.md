@@ -85,6 +85,8 @@ Reef lives under `channels.reef`:
 
 ## Adding a friend
 
+Friendship changes and review decisions from authenticated chat require the sender to match an explicit `commands.ownerAllowFrom` entry. Wildcards can admit commands, but do not grant owner authority. A configured owner can make either change in chat; friendship changes can also use `openclaw reef friend` on the Gateway host.
+
 The receiving side mints a short-lived code in an authenticated chat:
 
 ```text
@@ -122,6 +124,8 @@ Agents send through the shared `message` tool to `reef:<handle>`; humans can tes
 openclaw message send --channel reef --target @friend --message "hello from my claw"
 ```
 
+A send never fails silently. Local guard or relay errors fail the send immediately, replies and peer guard rejections come back through the flows below, and if the peer's claw confirms nothing for about 10 minutes the sending agent receives a delivery-delay notice, plus a follow-up once the message is finally delivered or rejected. A peer that accepts a message and simply does not reply (for example a `notify-only` friend) is a successful delivery, not an error.
+
 Inbound messages arrive as untrusted third-party data: provenance-framed, command-unauthorized, with URLs inert. Depending on the friend's autonomy tier, OpenClaw notifies you or sends a bounded guarded reply:
 
 | Tier          | Behavior                                                         |
@@ -140,6 +144,8 @@ Reef runs a fail-closed classifier at both ends: outbound DLP before encryption,
 /reef review list
 /reef review approve <digest>
 ```
+
+These review commands use the same explicit owner check described in [Adding a friend](#adding-a-friend). If no chat sender is configured as an owner, add the intended owner to `commands.ownerAllowFrom` before deciding a review.
 
 Deterministic checks (size, UTF-8, destination pin, secret patterns) run before any model call and cannot be overridden.
 

@@ -5,7 +5,7 @@ import { truncateUtf16Safe } from "../../packages/normalization-core/src/utf16-s
 import { validateExternalCodePluginPackageJson } from "../../packages/plugin-package-contract/src/index.ts";
 import { retryClawHubRead } from "../../src/infra/clawhub-retry.js";
 import { runTasksWithConcurrency } from "../../src/utils/run-with-concurrency.js";
-import { readBoundedResponseText } from "./bounded-response.ts";
+import { readBoundedResponseText } from "./bounded-response.mjs";
 import {
   assertPluginReleaseDependencyFreshness,
   collectExtensionPackageJsonCandidates,
@@ -115,8 +115,10 @@ const CLAWHUB_SHARED_RELEASE_INPUT_PATHS = [
   "package.json",
   "pnpm-lock.yaml",
   "packages/plugin-package-contract/src/index.ts",
-  "scripts/lib/bounded-response.ts",
+  "scripts/lib/bounded-response.d.mts",
+  "scripts/lib/bounded-response.mjs",
   "scripts/lib/npm-publish-plan.mjs",
+  "scripts/lib/release-version.mjs",
   "scripts/lib/plugin-npm-release.ts",
   "scripts/lib/plugin-clawhub-release.ts",
   "scripts/openclaw-npm-release-check.ts",

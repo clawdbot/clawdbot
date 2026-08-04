@@ -13,6 +13,7 @@ import { reefSetupWizard } from "./setup.js";
 import {
   finalizeReefIdentityBinding,
   generateAndStoreKeys,
+  loadKeys,
   loadReefIdentityBinding,
   reserveReefIdentityBinding,
 } from "./state.js";
@@ -169,5 +170,40 @@ describe("Reef setup wizard identity binding", () => {
       handle: "molty",
       relayUrl: "https://reefwire.ai",
     });
+  });
+
+  it("declares its persistence boundary before writing keys or creating the handle", async () => {
+    const runtime = installRuntime();
+    const beforePersistentEffect = vi.fn(async () => {
+      await expect(loadKeys(runtime)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+    vi.spyOn(ReefTransportClient.prototype, "createHandle").mockImplementation(async () => {
+      expect(beforePersistentEffect).toHaveBeenCalledTimes(1);
+      return { handle: "molty", key_epoch: 1 };
+    });
+    const textAnswers = [
+      "https://reefwire.ai",
+      "owner@example.com",
+      "setup-session",
+      "molty",
+      "gpt-5.6-terra",
+      "REEF_GUARD_OPENAI_KEY",
+      "reef-v1",
+    ];
+    const selectAnswers = ["code-only", "openai"];
+    const prompter = {
+      note: vi.fn(async () => undefined),
+      text: vi.fn(async () => textAnswers.shift() ?? ""),
+      select: vi.fn(async () => selectAnswers.shift()),
+    };
+
+    await reefSetupWizard.configureInteractive({
+      cfg: {},
+      prompter: prompter as never,
+      options: { beforePersistentEffect },
+    });
+
+    expect(beforePersistentEffect).toHaveBeenCalledTimes(1);
+    await expect(loadKeys(runtime)).resolves.toBeDefined();
   });
 });

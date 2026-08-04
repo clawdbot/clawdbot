@@ -3,31 +3,25 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "../../plugins/bundle-manifest.js";
+import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import type { PluginBundleFormat } from "../../plugins/manifest-types.js";
 import { resolvePackageExtensionEntries, type PackageManifest } from "../../plugins/manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "../../plugins/package-entry-resolution.js";
-import { auditOpenClawPeerDependencyLink } from "../../plugins/plugin-peer-link.js";
+import {
+  auditOpenClawPeerDependencyLink,
+  resolveOpenClawHostDependency,
+} from "../../plugins/plugin-peer-link.js";
+import type { PluginVerificationFailureReason } from "../../plugins/runtime-degraded-state.js";
 import { resolveUserPath } from "../../utils.js";
-
-type PluginPayloadSmokeFailureReason =
-  | "missing-install-path"
-  | "missing-package-dir"
-  | "missing-package-json"
-  | "invalid-package-json"
-  | "missing-bundle-manifest"
-  | "invalid-bundle-manifest"
-  | "missing-main-entry"
-  | "missing-extension-entry"
-  | "missing-openclaw-peer-link";
 
 export type PluginPayloadSmokeFailure = {
   pluginId: string;
   installPath?: string;
-  reason: PluginPayloadSmokeFailureReason;
+  reason: PluginVerificationFailureReason;
   detail: string;
 };
 
-type PluginPayloadSmokeResult = {
+export type PluginPayloadSmokeResult = {
   checked: string[];
   failures: PluginPayloadSmokeFailure[];
 };
@@ -49,6 +43,7 @@ const TRACKED_SOURCES: ReadonlySet<string> = new Set(["npm", "clawhub", "git", "
 export async function runPluginPayloadSmokeCheck(params: {
   records: Record<string, PluginInstallRecord>;
   env: NodeJS.ProcessEnv;
+  installSourceProvenance?: "authoritative" | "manifest-only";
 }): Promise<PluginPayloadSmokeResult> {
   const checked: string[] = [];
   const failures: PluginPayloadSmokeFailure[] = [];
@@ -94,6 +89,8 @@ export async function runPluginPayloadSmokeCheck(params: {
             pluginId,
             installPath,
             manifest: packagePayload.manifest,
+            installSource: record.source,
+            installSourceIsAuthoritative: params.installSourceProvenance !== "manifest-only",
           })),
         );
         continue;
@@ -117,10 +114,34 @@ export async function runPluginPayloadSmokeCheck(params: {
   return { checked, failures };
 }
 
+/** Verifies the exact manifest records selected for this process. */
+export async function runPluginPayloadSmokeCheckForManifestRecords(params: {
+  plugins: readonly Pick<PluginManifestRecord, "id" | "rootDir" | "format">[];
+  env: NodeJS.ProcessEnv;
+}): Promise<PluginPayloadSmokeResult> {
+  const records = Object.fromEntries(
+    params.plugins.map((plugin) => [
+      plugin.id,
+      {
+        source: plugin.format === "bundle" ? "marketplace" : "npm",
+        installPath: plugin.rootDir,
+        ...(plugin.format === "bundle" ? { clawhubFamily: "bundle-plugin" as const } : {}),
+      } satisfies PluginInstallRecord,
+    ]),
+  );
+  // Manifest snapshots do not carry install ownership; their synthetic npm source is not a ledger.
+  return await runPluginPayloadSmokeCheck({
+    records,
+    env: params.env,
+    installSourceProvenance: "manifest-only",
+  });
+}
+
 type PackagePayloadManifest = PackageManifest & { main?: unknown; exports?: unknown };
 
 type PackagePayloadManifestReadResult =
   | { status: "missing" }
+  | { status: "unreadable"; error: string }
   | { status: "invalid"; error: string }
   | { status: "present"; manifest: PackagePayloadManifest };
 
@@ -132,10 +153,16 @@ async function readPackagePayloadManifest(
   if (!packageJsonStat?.isFile()) {
     return { status: "missing" };
   }
+  let packageJson: string;
+  try {
+    packageJson = await fs.readFile(packageJsonPath, "utf8");
+  } catch (err) {
+    return { status: "unreadable", error: err instanceof Error ? err.message : String(err) };
+  }
   try {
     return {
       status: "present",
-      manifest: JSON.parse(await fs.readFile(packageJsonPath, "utf8")) as PackagePayloadManifest,
+      manifest: JSON.parse(packageJson) as PackagePayloadManifest,
     };
   } catch (err) {
     return { status: "invalid", error: err instanceof Error ? err.message : String(err) };
@@ -147,6 +174,15 @@ function formatPackagePayloadReadFailure(params: {
   installPath: string;
   packagePayload: Exclude<PackagePayloadManifestReadResult, { status: "present" }>;
 }): PluginPayloadSmokeFailure {
+  if (params.packagePayload.status === "unreadable") {
+    const packageJsonPath = path.join(params.installPath, "package.json");
+    return {
+      pluginId: params.pluginId,
+      installPath: params.installPath,
+      reason: "unreadable-package-json",
+      detail: `Could not read package.json at ${packageJsonPath}: ${params.packagePayload.error}`,
+    };
+  }
   if (params.packagePayload.status === "invalid") {
     return {
       pluginId: params.pluginId,
@@ -176,10 +212,18 @@ async function validatePackagePayload(params: {
   pluginId: string;
   installPath: string;
   manifest: PackagePayloadManifest;
+  installSource: PluginInstallRecord["source"];
+  installSourceIsAuthoritative: boolean;
 }): Promise<PluginPayloadSmokeFailure[]> {
   const failures: PluginPayloadSmokeFailure[] = [];
 
-  if (manifestDeclaresOpenClawPeer(params.manifest)) {
+  const hostDependency = resolveOpenClawHostDependency(params.manifest);
+  // Older non-npm installs never guaranteed direct host links; only npm ownership can repair them.
+  if (
+    hostDependency &&
+    (hostDependency.declaration === "peerDependencies" ||
+      (params.installSourceIsAuthoritative && params.installSource === "npm"))
+  ) {
     const peerIssue = await auditOpenClawPeerDependencyLink({
       packageDir: params.installPath,
       packageName: params.manifest.name ?? params.pluginId,
@@ -189,7 +233,11 @@ async function validatePackagePayload(params: {
         pluginId: params.pluginId,
         installPath: params.installPath,
         reason: "missing-openclaw-peer-link",
-        detail: `Plugin declares peerDependency "openclaw" but peer link audit failed: ${peerIssue.reason}.`,
+        detail: `Plugin declares ${
+          hostDependency.declaration === "peerDependencies" ? "peerDependency" : "dependency"
+        } "openclaw" but ${
+          hostDependency.declaration === "peerDependencies" ? "peer" : "host"
+        } link audit failed: ${peerIssue.reason}.`,
       });
     }
   }
@@ -221,12 +269,14 @@ async function validatePackagePayload(params: {
         detail: `Plugin extension entry validation failed: ${extensionValidation.error}`,
       });
     }
+
+    // Native plugin loading follows the declared extensions, not npm's main.
+    // Checking both would quarantine a loadable plugin or duplicate its real entry failure.
+    return failures;
   }
 
-  // Only fail on `missing-main-entry` when `main` is *explicitly declared*
-  // and absent on disk. Fully resolving `exports` conditional sub-keys is
-  // out of scope for a static smoke check, so packages with only `exports`
-  // remain intentionally permissive.
+  // Without native extension metadata, only check an explicitly declared npm
+  // main. Conditional exports remain outside this static smoke-check contract.
   if (typeof params.manifest.main !== "string" || !params.manifest.main.trim()) {
     return failures;
   }
@@ -302,16 +352,6 @@ export function validateBundleInstallRecordPayload(params: {
       : "invalid-bundle-manifest",
     detail: `Bundle manifest validation failed: ${bundleManifest.error}`,
   };
-}
-
-function manifestDeclaresOpenClawPeer(manifest: PackageManifest): boolean {
-  const peerDependencies = (manifest as { peerDependencies?: unknown }).peerDependencies;
-  return (
-    typeof peerDependencies === "object" &&
-    peerDependencies !== null &&
-    !Array.isArray(peerDependencies) &&
-    typeof (peerDependencies as Record<string, unknown>).openclaw === "string"
-  );
 }
 
 async function safeStat(target: string): Promise<import("node:fs").Stats | null> {

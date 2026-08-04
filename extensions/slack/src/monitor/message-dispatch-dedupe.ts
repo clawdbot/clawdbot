@@ -7,6 +7,7 @@
 // still run the same gate without ever producing a second visible reply.
 import {
   createChannelReplayGuard,
+  runClaimableDedupeClaimLoop,
   type ChannelReplayClaimHandle,
 } from "openclaw/plugin-sdk/persistent-dedupe";
 
@@ -68,23 +69,11 @@ export async function claimSlackMessageDispatchReplay(params: {
   guard: SlackMessageDispatchReplayGuard;
   key: string;
 }): Promise<SlackMessageDispatchClaimResult> {
-  let releaseRetries = 0;
-  while (true) {
-    const claim = await params.guard.claim({ keys: [params.key] });
-    if (claim.kind === "claimed") {
-      return { kind: "claimed", handle: claim.handle };
-    }
-    if (claim.kind === "duplicate" || claim.kind === "invalid") {
-      return { kind: "duplicate" };
-    }
-    try {
-      await claim.pending;
-      return { kind: "duplicate" };
-    } catch {
-      releaseRetries += 1;
-      if (releaseRetries > 1) {
-        return { kind: "duplicate" };
-      }
-    }
-  }
+  const claim = await runClaimableDedupeClaimLoop(
+    () => params.guard.claim({ keys: [params.key] }),
+    (_error, rejectionCount) => rejectionCount <= 1,
+  );
+  return claim.kind === "claimed"
+    ? { kind: "claimed", handle: claim.handle }
+    : { kind: "duplicate" };
 }

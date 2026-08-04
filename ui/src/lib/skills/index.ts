@@ -1,4 +1,4 @@
-// Shared skill Gateway operations and state helpers.
+import { formatErrorMessage } from "@openclaw/normalization-core";
 import {
   ClawHubTrustErrorCodes,
   readClawHubTrustErrorDetails,
@@ -10,21 +10,21 @@ import type {
   SkillStatusEntry,
   SkillStatusReport,
 } from "../../api/types.ts";
-
-export type ClawHubSearchResult = {
-  score: number;
-  slug: string;
-  displayName: string;
-  summary?: string;
-  version?: string;
-  updatedAt?: number;
-};
+import { redactToolDetail } from "../browser-redact.ts";
+import type { ClawHubSearchResult } from "./clawhub-search.ts";
+import {
+  normalizeSkillApiKeyReplacement,
+  runSkillConfigMutation,
+  skillConfigMutationSuccess,
+  type SkillConfigMutationOwner,
+} from "./config-mutations.ts";
 
 export type ClawHubSkillDetail = {
   skill: {
     slug: string;
     displayName: string;
     summary?: string;
+    icon?: string | null;
     tags?: Record<string, string>;
     channel?: string | null;
     isOfficial?: boolean | null;
@@ -77,6 +77,7 @@ export type ClawHubSkillSecurityVerdict = {
 type SkillsState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
+  runtimeConfig: SkillConfigMutationOwner;
   skillsAgentId: string | null;
   skillsAgentRevision: number;
   skillsLoading: boolean;
@@ -147,8 +148,6 @@ function setSkillMessage(state: SkillsState, key: string, message: SkillMessage)
   state.skillMessages = { ...state.skillMessages, [key]: message };
 }
 
-const getErrorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
-
 function getClawHubTrustDetailsFromError(err: unknown) {
   if (!err || typeof err !== "object" || !("details" in err)) {
     return undefined;
@@ -156,9 +155,8 @@ function getClawHubTrustDetailsFromError(err: unknown) {
   return readClawHubTrustErrorDetails((err as { details?: unknown }).details);
 }
 
-function formatClawHubInstallMessage(message: string, warning?: string): string {
-  return warning ? `${message}\n\n${warning}` : message;
-}
+const formatClawHubInstallMessage = (message: string, warning?: string): string =>
+  warning ? `${message}\n\n${warning}` : message;
 
 function formatClawHubAcknowledgementMessage(warning?: string): string {
   return formatClawHubInstallMessage(
@@ -259,14 +257,6 @@ async function runStaleAwareRequest<T>(
   onFinally();
 }
 
-export function setClawHubSearchQuery(state: SkillsState, query: string) {
-  state.clawhubSearchQuery = query;
-  state.clawhubInstallMessage = null;
-  state.clawhubSearchResults = null;
-  state.clawhubSearchError = null;
-  state.clawhubSearchLoading = false;
-}
-
 export function setSkillsAgentId(state: SkillsState, agentId: string | null) {
   const nextAgentId = agentId?.trim() || null;
   if (state.skillsAgentId === nextAgentId) {
@@ -343,7 +333,7 @@ export async function loadSkills(
     if (!isCurrent()) {
       return;
     }
-    state.skillsError = getErrorMessage(err);
+    state.skillsError = formatErrorMessage(err, { redact: redactToolDetail });
   } finally {
     // A transient disconnect invalidates the result, not this invocation's
     // loading ownership. Source/scope identity still protects newer loads.
@@ -454,7 +444,10 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
     }
   } catch (err) {
     if (isSkillsAgentScopeCurrent(state, agentScope)) {
-      state.skillCardErrors = { ...state.skillCardErrors, [skillKey]: getErrorMessage(err) };
+      state.skillCardErrors = {
+        ...state.skillCardErrors,
+        [skillKey]: formatErrorMessage(err, { redact: redactToolDetail }),
+      };
     }
   } finally {
     if (isSkillsAgentScopeCurrent(state, agentScope) && state.skillCardLoadingKey === skillKey) {
@@ -497,7 +490,7 @@ async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStat
       return;
     }
     state.clawhubVerdicts = {};
-    state.clawhubVerdictsError = getErrorMessage(err);
+    state.clawhubVerdictsError = formatErrorMessage(err, { redact: redactToolDetail });
   } finally {
     if (isSkillsAgentScopeCurrent(state, agentScope)) {
       state.clawhubVerdictsLoading = false;
@@ -550,7 +543,7 @@ async function runSkillMutation(
     ) {
       return;
     }
-    const message = getErrorMessage(err);
+    const message = formatErrorMessage(err, { redact: redactToolDetail });
     state.skillsError = message;
     setSkillMessage(state, skillKey, {
       kind: "error",
@@ -567,25 +560,57 @@ async function runSkillMutation(
   }
 }
 
-export async function updateSkillEnabled(state: SkillsState, skillKey: string, enabled: boolean) {
-  await runSkillMutation(state, skillKey, async (client) => {
-    await client.request("skills.update", { skillKey, enabled });
-    return {
-      kind: "success",
-      message: enabled ? "Skill enabled" : "Skill disabled",
-    };
-  });
+export async function updateSkillEnabled(
+  state: SkillsState,
+  skillKey: string,
+  enabled: boolean,
+  canDispatch: () => boolean = () => true,
+) {
+  await runSkillConfigUpdate(
+    state,
+    skillKey,
+    { enabled },
+    enabled ? "Skill enabled" : "Skill disabled",
+    canDispatch,
+  );
 }
 
-export async function saveSkillApiKey(state: SkillsState, skillKey: string) {
-  await runSkillMutation(state, skillKey, async (client) => {
-    const editValue = state.skillEdits[skillKey] ?? "";
-    await client.request("skills.update", { skillKey, apiKey: editValue });
-    return {
-      kind: "success",
-      message: `API key saved — stored in openclaw.json (skills.entries.${skillKey})`,
-    };
-  });
+async function runSkillConfigUpdate(
+  state: SkillsState,
+  skillKey: string,
+  patch: { enabled: boolean } | { apiKey: string },
+  message: string,
+  canDispatch: () => boolean,
+) {
+  await runSkillMutation(state, skillKey, async (client) =>
+    skillConfigMutationSuccess(
+      message,
+      await runSkillConfigMutation(
+        state.runtimeConfig,
+        client,
+        { skillKey, ...patch },
+        canDispatch,
+      ),
+    ),
+  );
+}
+
+export async function saveSkillApiKey(
+  state: SkillsState,
+  skillKey: string,
+  canDispatch: () => boolean = () => true,
+) {
+  const apiKey = normalizeSkillApiKeyReplacement(state.skillEdits[skillKey]);
+  if (!apiKey) {
+    return;
+  }
+  await runSkillConfigUpdate(
+    state,
+    skillKey,
+    { apiKey },
+    `API key saved — stored in openclaw.json (skills.entries.${skillKey})`,
+    canDispatch,
+  );
 }
 
 export async function installSkill(
@@ -610,46 +635,6 @@ export async function installSkill(
   });
 }
 
-export async function searchClawHub(state: SkillsState, query: string) {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  if (!query.trim()) {
-    state.clawhubSearchResults = null;
-    state.clawhubSearchError = null;
-    state.clawhubSearchLoading = false;
-    return;
-  }
-  const client = state.client;
-  const agentScope = captureSkillsAgentScope(state);
-  // Clear stale entries as soon as a new search begins so the UI cannot act on
-  // results that no longer match the current query while the next request is in flight.
-  state.clawhubSearchResults = null;
-  state.clawhubSearchLoading = true;
-  state.clawhubSearchError = null;
-  await runStaleAwareRequest(
-    () =>
-      state.connected &&
-      state.client === client &&
-      query === state.clawhubSearchQuery &&
-      isSkillsAgentScopeCurrent(state, agentScope),
-    () =>
-      client.request<{ results: ClawHubSearchResult[] }>("skills.search", {
-        query,
-        limit: 20,
-      }),
-    (res) => {
-      state.clawhubSearchResults = res?.results ?? [];
-    },
-    (err) => {
-      state.clawhubSearchError = getErrorMessage(err);
-    },
-    () => {
-      state.clawhubSearchLoading = false;
-    },
-  );
-}
-
 export async function loadClawHubDetail(state: SkillsState, slug: string) {
   if (!state.client || !state.connected) {
     return;
@@ -671,7 +656,7 @@ export async function loadClawHubDetail(state: SkillsState, slug: string) {
       state.clawhubDetail = res ?? null;
     },
     (err) => {
-      state.clawhubDetailError = getErrorMessage(err);
+      state.clawhubDetailError = formatErrorMessage(err, { redact: redactToolDetail });
     },
     () => {
       state.clawhubDetailLoading = false;
@@ -737,7 +722,10 @@ export async function installFromClawHub(
         kind: "error",
         text: needsAcknowledgement
           ? formatClawHubAcknowledgementMessage(trustDetails?.warning)
-          : formatClawHubInstallMessage(getErrorMessage(err), trustDetails?.warning),
+          : formatClawHubInstallMessage(
+              formatErrorMessage(err, { redact: redactToolDetail }),
+              trustDetails?.warning,
+            ),
         ...(needsAcknowledgement ? { acknowledgeSlug: slug } : {}),
         ...(needsAcknowledgement && trustDetails?.version
           ? { acknowledgeVersion: trustDetails.version }

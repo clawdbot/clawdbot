@@ -2,19 +2,19 @@ title: WhatsApp compact tools command reply
 
 scenario:
   id: whatsapp-tools-compact-command
-  surface: channel-framework
-  category: channel-framework.channel-actions-commands-and-approvals
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
   coverage:
-    primary: [channels.native-commands]
+    primary:
+      - channels.channel-native-commands
   objective: Verify WhatsApp renders the compact model-tool inventory.
   successCriteria:
     - The compact tools command reaches native command dispatch.
     - The joined reply includes exec and the verbose-mode hint.
   codeRefs:
-    - src/auto-reply/reply/commands-tools.ts
+    - src/auto-reply/reply/commands-info.ts
     - extensions/qa-lab/src/live-transports/whatsapp/adapter.runtime.ts
   execution:
-    profiles: { "whatsapp:mock-default": 34 }
     kind: flow
     channel: whatsapp
     config:

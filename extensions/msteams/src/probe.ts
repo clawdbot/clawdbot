@@ -7,6 +7,7 @@ import {
 } from "../runtime-api.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import { formatUnknownError } from "./errors.js";
+import { withMSTeamsRequestDeadline } from "./request-timeout.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { readAccessToken } from "./token-response.js";
 import { loadDelegatedTokens, resolveMSTeamsCredentials } from "./token.js";
@@ -72,7 +73,12 @@ export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsRes
   try {
     const { app } = await loadMSTeamsSdkWithAuth(creds, resolveMSTeamsSdkCloudOptions(cfg));
     const tokenProvider = createMSTeamsTokenProvider(app);
-    const botTokenValue = await tokenProvider.getAccessToken("https://api.botframework.com");
+    // Token-manager calls can outlive the SDK HTTP timeout, so keep both probe
+    // phases bounded by the shared Teams request deadline.
+    const botTokenValue = await withMSTeamsRequestDeadline({
+      label: "MS Teams Bot Framework probe token",
+      work: () => tokenProvider.getAccessToken("https://api.botframework.com"),
+    });
     if (!botTokenValue) {
       throw new Error("Failed to acquire bot token");
     }
@@ -86,7 +92,10 @@ export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsRes
         }
       | undefined;
     try {
-      const graphTokenValue = await tokenProvider.getAccessToken("https://graph.microsoft.com");
+      const graphTokenValue = await withMSTeamsRequestDeadline({
+        label: "MS Teams Graph probe token",
+        work: () => tokenProvider.getAccessToken("https://graph.microsoft.com"),
+      });
       const accessToken = readAccessToken(graphTokenValue);
       const payload = accessToken ? decodeJwtPayload(accessToken) : null;
       graph = {

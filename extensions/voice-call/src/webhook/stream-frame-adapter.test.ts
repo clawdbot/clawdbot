@@ -43,6 +43,9 @@ describe("TwilioStreamFrameAdapter", () => {
     expect(
       adapter.parseInbound(JSON.stringify({ event: "media", media: { payload: "AAA@@@" } })),
     ).toEqual({ kind: "ignored" });
+    expect(
+      adapter.parseInbound(JSON.stringify({ event: "media", media: { payload: "-_8" } })),
+    ).toEqual({ kind: "media", payloadBase64: "+/8=" });
   });
 
   it("ignores partial numeric media timestamps", () => {

@@ -148,6 +148,8 @@ export function createDiagnosticsEventHandler(params: {
           break;
         case "run.progress":
           break;
+        case "run.execution_phase":
+          break;
         case "diagnostic.heartbeat":
           recordHeartbeat(evt);
           return;
@@ -200,7 +202,7 @@ export function createDiagnosticsEventHandler(params: {
           recordSkillUsed(evt, metadata);
           return;
         case "exec.process.completed":
-          recordExecProcessCompleted(evt);
+          recordExecProcessCompleted(evt, metadata);
           break;
         case "exec.approval.followup_suppressed":
           break;

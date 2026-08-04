@@ -1,6 +1,6 @@
 import Foundation
-@testable import OpenClawKit
 import Testing
+@testable import OpenClawKit
 
 struct WatchCommandsTests {
     @Test func `app snapshot dual writes semantic and legacy status fields`() throws {
@@ -22,6 +22,7 @@ struct WatchCommandsTests {
         let encoded = try JSONEncoder().encode(message)
         let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
 
+        #expect(object["type"] as? String == "watch.app.snapshot")
         #expect(object["gatewayStatus"] != nil)
         #expect(object["gatewayStatusText"] as? String == "Connected")
         #expect(object["talkStatus"] != nil)

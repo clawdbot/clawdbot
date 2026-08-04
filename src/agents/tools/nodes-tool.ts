@@ -161,7 +161,7 @@ export function createNodesTool(options?: {
     label: "Nodes",
     name: "nodes",
     description:
-      "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing, notify, camera/photos/screen/location/notifications, executable lookup (which + bins), generic invoke. Files: file_fetch.",
+      "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke. Files: file_fetch.",
     parameters: NodesToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -222,8 +222,8 @@ export function createNodesTool(options?: {
               nodeId,
               command: "system.notify",
               params: {
-                title: title.trim() || undefined,
-                body: body.trim() || undefined,
+                title: title.trim(),
+                body: body.trim(),
                 sound: typeof params.sound === "string" ? params.sound : undefined,
                 priority: typeof params.priority === "string" ? params.priority : undefined,
                 delivery: typeof params.delivery === "string" ? params.delivery : undefined,

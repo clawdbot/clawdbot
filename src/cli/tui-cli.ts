@@ -1,5 +1,6 @@
 // Registers the terminal UI subcommand and normalizes its local-vs-gateway options.
 import type { Command } from "commander";
+import { CHAT_HISTORY_MAX_ENTRIES } from "../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
@@ -50,6 +51,9 @@ export function registerTuiCli(program: Command) {
         const historyLimit = parseStrictPositiveInteger(opts.historyLimit ?? "200");
         if (historyLimit === undefined) {
           throw new Error("--history-limit must be a positive integer.");
+        }
+        if (!isLocal && historyLimit > CHAT_HISTORY_MAX_ENTRIES) {
+          throw new Error(`--history-limit must be at most ${CHAT_HISTORY_MAX_ENTRIES}.`);
         }
         const { runTui } = await import("../tui/tui.js");
         await runTui({

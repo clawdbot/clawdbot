@@ -1,8 +1,8 @@
 // Whatsapp plugin module implements heartbeat behavior.
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { readWebAuthExistsForDecision, WHATSAPP_AUTH_UNSTABLE_CODE } from "./auth-store.js";
+import { loadWhatsAppChannelRuntime } from "./channel-runtime-loader.js";
 import type { OpenClawConfig } from "./runtime-api.js";
-import { loadWhatsAppChannelRuntime } from "./shared.js";
 
 export async function checkWhatsAppHeartbeatReady(params: {
   cfg: OpenClawConfig;
@@ -12,7 +12,7 @@ export async function checkWhatsAppHeartbeatReady(params: {
     hasActiveWebListener?: (accountId?: string) => boolean;
   };
 }) {
-  if (params.cfg.web?.enabled === false) {
+  if (params.cfg.channels?.whatsapp?.enabled === false) {
     return { ok: false as const, reason: "whatsapp-disabled" as const };
   }
   const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId });

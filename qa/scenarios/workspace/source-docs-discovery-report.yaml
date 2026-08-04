@@ -3,11 +3,12 @@ title: Source and docs discovery report
 scenario:
   id: source-docs-discovery-report
   surface: discovery
+  runtimePairLane: core
   coverage:
     primary:
-      - workspace.repo-discovery
+      - agent-runtime.tool-fs-read
     secondary:
-      - docs.discovery
+      - session-memory.context-visibility-discovery
   objective: Verify the agent can read repo docs and source, expand the QA plan, and publish a worked or did-not-work report.
   successCriteria:
     - Agent reads docs and source before proposing more tests.

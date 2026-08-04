@@ -3,6 +3,7 @@
  */
 import { createHash } from "node:crypto";
 import { describe, expect, test, vi } from "vitest";
+import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
 import * as sessionTranscriptReaders from "./session-transcript-readers.js";
@@ -163,6 +164,40 @@ describe("SessionHistorySseState", () => {
     expect(snapshot.history.items).toBe(snapshot.history.messages);
     expect(snapshot.history.messages[0]?.["__openclaw"]?.seq).toBe(2);
     expect(snapshot.rawTranscriptSeq).toBe(2);
+  });
+
+  test("retains the recent projection without changing carried inline sequence", () => {
+    const state = newState([
+      assistantTextMessage("first", 1),
+      assistantTextMessage("second", 2),
+      assistantTextMessage("third", 3),
+      assistantTextMessage("fourth", 4),
+    ]);
+
+    const retained = state.retainRecentMessages(2);
+
+    expect(retained.items).toBe(retained.messages);
+    expect(retained.messages).toEqual([
+      assistantTextMessage("third", 3),
+      assistantTextMessage("fourth", 4),
+    ]);
+    expect(retained.hasMore).toBe(true);
+    expect(retained.nextCursor).toBe("3");
+
+    const appended = appendAssistantText(state, "fifth", 5);
+    expect(appended?.messageSeq).toBe(5);
+    expect(appended?.message?.content).toEqual(textContent("fifth"));
+    expect(state.retainRecentMessages(2).messages).toEqual([
+      assistantTextMessage("fourth", 4),
+      assistantTextMessage("fifth", 5),
+    ]);
+  });
+
+  test("keeps the existing projection when it already fits the retention window", () => {
+    const state = newState([assistantTextMessage("first", 1)]);
+    const initialSnapshot = state.snapshot();
+
+    expect(state.retainRecentMessages(2)).toBe(initialSnapshot);
   });
 
   test("uses carried sequence for inline SSE appends", () => {
@@ -419,6 +454,81 @@ describe("SessionHistorySseState", () => {
     expect(appended).toEqual({ shouldRefresh: true });
     expect(state.snapshot().messages).toHaveLength(1);
     expect(state.snapshot().messages.at(-1)?.["__openclaw"]?.seq).toBe(5);
+  });
+
+  test("requests refresh when later assistant content repairs an inline stream error", () => {
+    const state = newState([userTextMessage("hello", 1)]);
+
+    const sentinel = state.appendInlineMessage({
+      message: {
+        role: "assistant",
+        content: textContent(STREAM_ERROR_FALLBACK_TEXT),
+        stopReason: "error",
+        errorMessage: "provider failed before content",
+      },
+      messageSeq: 2,
+    });
+
+    expect(sentinel?.message).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+      __openclaw: { seq: 2 },
+    });
+    expect(appendAssistantText(state, "actual fallback response", 3)).toEqual({
+      shouldRefresh: true,
+    });
+  });
+
+  test("keeps an inline failed turn before a new forwarded inter-session turn", () => {
+    const state = newState([
+      {
+        role: "assistant",
+        content: textContent(STREAM_ERROR_FALLBACK_TEXT),
+        stopReason: "error",
+        __openclaw: { seq: 1 },
+      },
+    ]);
+
+    const forwarded = state.appendInlineMessage({
+      message: {
+        role: "user",
+        content: textContent("forwarded update"),
+        provenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:webchat:source",
+          sourceTool: "sessions_send",
+        },
+      },
+      messageSeq: 2,
+    });
+
+    expect(forwarded?.message).toMatchObject({
+      role: "assistant",
+      content: textContent("forwarded update"),
+    });
+    expect(appendAssistantText(state, "actual fallback response", 3)?.message).toMatchObject({
+      role: "assistant",
+      content: textContent("actual fallback response"),
+    });
+    expect(state.snapshot().messages[0]?.content).toEqual([
+      { type: "text", text: "The agent run failed before producing a reply." },
+    ]);
+  });
+
+  test("requests refresh when initial SSE history ends with a repaired stream error", () => {
+    const state = newState([
+      userTextMessage("hello", 1),
+      {
+        role: "assistant",
+        content: textContent(STREAM_ERROR_FALLBACK_TEXT),
+        stopReason: "error",
+        __openclaw: { seq: 2 },
+      },
+    ]);
+
+    expect(appendAssistantText(state, "actual fallback response", 3)).toEqual({
+      shouldRefresh: true,
+    });
   });
 
   test("marks bounded tail snapshots as having older history", () => {

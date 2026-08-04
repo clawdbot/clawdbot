@@ -20,7 +20,8 @@ vi.mock("./shared-client.js", () => ({
   getLeasedSharedCodexAppServerClient: sharedClientMocks.getSharedCodexAppServerClient,
 }));
 
-const { readCodexAppServerUsage, requestCodexAppServerJson } = await import("./request.js");
+const { readCodexAppServerUsage, requestCodexAppServerJson, withCodexAppServerJsonClient } =
+  await import("./request.js");
 
 const expectDeadlineOptions = () =>
   expect.objectContaining({ timeoutMs: expect.any(Number), signal: expect.anything() });
@@ -84,6 +85,102 @@ describe("requestCodexAppServerJson sandbox guard", () => {
 
     expect(request).toHaveBeenCalledWith("thread/list", { limit: 10 }, expectDeadlineOptions());
   });
+
+  it.each([
+    {
+      method: "app/installed" as const,
+      requestParams: { threadId: "thread-1", forceRefresh: false },
+      response: { apps: [] },
+    },
+    {
+      method: "app/read" as const,
+      requestParams: { appIds: ["calendar-app"], includeTools: false },
+      response: { apps: [] },
+    },
+    {
+      method: "plugin/installed" as const,
+      requestParams: { cwds: [] },
+      response: { marketplaces: [], marketplaceLoadErrors: [] },
+    },
+    {
+      method: "config/batchWrite" as const,
+      requestParams: {
+        edits: [
+          {
+            keyPath: 'apps."calendar".tools."create".approval_mode',
+            value: null,
+            mergeStrategy: "replace" as const,
+          },
+        ],
+      },
+      response: {
+        status: "ok",
+        version: "1",
+        filePath: "/codex/config.toml",
+        overriddenMetadata: null,
+      },
+    },
+  ])(
+    "allows the $method control-plane request under sandbox and node execution policies",
+    async ({ method, requestParams, response }) => {
+      const request = vi.fn(async () => response);
+      sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+
+      for (const policy of [
+        {
+          config: { agents: { defaults: { sandbox: { mode: "all" as const } } } },
+          sessionKey: "sandboxed-session",
+        },
+        {
+          config: { tools: { exec: { host: "node" as const, node: "worker-1" } } },
+          sessionKey: "node-session",
+        },
+      ]) {
+        await expect(
+          requestCodexAppServerJson({
+            method,
+            requestParams,
+            ...policy,
+          }),
+        ).resolves.toEqual(response);
+      }
+
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(request).toHaveBeenNthCalledWith(1, method, requestParams, expectDeadlineOptions());
+      expect(request).toHaveBeenNthCalledWith(2, method, requestParams, expectDeadlineOptions());
+    },
+  );
+
+  it.each([
+    {
+      description: "sandboxed",
+      config: { agents: { defaults: { sandbox: { mode: "all" as const } } } },
+      sessionKey: "sandboxed-session",
+      reason: "OpenClaw sandboxing is active for this session",
+    },
+    {
+      description: "node-hosted",
+      config: { tools: { exec: { host: "node" as const, node: "worker-1" } } },
+      sessionKey: "node-session",
+      reason: "OpenClaw exec host=node is active for this session",
+    },
+  ])(
+    "fails closed for unlisted app methods in $description sessions",
+    async ({ config, sessionKey, reason }) => {
+      await expect(
+        requestCodexAppServerJson({
+          method: "app/activate",
+          requestParams: {},
+          config,
+          sessionKey,
+        }),
+      ).rejects.toThrow(
+        `Codex-native app-server method \`app/activate\` is unavailable because ${reason}.`,
+      );
+
+      expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+    },
+  );
 
   it("allows current native thread management methods in sandboxed sessions", async () => {
     const request = vi.fn(async () => ({ ok: true }));
@@ -353,6 +450,63 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     );
 
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+  });
+
+  it("shares one guarded isolated client across installed-plugin and account reads", async () => {
+    const installed = { marketplaces: [], marketplaceLoadErrors: [] };
+    const account = { account: { email: "codex-source@example.com" } };
+    const request = vi.fn(async (method: string) =>
+      method === "plugin/installed" ? installed : account,
+    );
+    const closeAndWait = vi.fn(async () => undefined);
+    sharedClientMocks.createIsolatedCodexAppServerClient.mockResolvedValue({
+      request,
+      closeAndWait,
+    });
+    const startOptions = {
+      transport: "stdio" as const,
+      command: "codex",
+      args: ["app-server", "--listen", "stdio://"],
+      headers: {},
+      env: { CODEX_HOME: "/source/.codex", HOME: "/source" },
+    };
+
+    await expect(
+      withCodexAppServerJsonClient(
+        { timeoutMs: 5_000, startOptions, authProfileId: null, isolated: true },
+        async (scopedRequest) => ({
+          installed: await scopedRequest<typeof installed>({
+            method: "plugin/installed",
+            requestParams: { cwds: [] },
+          }),
+          account: await scopedRequest<typeof account>({
+            method: "account/read",
+            requestParams: { refreshToken: false },
+          }),
+        }),
+      ),
+    ).resolves.toEqual({ installed, account });
+
+    expect(sharedClientMocks.createIsolatedCodexAppServerClient).toHaveBeenCalledTimes(1);
+    expect(sharedClientMocks.createIsolatedCodexAppServerClient).toHaveBeenCalledWith(
+      expect.objectContaining({ startOptions, authProfileId: null }),
+    );
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      "plugin/installed",
+      { cwds: [] },
+      expectDeadlineOptions(),
+    );
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      "account/read",
+      { refreshToken: false },
+      expectDeadlineOptions(),
+    );
+    expect(closeAndWait).toHaveBeenCalledExactlyOnceWith({
+      exitTimeoutMs: 2_000,
+      forceKillDelayMs: 250,
+    });
   });
 
   it("reads usage and account identity over one isolated client", async () => {

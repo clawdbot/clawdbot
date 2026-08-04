@@ -27,9 +27,22 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   connectionKind?: GatewayWsConnectionKind;
   worker?: WorkerConnectionIdentity;
   isDeviceTokenAuth?: boolean;
+  /** Temporary legacy migration session closed when normal enforcement resumes. */
+  isControlUiDeviceAuthMigrationSession?: boolean;
+  /** Signed shared-auth session admitted only to approve its own upgrade pairing. */
+  isControlUiDeviceAuthMigration?: boolean;
+  /** Client id verified against the server-approved device pairing record. */
+  pairedClientId?: string;
   usesSharedGatewayAuth: boolean;
   sharedGatewaySessionGeneration?: string;
   presenceKey?: string;
+  authenticatedUserId?: string;
+  authenticatedUserProfile?: {
+    profileId: string;
+    displayName: string | null;
+    hasAvatar: boolean;
+    updatedAt: number;
+  };
   clientIp?: string;
   internal?: {
     approvalRuntime?: boolean;

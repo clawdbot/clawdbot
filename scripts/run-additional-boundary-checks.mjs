@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import pMap from "p-map";
 import prettyMilliseconds from "pretty-ms";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
 const DEFAULT_CHECK_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_OUTPUT_MAX_BYTES = 512 * 1024;
@@ -76,6 +77,7 @@ export const BOUNDARY_CHECKS = [
     ["run", "lint:extensions:telegram-grammy-types"],
   ],
   ["lint:ui:no-raw-window-open", "pnpm", ["lint:ui:no-raw-window-open"]],
+  ["native-state-schema-version", "node", ["scripts/check-native-state-schema-version.mjs"]],
 ].map(([label, command, args]) => ({ label, command, args }));
 
 /**
@@ -583,7 +585,7 @@ export function parseCliArgs(args, env = process.env) {
   return { help, shardSpec };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   try {
     const cliArgs = parseCliArgs(process.argv.slice(2), process.env);
     if (cliArgs.help) {

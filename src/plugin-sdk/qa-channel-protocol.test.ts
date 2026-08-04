@@ -1,8 +1,17 @@
 // QA channel protocol tests cover synthetic channel payload validation and parsing.
 import { describe, expect, it } from "vitest";
-import { parseQaTarget, sanitizeQaBusToolCalls } from "./qa-channel-protocol.js";
+import { buildQaTarget, parseQaTarget, sanitizeQaBusToolCalls } from "./qa-channel-protocol.js";
 
 describe("qa-channel protocol", () => {
+  it("builds canonical targets", () => {
+    expect(buildQaTarget({ chatType: "direct", conversationId: "Alice" })).toBe("dm:Alice");
+    expect(buildQaTarget({ chatType: "group", conversationId: "Room" })).toBe("group:Room");
+    expect(buildQaTarget({ chatType: "channel", conversationId: "Room" })).toBe("channel:Room");
+    expect(buildQaTarget({ chatType: "channel", conversationId: "Room", threadId: "Topic" })).toBe(
+      "thread:Room/Topic",
+    );
+  });
+
   it("parses canonical targets without folding ids or prefix casing", () => {
     expect(parseQaTarget("channel:CaseSensitive")).toEqual({
       chatType: "channel",

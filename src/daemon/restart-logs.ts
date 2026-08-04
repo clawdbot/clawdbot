@@ -1,11 +1,22 @@
 /** Resolves daemon log paths and shell snippets for restart handoff diagnostics. */
+import fs from "node:fs";
 import path from "node:path";
 import { quoteCmdScriptArg } from "./cmd-argv.js";
 import { resolveGatewayProfileSuffix } from "./constants.js";
 import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
-import type { GatewayServiceEnv } from "./service-types.js";
+import type { GatewayLifecycleMutationMode, GatewayServiceEnv } from "./service-types.js";
 
 const GATEWAY_RESTART_LOG_FILENAME = "gateway-restart.log";
+
+export type GatewayLifecycleAuditSource = "cli" | "safe-rpc" | "supervisor" | "handoff";
+
+type GatewayLifecycleAuditEntry = {
+  action: "start" | "stop" | "restart";
+  source: GatewayLifecycleAuditSource;
+  mode: GatewayLifecycleMutationMode;
+  pid?: number;
+  interactive: boolean;
+};
 
 type GatewayLogPaths = {
   logDir: string;
@@ -59,6 +70,31 @@ export function resolveGatewaySupervisorLogPaths(
 
 export function resolveGatewayRestartLogPath(env: GatewayServiceEnv): string {
   return path.join(resolveGatewayLogPaths(env).logDir, GATEWAY_RESTART_LOG_FILENAME);
+}
+
+/** Append one best-effort lifecycle record without letting diagnostics block the mutation. */
+export function appendGatewayLifecycleAuditLog(
+  env: GatewayServiceEnv,
+  entry: GatewayLifecycleAuditEntry,
+): void {
+  try {
+    const logPath = resolveGatewayRestartLogPath(env);
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    const fields = [
+      `source=${entry.source}`,
+      `action=${entry.action}`,
+      `mode=${entry.mode}`,
+      ...(entry.pid !== undefined ? [`pid=${entry.pid}`] : []),
+      `interactive=${entry.interactive ? 1 : 0}`,
+    ];
+    fs.appendFileSync(
+      logPath,
+      `[${new Date().toISOString()}] openclaw gateway lifecycle ${fields.join(" ")}\n`,
+      "utf8",
+    );
+  } catch {
+    // Lifecycle logging is diagnostic only; service control remains authoritative.
+  }
 }
 
 export function shellEscapeRestartLogValue(value: string): string {

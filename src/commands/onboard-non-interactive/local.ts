@@ -9,14 +9,21 @@ import { resolveGatewayPort } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewayAuthToken } from "../../gateway/auth-token-resolution.js";
-import { resolveConfiguredSecretInputString } from "../../gateway/resolve-configured-secret-input-string.js";
+import { resolveConfiguredSecretInputWithFallback } from "../../gateway/resolve-configured-secret-input-string.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../daemon-runtime.js";
-import { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig } from "../onboard-config.js";
+import {
+  ensureOnboardingAgentWorkspace,
+  resolveOnboardingAgentTarget,
+} from "../onboard-agent-target.js";
+import {
+  applyLocalSetupWorkspaceConfig,
+  applySkipBootstrapConfig,
+  resolveOnboardingWorkspaceConflict,
+} from "../onboard-config.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
-  ensureWorkspaceAndSessions,
   resolveLocalControlUiProbeLinks,
   waitForGatewayReachable,
 } from "../onboard-helpers.js";
@@ -110,12 +117,13 @@ async function resolveGatewayHealthProbeToken(
   if (nextConfig.gateway?.auth?.mode === "password") {
     // Password mode uses the configured password directly; token fallback must
     // stay disabled or the probe can validate the wrong auth mode.
-    const resolved = await resolveConfiguredSecretInputString({
+    const resolved = await resolveConfiguredSecretInputWithFallback({
       config: nextConfig,
       env: process.env,
       value: nextConfig.gateway.auth.password,
       path: "gateway.auth.password",
       unresolvedReasonStyle: "detailed",
+      readFallback: () => process.env.OPENCLAW_GATEWAY_PASSWORD,
     });
     return {
       password: resolved.value,
@@ -166,22 +174,40 @@ export async function runNonInteractiveLocalSetup(params: {
   const { opts, runtime, baseConfig, baseHash } = params;
   const mode = "local" as const;
 
-  const workspaceDir = resolveNonInteractiveWorkspaceDir({
+  const requestedWorkspaceDir = resolveNonInteractiveWorkspaceDir({
     opts,
     baseConfig,
     defaultWorkspaceDir: DEFAULT_WORKSPACE,
   });
+  const workspaceConflict = resolveOnboardingWorkspaceConflict(baseConfig, requestedWorkspaceDir);
+  const workspaceDir = workspaceConflict?.currentWorkspaceDir ?? requestedWorkspaceDir;
+  if (workspaceConflict) {
+    runtime.error(
+      [
+        "Warning: existing agents keep their current workspace during non-interactive onboarding.",
+        `Current workspace: ${workspaceConflict.currentWorkspaceDir}`,
+        `Requested workspace: ${workspaceConflict.requestedWorkspaceDir}`,
+        `Run \`${formatCliCommand("openclaw onboard --classic")}\` to confirm moving the existing agent fleet.`,
+      ].join("\n"),
+    );
+  }
 
-  let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(baseConfig, workspaceDir);
+  let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(
+    baseConfig,
+    requestedWorkspaceDir,
+  );
   if (opts.skipBootstrap) {
     nextConfig = applySkipBootstrapConfig(nextConfig);
   }
+  // Workspace defaults are already staged above; provider discovery must use
+  // that requested owner before first-agent creation is allowed to write.
+  const authTarget = resolveOnboardingAgentTarget(nextConfig);
 
   const inferredAuthChoice = opts.authChoice
     ? undefined
     : (await import("./local/auth-choice-inference.js")).inferAuthChoiceFromFlags(opts, {
         config: nextConfig,
-        workspaceDir,
+        workspaceDir: authTarget.workspaceDir,
         env: process.env,
       });
   if (!opts.authChoice && inferredAuthChoice && inferredAuthChoice.matches.length > 1) {
@@ -198,6 +224,21 @@ export async function runNonInteractiveLocalSetup(params: {
     return;
   }
   const authChoice = opts.authChoice ?? inferredAuthChoice?.choice ?? "skip";
+
+  // Validate the complete Gateway proposal before provider methods or first-
+  // agent creation can write credentials, config, or workspace state.
+  const gatewayResult = applyNonInteractiveGatewayConfig({
+    nextConfig,
+    opts,
+    runtime,
+    defaultPort: resolveGatewayPort(baseConfig),
+  });
+  if (!gatewayResult) {
+    return;
+  }
+  nextConfig = gatewayResult.nextConfig;
+  nextConfig = applyNonInteractiveSkillsConfig({ nextConfig, opts, runtime });
+
   if (authChoice !== "skip") {
     // Auth-choice handling is loaded only when needed so skip-only onboarding
     // avoids provider plugin discovery and credential helper imports.
@@ -208,6 +249,7 @@ export async function runNonInteractiveLocalSetup(params: {
       opts,
       runtime,
       baseConfig,
+      target: authTarget,
     });
     if (!nextConfigAfterAuth) {
       return;
@@ -215,33 +257,35 @@ export async function runNonInteractiveLocalSetup(params: {
     nextConfig = nextConfigAfterAuth;
   }
 
-  const gatewayBasePort = resolveGatewayPort(baseConfig);
-  const gatewayResult = applyNonInteractiveGatewayConfig({
-    nextConfig,
-    opts,
-    runtime,
-    defaultPort: gatewayBasePort,
-  });
-  if (!gatewayResult) {
-    return;
-  }
-  nextConfig = gatewayResult.nextConfig;
-
-  nextConfig = applyNonInteractiveSkillsConfig({ nextConfig, opts, runtime });
   if (!opts.skipHooks) {
     nextConfig = enableDefaultOnboardingInternalHooks(nextConfig);
+  }
+
+  const { ensureOnboardingAgent } = await import("../onboard-agent.js");
+  const created = await ensureOnboardingAgent({
+    config: nextConfig,
+    workspace: workspaceDir,
+    baseConfig,
+  });
+  nextConfig = applyLocalSetupWorkspaceConfig(created.config, requestedWorkspaceDir);
+  // First-agent creation is the first permitted config mutation. Preserve its
+  // resulting hash so the canonical wizard write still rejects foreign edits.
+  const effectiveBaseHash = created.configHash ?? baseHash;
+  if (opts.skipBootstrap) {
+    nextConfig = applySkipBootstrapConfig(nextConfig);
   }
 
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
   nextConfig = await commitNonInteractiveOnboardConfig({
     nextConfig,
     baseConfig,
-    baseHash,
+    baseHash: effectiveBaseHash,
     reset: opts.reset,
   });
   logConfigUpdated(runtime);
 
-  await ensureWorkspaceAndSessions(workspaceDir, runtime, {
+  const finalTarget = resolveOnboardingAgentTarget(nextConfig);
+  await ensureOnboardingAgentWorkspace(finalTarget, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
     skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
   });
@@ -382,7 +426,7 @@ export async function runNonInteractiveLocalSetup(params: {
     opts,
     runtime,
     mode,
-    workspaceDir,
+    workspaceDir: finalTarget.workspaceDir,
     authChoice,
     gateway: {
       port: gatewayResult.port,

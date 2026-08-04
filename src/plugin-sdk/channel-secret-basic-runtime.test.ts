@@ -162,4 +162,39 @@ describe("createChannelSecretTargetRegistryEntries", () => {
       },
     ]);
   });
+
+  it("binds every consumer of one inherited field to the same atomic contract", () => {
+    const collect = (betaEndpoint: string, reverseAccounts = false) => {
+      const accounts = {
+        alpha: { endpoint: "https://alpha.example.invalid" },
+        beta: { endpoint: betaEndpoint },
+      };
+      const channel = {
+        token: { source: "env" as const, provider: "default", id: "FIXTURE_SHARED" },
+        accounts: reverseAccounts
+          ? { beta: accounts.beta, alpha: accounts.alpha }
+          : { alpha: accounts.alpha, beta: accounts.beta },
+      };
+      const context = createContext();
+      collectSimpleChannelFieldAssignments({
+        channelKey: "example",
+        field: "token",
+        channel,
+        surface: resolveChannelAccountSurface(channel),
+        defaults: undefined,
+        context,
+        topInactiveReason: "inactive",
+        accountInactiveReason: "inactive account",
+      });
+      return context.assignments.map((assignment) => assignment.ownerContractDigest);
+    };
+
+    const initial = collect("https://beta.example.invalid");
+    const changed = collect("https://changed.example.invalid");
+    expect(initial).toHaveLength(2);
+    expect(new Set(initial).size).toBe(1);
+    expect(new Set(collect("https://beta.example.invalid", true))).toEqual(new Set(initial));
+    expect(new Set(changed).size).toBe(1);
+    expect(changed[0]).not.toBe(initial[0]);
+  });
 });

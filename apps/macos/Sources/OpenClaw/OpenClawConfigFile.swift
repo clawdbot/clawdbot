@@ -4,10 +4,30 @@ import Foundation
 import OpenClawProtocol
 
 enum OpenClawConfigFile {
+    private struct ConfigReadIdentity: Equatable {
+        let path: String
+        let data: Data
+        let valid: Bool
+        let modificationTimeMs: Double?
+        let creationTimeMs: Double?
+        let systemNumber: String?
+        let fileNumber: String?
+        let mode: Int?
+        let linkCount: Int?
+        let ownerID: Int?
+        let groupID: Int?
+    }
+
     private static let logger = Logger(subsystem: "ai.openclaw", category: "config")
     private static let configAuditFileName = "config-audit.jsonl"
     private static let fileLock = NSRecursiveLock()
     private nonisolated(unsafe) static var configHealthState: [String: Any] = [:]
+    /// Config reads are serialized by fileLock. Keep only the latest canonical
+    /// identity so polling callers do not rebuild the same forensic fingerprint.
+    private nonisolated(unsafe) static var lastObservedConfigRead: ConfigReadIdentity?
+    #if DEBUG
+    private nonisolated(unsafe) static var configObservationCount = 0
+    #endif
 
     private static func withFileLock<T>(_ body: () throws -> T) rethrows -> T {
         self.fileLock.lock()
@@ -18,6 +38,10 @@ enum OpenClawConfigFile {
     #if DEBUG
     static func withTestingFileLock<T>(_ body: () throws -> T) rethrows -> T {
         try self.withFileLock(body)
+    }
+
+    static func testingConfigObservationCount() -> Int {
+        self.withFileLock { self.configObservationCount }
     }
     #endif
 
@@ -181,18 +205,6 @@ enum OpenClawConfigFile {
                 return false
             }
         }
-    }
-
-    static func updateGatewayDict(_ mutate: (inout [String: Any]) -> Void) {
-        var root = self.loadDict()
-        var gateway = root["gateway"] as? [String: Any] ?? [:]
-        mutate(&gateway)
-        if gateway.isEmpty {
-            root.removeValue(forKey: "gateway")
-        } else {
-            root["gateway"] = gateway
-        }
-        self.saveDict(root)
     }
 
     static func gatewayUpdateChannel() -> String? {
@@ -396,53 +408,6 @@ extension OpenClawConfigFile {
 
         guard normalizedSshHost == normalizedUrlHost else { return nil }
         return port
-    }
-
-    static func setRemoteGatewayUrl(host: String, port: Int?) {
-        guard let port, port > 0 else { return }
-        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedHost.isEmpty else { return }
-        self.updateGatewayDict { gateway in
-            var remote = gateway["remote"] as? [String: Any] ?? [:]
-            let existingUrl = (remote["url"] as? String)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let scheme = URL(string: existingUrl)?.scheme ?? "ws"
-            remote["url"] = "\(scheme)://\(trimmedHost):\(port)"
-            gateway["remote"] = remote
-        }
-    }
-
-    static func setRemoteGatewayUrlString(_ value: String) {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        self.updateGatewayDict { gateway in
-            var remote = gateway["remote"] as? [String: Any] ?? [:]
-            remote["url"] = trimmed
-            gateway["remote"] = remote
-        }
-    }
-
-    static func setRemoteGatewayTransport(_ value: String) {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        self.updateGatewayDict { gateway in
-            var remote = gateway["remote"] as? [String: Any] ?? [:]
-            remote["transport"] = trimmed
-            gateway["remote"] = remote
-        }
-    }
-
-    static func clearRemoteGatewayUrl() {
-        self.updateGatewayDict { gateway in
-            guard var remote = gateway["remote"] as? [String: Any] else { return }
-            guard remote["url"] != nil else { return }
-            remote.removeValue(forKey: "url")
-            if remote.isEmpty {
-                gateway.removeValue(forKey: "remote")
-            } else {
-                gateway["remote"] = remote
-            }
-        }
     }
 
     private static func remoteGatewayUrl() -> URL? {
@@ -654,27 +619,41 @@ extension OpenClawConfigFile {
     }
 
     private static func configFingerprint(
-        data: Data,
         root: [String: Any]?,
-        configURL: URL,
+        identity: ConfigReadIdentity,
         observedAt: String) -> [String: Any]
     {
-        let attributes = try? FileManager().attributesOfItem(atPath: configURL.path)
-        return [
-            "hash": SHA256.hash(data: data).compactMap { String(format: "%02x", $0) }.joined(),
-            "bytes": data.count,
-            "mtimeMs": self.fileTimestampMs(attributes?[.modificationDate]) ?? NSNull(),
-            "ctimeMs": self.fileTimestampMs(attributes?[.creationDate]) ?? NSNull(),
-            "dev": self.fileSystemNumber(attributes?[.systemNumber]) ?? NSNull(),
-            "ino": self.fileSystemNumber(attributes?[.systemFileNumber]) ?? NSNull(),
-            "mode": self.posixMode(attributes?[.posixPermissions]) ?? NSNull(),
-            "nlink": self.fileAttributeInt(attributes?[.referenceCount]) ?? NSNull(),
-            "uid": self.fileAttributeInt(attributes?[.ownerAccountID]) ?? NSNull(),
-            "gid": self.fileAttributeInt(attributes?[.groupOwnerAccountID]) ?? NSNull(),
+        [
+            "hash": SHA256.hash(data: identity.data).compactMap { String(format: "%02x", $0) }.joined(),
+            "bytes": identity.data.count,
+            "mtimeMs": identity.modificationTimeMs ?? NSNull(),
+            "ctimeMs": identity.creationTimeMs ?? NSNull(),
+            "dev": identity.systemNumber ?? NSNull(),
+            "ino": identity.fileNumber ?? NSNull(),
+            "mode": identity.mode ?? NSNull(),
+            "nlink": identity.linkCount ?? NSNull(),
+            "uid": identity.ownerID ?? NSNull(),
+            "gid": identity.groupID ?? NSNull(),
             "hasMeta": self.hasMeta(root),
             "gatewayMode": self.gatewayMode(root) ?? NSNull(),
             "observedAt": observedAt,
         ]
+    }
+
+    private static func configReadIdentity(data: Data, configURL: URL, valid: Bool) -> ConfigReadIdentity {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: configURL.path)
+        return ConfigReadIdentity(
+            path: configURL.path,
+            data: data,
+            valid: valid,
+            modificationTimeMs: self.fileTimestampMs(attributes?[.modificationDate]),
+            creationTimeMs: self.fileTimestampMs(attributes?[.creationDate]),
+            systemNumber: self.fileSystemNumber(attributes?[.systemNumber]),
+            fileNumber: self.fileSystemNumber(attributes?[.systemFileNumber]),
+            mode: self.posixMode(attributes?[.posixPermissions]),
+            linkCount: self.fileAttributeInt(attributes?[.referenceCount]),
+            ownerID: self.fileAttributeInt(attributes?[.ownerAccountID]),
+            groupID: self.fileAttributeInt(attributes?[.groupOwnerAccountID]))
     }
 
     private static func sameFingerprint(_ left: [String: Any]?, _ right: [String: Any]) -> Bool {
@@ -722,9 +701,8 @@ extension OpenClawConfigFile {
         guard let data = try? Data(contentsOf: url) else { return nil }
         let root = self.parseConfigData(data)
         return self.configFingerprint(
-            data: data,
             root: root,
-            configURL: url,
+            identity: self.configReadIdentity(data: data, configURL: url, valid: root != nil),
             observedAt: ISO8601DateFormatter().string(from: Date()))
     }
 
@@ -766,8 +744,14 @@ extension OpenClawConfigFile {
     }
 
     private static func observeConfigRead(data: Data, root: [String: Any]?, configURL: URL, valid: Bool) {
+        let identity = self.configReadIdentity(data: data, configURL: configURL, valid: valid)
+        guard identity != self.lastObservedConfigRead else { return }
+        self.lastObservedConfigRead = identity
+        #if DEBUG
+        self.configObservationCount += 1
+        #endif
         let observedAt = ISO8601DateFormatter().string(from: Date())
-        let current = self.configFingerprint(data: data, root: root, configURL: configURL, observedAt: observedAt)
+        let current = self.configFingerprint(root: root, identity: identity, observedAt: observedAt)
         var state = self.configHealthState
         let entry = self.configHealthEntry(state: state, configPath: configURL.path)
         let lastKnownGood = entry["lastKnownGood"] as? [String: Any]

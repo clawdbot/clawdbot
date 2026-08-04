@@ -5,20 +5,26 @@ import ai.openclaw.wear.shared.WearEventType
 import ai.openclaw.wear.shared.WearMessage
 import ai.openclaw.wear.shared.WearProtocol
 import ai.openclaw.wear.shared.WearProtocolCodec
+import ai.openclaw.wear.shared.WearProxyCapability
 import ai.openclaw.wear.shared.WearRpcMethod
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -30,29 +36,19 @@ class WearProxyClientTest {
       lateinit var client: WearProxyClient
       var sentNode: String? = null
       client =
-        WearProxyClient.createForTests(
-          nodeResolver = WearNodeResolver { "phone-nearby" },
-          transport =
-            WearMessageTransport { nodeId, path, data ->
-              sentNode = nodeId
-              assertEquals(WearProtocol.REQUEST_PATH, path)
-              val request = (WearProtocolCodec.decode(data) as WearDecodeResult.Success).message as WearMessage.Request
-              val response =
-                WearProtocolCodec.encode(
-                  WearMessage.Response(
-                    requestId = request.requestId,
-                    ok = true,
-                    result = buildJsonObject { put("connected", JsonPrimitive(true)) },
-                    eventStreamId = "stream-1",
-                    eventSequence = 12,
-                  ),
-                )
-              client.handleMessage(
-                sourceNodeId = "phone-nearby",
-                path = WearProtocol.RESPONSE_PATH,
-                data = response,
-              )
-            },
+        testProxyClient(
+          nodeResolver = { "phone-nearby" },
+          transport = { nodeId, path, data ->
+            sentNode = nodeId
+            assertEquals(WearProtocol.REQUEST_PATH, path)
+            client.respond(
+              sourceNodeId = "phone-nearby",
+              requestData = data,
+              result = buildJsonObject { put("connected", JsonPrimitive(true)) },
+              eventStreamId = "stream-1",
+              eventSequence = 12,
+            )
+          },
         )
 
       val response = client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, expectedNodeId = null)
@@ -76,25 +72,15 @@ class WearProxyClientTest {
     runTest {
       lateinit var client: WearProxyClient
       client =
-        WearProxyClient.createForTests(
-          nodeResolver = WearNodeResolver { "phone-nearby" },
-          transport =
-            WearMessageTransport { _, _, data ->
-              val request = (WearProtocolCodec.decode(data) as WearDecodeResult.Success).message as WearMessage.Request
-              val response =
-                WearProtocolCodec.encode(
-                  WearMessage.Response(
-                    requestId = request.requestId,
-                    ok = true,
-                    result = buildJsonObject { put("connected", JsonPrimitive(true)) },
-                  ),
-                )
-              client.handleMessage(
-                sourceNodeId = "phone-nearby",
-                path = WearProtocol.RESPONSE_PATH,
-                data = response,
-              )
-            },
+        testProxyClient(
+          nodeResolver = { "phone-nearby" },
+          transport = { _, _, data ->
+            client.respond(
+              sourceNodeId = "phone-nearby",
+              requestData = data,
+              result = buildJsonObject { put("connected", JsonPrimitive(true)) },
+            )
+          },
         )
 
       val response = client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, expectedNodeId = null)
@@ -113,15 +99,14 @@ class WearProxyClientTest {
       var preferredNode = "phone-1"
       lateinit var client: WearProxyClient
       client =
-        WearProxyClient.createForTests(
-          nodeResolver = WearNodeResolver { preferredNode },
-          transport =
-            WearMessageTransport { nodeId, _, data ->
-              val request = (WearProtocolCodec.decode(data) as WearDecodeResult.Success).message as WearMessage.Request
-              val response = WearProtocolCodec.encode(WearMessage.Response(requestId = request.requestId, ok = true))
-              client.handleMessage("wrong-phone", WearProtocol.RESPONSE_PATH, response)
-              client.handleMessage(nodeId, WearProtocol.RESPONSE_PATH, response)
-            },
+        testProxyClient(
+          nodeResolver = { preferredNode },
+          transport = { nodeId, _, data ->
+            val request = (WearProtocolCodec.decode(data) as WearDecodeResult.Success).message as WearMessage.Request
+            val response = WearProtocolCodec.encode(WearMessage.Response(requestId = request.requestId, ok = true))
+            client.handleMessage("wrong-phone", WearProtocol.RESPONSE_PATH, response)
+            client.handleMessage(nodeId, WearProtocol.RESPONSE_PATH, response)
+          },
         )
 
       client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, expectedNodeId = null)
@@ -142,12 +127,11 @@ class WearProxyClientTest {
       lateinit var client: WearProxyClient
       lateinit var request: WearMessage.Request
       client =
-        WearProxyClient.createForTests(
-          nodeResolver = WearNodeResolver { "phone-1" },
-          transport =
-            WearMessageTransport { _, _, data ->
-              request = (WearProtocolCodec.decode(data) as WearDecodeResult.Success).message as WearMessage.Request
-            },
+        testProxyClient(
+          nodeResolver = { "phone-1" },
+          transport = { _, _, data ->
+            request = (WearProtocolCodec.decode(data) as WearDecodeResult.Success).message as WearMessage.Request
+          },
         )
 
       client.updatePreferredPhoneNodeId("phone-1")
@@ -175,22 +159,15 @@ class WearProxyClientTest {
       var discoveries = 0
       var sentNode: String? = null
       client =
-        WearProxyClient.createForTests(
-          nodeResolver =
-            WearNodeResolver {
-              discoveries += 1
-              "different-phone"
-            },
-          transport =
-            WearMessageTransport { nodeId, _, data ->
-              sentNode = nodeId
-              val request = (WearProtocolCodec.decode(data) as WearDecodeResult.Success).message as WearMessage.Request
-              client.handleMessage(
-                sourceNodeId = nodeId,
-                path = WearProtocol.RESPONSE_PATH,
-                data = WearProtocolCodec.encode(WearMessage.Response(requestId = request.requestId, ok = true)),
-              )
-            },
+        testProxyClient(
+          nodeResolver = {
+            discoveries += 1
+            "different-phone"
+          },
+          transport = { nodeId, _, data ->
+            sentNode = nodeId
+            client.respond(nodeId, data)
+          },
         )
 
       val result = client.request(WearRpcMethod.ChatAbort, buildJsonObject {}, expectedNodeId = "state-phone")
@@ -205,17 +182,11 @@ class WearProxyClientTest {
     runTest {
       lateinit var client: WearProxyClient
       client =
-        WearProxyClient.createForTests(
-          nodeResolver = WearNodeResolver { "preferred-phone" },
-          transport =
-            WearMessageTransport { nodeId, _, data ->
-              val request = (WearProtocolCodec.decode(data) as WearDecodeResult.Success).message as WearMessage.Request
-              client.handleMessage(
-                sourceNodeId = nodeId,
-                path = WearProtocol.RESPONSE_PATH,
-                data = WearProtocolCodec.encode(WearMessage.Response(requestId = request.requestId, ok = true)),
-              )
-            },
+        testProxyClient(
+          nodeResolver = { "preferred-phone" },
+          transport = { nodeId, _, data ->
+            client.respond(nodeId, data)
+          },
         )
 
       client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, expectedNodeId = null)
@@ -233,22 +204,15 @@ class WearProxyClientTest {
       var discoveries = 0
       val sentNodes = mutableListOf<String>()
       client =
-        WearProxyClient.createForTests(
-          nodeResolver =
-            WearNodeResolver {
-              discoveries += 1
-              "resolver-phone"
-            },
-          transport =
-            WearMessageTransport { nodeId, _, data ->
-              sentNodes += nodeId
-              val request = (WearProtocolCodec.decode(data) as WearDecodeResult.Success).message as WearMessage.Request
-              client.handleMessage(
-                sourceNodeId = nodeId,
-                path = WearProtocol.RESPONSE_PATH,
-                data = WearProtocolCodec.encode(WearMessage.Response(requestId = request.requestId, ok = true)),
-              )
-            },
+        testProxyClient(
+          nodeResolver = {
+            discoveries += 1
+            "resolver-phone"
+          },
+          transport = { nodeId, _, data ->
+            sentNodes += nodeId
+            client.respond(nodeId, data)
+          },
         )
       val changed = async { client.preferredPhoneChanges.first() }
       runCurrent()
@@ -277,9 +241,9 @@ class WearProxyClientTest {
     runTest {
       var sends = 0
       val client =
-        WearProxyClient.createForTests(
-          nodeResolver = WearNodeResolver { "phone-current" },
-          transport = WearMessageTransport { _, _, _ -> sends += 1 },
+        testProxyClient(
+          nodeResolver = { "phone-current" },
+          transport = { _, _, _ -> sends += 1 },
         )
 
       val stale =
@@ -301,9 +265,9 @@ class WearProxyClientTest {
     runTest {
       var sends = 0
       val client =
-        WearProxyClient.createForTests(
-          nodeResolver = WearNodeResolver { null },
-          transport = WearMessageTransport { _, _, _ -> sends += 1 },
+        testProxyClient(
+          nodeResolver = { null },
+          transport = { _, _, _ -> sends += 1 },
         )
 
       var code: String? = null
@@ -321,9 +285,9 @@ class WearProxyClientTest {
   fun discoveryTaskCancellationUsesConnectivityError() =
     runTest {
       val client =
-        WearProxyClient.createForTests(
-          nodeResolver = WearNodeResolver { throw CancellationException("task canceled") },
-          transport = WearMessageTransport { _, _, _ -> error("must not send") },
+        testProxyClient(
+          nodeResolver = { throw CancellationException("task canceled") },
+          transport = { _, _, _ -> error("must not send") },
         )
 
       val failure = runCatching { client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null) }.exceptionOrNull()
@@ -335,15 +299,325 @@ class WearProxyClientTest {
   fun sendTaskCancellationUsesConnectivityError() =
     runTest {
       val client =
-        WearProxyClient.createForTests(
-          nodeResolver = WearNodeResolver { "phone-nearby" },
-          transport = WearMessageTransport { _, _, _ -> throw CancellationException("task canceled") },
+        testProxyClient(
+          nodeResolver = { "phone-nearby" },
+          transport = { _, _, _ -> throw CancellationException("task canceled") },
         )
 
       val failure = runCatching { client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null) }.exceptionOrNull()
 
       assertEquals("phone_unavailable", (failure as WearProxyException).code)
     }
+
+  @Test
+  fun shorterCallerTimeoutPropagatesWithoutInvalidatingPhone() =
+    runTest {
+      var discoveries = 0
+      var respond = false
+      lateinit var client: WearProxyClient
+      client =
+        testProxyClient(
+          nodeResolver = {
+            discoveries += 1
+            "resolver-phone"
+          },
+          transport = { nodeId, _, data ->
+            if (!respond) awaitCancellation()
+            client.respond(nodeId, data)
+          },
+        )
+      client.updatePreferredPhoneNodeId("phone-current")
+
+      val failure =
+        runCatching {
+          withTimeout(1_000L) {
+            client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null)
+          }
+        }.exceptionOrNull()
+      respond = true
+
+      assertTrue(failure is TimeoutCancellationException)
+      assertEquals("phone-current", client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null).sourceNodeId)
+      assertEquals(0, discoveries)
+    }
+
+  @Test
+  fun sendFailureInvalidatesCachedPhoneAndRediscoversNextRequest() =
+    runTest {
+      var resolvedNode = "phone-old"
+      var discoveries = 0
+      var sends = 0
+      val sentNodes = mutableListOf<String>()
+      lateinit var client: WearProxyClient
+      client =
+        testProxyClient(
+          nodeResolver = {
+            discoveries += 1
+            resolvedNode
+          },
+          transport = { nodeId, _, data ->
+            sends += 1
+            sentNodes += nodeId
+            if (sends == 1) error("stale node")
+            client.respond(nodeId, data)
+          },
+        )
+
+      val first = runCatching { client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null) }.exceptionOrNull()
+      resolvedNode = "phone-new"
+      val second = client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null)
+
+      assertEquals("phone_unavailable", (first as WearProxyException).code)
+      assertEquals("phone-new", second.sourceNodeId)
+      assertEquals(2, discoveries)
+      assertEquals(listOf("phone-old", "phone-new"), sentNodes)
+    }
+
+  @Test
+  fun responseTimeoutInvalidatesCachedPhoneAndRediscoversNextRequest() =
+    runTest {
+      var resolvedNode = "phone-old"
+      var discoveries = 0
+      var sends = 0
+      lateinit var client: WearProxyClient
+      client =
+        testProxyClient(
+          nodeResolver = {
+            discoveries += 1
+            resolvedNode
+          },
+          transport = { nodeId, _, data ->
+            sends += 1
+            if (sends > 1) {
+              client.respond(nodeId, data)
+            }
+          },
+        )
+
+      val first = runCatching { client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null) }.exceptionOrNull()
+      resolvedNode = "phone-new"
+      val second = client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null)
+
+      assertEquals("timeout", (first as WearProxyException).code)
+      assertEquals("phone-new", second.sourceNodeId)
+      assertEquals(2, discoveries)
+    }
+
+  @Test
+  fun staleSendFailureDoesNotInvalidateNewerSamePhoneGeneration() =
+    runTest {
+      var discoveries = 0
+      var sends = 0
+      lateinit var client: WearProxyClient
+      client =
+        testProxyClient(
+          nodeResolver = {
+            discoveries += 1
+            "resolver-phone"
+          },
+          transport = { nodeId, _, data ->
+            sends += 1
+            if (sends == 1) {
+              client.updatePreferredPhoneNodeId(nodeId)
+              error("stale send")
+            }
+            client.respond(nodeId, data)
+          },
+        )
+      client.updatePreferredPhoneNodeId("phone-current")
+
+      val first = runCatching { client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null) }.exceptionOrNull()
+      val second = client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null)
+
+      assertEquals("phone_unavailable", (first as WearProxyException).code)
+      assertEquals("phone-current", second.sourceNodeId)
+      assertEquals(0, discoveries)
+    }
+
+  @Test
+  fun staleResponseTimeoutDoesNotInvalidateNewerSamePhoneGeneration() =
+    runTest {
+      var discoveries = 0
+      var sends = 0
+      lateinit var client: WearProxyClient
+      client =
+        testProxyClient(
+          nodeResolver = {
+            discoveries += 1
+            "resolver-phone"
+          },
+          transport = { nodeId, _, data ->
+            sends += 1
+            if (sends == 1) {
+              client.updatePreferredPhoneNodeId(nodeId)
+            } else {
+              client.respond(nodeId, data)
+            }
+          },
+        )
+      client.updatePreferredPhoneNodeId("phone-current")
+
+      val first = runCatching { client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null) }.exceptionOrNull()
+      val second = client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null)
+
+      assertEquals("timeout", (first as WearProxyException).code)
+      assertEquals("phone-current", second.sourceNodeId)
+      assertEquals(0, discoveries)
+    }
+
+  @Test
+  fun successfulParallelResponseProtectsPhoneFromOlderTimeout() =
+    runTest {
+      var discoveries = 0
+      var sends = 0
+      lateinit var client: WearProxyClient
+      client =
+        testProxyClient(
+          nodeResolver = {
+            discoveries += 1
+            "resolver-phone"
+          },
+          transport = { nodeId, _, data ->
+            sends += 1
+            if (sends > 1) {
+              client.respond(nodeId, data)
+            }
+          },
+        )
+      client.updatePreferredPhoneNodeId("phone-current")
+
+      val older = async { runCatching { client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null) } }
+      runCurrent()
+      val newer = async { client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null) }
+      runCurrent()
+
+      assertEquals("phone-current", newer.await().sourceNodeId)
+      assertEquals("timeout", (older.await().exceptionOrNull() as WearProxyException).code)
+      assertEquals("phone-current", client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null).sourceNodeId)
+      assertEquals(0, discoveries)
+    }
+
+  @Test
+  fun correlatedResponseProtectsPhoneBeforeRequesterResumes() =
+    runTest {
+      var discoveries = 0
+      var respond = false
+      val requests = mutableListOf<WearMessage.Request>()
+      lateinit var client: WearProxyClient
+      client =
+        testProxyClient(
+          nodeResolver = {
+            discoveries += 1
+            "resolver-phone"
+          },
+          transport = { nodeId, _, data ->
+            val request = (WearProtocolCodec.decode(data) as WearDecodeResult.Success).message as WearMessage.Request
+            requests += request
+            if (respond) {
+              client.handleMessage(
+                sourceNodeId = nodeId,
+                path = WearProtocol.RESPONSE_PATH,
+                data = WearProtocolCodec.encode(WearMessage.Response(requestId = request.requestId, ok = true)),
+              )
+            }
+          },
+        )
+      client.updatePreferredPhoneNodeId("phone-current")
+
+      val older = async { runCatching { client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null) } }
+      val newer = async { runCatching { client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null) } }
+      runCurrent()
+      assertEquals(2, requests.size)
+
+      client.handleMessage(
+        sourceNodeId = "phone-current",
+        path = WearProtocol.RESPONSE_PATH,
+        data = WearProtocolCodec.encode(WearMessage.Response(requestId = requests[1].requestId, ok = true)),
+      )
+      newer.cancel()
+      advanceUntilIdle()
+
+      assertTrue(newer.isCancelled)
+      assertEquals("timeout", (older.await().exceptionOrNull() as WearProxyException).code)
+      respond = true
+      assertEquals("phone-current", client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null).sourceNodeId)
+      assertEquals(0, discoveries)
+    }
+
+  @Test
+  fun ambiguousCapabilityCallbackForcesReachableRediscovery() =
+    runTest {
+      var discoveries = 0
+      lateinit var client: WearProxyClient
+      client =
+        testProxyClient(
+          nodeResolver = {
+            discoveries += 1
+            "phone-reachable"
+          },
+          transport = { nodeId, _, data ->
+            client.respond(nodeId, data)
+          },
+        )
+      client.updatePreferredPhoneNodeId("phone-stale")
+
+      client.invalidatePreferredPhoneNode()
+      val result = client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null)
+
+      assertEquals("phone-reachable", result.sourceNodeId)
+      assertEquals(1, discoveries)
+    }
+
+  @Test
+  fun inFlightDiscoveryCannotRestoreInvalidatedPhone() =
+    runTest {
+      val discoveryStarted = CompletableDeferred<Unit>()
+      val releaseDiscovery = CompletableDeferred<Unit>()
+      var resolvedNode = "phone-old"
+      var discoveries = 0
+      val sentNodes = mutableListOf<String>()
+      lateinit var client: WearProxyClient
+      client =
+        testProxyClient(
+          nodeResolver = {
+            val result = resolvedNode
+            discoveries += 1
+            if (discoveries == 1) {
+              discoveryStarted.complete(Unit)
+              releaseDiscovery.await()
+            }
+            result
+          },
+          transport = { nodeId, _, data ->
+            sentNodes += nodeId
+            client.respond(nodeId, data)
+          },
+        )
+
+      val first = async { runCatching { client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null) } }
+      discoveryStarted.await()
+      client.invalidatePreferredPhoneNode()
+      resolvedNode = "phone-new"
+      releaseDiscovery.complete(Unit)
+
+      assertEquals("phone_unavailable", (first.await().exceptionOrNull() as WearProxyException).code)
+      assertEquals("phone-new", client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null).sourceNodeId)
+      assertEquals(2, discoveries)
+      assertEquals(listOf("phone-new"), sentNodes)
+    }
+
+  @Test
+  fun reachablePhoneSelectionPrefersOneNearbyNodeAndRejectsAmbiguity() {
+    val nearby = WearReachablePhoneNode(id = "phone-nearby", isNearby = true)
+    val nearbyTwo = WearReachablePhoneNode(id = "phone-nearby-2", isNearby = true)
+    val cloud = WearReachablePhoneNode(id = "phone-cloud", isNearby = false)
+    val cloudTwo = WearReachablePhoneNode(id = "phone-cloud-2", isNearby = false)
+
+    assertEquals("phone-nearby", selectReachablePhoneNodeId(listOf(cloud, nearby)))
+    assertEquals("phone-cloud", selectReachablePhoneNodeId(listOf(cloud)))
+    assertEquals(null, selectReachablePhoneNodeId(listOf(nearby, nearbyTwo, cloud)))
+    assertEquals(null, selectReachablePhoneNodeId(listOf(cloud, cloudTwo)))
+  }
 
   @Test
   fun eventGapAndResetRequireCanonicalRefresh() {
@@ -382,6 +656,45 @@ class WearProxyClientTest {
     assertEquals(WearSequenceDecision.GapOrReset, tracker.accept("stream", 12))
     tracker.adoptSnapshot("stream", 12)
     assertEquals(WearSequenceDecision.Accepted, tracker.accept("stream", 13))
+  }
+
+  @Test
+  fun rpcResponseMustMatchTheCurrentStreamAndWatermark() {
+    val tracker = WearEventSequenceTracker()
+
+    tracker.adoptSnapshot("stream", 10)
+
+    assertTrue(tracker.isResponseCurrent(tracker.beginResponseRequest(), "stream", 10))
+    assertFalse(tracker.isResponseCurrent(tracker.beginResponseRequest(), "stream", 11))
+    assertFalse(tracker.isResponseCurrent(tracker.beginResponseRequest(), "stream", 9))
+    assertFalse(tracker.isResponseCurrent(tracker.beginResponseRequest(), "new-stream", 11))
+    val pendingSnapshot = tracker.beginResponseRequest()
+    tracker.requireSnapshot()
+    assertFalse(tracker.isResponseCurrent(pendingSnapshot, "stream", 11))
+  }
+
+  @Test
+  fun legacyRpcResponseWithoutWatermarkRequiresUnchangedEvents() {
+    val tracker = WearEventSequenceTracker()
+
+    tracker.adoptSnapshot(null, 10)
+
+    assertTrue(tracker.isResponseCurrent(tracker.beginResponseRequest(), null, null))
+    val staleRequest = tracker.beginResponseRequest()
+    assertEquals(WearSequenceDecision.Accepted, tracker.accept(null, 11))
+    assertFalse(tracker.isResponseCurrent(staleRequest, null, null))
+  }
+
+  @Test
+  fun newerRpcRequestInvalidatesAnOlderCompletion() {
+    val tracker = WearEventSequenceTracker()
+
+    tracker.adoptSnapshot("stream", 10)
+    val olderRequest = tracker.beginResponseRequest()
+    val newerRequest = tracker.beginResponseRequest()
+
+    assertFalse(tracker.isResponseCurrent(olderRequest, "stream", 12))
+    assertTrue(tracker.isResponseCurrent(newerRequest, "stream", 10))
   }
 
   @Test
@@ -467,36 +780,37 @@ class WearProxyClientTest {
       WearUiState(
         loading = false,
         connected = true,
-        status = "Connected",
+        proxyCapabilities = WearProxyCapability.entries.toSet(),
         sessions = listOf(selected),
         selectedSession = selected,
         messages = listOf(WearChatMessage(id = "m1", role = "assistant", text = "old", timestamp = 1)),
         streamText = "typing",
         activeRunId = "run-1",
         sending = true,
-        error = "old",
+        failure = WearConversationFailure.INTERNAL_ERROR,
       )
 
     val reset = state.resetForPhoneChange()
 
     assertTrue(reset.loading)
     assertTrue(!reset.connected)
+    assertTrue(reset.proxyCapabilities.isEmpty())
     assertTrue(reset.sessions.isEmpty())
     assertEquals(null, reset.selectedSession)
     assertTrue(reset.messages.isEmpty())
     assertEquals(null, reset.streamText)
     assertEquals(null, reset.activeRunId)
-    assertTrue(reset.sending)
-    assertEquals(null, reset.error)
+    assertTrue(!reset.sending)
+    assertEquals(null, reset.failure)
   }
 
   @Test
   fun requestDeadlineIncludesPhoneDiscovery() =
     runTest {
       val client =
-        WearProxyClient.createForTests(
-          nodeResolver = WearNodeResolver { awaitCancellation() },
-          transport = WearMessageTransport { _, _, _ -> error("must not send") },
+        testProxyClient(
+          nodeResolver = { awaitCancellation() },
+          transport = { _, _, _ -> error("must not send") },
         )
 
       val failure =
@@ -512,13 +826,46 @@ class WearProxyClientTest {
   fun discoveryFailureUsesConnectivityError() =
     runTest {
       val client =
-        WearProxyClient.createForTests(
-          nodeResolver = WearNodeResolver { error("Play services failed") },
-          transport = WearMessageTransport { _, _, _ -> error("must not send") },
+        testProxyClient(
+          nodeResolver = { error("Play services failed") },
+          transport = { _, _, _ -> error("must not send") },
         )
 
       val failure = runCatching { client.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, null) }.exceptionOrNull()
 
       assertEquals("phone_unavailable", (failure as WearProxyException).code)
     }
+}
+
+private fun testProxyClient(
+  nodeResolver: suspend () -> String?,
+  transport: suspend (String, String, ByteArray) -> Unit,
+): WearProxyClient =
+  WearProxyClient.createForTests(
+    nodeResolver = WearNodeResolver(nodeResolver),
+    transport = WearMessageTransport(transport),
+  )
+
+private suspend fun WearProxyClient.respond(
+  sourceNodeId: String,
+  requestData: ByteArray,
+  result: JsonElement? = null,
+  eventStreamId: String? = null,
+  eventSequence: Long? = null,
+) {
+  val request = (WearProtocolCodec.decode(requestData) as WearDecodeResult.Success).message as WearMessage.Request
+  handleMessage(
+    sourceNodeId = sourceNodeId,
+    path = WearProtocol.RESPONSE_PATH,
+    data =
+      WearProtocolCodec.encode(
+        WearMessage.Response(
+          requestId = request.requestId,
+          ok = true,
+          result = result,
+          eventStreamId = eventStreamId,
+          eventSequence = eventSequence,
+        ),
+      ),
+  )
 }

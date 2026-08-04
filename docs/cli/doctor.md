@@ -10,7 +10,9 @@ title: "Doctor"
 
 Health checks and quick fixes for the gateway, channels, plugins, skills, model routing, local state, and config migrations. Use it whenever something is not behaving as expected and you want one command to explain what is wrong.
 
-When Gateway status reports SecretRef owners isolated during cold startup, doctor prints a **Secret owners unavailable** warning with every owner and affected config path.
+When Gateway status reports degraded SecretRef owners, doctor prints a **Secret runtime degradation** warning with every cold or stale owner, affected config path, redacted reason, and the `openclaw secrets reload` retry command.
+
+When channel ingress events are dead-lettered, doctor names each affected channel account and points to [`openclaw channels dead-letters list`](/cli/channels#inbound-dead-letters) for inspection and recovery.
 
 Related:
 
@@ -207,6 +209,8 @@ This includes retired MCP OAuth files under `<state-dir>/mcp-oauth/*.json`. Stop
 
 ## Shared state SQLite compaction
 
+See [Database schemas](/reference/database-schemas) for schema versioning, integrity checks, and downgrade recovery.
+
 `openclaw doctor --state-sqlite compact` is explicit offline maintenance for
 the canonical shared state database at
 `<state-dir>/state/openclaw.sqlite`. It does not accept an arbitrary database
@@ -264,6 +268,13 @@ session rows live in
 imported and archived out of the active sessions directory after successful
 import; archive-tier JSONL files remain support artifacts, not runtime
 fallbacks.
+
+The regular `openclaw doctor` pass also reports canonical SQLite transcripts
+whose initial session header was never persisted. `openclaw doctor --fix`
+prepends a current header and rebuilds the transcript indexes in one
+transaction while preserving existing event IDs, parent links, row timestamps,
+and session-list recency. Headerless legacy or malformed transcripts remain
+rejected until their owning migration can validate them.
 
 Modes:
 
@@ -349,7 +360,12 @@ it writes the local support report and prints a prefilled issue URL.
 `restore` remains the lower-level undo operation. It uses manifest
 `sourcePath -> archivePath` records, moves archived artifacts back only when the
 original path is missing, reports conflicts when both paths exist, and leaves
-the SQLite database in place.
+the SQLite database in place. When several manifests recorded the same original
+path, restore plans all candidates before moving any of them. Identical archives
+are safe duplicates, and one nonempty legacy `sessions.json` may supersede empty
+copies created by older writers. Distinct nonempty indexes, distinct transcript
+archives, invalid archives, and archives missing without a recorded prior
+restore fail closed so restore cannot silently replace or hide recoverable data.
 
 ### Downgrading After Session SQLite Migration
 
@@ -381,10 +397,11 @@ compare restored legacy artifacts with the SQLite rows before importing.
 - Any config write (including a `--fix` repair) rotates a backup to `~/.openclaw/openclaw.json.bak` (with a numbered `.bak.1`..`.bak.4` ring). `--fix` also drops unknown config keys reported by schema validation, listing each removal; it skips this while an update is in progress so partially written upgrade state is not stripped before its migration finishes.
 - If `openclaw.json` cannot be parsed and no last-known-good config can be recovered, `doctor --fix` preserves the original as `openclaw.json.clobbered.<timestamp>`, leaves the current file unchanged, and exits with an error instead of writing a partial replacement.
 - Set `OPENCLAW_SERVICE_REPAIR_POLICY=external` when another supervisor owns the gateway lifecycle. Doctor still reports gateway/service health and applies non-service repairs, but skips service install/start/restart/bootstrap and legacy service cleanup.
+- Doctor reports the managed Gateway's applied heap limit and the adaptive derivation used for the current host or container memory limit. Use `openclaw gateway status` for the same report outside a repair pass.
 - On Linux, doctor ignores inactive extra gateway-like systemd units and does not rewrite command/entrypoint metadata for a running systemd gateway service during repair. Stop the service first, or use `openclaw gateway install --force` to replace the active launcher.
 - `doctor --fix --non-interactive` reports missing or stale gateway service definitions but does not install or rewrite them outside update repair mode. Run `openclaw gateway install` for a missing service, or `openclaw gateway install --force` to replace the launcher.
 - State integrity checks detect orphan transcript files in the sessions directory. Archiving them as `.deleted.<timestamp>` requires interactive confirmation; `--fix`, `--yes`, and headless runs leave them in place.
-- Doctor scans `~/.openclaw/cron/jobs.json` (or `cron.store`) for legacy cron job shapes and rewrites them before importing canonical rows into SQLite.
+- Doctor scans historical `~/.openclaw/cron/jobs.json` stores and previously configured legacy store locations for old cron job shapes, imports jobs and quarantine records into SQLite, and archives the migrated JSON files.
 - Doctor reports cron jobs with an explicit `payload.model` override, including provider-namespace counts and mismatches against `agents.defaults.model`, so scheduled jobs that do not inherit the default model are visible during auth or billing investigations.
 - Doctor reports cron jobs still marked in-flight (`state.runningAtMs`), which can make `openclaw cron list` show them as `running`. This check is read-only: if no Gateway is currently executing a marked job, the next cron service startup records the interrupted run and clears the marker.
 - On Linux, doctor warns when the user's crontab still runs the unmaintained legacy `~/.openclaw/bin/ensure-whatsapp.sh`, which can misreport `Gateway inactive` when cron lacks the systemd user-bus environment.

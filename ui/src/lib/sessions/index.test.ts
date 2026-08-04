@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import {
   GatewayRequestError,
@@ -6,6 +7,7 @@ import {
   type GatewayHelloOk,
 } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createSessionCapability, reconcileSessionRunTerminal } from "./index.ts";
 
 function sessionsResult(sessions: SessionsListResult["sessions"], ts: number): SessionsListResult {
@@ -31,13 +33,13 @@ function deferred<T>() {
 function createGatewayHarness(client: GatewayBrowserClient, featureMethods?: string[]) {
   let snapshot: {
     client: GatewayBrowserClient | null;
-    connected: boolean;
+    phase: "connected" | "reconnecting";
     sessionKey: string;
     assistantAgentId: string | null;
     hello: GatewayHelloOk | null;
   } = {
     client,
-    connected: true,
+    phase: "connected" as const,
     sessionKey: "agent:main:main",
     assistantAgentId: "main",
     hello:
@@ -66,8 +68,12 @@ function createGatewayHarness(client: GatewayBrowserClient, featureMethods?: str
         listener(event);
       }
     },
-    publish: (connected: boolean) => {
-      snapshot = { ...snapshot, connected };
+    publish: (connected: boolean, nextClient: GatewayBrowserClient | null = snapshot.client) => {
+      snapshot = {
+        ...snapshot,
+        client: nextClient,
+        phase: connected ? "connected" : "reconnecting",
+      };
       for (const listener of listeners) {
         listener(snapshot);
       }
@@ -102,7 +108,10 @@ describe("createSessionCapability", () => {
       if (groupsCalls === 1) {
         throw new Error("temporary catalog failure");
       }
-      return { groups: [{ name: "Research" }] };
+      return {
+        groups: [{ name: "Research" }],
+        sectionOrder: ["work", "category:Research", "ungrouped"],
+      };
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway } = createGatewayHarness(client, ["sessions.groups.list"]);
@@ -114,6 +123,7 @@ describe("createSessionCapability", () => {
 
     expect(groupsCalls).toBe(2);
     expect(sessions.state.groups).toEqual(["Research"]);
+    expect(sessions.state.sectionOrder).toEqual(["work", "category:Research", "ungrouped"]);
     sessions.dispose();
   });
 
@@ -140,7 +150,7 @@ describe("createSessionCapability", () => {
 
     await sessions.groupsLoad();
 
-    await vi.waitFor(() => expect(sessions.state.groups).toEqual(["Recovered"]));
+    await waitForFast(() => expect(sessions.state.groups).toEqual(["Recovered"]));
     expect(groupsCalls).toBe(2);
     sessions.dispose();
   });
@@ -215,7 +225,7 @@ describe("createSessionCapability", () => {
         return await renamed.promise;
       }
       if (method === "sessions.subscribe") {
-        return {};
+        return { subscribed: true };
       }
       if (method === "sessions.list") {
         return sessionsResult([], 2);
@@ -243,7 +253,7 @@ describe("createSessionCapability", () => {
         return await replaced.promise;
       }
       if (method === "sessions.subscribe") {
-        return {};
+        return { subscribed: true };
       }
       if (method === "sessions.list") {
         return sessionsResult([], 2);
@@ -287,7 +297,7 @@ describe("createSessionCapability", () => {
         operation === "rename"
           ? sessions.groupsRename("Alpha", "Beta")
           : sessions.groupsDelete("Alpha");
-      await vi.waitFor(() =>
+      await waitForFast(() =>
         expect(request).toHaveBeenCalledWith("sessions.list", expect.any(Object)),
       );
       publish(false);
@@ -331,11 +341,11 @@ describe("createSessionCapability", () => {
     const sessions = createSessionCapability(gateway);
 
     const firstLoad = sessions.groupsLoad();
-    await vi.waitFor(() => expect(groupsCalls).toBe(1));
+    await waitForFast(() => expect(groupsCalls).toBe(1));
     emitEvent({ type: "event", event: "sessions.changed", payload: { reason: "groups" } });
-    await vi.waitFor(() => expect(groupsCalls).toBe(2));
+    await waitForFast(() => expect(groupsCalls).toBe(2));
     currentGroups.resolve({ groups: [{ name: "Current" }] });
-    await vi.waitFor(() => expect(sessions.state.groups).toEqual(["Current"]));
+    await waitForFast(() => expect(sessions.state.groups).toEqual(["Current"]));
     firstGroups.reject(new Error("stale catalog failure"));
     await firstLoad;
 
@@ -384,14 +394,17 @@ describe("createSessionCapability", () => {
       deletedSnapshots.push(next.deletedSessions.map((target) => target.key));
     });
 
-    await expect(sessions.deleteMany([{ key: keptKey }, { key: deletedKey }])).resolves.toEqual({
-      deleted: [deletedKey],
-      errors: [],
-      preservedWorktrees: [],
-    });
+    await expect(
+      sessions.deleteMany([{ key: keptKey }, { key: deletedKey, archivedOnly: true }]),
+    ).resolves.toEqual({ deleted: [deletedKey], errors: [], preservedWorktrees: [] });
     expect(deletedSnapshots.some((keys) => keys.includes(deletedKey))).toBe(true);
     expect(deletedSnapshots.some((keys) => keys.includes(keptKey))).toBe(false);
     expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenCalledWith("sessions.delete", {
+      key: deletedKey,
+      deleteTranscript: true,
+      archivedOnly: true,
+    });
     unsubscribe();
     sessions.dispose();
   });
@@ -407,7 +420,7 @@ describe("createSessionCapability", () => {
     const sessions = createSessionCapability({
       snapshot: {
         client,
-        connected: true,
+        phase: "connected" as const,
         sessionKey: "agent:main:main",
         assistantAgentId: "main",
         hello: null,
@@ -436,7 +449,7 @@ describe("createSessionCapability", () => {
     let listCalls = 0;
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.subscribe") {
-        return {};
+        return { subscribed: true };
       }
       if (method === "sessions.list") {
         listCalls += 1;
@@ -451,14 +464,14 @@ describe("createSessionCapability", () => {
     const staleRefresh = sessions.refresh({ force: true });
     publish(false);
     publish(true);
-    await vi.waitFor(() => expect(listCalls).toBe(2));
+    await waitForFast(() => expect(listCalls).toBe(2));
 
     staleList.resolve(sessionsResult([{ key: "stale", kind: "direct", updatedAt: 1 }], 1));
     await staleRefresh;
     expect(sessions.state.result).toBeNull();
 
     currentList.resolve(sessionsResult([{ key: "current", kind: "direct", updatedAt: 2 }], 2));
-    await vi.waitFor(() => expect(sessions.state.result?.sessions[0]?.key).toBe("current"));
+    await waitForFast(() => expect(sessions.state.result?.sessions[0]?.key).toBe("current"));
     sessions.dispose();
   });
 
@@ -469,7 +482,7 @@ describe("createSessionCapability", () => {
         return await staleCreate.promise;
       }
       if (method === "sessions.subscribe") {
-        return {};
+        return { subscribed: true };
       }
       if (method === "sessions.list") {
         return sessionsResult([], 2);
@@ -516,7 +529,7 @@ describe("createSessionCapability", () => {
     expect(sessions.state.loading).toBe(true);
 
     const created = sessions.create({ agentId: "main" });
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("sessions.create", { agentId: "main" }),
     );
 
@@ -547,7 +560,7 @@ describe("createSessionCapability", () => {
     const sessions = createSessionCapability({
       snapshot: {
         client,
-        connected: true,
+        phase: "connected" as const,
         sessionKey: "agent:main:source",
         assistantAgentId: "main",
         hello: null,
@@ -570,7 +583,7 @@ describe("createSessionCapability", () => {
         return await staleReset.promise;
       }
       if (method === "sessions.subscribe") {
-        return {};
+        return { subscribed: true };
       }
       if (method === "sessions.list") {
         return sessionsResult([], 2);
@@ -596,7 +609,7 @@ describe("createSessionCapability", () => {
         throw new Error("post-commit lifecycle failed");
       }
       if (method === "sessions.subscribe") {
-        return {};
+        return { subscribed: true };
       }
       if (method === "sessions.list") {
         return sessionsResult([], 2);
@@ -612,14 +625,14 @@ describe("createSessionCapability", () => {
     sessions.dispose();
   });
 
-  it("rolls back an optimistic model patch when its connection epoch retires", async () => {
+  it("clears optimistic and settled model overrides when its connection epoch retires", async () => {
     const stalePatch = deferred<unknown>();
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.patch") {
         return await stalePatch.promise;
       }
       if (method === "sessions.subscribe") {
-        return {};
+        return { subscribed: true };
       }
       if (method === "sessions.list") {
         return sessionsResult([], 2);
@@ -630,18 +643,20 @@ describe("createSessionCapability", () => {
     const { gateway, publish } = createGatewayHarness(client);
     const sessions = createSessionCapability(gateway);
     const key = "agent:main:main";
+    const inactiveKey = "agent:main:inactive";
     sessions.setModelOverride(key, "openai/gpt-old");
+    sessions.setModelOverride(inactiveKey, "openai/gpt-old-account");
 
     const operation = sessions.patch(key, { model: "openai/gpt-new" });
     expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-new");
 
     publish(false);
-    expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-old");
+    expect(sessions.state.modelOverrides).toEqual({});
     publish(true);
     stalePatch.resolve({});
 
     await expect(operation).resolves.toBeNull();
-    expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-old");
+    expect(sessions.state.modelOverrides).toEqual({});
     sessions.dispose();
   });
 
@@ -652,7 +667,7 @@ describe("createSessionCapability", () => {
         return { ok: true, path: "", key: "agent:main:main", entry: {} };
       }
       if (method === "sessions.subscribe") {
-        return {};
+        return { subscribed: true };
       }
       if (method === "sessions.list") {
         return sessionsResult([], 2);
@@ -670,7 +685,7 @@ describe("createSessionCapability", () => {
       { model: "openai/gpt-new" },
       { waitFor: priorPatch.promise },
     );
-    expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-new");
+    expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-old");
     expect(request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
 
     publish(false);
@@ -679,7 +694,7 @@ describe("createSessionCapability", () => {
 
     await expect(operation).resolves.toBeNull();
     expect(request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
-    expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-old");
+    expect(sessions.state.modelOverrides[key]).toBeUndefined();
     sessions.dispose();
   });
 
@@ -697,7 +712,7 @@ describe("createSessionCapability", () => {
     const sessions = createSessionCapability({
       snapshot: {
         client,
-        connected: true,
+        phase: "connected" as const,
         sessionKey: "agent:main:source",
         assistantAgentId: "main",
         hello: null,
@@ -748,7 +763,7 @@ describe("createSessionCapability", () => {
     const gateway = {
       snapshot: {
         client,
-        connected: true,
+        phase: "connected" as const,
         sessionKey: "agent:main:oldest",
         assistantAgentId: "main",
         hello: null,
@@ -803,7 +818,7 @@ describe("createSessionCapability", () => {
     const sessions = createSessionCapability({
       snapshot: {
         client,
-        connected: true,
+        phase: "connected" as const,
         sessionKey: key,
         assistantAgentId: "main",
         hello: null,
@@ -950,11 +965,11 @@ describe("createSessionCapability", () => {
 
     emitEvent(sessionChangedEvent(hiddenKey));
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([visibleKey]);
     expect(publishedKeys.some((keys) => keys.includes(hiddenKey))).toBe(false);
     refreshed.resolve(sessionsResult([{ key: visibleKey, kind: "direct", updatedAt: 1 }], 2));
-    await vi.waitFor(() => expect(sessions.state.loading).toBe(false));
+    await waitForFast(() => expect(sessions.state.loading).toBe(false));
     sessions.dispose();
   });
 
@@ -986,10 +1001,10 @@ describe("createSessionCapability", () => {
       payload: { sessionKey: visibleKey, reason: "delete" },
     });
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     expect(deletedSnapshots.some((keys) => keys.includes(visibleKey))).toBe(true);
     refreshed.resolve(sessionsResult([], 2));
-    await vi.waitFor(() => expect(sessions.state.loading).toBe(false));
+    await waitForFast(() => expect(sessions.state.loading).toBe(false));
     sessions.dispose();
   });
 
@@ -1019,7 +1034,7 @@ describe("createSessionCapability", () => {
 
     emitEvent(sessionChangedEvent(hiddenKey));
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     expect(sessions.state.result?.sessions.map((row) => row.key)).not.toContain(hiddenKey);
     sessions.dispose();
   });
@@ -1045,7 +1060,7 @@ describe("createSessionCapability", () => {
     const gateway = {
       snapshot: {
         client,
-        connected: true,
+        phase: "connected" as const,
         sessionKey: key,
         assistantAgentId: "main",
         hello: null,
@@ -1065,7 +1080,7 @@ describe("createSessionCapability", () => {
       payload: { sessionKey: key, updatedAt: 1, status: "done" },
     });
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(sessions.state.result?.sessions[0]).toMatchObject({
         key,
         hasActiveRun: false,

@@ -219,6 +219,34 @@ describe("Slack message tools", () => {
     ]);
   });
 
+  it("exposes message actions for a configured user-identity account", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          postAs: "user",
+          userToken: "test-user-token",
+          appToken: "test-app-token",
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(listSlackMessageActions(cfg)).toEqual([
+      "send",
+      "react",
+      "reactions",
+      "read",
+      "edit",
+      "delete",
+      "download-file",
+      "upload-file",
+      "pin",
+      "unpin",
+      "list-pins",
+      "member-info",
+      "emoji-list",
+    ]);
+  });
+
   it("honors the selected Slack account during discovery", () => {
     const cfg = {
       channels: {

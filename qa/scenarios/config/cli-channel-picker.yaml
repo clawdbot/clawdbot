@@ -2,8 +2,8 @@ title: CLI channel picker
 
 scenario:
   id: cli-channel-picker
-  surface: cli-install-update-onboard-doctor
-  category: cli-install-update-onboard-doctor.plugin-and-channel-setup
+  surface: cli
+  category: cli.plugin-and-channel-setup
   coverage:
     primary:
       - cli.channel-picker

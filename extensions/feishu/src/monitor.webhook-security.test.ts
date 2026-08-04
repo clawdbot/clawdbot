@@ -16,6 +16,7 @@ const probeFeishuMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./probe.js", () => ({
   probeFeishu: probeFeishuMock,
+  registerFeishuAiAgent: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
 vi.mock("./client.js", () => createFeishuClientMockModule());

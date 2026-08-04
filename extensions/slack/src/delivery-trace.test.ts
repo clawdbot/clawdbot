@@ -33,7 +33,7 @@ type RecordedWireCall = {
 
 type CapturedDispatcherOptions = {
   deliver: (payload: ReplyPayload, info: { kind: ReplyDispatchKind }) => Promise<unknown>;
-  onError?: (err: unknown, info: { kind: string }) => void;
+  onError?: (err: unknown, info: { kind: string }) => Promise<void> | void;
   typingCallbacks?: {
     onReplyStart?: () => Promise<void>;
     onIdle?: () => void;
@@ -131,6 +131,7 @@ vi.mock("./client.js", async (importOriginal) => {
   };
   return {
     ...actual,
+    createSlackReadClient: traceClient,
     createSlackWebClient: traceClient,
     createSlackWriteClient: traceClient,
     getSlackWriteClient: traceClient,
@@ -249,11 +250,8 @@ const slackTraceScenarios: Record<SlackTraceScenarioName, readonly DeliveryTrace
     { kind: "idle" },
   ],
   // Edit-preview tier: native transport ineligible → draft post + throttled
-  // chat.update, and the final promotes the draft in place. The custom-identity
-  // flavor of this tier is structurally unreachable: dispatch.ts disables the
-  // draft stream whenever a custom identity is set because chat.update cannot
-  // preserve custom authorship (identity turns instead deliver one final
-  // chat.postMessage), so no golden exists for it.
+  // chat.update, and the final promotes the draft in place. Custom identity uses
+  // a disposable app-authored draft plus a separate customized final instead.
   "preview-edit-fallback": [
     { kind: "reply-start" },
     { kind: "partial", text: PREVIEW_PARTIAL_ONE },
@@ -453,7 +451,6 @@ function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedS
       botId: "BBOT",
       textLimit: 4000,
       typingReaction: "",
-      removeAckAfterReply: false,
       allowFrom: [],
       // Mirrors the monitor's setSlackThreadStatus wiring
       // (extensions/slack/src/monitor/context.ts): typing travels over
@@ -548,7 +545,7 @@ async function setupSlackTrace(
     } catch (err) {
       // Mirrors the reply dispatcher: failed deliveries report onError and are
       // not counted as dispatched.
-      turn.options.onError?.(err, { kind });
+      await turn.options.onError?.(err, { kind });
     }
   };
 

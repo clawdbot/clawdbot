@@ -10,6 +10,7 @@ import type {
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { isExactClaudeSessionCursor } from "./session-catalog-cursor.js";
 import { resolveClaudeTerminalExecutable } from "./session-catalog-executable.js";
 import {
   CLAUDE_CLI_NODE_RUN_COMMAND,
@@ -63,9 +64,12 @@ async function requireLocalResumableClaudeSession(
       }
       break;
     }
-    const nextCursor = page.nextCursor?.trim();
-    if (!nextCursor || seenCursors.has(nextCursor)) {
+    const nextCursor = page.nextCursor;
+    if (nextCursor === undefined || seenCursors.has(nextCursor)) {
       break;
+    }
+    if (!isExactClaudeSessionCursor(nextCursor)) {
+      throw new Error("Claude session catalog returned an invalid cursor");
     }
     seenCursors.add(nextCursor);
     cursor = nextCursor;

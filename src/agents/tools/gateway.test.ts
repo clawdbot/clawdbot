@@ -299,6 +299,7 @@ describe("gateway tool defaults", () => {
       "operator.read",
       "operator.write",
       "operator.approvals",
+      "operator.questions",
       "operator.pairing",
       "operator.talk.secrets",
     ]);
@@ -679,6 +680,7 @@ describe("gateway tool defaults", () => {
       {
         name: "GatewayClientRequestError",
         gatewayCode: "INVALID_REQUEST",
+        details: { nodeCommandDispatched: false },
       },
     );
     mocks.callGateway.mockRejectedValueOnce(schemaError).mockResolvedValueOnce({ ok: true });
@@ -746,6 +748,39 @@ describe("gateway tool defaults", () => {
           ),
       ),
     ).rejects.toBe(dispatchedError);
+    expect(mocks.callGateway).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a node invoke schema rejection without pre-dispatch provenance", async () => {
+    const ambiguousError = Object.assign(
+      new Error("invalid node.invoke params: at root: unexpected property 'turnSourceChannel'"),
+      {
+        name: "GatewayClientRequestError",
+        gatewayCode: "INVALID_REQUEST",
+      },
+    );
+    mocks.callGateway.mockRejectedValueOnce(ambiguousError);
+
+    await expect(
+      withGatewayToolCallerIdentity(
+        {
+          agentId: "ops",
+          sessionKey: "agent:ops:main",
+          turnSourceChannel: "telegram",
+          turnSourceTo: "chat:123",
+        },
+        async () =>
+          await callGatewayTool(
+            "node.invoke",
+            {},
+            {
+              nodeId: "node-1",
+              command: "device.info",
+              idempotencyKey: "invoke-ambiguous",
+            },
+          ),
+      ),
+    ).rejects.toBe(ambiguousError);
     expect(mocks.callGateway).toHaveBeenCalledTimes(1);
   });
 
@@ -915,47 +950,6 @@ describe("gateway tool defaults", () => {
   it("fails env-selected approval calls when requester device identity is unavailable", async () => {
     process.env.OPENCLAW_GATEWAY_URL = "ws://127.0.0.1:18789";
     mocks.deviceIdentityError = new Error("state directory read-only");
-
-    await expect(
-      callGatewayTool("exec.approval.waitDecision", {}, { id: "approval-id" }),
-    ).rejects.toThrow("remote approval gateway calls require a stable device identity");
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-  });
-
-  it("fails remote approval calls when requester device identity is not persisted", async () => {
-    mocks.configState.value = {
-      gateway: {
-        mode: "remote",
-        remote: {
-          url: "ws://127.0.0.1:18789",
-          token: "remote-token",
-        },
-      },
-    };
-    mocks.persistedDeviceIdentity = null;
-    mocks.callGateway.mockResolvedValueOnce({ decision: "allow-once" });
-
-    await expect(
-      callGatewayTool("exec.approval.waitDecision", {}, { id: "approval-id" }),
-    ).rejects.toThrow("remote approval gateway calls require a stable device identity");
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-  });
-
-  it("fails remote approval calls when requester device identity readback differs", async () => {
-    mocks.configState.value = {
-      gateway: {
-        mode: "remote",
-        remote: {
-          url: "wss://gateway.example",
-          token: "remote-token",
-        },
-      },
-    };
-    mocks.persistedDeviceIdentity = {
-      ...mocks.deviceIdentity,
-      deviceId: "other-device",
-    };
-    mocks.callGateway.mockResolvedValueOnce({ decision: "allow-once" });
 
     await expect(
       callGatewayTool("exec.approval.waitDecision", {}, { id: "approval-id" }),

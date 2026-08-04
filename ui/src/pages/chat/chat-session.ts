@@ -1,12 +1,14 @@
+import { normalizeThinkLevel } from "../../../../src/auto-reply/thinking.shared.js";
 import type { FastMode, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { resolveChatModelOverrideValue } from "../../lib/chat/model-select-state.ts";
-import { normalizeThinkLevel } from "../../lib/chat/thinking.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
+  DEFAULT_SESSION_LIST_QUERY,
   scopedAgentParamsForSession,
   scopedAgentListParamsForRefreshTarget,
   scopedAgentListParamsForSession,
   type SessionCapability,
+  type SessionArchivedFilter,
   type SessionListOptions,
   type SessionRefreshTarget,
   type SessionScopeHost,
@@ -14,18 +16,17 @@ import {
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
+  isUiSelectedGlobalSessionKey,
   resolveUiGlobalAliasAgentId,
+  resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import type { ChatHistoryResult } from "./chat-history.ts";
 import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
 export { getPendingChatPickerPatch };
 
-const CHAT_SESSION_LIST_ACTIVE_MINUTES = 0;
-const CHAT_SESSION_LIST_LIMIT = 50;
-
 type ChatSessionListHost = {
-  sessionsShowArchived?: boolean;
+  sessionsArchivedFilter?: SessionArchivedFilter;
 };
 
 type ChatSessionRefreshHost = ChatSessionListHost &
@@ -55,18 +56,70 @@ type ChatIdleSessionReconciliationHost = SessionScopeHost & {
   sessionsResult?: SessionsListResult | null;
 };
 
+export function retireChatModelSelectionOwnership(
+  host: Pick<
+    ChatModelSettingsHost,
+    "agentsList" | "chatModelSwitchPromises" | "hello" | "requestUpdate" | "sessionKey" | "sessions"
+  >,
+): void {
+  const pendingKeys = Object.keys(host.chatModelSwitchPromises ?? {});
+  const ownedKeys = new Set([host.sessionKey, ...pendingKeys]);
+  if (isUiSelectedGlobalSessionKey(host, host.sessionKey)) {
+    ownedKeys.add("global");
+  }
+  const hasPendingSwitch = pendingKeys.length > 0;
+  const modelOverrides = host.sessions.state?.modelOverrides ?? {};
+  const hasModelOverride = [...ownedKeys].some((key) => Object.hasOwn(modelOverrides, key));
+  if (!hasPendingSwitch && !hasModelOverride) {
+    return;
+  }
+  host.chatModelSwitchPromises = {};
+  for (const key of ownedKeys) {
+    host.sessions.retireModelOverride(key);
+  }
+  host.requestUpdate?.();
+}
+
+export function applySelectedChatAgent(
+  host:
+    | (Pick<
+        ChatModelSettingsHost,
+        | "agentsList"
+        | "chatModelSwitchPromises"
+        | "hello"
+        | "requestUpdate"
+        | "sessionKey"
+        | "sessions"
+      > & {
+        assistantAgentId?: string | null;
+      })
+    | null
+    | undefined,
+  selectedAgentId: string | null,
+): void {
+  if (
+    !host ||
+    !isUiSelectedGlobalSessionKey(host, host.sessionKey) ||
+    (host.assistantAgentId ?? null) === selectedAgentId
+  ) {
+    return;
+  }
+  retireChatModelSelectionOwnership(host);
+  host.assistantAgentId = selectedAgentId;
+  host.requestUpdate?.();
+}
+
 function buildChatSessionListOptions(
-  _state: ChatSessionListHost,
+  state: ChatSessionListHost,
   options: { offset?: number; append?: boolean; search?: string | null } = {},
 ): SessionListOptions {
   const result: SessionListOptions = {
-    activeMinutes: CHAT_SESSION_LIST_ACTIVE_MINUTES,
-    limit: CHAT_SESSION_LIST_LIMIT,
+    ...DEFAULT_SESSION_LIST_QUERY,
     includeGlobal: true,
     includeUnknown: true,
     configuredAgentsOnly: true,
     includeDerivedTitles: true,
-    showArchived: false,
+    archivedFilter: state.sessionsArchivedFilter ?? "active",
   };
   const search = normalizeOptionalString(options.search ?? undefined);
   if (search) {
@@ -266,6 +319,12 @@ function patchSessionRow(
   sessionKey: string,
   patch: Partial<SessionsListResult["sessions"][number]>,
 ) {
+  // Mirror into the capability snapshot first: publishes replace the host copy
+  // wholesale, so without the mirror any mid-flight publish reverts this patch
+  // until the post-patch list refresh lands (visible slider snap-back that can
+  // swallow the next keyboard commit). The host copy still updates directly so
+  // hosts without a live capability subscription stay coherent.
+  host.sessions.patchRowLocal(sessionKey, patch);
   const current = host.sessionsResult;
   if (!current) {
     return;
@@ -360,7 +419,10 @@ export async function switchChatModel(
   if (currentOverride === nextModel) {
     return true;
   }
-  const previousModelOverride = host.sessions.state.modelOverrides[targetSessionKey];
+  const modelOwnerAgentId = scopedAgentParamsForSession(host, targetSessionKey).agentId;
+  const ownsModelOverride = () =>
+    !isUiSelectedGlobalSessionKey(host, targetSessionKey) ||
+    resolveUiSelectedGlobalAgentId(host) === modelOwnerAgentId;
   setChatError(host, null, true);
   const switchPromiseRef: { current?: Promise<boolean> } = {};
   const clearPendingSwitch = () => {
@@ -380,6 +442,7 @@ export async function switchChatModel(
         },
         {
           ...scopedAgentParamsForSession(host, targetSessionKey),
+          ownsModelOverride,
           reconcile: async () => {
             await host.onModelChanged?.();
             await refreshCurrentChatSessionList(host);
@@ -391,8 +454,9 @@ export async function switchChatModel(
       }
       return true;
     } catch (err) {
-      host.sessions.setModelOverride(targetSessionKey, previousModelOverride);
-      setChatError(host, `Failed to set model: ${String(err)}`, true);
+      if (ownsModelOverride()) {
+        setChatError(host, `Failed to set model: ${String(err)}`, true);
+      }
       return false;
     } finally {
       clearPendingSwitch();

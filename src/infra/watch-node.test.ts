@@ -278,6 +278,43 @@ describe("watch-node script", () => {
     expect(watcher.close).toHaveBeenCalledTimes(1);
   });
 
+  it("refreshes generated asset paths before each runner start", async () => {
+    const childA = createAutoExitChild();
+    const childB = createKillableChild();
+    const spawn = vi.fn().mockReturnValueOnce(childA).mockReturnValueOnce(childB);
+    const watcher = Object.assign(new EventEmitter(), {
+      close: vi.fn(async () => {}),
+    });
+    const fakeProcess = createFakeProcess();
+    const pathClassifier = {
+      refreshGeneratedPluginAssetPaths: vi.fn(),
+      isRestartRelevantRunNodePath: vi.fn(() => true),
+    };
+
+    const runPromise = runWatch({
+      args: ["gateway", "--force"],
+      createWatcher: () => watcher,
+      fs: { existsSync: () => true },
+      lockDisabled: true,
+      pathClassifier,
+      process: fakeProcess,
+      spawn,
+    });
+
+    expect(pathClassifier.refreshGeneratedPluginAssetPaths).toHaveBeenCalledTimes(1);
+    watcher.emit("change", "extensions/browser/package.json");
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(pathClassifier.refreshGeneratedPluginAssetPaths).toHaveBeenCalledTimes(2);
+
+    fakeProcess.emit("SIGINT");
+    const exitCode = await runPromise;
+    expect(exitCode).toBe(130);
+  });
+
   it("terminates child on SIGINT and returns shell interrupt code", async () => {
     const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
 

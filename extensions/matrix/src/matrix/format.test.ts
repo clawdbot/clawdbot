@@ -1,12 +1,197 @@
 // Matrix tests cover format plugin behavior.
 import { describe, expect, it } from "vitest";
-import { markdownToMatrixHtml, renderMarkdownToMatrixHtmlWithMentions } from "./format.js";
+import { findMatrixSpoilerDelimiterOffsets } from "./format-spoiler-ranges.js";
+import {
+  MATRIX_FORMAT_PROFILE,
+  markdownToMatrixBody,
+  markdownToMatrixHtml,
+  renderMarkdownToMatrixHtmlWithMentions,
+  renderMatrixMarkdownTables,
+} from "./format.js";
 
 function createMentionClient(selfUserId = "@bot:example.org") {
   return {
     getUserId: async () => selfUserId,
   } as unknown as import("./sdk.js").MatrixClient;
 }
+
+const MATRIX_FORMAT_GOLDENS = [
+  {
+    name: "spoiler",
+    markdown: "before ||secret|| after",
+    previousHtml: "<p>before ||secret|| after</p>",
+    html: "<p>before <span data-mx-spoiler>secret</span> after</p>",
+    body: "before [Spoiler] after",
+  },
+  {
+    name: "authored underline",
+    markdown: "<u>under</u> and <ins>inserted</ins>",
+    previousHtml: "<p>&lt;u&gt;under&lt;/u&gt; and &lt;ins&gt;inserted&lt;/ins&gt;</p>",
+    html: "<p><u>under</u> and <u>inserted</u></p>",
+    body: "<u>under</u> and <ins>inserted</ins>",
+  },
+  {
+    name: "native table",
+    markdown: "| Name | Age |\n|---|---|\n| Alice | 30 |",
+    previousHtml: "<p><strong>Alice</strong><br>\n• Age: 30</p>",
+    html: "<table>\n<thead>\n<tr>\n<th>Name</th>\n<th>Age</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>Alice</td>\n<td>30</td>\n</tr>\n</tbody>\n</table>",
+    body: "| Name | Age |\n|---|---|\n| Alice | 30 |",
+  },
+] as const;
+
+describe("Matrix formatting migration goldens", () => {
+  for (const golden of MATRIX_FORMAT_GOLDENS) {
+    it(`${golden.name}: emits the authorized before-to-after payload`, () => {
+      expect(markdownToMatrixHtml(golden.markdown)).toBe(golden.html);
+      expect(markdownToMatrixBody(golden.markdown)).toBe(golden.body);
+      expect(golden.html).not.toBe(golden.previousHtml);
+    });
+  }
+
+  it("declares the Matrix HTML profile and keeps explicit table fallbacks", () => {
+    expect(MATRIX_FORMAT_PROFILE).toMatchObject({
+      mechanism: "html",
+      constructs: { spoiler: "native", underline: "native", table: "native" },
+      chunk: { limit: 4_000, unit: "chars" },
+    });
+    expect(renderMatrixMarkdownTables(MATRIX_FORMAT_GOLDENS[2].markdown, "block")).toBe(
+      MATRIX_FORMAT_GOLDENS[2].markdown,
+    );
+    expect(renderMatrixMarkdownTables(MATRIX_FORMAT_GOLDENS[2].markdown, "bullets")).toBe(
+      "**Alice**\n• Age: 30",
+    );
+    expect(
+      markdownToMatrixHtml(MATRIX_FORMAT_GOLDENS[2].markdown, { tableMode: "off" }),
+    ).not.toContain("<table>");
+  });
+
+  it("keeps escaped literal pipes separate from a following spoiler", () => {
+    const markdown = "\\|\\| literal ||secret||";
+    expect(markdownToMatrixHtml(markdown)).toBe(
+      "<p>|| literal <span data-mx-spoiler>secret</span></p>",
+    );
+    expect(markdownToMatrixBody(markdown)).toBe("|| literal [Spoiler]");
+  });
+
+  it("does not treat pipes in link destinations as spoiler delimiters", () => {
+    const markdown = "[docs\nmore](https://example.test/a(b)||literal||) ||secret||";
+    expect(findMatrixSpoilerDelimiterOffsets(markdown)).toEqual([
+      markdown.indexOf("||secret||"),
+      markdown.lastIndexOf("||"),
+    ]);
+    const html = markdownToMatrixHtml(markdown);
+    expect(html).not.toContain("secret");
+  });
+
+  it("recognizes an overlapping spoiler opener after an escaped pipe", () => {
+    const markdown = "\\|||secret||";
+    expect(markdownToMatrixHtml(markdown)).toBe("<p>|<span data-mx-spoiler>secret</span></p>");
+    expect(markdownToMatrixBody(markdown)).toBe("|[Spoiler]");
+  });
+
+  it("pairs spoilers across a soft line break within one paragraph", () => {
+    const markdown = "before ||first\nsecond|| after";
+    expect(markdownToMatrixHtml(markdown)).toContain(
+      "<span data-mx-spoiler>first<br>\nsecond</span>",
+    );
+    expect(markdownToMatrixBody(markdown)).toBe("before [Spoiler] after");
+  });
+
+  it("does not mistake an escaped closing bracket for a link label", () => {
+    const markdown = "\\](||secret||)";
+    expect(markdownToMatrixHtml(markdown)).toContain("<span data-mx-spoiler>secret</span>");
+    expect(markdownToMatrixBody(markdown)).not.toContain("secret");
+  });
+
+  it("does not reuse a completed link label for later visible text", () => {
+    const markdown = "[x](https://example.test) then ](||secret||)";
+    expect(markdownToMatrixHtml(markdown)).toContain("](<span data-mx-spoiler>secret</span>)");
+    expect(markdownToMatrixBody(markdown)).not.toContain("secret");
+  });
+
+  it("excludes spoiler-looking pipes in valid link titles", () => {
+    const markdown = '[x](https://example.test "note ) ||literal||") ||secret||';
+    const html = markdownToMatrixHtml(markdown);
+    expect(html).not.toContain("secret");
+    expect(markdownToMatrixBody(markdown)).not.toContain("secret");
+  });
+
+  it("scopes link metadata to blocks and preserves reference identifiers", () => {
+    const stale = "[unfinished\n \n](||secret||)";
+    expect(markdownToMatrixHtml(stale)).toContain("<span data-mx-spoiler>secret</span>");
+    expect(markdownToMatrixBody(stale)).not.toContain("secret");
+
+    const reference = "[visible][id||x||]\n\n[id||x||]: https://example.test";
+    expect(markdownToMatrixHtml(reference)).not.toContain("secret");
+  });
+
+  it("keeps invalid autolinks and code-span brackets in visible spoiler parsing", () => {
+    const invalidAutolink = "<https://example.test/ ||secret||>";
+    expect(markdownToMatrixBody(invalidAutolink)).not.toContain("secret");
+
+    const codeBracket = "[x `]`](https://example.test/a||b) ||secret||";
+    expect(markdownToMatrixHtml(codeBracket)).not.toContain("secret");
+    expect(markdownToMatrixBody(codeBracket)).not.toContain("secret");
+  });
+
+  it("finds unescaped ends of reference identifiers", () => {
+    const markdown = "[x][id\\]||x] then ||secret||\n\n[id\\]||x]: https://example.test";
+    expect(markdownToMatrixHtml(markdown)).not.toContain("secret");
+    expect(markdownToMatrixBody(markdown)).not.toContain("secret");
+  });
+
+  it("keeps spoiler formatting inside image fallback labels", () => {
+    const markdown = "![||secret||](https://example.test/image.png)";
+    expect(markdownToMatrixHtml(markdown)).toContain("<span data-mx-spoiler>secret</span>");
+    expect(markdownToMatrixBody(markdown)).not.toContain("secret");
+  });
+
+  it("keeps spoiler spans nested when they cross bold formatting", () => {
+    const markdown = "**||secret** more||";
+    const html = markdownToMatrixHtml(markdown);
+    expect(html).not.toContain("</strong> more</span>");
+    expect(markdownToMatrixBody(markdown)).not.toContain("secret");
+  });
+
+  it("follows parsed autolink and resolved-reference metadata", () => {
+    const autolink = "<ftp://example.test/a||literal||> ||secret||";
+    expect(markdownToMatrixHtml(autolink)).not.toContain("secret");
+
+    const unresolved = "[x][missing||secret||]";
+    expect(markdownToMatrixHtml(unresolved)).toContain("<span data-mx-spoiler>secret</span>");
+
+    const invalidDefinition = "[id]: <broken destination> ||secret||";
+    expect(markdownToMatrixHtml(invalidDefinition)).toContain(
+      "<span data-mx-spoiler>secret</span>",
+    );
+  });
+
+  it("excludes bare linkified URLs and underline tag attributes", () => {
+    const bare = "https://example.test/a||literal|| then ||secret||";
+    expect(markdownToMatrixHtml(bare)).not.toContain("secret");
+    expect(markdownToMatrixBody(bare)).not.toContain("secret");
+
+    const underline = '<u title="||">text</u> then ||secret||';
+    expect(markdownToMatrixHtml(underline)).not.toContain("secret");
+    expect(markdownToMatrixBody(underline)).not.toContain("secret");
+  });
+
+  it("leaves compact empty-cell pipes to native table grammar", () => {
+    const markdown = "| A | B | C |\n|---|---|---|\n| x || y || z |";
+    expect(findMatrixSpoilerDelimiterOffsets(markdown)).toEqual([]);
+    expect(markdownToMatrixHtml(markdown)).toContain("<table>");
+    expect(markdownToMatrixBody(markdown)).toBe(markdown);
+  });
+
+  it("fails closed when every private marker is already present", () => {
+    const privateUse = Array.from({ length: 0x1900 }, (_, index) =>
+      String.fromCharCode(0xe000 + index),
+    ).join("");
+    expect(() => markdownToMatrixHtml(`${privateUse} ||secret||`)).toThrow(
+      "exhausted its private marker pool",
+    );
+  });
+});
 
 describe("markdownToMatrixHtml", () => {
   it("renders basic inline formatting", () => {

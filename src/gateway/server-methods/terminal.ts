@@ -9,7 +9,6 @@ import {
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   type TerminalOpenParams,
   type TerminalUploadResult,
   validateTerminalAttachParams,
@@ -40,6 +39,7 @@ import {
 } from "./terminal-open-plan.js";
 import { terminalUploadHandlers } from "./terminal-upload.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 function invalid(respond: GatewayRequestHandlerOptions["respond"], detail: string): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, detail));
@@ -87,6 +87,9 @@ async function stageNodeTerminalUpload(
   const result = await context.nodeRegistry.invoke({
     nodeId,
     expectedConnId: access.node.connId,
+    ...(access.node.pairingGeneration
+      ? { expectedPairingGeneration: access.node.pairingGeneration }
+      : {}),
     command: NODE_TERMINAL_UPLOAD_COMMAND,
     params: file,
     timeoutMs: 120_000,
@@ -133,11 +136,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
   ...terminalUploadHandlers,
   "terminal.open": async (opts) => {
     const { params, respond, context } = opts;
-    if (!validateTerminalOpenParams(params)) {
-      invalid(
-        respond,
-        `invalid terminal.open params: ${formatValidationErrors(validateTerminalOpenParams.errors)}`,
-      );
+    if (!assertValidParams(params, validateTerminalOpenParams, "terminal.open", respond)) {
       return;
     }
     const connId = requireConnId(opts);
@@ -290,6 +289,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
           registry: context.nodeRegistry,
           nodeId: relay.plan.nodeId,
           expectedConnId: access.node.connId,
+          expectedPairingGeneration: access.node.pairingGeneration,
           command: relay.plan.command,
           params: relay.params,
         });
@@ -366,11 +366,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
 
   "terminal.input": async (opts) => {
     const { params, respond, context } = opts;
-    if (!validateTerminalInputParams(params)) {
-      invalid(
-        respond,
-        `invalid terminal.input params: ${formatValidationErrors(validateTerminalInputParams.errors)}`,
-      );
+    if (!assertValidParams(params, validateTerminalInputParams, "terminal.input", respond)) {
       return;
     }
     const connId = requireConnId(opts);
@@ -392,11 +388,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
 
   "terminal.resize": async (opts) => {
     const { params, respond, context } = opts;
-    if (!validateTerminalResizeParams(params)) {
-      invalid(
-        respond,
-        `invalid terminal.resize params: ${formatValidationErrors(validateTerminalResizeParams.errors)}`,
-      );
+    if (!assertValidParams(params, validateTerminalResizeParams, "terminal.resize", respond)) {
       return;
     }
     const connId = requireConnId(opts);
@@ -415,11 +407,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
 
   "terminal.close": async (opts) => {
     const { params, respond, context } = opts;
-    if (!validateTerminalCloseParams(params)) {
-      invalid(
-        respond,
-        `invalid terminal.close params: ${formatValidationErrors(validateTerminalCloseParams.errors)}`,
-      );
+    if (!assertValidParams(params, validateTerminalCloseParams, "terminal.close", respond)) {
       return;
     }
     const connId = requireConnId(opts);
@@ -433,11 +421,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
 
   "terminal.attach": async (opts) => {
     const { params, respond, context } = opts;
-    if (!validateTerminalAttachParams(params)) {
-      invalid(
-        respond,
-        `invalid terminal.attach params: ${formatValidationErrors(validateTerminalAttachParams.errors)}`,
-      );
+    if (!assertValidParams(params, validateTerminalAttachParams, "terminal.attach", respond)) {
       return;
     }
     const connId = requireConnId(opts);
@@ -505,11 +489,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
 
   "terminal.text": async (opts) => {
     const { params, respond, context } = opts;
-    if (!validateTerminalTextParams(params)) {
-      invalid(
-        respond,
-        `invalid terminal.text params: ${formatValidationErrors(validateTerminalTextParams.errors)}`,
-      );
+    if (!assertValidParams(params, validateTerminalTextParams, "terminal.text", respond)) {
       return;
     }
     const connId = requireConnId(opts);

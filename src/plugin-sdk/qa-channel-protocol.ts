@@ -11,6 +11,18 @@ export type QaTargetParts = {
   threadId?: string;
 };
 
+/** Encode a canonical QA channel target. */
+export function buildQaTarget(params: {
+  chatType: QaBusConversationKind;
+  conversationId: string;
+  threadId?: string | null;
+}): string {
+  if (params.threadId) {
+    return `thread:${params.conversationId}/${params.threadId}`;
+  }
+  return `${params.chatType === "direct" ? "dm" : params.chatType}:${params.conversationId}`;
+}
+
 /** Parse the lowercase, prefix-scoped target grammar shared by QA Channel and QA Lab. */
 export function parseQaTarget(
   raw: string,
@@ -77,6 +89,8 @@ export type QaBusAttachment = {
   id: string;
   kind: "image" | "video" | "audio" | "file";
   mimeType: string;
+  /** Selects how QA Channel projects an inline fixture after saving it locally. */
+  mediaFactCarrier?: "path" | "media-store-url";
   fileName?: string;
   inline?: boolean;
   url?: string;

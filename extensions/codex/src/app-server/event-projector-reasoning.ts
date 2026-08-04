@@ -23,6 +23,7 @@ export class CodexReasoningProjection {
   private readonly reasoningTextByGroup = new Map<string, ReasoningTextGroup>();
   private readonly reasoningItemOrder = new Map<string, number>();
   private readonly planTextByItem = new Map<string, string>();
+  private turnPlanText: string | undefined;
   private reasoningStarted = false;
   private reasoningEnded = false;
 
@@ -75,6 +76,7 @@ export class CodexReasoningProjection {
   }
 
   handleTurnPlanUpdated(params: JsonObject): void {
+    const explanation = readNullableString(params, "explanation");
     const plan = Array.isArray(params.plan)
       ? params.plan.flatMap((entry) => {
           if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
@@ -88,8 +90,19 @@ export class CodexReasoningProjection {
           return [{ step, status: normalizePlanStepStatus(readString(record, "status")) }];
         })
       : undefined;
+    const planText = [
+      explanation,
+      ...(plan ?? []).map(({ step, status }) => `- [${status}] ${step}`),
+    ]
+      .filter((part): part is string => Boolean(part))
+      .join("\n");
+    if (planText) {
+      // Structured turn updates are the canonical latest plan. Retain the last
+      // non-empty update so the terminal transcript proves planning occurred.
+      this.turnPlanText = planText;
+    }
     this.emitPlanUpdate({
-      explanation: readNullableString(params, "explanation"),
+      explanation,
       steps: plan,
     });
   }
@@ -119,7 +132,10 @@ export class CodexReasoningProjection {
   }
 
   planText(): string {
-    return [...this.planTextByItem.values()].filter((text) => text.trim().length > 0).join("\n\n");
+    return (
+      this.turnPlanText ??
+      [...this.planTextByItem.values()].filter((text) => text.trim().length > 0).join("\n\n")
+    );
   }
 
   private emitPlanUpdate(params: { explanation?: string | null; steps?: AgentPlanStep[] }): void {

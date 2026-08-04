@@ -49,6 +49,21 @@ export function parseAgentSessionKey(
   return { agentId, rest };
 }
 
+export function parseSessionKeyParts(
+  key: string,
+): { agentId: string; channel: string; accountId: string } | null {
+  const match = /^agent:([^:]+):([^:]+):(.+)$/.exec(key);
+  return match
+    ? { agentId: match[1] as string, channel: match[2] as string, accountId: match[3] as string }
+    : null;
+}
+
+export function resolveUiSessionNavigationParentKey(
+  row: { parentSessionKey?: string | null; spawnedBy?: string | null } | null | undefined,
+): string | undefined {
+  return normalizeOptionalString(row?.parentSessionKey) ?? normalizeOptionalString(row?.spawnedBy);
+}
+
 function normalizeMainKey(value: string | undefined | null): string {
   return normalizeOptionalLowercaseString(value) ?? DEFAULT_MAIN_KEY;
 }
@@ -185,17 +200,23 @@ export function isUiGlobalScopeConfigured(
   return isUiGlobalSessionKey(resolveUiCanonicalMainSessionKey(host));
 }
 
-function resolveUiCanonicalMainSessionKey(
+export function resolveUiCanonicalMainSessionKey(
   host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
 ): string {
   const defaults = readSessionDefaults(host);
-  return (
-    normalizeOptionalString(defaults?.mainSessionKey) ??
-    buildAgentMainSessionKey({
-      agentId: resolveUiDefaultAgentId(host),
-      mainKey: resolveUiConfiguredMainKey(host),
-    })
-  );
+  const advertised = normalizeOptionalString(defaults?.mainSessionKey);
+  if (advertised) {
+    return advertised;
+  }
+  // Global scope routes main to the "global" sentinel even when the gateway
+  // has not advertised a main session key yet (e.g. pre-hello snapshots).
+  if (normalizeOptionalLowercaseString(host.agentsList?.scope) === "global") {
+    return "global";
+  }
+  return buildAgentMainSessionKey({
+    agentId: resolveUiDefaultAgentId(host),
+    mainKey: resolveUiConfiguredMainKey(host),
+  });
 }
 
 function normalizeUiSessionEventKey(
@@ -218,10 +239,27 @@ function normalizeUiSessionEventKey(
       buildAgentMainSessionKey({ agentId: defaultAgentId, mainKey }),
     ]
       .filter((value): value is string => Boolean(value))
-      .map(normalizeLowercaseStringOrEmpty),
+      .map(normalizeSessionKeyForUiComparison),
   );
-  const normalized = normalizeLowercaseStringOrEmpty(raw);
-  return aliases.has(normalized) ? normalizeLowercaseStringOrEmpty(canonicalMain) : normalized;
+  const normalized = normalizeSessionKeyForUiComparison(raw);
+  return aliases.has(normalized) ? normalizeSessionKeyForUiComparison(canonicalMain) : normalized;
+}
+
+export function canonicalUiSessionKeyForPersistence(
+  host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
+  sessionKey: string | undefined | null,
+): string {
+  return normalizeUiSessionEventKey(host, sessionKey) ?? "";
+}
+
+function areUiSessionKeysEquivalentForHost(
+  host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
+  left: string | undefined | null,
+  right: string | undefined | null,
+): boolean {
+  const normalizedLeft = normalizeUiSessionEventKey(host, left);
+  const normalizedRight = normalizeUiSessionEventKey(host, right);
+  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
 }
 
 export function uiSessionEventMatches(
@@ -233,9 +271,7 @@ export function uiSessionEventMatches(
   if (!eventKey) {
     return true;
   }
-  const keysMatch =
-    normalizeUiSessionEventKey(host, eventKey) ===
-    normalizeUiSessionEventKey(host, host.sessionKey);
+  const keysMatch = areUiSessionKeysEquivalentForHost(host, eventKey, host.sessionKey);
   const selectedAliasAgentId = resolveUiMainAliasAgentId(host, host.sessionKey);
   const globalAliasMatches =
     selectedAliasAgentId !== null &&
@@ -254,12 +290,14 @@ export function uiSessionEventMatches(
     : selectedAgentId === resolveUiDefaultAgentId(host);
 }
 
-export function isUiSelectedGlobalSessionKey(sessionKey: string | undefined | null): boolean {
+export function isUiSelectedGlobalSessionKey(
+  host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
+  sessionKey: string | undefined | null,
+): boolean {
   if (isUiGlobalSessionKey(sessionKey)) {
     return true;
   }
-  const parsed = parseAgentSessionKey(sessionKey);
-  return normalizeLowercaseStringOrEmpty(parsed?.rest) === DEFAULT_MAIN_KEY;
+  return resolveUiMainAliasAgentId(host, sessionKey) !== null;
 }
 
 export function resolveUiSelectedSessionAgentId(
@@ -375,4 +413,17 @@ export function isSubagentSessionKey(sessionKey: string | undefined | null): boo
   }
   const parsed = parseAgentSessionKey(raw);
   return normalizeLowercaseStringOrEmpty(parsed?.rest).startsWith("subagent:");
+}
+
+/** ACP-backed sessions (`agent:<id>:acp:<uuid>`) belong to the Coding zone, not chat threads. */
+export function isAcpSessionKey(sessionKey: string | undefined | null): boolean {
+  const raw = normalizeOptionalString(sessionKey) ?? "";
+  if (!raw) {
+    return false;
+  }
+  if (normalizeLowercaseStringOrEmpty(raw).startsWith("acp:")) {
+    return true;
+  }
+  const parsed = parseAgentSessionKey(raw);
+  return normalizeLowercaseStringOrEmpty(parsed?.rest).startsWith("acp:");
 }

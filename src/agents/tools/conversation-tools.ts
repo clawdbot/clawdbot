@@ -1,10 +1,14 @@
 /** Agent tools for addressing external conversations independently from local model sessions. */
 import crypto from "node:crypto";
 import { Type } from "typebox";
-import type {
-  ConversationListResult,
-  ConversationSendResult,
-  ConversationTurnResult,
+// Keep Gateway wire schemas as the single owner so Code Mode never advertises a divergent shape.
+import {
+  ConversationListResultSchema,
+  ConversationSendResultSchema,
+  ConversationTurnResultSchema,
+  type ConversationListResult,
+  type ConversationSendResult,
+  type ConversationTurnResult,
 } from "../../../packages/gateway-protocol/src/schema/agent.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
@@ -110,6 +114,7 @@ export function createConversationsListTool(
     description:
       "List external conversations as stable conversationRef values. Sessions hold local model context; conversationRef selects an exact external channel destination.",
     parameters: ConversationsListSchema,
+    outputSchema: ConversationListResultSchema,
     execute: async (_toolCallId, args) => {
       requireOwner(options);
       const params = args as Record<string, unknown>;
@@ -143,6 +148,7 @@ export function createConversationsSendTool(
     description:
       "Send directly through a conversationRef from conversations_list. This performs channel delivery; it does not run the local agent in the backing session.",
     parameters: ConversationsSendSchema,
+    outputSchema: ConversationSendResultSchema,
     execute: async (toolCallId, args, signal) => {
       requireOwner(options);
       const params = args as Record<string, unknown>;
@@ -185,6 +191,7 @@ export function createConversationsTurnTool(
     description:
       "Send through a conversationRef and wait for its correlated inbound reply. The reply returns here instead of starting a second local agent turn; unsolicited messages still start normal turns.",
     parameters: ConversationsTurnSchema,
+    outputSchema: ConversationTurnResultSchema,
     execute: async (toolCallId, args, signal) => {
       requireOwner(options);
       const params = args as Record<string, unknown>;

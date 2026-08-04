@@ -130,6 +130,9 @@ describe("parseClawHubPromotionsFeed", () => {
       /ISO dates/,
     );
     expect(() =>
+      parseClawHubPromotionsFeed({ ...validFeed, generatedAt: "1700000000000" }),
+    ).toThrow(/ISO dates/);
+    expect(() =>
       parseClawHubPromotionsFeed({
         ...validFeed,
         entries: [{ type: "advert", ...feedEntryFields }],
@@ -141,6 +144,24 @@ describe("parseClawHubPromotionsFeed", () => {
         expiresAt: "2026-07-04T00:00:00.000Z",
       }),
     ).toThrow(/expiresAt/);
+  });
+
+  it.each([
+    { field: "generatedAt", value: "2026-02-30T00:00:00.000Z" },
+    { field: "expiresAt", value: "2026-11-31T00:00:00.000Z" },
+  ])("rejects a calendar-invalid $field", ({ field, value }) => {
+    expect(() => parseClawHubPromotionsFeed({ ...validFeed, [field]: value })).toThrow(/ISO dates/);
+  });
+
+  it("accepts canonical ISO calendar dates including leap day", () => {
+    // Canonical leap day must still parse.
+    expect(() =>
+      parseClawHubPromotionsFeed({
+        ...validFeed,
+        generatedAt: "2028-02-29T12:00:00.000Z",
+        expiresAt: "2028-03-01T12:00:00.000Z",
+      }),
+    ).not.toThrow();
   });
 
   it("holds feed entries to the promotion payload contracts", () => {

@@ -1,6 +1,6 @@
 // Shared renderer for provider-reported usage snapshots (quota windows,
 // billing, provider cost history). Used by the usage dashboard and the
-// Model Providers settings page; styles live in styles/usage.css.
+// Models settings page; styles live in styles/usage.css.
 import { html, nothing } from "lit";
 import type { ProviderUsageSnapshot } from "../../../src/infra/provider-usage.types.js";
 import { t } from "../i18n/index.ts";

@@ -5,23 +5,7 @@ import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-
-const { resolveControlUiRootSyncMock, isPackageProvenControlUiRootSyncMock } = vi.hoisted(() => ({
-  resolveControlUiRootSyncMock: vi.fn(),
-  isPackageProvenControlUiRootSyncMock: vi.fn().mockReturnValue(true),
-}));
-
-vi.mock("../infra/control-ui-assets.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/control-ui-assets.js")>(
-    "../infra/control-ui-assets.js",
-  );
-  return {
-    ...actual,
-    resolveControlUiRootSync: resolveControlUiRootSyncMock,
-    isPackageProvenControlUiRootSync: isPackageProvenControlUiRootSyncMock,
-  };
-});
+import { describe, expect, it } from "vitest";
 
 const { handleControlUiHttpRequest } = await import("./control-ui.js");
 const { makeMockHttpResponse } = await import("./test-http-response.js");
@@ -40,25 +24,18 @@ function responseBody(end: ReturnType<typeof makeMockHttpResponse>["end"]) {
   return String(end.mock.calls[0]?.[0] ?? "");
 }
 
-afterEach(() => {
-  resolveControlUiRootSyncMock.mockReset();
-  isPackageProvenControlUiRootSyncMock.mockReset();
-  isPackageProvenControlUiRootSyncMock.mockReturnValue(true);
-});
-
-describe("handleControlUiHttpRequest auto-detected root", () => {
-  it("serves hardlinked asset files for bundled auto-detected roots", async () => {
+describe("handleControlUiHttpRequest prepared root lifecycle", () => {
+  it("serves hardlinked asset files for prepared bundled roots", async () => {
     await withControlUiRoot(async (tmp) => {
       const assetsDir = path.join(tmp, "assets");
       await fs.mkdir(assetsDir, { recursive: true });
       await fs.writeFile(path.join(assetsDir, "app.js"), "console.log('hi');");
       await fs.link(path.join(assetsDir, "app.js"), path.join(assetsDir, "app.hl.js"));
-      resolveControlUiRootSyncMock.mockReturnValue(tmp);
-
       const { res, end } = makeMockHttpResponse();
       const handled = await handleControlUiHttpRequest(
         { url: "/assets/app.hl.js", method: "GET" } as IncomingMessage,
         res,
+        { root: { kind: "bundled", path: tmp, realPath: await fs.realpath(tmp) } },
       );
 
       expect(handled).toBe(true);
@@ -67,46 +44,124 @@ describe("handleControlUiHttpRequest auto-detected root", () => {
     });
   });
 
-  it("serves hardlinked SPA fallback index.html for bundled auto-detected roots", async () => {
+  it("serves hardlinked SPA fallback index.html for prepared bundled roots", async () => {
     await withControlUiRoot(async (tmp) => {
       const sourceIndex = path.join(tmp, "index.source.html");
       const indexPath = path.join(tmp, "index.html");
       await fs.writeFile(sourceIndex, "<html>fallback-hardlink</html>\n");
       await fs.rm(indexPath);
       await fs.link(sourceIndex, indexPath);
-      resolveControlUiRootSyncMock.mockReturnValue(tmp);
-
       const { res, end } = makeMockHttpResponse();
       const handled = await handleControlUiHttpRequest(
         { url: "/dashboard", method: "GET" } as IncomingMessage,
         res,
+        { root: { kind: "bundled", path: tmp, realPath: await fs.realpath(tmp) } },
       );
 
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(200);
       expect(responseBody(end)).toBe(
-        '<html data-openclaw-terminal-enabled="false">fallback-hardlink</html>\n',
+        '<html data-openclaw-terminal-enabled="true">fallback-hardlink</html>\n',
       );
     });
   });
 
-  it("rejects hardlinked assets for non-package-proven auto-detected roots", async () => {
-    isPackageProvenControlUiRootSyncMock.mockReturnValue(false);
+  it("rejects hardlinked assets for prepared roots without bundled provenance", async () => {
     await withControlUiRoot(async (tmp) => {
       const assetsDir = path.join(tmp, "assets");
       await fs.mkdir(assetsDir, { recursive: true });
       await fs.writeFile(path.join(assetsDir, "app.js"), "console.log('hi');");
       await fs.link(path.join(assetsDir, "app.js"), path.join(assetsDir, "app.hl.js"));
-      resolveControlUiRootSyncMock.mockReturnValue(tmp);
-
       const { res } = makeMockHttpResponse();
       const handled = await handleControlUiHttpRequest(
         { url: "/assets/app.hl.js", method: "GET" } as IncomingMessage,
         res,
+        { root: { kind: "resolved", path: tmp, realPath: await fs.realpath(tmp) } },
       );
 
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(404);
     });
+  });
+
+  it.each(["GET", "HEAD"])(
+    "marks %s requests retryable while assets are preparing",
+    async (method) => {
+      const { res, end, setHeader } = makeMockHttpResponse();
+
+      const handled = await handleControlUiHttpRequest(
+        { url: "/", method } as IncomingMessage,
+        res,
+        { root: { kind: "preparing" } },
+      );
+
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(503);
+      expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
+      expect(setHeader).toHaveBeenCalledWith("Retry-After", "1");
+      if (method === "HEAD") {
+        expect(end).toHaveBeenCalledWith();
+      } else {
+        expect(responseBody(end)).toContain("being prepared");
+      }
+    },
+  );
+
+  it.each(["GET", "HEAD"])(
+    "keeps failed %s requests terminal without retry hints",
+    async (method) => {
+      const { res, end, setHeader } = makeMockHttpResponse();
+      const privateBuildFailure =
+        "Control UI build failed: private-credential in registry.invalid/package from /home/operator/private";
+      const failedRoot = { kind: "failed" as const, message: privateBuildFailure };
+
+      const handled = await handleControlUiHttpRequest(
+        { url: "/", method } as IncomingMessage,
+        res,
+        { root: failedRoot },
+      );
+
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(503);
+      expect(setHeader).not.toHaveBeenCalledWith("Retry-After", expect.anything());
+      if (method === "HEAD") {
+        expect(end).toHaveBeenCalledWith();
+      } else {
+        expect(responseBody(end)).toBe(
+          "Control UI assets could not be prepared. Check the Gateway logs or run `openclaw doctor --fix`.",
+        );
+        expect(responseBody(end)).not.toContain("private-credential");
+        expect(responseBody(end)).not.toContain("/home/operator/private");
+      }
+    },
+  );
+
+  it("keeps invalid configured roots terminal and preserves their repair guidance", async () => {
+    const { res, end, setHeader } = makeMockHttpResponse();
+
+    const handled = await handleControlUiHttpRequest(
+      { url: "/", method: "GET" } as IncomingMessage,
+      res,
+      { root: { kind: "invalid", path: "/custom/missing" } },
+    );
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(503);
+    expect(setHeader).not.toHaveBeenCalledWith("Retry-After", expect.anything());
+    expect(responseBody(end)).toContain("/custom/missing");
+    expect(responseBody(end)).toContain("gateway.controlUi.root");
+  });
+
+  it("does not rediscover a root when the Gateway did not provide one", async () => {
+    const { res, setHeader } = makeMockHttpResponse();
+
+    const handled = await handleControlUiHttpRequest(
+      { url: "/", method: "GET" } as IncomingMessage,
+      res,
+    );
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(503);
+    expect(setHeader).not.toHaveBeenCalledWith("Retry-After", expect.anything());
   });
 });

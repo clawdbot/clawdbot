@@ -77,6 +77,11 @@ type MessagePresentationAction =
       approvalKind: "exec" | "plugin";
       decision: "allow-once" | "allow-always" | "deny";
     }
+  | {
+      type: "question";
+      questionId: string;
+      optionValue: string;
+    }
   | { type: "url"; url: string }
   | {
       type: "web-app";
@@ -136,6 +141,16 @@ Button semantics:
   encode that action into a transport-private callback and resolve it through
   the approval service; they must not parse `/approve` command text or infer
   kind from the ID.
+- `action.type: "question"` identifies one choice for a live, runtime-authored
+  `ask_user` question. Like `approval`, this is an OpenClaw runtime action;
+  agents and plugins must not synthesize question IDs. Telegram, Discord, and
+  Slack map it to transport-private native callbacks and resolve the choice
+  through the Gateway. When the question becomes answered, expired, or
+  cancelled, those channels edit the delivered message, remove its actions,
+  and append the terminal status. WhatsApp, Signal, and iMessage render up to
+  four single-select choices as `1️⃣` through `4️⃣` reactions. Other question
+  shapes degrade to label text, and the user can answer with a plain-text
+  reply.
 - `action.type: "url"` opens a normal link.
 - `action.type: "web-app"` launches a channel-native web app. Set `url` for a
   URL-backed app or `widgetId` for an OpenClaw-hosted widget whose launch
@@ -627,9 +642,8 @@ Non-deprecated helpers worth knowing:
 The legacy `InteractiveReply*` types and conversion helpers are marked
 `@deprecated` in the SDK:
 
-- `InteractiveReply`, `InteractiveReplyBlock`, `InteractiveReplyButton`,
-  `InteractiveReplyOption`, `InteractiveReplySelectBlock`, and
-  `InteractiveReplyTextBlock`
+- `InteractiveReply`, `InteractiveReplyBlock`, `InteractiveReplyButton`, and
+  `InteractiveReplyOption`
 - `normalizeInteractiveReply(...)`
 - `hasInteractiveReplyBlocks(...)`
 - `interactiveReplyToPresentation(...)`
@@ -645,8 +659,6 @@ them; send `presentation` and let core/channel adaptation handle rendering.
 
 Approval helpers also have presentation-first replacements:
 
-- use `buildApprovalPresentationFromActionDescriptors(...)` instead of
-  `buildApprovalInteractiveReplyFromActionDescriptors(...)`
 - use `buildApprovalPresentation(...)` instead of
   `buildApprovalInteractiveReply(...)`
 - use `buildExecApprovalPresentation(...)` instead of

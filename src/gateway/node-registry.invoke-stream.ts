@@ -16,6 +16,7 @@ export type PendingInvoke = {
     error?: { code?: string; message?: string } | null;
   }) => void;
   reject: (err: Error) => void;
+  deadlineAtMs?: number;
   hardTimer?: ReturnType<typeof setTimeout>;
   idleTimer?: ReturnType<typeof setTimeout>;
   idleTimeoutMs?: number;
@@ -93,9 +94,14 @@ export class NodeInvokeStreamController {
       if (pending.connId !== connId) {
         continue;
       }
-      this.clearTimers(pending);
+      if (pending.deadlineAtMs !== undefined && Date.now() >= pending.deadlineAtMs) {
+        this.settleTimeout(id, pending);
+        continue;
+      }
+      if (!this.takePending(id, pending)) {
+        continue;
+      }
       this.options.disconnectPending(pending);
-      this.options.pendingInvokes.delete(id);
     }
   }
 
@@ -104,8 +110,13 @@ export class NodeInvokeStreamController {
     if (!pending || pending.nodeId !== params.nodeId || pending.connId !== params.connId) {
       return false;
     }
-    this.clearTimers(pending);
-    this.options.pendingInvokes.delete(params.id);
+    if (pending.deadlineAtMs !== undefined && Date.now() >= pending.deadlineAtMs) {
+      this.settleTimeout(params.id, pending);
+      return false;
+    }
+    if (!this.takePending(params.id, pending)) {
+      return false;
+    }
     if (!params.ok) {
       this.options.onFailedResult(pending);
     }
@@ -126,28 +137,30 @@ export class NodeInvokeStreamController {
     signal?: AbortSignal;
   }): void {
     if (params.timeoutMs > 0) {
+      params.pending.deadlineAtMs = Date.now() + params.timeoutMs;
+    }
+    this.options.pendingInvokes.set(params.requestId, params.pending);
+    if (params.timeoutMs > 0) {
       params.pending.hardTimer = setTimeout(() => {
-        this.sendInvokeCancel(params.requestId, params.pending);
-        this.clearTimers(params.pending);
-        this.options.pendingInvokes.delete(params.requestId);
-        params.pending.resolve({
-          ok: false,
-          error: { code: "TIMEOUT", message: "node invoke timed out" },
-        });
+        this.settleTimeout(params.requestId, params.pending);
       }, params.timeoutMs);
     }
     if (params.pending.onProgress && params.idleTimeoutMs > 0) {
       params.pending.idleTimeoutMs = params.idleTimeoutMs;
     }
-    this.options.pendingInvokes.set(params.requestId, params.pending);
     if (params.signal) {
       const onAbort = () => {
-        if (this.options.pendingInvokes.get(params.requestId) !== params.pending) {
+        if (
+          params.pending.deadlineAtMs !== undefined &&
+          Date.now() >= params.pending.deadlineAtMs
+        ) {
+          this.settleTimeout(params.requestId, params.pending);
+          return;
+        }
+        if (!this.takePending(params.requestId, params.pending)) {
           return;
         }
         this.sendInvokeCancel(params.requestId, params.pending);
-        this.clearTimers(params.pending);
-        this.options.pendingInvokes.delete(params.requestId);
         params.pending.resolve({
           ok: false,
           error: { code: "ABORTED", message: "node invoke cancelled" },
@@ -225,12 +238,10 @@ export class NodeInvokeStreamController {
 
   private createIdleTimer(requestId: string, pending: PendingInvoke) {
     return setTimeout(() => {
-      if (this.options.pendingInvokes.get(requestId) !== pending) {
+      if (!this.takePending(requestId, pending)) {
         return;
       }
       this.sendInvokeCancel(requestId, pending);
-      this.clearTimers(pending);
-      this.options.pendingInvokes.delete(requestId);
       pending.resolve({
         ok: false,
         error: { code: "IDLE_TIMEOUT", message: "node invoke produced no progress" },
@@ -249,12 +260,26 @@ export class NodeInvokeStreamController {
   }
 
   private sendInvokeCancel(requestId: string, pending: PendingInvoke): void {
-    // Cancel frames belong to the streaming-invoke contract only. Legacy
-    // single-result invokes must keep their pre-streaming wire behavior
-    // byte-identical, so timeouts there stay silent as before.
-    if (!pending.onProgress) {
+    this.options.sendCancel(requestId, pending);
+  }
+
+  private settleTimeout(requestId: string, pending: PendingInvoke): void {
+    if (!this.takePending(requestId, pending)) {
       return;
     }
-    this.options.sendCancel(requestId, pending);
+    this.sendInvokeCancel(requestId, pending);
+    pending.resolve({
+      ok: false,
+      error: { code: "TIMEOUT", message: "node invoke timed out" },
+    });
+  }
+
+  private takePending(requestId: string, pending: PendingInvoke): boolean {
+    if (this.options.pendingInvokes.get(requestId) !== pending) {
+      return false;
+    }
+    this.options.pendingInvokes.delete(requestId);
+    this.clearTimers(pending);
+    return true;
   }
 }

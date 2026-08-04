@@ -44,6 +44,17 @@
         "screenIndex"
       ]
     },
+    "mobile_ui": {
+      "emoji": "📱",
+      "title": "Mobile UI",
+      "detailKeys": [
+        "action",
+        "mobileAction",
+        "snapshotId",
+        "node",
+        "nodeId"
+      ]
+    },
     "screen": {
       "emoji": "🖥️",
       "title": "Screen",
@@ -274,6 +285,16 @@
         }
       }
     },
+    "dashboard": {
+      "emoji": "📋",
+      "title": "Dashboard",
+      "detailKeys": [
+        "action",
+        "tabId",
+        "name",
+        "title"
+      ]
+    },
     "nodes": {
       "emoji": "📱",
       "title": "Nodes",
@@ -438,6 +459,13 @@
       "detailKeys": [
         "explanation",
         "plan.0.step"
+      ]
+    },
+    "ask_user": {
+      "emoji": "❓",
+      "title": "Ask User",
+      "detailKeys": [
+        "questions.0.question"
       ]
     },
     "spawn_task": {
@@ -667,6 +695,21 @@
         "thinking",
         "runTimeoutSeconds",
         "cleanup"
+      ]
+    },
+    "agents_wait": {
+      "emoji": "⏳",
+      "title": "Wait for Agents",
+      "detailKeys": [
+        "ids",
+        "timeoutSeconds"
+      ]
+    },
+    "structured_output": {
+      "emoji": "🧾",
+      "title": "Structured Output",
+      "detailKeys": [
+        "result"
       ]
     },
     "subagents": {

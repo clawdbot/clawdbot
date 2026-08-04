@@ -1,4 +1,5 @@
 // Feishu plugin module implements bot sender name resolution.
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { createFeishuClient } from "./client.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
@@ -49,13 +50,7 @@ function readCache(key: string): CacheEntry | undefined {
 function writeCache(key: string, entry: CacheEntry): void {
   cache.delete(key);
   cache.set(key, entry);
-  while (cache.size > MAX_CACHE_ENTRIES) {
-    const oldest = cache.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    cache.delete(oldest);
-  }
+  pruneMapToMaxSize(cache, MAX_CACHE_ENTRIES);
 }
 
 function isBreakerOpen(accountId: string): boolean {

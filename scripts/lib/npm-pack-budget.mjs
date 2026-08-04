@@ -1,3 +1,5 @@
+import { resolveNpmJsonEntries } from "./npm-json-output.mjs";
+
 // 2026.3.12 ballooned to ~213.6 MiB unpacked and correlated with low-memory
 // startup/doctor OOM reports. 2026.4.12 intentionally stages Matrix runtime
 // dependencies, including crypto wasm, so packaged installs do not miss Docker
@@ -22,12 +24,15 @@ function formatPackUnpackedSizeBudgetError(params) {
 }
 
 export function collectPackUnpackedSizeErrors(results, options = {}) {
-  const entries = Array.from(results);
+  const entries = resolveNpmJsonEntries(results);
   const errors = [];
   const budgetBytes = options.budgetBytes ?? NPM_PACK_UNPACKED_SIZE_BUDGET_BYTES;
   let checkedCount = 0;
 
   for (const [index, entry] of entries.entries()) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      continue;
+    }
     if (typeof entry.unpackedSize !== "number" || !Number.isFinite(entry.unpackedSize)) {
       continue;
     }

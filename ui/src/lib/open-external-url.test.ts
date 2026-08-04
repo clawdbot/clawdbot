@@ -1,6 +1,10 @@
 // Control UI tests cover open external url behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { openExternalUrlSafe, resolveSafeExternalUrl } from "./open-external-url.ts";
+import {
+  openExternalUrlSafe,
+  reserveExternalWindowForDeferredNavigation,
+  resolveSafeExternalUrl,
+} from "./open-external-url.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -103,6 +107,23 @@ describe("openExternalUrlSafe", () => {
       "_blank",
       "noopener,noreferrer",
     );
+    expect(opened).toBe(openedLikeProxy);
+    expect(openedLikeProxy.opener).toBeNull();
+  });
+});
+
+describe("reserveExternalWindowForDeferredNavigation", () => {
+  it("opens an inert placeholder and detaches its opener", () => {
+    const openedLikeProxy = {
+      opener: { postMessage: () => void 0 },
+    } as unknown as WindowProxy;
+    const openMock = vi
+      .spyOn(window, "open")
+      .mockImplementation(() => openedLikeProxy as unknown as Window);
+
+    const opened = reserveExternalWindowForDeferredNavigation();
+
+    expect(openMock).toHaveBeenCalledWith("about:blank", "_blank");
     expect(opened).toBe(openedLikeProxy);
     expect(openedLikeProxy.opener).toBeNull();
   });

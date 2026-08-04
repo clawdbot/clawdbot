@@ -1,3 +1,4 @@
+import { computeBackoff } from "../../packages/retry/src/index.js";
 // Persists queued session deliveries for retry and recovery.
 import type { SourceReplyDeliveryMode } from "../auto-reply/source-reply-delivery-mode.types.js";
 import type { ChatType } from "../channels/chat-type.js";
@@ -12,13 +13,20 @@ import {
   updateDeliveryQueueEntry,
   upsertDeliveryQueueEntry,
   type DeliveryQueueCompletionRetention,
-  type DeliveryQueueRowMetadata,
 } from "./delivery-queue-sqlite.js";
 import { generateSecureUuid } from "./secure-random.js";
 
 // Session delivery queue persists session-scoped messages until channel
 // delivery acknowledges them or recovery exhausts retry policy.
-const QUEUE_NAME = "session";
+export const SESSION_DELIVERY_QUEUE_NAME = "session";
+
+type SessionDeliveryOwnerReference = {
+  kind: "subagent_completion";
+  runId: string;
+  taskId: string;
+  generation: number;
+  deadlineAt: number;
+};
 
 type SessionDeliveryContext = {
   channel?: string;
@@ -66,6 +74,7 @@ export type QueuedSessionDeliveryPayload =
       expectedMediaUrls?: string[];
       suppressTextDelivery?: true;
       idempotencyKey?: string;
+      owner?: SessionDeliveryOwnerReference;
     } & SessionDeliveryRetryPolicy);
 
 export type QueuedSessionDelivery = QueuedSessionDeliveryPayload & {
@@ -81,6 +90,20 @@ export type QueuedSessionDelivery = QueuedSessionDeliveryPayload & {
   settlementOutcome?: SessionDeliverySettledOutcome;
   availableAt?: number;
 };
+
+export function prepareClaimedSessionDelivery(
+  params: QueuedSessionDeliveryPayload,
+  initialAttemptLeaseMs: number,
+  now = Date.now(),
+): QueuedSessionDelivery {
+  return {
+    ...params,
+    id: buildEntryId(params.idempotencyKey),
+    enqueuedAt: now,
+    retryCount: 0,
+    availableAt: now + Math.max(0, initialAttemptLeaseMs),
+  };
+}
 
 export class SessionDeliveryDeferredError extends Error {
   override name = "SessionDeliveryDeferredError";
@@ -113,17 +136,6 @@ function buildEntryId(idempotencyKey?: string): string {
   return sha256Hex(idempotencyKey);
 }
 
-function queuedSessionDeliveryMetadata(entry: QueuedSessionDelivery): DeliveryQueueRowMetadata {
-  const route = entry.kind === "agentTurn" ? entry.route : undefined;
-  return {
-    entryKind: entry.kind,
-    sessionKey: entry.sessionKey,
-    channel: route?.channel ?? entry.deliveryContext?.channel,
-    target: route?.to ?? entry.deliveryContext?.to,
-    accountId: route?.accountId ?? entry.deliveryContext?.accountId,
-  };
-}
-
 /** Enqueue a session delivery and return its durable id. */
 export async function enqueueSessionDelivery(
   params: QueuedSessionDeliveryPayload,
@@ -138,9 +150,8 @@ export async function enqueueSessionDelivery(
     retryCount: 0,
   };
   upsertDeliveryQueueEntry({
-    queueName: QUEUE_NAME,
+    queueName: SESSION_DELIVERY_QUEUE_NAME,
     entry,
-    metadata: queuedSessionDeliveryMetadata(entry),
     stateDir,
     ...(params.completionRetention === "permanent"
       ? { insertOnly: true }
@@ -159,24 +170,19 @@ export async function enqueueClaimedSessionDelivery(
   claimed: boolean;
   status: "pending" | "failed" | "completed" | "unknown";
 }> {
-  const id = buildEntryId(params.idempotencyKey);
-  const entry: QueuedSessionDelivery = {
-    ...params,
-    id,
-    enqueuedAt: Date.now(),
-    retryCount: 0,
-    availableAt: Date.now() + Math.max(0, initialAttemptLeaseMs),
-  };
+  const entry = prepareClaimedSessionDelivery(params, initialAttemptLeaseMs);
+  const id = entry.id;
   const claimed = upsertDeliveryQueueEntry({
-    queueName: QUEUE_NAME,
+    queueName: SESSION_DELIVERY_QUEUE_NAME,
     entry,
-    metadata: queuedSessionDeliveryMetadata(entry),
     stateDir,
     insertOnly: true,
   });
   let status: "pending" | "failed" | "completed" | undefined;
   try {
-    status = claimed ? "pending" : getDeliveryQueueEntryStatus(QUEUE_NAME, id, stateDir);
+    status = claimed
+      ? "pending"
+      : getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, id, stateDir);
   } catch {
     // The insert-only conflict already proved another durable owner existed.
     // Preserve that ownership when diagnostics are temporarily unreadable.
@@ -189,7 +195,7 @@ export async function enqueueClaimedSessionDelivery(
 
 /** Release the initial-attempt lease so runtime recovery can retry immediately. */
 export async function releaseSessionDeliveryClaim(id: string, stateDir?: string): Promise<void> {
-  updateDeliveryQueueEntry(QUEUE_NAME, id, stateDir, (entry) => ({
+  updateDeliveryQueueEntry(SESSION_DELIVERY_QUEUE_NAME, id, stateDir, (entry) => ({
     ...entry,
     availableAt: Date.now(),
   }));
@@ -201,7 +207,7 @@ export async function deferSessionDelivery(
   delayMs: number,
   stateDir?: string,
 ): Promise<void> {
-  updateDeliveryQueueEntry(QUEUE_NAME, id, stateDir, (entry) => ({
+  updateDeliveryQueueEntry(SESSION_DELIVERY_QUEUE_NAME, id, stateDir, (entry) => ({
     ...entry,
     availableAt: Date.now() + Math.max(0, delayMs),
   }));
@@ -213,7 +219,7 @@ export async function advanceSessionDeliveryAgentRun(
   updates?: { expectedMediaUrls?: string[]; message?: string; suppressTextDelivery?: boolean },
   stateDir?: string,
 ): Promise<void> {
-  updateDeliveryQueueEntry(QUEUE_NAME, id, stateDir, (entry) => {
+  updateDeliveryQueueEntry(SESSION_DELIVERY_QUEUE_NAME, id, stateDir, (entry) => {
     const queued = entry as QueuedSessionDelivery;
     if (queued.kind !== "agentTurn") {
       return queued;
@@ -236,12 +242,11 @@ export async function markSessionDeliveryAttemptStarted(
 ): Promise<void> {
   try {
     const started = upsertDeliveryQueueEntry({
-      queueName: QUEUE_NAME,
+      queueName: SESSION_DELIVERY_QUEUE_NAME,
       entry: {
         ...entry,
         deliveryStartedAt: entry.deliveryStartedAt ?? Date.now(),
       } as QueuedSessionDelivery,
-      metadata: queuedSessionDeliveryMetadata(entry),
       stateDir,
       updatePendingOnly: true,
     });
@@ -272,26 +277,29 @@ export async function markSessionDeliverySettlement(
 ): Promise<void> {
   try {
     const settled = upsertDeliveryQueueEntry({
-      queueName: QUEUE_NAME,
+      queueName: SESSION_DELIVERY_QUEUE_NAME,
       entry: {
         ...entry,
         settlementOutcome: outcome,
         ...(outcome === "recovered" ? { acknowledgedAt: entry.acknowledgedAt ?? Date.now() } : {}),
       } as QueuedSessionDelivery,
-      metadata: queuedSessionDeliveryMetadata(entry),
       stateDir,
       updatePendingOnly: true,
     });
     if (settled) {
       return;
     }
-    if (getDeliveryQueueEntryStatus(QUEUE_NAME, entry.id, stateDir) === "completed") {
+    if (
+      getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, entry.id, stateDir) === "completed"
+    ) {
       return;
     }
     throw new Error(`Session delivery ${entry.id} is no longer pending`);
   } catch (error) {
     try {
-      if (getDeliveryQueueEntryStatus(QUEUE_NAME, entry.id, stateDir) === "completed") {
+      if (
+        getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, entry.id, stateDir) === "completed"
+      ) {
         return;
       }
     } catch {
@@ -304,10 +312,10 @@ export async function markSessionDeliverySettlement(
 /** Replace a settled pending row with its completed idempotency tombstone. */
 export async function completeSessionDelivery(id: string, stateDir?: string): Promise<void> {
   try {
-    completeDeliveryQueueEntry(QUEUE_NAME, id, stateDir);
+    completeDeliveryQueueEntry(SESSION_DELIVERY_QUEUE_NAME, id, stateDir);
   } catch (error) {
     try {
-      if (getDeliveryQueueEntryStatus(QUEUE_NAME, id, stateDir) === "completed") {
+      if (getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, id, stateDir) === "completed") {
         return;
       }
     } catch {
@@ -324,16 +332,28 @@ export async function failSessionDelivery(
   stateDir?: string,
   options?: { releaseAttemptOwnership?: boolean },
 ): Promise<void> {
-  updateDeliveryQueueEntry(QUEUE_NAME, id, stateDir, (entry) => {
+  updateDeliveryQueueEntry(SESSION_DELIVERY_QUEUE_NAME, id, stateDir, (entry) => {
     const queued = entry as QueuedSessionDelivery;
+    const retryCount = queued.retryCount + 1;
+    const now = Date.now();
     return {
       ...queued,
-      retryCount: queued.retryCount + 1,
+      retryCount,
       ...(queued.kind === "agentTurn"
         ? { lastChargedAgentRunAttempt: queued.agentRunAttempt ?? 0 }
         : {}),
       ...(options?.releaseAttemptOwnership === true ? { deliveryStartedAt: undefined } : {}),
-      lastAttemptAt: Date.now(),
+      lastAttemptAt: now,
+      ...(queued.kind === "agentTurn" && queued.owner?.kind === "subagent_completion"
+        ? {
+            availableAt:
+              now +
+              computeBackoff(
+                { initialMs: 15_000, factor: 2, maxMs: 5 * 60_000, jitter: 0.2 },
+                retryCount,
+              ),
+          }
+        : {}),
       lastError: error,
     };
   });
@@ -344,23 +364,27 @@ export async function loadPendingSessionDelivery(
   id: string,
   stateDir?: string,
 ): Promise<QueuedSessionDelivery | null> {
-  return loadDeliveryQueueEntry(QUEUE_NAME, id, stateDir) as QueuedSessionDelivery | null;
+  return loadDeliveryQueueEntry(
+    SESSION_DELIVERY_QUEUE_NAME,
+    id,
+    stateDir,
+  ) as QueuedSessionDelivery | null;
 }
 
 /** Load all pending session deliveries in retry order. */
 export async function loadPendingSessionDeliveries(
   stateDir?: string,
 ): Promise<QueuedSessionDelivery[]> {
-  return loadDeliveryQueueEntries(QUEUE_NAME, stateDir) as QueuedSessionDelivery[];
+  return loadDeliveryQueueEntries(SESSION_DELIVERY_QUEUE_NAME, stateDir) as QueuedSessionDelivery[];
 }
 
 /** Move an exhausted session delivery out of the pending queue. */
 export async function moveSessionDeliveryToFailed(id: string, stateDir?: string): Promise<void> {
   try {
-    moveDeliveryQueueEntryToFailed(QUEUE_NAME, id, stateDir);
+    moveDeliveryQueueEntryToFailed(SESSION_DELIVERY_QUEUE_NAME, id, stateDir);
   } catch (error) {
     try {
-      if (getDeliveryQueueEntryStatus(QUEUE_NAME, id, stateDir) === "failed") {
+      if (getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, id, stateDir) === "failed") {
         return;
       }
     } catch {

@@ -34,6 +34,21 @@ vi.mock("../agent-model-discovery.js", () => ({
   discoverModels: discoverModelsMock,
 }));
 
+vi.mock("../prepared-model-runtime.js", () => ({
+  getPreparedModelRuntimeSnapshot: () => undefined,
+  loadPreparedModelRuntimeSnapshot: async ({ agentDir }: { agentDir: string }) => {
+    const authStorage = discoverAuthStorageMock(agentDir);
+    return {
+      agentDir,
+      config: {},
+      createStores: () => ({
+        authStorage,
+        modelRegistry: discoverModelsMock(authStorage, agentDir),
+      }),
+    };
+  },
+}));
+
 vi.mock("../../plugins/provider-runtime.js", () => ({
   applyProviderResolvedTransportWithPlugin: () => undefined,
   buildProviderUnknownModelHintWithPlugin: () => undefined,

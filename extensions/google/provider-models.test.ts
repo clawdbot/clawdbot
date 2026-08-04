@@ -2,7 +2,11 @@
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";
 import { createProviderDynamicModelContext as createContext } from "../test-support/provider-model-test-helpers.js";
-import { isModernGoogleModel, resolveGoogleGeminiForwardCompatModel } from "./provider-models.js";
+import {
+  isGoogleTextGenerationModelId,
+  isModernGoogleModel,
+  resolveGoogleGeminiForwardCompatModel,
+} from "./provider-models.js";
 
 function createTemplateModel(
   provider: string,
@@ -528,5 +532,52 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
       id: "gemma-3-4b-it",
       reasoning: false,
     });
+  });
+
+  it.each([
+    ["gemini-3.6-flash", "gemini-3-flash-preview"],
+    ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"],
+  ])("resolves future Gemini 3 text family %s from %s metadata", (modelId, templateId) => {
+    const model = resolveGoogleGeminiForwardCompatModel({
+      providerId: "google",
+      ctx: createContext({
+        provider: "google",
+        modelId,
+        models: [
+          createTemplateModel("google", templateId, {
+            reasoning: true,
+            contextWindow: 1_048_576,
+          }),
+        ],
+      }),
+    });
+
+    expectModelFields(model, {
+      provider: "google",
+      id: modelId,
+      reasoning: true,
+      contextWindow: 1_048_576,
+    });
+  });
+
+  it("keeps non-chat Gemini surfaces out of text discovery and forward compatibility", () => {
+    for (const modelId of [
+      "gemini-3.1-flash-image",
+      "gemini-3.1-flash-tts-preview",
+      "gemini-3.1-flash-live-preview",
+      "gemini-2.5-flash-preview-native-audio-dialog",
+    ]) {
+      expect(isGoogleTextGenerationModelId(modelId)).toBe(false);
+      expect(
+        resolveGoogleGeminiForwardCompatModel({
+          providerId: "google",
+          ctx: createContext({
+            provider: "google",
+            modelId,
+            models: [createTemplateModel("google", "gemini-3-flash-preview")],
+          }),
+        }),
+      ).toBeUndefined();
+    }
   });
 });

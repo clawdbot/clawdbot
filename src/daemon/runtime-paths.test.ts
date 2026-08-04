@@ -45,9 +45,13 @@ function mockNodePathPresent(...nodePaths: string[]) {
   });
 }
 
-function nodeRuntime(nodeVersion: string, sqliteVersion: string | null = "3.51.3") {
+function nodeRuntime(
+  nodeVersion: string,
+  sqliteVersion: string | null = "3.51.3",
+  nodeSharedSqlite = false,
+) {
   return {
-    stdout: `${JSON.stringify({ nodeVersion, sqliteVersion })}\n`,
+    stdout: `${JSON.stringify({ nodeVersion, sqliteVersion, nodeSharedSqlite })}\n`,
     stderr: "",
   };
 }
@@ -402,6 +406,7 @@ describe("resolveSystemNodeInfo", () => {
       path: darwinNode,
       sqliteVersion: "3.51.3",
       version: "22.22.3",
+      nodeSharedSqlite: false,
       supported: true,
     });
   });
@@ -432,6 +437,7 @@ describe("resolveSystemNodeInfo", () => {
       path: homebrewOptNode,
       sqliteVersion: "3.51.3",
       version: "22.22.3",
+      nodeSharedSqlite: false,
       supported: true,
     });
   });
@@ -456,6 +462,7 @@ describe("resolveSystemNodeInfo", () => {
       path: homebrewOptNode,
       sqliteVersion: "3.51.3",
       version: "24.15.0",
+      nodeSharedSqlite: false,
       supported: true,
     });
     expect(execFile).toHaveBeenCalledTimes(1);
@@ -484,19 +491,55 @@ describe("resolveSystemNodeInfo", () => {
     expect(execFile).not.toHaveBeenCalled();
   });
 
-  it("renders a warning when system node is too old", () => {
+  it("reports an unavailable system Node version while preserving the selected runtime", () => {
+    const selectedNode = "/Users/me/.fnm/node-22/bin/node";
+    const warning = renderSystemNodeWarning(
+      {
+        path: darwinNode,
+        sqliteVersion: null,
+        version: null,
+        nodeSharedSqlite: false,
+        supported: false,
+      },
+      selectedNode,
+    );
+
+    expect(warning).toBe(
+      `System Node at ${darwinNode} is available, but its version could not be determined. Using ${selectedNode} for the daemon. Install Node 24.15+ (recommended) or Node 22.22.3+ from nodejs.org or Homebrew.`,
+    );
+  });
+
+  it("reports a known unsupported system Node version", () => {
+    const selectedNode = "/Users/me/.fnm/node-22/bin/node";
     const warning = renderSystemNodeWarning(
       {
         path: darwinNode,
         sqliteVersion: null,
         version: "18.19.0",
+        nodeSharedSqlite: false,
         supported: false,
+      },
+      selectedNode,
+    );
+
+    expect(warning).toBe(
+      `System Node 18.19.0 at ${darwinNode} is outside the supported range. Using ${selectedNode} for the daemon. Install Node 24.15+ (recommended) or Node 22.22.3+ from nodejs.org or Homebrew.`,
+    );
+  });
+
+  it("does not warn for a supported system Node version", () => {
+    const warning = renderSystemNodeWarning(
+      {
+        path: darwinNode,
+        sqliteVersion: "3.51.3",
+        version: "24.15.0",
+        nodeSharedSqlite: false,
+        supported: true,
       },
       "/Users/me/.fnm/node-22/bin/node",
     );
 
-    expect(warning).toContain("outside the supported range");
-    expect(warning).toContain(darwinNode);
+    expect(warning).toBeNull();
   });
 
   it("renders a WAL safety warning for supported Node with unsafe SQLite", () => {
@@ -504,11 +547,28 @@ describe("resolveSystemNodeInfo", () => {
       path: darwinNode,
       sqliteVersion: "3.51.2",
       version: "24.17.0",
+      nodeSharedSqlite: false,
       supported: false,
     });
 
     expect(warning).toContain("uses SQLite 3.51.2");
     expect(warning).toContain("not WAL-reset-safe");
+    expect(warning).toContain("Install Node 24.15+");
+  });
+
+  it("renders a shared-system-SQLite remediation when Node is supported but the system library is unsafe", () => {
+    const warning = renderSystemNodeWarning({
+      path: "/usr/bin/node",
+      sqliteVersion: "3.51.2",
+      version: "24.17.0",
+      nodeSharedSqlite: true,
+      supported: false,
+    });
+
+    expect(warning).toContain("uses shared system SQLite 3.51.2");
+    expect(warning).toContain("not WAL-reset-safe");
+    expect(warning).toContain("Upgrade the system SQLite library");
+    expect(warning).not.toContain("Install Node 24.15+");
   });
 
   it("uses validated custom Program Files roots on Windows", async () => {

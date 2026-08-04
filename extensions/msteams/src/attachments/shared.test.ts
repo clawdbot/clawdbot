@@ -40,6 +40,7 @@ async function safeFetch(params: SafeFetchParams) {
       allowHosts,
       authAllowHosts: authorizationAllowHosts ?? [],
     },
+    resolveFn: request.resolveFn ?? publicResolve,
   });
 }
 
@@ -599,7 +600,7 @@ describe("msteams inline image limits", () => {
       },
     ];
     const out = extractInlineImageCandidates(attachments, { maxInlineBytes: 4 });
-    expect(out).toStrictEqual([]);
+    expect(out).toStrictEqual([{ kind: "unavailable" }]);
   });
 
   it("accepts inline data images within limit", () => {
@@ -626,7 +627,7 @@ describe("msteams inline image limits", () => {
       },
     ];
     const out = extractInlineImageCandidates(attachments, { maxInlineBytes: 10 });
-    expect(out).toStrictEqual([]);
+    expect(out).toStrictEqual([{ kind: "unavailable" }]);
   });
 
   it("enforces cumulative inline size limit across attachments", () => {
@@ -644,8 +645,9 @@ describe("msteams inline image limits", () => {
       maxInlineBytes: 10,
       maxInlineTotalBytes: 6,
     });
-    expect(out.length).toBe(1);
+    expect(out.length).toBe(2);
     expect(out[0]?.kind).toBe("data");
+    expect(out[1]).toStrictEqual({ kind: "unavailable" });
   });
 });
 

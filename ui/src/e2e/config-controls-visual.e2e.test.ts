@@ -53,7 +53,7 @@ describeControlUiE2e("Control UI Settings controls mocked Gateway E2E", () => {
     await server?.close();
   });
 
-  it("keeps the view selector compact and checked switches on the scene accent", async () => {
+  it("keeps checked switches on the scene accent on the security page", async () => {
     const context = await browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
@@ -75,37 +75,17 @@ describeControlUiE2e("Control UI Settings controls mocked Gateway E2E", () => {
     });
 
     try {
-      const response = await page.goto(`${server.baseUrl}config`);
+      const response = await page.goto(`${server.baseUrl}settings/security`);
       expect(response?.status()).toBe(200);
 
-      const viewSelector = page
-        .locator(".content-header")
-        .getByRole("radiogroup", { name: "Settings view", exact: true });
-      await viewSelector.waitFor();
-      const activeMode = page.locator('.content-header wa-radio[value="quick"]');
-      expect(
-        await activeMode.evaluate((element) => element.getBoundingClientRect().height),
-      ).toBeLessThanOrEqual(40);
-      expect(
-        await page.locator('.content-header [slot="label"]').evaluate((element) => {
-          const box = element.getBoundingClientRect();
-          return {
-            height: box.height,
-            overflow: getComputedStyle(element).overflow,
-            width: box.width,
-          };
-        }),
-      ).toEqual({ height: 1, overflow: "hidden", width: 1 });
-      expect(
-        await activeMode.evaluate((element) => getComputedStyle(element).backgroundColor),
-      ).toBe(await resolvedBackground(page, "var(--bg-elevated)"));
-
-      const browserSwitchRole = page
-        .locator("#settings-general-security")
-        .getByRole("switch", { name: "Browser enabled", exact: true });
+      const overview = page.locator(".security-page");
+      const browserSwitchRole = overview.getByRole("switch", {
+        name: "Browser enabled",
+        exact: true,
+      });
       await browserSwitchRole.waitFor();
       expect(await browserSwitchRole.getAttribute("aria-checked")).toBe("true");
-      const browserSwitch = page.locator("#settings-general-security wa-switch.settings-toggle");
+      const browserSwitch = overview.locator("wa-switch.settings-toggle").first();
       expect(
         await browserSwitch.evaluate((element) => {
           const control = element.shadowRoot?.querySelector<HTMLElement>('[part="control"]');
@@ -119,22 +99,17 @@ describeControlUiE2e("Control UI Settings controls mocked Gateway E2E", () => {
           animations: "disabled",
           path: path.join(uiProofArtifactDir, "01-settings-view.png"),
         });
-        await page.locator("#settings-general-security").screenshot({
-          animations: "disabled",
-          path: path.join(uiProofArtifactDir, "02-security-controls.png"),
-        });
+        await overview
+          .locator(".settings-section")
+          .first()
+          .screenshot({
+            animations: "disabled",
+            path: path.join(uiProofArtifactDir, "02-security-controls.png"),
+          });
       }
 
       await browserSwitch.click();
       await expect.poll(() => browserSwitchRole.getAttribute("aria-checked")).toBe("false");
-      await page.locator('.content-header wa-radio[value="advanced"]').click();
-      await expect
-        .poll(() =>
-          page
-            .locator('.content-header wa-radio[value="advanced"]')
-            .evaluate((element) => (element as HTMLElement & { checked: boolean }).checked),
-        )
-        .toBe(true);
     } finally {
       await context.close();
     }

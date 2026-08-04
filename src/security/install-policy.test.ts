@@ -26,7 +26,7 @@ async function writePolicyScript(dir: string): Promise<string> {
   const scriptPath = path.join(dir, "policy.cjs");
   await fs.writeFile(
     scriptPath,
-    `
+    `#!${process.execPath}
 const fs = require("node:fs");
 
 let input = "";
@@ -101,10 +101,9 @@ function configWithPolicy(scriptPath: string, env: Record<string, string>): Open
         enabled: true,
         exec: {
           source: "exec",
-          command: process.execPath,
-          args: [scriptPath],
+          command: scriptPath,
           env,
-          allowInsecurePath: true,
+          trustedDirs: [path.dirname(scriptPath)],
           timeoutMs: 5000,
           maxOutputBytes: 16 * 1024,
         },
@@ -173,7 +172,9 @@ describe("runInstallPolicy", () => {
       mutable: false,
       network: true,
     });
-    await expect(fs.readFile(cwdPath, "utf8")).resolves.toBe(path.dirname(process.execPath));
+    await expect(fs.readFile(cwdPath, "utf8")).resolves.toBe(
+      await fs.realpath(path.dirname(scriptPath)),
+    );
     expect(captured.request).toMatchObject({
       kind: "skill-install",
       mode: "install",
@@ -201,7 +202,7 @@ describe("runInstallPolicy", () => {
                 POLICY_RESPONSE: response,
               },
               passEnv: ["PATH"],
-              allowInsecurePath: true,
+              trustedDirs: [path.dirname(envNodeScriptPath)],
             },
           },
         },
@@ -243,7 +244,7 @@ describe("runInstallPolicy", () => {
                   source: "exec",
                   command: forkScriptPath,
                   env: { NODE_BINARY: process.execPath, PID_FILE: pidPath },
-                  allowInsecurePath: true,
+                  trustedDirs: [path.dirname(forkScriptPath)],
                   // Preserve production-like startup headroom; the test fires
                   // the re-armed timer only after the readiness byte arrives.
                   noOutputTimeoutMs: 1_000,
@@ -254,9 +255,12 @@ describe("runInstallPolicy", () => {
           },
           request: baseRequest(sourceDir),
         });
-        await vi.waitFor(() => {
-          expect(noOutputTimeouts.length).toBeGreaterThanOrEqual(2);
-        });
+        await vi.waitFor(
+          () => {
+            expect(noOutputTimeouts.length).toBeGreaterThanOrEqual(2);
+          },
+          { timeout: 5_000 },
+        );
         childPid = await readPidFile(pidPath);
         noOutputTimeouts.at(-1)?.();
         const result = await resultPromise;
@@ -307,7 +311,7 @@ describe("runInstallPolicy", () => {
             env: {
               EXIT_CODE: "1",
             },
-            allowInsecurePath: true,
+            trustedDirs: [path.dirname(scriptPath)],
           },
         },
       },
@@ -466,7 +470,6 @@ describe("runInstallPolicy", () => {
               source: "exec",
               command: "policy.cjs",
               args: [],
-              allowInsecurePath: true,
             },
           },
         },
@@ -492,7 +495,6 @@ describe("runInstallPolicy", () => {
                 source: "exec",
                 command: "C:\\tmp\\policy.cjs",
                 args: [],
-                allowInsecurePath: true,
               },
             },
           },
@@ -656,7 +658,6 @@ describe("runInstallPolicy", () => {
               source: "exec",
               command: process.execPath,
               args: [symlinkScriptPath],
-              allowSymlinkCommand: true,
             },
           },
         },
@@ -679,7 +680,6 @@ describe("runInstallPolicy", () => {
               source: "exec",
               command: "/usr/bin/env",
               args: ["-S", `node ${scriptPath}`],
-              allowInsecurePath: true,
             },
           },
         },

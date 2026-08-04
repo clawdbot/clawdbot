@@ -26,11 +26,7 @@ import {
 import { quoteCommandPart, splitCommandParts } from "./command-line.js";
 import { resolveAcpxPluginRoot } from "./config.js";
 import type { ResolvedAcpxPluginConfig } from "./config.js";
-import {
-  OPENCLAW_ACPX_LEASE_ID_ARG,
-  OPENCLAW_ACPX_LEASE_ID_ENV,
-  OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
-} from "./process-lease.js";
+import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
 
 const CLAUDE_ACP_PACKAGE = "@agentclientprotocol/claude-agent-acp";
 const CLAUDE_ACP_BIN = "claude-agent-acp";
@@ -293,7 +289,6 @@ function resolveStderrLogPath(args) {
     return undefined;
   }
   const leaseId =
-    process.env[${JSON.stringify(OPENCLAW_ACPX_LEASE_ID_ENV)}] ||
     readOpenClawWrapperArg(args, ${quoteCommandPart(OPENCLAW_ACPX_LEASE_ID_ARG)}) ||
     "pid-" + process.pid;
   const fileName = stderrLogFileNamePrefix + "." + safeDiagnosticFilePart(leaseId) + ".log";

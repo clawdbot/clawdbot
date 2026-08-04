@@ -12,7 +12,7 @@ import type {
 } from "./types.js";
 
 function countMedia(payload: ReplyPayload): number {
-  return (payload.mediaUrls?.filter(Boolean).length ?? 0) + (payload.mediaUrl ? 1 : 0);
+  return collectMediaUrls(payload).length;
 }
 
 function collectMediaUrls(payload: ReplyPayload): string[] {

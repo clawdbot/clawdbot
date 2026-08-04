@@ -103,6 +103,11 @@ final class ControlChannel {
         didSet {
             CanvasManager.shared.refreshDebugStatus()
             guard oldValue != self.state else { return }
+            if self.state != .connected {
+                self.lastPingMs = nil
+                self.authSourceLabel = nil
+            }
+            NotificationCenter.default.post(name: .controlChannelStateDidChange, object: nil)
             switch self.state {
             case .connected:
                 self.logger.info("control channel state -> connected")
@@ -545,5 +550,6 @@ final class ControlChannel {
 }
 
 extension Notification.Name {
+    static let controlChannelStateDidChange = Notification.Name("openclaw.control-channel.state-did-change")
     static let controlHeartbeat = Notification.Name("openclaw.control.heartbeat")
 }

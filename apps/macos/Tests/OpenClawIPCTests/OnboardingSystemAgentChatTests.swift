@@ -27,6 +27,18 @@ private actor SystemAgentSessionRecorder {
     }
 }
 
+private actor SystemAgentMessageRecorder {
+    private var messages: [String] = []
+
+    func record(_ message: String) {
+        self.messages.append(message)
+    }
+
+    func snapshot() -> [String] {
+        self.messages
+    }
+}
+
 private actor SystemAgentMethodRecorder {
     private var methods: [String] = []
 
@@ -88,6 +100,20 @@ private func systemAgentRequestMethod(from message: URLSessionWebSocketTask.Mess
     return object["method"] as? String
 }
 
+private func systemAgentChatMessage(from message: URLSessionWebSocketTask.Message) -> String? {
+    let data: Data? = switch message {
+    case let .data(data): data
+    case let .string(string): string.data(using: .utf8)
+    @unknown default: nil
+    }
+    guard let data,
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          object["method"] as? String == "openclaw.chat",
+          let params = object["params"] as? [String: Any]
+    else { return nil }
+    return params["message"] as? String
+}
+
 private func respondToSystemAgentHealth(
     task: GatewayTestWebSocketTask,
     id: String,
@@ -98,8 +124,15 @@ private func respondToSystemAgentHealth(
     return true
 }
 
-private func systemAgentResponse(id: String, action: String = "none") -> Data {
-    Data(
+private func systemAgentResponse(
+    id: String,
+    action: String = "none",
+    agentDraft: String? = nil,
+    questionJSON: String? = nil) -> Data
+{
+    let agentDraftField = agentDraft.map { ",\n            \"agentDraft\": \"\($0)\"" } ?? ""
+    let questionField = questionJSON.map { ",\n            \"question\": \($0)" } ?? ""
+    return Data(
         """
         {
           "type": "res",
@@ -109,7 +142,7 @@ private func systemAgentResponse(id: String, action: String = "none") -> Data {
             "sessionId": "test-session",
             "reply": "ready",
             "action": "\(action)",
-            "sensitive": false
+            "sensitive": false\(agentDraftField)\(questionField)
           }
         }
         """.utf8)
@@ -477,6 +510,140 @@ struct OnboardingSystemAgentChatTests {
         #expect(session.latestTask()?.snapshotSendCount() == 2)
     }
 
+    @Test func `typed question sends reply while transcript shows label`() async throws {
+        let recordedMessages = SystemAgentMessageRecorder()
+        let questionJSON =
+            """
+            {"id":"next","header":"Next step","question":"What now?","options":[
+              {"label":"Talk to my agent","reply":"talk to agent","recommended":true},
+              {"label":"Connect WhatsApp","reply":"connect whatsapp","description":"Chat there."}
+            ],"isOther":true}
+            """
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message)
+                else { return }
+                if let message = systemAgentChatMessage(from: message) {
+                    await recordedMessages.record(message)
+                    task.emitReceiveSuccess(.data(systemAgentResponse(id: id)))
+                } else {
+                    task.emitReceiveSuccess(.data(systemAgentResponse(
+                        id: id,
+                        questionJSON: questionJSON)))
+                }
+            })
+        })
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let gateway = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        let chat = SystemAgentOnboardingChatModel(gateway: gateway)
+
+        await chat.startIfNeeded()
+        let assistant = try #require(chat.messages.first)
+        let question = try #require(assistant.question)
+        #expect(question.options.first?.recommended == true)
+
+        let task = try #require(chat.answerQuestion(
+            messageID: assistant.id,
+            optionLabel: "Connect WhatsApp"))
+        await task.value
+
+        #expect(await recordedMessages.snapshot() == ["connect whatsapp"])
+        #expect(chat.messages.map(\.text) == ["ready", "Connect WhatsApp", "ready"])
+        #expect(!chat.canAnswerQuestion(assistant))
+    }
+
+    @Test func `typed question skip sends fixed reply and dismisses cards`() async throws {
+        let recordedMessages = SystemAgentMessageRecorder()
+        let questionJSON =
+            #"{"id":"next","header":"Next step","question":"What now?","options":[{"label":"A"},{"label":"B"}]}"#
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message)
+                else { return }
+                if let message = systemAgentChatMessage(from: message) {
+                    await recordedMessages.record(message)
+                    task.emitReceiveSuccess(.data(systemAgentResponse(id: id)))
+                } else {
+                    task.emitReceiveSuccess(.data(systemAgentResponse(
+                        id: id,
+                        questionJSON: questionJSON)))
+                }
+            })
+        })
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let gateway = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        let chat = SystemAgentOnboardingChatModel(gateway: gateway)
+
+        await chat.startIfNeeded()
+        let assistant = try #require(chat.messages.first)
+        let task = try #require(chat.skipQuestion(messageID: assistant.id))
+        await task.value
+
+        #expect(await recordedMessages.snapshot() == ["Skip for now"])
+        #expect(chat.messages.map(\.text) == ["ready", "Skip for now", "ready"])
+        #expect(!chat.isQuestionVisible(assistant))
+    }
+
+    @Test(arguments: [
+        #"{"id":"dupes","header":"Next step","question":"What now?","options":[{"label":"Same"},{"label":"same"}]}"#,
+        #""invalid""#,
+        #"[]"#,
+    ])
+    func `malformed typed question keeps prose reply only`(questionJSON: String) async throws {
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message)
+                else { return }
+                task.emitReceiveSuccess(.data(systemAgentResponse(
+                    id: id,
+                    questionJSON: questionJSON)))
+            })
+        })
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let gateway = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        let chat = SystemAgentOnboardingChatModel(gateway: gateway)
+
+        await chat.startIfNeeded()
+
+        #expect(chat.messages.map(\.text) == ["ready"])
+        #expect(chat.messages.first?.question == nil)
+    }
+
+    @Test func `agent handoff carries the hatch draft intent`() async throws {
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message)
+                else { return }
+                task.emitReceiveSuccess(.data(systemAgentResponse(
+                    id: id,
+                    action: "open-agent",
+                    agentDraft: "hatch")))
+            })
+        })
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let gateway = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        let chat = SystemAgentOnboardingChatModel(gateway: gateway)
+        var receivedDraft: SystemAgentDraft?
+        chat.onAgentHandoff = { receivedDraft = $0 }
+
+        await chat.startIfNeeded()
+
+        #expect(receivedDraft == .hatch)
+        #expect(receivedDraft?.composerValue == "Wake up, my friend!")
+    }
+
     @Test func `settings callback refreshes inference after assistant reply`() async throws {
         let session = GatewayTestWebSocketSession(taskFactory: {
             GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
@@ -514,7 +681,7 @@ struct OnboardingSystemAgentChatTests {
         var replyCount = 0
         var handoffCount = 0
         chat.onReplyReceived = { replyCount += 1 }
-        chat.onAgentHandoff = { handoffCount += 1 }
+        chat.onAgentHandoff = { _ in handoffCount += 1 }
         chat.input = "route-bound secret"
         state.isPresented = true
 
@@ -612,7 +779,7 @@ struct OnboardingSystemAgentChatTests {
         var replyCount = 0
         var handoffCount = 0
         chat.onReplyReceived = { replyCount += 1 }
-        chat.onAgentHandoff = { handoffCount += 1 }
+        chat.onAgentHandoff = { _ in handoffCount += 1 }
 
         let startTask = Task { await chat.startIfNeeded() }
         var requestStarted = false

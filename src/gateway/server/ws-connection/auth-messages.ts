@@ -23,6 +23,8 @@ export function formatGatewayAuthFailureMessage(params: {
   const isControlUi = isOperatorUiClient(client);
   const isWebchat = isWebchatClient(client);
   const uiHint = "open the dashboard URL and paste the token in Control UI settings";
+  const missingUiTokenHint =
+    "paste in Control UI settings or openclaw doctor --generate-gateway-token; restart";
   const tokenHint = isCli
     ? "set gateway.remote.token to match gateway.auth.token"
     : isControlUi || isWebchat
@@ -35,7 +37,7 @@ export function formatGatewayAuthFailureMessage(params: {
       : "provide gateway auth password";
   switch (reason) {
     case "token_missing":
-      return `unauthorized: gateway token missing (${tokenHint})`;
+      return `unauthorized: gateway token missing (${isControlUi || isWebchat ? missingUiTokenHint : tokenHint})`;
     case "token_mismatch":
       return `unauthorized: gateway token mismatch (${tokenHint})`;
     case "token_missing_config":

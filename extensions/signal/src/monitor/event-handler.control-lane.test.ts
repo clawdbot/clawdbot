@@ -33,6 +33,51 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
+    "openclaw/plugin-sdk/channel-inbound",
+  );
+  type RunParams = Parameters<typeof actual.runChannelInboundEvent>[0];
+  return {
+    ...actual,
+    runChannelInboundEvent: async (params: RunParams) => {
+      const input = await params.adapter.ingest(params.raw);
+      if (!input) {
+        return { admission: { kind: "drop" as const, reason: "ingest-null" }, dispatched: false };
+      }
+      const eventClass = (await params.adapter.classify?.(input)) ?? {
+        kind: "message" as const,
+        canStartAgentTurn: true,
+      };
+      const preflight = (await params.adapter.preflight?.(input, eventClass)) ?? {};
+      const resolved = await params.adapter.resolveTurn(
+        input,
+        eventClass,
+        "kind" in preflight ? { admission: preflight } : preflight,
+      );
+      if (!("route" in resolved) || !("delivery" in resolved)) {
+        throw new Error("expected assembled Signal channel turn plan");
+      }
+      const result = await actual.runPreparedInboundReply({
+        channel: resolved.channel,
+        accountId: resolved.accountId,
+        routeSessionKey: resolved.route.sessionKey,
+        storePath: "/tmp/openclaw/signal-sessions.json",
+        ctxPayload: resolved.ctxPayload,
+        recordInboundSession: recordInboundSessionMock,
+        afterRecord: resolved.afterRecord,
+        record: resolved.record,
+        history: resolved.history,
+        admission: resolved.admission,
+        botLoopProtection: resolved.botLoopProtection,
+        runDispatch: async () => await dispatchInboundMessageMock({ ctx: resolved.ctxPayload }),
+      });
+      await params.adapter.onFinalize?.(result);
+      return result;
+    },
+  };
+});
+
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
     "openclaw/plugin-sdk/conversation-runtime",

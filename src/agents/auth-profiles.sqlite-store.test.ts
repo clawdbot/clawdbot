@@ -125,9 +125,37 @@ describe("auth profile sqlite store", () => {
         "utf8",
       );
 
-      const loaded = ensureAuthProfileStore(agentDir, { syncExternalCli: false });
+      expect(() => ensureAuthProfileStore(agentDir, { syncExternalCli: false })).toThrow(
+        "requires legacy credential migration",
+      );
+    });
+  });
 
-      expect(loaded.profiles["openai:default"]).toBeUndefined();
+  it("fails closed when a credential source appears during a successful SQLite read", async () => {
+    await withAgentDirEnv("openclaw-auth-sqlite-late-legacy-", (agentDir) => {
+      saveAuthProfileStore(apiKeyStore("not-a-real"), agentDir);
+      const legacyPath = path.join(agentDir, "auth.json");
+      const existsSync = fs.existsSync.bind(fs);
+      let legacyChecks = 0;
+      const existsSpy = vi.spyOn(fs, "existsSync").mockImplementation((pathname) => {
+        if (path.resolve(String(pathname)) === path.resolve(legacyPath)) {
+          legacyChecks += 1;
+          if (legacyChecks === 2) {
+            fs.writeFileSync(legacyPath, '{"openai":{"key":"not-a-real"}}\n', "utf8");
+            return true;
+          }
+          return false;
+        }
+        return existsSync(pathname);
+      });
+      try {
+        expect(() => ensureAuthProfileStore(agentDir, { syncExternalCli: false })).toThrow(
+          "requires legacy credential migration",
+        );
+      } finally {
+        existsSpy.mockRestore();
+      }
+      expect(fs.existsSync(legacyPath)).toBe(true);
     });
   });
 

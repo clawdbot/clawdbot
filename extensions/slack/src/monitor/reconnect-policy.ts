@@ -55,13 +55,16 @@ function isBufferArray(value: unknown): value is Buffer[] {
 }
 
 function resolveSlackSocketModeConnectionCount(message: unknown): number | undefined {
-  const buffer = Buffer.isBuffer(message)
-    ? message
-    : message instanceof ArrayBuffer
+  const buffer =
+    typeof message === "string"
       ? Buffer.from(message)
-      : isBufferArray(message)
-        ? Buffer.concat(message)
-        : undefined;
+      : Buffer.isBuffer(message)
+        ? message
+        : message instanceof ArrayBuffer
+          ? Buffer.from(message)
+          : isBufferArray(message)
+            ? Buffer.concat(message)
+            : undefined;
   if (!buffer?.includes(SLACK_SOCKET_HELLO_MARKER)) {
     return undefined;
   }

@@ -706,16 +706,16 @@ function fileKind(path: string): string {
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
   const map: Record<string, string> = {
     md: "Markdown",
-    txt: "Text",
+    txt: t("filePreview.kind.text"),
     json: "JSON",
     yaml: "YAML",
     yml: "YAML",
     ts: "TypeScript",
     js: "JavaScript",
     py: "Python",
-    sh: "Shell",
+    sh: t("filePreview.kind.shell"),
   };
-  return map[ext] ?? (ext ? ext.toUpperCase() : "File");
+  return map[ext] ?? (ext ? ext.toUpperCase() : t("filePreview.kind.file"));
 }
 
 const CODE_EXTENSIONS = new Set([

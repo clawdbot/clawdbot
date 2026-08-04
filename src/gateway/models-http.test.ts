@@ -54,6 +54,11 @@ async function expectMissingReadScope(res: Response) {
     error: {
       type: "forbidden",
       message: "missing scope: operator.read",
+      details: {
+        code: "MISSING_SCOPE",
+        missingScope: "operator.read",
+        requiredScopes: ["operator.read"],
+      },
     },
   });
 }

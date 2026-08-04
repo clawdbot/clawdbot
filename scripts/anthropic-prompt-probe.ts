@@ -14,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AuthProfileCredential } from "../src/agents/auth-profiles.js";
 import {
   parseBooleanEnv,
@@ -140,7 +141,7 @@ function summarizeText(text: string, max = 120): string {
   if (normalized.length <= max) {
     return normalized;
   }
-  return `${normalized.slice(0, max - 1)}…`;
+  return `${truncateUtf16Safe(normalized, max - 1)}…`;
 }
 
 function summarizeCapture(

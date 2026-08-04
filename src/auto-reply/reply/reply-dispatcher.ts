@@ -1,7 +1,13 @@
 // Dispatches final reply payloads through visible senders and message tools.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  findPlatformMessageRejectedError,
+  isProvenDeliveryNotSentError,
+} from "../../infra/delivery-recovery.shared.js";
+import { collectErrorGraphCandidates } from "../../infra/errors.js";
 import { generateSecureInt } from "../../infra/secure-random.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
@@ -42,6 +48,27 @@ export type ReplyDispatchDeliveryOutcome =
   | "cancelled"
   | "failed-before-deliver"
   | "failed-deliver";
+
+function isRetryableNoSendFailure(error: unknown): boolean {
+  return (
+    isProvenDeliveryNotSentError(error) &&
+    !findPlatformMessageRejectedError(error) &&
+    !collectErrorGraphCandidates(error, (candidate) => [
+      candidate.cause,
+      candidate.original,
+      candidate.error,
+      candidate.reason,
+      ...(Array.isArray(candidate.errors) ? candidate.errors : []),
+    ]).some(
+      (candidate) =>
+        isRecord(candidate) &&
+        (candidate.sentBeforeError === true ||
+          candidate.visibleReplySent === true ||
+          (isRecord(candidate.deliveryResult) &&
+            candidate.deliveryResult.visibleReplySent === true)),
+    )
+  );
+}
 
 type ReplyDispatchDeliveryOutcomeTracker = {
   promise: Promise<ReplyDispatchDeliveryOutcome>;
@@ -476,10 +503,18 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         await options.deliver(deliverPayload, dispatchInfo);
         deliveryOutcome = "delivered";
       })
-      .catch((err: unknown) => {
-        deliveryOutcome = deliveryStarted ? "failed-deliver" : "failed-before-deliver";
+      .catch(async (err: unknown) => {
         failedCounts[kind] += 1;
-        void options.onError?.(err, buildReplyDispatchRuntimeInfo(normalized, kind));
+        // Error cleanup belongs to this send: idle/finalization must not race it.
+        // Observer failures stay isolated from later queued deliveries.
+        try {
+          await options.onError?.(err, buildReplyDispatchRuntimeInfo(normalized, kind));
+        } catch {}
+        // Observers can attach partial-send evidence; classify only after that proof settles.
+        deliveryOutcome =
+          deliveryStarted && !isRetryableNoSendFailure(err)
+            ? "failed-deliver"
+            : "failed-before-deliver";
       })
       .finally(() => {
         const dispatchInfo = buildReplyDispatchRuntimeInfo(normalized, kind);

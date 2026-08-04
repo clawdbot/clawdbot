@@ -1,9 +1,24 @@
 // Shared execution admission for scheduled, manual, and on-exit cron runs.
-import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
+import type { CronJob } from "../types.js";
 import type { CronServiceState } from "./state.js";
+import { persistOrRestore, snapshotStoreForRollback } from "./store.js";
 
-export function resolveRunConcurrency(state: CronServiceState): number {
-  return resolveIntegerOption(state.deps.cronConfig?.maxConcurrentRuns, 1, { min: 1 });
+export function resolveRunConcurrency(): number {
+  return DEFAULT_CRON_MAX_CONCURRENT_RUNS;
+}
+
+function acquireCronRunSlot(state: CronServiceState): () => void {
+  state.runAdmission.active += 1;
+  let released = false;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    state.runAdmission.active -= 1;
+    dispatchWaiters(state);
+  };
 }
 
 function dispatchWaiters(state: CronServiceState): void {
@@ -12,22 +27,13 @@ function dispatchWaiters(state: CronServiceState): void {
     cancelCronRunAdmissionWaiters(state);
     return;
   }
-  const maxConcurrentRuns = resolveRunConcurrency(state);
+  const maxConcurrentRuns = resolveRunConcurrency();
   while (admission.active < maxConcurrentRuns) {
     const waiter = admission.waiters.shift();
     if (!waiter) {
       return;
     }
-    admission.active += 1;
-    let released = false;
-    waiter(() => {
-      if (released) {
-        return;
-      }
-      released = true;
-      admission.active -= 1;
-      dispatchWaiters(state);
-    });
+    waiter(acquireCronRunSlot(state));
   }
 }
 
@@ -36,17 +42,8 @@ async function acquireCronRunAdmission(state: CronServiceState): Promise<(() => 
   if (state.stopped) {
     return null;
   }
-  if (admission.waiters.length === 0 && admission.active < resolveRunConcurrency(state)) {
-    admission.active += 1;
-    let released = false;
-    return () => {
-      if (released) {
-        return;
-      }
-      released = true;
-      admission.active -= 1;
-      dispatchWaiters(state);
-    };
+  if (admission.waiters.length === 0 && admission.active < resolveRunConcurrency()) {
+    return acquireCronRunSlot(state);
   }
   return await new Promise<(() => void) | null>((resolve) => {
     admission.waiters.push(resolve);
@@ -61,7 +58,7 @@ export function cancelCronRunAdmissionWaiters(state: CronServiceState): void {
   }
 }
 
-/** Track a persisted marker only while it is waiting for shared admission. */
+/** Track a persisted marker through shared admission and payload execution. */
 export function reserveQueuedCronRun(
   state: CronServiceState,
   jobId: string,
@@ -98,22 +95,6 @@ export function isQueuedCronRunReservationCurrent(
   return state.queuedRunReservationsByJobId.get(jobId)?.identity === identity;
 }
 
-export function updateQueuedCronRunReservationMarker(
-  state: CronServiceState,
-  jobId: string,
-  identity: object,
-  runningAtMs: number,
-  previousLastError: string | undefined,
-): boolean {
-  const reservation = state.queuedRunReservationsByJobId.get(jobId);
-  if (reservation?.identity !== identity) {
-    return false;
-  }
-  reservation.markerAtMs = runningAtMs;
-  reservation.activationPreviousLastError = { value: previousLastError };
-  return true;
-}
-
 export function restoreQueuedCronRunReservationLastError(
   state: CronServiceState,
   jobId: string,
@@ -126,6 +107,32 @@ export function restoreQueuedCronRunReservationLastError(
   }
 }
 
+/** Clear a locally owned reservation, including a persisted-but-unstarted activation. */
+export function clearQueuedCronRunReservationMarker(
+  state: CronServiceState,
+  jobId: string,
+  identity: object,
+  jobState: { queuedAtMs?: number; runningAtMs?: number; lastError?: string },
+): boolean {
+  const reservation = state.queuedRunReservationsByJobId.get(jobId);
+  if (reservation?.identity !== identity) {
+    return false;
+  }
+  const queuedMatches = reservation.markerAtMs === jobState.queuedAtMs;
+  const runningMatches = reservation.markerAtMs === jobState.runningAtMs;
+  if (!queuedMatches && !runningMatches) {
+    return false;
+  }
+  restoreQueuedCronRunReservationLastError(state, jobId, identity, jobState);
+  if (queuedMatches) {
+    delete jobState.queuedAtMs;
+  }
+  if (runningMatches) {
+    delete jobState.runningAtMs;
+  }
+  return true;
+}
+
 export function isQueuedCronRunReservationMarkerCurrent(
   state: CronServiceState,
   jobId: string,
@@ -136,23 +143,50 @@ export function isQueuedCronRunReservationMarkerCurrent(
   return reservation?.identity === identity && reservation.markerAtMs === runningAtMs;
 }
 
-/** A matching process-local record means this durable marker is queued, not stuck. */
-export function isQueuedCronRun(
-  state: CronServiceState,
-  jobId: string,
-  runningAtMs: number,
-): boolean {
-  return state.queuedRunReservationsByJobId.get(jobId)?.markerAtMs === runningAtMs;
-}
+export async function activateQueuedCronRun(params: {
+  state: CronServiceState;
+  job: CronJob;
+  reservationIdentity: object;
+  onUnavailable?: () => void;
+  onUnavailableRollbackError?: () => Promise<void>;
+}): Promise<
+  | { kind: "activated"; startedAt: number }
+  | { kind: "unavailable"; reason: "stopped" | "restart-recovery-pending" }
+> {
+  const { state, job, reservationIdentity } = params;
+  const startedAt = state.deps.nowMs();
+  const previousLastError = job.state.lastError;
+  const activationRollbackSnapshot = snapshotStoreForRollback(state);
+  delete job.state.queuedAtMs;
+  job.state.runningAtMs = startedAt;
+  job.state.lastError = undefined;
+  // Persist running ownership before execution. A failed write restores the
+  // durable queued marker so the caller can release or recover that claim.
+  await persistOrRestore(state, activationRollbackSnapshot);
+  const reservation = state.queuedRunReservationsByJobId.get(job.id);
+  if (reservation?.identity === reservationIdentity) {
+    reservation.markerAtMs = startedAt;
+    reservation.activationPreviousLastError = { value: previousLastError };
+  }
+  if (!state.stopped && !state.restartRecoveryPending) {
+    return { kind: "activated", startedAt };
+  }
 
-/** A disabled job can retain only a force reservation that predated the disabled state. */
-export function isQueuedForceCronRun(
-  state: CronServiceState,
-  jobId: string,
-  runningAtMs: number,
-): boolean {
-  const reservation = state.queuedRunReservationsByJobId.get(jobId);
-  return reservation?.markerAtMs === runningAtMs && reservation.preserveWhenDisabled;
+  params.onUnavailable?.();
+  job.state.lastError = previousLastError;
+  const rollbackSnapshot = snapshotStoreForRollback(state);
+  delete job.state.runningAtMs;
+  try {
+    await persistOrRestore(state, rollbackSnapshot);
+  } catch (error) {
+    await params.onUnavailableRollbackError?.();
+    throw error;
+  }
+  releaseQueuedCronRun(state, job.id, reservationIdentity);
+  return {
+    kind: "unavailable",
+    reason: state.stopped ? "stopped" : "restart-recovery-pending",
+  };
 }
 
 /**

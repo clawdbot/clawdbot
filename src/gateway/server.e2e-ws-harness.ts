@@ -34,7 +34,10 @@ export async function startGatewayServerHarness(): Promise<GatewayServerHarness>
   });
 
   const openClient = async (opts?: Parameters<typeof connectOk>[1]): Promise<GatewayWsClient> => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    const ws = new WebSocket(
+      `ws://127.0.0.1:${port}`,
+      opts?.browserOrigin ? { headers: { origin: opts.browserOrigin } } : {},
+    );
     clients.add(ws);
     ws.once("close", () => clients.delete(ws));
     trackConnectChallengeNonce(ws);

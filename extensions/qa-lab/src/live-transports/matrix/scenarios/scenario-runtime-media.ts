@@ -1,10 +1,10 @@
+import { createQaVoicePreflightWav } from "../../../voice-preflight.fixture.js";
 // QA Lab Matrix plugin module implements scenario runtime media behavior.
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import { MATRIX_QA_MEDIA_ROOM_KEY, resolveMatrixQaScenarioRoomId } from "./scenario-contract.js";
 import {
   buildMatrixQaImageGenerationPrompt,
   buildMatrixQaImageUnderstandingPrompt,
-  createMatrixQaVoicePreflightWav,
   createMatrixQaSplitColorImagePng,
   hasMatrixQaExpectedColorReply,
   MATRIX_QA_IMAGE_ATTACHMENT_FILENAME,
@@ -68,14 +68,26 @@ function buildMatrixQaMediaTypeCoveragePrompt(params: {
 }
 
 function normalizeMatrixQaVoiceReply(value: string | undefined) {
-  return (value ?? "")
-    .toUpperCase()
-    .replace(/[^A-Z0-9]+/g, " ")
-    .trim();
+  return (value ?? "").toUpperCase().replace(/[^A-Z0-9]+/g, "");
 }
 
 function hasMatrixQaVoicePreflightReply(body: string | undefined) {
-  return normalizeMatrixQaVoiceReply(body).includes(MATRIX_QA_VOICE_PREFLIGHT_REPLY_MARKER);
+  return normalizeMatrixQaVoiceReply(body).includes(
+    normalizeMatrixQaVoiceReply(MATRIX_QA_VOICE_PREFLIGHT_REPLY_MARKER),
+  );
+}
+
+export const testing = { hasMatrixQaVoicePreflightReply };
+
+async function runMatrixQaVoicePhase<T>(phase: string, task: () => Promise<T>): Promise<T> {
+  try {
+    return await task();
+  } catch (error) {
+    throw new Error(
+      `Matrix voice-preflight scenario failed while ${phase}: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
 }
 
 export async function runImageUnderstandingAttachmentScenario(context: MatrixQaScenarioContext) {
@@ -236,27 +248,29 @@ export async function runVoicePreflightMentionScenario(context: MatrixQaScenario
   const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_MEDIA_ROOM_KEY);
   const { client, startSince } = await primeMatrixQaDriverMediaClient(context);
   const driverEventId = await client.sendMediaMessage({
-    buffer: createMatrixQaVoicePreflightWav(),
+    buffer: createQaVoicePreflightWav(),
     contentType: "audio/wav",
     fileName: MATRIX_QA_VOICE_PREFLIGHT_FILENAME,
     kind: "audio",
     roomId,
   });
-  const attachmentEvent = await client.waitForRoomEvent({
-    observedEvents: context.observedEvents,
-    predicate: (event) =>
-      event.roomId === roomId &&
-      event.eventId === driverEventId &&
-      event.sender === context.driverUserId &&
-      event.msgtype === "m.audio" &&
-      event.attachment?.kind === "audio" &&
-      event.attachment.filename === MATRIX_QA_VOICE_PREFLIGHT_FILENAME &&
-      event.attachment.caption === undefined,
-    roomId,
-    since: startSince,
-    timeoutMs: context.timeoutMs,
-  });
-  const matched = await client.waitForRoomEvent({
+  const attachmentEvent = await runMatrixQaVoicePhase("waiting for the driver audio event", () =>
+    client.waitForRoomEvent({
+      observedEvents: context.observedEvents,
+      predicate: (event) =>
+        event.roomId === roomId &&
+        event.eventId === driverEventId &&
+        event.sender === context.driverUserId &&
+        event.msgtype === "m.audio" &&
+        event.attachment?.kind === "audio" &&
+        event.attachment.filename === MATRIX_QA_VOICE_PREFLIGHT_FILENAME &&
+        event.attachment.caption === undefined,
+      roomId,
+      since: startSince,
+      timeoutMs: context.timeoutMs,
+    }),
+  );
+  const matched = await client.waitForOptionalRoomEvent({
     observedEvents: context.observedEvents,
     predicate: (event) =>
       event.roomId === roomId &&
@@ -269,6 +283,22 @@ export async function runVoicePreflightMentionScenario(context: MatrixQaScenario
     since: attachmentEvent.since,
     timeoutMs: context.timeoutMs,
   });
+  if (!matched.matched) {
+    const recentRoomEvents = context.observedEvents
+      .filter((event) => event.roomId === roomId)
+      .slice(-8)
+      .map((event) => ({
+        body: truncateMatrixQaPreview(event.body),
+        eventId: event.eventId,
+        kind: event.kind,
+        msgtype: event.msgtype,
+        sender: event.sender,
+        type: event.type,
+      }));
+    throw new Error(
+      `Matrix voice-preflight scenario failed while waiting for the transcript echo; recent room events: ${JSON.stringify(recentRoomEvents)}`,
+    );
+  }
   advanceMatrixQaActorCursor({
     actorId: "driver",
     syncState: context.syncState,
@@ -285,6 +315,7 @@ export async function runVoicePreflightMentionScenario(context: MatrixQaScenario
       expectedMarker: MATRIX_QA_VOICE_PREFLIGHT_REPLY_MARKER,
     },
     details: [
+      "post-gate transcript echo proved captionless audio satisfied mention gating",
       `room id: ${roomId}`,
       `driver voice event: ${driverEventId}`,
       `voice filename: ${MATRIX_QA_VOICE_PREFLIGHT_FILENAME}`,

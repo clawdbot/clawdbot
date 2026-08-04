@@ -48,6 +48,15 @@ export function backfillSessionEntryProvenance(db: DatabaseSync, previousVersion
   if (previousVersion >= 8) {
     return;
   }
+  const hasSessionEntries = db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_entries'")
+    .get();
+  const hasSessions = db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sessions'")
+    .get();
+  if (!hasSessionEntries || !hasSessions) {
+    return;
+  }
   const rows = db
     .prepare(
       `SELECT se.session_id, se.entry_json

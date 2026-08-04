@@ -2,7 +2,7 @@
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  getCachedLiveProviderModelRows,
+  buildLiveModelProviderConfig,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
@@ -29,17 +29,23 @@ const FREE_COST: ModelDefinitionConfig["cost"] = {
 
 // Zen publishes route-specific limits that differ from the family defaults below.
 const MODEL_LIMITS: Record<string, { contextWindow: number; maxTokens: number }> = {
+  "claude-opus-5": { contextWindow: 1_000_000, maxTokens: 128_000 },
   "claude-sonnet-5": { contextWindow: 1_000_000, maxTokens: 128_000 },
+  "gpt-5.6-luna": { contextWindow: 1_050_000, maxTokens: 128_000 },
+  "gpt-5.6-sol": { contextWindow: 1_050_000, maxTokens: 128_000 },
+  "gpt-5.6-terra": { contextWindow: 1_050_000, maxTokens: 128_000 },
   "glm-5.2": { contextWindow: 1_000_000, maxTokens: 131_072 },
   "grok-4.5": { contextWindow: 500_000, maxTokens: 500_000 },
-  "hy3-free": { contextWindow: 256_000, maxTokens: 64_000 },
   "kimi-k2.7-code": { contextWindow: 262_144, maxTokens: 262_144 },
+  "laguna-s-2.1-free": { contextWindow: 256_000, maxTokens: 32_000 },
+  "ling-3.0-flash-free": { contextWindow: 262_144, maxTokens: 32_768 },
   "minimax-m3": { contextWindow: 512_000, maxTokens: 128_000 },
 };
 
 // These rows are the inverse of their family's usual image-input capability.
 const MODEL_IMAGE_INPUT_OVERRIDES = new Map<string, boolean>([
-  ["hy3-free", false],
+  ["laguna-s-2.1-free", false],
+  ["ling-3.0-flash-free", false],
   ["minimax-m3", true],
 ]);
 
@@ -52,6 +58,7 @@ const MODEL_COSTS: Record<string, ModelDefinitionConfig["cost"]> = {
   "claude-opus-4-6": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   "claude-opus-4-7": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   "claude-opus-4-8": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  "claude-opus-5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   "claude-sonnet-4": {
     input: 3,
     output: 15,
@@ -89,6 +96,38 @@ const MODEL_COSTS: Record<string, ModelDefinitionConfig["cost"]> = {
     ],
   },
   "gemini-3.5-flash": { input: 1.5, output: 9, cacheRead: 0.15, cacheWrite: 0 },
+  "gemini-3.5-flash-lite": { input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 },
+  "gemini-3.6-flash": { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 },
+  "gpt-5.6-luna": {
+    input: 1,
+    output: 6,
+    cacheRead: 0.1,
+    cacheWrite: 1.25,
+    tieredPricing: [
+      { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25, range: [0, 272_000] },
+      { input: 2, output: 9, cacheRead: 0.2, cacheWrite: 2.5, range: [272_000] },
+    ],
+  },
+  "gpt-5.6-sol": {
+    input: 5,
+    output: 30,
+    cacheRead: 0.5,
+    cacheWrite: 6.25,
+    tieredPricing: [
+      { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25, range: [0, 272_000] },
+      { input: 10, output: 45, cacheRead: 1, cacheWrite: 12.5, range: [272_000] },
+    ],
+  },
+  "gpt-5.6-terra": {
+    input: 2.5,
+    output: 15,
+    cacheRead: 0.25,
+    cacheWrite: 3.125,
+    tieredPricing: [
+      { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125, range: [0, 272_000] },
+      { input: 5, output: 22.5, cacheRead: 0.5, cacheWrite: 6.25, range: [272_000] },
+    ],
+  },
   "glm-5": { input: 1, output: 3.2, cacheRead: 0.2, cacheWrite: 0 },
   "glm-5.1": { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
   "glm-5.2": { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
@@ -138,13 +177,14 @@ const MODEL_COSTS: Record<string, ModelDefinitionConfig["cost"]> = {
       { input: 4, output: 12, cacheRead: 1, cacheWrite: 0, range: [200_000] },
     ],
   },
-  "hy3-free": FREE_COST,
   "kimi-k2.5": { input: 0.6, output: 3, cacheRead: 0.1, cacheWrite: 0 },
   "kimi-k2.6": { input: 0.95, output: 4, cacheRead: 0.16, cacheWrite: 0 },
   "kimi-k2.7-code": { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0 },
+  "laguna-s-2.1-free": FREE_COST,
+  "ling-3.0-flash-free": FREE_COST,
   "mimo-v2.5-free": FREE_COST,
-  "minimax-m2.5": { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 },
-  "minimax-m2.7": { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 },
+  "minimax-m2.5": { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0 },
+  "minimax-m2.7": { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0 },
   "minimax-m3": { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0 },
   "nemotron-3-ultra-free": FREE_COST,
   "north-mini-code-free": FREE_COST,
@@ -161,6 +201,7 @@ const MODEL_NAMES: Record<string, string> = {
   "claude-opus-4-6": "Claude Opus 4.6",
   "claude-opus-4-7": "Claude Opus 4.7",
   "claude-opus-4-8": "Claude Opus 4.8",
+  "claude-opus-5": "Claude Opus 5",
   "claude-sonnet-4": "Claude Sonnet 4",
   "claude-sonnet-4-5": "Claude Sonnet 4.5",
   "claude-sonnet-4-6": "Claude Sonnet 4.6",
@@ -171,6 +212,11 @@ const MODEL_NAMES: Record<string, string> = {
   "gemini-3-flash": "Gemini 3 Flash",
   "gemini-3.1-pro": "Gemini 3.1 Pro",
   "gemini-3.5-flash": "Gemini 3.5 Flash",
+  "gemini-3.5-flash-lite": "Gemini 3.5 Flash-Lite",
+  "gemini-3.6-flash": "Gemini 3.6 Flash",
+  "gpt-5.6-luna": "GPT-5.6 Luna",
+  "gpt-5.6-sol": "GPT-5.6 Sol",
+  "gpt-5.6-terra": "GPT-5.6 Terra",
   "glm-5": "GLM-5",
   "glm-5.1": "GLM-5.1",
   "glm-5.2": "GLM-5.2",
@@ -193,10 +239,11 @@ const MODEL_NAMES: Record<string, string> = {
   "gpt-5.5-pro": "GPT-5.5 Pro",
   "grok-build-0.1": "Grok Build 0.1",
   "grok-4.5": "Grok 4.5",
-  "hy3-free": "Hy3 Free",
   "kimi-k2.5": "Kimi K2.5",
   "kimi-k2.6": "Kimi K2.6",
   "kimi-k2.7-code": "Kimi K2.7 Code",
+  "laguna-s-2.1-free": "Laguna S 2.1 Free",
+  "ling-3.0-flash-free": "Ling-3.0-flash Free",
   "mimo-v2.5-free": "MiMo V2.5 Free",
   "minimax-m2.5": "MiniMax M2.5",
   "minimax-m2.7": "MiniMax M2.7",
@@ -206,6 +253,9 @@ const MODEL_NAMES: Record<string, string> = {
   "qwen3.5-plus": "Qwen3.5 Plus",
   "qwen3.6-plus": "Qwen3.6 Plus",
 };
+
+const GPT_56_MODEL_IDS = new Set(["gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"]);
+const GPT_56_REASONING_EFFORTS = ["none", "low", "medium", "high", "xhigh", "max"];
 
 type OpencodeZenModelDefinition = ModelDefinitionConfig & {
   provider: typeof PROVIDER_ID;
@@ -343,6 +393,9 @@ function buildOpencodeZenModel(modelId: string): OpencodeZenModelDefinition {
     compat: {
       supportsUsageInStreaming: true,
       supportsReasoningEffort: true,
+      ...(GPT_56_MODEL_IDS.has(normalizedModelId)
+        ? { supportedReasoningEfforts: GPT_56_REASONING_EFFORTS }
+        : {}),
       maxTokensField: "max_tokens",
     },
   }) as OpencodeZenModelDefinition;
@@ -350,6 +403,7 @@ function buildOpencodeZenModel(modelId: string): OpencodeZenModelDefinition {
 
 const OPENCODE_ZEN_MODELS = [
   "claude-fable-5",
+  "claude-opus-5",
   "claude-opus-4-8",
   "claude-opus-4-7",
   "claude-opus-4-6",
@@ -360,9 +414,14 @@ const OPENCODE_ZEN_MODELS = [
   "claude-sonnet-4-5",
   "claude-sonnet-4",
   "claude-haiku-4-5",
+  "gemini-3.6-flash",
   "gemini-3.5-flash",
+  "gemini-3.5-flash-lite",
   "gemini-3.1-pro",
   "gemini-3-flash",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
   "gpt-5.5",
   "gpt-5.5-pro",
   "gpt-5.4",
@@ -398,25 +457,19 @@ const OPENCODE_ZEN_MODELS = [
   "big-pickle",
   "deepseek-v4-flash-free",
   "mimo-v2.5-free",
-  "hy3-free",
+  "laguna-s-2.1-free",
+  "ling-3.0-flash-free",
   "nemotron-3-ultra-free",
   "north-mini-code-free",
 ].map(buildOpencodeZenModel);
 
-function buildOpencodeZenProviderConfig(
-  models: OpencodeZenModelDefinition[],
-  apiKey?: string,
-): ModelProviderConfig {
+export function buildStaticOpencodeZenProviderConfig(apiKey?: string): ModelProviderConfig {
   return {
     api: "openai-completions",
     baseUrl: OPENCODE_ZEN_OPENAI_BASE_URL,
     ...(apiKey ? { apiKey } : {}),
-    models,
+    models: OPENCODE_ZEN_MODELS,
   };
-}
-
-export function buildStaticOpencodeZenProviderConfig(apiKey?: string): ModelProviderConfig {
-  return buildOpencodeZenProviderConfig(OPENCODE_ZEN_MODELS, apiKey);
 }
 
 function readLiveModelId(row: unknown): string | undefined {
@@ -434,12 +487,35 @@ function readLiveModelId(row: unknown): string | undefined {
   return modelId || undefined;
 }
 
-async function fetchOpencodeZenLiveModelIds(
+function projectOpencodeZenLiveModels(rows: readonly unknown[]): OpencodeZenModelDefinition[] {
+  const staticModels = new Map(OPENCODE_ZEN_MODELS.map((model) => [model.id, model]));
+  const seen = new Set<string>();
+  const models: OpencodeZenModelDefinition[] = [];
+  for (const row of rows) {
+    const modelId = readLiveModelId(row);
+    if (!modelId || seen.has(modelId)) {
+      continue;
+    }
+    seen.add(modelId);
+    const model = staticModels.get(modelId);
+    if (model) {
+      models.push(model);
+    }
+  }
+  return models;
+}
+
+export async function buildOpencodeZenLiveProviderConfig(
   params: FetchOpencodeZenLiveModelIdsParams = {},
-): Promise<string[]> {
-  const rows = await getCachedLiveProviderModelRows({
+): Promise<ModelProviderConfig> {
+  return await buildLiveModelProviderConfig({
     providerId: PROVIDER_ID,
     endpoint: OPENCODE_ZEN_MODELS_ENDPOINT,
+    providerConfig: {
+      api: "openai-completions",
+      baseUrl: OPENCODE_ZEN_OPENAI_BASE_URL,
+    },
+    models: OPENCODE_ZEN_MODELS,
     apiKey: params.apiKey,
     discoveryApiKey: params.discoveryApiKey,
     fetchGuard: params.fetchGuard,
@@ -447,43 +523,8 @@ async function fetchOpencodeZenLiveModelIds(
     timeoutMs: OPENCODE_ZEN_MODELS_TIMEOUT_MS,
     ttlMs: OPENCODE_ZEN_MODELS_CACHE_TTL_MS,
     auditContext: "opencode-zen-model-discovery",
+    projectRows: projectOpencodeZenLiveModels,
   });
-  const seen = new Set<string>();
-  const modelIds: string[] = [];
-  for (const row of rows) {
-    const modelId = readLiveModelId(row);
-    if (!modelId || seen.has(modelId)) {
-      continue;
-    }
-    seen.add(modelId);
-    modelIds.push(modelId);
-  }
-  return modelIds;
-}
-
-function buildDiscoveredOpencodeZenModels(modelIds: string[]): OpencodeZenModelDefinition[] {
-  const staticModels = new Map(OPENCODE_ZEN_MODELS.map((model) => [model.id, model]));
-  return modelIds.flatMap((modelId) => {
-    const model = staticModels.get(modelId);
-    return model ? [model] : [];
-  });
-}
-
-export async function buildOpencodeZenLiveProviderConfig(
-  params: FetchOpencodeZenLiveModelIdsParams = {},
-): Promise<ModelProviderConfig> {
-  try {
-    const liveModelIds = await fetchOpencodeZenLiveModelIds(params);
-    if (liveModelIds.length > 0) {
-      const liveModels = buildDiscoveredOpencodeZenModels(liveModelIds);
-      if (liveModels.length > 0) {
-        return buildOpencodeZenProviderConfig(liveModels, params.apiKey);
-      }
-    }
-  } catch {
-    // Live discovery is advisory; keep the provider-owned static seed visible.
-  }
-  return buildStaticOpencodeZenProviderConfig(params.apiKey);
 }
 
 export function listOpencodeZenModelCatalogEntries(): ModelCatalogEntry[] {

@@ -1,11 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI module implements custom theme behavior.
-import { z } from "zod";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
-
-// The Control UI CSP forbids dynamic code generation. Zod snapshots this flag
-// when z.object() is constructed, before its eval-backed fast path can probe.
-z.config({ jitless: true });
 
 const TWEAKCN_HOSTS = new Set(["tweakcn.com", "www.tweakcn.com"]);
 const THEME_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
@@ -93,29 +88,6 @@ const MODE_TOKEN_ORDER = [
 type ModeTokenName = (typeof MODE_TOKEN_ORDER)[number];
 type ThemeTokenMap = Record<ModeTokenName, string>;
 
-const REQUIRED_TWEAKCN_MODE_VARS = [
-  "background",
-  "foreground",
-  "card",
-  "card-foreground",
-  "popover",
-  "popover-foreground",
-  "primary",
-  "primary-foreground",
-  "secondary",
-  "secondary-foreground",
-  "muted",
-  "muted-foreground",
-  "accent",
-  "accent-foreground",
-  "destructive",
-  "destructive-foreground",
-  "border",
-  "input",
-  "ring",
-] as const;
-type RequiredTweakcnModeVar = (typeof REQUIRED_TWEAKCN_MODE_VARS)[number];
-
 export type ImportedCustomTheme = {
   sourceUrl: string;
   themeId: string;
@@ -125,39 +97,14 @@ export type ImportedCustomTheme = {
   dark: ThemeTokenMap;
 };
 
-const cssTokenSchema = z.string().max(MAX_CSS_TOKEN_LENGTH);
-
-function createStringShape<const T extends readonly string[]>(keys: T) {
-  return Object.fromEntries(keys.map((key) => [key, cssTokenSchema])) as Record<
-    T[number],
-    typeof cssTokenSchema
-  >;
+// Shape checks are intentionally shallow: normalizeStoredTokenMap and
+// resolveModeVar re-validate every token (presence, length, safe CSS) and
+// throw on anything off, so no schema library is needed at this boundary.
+function readThemeRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }
-
-const tweakcnThemeSchema = z.object({
-  name: z.string().max(80).optional(),
-  cssVars: z.object({
-    theme: z
-      .object({
-        "font-sans": cssTokenSchema.optional(),
-        "font-mono": cssTokenSchema.optional(),
-      })
-      .optional(),
-    light: z.object(createStringShape(REQUIRED_TWEAKCN_MODE_VARS)),
-    dark: z.object(createStringShape(REQUIRED_TWEAKCN_MODE_VARS)),
-  }),
-});
-
-const importedCustomThemeSchema = z.object({
-  sourceUrl: z.string(),
-  themeId: z.string(),
-  label: z.string(),
-  importedAt: z.string(),
-  light: z.object(createStringShape(MODE_TOKEN_ORDER)),
-  dark: z.object(createStringShape(MODE_TOKEN_ORDER)),
-});
-
-type TweakcnThemePayload = z.infer<typeof tweakcnThemeSchema>;
 
 type TweakcnThemeResolution = {
   sourceUrl: string;
@@ -305,7 +252,7 @@ function makeTokenMap(entries: Array<[ModeTokenName, string]>): ThemeTokenMap {
   return Object.fromEntries(entries) as ThemeTokenMap;
 }
 
-function normalizeStoredTokenMap(value: Record<string, string> | undefined): ThemeTokenMap | null {
+function normalizeStoredTokenMap(value: Record<string, unknown> | undefined): ThemeTokenMap | null {
   if (!value || typeof value !== "object") {
     return null;
   }
@@ -321,8 +268,8 @@ function normalizeStoredTokenMap(value: Record<string, string> | undefined): The
 }
 
 function resolveModeVar(
-  theme: Record<string, string | undefined>,
-  shared: Record<string, string | undefined> | undefined,
+  theme: Record<string, unknown>,
+  shared: Record<string, unknown> | undefined,
   key: string,
   fallback?: string,
 ) {
@@ -344,8 +291,8 @@ function resolveModeVar(
 
 function normalizeModeTokenMap(
   mode: "light" | "dark",
-  theme: Record<RequiredTweakcnModeVar, string>,
-  shared: Record<string, string | undefined> | undefined,
+  theme: Record<string, unknown>,
+  shared: Record<string, unknown> | undefined,
 ): ThemeTokenMap {
   const isLight = mode === "light";
   const contrastTarget = isLight ? "black" : "white";
@@ -461,22 +408,31 @@ function normalizeTweakcnThemeUrl(input: string): TweakcnThemeResolution {
 }
 
 export function parseImportedCustomTheme(value: unknown): ImportedCustomTheme | null {
-  const parsed = importedCustomThemeSchema.safeParse(value);
-  if (!parsed.success) {
+  const record = readThemeRecord(value);
+  if (!record) {
+    return null;
+  }
+  const { sourceUrl, themeId, label, importedAt } = record;
+  if (
+    typeof sourceUrl !== "string" ||
+    typeof themeId !== "string" ||
+    typeof label !== "string" ||
+    typeof importedAt !== "string"
+  ) {
     return null;
   }
   try {
-    requireThemeId(parsed.data.themeId);
-    const light = normalizeStoredTokenMap(parsed.data.light);
-    const dark = normalizeStoredTokenMap(parsed.data.dark);
+    requireThemeId(themeId);
+    const light = normalizeStoredTokenMap(readThemeRecord(record.light) ?? undefined);
+    const dark = normalizeStoredTokenMap(readThemeRecord(record.dark) ?? undefined);
     if (!light || !dark) {
       return null;
     }
     return {
-      sourceUrl: parsed.data.sourceUrl,
-      themeId: parsed.data.themeId,
-      label: describeThemeLabel(parsed.data.label),
-      importedAt: parsed.data.importedAt,
+      sourceUrl,
+      themeId,
+      label: describeThemeLabel(label),
+      importedAt,
       light,
       dark,
     };
@@ -489,19 +445,21 @@ function normalizeImportedCustomTheme(
   payload: unknown,
   resolution: Pick<TweakcnThemeResolution, "sourceUrl" | "themeId">,
 ): ImportedCustomTheme {
-  const parsed = tweakcnThemeSchema.safeParse(payload);
-  if (!parsed.success) {
+  const record = readThemeRecord(payload);
+  const cssVars = readThemeRecord(record?.cssVars);
+  const light = readThemeRecord(cssVars?.light);
+  const dark = readThemeRecord(cssVars?.dark);
+  const shared = cssVars?.theme === undefined ? undefined : readThemeRecord(cssVars.theme);
+  if (!record || !cssVars || !light || !dark || shared === null) {
     throw new Error("tweakcn returned an invalid theme payload.");
   }
-  const data: TweakcnThemePayload = parsed.data;
-  const shared = data.cssVars.theme;
   return {
     sourceUrl: resolution.sourceUrl,
     themeId: resolution.themeId,
-    label: describeThemeLabel(data.name),
+    label: describeThemeLabel(normalizeOptionalString(record.name)),
     importedAt: new Date().toISOString(),
-    light: normalizeModeTokenMap("light", data.cssVars.light, shared),
-    dark: normalizeModeTokenMap("dark", data.cssVars.dark, shared),
+    light: normalizeModeTokenMap("light", light, shared),
+    dark: normalizeModeTokenMap("dark", dark, shared),
   };
 }
 

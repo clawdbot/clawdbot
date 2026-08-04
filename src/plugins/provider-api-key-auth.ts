@@ -13,6 +13,10 @@ import type {
   ProviderPluginWizardSetup,
 } from "./types.js";
 
+type ProviderAuthMethodNonInteractiveValidationContext = Parameters<
+  NonNullable<ProviderAuthMethod["validateNonInteractive"]>
+>[0];
+
 type ProviderApiKeyAuthMethodOptions = {
   providerId: string;
   methodId: string;
@@ -107,6 +111,18 @@ async function applyApiKeyConfig(params: {
 export function createProviderApiKeyAuthMethod(
   params: ProviderApiKeyAuthMethodOptions,
 ): ProviderAuthMethod {
+  const resolveNonInteractiveCredential = async (
+    ctx: ProviderAuthMethodNonInteractiveValidationContext,
+  ) => {
+    const opts = ctx.opts as Record<string, unknown> | undefined;
+    return await ctx.resolveApiKey({
+      provider: params.providerId,
+      flagValue: resolveStringOption(opts, params.optionKey),
+      flagName: params.flagName,
+      envVar: params.envVar,
+      ...(params.allowProfile === false ? { allowProfile: false } : {}),
+    });
+  };
   return {
     id: params.methodId,
     label: params.label,
@@ -179,15 +195,9 @@ export function createProviderApiKeyAuthMethod(
         ...(params.defaultModel ? { defaultModel: params.defaultModel } : {}),
       };
     },
+    validateNonInteractive: async (ctx) => Boolean(await resolveNonInteractiveCredential(ctx)),
     runNonInteractive: async (ctx) => {
-      const opts = ctx.opts as Record<string, unknown> | undefined;
-      const resolved = await ctx.resolveApiKey({
-        provider: params.providerId,
-        flagValue: resolveStringOption(opts, params.optionKey),
-        flagName: params.flagName,
-        envVar: params.envVar,
-        ...(params.allowProfile === false ? { allowProfile: false } : {}),
-      });
+      const resolved = await resolveNonInteractiveCredential(ctx);
       if (!resolved) {
         return null;
       }

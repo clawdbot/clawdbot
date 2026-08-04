@@ -2,6 +2,41 @@
 // publishing and importing the relay profile, plus validation-error parsing.
 import type { NostrProfile } from "../../api/types.ts";
 
+const NOSTR_PROFILE_REQUEST_TIMEOUT_MS = 30_000;
+
+type NostrProfileHttpResult<T> = {
+  data: T | null;
+  response: Response;
+};
+
+async function requestNostrProfile<T>(
+  url: string,
+  init: Omit<RequestInit, "signal">,
+): Promise<NostrProfileHttpResult<T>> {
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () =>
+      controller.abort(
+        new DOMException("Nostr profile request timed out after 30 seconds", "TimeoutError"),
+      ),
+    NOSTR_PROFILE_REQUEST_TIMEOUT_MS,
+  );
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    let data: T | null = null;
+    try {
+      data = (await response.json()) as T;
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw controller.signal.reason ?? error;
+      }
+    }
+    return { data, response };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export function parseValidationErrors(details: unknown): Record<string, string> {
   if (!Array.isArray(details)) {
     return {};
@@ -33,7 +68,12 @@ export async function putNostrProfile(params: {
   headers: Record<string, string>;
   values: NostrProfile;
 }) {
-  const response = await fetch(buildNostrProfileUrl(params.accountId), {
+  return await requestNostrProfile<{
+    ok?: boolean;
+    error?: string;
+    details?: unknown;
+    persisted?: boolean;
+  }>(buildNostrProfileUrl(params.accountId), {
     method: "PUT",
     headers: {
       "Content-Type": "application/json",
@@ -41,20 +81,19 @@ export async function putNostrProfile(params: {
     },
     body: JSON.stringify(params.values),
   });
-  const data = (await response.json().catch(() => null)) as {
-    ok?: boolean;
-    error?: string;
-    details?: unknown;
-    persisted?: boolean;
-  } | null;
-  return { data, response };
 }
 
 export async function importNostrProfile(params: {
   accountId: string;
   headers: Record<string, string>;
 }) {
-  const response = await fetch(buildNostrProfileUrl(params.accountId, "/import"), {
+  return await requestNostrProfile<{
+    ok?: boolean;
+    error?: string;
+    imported?: NostrProfile;
+    merged?: NostrProfile;
+    saved?: boolean;
+  }>(buildNostrProfileUrl(params.accountId, "/import"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -62,12 +101,4 @@ export async function importNostrProfile(params: {
     },
     body: JSON.stringify({ autoMerge: true }),
   });
-  const data = (await response.json().catch(() => null)) as {
-    ok?: boolean;
-    error?: string;
-    imported?: NostrProfile;
-    merged?: NostrProfile;
-    saved?: boolean;
-  } | null;
-  return { data, response };
 }

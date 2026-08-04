@@ -51,7 +51,7 @@ vi.mock("openclaw/plugin-sdk/channel-runtime-context", () => {
 });
 
 vi.mock("./runtime.js", () => ({
-  getWhatsAppRuntime: () => ({ channel: runtimeContextMocks.channelRuntime }),
+  getWhatsAppChannelRuntime: () => runtimeContextMocks.channelRuntime,
 }));
 
 vi.mock("./connection-owner.js", () => ({
@@ -1051,6 +1051,55 @@ describe("WhatsAppConnectionController", () => {
     } finally {
       await controllerLocal.shutdown();
       vi.useRealTimers();
+    }
+  });
+
+  it("settles close and cancels setup when the stop signal is already aborted", async () => {
+    const abort = new AbortController();
+    const stopReason = new Error("already stopped");
+    abort.abort(stopReason);
+    const preAbortedController = new WhatsAppConnectionController({
+      accountId: "work",
+      authDir: "/tmp/wa-auth",
+      verbose: false,
+      keepAlive: false,
+      heartbeatSeconds: 30,
+      transportTimeoutMs: 60_000,
+      messageTimeoutMs: 60_000,
+      watchdogCheckMs: 5_000,
+      reconnectPolicy: {
+        initialMs: 250,
+        maxMs: 1_000,
+        factor: 2,
+        jitter: 0,
+        maxAttempts: 5,
+      },
+      abortSignal: abort.signal,
+    });
+
+    let ownerAcquireSignal: AbortSignal | undefined;
+    connectionOwnerMocks.acquire.mockImplementationOnce(async (_authDir, signal) => {
+      ownerAcquireSignal = signal;
+      return { release: connectionOwnerMocks.release };
+    });
+
+    try {
+      const abortPromise = (
+        preAbortedController as unknown as { abortPromise?: Promise<"aborted"> }
+      ).abortPromise;
+      await expect(abortPromise).resolves.toBe("aborted");
+      await expect(
+        preAbortedController.openConnection({
+          connectionId: "conn-pre-aborted",
+          createListener: async () => createListenerStub() as never,
+        }),
+      ).rejects.toThrow("controller is shutting down");
+
+      expect(ownerAcquireSignal?.aborted).toBe(true);
+      expect(ownerAcquireSignal?.reason).toBe(stopReason);
+      expect(createWaSocketMock).not.toHaveBeenCalled();
+    } finally {
+      await preAbortedController.shutdown();
     }
   });
 });

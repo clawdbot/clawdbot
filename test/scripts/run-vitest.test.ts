@@ -1,5 +1,5 @@
 // Run Vitest tests cover run vitest script behavior.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -13,6 +13,7 @@ import {
   TOOLING_EXCLUDED_TESTS,
   VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS,
   installVitestNoOutputWatchdog,
+  resolveBoundedVitestInvocations,
   resolveDefaultVitestNoOutputTimeoutMs,
   resolveDirectNodeVitestArgs,
   resolveExplicitTestFileNoPassArgs,
@@ -31,12 +32,22 @@ import {
   spawnWatchedVitestProcess,
   shouldSuppressVitestStderrLine,
 } from "../../scripts/run-vitest.mjs";
+import { forceKillVitestProcessGroup } from "../../scripts/vitest-process-group.mjs";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
 // These bounds only guard broken fixtures; readiness and exit are asserted via process signals.
 const LOAD_SENSITIVE_PROCESS_TIMEOUT_MS = process.env.CI ? 30_000 : 15_000;
 
 describe("scripts/run-vitest", () => {
+  it("ends argument failures with the stable failure trailer", () => {
+    const result = spawnSync(process.execPath, [nodePath.resolve("scripts/run-vitest.mjs")], {
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr.trim().split("\n").at(-1)).toBe("[vitest] FAILED (exit 1)");
+  });
+
   it.each([...VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS.keys(), ...TOOLING_EXCLUDED_TESTS])(
     "keeps hardcoded Vitest path %s valid",
     (referencedPath) => {
@@ -184,6 +195,90 @@ describe("scripts/run-vitest", () => {
     ).toEqual(["extensions/linux-canvas", "src/node-host", "--isolate", "--", "--no-isolate"]);
   });
 
+  it("bounds config-only Gateway server runs in fresh worker processes", () => {
+    const argv = [
+      "run",
+      "--config",
+      "test/vitest/vitest.gateway-server.config.ts",
+      "--reporter=verbose",
+      "--",
+      "-x",
+    ];
+
+    expect(
+      resolveBoundedVitestInvocations(argv, {
+        env: {},
+        gatewayServerTargetChunks: [
+          ["src/gateway/server-a.test.ts"],
+          ["src/gateway/server-b.test.ts"],
+        ],
+      }),
+    ).toEqual([
+      [
+        "run",
+        "--config",
+        "test/vitest/vitest.gateway-server.config.ts",
+        "--reporter=verbose",
+        "src/gateway/server-a.test.ts",
+        "--",
+        "-x",
+      ],
+      [
+        "run",
+        "--config",
+        "test/vitest/vitest.gateway-server.config.ts",
+        "--reporter=verbose",
+        "src/gateway/server-b.test.ts",
+        "--",
+        "-x",
+      ],
+    ]);
+  });
+
+  it("bounds implicit CI runs for absolute Gateway server config paths", () => {
+    expect(
+      resolveBoundedVitestInvocations(
+        ["--config", "/repo/test/vitest/vitest.gateway-server.config.ts"],
+        {
+          env: { CI: "1" },
+          gatewayServerTargetChunks: [
+            ["src/gateway/server-a.test.ts"],
+            ["src/gateway/server-b.test.ts"],
+          ],
+        },
+      ),
+    ).toHaveLength(2);
+  });
+
+  it.each([
+    ["local watch default", ["--config", "test/vitest/vitest.gateway-server.config.ts"]],
+    ["explicit watch", ["watch", "--config", "test/vitest/vitest.gateway-server.config.ts"]],
+    [
+      "explicit target",
+      [
+        "run",
+        "--config",
+        "test/vitest/vitest.gateway-server.config.ts",
+        "src/gateway/server-startup.test.ts",
+      ],
+    ],
+    [
+      "coverage output",
+      ["run", "--config", "test/vitest/vitest.gateway-server.config.ts", "--coverage"],
+    ],
+    ["different config", ["run", "--config", "test/vitest/vitest.gateway-core.config.ts"]],
+  ])("keeps %s as one direct Vitest invocation", (_label, argv) => {
+    expect(
+      resolveBoundedVitestInvocations(argv, {
+        env: {},
+        gatewayServerTargetChunks: [
+          ["src/gateway/server-a.test.ts"],
+          ["src/gateway/server-b.test.ts"],
+        ],
+      }),
+    ).toEqual([argv]);
+  });
+
   it("routes explicit tooling tests through the tooling config", () => {
     expect(resolveImplicitVitestArgs(["run", "test/scripts/run-vitest.test.ts"])).toEqual([
       "run",
@@ -279,7 +374,7 @@ describe("scripts/run-vitest", () => {
     ]);
   });
 
-  it("delegates bare explicit directories and globs to the project router", () => {
+  it("delegates bare explicit directories, globs, and extensionless prefixes", () => {
     expect(resolveTestProjectsDelegationArgs(["test/scripts"])).toEqual(["test/scripts"]);
     expect(
       resolveTestProjectsDelegationArgs(["run", "test/scripts", "--reporter=verbose"]),
@@ -290,6 +385,8 @@ describe("scripts/run-vitest", () => {
     expect(resolveTestProjectsDelegationArgs(["src/agents/**/*.ts"])).toBeNull();
     expect(resolveTestProjectsDelegationArgs(["src/**/*.test.ts"])).toBeNull();
     expect(resolveTestProjectsDelegationArgs(["./src"])).toBeNull();
+    const prefix = "extensions/telegram/src/format";
+    expect(resolveTestProjectsDelegationArgs([prefix])).toEqual([prefix]);
   });
 
   it("delegates mixed filters when an explicit file target is present", () => {
@@ -522,6 +619,7 @@ describe("scripts/run-vitest", () => {
 
     for (const configArg of [
       "--config=test/vitest/vitest.e2e.config.ts",
+      "--config=test/vitest/vitest.tui-pty.config.ts",
       "--config=test/vitest/vitest.gateway.config.ts",
       "--config=./test/vitest/vitest.ui-e2e.config.ts",
       "--config=test/vitest/vitest.full-agentic.config.ts",
@@ -781,9 +879,78 @@ describe("scripts/run-vitest", () => {
       expect(await waitForClose(watched.child)).toEqual({ code: null, signal: "SIGTERM" });
     } finally {
       watched.teardown();
-      if (watched.child.pid && isProcessAlive(watched.child.pid)) {
-        process.kill(-watched.child.pid, "SIGKILL");
+      forceKillVitestProcessGroup(watched.child);
+    }
+  });
+
+  posixIt("reaps residual process-group descendants before completing", async () => {
+    const descendantPidPath = nodePath.join(
+      os.tmpdir(),
+      `openclaw-run-vitest-residual-${process.pid}-${Date.now()}.pid`,
+    );
+    const watchedEnv = {
+      OPENCLAW_RESIDUAL_PID_PATH: descendantPidPath,
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "5000",
+    };
+    const watched = spawnWatchedVitestProcess({
+      pnpmArgs: [
+        "exec",
+        "node",
+        "-e",
+        [
+          'const { spawn } = require("node:child_process");',
+          'const fs = require("node:fs");',
+          'const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {',
+          '  stdio: "ignore",',
+          "});",
+          "descendant.unref();",
+          'process.once("SIGTERM", () => process.exit(0));',
+          "const pidPath = process.env.OPENCLAW_RESIDUAL_PID_PATH;",
+          "const pendingPath = `${pidPath}.${process.pid}.tmp`;",
+          "fs.writeFileSync(pendingPath, String(descendant.pid));",
+          "fs.renameSync(pendingPath, pidPath);",
+          "setInterval(() => {}, 1000);",
+        ].join("\n"),
+      ],
+      spawnParams: {
+        detached: true,
+        env: watchedEnv,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+      env: watchedEnv,
+    });
+    let descendantPid = 0;
+
+    try {
+      await waitFor(() => fs.existsSync(descendantPidPath), LOAD_SENSITIVE_PROCESS_TIMEOUT_MS);
+      descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+      expect(Number.isInteger(descendantPid)).toBe(true);
+      expect(isProcessAlive(descendantPid)).toBe(true);
+
+      process.kill(watched.child.pid!, "SIGTERM");
+      const snapshot = await Promise.race([
+        watched.completion.then((result) => ({
+          descendantAlive: isProcessAlive(descendantPid),
+          groupAlive: isProcessGroupAlive(watched.child.pid!),
+          result,
+        })),
+        delay(LOAD_SENSITIVE_PROCESS_TIMEOUT_MS, undefined, { ref: false }).then(() => {
+          throw new Error("timed out waiting for watched Vitest completion");
+        }),
+      ]);
+
+      expect(snapshot).toEqual({
+        descendantAlive: false,
+        groupAlive: false,
+        result: { code: 0, signal: null },
+      });
+    } finally {
+      watched.teardown();
+      forceKillVitestProcessGroup(watched.child);
+      if (descendantPid && isProcessAlive(descendantPid)) {
+        process.kill(descendantPid, "SIGKILL");
       }
+      fs.rmSync(descendantPidPath, { force: true });
     }
   });
 
@@ -1061,5 +1228,14 @@ function isProcessAlive(pid: number) {
     return true;
   } catch {
     return false;
+  }
+}
+
+function isProcessGroupAlive(pgid: number) {
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
   }
 }

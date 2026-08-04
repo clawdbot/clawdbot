@@ -22,7 +22,7 @@ import {
   type SignedReceipt,
 } from "../protocol/index.js";
 import { openReefAuditStore } from "./audit-state.js";
-import { loadReefIdentityBinding } from "./registration-state.js";
+import { loadReefIdentityBinding, type ReefIdentityBinding } from "./registration-state.js";
 import type { ReefKeys } from "./types.js";
 
 export * from "./audit-state.js";
@@ -45,6 +45,9 @@ export const REEF_REVIEWS_MAX_ENTRIES = 2_000;
 export const REEF_DELIVERED_NAMESPACE = "delivered";
 export const REEF_DELIVERED_MAX_ENTRIES = 5_000;
 export const REEF_DELIVERED_TTL_MS = REEF_REPLAY_TTL_MS;
+const REEF_INBOX_CURSOR_NAMESPACE = "inbox-cursor";
+const REEF_INBOX_CURSOR_KEY = "current";
+const REEF_INBOX_CURSOR_MAX_ENTRIES = 1;
 
 export type ReefReplayRecord = {
   peer: string;
@@ -502,6 +505,79 @@ export class ReefDeliveredStore {
     if (!this.#store.registerIfAbsent(id, { id }) && this.#store.lookup(id)?.id !== id) {
       throw new Error("Failed persisting Reef delivered marker");
     }
+  }
+}
+
+type ReefInboxCursorRecord = ReefIdentityBinding & { cursor: number };
+
+function parseReefInboxCursorRecord(value: unknown): ReefInboxCursorRecord | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Partial<ReefInboxCursorRecord>;
+  return typeof record.handle === "string" &&
+    record.handle.length > 0 &&
+    typeof record.relayUrl === "string" &&
+    record.relayUrl.length > 0 &&
+    Number.isSafeInteger(record.cursor) &&
+    (record.cursor ?? -1) >= 0
+    ? { handle: record.handle, relayUrl: record.relayUrl, cursor: record.cursor! }
+    : undefined;
+}
+
+/** Durable relay progress for the single Reef identity bound to this state DB. */
+export class ReefInboxCursorStore {
+  readonly #store: PluginStateSyncKeyedStore<ReefInboxCursorRecord>;
+
+  constructor(
+    runtime: PluginRuntime,
+    readonly binding: ReefIdentityBinding,
+  ) {
+    this.#store = runtime.state.openSyncKeyedStore<ReefInboxCursorRecord>({
+      namespace: REEF_INBOX_CURSOR_NAMESPACE,
+      maxEntries: REEF_INBOX_CURSOR_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+    });
+  }
+
+  load(): number {
+    const value = this.#store.lookup(REEF_INBOX_CURSOR_KEY);
+    if (value === undefined) {
+      return 0;
+    }
+    return this.#requireBoundRecord(value).cursor;
+  }
+
+  advance(cursor: number): void {
+    if (!Number.isSafeInteger(cursor) || cursor < 0) {
+      throw new Error("invalid Reef inbox cursor");
+    }
+    const update = this.#store.update;
+    if (!update) {
+      throw new Error("Reef inbox cursor requires atomic plugin-state updates");
+    }
+    update(REEF_INBOX_CURSOR_KEY, (current) => {
+      if (current === undefined) {
+        return { ...this.binding, cursor };
+      }
+      const existing = this.#requireBoundRecord(current);
+      return cursor > existing.cursor ? { ...existing, cursor } : existing;
+    });
+    const persisted = this.#store.lookup(REEF_INBOX_CURSOR_KEY);
+    if (!persisted || this.#requireBoundRecord(persisted).cursor < cursor) {
+      throw new Error("failed persisting Reef inbox cursor");
+    }
+  }
+
+  #requireBoundRecord(value: unknown): ReefInboxCursorRecord {
+    const record = parseReefInboxCursorRecord(value);
+    if (!record) {
+      throw new Error("invalid Reef inbox cursor state");
+    }
+    if (record.handle !== this.binding.handle || record.relayUrl !== this.binding.relayUrl) {
+      throw new Error("Reef inbox cursor belongs to a different identity");
+    }
+    return record;
   }
 }
 

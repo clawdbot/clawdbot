@@ -3,16 +3,17 @@ scenario:
   id: whatsapp-reply-delivery-shape
   surface: channels
   coverage:
-    primary: [channels.group-messages]
+    primary:
+      - whatsapp.outbound-text-sends
   execution:
-    profiles: { "whatsapp:mock-default": 27 }
     kind: flow
     channel: whatsapp
     timeoutMs: 120000
     retryCount: 1
     suiteIsolation: isolated
-    config: { whatsappScenarioId: whatsapp-reply-delivery-shape }
 flow:
   module: ./live-transports/whatsapp/scenario-runtime.js
-  call: runWhatsAppReplyDeliveryShapeScenario
-  args: [{ expr: whatsappScenarioContext }]
+  call: runWhatsAppScenario
+  args:
+    - { expr: whatsappScenarioContext }
+    - { moduleExport: whatsappQaReplyDeliveryShapeScenario }

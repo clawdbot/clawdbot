@@ -1,3 +1,4 @@
+import type { PlainTextToolCallProtectedRangeResolver } from "./contracts.js";
 // Tool Call Repair module implements promote behavior.
 import { parseStandalonePlainTextToolCallBlocks, type PlainTextToolCallBlock } from "./payload.js";
 
@@ -21,6 +22,7 @@ export type PlainTextToolCallPromotionOptions = {
   isRetainableNonTextBlock?: (block: Record<string, unknown>) => boolean;
   message: unknown;
   requireAssistantRole?: boolean;
+  resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver;
   resolveToolName?: ToolCallRepairNameResolver;
 };
 
@@ -87,6 +89,14 @@ function createPromotedToolCallBlocks(
   if (!parsedBlocks) {
     return undefined;
   }
+  const protectedRanges = options.resolveProtectedRanges?.(text) ?? [];
+  if (
+    parsedBlocks.some((block) =>
+      protectedRanges.some((range) => block.start >= range.start && block.start < range.end),
+    )
+  ) {
+    return undefined;
+  }
 
   const resolveToolName = options.resolveToolName ?? resolveExactToolName;
   const toolCalls: Record<string, unknown>[] = [];
@@ -137,7 +147,7 @@ export function projectStandalonePlainTextToolCallMessage(
 
   const originalContent = messageRecord.content;
   if (typeof originalContent === "string") {
-    const toolCalls = createPromotedToolCallBlocks(originalContent.trim(), options);
+    const toolCalls = createPromotedToolCallBlocks(originalContent, options);
     if (!toolCalls) {
       return undefined;
     }

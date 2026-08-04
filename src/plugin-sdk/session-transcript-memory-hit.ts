@@ -1,7 +1,11 @@
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { uniqueStrings } from "../../packages/normalization-core/src/string-normalization.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import {
+  isIncognitoSessionKey,
+  normalizeAgentId,
+  resolveAgentIdFromSessionKey,
+} from "../routing/session-key.js";
 
 const SESSION_TRANSCRIPT_MEMORY_HIT_PREFIX = "transcript";
 
@@ -107,6 +111,7 @@ export function resolveSessionTranscriptMemoryHitKeyToSessionKeys(
   const matches = Object.entries(params.store)
     .filter(([sessionKey, entry]) => {
       return (
+        !isIncognitoSessionKey(sessionKey) &&
         entry.sessionId === identity.sessionId &&
         normalizeAgentId(resolveAgentIdFromSessionKey(sessionKey)) === identity.agentId
       );
@@ -116,5 +121,8 @@ export function resolveSessionTranscriptMemoryHitKeyToSessionKeys(
   if (deduped.length > 0) {
     return deduped;
   }
-  return params.includeSyntheticFallback === false ? [] : [syntheticSessionKey(identity)];
+  const fallbackKey = syntheticSessionKey(identity);
+  return params.includeSyntheticFallback === false || isIncognitoSessionKey(fallbackKey)
+    ? []
+    : [fallbackKey];
 }

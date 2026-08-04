@@ -1,0 +1,356 @@
+:root {
+  color-scheme: dark;
+  font-family: "Avenir Next", Avenir, "Segoe UI", sans-serif;
+  background: #141312;
+  color: #f4efe8;
+  --ink: #f4efe8;
+  --muted: #9f978d;
+  --line: #34302c;
+  --panel: #1d1b19;
+  --panel-raised: #25221f;
+  --orange: #ff6437;
+  --orange-soft: #3a2119;
+  --green: #54d18b;
+  --red: #ff6b64;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 280px;
+  height: 100vh;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  background: #141312;
+}
+
+button,
+textarea {
+  font: inherit;
+}
+
+.topbar {
+  height: 62px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: #181614;
+}
+
+.mark {
+  width: 35px;
+  height: 35px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 1px solid #75402f;
+  border-radius: 10px 4px 10px 4px;
+  background: var(--orange-soft);
+  color: #ffad8f;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: -0.05em;
+}
+
+.identity {
+  min-width: 0;
+  flex: 1;
+}
+
+.eyebrow,
+.gate-kicker {
+  color: var(--orange);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+}
+
+.tab-title {
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #706960;
+  box-shadow: 0 0 0 3px #27231f;
+}
+
+.status-dot.ready {
+  background: var(--green);
+  box-shadow: 0 0 0 3px #183226;
+}
+
+.status-dot.error,
+.status-dot.denied {
+  background: var(--red);
+  box-shadow: 0 0 0 3px #381d1b;
+}
+
+.scope-strip {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  overflow: hidden;
+  border-bottom: 1px solid #292622;
+  background: #191715;
+  color: var(--muted);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.scope-strip span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.scope-icon {
+  color: var(--orange);
+}
+
+#conversation {
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-color: #4b4540 transparent;
+}
+
+.gate {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 34px 24px 46px;
+}
+
+.gate::before {
+  content: "";
+  width: 44px;
+  height: 3px;
+  margin-bottom: 18px;
+  background: var(--orange);
+}
+
+.gate h1 {
+  max-width: 310px;
+  margin: 8px 0 10px;
+  font-size: clamp(21px, 7vw, 29px);
+  font-weight: 650;
+  letter-spacing: -0.035em;
+  line-height: 1.08;
+}
+
+.gate p {
+  max-width: 330px;
+  margin: 0 0 18px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.request-id {
+  display: block;
+  max-width: 100%;
+  margin: 0 0 16px;
+  padding: 7px 9px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: #c8c0b7;
+  font-size: 10px;
+  text-overflow: ellipsis;
+}
+
+.primary {
+  border: 1px solid #ff835f;
+  border-radius: 7px;
+  padding: 9px 13px;
+  background: var(--orange);
+  color: #1a0d09;
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.messages {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 11px;
+  padding: 18px 14px 22px;
+}
+
+.message {
+  max-width: 88%;
+  padding: 10px 12px;
+  border: 1px solid #322e2a;
+  border-radius: 5px 13px 13px 13px;
+  background: var(--panel);
+  color: #e9e3dc;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.message.user {
+  align-self: flex-end;
+  border-color: #69402f;
+  border-radius: 13px 5px 13px 13px;
+  background: var(--orange-soft);
+  color: #ffe7de;
+}
+
+.message.system {
+  align-self: center;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 10px;
+  text-align: center;
+}
+
+.message.streaming::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 13px;
+  margin-left: 3px;
+  vertical-align: -2px;
+  background: var(--orange);
+  animation: blink 900ms step-end infinite;
+}
+
+.message pre {
+  margin: 8px 0 2px;
+  padding: 9px;
+  overflow-x: auto;
+  border: 1px solid #393531;
+  border-radius: 6px;
+  background: #11100f;
+}
+
+.message code {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 0.9em;
+}
+
+.message :not(pre) > code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: #0f0e0d;
+}
+
+.composer-shell {
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--line);
+  background: #181614;
+}
+
+.session-note,
+.binding-note {
+  overflow: hidden;
+  color: var(--muted);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-note {
+  margin: 0 2px 7px;
+}
+
+.binding-note {
+  margin: 7px 2px 0;
+  color: #766f68;
+}
+
+.composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 7px 7px 7px 10px;
+  border: 1px solid #3b3631;
+  border-radius: 11px;
+  background: var(--panel-raised);
+}
+
+.composer:focus-within {
+  border-color: #86503b;
+  box-shadow: 0 0 0 2px #3a2119;
+}
+
+textarea {
+  min-height: 24px;
+  max-height: 130px;
+  flex: 1;
+  resize: none;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+textarea::placeholder {
+  color: #797168;
+}
+
+.send {
+  width: 31px;
+  height: 31px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 8px;
+  background: var(--orange);
+  color: #1b0c08;
+  font-size: 18px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+button:disabled,
+textarea:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.hidden {
+  display: none !important;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .message.streaming::after {
+    animation: none;
+  }
+}

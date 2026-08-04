@@ -1,6 +1,5 @@
 // Control UI controller manages form utils gateway state.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import JSON5 from "json5";
 
 export function cloneConfigObject<T>(value: T): T {
   return structuredClone(value);
@@ -93,19 +92,11 @@ function sanitizeRedactedValue(params: {
 export function sanitizeRedactedFormForSubmit(
   form: Record<string, unknown>,
   originalForm: Record<string, unknown> | null | undefined,
-  originalRaw: string,
+  parsedOriginalRaw: Record<string, unknown> | null,
 ): Record<string, unknown> {
-  if (!originalForm || !originalRaw) {
-    return form;
-  }
-
-  let parsedOriginalRaw: unknown;
-  try {
-    parsedOriginalRaw = JSON5.parse(originalRaw);
-  } catch {
-    return form;
-  }
-  if (!isRecord(parsedOriginalRaw)) {
+  // Callers parse the original raw once at snapshot ingestion so this submit
+  // path stays synchronous and never races the lazy JSON5 parser.
+  if (!originalForm || !parsedOriginalRaw) {
     return form;
   }
 

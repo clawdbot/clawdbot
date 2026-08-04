@@ -13,8 +13,10 @@ import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registr
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import type { ChatType } from "../../../channels/chat-type.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
+import type { SessionToolOverrides } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ImageContent } from "../../../llm/types.js";
+import type { MediaFact } from "../../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../../plugins/hook-types.js";
 import type { RuntimePluginToolGrant } from "../../../plugins/runtime/tool-grant.js";
@@ -27,9 +29,11 @@ import type {
   SkillWorkshopProposalMutationBudget,
   SkillWorkshopRunOptions,
 } from "../../../skills/workshop/types.js";
+import type { ExecApprovalContinuationPromptRange } from "../../bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../../bootstrap-mode.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
+import type { ConversationRecallContext } from "../../conversation-recall.types.js";
 import type { BlockReplyPayload } from "../../embedded-agent-payloads.js";
 import type {
   BlockReplyChunking,
@@ -41,6 +45,9 @@ import type { ExpectedAgentHarnessRuntimeArtifact } from "../../harness/runtime-
 import type { AgentInternalEvent } from "../../internal-events.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import type { ScheduledToolPolicyContext } from "../../scheduled-tool-policy.js";
+import type { SessionManager } from "../../sessions/index.js";
+import type { TrustedSubagentCompletionHandoff } from "../../subagent-announce-handoff.js";
 import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
 import type { PromptMode } from "../../system-prompt.types.js";
 import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
@@ -49,6 +56,11 @@ import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.typ
 export type { ClientToolDefinition } from "../../command/shared-types.js";
 
 export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
+
+export type ResolvedToolPromptFinalizer = (params: {
+  prompt: string;
+  messageToolAvailable: boolean;
+}) => string;
 
 type ReasoningStreamPayload = Pick<
   ReplyPayload,
@@ -66,6 +78,8 @@ export type CurrentInboundPromptContext = {
 };
 
 export type RunEmbeddedAgentParams = {
+  /** Caller-owned in-memory transcript for ephemeral helper runs. */
+  sessionManager?: SessionManager;
   sessionId: string;
   sessionKey?: string;
   /** Storage-neutral transcript/session target. Defaults to sessionId/sessionKey/agentId. */
@@ -81,6 +95,8 @@ export type RunEmbeddedAgentParams = {
   messageProvider?: string;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
+  /** Out-of-band plugin bindings attached by the run initiator. */
+  toolBindings?: Readonly<Record<string, unknown>>;
   chatType?: ChatType;
   agentAccountId?: string;
   /** What initiated this agent run: "user", "heartbeat", "cron", "memory", "overflow", or "manual". */
@@ -137,14 +153,20 @@ export type RunEmbeddedAgentParams = {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  swarmCollector?: boolean;
+  swarmOutputSchema?: Record<string, unknown>;
   /** Restrict this reconstructed run to restart-safe tools. */
   forceRestartSafeTools?: boolean;
+  /** Preserve Code Mode controls for a replay-safe restart recovery turn. */
+  forceCodeModeTools?: boolean;
   /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */
   modelRun?: boolean;
   /** Disable trajectory persistence for auxiliary runs with no durable session owner. */
   disableTrajectory?: boolean;
   /** Restrict Skill Workshop to a bounded pending-proposal budget for an internal review run. */
   skillWorkshopProposalOnly?: boolean;
+  /** Mark proposals created by this internal review as autonomous captures. */
+  skillWorkshopAutonomousCapture?: boolean;
   /** Preserve the foreground run as proposal provenance for an internal review run. */
   skillWorkshopOrigin?: SkillProposalOrigin;
   /** Run-scoped mutation budget shared across internal runner attempts. */
@@ -176,14 +198,19 @@ export type RunEmbeddedAgentParams = {
    * overrides are unsupported; use an explicit run param instead.
    */
   config?: OpenClawConfig;
+  toolOverrides?: SessionToolOverrides;
   skillsSnapshot?: SkillSnapshot;
   prompt: string;
   /** User-visible prompt body to submit and persist; runtime context travels separately. */
   transcriptPrompt?: string;
+  /** Finalizes caller-owned guidance after the submitted tool surface is known. */
+  finalizePromptForResolvedTools?: ResolvedToolPromptFinalizer;
   currentInboundEventKind?: InboundEventKind;
   currentInboundContext?: CurrentInboundPromptContext;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
+  /** Ordered facts represented by attachment text in the current prompt. */
+  media?: MediaFact[];
   /** Optional client-provided tools (OpenResponses hosted tools). */
   clientTools?: ClientToolDefinition[];
   /** Disable built-in tools for this run (LLM-only mode). */
@@ -226,6 +253,10 @@ export type RunEmbeddedAgentParams = {
   toolsAllow?: string[];
   /** Owner-scoped plugin tool grant; normal policy and deny rules still apply. */
   runtimePluginToolGrant?: RuntimePluginToolGrant;
+  /** Consumed in-process subagent-completion capability; never derived from public input. */
+  trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
+  /** Trusted server-stamped authority for an explicitly capped scheduled run. */
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
   /** Seen bootstrap truncation warning signatures for this session (once mode dedupe). */
   bootstrapPromptWarningSignaturesSeen?: string[];
   /** Last shown bootstrap truncation warning signature for this session. */
@@ -235,6 +266,10 @@ export type RunEmbeddedAgentParams = {
     "host" | "security" | "ask" | "node" | "nodeCwd" | "notifyOnExit" | "notifyOnExitEmptySuccess"
   >;
   bashElevated?: ExecElevatedDefaults;
+  /** Trusted approved-exec runtime prompt span awaiting the resolved attempt cap. */
+  execApprovalContinuationPromptRange?: ExecApprovalContinuationPromptRange;
+  /** Corresponding span in the undecorated transcript prompt. */
+  execApprovalContinuationTranscriptPromptRange?: ExecApprovalContinuationPromptRange;
   timeoutMs: number;
   /**
    * Explicit per-run timeout override, in milliseconds, when the caller knows
@@ -247,6 +282,8 @@ export type RunEmbeddedAgentParams = {
    */
   runTimeoutOverrideMs?: number;
   runId: string;
+  /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
+  conversationRecall?: ConversationRecallContext;
   abortSignal?: AbortSignal;
   onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
   onExecutionPhase?: (info: {
@@ -316,6 +353,11 @@ export type RunEmbeddedAgentParams = {
    * final answer for silence.
    */
   allowEmptyAssistantReplyAsSilent?: boolean;
+  /**
+   * Whether this run still owes a visible reply after settled non-reporting tools.
+   * Exact configured silence and committed delivery remain terminal outcomes.
+   */
+  terminalReplyExpectation?: "required" | "optional";
   authProfileFailurePolicy?: AuthProfileFailurePolicy;
   /**
    * One-shot helper runs may opt in to executing through the provider's CLI

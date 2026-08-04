@@ -77,6 +77,97 @@ describeControlUiE2e("Control UI usage cost analysis mocked Gateway E2E", () => 
     await server?.close();
   });
 
+  it("keeps pending sessions visible when their UTC activity day is selected", async () => {
+    const selectedDay = "2026-05-14";
+    const updatedAt = Date.parse("2026-05-14T00:30:00.000Z");
+    const pendingSessionKey = "agent:main:pending-cache";
+    const cachedSessionKey = "agent:main:cached-usage";
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      timezoneId: "America/Los_Angeles",
+      viewport: { height: 1_000, width: 1_440 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.usage": {
+          updatedAt,
+          startDate: selectedDay,
+          endDate: selectedDay,
+          sessions: [
+            {
+              key: cachedSessionKey,
+              label: "Cached session",
+              agentId: "main",
+              updatedAt,
+              usage: {
+                ...totals,
+                activityDates: [selectedDay],
+                dailyBreakdown: [
+                  { date: selectedDay, cost: totals.totalCost, tokens: totals.totalTokens },
+                ],
+              },
+            },
+            {
+              key: pendingSessionKey,
+              label: "Pending session",
+              agentId: "main",
+              updatedAt,
+              usage: null,
+            },
+          ],
+          totals,
+          aggregates: {
+            messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
+            tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
+            byModel: [],
+            byProvider: [],
+            byAgent: [{ agentId: "main", totals }],
+            byChannel: [],
+            daily: [
+              {
+                date: selectedDay,
+                tokens: totals.totalTokens,
+                cost: totals.totalCost,
+                messages: 0,
+                toolCalls: 0,
+                errors: 0,
+              },
+            ],
+          },
+          cacheStatus: { status: "refreshing", cachedFiles: 1, pendingFiles: 1, staleFiles: 0 },
+        },
+        "usage.cost": {
+          updatedAt,
+          days: 1,
+          daily: [{ ...totals, date: selectedDay }],
+          totals,
+        },
+        "usage.status": { updatedAt, providers: [] },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}usage`);
+      const pendingRow = page.locator(".session-bar-row").filter({ hasText: "Pending session" });
+      const cachedRow = page.locator(".session-bar-row").filter({ hasText: "Cached session" });
+      await expect.poll(() => pendingRow.count(), { timeout: 10_000 }).toBe(1);
+
+      await page.locator(".usage-select").selectOption("utc");
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.usage")).at(-1)?.params)
+        .toMatchObject({ mode: "utc" });
+      await expect.poll(() => cachedRow.count(), { timeout: 10_000 }).toBe(1);
+      await page.locator(".daily-bar-wrapper").click();
+
+      await expect.poll(() => cachedRow.count()).toBe(1);
+      await expect.poll(() => pendingRow.count()).toBe(1);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("renders cost analysis from Gateway usage data", async () => {
     const context = await browser.newContext({
       locale: "en-US",
@@ -298,7 +389,12 @@ describeControlUiE2e("Control UI usage cost analysis mocked Gateway E2E", () => 
     try {
       await page.goto(`${server.baseUrl}usage`);
       await page.locator(".daily-chart-compact").waitFor({ state: "visible", timeout: 10_000 });
-      await page.locator(".agent-scope-control__select").selectOption("");
+      const agentScope = page.locator(".agent-scope-control openclaw-agent-select");
+      await agentScope.locator(".agent-select__trigger").click();
+      await agentScope
+        .locator("wa-dropdown-item[data-agent-option]")
+        .filter({ hasText: "All agents" })
+        .click();
       await expect
         .poll(async () => (await gateway.getRequests("usage.cost")).at(-1)?.params)
         .toMatchObject({ agentScope: "all" });
@@ -328,6 +424,30 @@ describeControlUiE2e("Control UI usage cost analysis mocked Gateway E2E", () => 
       await expect
         .poll(() => page.locator(".usage-insight-card", { hasText: "Top Providers" }).textContent())
         .toContain("openai");
+      const messagesHint = page.locator("#usage-summary-hint-messages");
+      const messagesTooltipHost = messagesHint.locator("xpath=..");
+      const messagesTooltip = messagesTooltipHost.locator("wa-tooltip");
+      await messagesHint.hover();
+      await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
+      await page.mouse.move(1, 1);
+      await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
+
+      await messagesHint.focus();
+      await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
+      await page.getByRole("button", { name: "Cost", exact: true }).focus();
+      await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
+
+      await messagesHint.click();
+      await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
+      await expect
+        .poll(() => messagesTooltipHost.locator('[slot="content"]').textContent())
+        .toContain("Total user and assistant messages in range.");
+      await page.getByRole("button", { name: "Cost", exact: true }).click();
+      await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
+      await messagesHint.focus();
+      await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
+      await messagesHint.press("Escape");
+      await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
       const providerCards = page.locator(".provider-usage-card");
       await expect.poll(() => providerCards.count()).toBe(3);
       await expect

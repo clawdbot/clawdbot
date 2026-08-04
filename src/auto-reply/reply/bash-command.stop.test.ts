@@ -28,6 +28,7 @@ function buildParams(commandBody: string) {
 
   const ctx = {
     CommandBody: commandBody,
+    commandText: commandBody,
     SessionKey: "session-key",
   } as MsgContext;
 

@@ -72,13 +72,6 @@ const EXTERNAL_AUTH_PROBE_TIMEOUT_MS = 5_000;
 
 // Keyed by pluginId/tabId: tab ids are only unique within their plugin.
 const BUNDLED_TAB_VIEWS: Record<string, () => Promise<BundledPluginTabView>> = {
-  "workspaces/workspaces": async () => {
-    const [{ renderWorkspace }, { stopWorkspace }] = await Promise.all([
-      import("./workspace-view.ts"),
-      import("./workspace-controller.ts"),
-    ]);
-    return { render: renderWorkspace, stop: stopWorkspace };
-  },
   "logbook/logbook": async () => {
     const [{ renderLogbook }, { stopLogbookPolling }] = await Promise.all([
       import("./logbook-view.ts"),
@@ -277,7 +270,7 @@ export class PluginPage extends OpenClawLightDomContentsElement {
     const context = this.context;
     if (
       !context ||
-      !context.gateway.snapshot.connected ||
+      context.gateway.snapshot.phase !== "connected" ||
       this.externalAuthTargetKey !== targetKey ||
       this.externalAuthRefreshMarker ||
       this.externalAuthProbeMarker
@@ -516,7 +509,8 @@ export class PluginPage extends OpenClawLightDomContentsElement {
   }
 
   private updateGatewaySource(gateway: ApplicationContext<RouteId>["gateway"]) {
-    const { client, connected } = gateway.snapshot;
+    const { client } = gateway.snapshot;
+    const connected = gateway.snapshot.phase === "connected";
     if (
       this.gatewaySource === gateway &&
       this.gatewayClient === client &&
@@ -552,13 +546,11 @@ export class PluginPage extends OpenClawLightDomContentsElement {
         return nothing;
       }
       const snapshot = context.gateway.snapshot;
-      // Config may be absent in unit harnesses; the Workspaces view defaults the
-      // embed policy to strict when `embed` is omitted.
       const config = context.config?.current;
       return this.bundledView.render({
         host: this.bundledViewHost,
         client: snapshot.client,
-        connected: snapshot.connected,
+        connected: snapshot.phase === "connected",
         embed: config
           ? {
               embedSandboxMode: config.embedSandboxMode,

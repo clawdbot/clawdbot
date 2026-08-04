@@ -1,7 +1,9 @@
+// @vitest-environment node
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { describe, expect, it, vi } from "vitest";
+import { controlUiLocaleModulesPlugin } from "../../config/control-ui-locales.ts";
 import {
   controlUiBrowserOnlySharedModuleAliases,
   createControlUiPrecompressedAssetVariants,
@@ -41,6 +43,7 @@ describe("Control UI Vite config", () => {
 
   it("embeds one canonical artifact identity from explicit build inputs", () => {
     const readGitCommit = vi.fn(() => "f".repeat(40));
+    const readGitCommitTimestamp = vi.fn(() => "2026-07-10T10:11:12.000Z");
     expect(
       resolveControlUiBuildInfo({
         env: {
@@ -48,6 +51,7 @@ describe("Control UI Vite config", () => {
           OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T12:34:56Z",
         },
         readGitCommit,
+        readGitCommitTimestamp,
         readGitBranch: () => null,
         readGitDirty: () => null,
         readPackageVersion: () => "2026.7.10",
@@ -55,12 +59,15 @@ describe("Control UI Vite config", () => {
     ).toEqual({
       version: "2026.7.10",
       commit: "0123456789abcdef0123456789abcdef01234567",
+      commitAt: "2026-07-10T10:11:12.000Z",
       builtAt: "2026-07-10T12:34:56.000Z",
       branch: null,
       dirty: null,
+      release: false,
       buildId: "2026.7.10-0123456789ab-2026-07-10T12-34-56.000Z",
     });
     expect(readGitCommit).not.toHaveBeenCalled();
+    expect(readGitCommitTimestamp).toHaveBeenCalledWith("0123456789abcdef0123456789abcdef01234567");
   });
 
   it("falls back to Git and the current UTC time only when inputs are absent", () => {
@@ -69,6 +76,7 @@ describe("Control UI Vite config", () => {
         env: {},
         now: () => new Date("2026-07-10T13:14:15.000Z"),
         readGitCommit: () => "a".repeat(40),
+        readGitCommitTimestamp: () => null,
         readGitBranch: () => null,
         readGitDirty: () => null,
         readPackageVersion: () => null,
@@ -76,11 +84,46 @@ describe("Control UI Vite config", () => {
     ).toEqual({
       version: null,
       commit: "a".repeat(40),
+      commitAt: null,
       builtAt: "2026-07-10T13:14:15.000Z",
       branch: null,
       dirty: null,
+      release: false,
       buildId: "aaaaaaaaaaaa-2026-07-10T13-14-15.000Z",
     });
+  });
+
+  it("records release packaging as an explicit artifact fact", () => {
+    expect(
+      resolveControlUiBuildInfo({
+        env: {
+          OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1",
+          OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T13:14:15.000Z",
+        },
+        readGitCommit: () => "a".repeat(40),
+        readGitCommitTimestamp: () => null,
+        readGitBranch: () => "release/2026.7.10",
+        readGitDirty: () => false,
+        readPackageVersion: () => "2026.7.10",
+      }),
+    ).toMatchObject({
+      version: "2026.7.10",
+      commit: "a".repeat(40),
+      branch: "release/2026.7.10",
+      dirty: false,
+      release: true,
+      buildId: "2026.7.10-release-aaaaaaaaaaaa-2026-07-10T13-14-15.000Z",
+    });
+  });
+
+  it("rejects malformed release-build identity", () => {
+    expect(() =>
+      resolveControlUiBuildInfo({
+        env: { OPENCLAW_CONTROL_UI_RELEASE_BUILD: "true" },
+        readGitCommit: () => null,
+        readPackageVersion: () => "2026.7.10",
+      }),
+    ).toThrow("OPENCLAW_CONTROL_UI_RELEASE_BUILD must be 1 when set");
   });
 
   it("uses checked-out Git instead of unverified GitHub workflow context", () => {
@@ -257,18 +300,39 @@ describe("Control UI Vite config", () => {
   it("resolves Control UI dev-server source aliases for internal packages", () => {
     const aliases = resolveSourcePackageAliasesForVite();
     expect(
+      aliases.find((alias) => alias.find === "@openclaw/normalization-core/json-schema"),
+    )?.toEqual({
+      find: "@openclaw/normalization-core/json-schema",
+      replacement: path.join(repoRoot, "packages/normalization-core/src/json-schema.ts"),
+    });
+    expect(
       aliases.find((alias) => alias.find === "@openclaw/normalization-core/string-coerce"),
     )?.toEqual({
       find: "@openclaw/normalization-core/string-coerce",
       replacement: path.join(repoRoot, "packages/normalization-core/src/string-coerce.ts"),
     });
+    expect(
+      aliases.find((alias) => alias.find === "@openclaw/normalization-core/phone-presentation"),
+    )?.toEqual({
+      find: "@openclaw/normalization-core/phone-presentation",
+      replacement: path.join(repoRoot, "packages/normalization-core/src/phone-presentation.ts"),
+    });
   });
 
-  it("resolves published OpenClaw packages before the broad plugin alias", () => {
-    const aliases = resolveExternalPackageAliasesForVite();
+  it("uses Node package resolution for external packages inherited by worktrees", () => {
+    const resolvePackage = vi.fn((specifier: string) =>
+      path.join("/parent/node_modules", specifier),
+    );
+
+    const aliases = resolveExternalPackageAliasesForVite(resolvePackage);
+
+    expect(resolvePackage.mock.calls).toEqual([
+      ["@openclaw/libterminal/package.json"],
+      ["@openclaw/uirouter/package.json"],
+    ]);
     expect(aliases.find((alias) => alias.find === "@openclaw/libterminal/browser")).toEqual({
       find: "@openclaw/libterminal/browser",
-      replacement: path.join(repoRoot, "node_modules/@openclaw/libterminal/dist/browser.js"),
+      replacement: path.join("/parent/node_modules/@openclaw/libterminal", "dist/browser.js"),
     });
   });
 
@@ -314,5 +378,31 @@ describe("Control UI Vite config", () => {
 
       expect(resolved).toBe(path.join(repoRoot, "ui/src/lib/browser-redact.ts"));
     }
+  });
+
+  it("materializes lazy locale modules from their watched canonical translation memory", async () => {
+    const plugin = controlUiLocaleModulesPlugin();
+    const resolveHook = plugin.resolveId;
+    const resolveId = typeof resolveHook === "function" ? resolveHook : resolveHook?.handler;
+    const loadHook = plugin.load;
+    const load = typeof loadHook === "function" ? loadHook : loadHook?.handler;
+    if (!resolveId || !load) {
+      throw new Error("Expected locale module resolver and loader");
+    }
+    const id = "virtual:openclaw-control-ui-locale/fr";
+    const resolved = await resolveId.call({} as never, id, undefined, {} as never);
+    expect(resolved).toBe(`\0${id}`);
+    expect(
+      await resolveId.call({} as never, `${id}/../../secret`, undefined, {} as never),
+    ).toBeNull();
+
+    const addWatchFile = vi.fn();
+    const result = await load.call({ addWatchFile } as never, resolved as string, {} as never);
+    if (typeof result !== "string") {
+      throw new Error("Expected locale module loader to return generated source");
+    }
+    const catalog = JSON.parse(result.replace(/^export default /, "").replace(/;$/, ""));
+    expect(catalog.common.health).toBe("Santé");
+    expect(addWatchFile).toHaveBeenCalledWith(path.join(repoRoot, "ui/src/i18n/.i18n/fr.tm.jsonl"));
   });
 });

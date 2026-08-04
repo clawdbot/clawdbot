@@ -54,6 +54,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Computer",
       detailKeys: ["action", "coordinate", "text", "node", "nodeId", "screenIndex"],
     },
+    mobile_ui: {
+      emoji: "📱",
+      title: "Mobile UI",
+      detailKeys: ["action", "mobileAction", "snapshotId", "node", "nodeId"],
+    },
     screen: {
       emoji: "🖥️",
       title: "Screen",
@@ -196,6 +201,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
         },
       },
     },
+    dashboard: {
+      emoji: "📋",
+      title: "Dashboard",
+      detailKeys: ["action", "tabId", "name", "title"],
+    },
     nodes: {
       emoji: "📱",
       title: "Nodes",
@@ -299,6 +309,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       emoji: "🗺️",
       title: "Update Plan",
       detailKeys: ["explanation", "plan.0.step"],
+    },
+    ask_user: {
+      emoji: "❓",
+      title: "Ask User",
+      detailKeys: ["questions.0.question"],
     },
     spawn_task: {
       emoji: "✨",
@@ -442,6 +457,8 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Sub-agent",
       detailKeys: ["label", "task", "agentId", "model", "thinking", "runTimeoutSeconds", "cleanup"],
     },
+    agents_wait: { emoji: "⏳", title: "Wait for Agents", detailKeys: ["ids", "timeoutSeconds"] },
+    structured_output: { emoji: "🧾", title: "Structured Output", detailKeys: ["result"] },
     subagents: {
       emoji: "🤖",
       title: "Subagents",
@@ -685,15 +702,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "PDF",
       detailKeys: ["path", "paths", "url", "urls", "prompt", "pageRange", "model"],
     },
-    sessions_yield: {
-      emoji: "⏸️",
-      title: "Yield",
-      detailKeys: ["message"],
-    },
-    tts: {
-      emoji: "🔊",
-      title: "TTS",
-      detailKeys: ["text", "channel"],
-    },
+    sessions_yield: { emoji: "⏸️", title: "Yield", detailKeys: ["message"] },
+    tts: { emoji: "🔊", title: "TTS", detailKeys: ["text", "channel"] },
   },
 };

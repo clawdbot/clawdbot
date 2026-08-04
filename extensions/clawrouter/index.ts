@@ -1,13 +1,12 @@
 // ClawRouter plugin entrypoint registers credential-scoped model routing and quota reporting.
-import {
-  definePluginEntry,
-  type ProviderAuthMethod,
-  type ProviderResolveDynamicModelContext,
-  type ProviderRuntimeModel,
+import type {
+  ProviderResolveDynamicModelContext,
+  ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
   buildClawRouterProviderConfig,
   normalizeClawRouterApiBaseUrl,
@@ -36,32 +35,6 @@ const perplexityTools = {
   normalizeToolSchemas: normalizePerplexityToolSchemas,
   inspectToolSchemas: inspectPerplexityToolSchemas,
 };
-
-function buildApiKeyAuth(): ProviderAuthMethod {
-  return createProviderApiKeyAuthMethod({
-    providerId: PROVIDER_ID,
-    methodId: "api-key",
-    label: "ClawRouter proxy key",
-    hint: "Credential-scoped access to approved models and budgets",
-    optionKey: "clawrouterApiKey",
-    flagName: "--clawrouter-api-key",
-    envVar: ENV_VAR,
-    promptMessage: "Enter ClawRouter proxy key",
-    noteTitle: "ClawRouter",
-    noteMessage: [
-      "Use the proxy key issued by your ClawRouter administrator.",
-      "OpenClaw discovers only the models granted to that key.",
-    ].join("\n"),
-    wizard: {
-      choiceId: "clawrouter-api-key",
-      choiceLabel: "ClawRouter proxy key",
-      choiceHint: "Approved models through one managed key",
-      groupId: PROVIDER_ID,
-      groupLabel: "ClawRouter",
-      groupHint: "Managed model access and quotas",
-    },
-  });
-}
 
 function configuredBaseUrl(
   config: { models?: { providers?: Record<string, { baseUrl?: unknown }> } } | null | undefined,
@@ -116,19 +89,25 @@ function resolveToolFamily(modelId: string) {
   return openAiTools;
 }
 
-export default definePluginEntry({
+export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "ClawRouter",
   description: "Managed multi-provider model routing and quotas",
-  register(api) {
+  manifest,
+  provider() {
     const dynamicModels = new Map<string, Map<string, ProviderRuntimeModel>>();
 
-    api.registerProvider({
-      id: PROVIDER_ID,
+    return {
       label: "ClawRouter",
       docsPath: "/providers/clawrouter",
-      envVars: [ENV_VAR],
-      auth: [buildApiKeyAuth()],
+      manifestAuth: {
+        hint: "Credential-scoped access to approved models and budgets",
+        noteTitle: "ClawRouter",
+        noteMessage: [
+          "Use the proxy key issued by your ClawRouter administrator.",
+          "OpenClaw discovers only the models granted to that key.",
+        ].join("\n"),
+      },
       catalog: {
         order: "simple",
         run: async (ctx) => {
@@ -249,6 +228,6 @@ export default definePluginEntry({
           baseUrl: configuredBaseUrl(ctx.config),
           timeoutMs: ctx.timeoutMs,
         }),
-    });
+    };
   },
 });

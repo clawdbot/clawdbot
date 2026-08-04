@@ -21,6 +21,7 @@ export {
   type SessionFileState,
   type SessionTranscriptClassification,
   type SessionTranscriptCorpusEntry,
+  type SessionTranscriptCorpusOptions,
 } from "./host/session-files.js";
 export {
   isSessionArchiveArtifactName,

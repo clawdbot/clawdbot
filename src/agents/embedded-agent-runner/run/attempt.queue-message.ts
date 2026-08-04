@@ -3,8 +3,15 @@
  */
 import { toErrorObject } from "../../../infra/errors.js";
 import type { ImageContent } from "../../../llm/types.js";
+import type { MediaFact } from "../../../media/media-facts.js";
+import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
+import {
+  cancelPendingAgentQuestionForSession,
+  claimPendingAgentQuestionAnswer,
+} from "../../harness/gateway-question.js";
 import { log } from "../logger.js";
+import type { EmbeddedAgentQueueMessageOptions } from "../run-state.js";
 
 /**
  * Minimal active-session surface needed to steer a running attempt and observe
@@ -17,12 +24,30 @@ type EmbeddedAgentActiveSessionSteerTarget = {
     text: string,
     images?: ImageContent[],
     userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
+    media?: MediaFact[],
+    imageOrder?: PromptImageOrderEntry[],
   ): Promise<void>;
   subscribe(listener: (event: unknown) => void): () => void;
 };
 
 /** Default wait for a steered user message to appear in the active transcript. */
 const DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS = 120_000;
+
+function steerActiveSession(
+  activeSession: EmbeddedAgentActiveSessionSteerTarget,
+  text: string,
+  images?: ImageContent[],
+  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
+  media?: MediaFact[],
+  imageOrder?: PromptImageOrderEntry[],
+): Promise<void> {
+  if (media?.length) {
+    return activeSession.steer(text, images, userTurnTranscriptRecorder, media, imageOrder);
+  }
+  return userTurnTranscriptRecorder
+    ? activeSession.steer(text, images, userTurnTranscriptRecorder)
+    : activeSession.steer(text, images);
+}
 
 function extractQueuedUserMessageText(message: unknown): string | undefined {
   if (!message || typeof message !== "object") {
@@ -134,6 +159,8 @@ async function steerAndWaitForTranscriptCommit(
   timeoutMs: number,
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
   images?: ImageContent[],
+  media?: MediaFact[],
+  imageOrder?: PromptImageOrderEntry[],
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -214,9 +241,14 @@ async function steerAndWaitForTranscriptCommit(
         scheduleTerminalCancellation();
       }
     });
-    const steer = userTurnTranscriptRecorder
-      ? activeSession.steer(text, images, userTurnTranscriptRecorder)
-      : activeSession.steer(text, images);
+    const steer = steerActiveSession(
+      activeSession,
+      text,
+      images,
+      userTurnTranscriptRecorder,
+      media,
+      imageOrder,
+    );
     steer.catch((err: unknown) => {
       finish(err);
     });
@@ -230,21 +262,42 @@ async function steerAndWaitForTranscriptCommit(
 export async function steerActiveSessionWithOptionalDeliveryWait(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
-  options:
-    | {
-        deliveryTimeoutMs?: number;
-        images?: ImageContent[];
-        waitForTranscriptCommit?: boolean;
-        userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
-      }
-    | undefined,
+  options: EmbeddedAgentQueueMessageOptions | undefined,
+  sessionKey?: string,
 ): Promise<void> {
-  if (options?.waitForTranscriptCommit !== true) {
-    if (options?.userTurnTranscriptRecorder) {
-      await activeSession.steer(text, options.images, options.userTurnTranscriptRecorder);
-    } else {
-      await activeSession.steer(text, options?.images);
+  const isInboundUserMessage = options?.isInboundUserMessage === true;
+  const isPlainTextAnswer = !options?.images?.length;
+  if (isInboundUserMessage && !isPlainTextAnswer) {
+    try {
+      await cancelPendingAgentQuestionForSession({ sessionKey, resolvedBy: "image-reply" });
+    } catch (error) {
+      log.warn(`failed to cancel ask_user before image steering: ${String(error)}`);
     }
+  }
+  if (
+    isInboundUserMessage &&
+    isPlainTextAnswer &&
+    (await claimPendingAgentQuestionAnswer({
+      sessionKey,
+      text,
+      persist: options.userTurnTranscriptRecorder
+        ? async () => {
+            await options.userTurnTranscriptRecorder?.persistApproved();
+          }
+        : undefined,
+    }))
+  ) {
+    return;
+  }
+  if (options?.waitForTranscriptCommit !== true) {
+    await steerActiveSession(
+      activeSession,
+      text,
+      options?.images,
+      options?.userTurnTranscriptRecorder,
+      options?.media,
+      options?.imageOrder,
+    );
     return;
   }
   await steerAndWaitForTranscriptCommit(
@@ -253,5 +306,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
     options.deliveryTimeoutMs ?? DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS,
     options.userTurnTranscriptRecorder,
     options.images,
+    options.media,
+    options.imageOrder,
   );
 }

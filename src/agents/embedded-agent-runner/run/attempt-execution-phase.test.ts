@@ -26,17 +26,9 @@ function createFixture() {
   const result = { messages: [] };
   const preparedStreamRuntime = { stream: { queueHandle: { kind: "embedded" } } };
   const state = {
-    aborted: false,
     beforeAgentRunBlocked: false,
     beforeAgentRunBlockedBy: undefined,
-    cleanupYieldAborted: false,
-    externalAbort: false,
-    idleTimedOut: false,
-    promptError: null,
-    timedOut: false,
-    timedOutByRunBudget: false,
-    timedOutDuringCompaction: false,
-    timedOutDuringToolExecution: false,
+    terminal: { kind: "ok" as const },
     trajectoryEndRecorded: false,
   };
   const prepStages = { mark: vi.fn() };
@@ -172,10 +164,12 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     expect(fixture.order).toEqual(["stream-runtime", "settled-phase"]);
     expect(fixture.state).toEqual(
       expect.objectContaining({
-        externalAbort: true,
-        idleTimedOut: true,
-        timedOutByRunBudget: true,
-        timedOutDuringCompaction: true,
+        terminal: {
+          aborted: true,
+          kind: "timeout",
+          phase: "compaction",
+          source: "external",
+        },
       }),
     );
     expect(fixture.prepStages.mark).toHaveBeenCalledWith("stream-setup");
@@ -203,9 +197,9 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     );
     expect(streamInput.lifecycle.isYieldDetected()).toBe(true);
     expect(streamInput.lifecycle.readRunState()).toEqual({
-      aborted: false,
+      aborted: true,
       promptError: null,
-      timedOut: false,
+      timedOut: true,
       yieldDetected: true,
     });
     expect(streamInput.stream.isReplaySafeTool(fixture.replaySafeTool)).toBe(true);

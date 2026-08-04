@@ -1,9 +1,11 @@
+import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 // Main-session keys normalize configured agents and legacy aliases into store keys.
 import {
   normalizeAgentId,
   normalizeMainKey,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import type { SessionScope } from "./types.js";
 
 const FALLBACK_DEFAULT_AGENT_ID = "main";
@@ -15,27 +17,16 @@ function buildMainSessionKey(agentId: string, mainKey?: string): string {
 }
 
 /** Resolves the configured main session key, honoring global session scope. */
-export function resolveMainSessionKey(cfg?: {
-  session?: { scope?: SessionScope; mainKey?: string };
-  agents?: { list?: Array<{ id?: string; default?: boolean }> };
-}): string {
+export function resolveMainSessionKey(cfg: OpenClawConfig): string {
   if (cfg?.session?.scope === "global") {
     return "global";
   }
-  const agents = Array.isArray(cfg?.agents?.list) ? cfg.agents.list : [];
-  const defaultAgentId =
-    agents.find((agent) => agent?.default)?.id ?? agents[0]?.id ?? FALLBACK_DEFAULT_AGENT_ID;
-  return buildMainSessionKey(defaultAgentId, cfg?.session?.mainKey);
+  return buildMainSessionKey(resolveDefaultAgentId(cfg), cfg.session?.mainKey);
 }
 
 /** Stable fingerprint for the config values that canonicalize chat session keys. */
-export function resolveSessionRoutingContract(cfg?: {
-  session?: { scope?: SessionScope; mainKey?: string };
-  agents?: { list?: Array<{ id?: string; default?: boolean }> };
-}): string {
-  const agents = Array.isArray(cfg?.agents?.list) ? cfg.agents.list : [];
-  const defaultAgentId =
-    agents.find((agent) => agent?.default)?.id ?? agents[0]?.id ?? FALLBACK_DEFAULT_AGENT_ID;
+export function resolveSessionRoutingContract(cfg: OpenClawConfig): string {
+  const defaultAgentId = resolveDefaultAgentId(cfg);
   const scope = cfg?.session?.scope ?? "per-sender";
   return [scope, normalizeMainKey(cfg?.session?.mainKey), normalizeAgentId(defaultAgentId)].join(
     "|",

@@ -20,6 +20,8 @@ type StartLazyPluginServiceModuleParamsWithValidator = {
 const runtimeMocks = vi.hoisted(() => ({
   startLazyPluginServiceModule: vi.fn(async (_params: StartLazyPluginServiceModuleParams) => null),
   stopBrowserControlService: vi.fn(async () => undefined),
+  createGatewayPageShareSink: vi.fn(() => ({ id: "gateway-page-share-sink" })),
+  setPageShareSink: vi.fn(),
 }));
 
 vi.mock("./sdk-node-runtime.js", () => ({
@@ -30,10 +32,19 @@ vi.mock("./control-service.js", () => ({
   stopBrowserControlService: runtimeMocks.stopBrowserControlService,
 }));
 
+vi.mock("./browser/extension-relay/page-share.js", () => ({
+  createGatewayPageShareSink: runtimeMocks.createGatewayPageShareSink,
+  setPageShareSink: runtimeMocks.setPageShareSink,
+}));
+
 describe("createBrowserPluginService", () => {
   beforeEach(() => {
     runtimeMocks.startLazyPluginServiceModule.mockReset().mockResolvedValue(null);
     runtimeMocks.stopBrowserControlService.mockReset().mockResolvedValue(undefined);
+    runtimeMocks.createGatewayPageShareSink
+      .mockReset()
+      .mockReturnValue({ id: "gateway-page-share-sink" });
+    runtimeMocks.setPageShareSink.mockReset();
   });
 
   afterEach(() => {
@@ -58,6 +69,18 @@ describe("createBrowserPluginService", () => {
     await service.start(SERVICE_CONTEXT);
 
     expect(runtimeMocks.startLazyPluginServiceModule).not.toHaveBeenCalled();
+  });
+
+  it("marks page-share delivery available for the full service lifecycle", async () => {
+    const service = createBrowserPluginService();
+
+    await service.start(SERVICE_CONTEXT);
+    expect(runtimeMocks.setPageShareSink).toHaveBeenCalledWith({
+      id: "gateway-page-share-sink",
+    });
+
+    await service.stop?.(SERVICE_CONTEXT);
+    expect(runtimeMocks.setPageShareSink).toHaveBeenLastCalledWith(null);
   });
 
   for (const value of ["0", "", "disabled"]) {

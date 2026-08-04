@@ -13,7 +13,10 @@ import type {
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const log = createSubsystemLogger("bedrock-mantle-discovery");
 
@@ -116,7 +119,11 @@ const iamTokenCache = new Map<string, { token: string; expiresAt: number }>();
 const IAM_TOKEN_TTL_MS = 7200_000; // Matches the 2h token lifetime we request below.
 
 function resolveMantleRegion(env: NodeJS.ProcessEnv): string {
-  return env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? "us-east-1";
+  return (
+    normalizeOptionalString(env.AWS_REGION) ??
+    normalizeOptionalString(env.AWS_DEFAULT_REGION) ??
+    "us-east-1"
+  );
 }
 
 function getCachedIamTokenEntry(
@@ -433,6 +440,21 @@ export async function resolveImplicitMantleProvider(params: {
   // keep reasoning off until the underlying Anthropic transport learns Opus 4.7
   // adaptive thinking semantics.
   const claudeModels: ModelDefinitionConfig[] = [
+    {
+      id: "anthropic.claude-opus-5",
+      name: "Claude Opus 5",
+      api: "anthropic-messages" as const,
+      reasoning: true,
+      params: { canonicalModelId: "claude-opus-5" },
+      input: ["text", "image"],
+      mediaInput: {
+        image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+      },
+      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    },
     {
       id: "anthropic.claude-sonnet-5",
       name: "Claude Sonnet 5",

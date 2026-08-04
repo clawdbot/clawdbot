@@ -1,2 +1,6 @@
 // Slack plugin module implements accounts behavior.
-export { resolveSlackAccount, resolveSlackAccountAllowFrom } from "./accounts.js";
+export {
+  resolveSlackAccount,
+  resolveSlackAccountAllowFrom,
+  resolveSlackOperationToken,
+} from "./accounts.js";

@@ -170,7 +170,10 @@ function describeTelegramMessageTool({
       schema: null,
     };
   }
-  const actions = new Set<ChannelMessageActionName>(["send"]);
+  const actions = new Set<ChannelMessageActionName>();
+  if (discovery.isEnabled("sendMessage")) {
+    actions.add("send");
+  }
   if (discovery.pollEnabled) {
     actions.add("poll");
   }
@@ -216,6 +219,11 @@ function describeTelegramMessageTool({
 export const telegramMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeTelegramMessageTool,
   resolveExecutionMode: () => "gateway",
+  messageActionTargetAliases: {
+    react: { aliases: ["messageId"], deliveryTargetAliases: [] },
+    edit: { aliases: ["messageId"], deliveryTargetAliases: [] },
+    delete: { aliases: ["messageId"], deliveryTargetAliases: [] },
+  },
   prepareSendPayload: prepareTelegramSendPayload,
   resolveCliActionRequest: ({ action, args }) => {
     if (action !== "thread-create") {
@@ -240,30 +248,52 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     params,
     cfg,
     accountId,
+    mediaAccess,
     mediaLocalRoots,
     mediaReadFile,
     sessionKey,
     inboundEventKind,
     toolContext,
+    conversationReadOrigin,
+    requesterAccountId,
     gatewayClientScopes,
   }) => {
     const telegramAction = resolveTelegramMessageActionName(action);
     if (!telegramAction) {
       throw new Error(`Unsupported Telegram action: ${action}`);
     }
+    const {
+      conversationReadOrigin: _modelConversationReadOrigin,
+      mediaAccess: _modelMediaAccess,
+      requesterAccountId: _modelRequesterAccountId,
+      toolContext: _modelToolContext,
+      ...runtimeParams
+    } = params;
     return await telegramMessageActionRuntime.handleTelegramAction(
       {
-        ...params,
+        // Authority stays in the host-owned options object below. Model tool
+        // arguments with these names must never reach the runtime as context.
+        ...runtimeParams,
         action: telegramAction,
         accountId: accountId ?? undefined,
         ...(action === "react"
           ? {
-              messageId: resolveReactionMessageId({ args: params, toolContext }),
+              messageId: resolveReactionMessageId({ args: runtimeParams, toolContext }),
             }
           : {}),
       },
       cfg,
-      { mediaLocalRoots, mediaReadFile, sessionKey, inboundEventKind, gatewayClientScopes },
+      {
+        ...(mediaAccess !== undefined ? { mediaAccess } : {}),
+        mediaLocalRoots,
+        mediaReadFile,
+        sessionKey,
+        inboundEventKind,
+        gatewayClientScopes,
+        ...(conversationReadOrigin ? { conversationReadOrigin } : {}),
+        ...(requesterAccountId ? { requesterAccountId } : {}),
+        ...(toolContext ? { toolContext } : {}),
+      },
     );
   },
 };

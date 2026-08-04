@@ -107,7 +107,7 @@ export async function runQaSelfCheckAgainstState(params: {
   });
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
   await fs.writeFile(outputPath, report, "utf8");
-  await transportFactoryResult.cleanup();
+  await transportFactoryResult.cleanupWithoutGateway();
 
   return {
     outputPath,

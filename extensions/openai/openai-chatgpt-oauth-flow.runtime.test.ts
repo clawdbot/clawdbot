@@ -1,5 +1,7 @@
 // Openai tests cover openai chatgpt oauth flow plugin behavior.
+import { once } from "node:events";
 import { Agent, createServer, get, type IncomingHttpHeaders, type Server } from "node:http";
+import { connect, type Socket } from "node:net";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -7,10 +9,21 @@ const ssrfMocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: ssrfMocks.fetchWithSsrFGuard,
-}));
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+    "openclaw/plugin-sdk/ssrf-runtime",
+  );
+  return {
+    ...actual,
+    fetchWithSsrFGuard: ssrfMocks.fetchWithSsrFGuard,
+  };
+});
 
+import {
+  resolvePinnedHostnameWithPolicy,
+  type LookupFn,
+  type SsrFPolicy,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   createOpenAIAuthorizationFlow,
   resolveOpenAICallbackHost,
@@ -51,6 +64,15 @@ function requestCallback(
   });
 }
 
+function connectIdleSocket(url: string): Promise<Socket> {
+  const callbackUrl = new URL(url);
+  const socket = connect({
+    host: resolveOpenAICallbackHost(),
+    port: Number(callbackUrl.port),
+  });
+  return once(socket, "connect").then(() => socket);
+}
+
 function mockTokenResponse(body: unknown, status = 200): void {
   mockTokenResponseText(JSON.stringify(body), status);
 }
@@ -63,6 +85,36 @@ function mockTokenResponseText(body: string, status = 200): void {
     }),
     release: vi.fn(async () => undefined),
   });
+}
+
+function mockFakeIpTokenResponse(params: { address: string; family: 4 | 6 }): void {
+  ssrfMocks.fetchWithSsrFGuard.mockImplementationOnce(
+    async ({ policy }: { policy?: SsrFPolicy }) => {
+      const lookupFn = vi.fn(async () => [params]) as unknown as LookupFn;
+      const pinned = await resolvePinnedHostnameWithPolicy("auth.openai.com", {
+        lookupFn,
+        policy,
+      });
+
+      expect(pinned.addresses).toEqual([params.address]);
+      await expect(
+        resolvePinnedHostnameWithPolicy("redirect.example.com", { lookupFn, policy }),
+      ).rejects.toThrow("Blocked hostname (not in allowlist)");
+      expect(lookupFn).toHaveBeenCalledOnce();
+
+      return {
+        response: new Response(
+          JSON.stringify({
+            access_token: "test-access-token",
+            refresh_token: "test-refresh-token",
+            expires_in: 3600,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+        release: vi.fn(async () => undefined),
+      };
+    },
+  );
 }
 
 afterEach(() => {
@@ -126,7 +178,7 @@ describe("OpenAI Codex OAuth flow", () => {
     );
   });
 
-  it("disconnects a keep-alive callback and cancels stale manual input", async () => {
+  it("disconnects callback sockets and cancels stale manual input", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => new Response(null, { status: 302 })),
@@ -141,6 +193,7 @@ describe("OpenAI Codex OAuth flow", () => {
     });
     const agent = new Agent({ keepAlive: true });
     let callbackResponse: Promise<{ headers: IncomingHttpHeaders; body: string }> | undefined;
+    let idleSocket: Socket | undefined;
     let manualPromptAborted = false;
     let manualPrompt: Promise<string> | undefined;
     const prompter = {
@@ -170,6 +223,7 @@ describe("OpenAI Codex OAuth flow", () => {
             if (!redirectUri || !state) {
               throw new Error("OAuth URL missing callback parameters");
             }
+            idleSocket = await connectIdleSocket(redirectUri);
             manualPrompt = params.prompter.text({
               message: "Paste callback",
               signal: params.manualPromptSignal,
@@ -203,7 +257,9 @@ describe("OpenAI Codex OAuth flow", () => {
       expect(response.body).toContain("OpenAI authentication completed");
       await vi.waitFor(() => expect(manualPromptAborted).toBe(true));
       expect(Object.keys(agent.freeSockets)).toHaveLength(0);
+      await vi.waitFor(() => expect(idleSocket?.destroyed).toBe(true));
     } finally {
+      idleSocket?.destroy();
       agent.destroy();
     }
   });
@@ -229,6 +285,40 @@ describe("OpenAI Codex OAuth flow", () => {
       message: "OpenAI Codex token exchange timed out after 5ms",
     });
   });
+
+  it.each([
+    { operation: "authorization-code exchange", address: "198.18.0.42", family: 4 as const },
+    { operation: "refresh-token exchange", address: "fc00::42", family: 6 as const },
+  ])(
+    "allows fake-IP DNS for the OpenAI OAuth $operation",
+    async ({ operation, address, family }) => {
+      mockFakeIpTokenResponse({ address, family });
+
+      const result =
+        operation === "authorization-code exchange"
+          ? await exchangeOpenAIAuthorizationCode(
+              "code",
+              "verifier",
+              resolveOpenAIRedirectUri("localhost"),
+            )
+          : await refreshOpenAIAccessToken("old-refresh-token");
+
+      expect(result).toMatchObject({
+        type: "success",
+        access: "test-access-token",
+        refresh: "test-refresh-token",
+      });
+      expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+        expect.objectContaining({
+          policy: {
+            allowRfc2544BenchmarkRange: true,
+            allowIpv6UniqueLocalRange: true,
+            hostnameAllowlist: ["auth.openai.com"],
+          },
+        }),
+      );
+    },
+  );
 
   it("cancels token exchange requests with the caller signal", async () => {
     const controller = new AbortController();

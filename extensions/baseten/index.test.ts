@@ -142,7 +142,7 @@ describe("Baseten provider registration", () => {
       baseUrl: "https://inference.baseten.co/v1",
       api: "openai-completions",
     });
-    expect(catalog.models).toHaveLength(12);
+    expect(catalog.models).toHaveLength(9);
     expect(provider.staticCatalog).toBeDefined();
     expect(
       provider.buildReplayPolicy?.({
@@ -153,13 +153,15 @@ describe("Baseten provider registration", () => {
   });
 
   it("sets and clears chat-template thinking while preserving caller arguments", () => {
-    expect(captureThinkingPayload("zai-org/GLM-5", "high")).toMatchObject({
+    expect(captureThinkingPayload("zai-org/GLM-5.2-Fast", "high")).toMatchObject({
       chat_template_args: { preserve_me: true, enable_thinking: true },
     });
     expect(captureThinkingPayload("moonshotai/Kimi-K2.6", "off")).toMatchObject({
       chat_template_args: { preserve_me: true, enable_thinking: false },
     });
-    expect(captureThinkingPayload("NVIDIA/Nemotron-120B-A12B", undefined)).toMatchObject({
+    expect(
+      captureThinkingPayload("nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B", undefined),
+    ).toMatchObject({
       chat_template_args: { preserve_me: true, enable_thinking: false },
     });
   });
@@ -181,6 +183,16 @@ describe("Baseten provider registration", () => {
       provider.resolveThinkingProfile?.({
         provider: "baseten",
         modelId: "zai-org/GLM-5.2",
+        reasoning: true,
+      } as never),
+    ).toEqual({
+      levels: [{ id: "off" }, { id: "high" }, { id: "max" }],
+      defaultLevel: "off",
+    });
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "baseten",
+        modelId: "zai-org/GLM-5.2-Fast",
         reasoning: true,
       } as never),
     ).toEqual({

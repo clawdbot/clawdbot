@@ -13,7 +13,7 @@ export const registerTelegramHandlers = (params: RegisterTelegramHandlerParams) 
   const authorizationRuntime = createTelegramHandlerAuthorizationRuntime(params);
   const inboundRuntime = createTelegramHandlerInboundRuntime(params, messageRuntime);
 
-  registerTelegramReactionHandler(params, authorizationRuntime);
+  registerTelegramReactionHandler(params, messageRuntime, authorizationRuntime);
   registerTelegramCallbackQueryHandler(params, messageRuntime, authorizationRuntime);
   registerTelegramMigrationHandler(params);
   registerTelegramMessageHandlers(params, messageRuntime, authorizationRuntime, inboundRuntime);

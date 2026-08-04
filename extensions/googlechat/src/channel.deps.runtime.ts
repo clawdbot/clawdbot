@@ -1,7 +1,6 @@
 // Googlechat plugin module implements channeleps behavior.
 export {
   buildChannelConfigSchema,
-  chunkTextForOutbound,
   DEFAULT_ACCOUNT_ID,
   GoogleChatConfigSchema,
   missingTargetError,
@@ -10,11 +9,7 @@ export {
   type ChannelStatusIssue,
   type OpenClawConfig,
 } from "../runtime-api.js";
-export {
-  listGoogleChatAccountIds,
-  resolveGoogleChatAccount,
-  type ResolvedGoogleChatAccount,
-} from "./accounts.js";
+export { resolveGoogleChatAccount, type ResolvedGoogleChatAccount } from "./accounts.js";
 export {
   isGoogleChatSpaceTarget,
   isGoogleChatUserTarget,

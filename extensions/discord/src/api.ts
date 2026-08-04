@@ -9,6 +9,7 @@ import {
   retryAsync,
   type RetryConfig,
 } from "openclaw/plugin-sdk/retry-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { isDiscordHtmlResponseBody, summarizeDiscordResponseBody } from "./error-body.js";
 import { parseDiscordRetryAfterBodySeconds } from "./retry-after.js";
 
@@ -218,11 +219,11 @@ export async function requestDiscord<T>(
               ),
           },
         );
-        const text = new TextDecoder().decode(responseBody);
-        if (!text.trim()) {
-          return undefined as T;
-        }
         try {
+          const text = new TextDecoder("utf-8", { fatal: true }).decode(responseBody);
+          if (!text.trim()) {
+            return undefined as T;
+          }
           return JSON.parse(text) as T;
         } catch {
           throw new DiscordApiError(`Discord API ${path} returned malformed JSON`, 0);
@@ -236,6 +237,8 @@ export async function requestDiscord<T>(
       label: options?.label ?? path,
       shouldRetry: (err) => err instanceof DiscordApiError && err.status === 429,
       retryAfterMs: (err) => getDiscordApiRetryAfterMs(err, retryConfig),
+      // 429 backoffs can run for minutes; keep them abortable like the fetch itself.
+      sleep: (ms) => sleepWithAbort(ms, options?.signal),
     },
   );
 }

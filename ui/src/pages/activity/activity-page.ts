@@ -14,6 +14,7 @@ import { renderSettingsWorkspace } from "../../components/settings-workspace.ts"
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { StreamAutoFollowController } from "../../lit/stream-auto-follow-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
   parseActivityEvent,
@@ -39,10 +40,12 @@ class ActivityPage extends OpenClawLightDomElement {
   @state() private toolFilter = "";
   @state() private expandedIds = new Set<string>();
   @state() private autoFollow = true;
-  @state() private atBottom = true;
 
   private sessionKey = "";
-  private scrollFrame: number | null = null;
+  private readonly streamFollow = new StreamAutoFollowController(this, {
+    selector: ".activity-stream",
+    isEnabled: () => this.autoFollow,
+  });
   private readonly subscriptions = new SubscriptionsController(this).effect(
     () => this.context?.gateway,
     (gateway) => {
@@ -61,17 +64,17 @@ class ActivityPage extends OpenClawLightDomElement {
   );
 
   override updated(changed: PropertyValues) {
-    if (this.autoFollow && this.atBottom && (changed.has("entries") || changed.has("autoFollow"))) {
-      this.scheduleScroll(changed.has("autoFollow"));
+    if (
+      this.autoFollow &&
+      this.streamFollow.atBottom &&
+      (changed.has("entries") || changed.has("autoFollow"))
+    ) {
+      this.streamFollow.schedule(changed.has("autoFollow"));
     }
   }
 
   override disconnectedCallback() {
     this.subscriptions.clear();
-    if (this.scrollFrame !== null) {
-      cancelAnimationFrame(this.scrollFrame);
-      this.scrollFrame = null;
-    }
     super.disconnectedCallback();
   }
 
@@ -104,7 +107,7 @@ class ActivityPage extends OpenClawLightDomElement {
     if (this.expandedIds.size > 0) {
       this.expandedIds = new Set();
     }
-    this.atBottom = true;
+    this.streamFollow.atBottom = true;
   }
 
   private applyGatewayEvent(
@@ -157,46 +160,11 @@ class ActivityPage extends OpenClawLightDomElement {
     return updateToolActivity(entries, event);
   }
 
-  private scheduleScroll(force = false) {
-    if (this.scrollFrame !== null) {
-      cancelAnimationFrame(this.scrollFrame);
-    }
-    void this.updateComplete.then(() => {
-      if (!this.isConnected) {
-        return;
-      }
-      this.scrollFrame = requestAnimationFrame(() => {
-        this.scrollFrame = null;
-        const container = this.querySelector<HTMLElement>(".activity-stream");
-        if (!container) {
-          return;
-        }
-        const distanceFromBottom =
-          container.scrollHeight - container.scrollTop - container.clientHeight;
-        if (!force && (!this.autoFollow || (!this.atBottom && distanceFromBottom >= 120))) {
-          return;
-        }
-        container.scrollTop = container.scrollHeight;
-        this.atBottom = true;
-      });
-    });
-  }
-
-  private handleScroll(event: Event) {
-    const container = event.currentTarget as HTMLElement | null;
-    if (!container) {
-      return;
-    }
-    const distanceFromBottom =
-      container.scrollHeight - container.scrollTop - container.clientHeight;
-    this.atBottom = distanceFromBottom < 120;
-  }
-
   private clearEntries() {
     activityClearBoundary = this.context.gateway.eventLog[0];
     this.entries = [];
     this.expandedIds = new Set();
-    this.atBottom = true;
+    this.streamFollow.atBottom = true;
   }
 
   override render() {
@@ -215,7 +183,7 @@ class ActivityPage extends OpenClawLightDomElement {
       onToggleAutoFollow: (next) => {
         this.autoFollow = next;
         if (next) {
-          this.scheduleScroll(true);
+          this.streamFollow.schedule(true);
         }
       },
       onClear: () => this.clearEntries(),
@@ -234,7 +202,7 @@ class ActivityPage extends OpenClawLightDomElement {
         }
         this.expandedIds = next;
       },
-      onScroll: (event) => this.handleScroll(event),
+      onScroll: (event) => this.streamFollow.handleScroll(event),
     });
     return html`
       <section class="content-header">
@@ -247,4 +215,6 @@ class ActivityPage extends OpenClawLightDomElement {
   }
 }
 
-customElements.define("openclaw-activity-page", ActivityPage);
+if (!customElements.get("openclaw-activity-page")) {
+  customElements.define("openclaw-activity-page", ActivityPage);
+}

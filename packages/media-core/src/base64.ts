@@ -49,6 +49,19 @@ function isBase64DataChar(code: number): boolean {
   );
 }
 
+function base64DataValue(code: number): number {
+  if (code >= 0x41 && code <= 0x5a) {
+    return code - 0x41;
+  }
+  if (code >= 0x61 && code <= 0x7a) {
+    return code - 0x61 + 26;
+  }
+  if (code >= 0x30 && code <= 0x39) {
+    return code - 0x30 + 52;
+  }
+  return code === 0x2b ? 62 : 63;
+}
+
 /**
  * Normalizes and validates a base64 string, returning canonical no-whitespace
  * base64 only when the input has valid alphabet, padding, and length.
@@ -59,6 +72,7 @@ export function canonicalizeBase64(base64: string): string | undefined {
   let cleanedLength = 0;
   let padding = 0;
   let sawPadding = false;
+  let lastDataCode = 0;
 
   const append = (char: string): void => {
     current += char;
@@ -86,6 +100,7 @@ export function canonicalizeBase64(base64: string): string | undefined {
     if (sawPadding || !isBase64DataChar(code)) {
       return undefined;
     }
+    lastDataCode = code;
     append(base64[i] ?? "");
   }
   if (cleanedLength === 0) {
@@ -97,6 +112,11 @@ export function canonicalizeBase64(base64: string): string | undefined {
       return undefined;
     }
     current += "=".repeat(4 - remainder);
+  }
+  const effectivePadding = remainder === 0 ? padding : 4 - remainder;
+  const padBitMask = effectivePadding === 2 ? 0x0f : effectivePadding === 1 ? 0x03 : 0;
+  if (padBitMask !== 0 && (base64DataValue(lastDataCode) & padBitMask) !== 0) {
+    return undefined;
   }
   if (current) {
     chunks.push(current);

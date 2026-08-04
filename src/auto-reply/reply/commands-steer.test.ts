@@ -61,6 +61,7 @@ describe("handleSteerCommand", () => {
       "keep going",
       {
         steeringMode: "all",
+        isInboundUserMessage: true,
         debounceMs: 0,
         taskSuggestionDeliveryMode: undefined,
       },
@@ -79,6 +80,7 @@ describe("handleSteerCommand", () => {
       "keep going",
       {
         steeringMode: "all",
+        isInboundUserMessage: true,
         debounceMs: 0,
         taskSuggestionDeliveryMode: "gateway",
       },
@@ -103,6 +105,7 @@ describe("handleSteerCommand", () => {
       "check the target",
       {
         steeringMode: "all",
+        isInboundUserMessage: true,
         debounceMs: 0,
         taskSuggestionDeliveryMode: undefined,
       },
@@ -126,16 +129,15 @@ describe("handleSteerCommand", () => {
       "continue from state",
       {
         steeringMode: "all",
+        isInboundUserMessage: true,
         debounceMs: 0,
         taskSuggestionDeliveryMode: undefined,
       },
     );
   });
 
-  it("resolves an active run from the target session file before stored session id fallback", async () => {
-    steerRuntimeMocks.resolveActiveEmbeddedRunSessionIdBySessionFile.mockReturnValue(
-      "session-file-active",
-    );
+  it("resolves an active run from the target session key before stored session id fallback", async () => {
+    steerRuntimeMocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("session-key-active");
 
     const params = buildParams("/steer check the active file");
     params.ctx.CommandSource = "native";
@@ -144,7 +146,6 @@ describe("handleSteerCommand", () => {
     params.sessionStore = {
       "agent:main:telegram:topic:5907": {
         sessionId: "stored-session-id",
-        sessionFile: "/tmp/openclaw-topic-5907.jsonl",
         updatedAt: Date.now(),
       },
     };
@@ -154,17 +155,16 @@ describe("handleSteerCommand", () => {
     expect(steerRuntimeMocks.resolveActiveEmbeddedRunSessionId).toHaveBeenCalledWith(
       "agent:main:telegram:topic:5907",
     );
-    expect(steerRuntimeMocks.resolveActiveEmbeddedRunSessionIdBySessionFile).toHaveBeenCalledWith(
-      "/tmp/openclaw-topic-5907.jsonl",
-    );
+    expect(steerRuntimeMocks.resolveActiveEmbeddedRunSessionIdBySessionFile).not.toHaveBeenCalled();
     expect(steerRuntimeMocks.isEmbeddedAgentRunActive).not.toHaveBeenCalledWith(
       "stored-session-id",
     );
     expect(steerRuntimeMocks.queueEmbeddedAgentMessageWithOutcomeAsync).toHaveBeenCalledWith(
-      "session-file-active",
+      "session-key-active",
       "check the active file",
       {
         steeringMode: "all",
+        isInboundUserMessage: true,
         debounceMs: 0,
         taskSuggestionDeliveryMode: undefined,
       },
@@ -194,6 +194,7 @@ describe("handleSteerCommand", () => {
       "use the active direct lane",
       {
         steeringMode: "all",
+        isInboundUserMessage: true,
         debounceMs: 0,
         taskSuggestionDeliveryMode: undefined,
       },

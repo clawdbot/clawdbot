@@ -6,6 +6,7 @@ import type {
 } from "openai/resources/responses/responses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
+import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model, Tool } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
@@ -13,7 +14,6 @@ import {
   applyCommonResponsesParams,
   createResponsesAssistantOutput,
   convertResponsesMessages,
-  processResponsesStream,
   resolveResponsesReasoningEffort,
   runResponsesStreamLifecycle,
 } from "./openai-responses-shared.js";
@@ -1312,6 +1312,39 @@ describe("processResponsesStream", () => {
     });
   });
 
+  it("derives totalTokens from the split buckets when the payload omits it", async () => {
+    const output = createAssistantOutput();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_no_total",
+            status: "completed",
+            usage: {
+              input_tokens: 30,
+              output_tokens: 12,
+              input_tokens_details: { cached_tokens: 5, cache_write_tokens: 3 },
+            },
+          },
+        },
+      ]),
+      output,
+      new AssistantMessageEventStream(),
+      nativeOpenAIModel,
+    );
+
+    // Responses-compatible proxies routinely omit total_tokens; reporting 0 understates the turn.
+    expect(output.usage).toMatchObject({
+      input: 22,
+      output: 12,
+      cacheRead: 5,
+      cacheWrite: 3,
+      totalTokens: 42,
+    });
+  });
+
   it("reports content-filtered incomplete responses as errors", async () => {
     const output = createAssistantOutput();
 
@@ -1369,26 +1402,27 @@ describe("processResponsesStream", () => {
   it("preserves failed terminal response details", async () => {
     const output = createAssistantOutput();
 
-    await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.failed",
-          response: {
-            id: "resp_failed",
-            status: "failed",
-            error: { code: "server_error", message: "provider failed" },
+    await expect(
+      processResponsesStream(
+        responseEvents([
+          {
+            type: "response.failed",
+            response: {
+              id: "resp_failed",
+              status: "failed",
+              error: { code: "server_error", message: "provider failed" },
+            },
           },
-        },
-      ]),
-      output,
-      new AssistantMessageEventStream(),
-      nativeOpenAIModel,
-    );
+        ]),
+        output,
+        new AssistantMessageEventStream(),
+        nativeOpenAIModel,
+      ),
+    ).rejects.toThrow("server_error: provider failed");
 
     expect(output).toMatchObject({
       responseId: "resp_failed",
-      stopReason: "error",
-      errorMessage: "server_error: provider failed",
+      stopReason: "stop",
     });
   });
 
@@ -2846,8 +2880,8 @@ describe("processResponsesStream", () => {
     expect(liveTextBlockSignatures).toEqual([
       ["text_start", 0, JSON.stringify({ v: 1, id: "msg_1", phase: "final_answer" })],
       ["text_start", 1, JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" })],
-      ["text_delta", 1, JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" })],
-      ["text_delta", 1, JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" })],
+      ["text_delta", 1, undefined],
+      ["text_delta", 1, undefined],
     ]);
   });
 
@@ -3114,7 +3148,7 @@ describe("Azure OpenAI Responses content type support", () => {
           status: "completed",
           usage: {
             input_tokens: 10,
-            input_tokens_details: { cached_tokens: 0 },
+            input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
             output_tokens: 5,
             output_tokens_details: { reasoning_tokens: 0 },
             total_tokens: 15,
@@ -3219,7 +3253,7 @@ describe("Azure OpenAI Responses content type support", () => {
           status: "completed",
           usage: {
             input_tokens: 3,
-            input_tokens_details: { cached_tokens: 0 },
+            input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
             output_tokens: 3,
             output_tokens_details: { reasoning_tokens: 0 },
             total_tokens: 6,

@@ -177,8 +177,10 @@ private struct ChatTalkInputDeviceMenuModifier: ViewModifier {
     private func menuLabel(_ text: String, selected: Bool) -> some View {
         if selected {
             Label(text, systemImage: "checkmark")
+                .font(OpenClawChatTypography.body)
         } else {
             Text(text)
+                .font(OpenClawChatTypography.body)
         }
     }
 }

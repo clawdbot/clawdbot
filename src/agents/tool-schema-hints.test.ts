@@ -27,6 +27,104 @@ describe("tool schema hints", () => {
     );
   });
 
+  it("keeps deeply nested literal unions complete without increasing the depth budget", () => {
+    const outputSchema = Type.Object(
+      {
+        conversations: Type.Array(
+          Type.Object(
+            {
+              conversationRef: Type.String(),
+              kind: Type.Union([
+                Type.Literal("direct"),
+                Type.Literal("group"),
+                Type.Literal("channel"),
+              ]),
+            },
+            { additionalProperties: false },
+          ),
+        ),
+      },
+      { additionalProperties: false },
+    );
+
+    expect(compactToolOutputHint(outputSchema)).toBe(
+      '{ conversations: Array<{ conversationRef: string; kind: "direct" | "group" | "channel" }> }',
+    );
+  });
+
+  it("renders up to eight literal union values", () => {
+    const values = [
+      "env",
+      "agent",
+      "defaults",
+      "model",
+      "provider",
+      "implicit",
+      "session",
+      "session-key",
+    ];
+    const eight = Type.Union(values.map((value) => Type.Literal(value)));
+    const nine = Type.Union([...values, "extra"].map((value) => Type.Literal(value)));
+
+    expect(compactToolOutputHint(eight)).toBe(
+      '"env" | "agent" | "defaults" | "model" | "provider" | "implicit" | "session" | "session-key"',
+    );
+    expect(compactToolOutputHint(nine)).toBeUndefined();
+  });
+
+  it("keeps input hints small while allowing larger exact output contracts", () => {
+    const schema = Type.Object(
+      Object.fromEntries(
+        Array.from({ length: 16 }, (_unused, index) => [
+          `field_${String(index).padStart(2, "0")}_with_long_name`,
+          Type.String(),
+        ]),
+      ),
+      { additionalProperties: false },
+    );
+
+    const inputHint = compactToolInputHint(schema);
+    const outputHint = compactToolOutputHint(schema);
+
+    expect(inputHint).toBe("unknown");
+    expect(inputHint.length).toBeLessThanOrEqual(300);
+    expect(outputHint).toBeDefined();
+    expect(outputHint!.length).toBeGreaterThan(300);
+    expect(outputHint!.length).toBeLessThanOrEqual(600);
+  });
+
+  it("keeps contracts with explicitly opaque leaves complete", () => {
+    const outputSchema = Type.Object(
+      {
+        count: Type.Number(),
+        messages: Type.Array(Type.Unknown()),
+        payload: Type.Optional(Type.Unknown()),
+      },
+      { additionalProperties: false },
+    );
+
+    expect(compactToolOutputHint(outputSchema)).toBe(
+      "{ count: number; messages: Array<unknown>; payload?: unknown }",
+    );
+  });
+
+  it("renders a bare top-type schema as unknown without demoting", () => {
+    expect(compactToolOutputHint(Type.Unknown())).toBe("unknown");
+    expect(compactToolOutputHint(Type.Any())).toBe("unknown");
+  });
+
+  it("still fails closed for constrained but untyped leaves", () => {
+    const outputSchema = Type.Object(
+      {
+        id: Type.String(),
+        blob: { minLength: 1 } as unknown as ReturnType<typeof Type.Unknown>,
+      },
+      { additionalProperties: false },
+    );
+
+    expect(compactToolOutputHint(outputSchema)).toBeUndefined();
+  });
+
   it("includes null in AJV-style nullable output hints", () => {
     expect(compactToolOutputHint({ type: "string", nullable: true })).toBe("string | null");
     expect(

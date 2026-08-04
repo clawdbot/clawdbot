@@ -17,6 +17,13 @@ dreaming stay owned by whichever memory backend is configured
 (`memory-core`, QMD, Honcho, etc.). `memory-wiki` sits beside it and compiles
 knowledge into a maintained wiki layer.
 
+Enable the plugin before using its CLI, tools, or runtime integration:
+
+```bash
+openclaw plugins enable memory-wiki
+openclaw gateway restart
+```
+
 | Layer                | Owns                                                                              |
 | -------------------- | --------------------------------------------------------------------------------- |
 | Active memory plugin | Recall, semantic search, promotion, dreaming, memory runtime                      |
@@ -196,16 +203,38 @@ claims:
 
 ## Compile pipeline
 
-Compile reads wiki pages, normalizes summaries, and emits stable
-machine-facing artifacts under:
-
-- `.openclaw-wiki/cache/agent-digest.json`
-- `.openclaw-wiki/cache/claims.jsonl`
-
-Agents and runtime code read these digests instead of scraping Markdown.
+Compile reads wiki pages, normalizes summaries, and persists a machine-facing
+snapshot in OpenClaw's shared SQLite plugin state. Runtime code uses the
+lifecycle-owned owner snapshot to load SQLite during async prompt preparation;
+synchronous prompt assembly never scrapes Markdown or reads cache files.
 Compiled output also powers first-pass wiki indexing for search/get, claim-id
 lookup back to owning pages, compact prompt supplements, and report
 generation.
+
+Source edits and vault restores become machine-facing only after the next
+compile. Restarting or refreshing the plugin lifecycle compares the vault's
+causally chained compile publication with SQLite and rejects a snapshot from a
+newer, rolled-back state. A compiler that started before the rollback cannot
+publish against the restored predecessor. Prompt preparation does not poll the
+vault or install file watchers.
+After rollback quarantine, a compile in the running process clears the owner
+immediately; a separate compiler process requires plugin lifecycle refresh so
+the daemon can confirm the new durable publication.
+ChatGPT import rollback records post-import edits before compile and keeps
+their recovery paths in plugin state, so an interrupted rollback can reconcile
+the recovery directory and report the same preserved pages on retry. Target
+recovery finishes before a persisted process-restart fence. After that point,
+retries rebuild derived indexes, dashboards, and compiled caches without
+rewriting source pages or moving or deleting recovery artifacts. A later normal
+compile may refresh machine-managed Related blocks. This covers in-process
+failure and process restart after ordinary filesystem calls return. It does not
+guarantee write ordering across kernel or host power loss. A pathname write
+racing fence persistence either remains after a successful fence or is
+preserved under `recovered/` by a pre-fence retry. Writes through a file
+descriptor opened before an import-owned inode is classified and unlinked are
+not guaranteed and may be lost.
+Compiled caches are rebuildable: cache rows from before publication epochs are
+treated as misses and replaced by the next compile; they are not migrated.
 
 ## Dashboards and health reports
 
@@ -267,10 +296,27 @@ The plugin also registers a non-exclusive memory corpus supplement, so shared
 `memory_search` and `memory_get` can reach the wiki when the active memory
 plugin supports corpus selection.
 
+## Browsing the wiki in the Control UI
+
+The [Control UI](/web/control-ui) can browse the compiled wiki directly: open
+the Memory page, then **Dreams → Diary → Memory Wiki**. The tab clusters
+synthesis, entity, and concept pages — plus source and report pages that
+carry claims, open questions, or contradictions — with per-page counts and a
+full-vault page breakdown, and opens full page content inline. Raw sources
+and reports without that metadata count toward the breakdown but are not
+listed as cards; open them from the **Imported Insights** sub-tab, which
+reviews what external-history imports surfaced before promotion.
+
+Both sub-tabs appear once the plugin is enabled; in agent-scoped vault setups
+they show the selected agent's own vault. The UI reads through the plugin's
+gateway methods (`wiki.overview`, `wiki.get`, `wiki.importInsights`); inline
+page previews use `wiki.get`, the same lookup agents reach through the
+`wiki_get` tool.
+
 ## Prompt and context behavior
 
 When `context.includeCompiledDigestPrompt` is enabled, memory prompt sections
-append a compact compiled snapshot from `agent-digest.json`: top pages only,
+append a compact compiled snapshot from plugin state: top pages only,
 top claims only, contradiction count, question count, confidence/freshness
 qualifiers. This is opt-in because it changes prompt shape; it mainly matters
 for context engines or prompt assembly that explicitly consume memory
@@ -392,10 +438,9 @@ the existing `~/.openclaw/wiki/main` path.
 
 Agent tools, compiled prompt digests, and the wiki supplement exposed through
 `memory_search` / `memory_get` resolve the vault from the active agent context.
-For CLI and Gateway calls in a setup with multiple configured agents, provide
-the agent explicitly with `openclaw wiki --agent <agentId> ...` or the Gateway
-request's `agentId`. A single configured agent remains the default when no id is
-provided.
+CLI calls use the configured default agent unless the command passes
+`--agent <agentId>`. Gateway calls in a multi-agent setup still require the
+request's `agentId`.
 
 In bridge mode, agent-scoped imports accept a public memory artifact only when
 its `agentIds` includes the selected agent. Artifacts owned by another agent,

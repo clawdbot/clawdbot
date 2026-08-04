@@ -1,3 +1,4 @@
+import type { TurnAdoptionLifecycle } from "../auto-reply/get-reply-options.types.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -11,7 +12,8 @@ import {
   resolveInboundRouteEnvelopeBuilderWithRuntime,
 } from "./inbound-event/envelope.js";
 import { createChannelReplyPipeline } from "./message/reply-pipeline.js";
-import { dispatchChannelInboundTurn, runPreparedInboundReply } from "./turn/kernel.js";
+import { dispatchChannelInboundTurn } from "./turn/kernel.js";
+import type { ChannelTurnPlan } from "./turn/types.js";
 export {
   createPreCryptoDirectDmAuthorizer,
   resolveInboundDirectDmAccessWithRuntime,
@@ -42,6 +44,7 @@ type DispatchInboundDirectDmParams = {
   messageId: string;
   timestamp?: number;
   commandAuthorized?: boolean;
+  turnAdoptionLifecycle?: TurnAdoptionLifecycle;
   /** Set only after the channel's sender/pairing guard admits this event. */
   inboundAccessAuthorized?: boolean;
   bodyForAgent?: string;
@@ -118,6 +121,16 @@ export async function dispatchInboundDirectDm(params: DispatchInboundDirectDmPar
       timestamp: params.timestamp,
     }),
   );
+  await dispatchChannelInboundTurn(buildDirectDmTurnPlan(params, route, ctxPayload));
+
+  return { route, ctxPayload };
+}
+
+function buildDirectDmTurnPlan(
+  params: DispatchInboundDirectDmParams,
+  route: DirectDmRoute,
+  ctxPayload: FinalizedMsgContext,
+): ChannelTurnPlan {
   const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg: params.cfg,
     agentId: route.agentId,
@@ -125,7 +138,7 @@ export async function dispatchInboundDirectDm(params: DispatchInboundDirectDmPar
     accountId: route.accountId ?? params.accountId,
   });
 
-  await dispatchChannelInboundTurn({
+  return {
     cfg: params.cfg,
     channel: params.channel,
     accountId: route.accountId ?? params.accountId,
@@ -139,10 +152,13 @@ export async function dispatchInboundDirectDm(params: DispatchInboundDirectDmPar
       onError: params.onDispatchError,
     },
     replyPipeline,
-    replyOptions: { onModelSelected },
-  });
-
-  return { route, ctxPayload };
+    replyOptions: {
+      onModelSelected,
+      ...(params.turnAdoptionLifecycle
+        ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
+        : {}),
+    },
+  };
 }
 
 export async function dispatchInboundDirectDmWithRuntime(
@@ -190,36 +206,22 @@ export async function dispatchInboundDirectDmWithRuntime(
     NativeDirectUserId: params.peer.id,
     ...params.extraContext,
   });
-  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
-    cfg: params.cfg,
-    agentId: route.agentId,
+  const plan = buildDirectDmTurnPlan(params, route, ctxPayload);
+  await params.runtime.channel.inbound.run({
     channel: params.channel,
     accountId: route.accountId ?? params.accountId,
-  });
-  await runPreparedInboundReply({
-    channel: params.channel,
-    accountId: route.accountId ?? params.accountId,
-    routeSessionKey: route.sessionKey,
-    storePath,
-    ctxPayload,
-    recordInboundSession: params.runtime.channel.session.recordInboundSession,
-    record: { onRecordError: params.onRecordError },
-    runDispatch: () =>
-      params.runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-        ctx: ctxPayload,
-        cfg: params.cfg,
-        dispatcherOptions: {
-          ...replyPipeline,
-          deliver: (payload: unknown) =>
-            params.deliver(
-              payload && typeof payload === "object"
-                ? normalizeOutboundReplyPayload(payload as Record<string, unknown>)
-                : {},
-            ),
-          onError: params.onDispatchError,
-        },
-        replyOptions: { onModelSelected },
+    raw: ctxPayload,
+    adapter: {
+      ingest: () => ({
+        id: params.messageId,
+        timestamp: params.timestamp,
+        rawText: params.rawBody,
+        textForAgent: params.bodyForAgent,
+        textForCommands: params.commandBody,
+        raw: ctxPayload,
       }),
+      resolveTurn: () => plan,
+    },
   });
   return { route, storePath, ctxPayload };
 }

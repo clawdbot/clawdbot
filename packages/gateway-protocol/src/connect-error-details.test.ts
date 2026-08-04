@@ -4,7 +4,6 @@ import {
   buildPairingConnectCloseReason,
   buildPairingConnectErrorDetails,
   buildPairingConnectErrorMessage,
-  ConnectPairingRequiredReasons,
   describePairingConnectRequirement,
   formatConnectErrorMessage,
   formatConnectPairingRequiredMessage,
@@ -76,18 +75,16 @@ describe("resolveAuthConnectErrorDetailCode", () => {
 
 describe("pairing connect details", () => {
   it("builds reason-specific pairing messages", () => {
-    expect(buildPairingConnectErrorMessage(ConnectPairingRequiredReasons.SCOPE_UPGRADE)).toBe(
+    expect(buildPairingConnectErrorMessage("scope-upgrade")).toBe(
       "pairing required: device is asking for more scopes than currently approved",
     );
-    expect(describePairingConnectRequirement(ConnectPairingRequiredReasons.NOT_PAIRED)).toBe(
-      "device is not approved yet",
-    );
+    expect(describePairingConnectRequirement("not-paired")).toBe("device is not approved yet");
   });
 
   it("builds structured pairing details with remediation", () => {
     expect(
       buildPairingConnectErrorDetails({
-        reason: ConnectPairingRequiredReasons.NOT_PAIRED,
+        reason: "not-paired",
         requestId: "req-123",
         recommendedNextStep: "wait_then_retry",
         retryable: true,
@@ -122,7 +119,7 @@ describe("pairing connect details", () => {
   it("includes request ids in close reasons when available", () => {
     expect(
       buildPairingConnectCloseReason({
-        reason: ConnectPairingRequiredReasons.ROLE_UPGRADE,
+        reason: "role-upgrade",
         requestId: "req-789",
       }),
     ).toBe(

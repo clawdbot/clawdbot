@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   generateOAuthState,
   generatePKCE,
+  oauthErrorHtml,
+  oauthSuccessHtml,
   parseOAuthAuthorizationInput,
   resolveOAuthTokenExpiresAt,
   resolveOAuthTokenLifetimeMs,
@@ -34,6 +36,13 @@ describe("provider OAuth runtime", () => {
     });
     expect(parseOAuthAuthorizationInput(" oauth-code ")).toEqual({ code: "oauth-code" });
     expect(parseOAuthAuthorizationInput("   ")).toEqual({});
+  });
+
+  it("escapes HTML-sensitive OAuth page content", () => {
+    expect(oauthSuccessHtml(`signed in as <user>&"'`)).toContain(
+      "signed in as &lt;user&gt;&amp;&quot;&#39;",
+    );
+    expect(oauthErrorHtml("failed <login>", `details &"'`)).toContain("details &amp;&quot;&#39;");
   });
 
   it("resolves safe OAuth token lifetimes and expiry timestamps", () => {

@@ -258,6 +258,19 @@ Plugin-managed internal hooks show up in `openclaw hooks list` with
 `plugin:<id>`. You cannot enable or disable them through `openclaw hooks`;
 enable or disable the plugin instead.
 
+Hook registration also depends on Gateway startup selection. For a hook-only
+plugin, declare `activation.onCapabilities: ["hook"]` in
+`openclaw.plugin.json`, then enable the plugin and include it in
+`plugins.allow` when that allowlist is configured. The manifest hint does not
+bypass global disable, deny, or per-plugin enablement policy.
+
+An explicit hook policy is also startup intent. For example,
+`plugins.entries.<id>.hooks.allowConversationAccess: true` both authorizes
+non-bundled conversation hooks and selects that configured plugin for Gateway
+startup; normal plugin policy still applies. After changing manifest or hook
+policy, restart the Gateway and verify the registration with
+`openclaw plugins inspect <id> --runtime --json`.
+
 ## Verify the active Gateway
 
 `openclaw plugins list` and plain `openclaw plugins inspect` read cold config,
@@ -288,6 +301,13 @@ serves your channels, not only a wrapper or supervisor.
 | Plugin path is blocked for suspicious ownership or permissions | Inspect the diagnostic before the config error                                                                                             | Fix filesystem ownership/permissions, then run `openclaw plugins registry --refresh`                    |
 | `OPENCLAW_NIX_MODE=1` blocks lifecycle commands                | Confirm the install is managed by Nix                                                                                                      | Change plugin selection in the Nix source instead of using plugin mutator commands                      |
 | Dependency import fails at runtime                             | Check whether the plugin was installed through npm/git/ClawHub or loaded from a local path                                                 | Run `openclaw plugins update <id>`, reinstall the source, or install local plugin dependencies yourself |
+
+When an enabled managed plugin fails payload verification during Gateway
+startup, OpenClaw quarantines that exact installed plugin root for the boot and
+continues serving other plugins. `openclaw status --all`, `openclaw health`,
+and `openclaw doctor` report it as `configured-unavailable`. Fix or reinstall
+the plugin, then restart the Gateway. A healthy explicit `plugins.load.paths`
+override with the same plugin id is not quarantined by a stale broken install.
 
 When stale plugin config still names a no-longer-discoverable channel plugin,
 config validation downgrades that channel key to a warning instead of a hard

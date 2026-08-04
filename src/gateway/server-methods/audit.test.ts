@@ -199,4 +199,36 @@ describe("audit gateway methods", () => {
       expect(listAuditEvents).not.toHaveBeenCalled();
     },
   );
+
+  it.each(["audit.list", "audit.activity.list"] as const)(
+    "trims whitespace around cursor digits for %s",
+    async (method) => {
+      const respond = await runAuditHandler(method, { cursor: "  11  " });
+      expect(respond).toHaveBeenCalledWith(true, expect.anything());
+      expect(listAuditEvents).toHaveBeenCalledWith(expect.objectContaining({ cursor: 11 }));
+    },
+  );
+
+  it.each(["audit.list", "audit.activity.list"] as const)(
+    "trims exact-match filter ids for %s before store lookup",
+    async (method) => {
+      const respond = await runAuditHandler(method, {
+        agentId: " main ",
+        sessionKey: " agent:main:main ",
+        runId: " run-1 ",
+      });
+
+      expect(respond).toHaveBeenCalledWith(true, expect.anything());
+      expect(listAuditEvents).toHaveBeenCalledWith(
+        expect.objectContaining({
+          filters: expect.objectContaining({
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            runId: "run-1",
+            ...(method === "audit.activity.list" ? { includeMessages: true } : {}),
+          }),
+        }),
+      );
+    },
+  );
 });

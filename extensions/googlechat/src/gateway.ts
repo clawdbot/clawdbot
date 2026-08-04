@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { channelBlockedPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
@@ -17,6 +18,9 @@ const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
   "googleChatChannelRuntime",
 );
+
+const UNRESOLVED_WEBHOOK_URL_ERROR =
+  "Invalid webhookUrl: expected an absolute URL such as https://chat.example.com/googlechat. No inbound webhook route was registered.";
 
 export async function startGoogleChatGatewayAccount(ctx: {
   account: ResolvedGoogleChatAccount;
@@ -37,10 +41,21 @@ export async function startGoogleChatGatewayAccount(ctx: {
   ctx.log?.info?.(`[${account.accountId}] starting Google Chat webhook`);
   const { resolveGoogleChatWebhookPath, startGoogleChatMonitor } =
     await loadGoogleChatChannelRuntime();
+  // An unparseable webhookUrl resolves to no path, and the monitor bails before it
+  // creates ingress or registers the HTTP route. Reporting the default path instead
+  // would advertise a route nothing binds, and this channel never sets `connected`,
+  // so health evaluation would read "healthy" for the lifetime of the process.
+  // The status store patch-merges, so the blocked branch clears `webhookPath`
+  // explicitly: a restart with broken config must not keep the previous run's path.
+  const webhookPath = resolveGoogleChatWebhookPath({ account });
   statusSink({
     running: true,
     lastStartAt: Date.now(),
-    webhookPath: resolveGoogleChatWebhookPath({ account }),
+    ...(webhookPath
+      ? { webhookPath, lifecycle: "starting" as const }
+      : channelBlockedPatch(UNRESOLVED_WEBHOOK_URL_ERROR, {
+          webhookPath: undefined,
+        })),
     audienceType: account.config.audienceType,
     audience: account.config.audience,
   });
@@ -84,7 +99,7 @@ export async function startGoogleChatGatewayAccount(ctx: {
           statusSink,
         }),
       stop: async (unregister) => {
-        unregister?.();
+        await unregister?.();
       },
       onStop: async () => {
         markStopped();

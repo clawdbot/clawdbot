@@ -323,20 +323,24 @@ export function resolveToolCallKind(name: string, args?: unknown): ToolCallKind 
 // Cache entries remember which details object they were built from: live tool
 // rows first render with args only and gain result `details` (e.g. the edit
 // diff) later on the same args identity, which must invalidate the cache.
-const toolCallViewCache = new WeakMap<object, { details: unknown; view: ToolCallView }>();
+const toolCallViewCache = new WeakMap<
+  object,
+  { details: unknown; name: string; view: ToolCallView }
+>();
 
 export function resolveToolCallView(source: ToolCallViewSource): ToolCallView {
   const args = asRecord(source.args);
   const cacheKey = args ?? asRecord(source.details);
+  const name = normalizeKey(source.name);
   if (cacheKey) {
     const cached = toolCallViewCache.get(cacheKey);
-    if (cached && cached.details === source.details) {
+    if (cached && cached.details === source.details && cached.name === name) {
       return cached.view;
     }
   }
   const view = buildToolCallView(source, args);
   if (cacheKey) {
-    toolCallViewCache.set(cacheKey, { details: source.details, view });
+    toolCallViewCache.set(cacheKey, { details: source.details, name, view });
   }
   return view;
 }
@@ -405,6 +409,20 @@ function buildToolCallView(
       return { kind: "generic" };
     }
     const { base, dir } = splitPathForDisplay(path);
+    const authoritativeDiff = readDetailsDiff(source.details);
+    if (authoritativeDiff) {
+      return {
+        kind,
+        target: base,
+        targetDetail: dir,
+        diff: authoritativeDiff.lines,
+        ...(authoritativeDiff.stat ? { stat: authoritativeDiff.stat } : {}),
+      };
+    }
+    const details = asRecord(source.details);
+    if (details?.changed === false) {
+      return { kind, target: base, targetDetail: dir };
+    }
     const content = args
       ? editorCommand === "create"
         ? readString(args.file_text)
@@ -419,7 +437,10 @@ function buildToolCallView(
       target: base,
       targetDetail: dir,
       diff,
-      stat: { added: countTextLines(content), removed: 0 },
+      // Present details need created=true before zero removals are authoritative.
+      ...(details && details.created !== true
+        ? {}
+        : { stat: { added: countTextLines(content), removed: 0 } }),
     };
   }
 

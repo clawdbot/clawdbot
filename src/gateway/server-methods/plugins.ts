@@ -32,7 +32,7 @@ function pluginPolicyRestartRequired(params: {
 }): boolean {
   const plan = buildGatewayReloadPlan([...params.changedPaths]);
   const mode = resolveGatewayReloadSettings(params.config).mode;
-  return plan.restartGateway || mode === "off" || mode === "restart";
+  return plan.restartGateway || mode === "off";
 }
 
 /** Gateway handlers for plugin inventory, ClawHub search, install, and policy state. */

@@ -1,34 +1,19 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { Value } from "typebox/value";
+import {
+  TasksCancelResultSchema,
+  TasksGetResultSchema,
+  TasksListResultSchema,
+  TasksRecoveryResultSchema,
+} from "../../../../packages/gateway-protocol/src/schema/tasks.js";
+import type {
+  TasksCancelResult,
+  TasksRecoveryResult,
+} from "../../../../packages/gateway-protocol/src/schema/tasks.js";
 import { t } from "../../i18n/index.ts";
+import { normalizeTaskSummary, type TaskStatus, type TaskSummary } from "./task-summary.ts";
 
-export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "timed_out";
-
-type TaskRuntime = "subagent" | "cron" | "acp" | "cli";
-type TaskTimestamp = number | string;
-
-export type TaskSummary = {
-  id: string;
-  taskId: string;
-  status: TaskStatus;
-  kind?: string;
-  runtime?: TaskRuntime;
-  title?: string;
-  agentId?: string;
-  sessionKey?: string;
-  childSessionKey?: string;
-  ownerKey?: string;
-  createdAt?: TaskTimestamp;
-  updatedAt?: TaskTimestamp;
-  startedAt?: TaskTimestamp;
-  endedAt?: TaskTimestamp;
-  toolUseCount?: number;
-  lastToolName?: string;
-  progressSummary?: string;
-  terminalSummary?: string;
-  error?: string;
-  /** Bounded task input returned by tasks.get, not tasks.list. */
-  prompt?: string;
-};
+type TaskTimestamp = NonNullable<TaskSummary["updatedAt"]>;
 
 type TaskEventPayload =
   | { action: "upserted"; task: TaskSummary }
@@ -37,97 +22,6 @@ type TaskEventPayload =
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function optionalCount(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
-}
-
-function normalizeTaskStatus(value: unknown): TaskStatus | null {
-  switch (value) {
-    case "queued":
-    case "running":
-    case "completed":
-    case "failed":
-    case "cancelled":
-    case "timed_out":
-      return value;
-    default:
-      return null;
-  }
-}
-
-function normalizeTaskRuntime(value: unknown): TaskRuntime | undefined {
-  switch (value) {
-    case "subagent":
-    case "cron":
-    case "acp":
-    case "cli":
-      return value;
-    default:
-      return undefined;
-  }
-}
-
-function normalizeTimestamp(value: unknown): TaskTimestamp | undefined {
-  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
-    return value;
-  }
-  if (typeof value === "string" && Number.isFinite(Date.parse(value))) {
-    return value;
-  }
-  return undefined;
-}
-
-function normalizeTaskSummary(value: unknown): TaskSummary | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const id = optionalString(value.id);
-  const taskId = optionalString(value.taskId) ?? id;
-  const status = normalizeTaskStatus(value.status);
-  if (!id || !taskId || !status) {
-    return null;
-  }
-  const runtime = normalizeTaskRuntime(value.runtime);
-  const kind = optionalString(value.kind);
-  const title = optionalString(value.title);
-  const agentId = optionalString(value.agentId);
-  const sessionKey = optionalString(value.sessionKey);
-  const childSessionKey = optionalString(value.childSessionKey);
-  const ownerKey = optionalString(value.ownerKey);
-  const createdAt = normalizeTimestamp(value.createdAt);
-  const updatedAt = normalizeTimestamp(value.updatedAt);
-  const startedAt = normalizeTimestamp(value.startedAt);
-  const endedAt = normalizeTimestamp(value.endedAt);
-  const toolUseCount = optionalCount(value.toolUseCount);
-  const lastToolName = optionalString(value.lastToolName);
-  const progressSummary = optionalString(value.progressSummary);
-  const terminalSummary = optionalString(value.terminalSummary);
-  const error = optionalString(value.error);
-  const prompt = optionalString(value.prompt);
-  return {
-    id,
-    taskId,
-    status,
-    ...(kind ? { kind } : {}),
-    ...(runtime ? { runtime } : {}),
-    ...(title ? { title } : {}),
-    ...(agentId ? { agentId } : {}),
-    ...(sessionKey ? { sessionKey } : {}),
-    ...(childSessionKey ? { childSessionKey } : {}),
-    ...(ownerKey ? { ownerKey } : {}),
-    ...(createdAt !== undefined ? { createdAt } : {}),
-    ...(updatedAt !== undefined ? { updatedAt } : {}),
-    ...(startedAt !== undefined ? { startedAt } : {}),
-    ...(endedAt !== undefined ? { endedAt } : {}),
-    ...(toolUseCount !== undefined ? { toolUseCount } : {}),
-    ...(lastToolName ? { lastToolName } : {}),
-    ...(progressSummary ? { progressSummary } : {}),
-    ...(terminalSummary ? { terminalSummary } : {}),
-    ...(error ? { error } : {}),
-    ...(prompt ? { prompt } : {}),
-  };
 }
 
 const STATUS_LABEL_KEYS = {
@@ -202,6 +96,60 @@ export function taskTimestampMs(value: TaskTimestamp | undefined): number {
   return 0;
 }
 
+type TaskSnapshotProvenance = "snapshot" | "event" | "detail";
+
+function preserveTaskPrompt(
+  selected: TaskSummary,
+  current: TaskSummary,
+  lookup: TaskSummary,
+): TaskSummary {
+  const prompt = lookup.prompt ?? current.prompt;
+  return prompt && selected.prompt !== prompt ? { ...selected, prompt } : selected;
+}
+
+export function newestTaskSnapshot(
+  current: TaskSummary,
+  lookup: TaskSummary | undefined,
+  provenance: TaskSnapshotProvenance = "detail",
+): TaskSummary {
+  if (!lookup) {
+    return current;
+  }
+  const currentAt = taskTimestampMs(current.updatedAt ?? current.endedAt ?? current.createdAt);
+  const lookupAt = taskTimestampMs(lookup.updatedAt ?? lookup.endedAt ?? lookup.createdAt);
+  if (lookupAt > currentAt) {
+    return preserveTaskPrompt(lookup, current, lookup);
+  }
+  if (lookupAt < currentAt) {
+    return current;
+  }
+  // Millisecond clocks collide under load. Ordered pages and events advance
+  // active work; only events correct terminal output, and details stay stale-safe.
+  const currentActive = isActiveTask(current);
+  const lookupActive = isActiveTask(lookup);
+  if (currentActive !== lookupActive) {
+    return preserveTaskPrompt(currentActive ? lookup : current, current, lookup);
+  }
+  if (!currentActive) {
+    return provenance === "event" ? preserveTaskPrompt(lookup, current, lookup) : current;
+  }
+  if (current.status === "running" && lookup.status === "queued") {
+    return preserveTaskPrompt(current, current, lookup);
+  }
+  if (current.status === "queued" && lookup.status === "running") {
+    return preserveTaskPrompt(lookup, current, lookup);
+  }
+  const currentToolCount = current.toolUseCount ?? 0;
+  const lookupToolCount = lookup.toolUseCount ?? 0;
+  if (currentToolCount > lookupToolCount) {
+    return preserveTaskPrompt(current, current, lookup);
+  }
+  if (lookupToolCount > currentToolCount || provenance !== "detail") {
+    return preserveTaskPrompt(lookup, current, lookup);
+  }
+  return preserveTaskPrompt(current, current, lookup);
+}
+
 export function sortTasks(tasks: readonly TaskSummary[]): TaskSummary[] {
   return tasks.toSorted((left, right) => {
     const timeDelta = taskTimestampMs(right.updatedAt) - taskTimestampMs(left.updatedAt);
@@ -226,7 +174,7 @@ export function partitionTasks(tasks: readonly TaskSummary[]): {
 }
 
 export function normalizeTasksListResult(value: unknown): TaskSummary[] | null {
-  if (!isRecord(value) || !Array.isArray(value.tasks)) {
+  if (!Value.Check(TasksListResultSchema, value)) {
     return null;
   }
   return sortTasks(
@@ -235,7 +183,7 @@ export function normalizeTasksListResult(value: unknown): TaskSummary[] | null {
 }
 
 export function normalizeTasksGetResult(value: unknown): TaskSummary | null {
-  if (!isRecord(value)) {
+  if (!Value.Check(TasksGetResultSchema, value)) {
     return null;
   }
   return normalizeTaskSummary(value.task);
@@ -247,32 +195,45 @@ export function mergeTaskLists(...lists: readonly (readonly TaskSummary[])[]): T
   const byId = new Map<string, TaskSummary>();
   for (const list of lists) {
     for (const task of list) {
-      byId.set(task.id, task);
+      const current = byId.get(task.id);
+      byId.set(task.id, current ? newestTaskSnapshot(current, task, "snapshot") : task);
     }
   }
   return sortTasks([...byId.values()]);
 }
 
-type TasksCancelResult = {
-  found: boolean;
-  cancelled: boolean;
-  reason?: string;
-  task?: TaskSummary;
-};
-
 // Cancellation refusals (already-terminal, missing handle, stale id) arrive as
 // successful responses with cancelled=false + reason, not thrown errors.
-export function normalizeTasksCancelResult(value: unknown): TasksCancelResult | null {
-  if (!isRecord(value) || typeof value.cancelled !== "boolean") {
+type NormalizedTasksCancelResult = Omit<TasksCancelResult, "task"> & { task?: TaskSummary };
+
+export function normalizeTasksCancelResult(value: unknown): NormalizedTasksCancelResult | null {
+  if (!Value.Check(TasksCancelResultSchema, value)) {
     return null;
   }
   const reason = optionalString(value.reason);
   const task = normalizeTaskSummary(value.task);
   return {
-    found: value.found === true,
+    found: value.found,
     cancelled: value.cancelled,
     ...(reason ? { reason } : {}),
     ...(task ? { task } : {}),
+  };
+}
+
+type NormalizedTasksRecoveryResult = Omit<TasksRecoveryResult, "results"> & {
+  results: Array<Omit<TasksRecoveryResult["results"][number], "task"> & { task?: TaskSummary }>;
+};
+
+export function normalizeTasksRecoveryResult(value: unknown): NormalizedTasksRecoveryResult | null {
+  if (!Value.Check(TasksRecoveryResultSchema, value)) {
+    return null;
+  }
+  return {
+    results: value.results.map((result) => {
+      const task = normalizeTaskSummary(result.task);
+      const { task: _wireTask, ...rest } = result;
+      return { ...rest, ...(task ? { task } : {}) };
+    }),
   };
 }
 
@@ -308,8 +269,10 @@ export function applyTaskEvent(
       refetch: false,
     };
   }
+  const current = tasks.find((task) => task.id === event.task.id);
+  const next = current ? newestTaskSnapshot(current, event.task, "event") : event.task;
   return {
-    tasks: sortTasks([event.task, ...tasks.filter((task) => task.id !== event.task.id)]),
+    tasks: sortTasks([next, ...tasks.filter((task) => task.id !== event.task.id)]),
     refetch: false,
   };
 }

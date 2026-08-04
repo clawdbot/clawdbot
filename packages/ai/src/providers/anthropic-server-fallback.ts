@@ -1,27 +1,72 @@
-import type { AssistantMessageDiagnostic } from "../types.js";
+import type { AssistantMessageDiagnostic, Model } from "../types.js";
+import {
+  resolveClaudeFable5ModelIdentity,
+  resolveClaudeModelIdentity,
+  resolveClaudeOpus5ModelIdentity,
+} from "./anthropic-model-contract.js";
 
 /** Anthropic beta that re-serves safety refusals on an allowed fallback model. */
-export const ANTHROPIC_SERVER_SIDE_FALLBACK_BETA = "server-side-fallback-2026-06-01";
+export const ANTHROPIC_SERVER_SIDE_FALLBACK_BETA = "server-side-fallback-2026-07-01";
 
-// Anthropic documents claude-opus-4-8 as the allowed fallback for claude-fable-5.
-export const CLAUDE_FABLE_5_FALLBACK_MODEL = "claude-opus-4-8";
+/** Let Anthropic select the recommended model for each refusal category. */
+export const ANTHROPIC_SERVER_SIDE_FALLBACKS = "default" as const;
 
-// Fallback-served turns bill at the serving model's rates.
-export const CLAUDE_FABLE_5_FALLBACK_MODEL_COST = {
+// Anthropic's current default routes serve fallback output on Opus 5 or 4.8,
+// which share the same standard and fast-mode rates.
+export const CLAUDE_OPUS_FALLBACK_MODEL_COST = {
   input: 5,
   output: 25,
   cacheRead: 0.5,
   cacheWrite: 6.25,
 } as const;
 
-export function buildAnthropicServerSideFallbacks(): Array<{ model: string }> {
-  return [{ model: CLAUDE_FABLE_5_FALLBACK_MODEL }];
-}
-
 export type AnthropicFallbackBoundary = {
   fromModel: string | null;
   toModel: string | null;
 };
+
+function resolveFallbackModelIdentity(modelId: string | null): string | null {
+  if (!modelId?.trim()) {
+    return null;
+  }
+  const ref = { id: modelId };
+  const normalized = resolveClaudeModelIdentity(ref);
+  if (normalized === "opus" || normalized === "opus-5" || resolveClaudeOpus5ModelIdentity(ref)) {
+    return "claude-opus-5";
+  }
+  if (resolveClaudeFable5ModelIdentity(ref)) {
+    return "claude-fable-5";
+  }
+  if (/^claude-opus-4-8(?=$|[^a-z0-9])/.test(normalized)) {
+    return "claude-opus-4-8";
+  }
+  return normalized || null;
+}
+
+function isClaudeOpusFallbackModel(modelId: string): boolean {
+  return modelId === "claude-opus-5" || modelId === "claude-opus-4-8";
+}
+
+/** Resolve billed rates from the serving model reported by Anthropic's fallback stream. */
+export function resolveAnthropicFallbackServingModelCost(params: {
+  requestedModelId: string;
+  servingModelId: string | null;
+  requestedCost: Model["cost"];
+}): Model["cost"] {
+  const requestedModelId = resolveFallbackModelIdentity(params.requestedModelId);
+  const servingModelId = resolveFallbackModelIdentity(params.servingModelId);
+  if (
+    !servingModelId ||
+    servingModelId === requestedModelId ||
+    !isClaudeOpusFallbackModel(servingModelId)
+  ) {
+    return params.requestedCost;
+  }
+  if (requestedModelId && isClaudeOpusFallbackModel(requestedModelId)) {
+    return params.requestedCost;
+  }
+  return CLAUDE_OPUS_FALLBACK_MODEL_COST;
+}
 
 function readBoundaryModel(value: unknown): string | null {
   if (!value || typeof value !== "object") {

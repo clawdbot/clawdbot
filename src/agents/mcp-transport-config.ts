@@ -1,6 +1,10 @@
 /**
  * Resolves MCP transport command, environment, and timeout configuration.
  */
+import {
+  clampPositiveTimerTimeoutMs,
+  resolvePositiveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveOpenClawMcpTransportAlias } from "../config/mcp-config-normalize.js";
@@ -69,25 +73,20 @@ function getPositiveNumber(rawServer: unknown, keys: readonly string[]): number 
 function getConnectionTimeoutMs(rawServer: unknown): number {
   const milliseconds = getPositiveNumber(rawServer, ["connectionTimeoutMs"]);
   if (milliseconds) {
-    return Math.floor(milliseconds);
-  }
-  const seconds = getPositiveNumber(rawServer, ["connectTimeout", "connect_timeout"]);
-  if (seconds) {
-    return Math.floor(seconds * 1_000);
+    return clampPositiveTimerTimeoutMs(milliseconds) ?? DEFAULT_CONNECTION_TIMEOUT_MS;
   }
   return DEFAULT_CONNECTION_TIMEOUT_MS;
 }
 
-function getRequestTimeoutMs(rawServer: unknown): number {
+export function resolveMcpRequestTimeoutMs(
+  rawServer: unknown,
+  fallbackMs = DEFAULT_REQUEST_TIMEOUT_MS,
+): number {
   const milliseconds = getPositiveNumber(rawServer, ["requestTimeoutMs"]);
   if (milliseconds) {
-    return Math.floor(milliseconds);
+    return clampPositiveTimerTimeoutMs(milliseconds) ?? DEFAULT_REQUEST_TIMEOUT_MS;
   }
-  const seconds = getPositiveNumber(rawServer, ["timeout"]);
-  if (seconds) {
-    return Math.floor(seconds * 1_000);
-  }
-  return DEFAULT_REQUEST_TIMEOUT_MS;
+  return resolvePositiveTimerTimeoutMs(fallbackMs, DEFAULT_REQUEST_TIMEOUT_MS);
 }
 
 function getBooleanField(rawServer: unknown, keys: readonly string[]): boolean | undefined {
@@ -171,21 +170,19 @@ function resolveHttpTransportConfig(
     !Array.isArray((rawServer as { oauth?: unknown }).oauth)
       ? { oauth: (rawServer as { oauth: Record<string, unknown> }).oauth }
       : {}),
-    ...(getBooleanField(rawServer, ["sslVerify", "ssl_verify"]) !== undefined
-      ? { sslVerify: getBooleanField(rawServer, ["sslVerify", "ssl_verify"]) }
+    ...(getBooleanField(rawServer, ["sslVerify"]) !== undefined
+      ? { sslVerify: getBooleanField(rawServer, ["sslVerify"]) }
       : {}),
-    ...(getStringField(rawServer, ["clientCert", "client_cert"])
-      ? { clientCert: getStringField(rawServer, ["clientCert", "client_cert"]) }
+    ...(getStringField(rawServer, ["clientCert"])
+      ? { clientCert: getStringField(rawServer, ["clientCert"]) }
       : {}),
-    ...(getStringField(rawServer, ["clientKey", "client_key"])
-      ? { clientKey: getStringField(rawServer, ["clientKey", "client_key"]) }
+    ...(getStringField(rawServer, ["clientKey"])
+      ? { clientKey: getStringField(rawServer, ["clientKey"]) }
       : {}),
     description: describeHttpMcpServerLaunchConfig(launch.config),
     connectionTimeoutMs: getConnectionTimeoutMs(rawServer),
-    requestTimeoutMs: getRequestTimeoutMs(rawServer),
-    supportsParallelToolCalls:
-      getBooleanField(rawServer, ["supportsParallelToolCalls", "supports_parallel_tool_calls"]) ??
-      false,
+    requestTimeoutMs: resolveMcpRequestTimeoutMs(rawServer),
+    supportsParallelToolCalls: getBooleanField(rawServer, ["supportsParallelToolCalls"]) ?? false,
   };
 }
 
@@ -217,10 +214,8 @@ export function resolveMcpTransportConfig(
       cwd: stdioLaunch.config.cwd,
       description: describeStdioMcpServerLaunchConfig(stdioLaunch.config),
       connectionTimeoutMs: getConnectionTimeoutMs(rawServer),
-      requestTimeoutMs: getRequestTimeoutMs(rawServer),
-      supportsParallelToolCalls:
-        getBooleanField(rawServer, ["supportsParallelToolCalls", "supports_parallel_tool_calls"]) ??
-        false,
+      requestTimeoutMs: resolveMcpRequestTimeoutMs(rawServer),
+      supportsParallelToolCalls: getBooleanField(rawServer, ["supportsParallelToolCalls"]) ?? false,
     };
   }
 

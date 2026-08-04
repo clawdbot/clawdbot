@@ -3,11 +3,16 @@ import {
   resolveOAuthTokenLifetimeMs,
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { throwIfOAuthLoginAborted } from "./openai-chatgpt-oauth-abort.runtime.js";
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const TOKEN_URL = "https://auth.openai.com/oauth/token";
+const OAUTH_TOKEN_SSRF_POLICY = {
+  allowRfc2544BenchmarkRange: true,
+  allowIpv6UniqueLocalRange: true,
+  hostnameAllowlist: ["auth.openai.com"],
+} satisfies SsrFPolicy;
 const TOKEN_REQUEST_TIMEOUT_MS = 30_000;
 const OAUTH_TOKEN_RESPONSE_BODY_LIMIT_BYTES = 1 * 1024 * 1024;
 
@@ -61,6 +66,9 @@ async function postTokenForm(
   throwIfOAuthLoginAborted(options.signal);
   const { response, release } = await fetchWithSsrFGuard({
     url: TOKEN_URL,
+    // Fake-IP proxies map public hosts into these ranges. The exact-host allowlist
+    // keeps redirects and every other hostname fail-closed.
+    policy: OAUTH_TOKEN_SSRF_POLICY,
     init: {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },

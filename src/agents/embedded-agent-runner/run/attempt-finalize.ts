@@ -1,5 +1,6 @@
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { buildTrajectoryArtifacts } from "../../../trajectory/metadata.js";
+import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import {
   resolveAttemptTrajectoryTerminal,
   resolveTerminalAssistantTexts,
@@ -21,16 +22,15 @@ export function finalizeEmbeddedAttempt(
   params: FinalizeEmbeddedAttemptParams,
 ): EmbeddedRunAttemptResult {
   const { result, trajectoryRecorder } = params;
+  const terminalState = projectAgentRunAttemptTerminal(result.terminal);
   const terminalAssistantTexts = resolveTerminalAssistantTexts({
     assistantTexts: result.assistantTexts,
     lastAssistantStopReason: result.lastAssistant?.stopReason,
     lastAssistantVisibleText: resolveFinalAssistantVisibleText(result.lastAssistant),
   });
   const terminal = resolveAttemptTrajectoryTerminal({
-    promptError: result.promptError,
-    aborted: result.aborted,
-    externalAbort: result.externalAbort,
-    timedOut: result.timedOut,
+    failed: terminalState.failed,
+    interrupted: terminalState.interrupted,
     assistantTexts: terminalAssistantTexts,
     toolMetas: result.toolMetas,
     didSendViaMessagingTool: result.didSendViaMessagingTool,
@@ -50,18 +50,20 @@ export function finalizeEmbeddedAttempt(
     lastAssistantStopReason: result.lastAssistant?.stopReason,
     hasTerminalOutput: params.hasTerminalOutput,
   });
-  const promptError = result.promptError ? formatErrorMessage(result.promptError) : undefined;
+  const promptError = terminalState.promptError
+    ? formatErrorMessage(terminalState.promptError)
+    : undefined;
 
   trajectoryRecorder?.recordEvent("model.completed", {
-    aborted: result.aborted,
-    externalAbort: result.externalAbort,
-    timedOut: result.timedOut,
-    idleTimedOut: result.idleTimedOut,
-    timedOutDuringCompaction: result.timedOutDuringCompaction,
-    timedOutDuringToolExecution: result.timedOutDuringToolExecution,
-    timedOutByRunBudget: result.timedOutByRunBudget,
+    aborted: terminalState.aborted,
+    externalAbort: terminalState.externalAbort,
+    timedOut: terminalState.timedOut,
+    idleTimedOut: terminalState.idleTimedOut,
+    timedOutDuringCompaction: terminalState.timedOutDuringCompaction,
+    timedOutDuringToolExecution: terminalState.timedOutDuringToolExecution,
+    timedOutByRunBudget: terminalState.timedOutByRunBudget,
     promptError,
-    promptErrorSource: result.promptErrorSource,
+    promptErrorSource: terminalState.promptErrorSource,
     terminalError: terminal.terminalError,
     usage: result.attemptUsage,
     promptCache: result.promptCache,
@@ -74,15 +76,15 @@ export function finalizeEmbeddedAttempt(
     "trace.artifacts",
     buildTrajectoryArtifacts({
       status: terminal.status,
-      aborted: result.aborted,
-      externalAbort: result.externalAbort,
-      timedOut: result.timedOut,
-      idleTimedOut: result.idleTimedOut,
-      timedOutDuringCompaction: result.timedOutDuringCompaction,
-      timedOutDuringToolExecution: result.timedOutDuringToolExecution === true,
-      timedOutByRunBudget: result.timedOutByRunBudget === true,
+      aborted: terminalState.aborted,
+      externalAbort: terminalState.externalAbort,
+      timedOut: terminalState.timedOut,
+      idleTimedOut: terminalState.idleTimedOut,
+      timedOutDuringCompaction: terminalState.timedOutDuringCompaction,
+      timedOutDuringToolExecution: terminalState.timedOutDuringToolExecution,
+      timedOutByRunBudget: terminalState.timedOutByRunBudget,
       promptError,
-      promptErrorSource: result.promptErrorSource,
+      promptErrorSource: terminalState.promptErrorSource,
       terminalError: terminal.terminalError,
       usage: result.attemptUsage,
       promptCache: result.promptCache,
@@ -101,13 +103,13 @@ export function finalizeEmbeddedAttempt(
   );
   trajectoryRecorder?.recordEvent("session.ended", {
     status: terminal.status,
-    aborted: result.aborted,
-    externalAbort: result.externalAbort,
-    timedOut: result.timedOut,
-    idleTimedOut: result.idleTimedOut,
-    timedOutDuringCompaction: result.timedOutDuringCompaction,
-    timedOutDuringToolExecution: result.timedOutDuringToolExecution,
-    timedOutByRunBudget: result.timedOutByRunBudget,
+    aborted: terminalState.aborted,
+    externalAbort: terminalState.externalAbort,
+    timedOut: terminalState.timedOut,
+    idleTimedOut: terminalState.idleTimedOut,
+    timedOutDuringCompaction: terminalState.timedOutDuringCompaction,
+    timedOutDuringToolExecution: terminalState.timedOutDuringToolExecution,
+    timedOutByRunBudget: terminalState.timedOutByRunBudget,
     promptError,
     terminalError: terminal.terminalError,
   });

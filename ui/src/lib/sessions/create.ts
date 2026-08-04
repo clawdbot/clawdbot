@@ -3,7 +3,10 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 
 export type SessionCreateOutcome = {
   key: string;
-  initialRun: { status: "idle" } | { status: "started" } | { status: "rejected"; error: string };
+  initialRun:
+    | { status: "idle" }
+    | { status: "started"; messageId?: string; messageSeq?: number }
+    | { status: "rejected"; error: string };
 };
 
 export type SessionCreateParams = {
@@ -13,9 +16,11 @@ export type SessionCreateParams = {
   currentSessionKey?: string;
   parentSessionKey?: string;
   fork?: boolean;
+  succeedsParent?: boolean;
   label?: string;
   model?: string;
   thinkingLevel?: string;
+  incognito?: boolean;
   worktree?: boolean;
   /** Base ref for the managed worktree branch; requires worktree. */
   worktreeBaseRef?: string;
@@ -40,7 +45,9 @@ export function resolveSessionCreateParams(sessionKey = "", agentId?: string) {
       : undefined;
   return {
     ...(agentId?.trim() ? { agentId: agentId.trim() } : {}),
-    ...(parentSessionKey ? { parentSessionKey, emitCommandHooks: true } : {}),
+    ...(parentSessionKey
+      ? { parentSessionKey, emitCommandHooks: true, succeedsParent: false }
+      : {}),
   };
 }
 
@@ -54,7 +61,18 @@ export async function requestSessionCreate(
     throw new Error("sessions.create returned no key");
   }
   if (result.runStarted === true) {
-    return { key, initialRun: { status: "started" } };
+    const messageId = typeof result.runId === "string" ? result.runId.trim() : "";
+    const messageSeq = result.messageSeq;
+    return {
+      key,
+      initialRun: {
+        status: "started",
+        ...(messageId ? { messageId } : {}),
+        ...(typeof messageSeq === "number" && Number.isSafeInteger(messageSeq) && messageSeq > 0
+          ? { messageSeq }
+          : {}),
+      },
+    };
   }
   if (result.runError !== undefined) {
     const message =
@@ -63,7 +81,7 @@ export async function requestSessionCreate(
       key,
       initialRun: {
         status: "rejected",
-        error: message || "The session was created, but its first message could not be sent.",
+        error: message || "The thread was created, but its first message could not be sent.",
       },
     };
   }

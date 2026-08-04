@@ -33,7 +33,10 @@ import {
   globalAfterEach0,
   globalAfterAll1,
 } from "./loader.test-harness.js";
-import { listMemoryPromptSupplements } from "./memory-state.test-fixtures.js";
+import {
+  listMemoryPromptPreparations,
+  listMemoryPromptSupplements,
+} from "./memory-state.test-fixtures.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 
 afterEach(globalAfterEach0);
@@ -620,6 +623,21 @@ describe("loadOpenClawPlugins", () => {
         },
       },
       {
+        label: "rejects malformed memory prompt preparation registration",
+        pluginId: "memory-prompt-preparation-malformed",
+        body: `module.exports = { id: "memory-prompt-preparation-malformed", register(api) {
+    api.registerMemoryPromptPreparation({ id: "broken-memory-prompt" });
+  } };`,
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          expectRegistryErrorDiagnostic({
+            registry,
+            pluginId: "memory-prompt-preparation-malformed",
+            message: "memory prompt preparation registration missing prepare function",
+          });
+          expect(listMemoryPromptPreparations()).toStrictEqual([]);
+        },
+      },
+      {
         label: "requires plugin CLI registrars to declare explicit command roots",
         pluginId: "cli-missing-metadata",
         body: `module.exports = { id: "cli-missing-metadata", register(api) {
@@ -936,13 +954,13 @@ describe("loadOpenClawPlugins", () => {
         },
       },
       {
-        label: "same plugin can implicitly replace its own route",
+        label: "same plugin can implicitly replace its own canonical exact route",
         buildPlugins: () => [
           writePlugin({
             id: "http-route-replace-self",
             filename: "http-route-replace-self.cjs",
             body: `module.exports = { id: "http-route-replace-self", register(api) {
-    api.registerHttpRoute({ path: "/demo", auth: "plugin", handler: async () => false });
+    api.registerHttpRoute({ path: "/Demo//", auth: "plugin", handler: async () => false });
     api.registerHttpRoute({ path: "/demo", auth: "plugin", handler: async () => true });
   } };`,
           }),
@@ -957,13 +975,37 @@ describe("loadOpenClawPlugins", () => {
         },
       },
       {
-        label: "cross-plugin replaceExisting is rejected",
+        label: "same plugin can implicitly replace its own canonical prefix route",
+        buildPlugins: () => [
+          writePlugin({
+            id: "http-route-replace-prefix",
+            filename: "http-route-replace-prefix.cjs",
+            body: `module.exports = { id: "http-route-replace-prefix", register(api) {
+    api.registerHttpRoute({ path: "/Webhooks//SMS/", auth: "plugin", match: "prefix", handler: async () => false });
+    api.registerHttpRoute({ path: "/webhooks/sms", auth: "plugin", match: "prefix", handler: async () => true });
+  } };`,
+          }),
+        ],
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          const routes = registry.httpRoutes.filter(
+            (entry) => entry.pluginId === "http-route-replace-prefix",
+          );
+          expect(routes).toHaveLength(1);
+          expect(routes[0]).toMatchObject({
+            path: "/webhooks/sms",
+            match: "prefix",
+          });
+          expect(registry.diagnostics).toStrictEqual([]);
+        },
+      },
+      {
+        label: "cross-plugin canonical replaceExisting is rejected",
         buildPlugins: () => [
           writePlugin({
             id: "http-route-owner-a",
             filename: "http-route-owner-a.cjs",
             body: `module.exports = { id: "http-route-owner-a", register(api) {
-    api.registerHttpRoute({ path: "/demo", auth: "plugin", handler: async () => false });
+    api.registerHttpRoute({ path: "/Demo//", auth: "plugin", handler: async () => false });
   } };`,
           }),
           writePlugin({
@@ -975,7 +1017,10 @@ describe("loadOpenClawPlugins", () => {
           }),
         ],
         assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
-          const route = registry.httpRoutes.find((entry) => entry.path === "/demo");
+          const route = registry.httpRoutes.find(
+            (entry) => entry.pluginId === "http-route-owner-a",
+          );
+          expect(route?.path).toBe("/Demo//");
           expect(route?.pluginId).toBe("http-route-owner-a");
           expectDiagnosticContaining({
             registry,

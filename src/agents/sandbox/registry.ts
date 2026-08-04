@@ -3,28 +3,31 @@
  *
  * Tracks runtime and browser containers in the shared state DB plus migration support for legacy registries.
  */
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Insertable, Selectable, Updateable } from "kysely";
 import { z } from "zod";
+import { acquireFileLock } from "../../infra/file-lock.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { withOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
+import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../../state/openclaw-state-db.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { safeParseJsonWithSchema } from "../../utils/zod-parse.js";
-import { acquireSessionWriteLock } from "../session-write-lock.js";
 import {
   SANDBOX_BROWSER_REGISTRY_PATH,
   SANDBOX_BROWSERS_DIR,
   SANDBOX_CONTAINERS_DIR,
   SANDBOX_REGISTRY_PATH,
 } from "./constants.js";
+import type { SandboxContainerEngineTarget } from "./container-engine.js";
 
 export type SandboxRegistryEntry = {
   containerName: string;
   backendId?: string;
+  backendTarget?: SandboxContainerEngineTarget;
   runtimeLabel?: string;
   sessionKey: string;
   createdAtMs: number;
@@ -173,6 +176,7 @@ function containerEntryToRow(entry: SandboxRegistryEntry, existing?: SandboxRegi
   const next: SandboxRegistryEntry = {
     ...entry,
     backendId: entry.backendId ?? existing?.backendId,
+    backendTarget: entry.backendTarget ?? existing?.backendTarget,
     runtimeLabel: entry.runtimeLabel ?? existing?.runtimeLabel,
     createdAtMs: existing?.createdAtMs ?? entry.createdAtMs,
     image: existing?.image ?? entry.image,
@@ -230,36 +234,62 @@ function rowToUpdate(row: SandboxRegistryInsert): SandboxRegistryUpdate {
   return update;
 }
 
-function readRegistryRows(kind: SandboxRegistryKind): SandboxRegistryRow[] {
-  const { db } = openOpenClawStateDatabase();
-  const stateDb = getSandboxRegistryKysely(db);
-  return executeSqliteQuerySync(
-    db,
-    stateDb
+function readRegistryRows(
+  kind: SandboxRegistryKind,
+  filter?: { backendId: string; scopeKey: string },
+): SandboxRegistryRow[] {
+  if (!fsSync.existsSync(resolveOpenClawStateSqlitePath(process.env))) {
+    return [];
+  }
+  // CLI reads must not join the Gateway's writable SQLite lifecycle (#101290).
+  return withOpenClawStateDatabaseReadOnly(({ db }) => {
+    if (!tableExists(db, "sandbox_registry_entries")) {
+      return [];
+    }
+    const stateDb = getSandboxRegistryKysely(db);
+    let query = stateDb
       .selectFrom("sandbox_registry_entries")
       .selectAll()
-      .where("registry_kind", "=", kind)
-      .orderBy("container_name", "asc"),
-  ).rows;
+      .where("registry_kind", "=", kind);
+    if (filter) {
+      query = query
+        .where("session_key", "=", filter.scopeKey)
+        .where("backend_id", "=", filter.backendId);
+    }
+    return executeSqliteQuerySync(
+      db,
+      filter
+        ? query.orderBy("last_used_at_ms", "desc").orderBy("container_name", "asc")
+        : query.orderBy("container_name", "asc"),
+    ).rows;
+  });
 }
 
 function readRegistryRow(
   kind: SandboxRegistryKind,
   containerName: string,
 ): SandboxRegistryRow | null {
-  const { db } = openOpenClawStateDatabase();
-  const stateDb = getSandboxRegistryKysely(db);
-  return (
-    executeSqliteQuerySync(
-      db,
-      stateDb
-        .selectFrom("sandbox_registry_entries")
-        .selectAll()
-        .where("registry_kind", "=", kind)
-        .where("container_name", "=", containerName)
-        .limit(1),
-    ).rows[0] ?? null
-  );
+  if (!fsSync.existsSync(resolveOpenClawStateSqlitePath(process.env))) {
+    return null;
+  }
+  // CLI reads must not join the Gateway's writable SQLite lifecycle (#101290).
+  return withOpenClawStateDatabaseReadOnly(({ db }) => {
+    if (!tableExists(db, "sandbox_registry_entries")) {
+      return null;
+    }
+    const stateDb = getSandboxRegistryKysely(db);
+    return (
+      executeSqliteQuerySync(
+        db,
+        stateDb
+          .selectFrom("sandbox_registry_entries")
+          .selectAll()
+          .where("registry_kind", "=", kind)
+          .where("container_name", "=", containerName)
+          .limit(1),
+      ).rows[0] ?? null
+    );
+  });
 }
 
 function insertRegistryRowIfMissing(row: SandboxRegistryInsert): void {
@@ -335,10 +365,9 @@ function normalizeSandboxRegistryEntry(entry: SandboxRegistryEntry): SandboxRegi
 }
 
 async function withRegistryLock<T>(registryPath: string, fn: () => Promise<T>): Promise<T> {
-  const lock = await acquireSessionWriteLock({
-    sessionFile: registryPath,
-    allowReentrant: false,
-    timeoutMs: 60_000,
+  const lock = await acquireFileLock(registryPath, {
+    stale: 30_000,
+    retries: { retries: 59, factor: 1, minTimeout: 1_000, maxTimeout: 1_000 },
   });
   try {
     return await fn();
@@ -686,6 +715,17 @@ export async function readRegistryEntry(
   const row = readRegistryRow("container", containerName);
   const entry = row ? rowToContainerEntry(row) : null;
   return entry ? normalizeSandboxRegistryEntry(entry) : null;
+}
+
+/** Reads registered runtime IDs for one backend-owned sandbox scope, newest first. */
+export async function readRegisteredSandboxRuntimeIds(params: {
+  backendId: string;
+  scopeKey: string;
+}): Promise<string[]> {
+  return readRegistryRows("container", params)
+    .map((row) => rowToContainerEntry(row))
+    .filter((entry): entry is SandboxRegistryEntry => entry != null)
+    .map((entry) => entry.containerName);
 }
 
 /** Creates or updates one sandbox runtime registry entry, preserving immutable creation fields. */

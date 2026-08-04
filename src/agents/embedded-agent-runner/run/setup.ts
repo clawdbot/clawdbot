@@ -5,7 +5,6 @@ import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import type {
-  PluginHookBeforeAgentStartResult,
   PluginHookBeforeModelResolveAttachment,
   PluginHookBeforeModelResolveEvent,
 } from "../../../plugins/types.js";
@@ -49,10 +48,6 @@ type HookRunnerLike = {
     input: PluginHookBeforeModelResolveEvent,
     context: HookContext,
   ): Promise<{ providerOverride?: string; modelOverride?: string } | undefined>;
-  runBeforeAgentStart(
-    input: { prompt: string },
-    context: HookContext,
-  ): Promise<PluginHookBeforeAgentStartResult | undefined>;
 };
 
 /** Durable harness sessions run only with their exact persisted identity and runtime lock. */
@@ -98,9 +93,7 @@ export function resolveAgentHarnessRunAdmissionError(params: {
 }
 
 /**
- * Runs model-selection hooks before resolving the runtime model. The dedicated
- * `before_model_resolve` hook wins over legacy `before_agent_start` overrides
- * when both provide provider/model changes.
+ * Runs model-selection hooks before resolving the runtime model.
  */
 export async function resolveHookModelSelection(params: {
   prompt: string;
@@ -114,17 +107,13 @@ export async function resolveHookModelSelection(params: {
   let provider = params.provider;
   let modelId = params.modelId;
   if (params.modelSelectionLocked === true) {
-    return { provider, modelId, beforeAgentStartResult: undefined };
+    return { provider, modelId };
   }
   let modelResolveOverride: { providerOverride?: string; modelOverride?: string } | undefined;
-  let beforeAgentStartResult: PluginHookBeforeAgentStartResult | undefined;
   const hookRunner = params.hookRunner;
 
   // Run before_model_resolve hooks early so plugins can override the
   // provider/model before resolveModel().
-  //
-  // Legacy compatibility: before_agent_start is also checked for override
-  // fields if present. New hook takes precedence when both are set.
   if (hookRunner?.hasHooks("before_model_resolve")) {
     try {
       const event: PluginHookBeforeModelResolveEvent = params.attachments
@@ -133,24 +122,6 @@ export async function resolveHookModelSelection(params: {
       modelResolveOverride = await hookRunner.runBeforeModelResolve(event, params.hookContext);
     } catch (hookErr) {
       log.warn(`before_model_resolve hook failed: ${String(hookErr)}`);
-    }
-  }
-
-  if (hookRunner?.hasHooks("before_agent_start")) {
-    try {
-      beforeAgentStartResult = await hookRunner.runBeforeAgentStart(
-        { prompt: params.prompt },
-        params.hookContext,
-      );
-      modelResolveOverride = {
-        providerOverride:
-          modelResolveOverride?.providerOverride ?? beforeAgentStartResult?.providerOverride,
-        modelOverride: modelResolveOverride?.modelOverride ?? beforeAgentStartResult?.modelOverride,
-      };
-    } catch (hookErr) {
-      log.warn(
-        `deprecated before_agent_start hook failed during model resolve: ${String(hookErr)}`,
-      );
     }
   }
 
@@ -166,7 +137,6 @@ export async function resolveHookModelSelection(params: {
   return {
     provider,
     modelId,
-    beforeAgentStartResult,
   };
 }
 

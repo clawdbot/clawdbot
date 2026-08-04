@@ -1,6 +1,9 @@
 // Xai plugin module implements model definitions behavior.
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeXaiModelId } from "./model-id.js";
 
 export const XAI_BASE_URL = "https://api.x.ai/v1";
@@ -253,12 +256,6 @@ const LEGACY_MODEL_KEYS = new Set([
 ]);
 const LEGACY_COST_KEYS = new Set(["input", "output", "cacheRead", "cacheWrite"]);
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function normalizeXaiCatalogModelId(modelId: string): string {
   const lower = normalizeOptionalLowercaseString(modelId) ?? "";
   const unprefixed = lower.startsWith("xai/") ? lower.slice("xai/".length) : lower;
@@ -266,12 +263,12 @@ function normalizeXaiCatalogModelId(modelId: string): string {
 }
 
 export function isLegacyXaiBuiltinModel(model: unknown): boolean {
-  const record = asRecord(model);
+  const record = asOptionalRecord(model);
   const id = normalizeOptionalLowercaseString(record?.id);
   const signature = id
     ? LEGACY_XAI_BUILTIN_SIGNATURES[id as keyof typeof LEGACY_XAI_BUILTIN_SIGNATURES]
     : undefined;
-  const cost = asRecord(record?.cost);
+  const cost = asOptionalRecord(record?.cost);
   if (!record || !signature || !cost) {
     return false;
   }

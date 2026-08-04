@@ -59,7 +59,8 @@ actor HealthSummaryService: HealthSummaryServicing {
     func summary(params: OpenClawHealthSummaryParams) async throws -> OpenClawHealthSummaryPayload {
         guard HealthAuthorization.isEnabled else {
             throw NSError(domain: "Health", code: 2, userInfo: [
-                NSLocalizedDescriptionKey: "HEALTH_ACCESS_DISABLED: enable Health Summaries in OpenClaw Settings",
+                NSLocalizedDescriptionKey:
+                    "HEALTH_ACCESS_DISABLED: enable Apple Health Summaries in OpenClaw Settings",
             ])
         }
 

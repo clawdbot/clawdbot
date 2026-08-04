@@ -8,6 +8,7 @@ import {
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import {
@@ -396,38 +397,100 @@ describe("followup queue drain restart after idle window", () => {
     expect(freshCalls[0]?.prompt).toBe("wait-for-lane");
   });
 
-  it("preserves overflow summaries across deferred retries", async () => {
-    const key = `test-deferred-summary-retry-${Date.now()}`;
-    const prompts: string[] = [];
-    const settings: QueueSettings = {
-      mode: "followup",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
-    const retried = createDeferred<void>();
-    let attempts = 0;
+  it.each([
+    [true, "external_user", true],
+    [true, "inter_session", false],
+    [true, "internal_system", false],
+    [false, "external_user", false],
+  ] as const)(
+    "preserves overflow summaries and human ownership for %s/%s",
+    async (senderIsOwner, kind, owner) => {
+      const key = `test-deferred-summary-retry-${Date.now()}`;
+      const prompts: string[] = [];
+      const followups: FollowupRun[] = [];
+      const inputProvenance = { kind, sourceTool: "test" };
+      const settings: QueueSettings = {
+        mode: "followup",
+        debounceMs: 0,
+        cap: 1,
+        dropPolicy: "summarize",
+      };
+      const retried = createDeferred<void>();
+      let attempts = 0;
 
-    const runFollowup = async (run: FollowupRun) => {
-      attempts++;
-      prompts.push(run.prompt);
-      if (attempts === 1) {
-        throw new FollowupRunDeferredError("reply lane busy");
+      const runFollowup = async (run: FollowupRun) => {
+        attempts++;
+        prompts.push(run.prompt);
+        followups.push(run);
+        if (attempts === 1) {
+          throw new FollowupRunDeferredError("reply lane busy");
+        }
+        retried.resolve();
+      };
+
+      for (const prompt of ["dropped while busy", "kept while busy"]) {
+        const followup = createRun({ prompt });
+        followup.run.senderIsOwner = senderIsOwner;
+        followup.run.inputProvenance = inputProvenance;
+        enqueueFollowupRun(key, followup, settings);
       }
-      retried.resolve();
-    };
+      scheduleFollowupDrain(key, runFollowup);
 
-    enqueueFollowupRun(key, createRun({ prompt: "dropped while busy" }), settings);
-    enqueueFollowupRun(key, createRun({ prompt: "kept while busy" }), settings);
-    scheduleFollowupDrain(key, runFollowup);
+      await retried.promise;
 
-    await retried.promise;
+      expect(attempts).toBe(2);
+      for (const run of followups) {
+        expect(run).toMatchObject({
+          run: { senderIsOwner, inputProvenance },
+          userTurnTranscriptRecorder: {
+            message: { provenance: inputProvenance, __openclaw: { senderIsOwner: owner } },
+          },
+        });
+      }
+      expect(prompts[0]).toContain("Dropped 1 message");
+      expect(prompts[0]).toContain("dropped while busy");
+      expect(prompts[1]).toContain("Dropped 1 message");
+      expect(prompts[1]).toContain("dropped while busy");
+    },
+  );
 
-    expect(attempts).toBe(2);
-    expect(prompts[0]).toContain("Dropped 1 message");
-    expect(prompts[0]).toContain("dropped while busy");
-    expect(prompts[1]).toContain("Dropped 1 message");
-    expect(prompts[1]).toContain("dropped while busy");
+  it.each([
+    [true, "external_user", true],
+    [true, "inter_session", false],
+    [true, "internal_system", false],
+    [false, "external_user", false],
+  ] as const)("keeps collected human ownership for %s/%s", async (senderIsOwner, kind, owner) => {
+    const key = `test-collected-human-owner-${Date.now()}`;
+    const inputProvenance = { kind, sourceTool: "test" };
+    const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
+    const collected = createDeferred<FollowupRun>();
+    for (const prompt of ["first", "second"]) {
+      const followup = createRun({ prompt });
+      followup.run.senderIsOwner = senderIsOwner;
+      followup.run.inputProvenance = inputProvenance;
+      followup.userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+        input: { text: prompt, senderIsOwner, provenance: inputProvenance },
+        target: {
+          agentId: followup.run.agentId,
+          sessionId: followup.run.sessionId,
+          sessionKey: key,
+          sessionEntry: undefined,
+        },
+      });
+      enqueueFollowupRun(key, followup, settings);
+    }
+    scheduleFollowupDrain(key, async (run) => collected.resolve(run));
+    const followup = await collected.promise;
+    expect(followup.run.senderIsOwner).toBe(senderIsOwner);
+    for (const message of [
+      followup.userTurnTranscriptRecorder?.message,
+      await followup.userTurnTranscriptRecorder?.resolveMessage(),
+    ]) {
+      expect(message).toMatchObject({
+        provenance: inputProvenance,
+        __openclaw: { senderIsOwner: owner },
+      });
+    }
   });
 
   it("merges overflow summaries added while a deferred retry is waiting", async () => {

@@ -24,6 +24,7 @@ const gatewayClientState = vi.hoisted(() => ({
     reason: "scope-upgrade",
     requestId: "req-123",
   } as Record<string, unknown> | null,
+  requestError: null as { code: string; message: string; details?: unknown } | null,
   stopCalls: 0,
   stopAndWaitCalls: [] as Array<{ timeoutMs?: number } | undefined>,
   stopAndWaitMode: "resolve" as "resolve" | "defer" | "reject",
@@ -55,10 +56,15 @@ const eventLoopReadyState = vi.hoisted(() => ({
 }));
 
 class MockGatewayClientRequestError extends Error {
+  readonly code: string;
+  readonly gatewayCode: string;
   readonly details?: unknown;
 
-  constructor(error: { message?: string; details?: unknown }) {
+  constructor(error: { code?: string; message?: string; details?: unknown }) {
     super(error.message ?? "gateway request failed");
+    this.name = "GatewayClientRequestError";
+    this.code = error.code ?? "UNAVAILABLE";
+    this.gatewayCode = this.code;
     this.details = error.details;
   }
 }
@@ -143,6 +149,9 @@ class MockGatewayClient {
 
   async request(method: string): Promise<unknown> {
     gatewayClientState.requests.push(method);
+    if (gatewayClientState.requestError) {
+      throw new MockGatewayClientRequestError(gatewayClientState.requestError);
+    }
     if (method === "system-presence") {
       return [];
     }
@@ -162,8 +171,8 @@ vi.mock("../infra/device-identity.js", () => ({
     }
     return deviceIdentityState.value;
   },
-  loadDeviceIdentityIfPresent: (filePath: unknown) => {
-    deviceIdentityState.identityPaths.push(filePath);
+  loadDeviceIdentityIfPresent: (options: unknown) => {
+    deviceIdentityState.identityPaths.push(options);
     if (deviceIdentityState.throwOnLoad) {
       throw new Error("read-only identity dir");
     }
@@ -303,6 +312,7 @@ describe("probeGateway", () => {
       reason: "scope-upgrade",
       requestId: "req-123",
     };
+    gatewayClientState.requestError = null;
     gatewayClientState.stopCalls = 0;
     gatewayClientState.stopAndWaitCalls = [];
     gatewayClientState.stopAndWaitMode = "resolve";
@@ -389,6 +399,33 @@ describe("probeGateway", () => {
     });
   });
 
+  it("preserves structured missing-scope details from a post-connect request", async () => {
+    gatewayClientState.helloAuth = {
+      role: "operator",
+      scopes: ["operator.write"],
+    };
+    gatewayClientState.requestError = {
+      code: "FORBIDDEN",
+      message: "permission denied",
+      details: {
+        code: "MISSING_SCOPE",
+        missingScope: "operator.read",
+        requiredScopes: ["operator.read"],
+      },
+    };
+
+    const result = await runTokenProbe();
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("permission denied");
+    expect(result.connectLatencyMs).not.toBeNull();
+    expect(result.missingScopeErrorDetails).toEqual({
+      code: "MISSING_SCOPE",
+      missingScope: "operator.read",
+      requiredScopes: ["operator.read"],
+    });
+  });
+
   it("loads probe identity and cached device auth from the provided env", async () => {
     const env = {
       ...process.env,
@@ -397,9 +434,7 @@ describe("probeGateway", () => {
 
     await runTokenProbe({ env });
 
-    expect(deviceIdentityState.identityPaths).toEqual([
-      "/tmp/openclaw-probe-service-state/identity/device.json",
-    ]);
+    expect(deviceIdentityState.identityPaths).toEqual([{ env }]);
     expect(deviceIdentityState.tokenParams).toEqual([
       {
         deviceId: "test-device-identity",

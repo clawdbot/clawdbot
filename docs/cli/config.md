@@ -24,14 +24,16 @@ Guided sections: `workspace`, `model`, `web`, `gateway`, `daemon`, `channels`, `
 
 ```bash
 openclaw config file
+openclaw config file --json
 openclaw config --section model
 openclaw config --section gateway --section daemon
 openclaw config schema
+openclaw config schema --json
 openclaw config get browser.executablePath
 openclaw config set browser.executablePath "/usr/bin/google-chrome"
 openclaw config set browser.profiles.work.executablePath "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 openclaw config set agents.defaults.heartbeat.every "2h"
-openclaw config set 'agents.list[0].tools.exec.node' "node-id-or-name"
+openclaw config set 'agents.entries.main.tools.exec.node' "node-id-or-name"
 openclaw config set agents.defaults.models '{"openai/gpt-5.4":{}}' --strict-json --merge
 openclaw config set channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN
 openclaw config set secrets.providers.vaultfile --provider-source file --provider-path /etc/openclaw/secrets.json --provider-mode json
@@ -48,14 +50,16 @@ Dot or bracket notation. Quote bracket paths in shell examples so zsh does not g
 
 ```bash
 openclaw config get agents.defaults.workspace
-openclaw config get 'agents.list[0].id'
-openclaw config get agents.list
-openclaw config set 'agents.list[1].tools.exec.node' "node-id-or-name"
+openclaw config get agents.entries.main
+openclaw config get agents.entries
+openclaw config set 'agents.entries.work.tools.exec.node' "node-id-or-name"
 ```
 
 ### `config get`
 
-Reads a value from the redacted config snapshot (secrets never print). `--json` prints the raw value as JSON; otherwise strings/numbers/booleans print bare and objects/arrays print as formatted JSON.
+Reads a value from the redacted config snapshot (secrets never print). `--json` prints the same redacted value as JSON; otherwise strings/numbers/booleans print bare and objects/arrays print as formatted JSON.
+
+When the path is missing, `--json` writes `{ "error": "Config path not found: <path>" }` to stdout and exits with status 1. Without `--json`, the diagnostic remains on stderr.
 
 ```bash
 openclaw config get browser.executablePath
@@ -65,6 +69,8 @@ openclaw config get agents.defaults.model --json
 ### `config file`
 
 Prints the active config file path, resolved from `OPENCLAW_CONFIG_PATH` or the default location. The path names a regular file, not a symlink; see [Write safety](#write-safety).
+
+With `--json`, stdout contains an object with the resolved path under `path`.
 
 ### `config schema`
 
@@ -87,8 +93,12 @@ Prints the generated JSON schema for `openclaw.json` to stdout.
 
 ```bash
 openclaw config schema
+openclaw config schema --json
 openclaw config schema > openclaw.schema.json
 ```
+
+The schema is JSON in both modes. `--json` is accepted as the explicit
+machine-output spelling and keeps stdout reserved for the schema document.
 
 ### `config validate`
 
@@ -113,10 +123,12 @@ openclaw config set gateway.port 19001 --strict-json
 openclaw config set channels.whatsapp.groups '["*"]' --strict-json
 ```
 
-`config get <path> --json` prints the raw value as JSON instead of terminal-formatted text.
+`config get <path> --json` prints the redacted value as JSON instead of terminal-formatted text.
+
+When a write changes `agents.defaults.model` or a per-agent `agents.entries.*.model`, OpenClaw resolves each changed primary or fallback through the configured provider catalogs before writing. Unknown model references are rejected without changing the active config; run `openclaw models list` to see available models.
 
 <Note>
-Object assignment replaces the target path by default. Protected paths that commonly hold user-added entries refuse replacements that would remove existing entries unless you pass `--replace`: `agents.defaults.models`, `agents.list`, `models.providers`, `models.providers.<id>`, `models.providers.<id>.models`, `plugins.entries`, and `auth.profiles`.
+Object assignment replaces the target path by default. Protected paths that commonly hold user-added entries refuse replacements that would remove existing entries unless you pass `--replace`: `agents.defaults.models`, `agents.entries`, `models.providers`, `models.providers.<id>`, `models.providers.<id>.models`, `plugins.entries`, and `auth.profiles`.
 </Note>
 
 Use `--merge` when adding entries to those maps:
@@ -174,6 +186,8 @@ Use `--replace` only when the provided value should intentionally become the com
     ```bash
     openclaw config set --batch-file ./config-set.batch.json --dry-run
     ```
+
+    Batch files are limited to 8 MiB.
 
   </Tab>
 </Tabs>
@@ -254,6 +268,8 @@ Paste or pipe a config-shaped JSON5 patch instead of running many path-based `co
 openclaw config patch --file ./openclaw.patch.json5 --dry-run
 openclaw config patch --file ./openclaw.patch.json5
 ```
+
+Patch files are limited to 8 MiB. Piped `--stdin` patches are limited to 1 MiB.
 
 Pipe a patch over stdin for remote setup scripts:
 
@@ -359,7 +375,7 @@ openclaw config set channels.discord.token \
   skippedExecRefs: number,
   errors?: [
     {
-      kind: "missing-path" | "schema" | "resolvability",
+      kind: "missing-path" | "schema" | "resolvability" | "model",
       message: string,
       ref?: string, // present for resolvability errors
     },
@@ -373,7 +389,7 @@ openclaw config set channels.discord.token \
     {
       "ok": true,
       "operations": 1,
-      "configPath": "~/.openclaw/openclaw.json",
+      "configPath": "/home/user/.openclaw/openclaw.json",
       "inputModes": ["builder"],
       "checks": {
         "schema": false,
@@ -390,7 +406,7 @@ openclaw config set channels.discord.token \
     {
       "ok": false,
       "operations": 1,
-      "configPath": "~/.openclaw/openclaw.json",
+      "configPath": "/home/user/.openclaw/openclaw.json",
       "inputModes": ["builder"],
       "checks": {
         "schema": false,
@@ -416,6 +432,7 @@ openclaw config set channels.discord.token \
     - `config schema validation failed`: your post-change config shape is invalid; fix the path/value or provider/ref object shape.
     - `Config policy validation failed: unsupported SecretRef usage`: move that credential back to plaintext/string input; keep SecretRefs on supported surfaces only.
     - `SecretRef assignment(s) could not be resolved`: the referenced provider/ref cannot currently resolve (missing env var, invalid file pointer, exec provider failure, or provider/source mismatch).
+    - `model reference validation failed`: a changed text-model primary or fallback is unknown; run `openclaw models list` and choose an available model.
     - `Dry run note: skipped <n> exec SecretRef resolvability check(s)`: rerun with `--allow-exec` if you need exec resolvability validation.
     - For batch mode, fix failing entries and rerun `--dry-run` before writing.
 

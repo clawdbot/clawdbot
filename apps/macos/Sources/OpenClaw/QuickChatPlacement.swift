@@ -1,6 +1,15 @@
 import AppKit
 
 enum QuickChatPlacement {
+    static func scaledRect(_ rect: NSRect, factor: CGFloat) -> NSRect {
+        let size = NSSize(width: rect.width * factor, height: rect.height * factor)
+        return NSRect(
+            x: rect.midX - (size.width / 2),
+            y: rect.midY - (size.height / 2),
+            width: size.width,
+            height: size.height)
+    }
+
     static func barFrame(contentSize: NSSize, visibleFrame: NSRect) -> NSRect {
         guard visibleFrame.width > 0, visibleFrame.height > 0 else { return .zero }
 

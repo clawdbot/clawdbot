@@ -32,6 +32,7 @@ vi.mock("./url.js", async (importOriginal) => ({
 const { registerTelegramMiniAppRoutes } = await import("./routes.js");
 
 const BOT_TOKEN = "fixture";
+let signedNonceSequence = 0;
 
 class MockResponse {
   statusCode = 200;
@@ -98,9 +99,10 @@ function config(allowFrom: string[] = ["123456"]): OpenClawConfig {
 }
 
 function signedInitData(userId: string, nonce: string): string {
+  signedNonceSequence += 1;
   const params = new URLSearchParams({
     auth_date: String(Math.floor(Date.now() / 1000)),
-    query_id: nonce,
+    query_id: `${nonce}-${signedNonceSequence}`,
     user: JSON.stringify({ id: Number(userId), first_name: "Ayaan" }),
   });
   const entries = [...params.entries()].map(([key, value]) => `${key}=${value}`).toSorted();
@@ -151,7 +153,13 @@ describe("registerTelegramMiniAppRoutes", () => {
     expect(issueDeviceBootstrapToken).toHaveBeenCalledWith({
       profile: {
         roles: ["operator"],
-        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+        scopes: [
+          "operator.approvals",
+          "operator.questions",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
         purpose: "control-ui",
       },
     });

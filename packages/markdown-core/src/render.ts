@@ -1,4 +1,10 @@
-import type { MarkdownAnnotationSpan } from "./ir-spans.js";
+import { applyConstructFallbacks } from "./construct-fallbacks.js";
+import type { FormatCapabilityProfile } from "./format-capabilities.js";
+import {
+  copyMarkdownLinkSpan,
+  isAutoLinkedMarkdownLink,
+  type MarkdownAnnotationSpan,
+} from "./ir-spans.js";
 // Markdown Core module implements render behavior.
 import type { MarkdownIR, MarkdownLinkSpan, MarkdownStyle, MarkdownStyleSpan } from "./ir.js";
 
@@ -29,12 +35,22 @@ export type RenderLink = {
   close: string;
 };
 
+type MarkdownLinkOrigin = "authored" | "linkify";
+
+function getMarkdownLinkOrigin(link: MarkdownLinkSpan): MarkdownLinkOrigin {
+  return isAutoLinkedMarkdownLink(link) ? "linkify" : "authored";
+}
+
 /** Renderer hooks for converting Markdown IR into a marker-based target format. */
 export type RenderOptions = {
   styleMarkers: RenderStyleMap;
   annotationMarkers?: RenderAnnotationMap;
   escapeText: (text: string) => string;
-  buildLink?: (link: MarkdownLinkSpan, text: string) => RenderLink | null;
+  buildLink?: (
+    link: MarkdownLinkSpan,
+    text: string,
+    context: { origin: MarkdownLinkOrigin },
+  ) => RenderLink | null;
 };
 
 const STYLE_ORDER: MarkdownStyle[] = [
@@ -49,6 +65,7 @@ const STYLE_ORDER: MarkdownStyle[] = [
   "heading_6",
   "bold",
   "italic",
+  "underline",
   "strikethrough",
   "spoiler",
 ];
@@ -177,8 +194,13 @@ function sortAnnotationSpans(spans: MarkdownAnnotationSpan[]): MarkdownAnnotatio
 }
 
 /** Renders Markdown IR by nesting configured style markers and optional link markers. */
-export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions): string {
-  const text = ir.text ?? "";
+export function renderMarkdownWithMarkers(
+  ir: MarkdownIR,
+  options: RenderOptions,
+  profile?: FormatCapabilityProfile,
+): string {
+  const projected = profile ? applyConstructFallbacks(ir, profile) : ir;
+  const text = projected.text ?? "";
   if (!text) {
     return "";
   }
@@ -186,7 +208,7 @@ export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions
   const styleMarkers = options.styleMarkers;
   const annotationMarkers = options.annotationMarkers ?? {};
   const annotated = sortAnnotationSpans(
-    (ir.annotations ?? []).filter((span) => Boolean(annotationMarkers[span.type])),
+    (projected.annotations ?? []).filter((span) => Boolean(annotationMarkers[span.type])),
   );
   const dominantAnnotations = annotated.filter(
     (span) => annotationMarkers[span.type]?.suppressNestedFormatting === true,
@@ -196,7 +218,7 @@ export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions
     ...new Set(annotated.flatMap((span) => [span.start, span.end])),
   ].toSorted((a, b) => a - b);
   const styled = sortStyleSpans(
-    ir.styles
+    projected.styles
       .filter((span) => Boolean(styleMarkers[span.style]))
       .flatMap((span) => {
         if (STRUCTURAL_STYLES.has(span.style)) {
@@ -252,16 +274,22 @@ export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions
 
   const linkStarts = new Map<number, RenderLink[]>();
   if (options.buildLink) {
-    const links = ir.links.flatMap((span) =>
-      subtractRanges(span, dominantAnnotationRanges).flatMap((piece) =>
-        splitAtBoundaries(piece, annotationBoundaries),
-      ),
+    const links = projected.links.flatMap((span) =>
+      subtractRanges(span, dominantAnnotationRanges)
+        .flatMap((piece) => splitAtBoundaries(piece, annotationBoundaries))
+        .map((piece) =>
+          copyMarkdownLinkSpan(span, {
+            start: piece.start,
+            end: piece.end,
+            href: piece.href,
+          }),
+        ),
     );
     for (const link of links) {
       if (link.start === link.end) {
         continue;
       }
-      const rendered = options.buildLink(link, text);
+      const rendered = options.buildLink(link, text, { origin: getMarkdownLinkOrigin(link) });
       if (!rendered) {
         continue;
       }

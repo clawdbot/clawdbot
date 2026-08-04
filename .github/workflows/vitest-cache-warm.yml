@@ -5,10 +5,6 @@ on:
     types: [vitest-cache-warm]
   schedule:
     - cron: "17 8 * * *"
-  workflow_run: # zizmor: ignore[dangerous-triggers] successful main-push CI only; read-only default-branch checkout, no artifacts or untrusted ref
-    workflows: [CI]
-    branches: [main]
-    types: [completed]
 
 permissions:
   contents: read
@@ -19,32 +15,29 @@ concurrency:
 
 jobs:
   warm:
-    if: github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_run' || (github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main'))
+    # Dependency snapshots are serialized before main CI fanout. This workflow
+    # writes only the transform and compile caches from scheduled/trusted runs.
+    if: github.repository == 'openclaw/openclaw'
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          node-compile-cache: ${{ github.event_name != 'workflow_run' && 'true' || 'false' }}
+          node-compile-cache: "true"
           node-compile-cache-scope: "test"
-          runtime-cache-sticky-disk: ${{ github.event_name != 'workflow_run' && 'true' || 'false' }}
-          save-node-compile-cache: ${{ github.event_name != 'workflow_run' && 'true' || 'false' }}
-          # This disposable, non-cancelled workflow is the sole dependency
-          # snapshot writer. Main CI completion coalesces refreshes without
-          # putting required build jobs in a cancel-on-pending mutex.
-          save-sticky-disk: "true"
-          save-vitest-fs-cache: ${{ github.event_name != 'workflow_run' && 'true' || 'false' }}
-          sticky-disk: "true"
-          use-actions-cache: "false"
-          vitest-fs-cache: ${{ github.event_name != 'workflow_run' && 'true' || 'false' }}
+          save-actions-cache: "true"
+          save-node-compile-cache: "true"
+          save-vitest-fs-cache: "true"
+          sticky-disk: "false"
+          use-actions-cache: "true"
+          vitest-fs-cache: "true"
 
       - name: Select broad cache seed
-        if: github.event_name != 'workflow_run'
         shell: bash
         run: |
           set -euo pipefail
@@ -52,14 +45,33 @@ jobs:
           import { appendFileSync } from "node:fs";
           import { createNodeTestShards } from "./scripts/lib/ci-node-test-plan.mjs";
 
-          // The unit-fast graph is striped across jobs; warm the union of its
-          // configs as whole suites so the seed covers every stripe's imports.
-          const shards = createNodeTestShards().filter((candidate) =>
+          // Warm whole configs for the striped unit-fast graph plus the import-
+          // bound graphs that remained cold in measured protected-cache readers.
+          const additionalShardNames = new Set([
+            "agentic-agents-embedded",
+            "agentic-gateway-methods",
+            "auto-reply-reply-commands-3",
+          ]);
+          const allShards = createNodeTestShards();
+          const coreShards = allShards.filter((candidate) =>
             candidate.shardName.startsWith("core-unit-fast"),
           );
-          if (shards.length === 0) {
+          if (coreShards.length === 0) {
             throw new Error("core-unit-fast cache seed shards are missing");
           }
+          const additionalShards = allShards.filter((candidate) =>
+            additionalShardNames.has(candidate.shardName),
+          );
+          const foundAdditionalShardNames = new Set(
+            additionalShards.map((shard) => shard.shardName),
+          );
+          const missingShardNames = [...additionalShardNames].filter(
+            (name) => !foundAdditionalShardNames.has(name),
+          );
+          if (missingShardNames.length > 0) {
+            throw new Error(`cache seed shards are missing: ${missingShardNames.join(", ")}`);
+          }
+          const shards = [...coreShards, ...additionalShards];
           const configs = [...new Set(shards.flatMap((shard) => shard.configs))];
           appendFileSync(
             process.env.GITHUB_ENV,
@@ -72,5 +84,4 @@ jobs:
           EOF
 
       - name: Warm transform and compile caches
-        if: github.event_name != 'workflow_run'
         run: node scripts/ci-run-node-test-shard.mjs
