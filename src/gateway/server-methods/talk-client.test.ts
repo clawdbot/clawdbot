@@ -126,6 +126,31 @@ describe("talk.client.transcript", () => {
     });
   });
 
+  it("falls back for out-of-range client timestamps without changing the message", async () => {
+    const voiceSessionId = createOrResumeClientVoiceSession({
+      agentId: "main",
+      sessionKey,
+      origin: "client",
+    });
+
+    expect(
+      await invokeTranscript({
+        sessionKey,
+        voiceSessionId,
+        entryId: "out-of-range-timestamp",
+        role: "user",
+        text: "hello with an out-of-range timestamp",
+        timestamp: 1e100,
+      }),
+    ).toHaveBeenCalledWith(true, { ok: true }, undefined);
+
+    const events = readSessionTranscriptMessageEvents({ agentId: "main", sessionId });
+    expect(events).toHaveLength(1);
+    expect(events[0]?.event).toMatchObject({
+      message: { timestamp: 1e100 },
+    });
+  });
+
   it("appends before the session has ever received a chat turn", async () => {
     const talkFirstSessionKey = "agent:main:talk-first";
     await ensureClientVoiceAgentSessionEntry({

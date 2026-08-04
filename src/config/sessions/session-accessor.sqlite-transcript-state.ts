@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   executeSqliteQuerySync,
@@ -82,9 +83,9 @@ export function ensureTranscriptSessionRoot(
   updatedAt: number,
   options: { allowStoredAlias?: boolean } = {},
 ): void {
-  const storedUpdatedAt = Number.isFinite(updatedAt)
-    ? Math.max(0, Math.trunc(updatedAt))
-    : Date.now();
+  const dateUpdatedAt = asDateTimestampMs(updatedAt);
+  const storedUpdatedAt =
+    dateUpdatedAt === undefined ? Date.now() : Math.max(0, Math.trunc(dateUpdatedAt));
   if (!options.allowStoredAlias) {
     assertCanonicalSqliteSessionKeysCurrent(database);
     assertCanonicalSessionKeyWriteMatchesDatabase(database, scope.sessionKey);
