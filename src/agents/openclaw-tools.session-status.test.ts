@@ -1605,6 +1605,79 @@ describe("session_status tool", () => {
     expect(event.context.sessionEntry).toMatchObject({ thinkingLevel: "medium" });
   });
 
+  it("clears a thinking override via thinkingLevel=default", async () => {
+    const events: InternalHookEvent[] = [];
+    registerInternalHook("session:patch", async (event) => {
+      events.push(event);
+    });
+    resetSessionStore({
+      main: {
+        sessionId: "s-thinking-reset",
+        updatedAt: 10,
+        thinkingLevel: "high",
+        modelFallback: {
+          prevModel: "gpt-5.4",
+          prevProvider: "openai",
+          prevThinkingLevel: "high",
+          ts: 1,
+          source: "agent-patch",
+        },
+      },
+    });
+
+    const tool = getSessionStatusTool();
+    const result = await tool.execute("call-session-status-thinking-reset", {
+      thinkingLevel: "default",
+    });
+
+    expect(result.details).toMatchObject({ ok: true, changedModel: false });
+    expect(result.details).not.toHaveProperty("thinkingLevel");
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+    const savedStore = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, SessionEntry>;
+    expect(savedStore.main?.thinkingLevel).toBeUndefined();
+    expect(savedStore.main?.modelFallback?.prevThinkingLevel).toBeUndefined();
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    const event = expectDefined(events[0], "events[0] test invariant");
+    expect(event.context.patch).toEqual({
+      key: "main",
+      thinkingLevel: null,
+    });
+    expect(event.context.sessionEntry.thinkingLevel).toBeUndefined();
+  });
+
+  it("validates thinking-only updates against the persisted next-run model", async () => {
+    const store: Record<string, SessionEntry> = {
+      main: {
+        sessionId: "s-thinking-next-run-model",
+        updatedAt: 10,
+        providerOverride: "openai",
+        modelOverride: "no-think",
+        thinkingLevel: "off",
+      },
+    };
+    resetSessionStore(store);
+
+    const tool = getSessionStatusTool("main", {
+      activeModelProvider: "openai",
+      activeModelId: "gpt-5.4",
+    });
+
+    await expect(
+      tool.execute("call-session-status-thinking-next-run-model", {
+        sessionKey: "current",
+        thinkingLevel: "high",
+      }),
+    ).rejects.toThrow(
+      'Thinking level "high" is not supported for openai/no-think. Use one of: off.',
+    );
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
+    expect(store.main).toMatchObject({
+      providerOverride: "openai",
+      modelOverride: "no-think",
+      thinkingLevel: "off",
+    });
+  });
+
   it("validates combined model and thinking updates against the new model", async () => {
     const events: InternalHookEvent[] = [];
     registerInternalHook("session:patch", async (event) => {
