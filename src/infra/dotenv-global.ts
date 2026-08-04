@@ -114,7 +114,12 @@ export function readSystemdEnvironmentFile(params: {
     return null;
   }
 
-  const entries: DotEnvEntry[] = [];
+  // Collect entries last-wins per key to match the service's runtime
+  // semantics (environment[parsed.key] = parsed.value).  A repeated key
+  // inside the same EnvironmentFile must resolve to the final assignment;
+  // the cross-file merge that follows is first-wins, so per-file last-wins
+  // avoids the CLI picking a stale token when the service uses a newer one.
+  const entryMap = new Map<string, string>();
   for (const line of content.split(/\r?\n/)) {
     const parsed = parseEnvironmentFileLine(line);
     if (!parsed) {
@@ -122,8 +127,12 @@ export function readSystemdEnvironmentFile(params: {
     }
     const key = normalizeEnvVarKey(parsed.key, { portable: true });
     if (key && (params.entryFilter?.(key, parsed.value) ?? true)) {
-      entries.push({ key, value: parsed.value });
+      entryMap.set(key, parsed.value);
     }
+  }
+  const entries: DotEnvEntry[] = [];
+  for (const [key, value] of entryMap) {
+    entries.push({ key, value });
   }
   return { filePath: params.filePath, entries };
 }

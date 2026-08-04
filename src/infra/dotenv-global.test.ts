@@ -114,6 +114,25 @@ describe("readSystemdEnvironmentFile", () => {
     });
   });
 
+  it("preserves last assignment for duplicate keys within a file", () => {
+    // systemd service readers overwrite per-key; the last assignment wins.
+    // readSystemdEnvironmentFile must match that so CLI auth uses the same
+    // value the service would.
+    const filePath = tmpFile(
+      "gateway.systemd.env",
+      "TOKEN=stale_old_token\nTOKEN=current_new_token\nOTHER=val\nTOKEN=final_token\n",
+    );
+    const result = readSystemdEnvironmentFile({ filePath });
+    expect(result).not.toBeNull();
+    expect(result!.entries).toContainEqual({
+      key: "TOKEN",
+      value: "final_token",
+    });
+    expect(result!.entries).toContainEqual({ key: "OTHER", value: "val" });
+    // Only one TOKEN entry (deduplicated) plus OTHER.
+    expect(result!.entries).toHaveLength(2);
+  });
+
   it("skips comments and blank lines", () => {
     const filePath = tmpFile("gateway.systemd.env", "# comment\n; also comment\n\nKEY=value\n");
     const result = readSystemdEnvironmentFile({ filePath });
