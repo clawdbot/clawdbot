@@ -323,11 +323,11 @@ export function createSlackProgressRuntime(runtimeParams: {
     mode: slackStreaming.mode,
     active: progressDraftActive && streamMode === "status_final",
     seed: progressSeed,
-    formatLine: formatSlackProgressDraftLine,
+    formatLine: previewToolProgressEnabled ? formatSlackProgressDraftLine : undefined,
     reasoningLinePrefix: "🧠 ",
-    commentaryLinePrefix: "💬 ",
+    commentaryLinePrefix: "",
     reasoningGate: previewToolProgressEnabled,
-    commentaryItalics: false,
+    commentaryItalics: true,
     updateOnLineChange: useNativeProgressStreaming || useRichProgressDraft,
     update: async (previewText, options) => {
       if (useNativeProgressStreaming) {
