@@ -204,6 +204,11 @@ function replayTerminalState(
   }
   for (const segment of ansiSequences.splitAnsiSegments(raw)) {
     if (segment.kind === "text") {
+      // pi-tui expands visible tabs before terminal output, so a captured literal HT is invalid
+      // evidence rather than a terminal-layout operation we should replay.
+      if (segment.value.includes("\t")) {
+        return undefined;
+      }
       if (!synchronized && completedFrame && segment.value) {
         completedFrame = false;
       }
@@ -293,11 +298,7 @@ function latestFrameHasRow(
 }
 
 function terminalAttackRowMatches(markers: string[], expectedText: string, row: string) {
-  return (
-    !row.includes("\t") &&
-    markers.every((marker) => row.includes(marker)) &&
-    row.includes(expectedText)
-  );
+  return markers.every((marker) => row.includes(marker)) && row.includes(expectedText);
 }
 
 export function hasSynchronizedFrameRow(
