@@ -31,7 +31,7 @@ import {
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
 // One recall batch can inspect every retained entry; cap filesystem pressure.
-const SHORT_TERM_SOURCE_FILE_CHECK_CONCURRENCY = 32;
+export const SHORT_TERM_SOURCE_FILE_CHECK_CONCURRENCY = 32;
 
 function mergeRecallProvenance(
   existing: MemoryEntryProvenance | undefined,

@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { resolveShortTermSourcePathCandidates } from "./short-term-promotion-record.js";
+import pLimit from "p-limit";
+import {
+  resolveShortTermSourcePathCandidates,
+  SHORT_TERM_SOURCE_FILE_CHECK_CONCURRENCY,
+} from "./short-term-promotion-record.js";
 import type { PromotionCandidate, ShortTermRecallEntry } from "./short-term-promotion-types.js";
 import { normalizeSnippet, SHORT_TERM_BASENAME_RE } from "./short-term-promotion-utils.js";
 
@@ -340,6 +344,26 @@ export async function resolveShortTermRecallEntryLocation(
     };
   }
   return null;
+}
+
+export async function resolveShortTermRecallEntryLocations(
+  workspaceDir: string,
+  entries: ShortTermRecallEntry[],
+): Promise<
+  Array<{
+    entry: ShortTermRecallEntry;
+    location: ShortTermRecallEntryLocation | null;
+  }>
+> {
+  const sourceFileLimit = pLimit(SHORT_TERM_SOURCE_FILE_CHECK_CONCURRENCY);
+  return await Promise.all(
+    entries.map((entry) =>
+      sourceFileLimit(async () => ({
+        entry,
+        location: await resolveShortTermRecallEntryLocation(workspaceDir, entry),
+      })),
+    ),
+  );
 }
 
 export async function isShortTermRecallEntryInsideManagedDreamingFence(

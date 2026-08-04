@@ -3683,6 +3683,69 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("bounds source reads while repairing a large recall store", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const sourceLines = Array.from(
+        { length: 64 },
+        (_, index) => `Durable recall ${index} about gateway routing.`,
+      );
+      const sourcePath = await writeDailyMemoryNote(workspaceDir, "2026-04-01", sourceLines);
+      await testing.writeRawRecallStore(workspaceDir, {
+        version: 1,
+        updatedAt: "2026-04-04T00:00:00.000Z",
+        entries: Object.fromEntries(
+          sourceLines.map((snippet, index) => [
+            `entry-${index}`,
+            {
+              key: `entry-${index}`,
+              path: "memory/2026-04-01.md",
+              startLine: index + 1,
+              endLine: index + 1,
+              source: "memory",
+              snippet,
+              recallCount: 1,
+              dailyCount: 0,
+              groundedCount: 0,
+              totalScore: 1,
+              maxScore: 1,
+              firstRecalledAt: "2026-04-01T00:00:00.000Z",
+              lastRecalledAt: "2026-04-04T00:00:00.000Z",
+              queryHashes: [`query-${index}`],
+              recallDays: ["2026-04-01"],
+              conceptTags: [],
+            },
+          ]),
+        ),
+      });
+
+      let activeSourceReads = 0;
+      let maxSourceReads = 0;
+      const realReadFile = fs.readFile;
+      const readSpy = vi.spyOn(fs, "readFile").mockImplementation(async (target, options) => {
+        if (typeof target === "string" && path.resolve(target) === sourcePath) {
+          activeSourceReads += 1;
+          maxSourceReads = Math.max(maxSourceReads, activeSourceReads);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          try {
+            return await realReadFile(target, options as never);
+          } finally {
+            activeSourceReads -= 1;
+          }
+        }
+        return await realReadFile(target, options as never);
+      });
+
+      try {
+        await repairShortTermPromotionArtifacts({ workspaceDir });
+      } finally {
+        readSpy.mockRestore();
+      }
+
+      expect(maxSourceReads).toBeGreaterThan(1);
+      expect(maxSourceReads).toBeLessThanOrEqual(32);
+    });
+  });
+
   it("waits for an active short-term lock before repairing", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await testing.writeRawRecallStore(workspaceDir, {
