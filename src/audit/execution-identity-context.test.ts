@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { recordAuditEvent } from "./audit-event-store.js";
 import {
@@ -28,6 +30,14 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function databaseOptions() {
   return { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-identity-") } };
+}
+
+function openIndependentStateDatabase(path: string): OpenClawStateDatabase {
+  return {
+    db: openNodeSqliteDatabase(path),
+    path,
+    walMaintenance: { checkpoint: () => true, close: () => true },
+  };
 }
 
 function facts(
@@ -87,6 +97,7 @@ function persistExecutionIdentityAdmissionEnvelope(
 function prepareExecutionIdentityContextAtAdmission(
   admissionFacts: ExecutionIdentityAdmissionFacts,
   options: {
+    database?: OpenClawStateDatabase;
     env?: NodeJS.ProcessEnv;
     now?: number;
     contextId?: string;
@@ -327,7 +338,7 @@ describe("execution identity context storage", () => {
     });
   });
 
-  it("lazily restores the additive table on an existing current-schema database", () => {
+  it("keeps inspection read-only and lets persistence restore the additive table", () => {
     const database = databaseOptions();
     const opened = openOpenClawStateDatabase(database);
     opened.db.exec("DROP TABLE execution_identity_contexts;");
@@ -343,6 +354,13 @@ describe("execution identity context storage", () => {
       run: { status: "unknown" },
       identity: { state: "unknown", reasonCode: "run_not_found" },
     });
+    expect(
+      reopened.db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("execution_identity_contexts"),
+    ).toBeUndefined();
+
+    prepareExecutionIdentityContextAtAdmission(facts("schema-restored"), database);
     expect(
       reopened.db
         .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
@@ -644,6 +662,71 @@ describe("execution identity context storage", () => {
       .all() as Array<{ run_id: string }>;
     expect(capped).toHaveLength(2);
     expect(capped.map((row) => row.run_id)).not.toContain("cap-1");
+  });
+
+  it("enforces the row cap across independent database connections", () => {
+    const database = databaseOptions();
+    const path = openOpenClawStateDatabase(database).path;
+    closeOpenClawStateDatabaseForTest();
+    const first = openIndependentStateDatabase(path);
+    const second = openIndependentStateDatabase(path);
+    try {
+      for (const [index, connection] of [first, second, first, second].entries()) {
+        const runId = `shared-cap-${index + 1}`;
+        prepareExecutionIdentityContextAtAdmission(facts(runId), {
+          database: connection,
+          now: 100 + index,
+          contextId: `context-${runId}`,
+          runtimeInstanceId: "runtime-1",
+          limits: { maxRows: 2, pruneBatchRows: 1 },
+        });
+      }
+
+      const retained = first.db
+        .prepare("SELECT run_id FROM execution_identity_contexts ORDER BY created_at")
+        .all() as Array<{ run_id: string }>;
+      expect(retained.map((row) => row.run_id)).toEqual(["shared-cap-3", "shared-cap-4"]);
+    } finally {
+      first.db.close();
+      second.db.close();
+    }
+  });
+
+  it("inspects through a read-only connection while another writer holds the database", () => {
+    const database = databaseOptions();
+    prepareExecutionIdentityContextAtAdmission(facts("held-lock-inspection"), {
+      ...database,
+      now: 100,
+      contextId: "context-held-lock-inspection",
+      executionId: "execution-held-lock-inspection",
+      runtimeInstanceId: "runtime-1",
+    });
+    const path = openOpenClawStateDatabase(database).path;
+    closeOpenClawStateDatabaseForTest();
+    const lockDatabase = openNodeSqliteDatabase(path);
+    lockDatabase.exec("BEGIN IMMEDIATE");
+    try {
+      const startedAt = performance.now();
+      expect(
+        inspectExecutionIdentityRun(
+          { executionId: "execution-held-lock-inspection" },
+          { ...database, now: 100 },
+        ),
+      ).toMatchObject({
+        identity: {
+          state: "present",
+          context: {
+            contextId: "context-held-lock-inspection",
+            executionId: "execution-held-lock-inspection",
+            runId: "held-lock-inspection",
+          },
+        },
+      });
+      expect(performance.now() - startedAt).toBeLessThan(250);
+    } finally {
+      lockDatabase.exec("ROLLBACK");
+      lockDatabase.close();
+    }
   });
 
   it("returns typed corrupt, unknown, and unsupported projections", () => {
