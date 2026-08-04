@@ -1,6 +1,7 @@
 /** Unit tests for standalone-tool credential resolution boundary. */
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { SecretRef } from "../config/types.secrets.js";
 import { createResolverContext } from "./runtime-shared.js";
 import type {
   RuntimeWebProviderMetadataBase,
@@ -83,13 +84,15 @@ function buildSelection(params: {
       providerId,
       value,
     }): Promise<SecretResolutionResult<TestSource>> => {
-      const ref = hasConfiguredSecretRef(value) ? (value as { id: string }) : undefined;
+      const ref = hasConfiguredSecretRef(value) ? (value as SecretRef) : undefined;
       if (ref) {
         const resolved = process.env[ref.id] ?? `${providerId}-resolved`;
         return {
           source: "env",
           secretRefConfigured: true,
           value: resolved,
+          secretRef: ref,
+          secretRefKey: `${ref.source}:${ref.provider}:${ref.id}`,
         };
       }
       return { source: "env", secretRefConfigured: false };
@@ -175,7 +178,7 @@ describe("runtime-web-tools-standalone", () => {
       sourceConfig,
     });
 
-    await resolveStandaloneProviderCredentials({
+    const owners = await resolveStandaloneProviderCredentials({
       selection,
       selectedProvider: "brave",
       unavailableProviders: [],
@@ -207,6 +210,13 @@ describe("runtime-web-tools-standalone", () => {
         }
       ).plugins?.entries?.xai?.config?.webSearch?.apiKey,
     ).toBeUndefined();
+    // The resolved credential is registered as a runtime secret owner.
+    expect(owners).toHaveLength(1);
+    expect(owners[0]).toMatchObject({
+      providerId: "perplexity",
+      path: "plugins.entries.perplexity.config.webSearch.apiKey",
+      resolvedValue: "perplexity-resolved",
+    });
   });
 
   it("resolves every inactive credential path for an enabled standalone-tool provider", async () => {
@@ -328,7 +338,7 @@ describe("runtime-web-tools-standalone", () => {
     };
 
     const unavailableProviders: RuntimeWebUnavailableProvider[] = [];
-    await resolveStandaloneProviderCredentials({
+    const owners = await resolveStandaloneProviderCredentials({
       selection,
       selectedProvider: "brave",
       unavailableProviders,
@@ -343,6 +353,13 @@ describe("runtime-web-tools-standalone", () => {
     );
     expect(unavailableProviders.every((p) => p.providerId === "perplexity")).toBe(true);
     expect(new Set(unavailableProviders.map((p) => p.refKey)).size).toBe(1);
+    // Unresolved standalone providers are also returned as owners so the runtime snapshot
+    // can track them for refresh/degradation.
+    expect(owners).toHaveLength(2);
+    expect(owners.map((owner) => owner.path)).toEqual([
+      "plugins.entries.perplexity.config.webSearch.apiKey",
+      "plugins.entries.perplexity.config.webSearch.legacyApiKey",
+    ]);
   });
 
   it("resolveMissingStandaloneProviderCredentials loads only the requested plugin's providers", async () => {

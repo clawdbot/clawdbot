@@ -1460,6 +1460,210 @@ describe("runtime web tools resolution", () => {
     });
   });
 
+  it("registers resolved standalone-tool provider credentials as runtime secret owners", async () => {
+    const { secretOwners, resolvedConfig, context } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "brave",
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            brave: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "BRAVE_API_KEY_REF" },
+                },
+              },
+            },
+            perplexity: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "PERPLEXITY_API_KEY_REF",
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        BRAVE_API_KEY_REF: "brave-key",
+        PERPLEXITY_API_KEY_REF: "perplexity-key",
+      },
+      manifestRegistry: {
+        plugins: [
+          {
+            id: "perplexity",
+            contracts: {
+              webSearchProviders: ["perplexity"],
+              tools: ["perplexity_search"],
+              providerCredentialTools: { perplexity: ["perplexity_search"] },
+            },
+          },
+        ],
+      } as unknown as Parameters<typeof runRuntimeWebTools>[0]["manifestRegistry"],
+    });
+
+    expect(context.warnings.map((w) => w.code)).not.toContain(
+      "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+    );
+    expect(readProviderKey(resolvedConfig, "perplexity")).toBe("perplexity-key");
+    expect(secretOwners).toContainEqual(
+      expect.objectContaining({
+        ownerKind: "capability",
+        ownerId: "web-search:perplexity",
+        refKeys: expect.arrayContaining([expect.stringContaining("PERPLEXITY_API_KEY_REF")]),
+        resolvedValues: expect.arrayContaining([
+          expect.objectContaining({ value: "perplexity-key" }),
+        ]),
+      }),
+    );
+  });
+
+  it("keeps unresolved standalone-tool provider credentials in the runtime snapshot for degradation", async () => {
+    const { secretOwners, degradedOwners, context } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "brave",
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            brave: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "BRAVE_API_KEY_REF" },
+                },
+              },
+            },
+            perplexity: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "PERPLEXITY_API_KEY_REF",
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        BRAVE_API_KEY_REF: "brave-key",
+      },
+      allowUnavailableSecretOwners: true,
+      manifestRegistry: {
+        plugins: [
+          {
+            id: "perplexity",
+            contracts: {
+              webSearchProviders: ["perplexity"],
+              tools: ["perplexity_search"],
+              providerCredentialTools: { perplexity: ["perplexity_search"] },
+            },
+          },
+        ],
+      } as unknown as Parameters<typeof runRuntimeWebTools>[0]["manifestRegistry"],
+    });
+
+    expect(context.warnings.map((w) => w.code)).not.toContain(
+      "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+    );
+    expect(secretOwners).toContainEqual(
+      expect.objectContaining({
+        ownerKind: "capability",
+        ownerId: "web-search:perplexity",
+        refKeys: expect.arrayContaining([expect.stringContaining("PERPLEXITY_API_KEY_REF")]),
+      }),
+    );
+    expect(degradedOwners).toContainEqual(
+      expect.objectContaining({
+        ownerId: "web-search:perplexity",
+        degradationState: "cold",
+      }),
+    );
+  });
+
+  it("preserves the configured-provider narrow discovery path when standalone mappings exist", async () => {
+    resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock.mockReturnValueOnce(
+      buildTestWebSearchProviders(),
+    );
+    await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "brave",
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            brave: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "BRAVE_API_KEY_REF" },
+                },
+              },
+            },
+            perplexity: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "PERPLEXITY_API_KEY_REF",
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        BRAVE_API_KEY_REF: "brave-key",
+        PERPLEXITY_API_KEY_REF: "perplexity-key",
+      },
+      manifestRegistry: {
+        plugins: [
+          {
+            id: "perplexity",
+            contracts: {
+              webSearchProviders: ["perplexity"],
+              tools: ["perplexity_search"],
+              providerCredentialTools: { perplexity: ["perplexity_search"] },
+            },
+          },
+        ],
+      } as unknown as Parameters<typeof runRuntimeWebTools>[0]["manifestRegistry"],
+    });
+
+    expect(resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ onlyPluginIds: ["brave"] }),
+    );
+  });
+
   it("auto-detects the next provider when a higher-priority ref is unresolved", async () => {
     const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
       config: asConfig({
