@@ -88,11 +88,14 @@ LINE-specific settings:
   (`authentication-failed`, HTTP 401/403).
 - **Stall watchdog.** A claimed delivery that never reaches agent-turn adoption
   dead-letters as `handler-timeout` after 5 minutes.
-- **Crash recovery.** A delivery claimed by a Gateway process that died is
-  reclaimed when its 30-minute claim lease expires, so an in-flight event can
-  wait up to that long after a hard crash before it is retried. Events accepted
-  while the Gateway is stopping are still persisted and drain after the next
-  start.
+- **Crash recovery.** Every drain pass opens with a recovery sweep that reclaims
+  any claim whose owning Gateway process is no longer running, so a delivery lost
+  to a hard crash is retried on the next sweep rather than after a timeout. The
+  30-minute claim lease is the fallback bound for the opposite case: it caps how
+  long a claim stays protected while its owner still looks alive — a running
+  process, or a reused PID whose process identity cannot be verified. Events
+  accepted while the Gateway is stopping are still persisted and drain after the
+  next start.
 - **Duplicate suppression window.** Completed and failed queue records are
   retained for 30 days (up to 4096 entries each per account); while the record
   exists, a redelivered webhook for the same event is acknowledged without a
