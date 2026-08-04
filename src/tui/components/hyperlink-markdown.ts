@@ -7,13 +7,13 @@ import type {
 } from "@earendil-works/pi-tui";
 import { Markdown } from "@earendil-works/pi-tui";
 import { addOsc8Hyperlinks, extractUrls } from "../osc8-hyperlinks.js";
-import { sanitizeRenderableText } from "../tui-formatters.js";
+import { isolateRtlRenderedLine, sanitizeMarkdownSource } from "../tui-formatters.js";
 
 function sanitizeMarkdownDisplayText(text: string): string {
   if (!text) {
     return text;
   }
-  return sanitizeRenderableText(text) || "(no output)";
+  return sanitizeMarkdownSource(text) || "(no output)";
 }
 
 /**
@@ -39,7 +39,7 @@ export class HyperlinkMarkdown implements Component {
   }
 
   render(width: number): string[] {
-    return addOsc8Hyperlinks(this.inner.render(width), this.urls);
+    return addOsc8Hyperlinks(this.inner.render(width), this.urls).map(isolateRtlRenderedLine);
   }
 
   setText(text: string): void {

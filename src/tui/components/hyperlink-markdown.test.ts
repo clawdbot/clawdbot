@@ -1,5 +1,6 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
+import { splitAnsiSegments } from "../../../packages/terminal-core/src/ansi-sequences.js";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { markdownTheme } from "../theme/theme.js";
 import { HyperlinkMarkdown } from "./hyperlink-markdown.js";
@@ -58,6 +59,25 @@ describe("HyperlinkMarkdown", () => {
     expect(updated).not.toContain("\u009b");
   });
 
+  it("parses sanitized RTL headings quotes and lists identically on construct and update", () => {
+    const source = "\u202e# مرحبا\u202c\n\n\u200f> שלום\n\n\u2066- عنصر\u2069";
+    const constructed = new HyperlinkMarkdown(source, 0, 0, markdownTheme);
+    const updated = new HyperlinkMarkdown("", 0, 0, markdownTheme);
+
+    updated.setText(source);
+    const rendered = constructed.render(80);
+    expect(updated.render(80)).toEqual(rendered);
+
+    const normalized = rendered
+      .map((line) => normalizeTestText(line).replace(/[\u2067\u2069]/gu, ""))
+      .join("\n");
+    expect(normalized).toContain("مرحبا");
+    expect(normalized).not.toContain("# مرحبا");
+    expect(normalized).toContain("│ שלום");
+    expect(normalized).toContain("- عنصر");
+    expect(rendered.join("\n")).not.toMatch(/[\u200f\u202e\u2066]/u);
+  });
+
   it("renders a neutral fallback when nonempty markdown sanitizes to empty", () => {
     const markdown = new HyperlinkMarkdown("\x1b]0;title\x07", 0, 0, markdownTheme);
 
@@ -81,11 +101,21 @@ describe("HyperlinkMarkdown", () => {
 
   it("keeps an RTL bare URL target byte-exact", () => {
     const url = "https://example.test/rtl-proof";
-    const rendered = new HyperlinkMarkdown(`مرحبا ${url}`, 0, 0, markdownTheme)
-      .render(120)
-      .join("\n");
+    const rendered = new HyperlinkMarkdown(`مرحبا ${url}`, 0, 0, markdownTheme).render(120)[0];
 
-    expect(rendered).toContain(`\x1b]8;;${url}\x07${url}\x1b]8;;\x07`);
-    expect(rendered).not.toContain(`\x1b]8;;${url}\u2069`);
+    expect(rendered).toBeDefined();
+    const targets = splitAnsiSegments(rendered ?? "").flatMap((segment) => {
+      if (segment.kind !== "ansi" || !segment.value.startsWith("\x1b]8;;")) {
+        return [];
+      }
+      const terminatorLength = segment.value.endsWith("\x1b\\") ? 2 : 1;
+      const target = segment.value.slice("\x1b]8;;".length, -terminatorLength);
+      return target ? [target] : [];
+    });
+    expect(targets.length).toBeGreaterThan(0);
+    expect(targets.every((target) => target === url)).toBe(true);
+    expect(rendered?.startsWith("\u2067")).toBe(true);
+    expect(rendered?.endsWith("\u2069")).toBe(true);
+    expect(visibleWidth(rendered ?? "")).toBe(120);
   });
 });

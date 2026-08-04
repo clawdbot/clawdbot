@@ -60,12 +60,32 @@ describe("btw inline message", () => {
     expect(lines[1]).not.toMatch(/[\r\n\t]/u);
   });
 
+  it("passes sanitized RTL source through Markdown exactly once", () => {
+    const message = new BtwInlineMessage({
+      question: "structure proof",
+      text: "\u202e# مرحبا\u202c\n\n\u200f> שלום\n\n\u2066- عنصر\u2069",
+    });
+
+    const lines = message.render(100);
+    const normalized = lines
+      .map((line) => normalizeTestText(line).replace(/[\u2067\u2069]/gu, ""))
+      .join("\n");
+    expect(normalized).toContain("مرحبا");
+    expect(normalized).not.toContain("# مرحبا");
+    expect(normalized).toContain("│ שלום");
+    expect(normalized).toContain("- عنصر");
+    for (const line of lines.filter((entry) => /[\u0590-\u08ff]/u.test(entry))) {
+      expect(line.match(/\u2067/gu)).toHaveLength(1);
+      expect(line.match(/\u2069/gu)).toHaveLength(1);
+    }
+  });
+
   it("sanitizes BTW error questions and text before applying trusted themes", () => {
     const questionAttack = "\x1b]0;T08_BTW_QUESTION_TITLE\x07";
     const errorAttack = "\u009b3Jretry";
     const message = new BtwInlineMessage({
       question: `why ${questionAttack}failed?\r\nمرحبا\tשלום`,
-      text: `${errorAttack} safely café`,
+      text: `${errorAttack} **plain** safely café`,
       isError: true,
     });
 
@@ -73,7 +93,7 @@ describe("btw inline message", () => {
     const rendered = normalizeTestText(raw);
     expect(rendered).toContain("BTW: \u2067why failed? مرحبا שלום\u2069");
     expect(rendered).toContain("مرحبا שלום");
-    expect(rendered).toContain("retry safely café");
+    expect(rendered).toContain("retry **plain** safely café");
     expect(raw).not.toContain(questionAttack);
     expect(raw).not.toContain(errorAttack);
   });

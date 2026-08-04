@@ -20,11 +20,22 @@ describe("hasSynchronizedFrameRow", () => {
     expect(parse(frame("\u2067RTL\u2069"))[0]).toEqual(["RTL"]);
   });
   it("rejects terminal row reconstruction false positives", () => {
+    expect(hasExpected(frame(`stale\x1b[2J\x1b[HT08A\x1b[6Gsafe\x1b[11GT08B`))).toBe(true);
+    expect(hasExpected(`${EXPECTED}${frame("\x1b[H\x1b[JT08A\x1b[6Gsafe\x1b[11GT08B")}`)).toBe(
+      true,
+    );
+    expect(hasExpected(`legacy ${frame(`\x1b[8G${EXPECTED}`)}`)).toBe(true);
     for (const raw of [
       frame("T08A safe\x1b[BT08B"),
       frame(`${EXPECTED}\r\x1b[KT08A bad T08B`),
       frame("T08AxsafexT08B\x1b[3J\x1b[HT08A\x1b[6Gsafe\x1b[11GT08B"),
       `T08A safe\r\n\x1b[B${frame("T08B")}`,
+      `${EXPECTED}${frame("")}`,
+      `${frame(EXPECTED)}${frame("\x1b[2J")}`,
+      `${frame(EXPECTED)}${frame("\x1b[31m")}`,
+      `${frame(EXPECTED)}${frame("\x1b[Bunrelated")}`,
+      `${EXPECTED}${frame("T08A\x1b[6Gsafe\x1b[11GT08B")}`,
+      `${EXPECTED}\x1b[H\x1b[J${frame("T08A\x1b[6Gsafe\x1b[11GT08B")}`,
     ]) {
       expect(hasExpected(raw)).toBe(false);
     }

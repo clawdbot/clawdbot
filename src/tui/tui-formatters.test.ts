@@ -9,8 +9,10 @@ import {
   extractThinkingFromMessage,
   formatTuiFooter,
   formatTuiErrorMessage,
+  isolateRtlRenderedLine,
   isTerminalSafeAutocompleteValue,
   isCommandMessage,
+  sanitizeMarkdownSource,
   sanitizeRenderableLine,
   sanitizeRenderableText,
 } from "./tui-formatters.js";
@@ -895,6 +897,24 @@ describe("sanitizeRenderableText", () => {
     const sanitized = sanitizeRenderableText(input);
 
     expect(sanitized).toContain("[binary data omitted]");
+  });
+});
+
+describe("Markdown display safety", () => {
+  it("strips hostile controls from source without adding directional isolates", () => {
+    const input = "\u202e# مرحبا\u202c\n\u009b31m> שלום\u009b0m";
+    const sanitized = sanitizeMarkdownSource(input);
+
+    expect(sanitized).toBe("# مرحبا\n> שלום");
+    expect(sanitized).not.toMatch(/[\u2066-\u2069]/u);
+  });
+
+  it("isolates rendered RTL lines without changing visible width", () => {
+    const rendered = "\x1b[1mمرحبا\x1b[0m";
+    const isolated = isolateRtlRenderedLine(rendered);
+
+    expect(isolated).toBe(`\u2067${rendered}\u2069`);
+    expect(visibleWidth(isolated)).toBe(visibleWidth(rendered));
   });
 });
 

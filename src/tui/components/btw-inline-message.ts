@@ -21,7 +21,7 @@ export class BtwInlineMessage extends Container {
   /** Replaces the current BTW content without reallocating the host component. */
   setResult(params: BtwInlineMessageParams) {
     const question = sanitizeRenderableLine(params.question);
-    const text = sanitizeRenderableText(params.text);
+    const text = params.isError ? sanitizeRenderableText(params.text) : params.text;
     this.clear();
     this.addChild(new Spacer(1));
     this.addChild(new Text(theme.header(`BTW: ${question}`), 1, 0));

@@ -6,10 +6,7 @@ import * as ansi from "../../packages/terminal-core/src/ansi.js";
 import { formatTuiFooter, sanitizeRenderableLine } from "./tui-formatters.js";
 import { sleep, type PtyRun, waitFor } from "./tui-pty-test-support.js";
 
-export type FixtureLogEntry = {
-  method: string;
-  payload?: unknown;
-};
+export type FixtureLogEntry = { method: string; payload?: unknown };
 
 export const COMPACT_TERMINAL_SIZES = [
   [64, 18],
@@ -95,22 +92,45 @@ function buildInlineTerminalAttackPayload(tag: string, attack: string): Terminal
   };
 }
 
-type TestScreen = { col: number; row: number; rows: string[][] };
+type TestScreen = {
+  blankFrom: Array<number | undefined>;
+  blankRowsFrom: number | null;
+  col: number;
+  row: number;
+  rows: string[][];
+  provenance: boolean[][];
+};
 
-function screenRow(screen: TestScreen) {
-  return (screen.rows[screen.row] ??= []);
+type SynchronizedFrame = { cells: string[][]; provenance: boolean[][]; rows: string[] };
+
+const STALE_CELL_SENTINEL = "\u0000";
+
+function setCellProvenance(row: boolean[], start: number, end: number, current: boolean) {
+  row.push(...Array(Math.max(0, end - row.length)).fill(false));
+  row.fill(current, start, end);
 }
 
-function clearScreenCell(row: string[], col: number) {
+function markBlankFrom(screen: TestScreen, row: number, col: number, current: boolean) {
+  screen.blankFrom[row] = current ? Math.min(screen.blankFrom[row] ?? col, col) : undefined;
+}
+
+function assertEvidence(condition: boolean, message: string) {
+  if (!condition) {
+    throw new Error(message);
+  }
+}
+
+function clearScreenCell(row: string[], provenance: boolean[], col: number, current: boolean) {
   let lead = col;
   while (lead > 0 && row[lead] === "") {
     lead -= 1;
   }
   const width = Math.max(1, ansi.visibleWidth(row[lead] ?? ""));
+  setCellProvenance(provenance, lead, Math.min(row.length, lead + width), current);
   return row.fill(" ", lead, lead + width);
 }
 
-function writeScreenText(screen: TestScreen, text: string) {
+function writeScreenText(screen: TestScreen, text: string, synchronized: boolean) {
   for (const part of text.split(/([\b\r\n\t])/u)) {
     if (part === "\r") {
       screen.col = 0;
@@ -125,28 +145,33 @@ function writeScreenText(screen: TestScreen, text: string) {
         if (ansi.sanitizeForLog(grapheme) !== grapheme) {
           throw new Error("unsupported terminal control in TUI PTY evidence");
         }
-        const row = screenRow(screen);
-        row.push(...Array(Math.max(0, screen.col - row.length)).fill(" "));
+        const row = (screen.rows[screen.row] ??= []);
         if (/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(grapheme)) {
           continue;
         }
         const width = ansi.visibleWidth(grapheme);
+        const provenance = (screen.provenance[screen.row] ??= []);
+        const gapStart = row.length;
+        row.push(...Array(Math.max(0, screen.col - row.length)).fill(" "));
+        provenance.push(...Array(Math.max(0, row.length - provenance.length)).fill(false));
+        const from = screen.blankRowsFrom;
+        const blankFrom = from !== null && screen.row >= from ? 0 : screen.blankFrom[screen.row];
+        if (synchronized && blankFrom !== undefined) {
+          setCellProvenance(provenance, Math.max(gapStart, blankFrom), row.length, true);
+        }
         for (let col = screen.col; col < screen.col + width; col += 1) {
-          clearScreenCell(row, col);
+          clearScreenCell(row, provenance, col, synchronized);
         }
         row[screen.col] = grapheme;
         row.splice(screen.col + 1, Math.max(0, width - 1), ...Array(width - 1).fill(""));
+        setCellProvenance(provenance, screen.col, screen.col + width, synchronized);
         screen.col += width;
       }
     }
   }
 }
 
-const lifecycleCsi = new Set(
-  "\x1b[?25h|\x1b[?25l|\x1b[?2004h|\x1b[?2004l|\x1b[>7u|\x1b[?u|\x1b[c|\x1b[<u|\x1b[>4;2m|\x1b[>4;0m".split(
-    "|",
-  ),
-);
+const lifecycleCsiBody = /^(?:\?25[hl]|\?2004[hl]|>7u|\?u|c|<u|>4;[02]m)$/u;
 
 function assertAllowedCsi(value: string, controls: string[] = []) {
   const body = value.startsWith("\x1b[") ? value.slice(2) : "";
@@ -158,17 +183,15 @@ function assertAllowedCsi(value: string, controls: string[] = []) {
       value === "\x1b[H" ||
       /^(?:0|2|3)?J$/u.test(body) ||
       /^(?:0|2)?K$/u.test(body) ||
-      lifecycleCsi.has(value) ||
+      lifecycleCsiBody.test(body) ||
       value === "\x1b[?2026h" ||
       value === "\x1b[?2026l" ||
       /^(?:\d+(?:;\d+)*)?m$/u.test(body));
-  if (!allowed) {
-    throw new Error(`unsupported CSI in TUI PTY evidence: ${JSON.stringify(value)}`);
-  }
+  assertEvidence(allowed, `unsupported CSI in TUI PTY evidence: ${JSON.stringify(value)}`);
 }
 
 function applyScreenCsi(screen: TestScreen, value: string, synchronized: boolean) {
-  if (synchronized && lifecycleCsi.has(value)) {
+  if (synchronized && lifecycleCsiBody.test(value.slice(2))) {
     throw new Error(`lifecycle CSI inside synchronized frame: ${JSON.stringify(value)}`);
   }
   const final = value.at(-1) ?? "";
@@ -186,18 +209,36 @@ function applyScreenCsi(screen: TestScreen, value: string, synchronized: boolean
   } else if (final === "J") {
     const mode = Number(param || "0");
     if (mode === 0) {
-      clearScreenCell(screenRow(screen), screen.col).splice(screen.col);
-      screen.rows.splice(screen.row + 1);
+      const row = (screen.rows[screen.row] ??= []);
+      const provenance = (screen.provenance[screen.row] ??= []);
+      clearScreenCell(row, provenance, screen.col, synchronized);
+      row.splice(screen.col);
+      provenance.splice(screen.col);
+      screen.rows.length = screen.row + 1;
+      screen.provenance.length = screen.rows.length;
+      markBlankFrom(screen, screen.row, screen.col, synchronized);
+      screen.blankRowsFrom = synchronized
+        ? Math.min(screen.blankRowsFrom ?? screen.rows.length, screen.rows.length)
+        : null;
     } else if (mode === 2) {
       screen.rows = [];
+      screen.provenance = [];
+      screen.blankFrom = [];
+      screen.blankRowsFrom = synchronized ? 0 : null;
     }
   } else if (final === "K") {
-    const row = screenRow(screen);
+    const row = (screen.rows[screen.row] ??= []);
+    const provenance = (screen.provenance[screen.row] ??= []);
     const mode = Number(param || "0");
     if (mode === 0) {
-      clearScreenCell(row, screen.col).splice(screen.col);
+      clearScreenCell(row, provenance, screen.col, synchronized);
+      row.splice(screen.col);
+      provenance.splice(screen.col);
+      markBlankFrom(screen, screen.row, screen.col, synchronized);
     } else if (mode === 2) {
       screen.rows[screen.row] = [];
+      screen.provenance[screen.row] = [];
+      markBlankFrom(screen, screen.row, 0, synchronized);
     }
   }
 }
@@ -246,11 +287,18 @@ function terminalOutputIsComplete(raw: string) {
   return csi?.ended !== false && !raw.endsWith("\x1b");
 }
 
-export function synchronizedFrameRows(raw: string): string[][] {
+function parseSynchronizedFrames(raw: string): SynchronizedFrame[] {
   const start = "\x1b[?2026h";
   const end = "\x1b[?2026l";
-  const frames: string[][] = [];
-  const screen: TestScreen = { col: 0, row: 0, rows: [] };
+  const frames: SynchronizedFrame[] = [];
+  const screen: TestScreen = {
+    blankFrom: [],
+    blankRowsFrom: null,
+    col: 0,
+    row: 0,
+    rows: [],
+    provenance: [],
+  };
   let synchronized = false;
   let osc8Open = false;
   if (!terminalOutputIsComplete(raw)) {
@@ -258,36 +306,39 @@ export function synchronizedFrameRows(raw: string): string[][] {
   }
   for (const segment of ansiSequences.splitAnsiSegments(raw)) {
     if (segment.kind === "text") {
-      writeScreenText(screen, segment.value);
+      writeScreenText(screen, segment.value, synchronized);
     } else if (segment.controls.length > 0 || !segment.value.startsWith("\x1b")) {
       throw new Error("unsupported terminal sequence in TUI PTY evidence");
     } else if (segment.value === start) {
-      if (synchronized) {
-        throw new Error("nested synchronized frame");
-      }
+      assertEvidence(!synchronized, "nested synchronized frame");
       synchronized = true;
+      screen.provenance = screen.rows.map((row) => Array(row.length).fill(false));
+      screen.blankFrom = [];
+      screen.blankRowsFrom = null;
     } else if (segment.value === end) {
-      if (!synchronized) {
-        throw new Error("unmatched synchronized frame end");
-      }
-      if (osc8Open) {
-        throw new Error("unclosed OSC 8 hyperlink in synchronized frame");
-      }
-      frames.push(Array.from(screen.rows, (row) => row?.join("").trimEnd() ?? ""));
+      assertEvidence(synchronized, "unmatched synchronized frame end");
+      assertEvidence(!osc8Open, "unclosed OSC 8 hyperlink in synchronized frame");
+      const cells = screen.rows.map((row) => [...row]);
+      frames.push({
+        cells,
+        provenance: cells.map((row, rowIndex) =>
+          row.map((_, colIndex) => screen.provenance[rowIndex]?.[colIndex] === true),
+        ),
+        rows: cells.map((row) => row.join("").trimEnd()),
+      });
       synchronized = false;
     } else if (segment.value.startsWith("\x1b]")) {
       const target = assertAllowedOsc(
         segment.value.slice(2, segment.value.endsWith("\x1b\\") ? -2 : -1),
       );
-      if (!synchronized && target !== "") {
-        throw new Error("OSC 8 open outside synchronized frame");
-      }
+      assertEvidence(synchronized || target === "", "OSC 8 open outside synchronized frame");
       if (!synchronized) {
         continue;
       }
-      if (target !== "" && osc8Open) {
-        throw new Error("unbalanced OSC 8 hyperlink in synchronized frame");
-      }
+      assertEvidence(
+        target === "" || !osc8Open,
+        "unbalanced OSC 8 hyperlink in synchronized frame",
+      );
       osc8Open = target !== "";
     } else if (segment.value.startsWith("\x1b[")) {
       assertAllowedCsi(segment.value, segment.controls);
@@ -299,14 +350,31 @@ export function synchronizedFrameRows(raw: string): string[][] {
   return synchronized || osc8Open ? [] : frames;
 }
 
+export function synchronizedFrameRows(raw: string): string[][] {
+  return parseSynchronizedFrames(raw).map((frame) => frame.rows);
+}
+
+function latestFrameHasRow(raw: string, predicate: (row: string) => boolean) {
+  const frame = parseSynchronizedFrames(raw).at(-1);
+  return (
+    frame?.cells.some((cells, rowIndex) => {
+      const provenance = frame.provenance[rowIndex] ?? [];
+      const authoredRow = cells
+        .map((cell, colIndex) => (cell === "" || provenance[colIndex] ? cell : STALE_CELL_SENTINEL))
+        .join("")
+        .trimEnd();
+      return predicate(authoredRow);
+    }) ?? false
+  );
+}
+
 export function hasSynchronizedFrameRow(raw: string, markers: string[], expectedText: string) {
-  return synchronizedFrameRows(raw).some((rows) =>
-    rows.some(
-      (row) =>
-        !row.includes("\t") &&
-        markers.every((marker) => row.includes(marker)) &&
-        row.includes(expectedText),
-    ),
+  return latestFrameHasRow(
+    raw,
+    (row) =>
+      !row.includes("\t") &&
+      markers.every((marker) => row.includes(marker)) &&
+      row.includes(expectedText),
   );
 }
 
@@ -315,17 +383,22 @@ async function assertTerminalAttackSanitized(
   payload: TerminalAttackPayload,
   timeoutMs: number,
 ) {
-  await fixture.run.waitForOutput(payload.markers.at(-1) ?? "", timeoutMs);
+  const observed = await fixture.run.waitForOutput(payload.markers.at(-1) ?? "", timeoutMs);
   const visible = fixture.run.visibleOutput();
   expect(payload.markers.every((marker) => visible.includes(marker))).toBe(true);
-  const raw = await waitFor({
-    timeoutMs,
-    read: () => {
-      const output = fixture.run.output();
-      return hasSynchronizedFrameRow(output, payload.markers, payload.expectedLine) ? output : null;
-    },
-    onTimeout: () => new Error(`expected completed synchronized row\n${fixture.run.output()}`),
-  });
+  if (!hasSynchronizedFrameRow(observed, payload.markers, payload.expectedLine)) {
+    await waitFor({
+      timeoutMs,
+      read: () => {
+        const output = fixture.run.output();
+        return hasSynchronizedFrameRow(output, payload.markers, payload.expectedLine)
+          ? output
+          : null;
+      },
+      onTimeout: () => new Error(`expected completed synchronized row\n${fixture.run.output()}`),
+    });
+  }
+  const raw = fixture.run.output();
   for (const attack of payload.attacks) {
     expect(raw).not.toContain(attack);
   }
@@ -355,8 +428,9 @@ async function assertTerminalAttackPrefixSanitized(
 }
 
 function hasStatusFrame(raw: string, markers: string[], status: RegExp) {
-  return synchronizedFrameRows(raw).some((rows) =>
-    rows.some((row) => markers.every((marker) => row.includes(marker)) && status.test(row)),
+  return latestFrameHasRow(
+    raw,
+    (row) => markers.every((marker) => row.includes(marker)) && status.test(row),
   );
 }
 
@@ -511,7 +585,6 @@ async function exerciseGatewayOutputSafety(
 
   try {
     await fixture.run.waitForOutput("local ready", startupTimeoutMs);
-    const outputOffset = fixture.run.output().length;
     await fixture.run.write("/gateway-status\r", { delay: false });
     await fixture.waitForLogEntry((entry) => entry.method === "getGatewayStatus");
     await fixture.waitForLogEntry((entry) => entry.method === "disconnect");
@@ -521,9 +594,7 @@ async function exerciseGatewayOutputSafety(
     for (const attack of systemAttacks) {
       expect(raw).not.toContain(attack);
     }
-    expect(
-      hasStatusFrame(fixture.run.output().slice(outputOffset), idlePayload.markers, /\| idle/u),
-    ).toBe(true);
+    expect(hasStatusFrame(fixture.run.output(), idlePayload.markers, /\| idle/u)).toBe(true);
 
     const helpOffset = fixture.run.visibleOutput().length;
     await fixture.run.write("/help\r", { delay: false });
@@ -558,10 +629,14 @@ async function exerciseMarkdownAndAutocompleteOutputSafety(
   try {
     await fixture.run.waitForOutput("local ready", startupTimeoutMs);
     await fixture.waitForLogEntry((entry) => entry.method === "listCommands");
-    await assertTerminalAttackSanitized(fixture, inFlight, 5_000);
+    const inFlightAssertion = assertTerminalAttackSanitized(fixture, inFlight, 5_000);
+    await fixture.run.write("\x14", { delay: false });
+    await inFlightAssertion;
 
     await fixture.run.write("/t08d", { delay: false });
-    await assertTerminalAttackSanitized(fixture, command, 5_000);
+    const commandAssertion = assertTerminalAttackSanitized(fixture, command, 5_000);
+    await fixture.run.write("\x14", { delay: false });
+    await commandAssertion;
 
     await fixture.run.write("\x1b", { delay: false });
     await sleep(50);

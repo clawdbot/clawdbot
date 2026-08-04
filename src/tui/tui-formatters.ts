@@ -246,6 +246,10 @@ function isolateRtlLine(line: string): string {
   return `${RTL_ISOLATE_START}${line}${RTL_ISOLATE_END}`;
 }
 
+export function isolateRtlRenderedLine(line: string): string {
+  return isolateRtlLine(line);
+}
+
 function applyRtlIsolation(text: string): string {
   if (!RTL_SCRIPT_RE.test(text)) {
     return text;
@@ -256,7 +260,7 @@ function applyRtlIsolation(text: string): string {
     .join("\n");
 }
 
-export function sanitizeRenderableText(text: string): string {
+export function sanitizeMarkdownSource(text: string): string {
   if (!text) {
     return text;
   }
@@ -264,17 +268,20 @@ export function sanitizeRenderableText(text: string): string {
   const hasLongTokens = LONG_TOKEN_TEST_RE.test(text);
   const controlSafe = sanitizeTerminalControlsAndBinary(text);
   if (controlSafe === text && !hasLongTokens) {
-    return applyRtlIsolation(text);
+    return text;
   }
 
-  const tokenSafe = LONG_TOKEN_TEST_RE.test(controlSafe)
+  return LONG_TOKEN_TEST_RE.test(controlSafe)
     ? transformOutsideCode(controlSafe, (segment) =>
         LONG_TOKEN_TEST_RE.test(segment)
           ? segment.replace(LONG_TOKEN_RE, normalizeLongTokenForDisplay)
           : segment,
       )
     : controlSafe;
-  return applyRtlIsolation(tokenSafe);
+}
+
+export function sanitizeRenderableText(text: string): string {
+  return applyRtlIsolation(sanitizeMarkdownSource(text));
 }
 
 export function sanitizeRenderableLine(text: string): string {
