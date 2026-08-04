@@ -13,7 +13,7 @@ import {
   readMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
 import { filterLiveShortTermRecallEntries } from "./short-term-promotion-record.js";
-import { isShortTermRecallEntryInsideManagedDreamingFence } from "./short-term-promotion-rehydrate.js";
+import { resolveShortTermRecallEntryLocation } from "./short-term-promotion-rehydrate.js";
 import {
   SHORT_TERM_LOCK_STALE_MS,
   isProcessLikelyAlive,
@@ -292,17 +292,23 @@ export async function repairShortTermPromotionArtifacts(params: {
         entries: Object.values(comparableStore.entries),
       });
       const liveEntryKeys = new Set(liveEntries.map((entry) => entry.key));
-      const managedDreamingEntryKeys = new Set(
-        (
-          await Promise.all(
-            liveEntries.map(async (entry) =>
-              (await isShortTermRecallEntryInsideManagedDreamingFence(workspaceDir, entry))
-                ? entry.key
-                : null,
-            ),
-          )
-        ).filter((key): key is string => key !== null),
+      const locatedEntries = await Promise.all(
+        liveEntries.map(async (entry) => ({
+          entry,
+          location: await resolveShortTermRecallEntryLocation(workspaceDir, entry),
+        })),
       );
+      const managedDreamingEntryKeys = new Set<string>();
+      for (const located of locatedEntries) {
+        if (!located.location) {
+          continue;
+        }
+        if (located.location.insideManagedDreamingFence) {
+          managedDreamingEntryKeys.add(located.entry.key);
+        } else {
+          comparableStore.entries[located.entry.key] = located.location.entry;
+        }
+      }
       const removedEntryKeys = new Set<string>();
       for (const key of Object.keys(comparableStore.entries)) {
         if (!liveEntryKeys.has(key) || managedDreamingEntryKeys.has(key)) {

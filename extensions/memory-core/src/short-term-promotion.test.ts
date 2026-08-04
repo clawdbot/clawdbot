@@ -3618,12 +3618,12 @@ describe("short-term promotion", () => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
         "# 2026-04-01",
         "",
-        "- Keep gateway routing stable.",
-        "",
         "## REM Sleep",
         "<!-- openclaw:dreaming:rem:start -->",
         "- Theme: `kept` kept surfacing across 1 memories.",
         "<!-- openclaw:dreaming:rem:end -->",
+        "",
+        "- Keep gateway routing stable.",
       ]);
       await testing.writeRawRecallStore(workspaceDir, {
         version: 1,
@@ -3633,7 +3633,7 @@ describe("short-term promotion", () => {
             key: "live",
             path: "memory/2026-04-01.md",
             startLine: 3,
-            endLine: 3,
+            endLine: 4,
             source: "memory",
             snippet: "Keep gateway routing stable.",
             recallCount: 1,

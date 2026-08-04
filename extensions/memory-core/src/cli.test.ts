@@ -1959,6 +1959,76 @@ describe("memory cli", () => {
     });
   });
 
+  it("keeps rem harness previews read-only when recall artifacts need repair", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const nowIso = "2026-04-04T00:00:00.000Z";
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "2026-04-01.md"),
+        [
+          "# 2026-04-01",
+          "",
+          "## REM Sleep",
+          "<!-- openclaw:dreaming:rem:start -->",
+          "- Theme: `kept` kept surfacing across 1 memories.",
+          "<!-- openclaw:dreaming:rem:end -->",
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+      await shortTermTesting.writeRawRecallStore(workspaceDir, {
+        version: 1,
+        updatedAt: nowIso,
+        entries: {
+          managed: {
+            key: "managed",
+            path: "memory/2026-04-01.md",
+            startLine: 5,
+            endLine: 5,
+            source: "memory",
+            snippet: "Theme: `kept` kept surfacing across 1 memories.",
+            recallCount: 1,
+            dailyCount: 0,
+            groundedCount: 0,
+            totalScore: 1,
+            maxScore: 1,
+            firstRecalledAt: nowIso,
+            lastRecalledAt: nowIso,
+            queryHashes: ["managed"],
+            recallDays: ["2026-04-01"],
+            conceptTags: ["kept", "1.00"],
+          },
+        },
+      });
+      await shortTermTesting.writeRawPhaseSignalStore(workspaceDir, {
+        version: 1,
+        updatedAt: nowIso,
+        entries: {
+          managed: { key: "managed", lightHits: 1, remHits: 1, lastRemAt: nowIso },
+        },
+      });
+      const beforeRecall = await shortTermTesting.readRecallStore(workspaceDir, nowIso);
+      const beforePhase = await shortTermTesting.readPhaseSignalStore(workspaceDir, nowIso);
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      await runMemoryCli(["rem-harness", "--json"]);
+
+      expect(firstWrittenJsonArg<Record<string, unknown>>(writeJson)).toBeDefined();
+      await expect(shortTermTesting.readRecallStore(workspaceDir, nowIso)).resolves.toEqual(
+        beforeRecall,
+      );
+      await expect(shortTermTesting.readPhaseSignalStore(workspaceDir, nowIso)).resolves.toEqual(
+        beforePhase,
+      );
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
   it("previews rem harness output from a historical daily file path", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const historyDir = path.join(workspaceDir, "history");

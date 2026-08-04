@@ -147,7 +147,7 @@ function compareCandidateWindow(
 
 function relocateCandidateRange(
   lines: string[],
-  candidate: PromotionCandidate,
+  candidate: Pick<PromotionCandidate, "startLine" | "endLine" | "snippet">,
 ): { startLine: number; endLine: number; snippet: string } | null {
   const targetSnippet = normalizeSnippet(candidate.snippet);
   const preferredSpan = Math.max(1, candidate.endLine - candidate.startLine + 1);
@@ -301,10 +301,15 @@ function lineRangeOverlapsDreamingFence(
   return false;
 }
 
-export async function isShortTermRecallEntryInsideManagedDreamingFence(
+export type ShortTermRecallEntryLocation = {
+  entry: ShortTermRecallEntry;
+  insideManagedDreamingFence: boolean;
+};
+
+export async function resolveShortTermRecallEntryLocation(
   workspaceDir: string,
   entry: ShortTermRecallEntry,
-): Promise<boolean> {
+): Promise<ShortTermRecallEntryLocation | null> {
   for (const sourcePath of resolveShortTermSourcePathCandidates(workspaceDir, entry.path)) {
     let rawSource: string;
     try {
@@ -315,11 +320,34 @@ export async function isShortTermRecallEntryInsideManagedDreamingFence(
       }
       throw err;
     }
-    if (lineRangeOverlapsDreamingFence(rawSource.split(/\r?\n/), entry.startLine, entry.endLine)) {
-      return true;
+    const lines = rawSource.split(/\r?\n/);
+    const relocated = relocateCandidateRange(lines, entry);
+    if (!relocated) {
+      continue;
     }
+    return {
+      entry: {
+        ...entry,
+        startLine: relocated.startLine,
+        endLine: relocated.endLine,
+        snippet: relocated.snippet,
+      },
+      insideManagedDreamingFence: lineRangeOverlapsDreamingFence(
+        lines,
+        relocated.startLine,
+        relocated.endLine,
+      ),
+    };
   }
-  return false;
+  return null;
+}
+
+export async function isShortTermRecallEntryInsideManagedDreamingFence(
+  workspaceDir: string,
+  entry: ShortTermRecallEntry,
+): Promise<boolean> {
+  const location = await resolveShortTermRecallEntryLocation(workspaceDir, entry);
+  return location?.insideManagedDreamingFence ?? false;
 }
 
 export async function rehydratePromotionCandidate(
