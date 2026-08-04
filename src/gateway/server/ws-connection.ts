@@ -391,9 +391,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
       closed = true;
       clearTimeout(handshakeTimer);
-      if (pingTimer !== undefined) {
-        clearInterval(pingTimer);
-      }
+      clearInterval(pingTimer);
       cleanupWorkerConnection?.();
       releasePreauthBudget();
       try {
