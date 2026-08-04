@@ -37,6 +37,7 @@ describe("hasSynchronizedFrameRow", () => {
     expect(hasExpected(frame("T08A  safe T08B"))).toBe(false);
     expect(parse(frame("界X\r\x1b[2G?"))[0]).toEqual([" ?X"]);
     expect(parse(frame("界X\r\x1b[2G\x1b[K"))[0]).toEqual([""]);
+    expect(parse(`${EXPECTED}${frame("")}`)).toEqual([[""]]);
     expect(parse(frame("\u2067RTL\u2069"))[0]).toEqual(["RTL"]);
     expect(parse(frame(`${"x".repeat(32)}\x1b[3Jy`), { cols: 32, rows: 2 })[0]).toEqual([
       "x".repeat(32),
