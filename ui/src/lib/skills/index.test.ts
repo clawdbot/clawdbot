@@ -199,6 +199,67 @@ describe("loadSkills", () => {
     expect(state.clawhubVerdictsError).toBeNull();
   });
 
+  it("keys verdicts by canonical slug when the requested alias differs (#108647)", async () => {
+    const { state, request } = createState();
+    request.mockImplementation(async (method: string) => {
+      if (method === "skills.status") {
+        return {
+          workspaceDir: "/tmp/workspace",
+          managedSkillsDir: "/tmp/skills",
+          skills: [
+            {
+              name: "AgentReceipt",
+              skillKey: "agentreceipt",
+              source: "workspace",
+              clawhub: {
+                status: "linked",
+                valid: true,
+                registry: "https://clawhub.ai",
+                slug: "agentreceipt",
+                installedVersion: "1.2.3",
+                installedAt: 123,
+              },
+            },
+          ],
+        };
+      }
+      if (method === "skills.securityVerdicts") {
+        return {
+          schema: "openclaw.skills.security-verdicts.v1",
+          items: [
+            {
+              registry: "https://clawhub.ai",
+              ok: true,
+              decision: "pass",
+              reasons: [],
+              // Requested with a version suffix; the canonical identity is
+              // carried separately.
+              requestedSlug: "agentreceipt@1.2.3",
+              requestedVersion: "1.2.3",
+              slug: "agentreceipt",
+              version: "1.2.3",
+              securityStatus: "clean",
+              securityPassed: true,
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    await loadSkills(state);
+
+    // The map must be keyed by the canonical slug so verdictForSkill's
+    // link.slug lookup hits instead of falling back to "Unavailable".
+    expect(state.clawhubVerdicts).toEqual({
+      "https://clawhub.ai\u0000agentreceipt\u00001.2.3": expect.objectContaining({
+        ok: true,
+        decision: "pass",
+        securityStatus: "clean",
+      }),
+    });
+  });
+
   it("loads selected agent skills and verdicts with the agent id", async () => {
     const { state, request } = createState();
     state.skillsAgentId = "research";

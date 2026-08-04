@@ -488,8 +488,12 @@ async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStat
       (response?.items ?? []).map((item) => [
         clawhubVerdictKey({
           registry: item.registry,
-          slug: item.requestedSlug,
-          version: item.requestedVersion,
+          // Backend items carry the canonical slug/version when the requested
+          // alias differs (e.g. requested with version suffix). Key the map by
+          // the canonical identity so verdictForSkill's link.slug lookup hits
+          // (#108647).
+          slug: item.slug ?? item.requestedSlug,
+          version: item.version ?? item.requestedVersion,
         }),
         item,
       ]),
