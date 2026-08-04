@@ -3,6 +3,11 @@ import crypto from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
+import {
+  readProviderPromptAccountingContext,
+  type ProviderPromptAccountingContext,
+  withoutProviderPromptAccountingContext,
+} from "../../llm/providers/stream-wrappers/provider-prompt-accounting.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 
 type ProviderPromptSnapshot = {
@@ -10,9 +15,6 @@ type ProviderPromptSnapshot = {
   digest: string;
   byteWeight: number;
 };
-
-export type ProviderPromptAccountingContext = Pick<Context, "systemPrompt" | "tools">;
-type ProviderStreamOptions = Parameters<StreamFn>[2];
 
 export type ProviderPromptState = {
   lastAttempt?: ProviderPromptSnapshot;
@@ -25,9 +27,6 @@ export type ProviderPromptState = {
 };
 
 const PROVIDER_PROMPT_STATES_KEY = Symbol.for("openclaw.providerPromptStates");
-const PROVIDER_PROMPT_ACCOUNTING_CONTEXT_KEY = Symbol.for(
-  "openclaw.providerPromptAccountingContext",
-);
 const providerPromptStates = resolveGlobalSingleton(
   PROVIDER_PROMPT_STATES_KEY,
   () => new Map<string, ProviderPromptState>(),
@@ -64,27 +63,6 @@ export function getProviderPromptState(runId: string): ProviderPromptState {
 
 export function clearProviderPromptState(runId: string): void {
   providerPromptStates.delete(runId);
-}
-
-/** Carries cached provider-prefix fields through context-cloning wrappers for admission only. */
-export function withProviderPromptAccountingContext(
-  options: ProviderStreamOptions,
-  accountingContext: ProviderPromptAccountingContext,
-): ProviderStreamOptions {
-  return Object.assign({}, options, {
-    [PROVIDER_PROMPT_ACCOUNTING_CONTEXT_KEY]: accountingContext,
-  }) as ProviderStreamOptions;
-}
-
-function readProviderPromptAccountingContext(
-  options: ProviderStreamOptions,
-): ProviderPromptAccountingContext | undefined {
-  if (!options || typeof options !== "object") {
-    return undefined;
-  }
-  return (options as Record<PropertyKey, unknown>)[PROVIDER_PROMPT_ACCOUNTING_CONTEXT_KEY] as
-    | ProviderPromptAccountingContext
-    | undefined;
 }
 
 /** Installs a run-scoped admission hook at the innermost provider-context boundary. */
@@ -173,7 +151,7 @@ export function wrapStreamFnWithProviderPromptState(params: {
         ? params.state.contextAdmission(model, context, accountingContext)
         : context;
     const originalOnPayload = options?.onPayload;
-    const transportOptions: NonNullable<ProviderStreamOptions> = {
+    const transportOptions = withoutProviderPromptAccountingContext({
       ...options,
       onPayload: async (payload, payloadModel) => {
         const replacement = await originalOnPayload?.(payload, payloadModel);
@@ -187,8 +165,7 @@ export function wrapStreamFnWithProviderPromptState(params: {
         recordProviderPromptAttempt(params.state, snapshot);
         return finalPayload;
       },
-    };
-    Reflect.deleteProperty(transportOptions, PROVIDER_PROMPT_ACCOUNTING_CONTEXT_KEY);
+    });
     const stream = await params.streamFn(model, admittedContext, transportOptions);
     return stream;
   };

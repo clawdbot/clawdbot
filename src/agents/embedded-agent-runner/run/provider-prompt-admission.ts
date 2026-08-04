@@ -1,7 +1,7 @@
 /** Admits the exact provider context without mutating persisted conversation history. */
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { ProviderPromptAccountingContext } from "../../../llm/providers/stream-wrappers/provider-prompt-accounting.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import type { ProviderPromptAccountingContext } from "../provider-prompt-state.js";
 import {
   cloneToolResultPromptProjectionState,
   type ToolResultPromptProjectionState,

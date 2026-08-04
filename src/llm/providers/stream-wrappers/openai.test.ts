@@ -11,6 +11,7 @@ import {
   createOpenAIThinkingLevelWrapper,
   createCodexNativeWebSearchWrapper,
 } from "./openai.js";
+import { readProviderPromptAccountingContext } from "./provider-prompt-accounting.js";
 
 function createPayloadCapture(opts?: { initialReasoning?: unknown }) {
   const payloads: Array<Record<string, unknown>> = [];
@@ -118,7 +119,9 @@ describe("createOpenAICompletionsToolsCompatWrapper", () => {
 describe("createCodexNativeWebSearchWrapper", () => {
   it("does not inject native web_search when code mode owns the tool surface", () => {
     const payloads: Array<Record<string, unknown>> = [];
+    let accountingTools: unknown;
     const baseStreamFn: StreamFn = (model, context, options) => {
+      accountingTools = readProviderPromptAccountingContext(options)?.tools;
       const payload: Record<string, unknown> = {
         model: model.id,
         tools: [
@@ -178,6 +181,50 @@ describe("createCodexNativeWebSearchWrapper", () => {
     expect(payloads[0]?.tools).toEqual([
       { type: "function", name: "exec" },
       { type: "function", name: "wait" },
+    ]);
+    expect(accountingTools).toEqual([
+      { name: "exec", description: "", parameters: {} },
+      { name: "wait", description: "", parameters: {} },
+    ]);
+  });
+
+  it("accounts for native web_search before the provider boundary admits the prompt", () => {
+    let accountingTools: unknown;
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      accountingTools = readProviderPromptAccountingContext(options)?.tools;
+      const payload: Record<string, unknown> = { model: model.id, tools: [] };
+      options?.onPayload?.(payload, model);
+      return createAssistantMessageEventStream();
+    };
+    const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
+      config: {
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              openaiCodex: { enabled: true, mode: "cached" },
+            },
+          },
+        },
+      },
+    });
+
+    void wrapped(
+      {
+        api: "openai-chatgpt-responses",
+        provider: "gateway",
+        id: "gpt-5.5",
+      } as Model<"openai-chatgpt-responses">,
+      {
+        messages: [],
+        tools: [{ name: "read", description: "Read a file", parameters: {} }],
+      },
+      {},
+    );
+
+    expect(accountingTools).toEqual([
+      { name: "read", description: "Read a file", parameters: {} },
+      { type: "web_search", external_web_access: false },
     ]);
   });
 

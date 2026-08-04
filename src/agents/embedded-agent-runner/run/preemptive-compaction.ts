@@ -100,6 +100,13 @@ function estimateProviderToolTokenPressure(tool: unknown): number {
   }
   // Provider transports serialize the model-facing tool contract, not AgentTool runtime metadata
   // such as labels, output schemas, execution policy, or callbacks.
+  if (
+    !Object.hasOwn(tool, "name") &&
+    !Object.hasOwn(tool, "description") &&
+    !Object.hasOwn(tool, "parameters")
+  ) {
+    return estimateJsonPayloadTokenPressure(tool);
+  }
   return estimateJsonPayloadTokenPressure({
     name: tool.name,
     description: tool.description,

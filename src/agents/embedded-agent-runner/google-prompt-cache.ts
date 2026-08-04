@@ -17,6 +17,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { parseGeminiAuth } from "../../infra/gemini-auth.js";
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
 import { readResponseWithLimit } from "../../infra/http-body.js";
+import { withProviderPromptAccountingContext } from "../../llm/providers/stream-wrappers/provider-prompt-accounting.js";
 import { streamWithPayloadPatch } from "../../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type { Model } from "../../llm/types.js";
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
@@ -31,7 +32,6 @@ import type { StreamFn } from "../runtime/index.js";
 import { isSessionWriteLockAcquireError } from "../session-write-lock-error.js";
 import { log } from "./logger.js";
 import { isGooglePromptCacheEligible, resolveCacheRetention } from "./prompt-cache-retention.js";
-import { withProviderPromptAccountingContext } from "./provider-prompt-state.js";
 import { EmbeddedAttemptSessionTakeoverError } from "./run/attempt.session-lock.js";
 
 const GOOGLE_PROMPT_CACHE_CUSTOM_TYPE = "openclaw.google-prompt-cache";

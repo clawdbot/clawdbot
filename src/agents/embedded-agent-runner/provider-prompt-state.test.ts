@@ -5,12 +5,17 @@ import {
   type Model,
 } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
+import { createCodexNativeWebSearchWrapper } from "../../llm/providers/stream-wrappers/openai.js";
+import type { AgentMessage } from "../runtime/index.js";
 import {
   clearProviderPromptState,
   getProviderPromptState,
+  installProviderPromptContextAdmission,
   markLastProviderPromptContextRejected,
   wrapStreamFnWithProviderPromptState,
 } from "./provider-prompt-state.js";
+import { estimateLlmBoundaryTokenPressure } from "./run/preemptive-compaction.js";
+import { admitProviderPrompt } from "./run/provider-prompt-admission.js";
 
 const model = {
   id: "model-1",
@@ -299,6 +304,77 @@ describe("provider prompt state", () => {
       timestamp: 1,
     });
     await result.result();
+    clearProviderPromptState(runId);
+  });
+
+  it("routes a near-budget native web-search prompt before transport", async () => {
+    const runId = "native-web-search-admission";
+    const state = getProviderPromptState(runId);
+    const context = {
+      messages: [{ role: "user", content: "m".repeat(4_000), timestamp: 1 }],
+      tools: [],
+    } as Context;
+    const baseEstimate = estimateLlmBoundaryTokenPressure({
+      messages: context.messages as AgentMessage[],
+      prompt: "",
+      tools: [],
+    });
+    const transport = vi.fn<StreamFn>(() => createResultStream("stop"));
+    const providerBoundary = wrapStreamFnWithProviderPromptState({
+      streamFn: transport,
+      state,
+      effectiveContextTokenBudget: baseEstimate + 1,
+    });
+    const removeAdmission = installProviderPromptContextAdmission(
+      state,
+      (_model, providerContext, accountingContext) => {
+        const admission = admitProviderPrompt({
+          context: providerContext,
+          accountingContext,
+          contextTokenBudget: baseEstimate + 1,
+          midTurnPrecheckEnabled: true,
+          reserveTokens: 0,
+          toolResultAggregateMaxChars: 1_000_000,
+          toolResultMaxChars: 64_000,
+          projectionState: {
+            replacements: new Map(),
+            frozen: new Set(),
+            ambiguousBaseKeys: new Set(),
+            sourceTextByKey: new Map(),
+          },
+        });
+        if (admission.status === "recovery_required") {
+          throw new Error("provider prompt requires recovery");
+        }
+        return admission.context;
+      },
+    );
+    const wrapped = createCodexNativeWebSearchWrapper(providerBoundary, {
+      config: {
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              openaiCodex: { enabled: true, mode: "cached" },
+            },
+          },
+        },
+      },
+    });
+
+    await expect(
+      wrapped(
+        {
+          api: "openai-chatgpt-responses",
+          provider: "gateway",
+          id: "gpt-5.5",
+        } as Model,
+        context,
+      ),
+    ).rejects.toThrow("provider prompt requires recovery");
+    expect(transport).not.toHaveBeenCalled();
+
+    removeAdmission();
     clearProviderPromptState(runId);
   });
 });

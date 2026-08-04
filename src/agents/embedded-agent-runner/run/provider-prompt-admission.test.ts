@@ -2,6 +2,7 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
+import { estimateLlmBoundaryTokenPressure } from "./preemptive-compaction.js";
 import { admitProviderPrompt } from "./provider-prompt-admission.js";
 
 type ProviderContext = Parameters<StreamFn>[1];
@@ -100,6 +101,33 @@ describe("provider prompt admission", () => {
         result.request.promptBudgetBeforeReserve,
       );
     }
+  });
+
+  it("routes a near-budget prompt after a provider-native tool is added", () => {
+    const context = {
+      messages: [{ role: "user", content: "m".repeat(4_000), timestamp: 1 }],
+      tools: [],
+    } as ProviderContext;
+    const baseEstimate = estimateLlmBoundaryTokenPressure({
+      messages: context.messages as AgentMessage[],
+      prompt: "",
+      tools: [],
+    });
+    const limits = {
+      contextTokenBudget: baseEstimate + 1,
+      reserveTokens: 0,
+    };
+
+    expect(admit(context, undefined, limits).status).toBe("ready");
+
+    const result = admit(context, undefined, {
+      ...limits,
+      accountingContext: {
+        tools: [{ type: "web_search", external_web_access: false }],
+      },
+    });
+
+    expect(result.status).toBe("recovery_required");
   });
 
   it("defers tool-schema-only pressure to the provider", () => {

@@ -24,6 +24,7 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import {
+  buildCodexNativeWebSearchTool,
   patchCodexNativeWebSearchPayload,
   resolveCodexNativeSearchActivation,
 } from "../../../agents/codex-native-web-search-core.js";
@@ -40,6 +41,11 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { streamSimple } from "../../stream.js";
 import type { SimpleStreamOptions } from "../../types.js";
+import {
+  readProviderPromptAccountingContext,
+  type ProviderPromptAccountingContext,
+  withProviderPromptAccountingContext,
+} from "./provider-prompt-accounting.js";
 import { mapThinkingLevelToReasoningEffort } from "./reasoning-effort-utils.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
@@ -169,6 +175,30 @@ function resolveCodeModeVisibleToolNames(context: {
     : undefined;
 }
 
+function resolveProviderPromptAccountingContext(
+  context: ProviderPromptAccountingContext,
+  options: Parameters<StreamFn>[2],
+): ProviderPromptAccountingContext {
+  const accountingContext = readProviderPromptAccountingContext(options) ?? context;
+  return {
+    systemPrompt: accountingContext.systemPrompt,
+    tools: accountingContext.tools,
+  };
+}
+
+function filterProviderPromptAccountingTools(
+  tools: ProviderPromptAccountingContext["tools"],
+  visibleToolNames: ReadonlySet<string>,
+): ProviderPromptAccountingContext["tools"] {
+  if (!Array.isArray(tools)) {
+    return tools;
+  }
+  return tools.filter((tool) => {
+    const name = readCodeModePayloadToolName(tool);
+    return typeof name === "string" && visibleToolNames.has(name);
+  });
+}
+
 function shouldApplyOpenAIReasoningCompatibility(model: {
   api?: unknown;
   provider?: unknown;
@@ -219,6 +249,9 @@ function hasResponsesWebSearchTool(tools: unknown): boolean {
   return tools.some((tool) => {
     if (!isRecord(tool)) {
       return false;
+    }
+    if (tool.name === "web_search") {
+      return true;
     }
     if (tool.type === "web_search") {
       return true;
@@ -661,8 +694,16 @@ export function createCodexNativeWebSearchWrapper(
         }/${model.id ?? "unknown"}`,
       );
       const originalOnPayload = options?.onPayload;
+      const accountingContext = resolveProviderPromptAccountingContext(context, options);
+      const accountingOptions = withProviderPromptAccountingContext(options, {
+        ...accountingContext,
+        tools: filterProviderPromptAccountingTools(
+          accountingContext.tools,
+          codeModeVisibleToolNames,
+        ),
+      });
       const codeModeOptions: OpenClawSimpleStreamOptions = {
-        ...options,
+        ...accountingOptions,
         openclawCodeModeToolSurface: true,
         onPayload: (payload) => {
           filterCodeModePayloadTools(payload, codeModeVisibleToolNames);
@@ -726,8 +767,19 @@ export function createCodexNativeWebSearchWrapper(
     );
 
     const originalOnPayload = options?.onPayload;
+    const accountingContext = resolveProviderPromptAccountingContext(context, options);
+    const accountingTools = Array.isArray(accountingContext.tools)
+      ? [...accountingContext.tools]
+      : [];
+    if (!hasResponsesWebSearchTool(accountingTools)) {
+      accountingTools.push(buildCodexNativeWebSearchTool(params.config));
+    }
+    const accountingOptions = withProviderPromptAccountingContext(options, {
+      ...accountingContext,
+      tools: accountingTools,
+    });
     return underlying(model, context, {
-      ...options,
+      ...accountingOptions,
       onPayload: (payload) => {
         const result = patchCodexNativeWebSearchPayload({
           payload,
