@@ -1227,9 +1227,10 @@ describe("TUI PTY real backends", () => {
       try {
         await valid.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
         await invalid.run.waitForOutput("gateway token mismatch", LOCAL_STARTUP_TIMEOUT_MS);
-        expect(
-          `${valid.run.output()}\n${invalid.run.output()}\n${shared.gateway.logs()}`,
-        ).not.toContain(invalidToken);
+        const output = `${valid.run.output()}\n${invalid.run.output()}\n${shared.gateway.logs()}`;
+        for (const token of [shared.gateway.gatewayToken, invalidToken]) {
+          expect(output.includes(token), "Gateway token leaked into captured output").toBe(false);
+        }
       } finally {
         await Promise.all([valid.cleanup(), invalid.cleanup()]);
       }
@@ -1254,16 +1255,32 @@ describe("TUI PTY real backends", () => {
         model: `tui-pty-mock/${GATEWAY_SCENARIOS.reconnect.modelId}`,
       });
       await shared.controlClient.sendChat({ sessionKey, message: userMarker });
-      await waitFor({
-        timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
-        read: async () => {
-          const history = JSON.stringify(
-            await shared.controlClient.loadHistory({ sessionKey, limit: 100 }),
+      const historyDeadline = Date.now() + LOCAL_OUTPUT_TIMEOUT_MS;
+      for (;;) {
+        const remainingMs = historyDeadline - Date.now();
+        if (remainingMs <= 0) {
+          throw new Error("Gateway history did not contain the completed seeded turn");
+        }
+        const historyResult = await Promise.race([
+          shared.controlClient.loadHistory({ sessionKey, limit: 100 }),
+          sleep(remainingMs).then(() => null),
+        ]);
+        if (historyResult === null) {
+          throw new Error("Gateway history did not contain the completed seeded turn");
+        }
+        const messages = (historyResult as { messages?: unknown }).messages;
+        const hasRoleMarker = (role: "assistant" | "user", marker: string) =>
+          Array.isArray(messages) &&
+          messages.some(
+            (message) =>
+              message !== null &&
+              typeof message === "object" &&
+              (message as { role?: unknown }).role === role &&
+              JSON.stringify((message as { content?: unknown }).content).includes(marker),
           );
-          return history.includes(userMarker) && history.includes(assistantMarker) ? true : null;
-        },
-        onTimeout: () => new Error("Gateway history did not contain the completed seeded turn"),
-      });
+        if (hasRoleMarker("user", userMarker) && hasRoleMarker("assistant", assistantMarker)) break;
+        await sleep(25);
+      }
 
       const attached = await startIsolatedGatewayPty({
         gateway: shared.gateway,
