@@ -584,7 +584,11 @@ describe("resolveGatewayLockDir", () => {
   const systemTmp = () => "/system/tmp";
 
   it("derives the lock dir from OPENCLAW_STATE_DIR when overridden (#118371)", () => {
-    const dir = resolveGatewayLockDir(systemTmp, { OPENCLAW_STATE_DIR: "/sandbox/home" }, () => "/real/home");
+    const dir = resolveGatewayLockDir(
+      systemTmp,
+      { OPENCLAW_STATE_DIR: "/sandbox/home" },
+      () => "/real/home",
+    );
     expect(dir.startsWith(path.join("/sandbox/home", "tmp"))).toBe(true);
     expect(dir).not.toContain("/system/tmp");
     expect(dir).not.toContain("/real/home/.openclaw");
