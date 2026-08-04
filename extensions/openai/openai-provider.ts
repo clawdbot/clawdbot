@@ -566,7 +566,7 @@ function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {
   };
 }
 
-async function buildOpenAICodexLiveProviderConfig(params: {
+export async function buildOpenAICodexLiveProviderConfig(params: {
   discoveryApiKey: string;
   accountId?: string;
   fetchGuard?: LiveModelCatalogFetchGuard;

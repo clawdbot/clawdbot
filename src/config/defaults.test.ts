@@ -10,6 +10,7 @@ import {
   applyAgentDefaults,
   applyContextPruningDefaults,
   applyMessageDefaults,
+  applyModelDefaults,
 } from "./defaults.js";
 
 const mocks = vi.hoisted(() => ({
@@ -136,5 +137,37 @@ describe("config defaults", () => {
 
     expect(next.agents?.defaults?.subagents?.archiveAfterMinutes).toBe(0);
     expect(next.agents?.defaults?.subagents?.maxConcurrent).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
+  });
+
+  it("preserves pricingUnavailable provenance through model defaults", () => {
+    const next = applyModelDefaults({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://chatgpt.com/backend-api",
+            models: [
+              {
+                id: "gpt-unknown",
+                name: "gpt-unknown",
+                cost: {
+                  input: 0,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  pricingUnavailable: true,
+                },
+              },
+            ],
+          },
+        },
+      },
+    } as never);
+
+    const model = next.models?.providers?.openai?.models?.find(
+      (entry) => entry.id === "gpt-unknown",
+    );
+    // Placeholder-zero pricing must keep its unknown-pricing provenance
+    // through config materialization, or it turns back into a confident $0.
+    expect(model?.cost).toMatchObject({ pricingUnavailable: true });
   });
 });

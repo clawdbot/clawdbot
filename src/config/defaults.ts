@@ -79,6 +79,9 @@ function resolveModelCost(
     cacheRead: typeof raw?.cacheRead === "number" ? raw.cacheRead : DEFAULT_MODEL_COST.cacheRead,
     cacheWrite:
       typeof raw?.cacheWrite === "number" ? raw.cacheWrite : DEFAULT_MODEL_COST.cacheWrite,
+    // Pricing provenance must survive defaulting, or placeholder-zero
+    // pricing turns back into a confident $0 downstream.
+    ...(raw?.pricingUnavailable === true ? { pricingUnavailable: true } : {}),
     ...(raw?.tieredPricing ? { tieredPricing: raw.tieredPricing } : {}),
   };
 }
