@@ -426,8 +426,13 @@ async function readSettledNarrativeText(params: {
 // ── Date formatting ────────────────────────────────────────────────────
 
 function formatNarrativeDate(epochMs: number, timezone?: string): string {
+  // A blank TZ is not a usable override: Intl.DateTimeFormat throws RangeError
+  // for an empty timeZone, so treat empty/whitespace-only values as unset and
+  // let Intl fall back to the host zone. Trimming only detects blankness; a
+  // nonblank value is preserved byte-for-byte.
+  const envTimeZone = process.env.TZ?.trim() ? process.env.TZ : undefined;
   const opts: Intl.DateTimeFormatOptions = {
-    timeZone: timezone ?? process.env.TZ,
+    timeZone: timezone ?? envTimeZone,
     year: "numeric",
     month: "long",
     day: "numeric",

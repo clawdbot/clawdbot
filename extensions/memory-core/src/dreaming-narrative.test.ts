@@ -18,6 +18,7 @@ import {
 import { appendSqliteSessionTranscriptEventForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  appendFallbackNarrativeEntry,
   dedupeDreamDiaryEntries,
   readRecentDreamDiaryEntries,
   removeBackfillDiaryEntries,
@@ -512,6 +513,34 @@ describe("runDreamNarrative", () => {
       `dreaming-narrative-researcher-rem-${workspaceHash}-${nowMs}`,
     );
     expectLogExcludes(logger.warn, "narrative generation failed");
+  });
+
+  // Regression: a blank TZ env reached Intl.DateTimeFormat verbatim and threw
+  // RangeError, so both the narrative entry and its fallback were silently dropped.
+  it("writes the fallback diary entry when TZ is blank", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-blank-tz-");
+    const logger = createMockLogger();
+    const originalTz = process.env.TZ;
+    Reflect.set(process.env, "TZ", "");
+    try {
+      await appendFallbackNarrativeEntry({
+        workspaceDir,
+        data: { phase: "rem", snippets: ["A blank TZ must not lose the diary entry."] },
+        nowMs: Date.parse("2026-04-05T03:00:00Z"),
+        logger,
+        reason: "the narrative run produced no text",
+      });
+    } finally {
+      if (originalTz === undefined) {
+        Reflect.deleteProperty(process.env, "TZ");
+      } else {
+        Reflect.set(process.env, "TZ", originalTz);
+      }
+    }
+
+    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(content).toContain("A memory trace surfaced, but details were unavailable in this run.");
+    expectLogExcludes(logger.warn, "narrative fallback failed");
   });
 
   it("waits for persisted assistant text before falling back", async () => {
