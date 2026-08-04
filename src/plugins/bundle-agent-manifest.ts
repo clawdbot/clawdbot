@@ -45,7 +45,7 @@ const COMMON_FIELDS = new Set([
 ]);
 const CURSOR_FIELDS = new Set(["is_background", "readonly"]);
 
-export type BundleAgentTemplateLoadResult = {
+type BundleAgentTemplateLoadResult = {
   agentTemplates: BundleAgentTemplate[];
   conflictingIds: string[];
   diagnostics: PluginDiagnostic[];

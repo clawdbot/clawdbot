@@ -23,7 +23,7 @@ export type PluginFormat = "openclaw" | "bundle";
 export type PluginBundleFormat = "agent" | "codex" | "claude" | "cursor";
 
 /** Prompt source metadata for a compatible-bundle agent. Prompt bytes are not persisted. */
-export type BundlePromptReference = {
+type BundlePromptReference = {
   kind: "file";
   path: string;
   contentDigest: string;
