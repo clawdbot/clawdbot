@@ -16,6 +16,7 @@ import {
   subtractMentionCounts,
   type QaFixtureFetchJsonOptions,
 } from "./fixture-utils.js";
+import { QA_TOOL_SEARCH_SECONDARY_TARGET } from "./providers/mock-openai/mock-openai-tooling.js";
 import {
   qaMockRequestCursorUrl,
   qaMockRequestsAfterUrl,
@@ -629,11 +630,17 @@ export function assertToolSearchBatchLaneResult(params: {
         output: truncateUtf16Safe(tools.gatewayOutputText, 300),
         mentions: tools.sessionLogToolMentions,
         targetToolResults: tools.sessionLogTargetToolResults,
+        declaredToolCount: tools.providerDeclaredToolCount,
+        directoryContainsTarget: tools.providerDirectoryContainsTarget,
       },
       null,
       2,
     );
   assert(tools.status === "completed", `structured lane did not complete successfully: ${debug()}`);
+  assert(
+    tools.providerDeclaredToolCount === 3 && !tools.providerDirectoryContainsTarget,
+    `structured lane did not keep the catalog behind its three control tools: ${debug()}`,
+  );
   assert(
     tools.providerPlannedTools.filter((name) => name === "tool_search").length === 1 &&
       tools.providerPlannedTools.filter((name) => name === "tool_call").length === 1 &&
@@ -651,14 +658,21 @@ export function assertToolSearchBatchLaneResult(params: {
       isRecord(targetGroup) &&
       targetGroup.query === targetTool &&
       Array.isArray(targetGroup.candidates) &&
+      targetGroup.candidates.length === 1 &&
       targetGroup.candidates.some(
         (candidate) =>
           isRecord(candidate) && (candidate.name === targetTool || candidate.id === targetTool),
       ) &&
       isRecord(catalogGroup) &&
-      catalogGroup.query === "large plugin tool catalog" &&
+      catalogGroup.query === QA_TOOL_SEARCH_SECONDARY_TARGET &&
       Array.isArray(catalogGroup.candidates) &&
-      catalogGroup.candidates.length > 0,
+      catalogGroup.candidates.length === 1 &&
+      catalogGroup.candidates.some(
+        (candidate) =>
+          isRecord(candidate) &&
+          (candidate.name === QA_TOOL_SEARCH_SECONDARY_TARGET ||
+            candidate.id === QA_TOOL_SEARCH_SECONDARY_TARGET),
+      ),
     `structured lane did not return both grouped search results: ${debug()}`,
   );
   assert(

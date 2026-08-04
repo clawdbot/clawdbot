@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { readQaMockRequestCursor } from "../shared/debug-request-cursor.js";
-import { readTargetFromPrompt } from "./mock-openai-tooling.js";
+import { QA_TOOL_SEARCH_SECONDARY_TARGET, readTargetFromPrompt } from "./mock-openai-tooling.js";
 import { startQaMockOpenAiServer } from "./server.js";
 
 type MockServer = { baseUrl: string };
@@ -4920,7 +4920,7 @@ Update and merge these partial structured summaries.`,
     expect(JSON.parse(String(toolPlanOutput.arguments))).toEqual({
       queries: [
         { query: targetTool, limit: 1 },
-        { query: "large plugin tool catalog", limit: 1 },
+        { query: QA_TOOL_SEARCH_SECONDARY_TARGET, limit: 1 },
       ],
     });
   });
@@ -4966,7 +4966,12 @@ Update and merge these partial structured summaries.`,
           type: "function_call",
           call_id: "call_tool_search_1",
           name: "tool_search",
-          arguments: JSON.stringify({ queries: [{ query: targetTool, limit: 1 }] }),
+          arguments: JSON.stringify({
+            queries: [
+              { query: targetTool, limit: 1 },
+              { query: QA_TOOL_SEARCH_SECONDARY_TARGET, limit: 1 },
+            ],
+          }),
         },
         makeToolOutputWithCallId(
           "call_tool_search_1",
@@ -4974,8 +4979,8 @@ Update and merge these partial structured summaries.`,
             results: [
               { query: targetTool, candidates: [{ name: targetTool }] },
               {
-                query: "large plugin tool catalog",
-                candidates: [{ name: "fake_plugin_tool_01" }],
+                query: QA_TOOL_SEARCH_SECONDARY_TARGET,
+                candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
               },
             ],
           }),

@@ -6,6 +6,8 @@ import type { StreamEvent } from "./mock-openai-contracts.js";
 
 let mockFunctionCallSequence = 0;
 
+export const QA_TOOL_SEARCH_SECONDARY_TARGET = "fake_plugin_tool_01";
+
 function normalizePromptPathCandidate(candidate: string) {
   const trimmed = candidate.trim().replace(/^`+|`+$/g, "");
   if (!trimmed) {

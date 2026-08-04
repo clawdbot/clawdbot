@@ -11,6 +11,7 @@ import {
   outputText,
   outputToolNames,
 } from "./fixture-utils.js";
+import { QA_TOOL_SEARCH_SECONDARY_TARGET } from "./providers/mock-openai/mock-openai-tooling.js";
 import {
   qaMockRequestCursorUrl,
   qaMockRequestsAfterUrl,
@@ -450,13 +451,19 @@ describe("tool search gateway e2e lane assertions", () => {
           providerToolOutputSnippet: JSON.stringify({
             results: [
               { query: targetTool, candidates: [{ name: targetTool }] },
-              { query: "large plugin tool catalog", candidates: [{ name: "fake_plugin_tool_01" }] },
+              {
+                query: QA_TOOL_SEARCH_SECONDARY_TARGET,
+                candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
+              },
             ],
           }),
           providerToolSearchResult: {
             results: [
               { query: targetTool, candidates: [{ name: targetTool }] },
-              { query: "large plugin tool catalog", candidates: [{ name: "fake_plugin_tool_01" }] },
+              {
+                query: QA_TOOL_SEARCH_SECONDARY_TARGET,
+                candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
+              },
             ],
           },
           sessionLogToolMentions: {
@@ -510,8 +517,24 @@ describe("tool search gateway e2e lane assertions", () => {
       plannedTools: ["tool_search", "tool_call"],
       result: {
         results: [
-          { query: "large plugin tool catalog", candidates: [{ name: "fake_plugin_tool_01" }] },
+          {
+            query: QA_TOOL_SEARCH_SECONDARY_TARGET,
+            candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
+          },
           { query: targetTool, candidates: [{ name: targetTool }] },
+        ],
+      },
+      mentions: { tool_search: 1, tool_call: 1, [targetTool]: 1 },
+      error: "did not return both grouped search results",
+    },
+    {
+      label: "reuses the first query candidate for the second group",
+      status: "completed",
+      plannedTools: ["tool_search", "tool_call"],
+      result: {
+        results: [
+          { query: targetTool, candidates: [{ name: targetTool }] },
+          { query: QA_TOOL_SEARCH_SECONDARY_TARGET, candidates: [{ name: targetTool }] },
         ],
       },
       mentions: { tool_search: 1, tool_call: 1, [targetTool]: 1 },
@@ -524,7 +547,10 @@ describe("tool search gateway e2e lane assertions", () => {
       result: {
         results: [
           { query: targetTool, candidates: [{ name: targetTool }] },
-          { query: "large plugin tool catalog", candidates: [{ name: "fake_plugin_tool_01" }] },
+          {
+            query: QA_TOOL_SEARCH_SECONDARY_TARGET,
+            candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
+          },
         ],
       },
       mentions: { tool_search: 1, tool_call: 1, [targetTool]: 1 },
@@ -537,7 +563,10 @@ describe("tool search gateway e2e lane assertions", () => {
       result: {
         results: [
           { query: targetTool, candidates: [{ name: targetTool }] },
-          { query: "large plugin tool catalog", candidates: [{ name: "fake_plugin_tool_01" }] },
+          {
+            query: QA_TOOL_SEARCH_SECONDARY_TARGET,
+            candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
+          },
         ],
       },
       mentions: { tool_search: 0, tool_call: 0, [targetTool]: 1 },
@@ -550,7 +579,10 @@ describe("tool search gateway e2e lane assertions", () => {
       result: {
         results: [
           { query: targetTool, candidates: [{ name: targetTool }] },
-          { query: "large plugin tool catalog", candidates: [{ name: "fake_plugin_tool_01" }] },
+          {
+            query: QA_TOOL_SEARCH_SECONDARY_TARGET,
+            candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
+          },
         ],
       },
       mentions: { tool_search: 1, tool_call: 1, [targetTool]: 1 },
@@ -580,11 +612,50 @@ describe("tool search gateway e2e lane assertions", () => {
     },
   );
 
+  it.each([
+    {
+      label: "exposes an extra provider tool",
+      declaredToolCount: 4,
+      directoryContainsTarget: false,
+    },
+    { label: "injects a target directory", declaredToolCount: 3, directoryContainsTarget: true },
+  ])("rejects structured proof that $label", ({ declaredToolCount, directoryContainsTarget }) => {
+    const result = {
+      results: [
+        { query: targetTool, candidates: [{ name: targetTool }] },
+        {
+          query: QA_TOOL_SEARCH_SECONDARY_TARGET,
+          candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
+        },
+      ],
+    };
+    expect(() =>
+      assertToolSearchBatchLaneResult({
+        targetTool,
+        tools: {
+          status: "completed",
+          targetToolIdentity,
+          sessionLogTargetToolResults: 1,
+          gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
+          providerDeclaredToolCount: declaredToolCount,
+          providerDirectoryContainsTarget: directoryContainsTarget,
+          providerPlannedTools: ["tool_search", "tool_call"],
+          providerRawBytes: 4_000,
+          providerToolSearchResult: result,
+          sessionLogToolMentions: { tool_search: 1, tool_call: 1, [targetTool]: 1 },
+        },
+      }),
+    ).toThrow("structured lane did not keep the catalog behind its three control tools");
+  });
+
   it("rejects structured proof without a typed target tool result", () => {
     const result = {
       results: [
         { query: targetTool, candidates: [{ name: targetTool }] },
-        { query: "large plugin tool catalog", candidates: [{ name: "fake_plugin_tool_01" }] },
+        {
+          query: QA_TOOL_SEARCH_SECONDARY_TARGET,
+          candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
+        },
       ],
     };
     expect(() =>
@@ -610,7 +681,10 @@ describe("tool search gateway e2e lane assertions", () => {
     const result = {
       results: [
         { query: targetTool, candidates: [{ name: targetTool }] },
-        { query: "large plugin tool catalog", candidates: [{ name: "fake_plugin_tool_01" }] },
+        {
+          query: QA_TOOL_SEARCH_SECONDARY_TARGET,
+          candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
+        },
       ],
     };
     expect(() =>

@@ -169,6 +169,7 @@ import {
   extractToolSearchTarget,
   toolSearchOutputHasCandidate,
   buildQaToolSearchArgs,
+  QA_TOOL_SEARCH_SECONDARY_TARGET,
   isActiveMemorySubagentPrompt,
   isSnackRecallPrompt,
   extractSnackPreference,
@@ -829,7 +830,7 @@ async function buildResponsesPayload(
       return buildToolCallEventsWithArgs("tool_search", {
         queries: [
           { query: targetTool, limit: 1 },
-          { query: "large plugin tool catalog", limit: 1 },
+          { query: QA_TOOL_SEARCH_SECONDARY_TARGET, limit: 1 },
         ],
       });
     }
