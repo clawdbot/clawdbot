@@ -15,6 +15,7 @@ import { previewGroundedRemMarkdown, type GroundedRemPreviewResult } from "./rem
 import {
   filterLiveShortTermRecallEntries,
   rankShortTermPromotionCandidates,
+  repairShortTermPromotionArtifacts,
   readShortTermRecallEntries,
   type PromotionCandidate,
 } from "./short-term-promotion.js";
@@ -128,6 +129,7 @@ export async function previewRemHarness(
     pluginConfig: params.pluginConfig,
     cfg: params.cfg,
   });
+  await repairShortTermPromotionArtifacts({ workspaceDir: params.workspaceDir });
   const allRecallEntries = await readShortTermRecallEntries({
     workspaceDir: params.workspaceDir,
     nowMs,

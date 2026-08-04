@@ -361,14 +361,7 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
             .map((recallDay) => (typeof recallDay === "string" ? normalizeIsoDay(recallDay) : null))
             .filter((valueLocal): valueLocal is string => valueLocal !== null)
         : [];
-      const conceptTags = Array.isArray(entry.conceptTags)
-        ? normalizeDistinctStrings(
-            entry.conceptTags.map((tag) =>
-              typeof tag === "string" ? normalizeLowercaseStringOrEmpty(tag) : tag,
-            ),
-            MAX_CONCEPT_TAGS,
-          )
-        : deriveConceptTags({ path: entryPath, snippet: fullSnippet });
+      const conceptTags = deriveConceptTags({ path: entryPath, snippet: fullSnippet });
       const provenanceRaw =
         entry.provenance && typeof entry.provenance === "object"
           ? (entry.provenance as Record<string, unknown>)

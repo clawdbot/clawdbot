@@ -131,6 +131,9 @@ function formatRepairSummary(repair: RepairShortTermPromotionArtifactsResult): s
       (repair.removedDanglingEntries ?? 0) > 0
         ? `-${repair.removedDanglingEntries} dangling`
         : null,
+      (repair.removedManagedDreamingEntries ?? 0) > 0
+        ? `-${repair.removedManagedDreamingEntries} managed-dreaming`
+        : null,
       removedOverflowEntries > 0 ? `-${removedOverflowEntries} overflow` : null,
     ]
       .filter(Boolean)

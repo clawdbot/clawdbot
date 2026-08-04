@@ -162,6 +162,7 @@ export type RepairShortTermPromotionArtifactsResult = {
   changed: boolean;
   removedInvalidEntries: number;
   removedDanglingEntries?: number;
+  removedManagedDreamingEntries?: number;
   removedOverflowEntries: number;
   rewroteStore: boolean;
   removedStaleLock: boolean;

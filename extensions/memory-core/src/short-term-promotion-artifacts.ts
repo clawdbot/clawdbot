@@ -13,6 +13,7 @@ import {
   readMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
 import { filterLiveShortTermRecallEntries } from "./short-term-promotion-record.js";
+import { isShortTermRecallEntryInsideManagedDreamingFence } from "./short-term-promotion-rehydrate.js";
 import {
   SHORT_TERM_LOCK_STALE_MS,
   isProcessLikelyAlive,
@@ -223,6 +224,7 @@ export async function repairShortTermPromotionArtifacts(params: {
   let rewroteStore = false;
   let removedInvalidEntries = 0;
   let removedDanglingEntries = 0;
+  let removedManagedDreamingEntries = 0;
   let removedOverflowEntries = 0;
   let removedStaleLock = false;
 
@@ -275,7 +277,7 @@ export async function repairShortTermPromotionArtifacts(params: {
               ),
               queryHashes: (entry.queryHashes ?? []).slice(-MAX_QUERY_HASHES),
               recallDays: mergeRecentDistinct(entry.recallDays ?? [], fallbackDay, MAX_RECALL_DAYS),
-              conceptTags: conceptTags.length > 0 ? conceptTags : (entry.conceptTags ?? []),
+              conceptTags,
             } satisfies ShortTermRecallEntry,
           ];
         }),
@@ -290,25 +292,41 @@ export async function repairShortTermPromotionArtifacts(params: {
         entries: Object.values(comparableStore.entries),
       });
       const liveEntryKeys = new Set(liveEntries.map((entry) => entry.key));
-      const danglingEntryKeys = new Set<string>();
+      const managedDreamingEntryKeys = new Set(
+        (
+          await Promise.all(
+            liveEntries.map(async (entry) =>
+              (await isShortTermRecallEntryInsideManagedDreamingFence(workspaceDir, entry))
+                ? entry.key
+                : null,
+            ),
+          )
+        ).filter((key): key is string => key !== null),
+      );
+      const removedEntryKeys = new Set<string>();
       for (const key of Object.keys(comparableStore.entries)) {
-        if (!liveEntryKeys.has(key)) {
+        if (!liveEntryKeys.has(key) || managedDreamingEntryKeys.has(key)) {
           delete comparableStore.entries[key];
-          danglingEntryKeys.add(key);
-          removedDanglingEntries += 1;
+          removedEntryKeys.add(key);
+          if (!liveEntryKeys.has(key)) {
+            removedDanglingEntries += 1;
+          } else {
+            removedManagedDreamingEntries += 1;
+          }
         }
       }
       removedOverflowEntries = enforceShortTermRecallStoreRetention(comparableStore);
       const needsRewrite =
         removedInvalidEntries > 0 ||
         removedDanglingEntries > 0 ||
+        removedManagedDreamingEntries > 0 ||
         removedOverflowEntries > 0 ||
         JSON.stringify(normalized.entries) !== JSON.stringify(comparableStore.entries);
       if (needsRewrite) {
         let phaseSignals: Awaited<ReturnType<typeof readPhaseSignalStore>> | undefined;
-        if (removedDanglingEntries > 0) {
+        if (removedEntryKeys.size > 0) {
           phaseSignals = await readPhaseSignalStore(workspaceDir, nowIso);
-          for (const key of danglingEntryKeys) {
+          for (const key of removedEntryKeys) {
             delete phaseSignals.entries[key];
           }
           phaseSignals.updatedAt = nowIso;
@@ -331,6 +349,7 @@ export async function repairShortTermPromotionArtifacts(params: {
     changed: rewroteStore || removedStaleLock,
     removedInvalidEntries,
     removedDanglingEntries,
+    removedManagedDreamingEntries,
     removedOverflowEntries,
     rewroteStore,
     removedStaleLock,

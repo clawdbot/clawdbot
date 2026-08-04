@@ -142,6 +142,7 @@ function formatRepairSummary(repair: {
   rewroteStore: boolean;
   removedInvalidEntries: number;
   removedDanglingEntries?: number;
+  removedManagedDreamingEntries?: number;
   removedOverflowEntries?: number;
   removedStaleLock: boolean;
 }): string {
@@ -152,6 +153,9 @@ function formatRepairSummary(repair: {
       repair.removedInvalidEntries > 0 ? `-${repair.removedInvalidEntries} invalid` : null,
       (repair.removedDanglingEntries ?? 0) > 0
         ? `-${repair.removedDanglingEntries} dangling`
+        : null,
+      (repair.removedManagedDreamingEntries ?? 0) > 0
+        ? `-${repair.removedManagedDreamingEntries} managed-dreaming`
         : null,
       removedOverflowEntries > 0 ? `-${removedOverflowEntries} overflow` : null,
     ]
@@ -648,6 +652,22 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
   ]);
   for (const { agentId, workspaceDir } of workspaces) {
     const sweepNowMs = Date.now();
+    const reportLines: string[] = [];
+    try {
+      const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
+      if (repair.changed) {
+        params.logger.info(
+          `memory-core: normalized recall artifacts before dreaming (${formatRepairSummary(repair)}) [workspace=${workspaceDir}].`,
+        );
+        reportLines.push(`- Repaired recall artifacts: ${formatRepairSummary(repair)}.`);
+      }
+    } catch (err) {
+      failedWorkspaces += 1;
+      params.logger.error(
+        `memory-core: recall artifact repair failed for workspace ${workspaceDir}: ${formatErrorMessage(err)}`,
+      );
+      continue;
+    }
     try {
       const phaseResult = await runDreamingSweepPhases({
         agentId,
@@ -670,14 +690,6 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
     }
 
     try {
-      const reportLines: string[] = [];
-      const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
-      if (repair.changed) {
-        params.logger.info(
-          `memory-core: normalized recall artifacts before dreaming (${formatRepairSummary(repair)}) [workspace=${workspaceDir}].`,
-        );
-        reportLines.push(`- Repaired recall artifacts: ${formatRepairSummary(repair)}.`);
-      }
       const candidates = await rankShortTermPromotionCandidates({
         workspaceDir,
         limit: params.config.limit,

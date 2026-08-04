@@ -3613,6 +3613,76 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("repairs legacy concept tags and removes managed dreaming recall rows", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+        "# 2026-04-01",
+        "",
+        "- Keep gateway routing stable.",
+        "",
+        "## REM Sleep",
+        "<!-- openclaw:dreaming:rem:start -->",
+        "- Theme: `kept` kept surfacing across 1 memories.",
+        "<!-- openclaw:dreaming:rem:end -->",
+      ]);
+      await testing.writeRawRecallStore(workspaceDir, {
+        version: 1,
+        updatedAt: "2026-04-04T00:00:00.000Z",
+        entries: {
+          live: {
+            key: "live",
+            path: "memory/2026-04-01.md",
+            startLine: 3,
+            endLine: 3,
+            source: "memory",
+            snippet: "Keep gateway routing stable.",
+            recallCount: 1,
+            dailyCount: 0,
+            groundedCount: 0,
+            totalScore: 1,
+            maxScore: 1,
+            firstRecalledAt: "2026-04-01T00:00:00.000Z",
+            lastRecalledAt: "2026-04-04T00:00:00.000Z",
+            queryHashes: ["live"],
+            recallDays: ["2026-04-01"],
+            conceptTags: ["gateway", "1.00", "١.٠٠"],
+          },
+          managed: {
+            key: "managed",
+            path: "memory/2026-04-01.md",
+            startLine: 7,
+            endLine: 7,
+            source: "memory",
+            snippet: "Theme: `kept` kept surfacing across 1 memories.",
+            recallCount: 1,
+            dailyCount: 0,
+            groundedCount: 0,
+            totalScore: 1,
+            maxScore: 1,
+            firstRecalledAt: "2026-04-01T00:00:00.000Z",
+            lastRecalledAt: "2026-04-04T00:00:00.000Z",
+            queryHashes: ["managed"],
+            recallDays: ["2026-04-01"],
+            conceptTags: ["kept", "theme", "1.00", "٥١-٥٤"],
+          },
+        },
+      });
+
+      const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
+
+      expect(repair).toMatchObject({
+        changed: true,
+        rewroteStore: true,
+        removedManagedDreamingEntries: 1,
+      });
+      const entries = await testing.readRecallStore(workspaceDir, new Date().toISOString());
+      expect(Object.keys(entries.entries)).toEqual(["live"]);
+      expect(entries.entries.live?.conceptTags).toContain("gateway");
+      expect(entries.entries.live?.conceptTags).not.toContain("1.00");
+      expect(entries.entries.live?.conceptTags).not.toContain("١.٠٠");
+    });
+  });
+
   it("waits for an active short-term lock before repairing", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await testing.writeRawRecallStore(workspaceDir, {

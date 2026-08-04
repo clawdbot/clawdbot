@@ -104,7 +104,7 @@ describe("concept vocabulary", () => {
   it("drops numeric compound noise while preserving ordinary vocabulary", () => {
     const tags = deriveConceptTags({
       path: "memory/2026-04-04.md",
-      snippet: "kept theme 1.00 51-54 gateway",
+      snippet: "kept theme 1.00 51-54 ١.٠٠ ٥١-٥٤ gateway",
     });
 
     expect(tags).toContain("gateway");
@@ -112,6 +112,8 @@ describe("concept vocabulary", () => {
     expect(tags).toContain("theme");
     expect(tags).not.toContain("1.00");
     expect(tags).not.toContain("51-54");
+    expect(tags).not.toContain("١.٠٠");
+    expect(tags).not.toContain("٥١-٥٤");
   });
 
   it("summarizes entry coverage across latin, cjk, and mixed tags", () => {

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveShortTermSourcePathCandidates } from "./short-term-promotion-record.js";
-import type { PromotionCandidate } from "./short-term-promotion-types.js";
+import type { PromotionCandidate, ShortTermRecallEntry } from "./short-term-promotion-types.js";
 import { normalizeSnippet, SHORT_TERM_BASENAME_RE } from "./short-term-promotion-utils.js";
 
 const GENERIC_DAY_HEADING_RE =
@@ -295,6 +295,27 @@ function lineRangeOverlapsDreamingFence(
       continue;
     }
     if (insideFence && oneIndexed >= safeStart && oneIndexed <= safeEnd) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export async function isShortTermRecallEntryInsideManagedDreamingFence(
+  workspaceDir: string,
+  entry: ShortTermRecallEntry,
+): Promise<boolean> {
+  for (const sourcePath of resolveShortTermSourcePathCandidates(workspaceDir, entry.path)) {
+    let rawSource: string;
+    try {
+      rawSource = await fs.readFile(sourcePath, "utf-8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+        continue;
+      }
+      throw err;
+    }
+    if (lineRangeOverlapsDreamingFence(rawSource.split(/\r?\n/), entry.startLine, entry.endLine)) {
       return true;
     }
   }

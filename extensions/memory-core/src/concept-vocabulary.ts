@@ -281,7 +281,7 @@ const PROTECTED_GLOSSARY = [
 ].map((word) => normalizeLowercaseStringOrEmpty(word.normalize("NFKC")));
 
 const COMPOUND_TOKEN_RE = /[\p{L}\p{N}]+(?:[._/-][\p{L}\p{N}]+)+/gu;
-const NUMERIC_COMPOUND_TOKEN_RE = /^\d+(?:[._/-]\d+)+$/u;
+const NUMERIC_COMPOUND_TOKEN_RE = /^\p{N}+(?:[._/-]\p{N}+)+$/u;
 const LETTER_OR_NUMBER_RE = /[\p{L}\p{N}]/u;
 const LATIN_RE = /\p{Script=Latin}/u;
 const HAN_RE = /\p{Script=Han}/u;
