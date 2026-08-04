@@ -68,6 +68,19 @@ const GATEWAY_SCENARIOS = {
     toolsProfile: "minimal",
     replyText: "FIRST_RUN_ACTIVE",
     holdFirstResponse: false,
+    followupReplyText: "FOLLOWUP_RUN_COMPLETE",
+  },
+  command: {
+    agentId: SHARED_GATEWAY_AGENT_ID,
+    modelId: "tui-pty-command",
+    toolsProfile: "minimal",
+    replyText: "FIRST_RUN_ACTIVE",
+  },
+  history: {
+    agentId: SHARED_GATEWAY_AGENT_ID,
+    modelId: "tui-pty-history",
+    toolsProfile: "minimal",
+    replyText: "T02_HISTORY_ASSISTANT",
   },
   followup: {
     agentId: SHARED_GATEWAY_AGENT_ID,
@@ -853,25 +866,31 @@ async function startIsolatedGatewayPty(params: {
 }) {
   const { gateway, registerCleanup, sessionKey, token = gateway.gatewayToken } = params;
   const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-gateway-client-"));
-  await writeFile(path.join(tempDir, "openclaw.json"), "{}\n", "utf8");
-  const cliArgs = ["tui", "--url", gateway.url, "--token", token, "--session", sessionKey];
-  const run = startPty(process.execPath, buildTuiProcessArgs(cliArgs), {
-    cwd: process.cwd(),
-    env: {
-      ...gateway.env,
-      HOME: tempDir,
-      OPENCLAW_HOME: tempDir,
-      OPENCLAW_CONFIG_PATH: path.join(tempDir, "openclaw.json"),
-      OPENCLAW_STATE_DIR: tempDir,
-      OPENCLAW_AGENT_DIR: undefined,
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_GATEWAY_PASSWORD: undefined,
-      OPENCLAW_THEME: "dark",
-      NO_COLOR: undefined,
-    },
-    exitTimeoutMs: LOCAL_EXIT_TIMEOUT_MS,
-    outputTimeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
-  });
+  let run: PtyRun;
+  try {
+    await writeFile(path.join(tempDir, "openclaw.json"), "{}\n", "utf8");
+    const cliArgs = ["tui", "--url", gateway.url, "--token", token, "--session", sessionKey];
+    run = startPty(process.execPath, buildTuiProcessArgs(cliArgs), {
+      cwd: process.cwd(),
+      env: {
+        ...gateway.env,
+        HOME: tempDir,
+        OPENCLAW_HOME: tempDir,
+        OPENCLAW_CONFIG_PATH: path.join(tempDir, "openclaw.json"),
+        OPENCLAW_STATE_DIR: tempDir,
+        OPENCLAW_AGENT_DIR: undefined,
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+        OPENCLAW_GATEWAY_PASSWORD: undefined,
+        OPENCLAW_THEME: "dark",
+        NO_COLOR: undefined,
+      },
+      exitTimeoutMs: LOCAL_EXIT_TIMEOUT_MS,
+      outputTimeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+    });
+  } catch (error) {
+    await rm(tempDir, { recursive: true, force: true });
+    throw error;
+  }
   const cleanup = createIdempotentCleanup(async () => {
     try {
       await run.dispose();
@@ -1247,8 +1266,8 @@ describe("TUI PTY real backends", () => {
       const agentId = SHARED_GATEWAY_AGENT_ID;
       const sessionKey = `agent:${agentId}:tui-pty-history`;
       const userMarker = "T02_HISTORY_USER";
-      const assistantMarker = GATEWAY_SCENARIOS.crossClient.replyText;
-      const model = `tui-pty-mock/${GATEWAY_SCENARIOS.crossClient.modelId}`;
+      const assistantMarker = GATEWAY_SCENARIOS.history.replyText;
+      const model = `tui-pty-mock/${GATEWAY_SCENARIOS.history.modelId}`;
       await shared.controlClient.createSession({ key: sessionKey, agentId });
       await shared.controlClient.patchSession({ key: sessionKey, agentId, model });
       await shared.controlClient.sendChat({ sessionKey, message: userMarker });
@@ -1283,7 +1302,7 @@ describe("TUI PTY real backends", () => {
   registerGatewayTest(
     "executes Gateway status model new and reset RPCs through a real TUI PTY",
     async ({ onTestFinished }) => {
-      const fixture = await startGatewayModeTui("crossClient", onTestFinished);
+      const fixture = await startGatewayModeTui("command", onTestFinished);
       const { controlClient } = await requireSharedGatewayFixture();
       try {
         await fixture.run.write("/gateway-status\r", { delay: false });
@@ -1301,8 +1320,19 @@ describe("TUI PTY real backends", () => {
           createdKey!,
           ({ sessionInfo }) => Boolean(sessionInfo?.sessionId),
         );
+        const commandModel = `tui-pty-mock/${GATEWAY_SCENARIOS.command.modelId}`;
+        const commandModelOffset = fixture.run.visibleOutput().length;
+        await fixture.run.write(`/model ${commandModel}\r`, { delay: false });
+        await waitForOutputAfter(fixture.run, `model set to ${commandModel}`, commandModelOffset);
+        await waitForHistoryMessages(
+          controlClient,
+          createdKey!,
+          ({ sessionInfo }) =>
+            sessionInfo?.sessionId === created.sessionInfo?.sessionId &&
+            [sessionInfo?.modelProvider, sessionInfo?.model].join("/") === commandModel,
+        );
         const resetMarker = "T02_RESET_HISTORY";
-        const seedReply = GATEWAY_SCENARIOS.crossClient.replyText;
+        const seedReply = GATEWAY_SCENARIOS.command.replyText;
         await fixture.run.write(`${resetMarker}\r`, { delay: false });
         await fixture.waitForOutput(seedReply);
         const seeded = await waitForHistoryMessages(
@@ -1313,8 +1343,7 @@ describe("TUI PTY real backends", () => {
               sessionInfo?.activeLeafEntryId &&
               sessionInfo?.sessionId === created.sessionInfo?.sessionId &&
               typeof sessionInfo?.updatedAt === "number" &&
-              [sessionInfo?.modelProvider, sessionInfo?.model].join("/") ===
-                `tui-pty-mock/${GATEWAY_SCENARIOS.crossClient.modelId}` &&
+              [sessionInfo?.modelProvider, sessionInfo?.model].join("/") === commandModel &&
               hasOrderedTurn(messages, resetMarker, seedReply),
             ),
         );
