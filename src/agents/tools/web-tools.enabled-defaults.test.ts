@@ -230,6 +230,79 @@ describe("web tools defaults", () => {
     expect(createTool).toHaveBeenCalledOnce();
   });
 
+  it("resolves an auto-detected provider schema when runtime metadata is absent", () => {
+    const registry = createEmptyPluginRegistry();
+    const braveParameters = {
+      type: "object",
+      required: ["query"],
+      properties: {
+        query: { type: "string" },
+        country: { type: "string" },
+      },
+    };
+    const braveCreateTool = vi.fn(() => ({
+      description: "Brave runtime tool",
+      parameters: braveParameters,
+      execute: async () => ({ query: "openclaw", results: [] }),
+    }));
+    const fallbackCreateTool = vi.fn(() => ({
+      description: "Fallback runtime tool",
+      parameters: {
+        type: "object",
+        required: ["query"],
+        properties: { query: { type: "string" } },
+      },
+      execute: async () => ({ query: "openclaw", results: [] }),
+    }));
+    registry.webSearchProviders.push(
+      {
+        pluginId: "brave",
+        pluginName: "Brave Search",
+        source: "test",
+        provider: {
+          id: "brave",
+          label: "Brave Search",
+          hint: "Runtime provider",
+          envVars: [],
+          placeholder: "brave-...",
+          signupUrl: "https://example.com/brave",
+          autoDetectOrder: 1,
+          credentialPath: "tools.web.search.brave.apiKey",
+          getCredentialValue: () => "configured",
+          getConfiguredCredentialValue: () => "configured",
+          setCredentialValue: () => {},
+          createTool: braveCreateTool,
+        },
+      },
+      {
+        pluginId: "google",
+        pluginName: "Gemini Search",
+        source: "test",
+        provider: {
+          id: "gemini",
+          label: "Gemini Search",
+          hint: "Runtime provider",
+          envVars: [],
+          placeholder: "gemini-...",
+          signupUrl: "https://example.com/gemini",
+          autoDetectOrder: 2,
+          credentialPath: "tools.web.search.gemini.apiKey",
+          getCredentialValue: () => "configured",
+          getConfiguredCredentialValue: () => "configured",
+          setCredentialValue: () => {},
+          createTool: fallbackCreateTool,
+        },
+      },
+    );
+    setActivePluginRegistry(registry);
+
+    const tool = createWebSearchTool({ config: {} });
+
+    expect(tool?.parameters).toBe(braveParameters);
+    expect(braveCreateTool).toHaveBeenCalledOnce();
+    expect(fallbackCreateTool).not.toHaveBeenCalled();
+  });
+
   it("late-binds the model schema to the current selected provider", () => {
     const registry = createEmptyPluginRegistry();
     const staleParameters = { type: "object", properties: { stale: { type: "string" } } };

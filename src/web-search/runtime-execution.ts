@@ -23,13 +23,31 @@ function isStructuredAvailabilityError(result: unknown): result is { error: stri
   return typeof error === "string" && /^missing_[a-z0-9_]*api_key$/i.test(error);
 }
 
+function asSchemaRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function resolveUnsupportedFallbackArguments(
+  parameters: unknown,
+  args: Record<string, unknown>,
+): string[] {
+  const schema = asSchemaRecord(parameters);
+  const properties = asSchemaRecord(schema?.properties);
+  if (schema?.type !== "object" || !properties) {
+    return [];
+  }
+  return Object.keys(args).filter((name) => !Object.hasOwn(properties, name));
+}
+
 export async function executeWebSearchCandidates(
   params: ExecuteWebSearchCandidatesParams,
 ): Promise<RunWebSearchResult> {
   let lastError: unknown;
   let sawUnavailableProvider = false;
 
-  for (const candidate of params.candidates) {
+  for (const [candidateIndex, candidate] of params.candidates.entries()) {
     params.signal?.throwIfAborted();
     try {
       const definition = candidate.createTool({
@@ -44,6 +62,17 @@ export async function executeWebSearchCandidates(
         }
         sawUnavailableProvider = true;
         continue;
+      }
+      if (params.allowFallback && candidateIndex > 0) {
+        const unsupportedArguments = resolveUnsupportedFallbackArguments(
+          definition.parameters,
+          params.args,
+        );
+        if (unsupportedArguments.length > 0) {
+          throw new Error(
+            `web_search fallback provider "${candidate.id}" does not accept provider-specific arguments: ${unsupportedArguments.join(", ")}. Retry without those arguments or explicitly select a compatible provider.`,
+          );
+        }
       }
       const executed = await definition.execute(params.args, { signal: params.signal });
       // Cancellation wins races with provider completion or cleanup failures. Otherwise an

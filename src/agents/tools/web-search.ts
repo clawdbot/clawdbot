@@ -93,15 +93,12 @@ function isWebSearchDisabled(config?: OpenClawConfig): boolean {
 function resolveWebSearchModelParameters(
   options: WebSearchToolOptions | undefined,
 ): AnyAgentTool["parameters"] {
-  const { config, preferRuntimeProviders, providerSelectionId, runtimeWebSearch } =
+  const { config, preferRuntimeProviders, runtimeWebSearch } =
     resolveWebSearchToolRuntimeContext({
       config: options?.config,
       lateBindRuntimeConfig: options?.lateBindRuntimeConfig,
       runtimeWebSearch: options?.runtimeWebSearch,
     });
-  if (!providerSelectionId.trim()) {
-    return WebSearchSchema;
-  }
   return (
     resolveWebSearchDefinition({
       config,
@@ -124,7 +121,7 @@ export function createWebSearchTool(options?: WebSearchToolOptions): AnyAgentToo
     name: "web_search",
     resultContentSource: "network",
     description:
-      "Search current web; normalized provider results. Supports freshness and date-range filters (freshness, date_after/date_before) and domain filtering (domain_filter).",
+      "Search current web and return normalized provider results. Available filters depend on the active provider.",
     get parameters() {
       return resolveWebSearchModelParameters(options);
     },
