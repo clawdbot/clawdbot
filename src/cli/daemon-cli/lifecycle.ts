@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
+import { probePortUsage } from "../../infra/ports-probe.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import {
@@ -218,6 +219,12 @@ async function stopGatewayWithoutServiceManager(port: number, lockOwnerPid: numb
   // reporting the gateway as not running while it keeps serving.
   const pids = listenerPids.length > 0 ? listenerPids : lockOwnerPid ? [lockOwnerPid] : [];
   if (pids.length === 0) {
+    const portStatus = await probePortUsage(port);
+    if (portStatus === "busy") {
+      throw new Error(
+        `Port ${port} is in use but the gateway process could not be identified (lsof unavailable or PID exited). Use \`lsof -i :${port}\` or \`openclaw gateway status --deep\` to investigate.`,
+      );
+    }
     return null;
   }
   for (const pid of pids) {
