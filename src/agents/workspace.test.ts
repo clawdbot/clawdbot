@@ -35,11 +35,13 @@ import {
   ensureAgentWorkspace,
   filterBootstrapFilesForSession,
   isWorkspaceBootstrapPending,
+  loadExtraBootstrapFilesWithDiagnostics,
   loadWorkspaceBootstrapFiles,
   resolveWorkspaceBootstrapStatus,
   resolveDefaultAgentWorkspaceDir,
   WORKSPACE_VANISHED_ERROR_CODE,
   type WorkspaceBootstrapFile,
+  workspaceFilesShareSourceIdentity,
 } from "./workspace.js";
 
 let testState: OpenClawTestState | undefined;
@@ -936,6 +938,34 @@ describe("loadWorkspaceBootstrapFiles", () => {
 
     const files = await loadWorkspaceBootstrapFiles(tempDir);
     expectSingleMemoryEntry(files, "memory");
+  });
+
+  it("carries canonical source identity through extra-file conversion", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-source-identity-");
+    const nestedDir = path.join(tempDir, "packages", "core");
+    const rootAliasDir = path.join(tempDir, "root-memory-alias");
+    const nestedAliasDir = path.join(tempDir, "nested-memory-alias");
+    await fs.mkdir(nestedDir, { recursive: true });
+    await fs.writeFile(path.join(tempDir, DEFAULT_MEMORY_FILENAME), "root memory", "utf8");
+    await fs.writeFile(path.join(nestedDir, DEFAULT_MEMORY_FILENAME), "nested memory", "utf8");
+    await fs.symlink(tempDir, rootAliasDir, process.platform === "win32" ? "junction" : "dir");
+    await fs.symlink(nestedDir, nestedAliasDir, process.platform === "win32" ? "junction" : "dir");
+
+    const rootMemory = (await loadWorkspaceBootstrapFiles(tempDir)).find(
+      (file) => file.name === DEFAULT_MEMORY_FILENAME,
+    );
+    const { files: aliases } = await loadExtraBootstrapFilesWithDiagnostics(tempDir, [
+      path.relative(tempDir, path.join(rootAliasDir, DEFAULT_MEMORY_FILENAME)),
+      path.relative(tempDir, path.join(nestedAliasDir, DEFAULT_MEMORY_FILENAME)),
+    ]);
+    const rootAlias = aliases.find((file) => file.path.startsWith(rootAliasDir));
+    const nestedAlias = aliases.find((file) => file.path.startsWith(nestedAliasDir));
+
+    expect(rootMemory).toBeDefined();
+    expect(rootAlias).toBeDefined();
+    expect(nestedAlias).toBeDefined();
+    expect(workspaceFilesShareSourceIdentity(rootMemory!, rootAlias!)).toBe(true);
+    expect(workspaceFilesShareSourceIdentity(rootMemory!, nestedAlias!)).toBe(false);
   });
 
   it("ignores lowercase memory.md when MEMORY.md is absent", async () => {
