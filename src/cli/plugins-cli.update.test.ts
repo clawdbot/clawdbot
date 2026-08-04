@@ -593,6 +593,7 @@ describe("plugins cli update", () => {
     expect(updateNpmInstalledHookPacks).not.toHaveBeenCalled();
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
       nextConfig.plugins?.installs,
+      { config: cfg },
     );
     expect(writeConfigFile).not.toHaveBeenCalled();
   });
@@ -632,7 +633,9 @@ describe("plugins cli update", () => {
 
     expect(runtimeErrors).toEqual([]);
     expect(updateNpmInstalledPlugins).toHaveBeenCalledOnce();
-    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(pluginRecords);
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(pluginRecords, {
+      config: cfg,
+    });
     expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
@@ -671,7 +674,9 @@ describe("plugins cli update", () => {
     await runPluginsCommand(["plugins", "update", "brave"]);
 
     expect(runtimeErrors).toEqual([]);
-    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(nextRecords);
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(nextRecords, {
+      config: sourceCfg,
+    });
     expect(writeConfigFile).not.toHaveBeenCalled();
     expect(replaceConfigFile).not.toHaveBeenCalled();
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
@@ -722,7 +727,13 @@ describe("plugins cli update", () => {
 
     await runPluginsCommand(["plugins", "update", "brave"]);
 
-    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(nextRecords);
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(nextRecords, {
+      config: {
+        plugins: {
+          load: { paths: [nextInstallPath, customPath] },
+        },
+      },
+    });
     expect(replaceConfigFile).toHaveBeenCalledWith({
       nextConfig: {
         plugins: {
@@ -791,6 +802,7 @@ describe("plugins cli update", () => {
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(
       1,
       nextRecords,
+      { config: cfg },
     );
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(
       2,
@@ -847,6 +859,7 @@ describe("plugins cli update", () => {
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(
       1,
       nextRecords,
+      { config: cfg },
     );
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(
       2,
@@ -896,6 +909,7 @@ describe("plugins cli update", () => {
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(
       1,
       nextRecords,
+      { config: cfg },
     );
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(
       2,
@@ -1422,6 +1436,7 @@ describe("plugins cli update", () => {
     expect(updateParams.dryRun).toBe(false);
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
       nextConfig.plugins?.installs,
+      { config: {} },
     );
     expect(updateNpmInstalledHookPacks).not.toHaveBeenCalled();
     expect(writeConfigFile).toHaveBeenCalledWith({});
@@ -1491,6 +1506,7 @@ describe("plugins cli update", () => {
 
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
       nextConfig.plugins?.installs,
+      { config: {} },
     );
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
       config: {},

@@ -283,7 +283,9 @@ async function commitPluginInstallRecordsWithWriter(params: {
   const retainedMarkerPaths: string[] = [];
   const clearedMarkerSnapshots: Array<{ markerPath: string; contents: string }> = [];
   try {
-    await writePersistedInstalledPluginIndexInstallRecords(params.nextInstallRecords);
+    await writePersistedInstalledPluginIndexInstallRecords(params.nextInstallRecords, {
+      config: params.nextConfig,
+    });
     try {
       await markRetainedReplacedManagedNpmInstallRecords({
         previousInstallRecords,
@@ -350,12 +352,13 @@ export async function commitPluginInstallRecordsWithConfig(params: {
 export async function commitPluginInstallRecordsOnly(params: {
   previousInstallRecords?: Record<string, PluginInstallRecord>;
   nextInstallRecords: Record<string, PluginInstallRecord>;
+  nextConfig: OpenClawConfig;
   verifyConfigFresh?: () => Promise<void>;
 }): Promise<void> {
   await commitPluginInstallRecordsWithWriter({
     previousInstallRecords: params.previousInstallRecords,
     nextInstallRecords: params.nextInstallRecords,
-    nextConfig: {},
+    nextConfig: params.nextConfig,
     commit: async () => {
       await params.verifyConfigFresh?.();
       return undefined;

@@ -37,6 +37,7 @@ vi.mock("./installed-plugin-index-records.js", async (importOriginal) => {
 import {
   commitConfigWithPendingPluginInstalls,
   commitConfigWriteWithPendingPluginInstalls,
+  commitPluginInstallRecordsOnly,
   commitPluginInstallRecordsWithConfig,
   stripPendingPluginInstallRecords,
   transformConfigWithPendingPluginInstalls,
@@ -87,10 +88,21 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       baseHash: "config-1",
     });
 
-    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
-      ...existingRecords,
-      ...pendingRecords,
-    });
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
+      {
+        ...existingRecords,
+        ...pendingRecords,
+      },
+      {
+        config: {
+          plugins: {
+            entries: {
+              demo: { enabled: true },
+            },
+          },
+        },
+      },
+    );
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
       nextConfig: {
         plugins: {
@@ -120,6 +132,36 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       movedInstallRecords: true,
       persistedHash: "test-config-hash",
     });
+  });
+
+  it("uses the effective config for records-only index commits", async () => {
+    const nextConfig: OpenClawConfig = {
+      plugins: {
+        entries: {
+          demo: { enabled: false },
+        },
+      },
+    };
+    const nextInstallRecords: Record<string, PluginInstallRecord> = {
+      demo: {
+        source: "npm",
+        spec: "demo@2.0.0",
+      },
+    };
+    const verifyConfigFresh = vi.fn(async () => undefined);
+
+    await commitPluginInstallRecordsOnly({
+      nextConfig,
+      nextInstallRecords,
+      verifyConfigFresh,
+    });
+
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
+      nextInstallRecords,
+      { config: nextConfig },
+    );
+    expect(verifyConfigFresh).toHaveBeenCalledOnce();
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
   it("migrates source records below the canonical index and explicit pending records", async () => {
@@ -154,12 +196,15 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       commit,
     });
 
-    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
-      stale: existingRecords.stale,
-      missing: sourceConfig.plugins?.installs?.missing,
-      codex: nextConfig.plugins?.installs?.codex,
-      concurrent: nextConfig.plugins?.installs?.concurrent,
-    });
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
+      {
+        stale: existingRecords.stale,
+        missing: sourceConfig.plugins?.installs?.missing,
+        codex: nextConfig.plugins?.installs?.codex,
+        concurrent: nextConfig.plugins?.installs?.concurrent,
+      },
+      { config: {} },
+    );
     expect(commit).toHaveBeenCalledWith(
       {},
       {
@@ -204,10 +249,13 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       }),
     });
 
-    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
-      other: sourceConfig.plugins?.installs?.other,
-      codex: codexRecord,
-    });
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
+      {
+        other: sourceConfig.plugins?.installs?.other,
+        codex: codexRecord,
+      },
+      { config: {} },
+    );
   });
 
   it("strips only selected pending plugin install records", () => {
@@ -678,16 +726,20 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       }),
     ).rejects.toThrow("config changed");
 
-    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(1, {
-      existing: {
-        source: "npm",
-        spec: "existing@1.0.0",
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(
+      1,
+      {
+        existing: {
+          source: "npm",
+          spec: "existing@1.0.0",
+        },
+        demo: {
+          source: "npm",
+          spec: "demo@1.0.0",
+        },
       },
-      demo: {
-        source: "npm",
-        spec: "demo@1.0.0",
-      },
-    });
+      { config: {} },
+    );
     expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(
       2,
       existingRecords,
