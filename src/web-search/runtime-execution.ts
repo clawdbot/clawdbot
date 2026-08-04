@@ -15,6 +15,8 @@ type ExecuteWebSearchCandidatesParams = {
   allowFallback: boolean;
 };
 
+const CLI_FALLBACK_ARGUMENT_ALIASES = new Set(["limit"]);
+
 function isStructuredAvailabilityError(result: unknown): result is { error: string } {
   if (!result || typeof result !== "object" || !("error" in result)) {
     return false;
@@ -41,6 +43,28 @@ function resolveUnsupportedFallbackArguments(
   return Object.keys(args).filter((name) => !Object.hasOwn(properties, name));
 }
 
+function normalizeFallbackArguments(
+  parameters: unknown,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const schema = asSchemaRecord(parameters);
+  const properties = asSchemaRecord(schema?.properties);
+  if (schema?.type !== "object" || !properties) {
+    return args;
+  }
+  const hasUnsupportedCliAlias = Object.keys(args).some(
+    (name) => CLI_FALLBACK_ARGUMENT_ALIASES.has(name) && !Object.hasOwn(properties, name),
+  );
+  if (!hasUnsupportedCliAlias) {
+    return args;
+  }
+  return Object.fromEntries(
+    Object.entries(args).filter(
+      ([name]) => !CLI_FALLBACK_ARGUMENT_ALIASES.has(name) || Object.hasOwn(properties, name),
+    ),
+  );
+}
+
 export async function executeWebSearchCandidates(
   params: ExecuteWebSearchCandidatesParams,
 ): Promise<RunWebSearchResult> {
@@ -63,10 +87,12 @@ export async function executeWebSearchCandidates(
         sawUnavailableProvider = true;
         continue;
       }
+      let executionArgs = params.args;
       if (params.allowFallback && candidateIndex > 0) {
+        executionArgs = normalizeFallbackArguments(definition.parameters, params.args);
         const unsupportedArguments = resolveUnsupportedFallbackArguments(
           definition.parameters,
-          params.args,
+          executionArgs,
         );
         if (unsupportedArguments.length > 0) {
           throw new Error(
@@ -74,7 +100,7 @@ export async function executeWebSearchCandidates(
           );
         }
       }
-      const executed = await definition.execute(params.args, { signal: params.signal });
+      const executed = await definition.execute(executionArgs, { signal: params.signal });
       // Cancellation wins races with provider completion or cleanup failures. Otherwise an
       // ignored signal could return stale work or trigger another provider fallback.
       params.signal?.throwIfAborted();

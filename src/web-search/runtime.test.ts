@@ -370,6 +370,62 @@ describe("web search runtime", () => {
     expect(geminiExecute).toHaveBeenCalledOnce();
   });
 
+  it("strips the CLI-only limit alias before executing a compatible fallback", async () => {
+    const geminiExecute = vi.fn(async (args: Record<string, unknown>) => ({
+      ...args,
+      provider: "gemini",
+    }));
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createCustomSearchProvider({
+        pluginId: "brave",
+        id: "brave",
+        autoDetectOrder: 1,
+        getConfiguredCredentialValue: () => "brave-configured",
+        getCredentialValue: () => "brave-configured",
+        createTool: () => ({
+          description: "Brave search",
+          parameters: {
+            type: "object",
+            properties: { query: { type: "string" }, count: { type: "integer" } },
+          },
+          execute: async () => {
+            throw new Error("brave unavailable");
+          },
+        }),
+      }),
+      createCustomSearchProvider({
+        pluginId: "google",
+        id: "gemini",
+        autoDetectOrder: 2,
+        getConfiguredCredentialValue: () => "gemini-configured",
+        getCredentialValue: () => "gemini-configured",
+        createTool: () => ({
+          description: "Gemini search",
+          parameters: {
+            type: "object",
+            properties: { query: { type: "string" }, count: { type: "integer" } },
+          },
+          execute: geminiExecute,
+        }),
+      }),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: {},
+        args: { query: "fallback", count: 3, limit: 3 },
+      }),
+    ).resolves.toEqual({
+      provider: "gemini",
+      result: { query: "fallback", count: 3, provider: "gemini" },
+    });
+    expect(geminiExecute).toHaveBeenCalledOnce();
+    expect(geminiExecute).toHaveBeenCalledWith(
+      { query: "fallback", count: 3 },
+      { signal: undefined },
+    );
+  });
+
   it("does not pass provider-specific arguments to an incompatible fallback", async () => {
     const geminiExecute = vi.fn(async () => ({ ok: true }));
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([
