@@ -2,7 +2,7 @@
 // requirements, payload plans, gateway fallback, and optional mirroring.
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChatType } from "../../channels/chat-type.js";
-import { deriveDurableFinalDeliveryRequirements } from "../../channels/message/capabilities.js";
+import { deriveDurableFinalDeliveryRequirementsForBatch } from "../../channels/message/capabilities.js";
 import {
   sendDurableMessageBatch,
   serializeDurableMessagePayloadOutcomes,
@@ -14,6 +14,7 @@ import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import type { DeliveryQueueCompletionRetention } from "../delivery-queue-sqlite.js";
 import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
@@ -100,6 +101,10 @@ type MessageSendParams = {
   deliveryIntentId?: string;
   /** @internal Serializable owner state finalized by live send or recovery. */
   deliveryCompletion?: DurableDeliveryCompletion;
+  /** @internal Retry the same pending producer intent only before platform I/O begins. */
+  reusePendingDeliveryIntent?: boolean;
+  /** @internal Retain completion proof for replay-safe producer intents. */
+  completionRetention?: DeliveryQueueCompletionRetention;
   /** @internal Override provider unknown-send reconciliation independently from queue durability. */
   requireUnknownSendReconciliation?: boolean;
   /** @internal Runs after queue persistence and before platform I/O. */
@@ -229,51 +234,16 @@ function resolveRequiredPlugin(channel: string, cfg: OpenClawConfig) {
   return plugin;
 }
 
-function payloadRequiresDurablePayloadTransport(payload: ReplyPayload): boolean {
-  return (
-    payload.presentation !== undefined ||
-    payload.delivery !== undefined ||
-    payload.interactive !== undefined ||
-    (payload.channelData !== undefined && Object.keys(payload.channelData).length > 0)
-  );
-}
-
-function mergeDurableRequirements(
-  target: DurableFinalDeliveryRequirements,
-  source: DurableFinalDeliveryRequirements,
-): DurableFinalDeliveryRequirements {
-  for (const [capability, required] of Object.entries(source) as Array<
-    [keyof DurableFinalDeliveryRequirements, boolean | undefined]
-  >) {
-    if (required === true) {
-      target[capability] = true;
-    }
-  }
-  return target;
-}
-
 function deriveRequiredMessageSendCapabilities(params: {
   payloads: ReplyPayload[];
   replyToId?: string | null;
   threadId?: string | number | null;
   silent?: boolean;
 }): DurableFinalDeliveryRequirements {
-  const requirements: DurableFinalDeliveryRequirements = { reconcileUnknownSend: true };
-  for (const payload of params.payloads) {
-    mergeDurableRequirements(
-      requirements,
-      deriveDurableFinalDeliveryRequirements({
-        payload,
-        replyToId: params.replyToId,
-        threadId: params.threadId,
-        silent: params.silent,
-        payloadTransport: payloadRequiresDurablePayloadTransport(payload),
-        batch: params.payloads.length > 1,
-        reconcileUnknownSend: true,
-      }),
-    );
-  }
-  return requirements;
+  return deriveDurableFinalDeliveryRequirementsForBatch({
+    ...params,
+    reconcileUnknownSend: true,
+  });
 }
 
 async function assertRequiredMessageSendDurability(params: {
@@ -445,6 +415,8 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       preparedMessageId: params.preparedMessageId,
       deliveryIntentId: params.deliveryIntentId,
       deliveryCompletion: params.deliveryCompletion,
+      reusePendingDeliveryIntent: params.reusePendingDeliveryIntent,
+      completionRetention: params.completionRetention,
       ...(params.onDeliveryIntent ? { onDeliveryIntent: params.onDeliveryIntent } : {}),
       ...(params.onDeliveryResult ? { onDeliveryResult: params.onDeliveryResult } : {}),
       ...(params.onDeliveredPayload ? { onDeliveredPayload: params.onDeliveredPayload } : {}),

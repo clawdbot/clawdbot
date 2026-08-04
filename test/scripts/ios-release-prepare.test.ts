@@ -38,7 +38,7 @@ function runPrepare(extraArgs: string[]): { ok: boolean; stdout: string; stderr:
 
 describe("scripts/ios-release-prepare.sh", () => {
   it("rejects non-canonical signing teams before generating release inputs", () => {
-    const result = runPrepare(["--version", "2026.6.11", "--build-number", "7"]);
+    const result = runPrepare(["--version", "2026.7.2", "--revision", "1", "--build-number", "3"]);
 
     expect(result.ok).toBe(false);
     expect(result.stderr).toContain(

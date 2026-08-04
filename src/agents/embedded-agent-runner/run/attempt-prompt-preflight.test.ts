@@ -67,7 +67,34 @@ describe("attempt prompt preflight", () => {
     });
   });
 
-  it("falls back to compaction when mid-turn tool-result truncation cannot help", () => {
+  it("admits a retry without changing history when persisted truncation cannot help", () => {
+    const toolResult = makeToolResultMessage("already capped tool output");
+    const sessionManager = createSessionManagerWithMessage(toolResult);
+    const messagesBefore = sessionManager.buildSessionContext().messages;
+    const replaceSessionMessages = vi.fn();
+    const outcome = handleEmbeddedAttemptMidTurnPrecheck({
+      attempt,
+      request: { ...request, route: "truncate_tool_results_only" },
+      sessionAgentId: "test",
+      sessionManager,
+      prePromptMessageCount: 4,
+      replaceSessionMessages,
+    });
+
+    expect(outcome.preflightRecovery).toEqual(
+      expect.objectContaining({
+        route: "truncate_tool_results_only",
+        source: "mid-turn",
+        handled: true,
+        truncatedCount: 0,
+      }),
+    );
+    expect(outcome.promptError).toBeUndefined();
+    expect(replaceSessionMessages).not.toHaveBeenCalled();
+    expect(sessionManager.buildSessionContext().messages).toEqual(messagesBefore);
+  });
+
+  it("keeps the compaction fallback when persisted truncation cannot inspect history", () => {
     const outcome = handleEmbeddedAttemptMidTurnPrecheck({
       attempt,
       request: { ...request, route: "truncate_tool_results_only" },
@@ -109,7 +136,7 @@ describe("attempt prompt preflight", () => {
     );
   });
 
-  it("short-circuits an oversized prompt into precheck recovery", async () => {
+  it("records heuristic pressure without short-circuiting the provider attempt", async () => {
     const result = await prepareEmbeddedAttemptPromptPreflight({
       attempt,
       contextEngineAssemblySucceeded: false,
@@ -119,8 +146,6 @@ describe("attempt prompt preflight", () => {
       includeBoundaryTimestamp: false,
       promptForPrecheck: "x".repeat(4_000),
       reserveTokens: 20,
-      sessionAgentId: "test",
-      sessionManager: SessionManager.inMemory(),
       sessionMessageCount: 0,
       state: {
         contextBudgetStatus: undefined,
@@ -131,12 +156,12 @@ describe("attempt prompt preflight", () => {
       },
       systemPrompt: "",
       toolResultMaxChars: 1_000,
-      withOwnedSessionWriteLock: async (operation) => await operation(),
     });
 
-    expect(result.skipPromptSubmission).toBe(true);
-    expect(result.promptErrorSource).toBe("precheck");
-    expect(result.preflightRecovery?.route).toBe("compact_only");
+    expect(result.skipPromptSubmission).toBe(false);
+    expect(result.promptError).toBeNull();
+    expect(result.promptErrorSource).toBeNull();
+    expect(result.preflightRecovery).toBeUndefined();
     expect(result.contextBudgetStatus?.shouldCompact).toBe(true);
     expect(result.contextBudgetStatus?.overflowTokens).toBeGreaterThan(0);
   });
@@ -161,19 +186,16 @@ describe("attempt prompt preflight", () => {
       includeBoundaryTimestamp: false,
       promptForPrecheck: "x".repeat(4_000),
       reserveTokens: 20,
-      sessionAgentId: "test",
-      sessionManager: SessionManager.inMemory(),
       sessionMessageCount: 0,
       state,
       systemPrompt: "",
       toolResultMaxChars: 1_000,
-      withOwnedSessionWriteLock: async (operation) => await operation(),
     });
 
     expect(result).toEqual(state);
   });
 
-  it("runs successful pre-prompt truncation under the owned write lock", async () => {
+  it("does not persist heuristic pre-prompt tool-result truncation", async () => {
     const toolResult = makeToolResultMessage("alpha beta gamma delta epsilon ".repeat(2_200));
     const messages = [toolResult];
     const reserveTokens = 2_000;
@@ -184,11 +206,6 @@ describe("attempt prompt preflight", () => {
     });
     const contextTokenBudget = estimatedPromptTokens - 200 + reserveTokens;
     const sessionManager = createSessionManagerWithMessage(toolResult);
-    let lockCalls = 0;
-    const withOwnedSessionWriteLock = async <T>(operation: () => Promise<T> | T): Promise<T> => {
-      lockCalls += 1;
-      return await operation();
-    };
 
     const result = await prepareEmbeddedAttemptPromptPreflight({
       attempt,
@@ -199,8 +216,6 @@ describe("attempt prompt preflight", () => {
       includeBoundaryTimestamp: true,
       promptForPrecheck: "hello",
       reserveTokens,
-      sessionAgentId: "test",
-      sessionManager,
       sessionMessageCount: messages.length,
       state: {
         contextBudgetStatus: undefined,
@@ -211,19 +226,12 @@ describe("attempt prompt preflight", () => {
       },
       systemPrompt: "sys",
       toolResultMaxChars: 1_000,
-      withOwnedSessionWriteLock,
     });
 
-    expect(lockCalls).toBe(1);
-    expect(result.skipPromptSubmission).toBe(true);
+    expect(result.skipPromptSubmission).toBe(false);
     expect(result.promptError).toBeNull();
     expect(result.promptErrorSource).toBeNull();
-    expect(result.preflightRecovery).toEqual(
-      expect.objectContaining({
-        route: "truncate_tool_results_only",
-        handled: true,
-        truncatedCount: 1,
-      }),
-    );
+    expect(result.preflightRecovery).toBeUndefined();
+    expect(sessionManager.buildSessionContext().messages).toEqual([toolResult]);
   });
 });

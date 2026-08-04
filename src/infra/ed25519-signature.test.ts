@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
-  base64UrlDecode,
   decodeCanonicalBase64OrBase64Url,
   deriveCanonicalEd25519PrivateKeyRaw,
   deriveCanonicalEd25519PublicKeyRaw,
@@ -14,8 +13,7 @@ import {
 
 describe("strict base64 decoding", () => {
   it("accepts canonical unpadded base64url", () => {
-    const raw = Buffer.from([0xfb, 0xff, 0x01]);
-    expect(base64UrlDecode("-_8B")).toEqual(raw);
+    expect(normalizeEd25519PublicKeyBase64Url("-_8B")).toBe("-_8B");
   });
 
   it("accepts canonical standard base64 through the strict mixed decoder", () => {
@@ -31,7 +29,9 @@ describe("strict base64 decoding", () => {
   );
 
   it("throws on input exceeding the maximum allowed length", () => {
-    expect(() => base64UrlDecode("A".repeat(5000))).toThrow(/maximum allowed length/);
+    expect(() => decodeCanonicalBase64OrBase64Url("A".repeat(5000))).toThrow(
+      /maximum allowed length/,
+    );
   });
 });
 

@@ -7,12 +7,15 @@ import type {
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import pMap, { pMapSkip } from "p-map";
+import { walkMemoryWikiDirectory } from "./bounded-walk.js";
 
 const LEGACY_IMPORT_RUN_READ_CONCURRENCY = 16;
 
 type ChatGptImportRunEntry = {
   path: string;
   snapshotPath?: string;
+  contentHash?: string;
+  recoveryPaths?: string[];
 };
 
 export type ChatGptImportRunRecord = {
@@ -26,8 +29,10 @@ export type ChatGptImportRunRecord = {
   createdCount: number;
   updatedCount: number;
   skippedCount: number;
-  createdPaths: string[];
+  createdPaths: ChatGptImportRunEntry[];
   updatedPaths: ChatGptImportRunEntry[];
+  rollbackStartedAt?: string;
+  rollbackTargetsFinalizedAt?: string;
   rolledBackAt?: string;
 };
 
@@ -53,6 +58,8 @@ type MemoryWikiImportRunPathStateRecord = {
   index: number;
   path: string;
   snapshotPath?: string;
+  contentHash?: string;
+  recoveryPaths?: string[];
 };
 
 type MemoryWikiImportRunStateRecord =
@@ -95,8 +102,14 @@ function resolvePathStateEntryKey(params: {
 function cloneImportRunRecord(record: ChatGptImportRunRecord): ChatGptImportRunRecord {
   return {
     ...record,
-    createdPaths: [...record.createdPaths],
-    updatedPaths: record.updatedPaths.map((entry) => ({ ...entry })),
+    createdPaths: record.createdPaths.map((entry) => ({
+      ...entry,
+      ...(entry.recoveryPaths ? { recoveryPaths: [...entry.recoveryPaths] } : {}),
+    })),
+    updatedPaths: record.updatedPaths.map((entry) => ({
+      ...entry,
+      ...(entry.recoveryPaths ? { recoveryPaths: [...entry.recoveryPaths] } : {}),
+    })),
   };
 }
 
@@ -107,13 +120,55 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
-function asStringArray(value: unknown): string[] {
+function normalizeImportRunEntries(value: unknown): ChatGptImportRunEntry[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.filter(
-    (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
-  );
+  return value.flatMap((raw): ChatGptImportRunEntry[] => {
+    if (typeof raw === "string") {
+      const entryPath = raw.trim();
+      return entryPath ? [{ path: entryPath }] : [];
+    }
+    const entry = asRecord(raw);
+    if (!entry) {
+      return [];
+    }
+    const entryPath = typeof entry.path === "string" ? entry.path.trim() : "";
+    if (!entryPath) {
+      return [];
+    }
+    const snapshotPath =
+      typeof entry.snapshotPath === "string" && entry.snapshotPath.trim()
+        ? entry.snapshotPath.trim()
+        : undefined;
+    const contentHash =
+      typeof entry.contentHash === "string" && entry.contentHash.trim()
+        ? entry.contentHash.trim()
+        : undefined;
+    const recoveryPaths = normalizeStringArray(entry.recoveryPaths);
+    return [
+      {
+        path: entryPath,
+        ...(snapshotPath ? { snapshotPath } : {}),
+        ...(contentHash ? { contentHash } : {}),
+        ...(recoveryPaths.length > 0 ? { recoveryPaths } : {}),
+      },
+    ];
+  });
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return [
+    ...new Set(
+      value
+        .filter((entry): entry is string => typeof entry === "string")
+        .map((entry) => entry.trim())
+        .filter(Boolean),
+    ),
+  ];
 }
 
 function asNonNegativeInteger(value: unknown): number {
@@ -139,25 +194,18 @@ function normalizeMemoryWikiImportRunRecord(raw: unknown): ChatGptImportRunRecor
   ) {
     return null;
   }
-  const updatedPaths = Array.isArray(record.updatedPaths)
-    ? record.updatedPaths
-        .map((entry) => asRecord(entry))
-        .filter((entry): entry is Record<string, unknown> => entry !== null)
-        .flatMap((entry): ChatGptImportRunEntry[] => {
-          const entryPath = typeof entry.path === "string" ? entry.path.trim() : "";
-          if (!entryPath) {
-            return [];
-          }
-          const snapshotPath =
-            typeof entry.snapshotPath === "string" && entry.snapshotPath.trim()
-              ? entry.snapshotPath.trim()
-              : undefined;
-          return [{ path: entryPath, ...(snapshotPath ? { snapshotPath } : {}) }];
-        })
-    : [];
   const rolledBackAt =
     typeof record.rolledBackAt === "string" && record.rolledBackAt.trim()
       ? record.rolledBackAt.trim()
+      : undefined;
+  const rollbackStartedAt =
+    typeof record.rollbackStartedAt === "string" && record.rollbackStartedAt.trim()
+      ? record.rollbackStartedAt.trim()
+      : undefined;
+  const rollbackTargetsFinalizedAt =
+    typeof record.rollbackTargetsFinalizedAt === "string" &&
+    record.rollbackTargetsFinalizedAt.trim()
+      ? record.rollbackTargetsFinalizedAt.trim()
       : undefined;
   return {
     version: 1,
@@ -170,8 +218,10 @@ function normalizeMemoryWikiImportRunRecord(raw: unknown): ChatGptImportRunRecor
     createdCount: asNonNegativeInteger(record.createdCount),
     updatedCount: asNonNegativeInteger(record.updatedCount),
     skippedCount: asNonNegativeInteger(record.skippedCount),
-    createdPaths: asStringArray(record.createdPaths),
-    updatedPaths,
+    createdPaths: normalizeImportRunEntries(record.createdPaths),
+    updatedPaths: normalizeImportRunEntries(record.updatedPaths),
+    ...(rollbackStartedAt ? { rollbackStartedAt } : {}),
+    ...(rollbackTargetsFinalizedAt ? { rollbackTargetsFinalizedAt } : {}),
     ...(rolledBackAt ? { rolledBackAt } : {}),
   };
 }
@@ -213,6 +263,11 @@ function normalizePathRecord(raw: unknown): MemoryWikiImportRunPathStateRecord |
     typeof record.snapshotPath === "string" && record.snapshotPath.trim()
       ? record.snapshotPath.trim()
       : undefined;
+  const contentHash =
+    typeof record.contentHash === "string" && record.contentHash.trim()
+      ? record.contentHash.trim()
+      : undefined;
+  const recoveryPaths = normalizeStringArray(record.recoveryPaths);
   return {
     kind: record.kind,
     vaultRootKey: record.vaultRootKey,
@@ -220,6 +275,8 @@ function normalizePathRecord(raw: unknown): MemoryWikiImportRunPathStateRecord |
     index: Math.max(0, Math.floor(record.index)),
     path: record.path,
     ...(snapshotPath ? { snapshotPath } : {}),
+    ...(contentHash ? { contentHash } : {}),
+    ...(recoveryPaths.length > 0 ? { recoveryPaths } : {}),
   };
 }
 
@@ -227,20 +284,20 @@ function composeImportRunRecord(
   meta: MemoryWikiImportRunMetaStateRecord,
   pathRows: MemoryWikiImportRunPathStateRecord[],
 ): ChatGptImportRunRecord {
+  const toEntry = (row: MemoryWikiImportRunPathStateRecord): ChatGptImportRunEntry => ({
+    path: row.path,
+    ...(row.snapshotPath ? { snapshotPath: row.snapshotPath } : {}),
+    ...(row.contentHash ? { contentHash: row.contentHash } : {}),
+    ...(row.recoveryPaths ? { recoveryPaths: [...row.recoveryPaths] } : {}),
+  });
   const createdPaths = pathRows
     .filter((row) => row.kind === "created-path")
     .toSorted((left, right) => left.index - right.index)
-    .map((row) => row.path);
+    .map(toEntry);
   const updatedPaths = pathRows
     .filter((row) => row.kind === "updated-path")
     .toSorted((left, right) => left.index - right.index)
-    .map((row) => {
-      const entry: ChatGptImportRunEntry = { path: row.path };
-      if (row.snapshotPath) {
-        entry.snapshotPath = row.snapshotPath;
-      }
-      return entry;
-    });
+    .map(toEntry);
   return {
     version: 1,
     runId: meta.runId,
@@ -254,6 +311,10 @@ function composeImportRunRecord(
     skippedCount: meta.skippedCount,
     createdPaths,
     updatedPaths,
+    ...(meta.rollbackStartedAt ? { rollbackStartedAt: meta.rollbackStartedAt } : {}),
+    ...(meta.rollbackTargetsFinalizedAt
+      ? { rollbackTargetsFinalizedAt: meta.rollbackTargetsFinalizedAt }
+      : {}),
     ...(meta.rolledBackAt ? { rolledBackAt: meta.rolledBackAt } : {}),
   };
 }
@@ -275,6 +336,10 @@ function toMetaRecord(
     createdCount: record.createdCount,
     updatedCount: record.updatedCount,
     skippedCount: record.skippedCount,
+    ...(record.rollbackStartedAt ? { rollbackStartedAt: record.rollbackStartedAt } : {}),
+    ...(record.rollbackTargetsFinalizedAt
+      ? { rollbackTargetsFinalizedAt: record.rollbackTargetsFinalizedAt }
+      : {}),
     ...(record.rolledBackAt ? { rolledBackAt: record.rolledBackAt } : {}),
   };
 }
@@ -285,12 +350,14 @@ function toPathRecords(
 ): MemoryWikiImportRunPathStateRecord[] {
   return [
     ...record.createdPaths.map(
-      (entryPath, index): MemoryWikiImportRunPathStateRecord => ({
+      (entry, index): MemoryWikiImportRunPathStateRecord => ({
         kind: "created-path",
         vaultRootKey,
         runId: record.runId,
         index,
-        path: entryPath,
+        path: entry.path,
+        ...(entry.contentHash ? { contentHash: entry.contentHash } : {}),
+        ...(entry.recoveryPaths ? { recoveryPaths: [...entry.recoveryPaths] } : {}),
       }),
     ),
     ...record.updatedPaths.map(
@@ -301,6 +368,8 @@ function toPathRecords(
         index,
         path: entry.path,
         ...(entry.snapshotPath ? { snapshotPath: entry.snapshotPath } : {}),
+        ...(entry.contentHash ? { contentHash: entry.contentHash } : {}),
+        ...(entry.recoveryPaths ? { recoveryPaths: [...entry.recoveryPaths] } : {}),
       }),
     ),
   ];
@@ -365,10 +434,6 @@ export function createMemoryWikiImportRunStateStore(
     async write(vaultRoot, record) {
       const vaultRootKey = resolveVaultRootKey(vaultRoot);
       const store = openStore();
-      await store.register(
-        resolveStateEntryKey(vaultRootKey, record.runId),
-        toMetaRecord(vaultRootKey, record),
-      );
       const nextPathKeys = new Set<string>();
       for (const pathRecord of toPathRecords(vaultRootKey, record)) {
         const key = resolvePathStateEntryKey({
@@ -381,6 +446,12 @@ export function createMemoryWikiImportRunStateStore(
         nextPathKeys.add(key);
         await store.register(key, pathRecord);
       }
+      // Path rows carry rollback recovery evidence. Commit the meta row last
+      // so phase fences and rolledBackAt never become visible ahead of it.
+      await store.register(
+        resolveStateEntryKey(vaultRootKey, record.runId),
+        toMetaRecord(vaultRootKey, record),
+      );
       for (const row of await store.entries()) {
         const pathRecord = normalizePathRecord(row.value);
         if (
@@ -465,19 +536,25 @@ export async function readLegacyMemoryWikiImportRunRecords(
   vaultRoot: string,
 ): Promise<ChatGptImportRunRecord[]> {
   const importRunsDir = resolveMemoryWikiImportRunsDir(vaultRoot);
-  const entries = await fs
-    .readdir(importRunsDir, { withFileTypes: true })
-    .catch((error: unknown) => {
-      const code = asRecord(error)?.code;
-      if (code === "ENOENT") {
-        return [];
-      }
-      throw error;
-    });
+  const entries = await walkMemoryWikiDirectory(importRunsDir, "", {
+    maxDepth: 1,
+    entryFilter: (entry) =>
+      entry.kind === "directory"
+        ? "skip-subtree"
+        : entry.kind === "file" && entry.relativePath.endsWith(".json")
+          ? "include"
+          : "skip",
+  }).catch((error: unknown) => {
+    const code = asRecord(error)?.code;
+    if (code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  });
   return await pMap(
-    entries.filter((entry) => entry.isFile() && entry.name.endsWith(".json")),
+    entries.filter((entry) => entry.kind === "file"),
     async (entry) => {
-      const raw = await fs.readFile(path.join(importRunsDir, entry.name), "utf8");
+      const raw = await fs.readFile(path.join(importRunsDir, entry.relativePath), "utf8");
       return normalizeMemoryWikiImportRunRecord(JSON.parse(raw) as unknown) ?? pMapSkip;
     },
     { concurrency: LEGACY_IMPORT_RUN_READ_CONCURRENCY, stopOnError: true },

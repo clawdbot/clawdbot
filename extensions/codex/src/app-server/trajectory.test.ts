@@ -78,7 +78,6 @@ function createMemoryBackedRecorder(params: {
       ...params.attempt,
     } as never,
     trajectoryRecorder: host.recorder,
-    trajectorySessionFile: `sqlite:main:${sessionId}:${path.join(params.tmpDir, "sessions.json")}`,
     tools: params.tools,
     env: {},
   });
@@ -115,57 +114,12 @@ function createSqliteHostTrajectoryRecorder(params: {
 }
 
 describe("Codex trajectory recorder", () => {
-  it("rejects file-backed trajectory targets without creating sidecars", () => {
-    const tmpDir = makeTempDir();
-    const warn = vi.fn();
-    const recorder = createCodexTrajectoryRecorder({
-      cwd: tmpDir,
-      attempt: {
-        sessionFile: path.join(tmpDir, "session.jsonl"),
-        sessionId: "session-1",
-        model: { api: "responses" },
-      } as never,
-      env: {},
-      warn,
-    });
-
-    expect(recorder).toBeNull();
-    expect(warn).toHaveBeenCalledWith(
-      "codex trajectory capture requires a matching SQLite session target",
-      { sessionId: "session-1", reason: "non-sqlite-session-target" },
-    );
-    expect(fs.existsSync(path.join(tmpDir, "session.trajectory.jsonl"))).toBe(false);
-    expect(fs.existsSync(path.join(tmpDir, "session.trajectory-path.json"))).toBe(false);
-  });
-
-  it("rejects a SQLite marker for a different session identity", () => {
-    const tmpDir = makeTempDir();
-    const warn = vi.fn();
-    const recorder = createCodexTrajectoryRecorder({
-      cwd: tmpDir,
-      attempt: {
-        sessionFile: "sqlite:main:other:/tmp/openclaw-agent.sqlite",
-        sessionId: "session-1",
-        model: { api: "responses" },
-      } as never,
-      trajectoryRecorder: createMemoryHostTrajectoryRecorder().recorder,
-      env: {},
-      warn,
-    });
-
-    expect(recorder).toBeNull();
-    expect(warn).toHaveBeenCalledWith(
-      "codex trajectory capture requires a matching SQLite session target",
-      { sessionId: "session-1", reason: "session-id-mismatch" },
-    );
-  });
-
   it("warns when the SQLite host recorder is unavailable", () => {
     const warn = vi.fn();
     const recorder = createCodexTrajectoryRecorder({
       cwd: makeTempDir(),
       attempt: {
-        sessionFile: "sqlite:main:session-1:/tmp/openclaw-agent.sqlite",
+        sessionFile: "agent:main:session-1",
         sessionId: "session-1",
         model: { api: "responses" },
       } as never,
@@ -180,20 +134,22 @@ describe("Codex trajectory recorder", () => {
     );
   });
 
-  it("stores SQLite-backed trajectory captures in the session database", async () => {
+  it("stores SQLite-backed captures for the canonical session-key target", async () => {
+    // Regression: the host stopped emitting legacy `sqlite:` session-file
+    // markers, so any marker re-derivation here drops every Codex capture.
     const tmpDir = makeTempDir();
     const storePath = path.join(tmpDir, "sessions", "sessions.json");
-    const trajectorySessionFile = `sqlite:main:session-1:${storePath}`;
     await upsertSessionEntry({
       agentId: "main",
       sessionKey: "agent:main:session-1",
       storePath,
-      entry: { sessionId: "session-1", sessionFile: trajectorySessionFile, updatedAt: 10 },
+      entry: { sessionId: "session-1", updatedAt: 10 },
     });
     const recorder = createCodexTrajectoryRecorder({
       cwd: tmpDir,
       attempt: {
-        sessionFile: path.join(tmpDir, "sessions", "session.jsonl"),
+        sessionFile: "agent:main:session-1",
+        sessionKey: "agent:main:session-1",
         sessionId: "session-1",
         model: { api: "responses" },
       } as never,
@@ -202,7 +158,6 @@ describe("Codex trajectory recorder", () => {
         sessionId: "session-1",
         storePath,
       }),
-      trajectorySessionFile,
       env: {},
     });
 
@@ -269,7 +224,7 @@ describe("Codex trajectory recorder", () => {
     const recorder = createCodexTrajectoryRecorder({
       cwd: makeTempDir(),
       attempt: {
-        sessionFile: "sqlite:main:session-1:/tmp/openclaw-agent.sqlite",
+        sessionFile: "agent:main:session-1",
         sessionId: "session-1",
         model: { api: "responses" },
       } as never,
@@ -308,7 +263,7 @@ describe("Codex trajectory recorder", () => {
       turnId: "turn-1",
       timedOut: false,
       result: {
-        aborted: false,
+        terminal: { kind: "ok" },
         attemptUsage: usage,
         assistantTexts: ["done"],
         messagesSnapshot: Array.from({ length: 20 }, (_value, index) => ({

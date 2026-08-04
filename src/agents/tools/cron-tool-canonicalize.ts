@@ -7,7 +7,7 @@ import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coer
 import { isRecord } from "../../utils.js";
 import { isStringOption } from "../../utils/string-readers.js";
 
-const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "on-exit"] as const;
+const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "on-exit", "stream"] as const;
 const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "script"] as const;
 const CRON_FLAT_PAYLOAD_KEYS = [
   "message",
@@ -37,6 +37,10 @@ const CRON_FLAT_SCHEDULE_KEYS = [
   "exact",
   "command",
   "cwd",
+  "mode",
+  "match",
+  "batchMs",
+  "maxBatchBytes",
 ] as const;
 const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   "name",
@@ -193,7 +197,16 @@ function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
     schedule.kind = "on-exit";
   }
 
-  for (const key of ["anchorMs", "tz", "staggerMs", "cwd"] as const) {
+  for (const key of [
+    "anchorMs",
+    "tz",
+    "staggerMs",
+    "cwd",
+    "mode",
+    "match",
+    "batchMs",
+    "maxBatchBytes",
+  ] as const) {
     hasSchedule = moveDefinedField({ source: value, target: schedule, from: key }) || hasSchedule;
   }
   hasSchedule =

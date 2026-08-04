@@ -10,7 +10,7 @@ import {
   replaceSessionEntry as replaceInternalSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
-import type { SessionEntry as ConfigSessionEntry } from "./config-types.js";
+import type { SessionEntry as ConfigSessionEntry } from "../config/sessions/types.js";
 import {
   cleanupSessionLifecycleArtifacts,
   deleteSessionEntry,

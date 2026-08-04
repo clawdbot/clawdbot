@@ -40,6 +40,43 @@ function formatPlatform(platform) {
     : `${platform.os}/${platform.architecture}`;
 }
 
+/** Verify required Docker attestations for every image reference. */
+export function verifyDockerAttestations(params) {
+  const {
+    imageRefs,
+    requiredPlatforms,
+    execFileSyncImpl = execFileSync,
+    log = console.log,
+  } = params;
+  const allErrors = [];
+  for (const imageRef of imageRefs) {
+    const index = parseJson(inspectRaw(imageRef, { execFileSyncImpl }), `${imageRef} index`);
+    const errors = collectDockerAttestationErrors({
+      imageRef,
+      index,
+      requiredPlatforms,
+      inspectAttestation(digest) {
+        return parseJson(
+          inspectRaw(imageRefForDigest(imageRef, digest), { execFileSyncImpl }),
+          `${imageRef} attestation ${digest}`,
+        );
+      },
+    });
+    if (errors.length === 0) {
+      log(
+        `Verified Docker attestations for ${imageRef}: ${requiredPlatforms
+          .map(formatPlatform)
+          .join(", ")}`,
+      );
+    }
+    allErrors.push(...errors);
+  }
+
+  if (allErrors.length > 0) {
+    throw new Error(allErrors.map((error) => `[docker-attestations] ${error}`).join("\n"));
+  }
+}
+
 function platformMatches(actual, expected) {
   return (
     actual?.os === expected.os &&
@@ -184,36 +221,10 @@ async function main() {
     throw new Error("At least one --platform is required.");
   }
 
-  const allErrors = [];
-  for (const imageRef of parsed.imageRefs) {
-    const index = parseJson(inspectRaw(imageRef), `${imageRef} index`);
-    const errors = collectDockerAttestationErrors({
-      imageRef,
-      index,
-      requiredPlatforms: parsed.requiredPlatforms,
-      inspectAttestation(digest) {
-        return parseJson(
-          inspectRaw(imageRefForDigest(imageRef, digest)),
-          `${imageRef} attestation ${digest}`,
-        );
-      },
-    });
-    if (errors.length === 0) {
-      console.log(
-        `Verified Docker attestations for ${imageRef}: ${parsed.requiredPlatforms
-          .map(formatPlatform)
-          .join(", ")}`,
-      );
-    }
-    allErrors.push(...errors);
-  }
-
-  if (allErrors.length > 0) {
-    for (const error of allErrors) {
-      console.error(`[docker-attestations] ${error}`);
-    }
-    process.exit(1);
-  }
+  verifyDockerAttestations({
+    imageRefs: parsed.imageRefs,
+    requiredPlatforms: parsed.requiredPlatforms,
+  });
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

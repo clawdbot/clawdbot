@@ -3,14 +3,23 @@ title: Gateway restart Code Mode wait recovery
 scenario:
   id: gateway-restart-inflight-run
   surface: runtime
-  runtimeParityTier: live-only
   coverage:
     primary:
-      - runtime.restart-recovery
+      - session-memory.recovery-restart-recovery
     secondary:
-      - runtime.gateway-restart
-      - runtime.delivery
+      - gateway.restart-and-stop-gateway-restart
+      - session-memory.recovery-delivery
   gatewayConfigPatch:
+    # Channel restart recovery deliberately fails closed when reply hooks are active.
+    # This scenario isolates the replay-safe Code Mode contract from those hooks.
+    plugins:
+      slots:
+        memory: none
+      entries:
+        acpx:
+          enabled: false
+        memory-core:
+          enabled: false
     tools:
       alsoAllow:
         - qa_restart_wait
@@ -33,6 +42,8 @@ scenario:
     - src/gateway/server-restart-sentinel.ts
   execution:
     kind: flow
+    runtime: openclaw
+    timeoutMs: 420000
     summary: Restart while replay-safe Code Mode wait is executing, then verify automatic reconstruction and delivery.
     config:
       requiredProviderMode: mock-openai
@@ -64,26 +75,26 @@ flow:
             expr: "`restart-inflight-${randomUUID().slice(0, 8)}`"
         - set: sessionKey
           value:
-            expr: "buildAgentSessionKey({ agentId: 'qa', channel: 'qa-channel', accountId: transport.accountId, peer: { kind: 'direct', id: conversationId }, dmScope: 'per-channel-peer', identityLinks: env.cfg.session?.identityLinks })"
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: 'qa-channel', accountId: transport.accountId, peer: { kind: 'direct', id: `dm:${conversationId}` }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
         - set: restartPatch
           value:
             expr: "({ gateway: { controlUi: { allowedOrigins: [`http://127.0.0.1:${64000 + Math.floor(Math.random() * 999)}`] } }, tools: { codeMode: { enabled: false } } })"
         - set: requestCursorBefore
           value:
             expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
-        - call: startAgentRun
-          saveAs: started
-          args:
-            - ref: env
-            - sessionKey:
-                ref: sessionKey
-              message:
-                expr: config.prompt
-              to:
-                expr: "`dm:${conversationId}`"
-              taskTracking: false
-              timeoutMs:
-                expr: liveTurnTimeoutMs(env, 180000)
+        # Real channel ingress owns the durable delivery context needed by recovery.
+        # Synthetic chat/agent RPC starts cannot prove recovered channel delivery.
+        - sendInbound:
+            accountId: default
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            senderId:
+              ref: conversationId
+            senderName: QA Restart Operator
+            text:
+              expr: config.prompt
         - call: waitForCondition
           saveAs: plannedWait
           args:
@@ -100,6 +111,17 @@ flow:
                 expr: "readSessionTranscriptSummary(env, sessionKey).then((summary) => summary.lastMessageRole === 'assistant' && summary.lastAssistantToolNames?.includes('wait') ? summary : undefined)"
             - expr: liveTurnTimeoutMs(env, 120000)
             - 25
+        - call: readRawQaSessionStore
+          saveAs: preRestartStore
+          args:
+            - ref: env
+        - set: preRestartEntry
+          value:
+            expr: preRestartStore[sessionKey]
+        - assert:
+            expr: "preRestartEntry?.restartRecoveryDeliveryContext?.channel === 'qa-channel' && preRestartEntry.restartRecoveryDeliveryContext.to === `dm:${conversationId}`"
+            message:
+              expr: "`restart recovery delivery claim missing before restart: ${JSON.stringify(preRestartEntry ?? null)}`"
         - call: restartGatewayWithConfigPatch
           args:
             - env:
@@ -166,4 +188,4 @@ flow:
             expr: "recoveryLogs.includes('dispatching restart-safe recovery') && recoveryLogs.includes('restart-safe recovery tool policy retained')"
             message:
               expr: "`restart-safe host policy was not observed; logs=${recoveryLogs}`"
-      detailsExpr: "`runId=${started.runId} session=${sessionKey} plannedTool=${plannedWait.plannedToolName} persistedTail=${interruptedTranscript.lastMessageRole}/${interruptedTranscript.lastAssistantStopReason}/${interruptedTranscript.lastAssistantToolNames?.join(',')} recoveredTail=${postRestartTranscript.lastMessageRole}/${postRestartTranscript.lastAssistantStopReason}/${postRestartTranscript.lastAssistantContentTypes?.join(',')} recoveredMarkers=${interruptedMatches.length} resendNotices=${restartNotices.length} restartSafePolicy=true heartbeatPoll=false\\n${outbound.text}`"
+      detailsExpr: "`session=${sessionKey} plannedTool=${plannedWait.plannedToolName} persistedTail=${interruptedTranscript.lastMessageRole}/${interruptedTranscript.lastAssistantStopReason}/${interruptedTranscript.lastAssistantToolNames?.join(',')} recoveredTail=${postRestartTranscript.lastMessageRole}/${postRestartTranscript.lastAssistantStopReason}/${postRestartTranscript.lastAssistantContentTypes?.join(',')} recoveredMarkers=${interruptedMatches.length} resendNotices=${restartNotices.length} restartSafePolicy=true heartbeatPoll=false\\n${outbound.text}`"

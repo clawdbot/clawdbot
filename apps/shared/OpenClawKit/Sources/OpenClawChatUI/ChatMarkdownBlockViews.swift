@@ -194,9 +194,8 @@ struct ChatMarkdownListView: View {
     let list: ChatMarkdownList
     let context: ChatMarkdownRenderer.Context
     let variant: ChatMarkdownVariant
-    let font: Font
+    let typography: ChatMarkdownRenderer.Typography
     let textColor: Color
-    let inlineMathTypography: ChatMarkdownRenderer.InlineMathTypography
 
     var body: some View {
         Grid(alignment: .topLeading, horizontalSpacing: 8, verticalSpacing: 7) {
@@ -208,7 +207,7 @@ struct ChatMarkdownListView: View {
 
                     VStack(alignment: .leading, spacing: 7) {
                         if self.list.items[index].content.isEmpty {
-                            ChatMarkdownRenderer.styledText(" ", font: self.font)
+                            ChatMarkdownRenderer.styledText(" ", font: self.typography.proseFont)
                         } else {
                             ForEach(self.list.items[index].content.indices, id: \.self) { contentIndex in
                                 self.content(self.list.items[index].content[contentIndex])
@@ -216,6 +215,9 @@ struct ChatMarkdownListView: View {
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    // Grid cells otherwise accept compressed row proposals and ellipsize
+                    // wrapped text. Preserve the item's ideal height while still wrapping.
+                    .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
@@ -227,14 +229,14 @@ struct ChatMarkdownListView: View {
         let marker = self.list.marker(for: item, at: index)
         HStack(spacing: 4) {
             if let text = marker.text {
-                ChatMarkdownRenderer.styledText(text, font: self.font)
+                ChatMarkdownRenderer.styledText(text, font: self.typography.proseFont)
                     .foregroundStyle(self.textColor)
                     .monospacedDigit()
                     .accessibilityLabel(self.markerAccessibilityLabel(at: index))
             }
             if let checkbox = marker.checkbox {
                 Image(systemName: checkbox == .checked ? "checkmark.square.fill" : "square")
-                    .font(self.font)
+                    .font(self.typography.proseFont)
                     .foregroundStyle(self.textColor)
                     .accessibilityLabel(Text(self.checkboxAccessibilityLabel(checkbox)))
             }
@@ -268,9 +270,8 @@ struct ChatMarkdownListView: View {
             text: markdown,
             context: self.context,
             variant: self.variant,
-            font: self.font,
-            textColor: self.textColor,
-            inlineMathTypography: self.inlineMathTypography)
+            typography: self.typography,
+            textColor: self.textColor)
     }
 
     func nestedListView(_ list: ChatMarkdownList) -> ChatMarkdownListView {
@@ -278,9 +279,8 @@ struct ChatMarkdownListView: View {
             list: list,
             context: self.context,
             variant: self.variant,
-            font: self.font,
-            textColor: self.textColor,
-            inlineMathTypography: self.inlineMathTypography)
+            typography: self.typography,
+            textColor: self.textColor)
     }
 
     private func markerAccessibilityLabel(at index: Int) -> Text {

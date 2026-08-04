@@ -6,10 +6,10 @@ scenario:
   category: reliability
   coverage:
     primary:
-      - personal.failure-recovery
+      - agent-runtime.failure-recovery
     secondary:
-      - personal.no-fake-progress
-      - tools.evidence
+      - agent-runtime.failure-recovery-no-fake-progress
+      - agent-runtime.failure-recovery-evidence
   risk: medium
   capabilities:
     - tools.read

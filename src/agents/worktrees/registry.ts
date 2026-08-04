@@ -133,33 +133,41 @@ export function getRegistryWorktreeProvisionedPaths(
   env: NodeJS.ProcessEnv,
   id: string,
 ): string[] | undefined {
-  const ledger = getRegistryWorktreeProvisionedLedger(env, id);
-  return ledger.status === "valid" ? ledger.paths : undefined;
-}
-
-export function getRegistryWorktreeProvisionedLedger(
-  env: NodeJS.ProcessEnv,
-  id: string,
-): { status: "legacy" } | { status: "invalid" } | { status: "valid"; paths: string[] } {
   const db = dbFor(env);
   const query = kyselyFor(db)
     .selectFrom("worktrees")
     .select("provisioned_paths_json")
     .where("id", "=", id);
   const row = executeSqliteQuerySync(db, query).rows[0];
-  if (!row) {
-    return { status: "invalid" };
-  }
-  if (row.provisioned_paths_json === null) {
-    return { status: "legacy" };
-  }
-  const data = parseProvisionedData(row.provisioned_paths_json);
-  return data
-    ? {
-        status: "valid",
-        paths: data.map((entry) => (typeof entry === "string" ? entry : entry.path)),
-      }
-    : { status: "invalid" };
+  return parseProvisionedData(row?.provisioned_paths_json ?? null)?.map((entry) =>
+    typeof entry === "string" ? entry : entry.path,
+  );
+}
+
+export function hasLegacyRegistryWorktrees(env: NodeJS.ProcessEnv): boolean {
+  const db = dbFor(env);
+  const query = kyselyFor(db)
+    .selectFrom("worktrees")
+    .select("id")
+    .where("provisioned_paths_json", "is", null)
+    .limit(1);
+  return executeSqliteQuerySync(db, query).rows.length > 0;
+}
+
+export function discardLegacyRegistryWorktrees(env: NodeJS.ProcessEnv): number {
+  const db = dbFor(env);
+  return runOpenClawStateWriteTransaction(
+    () =>
+      Number(
+        executeSqliteQuerySync(
+          db,
+          // Retire every pre-ledger owner row so next use provisions canonically.
+          // The checkout and branch stay untouched; doctor never deletes their user data.
+          kyselyFor(db).deleteFrom("worktrees").where("provisioned_paths_json", "is", null),
+        ).numAffectedRows ?? 0n,
+      ),
+    { env },
+  );
 }
 
 export function getRegistryWorktreeProvisionedState(

@@ -1,7 +1,7 @@
 // Qqbot plugin module implements channel.setup behavior.
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import "./bridge/bootstrap.js";
-import { qqbotConfigAdapter, qqbotMeta, qqbotSetupAdapterShared } from "./bridge/config-shared.js";
+import { qqbotConfigAdapter, qqbotMeta, qqbotSetupContract } from "./bridge/config-shared.js";
 import { qqbotSetupWizard } from "./bridge/setup/surface.js";
 import { qqbotChannelConfigSchema } from "./config-schema.js";
 import type { ResolvedQQBotAccount } from "./types.js";
@@ -28,7 +28,5 @@ export const qqbotSetupPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
   config: {
     ...qqbotConfigAdapter,
   },
-  setup: {
-    ...qqbotSetupAdapterShared,
-  },
+  setupContract: qqbotSetupContract,
 };

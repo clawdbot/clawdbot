@@ -1,5 +1,6 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SystemAgentSetupAuthStartResult, WizardNextResult } from "../../api/types.ts";
+import { isWizardNotFoundError } from "../../lib/gateway-errors.ts";
 import {
   MODEL_SETUP_AUTH_START_TIMEOUT_MS,
   MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS,
@@ -7,12 +8,17 @@ import {
   wizardStateFromResult,
 } from "./state.ts";
 
+export type ModelSetupWizardStartMethod =
+  | "openclaw.setup.auth.start"
+  | "openclaw.setup.prepare.start";
+
 type WizardRunnerOptions = {
   getClient: () => GatewayBrowserClient | null;
   onChange: (state: ModelSetupWizardState) => void;
-  onDone: () => void;
+  onDone: (startMethod: ModelSetupWizardStartMethod) => void;
   requestFailedMessage: () => string;
   cancelledMessage: () => string;
+  sessionExpiredMessage: () => string;
 };
 
 export class ModelSetupWizardRunner {
@@ -20,6 +26,7 @@ export class ModelSetupWizardRunner {
   private sessionId: string | null = null;
   private abortController: AbortController | null = null;
   private generation = 0;
+  private startMethod: ModelSetupWizardStartMethod = "openclaw.setup.auth.start";
 
   constructor(private readonly options: WizardRunnerOptions) {}
 
@@ -27,7 +34,10 @@ export class ModelSetupWizardRunner {
     return this.currentState;
   }
 
-  async start(authChoice: string): Promise<void> {
+  async start(
+    authChoice: string,
+    startMethod: ModelSetupWizardStartMethod = "openclaw.setup.auth.start",
+  ): Promise<void> {
     const client = this.options.getClient();
     if (!client || this.currentState.phase !== "idle") {
       return;
@@ -37,10 +47,11 @@ export class ModelSetupWizardRunner {
     const abortController = new AbortController();
     this.sessionId = sessionId;
     this.abortController = abortController;
+    this.startMethod = startMethod;
     this.setState({ phase: "starting", authChoice });
     try {
       const started = await client.request<SystemAgentSetupAuthStartResult>(
-        "openclaw.setup.auth.start",
+        startMethod,
         { sessionId, authChoice },
         { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS, signal: abortController.signal },
       );
@@ -142,7 +153,18 @@ export class ModelSetupWizardRunner {
     if (next.phase === "done") {
       this.sessionId = null;
       this.abortController = null;
-      this.options.onDone();
+      this.options.onDone(this.startMethod);
+      return;
+    }
+    // Gateway-executed steps (download/pull progress) carry no input controls,
+    // so nothing would ever ask for the next one. Keep polling: the session
+    // long-polls until the next update or the terminal result, so this renders
+    // live progress instead of freezing on the first frame.
+    if (next.phase === "step" && next.step.executor === "gateway") {
+      const generation = this.generation;
+      void this.requestNext(authChoice, undefined, generation).catch((error: unknown) => {
+        this.handleError(error, generation);
+      });
     }
   }
 
@@ -155,15 +177,17 @@ export class ModelSetupWizardRunner {
     this.sessionId = null;
     this.abortController?.abort();
     this.abortController = null;
-    if (client && sessionId) {
+    const sessionExpired = isWizardNotFoundError(error);
+    if (!sessionExpired && client && sessionId) {
       void client
         .request("wizard.cancel", { sessionId }, { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS })
         .catch(() => {
           // The failed request may have already completed or purged the session.
         });
     }
-    const message =
-      error instanceof Error && error.message.trim()
+    const message = sessionExpired
+      ? this.options.sessionExpiredMessage()
+      : error instanceof Error && error.message.trim()
         ? error.message
         : this.options.requestFailedMessage();
     this.setState({ phase: "error", message });

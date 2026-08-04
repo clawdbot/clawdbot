@@ -1,13 +1,14 @@
 ---
 name: openclaw-changelog-update
-description: Regenerate OpenClaw release changelog sections from git history before beta or stable releases.
+description: Regenerate OpenClaw release changelog sections from git history before beta, stable, or extended-stable releases.
 ---
 
 # OpenClaw Changelog Update
 
-Use this for release changelog rewrites and GitHub release-note source text.
-Run it once after the final Code SHA has green Full Release Validation. Do not
-rerun it for same-candidate tooling retries, resumed publication, or promotion.
+Use this for changelog rewrites and GitHub release-note source text. For regular
+beta/stable, run it after the Code SHA passes Full Release Validation. For
+extended-stable, run it before final exact-head validation and tagging. Do not
+rerun it for tooling retries, resumed publication, or promotion.
 Use it with `release-openclaw-maintainer`; this skill owns changelog content,
 ordering, grouping, and attribution discipline.
 
@@ -252,6 +253,14 @@ every human `Thanks @...` attribution.
 - dispatch SHA-pinned Full Release Validation for the Release SHA with evidence
   reuse enabled. It must select `changelog-only-release-v1`; any other changed
   path returns the release to the Code SHA validation loop
+
+## Extended-Stable Variant
+
+Extended-stable has one release commit and no GitHub Release body. After version
+prep and approved backports, regenerate `## YYYY.M.P` with the regular manifest
+and original-main-PR provenance rules. Land it by PR, then validate the final
+branch tip before tagging. Re-audit after a product backport; a tooling-only
+repair needs no changelog entry. Never rewrite a published tag or changelog.
 
 ## Quota / API Outage Rule
 

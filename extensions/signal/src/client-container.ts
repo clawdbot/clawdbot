@@ -6,9 +6,13 @@
  * to keep the two modes cleanly isolated.
  */
 
-import nodePath from "node:path";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
-import { detectMime, parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
+import {
+  detectMime,
+  extractOriginalFilename,
+  parseMediaContentLength,
+} from "openclaw/plugin-sdk/media-runtime";
 import {
   parseStrictNonNegativeInteger,
   resolveTimerTimeoutMs,
@@ -59,6 +63,7 @@ const SIGNAL_REST_SUCCESS_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 // Receive envelopes contain metadata only; cap frames, and do not let upgrades block reconnect.
 const WS_MAX_PAYLOAD = 1024 * 1024;
 const WS_HANDSHAKE_MS = 30_000;
+const WS_SHUTDOWN_DRAIN_TIMEOUT_MS = 1_500;
 // Outbound file paths are converted to base64 before posting to the container. Cap
 // reads to the same default the native signal send path uses (8 MiB) so a path to a
 // huge or symlinked file cannot OOM the gateway before encoding.
@@ -425,6 +430,7 @@ export async function streamContainerEvents(params: {
   abortSignal?: AbortSignal;
   timeoutMs?: number;
   onEvent: (event: ContainerWebSocketMessage) => unknown;
+  onStreamOpen?: () => void;
   logger?: { log?: (msg: string) => void; error?: (msg: string) => void };
 }): Promise<void> {
   const normalized = normalizeBaseUrl(params.baseUrl);
@@ -440,8 +446,13 @@ export async function streamContainerEvents(params: {
     let settled = false;
     let eventChain = Promise.resolve();
     let abortHandler: (() => void) | undefined;
+    let shutdownDrainTimer: ReturnType<typeof setTimeout> | undefined;
 
     const cleanup = () => {
+      if (shutdownDrainTimer) {
+        clearTimeout(shutdownDrainTimer);
+        shutdownDrainTimer = undefined;
+      }
       if (abortHandler) {
         params.abortSignal?.removeEventListener("abort", abortHandler);
         abortHandler = undefined;
@@ -461,7 +472,7 @@ export async function streamContainerEvents(params: {
       }
       settled = true;
       cleanup();
-      reject(toLintErrorObject(error, "Signal WebSocket receive handler failed"));
+      reject(toErrorObject(error, "Signal WebSocket receive handler failed"));
     };
 
     try {
@@ -470,12 +481,13 @@ export async function streamContainerEvents(params: {
       logError(
         `[signal-ws] failed to create WebSocket: ${err instanceof Error ? err.message : String(err)}`,
       );
-      reject(toLintErrorObject(err, "Non-Error rejection"));
+      reject(toErrorObject(err, "Non-Error rejection"));
       return;
     }
 
     ws.on("open", () => {
       log("[signal-ws] connected");
+      params.onStreamOpen?.();
     });
 
     ws.on("message", (data: Buffer) => {
@@ -526,10 +538,22 @@ export async function streamContainerEvents(params: {
     if (params.abortSignal) {
       abortHandler = () => {
         log("[signal-ws] aborted, closing connection");
+        // Arm before close: ws can synchronously flush buffered messages and emit
+        // close, whose final eventChain owns every accepted durable admission.
+        shutdownDrainTimer = setTimeout(() => {
+          logError(
+            "[signal-ws] shutdown timed out draining accepted receive events; messages may be lost",
+          );
+          ws.terminate();
+          resolveOnce();
+        }, WS_SHUTDOWN_DRAIN_TIMEOUT_MS);
+        shutdownDrainTimer.unref?.();
         ws.close();
-        resolveOnce();
       };
       params.abortSignal.addEventListener("abort", abortHandler, { once: true });
+      if (params.abortSignal.aborted) {
+        abortHandler();
+      }
     }
   });
 }
@@ -553,7 +577,8 @@ async function filesToBase64DataUris(
     });
     remainingBytes -= buffer.byteLength;
     const mime = (await detectMime({ buffer, filePath })) ?? "application/octet-stream";
-    const filename = nodePath.basename(filePath);
+    // Signal splits on semicolons; commas and fragments break RFC 2397 attachment data.
+    const filename = extractOriginalFilename(filePath).replace(/[,;#]/g, "_");
     const b64 = buffer.toString("base64");
     results.push(`data:${mime};filename=${filename};base64,${b64}`);
   }
@@ -947,19 +972,5 @@ export async function containerRpcRequest<T = unknown>(
     default:
       throw new Error(`Unsupported container RPC method: ${method}`);
   }
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

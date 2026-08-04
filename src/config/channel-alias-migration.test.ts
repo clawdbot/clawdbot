@@ -230,4 +230,38 @@ describe("defineChannelAliasMigration normalizeChannelConfig", () => {
       accounts: { work: { dmPolicy: "open", allowFrom: ["*"] } },
     });
   });
+
+  it("materializes root and default-account streaming inheritance", () => {
+    const migration = defineChannelAliasMigration({
+      channelId: "layered",
+      streaming: { defaultMode: "partial", deliveryOnly: true },
+      accountStreamingInheritsDefaultAccount: true,
+    });
+    const result = migration.normalizeChannelConfig({
+      cfg: cfgWith("layered", {
+        streaming: { block: { enabled: true } },
+        accounts: {
+          Default: { chunkMode: "newline" },
+          work: { blockStreamingCoalesce: { minChars: 20 } },
+        },
+      }),
+    });
+
+    expect((result.config.channels as Record<string, unknown>).layered).toEqual({
+      streaming: { block: { enabled: true } },
+      accounts: {
+        Default: { streaming: { block: { enabled: true }, chunkMode: "newline" } },
+        work: {
+          streaming: {
+            block: { enabled: true, coalesce: { minChars: 20 } },
+            chunkMode: "newline",
+          },
+        },
+      },
+    });
+    expect(result.changes.slice(-2)).toEqual([
+      "Copied channels.layered.streaming into channels.layered.accounts.Default.streaming to keep inherited settings while migrating flat streaming keys.",
+      "Copied channels.layered.accounts.Default.streaming into channels.layered.accounts.work.streaming to keep inherited settings while migrating flat streaming keys.",
+    ]);
+  });
 });

@@ -24,6 +24,8 @@ const mocks = vi.hoisted(() => {
   };
   const llama = {
     loadModel: vi.fn(async () => model),
+    createGrammarForJsonSchema: vi.fn(async (schema: unknown) => ({ schema })),
+    getGrammarFor: vi.fn(async (type: string) => ({ type })),
     dispose: llamaDispose,
   };
   return {
@@ -81,6 +83,22 @@ const model: Model = {
   params: { modelPath: "test.gguf" },
 };
 
+const weatherTool = {
+  name: "weather",
+  description: "Weather",
+  parameters: { type: "object" },
+} satisfies NonNullable<Context["tools"]>[number];
+const weatherToolWithCity = {
+  name: "weather",
+  description: "Get weather",
+  parameters: { type: "object", properties: { city: { type: "string" } } },
+} satisfies NonNullable<Context["tools"]>[number];
+const calendarTool = {
+  name: "calendar",
+  description: "Calendar",
+  parameters: { type: "object" },
+} satisfies NonNullable<Context["tools"]>[number];
+
 async function collectEvents(
   stream: AsyncIterable<AssistantMessageEvent>,
 ): Promise<AssistantMessageEvent[]> {
@@ -89,6 +107,28 @@ async function collectEvents(
     events.push(event);
   }
   return events;
+}
+
+type TestStreamParams = {
+  selectedModel?: Model;
+  prompt?: string;
+  tools?: Context["tools"];
+  options?: Parameters<ReturnType<typeof createLlamaCppStreamFn>>[2];
+};
+
+async function createTestStream(params: TestStreamParams = {}) {
+  return await createLlamaCppStreamFn({})(
+    params.selectedModel ?? model,
+    {
+      messages: [{ role: "user", content: params.prompt ?? "Hi", timestamp: 1 }],
+      ...(params.tools ? { tools: params.tools } : {}),
+    },
+    params.options,
+  );
+}
+
+async function collectTestEvents(params: TestStreamParams = {}) {
+  return await collectEvents(await createTestStream(params));
 }
 
 beforeEach(async () => {
@@ -205,13 +245,7 @@ describe("llama.cpp inference provider", () => {
         metadata: { stopReason: "eogToken" },
       };
     });
-    const stream = await createLlamaCppStreamFn({})(
-      model,
-      { messages: [{ role: "user", content: "Hi", timestamp: 1 }] },
-      { stop: ["END"] },
-    );
-
-    const events = await collectEvents(stream);
+    const events = await collectTestEvents({ prompt: "Hi", options: { stop: ["END"] } });
 
     expect(events.map((event) => event.type)).toEqual([
       "start",
@@ -233,28 +267,284 @@ describe("llama.cpp inference provider", () => {
       maxTokens: 2048,
       customStopTriggers: ["END"],
     });
+    expect(mocks.generateResponse.mock.calls[0]?.[1]).not.toHaveProperty("onResponseChunk");
   });
 
-  it("emits native function calls in the final assistant message", async () => {
+  it("streams reasoning and text before a result-only native tool call", async () => {
+    mocks.generateResponse.mockImplementationOnce(async (_history, options) => {
+      options.onResponseChunk({
+        type: "segment",
+        segmentType: "thought",
+        text: "First ",
+        tokens: [1],
+      });
+      options.onResponseChunk({
+        type: "segment",
+        segmentType: "thought",
+        text: "reason.",
+        tokens: [2],
+      });
+      options.onTextChunk("Answer.");
+      return {
+        response: "Answer.",
+        functionCalls: [{ functionName: "weather", params: { city: "Paris" }, raw: [] }],
+        metadata: { stopReason: "functionCalls" },
+      };
+    });
+
+    const events = await collectTestEvents({
+      selectedModel: { ...model, reasoning: true },
+      prompt: "Why?",
+      tools: [weatherTool],
+    });
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "thinking_start",
+      "thinking_delta",
+      "thinking_delta",
+      "thinking_end",
+      "text_start",
+      "text_delta",
+      "text_end",
+      "toolcall_start",
+      "toolcall_delta",
+      "toolcall_end",
+      "done",
+    ]);
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      message: {
+        content: [
+          { type: "thinking", thinking: "First reason." },
+          { type: "text", text: "Answer." },
+          { type: "toolCall", name: "weather", arguments: { city: "Paris" } },
+        ],
+      },
+    });
+    expect(events.find((event) => event.type === "thinking_delta")).toMatchObject({
+      contentIndex: 0,
+      partial: { content: [{ type: "thinking", thinking: "First " }] },
+    });
+    expect(events.find((event) => event.type === "toolcall_start")).toMatchObject({
+      contentIndex: 2,
+    });
+  });
+
+  it("closes native reasoning before streaming a completed tool call", async () => {
+    mocks.generateResponse.mockImplementationOnce(async (_history, options) => {
+      options.onResponseChunk({
+        type: "segment",
+        segmentType: "thought",
+        text: "Need current weather.",
+        tokens: [1],
+      });
+      options.onFunctionCallParamsChunk({
+        callIndex: 0,
+        functionName: "weather",
+        paramsChunk: '{"city":"Paris"}',
+        done: true,
+      });
+      return {
+        response: "",
+        functionCalls: [{ functionName: "weather", params: { city: "Paris" }, raw: [] }],
+        metadata: { stopReason: "functionCalls" },
+      };
+    });
+
+    const events = await collectTestEvents({
+      selectedModel: { ...model, reasoning: true },
+      prompt: "Weather?",
+      tools: [weatherTool],
+    });
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "thinking_start",
+      "thinking_delta",
+      "thinking_end",
+      "toolcall_start",
+      "toolcall_delta",
+      "toolcall_end",
+      "done",
+    ]);
+    expect(events.find((event) => event.type === "toolcall_start")).toMatchObject({
+      contentIndex: 1,
+    });
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      reason: "toolUse",
+      message: {
+        content: [
+          { type: "thinking", thinking: "Need current weather." },
+          { type: "toolCall", name: "weather", arguments: { city: "Paris" } },
+        ],
+      },
+    });
+  });
+
+  it("opens a new indexed block for every thought segment after visible text", async () => {
+    mocks.generateResponse.mockImplementationOnce(async (_history, options) => {
+      options.onResponseChunk({
+        type: "segment",
+        segmentType: "thought",
+        text: "First thought.",
+        tokens: [1],
+        segmentEndTime: new Date(1),
+      });
+      options.onTextChunk("First answer.");
+      options.onResponseChunk({
+        type: "segment",
+        segmentType: "thought",
+        text: "Second thought.",
+        tokens: [2],
+        segmentEndTime: new Date(2),
+      });
+      options.onTextChunk("Second answer.");
+      return {
+        response: "First answer.Second answer.",
+        functionCalls: undefined,
+        metadata: { stopReason: "eogToken" },
+      };
+    });
+
+    const events = await collectTestEvents({
+      selectedModel: { ...model, reasoning: true },
+      prompt: "Reason twice",
+    });
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "thinking_start",
+      "thinking_delta",
+      "thinking_end",
+      "text_start",
+      "text_delta",
+      "text_end",
+      "thinking_start",
+      "thinking_delta",
+      "thinking_end",
+      "text_start",
+      "text_delta",
+      "text_end",
+      "done",
+    ]);
+    expect(
+      events
+        .filter((event) => event.type === "thinking_start" || event.type === "text_start")
+        .map((event) => event.contentIndex),
+    ).toEqual([0, 1, 2, 3]);
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      message: {
+        content: [
+          { type: "thinking", thinking: "First thought." },
+          { type: "text", text: "First answer." },
+          { type: "thinking", thinking: "Second thought." },
+          { type: "text", text: "Second answer." },
+        ],
+      },
+    });
+  });
+
+  it("builds a JSON Schema grammar for tool-free responseFormat requests", async () => {
+    const schema = {
+      type: "object",
+      properties: { reply: { type: "string" } },
+      required: ["reply"],
+      additionalProperties: false,
+    };
+    await collectTestEvents({ options: { responseFormat: schema } });
+
+    expect(mocks.llama.createGrammarForJsonSchema).toHaveBeenCalledWith(schema);
+    expect(mocks.generateResponse.mock.calls[0]?.[1]).toMatchObject({
+      grammar: { schema },
+    });
+    expect(mocks.generateResponse.mock.calls[0]?.[1]).not.toHaveProperty("functions");
+  });
+
+  it("unwraps provider-shaped json_schema response formats", async () => {
+    const schema = {
+      type: "object",
+      properties: { reply: { type: "string" } },
+      required: ["reply"],
+      additionalProperties: false,
+    };
+    await collectTestEvents({
+      options: {
+        responseFormat: {
+          type: "json_schema",
+          json_schema: { name: "planner", schema },
+        },
+      },
+    });
+
+    expect(mocks.llama.createGrammarForJsonSchema).toHaveBeenCalledWith(schema);
+    expect(mocks.generateResponse.mock.calls[0]?.[1]).toMatchObject({ grammar: { schema } });
+  });
+
+  it("maps provider-shaped json_object response formats to the JSON grammar", async () => {
+    await collectTestEvents({ options: { responseFormat: { type: "json_object" } } });
+
+    expect(mocks.llama.getGrammarFor).toHaveBeenCalledWith("json");
+    expect(mocks.generateResponse.mock.calls[0]?.[1]).toMatchObject({
+      grammar: { type: "json" },
+    });
+  });
+
+  it("maps an empty JSON Schema to the generic JSON grammar", async () => {
+    await collectTestEvents({ options: { responseFormat: {} } });
+
+    expect(mocks.llama.getGrammarFor).toHaveBeenCalledWith("json");
+    expect(mocks.generateResponse.mock.calls[0]?.[1]).toMatchObject({
+      grammar: { type: "json" },
+    });
+  });
+
+  it("keeps provider-shaped text response formats unconstrained", async () => {
+    await collectTestEvents({ options: { responseFormat: { type: "text" } } });
+
+    expect(mocks.llama.getGrammarFor).not.toHaveBeenCalled();
+    expect(mocks.llama.createGrammarForJsonSchema).not.toHaveBeenCalled();
+    expect(mocks.generateResponse.mock.calls[0]?.[1]).not.toHaveProperty("grammar");
+  });
+
+  it("streams the complete lifecycle for native function calls", async () => {
     mocks.generateResponse.mockResolvedValueOnce({
       response: "",
       functionCalls: [{ functionName: "weather", params: { city: "Paris" }, raw: [] }],
       metadata: { stopReason: "functionCalls" },
     });
-    const stream = await createLlamaCppStreamFn({})(model, {
-      messages: [{ role: "user", content: "Weather?", timestamp: 1 }],
-      tools: [
-        {
-          name: "weather",
-          description: "Get weather",
-          parameters: { type: "object", properties: { city: { type: "string" } } },
-        },
-      ],
+    const events = await collectTestEvents({
+      prompt: "Weather?",
+      tools: [weatherToolWithCity],
     });
 
-    const events = await collectEvents(stream);
-
-    expect(events.map((event) => event.type)).toEqual(["done"]);
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "toolcall_start",
+      "toolcall_delta",
+      "toolcall_end",
+      "done",
+    ]);
+    const toolCallStart = events[1];
+    const toolCallDelta = events[2];
+    const toolCallEnd = events[3];
+    expect(toolCallStart).toMatchObject({
+      type: "toolcall_start",
+      contentIndex: 0,
+      partial: { content: [{ type: "toolCall", name: "weather", arguments: {} }] },
+    });
+    expect(toolCallDelta).toMatchObject({
+      type: "toolcall_delta",
+      contentIndex: 0,
+      delta: '{"city":"Paris"}',
+    });
+    expect(toolCallEnd).toMatchObject({
+      type: "toolcall_end",
+      contentIndex: 0,
+      toolCall: { name: "weather", arguments: { city: "Paris" } },
+    });
     expect(events.at(-1)).toMatchObject({
       type: "done",
       reason: "toolUse",
@@ -269,6 +559,280 @@ describe("llama.cpp inference provider", () => {
         ],
       },
     });
+    expect(mocks.llama.createGrammarForJsonSchema).not.toHaveBeenCalled();
+  });
+
+  it("streams split native arguments with stable ids after mixed text", async () => {
+    mocks.generateResponse.mockImplementationOnce(async (_history, options) => {
+      options.onTextChunk("Checking both.");
+      options.onFunctionCallParamsChunk({
+        callIndex: 0,
+        functionName: "weather",
+        paramsChunk: '{"city":',
+        done: false,
+      });
+      options.onFunctionCallParamsChunk({
+        callIndex: 0,
+        functionName: "weather",
+        paramsChunk: '"Paris"}',
+        done: true,
+      });
+      options.onFunctionCallParamsChunk({
+        callIndex: 1,
+        functionName: "calendar",
+        paramsChunk: '{"day":"today"}',
+        done: true,
+      });
+      return {
+        response: "Checking both.",
+        functionCalls: [
+          { functionName: "weather", params: { city: "Paris" }, raw: [] },
+          { functionName: "calendar", params: { day: "today" }, raw: [] },
+        ],
+        metadata: { stopReason: "functionCalls" },
+      };
+    });
+
+    const events = await collectTestEvents({
+      prompt: "Check both",
+      tools: [weatherTool, calendarTool],
+    });
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "text_start",
+      "text_delta",
+      "text_end",
+      "toolcall_start",
+      "toolcall_delta",
+      "toolcall_delta",
+      "toolcall_start",
+      "toolcall_delta",
+      "toolcall_end",
+      "toolcall_end",
+      "done",
+    ]);
+    const toolDeltas = events.filter((event) => event.type === "toolcall_delta");
+    expect(
+      events.find((event) => event.type === "toolcall_start")?.partial.content[1],
+    ).toMatchObject({
+      arguments: {},
+    });
+    expect(toolDeltas).toMatchObject([
+      { contentIndex: 1, delta: '{"city":', partial: { content: [{}, { arguments: {} }] } },
+      {
+        contentIndex: 1,
+        delta: '"Paris"}',
+        partial: { content: [{}, { arguments: { city: "Paris" } }] },
+      },
+      {
+        contentIndex: 2,
+        delta: '{"day":"today"}',
+        partial: { content: [{}, {}, { arguments: { day: "today" } }] },
+      },
+    ]);
+    const toolEnds = events.filter((event) => event.type === "toolcall_end");
+    expect(toolEnds).toMatchObject([
+      { contentIndex: 1, toolCall: { name: "weather", arguments: { city: "Paris" } } },
+      { contentIndex: 2, toolCall: { name: "calendar", arguments: { day: "today" } } },
+    ]);
+    const done = events.at(-1);
+    expect(done).toMatchObject({
+      type: "done",
+      reason: "toolUse",
+      message: {
+        content: [
+          { type: "text", text: "Checking both." },
+          { type: "toolCall", name: "weather", arguments: { city: "Paris" } },
+          { type: "toolCall", name: "calendar", arguments: { day: "today" } },
+        ],
+      },
+    });
+    if (done?.type === "done") {
+      expect(toolEnds.map((event) => event.toolCall.id)).toEqual(
+        done.message.content
+          .filter((content) => content.type === "toolCall")
+          .map((content) => content.id),
+      );
+    }
+  });
+
+  it.each([
+    [
+      "never completes or executes an interrupted native call at the token limit",
+      '{"city":',
+      false,
+    ],
+    [
+      "never completes a native call when its final argument reaches the token limit",
+      '{"city":"Paris"}',
+      true,
+    ],
+  ])("%s", async (_name, paramsChunk, done) => {
+    mocks.generateResponse.mockImplementationOnce(async (_history, options) => {
+      options.onFunctionCallParamsChunk({
+        callIndex: 0,
+        functionName: "weather",
+        paramsChunk,
+        done,
+      });
+      return {
+        response: "",
+        functionCalls: undefined,
+        metadata: { stopReason: "maxTokens" },
+      };
+    });
+
+    const events = await collectTestEvents({ prompt: "Weather?", tools: [weatherTool] });
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "toolcall_start",
+      "toolcall_delta",
+      "done",
+    ]);
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      reason: "length",
+      message: { content: [], stopReason: "length" },
+    });
+  });
+
+  it("never lets completed native calls override the authoritative token-limit terminal", async () => {
+    mocks.generateResponse.mockImplementationOnce(async (_history, options) => {
+      options.onFunctionCallParamsChunk({
+        callIndex: 0,
+        functionName: "weather",
+        paramsChunk: '{"city":"Paris"}',
+        done: true,
+      });
+      options.onFunctionCallParamsChunk({
+        callIndex: 1,
+        functionName: "calendar",
+        paramsChunk: '{"day":',
+        done: false,
+      });
+      return {
+        response: "",
+        functionCalls: [{ functionName: "weather", params: { city: "Paris" }, raw: [] }],
+        metadata: { stopReason: "maxTokens" },
+      };
+    });
+
+    const events = await collectTestEvents({
+      prompt: "Check both",
+      tools: [weatherTool, calendarTool],
+    });
+
+    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(0);
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      reason: "length",
+      message: {
+        stopReason: "length",
+        content: [],
+      },
+    });
+  });
+
+  it.each([
+    {
+      format: "Harmony",
+      text: '<|channel|>commentary to=weather code<|message|>{"city":"Paris"}<|call|>',
+    },
+    {
+      format: "bracketed",
+      text: '[weather]\n{"city":"Paris"}\n[END_TOOL_REQUEST]',
+    },
+  ])("promotes $format plaintext tool calls into native tool events", async ({ text }) => {
+    mocks.generateResponse.mockImplementationOnce(async (_history, options) => {
+      options.onTextChunk(text.slice(0, 12));
+      options.onTextChunk(text.slice(12));
+      return {
+        response: text,
+        functionCalls: undefined,
+        metadata: { stopReason: "eogToken" },
+      };
+    });
+
+    const events = await collectTestEvents({
+      prompt: "Weather?",
+      tools: [weatherToolWithCity],
+    });
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "toolcall_start",
+      "toolcall_delta",
+      "toolcall_end",
+      "done",
+    ]);
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      reason: "toolUse",
+      message: {
+        stopReason: "toolUse",
+        content: [
+          {
+            type: "toolCall",
+            name: "weather",
+            arguments: { city: "Paris" },
+          },
+        ],
+      },
+    });
+  });
+
+  it("preserves plaintext calls for tools that are not registered", async () => {
+    const text = '[tool:calendar] {"city":"Paris"}';
+    mocks.generateResponse.mockImplementationOnce(async (_history, options) => {
+      options.onTextChunk(text);
+      return {
+        response: text,
+        functionCalls: undefined,
+        metadata: { stopReason: "eogToken" },
+      };
+    });
+
+    const events = await collectTestEvents({
+      prompt: "Weather?",
+      tools: [weatherToolWithCity],
+    });
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "text_start",
+      "text_delta",
+      "text_end",
+      "done",
+    ]);
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      reason: "stop",
+      message: { content: [{ type: "text", text }] },
+    });
+  });
+
+  it("lets tools win when responseFormat is also present", async () => {
+    await collectTestEvents({
+      prompt: "Weather?",
+      tools: [weatherToolWithCity],
+      options: {
+        responseFormat: {
+          type: "object",
+          properties: { reply: { type: "string" } },
+          required: ["reply"],
+          additionalProperties: false,
+        },
+      },
+    });
+
+    expect(mocks.llama.createGrammarForJsonSchema).not.toHaveBeenCalled();
+    expect(mocks.generateResponse.mock.calls[0]?.[1]).toMatchObject({
+      functions: { weather: expect.any(Object) },
+      documentFunctionParams: true,
+    });
+    expect(mocks.generateResponse.mock.calls[0]?.[1]).not.toHaveProperty("grammar");
   });
 
   it("disposes the previous model and context when the model changes", async () => {
@@ -301,13 +865,47 @@ describe("llama.cpp inference provider", () => {
     expect(mocks.llama.loadModel).toHaveBeenCalledTimes(1);
   });
 
-  it("expands home-relative local model paths before resolving the file", async () => {
-    const stream = await createLlamaCppStreamFn({})(
-      { ...model, params: { modelPath: "~/Models/test.gguf" } },
-      { messages: [{ role: "user", content: "Hi", timestamp: 1 }] },
+  it.each([
+    {
+      scenario: "a smaller advertised model window",
+      model: { ...model, contextWindow: 4096, contextTokens: undefined },
+      expectedContextSize: { max: 4096 },
+      expectedGpuFit: 4096,
+    },
+    {
+      scenario: "the safe default below a larger advertised window",
+      model: { ...model, contextWindow: 32_768, contextTokens: undefined },
+      expectedContextSize: { max: 8192 },
+      expectedGpuFit: 8192,
+    },
+    {
+      scenario: "an explicit practical runtime cap",
+      model: { ...model, contextWindow: 8192, contextTokens: 3072 },
+      expectedContextSize: { max: 3072 },
+      expectedGpuFit: 3072,
+    },
+    {
+      scenario: "an explicitly configured native context size",
+      model: { ...model, contextTokens: 4096, params: { ...model.params, contextSize: 2048 } },
+      expectedContextSize: 2048,
+      expectedGpuFit: 2048,
+    },
+  ])("bounds native context and GPU allocation by $scenario", async (scenario) => {
+    await collectTestEvents({ selectedModel: scenario.model });
+    expect(mocks.model.createContext).toHaveBeenCalledWith(
+      expect.objectContaining({ contextSize: scenario.expectedContextSize }),
     );
+    expect(mocks.llama.loadModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gpuLayers: { fitContext: { contextSize: scenario.expectedGpuFit } },
+      }),
+    );
+  });
 
-    await collectEvents(stream);
+  it("expands home-relative local model paths before resolving the file", async () => {
+    await collectTestEvents({
+      selectedModel: { ...model, params: { modelPath: "~/Models/test.gguf" } },
+    });
 
     expect(mocks.resolveModelFile).toHaveBeenCalledWith(
       path.join(os.homedir(), "Models", "test.gguf"),
@@ -320,9 +918,7 @@ describe("llama.cpp inference provider", () => {
       options.onTextChunk("Partial");
       throw new Error("generation failed");
     });
-    const stream = await createLlamaCppStreamFn({})(model, {
-      messages: [{ role: "user", content: "Hi", timestamp: 1 }],
-    });
+    const stream = await createTestStream();
 
     await expect(stream.result()).resolves.toMatchObject({
       stopReason: "error",
@@ -334,11 +930,10 @@ describe("llama.cpp inference provider", () => {
   it("returns an aborted stream error when the signal is cancelled", async () => {
     const controller = new AbortController();
     controller.abort();
-    const stream = await createLlamaCppStreamFn({})(
-      model,
-      { messages: [{ role: "user", content: "stop", timestamp: 1 }] },
-      { signal: controller.signal },
-    );
+    const stream = await createTestStream({
+      prompt: "stop",
+      options: { signal: controller.signal },
+    });
 
     await expect(stream.result()).resolves.toMatchObject({
       stopReason: "aborted",
@@ -353,9 +948,7 @@ describe("llama.cpp inference provider", () => {
       functionCalls: undefined,
       metadata: { stopReason: "abort" },
     });
-    const stream = await createLlamaCppStreamFn({})(model, {
-      messages: [{ role: "user", content: "stop", timestamp: 1 }],
-    });
+    const stream = await createTestStream({ prompt: "stop" });
 
     await expect(stream.result()).resolves.toMatchObject({
       stopReason: "aborted",

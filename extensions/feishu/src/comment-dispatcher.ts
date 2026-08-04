@@ -13,6 +13,12 @@ import {
 import { createCommentTypingReactionLifecycle } from "./comment-reaction.js";
 import type { CommentFileType } from "./comment-target.js";
 import { deliverCommentThreadText } from "./drive.js";
+import {
+  createFeishuPartialReplyDeliveryError,
+  createFeishuReplyDeliveryResult,
+  noVisibleFeishuReplyDelivery,
+  type FeishuReplyDeliverySource,
+} from "./reply-delivery-result.js";
 import { getFeishuRuntime } from "./runtime.js";
 
 type CreateFeishuCommentReplyDispatcherParams = {
@@ -69,9 +75,10 @@ export function createFeishuCommentReplyDispatcher(
     },
   };
   const delivery: ChannelInboundTurnPlan["delivery"] = {
+    observeMessageSent: true,
     deliver: async (payload: ReplyPayload, info) => {
       if (info.kind !== "final") {
-        return;
+        return noVisibleFeishuReplyDelivery;
       }
       const reply = resolveSendableOutboundReplyParts(payload);
       if (!reply.hasText) {
@@ -80,18 +87,43 @@ export function createFeishuCommentReplyDispatcher(
             `feishu[${params.accountId ?? "default"}]: comment reply ignored media-only payload for comment=${params.commentId}`,
           );
         }
-        return;
+        return noVisibleFeishuReplyDelivery;
       }
       const chunks = core.channel.text.chunkTextWithMode(reply.text, textChunkLimit, chunkMode);
+      const results: FeishuReplyDeliverySource[] = [];
+      const acceptedChunks: string[] = [];
       for (const chunk of chunks) {
-        await deliverCommentThreadText(client, {
-          file_token: params.fileToken,
-          file_type: params.fileType,
-          comment_id: params.commentId,
-          content: chunk,
-          is_whole_comment: params.isWholeComment,
-        });
+        try {
+          const result = await deliverCommentThreadText(client, {
+            file_token: params.fileToken,
+            file_type: params.fileType,
+            comment_id: params.commentId,
+            content: chunk,
+            is_whole_comment: params.isWholeComment,
+          });
+          results.push({
+            messageId:
+              result.delivery_mode === "reply_comment" ? result.reply_id : result.comment_id,
+          });
+          acceptedChunks.push(chunk);
+        } catch (error: unknown) {
+          throw createFeishuPartialReplyDeliveryError(
+            error,
+            createFeishuReplyDeliveryResult({
+              results,
+              visibleReplySent: results.length > 0,
+              content: acceptedChunks.join(""),
+              kind: "text",
+            }),
+          );
+        }
       }
+      return createFeishuReplyDeliveryResult({
+        results,
+        visibleReplySent: results.length > 0,
+        content: reply.text,
+        kind: "text",
+      });
     },
     onError: (err, info) => {
       params.runtime.error?.(

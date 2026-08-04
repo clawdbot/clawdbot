@@ -1,6 +1,7 @@
 /** Resolves credentials for an immutable prepared runtime route. */
 import { toErrorObject } from "../../infra/errors.js";
 import { SecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
+import { OAuthRefreshFailureError } from "../auth-profiles/oauth-refresh-failure.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isProfileInCooldown } from "../auth-profiles/usage-state.js";
 import { getApiKeyForModel } from "../model-auth.js";
@@ -127,7 +128,10 @@ export async function resolvePreparedRuntimeAuthAttempts<Model, Auth>(params: {
       // Model, physical route, and credential become active together.
       return { model, plan: resolved.plan, auth: resolved.auth };
     } catch (error) {
-      if (error instanceof SecretSurfaceUnavailableError) {
+      if (
+        error instanceof SecretSurfaceUnavailableError ||
+        error instanceof OAuthRefreshFailureError
+      ) {
         throw error;
       }
       firstError ??= error;
@@ -307,6 +311,7 @@ export async function resolvePreparedRuntimeModelAuth(
     : undefined;
 
   let firstError: unknown;
+  let refreshFailure: OAuthRefreshFailureError | undefined;
   for (const profileId of currentCandidates) {
     try {
       const auth = await getApiKeyForModel({
@@ -326,8 +331,14 @@ export async function resolvePreparedRuntimeModelAuth(
       if (error instanceof SecretSurfaceUnavailableError) {
         throw error;
       }
+      if (!refreshFailure && error instanceof OAuthRefreshFailureError) {
+        refreshFailure = error;
+      }
       firstError ??= error;
     }
+  }
+  if (refreshFailure) {
+    throw refreshFailure;
   }
   throw toErrorObject(firstError, "Prepared runtime auth candidates could not be resolved.");
 }

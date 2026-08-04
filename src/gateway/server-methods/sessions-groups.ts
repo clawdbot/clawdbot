@@ -10,10 +10,12 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   deleteSessionGroup,
+  listSidebarSectionOrder,
   listSessionGroups,
   putSessionGroups,
   renameSessionGroup,
 } from "../session-groups.js";
+import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -25,7 +27,11 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    respond(true, { groups: listSessionGroups() }, undefined);
+    respond(
+      true,
+      { groups: listSessionGroups(), sectionOrder: listSidebarSectionOrder() },
+      undefined,
+    );
   },
   "sessions.groups.put": async ({ params, respond, context }) => {
     if (
@@ -33,11 +39,12 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    respond(true, { ok: true, groups: putSessionGroups(params.names) }, undefined);
+    const groups = putSessionGroups(params.names, params.sectionOrder);
+    respond(true, { ok: true, groups, sectionOrder: listSidebarSectionOrder() }, undefined);
     // Catalog-only changes still need to reach other open clients.
     emitSessionsChanged(context, { reason: "groups" });
   },
-  "sessions.groups.rename": async ({ params, respond, context }) => {
+  "sessions.groups.rename": async ({ params, respond, context, sessionMutationAuthorization }) => {
     if (
       !assertValidParams(
         params,
@@ -53,14 +60,19 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
         cfg: context.getRuntimeConfig(),
         name: params.name,
         to: params.to,
+        assertCurrent: sessionMutationAuthorization?.assertCurrent,
+        assertTargetCurrent: sessionMutationAuthorization?.assertTargetCurrent,
       });
       respond(true, { ok: true, ...result }, undefined);
       emitSessionsChanged(context, { reason: "groups" });
     } catch (error) {
+      if (error instanceof SessionMutationAuthorizationChangedError) {
+        throw error;
+      }
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
     }
   },
-  "sessions.groups.delete": async ({ params, respond, context }) => {
+  "sessions.groups.delete": async ({ params, respond, context, sessionMutationAuthorization }) => {
     if (
       !assertValidParams(
         params,
@@ -75,10 +87,15 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       const result = await deleteSessionGroup({
         cfg: context.getRuntimeConfig(),
         name: params.name,
+        assertCurrent: sessionMutationAuthorization?.assertCurrent,
+        assertTargetCurrent: sessionMutationAuthorization?.assertTargetCurrent,
       });
       respond(true, { ok: true, ...result }, undefined);
       emitSessionsChanged(context, { reason: "groups" });
     } catch (error) {
+      if (error instanceof SessionMutationAuthorizationChangedError) {
+        throw error;
+      }
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
     }
   },

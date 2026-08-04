@@ -11,7 +11,10 @@ import {
   createOpenClawCodingTools,
   resolveToolLoopDetectionConfig,
 } from "../agents/agent-tools.js";
-import type { CodeModeNamespaceDescriptor } from "../agents/code-mode-namespaces.js";
+import type {
+  CodeModeNamespaceDescriptor,
+  SerializedCodeModeNamespaceValue,
+} from "../agents/code-mode-namespaces.js";
 import {
   CodeModeHeadlessAbortError,
   CodeModeHeadlessTimeoutError,
@@ -23,8 +26,12 @@ import {
   applyEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
 } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import { ensureRuntimePluginsLoaded } from "../agents/runtime-plugins.js";
+import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import { resolveSandboxContext } from "../agents/sandbox.js";
+import {
+  resolveScheduledToolPolicyContext,
+  type ScheduledToolPolicyContext,
+} from "../agents/scheduled-tool-policy.js";
 import {
   createToolSearchCatalogRef,
   registerHeadlessToolSearchCatalog,
@@ -34,6 +41,9 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
@@ -71,6 +81,7 @@ type PreparedTriggerRuntime = {
   tools: AnyAgentTool[];
   ctx: Omit<ToolSearchToolContext, "catalogRef">;
   hookContext: Omit<HookContext, "runId">;
+  pluginRegistry?: PluginRegistry;
 };
 
 type PrepareTriggerRuntime = (params: {
@@ -78,6 +89,7 @@ type PrepareTriggerRuntime = (params: {
   jobId: string;
   agentId?: string;
   toolsAllow?: string[];
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
   signal?: AbortSignal;
 }) => Promise<PreparedTriggerRuntime>;
 
@@ -103,6 +115,7 @@ async function prepareTriggerRuntime(params: {
   jobId: string;
   agentId?: string;
   toolsAllow?: string[];
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
   signal?: AbortSignal;
 }): Promise<PreparedTriggerRuntime> {
   params.signal?.throwIfAborted();
@@ -126,82 +139,97 @@ async function prepareTriggerRuntime(params: {
   });
   params.signal?.throwIfAborted();
   const workspaceDir = workspace.dir;
-  ensureRuntimePluginsLoaded({
+  const pluginRegistry = loadAgentRuntimePluginRegistryHandle({
     config,
     workspaceDir,
     allowGatewaySubagentBinding: true,
   });
 
-  const rawSessionKey = `cron:${params.jobId}:trigger`;
-  const sessionKey = resolveCronAgentSessionKey({
-    sessionKey: rawSessionKey,
-    agentId,
-    mainKey: config.session?.mainKey,
-    cfg: config,
-  });
-  const sandbox = await resolveSandboxContext({
-    config,
-    sessionKey,
-    workspaceDir,
-  });
-  params.signal?.throwIfAborted();
-  const effectiveWorkspace =
-    sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : workspaceDir;
-  const toolPlan = resolveEmbeddedAttemptToolConstructionPlan({
-    toolsEnabled: true,
-    toolsAllow: params.toolsAllow,
-  });
-  // Bundle MCP tools are source:"mcp", which the headless bridge excludes.
-  // LSP runtimes are session-scoped and intentionally outside trigger v1.
-  const allTools = toolPlan.constructTools
-    ? createOpenClawCodingTools({
-        agentId,
-        exec: { config },
-        sandbox,
-        sessionKey,
-        trigger: "cron",
-        jobId: params.jobId,
-        agentDir,
-        cwd: effectiveWorkspace,
-        workspaceDir: effectiveWorkspace,
-        spawnWorkspaceDir: workspaceDir,
-        config,
-        allowGatewaySubagentBinding: true,
-        includeCoreTools: toolPlan.includeCoreTools,
-        runtimeToolAllowlist: toolPlan.runtimeToolAllowlist,
-        toolConstructionPlan: toolPlan.codingToolConstructionPlan,
-      })
-    : [];
-  const tools = applyEmbeddedAttemptToolsAllow(allTools, params.toolsAllow, {
-    toolMeta: (tool) => getPluginToolMeta(tool),
-  });
-  const hookContext: HookContext = {
-    agentId,
-    config,
-    cwd: effectiveWorkspace,
-    workspaceDir: effectiveWorkspace,
-    sessionKey,
-    loopDetection: resolveToolLoopDetectionConfig({ cfg: config, agentId }),
-  };
-  return {
-    tools,
-    hookContext,
-    ctx: {
-      config,
-      runtimeConfig: config,
+  const prepare = async (): Promise<PreparedTriggerRuntime> => {
+    const rawSessionKey = `cron:${params.jobId}:trigger`;
+    const sessionKey = resolveCronAgentSessionKey({
+      sessionKey: rawSessionKey,
       agentId,
+      mainKey: config.session?.mainKey,
+      cfg: config,
+    });
+    const sandbox = await resolveSandboxContext({
+      config,
       sessionKey,
-    },
+      workspaceDir,
+    });
+    params.signal?.throwIfAborted();
+    const effectiveWorkspace =
+      sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : workspaceDir;
+    const toolPlan = resolveEmbeddedAttemptToolConstructionPlan({
+      toolsEnabled: true,
+      toolsAllow: params.toolsAllow,
+    });
+    // Bundle MCP tools are source:"mcp", which the headless bridge excludes.
+    // LSP runtimes are session-scoped and intentionally outside trigger v1.
+    const allTools = toolPlan.constructTools
+      ? createOpenClawCodingTools({
+          agentId,
+          exec: { config },
+          sandbox,
+          sessionKey,
+          trigger: "cron",
+          jobId: params.jobId,
+          agentDir,
+          cwd: effectiveWorkspace,
+          workspaceDir: effectiveWorkspace,
+          spawnWorkspaceDir: workspaceDir,
+          config,
+          allowGatewaySubagentBinding: true,
+          includeCoreTools: toolPlan.includeCoreTools,
+          runtimeToolAllowlist: toolPlan.runtimeToolAllowlist,
+          inheritRuntimeToolAllowlist: Boolean(toolPlan.runtimeToolAllowlist),
+          scheduledToolPolicy: resolveScheduledToolPolicyContext({
+            toolsAllow: params.toolsAllow,
+            scheduledToolPolicy: params.scheduledToolPolicy,
+          }),
+          toolConstructionPlan: toolPlan.codingToolConstructionPlan,
+        })
+      : [];
+    const tools = applyEmbeddedAttemptToolsAllow(allTools, params.toolsAllow, {
+      toolMeta: (tool) => getPluginToolMeta(tool),
+    });
+    const hookContext: HookContext = {
+      agentId,
+      config,
+      cwd: effectiveWorkspace,
+      workspaceDir: effectiveWorkspace,
+      sessionKey,
+      loopDetection: resolveToolLoopDetectionConfig({ cfg: config, agentId }),
+    };
+    return {
+      tools,
+      hookContext,
+      ...(pluginRegistry ? { pluginRegistry } : {}),
+      ctx: {
+        config,
+        runtimeConfig: config,
+        agentId,
+        sessionKey,
+      },
+    };
   };
+  return await withPluginRuntimeRegistryScope(pluginRegistry, prepare);
 }
 
-function triggerStateNamespace(state: unknown): CodeModeNamespaceDescriptor {
+function triggerStateNamespace(state: unknown, streamBatch?: string): CodeModeNamespaceDescriptor {
+  const entries: Array<[string, SerializedCodeModeNamespaceValue]> = [
+    ["state", { kind: "value", value: state }],
+  ];
+  if (streamBatch !== undefined) {
+    entries.push(["streamBatch", { kind: "value", value: streamBatch }]);
+  }
   return {
     id: "cron:trigger",
     globalName: "trigger",
     scope: {
       kind: "object",
-      entries: [["state", { kind: "value", value: state }]],
+      entries,
     },
   };
 }
@@ -316,21 +344,13 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
   // concurrent cold evaluations for one job single-flight.
   const runtimeCache = new Map<string, TriggerRuntimeCacheEntry>();
 
-  const trimRuntimeCache = () => {
-    while (runtimeCache.size > MAX_CACHED_TRIGGER_RUNTIMES) {
-      const oldestJobId = runtimeCache.keys().next().value;
-      if (oldestJobId === undefined) {
-        return;
-      }
-      runtimeCache.delete(oldestJobId);
-    }
-  };
   const resolveCachedRuntime = async (request: {
     runtimeConfig: OpenClawConfig;
     jobId: string;
     requestedAgentId?: string;
     agentId: string;
     toolsAllow?: string[];
+    scheduledToolPolicy?: ScheduledToolPolicyContext;
     toolsAllowKey: string;
     signal: AbortSignal;
   }): Promise<PreparedTriggerRuntime> => {
@@ -365,6 +385,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       jobId: request.jobId,
       agentId: request.requestedAgentId,
       toolsAllow: request.toolsAllow,
+      scheduledToolPolicy: request.scheduledToolPolicy,
       signal: request.signal,
     });
     const entry: TriggerRuntimeCacheEntry = {
@@ -375,7 +396,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     };
     runtimeCache.delete(request.jobId);
     runtimeCache.set(request.jobId, entry);
-    trimRuntimeCache();
+    pruneMapToMaxSize(runtimeCache, MAX_CACHED_TRIGGER_RUNTIMES);
     // Failed preparations evict themselves so the next tick retries cold.
     void promise.catch(() => {
       if (runtimeCache.get(request.jobId) === entry) {
@@ -390,6 +411,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     agentId?: string;
     script: string;
     toolsAllow?: string[];
+    scheduledToolPolicy?: ScheduledToolPolicyContext;
     abortSignal?: AbortSignal;
     wallClockMs: number;
     maxToolCalls: number;
@@ -407,40 +429,50 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     try {
       const runtimeConfig = resolveCronActiveRuntimeConfig(deps.config);
       const agentId = resolveTriggerAgentId(runtimeConfig, params.agentId);
-      const toolsAllowKey = JSON.stringify(params.toolsAllow ?? null);
+      const toolsAllowKey = JSON.stringify([
+        params.toolsAllow ?? null,
+        params.scheduledToolPolicy ?? null,
+      ]);
       const runtime = await resolveCachedRuntime({
         runtimeConfig,
         jobId: params.jobId,
         requestedAgentId: params.agentId,
         agentId,
         toolsAllow: params.toolsAllow,
+        scheduledToolPolicy: params.scheduledToolPolicy,
         toolsAllowKey,
         signal: evaluationScope.signal,
       });
 
-      const catalogRef = createToolSearchCatalogRef();
-      const runId = `cron-trigger:${params.jobId}:${crypto.randomUUID()}`;
-      registerHeadlessToolSearchCatalog({
-        catalogRef,
-        tools: runtime.tools,
-        hookContext: { ...runtime.hookContext, runId },
-      });
-      const remainingWallClockMs = evaluationScope.deadline - Date.now();
-      if (remainingWallClockMs <= 0) {
-        throw new CodeModeHeadlessTimeoutError(`${params.label} timed out`);
-      }
-      const result = await runHeadless({
-        ctx: { ...runtime.ctx, catalogRef, abortSignal: evaluationScope.signal },
-        code: params.script,
-        wallClockMs: remainingWallClockMs,
-        maxToolCalls: params.maxToolCalls,
-        extraNamespaces: params.namespaces,
-        signal: evaluationScope.signal,
-      });
-      if (result.status === "failed") {
-        return { kind: "error", code: result.code, error: result.error };
-      }
-      return { kind: "completed", result };
+      const evaluate = async (): Promise<
+        | { kind: "completed"; result: Extract<CodeModeHeadlessResult, { status: "completed" }> }
+        | { kind: "error"; code: CronTriggerFailureCode; error: string }
+      > => {
+        const catalogRef = createToolSearchCatalogRef();
+        const runId = `cron-trigger:${params.jobId}:${crypto.randomUUID()}`;
+        registerHeadlessToolSearchCatalog({
+          catalogRef,
+          tools: runtime.tools,
+          hookContext: { ...runtime.hookContext, runId },
+        });
+        const remainingWallClockMs = evaluationScope.deadline - Date.now();
+        if (remainingWallClockMs <= 0) {
+          throw new CodeModeHeadlessTimeoutError(`${params.label} timed out`);
+        }
+        const result = await runHeadless({
+          ctx: { ...runtime.ctx, catalogRef, abortSignal: evaluationScope.signal },
+          code: params.script,
+          wallClockMs: remainingWallClockMs,
+          maxToolCalls: params.maxToolCalls,
+          extraNamespaces: params.namespaces,
+          signal: evaluationScope.signal,
+        });
+        if (result.status === "failed") {
+          return { kind: "error", code: result.code, error: result.error };
+        }
+        return { kind: "completed", result };
+      };
+      return await withPluginRuntimeRegistryScope(runtime.pluginRegistry, evaluate);
     } catch (error) {
       return {
         kind: "error",
@@ -578,7 +610,9 @@ export function createCronScriptRuntime(deps: CronTriggerEvaluatorDeps) {
       agentId?: string;
       script: string;
       state: unknown;
+      streamBatch?: string;
       toolsAllow?: string[];
+      scheduledToolPolicy?: ScheduledToolPolicyContext;
       abortSignal?: AbortSignal;
     }): Promise<CronTriggerEvaluationResult> => {
       if (activeTriggerEvaluations >= MAX_CONCURRENT_TRIGGER_EVALS) {
@@ -591,7 +625,7 @@ export function createCronScriptRuntime(deps: CronTriggerEvaluatorDeps) {
           wallClockMs: HEADLESS_TRIGGER_WALL_CLOCK_MS,
           maxToolCalls: HEADLESS_TRIGGER_TOOL_BUDGET,
           label: "cron trigger evaluation",
-          namespaces: [triggerStateNamespace(params.state)],
+          namespaces: [triggerStateNamespace(params.state, params.streamBatch)],
         });
         return outcome.kind === "completed" ? parseTriggerResult(outcome.result) : outcome;
       } finally {
@@ -603,7 +637,9 @@ export function createCronScriptRuntime(deps: CronTriggerEvaluatorDeps) {
       agentId?: string;
       script: string;
       state: unknown;
+      streamBatch?: string;
       toolsAllow?: string[];
+      scheduledToolPolicy?: ScheduledToolPolicyContext;
       timeoutSeconds?: number;
       toolBudget?: number;
       abortSignal?: AbortSignal;
@@ -621,7 +657,7 @@ export function createCronScriptRuntime(deps: CronTriggerEvaluatorDeps) {
         wallClockMs: timeoutSeconds * 1000,
         maxToolCalls: toolBudget,
         label: "cron script payload",
-        namespaces: [triggerStateNamespace(params.state)],
+        namespaces: [triggerStateNamespace(params.state, params.streamBatch)],
       });
       return outcome.kind === "completed" ? parseScriptPayloadResult(outcome.result) : outcome;
     },

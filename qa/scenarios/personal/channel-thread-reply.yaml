@@ -6,11 +6,11 @@ scenario:
   category: channel-replies
   coverage:
     primary:
-      - personal.channel-replies
+      - channels.native-threads-channel-replies
     secondary:
-      - channels.dm
-      - channels.threads
-      - channels.qa-channel
+      - channels.native-threads-dm
+      - channels.native-threads
+      - channels.native-threads-qa-channel
   risk: medium
   capabilities:
     - channel.reply

@@ -18,6 +18,7 @@ describe("meeting browser navigation errors", () => {
 describe("meeting browser join readiness", () => {
   it("retries a platform-owned transient in-call status", async () => {
     const adoptionAttempts: boolean[] = [];
+    const captionCaptureAttempts: boolean[] = [];
     let evaluationAttempts = 0;
     const result = await openMeetingWithBrowser({
       adapter: {
@@ -42,15 +43,16 @@ describe("meeting browser join readiness", () => {
           buildLeaveScript: () => "",
           buildStatusJoinScript: (params) => {
             adoptionAttempts.push(params.allowSessionAdoption);
+            captionCaptureAttempts.push(params.captureCaptions);
             return "() => '{}'";
           },
           captions: {
             buildTranscriptScript: () => "",
-            enabled: () => false,
+            enabled: () => true,
             parseTranscript: () => ({ droppedLines: 0, lines: [] }),
           },
           classifyManualAction: (health) =>
-            health.manualActionRequired
+            health.manualAction
               ? { category: "audio-choice-required", reason: "audio-choice", message: "Wait." }
               : undefined,
           parseLeaveResult: () => ({ departed: false }),
@@ -58,14 +60,13 @@ describe("meeting browser join readiness", () => {
             evaluationAttempts === 1
               ? {
                   inCall: true,
-                  manualActionRequired: true,
-                  manualActionReason: "audio-choice",
+                  manualAction: { reason: "audio-choice", message: "Wait." },
                   micMuted: false,
                 }
-              : { inCall: true, manualActionRequired: false, micMuted: false },
+              : { inCall: true, micMuted: false },
           permissions: () => undefined,
           permissionNotes: () => [],
-          shouldRetryJoinStatus: (health) => health.manualActionReason === "audio-choice",
+          shouldRetryJoinStatus: (health) => health.manualAction?.reason === "audio-choice",
         },
       },
       callBrowser: async (request) => {
@@ -86,6 +87,7 @@ describe("meeting browser join readiness", () => {
         waitForInCallMs: 1_000,
       },
       session: {
+        captureCaptions: false,
         meetingSessionId: "session-1",
         mode: "agent",
         url: "https://meet.test/meeting",
@@ -94,9 +96,9 @@ describe("meeting browser join readiness", () => {
 
     expect(evaluationAttempts).toBe(2);
     expect(adoptionAttempts).toEqual([true, false]);
+    expect(captionCaptureAttempts).toEqual([false, false]);
     expect(result.browser).toMatchObject({
       inCall: true,
-      manualActionRequired: false,
       micMuted: false,
     });
   });

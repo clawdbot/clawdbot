@@ -2,6 +2,7 @@
  * Registers caller-supplied custom API stream functions with the LLM registry.
  */
 import type { ApiRegistry } from "@openclaw/ai";
+import type { StreamFn } from "@openclaw/llm-core";
 import type {
   Api,
   AssistantMessageEventStreamContract,
@@ -9,7 +10,6 @@ import type {
   StreamOptions,
 } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
-import type { StreamFn } from "./runtime/index.js";
 import { buildStreamErrorAssistantMessage } from "./stream-message-shared.js";
 
 const CUSTOM_API_SOURCE_PREFIX = "openclaw-custom-api:";

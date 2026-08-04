@@ -36,6 +36,7 @@ export {
   dedupeProfileIds,
   listProfilesForProvider,
   markAuthProfileSuccess,
+  removeAuthProfilesAcrossOwnerStores,
   removeAuthProfilesWithLock,
   removeProviderAuthProfilesWithLock,
   resolveSubscriptionAuthModeForProfiles,
@@ -71,6 +72,8 @@ export {
   saveAuthProfileStore,
   findPersistedAuthProfileCredential,
   resolvePersistedAuthProfileOwnerAgentDir,
+  withEnvOnlyAuthProfileStore,
+  withAuthProfileStoreAgentDir,
 } from "./auth-profiles/store.js";
 export type {
   ApiKeyCredential,
@@ -94,6 +97,9 @@ export {
   markAuthProfileCooldown,
   markAuthProfileBlockedUntil,
   markAuthProfileFailure,
+  markInlineProviderApiKeyFailure,
+  resolveInlineProviderApiKeyUnusableUntil,
+  resolveInlineProviderApiKeyUsageId,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntilForDisplay,
   setAuthProfileFailureHook,

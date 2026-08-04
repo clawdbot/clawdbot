@@ -254,7 +254,7 @@ describe("Chrome MCP durable tab ownership", () => {
     const controller = new AbortController();
     const cdpPolicy = {
       dangerouslyAllowPrivateNetwork: false,
-      hostnameAllowlist: ["browser.example"],
+      allowedHostnames: ["browser.example"],
     };
     const operationOptions = {
       signal: controller.signal,

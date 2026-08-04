@@ -74,6 +74,43 @@ describe("security audit workspace skill path escape findings", () => {
     await Promise.all(runs);
   });
 
+  it.runIf(!isWindows)(
+    "audits every explicit workspace when malformed defaults prevent default resolution",
+    async () => {
+      const tmp = await tempCases.makeTmpDir("workspace-skill-malformed-roster");
+      const workspaceA = path.join(tmp, "workspace-a");
+      const workspaceB = path.join(tmp, "workspace-b");
+      const outsideA = path.join(tmp, "outside-a.md");
+      const outsideB = path.join(tmp, "outside-b.md");
+      await fs.writeFile(outsideA, "# outside a\n", "utf-8");
+      await fs.writeFile(outsideB, "# outside b\n", "utf-8");
+      for (const [workspaceDir, outsidePath] of [
+        [workspaceA, outsideA],
+        [workspaceB, outsideB],
+      ] as const) {
+        const skillDir = path.join(workspaceDir, "skills", "leak");
+        await fs.mkdir(skillDir, { recursive: true });
+        await fs.symlink(outsidePath, path.join(skillDir, "SKILL.md"));
+      }
+      const cfg: OpenClawConfig = {
+        agents: {
+          entries: {
+            alpha: { default: true, workspace: workspaceA },
+            beta: { default: true, workspace: workspaceB },
+          },
+        },
+      };
+
+      const findings = await collectWorkspaceSkillSymlinkEscapeFindings({ cfg });
+      const detail = findings
+        .filter((finding) => finding.checkId === "skills.workspace.symlink_escape")
+        .map((finding) => finding.detail)
+        .join("\n");
+      expect(detail).toContain(outsideA);
+      expect(detail).toContain(outsideB);
+    },
+  );
+
   it("treats an unresolvable realpath (timeout/error simulation) as a potential symlink escape", async () => {
     const tmp = await tempCases.makeTmpDir("workspace-skill-realpath-unresolvable");
     const workspaceDir = path.join(tmp, "workspace");

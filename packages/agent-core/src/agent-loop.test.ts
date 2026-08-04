@@ -982,6 +982,180 @@ describe("agentLoop tool termination", () => {
     };
   }
 
+  it.each([
+    { source: "network" as const, tainted: true },
+    { source: undefined, tainted: false },
+  ])(
+    "persists $source tool-result taint through the assistant turn",
+    async ({ source, tainted }) => {
+      let turn = 0;
+      const tool: AgentTool = {
+        ...makeTool("fetch", []),
+        ...(source ? { resultContentSource: source } : {}),
+      };
+      const streamFn: StreamFn = () => {
+        turn += 1;
+        const stream = createAssistantMessageEventStream();
+        queueMicrotask(() => {
+          const message =
+            turn === 1
+              ? makeAssistantMessage([
+                  { type: "toolCall", id: "call-fetch", name: tool.name, arguments: {} },
+                ])
+              : makeAssistantMessage([{ type: "text", text: "stored result" }]);
+          stream.push({
+            type: "done",
+            reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+            message,
+          });
+          stream.end();
+        });
+        return stream;
+      };
+
+      const stream = agentLoop(
+        [{ role: "user", content: "fetch", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [tool] },
+        config,
+        undefined,
+        streamFn,
+      );
+      await collectEvents(stream);
+      const messages = await stream.result();
+      const toolResult = messages.find((message) => message.role === "toolResult");
+      const assistant = messages.findLast(
+        (message): message is AssistantMessage => message.role === "assistant",
+      );
+      const metadata = (message: AgentMessage | undefined) =>
+        message ? (message as unknown as Record<string, unknown>)["__openclaw"] : undefined;
+
+      expect(metadata(toolResult)).toEqual(
+        tainted ? { resultContentSource: "network" } : undefined,
+      );
+      expect(metadata(assistant)).toEqual(tainted ? { turnTainted: true } : undefined);
+    },
+  );
+
+  it.each([
+    ["sequential", "invalid arguments"],
+    ["sequential", "policy blocked"],
+    ["parallel", "invalid arguments"],
+    ["parallel", "policy blocked"],
+  ] as const)(
+    "never stamps external provenance on %s %s calls that did not execute",
+    async (toolExecution, failure) => {
+      let turn = 0;
+      const executed: string[] = [];
+      const tool: AgentTool = {
+        ...makeTool("network_probe", executed),
+        resultContentSource: "network",
+        ...(failure === "invalid arguments"
+          ? { parameters: Type.Object({ query: Type.String() }) }
+          : {}),
+      };
+      const streamFn: StreamFn = () => {
+        const stream = createAssistantMessageEventStream();
+        queueMicrotask(() => {
+          turn += 1;
+          const message =
+            turn === 1
+              ? makeAssistantMessage([
+                  { type: "toolCall", id: "network-preflight", name: tool.name, arguments: {} },
+                ])
+              : makeAssistantMessage([{ type: "text", text: "local outcome" }]);
+          stream.push({
+            type: "done",
+            reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+            message,
+          });
+          stream.end();
+        });
+        return stream;
+      };
+      const stream = agentLoop(
+        [{ role: "user", content: "network preflight", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [tool] },
+        {
+          ...config,
+          toolExecution,
+          ...(failure === "policy blocked"
+            ? { beforeToolCall: async () => ({ block: true, reason: "local policy" }) }
+            : {}),
+        },
+        undefined,
+        streamFn,
+      );
+
+      const events = await collectEvents(stream);
+      const messages = await stream.result();
+      const toolResult = messages.find((message) => message.role === "toolResult");
+      const assistant = messages.findLast((message) => message.role === "assistant");
+
+      expect(executed).toEqual([]);
+      expect(events).toContainEqual(
+        expect.objectContaining({ type: "tool_execution_end", executionStarted: false }),
+      );
+      expect((toolResult as unknown as { __openclaw?: unknown })?.["__openclaw"]).toBeUndefined();
+      expect((assistant as unknown as { __openclaw?: unknown })?.["__openclaw"]).toBeUndefined();
+    },
+  );
+
+  it.each([
+    ["sequential", "caller cancellation", false],
+    ["sequential", "remote failure after cancellation", true],
+    ["parallel", "caller cancellation", false],
+    ["parallel", "remote failure after cancellation", true],
+  ] as const)(
+    "preserves %s provenance for %s after execution begins",
+    async (toolExecution, failure, tainted) => {
+      const controller = new AbortController();
+      const cancelReason = new Error("operator cancelled");
+      const afterToolCall = vi.fn(async () => undefined);
+      const tool: AgentTool = {
+        ...makeTool("network_cancel", []),
+        resultContentSource: "network",
+        execute: async () => {
+          controller.abort(cancelReason);
+          throw tainted ? new Error("remote failure after cancellation") : cancelReason;
+        },
+      };
+      const streamFn: StreamFn = () => {
+        const stream = createAssistantMessageEventStream();
+        queueMicrotask(() => {
+          const message = makeAssistantMessage([
+            { type: "toolCall", id: "network-cancel", name: tool.name, arguments: {} },
+          ]);
+          stream.push({
+            type: "done",
+            reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+            message,
+          });
+          stream.end();
+        });
+        return stream;
+      };
+      const stream = agentLoop(
+        [{ role: "user", content: failure, timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [tool] },
+        { ...config, toolExecution, afterToolCall },
+        controller.signal,
+        streamFn,
+      );
+
+      const events = await collectEvents(stream);
+      const messages = await stream.result();
+      const toolResult = messages.find((message) => message.role === "toolResult");
+
+      expect(afterToolCall).toHaveBeenCalledOnce();
+      expect(events).toContainEqual(
+        expect.objectContaining({ type: "tool_execution_end", executionStarted: true }),
+      );
+      expect((toolResult as unknown as { __openclaw?: unknown })?.["__openclaw"]).toEqual(
+        tainted ? { resultContentSource: "network" } : undefined,
+      );
+    },
+  );
+
   it("persists and passes a local turn id when the provider omits one", async () => {
     let turn = 0;
     const toolCall = { type: "toolCall" as const, id: "call_0", name: "exec", arguments: {} };
@@ -1359,6 +1533,9 @@ describe("agentLoop tool termination", () => {
 
   it("marks argument validation failures with typed provenance", async () => {
     const executed: string[] = [];
+    const afterToolOutcome = vi.fn(async () => ({
+      details: { observed: "pre-execution" },
+    }));
     let turn = 0;
     const streamFn: StreamFn = () => {
       turn += 1;
@@ -1388,7 +1565,7 @@ describe("agentLoop tool termination", () => {
       agentLoop(
         [{ role: "user", content: "hello", timestamp: 1 }],
         { systemPrompt: "", messages: [], tools: [tool] },
-        config,
+        { ...config, afterToolOutcome },
         undefined,
         streamFn,
       ),
@@ -1402,10 +1579,78 @@ describe("agentLoop tool termination", () => {
     expect(endEvent).toMatchObject({
       executionStarted: false,
       errorKind: "argument-validation",
+      result: {
+        details: { observed: "pre-execution" },
+      },
     });
+    expect(afterToolOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: {},
+        executionStarted: false,
+        errorKind: "argument-validation",
+        isError: true,
+        toolCall: expect.objectContaining({ name: "edit" }),
+      }),
+      undefined,
+    );
   });
 
-  it("stops after a tool result only when the finalized result explicitly terminates", async () => {
+  it("runs the finalized-outcome hook after the executed-only hook", async () => {
+    const executed: string[] = [];
+    const order: string[] = [];
+    let turn = 0;
+    const streamFn: StreamFn = () => {
+      turn += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message =
+          turn === 1
+            ? makeAssistantMessage([
+                { type: "toolCall", id: "call-read", name: "read", arguments: {} },
+              ])
+            : makeAssistantMessage([{ type: "text", text: "done" }]);
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
+        stream.end();
+      });
+      return stream;
+    };
+
+    const events = await collectEvents(
+      agentLoop(
+        [{ role: "user", content: "hello", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [makeTool("read", executed)] },
+        {
+          ...config,
+          afterToolCall: async () => {
+            order.push("afterToolCall");
+            return { details: { phase: "executed" } };
+          },
+          afterToolOutcome: async ({ result, executionStarted }) => {
+            order.push("afterToolOutcome");
+            expect(result.details).toEqual({ phase: "executed" });
+            expect(executionStarted).toBe(true);
+            return { details: { phase: "finalized" } };
+          },
+        },
+        undefined,
+        streamFn,
+      ),
+    );
+    const endEvent = events.find(
+      (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+        event.type === "tool_execution_end",
+    );
+
+    expect(executed).toEqual(["read"]);
+    expect(order).toEqual(["afterToolCall", "afterToolOutcome"]);
+    expect(endEvent?.result).toMatchObject({ details: { phase: "finalized" } });
+  });
+
+  it("preserves a terminal result when the finalized-outcome hook throws", async () => {
     const executed: string[] = [];
     let turn = 0;
     const streamFn: StreamFn = () => {
@@ -1437,6 +1682,9 @@ describe("agentLoop tool termination", () => {
         ...config,
         afterToolCall: async ({ toolCall }) =>
           toolCall.name === "message" ? { terminate: true } : undefined,
+        afterToolOutcome: async () => {
+          throw new Error("finalized hook failed");
+        },
       },
       undefined,
       streamFn,
@@ -1447,6 +1695,10 @@ describe("agentLoop tool termination", () => {
     expect(turn).toBe(1);
     expect(executed).toEqual(["message"]);
     expect(events.filter((event) => event.type === "tool_execution_start")).toHaveLength(1);
+    expect(events.find((event) => event.type === "tool_execution_end")?.result).toMatchObject({
+      content: [{ type: "text", text: "finalized hook failed" }],
+      terminate: true,
+    });
     expect(events.at(-1)).toMatchObject({ type: "agent_end" });
   });
 
@@ -1536,6 +1788,258 @@ describe("agentLoop tool termination", () => {
     expect(events.at(-1)).toMatchObject({ type: "agent_end" });
   });
 
+  it("emits aborted tool results for skipped tool calls on sequential abort (#116379)", async () => {
+    const controller = new AbortController();
+    let streamCalls = 0;
+    const streamFn: StreamFn = () => {
+      streamCalls += 1;
+      if (streamCalls > 1) {
+        throw new Error("model was called after abort");
+      }
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = makeAssistantMessage([
+          { type: "toolCall", id: "call-first", name: "first_tool", arguments: {} },
+          { type: "toolCall", id: "call-second", name: "second_tool", arguments: {} },
+          { type: "toolCall", id: "call-third", name: "third_tool", arguments: {} },
+        ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+    const firstTool: AgentTool = {
+      name: "first_tool",
+      label: "first_tool",
+      description: "Aborts the run mid-batch",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      executionMode: "sequential",
+      execute: async () => {
+        controller.abort(new Error("user aborted"));
+        return {
+          content: [{ type: "text", text: "first ran" }],
+          details: { aborted: true },
+        };
+      },
+    };
+    const skippedTool: AgentTool = {
+      name: "second_tool",
+      label: "second_tool",
+      description: "Should be skipped by abort",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      executionMode: "sequential",
+      hideFromChannelProgress: true,
+      execute: async () => {
+        throw new Error("second_tool should never execute");
+      },
+    };
+    const thirdTool: AgentTool = {
+      ...skippedTool,
+      name: "third_tool",
+      label: "third_tool",
+    };
+
+    // afterToolOutcome must observe every committed tool call, including the
+    // aborted tail the dispatch loop skipped — otherwise audit/redaction hooks
+    // silently miss the repaired calls (#116379).
+    const afterToolOutcome = vi.fn(async () => undefined);
+    const events: AgentEvent[] = [];
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "abort mid-batch", timestamp: 1 }],
+      {
+        systemPrompt: "",
+        messages: [],
+        tools: [firstTool, skippedTool, thirdTool],
+      },
+      { ...config, toolExecution: "sequential", afterToolOutcome },
+      (event) => {
+        events.push(event);
+      },
+      controller.signal,
+      streamFn,
+    );
+
+    // The assistant turn committed three tool_use blocks; every one must have a
+    // matching tool_result so the history has no orphaned tool_use.
+    const toolResultMessages = messages.filter((message) => message.role === "toolResult");
+    const toolResultIds = toolResultMessages.map(
+      (message) => (message as Extract<AgentMessage, { role: "toolResult" }>).toolCallId,
+    );
+    expect(toolResultIds).toEqual(["call-first", "call-second", "call-third"]);
+    // The first tool produced a real result; the skipped tail got aborted results.
+    expect(toolResultMessages[0]).toMatchObject({ toolCallId: "call-first", isError: false });
+    expect(toolResultMessages[1]).toMatchObject({ toolCallId: "call-second", isError: true });
+    expect(toolResultMessages[2]).toMatchObject({ toolCallId: "call-third", isError: true });
+    expect(
+      (toolResultMessages[1] as Extract<AgentMessage, { role: "toolResult" }>).content,
+    ).toContainEqual({ type: "text", text: "Operation aborted" });
+    // The outcome hook observed all three calls, including the two skipped tail
+    // calls, with the aborted marker.
+    expect(afterToolOutcome).toHaveBeenCalledTimes(3);
+    expect(afterToolOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolCall: expect.objectContaining({ id: "call-second" }),
+        isError: true,
+        executionStarted: false,
+      }),
+      controller.signal,
+    );
+    expect(afterToolOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolCall: expect.objectContaining({ id: "call-third" }),
+        isError: true,
+        executionStarted: false,
+      }),
+      controller.signal,
+    );
+    // Every skipped tail call emits a tool_execution_start before its
+    // tool_execution_end, preserving the lifecycle pairing every dispatched
+    // call already has — otherwise channel/client subscribers receive an end
+    // event for an unknown tool-call id (#116379).
+    for (const skippedId of ["call-second", "call-third"]) {
+      const startIdx = events.findIndex(
+        (event) =>
+          event.type === "tool_execution_start" &&
+          (event as Extract<AgentEvent, { type: "tool_execution_start" }>).toolCallId === skippedId,
+      );
+      const endIdx = events.findIndex(
+        (event) =>
+          event.type === "tool_execution_end" &&
+          (event as Extract<AgentEvent, { type: "tool_execution_end" }>).toolCallId === skippedId,
+      );
+      expect(startIdx).toBeGreaterThanOrEqual(0);
+      expect(endIdx).toBeGreaterThan(startIdx);
+      expect(
+        (events[endIdx] as Extract<AgentEvent, { type: "tool_execution_end" }>).executionStarted,
+      ).toBe(false);
+      expect(events[startIdx]).toMatchObject({ hideFromChannelProgress: true });
+      expect(events[endIdx]).toMatchObject({ hideFromChannelProgress: true });
+    }
+    expect(events.filter((event) => event.type === "tool_execution_start")).toHaveLength(3);
+    expect(events.filter((event) => event.type === "tool_execution_end")).toHaveLength(3);
+  });
+
+  it("emits aborted tool results for skipped tool calls on parallel abort (#116379)", async () => {
+    const controller = new AbortController();
+    let streamCalls = 0;
+    const streamFn: StreamFn = () => {
+      streamCalls += 1;
+      if (streamCalls > 1) {
+        throw new Error("model was called after abort");
+      }
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = makeAssistantMessage([
+          { type: "toolCall", id: "p-first", name: "p_first_tool", arguments: {} },
+          { type: "toolCall", id: "p-second", name: "p_second_tool", arguments: {} },
+          { type: "toolCall", id: "p-third", name: "p_third_tool", arguments: {} },
+        ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+    const firstTool: AgentTool = {
+      name: "p_first_tool",
+      label: "p_first_tool",
+      description: "Aborts the run mid-batch",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async () => {
+        controller.abort(new Error("user aborted"));
+        return {
+          content: [{ type: "text", text: "first ran" }],
+          details: { aborted: true },
+        };
+      },
+    };
+    const skippedTool: AgentTool = {
+      name: "p_second_tool",
+      label: "p_second_tool",
+      description: "Should be skipped by abort",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      hideFromChannelProgress: true,
+      execute: async () => {
+        throw new Error("p_second_tool should never execute");
+      },
+    };
+    const thirdTool: AgentTool = {
+      ...skippedTool,
+      name: "p_third_tool",
+      label: "p_third_tool",
+    };
+
+    // afterToolOutcome must observe every committed tool call, including the
+    // aborted tail the dispatch loop skipped — otherwise audit/redaction hooks
+    // silently miss the repaired calls (#116379).
+    const afterToolOutcome = vi.fn(async () => undefined);
+    const events: AgentEvent[] = [];
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "abort mid-batch parallel", timestamp: 1 }],
+      {
+        systemPrompt: "",
+        messages: [],
+        tools: [firstTool, skippedTool, thirdTool],
+      },
+      { ...config, toolExecution: "parallel", afterToolOutcome },
+      (event) => {
+        events.push(event);
+      },
+      controller.signal,
+      streamFn,
+    );
+
+    const toolResultMessages = messages.filter((message) => message.role === "toolResult");
+    const toolResultIds = toolResultMessages.map(
+      (message) => (message as Extract<AgentMessage, { role: "toolResult" }>).toolCallId,
+    );
+    expect(toolResultIds.toSorted()).toEqual(["p-first", "p-second", "p-third"]);
+    // Every tool_use is paired with a tool_result — no orphaned tool_use.
+    expect(toolResultMessages).toHaveLength(3);
+    // The outcome hook observed all three calls, including the two skipped tail
+    // calls, with the aborted marker.
+    expect(afterToolOutcome).toHaveBeenCalledTimes(3);
+    expect(afterToolOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolCall: expect.objectContaining({ id: "p-second" }),
+        isError: true,
+        executionStarted: false,
+      }),
+      controller.signal,
+    );
+    expect(afterToolOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolCall: expect.objectContaining({ id: "p-third" }),
+        isError: true,
+        executionStarted: false,
+      }),
+      controller.signal,
+    );
+    // Every tool call — dispatched or skipped — emits a tool_execution_start
+    // before its tool_execution_end, so channel/client subscribers never see an
+    // end event for an unknown tool-call id (#116379).
+    for (const toolCallId of ["p-first", "p-second", "p-third"]) {
+      const startIdx = events.findIndex(
+        (event) =>
+          event.type === "tool_execution_start" &&
+          (event as Extract<AgentEvent, { type: "tool_execution_start" }>).toolCallId ===
+            toolCallId,
+      );
+      const endIdx = events.findIndex(
+        (event) =>
+          event.type === "tool_execution_end" &&
+          (event as Extract<AgentEvent, { type: "tool_execution_end" }>).toolCallId === toolCallId,
+      );
+      expect(startIdx).toBeGreaterThanOrEqual(0);
+      expect(endIdx).toBeGreaterThan(startIdx);
+      if (toolCallId !== "p-first") {
+        expect(events[startIdx]).toMatchObject({ hideFromChannelProgress: true });
+        expect(events[endIdx]).toMatchObject({ hideFromChannelProgress: true });
+      }
+    }
+    expect(events.filter((event) => event.type === "tool_execution_start")).toHaveLength(3);
+    expect(events.filter((event) => event.type === "tool_execution_end")).toHaveLength(3);
+  });
+
   it("skips interrupted-turn guidance when the abort reason marks a turn handoff", async () => {
     const controller = new AbortController();
     let streamCalls = 0;
@@ -1607,12 +2111,15 @@ describe("agentLoop tool termination", () => {
     };
     const events: AgentEvent[] = [];
 
-    await runAgentLoop(
+    const abortedMessages = await runAgentLoop(
       [{ role: "user", content: "abort during parallel tool preparation", timestamp: 1 }],
       {
         systemPrompt: "",
         messages: [],
-        tools: [makeTool("paid", executed), makeTool("gated", executed)],
+        tools: [
+          { ...makeTool("paid", executed), resultContentSource: "network" },
+          { ...makeTool("gated", executed), resultContentSource: "network" },
+        ],
       },
       {
         ...config,
@@ -1640,6 +2147,11 @@ describe("agentLoop tool termination", () => {
 
     expect(executed).toEqual([]);
     expect(afterToolCall).not.toHaveBeenCalled();
+    expect(
+      abortedMessages
+        .filter((message) => message.role === "toolResult")
+        .every((message) => !(message as unknown as { __openclaw?: unknown })["__openclaw"]),
+    ).toBe(true);
     expect(endEvents).toHaveLength(2);
     expect(endEvents).toEqual(
       expect.arrayContaining([

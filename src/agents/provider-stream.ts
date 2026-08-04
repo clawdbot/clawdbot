@@ -4,6 +4,8 @@
  * model API once a concrete stream implementation exists.
  */
 import type { ApiRegistry } from "@openclaw/ai";
+import "./ai-transport-runtime-host.js";
+import { createTransportAwareStreamFnForModel } from "@openclaw/ai/transports";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getModelLlmRuntime } from "../llm/model-runtime-binding.js";
 import type { Api, Model } from "../llm/types.js";
@@ -14,7 +16,6 @@ import {
   unwrapModelHeaderSentinelsForProviderEgress,
   unwrapSecretSentinelsForProviderEgress,
 } from "./provider-secret-egress.js";
-import { createTransportAwareStreamFnForModel } from "./provider-transport-stream.js";
 import type { StreamFn } from "./runtime/index.js";
 
 /** Resolves and registers the stream function for a provider-backed model. */

@@ -77,8 +77,9 @@ export async function resolveReactionSyntheticEvent(
 
   const emoji = event.reaction_type?.emoji_type;
   const messageId = event.message_id;
-  const senderId = event.user_id?.open_id;
-  const senderUserId = event.user_id?.user_id;
+  const senderOpenId = event.user_id?.open_id?.trim();
+  const senderUserId = event.user_id?.user_id?.trim();
+  const senderId = senderOpenId || senderUserId;
   if (!emoji || !messageId || !senderId) {
     return null;
   }
@@ -135,14 +136,18 @@ export async function resolveReactionSyntheticEvent(
   return {
     sender: {
       sender_id: {
-        open_id: senderId,
+        ...(senderOpenId ? { open_id: senderOpenId } : {}),
         ...(senderUserId ? { user_id: senderUserId } : {}),
       },
       sender_type: "user",
     },
     message: {
       message_id: `${messageId}:reaction:${emoji}:${uuid()}`,
+      // Synthetic IDs are local-only; replies and topic routing must retain the real message facts.
+      reply_target_message_id: messageId,
       typing_target_message_id: messageId,
+      ...(reactedMsg.rootId ? { root_id: reactedMsg.rootId } : {}),
+      ...(reactedMsg.threadId ? { thread_id: reactedMsg.threadId } : {}),
       chat_id: syntheticChatId,
       chat_type: syntheticChatType,
       message_type: "text",
@@ -459,7 +464,12 @@ function registerEventHandlers(
 }
 
 type BotOpenIdSource =
-  | { kind: "prefetched"; botOpenId?: string; botName?: string }
+  | {
+      kind: "prefetched";
+      botOpenId?: string;
+      botName?: string;
+      source?: "provider" | "cache";
+    }
   | { kind: "fetch" };
 
 type MonitorSingleAccountParams = {
@@ -486,13 +496,23 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
   const botOpenIdSource = params.botOpenIdSource ?? { kind: "fetch" };
   const botIdentity =
     botOpenIdSource.kind === "prefetched"
-      ? { botOpenId: botOpenIdSource.botOpenId, botName: botOpenIdSource.botName }
+      ? {
+          botOpenId: botOpenIdSource.botOpenId,
+          botName: botOpenIdSource.botName,
+          source: botOpenIdSource.source,
+        }
       : await fetchBotIdentityForMonitor(account, { runtime, abortSignal });
   const { botOpenId } = applyBotIdentityState(accountId, botIdentity);
   log(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? "unknown"}`);
 
-  if (!botOpenId && !abortSignal?.aborted) {
-    startBotIdentityRecovery({ account, accountId, runtime, abortSignal });
+  if ((!botOpenId || botIdentity.source === "cache") && !abortSignal?.aborted) {
+    startBotIdentityRecovery({
+      account,
+      accountId,
+      runtime,
+      abortSignal,
+      currentSource: botIdentity.source,
+    });
   }
 
   const connectionMode = account.config.connectionMode ?? "websocket";
@@ -546,8 +566,8 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       ...(params.statusSink ? { statusSink: params.statusSink } : {}),
     });
 
-    durableIngress?.start();
     try {
+      durableIngress?.start();
       if (connectionMode === "webhook") {
         return await monitorWebhook({
           account,
@@ -555,6 +575,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
           runtime,
           abortSignal,
           eventDispatcher: durableEventDispatcher,
+          ...(durableIngress ? { invokeWebhookEvent: durableIngress.invokeWebhook } : {}),
           ...(params.statusSink ? { statusSink: params.statusSink } : {}),
         });
       }

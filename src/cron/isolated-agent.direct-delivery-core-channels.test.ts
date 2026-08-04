@@ -5,7 +5,7 @@ import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import type {
   ChannelOutboundAdapter,
   ChannelOutboundContext,
-} from "../channels/plugins/types.public.js";
+} from "../channels/plugins/types.adapters.js";
 import type { CliDeps } from "../cli/deps.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { resolveOutboundSendDep } from "../infra/outbound/send-deps.js";

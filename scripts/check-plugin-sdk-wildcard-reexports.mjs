@@ -4,8 +4,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
+const repoRoot = resolveRepoRoot(import.meta.url);
 const extensionsRoot = path.join(repoRoot, "extensions");
 
 const WILDCARD_PLUGIN_SDK_REEXPORT_PATTERN =

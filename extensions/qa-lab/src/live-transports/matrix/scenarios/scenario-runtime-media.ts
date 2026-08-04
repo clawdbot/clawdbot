@@ -1,10 +1,10 @@
+import { createQaVoicePreflightWav } from "../../../voice-preflight.fixture.js";
 // QA Lab Matrix plugin module implements scenario runtime media behavior.
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import { MATRIX_QA_MEDIA_ROOM_KEY, resolveMatrixQaScenarioRoomId } from "./scenario-contract.js";
 import {
   buildMatrixQaImageGenerationPrompt,
   buildMatrixQaImageUnderstandingPrompt,
-  createMatrixQaVoicePreflightWav,
   createMatrixQaSplitColorImagePng,
   hasMatrixQaExpectedColorReply,
   MATRIX_QA_IMAGE_ATTACHMENT_FILENAME,
@@ -248,7 +248,7 @@ export async function runVoicePreflightMentionScenario(context: MatrixQaScenario
   const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_MEDIA_ROOM_KEY);
   const { client, startSince } = await primeMatrixQaDriverMediaClient(context);
   const driverEventId = await client.sendMediaMessage({
-    buffer: createMatrixQaVoicePreflightWav(),
+    buffer: createQaVoicePreflightWav(),
     contentType: "audio/wav",
     fileName: MATRIX_QA_VOICE_PREFLIGHT_FILENAME,
     kind: "audio",

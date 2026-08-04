@@ -1,4 +1,6 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
+import type { RealtimeVoiceSessionConnection } from "openclaw/plugin-sdk/realtime-voice";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   XAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX,
   XAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR,
@@ -7,14 +9,17 @@ import {
 } from "./realtime-voice-config.js";
 import { XaiRealtimeVoiceProtocol } from "./realtime-voice-protocol.js";
 
+export class XaiRealtimeMalformedAudioError extends Error {}
+
 export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
   private assistantTranscriptBuffer = "";
   private assistantTranscriptFinalized = false;
   private inputTranscriptReplacements = new Map<string, string>();
 
-  protected abstract onSessionUpdated(): void;
+  protected abstract acceptsEvent(connection: RealtimeVoiceSessionConnection): boolean;
+  protected abstract onSessionUpdated(connection: RealtimeVoiceSessionConnection): void;
 
-  protected handleEvent(event: XaiRealtimeEvent): void {
+  protected handleEvent(event: XaiRealtimeEvent, connection: RealtimeVoiceSessionConnection): void {
     this.config.onEvent?.({
       direction: "server",
       type: event.type,
@@ -24,6 +29,9 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
         ? { responseId: event.response_id ?? event.response?.id }
         : {}),
     });
+    if (!this.acceptsEvent(connection)) {
+      return;
+    }
     switch (event.type) {
       case "session.created":
         return;
@@ -42,20 +50,13 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
           this.pendingToolResultAcks.delete(callId);
           return;
         }
-        if (event.type === "conversation.item.created" && item?.type === "function_call") {
-          // Resumption replays persisted items instead of replaying the original
-          // response event. Re-emit only calls this bridge did not already deliver.
-          this.emitToolCallOnce({
-            itemId: item.id ?? event.item_id,
-            callId: item.call_id,
-            name: item.name,
-            rawArgs: item.arguments,
-          });
+        if (event.type === "conversation.item.created") {
+          this.emitCompletedToolCall(item, event);
         }
         return;
       }
       case "session.updated":
-        this.onSessionUpdated();
+        this.onSessionUpdated(connection);
         return;
       case "response.created":
         this.responseActive = true;
@@ -70,7 +71,13 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
         if (!audioDelta) {
           return;
         }
-        this.config.onAudio(Buffer.from(audioDelta, "base64"));
+        const canonicalAudio = canonicalizeBase64(audioDelta);
+        if (!canonicalAudio) {
+          throw new XaiRealtimeMalformedAudioError(
+            "xAI realtime voice stream returned malformed base64 audio data",
+          );
+        }
+        this.emitAudioWithPlaybackMark(Buffer.from(canonicalAudio, "base64"));
         if (event.item_id && event.item_id !== this.lastAssistantItemId) {
           this.lastAssistantItemId = event.item_id;
           this.responseStartTimestamp = this.latestMediaTimestamp;
@@ -78,7 +85,6 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
           this.responseStartTimestamp = this.latestMediaTimestamp;
         }
         this.responseActive = true;
-        this.sendMark();
         return;
       }
       case "input_audio_buffer.speech_started":
@@ -91,9 +97,15 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
           this.appendAssistantTranscriptDelta(event.delta);
         }
         return;
+      case "response.text.done":
       case "response.output_text.done":
       case "response.output_audio_transcript.done":
         this.flushAssistantTranscript(event.transcript ?? event.text);
+        return;
+      case "conversation.item.input_audio_transcription.delta":
+        if (event.delta) {
+          this.config.onTranscript?.("user", event.delta, false);
+        }
         return;
       case "conversation.item.input_audio_transcription.updated":
         if (event.transcript) {
@@ -109,13 +121,39 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
         }
         return;
       }
-      case "response.done":
-        this.flushAssistantTranscript();
+      case "conversation.item.input_audio_transcription.failed":
+        this.inputTranscriptReplacements.delete(this.inputTranscriptKey(event));
+        this.config.onError?.(new Error(readXaiRealtimeErrorDetail(event.error)));
+        return;
+      case "response.done": {
+        const status = event.response?.status;
+        const output = event.response?.output ?? [];
+        if (status === undefined || status === "completed") {
+          for (const item of output) {
+            this.emitCompletedToolCall(item, event);
+          }
+        }
+        const terminalTranscript = output
+          .filter((item) => item.type === "message" && item.role === "assistant")
+          .flatMap((item) => item.content ?? [])
+          .map((content) => content.transcript ?? content.text ?? "")
+          .join("");
+        this.flushAssistantTranscript(terminalTranscript);
         this.responseActive = false;
         this.responseCreateInFlight = false;
         this.responseCancelInFlight = false;
+        if (status === "failed" || status === "incomplete") {
+          const details = event.response?.status_details;
+          const error = isRecord(details) ? details.error : undefined;
+          const reason = isRecord(details) ? normalizeOptionalString(details.reason) : undefined;
+          const message = error
+            ? readXaiRealtimeErrorDetail(error)
+            : `xAI realtime voice response ${status}${reason ? `: ${reason}` : ""}`;
+          this.config.onError?.(new Error(message));
+        }
         this.flushPendingResponseCreate();
         return;
+      }
       case "response.function_call_arguments.delta": {
         const key = event.item_id ?? "unknown";
         const existing = this.toolCallBuffers.get(key);
@@ -133,11 +171,14 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
       case "response.function_call_arguments.done": {
         const key = event.item_id ?? "unknown";
         const buffered = this.toolCallBuffers.get(key);
+        // xAI's documented Function Call Flow requires executing finalized
+        // arguments immediately so tool results can continue the response.
         this.emitToolCallOnce({
           itemId: event.item_id,
           callId: buffered?.callId || event.call_id,
           name: buffered?.name || event.name,
-          rawArgs: buffered?.args || event.arguments,
+          // The done payload owns the final JSON; streamed chunks may be stale or incomplete.
+          rawArgs: event.arguments ?? buffered?.args,
         });
         this.toolCallBuffers.delete(key);
         return;
@@ -150,6 +191,19 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
 
   protected resetInputTranscripts(): void {
     this.inputTranscriptReplacements.clear();
+  }
+
+  private emitCompletedToolCall(item: XaiRealtimeEvent["item"], event: XaiRealtimeEvent): void {
+    if (item?.type === "function_call" && (!item.status || item.status === "completed")) {
+      // Completed items and resumed replay are authoritative; added items can
+      // still be in progress and must not dispatch incomplete arguments.
+      this.emitToolCallOnce({
+        itemId: item.id ?? event.item_id,
+        callId: item.call_id,
+        name: item.name,
+        rawArgs: item.arguments,
+      });
+    }
   }
 
   private appendAssistantTranscriptDelta(delta: string): void {
@@ -200,7 +254,10 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
   }
 
   private describeServerEvent(event: XaiRealtimeEvent): string | undefined {
-    if (event.type === "error") {
+    if (
+      event.type === "error" ||
+      event.type === "conversation.item.input_audio_transcription.failed"
+    ) {
       return readXaiRealtimeErrorDetail(event.error);
     }
     if (event.type !== "response.done") {

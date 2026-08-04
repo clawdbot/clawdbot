@@ -23,7 +23,7 @@ describe("buildReplyPromptEnvelope", () => {
       sessionCtx,
       baseBody: "A new session was started via /new or /reset.",
       hasUserBody: true,
-      inboundUserContext: "Conversation info (untrusted metadata):\nsender_id=telegram-user-1",
+      inboundUserContext: "Conversation info:\nsender_id=telegram-user-1",
       isBareSessionReset: true,
       startupAction: "reset",
       startupContextPrelude: "Startup context",
@@ -138,12 +138,12 @@ describe("buildReplyPromptEnvelope", () => {
       baseBody: "No wtf",
       hasUserBody: true,
       inboundUserContext: [
-        "Conversation info (untrusted metadata):",
+        "Conversation info:",
         "```json",
         JSON.stringify({ message_id: "35676", inbound_event_kind: "room_event" }, null, 2),
         "```",
         "",
-        "Conversation context (untrusted, chronological, selected for current message):",
+        "Conversation context (chronological, selected for current message):",
         "#35674 Other: I wish I could enjoy 5.5",
         "#35675 User ->#35674: Are you fr fr",
       ].join("\n"),
@@ -162,12 +162,12 @@ describe("buildReplyPromptEnvelope", () => {
         "inbound_event_kind: room_event",
         [
           "Room context:",
-          "Conversation info (untrusted metadata):",
+          "Conversation info:",
           "```json",
           JSON.stringify({ message_id: "35676", inbound_event_kind: "room_event" }, null, 2),
           "```",
           "",
-          "Conversation context (untrusted, chronological, selected for current message):",
+          "Conversation context (chronological, selected for current message):",
           "#35674 Other: I wish I could enjoy 5.5",
           "#35675 User ->#35674: Are you fr fr",
         ].join("\n"),
@@ -181,7 +181,7 @@ describe("buildReplyPromptEnvelope", () => {
         "inbound_event_kind: room_event",
         [
           "Room context:",
-          "Conversation info (untrusted metadata):",
+          "Conversation info:",
           "```json",
           JSON.stringify({ message_id: "35676", inbound_event_kind: "room_event" }, null, 2),
           "```",
@@ -191,7 +191,7 @@ describe("buildReplyPromptEnvelope", () => {
       ].join("\n\n"),
     );
     expect(envelope.currentInboundContext?.resumableText).not.toContain(
-      "Conversation context (untrusted, chronological, selected for current message):",
+      "Conversation context (chronological, selected for current message):",
     );
   });
 
@@ -291,6 +291,42 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.transcriptCommandBody).toContain("https://example.com/photo.jpg");
   });
 
+  it("carries preprojected media without duplicating its model-facing bytes", () => {
+    const body = "[media attached: /tmp/tlon.png (image/png) | /tmp/tlon.png]\ninspect this";
+    const sessionCtx = finalizeInboundContext({
+      Body: body,
+      BodyForAgent: body,
+      Provider: "tlon",
+      ChatType: "direct",
+    });
+    const media = [{ path: "/tmp/tlon.png", contentType: "image/png", kind: "image" as const }];
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: body,
+      hasUserBody: true,
+      inboundUserContext: "",
+      isBareSessionReset: false,
+      startupAction: "new",
+      media,
+    });
+
+    expect(envelope.prefixedCommandBody).toBe(body);
+    expect(envelope.queuedBody).toBe(body);
+    expect(envelope.transcriptCommandBody).toBe(body);
+    expect(envelope.media).toEqual([
+      {
+        path: "/tmp/tlon.png",
+        url: undefined,
+        contentType: "image/png",
+        kind: "image",
+        transcribed: false,
+        messageId: undefined,
+      },
+    ]);
+  });
+
   it("keeps soft reset user notes visible without leaking startup context into transcripts", () => {
     const sessionCtx = finalizeInboundContext({
       Body: "",
@@ -304,14 +340,14 @@ describe("buildReplyPromptEnvelope", () => {
       sessionCtx,
       baseBody: "",
       hasUserBody: true,
-      inboundUserContext: 'Conversation info (untrusted metadata):\n{"sender":{"id":"U123"}}',
+      inboundUserContext: 'Conversation info:\n{"sender":{"id":"U123"}}',
       isBareSessionReset: true,
       startupAction: "reset",
       startupContextPrelude: "Startup context",
       softResetTail: "re-read persona files",
     });
 
-    expect(envelope.prefixedCommandBody).toContain("Conversation info (untrusted metadata):");
+    expect(envelope.prefixedCommandBody).toContain("Conversation info:");
     expect(envelope.prefixedCommandBody).toContain("Startup context");
     expect(envelope.prefixedCommandBody).toContain("re-read persona files");
     expect(envelope.transcriptCommandBody).toBe("re-read persona files");

@@ -14,8 +14,8 @@ type CallManagerRuntimeState = {
   activeCalls: Map<CallId, CallRecord>;
   providerCallIdMap: Map<string, CallId>;
   processedEventIds: Set<string>;
-  /** Provider call IDs we already sent a reject hangup for; avoids duplicate hangup calls. */
-  rejectedProviderCallIds: Set<string>;
+  /** Provider call IDs reserved for reject hangup; avoids duplicate hangup calls. */
+  rejectedProviderCallIds: Map<string, symbol>;
 };
 
 type CallManagerRuntimeDeps = {

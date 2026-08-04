@@ -1080,6 +1080,18 @@ describe("hardenApprovedExecutionPaths", () => {
         decoyName: "pipefail",
         expectedArgvIndex: 3,
       },
+      {
+        name: "mksh plus set option",
+        argv: ["mksh", "+o", "errexit", "./run.sh"],
+        decoyName: "errexit",
+        expectedArgvIndex: 3,
+      },
+      {
+        name: "yash plus interactive option",
+        argv: ["yash", "+i", "./run.sh"],
+        decoyName: "+i",
+        expectedArgvIndex: 2,
+      },
     ];
 
     for (const testCase of casesValue) {
@@ -1114,6 +1126,58 @@ describe("hardenApprovedExecutionPaths", () => {
         ).toBe(false);
       });
     }
+  });
+
+  it("does not bind opaque shell command operands as mutable script files", () => {
+    const tmp = createFixtureDir("openclaw-opaque-shell-operand-");
+    const scriptPath = path.join(tmp, "run.sh");
+    fs.writeFileSync(scriptPath, "#!/bin/sh\necho SAFE\n");
+    fs.chmodSync(scriptPath, 0o755);
+    const snapshot = resolveMutableFileOperandSnapshotSync({
+      argv: ["nu", "--commands", "./run.sh"],
+      cwd: tmp,
+      shellCommand: null,
+    });
+    expect(snapshot).toEqual({ ok: true, snapshot: null });
+  });
+
+  it("denies opaque shell inline payloads hidden by startup options", () => {
+    const tmp = createFixtureDir("openclaw-opaque-shell-hidden-inline-");
+    const configPath = path.join(tmp, "config.nu");
+    const scriptPath = path.join(tmp, "run.sh");
+    fs.writeFileSync(configPath, "print hidden\n");
+    fs.writeFileSync(scriptPath, "#!/bin/sh\necho SAFE\n");
+    fs.chmodSync(scriptPath, 0o755);
+
+    const prepared = buildSystemRunApprovalPlan({
+      command: ["nu", `--config=${configPath}`, "--commands", "./run.sh"],
+      cwd: tmp,
+    });
+
+    expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+  });
+
+  it("denies nushell execute payloads hidden by startup modes", () => {
+    const tmp = createFixtureDir("openclaw-nu-startup-execute-");
+    const scriptPath = path.join(tmp, "run.sh");
+    fs.writeFileSync(scriptPath, "#!/bin/sh\necho SAFE\n");
+    fs.chmodSync(scriptPath, 0o755);
+
+    const prepared = buildSystemRunApprovalPlan({
+      command: ["nu", "--interactive", "--execute", "./run.sh"],
+      cwd: tmp,
+    });
+
+    expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+  });
+
+  it("denies startup-file shell wrappers with inline commands", () => {
+    expect(buildSystemRunApprovalPlan({ command: ["tcsh", "-c", "echo SAFE"] })).toEqual(
+      DENIED_RUNTIME_APPROVAL,
+    );
+    expect(
+      buildSystemRunApprovalPlan({ command: ["osh", "--rcfile", "/tmp/evil", "-c", "echo SAFE"] }),
+    ).toEqual(DENIED_RUNTIME_APPROVAL);
   });
 
   it("captures fish script operands with plus-prefixed filenames", () => {

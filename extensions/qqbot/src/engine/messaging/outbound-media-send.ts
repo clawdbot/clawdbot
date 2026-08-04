@@ -5,7 +5,8 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { extensionForMime, type MediaKind } from "openclaw/plugin-sdk/media-mime";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import {
   pathExistsSync,
@@ -23,7 +24,6 @@ import {
   getMaxUploadSize,
   readFileAsync,
 } from "../utils/file-utils.js";
-import { formatErrorMessage } from "../utils/format.js";
 import { debugError, debugLog, debugWarn } from "../utils/log.js";
 import {
   getQQBotDataDir,
@@ -206,7 +206,7 @@ function mediaFileTypeForKind(mediaKind: QQBotMediaKind): MediaFileType {
 
 function senderKindForLoadedMedia(
   mediaKind: QQBotMediaKind,
-  loadedKind: "image" | "audio" | "video" | "document" | undefined,
+  loadedKind: MediaKind | undefined,
 ): "image" | "video" | "file" | null {
   if (mediaKind === "image") {
     return loadedKind === "image" ? "image" : null;
@@ -322,9 +322,7 @@ async function trySendViaHostRead(
       return { channel: "qqbot", error: `File is empty: ${hostReadMediaPath}` };
     }
     if (mediaKind === "media" && loaded.kind === "audio") {
-      const directUploadFormats =
-        ctx.account.config?.audioFormatPolicy?.uploadDirectFormats ??
-        ctx.account.config?.voiceDirectUploadFormats;
+      const directUploadFormats = ctx.account.config?.audioFormatPolicy?.uploadDirectFormats;
       const transcodeEnabled = ctx.account.config?.audioFormatPolicy?.transcodeEnabled !== false;
       const stagedPath = await stageLoadedHostReadVoice(mediaPath, loaded);
       return await sendVoiceFromLocal(ctx, stagedPath, directUploadFormats, transcodeEnabled);

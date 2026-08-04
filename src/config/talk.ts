@@ -51,22 +51,6 @@ function normalizeNonNegativeInteger(value: unknown): number | undefined {
   return value;
 }
 
-function buildLegacyTalkProviderCompat(
-  value: Record<string, unknown>,
-): TalkProviderConfig | undefined {
-  const provider: TalkProviderConfig = {};
-  for (const key of ["voiceId", "voiceAliases", "modelId", "outputFormat"] as const) {
-    if (value[key] !== undefined) {
-      provider[key] = value[key];
-    }
-  }
-  const apiKey = normalizeTalkSecretInput(value.apiKey);
-  if (apiKey !== undefined) {
-    provider.apiKey = apiKey;
-  }
-  return Object.keys(provider).length > 0 ? provider : undefined;
-}
-
 function normalizeTalkProviderConfig(value: unknown): TalkProviderConfig | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -210,6 +194,10 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
 
   const source = value as Record<string, unknown>;
   const normalized: TalkConfig = {};
+  const agentId = normalizeOptionalString(source.agentId);
+  if (agentId) {
+    normalized.agentId = agentId;
+  }
   const speechLocale = normalizeOptionalString(source.speechLocale);
   if (speechLocale) {
     normalized.speechLocale = speechLocale;
@@ -288,20 +276,20 @@ export function resolveActiveTalkProviderConfig(
 }
 
 /**
- * Build the gateway `talk.config` payload from persisted config.
+ * Build the gateway `talk.config` payload from canonical Talk config.
  * The response includes canonical provider data plus the resolved provider when selection is unambiguous.
  */
-export function buildTalkConfigResponse(value: unknown): TalkConfigResponse | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const normalized = normalizeTalkSection(value as TalkConfig);
-  const legacyCompat = buildLegacyTalkProviderCompat(value);
-  if (!normalized && !legacyCompat) {
+export function buildTalkConfigResponse(
+  normalized: TalkConfig | undefined,
+): TalkConfigResponse | undefined {
+  if (!normalized) {
     return undefined;
   }
 
   const payload: TalkConfigResponse = {};
+  if (typeof normalized?.agentId === "string") {
+    payload.agentId = normalized.agentId;
+  }
   if (typeof normalized?.interruptOnSpeech === "boolean") {
     payload.interruptOnSpeech = normalized.interruptOnSpeech;
   }
@@ -324,11 +312,7 @@ export function buildTalkConfigResponse(value: unknown): TalkConfigResponse | un
     payload.realtime = normalized.realtime;
   }
 
-  // Keep legacy flat ElevenLabs fields readable for clients while migration moves writes to
-  // talk.provider/providers; normalizeTalkSection intentionally excludes those provider details.
-  const resolved =
-    resolveActiveTalkProviderConfig(normalized) ??
-    (legacyCompat ? { provider: "elevenlabs", config: legacyCompat } : undefined);
+  const resolved = resolveActiveTalkProviderConfig(normalized);
   const activeProvider = resolved?.provider;
   if (activeProvider) {
     payload.provider = activeProvider;

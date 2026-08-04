@@ -1,8 +1,5 @@
 // Huggingface setup module handles plugin onboarding behavior.
-import {
-  createModelCatalogPresetAppliers,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/provider-onboard";
+import { createModelCatalogPresetAppliers } from "openclaw/plugin-sdk/provider-onboard";
 import {
   buildHuggingfaceModelDefinition,
   HUGGINGFACE_BASE_URL,
@@ -11,9 +8,9 @@ import {
 
 export const HUGGINGFACE_DEFAULT_MODEL_REF = "huggingface/deepseek-ai/DeepSeek-R1";
 
-const huggingfacePresetAppliers = createModelCatalogPresetAppliers({
+export const { applyConfig: applyHuggingfaceConfig } = createModelCatalogPresetAppliers<[]>({
   primaryModelRef: HUGGINGFACE_DEFAULT_MODEL_REF,
-  resolveParams: (_cfg: OpenClawConfig) => ({
+  resolveParams: () => ({
     providerId: "huggingface",
     api: "openai-completions",
     baseUrl: HUGGINGFACE_BASE_URL,
@@ -21,7 +18,3 @@ const huggingfacePresetAppliers = createModelCatalogPresetAppliers({
     aliases: [{ modelRef: HUGGINGFACE_DEFAULT_MODEL_REF, alias: "Hugging Face" }],
   }),
 });
-
-export function applyHuggingfaceConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return huggingfacePresetAppliers.applyConfig(cfg);
-}

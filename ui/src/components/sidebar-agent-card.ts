@@ -12,8 +12,6 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) agentName = "";
   @property({ attribute: false }) avatarUrl: string | null = null;
   @property({ attribute: false }) avatarText = "";
-  @property({ attribute: false }) offline = false;
-  @property({ attribute: false }) statusLabel = "";
   @property({ attribute: false }) subtitle = "";
   @property({ attribute: false }) menuOpen = false;
   /** Unread sessions exist on non-active agents; surfaces next to the name. */
@@ -38,7 +36,7 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
           class="sidebar-agent-card__main"
           aria-haspopup="menu"
           aria-expanded=${String(this.menuOpen)}
-          aria-label="${this.agentName} · ${menuLabel} · ${this.statusLabel}${this.approvalCount > 0
+          aria-label="${this.agentName} · ${menuLabel}${this.approvalCount > 0
             ? ` · ${approvalLabel}`
             : ""}"
           @click=${(event: MouseEvent) => this.onToggleMenu?.(event.currentTarget as HTMLElement)}
@@ -55,14 +53,6 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
               : html`<span class="sidebar-agent-card__avatar-text" aria-hidden="true"
                   >${this.avatarText}</span
                 >`}
-            ${this.offline
-              ? html`<span
-                  class="sidebar-agent-card__presence"
-                  role="img"
-                  aria-label=${this.statusLabel}
-                  title=${this.statusLabel}
-                ></span>`
-              : nothing}
           </span>
           <span class="sidebar-agent-card__text">
             <span class="sidebar-agent-card__name">
@@ -76,12 +66,13 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
               : nothing}
           </span>
           ${this.approvalCount > 0
-            ? html`<span
-                class="sidebar-agent-approval-count sidebar-agent-card__approval-count"
-                aria-label=${approvalLabel}
-                title=${approvalLabel}
-                >${this.approvalCount}</span
-              >`
+            ? html`<openclaw-tooltip .content=${approvalLabel}>
+                <span
+                  class="sidebar-agent-approval-count sidebar-agent-card__approval-count"
+                  aria-label=${approvalLabel}
+                  >${this.approvalCount}</span
+                >
+              </openclaw-tooltip>`
             : nothing}
           ${this.menuUnread && !this.menuOpen
             ? html`<span

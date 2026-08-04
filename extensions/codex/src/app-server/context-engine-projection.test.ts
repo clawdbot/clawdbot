@@ -392,6 +392,18 @@ describe("projectContextEngineAssemblyForCodex", () => {
     );
   });
 
+  it.each([
+    { contextTokenBudget: 4_000, maxRenderedContextChars: 8_000 },
+    { contextTokenBudget: 8_000, maxRenderedContextChars: 16_000 },
+  ])(
+    "keeps a $contextTokenBudget-token model within its reserved prompt budget",
+    ({ contextTokenBudget, maxRenderedContextChars }) => {
+      expect(resolveCodexContextEngineProjectionMaxChars({ contextTokenBudget })).toBe(
+        maxRenderedContextChars,
+      );
+    },
+  );
+
   it("applies configured reserve tokens to the scaled projection cap", () => {
     expect(
       resolveCodexContextEngineProjectionMaxChars({

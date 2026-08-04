@@ -15,7 +15,7 @@ export function getSecurityConfirmMessage(): string {
 
 export function getSecurityNoteMessage(): string {
   return [
-    t("wizard.security.beta"),
+    t("wizard.security.attribution"),
     t("wizard.security.personalAgent"),
     t("wizard.security.toolAccess"),
     t("wizard.security.promptRisk"),

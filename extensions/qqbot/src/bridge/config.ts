@@ -1,7 +1,7 @@
 // Qqbot helper module supports config behavior.
-import fs from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-auth";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { coerceSecretRef, normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { getPlatformAdapter } from "../engine/adapter/index.js";
 import {
@@ -11,6 +11,7 @@ import {
   resolveAccountBase,
   resolveDefaultAccountId,
 } from "../engine/config/resolve.js";
+import { normalizeOptionalString } from "../engine/utils/string-normalize.js";
 import type { ResolvedQQBotAccount, QQBotAccountConfig } from "../types.js";
 
 export const DEFAULT_ACCOUNT_ID = ENGINE_DEFAULT_ACCOUNT_ID;
@@ -135,14 +136,26 @@ export function resolveQQBotAccount(
     secretSource = "config";
   } else if (accountConfig.clientSecretFile) {
     try {
-      clientSecret = fs.readFileSync(accountConfig.clientSecretFile, "utf8").trim();
-      secretSource = "file";
+      const fileSecret = tryReadSecretFileSync(
+        accountConfig.clientSecretFile,
+        "QQ Bot client secret",
+        // Existing clientSecretFile paths may be symlinks or hardlinks. Keep
+        // that contract while gaining the shared credential size limit.
+        { rejectHardlinks: false },
+      );
+      if (fileSecret) {
+        clientSecret = fileSecret;
+        secretSource = "file";
+      }
     } catch {
       secretSource = "none";
     }
-  } else if (process.env.QQBOT_CLIENT_SECRET && base.accountId === DEFAULT_ACCOUNT_ID) {
-    clientSecret = process.env.QQBOT_CLIENT_SECRET;
-    secretSource = "env";
+  } else {
+    const envClientSecret = normalizeOptionalString(process.env.QQBOT_CLIENT_SECRET);
+    if (envClientSecret && base.accountId === DEFAULT_ACCOUNT_ID) {
+      clientSecret = envClientSecret;
+      secretSource = "env";
+    }
   }
 
   return {

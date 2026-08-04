@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { MEDIA_MAX_BYTES } from "./store.js";
 
 const MB = 1024 * 1024;
+type GeneratedMediaKind = Extract<MediaKind, "audio" | "image" | "video">;
 
 /** Resolves the global generated-media byte cap from the user-facing MB config value. */
 export function resolveConfiguredMediaMaxBytes(cfg?: OpenClawConfig): number | undefined {
@@ -15,7 +16,10 @@ export function resolveConfiguredMediaMaxBytes(cfg?: OpenClawConfig): number | u
 }
 
 /** Returns the configured media cap, falling back to the media-core per-kind default. */
-export function resolveGeneratedMediaMaxBytes(cfg: OpenClawConfig | undefined, kind: MediaKind) {
+export function resolveGeneratedMediaMaxBytes(
+  cfg: OpenClawConfig | undefined,
+  kind: GeneratedMediaKind,
+) {
   return resolveConfiguredMediaMaxBytes(cfg) ?? maxBytesForKind(kind);
 }
 

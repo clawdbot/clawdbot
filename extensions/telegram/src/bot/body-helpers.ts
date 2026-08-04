@@ -1,6 +1,9 @@
 // Telegram helper module supports body helpers behavior.
 import type { Chat, Message, MessageOrigin, User } from "grammy/types";
-import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
+import type {
+  ChannelInboundMediaInput,
+  NormalizedLocation,
+} from "openclaw/plugin-sdk/channel-inbound";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
@@ -22,8 +25,10 @@ type TelegramMediaFileRef =
   | NonNullable<Message["document"]>
   | NonNullable<Message["sticker"]>;
 
+export type TelegramMediaKind = Exclude<NonNullable<ChannelInboundMediaInput["kind"]>, "unknown">;
+
 type TelegramPrimaryMedia = {
-  placeholder: string;
+  kind: TelegramMediaKind;
   fileRef: TelegramMediaFileRef;
 };
 
@@ -42,33 +47,27 @@ export function resolveTelegramPrimaryMedia(
   }
   const photo = msg.photo?.[msg.photo.length - 1];
   if (photo) {
-    return { placeholder: "<media:image>", fileRef: photo };
+    return { kind: "image", fileRef: photo };
   }
   if (msg.video) {
-    return { placeholder: "<media:video>", fileRef: msg.video };
+    return { kind: "video", fileRef: msg.video };
   }
   if (msg.video_note) {
-    return { placeholder: "<media:video>", fileRef: msg.video_note };
+    return { kind: "video", fileRef: msg.video_note };
   }
   if (msg.audio) {
-    return { placeholder: "<media:audio>", fileRef: msg.audio };
+    return { kind: "audio", fileRef: msg.audio };
   }
   if (msg.voice) {
-    return { placeholder: "<media:audio>", fileRef: msg.voice };
+    return { kind: "audio", fileRef: msg.voice };
   }
   if (msg.document) {
-    return { placeholder: "<media:document>", fileRef: msg.document };
+    return { kind: "document", fileRef: msg.document };
   }
   if (msg.sticker) {
-    return { placeholder: "<media:sticker>", fileRef: msg.sticker };
+    return { kind: "sticker", fileRef: msg.sticker };
   }
   return undefined;
-}
-
-export function resolveTelegramMediaPlaceholder(
-  msg: TelegramMediaMessage | undefined | null,
-): string | undefined {
-  return resolveTelegramPrimaryMedia(msg)?.placeholder;
 }
 
 export function buildSenderLabel(msg: Message, senderId?: number | string) {
@@ -97,9 +96,10 @@ export type TelegramTextEntity = NonNullable<Message["entities"]>[number];
 
 const TELEGRAM_RICH_MESSAGE_PLACEHOLDER = "[unsupported Telegram rich_message received]";
 
-type TelegramTextMessage = Pick<Message, "text" | "caption" | "entities" | "caption_entities"> & {
-  rich_message?: unknown;
-};
+type TelegramTextMessage = Pick<
+  Message,
+  "text" | "caption" | "entities" | "caption_entities" | "poll"
+> & { rich_message?: unknown };
 
 function hasTelegramRichMessage(value: unknown): boolean {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -216,13 +216,67 @@ export function resolveTelegramTextContent(text: unknown, caption?: unknown): st
   return isBinaryContent(raw) ? "" : raw;
 }
 
+function formatTelegramPollText(poll: NonNullable<Message["poll"]>): string {
+  const correctOptionIds = new Set(poll.correct_option_ids ?? []);
+  const optionLines = poll.options.map((option, index) => {
+    const optionText = renderTelegramTextEntities(option.text, option.text_entities);
+    const voteLabel = option.voter_count === 1 ? "vote" : "votes";
+    const correctLabel = correctOptionIds.has(index) ? " (correct)" : "";
+    return `${index + 1}. ${optionText} — ${option.voter_count} ${voteLabel}${correctLabel}`;
+  });
+
+  return [
+    `[Poll] ${renderTelegramTextEntities(poll.question, poll.question_entities)}`,
+    ...(poll.description
+      ? [renderTelegramTextEntities(poll.description, poll.description_entities)]
+      : []),
+    ...optionLines,
+    `Total voters: ${poll.total_voter_count}`,
+    `Type: ${poll.type}`,
+    `Visibility: ${poll.is_anonymous ? "anonymous" : "public"}`,
+    `Selection: ${poll.allows_multiple_answers ? "multiple answers" : "single answer"}`,
+    `Status: ${poll.is_closed ? "closed" : "open"}`,
+    ...(poll.explanation
+      ? [`Explanation: ${renderTelegramTextEntities(poll.explanation, poll.explanation_entities)}`]
+      : []),
+  ].join("\n");
+}
+
 export function getTelegramTextParts(msg: TelegramTextMessage): {
   text: string;
   entities: TelegramTextEntity[];
 } {
   const text = resolveTelegramTextContent(msg.text, msg.caption);
-  const entities = text ? (msg.entities ?? msg.caption_entities ?? []) : [];
-  return { text, entities };
+  if (text) {
+    return { text, entities: msg.entities ?? msg.caption_entities ?? [] };
+  }
+  return { text: msg.poll ? formatTelegramPollText(msg.poll) : "", entities: [] };
+}
+
+export function joinTelegramTextParts(
+  messages: readonly Message[],
+  separator: string,
+): { text: string; entities: TelegramTextEntity[] } {
+  const textParts: string[] = [];
+  const entities: TelegramTextEntity[] = [];
+  let offset = 0;
+
+  for (const message of messages) {
+    const textPart = getTelegramTextParts(message);
+    if (!textPart.text) {
+      continue;
+    }
+    if (textParts.length > 0) {
+      offset += separator.length;
+    }
+    entities.push(
+      ...textPart.entities.map((entity) => ({ ...entity, offset: entity.offset + offset })),
+    );
+    textParts.push(textPart.text);
+    offset += textPart.text.length;
+  }
+
+  return { text: textParts.join(separator), entities };
 }
 
 function isTelegramMentionWordChar(char: string | undefined): boolean {
@@ -271,6 +325,26 @@ export function hasBotMention(msg: Message, botUsername: string) {
     }
   }
   return false;
+}
+
+export function hasLeadingBotCommandAddressedToOtherBot(
+  msg: Message,
+  botUsername: string,
+): boolean {
+  const { text, entities } = getTelegramTextParts(msg);
+  const normalizedBotUsername = normalizeLowercaseStringOrEmpty(botUsername).replace(/^@/u, "");
+  if (!normalizedBotUsername) {
+    return false;
+  }
+  const leadingCommand = entities.find(
+    (entity) => entity.type === "bot_command" && entity.offset === 0,
+  );
+  if (!leadingCommand) {
+    return false;
+  }
+  const command = text.slice(0, leadingCommand.length);
+  const target = command.match(/^\/[^@\s]+@([a-z0-9_]+)$/iu)?.[1];
+  return Boolean(target && target.toLowerCase() !== normalizedBotUsername);
 }
 
 export function hasBotMentionInText(text: string, botUsername: string): boolean {

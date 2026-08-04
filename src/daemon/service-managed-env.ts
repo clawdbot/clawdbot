@@ -114,11 +114,17 @@ export function writeManagedServiceEnvKeysToEnvironment(
   environment[MANAGED_SERVICE_ENV_KEYS_VAR] = value;
 }
 
-function readEnvironmentValueSource(
-  command: ServiceEnvCommand,
-  normalizedKey: string,
+export function readEnvironmentValueSource(
+  environmentValueSources:
+    | Record<string, GatewayServiceEnvironmentValueSource | undefined>
+    | undefined,
+  key: string,
 ): GatewayServiceEnvironmentValueSource | undefined {
-  for (const [rawKey, source] of Object.entries(command?.environmentValueSources ?? {})) {
+  const normalizedKey = normalizeServiceEnvKey(key);
+  if (!normalizedKey) {
+    return undefined;
+  }
+  for (const [rawKey, source] of Object.entries(environmentValueSources ?? {})) {
     if (normalizeServiceEnvKey(rawKey) === normalizedKey) {
       return source;
     }
@@ -155,7 +161,11 @@ export function collectInlineManagedServiceEnvKeys(
     if (normalized === MANAGED_SERVICE_ENV_KEYS_VAR) {
       continue;
     }
-    if (!hasInlineEnvironmentSource(readEnvironmentValueSource(command, normalized))) {
+    if (
+      !hasInlineEnvironmentSource(
+        readEnvironmentValueSource(command.environmentValueSources, normalized),
+      )
+    ) {
       continue;
     }
     // Only inline/file-overlap sources can be repaired from the service command

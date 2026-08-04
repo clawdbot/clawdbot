@@ -24,8 +24,11 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   assertOkOrThrowProviderError,
+  createProviderOperationDeadline,
   readProviderJsonResponse,
   readProviderTextResponse,
+  resolveProviderOperationTimeoutMs,
+  waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenAiEmbeddingClient } from "./embedding-provider.js";
@@ -90,11 +93,13 @@ async function submitOpenAiBatch(params: {
 async function fetchOpenAiBatchStatus(params: {
   openAi: OpenAiEmbeddingClient;
   batchId: string;
+  signal?: AbortSignal;
 }): Promise<OpenAiBatchStatus> {
   return await fetchOpenAiBatchResource({
     openAi: params.openAi,
     path: `/batches/${params.batchId}`,
     label: "openai.batch-status",
+    signal: params.signal,
     parse: async (res) => readProviderJsonResponse<OpenAiBatchStatus>(res, "openai.batch-status"),
   });
 }
@@ -134,6 +139,7 @@ async function fetchOpenAiBatchResource<T>(params: {
   openAi: OpenAiEmbeddingClient;
   path: string;
   label: string;
+  signal?: AbortSignal;
   parse: (res: Response) => Promise<T>;
 }): Promise<T> {
   const baseUrl = normalizeBatchBaseUrl(params.openAi);
@@ -141,6 +147,7 @@ async function fetchOpenAiBatchResource<T>(params: {
     url: `${baseUrl}${params.path}`,
     ssrfPolicy: params.openAi.ssrfPolicy,
     fetchImpl: params.openAi.fetchImpl,
+    signal: params.signal,
     init: {
       headers: buildBatchHeaders(params.openAi, { json: true }),
     },
@@ -256,34 +263,52 @@ async function waitForOpenAiBatch(params: {
   debug?: (message: string, data?: Record<string, unknown>) => void;
   initial?: OpenAiBatchStatus;
 }): Promise<BatchCompletionResult> {
-  const start = Date.now();
+  const deadline = createProviderOperationDeadline({
+    label: `openai batch ${params.batchId}`,
+    timeoutMs: params.timeoutMs,
+  });
   const pollBackoff = createOpenAiBatchPollBackoff(params);
   let current: OpenAiBatchStatus | undefined = params.initial;
   while (true) {
     let status: OpenAiBatchStatus;
+    let statusSignal: AbortSignal | undefined;
     try {
-      status =
-        current ??
-        (await fetchOpenAiBatchStatus({
+      if (current) {
+        status = current;
+      } else {
+        statusSignal = AbortSignal.timeout(
+          resolveProviderOperationTimeoutMs({
+            deadline,
+            defaultTimeoutMs: params.timeoutMs,
+          }),
+        );
+        status = await fetchOpenAiBatchStatus({
           openAi: params.openAi,
           batchId: params.batchId,
-        }));
-    } catch (error) {
-      if (!params.wait || !isRetryableOpenAiBatchPollError(error)) {
-        throw error;
+          signal: statusSignal,
+        });
       }
-      if (Date.now() - start > params.timeoutMs) {
+    } catch (error) {
+      if (statusSignal?.aborted) {
         throw new Error(`openai batch ${params.batchId} timed out after ${params.timeoutMs}ms`, {
           cause: error,
         });
       }
+      if (!params.wait || !isRetryableOpenAiBatchPollError(error)) {
+        throw error;
+      }
       const delayMs = pollBackoff.nextDelayMs();
       params.debug?.(
-        `openai batch ${params.batchId} status check failed: ${formatOpenAiBatchDiagnostic(error)}; waiting ${delayMs}ms`,
+        `openai batch ${params.batchId} status check failed: ${formatOpenAiBatchDiagnostic(error)}; waiting up to ${delayMs}ms`,
       );
-      await new Promise((resolve) => {
-        setTimeout(resolve, delayMs);
-      });
+      try {
+        await waitProviderOperationPollInterval({ deadline, pollIntervalMs: delayMs });
+        resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: params.timeoutMs });
+      } catch {
+        throw new Error(`openai batch ${params.batchId} timed out after ${params.timeoutMs}ms`, {
+          cause: error,
+        });
+      }
       current = undefined;
       continue;
     }
@@ -316,18 +341,14 @@ async function waitForOpenAiBatch(params: {
     if (!params.wait) {
       throw new Error(`openai batch ${params.batchId} still ${state}; wait disabled`);
     }
-    if (Date.now() - start > params.timeoutMs) {
-      throw new Error(`openai batch ${params.batchId} timed out after ${params.timeoutMs}ms`);
-    }
     const delayMs = pollBackoff.nextDelayMs();
     params.debug?.(
       `openai batch ${params.batchId} ${state}${formatOpenAiBatchProgress(
         status,
-      )}; waiting ${delayMs}ms`,
+      )}; waiting up to ${delayMs}ms`,
     );
-    await new Promise((resolve) => {
-      setTimeout(resolve, delayMs);
-    });
+    await waitProviderOperationPollInterval({ deadline, pollIntervalMs: delayMs });
+    resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: params.timeoutMs });
     current = undefined;
   }
 }

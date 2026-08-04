@@ -194,6 +194,16 @@ internal class ChatComposerStateStore(
       }
     }
 
+  fun replaceAttachments(
+    owner: ChatComposerOwner,
+    candidates: List<PendingAttachment>,
+  ) {
+    synchronized(lock) {
+      val omitted = attachmentStore.replace(owner, candidates)
+      recordAttachmentOmissionLocked(owner, omitted, ChatComposerAttachmentNotice.Image)
+    }
+  }
+
   fun addAuthorizedAttachments(
     owner: ChatComposerOwner,
     mediaAuthorizationId: String,

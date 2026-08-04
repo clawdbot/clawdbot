@@ -78,7 +78,8 @@ function buildSearxngSearchUrl(params: {
   language?: string;
 }): string {
   const url = new URL(params.baseUrl);
-  const pathname = url.pathname.endsWith("/") ? `${url.pathname}search` : `${url.pathname}/search`;
+  const basePathname = url.pathname.replace(/\/+$/u, "");
+  const pathname = basePathname.endsWith("/search") ? basePathname : `${basePathname}/search`;
   url.pathname = pathname;
   url.search = "";
   url.searchParams.set("q", params.query);

@@ -11,13 +11,21 @@ import {
 } from "../../test/helpers/openclaw-test-instance.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { connectGatewayClient } from "../gateway/test-helpers.e2e.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import { GatewayChatClient } from "./gateway-chat.js";
+import {
+  cleanupStartedFixture,
+  createFreshSession,
+  lastOutputIndexAfter,
+  waitForOutputAfter,
+} from "./tui-pty-local-test-support.js";
 import { sleep, startPty, waitFor, type PtyRun } from "./tui-pty-test-support.js";
 
 type MockModelServer = {
   baseUrl: string;
   requests: (modelId?: string) => MockModelRequest[];
+  rejectedRequests: () => MockModelRequest[];
   releaseFirstResponse: (modelId: string) => void;
   stop: () => Promise<void>;
 };
@@ -41,6 +49,8 @@ type GatewayScenario = MockModelBehavior & {
   toolsProfile: "minimal" | "coding";
 };
 
+const SHARED_GATEWAY_AGENT_ID = "tui-pty-gateway";
+
 const GATEWAY_SCENARIOS = {
   validation: {
     agentId: "tui-pty-validation",
@@ -51,16 +61,16 @@ const GATEWAY_SCENARIOS = {
     followupReplyText: "FOLLOWUP_RUN_COMPLETE",
     invalidEditLoop: true,
   },
-  newSession: {
-    agentId: "tui-pty-new-session",
-    modelId: "tui-pty-new-session",
+  crossClient: {
+    agentId: SHARED_GATEWAY_AGENT_ID,
+    modelId: "tui-pty-cross-client",
     toolsProfile: "minimal",
     replyText: "FIRST_RUN_ACTIVE",
     holdFirstResponse: false,
     followupReplyText: "FOLLOWUP_RUN_COMPLETE",
   },
   followup: {
-    agentId: "tui-pty-followup",
+    agentId: SHARED_GATEWAY_AGENT_ID,
     modelId: "tui-pty-followup",
     toolsProfile: "minimal",
     replyText: "FIRST_RUN_ACTIVE",
@@ -68,7 +78,7 @@ const GATEWAY_SCENARIOS = {
     followupReplyText: "FOLLOWUP_RUN_COMPLETE",
   },
   emptyReply: {
-    agentId: "tui-pty-empty-reply",
+    agentId: SHARED_GATEWAY_AGENT_ID,
     modelId: "tui-pty-empty-reply",
     toolsProfile: "minimal",
     replyText: "[[reply_to_current]]",
@@ -76,7 +86,7 @@ const GATEWAY_SCENARIOS = {
     followupReplyText: "FOLLOWUP_RUN_COMPLETE",
   },
   cancel: {
-    agentId: "tui-pty-cancel",
+    agentId: SHARED_GATEWAY_AGENT_ID,
     modelId: "tui-pty-cancel",
     toolsProfile: "minimal",
     replyText: "FIRST_RUN_ACTIVE",
@@ -84,7 +94,7 @@ const GATEWAY_SCENARIOS = {
     followupReplyText: "FOLLOWUP_RUN_COMPLETE",
   },
   collect: {
-    agentId: "tui-pty-collect",
+    agentId: SHARED_GATEWAY_AGENT_ID,
     modelId: "tui-pty-collect",
     toolsProfile: "minimal",
     replyText: "FIRST_RUN_ACTIVE",
@@ -92,7 +102,7 @@ const GATEWAY_SCENARIOS = {
     followupReplyText: "FOLLOWUP_RUN_COMPLETE",
   },
   reconnect: {
-    agentId: "tui-pty-reconnect",
+    agentId: SHARED_GATEWAY_AGENT_ID,
     modelId: "tui-pty-reconnect",
     toolsProfile: "minimal",
     replyText: "RECONNECTED_RUN_COMPLETE",
@@ -106,7 +116,30 @@ const LOCAL_OUTPUT_TIMEOUT_MS = 120_000;
 const LOCAL_EXIT_TIMEOUT_MS = 4_000;
 const LOCAL_TEST_TIMEOUT_MS = 150_000;
 const SUBMISSION_SETTLE_MS = 150;
-const SESSION_ROLLOVER_BUSY_MESSAGE = "abort the current run before /new";
+
+function isRetryableGatewayUnavailable(error: unknown): error is Error & {
+  retryAfterMs?: number;
+} {
+  return (
+    error instanceof Error &&
+    (error as { gatewayCode?: unknown }).gatewayCode === "UNAVAILABLE" &&
+    (error as { retryable?: unknown }).retryable === true
+  );
+}
+
+async function requestWithUnavailableRetry<T>(request: () => Promise<T>): Promise<T> {
+  const deadline = Date.now() + LOCAL_STARTUP_TIMEOUT_MS;
+  while (true) {
+    try {
+      return await request();
+    } catch (error) {
+      if (!isRetryableGatewayUnavailable(error) || Date.now() >= deadline) {
+        throw error;
+      }
+      await sleep(Math.max(25, Math.min(error.retryAfterMs ?? 25, 1_000)));
+    }
+  }
+}
 
 function createIdempotentCleanup(cleanup: () => Promise<void>) {
   let cleanupPromise: Promise<void> | undefined;
@@ -114,51 +147,6 @@ function createIdempotentCleanup(cleanup: () => Promise<void>) {
 }
 
 type CleanupRegistrar = (cleanup: () => Promise<void>) => void;
-
-async function waitForOutputAfter(run: PtyRun, needle: string, offset: number) {
-  await waitFor({
-    timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
-    read: () => (run.output().slice(offset).includes(needle) ? true : null),
-    onTimeout: () =>
-      new Error(
-        `timed out waiting for ${JSON.stringify(needle)} after offset ${offset}\n${run.output()}`,
-      ),
-  });
-}
-
-async function createFreshSession(run: PtyRun, newSessionPrefix: string) {
-  const deadline = Date.now() + LOCAL_STARTUP_TIMEOUT_MS;
-  let attempts = 0;
-  let outputOffset = run.output().length;
-  while (Date.now() < deadline) {
-    attempts += 1;
-    await run.write("/new\r", { delay: false });
-    const outcome = await waitFor({
-      timeoutMs: Math.max(1, deadline - Date.now()),
-      read: () => {
-        const output = run.output();
-        if (output.includes(newSessionPrefix, outputOffset)) {
-          return "created";
-        }
-        return output.includes(SESSION_ROLLOVER_BUSY_MESSAGE, outputOffset) ? "busy" : null;
-      },
-      onTimeout: () =>
-        new Error(`timed out creating a fresh session after ${attempts} attempts\n${run.output()}`),
-    });
-    if (outcome === "created") {
-      return;
-    }
-
-    // Redraws can repeat an old rejection after this attempt's offset. Keep
-    // watching that attempt through settle so an accepted /new is not retried.
-    await sleep(SUBMISSION_SETTLE_MS);
-    if (run.output().includes(newSessionPrefix, outputOffset)) {
-      return;
-    }
-    outputOffset = run.output().length;
-  }
-  throw new Error(`timed out creating a fresh session after ${attempts} attempts\n${run.output()}`);
-}
 
 async function readRequestBody(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
@@ -295,6 +283,7 @@ async function startRoutedMockModelServer(
   behaviors: Readonly<Record<string, MockModelBehavior>>,
 ): Promise<MockModelServer> {
   const requests: MockModelRequest[] = [];
+  const rejectedRequests: MockModelRequest[] = [];
   const requestsByModel = new Map<string, MockModelRequest[]>();
   const firstResponseGates = new Map(
     Object.entries(behaviors)
@@ -310,7 +299,10 @@ async function startRoutedMockModelServer(
       }
       if (req.method === "GET" && url.pathname === "/v1/models") {
         writeJson(res, 200, {
-          data: Object.keys(behaviors).map((id) => ({ id, object: "model" })),
+          data: Object.keys(behaviors).map((id) => ({
+            id,
+            object: "model",
+          })),
         });
         return;
       }
@@ -318,8 +310,10 @@ async function startRoutedMockModelServer(
         const body = await readJsonRequest(req);
         if (url.pathname === "/v1/responses" || url.pathname === "/responses") {
           const modelId = typeof body.model === "string" ? body.model : "";
+          const request = { method: req.method, path: url.pathname, body };
           const behavior = behaviors[modelId];
           if (!behavior) {
+            rejectedRequests.push(request);
             writeJson(res, 400, { error: `unknown mock model: ${modelId || "missing"}` });
             return;
           }
@@ -328,7 +322,6 @@ async function startRoutedMockModelServer(
             requestsByModel.set(modelId, modelRequests);
           }
           const requestIndex = modelRequests.length;
-          const request = { method: req.method, path: url.pathname, body };
           requests.push(request);
           modelRequests.push(request);
           if (behavior.invalidEditLoop) {
@@ -362,6 +355,7 @@ async function startRoutedMockModelServer(
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     requests: (modelId) => (modelId ? (requestsByModel.get(modelId) ?? []) : requests),
+    rejectedRequests: () => rejectedRequests,
     releaseFirstResponse: (modelId) => {
       firstResponseGates.get(modelId)?.resolve();
     },
@@ -404,45 +398,11 @@ function buildTuiCliScript(args: string[]) {
   ].join("\n");
 }
 
-function buildLocalValidationTuiScript() {
-  const agentEventsModuleUrl = pathToFileURL(
-    path.join(process.cwd(), "src/infra/agent-events.ts"),
-  ).href;
-  const embeddedBackendModuleUrl = pathToFileURL(
-    path.join(process.cwd(), "src/tui/embedded-backend.ts"),
-  ).href;
-  const tuiModuleUrl = pathToFileURL(path.join(process.cwd(), "src/tui/tui.ts")).href;
-  // A PTY-side abort can race the validation retry into another provider turn.
-  // Abort through the real local backend after its listener records the second
-  // tool error; the Gateway case below still covers keyboard-driven aborts.
-  return [
-    `import { onAgentEvent } from ${JSON.stringify(agentEventsModuleUrl)};`,
-    `import { EmbeddedTuiBackend } from ${JSON.stringify(embeddedBackendModuleUrl)};`,
-    `import { runTui } from ${JSON.stringify(tuiModuleUrl)};`,
-    `const backend = new EmbeddedTuiBackend();`,
-    `const sessionKey = "agent:main:main";`,
-    `let validationErrorCount = 0;`,
-    `onAgentEvent((event) => {`,
-    `  if (event.stream !== "tool" || event.data?.phase !== "result" || typeof event.data?.toolErrorSummary !== "string") return;`,
-    `  validationErrorCount += 1;`,
-    `  if (validationErrorCount !== 2) return;`,
-    `  queueMicrotask(() => {`,
-    `    void backend.abortChat({ sessionKey }).then((result) => {`,
-    `      if (!result.aborted) {`,
-    `        console.error("local validation test failed to abort its active run");`,
-    `        process.exit(1);`,
-    `      }`,
-    `    }).catch((error) => {`,
-    `      console.error(error);`,
-    `      process.exit(1);`,
-    `    });`,
-    `  });`,
-    `});`,
-    `runTui({ local: true, backend, session: sessionKey, deliver: false, historyLimit: 200, forceProcessExitOnReturn: true }).catch((error) => {`,
-    `  console.error(error);`,
-    `  process.exit(1);`,
-    `});`,
-  ].join("\n");
+function buildTuiProcessArgs(args: string[]) {
+  if (process.env.OPENCLAW_TUI_PTY_USE_BUILT_CLI === "1") {
+    return [path.join(process.cwd(), "openclaw.mjs"), ...args];
+  }
+  return ["--import", "tsx", "--eval", buildTuiCliScript(args)];
 }
 
 function buildMockModelProvider(baseUrl: string, modelIds: string[]): ModelProviderConfig {
@@ -486,14 +446,13 @@ function buildLocalModeConfig(params: {
         skills: [],
         skipBootstrap: true,
       },
-      list: [
-        {
-          id: "main",
+      entries: {
+        main: {
           default: true,
           skills: [],
           model: { primary: "tui-pty-mock/gpt-5.5" },
         },
-      ],
+      },
     },
     tools: {
       profile: params.toolsProfile ?? "minimal",
@@ -512,15 +471,39 @@ function buildLocalModeConfig(params: {
   } satisfies OpenClawConfig;
 }
 
+async function cleanupLocalModeResources(params: {
+  run?: PtyRun;
+  mockModel: MockModelServer;
+  tempDir: string;
+}) {
+  const settled = await Promise.allSettled([
+    ...(params.run ? [params.run.dispose()] : []),
+    params.mockModel.stop(),
+  ]);
+  const failures = settled.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  try {
+    await rm(params.tempDir, { recursive: true, force: true });
+  } catch (error) {
+    failures.push(error);
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "local TUI PTY fixture cleanup failed");
+  }
+}
+
 async function startLocalModeTui(
   registerCleanup: CleanupRegistrar,
   opts: {
+    cliArgs?: string[];
     invalidEditLoop?: boolean;
     holdFirstResponse?: boolean;
     followupReplyText?: string;
+    replyText?: string;
   } = {},
 ) {
-  const replyText = "LOCAL_PTY_RESPONSE";
+  const replyText = opts.replyText ?? "LOCAL_PTY_RESPONSE";
   const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-local-"));
   const workspaceDir = path.join(tempDir, "workspace");
   const homeDir = path.join(tempDir, "home");
@@ -539,41 +522,61 @@ async function startLocalModeTui(
     providerBaseUrl: mockModel.baseUrl,
     toolsProfile: opts.invalidEditLoop ? "coding" : "minimal",
   });
-  const script = opts.invalidEditLoop
-    ? buildLocalValidationTuiScript()
-    : buildTuiCliScript(["tui", "--local"]);
-  await Promise.all([
-    mkdir(workspaceDir, { recursive: true }),
-    mkdir(homeDir, { recursive: true }),
-    mkdir(stateDir, { recursive: true }),
-    mkdir(xdgConfigHome, { recursive: true }),
-    mkdir(xdgDataHome, { recursive: true }),
-    mkdir(xdgCacheHome, { recursive: true }),
-    writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8"),
-  ]);
+  let run: PtyRun;
+  try {
+    await Promise.all([
+      mkdir(workspaceDir, { recursive: true }),
+      mkdir(homeDir, { recursive: true }),
+      mkdir(stateDir, { recursive: true }),
+      mkdir(xdgConfigHome, { recursive: true }),
+      mkdir(xdgDataHome, { recursive: true }),
+      mkdir(xdgCacheHome, { recursive: true }),
+      writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8"),
+    ]);
 
-  const run = startPty(process.execPath, ["--import", "tsx", "--eval", script], {
-    cwd: process.cwd(),
-    env: {
-      HOME: homeDir,
-      OPENCLAW_HOME: homeDir,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_STATE_DIR: stateDir,
-      XDG_CONFIG_HOME: xdgConfigHome,
-      XDG_DATA_HOME: xdgDataHome,
-      XDG_CACHE_HOME: xdgCacheHome,
-      OPENCLAW_THEME: "dark",
-      OPENCLAW_CODEX_DISCOVERY_LIVE: "0",
-      NO_COLOR: undefined,
-    },
-    exitTimeoutMs: LOCAL_EXIT_TIMEOUT_MS,
-    outputTimeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
-  });
+    run = startPty(process.execPath, buildTuiProcessArgs(opts.cliArgs ?? ["tui", "--local"]), {
+      cwd: process.cwd(),
+      env: {
+        HOME: homeDir,
+        OPENCLAW_HOME: homeDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "500",
+        OPENCLAW_AGENT_DIR: undefined,
+        OPENCLAW_SKIP_PROVIDERS: undefined,
+        XDG_CONFIG_HOME: xdgConfigHome,
+        XDG_DATA_HOME: xdgDataHome,
+        XDG_CACHE_HOME: xdgCacheHome,
+        OPENCLAW_THEME: "dark",
+        OPENCLAW_CODEX_DISCOVERY_LIVE: "0",
+        NO_COLOR: undefined,
+      },
+      exitTimeoutMs: LOCAL_EXIT_TIMEOUT_MS,
+      outputTimeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+    });
+  } catch (error) {
+    let cleanupFailure: unknown;
+    try {
+      await cleanupLocalModeResources({ mockModel, tempDir });
+    } catch (cleanupError) {
+      cleanupFailure = cleanupError;
+    }
+    if (cleanupFailure !== undefined) {
+      const cleanupDetail =
+        cleanupFailure instanceof Error
+          ? cleanupFailure.message
+          : typeof cleanupFailure === "string"
+            ? cleanupFailure
+            : "unknown cleanup error";
+      throw new Error(`local TUI PTY fixture cleanup failed: ${cleanupDetail}`, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
 
   const cleanup = createIdempotentCleanup(async () => {
-    await run.dispose();
-    await mockModel.stop();
-    await rm(tempDir, { recursive: true, force: true });
+    await cleanupLocalModeResources({ run, mockModel, tempDir });
   });
   registerCleanup(cleanup);
   return {
@@ -588,19 +591,20 @@ type SharedGatewayFixture = {
   gateway: OpenClawTestInstance;
   controlClient: GatewayChatClient;
   mockModel: MockModelServer;
+  run: PtyRun;
   cleanup: () => Promise<void>;
 };
 
-type SharedGatewayFixtureStartup = {
-  promise: Promise<SharedGatewayFixture>;
-  failureReported: boolean;
-};
-
-let sharedGatewayFixtureStartup: SharedGatewayFixtureStartup | undefined;
+let sharedGatewayFixtureStartup: Promise<SharedGatewayFixture> | undefined;
 let gatewaySessionSequence = 0;
 
 function buildGatewayModeConfig(params: { tempDir: string; providerBaseUrl: string }) {
   const scenarios: GatewayScenario[] = Object.values(GATEWAY_SCENARIOS);
+  // One minimal agent keeps provider/runtime initialization warm; unique
+  // sessions and per-session models retain each scenario's state boundary.
+  const agentScenarios = [
+    ...new Map(scenarios.map((scenario) => [scenario.agentId, scenario])).values(),
+  ];
   const defaultScenario = GATEWAY_SCENARIOS.validation;
   const defaultModelRef = `tui-pty-mock/${defaultScenario.modelId}`;
   const modelRefs = scenarios.map((scenario) => `tui-pty-mock/${scenario.modelId}`);
@@ -620,14 +624,18 @@ function buildGatewayModeConfig(params: { tempDir: string; providerBaseUrl: stri
         skills: [],
         skipBootstrap: true,
       },
-      list: scenarios.map((scenario, index) => ({
-        id: scenario.agentId,
-        ...(index === 0 ? { default: true } : {}),
-        workspace: path.join(params.tempDir, scenario.agentId),
-        skills: [],
-        model: { primary: `tui-pty-mock/${scenario.modelId}` },
-        tools: { profile: scenario.toolsProfile },
-      })),
+      entries: Object.fromEntries(
+        agentScenarios.map((scenario, index) => [
+          scenario.agentId,
+          {
+            ...(index === 0 ? { default: true } : {}),
+            workspace: path.join(params.tempDir, scenario.agentId),
+            skills: [],
+            model: { primary: `tui-pty-mock/${scenario.modelId}` },
+            tools: { profile: scenario.toolsProfile },
+          },
+        ]),
+      ),
     },
     models: {
       mode: "replace",
@@ -651,10 +659,13 @@ async function startSharedGatewayFixture(): Promise<SharedGatewayFixture> {
   let mockModel: MockModelServer | undefined;
   let gateway: OpenClawTestInstance | undefined;
   let controlClient: GatewayChatClient | undefined;
+  let run: PtyRun | undefined;
   try {
     const scenarios: GatewayScenario[] = Object.values(GATEWAY_SCENARIOS);
     await Promise.all(
-      scenarios.map((scenario) => mkdir(path.join(tempDir, scenario.agentId), { recursive: true })),
+      [...new Set(scenarios.map((scenario) => scenario.agentId))].map((agentId) =>
+        mkdir(path.join(tempDir, agentId), { recursive: true }),
+      ),
     );
     mockModel = await startRoutedMockModelServer(
       Object.fromEntries(
@@ -696,18 +707,56 @@ async function startSharedGatewayFixture(): Promise<SharedGatewayFixture> {
       onTimeout: () => new Error("shared Gateway control client did not connect"),
     });
 
+    const initialScenario = GATEWAY_SCENARIOS.validation;
+    const initialSessionKey = `agent:${initialScenario.agentId}:tui-pty-shared`;
+    await controlClient.createSession({
+      key: initialSessionKey,
+      agentId: initialScenario.agentId,
+    });
+    run = startPty(
+      process.execPath,
+      buildTuiProcessArgs([
+        "tui",
+        "--url",
+        gateway.url,
+        "--token",
+        gateway.gatewayToken,
+        "--session",
+        initialSessionKey,
+      ]),
+      {
+        cwd: process.cwd(),
+        env: {
+          ...gateway.env,
+          OPENCLAW_THEME: "dark",
+          NO_COLOR: undefined,
+        },
+        exitTimeoutMs: LOCAL_EXIT_TIMEOUT_MS,
+        outputTimeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+      },
+    );
+    await run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
+
     const fixtureGateway = gateway;
     const fixtureMockModel = mockModel;
     const fixtureControlClient = controlClient;
+    const fixtureRun = run;
     const cleanup = createIdempotentCleanup(async () => {
-      await fixtureControlClient.stop();
       try {
-        await fixtureGateway.cleanup();
+        await fixtureRun.dispose();
       } finally {
         try {
-          await fixtureMockModel.stop();
+          await fixtureControlClient.stop();
         } finally {
-          await rm(tempDir, { recursive: true, force: true });
+          try {
+            await fixtureGateway.cleanup();
+          } finally {
+            try {
+              await fixtureMockModel.stop();
+            } finally {
+              await rm(tempDir, { recursive: true, force: true });
+            }
+          }
         }
       }
     });
@@ -715,17 +764,25 @@ async function startSharedGatewayFixture(): Promise<SharedGatewayFixture> {
       gateway: fixtureGateway,
       controlClient: fixtureControlClient,
       mockModel: fixtureMockModel,
+      run: fixtureRun,
       cleanup,
     };
   } catch (error) {
-    await controlClient?.stop();
     try {
-      await gateway?.cleanup();
+      await run?.dispose();
     } finally {
       try {
-        await mockModel?.stop();
+        await controlClient?.stop();
       } finally {
-        await rm(tempDir, { recursive: true, force: true });
+        try {
+          await gateway?.cleanup();
+        } finally {
+          try {
+            await mockModel?.stop();
+          } finally {
+            await rm(tempDir, { recursive: true, force: true });
+          }
+        }
       }
     }
     throw error;
@@ -733,16 +790,10 @@ async function startSharedGatewayFixture(): Promise<SharedGatewayFixture> {
 }
 
 async function requireSharedGatewayFixture(): Promise<SharedGatewayFixture> {
-  const startup = sharedGatewayFixtureStartup;
-  if (!startup) {
+  if (!sharedGatewayFixtureStartup) {
     throw new Error("shared Gateway fixture startup was not initialized");
   }
-  try {
-    return await startup.promise;
-  } catch (error) {
-    startup.failureReported = true;
-    throw error;
-  }
+  return await sharedGatewayFixtureStartup;
 }
 
 async function startGatewayModeTui(
@@ -752,30 +803,22 @@ async function startGatewayModeTui(
   const shared = await requireSharedGatewayFixture();
   const scenario = GATEWAY_SCENARIOS[scenarioId];
   const requestOffset = shared.mockModel.requests(scenario.modelId).length;
+  const rejectedRequestOffset = shared.mockModel.rejectedRequests().length;
   const sessionKey = `agent:${scenario.agentId}:tui-pty-${++gatewaySessionSequence}`;
   const sessionKeys = new Set([sessionKey]);
-  const script = buildTuiCliScript([
-    "tui",
-    "--url",
-    shared.gateway.url,
-    "--token",
-    shared.gateway.gatewayToken,
-    "--session",
-    sessionKey,
-  ]);
-  const run = startPty(process.execPath, ["--import", "tsx", "--eval", script], {
-    cwd: process.cwd(),
-    env: {
-      ...shared.gateway.env,
-      OPENCLAW_THEME: "dark",
-      NO_COLOR: undefined,
-    },
-    exitTimeoutMs: LOCAL_EXIT_TIMEOUT_MS,
-    outputTimeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+  await shared.controlClient.createSession({ key: sessionKey, agentId: scenario.agentId });
+  await shared.controlClient.patchSession({
+    key: sessionKey,
+    agentId: scenario.agentId,
+    model: `tui-pty-mock/${scenario.modelId}`,
   });
+  const run = shared.run;
+  const outputOffset = run.visibleOutput().length;
+  // Session adoption is the per-case isolation boundary for the shared PTY.
+  await run.write(`/session ${sessionKey}\r`, { delay: false });
+  await waitForOutputAfter(run, `session ${sessionKey.split(":").at(-1)}`, outputOffset);
   const cleanup = createIdempotentCleanup(async () => {
     shared.mockModel.releaseFirstResponse(scenario.modelId);
-    await run.dispose();
     for (const key of sessionKeys) {
       await shared.controlClient.abortChat({ sessionKey: key });
     }
@@ -787,53 +830,119 @@ async function startGatewayModeTui(
     gateway: shared.gateway,
     mockModel: {
       requests: () => shared.mockModel.requests(scenario.modelId).slice(requestOffset),
+      rejectedRequests: () => shared.mockModel.rejectedRequests().slice(rejectedRequestOffset),
       releaseFirstResponse: () => shared.mockModel.releaseFirstResponse(scenario.modelId),
     },
     agentId: scenario.agentId,
     sessionKey,
+    outputOffset,
+    waitForOutput: async (needle: string, timeoutMs = LOCAL_OUTPUT_TIMEOUT_MS) =>
+      await waitForOutputAfter(run, needle, outputOffset, timeoutMs),
+    visibleOutput: () => run.visibleOutput().slice(outputOffset),
+    lastOutputIndex: (needle: string) => lastOutputIndexAfter(run, needle, outputOffset),
     trackSessionKey: (key: string) => sessionKeys.add(key),
     cleanup,
   };
 }
 
-// Gateway cases share one real server but keep isolated PTYs, models, and sessions.
-// Keep them serial so constrained release runners avoid host contention.
+// Gateway cases share one real server and PTY but keep isolated models and sessions.
+// Per-case abort cleanup and serial order prevent active-run or queue state leaks.
 describe("TUI PTY real backends", () => {
-  beforeAll(() => {
-    const promise = startSharedGatewayFixture();
-    sharedGatewayFixtureStartup = { promise, failureReported: false };
-    // Local cases run while startup continues. Mark an early rejection handled;
-    // the Gateway setup hook awaits the original promise and reports the failure.
-    void promise.catch(() => undefined);
-  });
-
-  afterAll(async () => {
-    const startup = sharedGatewayFixtureStartup;
-    try {
-      if (!startup) {
-        return;
-      }
-      let fixture: SharedGatewayFixture;
-      try {
-        fixture = await startup.promise;
-      } catch (error) {
-        // A filtered local-only run has no Gateway hook to surface startup failure.
-        // Preserve the old beforeAll contract without duplicating an existing failure.
-        if (!startup.failureReported) {
-          throw error;
+  for (const alias of ["chat", "terminal"] as const) {
+    it(
+      `launches openclaw ${alias} as local mode through a real PTY`,
+      async ({ onTestFinished }) => {
+        const replyText = `${alias.toUpperCase()}_ALIAS_RESPONSE`;
+        const prompt = `message through ${alias} alias`;
+        const fixture = await startLocalModeTui(onTestFinished, {
+          cliArgs: [alias],
+          replyText,
+        });
+        try {
+          await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
+          await fixture.run.write(`${prompt}\r`);
+          await waitFor({
+            timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+            read: () => (fixture.mockModel.requests().length === 1 ? true : null),
+            onTimeout: () =>
+              new Error(`${alias} alias did not reach the model\n${fixture.run.output()}`),
+          });
+          expect(JSON.stringify(fixture.mockModel.requests()[0]?.body)).toContain(prompt);
+          await fixture.run.waitForOutput(replyText, LOCAL_OUTPUT_TIMEOUT_MS);
+          await fixture.run.write("/exit\r", { delay: false });
+          expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+        } finally {
+          await fixture.cleanup();
         }
-        return;
-      }
-      await fixture.cleanup();
-    } finally {
-      sharedGatewayFixtureStartup = undefined;
-    }
-  }, LOCAL_TEST_TIMEOUT_MS);
+      },
+      LOCAL_TEST_TIMEOUT_MS,
+    );
+  }
 
   it(
-    "drives the real local backend with a mocked model endpoint",
+    "sends the initial message supplied to openclaw tui through a real local PTY",
     async ({ onTestFinished }) => {
-      const fixture = await startLocalModeTui(onTestFinished);
+      const initialMessage = "initial message from CLI launch";
+      const replyText = "INITIAL_MESSAGE_RESPONSE";
+      const fixture = await startLocalModeTui(onTestFinished, {
+        cliArgs: ["tui", "--local", "--message", initialMessage],
+        replyText,
+      });
+      try {
+        await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (fixture.mockModel.requests().length === 1 ? true : null),
+          onTimeout: () =>
+            new Error(`initial message did not reach the model\n${fixture.run.output()}`),
+        });
+        expect(JSON.stringify(fixture.mockModel.requests()[0]?.body)).toContain(initialMessage);
+        await fixture.run.waitForOutput(replyText, LOCAL_OUTPUT_TIMEOUT_MS);
+        await fixture.run.write("/exit\r", { delay: false });
+        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "rejects Gateway options on a local TUI alias through a real PTY",
+    async ({ onTestFinished }) => {
+      const run = startPty(
+        process.execPath,
+        buildTuiProcessArgs(["chat", "--url", "ws://127.0.0.1:1"]),
+        {
+          cwd: process.cwd(),
+          env: {
+            OPENCLAW_THEME: "dark",
+            NO_COLOR: undefined,
+          },
+          exitTimeoutMs: LOCAL_EXIT_TIMEOUT_MS,
+          outputTimeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+        },
+      );
+      onTestFinished(async () => {
+        await run.dispose();
+      });
+
+      await run.waitForOutput(
+        "--local cannot be combined with --url, --token, --password, or --tls-fingerprint",
+        LOCAL_STARTUP_TIMEOUT_MS,
+      );
+      expect((await run.waitForExit()).exitCode).toBe(1);
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "drives and steers the real local backend with a mocked model endpoint",
+    async ({ onTestFinished }) => {
+      const fixture = await startLocalModeTui(onTestFinished, {
+        holdFirstResponse: true,
+        followupReplyText: "LOCAL_STEER_COMPLETE",
+      });
       try {
         await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
         for (const command of ["/status", "/compact", "/commands", "/context"]) {
@@ -843,13 +952,13 @@ describe("TUI PTY real backends", () => {
           );
         }
         await fixture.run.write("/side\r");
-        await fixture.run.waitForOutput("Usage: /btw [side question]");
+        await fixture.run.waitForOutput("Usage: /btw <side question>");
         expect(fixture.mockModel.requests()).toHaveLength(0);
 
-        await fixture.run.write("send the local PTY smoke response\r");
+        await fixture.run.write("slow local parent\r");
         await waitFor({
           timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
-          read: () => (fixture.mockModel.requests().length > 0 ? true : null),
+          read: () => (fixture.mockModel.requests().length === 1 ? true : null),
           onTimeout: () =>
             new Error(
               `mock model server did not receive a request\nrequests=${JSON.stringify(
@@ -862,48 +971,8 @@ describe("TUI PTY real backends", () => {
         const request = fixture.mockModel.requests()[0];
         expect(request?.path).toBe("/v1/responses");
         expect(request?.body.model).toBe("gpt-5.5");
-        await fixture.run.waitForOutput("LOCAL_PTY_RESPONSE");
 
-        await createFreshSession(fixture.run, "new session: agent:main:tui-");
-        await fixture.run.write("send after local new\r");
-        await waitFor({
-          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
-          read: () => (fixture.mockModel.requests().length === 2 ? true : null),
-          onTimeout: () =>
-            new Error(`post-/new prompt did not reach the model\n${fixture.run.output()}`),
-        });
-        expect(JSON.stringify(fixture.mockModel.requests()[1]?.body)).toContain(
-          "send after local new",
-        );
-
-        await fixture.run.write("/exit\r", { delay: false });
-        const exit = await fixture.run.waitForExit();
-        expect(exit.exitCode).toBe(0);
-      } finally {
-        await fixture.cleanup();
-      }
-    },
-    LOCAL_TEST_TIMEOUT_MS,
-  );
-
-  it(
-    "steers an active real local session in the same turn",
-    async ({ onTestFinished }) => {
-      const fixture = await startLocalModeTui(onTestFinished, {
-        holdFirstResponse: true,
-        followupReplyText: "LOCAL_STEER_COMPLETE",
-      });
-      try {
-        await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
-        await fixture.run.write("slow local parent\r");
-        await waitFor({
-          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
-          read: () => (fixture.mockModel.requests().length === 1 ? true : null),
-          onTimeout: () =>
-            new Error(`first prompt did not reach the model\n${fixture.run.output()}`),
-        });
-
-        const steerOffset = fixture.run.output().length;
+        const steerOffset = fixture.run.visibleOutput().length;
         await fixture.run.write("steer the active local turn\r");
         await waitForOutputAfter(fixture.run, "steer the active local turn", steerOffset);
         await sleep(SUBMISSION_SETTLE_MS);
@@ -933,11 +1002,30 @@ describe("TUI PTY real backends", () => {
               secondRequestHasDynamicPrompt: (
                 JSON.stringify(fixture.mockModel.requests()[1]?.body) ?? ""
               ).includes("steer the active local turn"),
-              renderedCompletion: fixture.run.output().includes("LOCAL_STEER_COMPLETE"),
+              renderedCompletion: fixture.run.visibleOutput().includes("LOCAL_STEER_COMPLETE"),
               secondPromptEchoedBeforeRelease: true,
             }),
           );
         }
+
+        const steerResponseOffset = fixture.run.visibleOutput().lastIndexOf("LOCAL_STEER_COMPLETE");
+        await waitForOutputAfter(fixture.run, "| idle", steerResponseOffset);
+        await createFreshSession(fixture.run, "new session: agent:main:tui-");
+        const freshResponseStart = fixture.run.visibleOutput().length;
+        await fixture.run.write("send after local new\r");
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (fixture.mockModel.requests().length === 3 ? true : null),
+          onTimeout: () =>
+            new Error(`post-/new prompt did not reach the model\n${fixture.run.output()}`),
+        });
+        const freshRequest = JSON.stringify(fixture.mockModel.requests()[2]?.body);
+        expect(freshRequest).toContain("send after local new");
+        expect(freshRequest).not.toContain("slow local parent");
+        expect(freshRequest).not.toContain("steer the active local turn");
+        await waitForOutputAfter(fixture.run, "LOCAL_STEER_COMPLETE", freshResponseStart);
+        const freshResponseOffset = fixture.run.visibleOutput().lastIndexOf("LOCAL_STEER_COMPLETE");
+        await waitForOutputAfter(fixture.run, "| idle", freshResponseOffset);
 
         await fixture.run.write("/exit\r", { delay: false });
         expect((await fixture.run.waitForExit()).exitCode).toBe(0);
@@ -982,16 +1070,19 @@ describe("TUI PTY real backends", () => {
             });
             await eventProbe.subscribeSessionEvents();
           }
-          await fixture.run.waitForOutput(
-            mode === "gateway" ? "gateway connected" : "local ready",
-            LOCAL_STARTUP_TIMEOUT_MS,
-          );
+          if (fixture.kind === "local") {
+            await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
+          }
           await fixture.run.write("trigger malformed edit calls\r");
           await waitFor({
             timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
             read: () => (fixture.mockModel.requests().length >= 2 ? true : null),
             onTimeout: () =>
-              new Error(`model did not repeat the malformed edit call\n${fixture.run.output()}`),
+              new Error(
+                `model did not repeat the malformed edit call\n` +
+                  `rejected model requests=${JSON.stringify(fixture.mockModel.rejectedRequests())}\n` +
+                  fixture.run.output(),
+              ),
           });
           if (eventProbe) {
             await waitFor({
@@ -1018,19 +1109,25 @@ describe("TUI PTY real backends", () => {
                 ),
             });
           }
-          if (mode === "gateway") {
-            await fixture.run.write("\u001b", { delay: false });
+          await fixture.run.write("\u001b", { delay: false });
+          if (fixture.kind === "gateway") {
+            await fixture.waitForOutput("run aborted: edit tool validation failed:");
+          } else {
+            await fixture.run.waitForOutput(
+              "run aborted: edit tool validation failed:",
+              LOCAL_OUTPUT_TIMEOUT_MS,
+            );
           }
-          await fixture.run.waitForOutput(
-            "run aborted: edit tool validation failed:",
-            LOCAL_OUTPUT_TIMEOUT_MS,
-          );
 
           expect(fixture.mockModel.requests().length).toBeGreaterThanOrEqual(2);
-          expect(fixture.run.output()).not.toContain("Received arguments");
+          const caseOutput =
+            fixture.kind === "gateway" ? fixture.visibleOutput() : fixture.run.visibleOutput();
+          expect(caseOutput).not.toContain("Received arguments");
 
-          await fixture.run.write("/exit\r", { delay: false });
-          expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+          if (fixture.kind === "local") {
+            await fixture.run.write("/exit\r", { delay: false });
+            expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+          }
         } finally {
           await eventProbe?.stop();
           await fixture.cleanup();
@@ -1039,8 +1136,6 @@ describe("TUI PTY real backends", () => {
       LOCAL_TEST_TIMEOUT_MS,
     );
   }
-
-  registerValidationLoopTest("local");
 
   // Register every Gateway case inside the nested suite so targeted runs retain
   // the fixture's separate startup timeout.
@@ -1057,20 +1152,24 @@ describe("TUI PTY real backends", () => {
       const fixture = await startGatewayModeTui("reconnect", onTestFinished);
       let gatewayStopped = false;
       try {
-        await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
-        const disconnectOffset = fixture.run.output().length;
+        const disconnectOffset = fixture.run.visibleOutput().length;
         await fixture.gateway.stopGateway();
         gatewayStopped = true;
         await waitForOutputAfter(fixture.run, "gateway disconnected", disconnectOffset);
 
         await fixture.run.write("send preserved draft after restart\r");
-        await fixture.run.waitForOutput("not connected to gateway — message not sent");
+        await fixture.waitForOutput("not connected to gateway — message not sent");
         expect(fixture.mockModel.requests()).toHaveLength(0);
 
-        const reconnectOffset = fixture.run.output().length;
+        const reconnectOffset = fixture.run.visibleOutput().length;
         await fixture.gateway.startGateway();
         gatewayStopped = false;
         await waitForOutputAfter(fixture.run, "gateway reconnected", reconnectOffset);
+        await waitForOutputAfter(
+          fixture.run,
+          "gateway reconnected after transport loss",
+          reconnectOffset,
+        );
         await fixture.run.write("\r", { delay: false });
         await waitFor({
           timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
@@ -1083,10 +1182,7 @@ describe("TUI PTY real backends", () => {
         expect(JSON.stringify(fixture.mockModel.requests()[0]?.body)).toContain(
           "send preserved draft after restart",
         );
-        await fixture.run.waitForOutput("RECONNECTED_RUN_COMPLETE");
-
-        await fixture.run.write("/exit\r", { delay: false });
-        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+        await fixture.waitForOutput("RECONNECTED_RUN_COMPLETE");
       } finally {
         if (gatewayStopped) {
           await fixture.gateway.startGateway();
@@ -1098,40 +1194,55 @@ describe("TUI PTY real backends", () => {
   );
 
   registerGatewayTest(
-    "creates and adopts a fresh session through the real Gateway backend",
+    "renders messages sent by another real Gateway client without restarting",
     async ({ onTestFinished }) => {
-      const fixture = await startGatewayModeTui("newSession", onTestFinished);
+      const fixture = await startGatewayModeTui("crossClient", onTestFinished);
+      let externalClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
       try {
-        await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
-        await fixture.run.write("seed gateway session\r");
-        await fixture.run.waitForOutput("FIRST_RUN_ACTIVE");
-
-        const newSessionPrefix = `new session: agent:${fixture.agentId}:tui-`;
-        await createFreshSession(fixture.run, newSessionPrefix);
-        const newSessionKey = fixture.run
-          .output()
-          .match(new RegExp(`new session: (agent:${fixture.agentId}:tui-[a-z0-9-]+)`))?.[1];
-        expect(newSessionKey).toBeDefined();
-        if (newSessionKey) {
-          fixture.trackSessionKey(newSessionKey);
-        }
-        await fixture.run.write("send after gateway new\r");
-        await waitFor({
-          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
-          read: () => (fixture.mockModel.requests().length === 2 ? true : null),
-          onTimeout: () =>
-            new Error(
-              `post-/new Gateway prompt did not reach the model\n${fixture.gateway.logs()}\n${fixture.run.output()}`,
-            ),
+        await fixture.run.write("seed cross-client session\r");
+        await fixture.waitForOutput("FIRST_RUN_ACTIVE");
+        const firstReplyOffset = fixture.lastOutputIndex("FIRST_RUN_ACTIVE");
+        await waitForOutputAfter(fixture.run, "| idle", firstReplyOffset);
+        const connectedExternalClient = await connectGatewayClient({
+          url: fixture.gateway.url,
+          token: fixture.gateway.gatewayToken,
+          scopes: ["operator.read", "operator.write"],
+          clientDisplayName: "tui-external-session-writer",
         });
-        const freshRequest = JSON.stringify(fixture.mockModel.requests()[1]?.body);
-        expect(freshRequest).toContain("send after gateway new");
-        expect(freshRequest).not.toContain("seed gateway session");
+        externalClient = connectedExternalClient;
 
-        await fixture.run.write("/exit\r", { delay: false });
-        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+        const marker = "EXTERNAL_GATEWAY_SESSION_MESSAGE";
+        await requestWithUnavailableRetry(
+          async () =>
+            await connectedExternalClient.request("sessions.send", {
+              key: fixture.sessionKey,
+              message: marker,
+              idempotencyKey: `${fixture.sessionKey}:external-message`,
+              timeoutMs: 30_000,
+            }),
+        );
+
+        await fixture.waitForOutput(marker);
+        await fixture.waitForOutput("FOLLOWUP_RUN_COMPLETE");
+        const followupOffset = fixture.lastOutputIndex("FOLLOWUP_RUN_COMPLETE");
+        await waitForOutputAfter(fixture.run, "| idle", followupOffset);
+        console.info(
+          "[behavior-evidence] tui-real-gateway-cross-client",
+          JSON.stringify({
+            transport: "real Gateway WebSocket",
+            terminal: "real PTY",
+            externalMessage: marker,
+            externalMessageRendered: fixture.visibleOutput().includes(marker),
+            followupRendered: fixture.visibleOutput().includes("FOLLOWUP_RUN_COMPLETE"),
+            returnedToIdle: fixture.run.visibleOutput().slice(followupOffset).includes("| idle"),
+          }),
+        );
       } finally {
-        await fixture.cleanup();
+        try {
+          await externalClient?.stopAndWait({ timeoutMs: 1_000 });
+        } finally {
+          await fixture.cleanup();
+        }
       }
     },
     LOCAL_TEST_TIMEOUT_MS,
@@ -1142,7 +1253,6 @@ describe("TUI PTY real backends", () => {
     async ({ onTestFinished }) => {
       const fixture = await startGatewayModeTui("followup", onTestFinished);
       try {
-        await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
         await fixture.run.write("slow first turn\r");
         await waitFor({
           timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
@@ -1151,7 +1261,7 @@ describe("TUI PTY real backends", () => {
             new Error(`first prompt did not reach the model\n${fixture.run.output()}`),
         });
 
-        const followupOffset = fixture.run.output().length;
+        const followupOffset = fixture.run.visibleOutput().length;
         await fixture.run.write("queued followup turn\r");
         await waitForOutputAfter(fixture.run, "queued followup turn", followupOffset);
         // Keep the provider held while the echoed input crosses TUI submission.
@@ -1169,8 +1279,8 @@ describe("TUI PTY real backends", () => {
               )}\n${fixture.gateway.logs()}\n${fixture.run.output()}`,
             ),
         });
-        await fixture.run.waitForOutput("FOLLOWUP_RUN_COMPLETE");
-        const completedOffset = fixture.run.output().lastIndexOf("FOLLOWUP_RUN_COMPLETE");
+        await fixture.waitForOutput("FOLLOWUP_RUN_COMPLETE");
+        const completedOffset = fixture.lastOutputIndex("FOLLOWUP_RUN_COMPLETE");
 
         await fixture.run.write("turn after queued followup\r");
         await waitFor({
@@ -1188,12 +1298,14 @@ describe("TUI PTY real backends", () => {
         expect(JSON.stringify(fixture.mockModel.requests()[2]?.body)).toContain(
           "turn after queued followup",
         );
-        await waitForOutputAfter(fixture.run, "FOLLOWUP_RUN_COMPLETE", completedOffset);
-        const finalResponseOffset = fixture.run.output().lastIndexOf("FOLLOWUP_RUN_COMPLETE");
+        const nextResponseOffset = completedOffset + "FOLLOWUP_RUN_COMPLETE".length;
+        await waitForOutputAfter(fixture.run, "FOLLOWUP_RUN_COMPLETE", nextResponseOffset);
+        const finalResponseOffset = lastOutputIndexAfter(
+          fixture.run,
+          "FOLLOWUP_RUN_COMPLETE",
+          nextResponseOffset,
+        );
         await waitForOutputAfter(fixture.run, "| idle", finalResponseOffset);
-
-        await fixture.run.write("/exit\r", { delay: false });
-        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
       } finally {
         await fixture.cleanup();
       }
@@ -1206,7 +1318,6 @@ describe("TUI PTY real backends", () => {
     async ({ onTestFinished }) => {
       const fixture = await startGatewayModeTui("emptyReply", onTestFinished);
       try {
-        await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
         await fixture.run.write("non-deliverable first turn\r");
         await waitFor({
           timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
@@ -1218,7 +1329,7 @@ describe("TUI PTY real backends", () => {
         await waitFor({
           timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
           read: () =>
-            fixture.run.output().includes("did not produce a visible reply") ? true : null,
+            fixture.visibleOutput().includes("did not produce a visible reply") ? true : null,
           onTimeout: () =>
             new Error(
               `empty-reply fallback was not rendered\nrequests=${JSON.stringify(
@@ -1229,7 +1340,7 @@ describe("TUI PTY real backends", () => {
             ),
         });
         expect(fixture.mockModel.requests()).toHaveLength(1);
-        expect(fixture.run.output()).not.toContain("[[reply_to_current]]");
+        expect(fixture.visibleOutput()).not.toContain("[[reply_to_current]]");
 
         await fixture.run.write("turn after empty reply\r");
         await waitFor({
@@ -1240,10 +1351,7 @@ describe("TUI PTY real backends", () => {
               `TUI stayed blocked after empty-reply fallback\n${fixture.gateway.logs()}\n${fixture.run.output()}`,
             ),
         });
-        await fixture.run.waitForOutput("FOLLOWUP_RUN_COMPLETE");
-
-        await fixture.run.write("/exit\r", { delay: false });
-        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+        await fixture.waitForOutput("FOLLOWUP_RUN_COMPLETE");
       } finally {
         await fixture.cleanup();
       }
@@ -1256,7 +1364,6 @@ describe("TUI PTY real backends", () => {
     async ({ onTestFinished }) => {
       const fixture = await startGatewayModeTui("cancel", onTestFinished);
       try {
-        await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
         await fixture.run.write("slow turn to abort\r");
         await waitFor({
           timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
@@ -1264,21 +1371,20 @@ describe("TUI PTY real backends", () => {
           onTimeout: () =>
             new Error(`first prompt did not reach the model\n${fixture.run.output()}`),
         });
-        const followupOffset = fixture.run.output().length;
+        const followupOffset = fixture.run.visibleOutput().length;
         await fixture.run.write("must never reach model\r");
         await waitForOutputAfter(fixture.run, "must never reach model", followupOffset);
         await sleep(SUBMISSION_SETTLE_MS);
         await fixture.run.write("\u001b", { delay: false });
-        await fixture.run.waitForOutput("aborted");
+        await fixture.waitForOutput("aborted");
         fixture.mockModel.releaseFirstResponse();
         // Abort has cleared the queue; keep only a short window for a stray provider request.
         await sleep(250);
 
         expect(fixture.mockModel.requests()).toHaveLength(1);
-        expect(fixture.run.output()).not.toContain("FOLLOWUP_RUN_COMPLETE");
-
-        await fixture.run.write("/exit\r", { delay: false });
-        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+        expect(fixture.run.visibleOutput().slice(followupOffset)).not.toContain(
+          "FOLLOWUP_RUN_COMPLETE",
+        );
       } finally {
         await fixture.cleanup();
       }
@@ -1297,36 +1403,65 @@ describe("TUI PTY real backends", () => {
       });
       try {
         let queueClientConnected = false;
+        const admittedRunIds = new Set<string>();
         queueClient.onConnected = () => {
           queueClientConnected = true;
         };
+        // Retain admission events that arrive before both chat.send ACKs settle.
+        queueClient.onEvent = ({ event, payload }) => {
+          if (event !== "chat" || !payload || typeof payload !== "object") {
+            return;
+          }
+          const chatEvent = payload as { runId?: unknown; sessionKey?: unknown; state?: unknown };
+          if (
+            chatEvent.state === "final" &&
+            chatEvent.sessionKey === fixture.sessionKey &&
+            typeof chatEvent.runId === "string"
+          ) {
+            admittedRunIds.add(chatEvent.runId);
+          }
+        };
         queueClient.start();
-        await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
         await waitFor({
           timeoutMs: LOCAL_STARTUP_TIMEOUT_MS,
           read: () => (queueClientConnected ? true : null),
           onTimeout: () => new Error("TUI Gateway client did not connect"),
         });
+        await queueClient.subscribeSessionEvents();
         await fixture.run.write("/queue collect debounce:250ms\r", { delay: false });
-        await fixture.run.waitForOutput("Queue mode set to collect.");
+        await fixture.waitForOutput("Queue mode set to collect.");
         await fixture.run.write("slow collect parent\r");
         await waitFor({
           timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
           read: () => (fixture.mockModel.requests().length === 1 ? true : null),
           onTimeout: () =>
-            new Error(`first prompt did not reach the model\n${fixture.run.output()}`),
+            new Error(
+              `first prompt did not reach the model\n` +
+                `rejected model requests=${JSON.stringify(fixture.mockModel.rejectedRequests())}\n` +
+                fixture.run.output(),
+            ),
         });
         const alphaSend = queueClient.sendChat({
           sessionKey: fixture.sessionKey,
           message: "collect prompt alpha",
         });
-        await sleep(50);
         const betaSend = queueClient.sendChat({
           sessionKey: fixture.sessionKey,
           message: "collect prompt beta",
         });
         const sendResults = await Promise.all([alphaSend, betaSend]);
         expect(sendResults.map((result) => result.status)).toEqual(["started", "started"]);
+        const expectedRunIds = sendResults.map(({ runId }) => runId);
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (expectedRunIds.every((runId) => admittedRunIds.has(runId)) ? true : null),
+          onTimeout: () =>
+            new Error(
+              `queued prompts were not admitted: expected ${expectedRunIds.join(", ")}; ` +
+                `observed ${[...admittedRunIds].join(", ")}\n${fixture.gateway.logs()}\n` +
+                fixture.run.output(),
+            ),
+        });
         fixture.mockModel.releaseFirstResponse();
         await waitFor({
           timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
@@ -1336,8 +1471,8 @@ describe("TUI PTY real backends", () => {
               `collected prompt did not reach the model\n${fixture.gateway.logs()}\n${fixture.run.output()}`,
             ),
         });
-        await fixture.run.waitForOutput("FOLLOWUP_RUN_COMPLETE");
-        const completedOffset = fixture.run.output().lastIndexOf("FOLLOWUP_RUN_COMPLETE");
+        await fixture.waitForOutput("FOLLOWUP_RUN_COMPLETE");
+        const completedOffset = fixture.lastOutputIndex("FOLLOWUP_RUN_COMPLETE");
         await waitForOutputAfter(fixture.run, "| idle", completedOffset);
 
         const requests = fixture.mockModel.requests();
@@ -1352,9 +1487,6 @@ describe("TUI PTY real backends", () => {
         const collectedBody = JSON.stringify(fixture.mockModel.requests()[1]?.body);
         expect(collectedBody).toContain("collect prompt alpha");
         expect(collectedBody).toContain("collect prompt beta");
-
-        await fixture.run.write("/exit\r", { delay: false });
-        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
       } finally {
         await queueClient.stop();
         await fixture.cleanup();
@@ -1364,11 +1496,22 @@ describe("TUI PTY real backends", () => {
   );
 
   describe("with shared Gateway fixture", () => {
-    // Preserve the fixture's original setup budget: overlap startup with local
-    // cases, then join it in a hook before any Gateway PTY starts.
     beforeAll(async () => {
-      await requireSharedGatewayFixture();
+      const startup = startSharedGatewayFixture();
+      sharedGatewayFixtureStartup = startup;
+      await startup;
     }, LOCAL_TEST_TIMEOUT_MS);
+
+    afterAll(async () => {
+      const startup = sharedGatewayFixtureStartup;
+      sharedGatewayFixtureStartup = undefined;
+      await cleanupStartedFixture(startup);
+    }, LOCAL_TEST_TIMEOUT_MS);
+
+    it("launches openclaw tui against a real Gateway through a real PTY", async () => {
+      const fixture = await requireSharedGatewayFixture();
+      expect(fixture.run.visibleOutput()).toContain("gateway connected");
+    });
 
     for (const register of gatewayTestRegistrations) {
       register();

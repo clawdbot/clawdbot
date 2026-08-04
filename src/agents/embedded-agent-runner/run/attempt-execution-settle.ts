@@ -1,5 +1,11 @@
 /** Runs prompt dispatch, stream settlement, cleanup, and result projection. */
 import type { AssistantMessage } from "../../../llm/types.js";
+import {
+  mergeAgentRunAttemptTerminal,
+  projectAgentRunAttemptTerminal,
+  setAgentRunAttemptTerminalFailure,
+  type AgentRunAttemptFailureSource,
+} from "../../agent-run-terminal-outcome.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { settleRequesterAfterSessionSpawns } from "../../subagent-registry.js";
 import type { NormalizedUsage } from "../../usage.js";
@@ -23,39 +29,50 @@ type StreamCleanupInput = {
   clearAttemptTimeoutTimers: () => void;
   isProbeSession: boolean;
   queueHandle: PreparedStreamRuntime["stream"]["queueHandle"];
-  removeAttemptAbortSignalListener: () => void;
   state: EmbeddedAttemptExecutionState;
   unsubscribe: () => void;
 };
 
-function cleanupEmbeddedAttemptStreamExecution(input: StreamCleanupInput): void {
+function cleanupEmbeddedAttemptStreamExecution(input: StreamCleanupInput): Error | undefined {
   const { attempt, state } = input;
+  const terminal = projectAgentRunAttemptTerminal(state.terminal);
   input.clearAttemptTimeoutTimers();
   if (
     !input.isProbeSession &&
-    (state.aborted || state.timedOut) &&
-    !state.timedOutDuringCompaction
+    (terminal.aborted || terminal.timedOut) &&
+    !terminal.timedOutDuringCompaction
   ) {
     log.debug(
-      `run cleanup: runId=${attempt.runId} sessionId=${attempt.sessionId} aborted=${state.aborted} timedOut=${state.timedOut}`,
+      `run cleanup: runId=${attempt.runId} sessionId=${attempt.sessionId} aborted=${terminal.aborted} timedOut=${terminal.timedOut}`,
     );
   }
-  try {
-    input.unsubscribe();
-  } catch (error) {
-    // A throwing unsubscribe indicates a resource leak, but must not mask the run error.
-    log.error(
-      `CRITICAL: unsubscribe failed, possible resource leak: runId=${attempt.runId} ${String(error)}`,
-    );
+  // Every release belongs to this owner; one broken callback must not strand
+  // the active run or mask the prompt failure that caused teardown.
+  let firstCleanupError: Error | undefined;
+  for (const [name, cleanup] of [
+    ["unsubscribe", input.unsubscribe],
+    ["backend detach", () => attempt.replyOperation?.detachBackend(input.queueHandle)],
+    [
+      "active run cleanup",
+      () =>
+        clearActiveEmbeddedRun(
+          attempt.sessionId,
+          input.queueHandle,
+          attempt.sessionKey,
+          attempt.sessionFile,
+        ),
+    ],
+  ] as const) {
+    try {
+      cleanup();
+    } catch (error) {
+      firstCleanupError ??= error instanceof Error ? error : new Error(String(error));
+      log.error(
+        `CRITICAL: ${name} failed, possible resource leak: runId=${attempt.runId} ${String(error)}`,
+      );
+    }
   }
-  attempt.replyOperation?.detachBackend(input.queueHandle);
-  clearActiveEmbeddedRun(
-    attempt.sessionId,
-    input.queueHandle,
-    attempt.sessionKey,
-    attempt.sessionFile,
-  );
-  input.removeAttemptAbortSignalListener();
+  return firstCleanupError;
 }
 
 export async function runEmbeddedAttemptSettledPhase(
@@ -104,10 +121,7 @@ export async function runEmbeddedAttemptSettledPhase(
   const preparedStreamRuntime = input.preparedStreamRuntime;
   const {
     abortable,
-    cache: {
-      observabilityEnabled: cacheObservabilityEnabled,
-      promptToolNames: promptCacheToolNames,
-    },
+    cache: { observabilityEnabled: cacheObservabilityEnabled, promptTools: promptCacheTools },
     history: {
       contextEnginePromptAuthority,
       contextEngineAssemblySucceeded,
@@ -124,13 +138,10 @@ export async function runEmbeddedAttemptSettledPhase(
     queueHandle,
     stopAcceptingSteerMessages,
     getBeforeAgentFinalizeRevisionReason,
+    getBeforeAgentFinalizeRevisionEntryId,
   } = preparedStream;
   const { unsubscribe, waitForPendingEvents } = subscription;
-  const {
-    getRunAbortDeadlineAtMs,
-    clearTimers: clearAttemptTimeoutTimers,
-    removeAbortSignalListener: removeAttemptAbortSignalListener,
-  } = attemptTimeout;
+  const { getRunAbortDeadlineAtMs, clearTimers: clearAttemptTimeoutTimers } = attemptTimeout;
   let promptCacheChangesForTurn: PromptCacheChange[] | null = null;
   let lastAssistant: AssistantMessage | undefined;
   let currentAttemptAssistant: EmbeddedRunAttemptResult["currentAttemptAssistant"];
@@ -143,7 +154,18 @@ export async function runEmbeddedAttemptSettledPhase(
   let sessionIdUsed = activeSession.sessionId;
   let sessionFileUsed: string | undefined = attempt.sessionFile;
   let preflightRecovery: EmbeddedRunAttemptResult["preflightRecovery"];
-  let promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"] = null;
+  let cleanupError: Error | undefined;
+  const readTerminal = () => projectAgentRunAttemptTerminal(state.terminal);
+  const setFailure = (error: unknown, source: AgentRunAttemptFailureSource | null) => {
+    state.terminal = setAgentRunAttemptTerminalFailure(
+      state.terminal,
+      error !== null && error !== undefined ? { error, source: source ?? "prompt" } : null,
+    );
+  };
+  const promptToolPolicyBaseline = {
+    activeToolNames: activeSession.getActiveToolNames(),
+    catalogEntries: [...(toolBase.toolSearchCatalogRef?.current?.entries ?? [])],
+  };
 
   try {
     const { promptStartedAt } = await runEmbeddedAttemptPromptPhase({
@@ -169,7 +191,7 @@ export async function runEmbeddedAttemptSettledPhase(
           retention: effectivePromptCacheRetention,
           streamStrategy,
           transport: effectiveAgentTransport,
-          toolNames: promptCacheToolNames,
+          tools: promptCacheTools,
           trace: cacheTrace,
         },
       },
@@ -209,12 +231,23 @@ export async function runEmbeddedAttemptSettledPhase(
         transport: effectiveAgentTransport,
         uncompactedEffectiveTools,
       },
+      toolPolicy: {
+        baseline: promptToolPolicyBaseline,
+        effectiveTools,
+        uncompactedEffectiveTools,
+        tools,
+        codeModeControlsEnabled: toolBase.codeModeControlsEnabledForRun,
+        toolSearchCatalogRef: toolBase.toolSearchCatalogRef,
+        forceToolNames: [
+          ...(toolBase.forceDirectMessageTool ? ["message"] : []),
+          ...(attempt.swarmCollector && attempt.swarmOutputSchema ? ["structured_output"] : []),
+        ],
+      },
       preflight: {
         ...(input.activeContextEngine ? { activeContextEngine: input.activeContextEngine } : {}),
         contextEngineAssemblySucceeded,
         contextEnginePromptAuthority,
         includeBoundaryTimestamp,
-        sessionAgentId: input.setup.sessionAgentId,
         ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
         ...(unwindowedContextEngineMessagesForPrecheck
           ? { unwindowedContextEngineMessagesForPrecheck }
@@ -227,17 +260,19 @@ export async function runEmbeddedAttemptSettledPhase(
         trajectoryRecorder,
       },
       lifecycle: {
-        readState: () => ({
-          contextBudgetStatus,
-          preflightRecovery,
-          promptError: state.promptError,
-          promptErrorSource,
-        }),
+        readState: () => {
+          const terminal = readTerminal();
+          return {
+            contextBudgetStatus,
+            preflightRecovery,
+            promptError: terminal.promptError,
+            promptErrorSource: terminal.promptErrorSource,
+          };
+        },
         writeState: (nextState) => {
           contextBudgetStatus = nextState.contextBudgetStatus;
           preflightRecovery = nextState.preflightRecovery;
-          state.promptError = nextState.promptError;
-          promptErrorSource = nextState.promptErrorSource;
+          setFailure(nextState.promptError, nextState.promptErrorSource);
         },
         getPrePromptMessageCount: () => sessionRuntimeState.prePromptMessageCount,
         setPrePromptMessageCount: (count) => {
@@ -258,8 +293,10 @@ export async function runEmbeddedAttemptSettledPhase(
         },
         markYieldAborted: () => {
           yieldAborted = true;
-          state.cleanupYieldAborted = true;
-          state.aborted = false;
+          state.terminal = mergeAgentRunAttemptTerminal(state.terminal, {
+            kind: "aborted",
+            source: "yield_cleanup",
+          });
         },
         readYieldState: input.lifecycle.readYieldState,
         stopAcceptingSteerMessages,
@@ -279,15 +316,20 @@ export async function runEmbeddedAttemptSettledPhase(
       shouldFlushForContextEngine: () =>
         Boolean(input.activeContextEngine && !getBeforeAgentFinalizeRevisionReason()),
       getBeforeAgentFinalizeRevisionReason,
+      getBeforeAgentFinalizeRevisionEntryId,
       getContextEngineAfterTurnCheckpoint: contextGuards.getAfterTurnCheckpoint,
       onSettleErrorState: (settleState) => {
-        state.promptError = settleState.promptError;
-        promptErrorSource = settleState.promptErrorSource;
+        setFailure(settleState.promptError, settleState.promptErrorSource);
       },
       onSettled: (settledStream) => {
-        state.promptError = settledStream.promptError;
-        promptErrorSource = settledStream.promptErrorSource;
-        state.timedOutDuringCompaction = settledStream.timedOutDuringCompaction;
+        setFailure(settledStream.promptError, settledStream.promptErrorSource);
+        if (settledStream.timedOutDuringCompaction) {
+          state.terminal = mergeAgentRunAttemptTerminal(state.terminal, {
+            kind: "timeout",
+            phase: "compaction",
+            source: "observation",
+          });
+        }
         messagesSnapshot = settledStream.messagesSnapshot;
         sessionIdUsed = settledStream.sessionIdUsed;
         lastAssistant = settledStream.lastAssistant;
@@ -297,22 +339,32 @@ export async function runEmbeddedAttemptSettledPhase(
         cacheBreak = settledStream.cacheBreak;
         sessionRuntimeState.promptCache = settledStream.promptCache;
       },
-      getState: () => ({
-        promptError: state.promptError,
-        promptErrorSource,
-        yieldAborted,
-        sessionIdUsed,
-        sessionFileUsed,
-      }),
+      getState: () => {
+        const terminal = readTerminal();
+        return {
+          promptError: terminal.promptError,
+          promptErrorSource: terminal.promptErrorSource,
+          yieldAborted,
+          sessionIdUsed,
+          sessionFileUsed,
+        };
+      },
       settle: {
         subscription,
-        readLifecycleState: () => ({
-          aborted: state.aborted,
-          timedOut: state.timedOut,
-          timedOutDuringCompaction: state.timedOutDuringCompaction,
-        }),
+        readLifecycleState: () => {
+          const terminal = readTerminal();
+          return {
+            aborted: terminal.aborted,
+            timedOut: terminal.timedOut,
+            timedOutDuringCompaction: terminal.timedOutDuringCompaction,
+          };
+        },
         markTimedOutDuringCompaction: () => {
-          state.timedOutDuringCompaction = true;
+          state.terminal = mergeAgentRunAttemptTerminal(state.terminal, {
+            kind: "timeout",
+            phase: "compaction",
+            source: "observation",
+          });
         },
         runAbortSignal: input.runAbortController.signal,
         isProbeSession,
@@ -328,12 +380,15 @@ export async function runEmbeddedAttemptSettledPhase(
       },
       afterTurn: {
         activeContextEngine: input.activeContextEngine,
-        readLifecycleState: () => ({
-          aborted: state.aborted,
-          timedOut: state.timedOut,
-          idleTimedOut: state.idleTimedOut,
-          timedOutDuringCompaction: state.timedOutDuringCompaction,
-        }),
+        readLifecycleState: () => {
+          const terminal = readTerminal();
+          return {
+            aborted: terminal.aborted,
+            timedOut: terminal.timedOut,
+            idleTimedOut: terminal.idleTimedOut,
+            timedOutDuringCompaction: terminal.timedOutDuringCompaction,
+          };
+        },
         runtime: {
           effectiveWorkspace: input.setup.effectiveWorkspace,
           agentDir: input.agentDir,
@@ -355,15 +410,18 @@ export async function runEmbeddedAttemptSettledPhase(
     sessionIdUsed = afterTurn.sessionIdUsed;
     sessionFileUsed = afterTurn.sessionFileUsed;
   } finally {
-    cleanupEmbeddedAttemptStreamExecution({
+    cleanupError = cleanupEmbeddedAttemptStreamExecution({
       attempt,
       clearAttemptTimeoutTimers,
       isProbeSession,
       queueHandle,
-      removeAttemptAbortSignalListener,
       state,
       unsubscribe,
     });
+  }
+
+  if (cleanupError !== undefined) {
+    throw cleanupError;
   }
 
   const beforeAgentFinalizeRevisionReason = getBeforeAgentFinalizeRevisionReason();
@@ -371,15 +429,7 @@ export async function runEmbeddedAttemptSettledPhase(
     attempt,
     subscription,
     state: {
-      aborted: state.aborted,
-      externalAbort: state.externalAbort,
-      timedOut: state.timedOut,
-      idleTimedOut: state.idleTimedOut,
-      timedOutDuringCompaction: state.timedOutDuringCompaction,
-      timedOutDuringToolExecution: state.timedOutDuringToolExecution,
-      timedOutByRunBudget: state.timedOutByRunBudget,
-      promptError: state.promptError,
-      promptErrorSource,
+      terminal: state.terminal,
       preflightRecovery,
       sessionIdUsed,
       sessionFileUsed,

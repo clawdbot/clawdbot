@@ -15,6 +15,11 @@
     "region": "eu-west"
   },
   {
+    "key": "openclaw/openclaw-node-deps-bind-v5-24.x",
+    "architecture": "amd64",
+    "region": "eu-west"
+  },
+  {
     "key": "openclaw/openclaw-vitest-fs-v2-protected-Linux-X64-node-24.x",
     "architecture": "amd64",
     "region": "eu-west"

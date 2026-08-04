@@ -6,8 +6,11 @@ import Testing
 @testable import OpenClaw
 
 struct MacGatewayChatTransportMappingTests {
-    @Test func `mac chat advertises inline widgets`() {
-        #expect(GatewayConnection.operatorClientCaps == [OpenClawGatewayClientCapability.inlineWidgets])
+    @Test func `mac chat advertises typed agent rosters and inline widgets`() {
+        #expect(GatewayConnection.operatorClientCaps == [
+            OpenClawGatewayClientCapability.agentKind,
+            OpenClawGatewayClientCapability.inlineWidgets,
+        ])
     }
 
     @Test func `bare global session target carries normalized selected agent`() {
@@ -36,6 +39,19 @@ struct MacGatewayChatTransportMappingTests {
         #expect(transport.sessionTarget(for: "global") == .init(
             sessionKey: "global",
             agentID: nil))
+    }
+
+    @Test func `fixed connection does not inherit app wide cache routing`() async throws {
+        let url = try #require(URL(string: "wss://fixed.example"))
+        let connection = GatewayConnection(configProvider: {
+            (url: url, token: nil, password: nil)
+        })
+        let transport = MacGatewayChatTransport(
+            connection: connection,
+            outboxGatewayID: "manual-fixed")
+
+        #expect(await transport.currentOutboxGatewayMatchesConnection())
+        await connection.shutdown()
     }
 
     @Test func `session settings request preserves verbosity patch`() {

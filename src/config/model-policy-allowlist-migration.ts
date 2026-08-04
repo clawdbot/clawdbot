@@ -4,10 +4,15 @@ import { isRecord } from "../utils.js";
 export const MODEL_POLICY_ALLOWLIST_MIGRATION_MARKER = "modelPolicyAllowlist";
 
 export function hasModelPolicyAllowlistMigrationMarker(value: unknown): boolean {
-  if (!isRecord(value) || !isRecord(value.meta) || !isRecord(value.meta.migrations)) {
-    return false;
+  if (
+    isRecord(value) &&
+    isRecord(value.meta) &&
+    isRecord(value.meta.migrations) &&
+    value.meta.migrations[MODEL_POLICY_ALLOWLIST_MIGRATION_MARKER] === true
+  ) {
+    return true;
   }
-  return value.meta.migrations[MODEL_POLICY_ALLOWLIST_MIGRATION_MARKER] === true;
+  return false;
 }
 
 /** Any policy object opts into the explicit model-policy semantics. */

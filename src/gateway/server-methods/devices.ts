@@ -2,7 +2,6 @@
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateDevicePairApproveParams,
   validateDevicePairListParams,
   validateDevicePairRemoveParams,
@@ -12,6 +11,7 @@ import {
   validateDeviceTokenRotateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
+  approveControlUiDeviceAuthMigrationPairing,
   approveDevicePairing,
   formatDevicePairingForbiddenMessage,
   getPairedDevice,
@@ -28,6 +28,8 @@ import {
   updatePairedDeviceMetadata,
 } from "../../infra/device-pairing.js";
 import type { DiagnosticSecurityEventInput } from "../../infra/diagnostic-events.js";
+import { clearRemovedNodeRuntimeState } from "../node-runtime-state.js";
+import { invalidateNodeWakeState } from "../node-wake-state.js";
 import {
   deniesCrossDeviceManagement,
   deniesDeviceTokenRoleManagement,
@@ -39,6 +41,7 @@ import {
 import type { DeviceManagementAuthz } from "./device-management-authz.js";
 import { emitDeviceManagementSecurityEvent } from "./device-management-security.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 const DEVICE_TOKEN_ROTATION_DENIED_MESSAGE = "device token rotation denied";
 const DEVICE_TOKEN_REVOCATION_DENIED_MESSAGE = "device token revocation denied";
@@ -211,30 +214,20 @@ function emitDeviceTokenLifecycleSecurityEvent(params: {
 /** Gateway request handlers for device pair approval, removal, token rotation, and revocation. */
 export const deviceHandlers: GatewayRequestHandlers = {
   "device.pair.list": async ({ params, respond, context, client }) => {
-    if (!validateDevicePairListParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid device.pair.list params: ${formatValidationErrors(
-            validateDevicePairListParams.errors,
-          )}`,
-        ),
-      );
+    if (!assertValidParams(params, validateDevicePairListParams, "device.pair.list", respond)) {
       return;
     }
     const list = await listDevicePairing();
     const authz = resolveDeviceSessionAuthz(client);
-    const visibleList =
-      authz.callerDeviceId && !authz.isAdminCaller
-        ? {
-            pending: list.pending.filter(
-              (request) => request.deviceId.trim() === authz.callerDeviceId,
-            ),
-            paired: list.paired.filter((device) => device.deviceId.trim() === authz.callerDeviceId),
-          }
-        : list;
+    let visibleList = list;
+    if (authz.isDeviceAuthMigrationSession && !authz.callerDeviceId) {
+      visibleList = { pending: [], paired: [] };
+    } else if (authz.callerDeviceId && !authz.isAdminCaller) {
+      visibleList = {
+        pending: list.pending.filter((request) => request.deviceId.trim() === authz.callerDeviceId),
+        paired: list.paired.filter((device) => device.deviceId.trim() === authz.callerDeviceId),
+      };
+    }
     respond(
       true,
       {
@@ -251,22 +244,23 @@ export const deviceHandlers: GatewayRequestHandlers = {
     );
   },
   "device.pair.approve": async ({ params, respond, context, client }) => {
-    if (!validateDevicePairApproveParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid device.pair.approve params: ${formatValidationErrors(
-            validateDevicePairApproveParams.errors,
-          )}`,
-        ),
-      );
+    if (
+      !assertValidParams(params, validateDevicePairApproveParams, "device.pair.approve", respond)
+    ) {
       return;
     }
     const { requestId } = params as { requestId: string };
     const authz = resolveDeviceSessionAuthz(client);
+    let migrationApprovalScopes: string[] | undefined;
     if (!authz.isAdminCaller) {
+      if (authz.isDeviceAuthMigrationSession && !authz.isDeviceAuthMigrationCaller) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, DEVICE_PAIR_APPROVAL_DENIED_MESSAGE),
+        );
+        return;
+      }
       const pending = await getPendingDevicePairing(requestId);
       if (!pending) {
         respond(
@@ -310,13 +304,45 @@ export const deviceHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      if (authz.isDeviceAuthMigrationCaller) {
+        migrationApprovalScopes = pending.scopes ?? [];
+      }
     }
-    const approved = await approveDevicePairing(requestId, { callerScopes: authz.callerScopes });
+    const migrationDeviceId = authz.isDeviceAuthMigrationCaller ? authz.callerDeviceId : null;
+    if (
+      authz.isDeviceAuthMigrationCaller &&
+      (!migrationDeviceId ||
+        context.claimControlUiDeviceAuthMigration?.(migrationDeviceId) !== true)
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, DEVICE_PAIR_APPROVAL_DENIED_MESSAGE),
+      );
+      return;
+    }
+    const releaseMigrationClaim = () => {
+      if (migrationDeviceId) {
+        context.releaseControlUiDeviceAuthMigrationClaim?.(migrationDeviceId);
+      }
+    };
+    let approved: Awaited<ReturnType<typeof approveDevicePairing>>;
+    try {
+      const callerScopes = migrationApprovalScopes ?? authz.callerScopes;
+      approved = authz.isDeviceAuthMigrationCaller
+        ? await approveControlUiDeviceAuthMigrationPairing(requestId, { callerScopes })
+        : await approveDevicePairing(requestId, { callerScopes });
+    } catch (error) {
+      releaseMigrationClaim();
+      throw error;
+    }
     if (!approved) {
+      releaseMigrationClaim();
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
       return;
     }
     if (approved.status === "forbidden") {
+      releaseMigrationClaim();
       emitDevicePairingDeniedSecurityEvent({
         authz,
         controlId: "device.pair.approve",
@@ -328,6 +354,16 @@ export const deviceHandlers: GatewayRequestHandlers = {
         errorShape(ErrorCodes.INVALID_REQUEST, formatDevicePairingForbiddenMessage(approved)),
       );
       return;
+    }
+    const normalizedDeviceId = approved.device.deviceId.trim();
+    if (approved.nodePairingGenerationChanged) {
+      invalidateNodeWakeState(normalizedDeviceId);
+      // Mark the retired node generation before publishing success so buffered
+      // node RPCs cannot retain authority while transport teardown is deferred.
+      context.invalidateClientsForDevice?.(normalizedDeviceId, {
+        role: "node",
+        reason: "device-pairing-reapproved",
+      });
     }
     context.logGateway.info(
       `device pairing approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"}`,
@@ -353,24 +389,29 @@ export const deviceHandlers: GatewayRequestHandlers = {
       },
       { dropIfSlow: true },
     );
+    // The completion listener keeps this handshake migration-bound until the
+    // client reconnects with its newly approved device token.
     respond(true, { requestId, device: redactPairedDevice(approved.device) }, undefined);
+    if (approved.nodePairingGenerationChanged) {
+      queueMicrotask(() => {
+        context.disconnectClientsForDevice?.(normalizedDeviceId, { role: "node" });
+      });
+    }
   },
   "device.pair.reject": async ({ params, respond, context, client }) => {
-    if (!validateDevicePairRejectParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid device.pair.reject params: ${formatValidationErrors(
-            validateDevicePairRejectParams.errors,
-          )}`,
-        ),
-      );
+    if (!assertValidParams(params, validateDevicePairRejectParams, "device.pair.reject", respond)) {
       return;
     }
     const { requestId } = params as { requestId: string };
     const authz = resolveDeviceSessionAuthz(client);
+    if (authz.isDeviceAuthMigrationSession && !authz.isDeviceAuthMigrationCaller) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, DEVICE_PAIR_REJECTION_DENIED_MESSAGE),
+      );
+      return;
+    }
     if (authz.callerDeviceId && !authz.isAdminCaller) {
       const pending = await getPendingDevicePairing(requestId);
       if (!pending) {
@@ -424,17 +465,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
     respond(true, rejected, undefined);
   },
   "device.pair.remove": async ({ params, respond, context, client }) => {
-    if (!validateDevicePairRemoveParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid device.pair.remove params: ${formatValidationErrors(
-            validateDevicePairRemoveParams.errors,
-          )}`,
-        ),
-      );
+    if (!assertValidParams(params, validateDevicePairRemoveParams, "device.pair.remove", respond)) {
       return;
     }
     const { deviceId } = params as { deviceId: string };
@@ -481,6 +512,10 @@ export const deviceHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown deviceId"));
       return;
     }
+    clearRemovedNodeRuntimeState({ nodeId: removed.deviceId, context });
+    context.invalidateClientsForDevice?.(removed.deviceId, {
+      reason: "device-pair-removed",
+    });
     context.logGateway.info(`device pairing removed device=${removed.deviceId}`);
     emitDevicePairingLifecycleSecurityEvent({
       action: "device.pairing.removed",
@@ -489,30 +524,13 @@ export const deviceHandlers: GatewayRequestHandlers = {
       targetDeviceId: removed.deviceId,
       controlId: "device.pair.remove",
     });
-    // Mark affected clients invalid *before* responding so any RPCs already
-    // pipelined into their WS socket buffer are rejected at the per-request
-    // dispatch check, closing the race between queueMicrotask-scheduled
-    // disconnect and inflight frames.
-    context.invalidateClientsForDevice?.(removed.deviceId, {
-      reason: "device-pair-removed",
-    });
     respond(true, removed, undefined);
     queueMicrotask(() => {
       context.disconnectClientsForDevice?.(removed.deviceId);
     });
   },
   "device.pair.rename": async ({ params, respond, context, client }) => {
-    if (!validateDevicePairRenameParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid device.pair.rename params: ${formatValidationErrors(
-            validateDevicePairRenameParams.errors,
-          )}`,
-        ),
-      );
+    if (!assertValidParams(params, validateDevicePairRenameParams, "device.pair.rename", respond)) {
       return;
     }
     const { deviceId, label } = params as {
@@ -578,17 +596,9 @@ export const deviceHandlers: GatewayRequestHandlers = {
     respond(true, { deviceId, label: trimmed }, undefined);
   },
   "device.token.rotate": async ({ params, respond, context, client }) => {
-    if (!validateDeviceTokenRotateParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid device.token.rotate params: ${formatValidationErrors(
-            validateDeviceTokenRotateParams.errors,
-          )}`,
-        ),
-      );
+    if (
+      !assertValidParams(params, validateDeviceTokenRotateParams, "device.token.rotate", respond)
+    ) {
       return;
     }
     const { deviceId, role, scopes } = params as {
@@ -671,6 +681,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       return;
     }
     const entry = rotated.entry;
+    const normalizedDeviceId = deviceId.trim();
     context.logGateway.info(
       `device token rotated device=${deviceId} role=${entry.role} scopes=${entry.scopes.join(",")}`,
     );
@@ -683,11 +694,14 @@ export const deviceHandlers: GatewayRequestHandlers = {
       role: entry.role,
       scopeCount: entry.scopes.length,
     });
+    if (entry.role === "node") {
+      invalidateNodeWakeState(normalizedDeviceId);
+    }
     // Mark affected clients invalid *before* responding so any RPCs already
     // pipelined into their WS socket buffer are rejected at the per-request
     // dispatch check, closing the race between queueMicrotask-scheduled
     // disconnect and inflight frames.
-    context.invalidateClientsForDevice?.(deviceId.trim(), {
+    context.invalidateClientsForDevice?.(normalizedDeviceId, {
       role: entry.role,
       reason: "device-token-rotated",
     });
@@ -703,21 +717,13 @@ export const deviceHandlers: GatewayRequestHandlers = {
       undefined,
     );
     queueMicrotask(() => {
-      context.disconnectClientsForDevice?.(deviceId.trim(), { role: entry.role });
+      context.disconnectClientsForDevice?.(normalizedDeviceId, { role: entry.role });
     });
   },
   "device.token.revoke": async ({ params, respond, context, client }) => {
-    if (!validateDeviceTokenRevokeParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid device.token.revoke params: ${formatValidationErrors(
-            validateDeviceTokenRevokeParams.errors,
-          )}`,
-        ),
-      );
+    if (
+      !assertValidParams(params, validateDeviceTokenRevokeParams, "device.token.revoke", respond)
+    ) {
       return;
     }
     const { deviceId, role } = params as { deviceId: string; role: string };
@@ -798,6 +804,9 @@ export const deviceHandlers: GatewayRequestHandlers = {
       controlId: "device.token.revoke",
       role: entry.role,
     });
+    if (entry.role === "node") {
+      invalidateNodeWakeState(normalizedDeviceId);
+    }
     // Mark affected clients invalid *before* responding so any RPCs already
     // pipelined into their WS socket buffer are rejected at the per-request
     // dispatch check, closing the race between queueMicrotask-scheduled

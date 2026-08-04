@@ -11,21 +11,23 @@ import type {
   SandboxBackendCommandResult,
   SandboxFsBridgeContext,
 } from "./backend-handle.types.js";
-import { SANDBOX_PINNED_MUTATION_PYTHON } from "./fs-bridge-mutation-helper.js";
+import {
+  SANDBOX_CREATE_EXISTS_EXIT_CODE,
+  SANDBOX_PINNED_MUTATION_PYTHON,
+} from "./fs-bridge-mutation-helper.js";
 import { createWritableRenameTargetResolver } from "./fs-bridge-rename-targets.js";
 import { parseSandboxStatMtimeMs, parseSandboxStatSize } from "./fs-bridge-stat-parse.js";
 import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
+import { isPathInsideContainerRoot, relativePathEscapesContainerRoot } from "./path-utils.js";
 import {
-  isPathInsideContainerRoot,
-  normalizeContainerPath as normalizeSandboxContainerPath,
-  relativePathEscapesContainerRoot,
-} from "./path-utils.js";
-import {
-  isExistingWorkspaceSkillMountSource,
-  resolveMaterializedSandboxSkillsWorkspaceDir,
-} from "./workspace-mounts.js";
-
-type RemoteMountSource = "workspace" | "agent" | "protectedSkill";
+  buildRemoteProtectedSkillMounts,
+  compareRemoteMountsByContainerPath,
+  compareRemoteMountsByLocalPath,
+  normalizeContainerPath,
+  type RemoteMountInfo,
+  type RemoteMountSource,
+  toPosixRelative,
+} from "./remote-fs-bridge-paths.js";
 
 type ResolvedRemotePath = SandboxResolvedPath & {
   writable: boolean;
@@ -41,12 +43,7 @@ function hasMultipleHardlinks(raw: string): boolean {
   return /^\d+$/.test(raw);
 }
 
-type MountInfo = {
-  localRoot: string;
-  containerRoot: string;
-  writable: boolean;
-  source: RemoteMountSource;
-};
+type MountInfo = RemoteMountInfo;
 
 /** Minimal remote shell contract used by the SSH filesystem bridge. */
 export type RemoteShellSandboxHandle = {
@@ -86,7 +83,14 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     filePath: string;
     cwd?: string;
     signal?: AbortSignal;
+    maxBytes?: number;
   }): Promise<Buffer> {
+    if (
+      params.maxBytes !== undefined &&
+      (!Number.isSafeInteger(params.maxBytes) || params.maxBytes < 0)
+    ) {
+      throw new RangeError("Sandbox file read limit must be a non-negative safe integer.");
+    }
     const target = this.resolveTarget(params);
     const relativePath = path.posix.relative(target.mountRootPath, target.containerPath);
     if (
@@ -102,10 +106,55 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
         target.mountRootPath,
         path.posix.dirname(relativePath) === "." ? "" : path.posix.dirname(relativePath),
         path.posix.basename(relativePath),
+        ...(params.maxBytes === undefined ? [] : [String(params.maxBytes)]),
       ],
       signal: params.signal,
     });
     return result.stdout;
+  }
+
+  async copyFile(params: {
+    sourcePath: string;
+    destinationPath: string;
+    cwd?: string;
+    mkdir?: boolean;
+    signal?: AbortSignal;
+  }): Promise<void> {
+    const source = this.resolveTarget({ filePath: params.sourcePath, cwd: params.cwd });
+    const destination = this.resolveTarget({
+      filePath: params.destinationPath,
+      cwd: params.cwd,
+    });
+    await this.ensureRemoteWritable(destination, "copy files", params.signal);
+    await this.assertNoHardlinkedFile({
+      containerPath: destination.containerPath,
+      action: "copy files",
+      signal: params.signal,
+    });
+    const sourcePinned = await this.resolvePinnedParent({
+      containerPath: source.containerPath,
+      action: "copy files",
+      signal: params.signal,
+    });
+    const destinationPinned = await this.resolvePinnedParent({
+      containerPath: destination.containerPath,
+      action: "copy files",
+      requireWritable: true,
+      signal: params.signal,
+    });
+    await this.runMutation({
+      args: [
+        "copy",
+        sourcePinned.mountRootPath,
+        sourcePinned.relativeParentPath,
+        sourcePinned.basename,
+        destinationPinned.mountRootPath,
+        destinationPinned.relativeParentPath,
+        destinationPinned.basename,
+        params.mkdir !== false ? "1" : "0",
+      ],
+      signal: params.signal,
+    });
   }
 
   async writeFile(params: {
@@ -143,6 +192,48 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       stdin: buffer,
       signal: params.signal,
     });
+  }
+
+  async createFileExclusive(params: {
+    filePath: string;
+    cwd?: string;
+    data: Buffer | string;
+    encoding?: BufferEncoding;
+    mkdir?: boolean;
+    signal?: AbortSignal;
+  }): Promise<"created" | "exists"> {
+    const target = this.resolveTarget(params);
+    await this.ensureRemoteWritable(target, "create files", params.signal);
+    const pinned = await this.resolvePinnedParent({
+      containerPath: target.containerPath,
+      action: "create files",
+      requireWritable: true,
+      signal: params.signal,
+    });
+    const buffer = Buffer.isBuffer(params.data)
+      ? params.data
+      : Buffer.from(params.data, params.encoding ?? "utf8");
+    const result = await this.runMutation({
+      args: [
+        "create",
+        pinned.mountRootPath,
+        pinned.relativeParentPath,
+        pinned.basename,
+        params.mkdir !== false ? "1" : "0",
+      ],
+      stdin: buffer,
+      allowFailure: true,
+      signal: params.signal,
+    });
+    if (result.code === SANDBOX_CREATE_EXISTS_EXIT_CODE) {
+      return "exists";
+    }
+    if (result.code !== 0) {
+      throw new Error(
+        `Sandbox create failed for ${target.containerPath}: ${result.stderr.toString("utf8").trim()}`,
+      );
+    }
+    return "created";
   }
 
   async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {
@@ -631,109 +722,4 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       allowFailure: params.allowFailure,
     });
   }
-}
-
-function buildRemoteProtectedSkillMounts(params: {
-  localRoot: string;
-  skillsWorkspaceDir?: string;
-  workspaceContainerRoot: string;
-  agentContainerRoot: string;
-  includeAgentMount: boolean;
-}): MountInfo[] {
-  const materializedSkillsWorkspaceDir = path.resolve(
-    params.skillsWorkspaceDir ?? resolveMaterializedSandboxSkillsWorkspaceDir(params.localRoot),
-  );
-  const mounts: Array<MountInfo & { allowedRoot: string }> = [
-    {
-      localRoot: path.join(params.localRoot, "skills"),
-      containerRoot: path.posix.join(params.workspaceContainerRoot, "skills"),
-      writable: false,
-      source: "protectedSkill",
-      allowedRoot: params.localRoot,
-    },
-    {
-      localRoot: path.join(params.localRoot, ".agents", "skills"),
-      containerRoot: path.posix.join(params.workspaceContainerRoot, ".agents", "skills"),
-      writable: false,
-      source: "protectedSkill",
-      allowedRoot: params.localRoot,
-    },
-    {
-      localRoot: path.join(materializedSkillsWorkspaceDir, "skills"),
-      containerRoot: path.posix.join(
-        params.workspaceContainerRoot,
-        ".openclaw",
-        "sandbox-skills",
-        "skills",
-      ),
-      writable: false,
-      source: "protectedSkill",
-      allowedRoot: materializedSkillsWorkspaceDir,
-    },
-  ];
-  if (params.includeAgentMount) {
-    mounts.push(
-      {
-        localRoot: path.join(params.localRoot, "skills"),
-        containerRoot: path.posix.join(params.agentContainerRoot, "skills"),
-        writable: false,
-        source: "protectedSkill",
-        allowedRoot: params.localRoot,
-      },
-      {
-        localRoot: path.join(params.localRoot, ".agents", "skills"),
-        containerRoot: path.posix.join(params.agentContainerRoot, ".agents", "skills"),
-        writable: false,
-        source: "protectedSkill",
-        allowedRoot: params.localRoot,
-      },
-      {
-        localRoot: path.join(materializedSkillsWorkspaceDir, "skills"),
-        containerRoot: path.posix.join(
-          params.agentContainerRoot,
-          ".openclaw",
-          "sandbox-skills",
-          "skills",
-        ),
-        writable: false,
-        source: "protectedSkill",
-        allowedRoot: materializedSkillsWorkspaceDir,
-      },
-    );
-  }
-  return mounts
-    .filter((mount) =>
-      isExistingWorkspaceSkillMountSource({
-        rootDir: mount.allowedRoot,
-        hostPath: mount.localRoot,
-      }),
-    )
-    .map(({ allowedRoot: _allowedRoot, ...mount }) => mount);
-}
-
-function compareRemoteMountsByContainerPath(a: MountInfo, b: MountInfo): number {
-  return b.containerRoot.length - a.containerRoot.length || mountPriority(b) - mountPriority(a);
-}
-
-function compareRemoteMountsByLocalPath(a: MountInfo, b: MountInfo): number {
-  return b.localRoot.length - a.localRoot.length || mountPriority(b) - mountPriority(a);
-}
-
-function mountPriority(mount: MountInfo): number {
-  if (mount.source === "protectedSkill") {
-    return 2;
-  }
-  if (mount.source === "agent") {
-    return 1;
-  }
-  return 0;
-}
-
-function normalizeContainerPath(value: string): string {
-  const normalized = normalizeSandboxContainerPath(value.trim() || "/");
-  return normalized.startsWith("/") ? normalized : `/${normalized}`;
-}
-
-function toPosixRelative(root: string, candidate: string): string {
-  return path.relative(root, candidate).split(path.sep).filter(Boolean).join(path.posix.sep);
 }

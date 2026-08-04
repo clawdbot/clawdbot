@@ -1,0 +1,31 @@
+title: Control UI Skills and Nodes operator administration
+
+scenario:
+  id: control-ui-skills-nodes
+  surface: control-ui
+  category: control-ui.operator-console
+  coverage:
+    primary:
+      - control-ui.skills-nodes
+  objective: >-
+    Prove an operator can administer agent-scoped Skills and inspect the
+    connected Nodes inventory through the Control UI.
+  successCriteria:
+    - Chromium switches Skills administration from the default agent to a named agent.
+    - A skill install action sends the named agent and installer identity through the Gateway.
+    - The post-install Gateway response renders a visible successful outcome.
+    - Chromium renders a connected node with its capabilities and commands.
+  docsRefs:
+    - docs/web/control-ui.md
+    - docs/help/testing.md
+  codeRefs:
+    - ui/src/e2e/operator-admin.e2e.test.ts
+    - ui/src/pages/skills/skills-page.ts
+    - ui/src/pages/nodes/nodes-page.ts
+  execution:
+    kind: playwright
+    path: ui/src/e2e/operator-admin.e2e.test.ts
+    testNamePattern: administers agent-scoped Skills and inspects the connected Nodes inventory
+    summary: >-
+      Real Chromium coverage for agent-scoped Skills requests, visible install
+      results, and connected Nodes inventory inspection.

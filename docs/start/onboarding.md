@@ -12,6 +12,11 @@ verified AI backend, grant permissions, and hand off to the agent's own
 bootstrap ritual.
 For CLI onboarding and a comparison of both paths, see [Onboarding Overview](/start/onboarding-overview).
 
+<Tip>
+Need the app first? [Download OpenClaw for macOS](/platforms/macos#download),
+then return here for first-run setup.
+</Tip>
+
 <Steps>
 <Step title="Approve macOS warning">
 <Frame>
@@ -72,9 +77,10 @@ Where does the **Gateway** run?
 
 Once the Gateway is ready, onboarding looks for AI access you already have:
 a Claude Code or Codex login, `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`, or a
-tool-capable model already installed in a reachable Ollama or LM Studio server.
-Detection runs on the Gateway host, including when the macOS app connects to a
-Linux Gateway. The best option is tested with a real completion and only saved
+tool-capable model with at least 16K of measured effective context already
+installed in a reachable Ollama or LM Studio server. Detection runs on the
+Gateway host, including when the macOS app connects to a Linux Gateway. The best
+option is tested with a real completion and only saved
 after it answers; when a test fails the app automatically tries the next option
 and shows why the previous one failed. If several options are found you can
 switch between them before continuing. Automatic local discovery never pulls
@@ -85,15 +91,16 @@ To use a Claude subscription when the Gateway host has no Claude CLI login, run
 printed token as **Anthropic setup-token** under **Connect with an API key or
 token**.
 
-Installed Gemini CLI, Antigravity, Pi, and OpenCode CLIs are shown for context
-when they cannot be selected as the reusable guided-setup inference route.
-Gemini and Antigravity cannot enforce the tool-free inference probe. Pi and
-OpenCode are whole-agent harnesses rather than setup inference routes; their
-session integrations require separate runtime and plugin setup.
+Pi and OpenCode installs may be shown for context when they cannot be selected
+as the reusable guided-setup inference route. They are whole-agent harnesses,
+not setup inference routes; their session integrations require separate runtime
+and plugin setup. Gemini CLI and Antigravity are not offered as detected setup
+routes.
 
 You can also sign in through the provider's own OAuth or device-pairing flow.
-The built-in choices include OpenAI/ChatGPT, OpenRouter, GitHub Copilot, Google
-Gemini CLI, xAI, MiniMax Global and CN, and Chutes. The list comes from the
+The built-in choices include OpenAI/ChatGPT, OpenRouter, GitHub Copilot, xAI,
+MiniMax Global and CN, and Chutes. Google is available through the supported AI
+Studio API-key route. The list comes from the
 Gateway's active text-inference provider plugins rather than a fixed app list,
 so another provider can opt in without adding provider-specific macOS code.
 

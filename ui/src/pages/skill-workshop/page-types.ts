@@ -17,4 +17,5 @@ export type SkillWorkshopRenderContext = {
   selfLearning: SkillWorkshopSelfLearning | null;
   onSelfLearningToggle: (enabled: boolean) => void;
   onHistoryScan: () => void;
+  onRetry: () => void;
 };

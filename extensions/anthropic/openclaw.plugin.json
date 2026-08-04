@@ -18,6 +18,17 @@
       "claude-cli": {
         "models": [
           {
+            "id": "claude-opus-5",
+            "name": "Claude Opus 5 (Claude CLI)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+            },
+            "contextWindow": 1000000,
+            "maxTokens": 128000
+          },
+          {
             "id": "claude-sonnet-5",
             "name": "Claude Sonnet 5 (Claude CLI)",
             "reasoning": true,
@@ -42,43 +53,12 @@
           {
             "id": "claude-opus-4-8",
             "name": "Claude Opus 4.8 (Claude CLI)",
+            "status": "deprecated",
+            "replacedBy": "claude-opus-5",
             "reasoning": true,
             "input": ["text", "image"],
             "mediaInput": {
               "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
-            },
-            "contextWindow": 200000,
-            "maxTokens": 128000
-          },
-          {
-            "id": "claude-opus-4-7",
-            "name": "Claude Opus 4.7 (Claude CLI)",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
-            },
-            "contextWindow": 200000,
-            "maxTokens": 128000
-          },
-          {
-            "id": "claude-sonnet-4-6",
-            "name": "Claude Sonnet 4.6 (Claude CLI)",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 1568, "preferredSidePx": 1568, "tokenMode": "provider" }
-            },
-            "contextWindow": 200000,
-            "maxTokens": 128000
-          },
-          {
-            "id": "claude-opus-4-6",
-            "name": "Claude Opus 4.6 (Claude CLI)",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 1568, "preferredSidePx": 1568, "tokenMode": "provider" }
             },
             "contextWindow": 200000,
             "maxTokens": 128000
@@ -106,7 +86,25 @@
               "minimal": "low",
               "xhigh": "xhigh",
               "max": "max"
-            }
+            },
+            "compat": { "codeMode": "preferred" }
+          },
+          {
+            "id": "claude-opus-5",
+            "name": "Claude Opus 5",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+            },
+            "cost": { "input": 5, "output": 25, "cacheRead": 0.5, "cacheWrite": 6.25 },
+            "contextWindow": 1000000,
+            "maxTokens": 128000,
+            "thinkingLevelMap": {
+              "xhigh": "xhigh",
+              "max": "max"
+            },
+            "compat": { "codeMode": "preferred" }
           },
           {
             "id": "claude-sonnet-5",
@@ -122,7 +120,8 @@
             "thinkingLevelMap": {
               "xhigh": "xhigh",
               "max": "max"
-            }
+            },
+            "compat": { "codeMode": "preferred" }
           },
           {
             "id": "claude-mythos-5",
@@ -140,29 +139,22 @@
               "minimal": "low",
               "xhigh": "xhigh",
               "max": "max"
-            }
+            },
+            "compat": { "codeMode": "preferred" }
           },
           {
             "id": "claude-opus-4-8",
             "name": "Claude Opus 4.8",
+            "status": "deprecated",
+            "replacedBy": "claude-opus-5",
             "reasoning": true,
             "input": ["text", "image"],
             "mediaInput": {
               "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
             },
             "contextWindow": 1000000,
-            "maxTokens": 128000
-          },
-          {
-            "id": "claude-opus-4-7",
-            "name": "Claude Opus 4.7",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
-            },
-            "contextWindow": 1000000,
-            "maxTokens": 128000
+            "maxTokens": 128000,
+            "compat": { "codeMode": "preferred" }
           },
           {
             "id": "claude-haiku-4-5",
@@ -173,47 +165,15 @@
               "image": { "maxSidePx": 1568, "preferredSidePx": 1568, "tokenMode": "provider" }
             },
             "contextWindow": 200000,
-            "maxTokens": 64000
-          },
-          {
-            "id": "claude-haiku-4-5-20251001",
-            "name": "Claude Haiku 4.5",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 1568, "preferredSidePx": 1568, "tokenMode": "provider" }
-            },
-            "contextWindow": 200000,
-            "maxTokens": 64000
-          },
-          {
-            "id": "claude-sonnet-4-6",
-            "name": "Claude Sonnet 4.6",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 1568, "preferredSidePx": 1568, "tokenMode": "provider" }
-            },
-            "contextWindow": 1000000,
-            "maxTokens": 128000
-          },
-          {
-            "id": "claude-opus-4-6",
-            "name": "Claude Opus 4.6",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 1568, "preferredSidePx": 1568, "tokenMode": "provider" }
-            },
-            "contextWindow": 1000000,
-            "maxTokens": 128000
+            "maxTokens": 64000,
+            "compat": { "codeMode": "preferred" }
           }
         ]
       }
     },
     "discovery": {
       "claude-cli": "static",
-      "anthropic": "static"
+      "anthropic": "refreshable"
     }
   },
   "modelSupport": {
@@ -223,8 +183,9 @@
     "providers": {
       "anthropic": {
         "aliases": {
+          "opus-5": "claude-opus-5",
+          "opus": "claude-opus-5",
           "opus-4.8": "claude-opus-4-8",
-          "opus": "claude-opus-4-8",
           "opus-4.6": "claude-opus-4-6",
           "mythos-5": "claude-mythos-5",
           "sonnet-5": "claude-sonnet-5",
@@ -318,7 +279,7 @@
     "anthropic": {
       "capabilities": ["image"],
       "defaultModels": {
-        "image": "claude-opus-4-8"
+        "image": "claude-opus-5"
       },
       "autoPriority": {
         "image": 20

@@ -27,8 +27,6 @@ function buildStartupInfo(record: PluginManifestRecord): InstalledPluginStartupI
   return {
     sidecar: record.activation?.onStartup === true,
     memory: hasKind(record.kind, "memory"),
-    deferConfiguredChannelFullLoadUntilAfterListen:
-      record.startupDeferConfiguredChannelFullLoadUntilAfterListen === true,
     agentHarnesses: normalizeSortedUniqueStringEntries([
       ...(record.activation?.onAgentHarnesses ?? []),
       ...(record.cliBackends ?? []),
@@ -70,12 +68,6 @@ export function collectPluginManifestCompatCodes(
   record: PluginManifestRecord,
 ): readonly PluginCompatCode[] {
   const codes: PluginCompatCode[] = [];
-  if (record.providerAuthEnvVars && Object.keys(record.providerAuthEnvVars).length > 0) {
-    codes.push("provider-auth-env-vars");
-  }
-  if (record.channelEnvVars && Object.keys(record.channelEnvVars).length > 0) {
-    codes.push("channel-env-vars");
-  }
   if (record.activation?.onProviders?.length) {
     codes.push("activation-provider-hint");
   }

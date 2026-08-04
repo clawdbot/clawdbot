@@ -284,6 +284,10 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
 
 ## Follow PR review and landing hygiene
 
+- `scripts/pr` requires `git`, `gh`, `jq`, `rg` (ripgrep), `pnpm`, and `node`
+  on the maintainer host. Let its preflight fail loudly when one is missing.
+  Tests that source `scripts/pr-lib/*` directly must provide the same command
+  surface instead of weakening the production wrapper for a minimal test image.
 - At the start of code-changing or landing work that will need tests or heavy
   proof, classify source trust and pre-warm the safe backend through `$crabbox`
   in the background. Trusted maintainer code defaults to Blacksmith Testbox;

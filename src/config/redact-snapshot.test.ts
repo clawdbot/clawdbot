@@ -657,8 +657,7 @@ describe("redactConfigSnapshot", () => {
     const sourceConfig = {
       tools: {
         exec: {
-          ask: "off",
-          security: "full",
+          mode: "full",
         },
       },
     } satisfies OpenClawConfig;

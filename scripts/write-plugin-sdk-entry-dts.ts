@@ -6,43 +6,8 @@ import { build } from "tsdown";
 import {
   buildPluginSdkEntrySources,
   pluginSdkEntrypoints,
-  publicPluginSdkEntrypoints,
+  productionPluginSdkEntrypoints,
 } from "./lib/plugin-sdk-entries.mjs";
-
-const RUNTIME_SHIMS: Partial<Record<string, string>> = {
-  "webhook-path": [
-    "/** Normalize webhook paths into the canonical registry form used by route lookup. */",
-    "export function normalizeWebhookPath(raw) {",
-    "  const trimmed = raw.trim();",
-    "  if (!trimmed) {",
-    '    return "/";',
-    "  }",
-    '  const withSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;',
-    '  if (withSlash.length > 1 && withSlash.endsWith("/")) {',
-    "    return withSlash.slice(0, -1);",
-    "  }",
-    "  return withSlash;",
-    "}",
-    "",
-    "/** Resolve the effective webhook path from explicit path, URL, or default fallback. */",
-    "export function resolveWebhookPath(params) {",
-    "  const trimmedPath = params.webhookPath?.trim();",
-    "  if (trimmedPath) {",
-    "    return normalizeWebhookPath(trimmedPath);",
-    "  }",
-    "  if (params.webhookUrl?.trim()) {",
-    "    try {",
-    "      const parsed = new URL(params.webhookUrl);",
-    '      return normalizeWebhookPath(parsed.pathname || "/");',
-    "    } catch {",
-    "      return null;",
-    "    }",
-    "  }",
-    "  return params.defaultPath ?? null;",
-    "}",
-    "",
-  ].join("\n"),
-};
 
 const USE_CANONICAL_DECLARATIONS = process.env.OPENCLAW_PLUGIN_SDK_CANONICAL_DTS === "1";
 
@@ -87,7 +52,7 @@ const distPluginSdkDir = path.join(process.cwd(), "dist/plugin-sdk");
 const shouldBuildPrivateQaEntries = process.env.OPENCLAW_BUILD_PRIVATE_QA === "1";
 const flatDeclarationEntrypoints = shouldBuildPrivateQaEntries
   ? pluginSdkEntrypoints
-  : publicPluginSdkEntrypoints;
+  : productionPluginSdkEntrypoints;
 const flatDeclarationEntrypointSet = new Set(flatDeclarationEntrypoints);
 
 if (USE_CANONICAL_DECLARATIONS) {
@@ -144,14 +109,6 @@ for (const entry of pluginSdkEntrypoints) {
     `export * from "../../../../../dist/plugin-sdk/${entry}.js";\n`,
     "utf8",
   );
-
-  const runtimeShim = RUNTIME_SHIMS[entry];
-  if (!runtimeShim) {
-    continue;
-  }
-  const runtimeOut = path.join(process.cwd(), `dist/plugin-sdk/${entry}.js`);
-  fs.mkdirSync(path.dirname(runtimeOut), { recursive: true });
-  fs.writeFileSync(runtimeOut, runtimeShim, "utf8");
 }
 
 const stampPath = path.join(process.cwd(), "dist/plugin-sdk/.boundary-entry-shims.stamp");

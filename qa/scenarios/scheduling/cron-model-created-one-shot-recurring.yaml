@@ -3,14 +3,14 @@ title: Model-created one-shot and recurring cron jobs
 scenario:
   id: cron-model-created-one-shot-recurring
   surface: cron
-  runtimeParityTier: live-only
+  runtimePairLane: core
   coverage:
     primary:
-      - scheduling.cron
-      - agents.tool-use
+      - automation.agent-cron-tool
     secondary:
-      - scheduling.dedup
-      - scheduling.persistence
+      - automation.model-authored-cron-jobs
+      - automation.isolated-cron-execution-dedup
+      - automation.scheduler-persistence
   gatewayConfigPatch:
     commands:
       ownerAllowFrom:
@@ -18,6 +18,7 @@ scenario:
   objective: Verify a live model can author one-off and recurring cron jobs whose natural scheduler behavior matches their requested semantics.
   successCriteria:
     - The model creates exactly one `at` job and one `every` job through the cron tool.
+    - Both jobs persist the concrete creator tool surface as explicit default authority.
     - The one-off job fires naturally once and is deleted after success.
     - The recurring job fires naturally at least twice, remains enabled, and advances its next run.
     - Stored jobs use isolated agent turns with no delivery side effects.
@@ -37,6 +38,7 @@ scenario:
       senderAllowlist:
         - qa-cron-operator
     config:
+      requiredProviderMode: live-frontier
       conversationPrefix: cron-model-author
       authorDoneMarker: CRON-MODEL-AUTHOR-OK
       oneShotDelayMs: 240000
@@ -139,7 +141,11 @@ flow:
             expr: "jobs.every((job) => job.sessionTarget === 'isolated' && job.payload.kind === 'agentTurn' && job.delivery?.mode === 'none')"
             message:
               expr: "`model created unsafe job shape: ${JSON.stringify(jobs)}`"
-      detailsExpr: "`author=${authorReply.text}; cron-tool-calls=${cronToolCalls.length}; at=${oneShotJob.id}:${oneShotJob.name}:${oneShotJob.schedule.kind}:${oneShotJob.schedule.at}:${oneShotJob.deleteAfterRun}; every=${recurringJob.id}:${recurringJob.name}:${recurringJob.schedule.kind}:${recurringJob.schedule.everyMs}; targets=${jobs.map((job) => job.sessionTarget).join(',')}; delivery=${jobs.map((job) => job.delivery?.mode).join(',')}`"
+        - assert:
+            expr: "jobs.every((job) => Array.isArray(job.payload.toolsAllow) && job.payload.toolsAllow.length > 0 && job.payload.toolsAllow.includes('cron') && !job.payload.toolsAllow.includes('*') && job.payload.toolsAllowIsDefault === true)"
+            message:
+              expr: "`model-created jobs did not persist concrete default authority: ${JSON.stringify(jobs.map((job) => job.payload))}`"
+      detailsExpr: "`author=${authorReply.text}; cron-tool-calls=${cronToolCalls.length}; at=${oneShotJob.id}:${oneShotJob.name}:${oneShotJob.schedule.kind}:${oneShotJob.schedule.at}:${oneShotJob.deleteAfterRun}; every=${recurringJob.id}:${recurringJob.name}:${recurringJob.schedule.kind}:${recurringJob.schedule.everyMs}; targets=${jobs.map((job) => job.sessionTarget).join(',')}; delivery=${jobs.map((job) => job.delivery?.mode).join(',')}; authority-counts=${jobs.map((job) => job.payload.toolsAllow.length).join(',')}`"
 
     - name: scheduler fires one-off once and recurring repeatedly
       actions:
@@ -242,6 +248,10 @@ flow:
             expr: "finalRecurring.state.nextRunAtMs > recurringJob.state.nextRunAtMs"
             message:
               expr: "`recurring next run did not advance from ${recurringJob.state.nextRunAtMs}: ${JSON.stringify(finalRecurring)}`"
+        - assert:
+            expr: "JSON.stringify([...(finalRecurring.payload.toolsAllow ?? [])].sort()) === JSON.stringify([...(recurringJob.payload.toolsAllow ?? [])].sort()) && finalRecurring.payload.toolsAllowIsDefault === true"
+            message:
+              expr: "`recurring authority changed across restart: before=${JSON.stringify(recurringJob.payload)} after=${JSON.stringify(finalRecurring?.payload)}`"
         - assert:
             expr: "finalList.jobs.length === 1 && finalList.jobs[0].id === recurringJob.id"
             message:

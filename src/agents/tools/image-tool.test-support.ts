@@ -15,6 +15,7 @@ import type {
 } from "../../plugin-sdk/media-understanding.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { resolveBundledStaticCatalogModel } from "../embedded-agent-runner/model.static-catalog.js";
+import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import type {
   coerceImageAssistantText,
   decodeDataUrl,
@@ -84,6 +85,7 @@ type ImageToolTestApi = {
     agentDir: string;
     workspaceDir?: string;
     authStore?: AuthProfileStore;
+    preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   }): ImageModelConfig | null;
 };
 

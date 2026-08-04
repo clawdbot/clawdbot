@@ -8,6 +8,7 @@ import {
 } from "./gateway-codex-harness.command-evidence.live-helpers.js";
 import {
   buildCodexHarnessLargeOutputCommand,
+  CODEX_HARNESS_MAX_LARGE_OUTPUT_BYTES,
   EXPECTED_CODEX_MODELS_COMMAND_TEXT,
   EXPECTED_CODEX_STATUS_COMMAND_TEXT,
   isExpectedCodexModelsCommandText,
@@ -42,11 +43,12 @@ describe("gateway codex harness live helpers", () => {
   it("builds an exact large-output command without escape-sensitive newlines", () => {
     const command = buildCodexHarnessLargeOutputCommand({
       commandMarker: "OPENCLAW-LARGE-OUTPUT-ABC",
-      outputBytes: 1_000_000,
+      outputBytes: CODEX_HARNESS_MAX_LARGE_OUTPUT_BYTES,
     });
 
     expect(command).toContain('"OPENCLAW-LARGE-OUTPUT-ABC|"');
-    expect(command).toContain(".slice(0,1000000)");
+    expect(command).toContain(".slice(0,800000)");
+    expect(CODEX_HARNESS_MAX_LARGE_OUTPUT_BYTES).toBeLessThan(1024 * 1024);
     expect(command).not.toContain("\\n");
     expect(command).not.toContain("\n");
   });

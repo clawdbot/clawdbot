@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -88,23 +88,22 @@ export function execPlainGh(args, options = {}) {
   });
 }
 
-export function execGhApiRead(endpoint, options = {}) {
+export function execGhRead(args, options = {}, params = {}) {
   const env = plainGhEnv(options.env ?? process.env);
-  // Keep reads on the normal PATH shim; OPENCLAW_GH_BIN pins maintainer writes.
+  // Reads stay on the cache-aware PATH shim; the explicit binary is reserved for writes.
   delete env.OPENCLAW_GH_BIN;
-  return execFileSync("gh", ["api", endpoint, "--method", "GET"], {
+  const execFileSyncImpl = params.execFileSyncImpl ?? execFileSync;
+  return execFileSyncImpl("gh", args, {
     ...options,
     env,
     maxBuffer: options.maxBuffer ?? PLAIN_GH_MAX_BUFFER_BYTES,
   });
 }
 
-export function spawnPlainGh(args, options = {}) {
-  const env = plainGhEnv(options.env ?? process.env);
-  const ghBin = resolvePlainGhBin(env);
-  return spawnSync(ghBin, args, {
-    ...options,
-    env,
-    maxBuffer: options.maxBuffer ?? PLAIN_GH_MAX_BUFFER_BYTES,
-  });
+export function execGhJson(args, options = {}, params = {}) {
+  return JSON.parse(execGhRead(args, { ...options, encoding: "utf8" }, params));
+}
+
+export function execGhApiRead(endpoint, options = {}) {
+  return execGhRead(["api", endpoint, "--method", "GET"], options);
 }

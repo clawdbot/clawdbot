@@ -17,6 +17,7 @@ import {
   createWorkerPlacementDispatchService,
   type WorkerPlacementDispatchService,
 } from "./worker-environments/placement-dispatch.js";
+import { FORCED_WORKER_ABANDONMENT_ERROR } from "./worker-environments/placement-force-abandon.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { createReclaimedPlacementRedispatch } from "./worker-environments/reclaimed-placement-redispatch.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
@@ -40,7 +41,8 @@ const loadWorkerPlacementSessionRuntimeModule = createLazyRuntimeModule(async ()
     managedWorktrees,
     resolveWorkerPlacementSessionRuntime:
       placementSessionRuntime.resolveWorkerPlacementSessionRuntime,
-    resolveFreshestSessionEntryFromStoreKeys: sessionUtils.resolveFreshestSessionEntryFromStoreKeys,
+    resolveCanonicalSessionEntryFromStoreKeys:
+      sessionUtils.resolveCanonicalSessionEntryFromStoreKeys,
     resolveGatewaySessionStoreTargetWithStore:
       sessionUtils.resolveGatewaySessionStoreTargetWithStore,
   };
@@ -127,8 +129,10 @@ function coordinateWorkerPlacementDispatch(
   };
   return {
     dispatch: async (request) => await runPlacementOperation(() => service.dispatch(request)),
-    forceDestroyEnvironment: (environmentId) =>
-      runExclusivePlacementOperation(() => service.forceDestroyEnvironment(environmentId)),
+    forceDestroyEnvironment: (environmentId, onCleanupError) =>
+      runExclusivePlacementOperation(() =>
+        service.forceDestroyEnvironment(environmentId, onCleanupError),
+      ),
     reclaim: async (request) => await runPlacementOperation(() => service.reclaim(request)),
     reconcile: () => runReconciliation(service.reconcile),
     reconcileActive: () => runReconciliation(service.reconcileActive),
@@ -163,7 +167,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
   }): Promise<string> => {
     const {
       managedWorktrees,
-      resolveFreshestSessionEntryFromStoreKeys,
+      resolveCanonicalSessionEntryFromStoreKeys,
       resolveGatewaySessionStoreTargetWithStore,
     } = await loadWorkerPlacementSessionRuntimeModule();
     const target = resolveGatewaySessionStoreTargetWithStore({
@@ -172,7 +176,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
       agentId,
       clone: false,
     });
-    const sessionEntry = resolveFreshestSessionEntryFromStoreKeys(target.store, target.storeKeys);
+    const sessionEntry = resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
     const worktree = managedWorktrees.findLiveByOwner("session", target.canonicalKey);
     if (
       sessionEntry?.sessionId !== sessionId ||
@@ -194,7 +198,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         const {
           isWorkerPlacementSessionRuntimeSupported,
           managedWorktrees,
-          resolveFreshestSessionEntryFromStoreKeys,
+          resolveCanonicalSessionEntryFromStoreKeys,
           resolveGatewaySessionStoreTargetWithStore,
           resolveWorkerPlacementSessionRuntime,
         } = await loadWorkerPlacementSessionRuntimeModule();
@@ -222,7 +226,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
               agentId,
               clone: false,
             });
-            const currentEntry = resolveFreshestSessionEntryFromStoreKeys(
+            const currentEntry = resolveCanonicalSessionEntryFromStoreKeys(
               currentTarget.store,
               currentTarget.storeKeys,
             );
@@ -296,7 +300,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         const {
           isWorkerPlacementSessionRuntimeSupported,
           managedWorktrees,
-          resolveFreshestSessionEntryFromStoreKeys,
+          resolveCanonicalSessionEntryFromStoreKeys,
           resolveGatewaySessionStoreTargetWithStore,
           resolveWorkerPlacementSessionRuntime,
         } = await loadWorkerPlacementSessionRuntimeModule();
@@ -324,7 +328,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
               agentId,
               clone: false,
             });
-            const currentEntry = resolveFreshestSessionEntryFromStoreKeys(
+            const currentEntry = resolveCanonicalSessionEntryFromStoreKeys(
               currentTarget.store,
               currentTarget.storeKeys,
             );
@@ -373,7 +377,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
       runReclaimBarrier: async ({ sessionId, sessionKey, agentId, reclaim }) => {
         const {
           managedWorktrees,
-          resolveFreshestSessionEntryFromStoreKeys,
+          resolveCanonicalSessionEntryFromStoreKeys,
           resolveGatewaySessionStoreTargetWithStore,
         } = await loadWorkerPlacementSessionRuntimeModule();
         const target = resolveGatewaySessionStoreTargetWithStore({
@@ -400,7 +404,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
               agentId,
               clone: false,
             });
-            const currentEntry = resolveFreshestSessionEntryFromStoreKeys(
+            const currentEntry = resolveCanonicalSessionEntryFromStoreKeys(
               currentTarget.store,
               currentTarget.storeKeys,
             );
@@ -465,6 +469,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
     environments: params.environments,
     placements: params.placements,
     admitNewPlacements: params.admitNewPlacements,
+    resolveWorkspacePath,
     redispatchReclaimed: createReclaimedPlacementRedispatch({
       environments: params.environments,
       dispatch: dispatchService.dispatch,
@@ -472,6 +477,13 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
     workspaceOperations,
   });
   const recoverPendingWorkspaceReconciliations = async (): Promise<void> => {
+    const orphanedJournals = params.placements.pruneOrphanedWorkspaceReconciliations({
+      retainFailedOwner: (recoveryError) =>
+        recoveryError.startsWith(FORCED_WORKER_ABANDONMENT_ERROR),
+    });
+    for (const owner of orphanedJournals) {
+      workerPlacementLog.warn(`discarded orphaned cloud workspace journal for ${owner.sessionId}`);
+    }
     for (const owner of params.placements.listWorkspaceReconciliationOwners()) {
       try {
         const placement = params.placements.get(owner.sessionId);

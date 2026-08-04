@@ -18,8 +18,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -54,14 +56,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.wear.compose.foundation.lazy.TransformingLazyColumn
@@ -73,18 +79,51 @@ import androidx.wear.compose.material3.ButtonDefaults
 import androidx.wear.compose.material3.HorizontalPagerScaffold
 import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.Text
+import androidx.wear.compose.material3.minimumInteractiveComponentSize
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import androidx.compose.ui.semantics.onClick as semanticsOnClick
 
-private const val PAGE_COUNT = 3
-private const val CHAT_PAGE = 0
-private const val VOICE_PAGE = 1
-private const val CONTROLS_PAGE = 2
+internal enum class WearHomePage {
+  Chat,
+  Voice,
+  Controls,
+}
+
 private const val VOICE_MODE_COUNT = 2
 private const val VOICE_HOME_MODE = 0
 private const val VOICE_THREAD_MODE = 1
+
+internal data class WearVoiceLayout(
+  val horizontalPadding: Dp,
+  val orbSize: Dp,
+  val contentHeight: Dp,
+)
+
+internal fun wearVoiceLayout(
+  maxWidth: Dp,
+  fontScale: Float,
+): WearVoiceLayout {
+  val compact = maxWidth <= 192.dp
+  val compactLargeText = compact && fontScale > 1.1f
+  return WearVoiceLayout(
+    horizontalPadding = if (fontScale > 1.1f) 4.dp else 6.dp,
+    orbSize =
+      when {
+        compactLargeText -> 68.dp
+        compact -> 80.dp
+        else -> 92.dp
+      },
+    contentHeight =
+      when {
+        compactLargeText -> 132.dp
+        compact -> 144.dp
+        else -> 156.dp
+      },
+  )
+}
 
 @Composable
 internal fun OpenClawWearScreens(
@@ -95,6 +134,7 @@ internal fun OpenClawWearScreens(
   speaking: Boolean,
   realtimeCapturing: Boolean,
   realtimePlaying: Boolean,
+  realtimeMouthLevel: Float,
   realtimePlaybackFailed: Boolean,
   realtimeThinkingOverride: Boolean,
   actionBusy: Boolean,
@@ -103,6 +143,10 @@ internal fun OpenClawWearScreens(
   themeMode: WearThemeMode,
   autoSpeak: Boolean,
   notificationsGranted: Boolean,
+  initialPage: WearHomePage = WearHomePage.Chat,
+  navigationRequest: WearNavigationRequest? = null,
+  voiceSwipeHintEnabled: Boolean = true,
+  onNavigationRequestHandled: (Int) -> Unit = {},
   onTalk: () -> Unit,
   onType: () -> Unit,
   onRealtimeTalk: () -> Unit,
@@ -129,15 +173,25 @@ internal fun OpenClawWearScreens(
   }
 
   val colors = OpenClawWearTheme.colors
-  val pagerState = rememberPagerState(pageCount = { PAGE_COUNT })
+  val pagerState =
+    rememberPagerState(
+      initialPage = initialPage.ordinal,
+      pageCount = { WearHomePage.entries.size },
+    )
   val voicePagerState = rememberPagerState(pageCount = { VOICE_MODE_COUNT })
   val pagerScope = rememberCoroutineScope()
   val realtimeActive = snapshot.realtimeTalk.active || realtimeCapturing
-  var showVoiceSwipeHint by remember { mutableStateOf(true) }
+  var showVoiceSwipeHint by remember { mutableStateOf(voiceSwipeHintEnabled) }
   var realtimeStartedAtMillis by remember { mutableLongStateOf(0L) }
   var realtimeElapsedSeconds by remember { mutableLongStateOf(0L) }
+  LaunchedEffect(navigationRequest?.id) {
+    val request = navigationRequest ?: return@LaunchedEffect
+    val destination = wearLaunchPage(request.target, realtimeActive)
+    pagerState.scrollToPage(destination.ordinal)
+    onNavigationRequestHandled(request.id)
+  }
   LaunchedEffect(pagerState.currentPage, showVoiceSwipeHint) {
-    if (pagerState.currentPage == VOICE_PAGE && showVoiceSwipeHint) {
+    if (pagerState.currentPage == WearHomePage.Voice.ordinal && showVoiceSwipeHint) {
       delay(1_800L)
       showVoiceSwipeHint = false
     }
@@ -158,9 +212,9 @@ internal fun OpenClawWearScreens(
       delay(250L)
     }
   }
-  BackHandler(enabled = pagerState.currentPage == VOICE_PAGE) {
+  BackHandler(enabled = pagerState.currentPage == WearHomePage.Voice.ordinal) {
     pagerScope.launch {
-      pagerState.animateScrollToPage(CHAT_PAGE)
+      pagerState.animateScrollToPage(WearHomePage.Chat.ordinal)
     }
   }
   HorizontalPagerScaffold(
@@ -175,12 +229,12 @@ internal fun OpenClawWearScreens(
       modifier = Modifier.fillMaxSize(),
       rotaryScrollableBehavior = null,
       userScrollEnabled =
-        pagerState.currentPage != VOICE_PAGE ||
+        pagerState.currentPage != WearHomePage.Voice.ordinal ||
           voicePagerState.currentPage == VOICE_HOME_MODE ||
           voicePagerState.currentPage == VOICE_THREAD_MODE,
     ) { page ->
       when (page) {
-        CHAT_PAGE ->
+        WearHomePage.Chat.ordinal ->
           ChatPage(
             snapshot = snapshot,
             interaction = interaction,
@@ -197,7 +251,7 @@ internal fun OpenClawWearScreens(
             onSpeakLatest = onSpeakLatest,
             onStopSpeaking = onStopSpeaking,
           )
-        CONTROLS_PAGE ->
+        WearHomePage.Controls.ordinal ->
           ControlsPage(
             snapshot = snapshot,
             themeMode = themeMode,
@@ -215,11 +269,12 @@ internal fun OpenClawWearScreens(
         else ->
           VoicePage(
             voicePagerState = voicePagerState,
-            showSwipeHint = showVoiceSwipeHint && pagerState.currentPage == VOICE_PAGE,
+            showSwipeHint = showVoiceSwipeHint && pagerState.currentPage == WearHomePage.Voice.ordinal,
             realtimeTalk = snapshot.realtimeTalk,
             speaking = speaking,
             realtimeCapturing = realtimeCapturing,
             realtimePlaying = realtimePlaying,
+            realtimeMouthLevel = realtimeMouthLevel,
             realtimePlaybackFailed = realtimePlaybackFailed,
             realtimeThinkingOverride = realtimeThinkingOverride,
             realtimeElapsedSeconds = realtimeElapsedSeconds,
@@ -234,6 +289,11 @@ internal fun OpenClawWearScreens(
     }
   }
 }
+
+internal fun wearLaunchPage(
+  target: WearLaunchTarget,
+  realtimeActive: Boolean,
+): WearHomePage = if (realtimeActive) WearHomePage.Voice else target.initialPage
 
 @Composable
 private fun ChatPage(
@@ -335,13 +395,11 @@ private fun ChatPage(
         )
       }
     }
-    snapshot.errorText
-      ?.takeIf(String::isNotBlank)
-      ?.let { error ->
-        item {
-          InlineError(text = error)
-        }
+    snapshot.failure?.let { failure ->
+      item {
+        InlineError(text = failureDetail(failure))
       }
+    }
   }
 }
 
@@ -353,6 +411,7 @@ private fun VoicePage(
   speaking: Boolean,
   realtimeCapturing: Boolean,
   realtimePlaying: Boolean,
+  realtimeMouthLevel: Float,
   realtimePlaybackFailed: Boolean,
   realtimeThinkingOverride: Boolean,
   realtimeElapsedSeconds: Long,
@@ -419,6 +478,7 @@ private fun VoicePage(
             speaking = speaking,
             realtimeCapturing = realtimeCapturing,
             realtimePlaying = realtimePlaying,
+            realtimeMouthLevel = realtimeMouthLevel,
             realtimePlaybackFailed = realtimePlaybackFailed,
             realtimeThinkingOverride = realtimeThinkingOverride,
             realtimeElapsedSeconds = realtimeElapsedSeconds,
@@ -446,7 +506,7 @@ private fun VoicePage(
       Text(
         text = stringResource(R.string.swipe_between_voice_modes),
         color = colors.textMuted,
-        fontSize = 9.sp,
+        fontSize = 10.sp,
         fontWeight = FontWeight.SemiBold,
         textAlign = TextAlign.Center,
         modifier =
@@ -465,6 +525,7 @@ private fun VoiceHomeMode(
   speaking: Boolean,
   realtimeCapturing: Boolean,
   realtimePlaying: Boolean,
+  realtimeMouthLevel: Float,
   realtimePlaybackFailed: Boolean,
   realtimeThinkingOverride: Boolean,
   realtimeElapsedSeconds: Long,
@@ -489,11 +550,11 @@ private fun VoiceHomeMode(
     )
   var dictatePreview by remember { mutableStateOf(false) }
   val coroutineScope = rememberCoroutineScope()
-  val dictateEnabled = inputEnabled && !actionBusy && !speaking && !realtimeActive && !dictatePreview
-  val liveEnabled =
+  val dictateActionEnabled = inputEnabled && !actionBusy && !speaking && !realtimeActive && !dictatePreview
+  val liveActionEnabled =
     (realtimeActive || ttsOnly || (inputEnabled && !actionBusy)) && !dictatePreview
   val startDictate: () -> Unit = {
-    if (dictateEnabled) {
+    if (dictateActionEnabled) {
       coroutineScope.launch {
         dictatePreview = true
         delay(300L)
@@ -503,7 +564,7 @@ private fun VoiceHomeMode(
     }
   }
   val toggleLive: () -> Unit = {
-    if (liveEnabled) {
+    if (liveActionEnabled) {
       if (ttsOnly) {
         onStopSpeaking()
       } else {
@@ -533,30 +594,29 @@ private fun VoiceHomeMode(
       state == RealtimeVoiceButtonState.ERROR -> colors.danger
       else -> colors.voiceAccent
     }
-  val containerColor =
+  val avatarState = if (dictatePreview) RealtimeVoiceButtonState.LISTENING else state
+  val liveVoiceDescription = stringResource(R.string.talk)
+  val liveClickLabel =
     when {
-      dictatePreview || state == RealtimeVoiceButtonState.IDLE -> colors.surfaceRaised
-      state == RealtimeVoiceButtonState.ERROR -> colors.danger.copy(alpha = 0.28f)
-      else -> colors.voiceAccentSoft
+      ttsOnly -> stringResource(R.string.stop_speaking)
+      realtimeActive -> stringResource(R.string.stop_speaking)
+      else -> stringResource(R.string.speak_to_agent)
     }
-  val contentColor =
-    when {
-      dictatePreview -> colors.voiceAccent
-      state == RealtimeVoiceButtonState.IDLE -> colors.text
-      state == RealtimeVoiceButtonState.ERROR -> colors.danger
-      else -> colors.voiceAccent
-    }
-  Box(
-    modifier =
-      Modifier
-        .fillMaxSize()
-        .padding(horizontal = 14.dp),
+  val dictateClickLabel = stringResource(R.string.dictate)
+  val orbClick = if (liveActionEnabled) toggleLive else startDictate
+  val orbClickLabel = if (liveActionEnabled) liveClickLabel else dictateClickLabel
+  val fontScale = LocalDensity.current.fontScale
+  BoxWithConstraints(
+    modifier = Modifier.fillMaxSize(),
   ) {
+    val layout = wearVoiceLayout(maxWidth = maxWidth, fontScale = fontScale)
+    val voiceControlOffset = if (fontScale > 1.1f) 20.dp else 16.dp
     Row(
       modifier =
         Modifier
           .align(Alignment.Center)
-          .fillMaxWidth(),
+          .fillMaxWidth()
+          .padding(horizontal = layout.horizontalPadding),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.Center,
     ) {
@@ -564,66 +624,67 @@ private fun VoiceHomeMode(
         title = stringResource(R.string.hold),
         detail = stringResource(R.string.dictate),
         accent = colors.voiceAccent,
-        onClick = if (dictateEnabled) startDictate else null,
+        onClick = if (dictateActionEnabled) startDictate else null,
+        onClickLabel = dictateClickLabel,
         modifier =
           Modifier
+            .offset(y = voiceControlOffset)
             .weight(1f),
       )
       Box(
         modifier =
           Modifier
-            .width(92.dp)
-            .height(134.dp),
+            .width(layout.orbSize)
+            .height(layout.contentHeight),
       ) {
         VoiceGestureLabel(
           title = stringResource(R.string.double_tap),
           detail = stringResource(R.string.thread),
           accent = colors.voiceAccent,
+          onDoubleClick = onOpenThread,
+          onClickLabel = stringResource(R.string.open_thread),
           verticalPadding = 0.dp,
           modifier =
             Modifier
               .align(Alignment.TopCenter)
-              .offset(y = (-4).dp)
-              .fillMaxWidth(),
+              .fillMaxWidth()
+              .minimumInteractiveComponentSize(),
         )
-        VoiceOrb(
-          accent = accent,
-          containerColor = containerColor,
-          pulse = dictatePreview || state != RealtimeVoiceButtonState.IDLE,
-          size = 92.dp,
+        Box(
           modifier =
             Modifier
               .align(Alignment.Center)
+              .size(layout.orbSize)
+              .offset(y = voiceControlOffset)
               .combinedClickable(
-                enabled = !dictatePreview,
+                // combinedClickable gates every gesture together; keep preview exclusive and fall back to Dictate.
+                enabled = !dictatePreview && (liveActionEnabled || dictateActionEnabled),
+                onClickLabel = orbClickLabel,
                 role = Role.Button,
-                onClick = toggleLive,
+                onClick = orbClick,
                 onDoubleClick = onOpenThread,
-                onLongClick = startDictate,
-              ),
+                onLongClickLabel = dictateClickLabel.takeIf { dictateActionEnabled },
+                onLongClick = startDictate.takeIf { dictateActionEnabled },
+              ).semantics {
+                contentDescription = liveVoiceDescription
+              },
+          contentAlignment = Alignment.Center,
         ) {
-          if (
-            dictatePreview ||
-            state == RealtimeVoiceButtonState.LISTENING ||
-            state == RealtimeVoiceButtonState.SPEAKING
-          ) {
-            LiveWaveform(
-              color = colors.voiceAccent,
-              active = true,
-            )
-          } else {
-            MicrophoneGlyph(
-              color = contentColor,
-              modifier = Modifier.size(38.dp),
-            )
-          }
+          WearTalkAvatar(
+            state = avatarState,
+            mouthLevel = if (realtimePlaying) realtimeMouthLevel else 0f,
+            syntheticSpeech = ttsOnly,
+            accent = accent,
+            danger = colors.danger,
+            modifier = Modifier.fillMaxSize(),
+          )
         }
         statusText?.let { status ->
           Text(
             text = status,
             color = colors.textMuted,
-            fontSize = 9.sp,
-            lineHeight = 10.sp,
+            fontSize = 12.sp,
+            lineHeight = 12.sp,
             textAlign = TextAlign.Center,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -639,10 +700,11 @@ private fun VoiceHomeMode(
         title = stringResource(R.string.tap),
         detail = stringResource(R.string.live),
         accent = colors.voiceAccent,
-        onClick = if (liveEnabled) toggleLive else null,
+        onClick = if (liveActionEnabled) toggleLive else null,
+        onClickLabel = liveClickLabel,
         modifier =
           Modifier
-            .offset(x = (-6).dp)
+            .offset(y = voiceControlOffset)
             .weight(1f),
       )
     }
@@ -658,38 +720,57 @@ private fun VoiceGestureLabel(
   modifier: Modifier = Modifier,
   onClick: (() -> Unit)? = null,
   onDoubleClick: (() -> Unit)? = null,
+  onClickLabel: String? = null,
   verticalPadding: androidx.compose.ui.unit.Dp = 10.dp,
 ) {
   val interactionModifier =
-    if (onClick != null || onDoubleClick != null) {
-      Modifier.combinedClickable(
-        role = Role.Button,
-        onClick = { onClick?.invoke() },
-        onDoubleClick = onDoubleClick,
-      )
-    } else {
-      Modifier
+    when {
+      onDoubleClick != null ->
+        Modifier
+          .pointerInput(onDoubleClick) {
+            detectTapGestures(onDoubleTap = { onDoubleClick() })
+          }.semantics(mergeDescendants = true) {
+            role = Role.Button
+            semanticsOnClick(label = onClickLabel) {
+              onDoubleClick()
+              true
+            }
+          }
+      onClick != null ->
+        Modifier.clickable(
+          role = Role.Button,
+          onClickLabel = onClickLabel,
+          onClick = onClick,
+        )
+      else -> Modifier
     }
   Column(
     modifier =
       modifier
         .then(interactionModifier)
-        .padding(vertical = verticalPadding),
+        .then(
+          if (onClick != null || onDoubleClick != null) {
+            Modifier.minimumInteractiveComponentSize()
+          } else {
+            Modifier
+          },
+        ).padding(vertical = verticalPadding),
     horizontalAlignment = Alignment.CenterHorizontally,
+    verticalArrangement = Arrangement.Center,
   ) {
     Text(
       text = title,
       color = accent,
-      fontSize = 10.sp,
-      lineHeight = 10.sp,
+      fontSize = 12.sp,
+      lineHeight = 14.sp,
       fontWeight = FontWeight.SemiBold,
       textAlign = TextAlign.Center,
     )
     Text(
       text = detail,
       color = OpenClawWearTheme.colors.textMuted,
-      fontSize = 9.sp,
-      lineHeight = 9.sp,
+      fontSize = 12.sp,
+      lineHeight = 14.sp,
       textAlign = TextAlign.Center,
       maxLines = 1,
     )
@@ -708,6 +789,13 @@ private fun ThreadVoiceMode(
 ) {
   val colors = OpenClawWearTheme.colors
   val listState = rememberTransformingLazyColumnState()
+  val liveVoiceDescription = stringResource(R.string.talk)
+  val liveClickLabel =
+    if (realtimeActive) {
+      stringResource(R.string.stop_speaking)
+    } else {
+      stringResource(R.string.speak_to_agent)
+    }
   val coroutineScope = rememberCoroutineScope()
   val visibleConversation = conversation.takeLast(VISIBLE_REALTIME_ENTRY_COUNT)
   val contentRevision = wearThreadContentRevision(visibleConversation, thinking)
@@ -758,8 +846,8 @@ private fun ThreadVoiceMode(
           Text(
             text = stringResource(R.string.no_live_conversation),
             color = colors.textMuted,
-            fontSize = 11.sp,
-            lineHeight = 14.sp,
+            fontSize = 12.sp,
+            lineHeight = 16.sp,
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(horizontal = 30.dp, vertical = 20.dp),
           )
@@ -787,9 +875,13 @@ private fun ThreadVoiceMode(
           Modifier
             .align(Alignment.BottomCenter)
             .padding(bottom = 44.dp)
+            .minimumInteractiveComponentSize()
             .background(colors.voiceAccentSoft, RoundedCornerShape(14.dp))
             .border(1.dp, colors.voiceAccent, RoundedCornerShape(14.dp))
-            .clickable(role = Role.Button) {
+            .clickable(
+              role = Role.Button,
+              onClickLabel = stringResource(R.string.show_new_messages),
+            ) {
               followState = wearThreadFollowLatest(followState)
               if (latestAnchorIndex >= 0) {
                 coroutineScope.launch {
@@ -800,9 +892,9 @@ private fun ThreadVoiceMode(
         contentAlignment = Alignment.Center,
       ) {
         Text(
-          text = "${stringResource(R.string.new_messages)} ↓",
+          text = stringResource(R.string.new_messages) + " ↓",
           color = colors.voiceAccent,
-          fontSize = 9.sp,
+          fontSize = 10.sp,
           fontWeight = FontWeight.Bold,
         )
       }
@@ -819,11 +911,12 @@ private fun ThreadVoiceMode(
         modifier =
           Modifier
             .width(70.dp)
-            .height(34.dp)
-            .background(colors.surfaceRaised, RoundedCornerShape(17.dp))
-            .border(1.dp, colors.borderStrong, RoundedCornerShape(17.dp))
+            .minimumInteractiveComponentSize()
+            .background(colors.surfaceRaised, RoundedCornerShape(24.dp))
+            .border(1.dp, colors.borderStrong, RoundedCornerShape(24.dp))
             .clickable(
               enabled = inputEnabled && !actionBusy && !realtimeActive,
+              onClickLabel = stringResource(R.string.type),
               role = Role.Button,
               onClick = onType,
             ),
@@ -844,7 +937,7 @@ private fun ThreadVoiceMode(
       Box(
         modifier =
           Modifier
-            .size(36.dp)
+            .minimumInteractiveComponentSize()
             .background(
               color = if (realtimeActive) colors.voiceAccent else colors.surfaceRaised,
               shape = CircleShape,
@@ -854,9 +947,12 @@ private fun ThreadVoiceMode(
               shape = CircleShape,
             ).clickable(
               enabled = realtimeActive || (inputEnabled && !actionBusy),
+              onClickLabel = liveClickLabel,
               role = Role.Button,
               onClick = onRealtimeTalk,
-            ),
+            ).semantics {
+              contentDescription = liveVoiceDescription
+            },
         contentAlignment = Alignment.Center,
       ) {
         MicrophoneGlyph(
@@ -881,7 +977,7 @@ private fun WearThreadThinking() {
         .padding(horizontal = 12.dp, vertical = 8.dp),
   ) {
     Text(
-      text = "${stringResource(R.string.thinking)}…",
+      text = stringResource(R.string.thinking) + "…",
       color = colors.textMuted,
       fontSize = 10.sp,
       fontWeight = FontWeight.SemiBold,
@@ -970,48 +1066,6 @@ internal fun nextWearThreadFollowForViewport(
 internal fun wearThreadFollowLatest(state: WearThreadFollowState): WearThreadFollowState = state.copy(followingLatest = true, hasNewContent = false)
 
 @Composable
-private fun VoiceOrb(
-  accent: Color,
-  containerColor: Color,
-  pulse: Boolean,
-  size: androidx.compose.ui.unit.Dp,
-  modifier: Modifier = Modifier,
-  content: @Composable () -> Unit,
-) {
-  val ringAlpha =
-    if (pulse) {
-      val transition = rememberInfiniteTransition(label = "voice-orb-ring")
-      transition
-        .animateFloat(
-          initialValue = 0.4f,
-          targetValue = 1f,
-          animationSpec =
-            infiniteRepeatable(
-              animation = tween(durationMillis = 850),
-              repeatMode = RepeatMode.Reverse,
-            ),
-          label = "voice-orb-ring-alpha",
-        ).value
-    } else {
-      1f
-    }
-  Box(
-    modifier =
-      modifier
-        .size(size)
-        .background(containerColor, CircleShape)
-        .border(
-          width = if (pulse) 3.dp else 1.dp,
-          color = accent.copy(alpha = ringAlpha),
-          shape = CircleShape,
-        ),
-    contentAlignment = Alignment.Center,
-  ) {
-    content()
-  }
-}
-
-@Composable
 private fun MicrophoneGlyph(
   color: Color,
   modifier: Modifier = Modifier,
@@ -1056,47 +1110,6 @@ private fun MicrophoneGlyph(
   }
 }
 
-@Composable
-private fun LiveWaveform(
-  color: Color,
-  active: Boolean,
-) {
-  val transition = rememberInfiniteTransition(label = "live-waveform")
-  val phase by
-    transition.animateFloat(
-      initialValue = 0f,
-      targetValue = 1f,
-      animationSpec =
-        infiniteRepeatable(
-          animation = tween(durationMillis = 520),
-          repeatMode = RepeatMode.Reverse,
-        ),
-      label = "live-waveform-phase",
-    )
-  val amplitude = if (active) phase else 0f
-  Row(
-    horizontalArrangement = Arrangement.spacedBy(3.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    modifier = Modifier.height(28.dp),
-  ) {
-    listOf(
-      7f + (8f * amplitude),
-      10f + (13f * (1f - amplitude)),
-      12f + (14f * amplitude),
-      10f + (13f * (1f - amplitude)),
-      7f + (8f * amplitude),
-    ).forEach { barHeight ->
-      Box(
-        modifier =
-          Modifier
-            .width(3.dp)
-            .height(barHeight.dp)
-            .background(color, RoundedCornerShape(2.dp)),
-      )
-    }
-  }
-}
-
 private fun realtimeVoiceButtonState(
   realtimeTalk: WearRealtimeTalkSnapshot,
   ttsOnly: Boolean,
@@ -1129,7 +1142,7 @@ private fun formatVoiceElapsedTime(totalSeconds: Long): String {
   return "$minutes:${seconds.toString().padStart(2, '0')}"
 }
 
-private enum class RealtimeVoiceButtonState {
+internal enum class RealtimeVoiceButtonState {
   IDLE,
   CONNECTING,
   LISTENING,
@@ -1162,13 +1175,15 @@ private fun RealtimeTalkBubble(entry: WearRealtimeTalkEntry) {
   ) {
     Text(
       text =
-        if (isUser) {
-          stringResource(R.string.you)
-        } else {
-          stringResource(R.string.agent)
-        }.uppercase(),
+        localizedWearUppercase(
+          if (isUser) {
+            stringResource(R.string.you)
+          } else {
+            stringResource(R.string.agent)
+          },
+        ),
       color = if (isUser) foreground.copy(alpha = 0.72f) else colors.textMuted,
-      fontSize = 9.sp,
+      fontSize = 10.sp,
       fontWeight = FontWeight.Bold,
       letterSpacing = 0.8.sp,
     )
@@ -1182,9 +1197,9 @@ private fun RealtimeTalkBubble(entry: WearRealtimeTalkEntry) {
     )
     if (entry.streaming) {
       Text(
-        text = stringResource(R.string.live).uppercase(),
+        text = localizedWearUppercase(stringResource(R.string.live)),
         color = colors.warning,
-        fontSize = 9.sp,
+        fontSize = 10.sp,
         fontWeight = FontWeight.Bold,
       )
     }
@@ -1211,8 +1226,8 @@ private fun ControlsPage(
     item {
       ConnectionPanel(snapshot = snapshot)
     }
-    snapshot.errorText?.takeIf(String::isNotBlank)?.let { error ->
-      item { InlineError(text = error) }
+    snapshot.failure?.let { failure ->
+      item { InlineError(text = failureDetail(failure)) }
     }
     item {
       SelectionButton(
@@ -1372,7 +1387,7 @@ private fun OpenClawHeader(pageLabel: String) {
     horizontalAlignment = Alignment.CenterHorizontally,
   ) {
     Text(
-      text = stringResource(R.string.app_name).uppercase(),
+      text = localizedWearUppercase(stringResource(R.string.app_name)),
       color = colors.text,
       fontSize = 16.sp,
       fontWeight = FontWeight.Bold,
@@ -1381,7 +1396,7 @@ private fun OpenClawHeader(pageLabel: String) {
       maxLines = 1,
     )
     Text(
-      text = pageLabel.uppercase(),
+      text = localizedWearUppercase(pageLabel),
       color = colors.textMuted,
       fontSize = 10.sp,
       fontWeight = FontWeight.SemiBold,
@@ -1476,9 +1491,9 @@ private fun ContextPickerRow(
       horizontalAlignment = Alignment.CenterHorizontally,
     ) {
       Text(
-        text = label.uppercase(),
+        text = localizedWearUppercase(label),
         color = OpenClawWearTheme.colors.textMuted,
-        fontSize = 8.sp,
+        fontSize = 10.sp,
         fontWeight = FontWeight.Bold,
         letterSpacing = 0.8.sp,
         maxLines = 1,
@@ -1512,6 +1527,8 @@ private fun PickerChevron(
   Box(
     modifier =
       Modifier
+        // Foundation clickable expands hit testing to the system minimum touch target.
+        // Compact visual bounds keep picker values readable on 192dp round screens.
         .width(32.dp)
         .height(30.dp)
         .semantics { this.contentDescription = contentDescription }
@@ -1611,13 +1628,15 @@ private fun MessageBubble(message: WearChatMessage) {
   ) {
     Text(
       text =
-        when (message.chatRole) {
-          WearChatRole.USER -> stringResource(R.string.you)
-          WearChatRole.ASSISTANT -> stringResource(R.string.agent)
-          WearChatRole.SYSTEM -> stringResource(R.string.system)
-        }.uppercase(),
+        localizedWearUppercase(
+          when (message.chatRole) {
+            WearChatRole.USER -> stringResource(R.string.you)
+            WearChatRole.ASSISTANT -> stringResource(R.string.agent)
+            WearChatRole.SYSTEM -> stringResource(R.string.system)
+          },
+        ),
       color = if (isUser) foreground.copy(alpha = 0.72f) else colors.textMuted,
-      fontSize = 9.sp,
+      fontSize = 10.sp,
       fontWeight = FontWeight.Bold,
       letterSpacing = 0.8.sp,
     )
@@ -1645,9 +1664,9 @@ private fun StreamingBubble(text: String) {
         .padding(horizontal = 12.dp, vertical = 9.dp),
   ) {
     Text(
-      text = stringResource(R.string.agent_working).uppercase(),
+      text = localizedWearUppercase(stringResource(R.string.agent_working)),
       color = colors.warning,
-      fontSize = 9.sp,
+      fontSize = 10.sp,
       fontWeight = FontWeight.Bold,
       letterSpacing = 0.8.sp,
     )
@@ -1687,7 +1706,7 @@ private fun ConnectionPanel(snapshot: WearConversationSnapshot) {
       )
       Spacer(modifier = Modifier.size(7.dp))
       Text(
-        text = stringResource(R.string.connection).uppercase(),
+        text = localizedWearUppercase(stringResource(R.string.connection)),
         color = colors.textMuted,
         fontSize = 10.sp,
         fontWeight = FontWeight.Bold,
@@ -1718,7 +1737,7 @@ private fun ConnectionPanel(snapshot: WearConversationSnapshot) {
 private fun PhoneBoundaryPanel() {
   Panel {
     Text(
-      text = stringResource(R.string.security_boundary).uppercase(),
+      text = localizedWearUppercase(stringResource(R.string.security_boundary)),
       color = OpenClawWearTheme.colors.textMuted,
       fontSize = 10.sp,
       fontWeight = FontWeight.Bold,
@@ -1754,7 +1773,7 @@ private fun ThemeModeSelector(
         .padding(horizontal = 12.dp),
   ) {
     Text(
-      text = stringResource(R.string.appearance).uppercase(),
+      text = localizedWearUppercase(stringResource(R.string.appearance)),
       color = colors.textMuted,
       fontSize = 10.sp,
       fontWeight = FontWeight.SemiBold,
@@ -1798,7 +1817,7 @@ private fun ThemeModeOption(
   Box(
     modifier =
       modifier
-        .height(40.dp)
+        .minimumInteractiveComponentSize()
         .background(
           color = if (selected) colors.primary else Color.Transparent,
           shape = RoundedCornerShape(9.dp),
@@ -1906,43 +1925,6 @@ private fun ActionButton(
 }
 
 @Composable
-private fun CompactVoiceButton(
-  label: String,
-  enabled: Boolean,
-  onClick: () -> Unit,
-  modifier: Modifier = Modifier,
-) {
-  val colors = OpenClawWearTheme.colors
-  Button(
-    onClick = onClick,
-    enabled = enabled,
-    colors =
-      ButtonDefaults.buttonColors(
-        containerColor = colors.surfaceRaised,
-        contentColor = colors.text,
-        disabledContainerColor = colors.surface,
-        disabledContentColor = colors.textMuted,
-      ),
-    modifier =
-      modifier.border(
-        width = 1.dp,
-        color = if (enabled) colors.borderStrong else colors.border,
-        shape = RoundedCornerShape(24.dp),
-      ),
-    label = {
-      Text(
-        text = label,
-        modifier = Modifier.fillMaxWidth(),
-        fontSize = 12.sp,
-        fontWeight = FontWeight.SemiBold,
-        textAlign = TextAlign.Center,
-        maxLines = 1,
-      )
-    },
-  )
-}
-
-@Composable
 private fun SecondaryButton(
   label: String,
   enabled: Boolean,
@@ -2010,8 +1992,8 @@ private fun InlineError(text: String) {
   Text(
     text = text,
     color = colors.danger,
-    fontSize = 11.sp,
-    lineHeight = 14.sp,
+    fontSize = 12.sp,
+    lineHeight = 16.sp,
     textAlign = TextAlign.Center,
     modifier =
       Modifier

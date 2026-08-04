@@ -20,7 +20,7 @@ import { createExtensionRuntime } from "./extensions/loader.js";
 import type { LoadExtensionsResult, ToolDefinition } from "./extensions/types.js";
 import { ModelRegistry } from "./model-registry.js";
 import type { ResourceLoader } from "./resource-loader.js";
-import { createAgentSession } from "./sdk.js";
+import { createAgentSession, createAgentSessionForEmbeddedRunner } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 import { createSyntheticSourceInfo } from "./source-info.js";
@@ -156,6 +156,7 @@ async function createTestSession(
     sessionManager?: SessionManager;
     resourceLoader?: ResourceLoader;
     customTools?: ToolDefinition[];
+    contextOverflowRecoveryOwner?: "session" | "caller";
   } = {},
 ) {
   const model = options.model ?? testModel;
@@ -173,15 +174,20 @@ async function createTestSession(
     api: model.api,
     streamSimple: streamMocks.streamSimple,
   });
-  const result = await createAgentSession({
+  const sessionOptions = {
     model,
-    noTools: "builtin",
+    noTools: "builtin" as const,
     customTools: options.customTools,
     resourceLoader: options.resourceLoader ?? createResourceLoader(),
     sessionManager,
     settingsManager,
     modelRegistry,
-  });
+  };
+  const result = options.contextOverflowRecoveryOwner
+    ? await createAgentSessionForEmbeddedRunner(sessionOptions, {
+        contextOverflowRecoveryOwner: options.contextOverflowRecoveryOwner,
+      })
+    : await createAgentSession(sessionOptions);
   sessions.push(result.session);
   return { ...result, settingsManager, sessionManager };
 }
@@ -202,6 +208,59 @@ afterEach(() => {
 });
 
 describe("AgentSession loop correctness", () => {
+  it("carries the canonical assistant entry id through ordered terminal listeners", async () => {
+    const assistant = createAssistant(testModel, [{ type: "text", text: "same answer" }]);
+    const sessionManager = SessionManager.inMemory();
+    sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
+    sessionManager.appendMessage({ ...assistant });
+    streamMocks.streamSimple.mockImplementation(() => createAssistantResultStream(assistant));
+    const appendMessage = vi.spyOn(sessionManager, "appendMessage");
+    const { session } = await createTestSession({ sessionManager });
+    const order: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    let promptSettled = false;
+    let terminalEntryId: string | undefined;
+
+    session.subscribe(async (event) => {
+      if (event.type !== "agent_end") {
+        return;
+      }
+      terminalEntryId = event.assistantEntryId;
+      order.push("first:start");
+      session.subscribe((lateEvent) => {
+        if (lateEvent.type === "agent_end") {
+          order.push("late");
+        }
+      });
+      unsubscribeSecond();
+      await new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      order.push("first:end");
+      throw new Error("listener rejected");
+    });
+    const unsubscribeSecond = session.subscribe(async (event) => {
+      if (event.type === "agent_end") {
+        order.push("second");
+      }
+    });
+
+    const prompt = session.prompt("new prompt").then(() => {
+      promptSettled = true;
+    });
+    await vi.waitFor(() => expect(order).toEqual(["first:start"]));
+    expect(promptSettled).toBe(false);
+
+    releaseFirst?.();
+    await prompt;
+
+    const persistedAssistantCall = appendMessage.mock.results.findLast(
+      (result) => result.type === "return",
+    );
+    expect(terminalEntryId).toBe(persistedAssistantCall?.value);
+    expect(order).toEqual(["first:start", "first:end", "second"]);
+  });
+
   it("emits agent_settled once after a normal run", async () => {
     const lifecycleEvents: string[] = [];
     const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
@@ -278,6 +337,33 @@ describe("AgentSession loop correctness", () => {
     expect(compactionEvents).toContainEqual(
       expect.objectContaining({ type: "compaction_end", reason: "threshold", willRetry: false }),
     );
+  });
+
+  it("skips threshold maintenance when embedded auto-compaction is disabled", async () => {
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: false, reserveTokens: 0, keepRecentTokens: 1 },
+      retry: { enabled: false },
+    });
+    const compactionEvents: AgentSessionEvent[] = [];
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 100),
+      ),
+    );
+    const { session } = await createTestSession({
+      settingsManager,
+      resourceLoader: createResourceLoader(createCompactionHandlers()),
+    });
+    session.subscribe((event) => {
+      if (event.type === "compaction_end") {
+        compactionEvents.push(event);
+      }
+    });
+
+    await session.prompt("new prompt");
+
+    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+    expect(compactionEvents).toEqual([]);
   });
 
   it("does not retry a high-usage turn terminated by a tool result", async () => {
@@ -366,6 +452,70 @@ describe("AgentSession loop correctness", () => {
       expect.objectContaining({ type: "compaction_end", reason: "overflow", willRetry: true }),
     );
     expect(session.getLastAssistantText()).toBe("complete retry");
+  });
+
+  it("leaves reactive overflow recovery to the caller when configured", async () => {
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: true, reserveTokens: 0, keepRecentTokens: 1 },
+      retry: { enabled: false },
+    });
+    const compactionEvents: AgentSessionEvent[] = [];
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream({
+        ...createAssistant(activeModel, [], "error", 100),
+        errorMessage: "400 Your input exceeds the context window of this model",
+      }),
+    );
+    const { session } = await createTestSession({
+      settingsManager,
+      resourceLoader: createResourceLoader(createCompactionHandlers()),
+      contextOverflowRecoveryOwner: "caller",
+    });
+    session.subscribe((event) => {
+      if (event.type === "compaction_end") {
+        compactionEvents.push(event);
+      }
+    });
+
+    await session.prompt("long request");
+
+    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+    expect(compactionEvents).toEqual([]);
+    expect(session.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "400 Your input exceeds the context window of this model",
+    });
+  });
+
+  it("keeps threshold maintenance session-owned when the caller owns overflow recovery", async () => {
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: true, reserveTokens: 0, keepRecentTokens: 1 },
+      retry: { enabled: false },
+    });
+    const compactionEvents: AgentSessionEvent[] = [];
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 100),
+      ),
+    );
+    const { session } = await createTestSession({
+      settingsManager,
+      resourceLoader: createResourceLoader(createCompactionHandlers()),
+      contextOverflowRecoveryOwner: "caller",
+    });
+    session.subscribe((event) => {
+      if (event.type === "compaction_end") {
+        compactionEvents.push(event);
+      }
+    });
+
+    await session.prompt("long request");
+
+    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+    expect(compactionEvents).toContainEqual(
+      expect.objectContaining({ type: "compaction_end", reason: "threshold", willRetry: false }),
+    );
   });
 
   it("delivers a pending prompt immediately after pre-prompt compaction", async () => {

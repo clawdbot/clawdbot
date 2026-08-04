@@ -159,6 +159,7 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
       "--text",
       "--channel",
       "--voice",
+      "--provider",
       "--model",
       "--output",
       "--local",

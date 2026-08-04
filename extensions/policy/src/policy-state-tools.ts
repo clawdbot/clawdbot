@@ -1,4 +1,4 @@
-// Policy plugin TOOLS.md evidence.
+// Policy plugin AGENTS.md Tools-section evidence.
 import { COLLAPSE_HYPHENS, NON_SLUG_CHARS, TRIM_HYPHENS } from "./policy-state-types.js";
 import type { PolicyToolEvidence } from "./policy-state-types.js";
 
@@ -12,9 +12,47 @@ function scanPolicyToolHeaders(raw: string): readonly PolicyToolEvidence[] {
     return [];
   }
   const tools: PolicyToolEvidence[] = [];
+  let localNotesMode: "plain" | "migrated" | undefined;
   for (let index = 0; index < section.length; index += 1) {
-    const line = section[index]?.text ?? "";
-    const heading = /^###\s+([^\s#]+)(.*)$/.exec(line);
+    const sectionLine = section[index];
+    const line = sectionLine?.text ?? "";
+    const sectionHeading = /^(#{1,6})\s+(.+?)\s*#*\s*$/u.exec(line);
+    const isChildHeading = sectionHeading?.[1]?.length === (sectionLine?.sectionDepth ?? 0) + 1;
+    if (
+      line.includes("Skills provide your tools.") &&
+      line.includes("Keep local notes") &&
+      line.includes("TOOLS.md")
+    ) {
+      localNotesMode = "plain";
+      continue;
+    }
+    if (isChildHeading && /^Local notes\s*$/iu.test(sectionHeading?.[2] ?? "")) {
+      localNotesMode = "plain";
+      continue;
+    }
+    if (
+      isChildHeading &&
+      /^Local notes \(migrated from TOOLS\.md\)\s*$/iu.test(sectionHeading?.[2] ?? "")
+    ) {
+      localNotesMode = "migrated";
+      continue;
+    }
+    if (
+      localNotesMode &&
+      sectionHeading &&
+      sectionHeading[1]!.length <= (section[index]?.sectionDepth ?? 0) &&
+      slugify(sectionHeading[2] ?? "") === "tools"
+    ) {
+      localNotesMode = undefined;
+      continue;
+    }
+    if (localNotesMode === "plain" && isChildHeading) {
+      localNotesMode = undefined;
+    }
+    if (localNotesMode) {
+      continue;
+    }
+    const heading = isChildHeading ? /^([^\s#]+)(.*)$/u.exec(sectionHeading?.[2] ?? "") : null;
     const bullet = /^[-*+]\s+([^:\s][^:]*?)\s*:(.*)$/.exec(line);
     const match = heading ?? bullet;
     const toolName = match?.[1];
@@ -35,13 +73,19 @@ function scanPolicyToolHeaders(raw: string): readonly PolicyToolEvidence[] {
       capabilities?: readonly string[];
     } = {
       id,
-      source: `oc://TOOLS.md/tools/${id}`,
+      source: `oc://AGENTS.md/tools/${id}`,
       line: section[index]?.line ?? index + 1,
     };
     const metaLines = [match[2] ?? ""];
     for (let metaIndex = index + 1; metaIndex < section.length; metaIndex += 1) {
-      const metaLine = section[metaIndex]?.text ?? "";
-      if (/^###\s+\S+/.test(metaLine.trim()) || /^[-*+]\s+[^:\s][^:]*?\s*:/.test(metaLine)) {
+      const metaSectionLine = section[metaIndex];
+      const metaLine = metaSectionLine?.text ?? "";
+      const metaHeading = /^(#{1,6})\s+(.+?)\s*#*\s*$/u.exec(metaLine.trim());
+      if (
+        (metaHeading !== null &&
+          (metaHeading[1]?.length ?? 0) <= (metaSectionLine?.sectionDepth ?? 0) + 1) ||
+        /^[-*+]\s+[^:\s][^:]*?\s*:/.test(metaLine)
+      ) {
         break;
       }
       metaLines.push(metaLine);
@@ -71,30 +115,59 @@ function scanPolicyToolHeaders(raw: string): readonly PolicyToolEvidence[] {
 function markdownSectionLines(
   raw: string,
   sectionSlug: string,
-): readonly { readonly line: number; readonly text: string }[] {
+): readonly {
+  readonly line: number;
+  readonly text: string;
+  readonly sectionDepth: number;
+}[] {
   const lines = raw.split(/\r?\n/);
   let sectionDepth: number | undefined;
-  const section: { line: number; text: string }[] = [];
+  let foundSection = false;
+  let fence: { marker: "`" | "~"; length: number } | undefined;
+  const section: { line: number; text: string; sectionDepth: number }[] = [];
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index] ?? "";
+    const fenceRun = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
+    const closingFenceRun = /^\s*(`{3,}|~{3,})\s*$/.exec(line)?.[1];
+    const marker = fenceRun?.[0] as "`" | "~" | undefined;
+    if (marker && !fence) {
+      fence = { marker, length: fenceRun!.length };
+      continue;
+    }
+    if (
+      closingFenceRun &&
+      fence &&
+      closingFenceRun[0] === fence.marker &&
+      closingFenceRun.length >= fence.length
+    ) {
+      fence = undefined;
+      continue;
+    }
+    if (fence) {
+      continue;
+    }
     const heading = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
     if (heading !== null) {
       const depth = heading[1]?.length ?? 0;
       const slug = slugify(heading[2] ?? "");
       if (sectionDepth !== undefined && depth <= sectionDepth) {
-        break;
+        sectionDepth = undefined;
       }
       if (sectionDepth !== undefined) {
-        section.push({ line: index + 1, text: line });
+        section.push({ line: index + 1, text: line, sectionDepth });
         continue;
       }
-      if (sectionDepth === undefined && slug === sectionSlug) {
+      if (depth <= 2 && slug === sectionSlug) {
+        if (foundSection) {
+          section.push({ line: index + 1, text: line, sectionDepth: depth });
+        }
+        foundSection = true;
         sectionDepth = depth;
       }
       continue;
     }
     if (sectionDepth !== undefined) {
-      section.push({ line: index + 1, text: line });
+      section.push({ line: index + 1, text: line, sectionDepth });
     }
   }
   return section;

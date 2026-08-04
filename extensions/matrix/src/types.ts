@@ -77,8 +77,8 @@ type MatrixThreadBindingsConfig = {
 type MatrixExecApprovalTarget = "dm" | "channel" | "both";
 
 type MatrixExecApprovalConfig = {
-  /** If true, deliver exec approvals through Matrix-native prompts. */
-  enabled?: boolean;
+  /** Explicitly enable Matrix-native approval prompts when approvers are available. */
+  enabled?: boolean | "auto";
   /** Optional approver Matrix user IDs. Falls back to dm.allowFrom. */
   approvers?: Array<string | number>;
   /** Optional agent allowlist for approval delivery. */
@@ -238,9 +238,7 @@ export type CoreConfig = {
       botLoopProtection?: ChannelBotLoopProtectionConfig;
     };
   };
-  commands?: {
-    useAccessGroups?: boolean;
-  };
+  commands?: OpenClawConfig["commands"];
   session?: {
     store?: string;
     dmScope?: NonNullable<OpenClawConfig["session"]>["dmScope"];

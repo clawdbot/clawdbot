@@ -41,14 +41,10 @@ function normalizeProviderEnvVars(
 
 function resolvePluginProviderEnvVars(plugin: {
   setup?: { providers?: Array<{ id: string; envVars?: string[] }> };
-  providerAuthEnvVars?: Record<string, string[]>;
 }): Record<string, string[]> {
   const envVars: Record<string, string[]> = {};
   for (const provider of plugin.setup?.providers ?? []) {
     envVars[provider.id] = uniqueStrings(provider.envVars ?? []);
-  }
-  for (const [providerId, keys] of Object.entries(plugin.providerAuthEnvVars ?? {})) {
-    envVars[providerId] = uniqueStrings([...(envVars[providerId] ?? []), ...keys]);
   }
   return normalizeProviderEnvVars(envVars);
 }
@@ -140,13 +136,22 @@ function formatBundledCapabilityPluginLoadError(params: {
   const diagnostics = params.registry.diagnostics
     .filter((entry) => entry.pluginId === params.pluginId)
     .map((entry) => entry.message);
+  const providerIds = params.registry.providers
+    .filter((entry) => entry.pluginId === params.pluginId)
+    .map((entry) => entry.provider.id);
+  const webFetchProviderIds = params.registry.webFetchProviders
+    .filter((entry) => entry.pluginId === params.pluginId)
+    .map((entry) => entry.provider.id);
+  const webSearchProviderIds = params.registry.webSearchProviders
+    .filter((entry) => entry.pluginId === params.pluginId)
+    .map((entry) => entry.provider.id);
   const detailParts = plugin
     ? [
         `status=${plugin.status}`,
         ...(plugin.error ? [`error=${plugin.error}`] : []),
-        `providerIds=[${plugin.providerIds.join(", ")}]`,
-        `webFetchProviderIds=[${plugin.webFetchProviderIds.join(", ")}]`,
-        `webSearchProviderIds=[${plugin.webSearchProviderIds.join(", ")}]`,
+        `providerIds=[${providerIds.join(", ")}]`,
+        `webFetchProviderIds=[${webFetchProviderIds.join(", ")}]`,
+        `webSearchProviderIds=[${webSearchProviderIds.join(", ")}]`,
       ]
     : ["plugin record missing"];
   if (diagnostics.length > 0) {
@@ -161,13 +166,11 @@ function loadScopedCapabilityRuntimeRegistryEntries<T>(params: {
   pluginId: string;
   capabilityLabel: string;
   loadEntries: (registry: BundledCapabilityRuntimeRegistry) => T[];
-  loadDeclaredIds: (
-    plugin: BundledCapabilityRuntimeRegistry["plugins"][number],
-  ) => readonly string[];
 }): T[] {
   const discovery = discoverOpenClawPlugins({});
   let lastFailure: Error | undefined;
 
+  // Manifest IDs exist before registration; only observed runtime entries prove the load worked.
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const registry = loadBundledCapabilityRuntimeRegistry({
       pluginIds: [params.pluginId],
@@ -179,18 +182,11 @@ function loadScopedCapabilityRuntimeRegistryEntries<T>(params: {
       return entries;
     }
 
-    const plugin = registry.plugins.find((entry) => entry.id === params.pluginId);
     lastFailure = formatBundledCapabilityPluginLoadError({
       pluginId: params.pluginId,
       capabilityLabel: params.capabilityLabel,
       registry,
     });
-    const shouldRetry =
-      attempt === 0 &&
-      (!plugin || plugin.status !== "loaded" || params.loadDeclaredIds(plugin).length === 0);
-    if (!shouldRetry) {
-      break;
-    }
   }
 
   throw (
@@ -227,7 +223,6 @@ function loadProviderContractEntriesForPluginId(pluginId: string): ProviderContr
             pluginId: entry.pluginId,
             provider: entry.provider,
           })),
-      loadDeclaredIds: (plugin) => plugin.providerIds,
     }).map((entry) => ({
       pluginId: entry.pluginId,
       provider: entry.provider,
@@ -282,7 +277,6 @@ export function resolveWebFetchProviderContractEntriesForPluginId(
           provider: entry.provider,
           credentialValue: resolveWebFetchCredentialValue(entry.provider),
         })),
-    loadDeclaredIds: (plugin) => plugin.webFetchProviderIds,
   });
 }
 
@@ -311,7 +305,6 @@ export function resolveWebSearchProviderContractEntriesForPluginId(
           provider: entry.provider,
           credentialValue: resolveWebSearchCredentialValue(entry.provider),
         })),
-    loadDeclaredIds: (plugin) => plugin.webSearchProviderIds,
   });
 }
 

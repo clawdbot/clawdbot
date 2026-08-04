@@ -1,11 +1,22 @@
 // Zalo plugin module implements probe behavior.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
+import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getMe, ZaloApiError, type ZaloBotInfo, type ZaloFetch } from "./api.js";
 
 export type ZaloProbeResult = BaseProbeResult<string> & {
   bot?: ZaloBotInfo;
   elapsedMs: number;
 };
+
+function formatZaloProbeError(error: unknown, timeoutMs: number): string {
+  if (error instanceof ZaloApiError) {
+    return error.description ?? error.message;
+  }
+  if (error instanceof Error) {
+    return error.name === "AbortError" ? `Request timed out after ${timeoutMs}ms` : error.message;
+  }
+  return String(error);
+}
 
 export async function probeZalo(
   token: string,
@@ -16,31 +27,17 @@ export async function probeZalo(
     return { ok: false, error: "No token provided", elapsedMs: 0 };
   }
 
-  const startTime = Date.now();
+  return await runChannelProbe(
+    undefined,
+    async ({ elapsedMs }) => {
+      const response = await getMe(token.trim(), timeoutMs, fetcher);
 
-  try {
-    const response = await getMe(token.trim(), timeoutMs, fetcher);
-    const elapsedMs = Date.now() - startTime;
-
-    if (response.ok && response.result) {
-      return { ok: true, bot: response.result, elapsedMs };
-    }
-
-    return { ok: false, error: "Invalid response from Zalo API", elapsedMs };
-  } catch (err) {
-    const elapsedMs = Date.now() - startTime;
-
-    if (err instanceof ZaloApiError) {
-      return { ok: false, error: err.description ?? err.message, elapsedMs };
-    }
-
-    if (err instanceof Error) {
-      if (err.name === "AbortError") {
-        return { ok: false, error: `Request timed out after ${timeoutMs}ms`, elapsedMs };
+      if (response.ok && response.result) {
+        return { ok: true, bot: response.result, elapsedMs: elapsedMs() };
       }
-      return { ok: false, error: err.message, elapsedMs };
-    }
 
-    return { ok: false, error: String(err), elapsedMs };
-  }
+      return { ok: false, error: "Invalid response from Zalo API", elapsedMs: elapsedMs() };
+    },
+    (error) => ({ ok: false, error: formatZaloProbeError(error, timeoutMs) }),
+  );
 }

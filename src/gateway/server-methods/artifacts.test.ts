@@ -7,6 +7,8 @@ import { artifactsHandlers } from "./artifacts.js";
 const hoisted = vi.hoisted(() => ({
   getTaskSessionLookupByIdForStatus: vi.fn(),
   loadSessionEntry: vi.fn(),
+  resolveManagedArtifactDownload: vi.fn(),
+  resolveManagedUrlDownload: vi.fn(),
   visitSessionMessagesAsync: vi.fn(),
   resolveSessionKeyForRun: vi.fn(),
 }));
@@ -20,6 +22,7 @@ vi.mock("../session-utils.js", async () => {
   return {
     ...actual,
     loadSessionEntry: hoisted.loadSessionEntry,
+    loadSessionEntryReadOnly: hoisted.loadSessionEntry,
   };
 });
 
@@ -43,6 +46,17 @@ vi.mock("../server-session-key.js", async () => {
   };
 });
 
+vi.mock("../managed-image-attachments.js", async () => {
+  const actual = await vi.importActual<typeof import("../managed-image-attachments.js")>(
+    "../managed-image-attachments.js",
+  );
+  return {
+    ...actual,
+    resolveManagedOutgoingMediaArtifactDownload: hoisted.resolveManagedArtifactDownload,
+    resolveManagedOutgoingMediaUrlDownload: hoisted.resolveManagedUrlDownload,
+  };
+});
+
 function createResponder() {
   const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
   return {
@@ -63,13 +77,16 @@ async function invokeArtifactHandler(
   options: { id?: string; context?: unknown } = {},
 ) {
   const responder = createResponder();
+  const defaultContext = {
+    getRuntimeConfig: () => ({ agents: { entries: { main: { default: true } } } }),
+  };
   await artifactsHandlers[method]?.({
     req: { type: "req", id: options.id ?? method, method, params: {} },
     params,
     client: null,
     isWebchatConnect: () => false,
     respond: responder.respond,
-    context: (options.context ?? {}) as never,
+    context: (options.context ?? defaultContext) as never,
   });
   return responder;
 }
@@ -207,6 +224,8 @@ describe("artifacts RPC handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     hoisted.resolveSessionKeyForRun.mockReset();
+    hoisted.resolveManagedArtifactDownload.mockResolvedValue(null);
+    hoisted.resolveManagedUrlDownload.mockResolvedValue(null);
     hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue(undefined);
     hoisted.loadSessionEntry.mockReturnValue({
       storePath: "/tmp/sessions.json",
@@ -354,6 +373,112 @@ describe("artifacts RPC handlers", () => {
       data: "aGVsbG8=",
     });
     expectFields(downloadPayload.artifact, { id: artifactId });
+  });
+
+  it("preserves managed artifact identity and returns a ticketed download URL", async () => {
+    const artifactId = "artifact_managed_image_11111111-1111-4111-8111-111111111111";
+    mockedMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "image",
+            artifactId,
+            url: "/api/chat/media/outgoing/agent%3Amain%3Amain/11111111-1111-4111-8111-111111111111/full",
+            alt: "chart.png",
+            mimeType: "image/png",
+            sizeBytes: 14,
+          },
+        ],
+        __openclaw: { seq: 2 },
+      },
+    ]);
+    hoisted.resolveManagedArtifactDownload.mockResolvedValue({
+      artifactId,
+      sessionKey: "agent:main:main",
+      type: "image",
+      title: "chart.png",
+      mimeType: "image/png",
+      sizeBytes: 14,
+      url: "/api/chat/media/outgoing/agent%3Amain%3Amain/id/full?mediaTicket=ticket",
+      expiresAt: "2026-07-28T05:00:00.000Z",
+    });
+
+    const listed = await listArtifacts({ sessionKey: "agent:main:main" });
+    expectFields(expectFirstArtifact(listed.calls), { id: artifactId, sizeBytes: 14 });
+
+    const downloaded = await downloadArtifact({ sessionKey: "agent:main:main", artifactId });
+    expectFields(expectOkPayload(downloaded.calls), {
+      url: "/api/chat/media/outgoing/agent%3Amain%3Amain/id/full?mediaTicket=ticket",
+      expiresAt: "2026-07-28T05:00:00.000Z",
+    });
+    expect(hoisted.resolveManagedArtifactDownload).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      artifactId,
+    });
+  });
+
+  it.each([
+    { type: "audio", mimeType: "audio/mpeg", data: "YXVkaW8=" },
+    { type: "video", mimeType: "video/mp4", data: "dmlkZW8=" },
+  ])("downloads inline $type artifacts as bytes", async ({ type, mimeType, data }) => {
+    mockedMessages([
+      {
+        role: "assistant",
+        content: [{ type, data, mimeType, fileName: `result.${type}` }],
+        __openclaw: { seq: 2 },
+      },
+    ]);
+    const listed = await listArtifacts({ sessionKey: "agent:main:main" });
+    const artifact = expectFirstArtifact(listed.calls);
+    const artifactId = requireNonEmptyString(artifact?.id, "expected media artifact id");
+
+    const downloaded = await downloadArtifact({
+      sessionKey: "agent:main:main",
+      artifactId,
+    });
+
+    expectFields(artifact, { type, mimeType });
+    expectFields(artifact?.download, { mode: "bytes" });
+    expectFields(expectOkPayload(downloaded.calls), {
+      encoding: "base64",
+      data,
+    });
+  });
+
+  it.each([
+    { type: "audio", mimeType: "audio/mpeg", fileName: "theme.mp3" },
+    { type: "video", mimeType: "video/mp4", fileName: "clip.mp4" },
+  ])("returns ticketed URLs for managed $type artifacts", async ({ type, mimeType, fileName }) => {
+    const attachmentId = "22222222-2222-4222-8222-222222222222";
+    const artifactId = `artifact_managed_media_${attachmentId}`;
+    const url = `/api/chat/media/outgoing/agent%3Amain%3Amain/${attachmentId}/full`;
+    mockedMessages([
+      {
+        role: "assistant",
+        content: [{ type, artifactId, url, openUrl: url, fileName, mimeType, sizeBytes: 10 }],
+        __openclaw: { seq: 2 },
+      },
+    ]);
+    hoisted.resolveManagedArtifactDownload.mockResolvedValue({
+      artifactId,
+      sessionKey: "agent:main:main",
+      type,
+      title: fileName,
+      mimeType,
+      sizeBytes: 10,
+      url: `${url}?mediaTicket=ticket`,
+      expiresAt: "2026-07-28T05:00:00.000Z",
+    });
+
+    const listed = await listArtifacts({ sessionKey: "agent:main:main" });
+    const downloaded = await downloadArtifact({ sessionKey: "agent:main:main", artifactId });
+
+    expectFields(expectFirstArtifact(listed.calls), { id: artifactId, type, mimeType });
+    expectFields(expectOkPayload(downloaded.calls), {
+      url: `${url}?mediaTicket=ticket`,
+      expiresAt: "2026-07-28T05:00:00.000Z",
+    });
   });
 
   it("can scan artifact summaries without retaining inline data", async () => {

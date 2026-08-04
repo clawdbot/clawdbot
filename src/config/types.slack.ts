@@ -81,11 +81,7 @@ export type SlackChannelStreamingConfig = {
 };
 export type SlackExecApprovalTarget = ChannelExecApprovalTarget;
 export type SlackExecApprovalConfig = ChannelExecApprovalConfig;
-export type SlackCapabilitiesConfig =
-  | string[]
-  | {
-      interactiveReplies?: boolean;
-    };
+export type SlackCapabilitiesConfig = string[];
 
 export type SlackActionConfig = {
   reactions?: boolean;
@@ -118,15 +114,6 @@ export type SlackThreadConfig = {
   initialHistoryLimit?: number;
 };
 
-export type SlackSocketModeConfig = {
-  /** Slack SDK pong timeout in milliseconds. Socket Mode only. Default: 15000. */
-  clientPingTimeout?: number;
-  /** Slack SDK server ping timeout in milliseconds. Socket Mode only. */
-  serverPingTimeout?: number;
-  /** Enable Slack SDK ping/pong transport logging. Socket Mode only. */
-  pingPongLoggingEnabled?: boolean;
-};
-
 export type SlackRelayConfig = {
   /** Full relay websocket URL, including the route path. */
   url?: string;
@@ -147,8 +134,16 @@ export type SlackAccountConfig = Omit<
 > &
   ChannelBotInteractionConfig &
   ChannelReactionConfig<SlackReactionNotificationMode, never, string, true> & {
-    /** Slack author identity. Default: bot. */
+    /** @deprecated Doctor-only legacy input. */
     identity?: "bot" | "user";
+    /** @deprecated Doctor-only legacy input. */
+    socketMode?: {
+      clientPingTimeout?: number;
+      serverPingTimeout?: number;
+      pingPongLoggingEnabled?: boolean;
+    };
+    /** Slack author identity. Default: bot. */
+    postAs?: "bot" | "user";
     /** Slack connection mode (socket|http|relay). Default: socket. */
     mode?: "socket" | "http" | "relay";
     /**
@@ -158,7 +153,6 @@ export type SlackAccountConfig = Omit<
      */
     enterpriseOrgInstall?: boolean;
     /** Slack SDK Socket Mode transport options. Ignored in HTTP mode. */
-    socketMode?: SlackSocketModeConfig;
     /** Relay-delivered Slack event source. Used when mode is "relay". */
     relay?: SlackRelayConfig;
     /** Slack signing secret (required for HTTP mode). */

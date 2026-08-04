@@ -1,5 +1,6 @@
 import type { SqliteSessionStateDeletePlan } from "./session-accessor.sqlite-archive.js";
 import type { SessionEntryLifecycleRemoval } from "./session-accessor.sqlite-contract.js";
+import type { SessionResetBoundaryPlan } from "./session-reset-boundary-event.js";
 import type { SessionEntry } from "./types.js";
 
 // Shared plan shapes only. Runtime ownership stays in maintenance and lifecycle-state.
@@ -26,6 +27,7 @@ export type SqliteProjectedLifecycleMutation = {
   upsertedEntries: Array<{
     entry: SessionEntry;
     expectedEntry: SessionEntry | undefined;
+    resetBoundaryPlan?: SessionResetBoundaryPlan;
     sessionKey: string;
   }>;
 };

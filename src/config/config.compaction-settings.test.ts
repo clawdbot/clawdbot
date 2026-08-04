@@ -20,8 +20,7 @@ describe("config compaction settings", () => {
   it("preserves memory flush config values", () => {
     const compaction = materializeCompactionConfig({
       mode: "safeguard",
-      identifierPolicy: "custom",
-      identifierInstructions: "Keep ticket IDs unchanged.",
+      identifierPolicy: "strict",
       qualityGuard: {
         enabled: true,
         maxRetries: 2,
@@ -33,24 +32,19 @@ describe("config compaction settings", () => {
         enabled: false,
         model: "ollama/qwen3:8b",
         softThresholdTokens: 1234,
-        prompt: "Write notes.",
-        systemPrompt: "Flush memory now.",
       },
       maxActiveTranscriptBytes: "20mb",
     });
 
     expect(compaction?.mode).toBe("safeguard");
     expect(compaction?.keepRecentTokens).toBeUndefined();
-    expect(compaction?.identifierPolicy).toBe("custom");
-    expect(compaction?.identifierInstructions).toBe("Keep ticket IDs unchanged.");
+    expect(compaction?.identifierPolicy).toBe("strict");
     expect(compaction?.qualityGuard?.enabled).toBe(true);
     expect(compaction?.qualityGuard?.maxRetries).toBe(2);
     expect(compaction?.midTurnPrecheck?.enabled).toBe(true);
     expect(compaction?.memoryFlush?.enabled).toBe(false);
     expect(compaction?.memoryFlush?.model).toBe("ollama/qwen3:8b");
     expect(compaction?.memoryFlush?.softThresholdTokens).toBe(1234);
-    expect(compaction?.memoryFlush?.prompt).toBe("Write notes.");
-    expect(compaction?.memoryFlush?.systemPrompt).toBe("Flush memory now.");
     expect(compaction?.maxActiveTranscriptBytes).toBe("20mb");
   });
 

@@ -96,7 +96,7 @@ openclaw nodes status
 
 The Gateway only forwards commands the node declares and server policy
 allows. Privacy-sensitive commands such as `screen.record`, `camera.snap`,
-and `camera.clip` need explicit `gateway.nodes.allowCommands` opt-in.
+and `camera.clip` need explicit `gateway.nodes.commands.allow` opt-in.
 
 ## Local MCP mode
 

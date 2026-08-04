@@ -5,7 +5,7 @@ import {
   saveRemoteMedia,
 } from "openclaw/plugin-sdk/media-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { downloadMessageImages } from "./media.js";
+import { buildTlonInboundMediaPrompt, downloadMessageImages } from "./media.js";
 
 vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
   MAX_IMAGE_BYTES: 6 * 1024 * 1024,
@@ -44,6 +44,25 @@ describe("tlon monitor media", () => {
     expect(saveRemoteMediaMock.mock.calls.map(([options]) => options.url)).toEqual(
       Array.from({ length: 8 }, (_, index) => `https://example.com/${index}.png`),
     );
+  });
+
+  it("keeps the duplicated path projection byte-stable beside ordered facts", () => {
+    expect(
+      buildTlonInboundMediaPrompt("caption", [
+        { path: "/tmp/a.png", contentType: "image/png" },
+        { path: "/tmp/b.jpg", contentType: "image/jpeg" },
+      ]),
+    ).toEqual({
+      body: [
+        "[media attached: /tmp/a.png (image/png) | /tmp/a.png]",
+        "[media attached: /tmp/b.jpg (image/jpeg) | /tmp/b.jpg]",
+        "caption",
+      ].join("\n"),
+      media: [
+        { path: "/tmp/a.png", contentType: "image/png" },
+        { path: "/tmp/b.jpg", contentType: "image/jpeg" },
+      ],
+    });
   });
 
   it("stores fetched media through the shared inbound media store with the image cap", async () => {

@@ -12,6 +12,36 @@ const OPENCLAW_RELEASE_PREFIX_RE = /^\d{4}\./;
 const DIST_TAG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /**
+ * npm ≤11 prints `npm view`/`npm pack` `--json` results as a bare entry object
+ * or an entry array; npm 12 wraps view results in a singleton array and keys
+ * pack results by package name. Normalize both shapes to the entry list, or
+ * metadata reads mistake the wrapper for an entry and fail closed with
+ * incomplete-metadata errors.
+ */
+export function resolveNpmJsonEntries(value: unknown): unknown[] {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const looksLikeEntry =
+      typeof record.id === "string" ||
+      typeof record.name === "string" ||
+      typeof record.version === "string" ||
+      typeof record.filename === "string";
+    if (!looksLikeEntry) {
+      const entries = Object.values(record).filter(
+        (entry) => Boolean(entry) && typeof entry === "object" && !Array.isArray(entry),
+      );
+      if (entries.length > 0) {
+        return entries;
+      }
+    }
+  }
+  return [value];
+}
+
+/**
  * Parsed registry-only npm spec accepted by plugin install flows.
  * Selectors are limited to exact versions and dist-tags; URL/git/file specs
  * are rejected before they can execute on the gateway host.

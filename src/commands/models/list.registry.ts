@@ -1,9 +1,10 @@
-/** Model registry access helpers for `openclaw models list`. */
-import { loadAgentModelRegistry } from "../../agents/model-registry-loader.js";
+import { modelKey } from "../../agents/model-ref-shared.js";
 import {
   shouldSuppressBuiltInModel,
   shouldSuppressBuiltInModelFromManifest,
 } from "../../agents/model-suppression.js";
+/** Model registry access helpers for `openclaw models list`. */
+import { loadPreparedAgentModelRegistry as loadAgentModelRegistry } from "../../agents/prepared-model-registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ModelRegistry } from "../../llm/model-registry.js";
 import type { Model } from "../../llm/types.js";
@@ -12,7 +13,6 @@ import {
   MODEL_AVAILABILITY_UNAVAILABLE_CODE,
   shouldFallbackToAuthHeuristics,
 } from "./list.errors.js";
-import { modelKey } from "./shared.js";
 
 function createAvailabilityUnavailableError(message: string): Error {
   const err = new Error(message);

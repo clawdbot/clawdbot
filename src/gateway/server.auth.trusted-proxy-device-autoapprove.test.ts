@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { writeConfigFile } from "../config/config.js";
@@ -11,6 +11,8 @@ import {
   signDevicePayload,
 } from "../infra/device-identity.js";
 import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
+import { resetLogger, setLoggerOverride } from "../logging.js";
+import { loggingState } from "../logging/state.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { CONTROL_UI_CLIENT, NODE_CLIENT } from "./server.auth.test-helpers.js";
 import {
@@ -174,6 +176,64 @@ async function connectBrowserWithoutScopes(params: {
 }
 
 describe("trusted-proxy browser device auto-approval", () => {
+  test("auto-approves operator.admin and warns once at startup", async () => {
+    await writeGatewayAuthConfig({
+      mode: "trusted-proxy",
+      deviceAutoApprove: { enabled: true, scopes: ["operator.admin"] },
+    });
+    const identityPath = deviceIdentityPath("trusted-proxy-admin");
+    const identity = loadOrCreateDeviceIdentity({ path: identityPath });
+    const warnings: string[] = [];
+    loggingState.rawConsole = {
+      log: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn((message: string) => warnings.push(message)),
+      error: vi.fn(),
+    };
+    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+
+    try {
+      await withGatewayServer(async ({ port }) => {
+        const res = await connectBrowser({
+          port,
+          identityPath,
+          scopes: ["operator.admin"],
+        });
+        expect(res.ok).toBe(true);
+      });
+      await withGatewayServer(async () => {}, {
+        serverOptions: { auth: { mode: "token", token: "secret" } },
+      });
+    } finally {
+      loggingState.rawConsole = null;
+      resetLogger();
+    }
+
+    expect(
+      warnings.filter((message) =>
+        message.includes(
+          "SECURITY WARNING: gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin; every proxy-authenticated user can auto-approve a new browser device with full admin, and requests without scopes receive full admin automatically. Remove operator.admin to require manual approval until per-identity roles are available.",
+        ),
+      ),
+    ).toHaveLength(1);
+    const paired = await getPairedDevice(identity.deviceId);
+    expect(paired?.approvedScopes).toEqual(["operator.admin"]);
+    expect(paired?.tokens?.operator?.scopes).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+    ]);
+    expect(paired?.approvedVia).toBe("trusted-proxy");
+
+    expect(
+      warnings.filter((message) =>
+        message.includes(
+          "SECURITY WARNING: gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin",
+        ),
+      ),
+    ).toHaveLength(1);
+  });
+
   test("auto-approves a new browser device with the default scopes", async () => {
     await writeGatewayAuthConfig({
       mode: "trusted-proxy",
@@ -196,6 +256,7 @@ describe("trusted-proxy browser device auto-approval", () => {
     const paired = await getPairedDevice(identity.deviceId);
     expect(paired?.approvedScopes).toEqual([
       "operator.approvals",
+      "operator.questions",
       "operator.read",
       "operator.write",
     ]);
@@ -351,7 +412,7 @@ describe("trusted-proxy browser device auto-approval", () => {
     ]);
   });
 
-  test("keeps scope upgrades on existing devices pending for manual approval", async () => {
+  test("auto-approves same-key scope upgrades on existing devices", async () => {
     await writeGatewayAuthConfig({
       mode: "trusted-proxy",
       deviceAutoApprove: {
@@ -371,18 +432,98 @@ describe("trusted-proxy browser device auto-approval", () => {
         identityPath,
         scopes: ["operator.read", "operator.write"],
       });
-      expect(upgrade.ok).toBe(false);
-      expect(upgrade.error?.message ?? "").toContain("pairing required");
+      expect(upgrade.ok).toBe(true);
     });
 
     const pairing = await listDevicePairing();
-    const pending = pairing.pending.filter((entry) => entry.deviceId === identity.deviceId);
-    expect(pending).toHaveLength(1);
-    expect(pending[0]).toMatchObject({
-      isRepair: true,
-      scopes: ["operator.read", "operator.write"],
+    expect(pairing.pending.filter((entry) => entry.deviceId === identity.deviceId)).toHaveLength(0);
+    expect((await getPairedDevice(identity.deviceId))?.approvedScopes).toEqual([
+      "operator.read",
+      "operator.write",
+    ]);
+  });
+
+  test("rejects a foreign-key connect for an already-paired deviceId", async () => {
+    await writeGatewayAuthConfig({
+      mode: "trusted-proxy",
+      deviceAutoApprove: {
+        enabled: true,
+        scopes: ["operator.read", "operator.write"],
+      },
     });
-    expect((await getPairedDevice(identity.deviceId))?.approvedScopes).toEqual(["operator.read"]);
+    const identityPath = deviceIdentityPath("trusted-proxy-key-mismatch-victim");
+    const identity = loadOrCreateDeviceIdentity({ path: identityPath });
+    const attackerIdentity = loadOrCreateDeviceIdentity({
+      path: deviceIdentityPath("trusted-proxy-key-mismatch-attacker"),
+    });
+
+    await withGatewayServer(async ({ port }) => {
+      const initial = await connectBrowser({ port, identityPath, scopes: ["operator.read"] });
+      expect(initial.ok).toBe(true);
+
+      // Same deviceId, different key pair: a valid signature over the attacker
+      // key must not ride the trusted-proxy upgrade lane.
+      const ws = await openBrowserWs(port, trustedProxyHeaders());
+      try {
+        const nonce = await readConnectChallengeNonce(ws);
+        if (!nonce) {
+          throw new Error("missing connect.challenge nonce");
+        }
+        const signedAt = Date.now();
+        const scopes = ["operator.read", "operator.write"];
+        const payload = buildDeviceAuthPayloadV3({
+          deviceId: identity.deviceId,
+          clientId: CONTROL_UI_CLIENT.id,
+          clientMode: CONTROL_UI_CLIENT.mode,
+          role: "operator",
+          scopes,
+          signedAtMs: signedAt,
+          token: null,
+          nonce,
+          platform: CONTROL_UI_CLIENT.platform,
+        });
+        const id = randomUUID();
+        const response = onceMessage<{ type: "res"; id: string; ok: boolean }>(
+          ws,
+          (message) => message.type === "res" && message.id === id,
+        );
+        ws.send(
+          JSON.stringify({
+            type: "req",
+            id,
+            method: "connect",
+            params: {
+              minProtocol: PROTOCOL_VERSION,
+              maxProtocol: PROTOCOL_VERSION,
+              client: CONTROL_UI_CLIENT,
+              caps: [],
+              commands: [],
+              role: "operator",
+              scopes,
+              device: {
+                id: identity.deviceId,
+                publicKey: publicKeyRawBase64UrlFromPem(attackerIdentity.publicKeyPem),
+                signature: signDevicePayload(attackerIdentity.privateKeyPem, payload),
+                signedAt,
+                nonce,
+              },
+            },
+          }),
+        );
+        expect((await response).ok).toBe(false);
+      } finally {
+        ws.close();
+      }
+    });
+
+    // The connect is rejected before any pending request exists: deviceId is
+    // bound to the key fingerprint, so a foreign key cannot even enqueue a
+    // repair, let alone ride the same-key upgrade lane.
+    const pairing = await listDevicePairing();
+    expect(pairing.pending.filter((entry) => entry.deviceId === identity.deviceId)).toEqual([]);
+    const paired = await getPairedDevice(identity.deviceId);
+    expect(paired?.approvedScopes).toEqual(["operator.read"]);
+    expect(paired?.publicKey).toBe(publicKeyRawBase64UrlFromPem(identity.publicKeyPem));
   });
 
   test("leaves trusted-proxy pairing unchanged when auto-approval is disabled", async () => {

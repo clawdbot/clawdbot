@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { escapeRegExp as escapeRegExpLiteral } from "../shared/regexp.js";
 import { expandHomePrefix } from "./home-dir.js";
 
 const GLOB_REGEX_CACHE_LIMIT = 512;
@@ -43,10 +44,6 @@ function normalizeDotPathSegments(value: string): string {
   const normalized =
     process.platform === "win32" ? path.win32.normalize(value) : path.posix.normalize(value);
   return normalizeMatchTarget(normalized);
-}
-
-function escapeRegExpLiteral(input: string): string {
-  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function compileGlobRegex(pattern: string): RegExp {

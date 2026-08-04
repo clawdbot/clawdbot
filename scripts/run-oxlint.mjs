@@ -3,6 +3,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { runWithFailedTrailer } from "./lib/failed-trailer.mjs";
 import {
   acquireLocalHeavyCheckLockSync,
   applyLocalOxlintPolicy,
@@ -282,5 +283,5 @@ export async function main(argv = process.argv.slice(2), runtimeEnv = process.en
 }
 
 if (import.meta.main) {
-  await main();
+  await runWithFailedTrailer("oxlint", main);
 }

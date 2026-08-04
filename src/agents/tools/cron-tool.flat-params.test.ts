@@ -52,7 +52,7 @@ describe("cron tool flat-params", () => {
           },
         },
       ),
-    ).toEqual({ text: "Cron jobs listed.\nCount: 2" });
+    ).toEqual({ text: "Automations listed.\nCount: 2" });
     expect(
       terminalPresentation(
         { action: "list" },
@@ -64,7 +64,7 @@ describe("cron tool flat-params", () => {
           },
         },
       ),
-    ).toEqual({ text: "Cron jobs listed.\nCount: 250" });
+    ).toEqual({ text: "Automations listed.\nCount: 250" });
     expect(
       terminalPresentation(
         { action: "add" },
@@ -73,7 +73,7 @@ describe("cron tool flat-params", () => {
     ).toBeUndefined();
   });
 
-  it("preserves explicit top-level sessionKey during flat-params recovery", async () => {
+  it("binds recovered agentTurn jobs to the creating conversation by default", async () => {
     const tool = createCronTool(
       { agentSessionKey: "agent:main:discord:channel:ops" },
       { callGatewayTool: callGatewayToolMock },
@@ -85,9 +85,13 @@ describe("cron tool flat-params", () => {
       message: "do stuff",
     });
 
-    const [method, _gatewayOpts, params] = firstGatewayToolCall<{ sessionKey?: string }>();
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      sessionKey?: string;
+      sessionTarget?: string;
+    }>();
     expect(method).toBe("cron.add");
-    expect(params.sessionKey).toBe("agent:main:telegram:group:-100123:topic:99");
+    expect(params.sessionTarget).toBe("current");
+    expect(params.sessionKey).toBe("agent:main:discord:channel:ops");
   });
 
   it("recovers flat cron schedule shorthand for add", async () => {
@@ -173,7 +177,7 @@ describe("cron tool flat-params", () => {
         cwd: "/repo",
         message: "rebuilt",
       }),
-    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
+    ).rejects.toThrow("automation on-exit schedules cannot be created or edited");
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
@@ -187,7 +191,7 @@ describe("cron tool flat-params", () => {
         command: "make",
         message: "done",
       }),
-    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
+    ).rejects.toThrow("automation on-exit schedules cannot be created or edited");
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
@@ -202,7 +206,7 @@ describe("cron tool flat-params", () => {
         command: "pnpm build",
         cwd: "/repo",
       }),
-    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
+    ).rejects.toThrow("automation on-exit schedules cannot be created or edited");
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
@@ -215,7 +219,7 @@ describe("cron tool flat-params", () => {
         jobId: "job-infer",
         command: "make",
       }),
-    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
+    ).rejects.toThrow("automation on-exit schedules cannot be created or edited");
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 

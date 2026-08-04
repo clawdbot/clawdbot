@@ -2,10 +2,8 @@ import { resolveInlineAgentImageAttachments } from "../../auto-reply/reply/agent
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  assertAgentRunLifecycleGenerationCurrent,
-  registerAgentRunContext,
-} from "../../infra/agent-events.js";
+import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
+import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -112,6 +110,7 @@ export async function runAcpAgentCommand(params: {
       signal: params.opts.abortSignal,
       onLifecycle: (event) => {
         if (event.type === "prompt_submitted") {
+          params.opts.onExecutionStarted?.();
           attemptExecutionRuntime.emitAcpPromptSubmitted({
             runId: params.runId,
             sessionKey: params.sessionKey,
@@ -177,6 +176,7 @@ export async function runAcpAgentCommand(params: {
 
   const finalTextRaw = visibleTextAccumulator.finalizeRaw();
   const finalText = visibleTextAccumulator.finalize();
+  const terminalReply = visibleTextAccumulator.finalizeReplySnapshot();
   let sessionEntry = params.sessionEntry;
   try {
     const { resolveAcpSessionCwd } = await loadAcpSessionIdentifiersRuntime();
@@ -249,11 +249,13 @@ export async function runAcpAgentCommand(params: {
     abortSignal: params.opts.abortSignal,
     stopReason,
     resultStatus,
+    terminalReply,
   });
 
   const result = applyAgentRunAbortMetadata(
     attemptExecutionRuntime.buildAcpResult({
       payloadText: finalText,
+      terminalReply,
       startedAt,
       stopReason,
       resultStatus,

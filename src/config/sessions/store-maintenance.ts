@@ -12,6 +12,7 @@ import {
   isSubagentSessionKey,
   parseAgentSessionKey,
 } from "../../sessions/session-key-utils.js";
+import { sessionDeliveryOrigin } from "../../utils/delivery-context.shared.js";
 import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
 import { parseSessionThreadInfoFast } from "./thread-info.js";
 import type { SessionEntry } from "./types.js";
@@ -393,6 +394,13 @@ function isExternalGroupOrChannelSessionKey(sessionKey: string): boolean {
   return /^[^:]+:(?:group|channel):.+$/.test(rest);
 }
 
+function isPrimarySessionMaintenanceKey(sessionKey: string): boolean {
+  if (normalizeLowercaseStringOrEmpty(sessionKey) === "global") {
+    return true;
+  }
+  return parseAgentSessionKey(sessionKey)?.rest === "main";
+}
+
 function isProtectedSessionMaintenanceEntry(
   sessionKey: string,
   entry: SessionEntry | undefined,
@@ -400,6 +408,11 @@ function isProtectedSessionMaintenanceEntry(
   // Human conversation surfaces are protected; synthetic automation sessions are disposable.
   if (isSyntheticSessionMaintenanceKey(sessionKey)) {
     return false;
+  }
+  // Primary sessions are operator-facing and must survive maintenance even without an active
+  // admission. Global scope uses the literal `global` key instead of `agent:<id>:main`.
+  if (isPrimarySessionMaintenanceKey(sessionKey)) {
+    return true;
   }
   if (parseSessionThreadInfoFast(sessionKey).threadId) {
     return true;
@@ -410,7 +423,9 @@ function isProtectedSessionMaintenanceEntry(
   if (isExternalGroupOrChannelSessionKey(sessionKey)) {
     return true;
   }
-  const chatType = normalizeLowercaseStringOrEmpty(entry?.chatType ?? entry?.origin?.chatType);
+  const chatType = normalizeLowercaseStringOrEmpty(
+    entry?.chatType ?? sessionDeliveryOrigin(entry)?.chatType,
+  );
   return chatType === "group" || chatType === "channel" || chatType === "thread";
 }
 
@@ -419,6 +434,10 @@ export function shouldPreserveMaintenanceEntry(params: {
   entry: SessionEntry | undefined;
   preserveKeys?: ReadonlySet<string>;
 }): boolean {
+  // Archived sessions are user-shelved; only an explicit sessions.delete may remove them.
+  if (params.entry?.archivedAt !== undefined) {
+    return true;
+  }
   // A model lock is durable harness ownership, not merely a UI restriction.
   // Evicting the row can strand its native runtime binding and later recreate
   // the same conversation under an incompatible model, so pressure may exceed

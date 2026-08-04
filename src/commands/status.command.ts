@@ -141,8 +141,8 @@ export async function statusCommand(
     await runStatusJsonCommand({
       opts,
       runtime,
-      includeSecurityAudit: opts.all === true,
-      includePluginCompatibility: true,
+      includeSecurityAudit: opts.all === true || opts.deep === true,
+      includePluginCompatibility: opts.all === true,
       suppressHealthErrors: true,
       scanStatusJsonFast: async (scanOpts, runtimeForScan) =>
         await loadStatusScanFastJsonModule().then(({ scanStatusJsonFast }) =>
@@ -225,6 +225,11 @@ export async function statusCommand(
         async () => await resolveStatusGatewayHealth(input),
       ),
   });
+
+  // Structured probe failures belong to nonthrowing JSON; text status keeps failures loud.
+  if (health && "error" in health) {
+    throw new Error(health.error);
+  }
 
   const rich = true;
   const {

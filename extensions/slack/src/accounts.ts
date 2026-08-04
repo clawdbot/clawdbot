@@ -4,7 +4,6 @@ import {
   DEFAULT_ACCOUNT_ID,
   hasConfiguredAccountValue,
   normalizeAccountId,
-  resolveMergedAccountConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import {
@@ -58,10 +57,15 @@ export function resolveSlackOperationToken(
   return account.config.userTokenReadOnly === false ? (botToken ?? userToken) : botToken;
 }
 
-const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("slack", {
+const {
+  listAccountIds,
+  resolveDefaultAccountId,
+  resolveAccountConfig: resolveMergedSlackAccountConfig,
+} = createAccountListHelpers<SlackAccountConfig>("slack", {
+  nestedObjectKeys: ["botLoopProtection", "relay"],
   hasImplicitDefaultAccount: (cfg) => {
     const slack = cfg.channels?.slack;
-    if (slack?.identity === "user") {
+    if (slack?.postAs === "user") {
       const hasUserToken =
         hasConfiguredAccountValue(slack.userToken) ||
         hasConfiguredAccountValue(process.env.SLACK_USER_TOKEN);
@@ -178,12 +182,7 @@ export function mergeSlackAccountConfig(
   accountId: string,
 ): SlackAccountConfig {
   const accountConfig = resolveSlackAccountConfig(cfg, accountId);
-  const merged = resolveMergedAccountConfig<SlackAccountConfig>({
-    channelConfig: cfg.channels?.slack as SlackAccountConfig,
-    accounts: cfg.channels?.slack?.accounts as Record<string, Partial<SlackAccountConfig>>,
-    accountId,
-    nestedObjectKeys: ["botLoopProtection", "relay"],
-  });
+  const merged = resolveMergedSlackAccountConfig(cfg, accountId);
   const streaming = mergeSlackStreamingConfig(
     (cfg.channels?.slack as Record<string, unknown> | undefined)?.streaming,
     (accountConfig as Record<string, unknown> | undefined)?.streaming,
@@ -239,7 +238,7 @@ export function resolveSlackAccount(params: {
   );
   const baseEnabled = params.cfg.channels?.slack?.enabled !== false;
   const merged = mergeSlackAccountConfig(params.cfg, accountId);
-  const identity = merged.identity ?? "bot";
+  const identity = merged.postAs ?? "bot";
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
   const mode = merged.mode ?? "socket";

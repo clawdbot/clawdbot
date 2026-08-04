@@ -57,6 +57,8 @@ describe("provider overflow messages", () => {
     "Error: 400 Input length (265330) exceeds model's maximum context length (262144).",
     "Provider returned error: Input length 131393 exceeds the maximum allowed input length of 131,040 tokens.",
     "Input length 131393 exceeds maximum allowed input length of 131040 token",
+    "code 1210: tokens in request more than max tokens allowed",
+    "code 1261: Prompt exceeds max length",
   ])("detects %s", (text) => {
     expect(isContextOverflow(errorMessage(text), 262_144)).toBe(true);
   });
@@ -78,5 +80,12 @@ describe("usage-based overflow", () => {
 
   it("does not infer overflow from aggregate billing when context is unavailable", () => {
     expect(isContextOverflow(successfulMessage({ state: "unavailable" }), 1_000_000)).toBe(false);
+  });
+
+  it("counts cache-write tokens toward the context when no snapshot is available", () => {
+    // input + cacheRead alone is 1_100_012, under this window; the 93_130 cache-write
+    // tokens are prompt tokens too, and providers that report them separately keep
+    // them out of `input`. Omitting the bucket silently under-counts the context.
+    expect(isContextOverflow(successfulMessage(), 1_150_000)).toBe(true);
   });
 });

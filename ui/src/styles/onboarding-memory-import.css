@@ -45,7 +45,7 @@
   padding: 14px;
   border: 1px solid var(--border);
   border-radius: 12px;
-  background: var(--bg-subtle);
+  background: var(--bg-muted);
 }
 
 .onboarding-memory-import__provider label {

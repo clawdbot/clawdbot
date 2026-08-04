@@ -21,7 +21,6 @@ mkdir -p ~/.openclaw/workspace
 ```bash
 cp docs/reference/templates/AGENTS.md ~/.openclaw/workspace/AGENTS.md
 cp docs/reference/templates/SOUL.md ~/.openclaw/workspace/SOUL.md
-cp docs/reference/templates/TOOLS.md ~/.openclaw/workspace/TOOLS.md
 ```
 
 3. Optional: use this file's personal-assistant skill roster instead of the generic template:
@@ -68,17 +67,20 @@ Before proposing or building a custom system, feature, workflow, tool, integrati
 ## Memory system (recommended)
 
 - Daily log: `memory/YYYY-MM-DD.md` (create `memory/` if needed).
-- Long-term memory: `MEMORY.md` for durable facts, preferences, and decisions.
+- User model: `USER.md` for dated active or superseded directives about stable preferences and profile facts.
+- Long-term memory: `MEMORY.md` for durable non-profile facts and decisions.
 - Lowercase `memory.md` is legacy repair input only; do not keep both root files on purpose.
 - On session start, read today + yesterday + `MEMORY.md` when present.
 - Before writing memory files, read them first; write only concrete updates, never empty placeholders.
-- Capture: decisions, preferences, constraints, open loops.
+- Capture preferences as directives in `USER.md`; capture decisions, constraints, and open loops in durable or daily memory as appropriate.
 - Avoid secrets unless explicitly requested.
 
-## Tools and skills
+## Tools
+
+### Local notes
 
 - Tools live in skills; follow each skill's `SKILL.md` when you need it.
-- Keep environment-specific notes in `TOOLS.md` (notes for skills).
+- Keep environment-specific notes in this file's `## Tools` section.
 
 ## Backup tip (recommended)
 

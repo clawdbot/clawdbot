@@ -1,5 +1,39 @@
+import type { MessageHookMediaFact } from "../hooks/message-hook-media.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import type { PluginConversationBinding } from "./conversation-binding.types.js";
+
+/** Ordered media fact exposed by inbound message hooks. */
+export type PluginHookMediaFact = MessageHookMediaFact;
+
+/** Provider metadata plus deprecated media aliases retained during the SDK migration window. */
+export type PluginHookInboundMessageMetadata = Record<string, unknown> & {
+  /** @deprecated Use the first `event.media` fact with a defined `path`. */
+  mediaPath?: string;
+  /** @deprecated Use the first `event.media` fact's `url ?? path`. */
+  mediaUrl?: string;
+  /** @deprecated Use the first `event.media` fact's `contentType ?? kind`. */
+  mediaType?: string;
+  /** @deprecated Collect defined `path` values from `event.media` in order. */
+  mediaPaths?: string[];
+  /** @deprecated Collect each defined `url ?? path` from `event.media` in order. */
+  mediaUrls?: string[];
+  /** @deprecated Collect each defined `contentType ?? kind` from `event.media` in order. */
+  mediaTypes?: string[];
+  /** @deprecated Use the first `event.originalMedia` fact with a defined `path`. */
+  originalMediaPath?: string;
+  /** @deprecated Use the first `event.originalMedia` fact's `url ?? path`. */
+  originalMediaUrl?: string;
+  /** @deprecated Use the first `event.originalMedia` fact's `contentType ?? kind`. */
+  originalMediaType?: string;
+  /** @deprecated Collect defined `path` values from `event.originalMedia` in order. */
+  originalMediaPaths?: string[];
+  /** @deprecated Collect each defined `url ?? path` from `event.originalMedia` in order. */
+  originalMediaUrls?: string[];
+  /** @deprecated Collect each defined `contentType ?? kind` from `event.originalMedia` in order. */
+  originalMediaTypes?: string[];
+  /** @deprecated Use `event.mediaStagingPending`. */
+  mediaStagingPending?: boolean;
+};
 
 export type PluginHookMessageContext = {
   channelId: string;
@@ -95,7 +129,13 @@ export type PluginHookInboundClaimEvent = {
   commandAuthorized?: boolean;
   senderIsOwner?: boolean;
   wasMentioned?: boolean;
-  metadata?: Record<string, unknown>;
+  /** Staged, locally usable attachments in stable source order. */
+  media?: PluginHookMediaFact[];
+  /** Original attachment facts when local staging has not completed yet. */
+  originalMedia?: PluginHookMediaFact[];
+  /** True when `originalMedia` is present but `media` is intentionally withheld pending staging. */
+  mediaStagingPending?: boolean;
+  metadata?: PluginHookInboundMessageMetadata;
 };
 
 export type PluginHookMessageReceivedEvent = {
@@ -116,7 +156,13 @@ export type PluginHookMessageReceivedEvent = {
   traceId?: string;
   spanId?: string;
   parentSpanId?: string;
-  metadata?: Record<string, unknown>;
+  /** Staged, locally usable attachments in stable source order. */
+  media?: PluginHookMediaFact[];
+  /** Original attachment facts when local staging has not completed yet. */
+  originalMedia?: PluginHookMediaFact[];
+  /** True when `originalMedia` is present but `media` is intentionally withheld pending staging. */
+  mediaStagingPending?: boolean;
+  metadata?: PluginHookInboundMessageMetadata;
 };
 
 export type PluginHookMessageSendingEvent = {

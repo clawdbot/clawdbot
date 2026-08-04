@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -8,6 +9,27 @@ import { writeArchiveStreamToFile } from "./backup-create-stream.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("writeArchiveStreamToFile", () => {
+  it("removes the exclusive partial archive when its initial descriptor stat fails", async () => {
+    const tempDir = tempDirs.make("openclaw-backup-stream-fstat-");
+    const archivePath = path.join(tempDir, "partial.tar.gz");
+    const archiveStream = new PassThrough();
+    const fstatSpy = vi.spyOn(fsSync, "fstatSync").mockImplementationOnce(() => {
+      throw Object.assign(new Error("fstat failed"), { code: "EIO" });
+    });
+    try {
+      const writePromise = writeArchiveStreamToFile({
+        archivePath,
+        archiveStream,
+      });
+      archiveStream.end("partial archive");
+
+      await expect(writePromise).rejects.toThrow("fstat failed");
+      await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      fstatSpy.mockRestore();
+    }
+  });
+
   it("closes a partial archive before propagating a stream error", async () => {
     const tempDir = tempDirs.make("openclaw-backup-stream-");
     const archivePath = path.join(tempDir, "partial.tar.gz");
@@ -20,7 +42,7 @@ describe("writeArchiveStreamToFile", () => {
     archiveStream.destroy(new Error("injected tar read failure"));
 
     await expect(writePromise).rejects.toThrow("injected tar read failure");
-    await expect(fs.rm(archivePath)).resolves.toBeUndefined();
+    await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("aborts and closes a partial archive when the source stops producing data", async () => {
@@ -42,7 +64,7 @@ describe("writeArchiveStreamToFile", () => {
       await vi.advanceTimersByTimeAsync(60);
       await rejection;
       expect(archiveStream.destroyed).toBe(true);
-      await expect(fs.rm(archivePath)).resolves.toBeUndefined();
+      await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       vi.useRealTimers();
     }
@@ -66,7 +88,7 @@ describe("writeArchiveStreamToFile", () => {
       await vi.advanceTimersByTimeAsync(40);
       archiveStream.end("third");
 
-      await expect(writePromise).resolves.toBeUndefined();
+      await expect(writePromise).resolves.toMatchObject({ archivePath });
       await expect(fs.readFile(archivePath, "utf8")).resolves.toBe("firstsecondthird");
     } finally {
       vi.useRealTimers();

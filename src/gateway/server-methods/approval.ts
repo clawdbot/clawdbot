@@ -1,4 +1,5 @@
 // Unified operator approval lookup and first-answer resolution handlers.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -30,7 +31,6 @@ import {
 } from "../operator-approval-authorization.js";
 import {
   getOperatorApprovalDetailed,
-  getOperatorApprovalDetailedByLocator,
   listTerminalOperatorApprovals,
   OperatorApprovalHistoryCursorError,
   type OperatorApprovalRecord,
@@ -41,12 +41,8 @@ import {
   type ExecApprovalIosPushDelivery,
   type PluginApprovalIosPushDelivery,
 } from "./approval-publication.js";
-import type {
-  GatewayClient,
-  GatewayRequestContext,
-  GatewayRequestHandlers,
-  RespondFn,
-} from "./types.js";
+import { respondApprovalStorageUnavailable } from "./approval-shared.js";
+import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 
 type CreateApprovalHandlersParams = {
   execApprovalManager: ExecApprovalManager;
@@ -57,10 +53,6 @@ type CreateApprovalHandlersParams = {
   pluginIosPushDelivery?: PluginApprovalIosPushDelivery;
   databaseOptions?: OpenClawStateDatabaseOptions;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function buildApprovalSnapshot(
   record: OperatorApprovalRecord,
@@ -136,22 +128,6 @@ function respondApprovalNotFound(respond: RespondFn): void {
   );
 }
 
-function respondApprovalUnavailable(params: {
-  context: GatewayRequestContext;
-  respond: RespondFn;
-  operation: "history" | "lookup" | "resolve";
-  error: unknown;
-}): void {
-  params.context.logGateway?.error?.(
-    `approval ${params.operation} storage failure: ${String(params.error)}`,
-  );
-  params.respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.UNAVAILABLE, `approval ${params.operation} unavailable`),
-  );
-}
-
 function readExactApprovalId(params: unknown): string | null {
   if (!isRecord(params) || typeof params.id !== "string") {
     return null;
@@ -194,15 +170,11 @@ function loadVisibleApproval(params: {
   }
   let lookup: ReturnType<typeof getOperatorApprovalDetailed>;
   try {
-    lookup = params.allowTransportRef
-      ? getOperatorApprovalDetailedByLocator({
-          locator: params.id,
-          databaseOptions: params.databaseOptions,
-        })
-      : getOperatorApprovalDetailed({
-          id: params.id,
-          databaseOptions: params.databaseOptions,
-        });
+    lookup = getOperatorApprovalDetailed({
+      id: params.id,
+      allowTransportRef: params.allowTransportRef,
+      databaseOptions: params.databaseOptions,
+    });
   } catch (error) {
     const corrupt = { outcome: "corrupt", id: params.id } as const;
     params.execApprovalManager.reconcileDurableLookup(corrupt);
@@ -257,49 +229,6 @@ function resolveLiveRecord<TPayload>(params: {
   return params.liveRecord ?? params.manager.getLiveSnapshot(params.id) ?? undefined;
 }
 
-function applyForcedDeny<TPayload>(params: {
-  manager: ExecApprovalManager<TPayload>;
-  id: string;
-  resolver: OperatorApprovalResolver;
-  localResolvedBy: string | null;
-}): ApplyApprovalDecisionResult<TPayload> {
-  const result = params.manager.forceDenyDetailed(
-    params.id,
-    "malformed-verdict",
-    params.resolver,
-    "denied",
-    undefined,
-    false,
-    params.localResolvedBy,
-  );
-  switch (result.outcome) {
-    case "denied":
-      return {
-        ok: true,
-        applied: true,
-        record: result.record,
-        liveRecord: resolveLiveRecord({
-          manager: params.manager,
-          id: params.id,
-          liveRecord: result.liveRecord,
-        }),
-      };
-    case "expired":
-    case "already-terminal":
-    case "not-due":
-      return {
-        ok: true,
-        applied: false,
-        record: result.record,
-        liveRecord: result.liveRecord,
-      };
-    case "not-found":
-    case "corrupt":
-      return { ok: false };
-  }
-  return result satisfies never;
-}
-
 function applyApprovalDecision<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;
   id: string;
@@ -308,43 +237,37 @@ function applyApprovalDecision<TPayload>(params: {
   resolver: OperatorApprovalResolver;
   localResolvedBy: string | null;
 }): ApplyApprovalDecisionResult<TPayload> {
-  if (params.forceMalformedDeny) {
-    return applyForcedDeny(params);
+  const result = params.forceMalformedDeny
+    ? params.manager.forceDenyDetailed(
+        params.id,
+        "malformed-verdict",
+        params.resolver,
+        "denied",
+        undefined,
+        false,
+        params.localResolvedBy,
+      )
+    : params.manager.resolveDetailed(
+        params.id,
+        params.decision as ExecApprovalDecision,
+        params.resolver,
+        params.localResolvedBy,
+      );
+  if (result.outcome === "decision-not-allowed") {
+    return applyApprovalDecision({ ...params, forceMalformedDeny: true });
   }
-
-  const result = params.manager.resolveDetailed(
-    params.id,
-    params.decision as ExecApprovalDecision,
-    params.resolver,
-    params.localResolvedBy,
-  );
-  switch (result.outcome) {
-    case "resolved":
-      return {
-        ok: true,
-        applied: true,
-        record: result.record,
-        liveRecord: resolveLiveRecord({
-          manager: params.manager,
-          id: params.id,
-          liveRecord: result.liveRecord,
-        }),
-      };
-    case "expired":
-    case "already-resolved":
-      return {
-        ok: true,
-        applied: false,
-        record: result.record,
-        liveRecord: result.liveRecord,
-      };
-    case "decision-not-allowed":
-      return applyForcedDeny(params);
-    case "not-found":
-    case "corrupt":
-      return { ok: false };
+  if (result.outcome === "not-found" || result.outcome === "corrupt") {
+    return { ok: false };
   }
-  return result satisfies never;
+  const applied = result.outcome === "resolved" || result.outcome === "denied";
+  return {
+    ok: true,
+    applied,
+    record: result.record,
+    liveRecord: applied
+      ? resolveLiveRecord({ manager: params.manager, id: params.id, liveRecord: result.liveRecord })
+      : result.liveRecord,
+  };
 }
 
 /** Creates kind-agnostic approval lookup and resolution handlers. */
@@ -379,7 +302,7 @@ export function createApprovalHandlers(
           );
           return;
         }
-        respondApprovalUnavailable({ context, respond, operation: "history", error });
+        respondApprovalStorageUnavailable({ context, respond, operation: "history", error });
         return;
       }
       const controlUiBasePath = normalizeControlUiBasePath(
@@ -419,7 +342,7 @@ export function createApprovalHandlers(
             })
           : null;
       } catch (error) {
-        respondApprovalUnavailable({ context, respond, operation: "lookup", error });
+        respondApprovalStorageUnavailable({ context, respond, operation: "lookup", error });
         return;
       }
       const controlUiBasePath = normalizeControlUiBasePath(
@@ -450,7 +373,7 @@ export function createApprovalHandlers(
             })
           : null;
       } catch (error) {
-        respondApprovalUnavailable({ context, respond, operation: "lookup", error });
+        respondApprovalStorageUnavailable({ context, respond, operation: "lookup", error });
         return;
       }
       if (!id || !record) {
@@ -517,7 +440,7 @@ export function createApprovalHandlers(
                   localResolvedBy,
                 });
       } catch (error) {
-        respondApprovalUnavailable({ context, respond, operation: "resolve", error });
+        respondApprovalStorageUnavailable({ context, respond, operation: "resolve", error });
         return;
       }
       if (!resolution.ok) {

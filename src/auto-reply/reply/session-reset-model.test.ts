@@ -7,7 +7,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { clearSessionStoreCacheForTest } from "../../config/sessions/store.js";
+import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import type { ModelAliasIndex } from "./model-selection-directive.js";
 
 const loadPreparedModelCatalog = vi.hoisted(() => vi.fn(async () => modelCatalog));
@@ -29,6 +29,7 @@ function createResetFixture(entry: Partial<SessionEntry> = {}) {
   const sessionEntry: SessionEntry = {
     sessionId: "s1",
     updatedAt: Date.now(),
+    delivery: { kind: "none" },
     ...entry,
   };
   return {
@@ -291,6 +292,7 @@ describe("applyResetModelOverride", () => {
     const rotatedEntry: SessionEntry = {
       sessionId: "s2",
       updatedAt: fixture.sessionEntry.updatedAt + 1,
+      delivery: { kind: "none" },
       providerOverride: "openai",
       modelOverride: "gpt-4o-mini",
       modelOverrideSource: "user",

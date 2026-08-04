@@ -1,6 +1,6 @@
 // Doctor-only runtime policy repair for migrated cron Codex model refs.
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveDefaultAgentId } from "../../../agents/agent-scope-config.js";
+import { tryResolveDefaultAgentId } from "../../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 import {
@@ -31,8 +31,19 @@ function resolvePolicyOwner(params: {
   const requestedAgentId = params.target.agentId
     ? normalizeAgentId(params.target.agentId)
     : undefined;
-  const defaultAgentId = resolveDefaultAgentId(params.cfg);
+  const defaultAgentId = tryResolveDefaultAgentId(params.cfg);
   const effectiveAgentId = requestedAgentId ?? defaultAgentId;
+  if (!effectiveAgentId) {
+    return undefined;
+  }
+  const entries = asOptionalRecord(agents.entries);
+  const keyedEntry = entries
+    ? Object.entries(entries).find(([agentId]) => normalizeAgentId(agentId) === effectiveAgentId)
+    : undefined;
+  const keyedRecord = asOptionalRecord(keyedEntry?.[1]);
+  if (keyedEntry && keyedRecord) {
+    return { owner: keyedRecord, path: `agents.entries.${keyedEntry[0]}` };
+  }
   const list = Array.isArray(agents.list) ? agents.list : [];
   const owner = list.find((entry) => {
     const record = asOptionalRecord(entry);

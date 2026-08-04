@@ -62,8 +62,10 @@ function resolveParallelConfig(searchConfig?: SearchConfigRecord): ParallelConfi
 
 function resolveParallelApiKey(parallel?: ParallelConfig): string | undefined {
   return (
-    readConfiguredSecretString(parallel?.apiKey, "tools.web.search.parallel.apiKey") ??
-    readProviderEnvValue(["PARALLEL_API_KEY"])
+    readConfiguredSecretString(
+      parallel?.apiKey,
+      "plugins.entries.parallel.config.webSearch.apiKey",
+    ) ?? readProviderEnvValue(["PARALLEL_API_KEY"])
   );
 }
 
@@ -121,6 +123,7 @@ async function runParallelSearch(params: {
   sessionId?: string;
   clientModel?: string;
   timeoutSeconds: number;
+  signal?: AbortSignal;
 }): Promise<ParallelSearchResponse> {
   const body: Record<string, unknown> = {
     search_queries: [...params.searchQueries],
@@ -140,6 +143,7 @@ async function runParallelSearch(params: {
     {
       url: params.endpoint,
       timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
       init: {
         method: "POST",
         headers: {
@@ -168,6 +172,7 @@ async function runParallelSearch(params: {
 export async function executeParallelWebSearchProviderTool(
   ctx: { config?: Record<string, unknown>; searchConfig?: SearchConfigRecord },
   args: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const searchConfig = mergeScopedSearchConfig(
     ctx.searchConfig,
@@ -232,7 +237,9 @@ export async function executeParallelWebSearchProviderTool(
     sessionId,
     clientModel,
     timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
+    signal,
   });
+  signal?.throwIfAborted();
   const results = mapParallelResults(response);
 
   const payload: Record<string, unknown> = {

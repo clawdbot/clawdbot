@@ -1,6 +1,7 @@
 import { AGENT_MODEL_CONFIG_KEYS } from "@openclaw/model-catalog-core/configured-model-refs";
 import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import {
   maybeMigrateLegacyLosslessCompactionConfig,
   rewriteAgentCompactionRefs,
@@ -33,8 +34,6 @@ import type {
   MutableRecord,
   SharedDefaultCompactionOverrideConsumers,
 } from "./codex-route-types.js";
-
-const AGENT_MEDIA_MODEL_CONFIG_KEYS = ["imageGenerationModel", "videoGenerationModel"] as const;
 
 function rewriteModelPolicyAllowRefs(params: {
   hits: CodexRouteHit[];
@@ -164,12 +163,13 @@ function rewriteAgentModelRefs(params: {
     blockedModelIdentities: params.blockedModelIdentities,
     env: params.env,
   });
-  for (const key of AGENT_MEDIA_MODEL_CONFIG_KEYS) {
+  const mediaModels = asMutableRecord(params.agent.mediaModels);
+  for (const key of ["image", "video"] as const) {
     rewriteModelConfigSlot({
       hits: params.hits,
-      container: params.agent,
+      container: mediaModels ?? {},
       key,
-      path: `${params.path}.${key}`,
+      path: `${params.path}.mediaModels.${key}`,
       blockedModelIdentities: params.blockedModelIdentities,
     });
   }
@@ -246,20 +246,15 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
     env: params.env,
   });
   const inheritedModelRef = readAgentPrimaryModelRef(nextConfig.agents?.defaults);
-  const agents = Array.isArray(nextConfig.agents?.list) ? nextConfig.agents.list : [];
-  for (const [index, agent] of agents.entries()) {
-    const agentRecord = asMutableRecord(agent);
-    if (!agentRecord) {
-      continue;
-    }
-    const id = readAgentPathId(agentRecord, index);
+  const agents = listMutableCodexRouteAgentEntries(nextConfig);
+  for (const { agent: agentRecord, agentId, path } of agents) {
     rewriteAgentModelRefs({
       cfg: nextConfig,
       preRepairCfg: params.cfg,
       hits,
       agent: agentRecord,
-      path: `agents.list.${id}`,
-      agentId: id,
+      path,
+      agentId,
       currentRuntime: resolveRuntime({
         agentRuntime: ignoreLegacyAgentRuntimePins
           ? undefined
@@ -353,9 +348,9 @@ function rewriteNonAgentModelRefs(params: {
   rewriteStringModelSlotIfCanonicalCodexRuntime({
     cfg: params.cfg,
     hits: params.hits,
-    container: asMutableRecord(params.cfg.messages?.tts),
+    container: asMutableRecord(params.cfg.tts),
     key: "summaryModel",
-    path: "messages.tts.summaryModel",
+    path: "tts.summaryModel",
     blockedModelIdentities: params.blockedModelIdentities,
     env: params.env,
   });
@@ -408,8 +403,4 @@ function isCompactionOnlyRouteHit(hit: CodexRouteHit): boolean {
     hit.path.startsWith("agents.") &&
     (hit.path.endsWith(".compaction.model") || hit.path.endsWith(".compaction.memoryFlush.model"))
   );
-}
-
-function readAgentPathId(agent: MutableRecord, index: number): string {
-  return typeof agent.id === "string" && agent.id.trim() ? agent.id.trim() : String(index);
 }

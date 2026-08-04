@@ -1,5 +1,5 @@
 // Control UI tests cover cron filters behavior.
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
@@ -37,6 +37,17 @@ function cronJob(id: string, name: string, schedule: Record<string, unknown>, st
 function cronListResponse(jobs: unknown[], total = jobs.length) {
   return {
     jobs,
+    total,
+    offset: 0,
+    limit: 50,
+    hasMore: false,
+    nextOffset: null,
+  };
+}
+
+function cronRunsResponse(entries: unknown[], total = entries.length) {
+  return {
+    entries,
     total,
     offset: 0,
     limit: 50,
@@ -84,6 +95,23 @@ function jobTitle(page: Page, name: string) {
   return page.locator(".cron-table__name-text", { hasText: new RegExp(`^${name}$`, "u") });
 }
 
+async function dismissDropdownToNextTrigger(page: Page, trigger: Locator, nextTrigger: Locator) {
+  await page.keyboard.press("Escape");
+  expect(await trigger.evaluate((element) => element === document.activeElement)).toBe(true);
+  expect(
+    await trigger.evaluate((element) =>
+      element
+        .closest("wa-dropdown")
+        ?.shadowRoot?.querySelector('[part="menu"]')
+        ?.hasAttribute("inert"),
+    ),
+  ).toBe(true);
+  await page.keyboard.press("Tab");
+  await expect
+    .poll(() => nextTrigger.evaluate((element) => element === document.activeElement))
+    .toBe(true);
+}
+
 async function waitForJobTitle(
   page: Page,
   gateway: MockGatewayControls,
@@ -126,6 +154,47 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
   afterAll(async () => {
     await browser?.close();
     await server?.close();
+  });
+
+  it("suggests browser-supported timezones without restricting free-form input", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1_280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "cron.list": cronListResponse([]),
+        "cron.runs": cronRunsResponse([]),
+        "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
+      },
+    });
+
+    try {
+      const response = await page.goto(`${server.baseUrl}cron`);
+      expect(response?.status()).toBe(200);
+      await page.locator('[data-test-id="cron-new-task"]').click();
+      await page.locator('[data-test-id="cron-schedule-kind-cron"]').click();
+
+      const timezone = page.locator("#cron-cron-tz");
+      await timezone.waitFor({ state: "visible" });
+      expect(await timezone.getAttribute("list")).toBe("cron-tz-suggestions");
+      const browserTimezone = await page.evaluate(
+        () => Intl.DateTimeFormat().resolvedOptions().timeZone,
+      );
+      const timezoneOptions = await page
+        .locator("#cron-tz-suggestions option")
+        .evaluateAll((options) => options.map((option) => option.getAttribute("value")));
+      expect(timezoneOptions).toContain(browserTimezone);
+      expect(timezoneOptions).toContain("UTC");
+      expect(timezoneOptions.length).toBeGreaterThan(100);
+
+      await timezone.fill("Etc/GMT+3");
+      expect(await timezone.inputValue()).toBe("Etc/GMT+3");
+    } finally {
+      await context.close();
+    }
   });
 
   it("sends cron job table filters through the Gateway and renders the filtered page", async () => {
@@ -229,6 +298,496 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
     }
   });
 
+  it("creates a cron-scheduled task and renders the refreshed row", async () => {
+    const schedule = { kind: "cron", expr: "0 9 * * 1-5", tz: "UTC" };
+    const createdJob = {
+      ...cronJob("weekday-report", "Weekday report", schedule),
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "Prepare the weekday report" },
+    };
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1_280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "cron.add": { id: createdJob.id },
+        "cron.list": cronListResponse([]),
+        "cron.runs": cronRunsResponse([]),
+        "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}cron`);
+      await page.locator('[data-test-id="cron-new-task"]').click();
+      await page.locator("#cron-name").fill(createdJob.name);
+      await page.locator("#cron-payload-text").fill(createdJob.payload.message);
+      await page.locator('[data-test-id="cron-schedule-kind-cron"]').click();
+      await page.locator("#cron-cron-expr").fill(schedule.expr);
+      await page.locator("#cron-cron-tz").fill(schedule.tz);
+      await gateway.setMethodResponse("cron.list", cronListResponse([createdJob]));
+      await page.locator('[data-test-id="cron-submit"]').click();
+
+      const addRequest = await gateway.waitForRequest("cron.add");
+      expect(requestParams(addRequest)).toMatchObject({
+        name: createdJob.name,
+        payload: createdJob.payload,
+        schedule,
+      });
+      await jobTitle(page, createdJob.name).waitFor({ state: "visible", timeout: 10_000 });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps read-only operators on Cron browse and history surfaces", async () => {
+    const readOnlyJob = {
+      ...cronJob(
+        "read-only-job",
+        "Read-only nightly digest",
+        { kind: "cron", expr: "0 1 * * *", tz: "UTC" },
+        { lastRunStatus: "ok", lastRunAtMs: Date.parse("2026-05-29T08:10:00.000Z") },
+      ),
+      description: "Explain the nightly digest without granting write access",
+    };
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1_280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      operatorScopes: ["operator.read"],
+      methodResponses: {
+        "cron.list": cronListResponse([readOnlyJob]),
+        "cron.runs": cronRunsResponse([
+          {
+            ts: 1,
+            jobId: readOnlyJob.id,
+            jobName: readOnlyJob.name,
+            status: "ok",
+            summary: "Read-only history remains available",
+          },
+        ]),
+        "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}cron`);
+      await jobTitle(page, readOnlyJob.name).waitFor({ timeout: 10_000 });
+      await page.getByRole("note").filter({ hasText: "Browsing only" }).waitFor();
+      expect(
+        await page.locator(`[data-test-id="cron-row-description-${readOnlyJob.id}"]`).textContent(),
+      ).toContain(readOnlyJob.description);
+
+      await expect.poll(() => page.locator('[data-test-id="cron-new-task"]').count()).toBe(0);
+      await expect
+        .poll(() => page.locator(`[data-test-id="cron-row-run-${readOnlyJob.id}"]`).count())
+        .toBe(0);
+      await expect
+        .poll(() => page.locator(`[data-test-id="cron-row-toggle-${readOnlyJob.id}"]`).count())
+        .toBe(0);
+      await expect.poll(() => page.locator("wa-dropdown.cron-job-menu").count()).toBe(0);
+      await expect.poll(() => page.locator("[data-suggestion]").count()).toBe(0);
+      expect(await page.locator(".cron-filter-popover__trigger").count()).toBe(1);
+
+      await jobTitle(page, readOnlyJob.name).click();
+      await page.locator("fieldset.cron-editor:disabled").waitFor();
+      expect(
+        await page.locator('[data-test-id="cron-detail-description"]').textContent(),
+      ).toContain(readOnlyJob.description);
+      await expect.poll(() => page.locator('[data-test-id="cron-run-now"]').count()).toBe(0);
+      await expect.poll(() => page.locator('[data-test-id="cron-submit"]').count()).toBe(0);
+      await expect.poll(() => page.locator(".cron-editor-actions").count()).toBe(0);
+
+      await page.locator('[data-test-id="cron-detail-tab-history"]').click();
+      await page.getByText("Read-only history remains available", { exact: true }).waitFor();
+      expect(
+        await page.locator('[data-test-id="cron-detail-description"]').textContent(),
+      ).toContain(readOnlyJob.description);
+
+      const mutationMethods = new Set(["cron.add", "cron.remove", "cron.run", "cron.update"]);
+      expect(
+        (await gateway.getRequests()).filter((request) => mutationMethods.has(request.method)),
+      ).toHaveLength(0);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("announces selected history filters and sends their Gateway request values", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1_280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "cron.list": cronListResponse([]),
+        "cron.runs": cronRunsResponse([
+          {
+            ts: 1,
+            jobId: "filtered-job",
+            status: "error",
+            deliveryStatus: "delivered",
+            summary: "Delivered failure",
+          },
+        ]),
+        "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}cron`);
+      await page.getByRole("tab", { name: "Run history", exact: true }).click();
+
+      const statusFilter = page.locator('[data-filter="status"]');
+      const deliveryFilter = page.locator('[data-filter="delivery"]');
+      const statusTrigger = statusFilter.locator(".cron-filter-dropdown__trigger");
+      const deliveryTrigger = deliveryFilter.locator(".cron-filter-dropdown__trigger");
+      await page.getByRole("button", { name: "Status All statuses", exact: true }).waitFor();
+      await page.getByRole("button", { name: "Delivery All delivery", exact: true }).waitFor();
+
+      const initialRequestCount = (await gateway.getRequests("cron.runs")).length;
+      await statusTrigger.click();
+      await statusFilter.locator('wa-dropdown-item[value="option:error"]').click();
+      await page.getByRole("button", { name: "Status Error", exact: true }).waitFor();
+      await statusFilter.locator('wa-dropdown-item[value="option:ok"]').click();
+      await page.getByRole("button", { name: "Status OK, Error", exact: true }).waitFor();
+      expect(await statusTrigger.textContent()).toContain("OK, Error");
+      await statusFilter.locator('wa-dropdown-item[value="option:skipped"]').click();
+      await page
+        .getByRole("button", { name: "Status OK +2 (OK, Error, and Skipped)", exact: true })
+        .waitFor();
+      expect(await statusTrigger.textContent()).toContain("OK +2");
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("cron.runs")).slice(initialRequestCount).some((request) => {
+            const params = requestParams(request);
+            const statuses = params.statuses;
+            return (
+              Array.isArray(statuses) &&
+              ["ok", "error", "skipped"].every((status) => statuses.includes(status))
+            );
+          }),
+        )
+        .toBe(true);
+
+      const statusRequestCount = (await gateway.getRequests("cron.runs")).length;
+      await deliveryTrigger.click();
+      await deliveryFilter.locator('wa-dropdown-item[value="option:delivered"]').click();
+      await page.getByRole("button", { name: "Delivery Delivered", exact: true }).waitFor();
+      await deliveryFilter.locator('wa-dropdown-item[value="option:not-delivered"]').click();
+      await page
+        .getByRole("button", { name: "Delivery Delivered, Not delivered", exact: true })
+        .waitFor();
+      expect(await deliveryTrigger.textContent()).toContain("Delivered, Not delivered");
+      await deliveryFilter.locator('wa-dropdown-item[value="option:unknown"]').click();
+      await page
+        .getByRole("button", {
+          name: "Delivery Delivered +2 (Delivered, Not delivered, and Unknown)",
+          exact: true,
+        })
+        .waitFor();
+      expect(await deliveryTrigger.textContent()).toContain("Delivered +2");
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("cron.runs")).slice(statusRequestCount).some((request) => {
+            const params = requestParams(request);
+            const statuses = params.statuses;
+            const deliveryStatuses = params.deliveryStatuses;
+            return (
+              Array.isArray(statuses) &&
+              ["ok", "error", "skipped"].every((status) => statuses.includes(status)) &&
+              Array.isArray(deliveryStatuses) &&
+              ["delivered", "not-delivered", "unknown"].every((status) =>
+                deliveryStatuses.includes(status),
+              )
+            );
+          }),
+        )
+        .toBe(true);
+
+      const deliveryRequestCount = (await gateway.getRequests("cron.runs")).length;
+      await deliveryFilter.locator('wa-dropdown-item[value="command:clear"]').click();
+      await page.getByRole("button", { name: "Delivery All delivery", exact: true }).waitFor();
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("cron.runs")).slice(deliveryRequestCount).some((request) => {
+            const params = requestParams(request);
+            const statuses = params.statuses;
+            return (
+              Array.isArray(statuses) &&
+              ["ok", "error", "skipped"].every((status) => statuses.includes(status)) &&
+              !("deliveryStatuses" in params)
+            );
+          }),
+        )
+        .toBe(true);
+
+      const clearedDeliveryRequestCount = (await gateway.getRequests("cron.runs")).length;
+      await statusTrigger.click();
+      await statusFilter.locator('wa-dropdown-item[value="command:clear"]').click();
+      await page.getByRole("button", { name: "Status All statuses", exact: true }).waitFor();
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("cron.runs"))
+            .slice(clearedDeliveryRequestCount)
+            .some((request) => {
+              const params = requestParams(request);
+              return !("statuses" in params) && !("deliveryStatuses" in params);
+            }),
+        )
+        .toBe(true);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("localizes history filters and selects them using only native keyboard controls", async () => {
+    const context = await browser.newContext({
+      locale: "de-DE",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1_280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "cron.list": cronListResponse([]),
+        "cron.runs": cronRunsResponse([]),
+        "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}cron`);
+      await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe("de");
+      await page.getByRole("tab", { name: "Ausführungsverlauf", exact: true }).click();
+
+      const statusFilter = page.locator('[data-filter="status"]');
+      const deliveryFilter = page.locator('[data-filter="delivery"]');
+      const statusTrigger = statusFilter.locator(".cron-filter-dropdown__trigger");
+      const deliveryTrigger = deliveryFilter.locator(".cron-filter-dropdown__trigger");
+      await page.getByRole("button", { name: "Status Alle Status", exact: true }).waitFor();
+      await page
+        .getByRole("button", { name: "Zustellung Alle Zustellungen", exact: true })
+        .waitFor();
+
+      await statusTrigger.focus();
+      await page.keyboard.press("Enter");
+      await expect.poll(() => statusFilter.locator("wa-dropdown-item:focus").count()).toBe(1);
+      await page.keyboard.press("ArrowDown");
+      await page.keyboard.press("Enter");
+      await page.getByRole("button", { name: "Status Fehler", exact: true }).waitFor();
+      await page.keyboard.press("Home");
+      await page.keyboard.press("Enter");
+      await page.getByRole("button", { name: "Status OK, Fehler", exact: true }).waitFor();
+      expect(await statusTrigger.textContent()).toContain("OK, Fehler");
+      await page.keyboard.press("ArrowDown");
+      await page.keyboard.press("ArrowDown");
+      await page.keyboard.press("Enter");
+      await page
+        .getByRole("button", { name: "Status OK +2 (OK, Fehler und Übersprungen)", exact: true })
+        .waitFor();
+      expect(await statusTrigger.textContent()).toContain("OK +2");
+
+      await dismissDropdownToNextTrigger(page, statusTrigger, deliveryTrigger);
+      await page.keyboard.press("Enter");
+      await expect.poll(() => deliveryFilter.locator("wa-dropdown-item:focus").count()).toBe(1);
+      await page.keyboard.press("Enter");
+      await page.keyboard.press("ArrowDown");
+      await page.keyboard.press("Enter");
+      await page
+        .getByRole("button", { name: "Zustellung Zugestellt, Nicht zugestellt", exact: true })
+        .waitFor();
+      expect(await deliveryTrigger.textContent()).toContain("Zugestellt, Nicht zugestellt");
+      await page.keyboard.press("ArrowDown");
+      await page.keyboard.press("Enter");
+      await page
+        .getByRole("button", {
+          name: "Zustellung Zugestellt +2 (Zugestellt, Nicht zugestellt und Unbekannt)",
+          exact: true,
+        })
+        .waitFor();
+      expect(await deliveryTrigger.textContent()).toContain("Zugestellt +2");
+
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("cron.runs")).some((request) => {
+            const params = requestParams(request);
+            const statuses = params.statuses;
+            const deliveryStatuses = params.deliveryStatuses;
+            return (
+              Array.isArray(statuses) &&
+              ["ok", "error", "skipped"].every((status) => statuses.includes(status)) &&
+              Array.isArray(deliveryStatuses) &&
+              ["delivered", "not-delivered", "unknown"].every((status) =>
+                deliveryStatuses.includes(status),
+              )
+            );
+          }),
+        )
+        .toBe(true);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps the newest visible overview when an older history search resolves last", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1_280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "cron.list": cronListResponse([]),
+        "cron.runs": cronRunsResponse([
+          { ts: 1, jobId: "initial-job", status: "ok", summary: "Initial history" },
+        ]),
+        "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}cron`);
+      await page.getByRole("tab", { name: "Run history", exact: true }).click();
+      await expect
+        .poll(() => page.locator(".cron-run-entry", { hasText: "Initial history" }).count())
+        .toBe(1);
+
+      await gateway.deferNext("cron.runs");
+      const search = page.locator(".cron-run-filter-search input");
+      await search.fill("stale");
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("cron.runs")).some(
+            (request) => requestParams(request).query === "stale",
+          ),
+        )
+        .toBe(true);
+
+      await gateway.setMethodResponse(
+        "cron.runs",
+        cronRunsResponse([
+          { ts: 3, jobId: "fresh-job", status: "ok", summary: "Newest matching history" },
+        ]),
+      );
+      await search.fill("fresh");
+      await expect
+        .poll(() => page.locator(".cron-run-entry", { hasText: "Newest matching history" }).count())
+        .toBe(1);
+
+      await gateway.resolveDeferred(
+        "cron.runs",
+        cronRunsResponse([
+          { ts: 2, jobId: "stale-job", status: "ok", summary: "Stale matching history" },
+        ]),
+      );
+
+      await expect
+        .poll(() => page.locator(".cron-run-entry", { hasText: "Newest matching history" }).count())
+        .toBe(1);
+      await expect
+        .poll(() => page.locator(".cron-run-entry", { hasText: "Stale matching history" }).count())
+        .toBe(0);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps selected task history when a deferred overview refresh resolves last", async () => {
+    const selectedJob = cronJob("selected-history-job", "Selected history task", {
+      kind: "every",
+      everyMs: 60_000,
+    });
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1_280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "cron.list": cronListResponse([selectedJob]),
+        "cron.runs": {
+          cases: [
+            {
+              match: { scope: "job", id: selectedJob.id },
+              response: cronRunsResponse([
+                {
+                  ts: 2,
+                  jobId: selectedJob.id,
+                  status: "ok",
+                  summary: "Selected task history",
+                },
+              ]),
+            },
+            {
+              match: { scope: "all" },
+              response: cronRunsResponse([
+                { ts: 1, jobId: "overview-job", status: "ok", summary: "Overview history" },
+              ]),
+            },
+          ],
+        },
+        "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}cron`);
+      await jobTitle(page, selectedJob.name).waitFor({ timeout: 10_000 });
+
+      const previousHistoryRequestCount = (await gateway.getRequests("cron.runs")).length;
+      await gateway.deferNext("cron.runs");
+      await gateway.emitGatewayEvent("cron", {});
+      await expect
+        .poll(async () => (await gateway.getRequests("cron.runs")).length)
+        .toBeGreaterThan(previousHistoryRequestCount);
+
+      await jobTitle(page, selectedJob.name).click();
+      await page.locator('[data-test-id="cron-detail-tab-history"]').click();
+      await expect
+        .poll(() => page.locator(".cron-run-entry", { hasText: "Selected task history" }).count())
+        .toBe(1);
+
+      await gateway.resolveDeferred(
+        "cron.runs",
+        cronRunsResponse([
+          { ts: 3, jobId: "overview-job", status: "ok", summary: "Late overview history" },
+        ]),
+      );
+
+      await expect
+        .poll(() => page.locator(".cron-run-entry", { hasText: "Selected task history" }).count())
+        .toBe(1);
+      await expect
+        .poll(() => page.locator(".cron-run-entry", { hasText: "Late overview history" }).count())
+        .toBe(0);
+
+      const statusTrigger = page.locator('[data-filter="status"] .cron-filter-dropdown__trigger');
+      const deliveryTrigger = page.locator(
+        '[data-filter="delivery"] .cron-filter-dropdown__trigger',
+      );
+      await statusTrigger.focus();
+      await page.keyboard.press("Enter");
+      await expect
+        .poll(() => page.locator('[data-filter="status"] wa-dropdown-item:focus').count())
+        .toBe(1);
+      await dismissDropdownToNextTrigger(page, statusTrigger, deliveryTrigger);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("saves and displays agent-turn model overrides", async () => {
     const configuredModel = "openai/gpt-5.2";
     const existingJob = {
@@ -288,6 +847,80 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
         },
       });
       expect(requireRecord(requestParams(addRequest).delivery).accountId).toBeUndefined();
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("creates and edits agent-turn jobs with an explicit zero timeout", async () => {
+    const existingJob = {
+      ...cronJob("existing-no-timeout", "Existing no-timeout task", {
+        kind: "every",
+        everyMs: 60_000,
+      }),
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: {
+        kind: "agentTurn",
+        message: "Continue until the existing task finishes",
+        timeoutSeconds: 0,
+      },
+    };
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1_280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "cron.add": { id: "created-no-timeout" },
+        "cron.update": { id: existingJob.id },
+        "cron.list": cronListResponse([existingJob]),
+        "cron.runs": cronRunsResponse([]),
+        "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}cron`);
+      await jobTitle(page, existingJob.name).waitFor({ timeout: 10_000 });
+
+      await page.locator('[data-test-id="cron-new-task"]').click();
+      await page.locator("#cron-name").fill("Created no-timeout task");
+      await page.locator("#cron-payload-text").fill("Continue until the new task finishes");
+      await page.locator("details.cron-advanced > summary").click();
+      await page.locator("#cron-timeout-seconds").fill("0");
+      await page.locator('[data-test-id="cron-submit"]').click();
+
+      const addRequest = await gateway.waitForRequest("cron.add");
+      expect(requestParams(addRequest)).toMatchObject({
+        name: "Created no-timeout task",
+        payload: {
+          kind: "agentTurn",
+          message: "Continue until the new task finishes",
+          timeoutSeconds: 0,
+        },
+      });
+
+      await jobTitle(page, existingJob.name).waitFor({ timeout: 10_000 });
+      await jobTitle(page, existingJob.name).click();
+      await page.locator("details.cron-advanced > summary").click();
+      expect(await page.locator("#cron-timeout-seconds").inputValue()).toBe("0");
+      await page.locator("#cron-payload-text").fill("Continue until the edited task finishes");
+      await page.locator('[data-test-id="cron-submit"]').click();
+
+      const updateRequest = await gateway.waitForRequest("cron.update");
+      expect(requestParams(updateRequest)).toMatchObject({
+        id: existingJob.id,
+        patch: {
+          payload: {
+            kind: "agentTurn",
+            message: "Continue until the edited task finishes",
+            timeoutSeconds: 0,
+          },
+        },
+      });
     } finally {
       await context.close();
     }

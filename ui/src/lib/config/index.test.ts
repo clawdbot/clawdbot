@@ -1,8 +1,10 @@
+// @vitest-environment node
 // Control UI tests cover config behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot } from "../../api/types.ts";
-import { createRuntimeConfigCapability, findAgentConfigEntryIndex } from "./index.ts";
+import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
+import { createRuntimeConfigCapability, resolveAgentConfigEntryTarget } from "./index.ts";
 
 const CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS = 800;
 
@@ -17,7 +19,11 @@ function deferred<T>() {
 }
 
 function createGatewayHarness(client: GatewayBrowserClient) {
-  let snapshot = { client, connected: true, sessionKey: "main" };
+  let snapshot: {
+    client: GatewayBrowserClient;
+    phase: ApplicationGatewayPhase;
+    sessionKey: string;
+  } = { client, phase: "connected", sessionKey: "main" };
   const listeners = new Set<(next: typeof snapshot) => void>();
   return {
     gateway: {
@@ -29,8 +35,12 @@ function createGatewayHarness(client: GatewayBrowserClient) {
         return () => listeners.delete(listener);
       },
     },
-    publish: (connected: boolean) => {
-      snapshot = { client, connected, sessionKey: "main" };
+    publish: (connected: boolean, nextClient: GatewayBrowserClient = client) => {
+      snapshot = {
+        client: nextClient,
+        phase: connected ? "connected" : "reconnecting",
+        sessionKey: "main",
+      };
       for (const listener of listeners) {
         listener(snapshot);
       }
@@ -156,7 +166,10 @@ describe("createRuntimeConfigCapability", () => {
       if (method === "config.get") {
         configGetCount += 1;
         return {
-          config: configGetCount === 1 ? { count: 1, enabled: false, tags: [1], label: "ok" } : {},
+          config:
+            configGetCount === 1
+              ? { count: 1, composedCount: 2, enabled: false, tags: [1], label: "ok" }
+              : {},
           hash: configGetCount === 1 ? "hash-1" : "hash-2",
           valid: true,
           issues: [],
@@ -168,6 +181,7 @@ describe("createRuntimeConfigCapability", () => {
             type: "object",
             properties: {
               count: { type: "number" },
+              composedCount: { type: "number", allOf: [{ minimum: 2 }] },
               enabled: { type: "boolean" },
               tags: { type: "array", items: { type: "integer" } },
               label: { type: "string", minLength: 1 },
@@ -185,6 +199,7 @@ describe("createRuntimeConfigCapability", () => {
 
     await Promise.all([runtimeConfig.ensureLoaded(), runtimeConfig.ensureSchemaLoaded()]);
     runtimeConfig.patchForm(["count"], "42.5");
+    runtimeConfig.patchForm(["composedCount"], "8.5");
     runtimeConfig.patchForm(["enabled"], "true");
     runtimeConfig.patchForm(["tags"], ["7", ""]);
     runtimeConfig.patchForm(["label"], "");
@@ -194,15 +209,196 @@ describe("createRuntimeConfigCapability", () => {
     expect(submission?.params).toMatchObject({ baseHash: "hash-1" });
     const raw = (submission?.params as { raw?: unknown } | undefined)?.raw;
     expect(typeof raw).toBe("string");
-    expect(JSON.parse(raw as string)).toEqual({ count: 42.5, enabled: true, tags: [7] });
+    expect(JSON.parse(raw as string)).toEqual({
+      count: 42.5,
+      composedCount: 8.5,
+      enabled: true,
+      tags: [7],
+    });
+    runtimeConfig.dispose();
+  });
+
+  it("removes a restored optional override from config.set while preserving siblings", async () => {
+    const submitted: Array<{ method: string; params: unknown }> = [];
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "config.get") {
+        return {
+          config: { runtime: { keep: true, mode: "custom" } },
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      if (method === "config.schema") {
+        return {
+          schema: {
+            type: "object",
+            properties: {
+              runtime: {
+                type: "object",
+                properties: {
+                  keep: { type: "boolean" },
+                  mode: { type: "string", default: "balanced" },
+                },
+              },
+            },
+          },
+          uiHints: {},
+        };
+      }
+      submitted.push({ method, params });
+      return { hash: "hash-2" };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+
+    await Promise.all([runtimeConfig.ensureLoaded(), runtimeConfig.ensureSchemaLoaded()]);
+    runtimeConfig.removeFormValue(["runtime", "mode"]);
+
+    await expect(runtimeConfig.save()).resolves.toBe(true);
+    const submission = submitted.find((entry) => entry.method === "config.set");
+    const raw = (submission?.params as { raw?: unknown } | undefined)?.raw;
+    expect(typeof raw).toBe("string");
+    expect(JSON.parse(raw as string)).toEqual({ runtime: { keep: true } });
+    runtimeConfig.dispose();
+  });
+
+  it("submits only decimal numeric spellings as numbers", async () => {
+    const submitted: Array<{ method: string; params: unknown }> = [];
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "config.get") {
+        return {
+          config: {},
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      if (method === "config.schema") {
+        return {
+          schema: {
+            type: "object",
+            properties: {
+              hex: { type: "number" },
+              binary: { type: "integer" },
+              explicitPlus: { type: "number" },
+              separator: { type: "number" },
+              nonFinite: { type: "number" },
+              scientific: { type: "number" },
+              decimal: { type: "number" },
+              fractionalInteger: { type: "integer" },
+              unionRadix: { anyOf: [{ type: "integer" }, { type: "string" }] },
+              unionScientific: { anyOf: [{ type: "integer" }, { type: "string" }] },
+            },
+          },
+          uiHints: {},
+        };
+      }
+      submitted.push({ method, params });
+      return { hash: "hash-2" };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+
+    await Promise.all([runtimeConfig.ensureLoaded(), runtimeConfig.ensureSchemaLoaded()]);
+    runtimeConfig.patchForm(["hex"], "0x10");
+    runtimeConfig.patchForm(["binary"], "0b1010");
+    runtimeConfig.patchForm(["explicitPlus"], "+5");
+    runtimeConfig.patchForm(["separator"], "1_000");
+    runtimeConfig.patchForm(["nonFinite"], "Infinity");
+    runtimeConfig.patchForm(["scientific"], "-2.5E-3");
+    runtimeConfig.patchForm(["decimal"], ".5");
+    runtimeConfig.patchForm(["fractionalInteger"], "42.5");
+    runtimeConfig.patchForm(["unionRadix"], "0o17");
+    runtimeConfig.patchForm(["unionScientific"], "1e5");
+
+    await expect(runtimeConfig.save()).resolves.toBe(true);
+    const submission = submitted.find((entry) => entry.method === "config.set");
+    const raw = (submission?.params as { raw?: unknown } | undefined)?.raw;
+    expect(typeof raw).toBe("string");
+    expect(JSON.parse(raw as string)).toEqual({
+      hex: "0x10",
+      binary: "0b1010",
+      explicitPlus: "+5",
+      separator: "1_000",
+      nonFinite: "Infinity",
+      scientific: -0.0025,
+      decimal: 0.5,
+      fractionalInteger: "42.5",
+      unionRadix: "0o17",
+      unionScientific: 100_000,
+    });
     runtimeConfig.dispose();
   });
 
   it("stages inherited agent overrides and the default through the public capability", async () => {
+    const submitted: Array<{ method: string; params: unknown }> = [];
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "config.get") {
+        return {
+          sourceConfig: {
+            agents: {
+              entries: {
+                MAIN: {},
+                reviewer: { default: true },
+              },
+            },
+          },
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      submitted.push({ method, params });
+      return { hash: "hash-2" };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+    await runtimeConfig.ensureLoaded();
+
+    const newAgent = runtimeConfig.agentEntry("new-agent", { ensure: true });
+    expect(newAgent).toEqual({
+      path: ["agents", "entries", "new-agent"],
+      entry: {},
+    });
+    runtimeConfig.patchForm([...newAgent!.path, "model"], "openai/gpt-5.4");
+    expect(runtimeConfig.stageDefaultAgent("main")).toBe(true);
+    expect(runtimeConfig.state.configForm).toEqual({
+      agents: {
+        entries: {
+          MAIN: { default: true },
+          reviewer: {},
+          "new-agent": { model: "openai/gpt-5.4" },
+        },
+      },
+    });
+    await expect(runtimeConfig.save()).resolves.toBe(true);
+    const raw = (
+      submitted.find((entry) => entry.method === "config.set")?.params as
+        | { raw?: unknown }
+        | undefined
+    )?.raw;
+    expect(JSON.parse(String(raw))).toEqual({
+      agents: {
+        entries: {
+          MAIN: { default: true },
+          reviewer: {},
+          "new-agent": { model: "openai/gpt-5.4" },
+        },
+      },
+    });
+    expect(JSON.parse(String(raw)).agents).not.toHaveProperty("list");
+    runtimeConfig.dispose();
+  });
+
+  it("refuses to create blocked agent entry paths", async () => {
     const request = vi.fn(async (method: string) =>
       method === "config.get"
         ? {
-            config: { agents: { list: [{ id: "main" }, { id: "reviewer" }] } },
+            sourceConfig: { agents: { entries: { main: { default: true } } } },
             hash: "hash-1",
             valid: true,
             issues: [],
@@ -214,12 +410,10 @@ describe("createRuntimeConfigCapability", () => {
     const runtimeConfig = createRuntimeConfigCapability(gateway);
     await runtimeConfig.ensureLoaded();
 
-    expect(runtimeConfig.ensureAgentEntry("new-agent")).toBe(2);
-    expect(runtimeConfig.stageDefaultAgent("reviewer")).toBe(true);
-    expect(runtimeConfig.state.configForm).toMatchObject({
-      agents: {
-        list: [{ id: "main" }, { id: "reviewer", default: true }, { id: "new-agent" }],
-      },
+    expect(runtimeConfig.agentEntry("__proto__", { ensure: true })).toBeNull();
+    expect(runtimeConfig.agentEntry(" ", { ensure: true })).toBeNull();
+    expect(runtimeConfig.state.configForm).toEqual({
+      agents: { entries: { main: { default: true } } },
     });
     runtimeConfig.dispose();
   });
@@ -438,6 +632,269 @@ describe("config form auto-save", () => {
     expect(setCalls).toBe(2);
     runtimeConfig.dispose();
   });
+
+  it.each([
+    ["automatic save", "123"],
+    ["automatic save", "z.ai"],
+    ["automatic save", "a.models.3"],
+    ["manual save", "123"],
+    ["manual save", "z.ai"],
+    ["manual save", "a.models.3"],
+    ["manual save", "$&"],
+    ["apply", "123"],
+    ["apply", "z.ai"],
+    ["apply", "a.models.3"],
+  ] as const)(
+    "formats the rejected %s validation path for provider %s without changing the Gateway issue",
+    async (operation, providerId) => {
+      vi.useFakeTimers();
+      const issue = {
+        path: `models.providers.${providerId}.models.3.name`,
+        message: "Invalid model name",
+      };
+      const rejection = new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: `invalid config: ${issue.path}: ${issue.message}`,
+        details: { issues: [issue] },
+      });
+      const config = {
+        models: {
+          providers: {
+            [providerId]: {
+              models: [
+                { name: "First" },
+                { name: "Second" },
+                { name: "Third" },
+                { name: "Fourth" },
+              ],
+            },
+          },
+        },
+      };
+      const request = vi.fn(async (method: string) => {
+        if (method === "config.get") {
+          return { config, raw: JSON.stringify(config), hash: "hash-1", valid: true, issues: [] };
+        }
+        if (method === "config.set" || method === "config.apply") {
+          throw rejection;
+        }
+        return {};
+      });
+      const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+      await runtimeConfig.ensureLoaded();
+      expect(runtimeConfig.state.configSchema).toBeNull();
+
+      if (operation === "automatic save") {
+        runtimeConfig.patchForm(["models", "providers", providerId, "models", 3, "name"], "");
+        await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+      } else if (operation === "manual save") {
+        runtimeConfig.patchForm(["models", "providers", providerId, "models", 3, "name"], "");
+        await expect(runtimeConfig.save()).resolves.toBe(false);
+      } else {
+        await expect(runtimeConfig.apply()).resolves.toBe(false);
+      }
+
+      expect(runtimeConfig.state.configSnapshot?.valid).toBe(true);
+      expect(runtimeConfig.state.configIssues).toEqual([]);
+      expect(runtimeConfig.state.lastError).toBe(
+        `GatewayRequestError: invalid config: models.providers.${providerId}.models.#4.name: Invalid model name`,
+      );
+      expect(issue.path).toBe(`models.providers.${providerId}.models.3.name`);
+      expect(rejection.message).toBe(
+        `invalid config: models.providers.${providerId}.models.3.name: Invalid model name`,
+      );
+      expect(rejection.details).toEqual({ issues: [issue] });
+      runtimeConfig.dispose();
+    },
+  );
+
+  it("preserves raw validation paths when dotted draft keys have multiple interpretations", async () => {
+    const issue = {
+      path: "models.providers.a.models.3.name",
+      message: "Invalid model name",
+    };
+    const config = {
+      models: {
+        providers: {
+          a: {
+            models: [{ name: "First" }, { name: "Second" }, { name: "Third" }, { name: "Fourth" }],
+          },
+          "a.models.3.name": { models: [{ name: "Ambiguous provider" }] },
+        },
+      },
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return { config, raw: JSON.stringify(config), hash: "hash-1", valid: true, issues: [] };
+      }
+      if (method === "config.set") {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: `invalid config: ${issue.path}: ${issue.message}`,
+          details: { issues: [issue] },
+        });
+      }
+      return {};
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+    runtimeConfig.patchForm(["models", "providers", "a", "models", 3, "name"], "");
+
+    await expect(runtimeConfig.save()).resolves.toBe(false);
+    expect(runtimeConfig.state.lastError).toBe(
+      "GatewayRequestError: invalid config: models.providers.a.models.3.name: Invalid model name",
+    );
+    expect(issue.path).toBe("models.providers.a.models.3.name");
+    runtimeConfig.dispose();
+  });
+
+  it("rewrites only complete validation fields when issue paths overlap", async () => {
+    const issues = [
+      { path: "foo.items.0.name", message: "Invalid numeric record" },
+      { path: "items.0.name", message: "Invalid array item" },
+    ];
+    const config = {
+      foo: { items: { "0": { name: "Record" } } },
+      items: [{ name: "Array" }],
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return { config, raw: JSON.stringify(config), hash: "hash-1", valid: true, issues: [] };
+      }
+      if (method === "config.set") {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message:
+            "invalid config: foo.items.0.name: Invalid numeric record; items.0.name: Invalid array item",
+          details: { issues },
+        });
+      }
+      return {};
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+    runtimeConfig.patchForm(["items", 0, "name"], "");
+
+    await expect(runtimeConfig.save()).resolves.toBe(false);
+    expect(runtimeConfig.state.lastError).toBe(
+      "GatewayRequestError: invalid config: foo.items.0.name: Invalid numeric record; items.#1.name: Invalid array item",
+    );
+    expect(issues.map((issue) => issue.path)).toEqual(["foo.items.0.name", "items.0.name"]);
+    runtimeConfig.dispose();
+  });
+
+  it("preserves machine-indexed validation paths for raw-editor submissions", async () => {
+    const issue = { path: "models.3.name", message: "Invalid model name" };
+    const config = {
+      models: [{ name: "First" }, { name: "Second" }, { name: "Third" }, { name: "Fourth" }],
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return { config, raw: JSON.stringify(config), hash: "hash-1", valid: true, issues: [] };
+      }
+      if (method === "config.set") {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: `invalid config: ${issue.path}: ${issue.message}`,
+          details: { issues: [issue] },
+        });
+      }
+      return {};
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+    runtimeConfig.setRaw(
+      JSON.stringify({
+        models: [{ name: "First" }, { name: "Second" }, { name: "Third" }, { name: "" }],
+      }),
+    );
+
+    await expect(runtimeConfig.save()).resolves.toBe(false);
+    expect(runtimeConfig.state.configFormMode).toBe("raw");
+    expect(runtimeConfig.state.lastError).toBe(
+      "GatewayRequestError: invalid config: models.3.name: Invalid model name",
+    );
+    runtimeConfig.dispose();
+  });
+
+  it.each(["automatic save", "manual save", "apply"] as const)(
+    "formats rejected %s paths against the submitted draft after a mid-flight edit",
+    async (operation) => {
+      vi.useFakeTimers();
+      const pendingWrite = deferred<unknown>();
+      const issue = {
+        path: "models.providers.a.models.3.models.3.name",
+        message: "Invalid model name",
+      };
+      const config = {
+        models: {
+          providers: {
+            "a.models.3": {
+              models: [
+                { name: "First" },
+                { name: "Second" },
+                { name: "Third" },
+                { name: "Fourth" },
+              ],
+            },
+          },
+        },
+      };
+      const request = vi.fn((method: string) => {
+        if (method === "config.get") {
+          return Promise.resolve({
+            config,
+            raw: JSON.stringify(config),
+            hash: "hash-1",
+            valid: true,
+            issues: [],
+          });
+        }
+        if (method === "config.set" || method === "config.apply") {
+          return pendingWrite.promise;
+        }
+        return Promise.resolve({});
+      });
+      const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+      await runtimeConfig.ensureLoaded();
+
+      let write: Promise<boolean> | undefined;
+      if (operation === "automatic save") {
+        runtimeConfig.patchForm(["models", "providers", "a.models.3", "models", 3, "name"], "");
+        await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+      } else if (operation === "manual save") {
+        runtimeConfig.patchForm(["models", "providers", "a.models.3", "models", 3, "name"], "");
+        write = runtimeConfig.save();
+      } else {
+        write = runtimeConfig.apply();
+      }
+      expect(request).toHaveBeenCalledWith(
+        operation === "apply" ? "config.apply" : "config.set",
+        expect.any(Object),
+      );
+
+      runtimeConfig.patchForm(["models", "providers", "a"], {
+        models: [{}, {}, {}, { models: [{}, {}, {}, { name: "Overlapping provider" }] }],
+      });
+      pendingWrite.reject(
+        new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: `invalid config: ${issue.path}: ${issue.message}`,
+          details: { issues: [issue] },
+        }),
+      );
+      if (write) {
+        await expect(write).resolves.toBe(false);
+      } else {
+        await vi.advanceTimersByTimeAsync(0);
+      }
+
+      expect(runtimeConfig.state.lastError).toBe(
+        "GatewayRequestError: invalid config: models.providers.a.models.3.models.#4.name: Invalid model name",
+      );
+      runtimeConfig.dispose();
+    },
+  );
 
   it("clears needsApply only on apply; a discarding refresh keeps the banner", async () => {
     vi.useFakeTimers();
@@ -1499,6 +1956,634 @@ describe("config form auto-save", () => {
     runtimeConfig.dispose();
   });
 
+  it("flushes a scheduled autosave when a write barrier runs before the debounce", async () => {
+    vi.useFakeTimers();
+    const setGate = deferred<unknown>();
+    const methods: string[] = [];
+    const request = vi.fn((method: string, params?: unknown) => {
+      methods.push(method);
+      if (method === "config.get") {
+        return Promise.resolve({
+          config: { count: 1 },
+          raw: '{\n  "count": 1\n}\n',
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        });
+      }
+      if (method === "config.set") {
+        expect(params).toMatchObject({ baseHash: "hash-1" });
+        return setGate.promise;
+      }
+      return Promise.resolve({});
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    runtimeConfig.patchForm(["count"], 2);
+    let drained = false;
+    const drain = runtimeConfig.waitForPendingWrites().then(() => {
+      drained = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(methods.filter((method) => method === "config.set")).toHaveLength(1);
+    expect(drained).toBe(false);
+
+    setGate.resolve({ hash: "hash-2" });
+    await drain;
+    expect(drained).toBe(true);
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
+    runtimeConfig.dispose();
+  });
+
+  it("adopts config.patch acknowledgements for consecutive queued patches", async () => {
+    const patchBaseHashes: string[] = [];
+    let storedConfig: Record<string, unknown> = { count: 1 };
+    let hashCounter = 1;
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "config.get") {
+        return {
+          config: storedConfig,
+          raw: JSON.stringify(storedConfig),
+          hash: `hash-${hashCounter}`,
+          valid: true,
+          issues: [],
+        };
+      }
+      if (method === "config.patch") {
+        const patch = params as { baseHash: string; raw: string };
+        patchBaseHashes.push(patch.baseHash);
+        storedConfig = { ...storedConfig, ...(JSON.parse(patch.raw) as Record<string, unknown>) };
+        hashCounter += 1;
+        return { config: storedConfig, hash: `hash-${hashCounter}` };
+      }
+      return {};
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    const first = runtimeConfig.patch({ raw: { first: true }, note: "first test patch" });
+    const second = runtimeConfig.patch({ raw: { second: true }, note: "second test patch" });
+
+    await expect(Promise.all([first, second])).resolves.toEqual([true, true]);
+    expect(patchBaseHashes).toEqual(["hash-1", "hash-2"]);
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-3");
+    expect(runtimeConfig.state.configForm).toEqual({ count: 1, first: true, second: true });
+    runtimeConfig.dispose();
+  });
+
+  it("preserves JSON5 raw text when config.patch reports a no-op", async () => {
+    const originalRaw = "{\n  // keep this operator note\n  count: 1,\n}\n";
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          config: { count: 1 },
+          raw: originalRaw,
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      if (method === "config.patch") {
+        return { config: { count: 1 }, noop: true };
+      }
+      return {};
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    await expect(
+      runtimeConfig.patch({ raw: { count: 1 }, note: "no-op test patch" }),
+    ).resolves.toBe(true);
+    expect(runtimeConfig.state.configSnapshot?.raw).toBe(originalRaw);
+    expect(runtimeConfig.state.configRaw).toBe(originalRaw);
+    runtimeConfig.dispose();
+  });
+
+  it("keeps a concurrent dirty draft on its pre-patch CAS base", async () => {
+    vi.useFakeTimers();
+    const patchGate = deferred<unknown>();
+    const request = vi.fn((method: string) => {
+      if (method === "config.get") {
+        return Promise.resolve({
+          config: { count: 1 },
+          raw: '{"count":1}',
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        });
+      }
+      if (method === "config.patch") {
+        return patchGate.promise;
+      }
+      return Promise.resolve({});
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    const patch = runtimeConfig.patch({ raw: { patched: true }, note: "concurrent test patch" });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("config.patch", expect.anything()));
+    runtimeConfig.patchForm(["count"], 2);
+    patchGate.resolve({ config: { count: 1, patched: true }, hash: "hash-2" });
+    await expect(patch).resolves.toBe(true);
+
+    expect(runtimeConfig.state.configFormDirty).toBe(true);
+    expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-1");
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
+    runtimeConfig.resetDraft();
+    runtimeConfig.dispose();
+  });
+
+  it("orders a patch acknowledgement after an older in-flight config load", async () => {
+    const staleLoad = deferred<ConfigSnapshot>();
+    let getCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        getCalls += 1;
+        if (getCalls === 2) {
+          return staleLoad.promise;
+        }
+        return {
+          config: { count: 1 },
+          raw: '{"count":1}',
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      if (method === "config.patch") {
+        return { config: { count: 1, patched: true }, hash: "hash-2" };
+      }
+      return {};
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    const staleRefresh = runtimeConfig.refresh();
+    await vi.waitFor(() => expect(getCalls).toBe(2));
+    await expect(
+      runtimeConfig.patch({ raw: { patched: true }, note: "ordered patch test" }),
+    ).resolves.toBe(true);
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
+
+    staleLoad.resolve({
+      config: { count: 999 },
+      raw: '{"count":999}',
+      hash: "stale-hash",
+      valid: true,
+      issues: [],
+    });
+    await staleRefresh;
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
+    expect(runtimeConfig.state.configForm).toEqual({ count: 1, patched: true });
+    runtimeConfig.dispose();
+  });
+
+  it("refreshes hash-only patch acknowledgements before publishing their revision", async () => {
+    let storedConfig: Record<string, unknown> = { count: 1 };
+    let hash = "hash-1";
+    let getCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        getCalls += 1;
+        return {
+          config: storedConfig,
+          raw: JSON.stringify(storedConfig),
+          hash,
+          valid: true,
+          issues: [],
+        };
+      }
+      if (method === "config.patch") {
+        storedConfig = { count: 1, patched: true };
+        hash = "hash-2";
+        return { hash };
+      }
+      return {};
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    await expect(
+      runtimeConfig.patch({ raw: { patched: true }, note: "hash-only patch test" }),
+    ).resolves.toBe(true);
+
+    expect(getCalls).toBe(2);
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
+    expect(runtimeConfig.state.configForm).toEqual({ count: 1, patched: true });
+    runtimeConfig.dispose();
+  });
+
+  it("records a committed hash-only patch when its acknowledgement refresh fails", async () => {
+    let getCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        getCalls += 1;
+        if (getCalls > 1) {
+          throw new Error("refresh unavailable");
+        }
+        return {
+          config: { count: 1 },
+          raw: '{"count":1}',
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      if (method === "config.patch") {
+        return { hash: "hash-2" };
+      }
+      return {};
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    await expect(
+      runtimeConfig.patch({ raw: { patched: true }, note: "hash-only refresh failure" }),
+    ).resolves.toBe(false);
+
+    expect(runtimeConfig.state.configNeedsApply).toBe(true);
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-1");
+    expect(runtimeConfig.state.lastError).toContain("refresh unavailable");
+    runtimeConfig.dispose();
+  });
+
+  it("serializes external mutations after scheduled drafts and refreshes before resolving", async () => {
+    vi.useFakeTimers();
+    const order: string[] = [];
+    let storedConfig: Record<string, unknown> = { count: 1 };
+    let hash = "hash-1";
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "config.get") {
+        order.push("config.get");
+        return {
+          config: storedConfig,
+          raw: JSON.stringify(storedConfig),
+          hash,
+          valid: true,
+          issues: [],
+        };
+      }
+      if (method === "config.set") {
+        order.push("config.set");
+        storedConfig = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
+        hash = "hash-2";
+        return { hash };
+      }
+      if (method === "plugins.setEnabled") {
+        order.push("plugins.setEnabled");
+        storedConfig = { ...storedConfig, pluginEnabled: true };
+        hash = "hash-3";
+        return { ok: true };
+      }
+      return {};
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+    order.length = 0;
+
+    runtimeConfig.patchForm(["count"], 2);
+    const result = await runtimeConfig.runExternalMutation((client) =>
+      client.request("plugins.setEnabled", { pluginId: "memory-core", enabled: true }),
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      value: { ok: true },
+      refresh: { ok: true },
+    });
+    expect(order).toEqual(["config.set", "plugins.setEnabled", "config.get"]);
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-3");
+    expect(runtimeConfig.state.configForm).toEqual({ count: 2, pluginEnabled: true });
+    runtimeConfig.dispose();
+  });
+
+  it("forces a post-mutation refresh instead of joining a pre-existing config load", async () => {
+    const staleLoad = deferred<ConfigSnapshot>();
+    let getCalls = 0;
+    let storedConfig: Record<string, unknown> = { count: 1 };
+    let hash = "hash-1";
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        getCalls += 1;
+        if (getCalls === 2) {
+          return staleLoad.promise;
+        }
+        return {
+          config: storedConfig,
+          raw: JSON.stringify(storedConfig),
+          hash,
+          valid: true,
+          issues: [],
+        };
+      }
+      if (method === "plugins.setEnabled") {
+        storedConfig = { count: 1, pluginEnabled: true };
+        hash = "hash-2";
+        return { ok: true };
+      }
+      return {};
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    const overlappingRefresh = runtimeConfig.refresh();
+    await vi.waitFor(() => expect(getCalls).toBe(2));
+    const result = await runtimeConfig.runExternalMutation((client) =>
+      client.request("plugins.setEnabled", { pluginId: "memory-core", enabled: true }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(getCalls).toBe(3);
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
+    expect(runtimeConfig.state.configForm).toEqual({ count: 1, pluginEnabled: true });
+
+    staleLoad.resolve({
+      config: { count: 999 },
+      raw: '{"count":999}',
+      hash: "stale-hash",
+      valid: true,
+      issues: [],
+    });
+    await overlappingRefresh;
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
+    runtimeConfig.dispose();
+  });
+
+  it("preserves a committed external mutation when its authoritative refresh fails", async () => {
+    let getCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        getCalls += 1;
+        if (getCalls === 1) {
+          return {
+            config: { count: 1 },
+            raw: '{"count":1}',
+            hash: "hash-1",
+            valid: true,
+            issues: [],
+          };
+        }
+        throw new Error("refresh unavailable");
+      }
+      if (method === "plugins.setEnabled") {
+        return { ok: true };
+      }
+      return {};
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    const result = await runtimeConfig.runExternalMutation((client) =>
+      client.request("plugins.setEnabled", { pluginId: "memory-core", enabled: true }),
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      value: { ok: true },
+      refresh: { ok: false, error: "Error: refresh unavailable" },
+    });
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-1");
+    runtimeConfig.dispose();
+  });
+
+  it("distinguishes definitive external mutation rejections from transient errors", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          config: { count: 1 },
+          raw: '{"count":1}',
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      return {};
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    await expect(
+      runtimeConfig.runExternalMutation(async () => {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "invalid config",
+        });
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: "rejected",
+      error: "invalid config",
+    });
+    await expect(
+      runtimeConfig.runExternalMutation(async () => {
+        throw new Error("socket closed");
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: "error",
+      error: "socket closed",
+    });
+    runtimeConfig.dispose();
+  });
+
+  it("classifies an external mutation interrupted by disconnect as retryable", async () => {
+    const mutation = deferred<unknown>();
+    const request = vi.fn((method: string) => {
+      if (method === "config.get") {
+        return Promise.resolve({
+          config: { count: 1 },
+          raw: '{"count":1}',
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        });
+      }
+      if (method === "plugins.setEnabled") {
+        return mutation.promise;
+      }
+      return Promise.resolve({});
+    });
+    const { runtimeConfig, publish } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    const resultPromise = runtimeConfig.runExternalMutation((client) =>
+      client.request("plugins.setEnabled", { pluginId: "memory-core", enabled: true }),
+    );
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("plugins.setEnabled", expect.anything()),
+    );
+    publish(false);
+    mutation.reject(new Error("socket closed"));
+
+    await expect(resultPromise).resolves.toEqual({
+      ok: false,
+      reason: "unavailable",
+      error: "Connection changed before the configuration update completed.",
+    });
+    runtimeConfig.dispose();
+  });
+
+  it("queues background external mutations until write suspension ends", async () => {
+    const methods: string[] = [];
+    const request = vi.fn(async (method: string) => {
+      methods.push(method);
+      if (method === "config.get") {
+        return {
+          config: { count: 1 },
+          raw: '{"count":1}',
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      return { ok: true };
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+    methods.length = 0;
+    runtimeConfig.setWritesSuspended(true);
+
+    const resultPromise = runtimeConfig.runExternalMutation(
+      (client) => client.request("config.patch", { raw: '{"ui":{"prefs":{"locale":"de"}}}' }),
+      { waitForWritesResumed: true },
+    );
+    await Promise.resolve();
+    expect(methods).toEqual([]);
+
+    runtimeConfig.setWritesSuspended(false);
+    await expect(resultPromise).resolves.toEqual({
+      ok: true,
+      value: { ok: true },
+      refresh: { ok: true },
+    });
+    expect(methods).toEqual(["config.patch", "config.get"]);
+    runtimeConfig.dispose();
+  });
+
+  it("preserves queued mutation waiters when suspension is repeated", async () => {
+    const methods: string[] = [];
+    const request = vi.fn(async (method: string) => {
+      methods.push(method);
+      if (method === "config.get") {
+        return {
+          config: { count: 1 },
+          raw: '{"count":1}',
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      return { ok: true };
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+    methods.length = 0;
+    runtimeConfig.setWritesSuspended(true);
+
+    const resultPromise = runtimeConfig.runExternalMutation(
+      (client) => client.request("config.patch", { raw: '{"ui":{"prefs":{"locale":"de"}}}' }),
+      { waitForWritesResumed: true },
+    );
+    await Promise.resolve();
+    runtimeConfig.setWritesSuspended(true);
+    runtimeConfig.setWritesSuspended(false);
+
+    await expect(resultPromise).resolves.toEqual({
+      ok: true,
+      value: { ok: true },
+      refresh: { ok: true },
+    });
+    expect(methods).toEqual(["config.patch", "config.get"]);
+    runtimeConfig.dispose();
+  });
+
+  it("does not retarget a suspended external mutation after the gateway changes", async () => {
+    const requestA = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          config: { count: 1 },
+          raw: '{"count":1}',
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      return { ok: true };
+    });
+    const requestB = vi.fn(async () => ({ ok: true }));
+    const clientA = { request: requestA } as unknown as GatewayBrowserClient;
+    const clientB = { request: requestB } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(clientA);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+    await runtimeConfig.ensureLoaded();
+    requestA.mockClear();
+    runtimeConfig.setWritesSuspended(true);
+
+    const resultPromise = runtimeConfig.runExternalMutation(
+      (client) => client.request("config.patch", { raw: '{"ui":{"prefs":{"locale":"de"}}}' }),
+      { waitForWritesResumed: true },
+    );
+    await Promise.resolve();
+    publish(true, clientB);
+    runtimeConfig.setWritesSuspended(false);
+
+    await expect(resultPromise).resolves.toEqual({
+      ok: false,
+      reason: "unavailable",
+      error: "Connection changed before the configuration update started.",
+    });
+    expect(requestA).not.toHaveBeenCalled();
+    expect(requestB).not.toHaveBeenCalled();
+    runtimeConfig.dispose();
+  });
+
+  it("retries a background mutation when suspension begins during its write drain", async () => {
+    vi.useFakeTimers();
+    const firstSet = deferred<unknown>();
+    const methods: string[] = [];
+    const request = vi.fn((method: string) => {
+      methods.push(method);
+      if (method === "config.get") {
+        return Promise.resolve({
+          config: { count: 1 },
+          raw: '{"count":1}',
+          hash: methods.filter((entry) => entry === "config.set").length ? "hash-2" : "hash-1",
+          valid: true,
+          issues: [],
+        });
+      }
+      if (method === "config.set") {
+        return firstSet.promise;
+      }
+      return Promise.resolve({ ok: true });
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+    methods.length = 0;
+
+    runtimeConfig.patchForm(["count"], 2);
+    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+    const resultPromise = runtimeConfig.runExternalMutation(
+      (client) => client.request("config.patch", { raw: '{"ui":{"prefs":{"locale":"de"}}}' }),
+      { waitForWritesResumed: true },
+    );
+    runtimeConfig.setWritesSuspended(true);
+    firstSet.resolve({ hash: "hash-2" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(methods).toEqual(["config.set"]);
+
+    runtimeConfig.setWritesSuspended(false);
+    await expect(resultPromise).resolves.toEqual({
+      ok: true,
+      value: { ok: true },
+      refresh: { ok: true },
+    });
+    expect(methods).toEqual(["config.set", "config.patch", "config.get"]);
+    runtimeConfig.dispose();
+  });
+
   it("refreshes applied revision truth after config.patch", async () => {
     vi.useFakeTimers();
     let getCount = 0;
@@ -1649,6 +2734,93 @@ describe("config form auto-save", () => {
     expect(submissions[1]?.baseHash).toBe("hash-2");
     expect(applySubmissions).toHaveLength(1);
     expect(applySubmissions[0]?.baseHash).toBe("hash-3");
+    runtimeConfig.dispose();
+  });
+
+  it("cancels a debounce armed while an explicit save drains another write", async () => {
+    vi.useFakeTimers();
+    const { request, submissions, firstSet } = createDeferredSetServerMock();
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    runtimeConfig.patchForm(["count"], 2);
+    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+    expect(submissions).toHaveLength(1);
+
+    const save = runtimeConfig.save();
+    runtimeConfig.patchForm(["count"], 3);
+    firstSet.resolve({});
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(save).resolves.toBe(true);
+    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
+
+    expect(submissions).toEqual([
+      { raw: '{\n  "count": 2\n}\n', baseHash: "hash-1" },
+      { raw: '{\n  "count": 3\n}\n', baseHash: "hash-2" },
+    ]);
+    runtimeConfig.dispose();
+  });
+
+  it("lets a reconnected explicit op bypass a dead prior-connection FIFO", async () => {
+    const deadSet = deferred<unknown>();
+    const methods: string[] = [];
+    const request = vi.fn((method: string) => {
+      methods.push(method);
+      if (method === "config.get") {
+        return Promise.resolve({ config: { count: 1 }, hash: "hash-1", valid: true, issues: [] });
+      }
+      if (method === "config.set") {
+        return deadSet.promise;
+      }
+      return Promise.resolve({});
+    });
+    const { runtimeConfig, publish } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    void runtimeConfig.save();
+    void runtimeConfig.apply();
+    await vi.waitFor(() => expect(methods).toContain("config.set"));
+    publish(false);
+    publish(true);
+
+    await expect(
+      runtimeConfig.patch({ raw: { ui: { prefs: { themeMode: "dark" } } }, note: "test" }),
+    ).resolves.toBe(true);
+    expect(methods).toContain("config.patch");
+    expect(methods).not.toContain("config.apply");
+    runtimeConfig.dispose();
+  });
+
+  it("does not dispatch an explicit op enqueued before reconnect", async () => {
+    const firstPatch = deferred<unknown>();
+    let patchCalls = 0;
+    let setCalls = 0;
+    const request = vi.fn((method: string) => {
+      if (method === "config.get") {
+        return Promise.resolve({ config: { count: 1 }, hash: "hash-1", valid: true, issues: [] });
+      }
+      if (method === "config.patch") {
+        patchCalls += 1;
+        return firstPatch.promise;
+      }
+      if (method === "config.set") {
+        setCalls += 1;
+      }
+      return Promise.resolve({});
+    });
+    const { runtimeConfig, publish } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    const stalePatch = runtimeConfig.patch({ raw: { ui: { prefs: {} } }, note: "test" });
+    const staleSet = runtimeConfig.save();
+    await vi.waitFor(() => expect(patchCalls).toBe(1));
+    publish(false);
+    publish(true);
+    firstPatch.resolve({});
+
+    await expect(stalePatch).resolves.toBe(false);
+    await expect(staleSet).resolves.toBe(false);
+    expect(setCalls).toBe(0);
     runtimeConfig.dispose();
   });
 
@@ -1972,11 +3144,18 @@ describe("config form auto-save", () => {
     // Patch during the debounce window: the draft must be flushed as a real
     // save before the patch, not silently dropped with its timer.
     runtimeConfig.patchForm(["count"], 2);
+    let patchBaseCount: unknown;
     await expect(
-      runtimeConfig.patch({ raw: { other: true }, note: "test patch after autosave" }),
+      runtimeConfig.patchFromSnapshot((config) => {
+        patchBaseCount = config.count;
+        return {
+          options: { raw: { other: true }, note: "test patch after autosave" },
+        };
+      }),
     ).resolves.toBe(true);
 
     expect(order).toEqual(["config.set", "config.patch"]);
+    expect(patchBaseCount).toBe(2);
     expect(runtimeConfig.state.configFormDirty).toBe(false);
     runtimeConfig.dispose();
   });
@@ -2126,15 +3305,51 @@ describe("config form auto-save", () => {
 describe("agent config helpers", () => {
   it("finds explicit agent entries", () => {
     expect(
-      findAgentConfigEntryIndex(
+      resolveAgentConfigEntryTarget(
         {
           agents: {
-            list: [{ id: "main" }, { id: "assistant" }],
+            entries: {
+              main: {},
+              assistant: { model: "openai/gpt-5.4" },
+            },
           },
         },
         "assistant",
       ),
-    ).toBe(1);
+    ).toEqual({
+      path: ["agents", "entries", "assistant"],
+      entry: { model: "openai/gpt-5.4" },
+    });
+  });
+
+  it("preserves the authored key while resolving normalized agent identities", () => {
+    expect(
+      resolveAgentConfigEntryTarget(
+        {
+          agents: {
+            entries: {
+              MAIN: { model: "openai/gpt-5.4" },
+            },
+          },
+        },
+        "main",
+      ),
+    ).toEqual({
+      path: ["agents", "entries", "MAIN"],
+      entry: { model: "openai/gpt-5.4" },
+    });
+  });
+
+  it("does not resolve missing, blank, or blocked entry keys", () => {
+    const entries = JSON.parse(
+      '{"__proto__":{"model":"openai/gpt-5.4"},"foo bar":{"model":"openai/gpt-5.4"}}',
+    ) as Record<string, unknown>;
+    const config = { agents: { entries } };
+
+    expect(resolveAgentConfigEntryTarget(config, "missing")).toBeNull();
+    expect(resolveAgentConfigEntryTarget(config, " ")).toBeNull();
+    expect(resolveAgentConfigEntryTarget(config, "__proto__")).toBeNull();
+    expect(resolveAgentConfigEntryTarget(config, "foo-bar")).toBeNull();
   });
 });
 

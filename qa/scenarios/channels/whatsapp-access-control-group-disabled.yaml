@@ -5,7 +5,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.access-policy
+      - whatsapp.group-allowlists
   objective: Verify groupPolicy disabled rejects group messages.
   gatewayConfigPatch:
     channels:
@@ -18,7 +18,7 @@ scenario:
   docsRefs:
     - docs/channels/whatsapp.md
   codeRefs:
-    - extensions/whatsapp/src/monitor.ts
+    - extensions/whatsapp/src/inbound/access-control.ts
   execution:
     kind: flow
     channel: whatsapp

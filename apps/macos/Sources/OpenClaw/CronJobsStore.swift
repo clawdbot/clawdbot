@@ -41,13 +41,8 @@ final class CronJobsStore {
         GatewayPushSubscription.restartTask(task: &self.eventTask) { [weak self] push in
             self?.handle(push: push)
         }
-        self.pollTask = Task.detached { [weak self] in
-            guard let self else { return }
-            await self.refreshJobs()
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: UInt64(self.interval * 1_000_000_000))
-                await self.refreshJobs()
-            }
+        SimpleTaskSupport.startDetachedLoop(task: &self.pollTask, interval: self.interval) { [weak self] in
+            await self?.refreshJobs()
         }
     }
 
@@ -167,20 +162,14 @@ final class CronJobsStore {
     }
 
     private func scheduleRefresh(delayMs: Int = 250) {
-        self.refreshTask?.cancel()
-        self.refreshTask = Task { [weak self] in
-            guard let self else { return }
-            try? await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
-            await self.refreshJobs()
+        SimpleTaskSupport.schedule(task: &self.refreshTask, delay: TimeInterval(delayMs) / 1000) { [weak self] in
+            await self?.refreshJobs()
         }
     }
 
     private func scheduleRunsRefresh(jobId: String, delayMs: Int = 200) {
-        self.runsTask?.cancel()
-        self.runsTask = Task { [weak self] in
-            guard let self else { return }
-            try? await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
-            await self.refreshRuns(jobId: jobId)
+        SimpleTaskSupport.schedule(task: &self.runsTask, delay: TimeInterval(delayMs) / 1000) { [weak self] in
+            await self?.refreshRuns(jobId: jobId)
         }
     }
 

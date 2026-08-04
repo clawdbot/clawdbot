@@ -2,7 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  normalizeSessionDeliveryState,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it } from "vitest";
@@ -135,12 +138,14 @@ describe("telegram native approval adapter", () => {
       entry: {
         sessionId: "sess",
         updatedAt: Date.now(),
-        deliveryContext: {
-          channel: "telegram",
-          to: "-1003841603622",
-          accountId: "default",
-          threadId: 928,
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "telegram",
+            to: "-1003841603622",
+            accountId: "default",
+            threadId: 928,
+          },
+        }),
       },
     });
 
@@ -177,12 +182,14 @@ describe("telegram native approval adapter", () => {
       entry: {
         sessionId: "sess",
         updatedAt: Date.now(),
-        deliveryContext: {
-          channel: "telegram",
-          to: "-1003841603622",
-          accountId: "default",
-          threadId: "928",
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "telegram",
+            to: "-1003841603622",
+            accountId: "default",
+            threadId: "928",
+          },
+        }),
       },
     });
 

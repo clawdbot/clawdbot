@@ -8,6 +8,7 @@ export const SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS = [
   "modelOverride",
   "agentRuntimeOverride",
   "modelOverrideSource",
+  "modelOverrideRouteResolution",
   "modelOverrideFallbackOriginProvider",
   "modelOverrideFallbackOriginModel",
   "authProfileOverride",
@@ -24,9 +25,7 @@ const MODEL_ROUTE_OVERRIDE_FIELDS = [
 const MODEL_OVERRIDE_RUNTIME_FIELDS = [
   "modelProvider",
   "model",
-  "fallbackNoticeSelectedModel",
-  "fallbackNoticeActiveModel",
-  "fallbackNoticeReason",
+  "fallbackNotice",
   "contextTokens",
   "contextBudgetStatus",
 ] as const satisfies ReadonlyArray<keyof SessionEntry>;

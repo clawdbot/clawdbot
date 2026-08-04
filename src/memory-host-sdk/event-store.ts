@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-store.js";
 import {
   pluginStateEntriesInKeyRange,
@@ -87,10 +88,6 @@ function truncateUtf8(value: string, maxBytes: number): { value: string; truncat
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 /** Validate and bound one diagnostic event before storing it in plugin state. */

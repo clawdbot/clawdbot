@@ -310,7 +310,11 @@ async function main() {
   assert(gatewayUrl, "missing GW_URL");
   assert(gatewayToken, "missing GW_TOKEN");
 
-  const gateway = await connectGateway({ url: gatewayUrl, token: gatewayToken });
+  const gateway = await connectGateway({
+    url: gatewayUrl,
+    token: gatewayToken,
+    bindFreshDevice: true,
+  });
   try {
     const cron = await runCronCleanupScenario({ gateway, pidPath });
     const subagent = await runSubagentCleanupScenario({ gateway, pidPath, pidsPath, exitPath });

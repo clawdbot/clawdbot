@@ -10,8 +10,41 @@ import {
   migrateLegacyCronDeliveryThreadIds,
   repairLegacyTaskAgentAttribution,
   repairLegacyTaskDeliveryStatuses,
+  repairLegacySubagentExecutionPayloads,
+  repairLegacySubagentRetainedResults,
 } from "./openclaw-state-db-legacy-backfills.js";
 import { ensureColumn } from "./openclaw-state-db-schema-helpers.js";
+
+export function ensureAgentDeletionJournalSchema(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS agent_deletion_journal (
+      agent_id TEXT PRIMARY KEY,
+      operation_id TEXT NOT NULL DEFAULT '',
+      agent_dir TEXT NOT NULL,
+      workspace_dir TEXT NOT NULL,
+      sessions_dir TEXT NOT NULL,
+      database_paths_json TEXT NOT NULL DEFAULT '[]',
+      cleanup_paths_json TEXT NOT NULL DEFAULT '[]',
+      created_at INTEGER NOT NULL,
+      cleanup_completed INTEGER NOT NULL DEFAULT 0,
+      delete_files INTEGER NOT NULL DEFAULT 1
+    ) STRICT
+  `);
+}
+
+export function ensureAgentDatabaseLeaseSchema(database: DatabaseSync): void {
+  ensureAgentDeletionJournalSchema(database);
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS agent_database_leases (
+      lease_id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      path TEXT NOT NULL,
+      owner_pid INTEGER NOT NULL,
+      owner_start_time INTEGER,
+      opened_at INTEGER NOT NULL
+    ) STRICT
+  `);
+}
 
 function resolveLegacyManagedImageRoot(recordJson: unknown): string | null {
   if (typeof recordJson !== "string") {
@@ -61,6 +94,14 @@ function backfillLegacyManagedImageRoots(db: DatabaseSync): void {
 }
 
 export function ensureAdditiveStateColumns(db: DatabaseSync): void {
+  if (ensureColumn(db, "claw_package_refs", "updated_at_ms INTEGER NOT NULL DEFAULT 0")) {
+    db.exec("UPDATE claw_package_refs SET updated_at_ms = installed_at_ms;");
+  }
+  ensureColumn(
+    db,
+    "claw_package_refs",
+    "package_integrity TEXT NOT NULL DEFAULT 'sha256:0000000000000000000000000000000000000000000000000000000000000000'",
+  );
   const addedDiagnosticEventSequence = ensureColumn(
     db,
     "diagnostic_events",
@@ -302,6 +343,8 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "subagent_runs", "swarm_structured_json TEXT");
   ensureColumn(db, "subagent_runs", "swarm_schema_error TEXT");
   ensureColumn(db, "subagent_runs", "swarm_usage_json TEXT");
+  repairLegacySubagentExecutionPayloads(db);
+  repairLegacySubagentRetainedResults(db);
   ensureColumn(db, "worker_environments", "bootstrap_bundle_hash TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_openclaw_version TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_protocol_features_json TEXT");

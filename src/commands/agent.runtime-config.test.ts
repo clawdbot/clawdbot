@@ -18,6 +18,7 @@ type ResolveCommandConfigParams = {
   commandName: string;
   targetIds: Set<string>;
   allowedPaths?: Set<string>;
+  optionalActivePaths?: Set<string>;
   runtime: RuntimeEnv;
 };
 
@@ -37,6 +38,8 @@ vi.mock("../cli/command-secret-targets.js", () => ({
       "models.providers.*.apiKey",
       ...(params?.includeChannelTargets === true ? ["channels.telegram.botToken"] : []),
     ]),
+  getAgentRuntimeOptionalCommandSecretPaths: () =>
+    new Set(["plugins.entries.firecrawl.config.webFetch.apiKey"]),
   getScopedChannelsCommandSecretTargets: (params: {
     config: OpenClawConfig;
     channel?: string;
@@ -248,6 +251,7 @@ describe("agentCommand runtime config", () => {
         config: loadedConfig,
         commandName: "agent",
         targetIds: new Set(["models.providers.*.apiKey"]),
+        optionalActivePaths: new Set(["plugins.entries.firecrawl.config.webFetch.apiKey"]),
         runtime,
       });
       const targetIds = requireResolveCommandConfigParams().targetIds;
@@ -407,6 +411,81 @@ describe("agentCommand runtime config", () => {
       expect(resolveCommandConfigWithSecretsMock).not.toHaveBeenCalled();
       expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(loadedConfig, loadedConfig);
       expect(prepared.cfg).toBe(loadedConfig);
+    });
+  });
+
+  it.each([
+    {
+      name: "global memory headers",
+      apply: (config: OpenClawConfig) => {
+        config.memory = {
+          search: {
+            remote: {
+              headers: {
+                Authorization: { source: "env", provider: "default", id: "MEMORY_HEADER" },
+              },
+            },
+          },
+        } as unknown as OpenClawConfig["memory"];
+      },
+    },
+    {
+      name: "per-agent memory headers",
+      apply: (config: OpenClawConfig) => {
+        config.agents = {
+          ...config.agents,
+          entries: {
+            personal: {
+              memory: {
+                search: {
+                  remote: {
+                    headers: {
+                      Authorization: {
+                        source: "env",
+                        provider: "default",
+                        id: "AGENT_MEMORY_HEADER",
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        } as unknown as OpenClawConfig["agents"];
+      },
+    },
+    {
+      name: "per-agent TTS provider",
+      apply: (config: OpenClawConfig) => {
+        config.agents = {
+          ...config.agents,
+          entries: {
+            personal: {
+              tts: {
+                providers: {
+                  elevenlabs: {
+                    apiKey: { source: "env", provider: "default", id: "AGENT_TTS_KEY" },
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig["agents"];
+      },
+    },
+  ])("resolves command secrets for $name", async ({ apply }) => {
+    await withTempHome(async (home) => {
+      const loadedConfig = mockConfig(home, path.join(home, "sessions.json"));
+      apply(loadedConfig);
+      resolveCommandConfigWithSecretsMock.mockResolvedValueOnce({
+        resolvedConfig: loadedConfig,
+        effectiveConfig: loadedConfig,
+        diagnostics: [],
+      });
+
+      await resolveAgentRuntimeConfig(runtime);
+
+      expect(resolveCommandConfigWithSecretsMock).toHaveBeenCalledTimes(1);
     });
   });
 

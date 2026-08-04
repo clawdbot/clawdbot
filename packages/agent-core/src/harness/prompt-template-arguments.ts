@@ -87,11 +87,3 @@ export function substituteArgs(content: string, args: string[]): string {
   result = result.replace(/\$@/g, allArgs);
   return result;
 }
-
-/** Format a prompt template invocation using command-style argument substitution. */
-export function formatPromptTemplateInvocation(
-  template: PromptTemplate,
-  args: string[] = [],
-): string {
-  return substituteArgs(template.content, args);
-}

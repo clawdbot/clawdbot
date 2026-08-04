@@ -2,11 +2,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 // Reply completeness is process-local metadata. Keep it off config objects so
 // frozen runtime snapshots and identity-keyed caches remain valid.
-const replyConfigRuntimeModes = new WeakMap<OpenClawConfig, "fast" | "full">();
+const replyConfigRuntimeModes = new WeakMap<OpenClawConfig, "fast" | "full" | "published">();
 
 export function markReplyConfigRuntimeMode<T extends OpenClawConfig>(
   config: T,
-  runtimeMode: "fast" | "full",
+  runtimeMode: "fast" | "full" | "published",
 ): T {
   replyConfigRuntimeModes.set(config, runtimeMode);
   return config;
@@ -19,9 +19,17 @@ export function isCompleteReplyConfig(config: unknown): config is OpenClawConfig
 }
 
 export function usesFullReplyRuntime(config: unknown): boolean {
+  if (!config || typeof config !== "object") {
+    return false;
+  }
+  const mode = replyConfigRuntimeModes.get(config as OpenClawConfig);
+  return mode === "full" || mode === "published";
+}
+
+export function usesPublishedReplyRuntime(config: unknown): boolean {
   return Boolean(
     config &&
     typeof config === "object" &&
-    replyConfigRuntimeModes.get(config as OpenClawConfig) === "full",
+    replyConfigRuntimeModes.get(config as OpenClawConfig) === "published",
   );
 }

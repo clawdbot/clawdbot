@@ -1,3 +1,4 @@
+import CoreTransferable
 import Foundation
 import Observation
 import SwiftUI
@@ -16,6 +17,23 @@ import UIKit
 /// Sendable. This wrapper is only used for one detached JPEG encoding pass.
 private struct OpenClawSendableCameraImage: @unchecked Sendable {
     let value: UIImage
+}
+
+private struct OpenClawVideoTransfer: Sendable, Transferable {
+    let url: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(contentType: .movie) { video in
+            SentTransferredFile(video.url)
+        } importing: { received in
+            let fileExtension = received.file.pathExtension
+            let destination = FileManager.default.temporaryDirectory
+                .appendingPathComponent("openclaw-picker-video-\(UUID().uuidString)")
+                .appendingPathExtension(fileExtension.isEmpty ? "mov" : fileExtension)
+            try FileManager.default.copyItem(at: received.file, to: destination)
+            return OpenClawVideoTransfer(url: destination)
+        }
+    }
 }
 #endif
 
@@ -133,7 +151,7 @@ struct OpenClawChatComposer: View {
             }
             .fileImporter(
                 isPresented: self.fileImporterPresentation,
-                allowedContentTypes: [.image],
+                allowedContentTypes: OpenClawChatPickerAttachmentMetadata.allowedFileContentTypes,
                 allowsMultipleSelection: true,
                 onCompletion: { result in
                     let owner = self.fileImporterOwner
@@ -144,7 +162,7 @@ struct OpenClawChatComposer: View {
                 isPresented: self.photoPickerPresentation,
                 selection: self.$pickerItems,
                 maxSelectionCount: 8,
-                matching: .images)
+                matching: .any(of: [.images, .videos]))
             .onChange(of: self.pickerItems) { _, items in
                 guard !items.isEmpty else { return }
                 let owner = self.photoPickerOwner
@@ -355,6 +373,9 @@ struct OpenClawChatComposer: View {
         HStack(spacing: 8) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 5) {
+                    if self.viewModel.sessionBranches.count > 1 {
+                        self.branchMenu
+                    }
                     if self.showsSessionSwitcher {
                         self.sessionPicker
                         if self.viewModel.showsThinkingPicker {
@@ -582,6 +603,60 @@ struct OpenClawChatComposer: View {
         .help("Thread")
     }
 
+    private var branchMenu: some View {
+        Menu {
+            ForEach(self.viewModel.sessionBranches) { branch in
+                Button {
+                    guard !branch.active else { return }
+                    Task { await self.viewModel.switchToBranch(branch.leafEntryId) }
+                } label: {
+                    HStack(spacing: 6) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(self.branchTitle(branch))
+                                .font(OpenClawChatTypography.captionSemiBold)
+                            Text(self.branchMetadata(branch))
+                                .font(OpenClawChatTypography.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        if branch.active {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+                .disabled(branch.active)
+            }
+            .task {
+                await self.viewModel.refreshSessionBranchesForMenuPresentation()
+            }
+        } label: {
+            Image(systemName: "arrow.triangle.branch")
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .help("Branches")
+        .accessibilityLabel("Branches")
+        .disabled(!self.viewModel.canSwitchSessionBranch)
+    }
+
+    private func branchTitle(_ branch: OpenClawChatSessionBranch) -> String {
+        let headline = branch.headline.trimmingCharacters(in: .whitespacesAndNewlines)
+        return headline.isEmpty ? String(localized: "Untitled branch") : headline
+    }
+
+    private func branchMetadata(_ branch: OpenClawChatSessionBranch) -> String {
+        var parts = [Self.branchMessageCount(branch.messageCount)]
+        if let updatedAt = branch.updatedAt,
+           let date = try? Date(updatedAt, strategy: .iso8601)
+        {
+            parts.append(date.formatted(.relative(presentation: .named, unitsStyle: .abbreviated)))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    static func branchMessageCount(_ count: Int) -> String {
+        String(AttributedString(localized: "^[\(count) message](inflect: true)").characters)
+    }
+
     @ViewBuilder
     private var attachmentPicker: some View {
         #if os(macOS)
@@ -591,7 +666,7 @@ struct OpenClawChatComposer: View {
             } label: {
                 CompactChatAttachmentLabel()
             }
-            .help("Add Image")
+            .help("Add Attachment")
             .accessibilityLabel("Attachments")
             .accessibilityIdentifier("chat-attachment-picker")
             .buttonStyle(.plain)
@@ -603,7 +678,7 @@ struct OpenClawChatComposer: View {
             } label: {
                 Image(systemName: "paperclip")
             }
-            .help("Add Image")
+            .help("Add Attachment")
             .accessibilityLabel("Attachments")
             .buttonStyle(.bordered)
             .controlSize(.small)
@@ -616,7 +691,7 @@ struct OpenClawChatComposer: View {
             } label: {
                 CompactChatAttachmentLabel()
             }
-            .help("Add Image")
+            .help("Add Attachment")
             .accessibilityLabel("Attachments")
             .accessibilityIdentifier("chat-attachment-picker")
             .buttonStyle(.plain)
@@ -628,7 +703,7 @@ struct OpenClawChatComposer: View {
             } label: {
                 Image(systemName: "paperclip")
             }
-            .help("Add Image")
+            .help("Add Attachment")
             .accessibilityLabel("Attachments")
             .buttonStyle(.bordered)
             .controlSize(.small)
@@ -751,6 +826,10 @@ struct OpenClawChatComposer: View {
         HStack(alignment: .center, spacing: 4) {
             self.cleanAttachmentMenu
 
+            if self.viewModel.sessionBranches.count > 1 {
+                self.branchMenu
+            }
+
             self.editorOverlay
                 .frame(maxWidth: .infinity, minHeight: self.cleanControlHeight, alignment: .leading)
                 .layoutPriority(1)
@@ -858,6 +937,32 @@ struct OpenClawChatComposer: View {
                 .padding(.vertical, 3)
                 .onChange(of: self.viewModel.input) { _, _ in
                     self.updateSlashPopoverPresentation()
+                }
+            #elseif os(iOS)
+            ChatComposerTextViewIOS(
+                text: self.$viewModel.input,
+                shouldFocus: self.isFocused,
+                isEnabled: self.isComposerEnabled,
+                minHeight: self.textMinHeight,
+                maxHeight: self.textMaxHeight,
+                onFocusChange: { focused in
+                    self.isFocused = focused
+                },
+                onHistoryUp: {
+                    !self.isSlashPopoverPresented && self.viewModel.recallPreviousInput(caretOnFirstLine: $0)
+                },
+                onHistoryDown: { !self.isSlashPopoverPresented && self.viewModel.recallNextInput() })
+                .padding(.horizontal, self.cleanFieldTextInset)
+                .padding(.vertical, self.composerChrome == .clean ? 0 : 6)
+                .onChange(of: self.viewModel.input) { _, _ in
+                    self.updateSlashPopoverPresentation()
+                }
+                .onChange(of: self.isFocused) { _, focused in
+                    if focused {
+                        self.updateSlashPopoverPresentation()
+                    } else {
+                        self.setSlashPanelPresented(false)
+                    }
                 }
             #else
             TextField(
@@ -1169,7 +1274,7 @@ extension OpenClawChatComposer {
 extension OpenClawChatComposer {
     @ViewBuilder
     private var sendButton: some View {
-        if self.viewModel.pendingRunCount > 0, !self.viewModel.hasDraftToSend {
+        if self.viewModel.pendingRunCount > 0, self.shouldShowStopButton {
             Button {
                 self.viewModel.abort()
             } label: {
@@ -1360,10 +1465,10 @@ extension OpenClawChatComposer {
     private func pickFilesMac() {
         guard self.isAttachmentInputEnabled else { return }
         let panel = NSOpenPanel()
-        panel.title = "Select image attachments"
+        panel.title = "Select attachments"
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
-        panel.allowedContentTypes = [.image]
+        panel.allowedContentTypes = OpenClawChatPickerAttachmentMetadata.allowedFileContentTypes
         panel.begin { resp in
             guard resp == .OK else { return }
             self.viewModel.addAttachments(urls: panel.urls)
@@ -1486,16 +1591,32 @@ extension OpenClawChatComposer {
                 guard self.viewModel === owner.viewModel,
                       owner.viewModel.isCurrentSession(owner.session)
                 else { break }
-                guard let data = try await item.loadTransferable(type: Data.self) else { continue }
-                let type = item.supportedContentTypes.first ?? .image
-                let ext = type.preferredFilenameExtension ?? "jpg"
-                let mime = type.preferredMIMEType ?? "image/jpeg"
-                let name = "photo-\(UUID().uuidString.prefix(8)).\(ext)"
-                await owner.viewModel.addImageAttachment(
-                    data: data,
-                    fileName: name,
-                    mimeType: mime,
-                    for: owner.session)
+                let type = item.supportedContentTypes.first(where: {
+                    $0.conforms(to: .movie) || $0.conforms(to: .image)
+                }) ?? item.supportedContentTypes.first ?? .image
+                if type.conforms(to: .movie) {
+                    guard let transfer = try await item.loadTransferable(type: OpenClawVideoTransfer.self)
+                    else { continue }
+                    defer { try? FileManager.default.removeItem(at: transfer.url) }
+                    let metadata = OpenClawChatPickerAttachmentMetadata.resolve(
+                        contentType: type,
+                        transferredFileURL: transfer.url)
+                    let name = "video-\(UUID().uuidString.prefix(8)).\(metadata.fileExtension)"
+                    await owner.viewModel.addVideoAttachment(
+                        url: transfer.url,
+                        fileName: name,
+                        mimeType: metadata.mimeType,
+                        expectedSession: owner.session)
+                } else {
+                    guard let data = try await item.loadTransferable(type: Data.self) else { continue }
+                    let metadata = OpenClawChatPickerAttachmentMetadata.resolve(contentType: type)
+                    let name = "photo-\(UUID().uuidString.prefix(8)).\(metadata.fileExtension)"
+                    await owner.viewModel.addImageAttachment(
+                        data: data,
+                        fileName: name,
+                        mimeType: metadata.mimeType,
+                        for: owner.session)
+                }
             } catch {
                 guard self.viewModel === owner.viewModel,
                       owner.viewModel.isCurrentSession(owner.session)
@@ -1506,6 +1627,13 @@ extension OpenClawChatComposer {
         self.pickerItems = []
     }
     #endif
+
+    /// Preserve text and image draft controls while keeping completed voice notes abortable.
+    private var shouldShowStopButton: Bool {
+        !self.viewModel.hasDraftToSend || self.viewModel.attachments.contains {
+            $0.mimeType == "audio/mp4" && $0.durationSeconds != nil
+        }
+    }
 
     private func sendDraftIfEnabled() {
         guard self.canSendMessage else { return }

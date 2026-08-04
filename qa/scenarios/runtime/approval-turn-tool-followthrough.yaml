@@ -3,11 +3,10 @@ title: Approval turn tool followthrough
 scenario:
   id: approval-turn-tool-followthrough
   surface: harness
+  runtimePairLane: core
   coverage:
-    primary:
-      - runtime.approvals
     secondary:
-      - tools.followthrough
+      - agent-runtime.approval-flow-followthrough
   objective: Verify a short approval like "ok do it" triggers immediate tool use instead of fake-progress narration.
   successCriteria:
     - Agent can keep the pre-action turn brief.
@@ -18,7 +17,7 @@ scenario:
     - docs/channels/qa-channel.md
   codeRefs:
     - extensions/qa-lab/src/suite.ts
-    - extensions/qa-lab/src/mock-openai-server.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
     - src/agents/embedded-agent-runner/run/incomplete-turn.ts
   execution:
     kind: flow

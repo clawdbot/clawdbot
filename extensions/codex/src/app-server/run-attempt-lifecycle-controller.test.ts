@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { interruptCodexTurnAndWaitBestEffort } from "./attempt-client-cleanup.js";
 import { createCodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import { buildCodexLifecycleTerminalMeta } from "./run-attempt-lifecycle-terminal.js";
 
 function createTerminalReleaseHarness() {
   const order: string[] = [];
+  const notificationHandlers = new Set<(notification: unknown) => void>();
   const cancel = vi.fn(() => order.push("cancel"));
   const request = vi.fn(async (method: string) => {
     order.push(method);
@@ -17,6 +19,15 @@ function createTerminalReleaseHarness() {
     pendingTerminalDynamicToolRelease: undefined,
     terminalDynamicToolReleaseCheckScheduled: false,
     resolveCompletion,
+  };
+  const client = {
+    request,
+    addNotificationHandler: (handler: (notification: unknown) => void) => {
+      notificationHandlers.add(handler);
+      return () => notificationHandlers.delete(handler);
+    },
+    addRequestHandler: () => () => undefined,
+    addCloseHandler: () => () => undefined,
   };
   const controller = createCodexAttemptLifecycleController(
     {
@@ -32,21 +43,36 @@ function createTerminalReleaseHarness() {
           },
         },
       },
-      state: { client: { request } },
+      state: { client },
     } as never,
     {
       state,
       activeTurnItemIds: new Set(),
       pendingOpenClawDynamicToolCompletionIds: new Set(),
       steeringQueueRef: { current: { cancel } },
-      turnWatches: {
-        clearCompletionIdleTimer: vi.fn(),
-        clearAssistantCompletionIdleTimer: vi.fn(),
-        clearTerminalIdleTimer: vi.fn(),
+      interruptTurn: (turnId: string) =>
+        interruptCodexTurnAndWaitBestEffort(client as never, {
+          threadId: "thread-1",
+          turnId,
+        }),
+      completeTurn: () => {
+        state.completed = true;
+        resolveCompletion();
       },
     } as never,
   );
-  return { cancel, controller, order, request, resolveCompletion, state };
+  const completeTurn = () => {
+    for (const handler of notificationHandlers) {
+      handler({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: { id: "turn-1", status: "interrupted" },
+        },
+      });
+    }
+  };
+  return { cancel, completeTurn, controller, order, request, resolveCompletion, state };
 }
 
 function terminalYieldResult(success: boolean) {
@@ -119,8 +145,13 @@ describe("Codex terminal dynamic-tool release", () => {
       { timeoutMs: 5_000 },
     );
     expect(harness.order.indexOf("cancel")).toBeLessThan(harness.order.indexOf("turn/interrupt"));
+    expect(harness.state.completed).toBe(false);
+    expect(harness.resolveCompletion).not.toHaveBeenCalled();
+
+    harness.completeTurn();
+    await vi.waitFor(() => expect(harness.resolveCompletion).toHaveBeenCalledOnce());
+
     expect(harness.state.completed).toBe(true);
-    expect(harness.resolveCompletion).toHaveBeenCalledOnce();
   });
 
   it("keeps steering open when the yield result fails", async () => {

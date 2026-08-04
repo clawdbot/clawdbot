@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../workspace-bootstrap-read.js";
-import { DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME } from "../workspace.js";
+import { DEFAULT_AGENTS_FILENAME, DEFAULT_SOUL_FILENAME } from "../workspace.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
 const tempRoots: string[] = [];
@@ -90,15 +90,15 @@ describe("ensureSandboxWorkspace", () => {
       `## Startup\n\n` + "x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES),
       "utf-8",
     );
-    await fs.writeFile(path.join(seed, DEFAULT_TOOLS_FILENAME), "seeded-tools", "utf-8");
+    await fs.writeFile(path.join(seed, DEFAULT_SOUL_FILENAME), "seeded-soul", "utf-8");
 
     await ensureSandboxWorkspace(sandbox, seed, true);
 
     await expect(fs.readFile(path.join(sandbox, DEFAULT_AGENTS_FILENAME), "utf-8")).rejects.toThrow(
       "no such file",
     );
-    await expect(fs.readFile(path.join(sandbox, DEFAULT_TOOLS_FILENAME), "utf-8")).resolves.toBe(
-      "seeded-tools",
+    await expect(fs.readFile(path.join(sandbox, DEFAULT_SOUL_FILENAME), "utf-8")).resolves.toBe(
+      "seeded-soul",
     );
   });
 

@@ -108,7 +108,7 @@ export type RelayCommandBody =
   /** Detach chrome.debugger from a tab (tab left the group or client detached). */
   | { type: "detach"; tabId: number }
   /** Open a new tab inside the OpenClaw tab group. Result: { tabId: number }. */
-  | { type: "createTab"; url: string; background?: boolean }
+  | { type: "createTab"; url: string; background?: boolean; focus?: boolean }
   /** Close a shared tab. Result: {}. */
   | { type: "closeTab"; tabId: number }
   /** Focus a shared tab (window + tab activation). Result: {}. */

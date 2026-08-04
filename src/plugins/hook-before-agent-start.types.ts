@@ -30,6 +30,11 @@ export type PluginHookBeforePromptBuildResult = {
   prependContext?: string;
   appendContext?: string;
   /**
+   * Narrows the tools submitted to the model for this turn.
+   * An empty array disables optional tools; omitted leaves the existing tool policy unchanged.
+   */
+  toolsAllow?: string[];
+  /**
    * Prepended to the agent system prompt so providers can cache it (e.g. prompt caching).
    * Use for static plugin guidance instead of prependContext to avoid per-turn token cost.
    */
@@ -39,52 +44,4 @@ export type PluginHookBeforePromptBuildResult = {
    * Use for static plugin guidance instead of prependContext to avoid per-turn token cost.
    */
   appendSystemContext?: string;
-};
-
-const PLUGIN_PROMPT_MUTATION_RESULT_FIELDS = [
-  "systemPrompt",
-  "prependContext",
-  "appendContext",
-  "prependSystemContext",
-  "appendSystemContext",
-] as const satisfies readonly (keyof PluginHookBeforePromptBuildResult)[];
-
-type MissingPluginPromptMutationResultFields = Exclude<
-  keyof PluginHookBeforePromptBuildResult,
-  (typeof PLUGIN_PROMPT_MUTATION_RESULT_FIELDS)[number]
->;
-type AssertAllPluginPromptMutationResultFieldsListed =
-  MissingPluginPromptMutationResultFields extends never ? true : never;
-const assertAllPluginPromptMutationResultFieldsListed: AssertAllPluginPromptMutationResultFieldsListed = true;
-void assertAllPluginPromptMutationResultFieldsListed;
-
-/**
- * @deprecated Use before_model_resolve and before_prompt_build.
- *
- * Legacy compatibility hook that combines both phases.
- */
-export type PluginHookBeforeAgentStartEvent = {
-  prompt: string;
-  runId?: string;
-  /** Optional because legacy hook can run in pre-session phase. */
-  messages?: unknown[];
-};
-
-/** @deprecated Use before_model_resolve and before_prompt_build result types. */
-export type PluginHookBeforeAgentStartResult = PluginHookBeforePromptBuildResult &
-  PluginHookBeforeModelResolveResult;
-
-export const stripPromptMutationFieldsFromLegacyHookResult = (
-  result: PluginHookBeforeAgentStartResult | void,
-): PluginHookBeforeModelResolveResult | void => {
-  if (!result || typeof result !== "object") {
-    return result;
-  }
-  const remaining: Partial<PluginHookBeforeAgentStartResult> = { ...result };
-  for (const field of PLUGIN_PROMPT_MUTATION_RESULT_FIELDS) {
-    delete remaining[field];
-  }
-  return Object.keys(remaining).length > 0
-    ? (remaining as PluginHookBeforeModelResolveResult)
-    : undefined;
 };

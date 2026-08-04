@@ -244,6 +244,9 @@ input.addEventListener("input", () => {
   setComposerEnabled(panelReady);
 });
 input.addEventListener("keydown", (event) => {
+  if (event.isComposing) {
+    return;
+  }
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
     void send();

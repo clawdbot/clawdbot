@@ -15,7 +15,7 @@
  */
 export const SYSTEM_AGENT_CONFIG_WRITE_DENYLIST: Readonly<Record<string, string>> = {
   $include: "alternate-config inclusion; edit openclaw.json in a trusted shell",
-  auth: "provider auth; exit OpenClaw and run `openclaw onboard`",
+  auth: "provider auth; `openclaw onboard` on the machine running OpenClaw",
   env: "environment/credential injection; edit openclaw.json in a trusted shell",
   models:
     "provider/catalog definitions feed routing; use `set_default_model` or `openclaw onboard`",
@@ -46,7 +46,7 @@ export function classifyInferenceRouteConfigPath(
     return "blocked";
   }
   if (scope === "defaults") {
-    return ["agentruntime", "clibackends", "model", "models", "params"].includes(ownerOrField ?? "")
+    return ["agentruntime", "model", "models", "params"].includes(ownerOrField ?? "")
       ? "blocked"
       : "allowed";
   }
@@ -63,7 +63,7 @@ export function classifyInferenceRouteConfigPath(
   if (["agentdir", "default", "id"].includes(routeField ?? "")) {
     return "blocked";
   }
-  return ["agentruntime", "clibackends", "model", "models", "params"].includes(routeField ?? "")
+  return ["agentruntime", "model", "models", "params"].includes(routeField ?? "")
     ? "agent-route"
     : "allowed";
 }

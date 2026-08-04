@@ -1,6 +1,11 @@
 // Daemon lifecycle tests cover CLI service lifecycle orchestration and cleanup.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../../test-utils/env.js";
+import {
+  expectRestartError,
+  requireMockCallArg,
+  type RestartParams,
+} from "./lifecycle.test-helpers.js";
 
 type RestartHealthSnapshot = {
   healthy: boolean;
@@ -11,30 +16,13 @@ type RestartHealthSnapshot = {
   elapsedMs?: number;
 };
 
-type RestartPostCheckContext = {
-  json: boolean;
-  stdout: NodeJS.WritableStream;
-  warnings: string[];
-  fail: (message: string, hints?: string[]) => void;
-};
-
-type RestartParams = {
-  opts?: { json?: boolean };
-  repairLoadedService?: (ctx: {
-    json: boolean;
-    stdout: NodeJS.WritableStream;
-    state: unknown;
-    issues: unknown[];
-  }) => Promise<unknown>;
-  postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
-};
-
 const service = {
   readCommand: vi.fn(),
   readRuntime: vi.fn(),
   restart: vi.fn(),
   stop: vi.fn(),
 };
+const isDefaultInstallIdentity = vi.hoisted(() => vi.fn(() => true));
 
 const runServiceStart = vi.fn();
 const runServiceRestart = vi.fn();
@@ -99,29 +87,6 @@ const createGatewayLifecycleMutationAudit = vi.fn(
     }),
 );
 
-function requireMockCallArg(
-  mockFn: { mock: { calls: unknown[][] } },
-  label: string,
-  index = 0,
-): Record<string, unknown> {
-  const arg = mockFn.mock.calls[index]?.[0] as Record<string, unknown> | undefined;
-  if (!arg) {
-    throw new Error(`expected ${label} call #${index + 1}`);
-  }
-  return arg;
-}
-
-async function expectRestartError(
-  promise: Promise<unknown>,
-): Promise<Error & { hints?: string[] }> {
-  try {
-    await promise;
-  } catch (error) {
-    return error as Error & { hints?: string[] };
-  }
-  throw new Error("expected restart to fail");
-}
-
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: () => loadConfig(),
   loadConfig: () => loadConfig(),
@@ -129,9 +94,13 @@ vi.mock("../../config/config.js", () => ({
   resolveGatewayPort: (cfg?: unknown, env?: unknown) => resolveGatewayPort(cfg, env),
 }));
 
+vi.mock("../../config/paths.js", () => ({
+  isDefaultInstallIdentity: () => isDefaultInstallIdentity(),
+  resolveNativeServiceProfileConflict: () => null,
+}));
+
 vi.mock("../../infra/gateway-processes.js", () => ({
-  findVerifiedGatewayListenerPidsOnPortSync: (port: number) =>
-    findVerifiedGatewayListenerPidsOnPortSync(port),
+  findVerifiedGatewayListenerPidsOnPortSync,
   signalVerifiedGatewayPidSync: (pid: number, signal: "SIGTERM" | "SIGUSR1") =>
     signalVerifiedGatewayPidSync(pid, signal),
   formatGatewayPidList: (pids: number[]) => formatGatewayPidList(pids),
@@ -275,13 +244,12 @@ describe("runDaemonRestart health checks", () => {
     ]);
     delete process.env.OPENCLAW_CONTAINER_HINT;
     service.readCommand.mockReset();
-    service.readRuntime.mockReset();
-    service.readRuntime.mockResolvedValue({ status: "stopped" });
-    service.restart.mockReset();
+    service.readRuntime.mockReset().mockResolvedValue({ status: "stopped" });
+    service.restart.mockReset().mockResolvedValue({ outcome: "completed" });
     service.stop.mockReset();
-    runServiceStart.mockReset();
+    runServiceStart.mockReset().mockResolvedValue(undefined);
     runServiceRestart.mockReset();
-    runServiceStop.mockReset();
+    runServiceStop.mockReset().mockResolvedValue(undefined);
     waitForGatewayHealthyListener.mockReset();
     waitForGatewayHealthyRestart.mockReset();
     terminateStaleGatewayPids.mockReset();
@@ -289,43 +257,36 @@ describe("runDaemonRestart health checks", () => {
     renderRestartDiagnostics.mockReset();
     resolveGatewayPort.mockReset();
     findVerifiedGatewayListenerPidsOnPortSync.mockReset();
-    signalVerifiedGatewayPidSync.mockReset();
-    writeGatewayRestartIntentSync.mockReset();
+    signalVerifiedGatewayPidSync.mockReset().mockImplementation(() => {});
+    writeGatewayRestartIntentSync.mockReset().mockReturnValue(true);
     clearGatewayRestartIntentSync.mockReset();
-    formatGatewayPidList.mockReset();
+    formatGatewayPidList.mockReset().mockImplementation((pids) => pids.join(", "));
     probeGateway.mockReset();
     callGatewayCli.mockReset();
     isRestartEnabled.mockReset();
     loadConfig.mockReset();
-    readActiveGatewayLockPort.mockReset();
+    readActiveGatewayLockPort.mockReset().mockResolvedValue(undefined);
     readActiveGatewayLockIdentity.mockReset();
-    recoverInstalledLaunchAgent.mockReset();
+    recoverInstalledLaunchAgent.mockReset().mockResolvedValue(null);
     repairLoadedGatewayServiceForStart.mockReset();
-    isTerminalInteractive.mockReset();
-    isTerminalInteractive.mockReturnValue(true);
+    isTerminalInteractive.mockReset().mockReturnValue(true);
     appendGatewayLifecycleAudit.mockClear();
     createGatewayLifecycleMutationAudit.mockClear();
+    isDefaultInstallIdentity.mockReset().mockReturnValue(true);
 
     service.readCommand.mockResolvedValue({
       programArguments: ["openclaw", "gateway", "--port", "18789"],
       environment: {},
     });
-    service.restart.mockResolvedValue({ outcome: "completed" });
-    runServiceStart.mockResolvedValue(undefined);
-    recoverInstalledLaunchAgent.mockResolvedValue(null);
-    readActiveGatewayLockPort.mockResolvedValue(undefined);
     readActiveGatewayLockIdentity.mockResolvedValue({
       pid: 4200,
       ownerId: "gateway-owner-old",
       createdAt: "2026-07-16T12:00:00.000Z",
       port: 18_789,
     });
-    findInstalledSystemdGatewayScope.mockReset();
-    findInstalledSystemdGatewayScope.mockResolvedValue(null);
-    restartSystemdService.mockReset();
-    restartSystemdService.mockResolvedValue({ outcome: "completed" });
-    stopSystemdService.mockReset();
-    stopSystemdService.mockResolvedValue(undefined);
+    findInstalledSystemdGatewayScope.mockReset().mockResolvedValue(null);
+    restartSystemdService.mockReset().mockResolvedValue({ outcome: "completed" });
+    stopSystemdService.mockReset().mockResolvedValue(undefined);
 
     runServiceRestart.mockImplementation(async (params: RestartParams) => {
       const fail = (message: string, hints?: string[]) => {
@@ -341,7 +302,6 @@ describe("runDaemonRestart health checks", () => {
       });
       return true;
     });
-    runServiceStop.mockResolvedValue(undefined);
     waitForGatewayHealthyListener.mockResolvedValue({
       healthy: true,
       portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
@@ -382,9 +342,6 @@ describe("runDaemonRestart health checks", () => {
       },
     });
     isRestartEnabled.mockReturnValue(true);
-    signalVerifiedGatewayPidSync.mockImplementation(() => {});
-    writeGatewayRestartIntentSync.mockReturnValue(true);
-    formatGatewayPidList.mockImplementation((pids) => pids.join(", "));
   });
 
   afterEach(() => {
@@ -414,6 +371,16 @@ describe("runDaemonRestart health checks", () => {
 
     expect(requireMockCallArg(runServiceStart, "runServiceStart").expectedPort).toBeUndefined();
     expect(requireMockCallArg(runServiceRestart, "runServiceRestart").expectedPort).toBeUndefined();
+  });
+
+  it("guards loaded service restart at the native mutation boundary", async () => {
+    await runDaemonRestart({ json: true });
+
+    const restartParams = requireMockCallArg(runServiceRestart, "runServiceRestart");
+    isDefaultInstallIdentity.mockReturnValue(false);
+    expect(() => (restartParams.beforeServiceMutation as () => void)()).toThrow(
+      /non-default state dir/,
+    );
   });
 
   it("uses the installed service environment for managed restart health", async () => {
@@ -839,12 +806,15 @@ describe("runDaemonRestart health checks", () => {
   });
 
   it("signals a single unmanaged gateway process on restart", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    isDefaultInstallIdentity.mockReturnValue(false);
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
     mockUnmanagedRestart({ runPostRestartCheck: true });
 
     await runDaemonRestart({ json: true });
 
     expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(18789);
+    expect(findInstalledSystemdGatewayScope).not.toHaveBeenCalled();
     expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4200, "SIGUSR1");
     expect(appendGatewayLifecycleAudit).toHaveBeenCalledWith({
       action: "restart",
@@ -857,6 +827,17 @@ describe("runDaemonRestart health checks", () => {
     expect(waitForGatewayHealthyRestart).not.toHaveBeenCalled();
     expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
     expect(service.restart).not.toHaveBeenCalled();
+  });
+
+  it("rejects denied Darwin recovery when no unmanaged listener exists", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    isDefaultInstallIdentity.mockReturnValue(false);
+    mockUnmanagedRestart();
+
+    await expect(runDaemonRestart({ json: true })).rejects.toThrow(/non-default state dir/);
+
+    expect(recoverInstalledLaunchAgent).not.toHaveBeenCalled();
+    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
   });
 
   it("uses targeted RPC for an unmanaged Windows gateway restart", async () => {
@@ -1024,6 +1005,7 @@ describe("runDaemonRestart health checks", () => {
   });
 
   it("fails unmanaged restart when multiple gateway listeners are present", async () => {
+    isDefaultInstallIdentity.mockReturnValue(false);
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200, 4300]);
     mockUnmanagedRestart();
 

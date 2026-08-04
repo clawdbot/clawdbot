@@ -1,7 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { BoardStore } from "../boards/board-store.js";
+import { buildBoardWidgetContentSecurityPolicy } from "./board-sandbox.js";
 import { boardStore } from "./board-store.js";
-import { BOARD_HTTP_PATH_PREFIX, verifyBoardViewTicket } from "./board-view-ticket.js";
+import { BOARD_HTTP_PATH_PREFIX } from "./board-view-ticket.js";
+import { resolveAuthorizedBoardWidgetView } from "./board-widget-view.js";
 import { sendMethodNotAllowed } from "./http-common.js";
 
 const BOARD_WIDGET_NAME_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -50,6 +52,9 @@ export function handleBoardHttpRequest(
   if (!pathname.startsWith(BOARD_HTTP_PATH_PREFIX)) {
     return false;
   }
+  // The ticket is the authorization boundary. CORS lets a Control UI hosted
+  // away from the Gateway fetch the bytes and observe authorization failures.
+  res.setHeader("Access-Control-Allow-Origin", "*");
   if (req.method !== "GET") {
     sendMethodNotAllowed(res, "GET");
     return true;
@@ -60,26 +65,30 @@ export function handleBoardHttpRequest(
     return true;
   }
   const ticket = url.searchParams.get("bt");
-  const claims = ticket ? verifyBoardViewTicket(ticket, { nowMs: opts.nowMs }) : undefined;
-  if (!claims || claims.sessionKey !== path.sessionKey || claims.name !== path.name) {
+  if (!ticket) {
     sendUnauthorized(res);
     return true;
   }
-  const document = (opts.store ?? boardStore).readWidgetHtml(path.sessionKey, path.name);
-  if (
-    !document ||
-    !("html" in document) ||
-    (document.grantState !== "none" && document.grantState !== "granted") ||
-    document.revision !== claims.revision ||
-    document.viewGeneration !== claims.viewGeneration
-  ) {
+  let authorized;
+  try {
+    authorized = resolveAuthorizedBoardWidgetView(opts.store ?? boardStore, ticket, {
+      nowMs: opts.nowMs,
+    });
+  } catch {
+    sendUnauthorized(res);
+    return true;
+  }
+  if (authorized.sessionKey !== path.sessionKey || authorized.name !== path.name) {
     sendUnauthorized(res);
     return true;
   }
   res.statusCode = 200;
   res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.setHeader("Content-Security-Policy", "sandbox allow-scripts");
+  res.setHeader(
+    "Content-Security-Policy",
+    buildBoardWidgetContentSecurityPolicy(authorized.document),
+  );
   res.setHeader("Cache-Control", "no-cache");
-  res.end(document.html);
+  res.end(authorized.document.html);
   return true;
 }

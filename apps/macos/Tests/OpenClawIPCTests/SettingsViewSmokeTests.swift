@@ -155,6 +155,12 @@ struct SettingsViewSmokeTests {
         _ = view.body
     }
 
+    @Test func `connection settings builds body`() {
+        let state = AppState(preview: true)
+        let view = GeneralSettings(state: state, page: .connection)
+        _ = view.body
+    }
+
     @Test func `general settings renders the keyboard shortcut recorder`() {
         let state = AppState(preview: true)
         let hosting = NSHostingView(rootView: GeneralSettings(state: state))
@@ -194,10 +200,12 @@ struct SettingsViewSmokeTests {
     }
 
     @Test func `permissions settings builds body`() {
+        let state = AppState(preview: true)
         let view = PermissionsSettings(
+            state: state,
             status: [
-                .notifications: true,
-                .screenRecording: false,
+                .notifications: .granted,
+                .screenRecording: .notGranted,
             ],
             refresh: {},
             showOnboarding: {})
@@ -207,6 +215,19 @@ struct SettingsViewSmokeTests {
     @Test func `settings root view builds body`() {
         let state = AppState(preview: true)
         let view = SettingsRootView(state: state, updater: nil, initialTab: .general)
+        _ = view.body
+    }
+
+    @Test func `Gateway settings is visible and builds body`() throws {
+        let tabs = SettingsTabGroup.defaultGroups(showDebug: false, showSystemAgent: false)
+            .flatMap(\.tabs)
+        #expect(tabs.contains(.gateways))
+
+        let profile = try MacGatewayProfile(
+            id: "studio",
+            name: "Studio",
+            url: #require(URL(string: "wss://studio.example")))
+        let view = GatewaySettings(profiles: [profile], isPreview: true)
         _ = view.body
     }
 

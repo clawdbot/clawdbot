@@ -1,5 +1,5 @@
 // Control UI tests cover chat responsive behavior.
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 import {
@@ -7,6 +7,7 @@ import {
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
+  type ControlUiMockGatewayScenario,
   type ControlUiE2eServer,
 } from "../../test-helpers/control-ui-e2e.ts";
 
@@ -20,12 +21,16 @@ const VIEWPORTS = [
   [1440, 900],
 ] as const;
 const TOUCH_TARGET_MIN_PX = 43.5;
-// Real-app cases boot through a cold Vite dev server that transforms the whole
-// Control UI module graph on first request; with 6 Vitest workers sharing an
-// 8vCPU CI runner that first render can starve well past 10s. Budget the
-// first-render waits for contention while staying inside the 60s testTimeout.
+// The shared real-app page still cold-boots Vite's full Control UI graph once;
+// under CI contention that first render can starve well past 10s.
 const APP_FIRST_RENDER_TIMEOUT_MS = 30_000;
-const LONG_SIDE_CHAT_BODY = Array.from(
+const FULL_APP_TEST_OPTIONS = {
+  // Shared-page interactions mutate viewport, pointer, and composer state. Keep
+  // each as a sequential barrier so they cannot overlap one another.
+  concurrent: false,
+  timeout: 60_000,
+} as const;
+const LONG_SESSION_RAIL_BODY = Array.from(
   { length: 80 },
   (_, index) => `<p>Line ${index + 1}: keep the complete side result readable.</p>`,
 ).join("");
@@ -35,7 +40,80 @@ const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
   : describe.skip;
 
 let sharedBrowser: Browser | null = null;
+let sharedLayoutContext: BrowserContext | null = null;
+let sharedAppPage: Page | null = null;
+let sharedAppPagePromise: Promise<Page> | null = null;
+const sharedAppPageErrors: string[] = [];
 let realChatServer: ControlUiE2eServer | null = null;
+let cachedUiCss: string | null = null;
+
+const SHARED_APP_CONTEXT_TEXT = "Context hover regression fixture.";
+const SHARED_APP_SLASH_TEXT = "Short landscape slash command keyboard regression fixture.";
+const SHARED_APP_IMAGE_URL = "https://cdn.example/render%2Epng?download=1";
+const SHARED_APP_VIDEO_URL = "https://cdn.example/clip%2Emp4?download=1";
+
+function installResponsiveChatGateway(page: Page, scenario: ControlUiMockGatewayScenario = {}) {
+  return installMockGateway(page, {
+    agentModel: "openai/gpt-5.5",
+    ...scenario,
+  });
+}
+
+async function getSharedAppPage(): Promise<Page> {
+  sharedAppPagePromise ??= createSharedAppPage();
+  return await sharedAppPagePromise;
+}
+
+async function createSharedAppPage(): Promise<Page> {
+  if (!realChatServer) {
+    throw new Error("Expected the Control UI server to be ready");
+  }
+  // The five app assertions use disjoint fixture messages and reset mutable
+  // page state, so one lazy boot preserves coverage without five graph loads.
+  const page = await openBrowserPage(1366, 900, { isolated: true });
+  try {
+    page.on("pageerror", (error) => sharedAppPageErrors.push(error.message));
+    await page.route("https://cdn.example/**", (route) => route.abort());
+    await installResponsiveChatGateway(page, {
+      assistantName: "Claw",
+      historyMessages: [
+        {
+          content: [{ text: SHARED_APP_CONTEXT_TEXT, type: "text" }],
+          model: "openai/gpt-5.5",
+          role: "assistant",
+          timestamp: Date.UTC(2026, 6, 5, 9, 51),
+          usage: { cacheRead: 2_400, input: 19_600, output: 126 },
+        },
+        {
+          content: `MEDIA:${SHARED_APP_IMAGE_URL}`,
+          role: "assistant",
+          timestamp: Date.UTC(2026, 6, 9, 10, 0),
+        },
+        {
+          content: "Encoded transcript video",
+          __openclaw: { media: [{ url: SHARED_APP_VIDEO_URL, contentType: "video/mp4" }] },
+          role: "user",
+          timestamp: Date.UTC(2026, 6, 9, 10, 1),
+        },
+        {
+          content: [{ text: SHARED_APP_SLASH_TEXT, type: "text" }],
+          role: "assistant",
+          timestamp: Date.UTC(2026, 6, 9, 10, 2),
+        },
+      ],
+    });
+    await page.goto(`${realChatServer.baseUrl}chat/main`, {
+      waitUntil: "domcontentloaded",
+      timeout: APP_FIRST_RENDER_TIMEOUT_MS,
+    });
+    await page.getByText(SHARED_APP_SLASH_TEXT).waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
+    sharedAppPage = page;
+    return page;
+  } catch (error) {
+    await closeBrowserPage(page);
+    throw error;
+  }
+}
 
 type ControlRect = {
   x: number;
@@ -52,7 +130,8 @@ type ControlRect = {
 type ChatFixtureOptions = {
   composerAttachment?: boolean;
   direct?: boolean;
-  sideChatBody?: string;
+  sessionRailBody?: string;
+  sessionRailDocked?: boolean;
   singleAgent?: boolean;
   slashMenu?: boolean;
 };
@@ -81,6 +160,9 @@ function expectControlRect(rect: ControlRect | null, label: string): ControlRect
 }
 
 function readUiCss(): string {
+  if (cachedUiCss !== null) {
+    return cachedUiCss;
+  }
   const files = [
     "ui/src/styles/base.css",
     "ui/src/styles/layout.css",
@@ -90,9 +172,11 @@ function readUiCss(): string {
     "ui/src/styles/chat/text.css",
     "ui/src/styles/chat/grouped.css",
     "ui/src/styles/chat/tool-cards.css",
+    "ui/src/styles/chat/question-card.css",
     "ui/src/styles/chat/sidebar.css",
   ];
-  return files.map((file) => readStyleSheet(file)).join("\n");
+  cachedUiCss = files.map((file) => readStyleSheet(file)).join("\n");
+  return cachedUiCss;
 }
 
 function iconSvg() {
@@ -144,9 +228,6 @@ function activityAlignmentHtml() {
 function chatFooterActionsHtml() {
   return `
     <div class="chat-group-footer-actions">
-      <button class="chat-expand-btn" type="button" aria-label="Open in canvas">
-        <span class="chat-expand-btn__icon" aria-hidden="true">${iconSvg()}</span>
-      </button>
       <button class="chat-copy-btn" type="button" aria-label="Copy as markdown">
         <span class="chat-copy-btn__icon" aria-hidden="true">${iconSvg()}</span>
       </button>
@@ -265,7 +346,7 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
       <main class="content content--chat">
         <section class="card chat">
           <div class="chat-split-container">
-            <div class="chat-main" style="flex: 1 1 100%">
+            <div class="chat-main${opts.sessionRailDocked ? " chat-main--rail-docked" : ""}" style="flex: 1 1 100%">
               <div class="chat-thread${opts.direct ? " chat-thread--direct" : ""}" role="log">
                 <div class="chat-thread-inner">
                   <div class="chat-group user">
@@ -274,7 +355,7 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                       <div class="chat-bubble"><div class="chat-text">Keep this visible.</div></div>
                     </div>
                   </div>
-                  <div class="chat-group assistant">
+                  <div class="chat-group assistant chat-group--with-footer">
                     <div class="chat-avatar assistant">A</div>
                     <div class="chat-group-messages">
                       <div class="chat-bubble"><div class="chat-text">It stays readable.</div></div>
@@ -284,43 +365,40 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                           <pre><code>const importantLongIdentifier = "control-ui-chat-responsive-regression-fixture-keeps-code-scrollable"; console.log(importantLongIdentifier);</code></pre>
                         </div>
                       </div>
-                      <div class="chat-group-footer">
-                        <div class="chat-group-footer__meta">
-                          <span class="chat-sender-name">Assistant</span>
-                          <span class="chat-group-timestamp">9:41 PM</span>
-                        </div>
-                        ${chatFooterActionsHtml()}
+                    </div>
+                    <div class="chat-group-footer">
+                      <div class="chat-group-footer__meta">
+                        <span class="chat-sender-name">Assistant</span>
+                        <span class="chat-group-timestamp">9:41 PM</span>
                       </div>
+                      ${chatFooterActionsHtml()}
                     </div>
                   </div>
                 </div>
               </div>
               ${
-                opts.sideChatBody !== undefined
-                  ? `<section class="chat-side-chat" role="dialog" aria-label="Side chat">
-                      <header class="chat-side-chat__header">
-                        <div class="chat-side-chat__heading">
-                          <h2 class="chat-side-chat__title">Side chat</h2>
-                          <span class="chat-side-chat__meta">Not saved to chat history</span>
-                        </div>
-                        <div class="chat-side-chat__actions">
-                          <button class="btn btn--ghost btn--icon chat-icon-btn">${iconSvg()}</button>
-                          <button class="btn btn--ghost btn--icon chat-icon-btn">${iconSvg()}</button>
+                opts.sessionRailBody !== undefined
+                  ? `<openclaw-chat-session-rail>
+                    <section class="chat-session-rail chat-session-rail--expanded" role="region" aria-label="Session companion">
+                      <header class="chat-session-rail__header">
+                        <div class="chat-session-rail__header-copy">
+                          <strong class="chat-session-rail__headline">Reviewing the session</strong>
                         </div>
                       </header>
-                      <div class="chat-side-chat__scroll">
-                        <article class="chat-side-chat__turn">
-                          <div class="chat-side-chat__question">What should I check next?</div>
-                          <div class="chat-side-chat__answer">${opts.sideChatBody}</div>
+                      <div class="chat-session-rail__thread">
+                        <article class="chat-session-rail__exchange">
+                          <div class="chat-session-rail__question">What should I check next?</div>
+                          <div class="chat-session-rail__answer">${opts.sessionRailBody}</div>
                         </article>
                       </div>
-                      <footer class="chat-side-chat__composer">
-                        <div class="chat-side-chat__prompt">
-                          <input class="chat-side-chat__input" type="text" placeholder="Follow up…" />
-                          <button class="btn btn--ghost btn--icon chat-icon-btn chat-side-chat__send">${iconSvg()}</button>
-                        </div>
+                      <footer class="chat-session-rail__composer">
+                        <label class="chat-session-rail__prompt">
+                          <input class="chat-session-rail__input" type="text" placeholder="What should I know?" />
+                        </label>
+                        <button class="btn btn--ghost btn--icon chat-icon-btn chat-session-rail__submit">${iconSvg()}</button>
                       </footer>
-                    </section>`
+                    </section>
+                  </openclaw-chat-session-rail>`
                   : ""
               }
               <div class="agent-chat__composer-shell">
@@ -435,12 +513,24 @@ async function openFixture(width: number, height: number, opts: ChatFixtureOptio
   }
 }
 
-async function openBrowserPage(width: number, height: number): Promise<Page> {
+async function openBrowserPage(
+  width: number,
+  height: number,
+  options: { isolated?: boolean } = {},
+): Promise<Page> {
   sharedBrowser ??= await chromium.launch({
     executablePath: chromiumExecutablePath,
     headless: true,
   });
-  return await sharedBrowser.newPage({ viewport: { width, height } });
+  if (options.isolated) {
+    return await sharedBrowser.newPage({ viewport: { width, height } });
+  }
+  // Static setContent fixtures do not mutate context-owned storage or routes,
+  // so they can share one context while their pages remain concurrent.
+  sharedLayoutContext ??= await sharedBrowser.newContext();
+  const page = await sharedLayoutContext.newPage();
+  await page.setViewportSize({ width, height });
+  return page;
 }
 
 async function closeBrowserPage(page: Page): Promise<void> {
@@ -534,15 +624,120 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       executablePath: chromiumExecutablePath,
       headless: true,
     });
+    sharedLayoutContext = await sharedBrowser.newContext();
     realChatServer = await startControlUiE2eServer();
   });
 
   afterAll(async () => {
+    await sharedAppPage?.close();
+    sharedAppPage = null;
+    sharedAppPagePromise = null;
     await realChatServer?.close();
     realChatServer = null;
+    await sharedLayoutContext?.close();
+    sharedLayoutContext = null;
     await sharedBrowser?.close();
     sharedBrowser = null;
   });
+
+  it(
+    "does not replay a consumed session rail open generation after round trips or remounts",
+    FULL_APP_TEST_OPTIONS,
+    async () => {
+      const page = await getSharedAppPage();
+      const result = await page.evaluate(async () => {
+        await customElements.whenDefined("openclaw-chat-session-rail");
+        localStorage.setItem("openclaw.chat.observerHud.display", "pill");
+        type Rail = HTMLElement & {
+          companion: {
+            exchanges: [];
+            pendingQuestion: null;
+            failedQuestion: null;
+            hint: null;
+            draft: string;
+          };
+          connected: boolean;
+          consumedOpenRequest: number;
+          onOpenRequestConsumed: (openRequest: number) => void;
+          onVisibilityChange: (visible: boolean) => void;
+          openRequest: number;
+          sessionKey: string;
+          updateComplete: Promise<boolean>;
+        };
+        const createRail = () => document.createElement("openclaw-chat-session-rail") as Rail;
+        let rail = createRail();
+        let consumedOpenRequest = 0;
+        let visibleReports = 0;
+        const configureRail = (nextRail: Rail) => {
+          nextRail.companion = {
+            exchanges: [],
+            pendingQuestion: null,
+            failedQuestion: null,
+            hint: null,
+            draft: "What changed?",
+          };
+          nextRail.connected = true;
+          nextRail.consumedOpenRequest = consumedOpenRequest;
+          nextRail.onOpenRequestConsumed = (openRequest) => {
+            consumedOpenRequest = openRequest;
+          };
+          nextRail.onVisibilityChange = (visible) => {
+            if (visible) {
+              visibleReports += 1;
+            }
+          };
+        };
+        configureRail(rail);
+        rail.sessionKey = "agent:main:a";
+        document.body.append(rail);
+        await rail.updateComplete;
+        const mode = () =>
+          rail.querySelector(".chat-session-rail--expanded") ? "expanded" : "pill";
+        const update = async (sessionKey: string, openRequest: number) => {
+          rail.sessionKey = sessionKey;
+          rail.openRequest = openRequest;
+          rail.consumedOpenRequest = consumedOpenRequest;
+          await rail.updateComplete;
+          return mode();
+        };
+
+        const sameElementModes = [
+          await update("agent:main:a", 1),
+          await update("agent:main:b", 0),
+          await update("agent:main:a", 1),
+          await update("agent:main:a", 2),
+        ];
+        rail.remove();
+        rail = createRail();
+        configureRail(rail);
+        rail.sessionKey = "agent:main:a";
+        rail.openRequest = 2;
+        document.body.append(rail);
+        await rail.updateComplete;
+        const remountMode = mode();
+        const nextGenerationMode = await update("agent:main:a", 3);
+
+        const snapshot = {
+          sameElementModes,
+          remountMode,
+          nextGenerationMode,
+          storedPreference: localStorage.getItem("openclaw.chat.observerHud.display"),
+          visibleReports,
+        };
+        rail.remove();
+        localStorage.removeItem("openclaw.chat.observerHud.display");
+        return snapshot;
+      });
+
+      expect(result).toEqual({
+        sameElementModes: ["expanded", "pill", "pill", "expanded"],
+        remountMode: "pill",
+        nextGenerationMode: "expanded",
+        storedPreference: "pill",
+        visibleReports: 3,
+      });
+    },
+  );
 
   it.each([
     [320, 568],
@@ -568,6 +763,82 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(spacing).not.toBeNull();
       expect(spacing?.paddingTop).toBeGreaterThanOrEqual(20);
       expect(spacing?.inset).toBeCloseTo(spacing?.paddingTop ?? 0, 0);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("keeps the native gateway picker as compact as sidebar menus", async () => {
+    const page = await openBrowserPage(800, 600);
+    try {
+      const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}\n${splitViewCss}</style></head><body>
+          <wa-dropdown class="chat-pane__gateway-menu">
+            <template shadowrootmode="open"><div part="menu">Gateways</div></template>
+            <wa-dropdown-item class="chat-pane__gateway-menu-item">Local Gateway</wa-dropdown-item>
+          </wa-dropdown>
+        </body></html>`,
+      );
+
+      const styles = await page.evaluate(() => {
+        const dropdown = document.querySelector<HTMLElement>(".chat-pane__gateway-menu")!;
+        const menu = dropdown.shadowRoot!.querySelector<HTMLElement>('[part="menu"]')!;
+        const item = dropdown.querySelector<HTMLElement>(".chat-pane__gateway-menu-item")!;
+        const menuStyle = getComputedStyle(menu);
+        const itemStyle = getComputedStyle(item);
+        return {
+          menu: {
+            borderRadius: menuStyle.borderRadius,
+            padding: menuStyle.padding,
+          },
+          item: {
+            borderRadius: itemStyle.borderRadius,
+            fontSize: itemStyle.fontSize,
+            minHeight: itemStyle.minHeight,
+            padding: itemStyle.padding,
+          },
+        };
+      });
+
+      expect(styles).toEqual({
+        menu: { borderRadius: "8px", padding: "6px" },
+        item: {
+          borderRadius: "8px",
+          fontSize: "13px",
+          minHeight: "30px",
+          padding: "0px 8px",
+        },
+      });
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("pins the collapsed session rail to the pane header edge", async () => {
+    const page = await openBrowserPage(922, 282);
+    try {
+      const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}\n${splitViewCss}</style></head><body>
+          <div class="chat-split-view__cell" style="width: 922px; height: 282px;">
+            <div class="chat-pane__header">Current session</div>
+            <div class="chat-split-view__pane">
+              <div class="chat-main" style="height: 100%;">
+                <div class="chat-session-rail chat-session-rail--pill">
+                  <span class="chat-session-rail__status" data-health="on-track">On track</span>
+                  <span class="chat-session-rail__headline">Investigating repository guidance</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+
+      const header = await getBoundingBox(page, ".chat-pane__header");
+      const observer = await getBoundingBox(page, ".chat-session-rail");
+
+      expect(observer.y).toBeCloseTo(header.y + header.height, 0);
     } finally {
       await closeBrowserPage(page);
     }
@@ -609,66 +880,373 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it(
-    "reveals message context on timestamp hover and keeps click-to-open",
-    // This full-app case shares Chromium with concurrent layout pages; match
-    // the UI runner's cold-browser budget instead of imposing a flaky 20s cap.
-    { timeout: 60_000 },
-    async () => {
-      if (!realChatServer) {
-        throw new Error("Expected the Control UI server to be ready");
-      }
-      const page = await openBrowserPage(1366, 900);
-      try {
-        await installMockGateway(page, {
-          assistantName: "Claw",
-          historyMessages: [
-            {
-              content: [{ text: "Context hover regression fixture.", type: "text" }],
-              model: "openai/gpt-5.5",
-              role: "assistant",
-              timestamp: Date.UTC(2026, 6, 5, 9, 51),
-              usage: { cacheRead: 2_400, input: 19_600, output: 126 },
-            },
-          ],
-        });
-        await page.goto(`${realChatServer.baseUrl}chat`, {
-          waitUntil: "domcontentloaded",
-          timeout: APP_FIRST_RENDER_TIMEOUT_MS,
-        });
-        await page
-          .getByText("Context hover regression fixture.")
-          .waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
+  it("applies configured chat width to tool rows and composer without changing defaults", async () => {
+    const page = await openBrowserPage(1600, 900);
+    const renderFixture = async (configured: boolean) => {
+      const style = configured
+        ? 'style="--chat-thread-max-width: 82%; --chat-message-max-width: 100%"'
+        : "";
+      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+        <section class="card chat" ${style}>
+          <div class="chat-thread chat-thread--direct" role="log">
+            <div class="chat-thread-inner">
+              <div class="chat-group tool">
+                <div class="chat-avatar tool">A</div>
+                <div class="chat-group-messages" data-tool-lane>
+                  <div class="chat-bubble chat-bubble--tool-shell" data-tool-shell>
+                    <div class="chat-tool-msg-collapse">Tool output</div>
+                  </div>
+                </div>
+              </div>
+              <div class="chat-group tool chat-group--activity">
+                <div class="chat-avatar tool">A</div>
+                <div class="chat-group-messages" data-activity-lane>
+                  <div class="chat-activity-group">Activity</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="chat-prs" data-chat-prs>Pull requests</div>
+          <div class="agent-chat__composer-shell" data-composer>
+            <div class="agent-chat__input">Composer</div>
+          </div>
+        </section>
+      </body></html>`);
+      return await page.evaluate(() => {
+        const rect = (selector: string) => {
+          const bounds = document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+          return { center: bounds.x + bounds.width / 2, width: bounds.width };
+        };
+        return {
+          activity: rect("[data-activity-lane]"),
+          composer: rect("[data-composer]"),
+          prs: rect("[data-chat-prs]"),
+          shell: rect("[data-tool-shell]"),
+          thread: rect(".chat-thread-inner"),
+          tool: rect("[data-tool-lane]"),
+        };
+      });
+    };
 
-        const details = page.locator("details.msg-meta");
-        const context = page.locator(".msg-meta__details");
-        const initialLayout = await page.evaluate(() => {
-          const footer = document.querySelector<HTMLElement>(".chat-group-footer")!;
-          const group = document.querySelector<HTMLElement>(".chat-group")!;
+    try {
+      const defaults = await renderFixture(false);
+      expect(defaults.thread.width).toBeCloseTo(768, 0);
+      expect(defaults.composer.width).toBeCloseTo(defaults.thread.width, 0);
+      expect(defaults.prs.width).toBeCloseTo(defaults.thread.width, 0);
+      expect(defaults.tool.width).toBeCloseTo(defaults.thread.width, 0);
+      expect(defaults.shell.width).toBeCloseTo(760, 0);
+      expect(defaults.activity.width).toBeCloseTo(760, 0);
+
+      const configured = await renderFixture(true);
+      for (const key of ["activity", "shell", "tool"] as const) {
+        expect(configured[key].width).toBeCloseTo(configured.thread.width, 0);
+      }
+      expect(configured.composer.width).toBeCloseTo(configured.prs.width, 0);
+      for (const rect of Object.values(configured)) {
+        expect(rect.center).toBeCloseTo(configured.thread.center, 0);
+      }
+      expect(configured.thread.width).toBeGreaterThan(defaults.thread.width);
+      expect(configured.composer.width).toBeGreaterThan(defaults.composer.width);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("gives inline MCP Apps the full assistant message column", async () => {
+    const page = await openBrowserPage(1366, 900);
+    try {
+      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+        <div class="chat-thread chat-thread--direct" role="log">
+          <div class="chat-thread-inner">
+            <div class="chat-group assistant chat-group--with-footer">
+              <div class="chat-group-messages">
+                <div class="chat-bubble">
+                  <div class="chat-tool-card__preview" data-content-kind="mcp-app">
+                    <div class="chat-tool-card__preview-panel">
+                      <mcp-app-view style="display:block;width:100%;height:320px"></mcp-app-view>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </body></html>`);
+
+      await expectNoHorizontalOverflow(page);
+      const widths = await page.evaluate(() => ({
+        app: document.querySelector("mcp-app-view")!.getBoundingClientRect().width,
+        bubble: document.querySelector<HTMLElement>(".chat-bubble")!.getBoundingClientRect().width,
+        messages: document
+          .querySelector<HTMLElement>(".chat-group-messages")!
+          .getBoundingClientRect().width,
+      }));
+      expect(widths.bubble).toBeCloseTo(widths.messages, 0);
+      expect(widths.app).toBeGreaterThan(600);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("keeps wrapped message footers inside measured virtual rows", async () => {
+    const page = await openBrowserPage(1366, 900);
+    try {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-thread" style="width: 220px; height: 400px;">
+            <div class="chat-thread-inner chat-thread-inner--virtual" style="width: 220px;">
+              <div class="chat-virtual-sizer" style="height: 400px;">
+                <div class="chat-virtual-row" data-first-row style="transform: translateY(0px);">
+                  <div
+                    class="chat-group assistant chat-group--with-footer"
+                    style="--chat-message-max-width: 120px;"
+                  >
+                    <div class="chat-avatar assistant">A</div>
+                    <div class="chat-group-messages">
+                      <div class="chat-bubble"><div class="chat-text">A narrow assistant message.</div></div>
+                    </div>
+                    <div class="chat-group-footer">
+                      <div class="chat-group-footer__meta">
+                        <span class="chat-sender-name">Assistant</span>
+                        <span class="chat-group-timestamp">9:41 PM</span>
+                      </div>
+                      <div class="chat-group-footer-actions">
+                        <button type="button">${iconSvg()}</button>
+                        <button type="button">${iconSvg()}</button>
+                        <button type="button">${iconSvg()}</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="chat-virtual-row" data-second-row>
+                  <div class="chat-group user"><div class="chat-group-messages">Next row</div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+
+      const layout = await page.evaluate(() => {
+        const first = document.querySelector<HTMLElement>("[data-first-row]")!;
+        const second = document.querySelector<HTMLElement>("[data-second-row]")!;
+        const avatar = first.querySelector<HTMLElement>(".chat-avatar")!;
+        const bubble = first.querySelector<HTMLElement>(".chat-bubble")!;
+        const footer = first.querySelector<HTMLElement>(".chat-group-footer")!;
+        second.style.transform = `translateY(${first.getBoundingClientRect().height}px)`;
+        const firstRect = first.getBoundingClientRect();
+        const secondRect = second.getBoundingClientRect();
+        const avatarRect = avatar.getBoundingClientRect();
+        const bubbleRect = bubble.getBoundingClientRect();
+        const footerRect = footer.getBoundingClientRect();
+        return {
+          avatarBottom: avatarRect.bottom,
+          bubbleBottom: bubbleRect.bottom,
+          firstBottom: firstRect.bottom,
+          footerBottom: footerRect.bottom,
+          footerHeight: footerRect.height,
+          secondTop: secondRect.top,
+        };
+      });
+
+      expect(layout.footerHeight).toBeGreaterThan(24);
+      expect(layout.bubbleBottom - layout.avatarBottom).toBeCloseTo(4, 0);
+      expect(layout.footerBottom).toBeLessThanOrEqual(layout.firstBottom + 1);
+      expect(layout.secondTop).toBeGreaterThanOrEqual(layout.firstBottom - 1);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("keeps attached images within narrow message lanes", async () => {
+    const page = await openBrowserPage(320, 568);
+    try {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div data-image-lane style="width: 180px;">
+            <div class="chat-message-images">
+              <img
+                class="chat-message-image"
+                width="600"
+                height="100"
+                alt="Wide attachment"
+                src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='100'%3E%3C/svg%3E"
+              />
+            </div>
+          </div>
+        </body></html>`,
+      );
+      await page.locator(".chat-message-image").waitFor();
+
+      const lane = await getRect(page, "[data-image-lane]");
+      const image = await getRect(page, ".chat-message-image");
+      expect(image.width).toBeLessThanOrEqual(lane.width + 1);
+      expect(image.width / image.height).toBeCloseTo(6, 1);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("wraps long question and approval metadata inside narrow cards", async () => {
+    const page = await openBrowserPage(320, 568);
+    try {
+      const longToken = `workspace${"x".repeat(240)}session`;
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div data-narrow-card style="width: 220px;">
+            <div class="chat-question-panel__heading">
+              <span class="chat-question-panel__progress">1/1</span>
+              <span class="chat-question-panel__prompt">${longToken}</span>
+            </div>
+            <div class="exec-approval-meta">
+              <div class="exec-approval-meta-row"><span>Session</span><span>${longToken}</span></div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+
+      const metrics = await page.evaluate(() => {
+        const card = document.querySelector<HTMLElement>("[data-narrow-card]")!;
+        const heading = document.querySelector<HTMLElement>(".chat-question-panel__heading")!;
+        const row = document.querySelector<HTMLElement>(".exec-approval-meta-row")!;
+        return {
+          cardRight: card.getBoundingClientRect().right,
+          headingRight: heading.getBoundingClientRect().right,
+          promptRight: document
+            .querySelector<HTMLElement>(".chat-question-panel__prompt")!
+            .getBoundingClientRect().right,
+          rowRight: row.getBoundingClientRect().right,
+          valueRight: row.lastElementChild!.getBoundingClientRect().right,
+        };
+      });
+
+      expect(metrics.promptRight).toBeLessThanOrEqual(metrics.headingRight + 1);
+      expect(metrics.valueRight).toBeLessThanOrEqual(metrics.rowRight + 1);
+      expect(metrics.headingRight).toBeLessThanOrEqual(metrics.cardRight + 1);
+      expect(metrics.rowRight).toBeLessThanOrEqual(metrics.cardRight + 1);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("reserves command text space for flush tool-card actions", async () => {
+    const page = await openBrowserPage(320, 568);
+    try {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-tool-card chat-tool-card--flush" style="width: 220px;">
+            <div class="chat-tool-card__actions">
+              <button class="chat-tool-card__action-btn" type="button">${iconSvg()}</button>
+            </div>
+            <div class="chat-tool-term">
+              <div class="chat-tool-term__cmd"><span class="chat-tool-term__prompt">$</span><code>command with a long first line</code></div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+
+      const layout = await page.evaluate(() => {
+        const command = document.querySelector<HTMLElement>(".chat-tool-term__cmd")!;
+        const actions = document.querySelector<HTMLElement>(".chat-tool-card__actions")!;
+        const commandRect = command.getBoundingClientRect();
+        return {
+          actionLeft: actions.getBoundingClientRect().left,
+          commandContentRight:
+            commandRect.right - Number.parseFloat(getComputedStyle(command).paddingRight),
+        };
+      });
+
+      expect(layout.commandContentRight).toBeLessThanOrEqual(layout.actionLeft + 1);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it(
+    "remeasures a populated composer when the viewport width changes",
+    FULL_APP_TEST_OPTIONS,
+    async () => {
+      const page = await getSharedAppPage();
+      const errorStart = sharedAppPageErrors.length;
+      try {
+        await page.setViewportSize({ width: 900, height: 800 });
+        const textarea = page.locator(".agent-chat__composer-combobox > textarea");
+        await textarea.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
+        await textarea.fill(
+          "Resize this populated draft across a narrow pane so its wrapped lines change height without waiting for another input event. ".repeat(
+            2,
+          ),
+        );
+        await waitForLayoutSettled(page);
+        const wideHeight = (await textarea.boundingBox())?.height ?? 0;
+
+        await page.setViewportSize({ width: 430, height: 800 });
+        await page.waitForFunction((previousHeight) => {
+          const element = document.querySelector<HTMLTextAreaElement>(
+            ".agent-chat__composer-combobox > textarea",
+          );
+          return element !== null && element.getBoundingClientRect().height > previousHeight + 1;
+        }, wideHeight);
+        const narrowHeight = (await textarea.boundingBox())?.height ?? 0;
+        expect(narrowHeight).toBeGreaterThan(wideHeight + 1);
+
+        await page.setViewportSize({ width: 900, height: 800 });
+        await page.waitForFunction((previousHeight) => {
+          const element = document.querySelector<HTMLTextAreaElement>(
+            ".agent-chat__composer-combobox > textarea",
+          );
+          return element !== null && element.getBoundingClientRect().height < previousHeight - 1;
+        }, narrowHeight);
+        expect(
+          sharedAppPageErrors
+            .slice(errorStart)
+            .filter((message) => message.includes("ResizeObserver loop")),
+        ).toEqual([]);
+      } finally {
+        await page.locator(".agent-chat__composer-combobox > textarea").fill("");
+        await page.setViewportSize({ width: 1366, height: 900 });
+      }
+    },
+  );
+
+  it(
+    "reveals, pins, and dismisses message context from the timestamp",
+    FULL_APP_TEST_OPTIONS,
+    async () => {
+      const page = await getSharedAppPage();
+      try {
+        await page.setViewportSize({ width: 1366, height: 900 });
+        const group = page.locator(".chat-group").filter({ hasText: SHARED_APP_CONTEXT_TEXT });
+        const details = group.locator("details.msg-meta");
+        const context = details.locator(".msg-meta__details");
+        const summary = details.locator(".msg-meta__summary");
+        const messageText = group.locator(".chat-text").first();
+        await messageText.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
+        const initialLayout = await group.evaluate((node) => {
+          const footer = node.querySelector<HTMLElement>(".chat-group-footer")!;
           return {
             footerHeight: footer.getBoundingClientRect().height,
-            groupHeight: group.getBoundingClientRect().height,
+            groupHeight: (node as HTMLElement).getBoundingClientRect().height,
           };
         });
         expect(await context.isVisible()).toBe(false);
 
         // Travel like a real pointer: the footer overlay is pointer-gated until
         // the group is hovered, so enter through the message body first.
-        await page.locator(".chat-text").first().hover();
-        await page.locator(".msg-meta__summary").hover();
+        await messageText.hover();
+        await summary.hover();
         // The reveal is state-driven, so the re-render can lag the hover event
         // under CPU contention; poll instead of a one-shot visibility read.
         await context.waitFor({ state: "visible", timeout: 10_000 });
-        const hoverLayout = await page.evaluate(() => {
-          const footer = document.querySelector<HTMLElement>(".chat-group-footer")!;
-          const group = document.querySelector<HTMLElement>(".chat-group")!;
-          const summary = document.querySelector<HTMLElement>(".msg-meta__summary")!;
-          const detailsOverlay = document.querySelector<HTMLElement>(".msg-meta__details")!;
+        const hoverLayout = await group.evaluate((node) => {
+          const footer = node.querySelector<HTMLElement>(".chat-group-footer")!;
+          const summaryNode = node.querySelector<HTMLElement>(".msg-meta__summary")!;
+          const detailsOverlay = node.querySelector<HTMLElement>(".msg-meta__details")!;
           return {
             contextBottom: detailsOverlay.getBoundingClientRect().bottom,
             footerHeight: footer.getBoundingClientRect().height,
-            groupHeight: group.getBoundingClientRect().height,
-            summaryTop: summary.getBoundingClientRect().top,
+            groupHeight: (node as HTMLElement).getBoundingClientRect().height,
+            summaryTop: summaryNode.getBoundingClientRect().top,
           };
         });
         expect(hoverLayout.footerHeight).toBeCloseTo(initialLayout.footerHeight, 2);
@@ -678,59 +1256,47 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         await page.mouse.move(0, 0);
         await context.waitFor({ state: "hidden", timeout: 10_000 });
 
-        await page.locator(".chat-text").first().hover();
-        await page.locator(".msg-meta__summary").click();
+        await messageText.hover();
+        await summary.hover();
+        // Escape only owns pinned disclosures; it must not corrupt an active
+        // hover preview before the click converts that preview into a pin.
+        await page.keyboard.press("Escape");
+        await summary.click();
         await page.mouse.move(0, 0);
         // Click-to-open must survive the pointer leaving the message group.
         await context.waitFor({ state: "visible", timeout: 10_000 });
         expect(await details.getAttribute("open")).toBe("");
+
+        await page.mouse.click(0, 0);
+        await context.waitFor({ state: "hidden", timeout: 10_000 });
+        expect(await details.getAttribute("open")).toBeNull();
+
+        await messageText.hover();
+        await summary.click();
+        await context.waitFor({ state: "visible", timeout: 10_000 });
+        await page.keyboard.press("Escape");
+        await context.waitFor({ state: "hidden", timeout: 10_000 });
+        expect(await details.getAttribute("open")).toBeNull();
       } finally {
-        await closeBrowserPage(page);
+        await page.keyboard.press("Escape");
+        await page.mouse.move(0, 0);
       }
     },
   );
 
-  it("renders encoded media extensions from assistant output and transcript fields", async () => {
-    if (!realChatServer) {
-      throw new Error("Expected the Control UI server to be ready");
-    }
-    const imageUrl = "https://cdn.example/render%2Epng?download=1";
-    const videoUrl = "https://cdn.example/clip%2Emp4?download=1";
-    const page = await openBrowserPage(1366, 900);
-    try {
-      await page.route("https://cdn.example/**", (route) => route.abort());
-      await installMockGateway(page, {
-        historyMessages: [
-          {
-            content: `MEDIA:${imageUrl}`,
-            role: "assistant",
-            timestamp: Date.UTC(2026, 6, 9, 10, 0),
-          },
-          {
-            content: "Encoded transcript video",
-            MediaPath: videoUrl,
-            role: "user",
-            timestamp: Date.UTC(2026, 6, 9, 10, 1),
-          },
-        ],
-      });
-      await page.goto(`${realChatServer.baseUrl}chat`, {
-        waitUntil: "domcontentloaded",
-        timeout: APP_FIRST_RENDER_TIMEOUT_MS,
-      });
-
-      const image = page.locator("img.chat-message-image");
-      const video = page.locator("video");
-      // First wait absorbs the cold-app render; both elements land in the same
-      // history render pass, so the video follows immediately after.
+  it(
+    "renders encoded media extensions from assistant output and transcript fields",
+    FULL_APP_TEST_OPTIONS,
+    async () => {
+      const page = await getSharedAppPage();
+      const image = page.locator(`img.chat-message-image[src="${SHARED_APP_IMAGE_URL}"]`);
+      const video = page.locator(`video[src="${SHARED_APP_VIDEO_URL}"]`);
       await image.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
-      await video.waitFor({ timeout: 10_000 });
-      expect(await image.getAttribute("src")).toBe(imageUrl);
-      expect(await video.getAttribute("src")).toBe(videoUrl);
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
+      await video.waitFor({ state: "attached", timeout: 10_000 });
+      expect(await image.getAttribute("src")).toBe(SHARED_APP_IMAGE_URL);
+      expect(await video.getAttribute("src")).toBe(SHARED_APP_VIDEO_URL);
+    },
+  );
 
   it.each([
     [393, 852],
@@ -983,19 +1549,19 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
             <div class="chat-thread" role="log">
               <div class="chat-thread-inner">
-                <div class="chat-group assistant">
+                <div class="chat-group assistant chat-group--with-footer">
                   <div class="chat-avatar assistant">A</div>
                   <div class="chat-group-messages">
                     <div class="chat-bubble">
                       <div class="chat-text"><p>Done.</p></div>
                     </div>
-                    <div class="chat-group-footer">
-                      <div class="chat-group-footer__meta">
-                        <span class="chat-sender-name">Assistant</span>
-                        <span class="chat-group-timestamp">9:41 PM</span>
-                      </div>
-                      ${chatFooterActionsHtml()}
+                  </div>
+                  <div class="chat-group-footer">
+                    <div class="chat-group-footer__meta">
+                      <span class="chat-sender-name">Assistant</span>
+                      <span class="chat-group-timestamp">9:41 PM</span>
                     </div>
+                    ${chatFooterActionsHtml()}
                   </div>
                 </div>
               </div>
@@ -1456,40 +2022,35 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     },
   );
 
-  it("stacks the detail sidebar below the thread in a narrow pane", async () => {
+  it("collapses sidebar columns into one tabbed column below the pane breakpoint", async () => {
     const page = await openBrowserPage(900, 700);
     try {
-      // A 620px pane inside a wide viewport: chat-pane sets the stacked class
-      // when the pane cannot fit chat + detail panel side by side.
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
           <div style="width: 620px; height: 600px; display: flex;">
-            <div class="chat-split-container chat-split-container--open chat-split-container--stacked">
-              <div class="chat-main" style="flex: 0 1 60%">
-                <div class="chat-thread" role="log">
-                  <div class="chat-thread-inner">
-                    <div class="chat-group assistant">
-                      <div class="chat-avatar assistant">A</div>
-                      <div class="chat-group-messages">
-                        <div class="chat-bubble"><div class="chat-text">Stacked layout keeps the thread readable.</div></div>
-                      </div>
-                    </div>
+            <div class="sidebar-region sidebar-region--narrow">
+              <main class="sidebar-region__primary">Primary chat</main>
+              <section class="sidebar-column sidebar-column--collapsed">
+                <div class="sidebar-column__header">
+                  <div class="sidebar-column__tabs">
+                    <button class="sidebar-column__tab" aria-selected="true">Details</button>
+                    <button class="sidebar-column__tab" aria-selected="false">Discussion</button>
                   </div>
                 </div>
-              </div>
-              <section class="chat-sidebar"><div class="sidebar-panel">Detail panel</div></section>
+                <div class="sidebar-column__body">Active detail panel</div>
+              </section>
             </div>
           </div>
         </body></html>`,
       );
 
       await expectNoHorizontalOverflow(page);
-      const main = await getRect(page, ".chat-main");
-      const sidebar = await getRect(page, ".chat-sidebar");
-      expect(sidebar.top).toBeGreaterThanOrEqual(main.bottom - 1);
-      expect(Math.abs(sidebar.width - main.width)).toBeLessThanOrEqual(1);
+      const primary = await getRect(page, ".sidebar-region__primary");
+      const sidebar = await getRect(page, ".sidebar-column--collapsed");
+      expect(sidebar.top).toBeGreaterThanOrEqual(primary.bottom - 1);
+      expect(Math.abs(sidebar.width - primary.width)).toBeLessThanOrEqual(1);
       expect(sidebar.width).toBeGreaterThanOrEqual(618);
-      expect(sidebar.height).toBeGreaterThanOrEqual(160);
+      expect(await page.locator(".sidebar-column__tab").count()).toBe(2);
     } finally {
       await closeBrowserPage(page);
     }
@@ -1896,38 +2457,17 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     let page: Page;
 
     beforeAll(async () => {
-      if (!realChatServer) {
-        throw new Error("Expected the Control UI server to be ready");
-      }
-      page = await openBrowserPage(568, 320);
-      await installMockGateway(page, {
-        historyMessages: [
-          {
-            content: [
-              {
-                text: "Short landscape slash command keyboard regression fixture.",
-                type: "text",
-              },
-            ],
-            role: "assistant",
-            timestamp: Date.now(),
-          },
-        ],
-      });
-      await page.goto(`${realChatServer.baseUrl}chat`, {
-        waitUntil: "domcontentloaded",
-        timeout: APP_FIRST_RENDER_TIMEOUT_MS,
-      });
-      await page
-        .getByText("Short landscape slash command keyboard regression fixture.")
-        .waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
+      page = await getSharedAppPage();
+      await page.setViewportSize({ width: 568, height: 320 });
+      await page.getByText(SHARED_APP_SLASH_TEXT).waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
       const textarea = page.locator(".agent-chat__composer-combobox > textarea");
       await textarea.fill("/");
       await textarea.focus();
     });
 
     afterAll(async () => {
-      await closeBrowserPage(page);
+      await page.locator(".agent-chat__composer-combobox > textarea").fill("");
+      await page.setViewportSize({ width: 1366, height: 900 });
     });
 
     it("scrolls the keyboard-active slash option into view in short landscape", async () => {
@@ -2019,13 +2559,13 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     [1024, 768],
     [1366, 900],
   ] as const)(
-    "scrolls long side-chat conversations instead of expanding the panel at %sx%s",
+    "scrolls long session-rail conversations instead of expanding the overlay at %sx%s",
     async (width, height) => {
       const page = await openFixture(width, height, {
-        sideChatBody: LONG_SIDE_CHAT_BODY,
+        sessionRailBody: LONG_SESSION_RAIL_BODY,
       });
       try {
-        const panel = await page.locator(".chat-side-chat").evaluate((node) => {
+        const panel = await page.locator(".chat-session-rail").evaluate((node) => {
           const element = node as HTMLElement;
           return {
             clientHeight: element.clientHeight,
@@ -2033,9 +2573,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           };
         });
         expect(panel.position).toBe("absolute");
-        expect(panel.clientHeight).toBeLessThanOrEqual(560);
+        expect(panel.clientHeight).toBeLessThanOrEqual(680);
 
-        const body = await page.locator(".chat-side-chat__scroll").evaluate((node) => {
+        const body = await page.locator(".chat-session-rail__thread").evaluate((node) => {
           const style = getComputedStyle(node as HTMLElement);
           return {
             overflowY: style.overflowY,
@@ -2046,7 +2586,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(body.overflowY).toBe("auto");
         expect(body.clientHeight).toBeLessThan(body.scrollHeight);
 
-        const scrollTop = await page.locator(".chat-side-chat__scroll").evaluate((node) => {
+        const scrollTop = await page.locator(".chat-session-rail__thread").evaluate((node) => {
           const element = node as HTMLElement;
           element.scrollTop = element.scrollHeight;
           return element.scrollTop;
@@ -2058,13 +2598,13 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     },
   );
 
-  it("renders the side chat as a mobile overlay without horizontal overflow", async () => {
+  it("renders the session rail as a mobile overlay without horizontal overflow", async () => {
     const page = await openFixture(320, 568, {
-      sideChatBody: LONG_SIDE_CHAT_BODY,
+      sessionRailBody: LONG_SESSION_RAIL_BODY,
     });
     try {
       await expectNoHorizontalOverflow(page);
-      const panel = await page.locator(".chat-side-chat").evaluate((node) => {
+      const panel = await page.locator(".chat-session-rail").evaluate((node) => {
         const element = node as HTMLElement;
         return {
           clientHeight: element.clientHeight,
@@ -2072,9 +2612,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         };
       });
       expect(panel.position).toBe("fixed");
-      expect(panel.clientHeight).toBeLessThanOrEqual(380);
+      expect(panel.clientHeight).toBeLessThanOrEqual(460);
 
-      const scroll = await page.locator(".chat-side-chat__scroll").evaluate((node) => {
+      const scroll = await page.locator(".chat-session-rail__thread").evaluate((node) => {
         const element = node as HTMLElement;
         return {
           overflowY: getComputedStyle(element).overflowY,
@@ -2085,12 +2625,33 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(scroll.overflowY).toBe("auto");
       expect(scroll.clientHeight).toBeLessThan(scroll.scrollHeight);
 
-      const scrollTop = await page.locator(".chat-side-chat__scroll").evaluate((node) => {
+      const scrollTop = await page.locator(".chat-session-rail__thread").evaluate((node) => {
         const element = node as HTMLElement;
         element.scrollTop = element.scrollHeight;
         return element.scrollTop;
       });
       expect(scrollTop).toBeGreaterThan(0);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("docks an expanded session rail as a static 400px column on wide chat panes", async () => {
+    const page = await openFixture(1440, 900, {
+      sessionRailBody: LONG_SESSION_RAIL_BODY,
+      sessionRailDocked: true,
+    });
+    try {
+      const main = page.locator(".chat-main");
+      await expect(
+        main.evaluate((node) => node.classList.contains("chat-main--rail-docked")),
+      ).resolves.toBe(true);
+      const rail = await page.locator(".chat-session-rail").evaluate((node) => ({
+        position: getComputedStyle(node as HTMLElement).position,
+        width: (node as HTMLElement).getBoundingClientRect().width,
+      }));
+      expect(rail.position).toBe("static");
+      expect(rail.width).toBeCloseTo(400, 0);
     } finally {
       await closeBrowserPage(page);
     }

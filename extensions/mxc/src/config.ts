@@ -42,16 +42,26 @@ const nonEmptyTrimmedString = (message: string) =>
   z.string({ error: message }).trim().min(1, { error: message });
 
 const MxcPluginConfigSchema = z.strictObject({
-  mxcBinaryPath: nonEmptyTrimmedString("mxcBinaryPath must be a non-empty string").optional(),
+  mxcBinaryPath: nonEmptyTrimmedString("mxcBinaryPath must be a non-empty string")
+    .describe(
+      "Absolute path to the MXC executor (wxc-exec.exe). When unset, the executor is discovered from the installed @microsoft/mxc-sdk.",
+    )
+    .optional(),
   containment: z
     .enum(MXC_CONTAINMENTS, {
       error: `containment must be one of ${MXC_CONTAINMENTS.join(", ")}`,
     })
+    .describe(
+      "Windows containment mode. 'process' and 'processcontainer' currently both resolve to the Windows ProcessContainer sandbox.",
+    )
     .optional(),
   network: z
     .enum(MXC_NETWORK_MODES, {
       error: `network must be one of ${MXC_NETWORK_MODES.join(", ")}`,
     })
+    .describe(
+      "Outbound network policy. 'none' blocks all network; 'default' allows outbound access via the internetClient capability.",
+    )
     .optional(),
   timeoutSeconds: z
     .number({
@@ -61,12 +71,21 @@ const MxcPluginConfigSchema = z.strictObject({
     .max(MAX_TIMER_TIMEOUT_SECONDS, {
       error: `timeoutSeconds must be a number <= ${MAX_TIMER_TIMEOUT_SECONDS}`,
     })
+    .describe(
+      "Per-command execution timeout in seconds. Capped to the sandbox policy baseline timeout when both are set.",
+    )
     .optional(),
-  debug: z.boolean({ error: "debug must be a boolean" }).optional(),
+  debug: z
+    .boolean({ error: "debug must be a boolean" })
+    .describe("Forward verbose debug output from the MXC SDK launcher.")
+    .optional(),
   mxcPolicyPaths: z
     .array(nonEmptyTrimmedString("mxcPolicyPaths must be an array of non-empty strings"), {
       error: "mxcPolicyPaths must be an array of non-empty strings",
     })
+    .describe(
+      "Absolute MXC policy file paths applied on top of the built-in sandbox baseline policy.",
+    )
     .optional(),
 });
 

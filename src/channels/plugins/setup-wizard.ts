@@ -6,6 +6,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import { resolveChannelSetupExecutionAdapter } from "./setup-contract.js";
 import { configureChannelAccessWithAllowlist } from "./setup-group-access-configure.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "./setup-helpers.js";
 import {
@@ -23,6 +24,7 @@ import type {
   ChannelSetupStatus,
   ChannelSetupStatusContext,
 } from "./setup-wizard-types.js";
+import type { ChannelSetupAdapter } from "./types.adapters.js";
 import type { ChannelSetupInput } from "./types.core.js";
 
 export type {
@@ -48,6 +50,7 @@ function createWizardAccountScope(params: {
   cfg: OpenClawConfig;
   channelKey: string;
   accountId: string;
+  setupSurface?: ChannelSetupAdapter;
 }): { cfg: OpenClawConfig; restore: (cfg: OpenClawConfig) => OpenClawConfig } {
   const accountId = normalizeAccountId(params.accountId);
   const initialChannel = getChannelSection(params.cfg, params.channelKey);
@@ -60,6 +63,7 @@ function createWizardAccountScope(params: {
   const cfg = moveSingleAccountChannelSectionToDefaultAccount({
     cfg: params.cfg,
     channelKey: params.channelKey,
+    setupSurface: params.setupSurface,
   });
   const channel = getChannelSection(cfg, params.channelKey);
   const previousDefaultAccount = channel.defaultAccount;
@@ -131,28 +135,36 @@ async function buildStatus(
   };
 }
 
-// Legacy setup adapters still own the canonical config write path. Wizard
-// inputs funnel through them unless a field supplies a narrower writer.
+// Channel-owned contracts own config writes; released legacy adapters remain
+// supported through the single setup execution compatibility boundary.
 function applySetupInput(params: {
   plugin: ChannelSetupWizardPlugin;
   cfg: OpenClawConfig;
   accountId: string;
   input: ChannelSetupInput;
 }) {
-  const setup = params.plugin.setup;
+  const setup = resolveChannelSetupExecutionAdapter(params.plugin);
   if (!setup?.applyAccountConfig) {
     throw new Error(`${params.plugin.id} does not support setup`);
+  }
+  let input: unknown = params.input;
+  if (params.plugin.setupContract) {
+    const parsed = params.plugin.setupContract.parseInput(input);
+    if (!parsed.ok) {
+      throw new Error(parsed.error);
+    }
+    input = parsed.value;
   }
   const resolvedAccountId =
     setup.resolveAccountId?.({
       cfg: params.cfg,
       accountId: params.accountId,
-      input: params.input,
+      input,
     }) ?? params.accountId;
   const validationError = setup.validateInput?.({
     cfg: params.cfg,
     accountId: resolvedAccountId,
-    input: params.input,
+    input,
   });
   if (validationError) {
     throw new Error(validationError);
@@ -160,7 +172,7 @@ function applySetupInput(params: {
   let next = setup.applyAccountConfig({
     cfg: params.cfg,
     accountId: resolvedAccountId,
-    input: params.input,
+    input,
   });
   if (params.input.name?.trim() && setup.applyAccountName) {
     next = setup.applyAccountName({
@@ -218,6 +230,21 @@ async function applyWizardTextInputValue(params: {
           [params.input.inputKey]: params.value,
         },
       }).cfg;
+}
+
+function resolveTextInputKeepMessage(
+  input: ChannelSetupWizardTextInput,
+  currentValue: string,
+): string {
+  if (input.sensitive === true) {
+    // Never pass a configured secret to plugin-owned presentation code.
+    return typeof input.keepPrompt === "string"
+      ? input.keepPrompt
+      : `${input.message} already configured. Keep it?`;
+  }
+  return typeof input.keepPrompt === "function"
+    ? input.keepPrompt(currentValue)
+    : (input.keepPrompt ?? `${input.message} set (${currentValue}). Keep it?`);
 }
 
 export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
@@ -280,6 +307,9 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
             cfg,
             channelKey: plugin.id,
             accountId,
+            setupSurface: resolveChannelSetupExecutionAdapter(plugin) as
+              | ChannelSetupAdapter
+              | undefined,
           })
         : { cfg, restore: (currentCfg: OpenClawConfig) => currentCfg };
       let next = accountScope.cfg;
@@ -496,11 +526,7 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
 
           if (currentValue && textInput.confirmCurrentValue !== false) {
             const keep = await prompter.confirm({
-              message:
-                typeof textInput.keepPrompt === "function"
-                  ? textInput.keepPrompt(currentValue)
-                  : (textInput.keepPrompt ??
-                    `${textInput.message} set (${currentValue}). Keep it?`),
+              message: resolveTextInputKeepMessage(textInput, currentValue),
               initialValue: true,
             });
             if (keep) {
@@ -518,17 +544,21 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
             }
           }
 
-          const initialValue = normalizeOptionalString(
-            (await textInput.initialValue?.({
-              cfg: next,
-              accountId,
-              credentialValues,
-            })) ?? currentValue,
-          );
+          const initialValue =
+            textInput.sensitive === true
+              ? undefined
+              : normalizeOptionalString(
+                  (await textInput.initialValue?.({
+                    cfg: next,
+                    accountId,
+                    credentialValues,
+                  })) ?? currentValue,
+                );
           const rawValue = await prompter.text({
             message: textInput.message,
-            initialValue,
             placeholder: textInput.placeholder,
+            ...(textInput.sensitive === true ? {} : { initialValue }),
+            ...(textInput.sensitive === true ? { sensitive: true } : {}),
             validate: (value) => {
               const trimmed = normalizeOptionalString(value) ?? "";
               if (!trimmed && textInput.required !== false) {

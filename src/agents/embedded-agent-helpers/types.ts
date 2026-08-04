@@ -11,6 +11,7 @@ export type FailoverReason =
   | "billing"
   | "server_error"
   | "timeout"
+  | "tls_certificate"
   | "context_overflow"
   | "model_not_found"
   | "session_expired"

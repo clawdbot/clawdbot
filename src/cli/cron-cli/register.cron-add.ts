@@ -12,6 +12,7 @@ import { defaultRuntime } from "../../runtime.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parseStrictPositiveIntOrUndefined } from "../program/helpers.js";
+import { listCronJobsFromGateway } from "./list-jobs.js";
 import { resolveCronCreateScheduleFromArgs } from "./schedule-options.js";
 import {
   getCronChannelOptions,
@@ -33,7 +34,7 @@ export function registerCronStatusCommand(cron: Command) {
   addGatewayClientOptions(
     cron
       .command("status")
-      .description("Show cron scheduler status")
+      .description("Show automations scheduler status")
       .option("--json", "Output JSON", false)
       .action(async (opts) => {
         try {
@@ -50,20 +51,23 @@ export function registerCronListCommand(cron: Command) {
   addGatewayClientOptions(
     cron
       .command("list")
-      .description("List cron jobs")
+      .description("List automations")
       .option("--all", "Include disabled jobs", false)
       .option("--agent <id>", "Filter by agent id")
       .option("--json", "Output JSON", false)
       .action(async (opts) => {
         try {
-          const listParams: Record<string, unknown> = {
+          const listParams: { includeDisabled: boolean; agentId?: string } = {
             includeDisabled: Boolean(opts.all),
           };
           const agentId = normalizeOptionalString(opts.agent);
+          if (typeof opts.agent === "string" && !agentId) {
+            throw new Error("--agent must not be blank");
+          }
           if (agentId) {
             listParams.agentId = sanitizeAgentId(agentId);
           }
-          const res = await callGatewayFromCli("cron.list", opts, listParams);
+          const res = await listCronJobsFromGateway(opts, listParams);
           if (opts.json) {
             printCronJson(enrichCronJsonWithStatus(res));
             return;
@@ -83,7 +87,7 @@ export function registerCronAddCommand(cron: Command) {
     cron
       .command("add")
       .alias("create")
-      .description("Add a cron job")
+      .description("Add an automation")
       .argument("[scheduleOrName]", "Schedule string, or job name when using --at/--every/--cron")
       .argument("[message]", "Agent message when using a positional schedule")
       .option("--name <name>", "Job name")
@@ -110,6 +114,12 @@ export function registerCronAddCommand(cron: Command) {
         "Fire once when this watched command exits (event trigger; survives turn teardown)",
       )
       .option("--on-exit-cwd <path>", "Working directory for the --on-exit watched command")
+      .option("--stream-command <json>", "Stream source argv as a JSON array of strings")
+      .option("--stream-cwd <path>", "Working directory for the stream source")
+      .option("--stream-mode <mode>", "Stream line selection mode (line|match)")
+      .option("--stream-match <regex>", "Regex source required for stream match mode")
+      .option("--stream-batch-ms <n>", "Quiet-window batch delay in milliseconds")
+      .option("--stream-max-batch-bytes <n>", "Maximum UTF-8 bytes per stream batch")
       .option(
         "--tz <iana>",
         "Timezone for cron expressions (IANA; cron default: Gateway host local timezone)",
@@ -166,7 +176,8 @@ export function registerCronAddCommand(cron: Command) {
               typeof opts.at === "string" ||
               typeof opts.cron === "string" ||
               typeof opts.every === "string" ||
-              typeof opts.onExit === "string";
+              typeof opts.onExit === "string" ||
+              typeof opts.streamCommand === "string";
             const positionalSchedule = hasScheduleFlag ? undefined : nameArg;
             const schedule = resolveCronCreateScheduleFromArgs({
               at: opts.at,
@@ -174,6 +185,12 @@ export function registerCronAddCommand(cron: Command) {
               every: opts.every,
               onExit: opts.onExit,
               onExitCwd: opts.onExitCwd,
+              streamCommand: opts.streamCommand,
+              streamCwd: opts.streamCwd,
+              streamMode: opts.streamMode,
+              streamMatch: opts.streamMatch,
+              streamBatchMs: opts.streamBatchMs,
+              streamMaxBatchBytes: opts.streamMaxBatchBytes,
               exact: opts.exact,
               positionalSchedule,
               stagger: opts.stagger,
@@ -207,9 +224,10 @@ export function registerCronAddCommand(cron: Command) {
               const commandShell = normalizeOptionalString(opts.command);
               const commandArgv = parseCronCommandArgv(opts.commandArgv);
               const scriptPath = normalizeOptionalString(opts.script);
+              const toolsAllow = parseCronToolsAllow(opts.tools);
               if (optionMessage && positionalMessage && optionMessage !== positionalMessage) {
                 throw new Error(
-                  "Pass the cron job message either positionally or with --message, not both.",
+                  "Pass the automation message either positionally or with --message, not both.",
                 );
               }
               const message = optionMessage ?? positionalMessage ?? "";
@@ -230,7 +248,11 @@ export function registerCronAddCommand(cron: Command) {
                 );
               }
               if (systemEvent) {
-                return { kind: "systemEvent" as const, text: systemEvent };
+                return {
+                  kind: "systemEvent" as const,
+                  text: systemEvent,
+                  ...(toolsAllow ? { toolsAllow } : {}),
+                };
               }
               if (scriptPath) {
                 const scriptTimeoutSeconds = parseStrictPositiveIntOrUndefined(
@@ -248,7 +270,7 @@ export function registerCronAddCommand(cron: Command) {
                   scriptPath,
                   timeoutSeconds: scriptTimeoutSeconds,
                   toolBudget: scriptToolBudget,
-                  toolsAllow: parseCronToolsAllow(opts.tools),
+                  toolsAllow,
                 };
               }
               const timeoutSeconds = parseStrictPositiveIntOrUndefined(opts.timeoutSeconds);
@@ -290,6 +312,7 @@ export function registerCronAddCommand(cron: Command) {
                       : undefined,
                   outputMaxBytes:
                     outputMaxBytes && Number.isFinite(outputMaxBytes) ? outputMaxBytes : undefined,
+                  ...(toolsAllow ? { toolsAllow } : {}),
                 };
               }
               return {
@@ -301,7 +324,7 @@ export function registerCronAddCommand(cron: Command) {
                 timeoutSeconds:
                   timeoutSeconds && Number.isFinite(timeoutSeconds) ? timeoutSeconds : undefined,
                 lightContext: opts.lightContext === true ? true : undefined,
-                toolsAllow: parseCronToolsAllow(opts.tools),
+                toolsAllow,
               };
             })();
             const resolvedPayload = await (async () => {
@@ -415,7 +438,7 @@ export function registerCronAddCommand(cron: Command) {
             const positionalName = hasScheduleFlag ? normalizeOptionalString(nameArg) : undefined;
             if (optionName && positionalName && optionName !== positionalName) {
               throw new Error(
-                "Pass the cron job name either positionally or with --name, not both.",
+                "Pass the automation name either positionally or with --name, not both.",
               );
             }
             const name = optionName ?? positionalName ?? "";
@@ -454,9 +477,7 @@ export function registerCronAddCommand(cron: Command) {
               : undefined;
 
             if (
-              (resolvedPayload.kind === "agentTurn" ||
-                resolvedPayload.kind === "command" ||
-                resolvedPayload.kind === "script") &&
+              (resolvedPayload.kind === "agentTurn" || resolvedPayload.kind === "script") &&
               !agentId
             ) {
               defaultRuntime.error(

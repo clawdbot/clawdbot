@@ -333,7 +333,10 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
     expect(toolResult.content).toEqual([{ type: "text", text: "aborted" }]);
   });
 
-  it("preserves real OpenAI transport results and aborts missing parallel siblings", () => {
+  it.each([
+    "openclaw-openai-responses-transport",
+    "openclaw-openai-chatgpt-responses-transport",
+  ] as const)("preserves real %s results and aborts missing parallel siblings", (api) => {
     const messages: Context["messages"] = [
       {
         ...assistantToolCall("call_keep"),
@@ -353,10 +356,7 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
       { role: "user", content: "continue", timestamp: Date.now() },
     ];
 
-    const result = transformTransportMessages(
-      messages,
-      makeModel("openclaw-openai-responses-transport" as Api, "openai", "gpt-5.4"),
-    );
+    const result = transformTransportMessages(messages, makeModel(api as Api, "openai", "gpt-5.4"));
 
     expect(result.map((msg) => msg.role)).toEqual([
       "assistant",

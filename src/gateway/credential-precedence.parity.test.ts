@@ -54,7 +54,7 @@ function withGatewayAuthEnv<T>(env: NodeJS.ProcessEnv, fn: () => T): T {
 describe("gateway credential precedence coverage", () => {
   const cases: TestCase[] = [
     {
-      name: "local mode: env overrides config for call/probe/status, auth remains config-first",
+      name: "local mode keeps configured auth aligned across client and server surfaces",
       cfg: {
         gateway: {
           mode: "local",
@@ -69,8 +69,8 @@ describe("gateway credential precedence coverage", () => {
         OPENCLAW_GATEWAY_PASSWORD: "env-password", // pragma: allowlist secret
       } as NodeJS.ProcessEnv,
       expected: {
-        call: { token: "env-token", password: "env-password" }, // pragma: allowlist secret
-        probe: { token: "env-token", password: "env-password" }, // pragma: allowlist secret
+        call: { token: "config-token", password: "config-password" }, // pragma: allowlist secret
+        probe: { token: "config-token", password: "config-password" }, // pragma: allowlist secret
         status: { token: "config-token", password: "config-password" }, // pragma: allowlist secret
         auth: { token: "config-token", password: "config-password" }, // pragma: allowlist secret
       },
@@ -103,7 +103,7 @@ describe("gateway credential precedence coverage", () => {
       },
     },
     {
-      name: "local mode in gateway service runtime uses config-first token precedence",
+      name: "gateway service runtime uses the same local credential policy",
       cfg: {
         gateway: {
           mode: "local",
@@ -119,8 +119,8 @@ describe("gateway credential precedence coverage", () => {
         OPENCLAW_SERVICE_KIND: "gateway",
       } as NodeJS.ProcessEnv,
       expected: {
-        call: { token: "config-token", password: "env-password" }, // pragma: allowlist secret
-        probe: { token: "config-token", password: "env-password" }, // pragma: allowlist secret
+        call: { token: "config-token", password: "config-password" }, // pragma: allowlist secret
+        probe: { token: "config-token", password: "config-password" }, // pragma: allowlist secret
         status: { token: "config-token", password: "config-password" }, // pragma: allowlist secret
         auth: { token: "config-token", password: "config-password" }, // pragma: allowlist secret
       },

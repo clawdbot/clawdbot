@@ -6,6 +6,7 @@ import {
   callGatewayTool,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveCodexGatewayTimeoutWithGraceMs } from "./attempt-timeouts.js";
 
@@ -88,17 +89,22 @@ export async function waitForPluginApprovalDecision(params: {
   signal?: AbortSignal;
 }): Promise<ExecApprovalDecision | null | undefined> {
   const timeoutMs = DEFAULT_CODEX_APPROVAL_TIMEOUT_MS;
-  const waitPromise: Promise<ApprovalWaitResult | undefined> = callGatewayTool(
+  const waitPromise: Promise<ApprovalWaitResult | null | undefined> = callGatewayTool(
     "plugin.approval.waitDecision",
     { timeoutMs: resolveCodexGatewayTimeoutWithGraceMs(timeoutMs) },
     { id: params.approvalId },
-  );
+  ).catch((error: unknown) => {
+    if (isApprovalNotFoundError(error)) {
+      return null;
+    }
+    throw error;
+  });
   // Bind the verdict to the approval that parked this prompt. A stale or
   // misrouted reply maps to "unavailable" instead of releasing another gate.
   const bindDecision = (
-    result: ApprovalWaitResult | undefined,
+    result: ApprovalWaitResult | null | undefined,
   ): ExecApprovalDecision | null | undefined =>
-    result?.id === params.approvalId ? result.decision : undefined;
+    result === null ? null : result?.id === params.approvalId ? result.decision : undefined;
   if (!params.signal) {
     return bindDecision(await waitPromise);
   }

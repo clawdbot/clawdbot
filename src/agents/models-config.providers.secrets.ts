@@ -78,6 +78,18 @@ export function createProviderApiKeyResolverFromPreparedCredentials(
         discoveryApiKey: toDiscoveryApiKey(credential.access),
       };
     }
+    if (credential.type === "token") {
+      if (
+        !credential.token.trim() ||
+        (credential.expires !== undefined && Date.now() >= credential.expires)
+      ) {
+        return resolveConfiguredOrEnvironment(provider);
+      }
+      return {
+        apiKey: credential.token,
+        discoveryApiKey: toDiscoveryApiKey(credential.token),
+      };
+    }
     if (!credential.key.trim()) {
       return resolveConfiguredOrEnvironment(provider);
     }
@@ -326,7 +338,6 @@ function resolveConfigBackedProviderAuth(params: {
     }
     return {
       apiKey: resolveNonEnvSecretRefApiKeyMarker(configuredApiKeyRef.source),
-      discoveryApiKey: undefined,
       mode: "api_key",
       source: "config",
     };

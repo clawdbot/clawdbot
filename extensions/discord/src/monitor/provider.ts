@@ -1,7 +1,6 @@
 // Discord provider module implements model/runtime integration.
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
-import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
@@ -42,7 +41,7 @@ import {
 } from "./provider.startup.js";
 import { resolveDiscordRestFetch } from "./rest-fetch.js";
 import { formatDiscordStartupStatusMessage } from "./startup-status.js";
-import type { DiscordMonitorStatusSink } from "./status.js";
+import { createDiscordReadyStatusPatch, type DiscordMonitorStatusSink } from "./status.js";
 
 export type MonitorDiscordOpts = {
   token?: string;
@@ -99,9 +98,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
 
   const rawDiscordCfg = account.config;
-  const discordRootThreadBindings = cfg.channels?.discord?.threadBindings;
-  const discordAccountThreadBindings =
-    cfg.channels?.discord?.accounts?.[account.accountId]?.threadBindings;
   const discordRestFetch = resolveDiscordRestFetch(rawDiscordCfg.proxy, runtime);
   const dmConfig = rawDiscordCfg.dm;
   const configuredDmAllowFrom = resolveDiscordAccountAllowFrom({
@@ -146,17 +142,15 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     await discordProviderRuntime.loadDiscordProviderSessionRuntime();
   const threadBindingIdleTimeoutMs =
     discordProviderSessionRuntime.resolveThreadBindingIdleTimeoutMs({
-      channelIdleHoursRaw:
-        discordAccountThreadBindings?.idleHours ?? discordRootThreadBindings?.idleHours,
+      channelIdleHoursRaw: discordCfg.threadBindings?.idleHours,
       sessionIdleHoursRaw: cfg.session?.threadBindings?.idleHours,
     });
   const threadBindingMaxAgeMs = discordProviderSessionRuntime.resolveThreadBindingMaxAgeMs({
-    channelMaxAgeHoursRaw:
-      discordAccountThreadBindings?.maxAgeHours ?? discordRootThreadBindings?.maxAgeHours,
+    channelMaxAgeHoursRaw: discordCfg.threadBindings?.maxAgeHours,
     sessionMaxAgeHoursRaw: cfg.session?.threadBindings?.maxAgeHours,
   });
   const threadBindingsEnabled = discordProviderSessionRuntime.resolveThreadBindingsEnabled({
-    channelEnabledRaw: discordAccountThreadBindings?.enabled ?? discordRootThreadBindings?.enabled,
+    channelEnabledRaw: discordCfg.threadBindings?.enabled,
     sessionEnabledRaw: cfg.session?.threadBindings?.enabled,
   });
   const groupDmEnabled = dmConfig?.groupEnabled ?? false;
@@ -171,7 +165,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     providerSetting: discordCfg.commands?.nativeSkills,
     globalSetting: cfg.commands?.nativeSkills,
   });
-  const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+  const useAccessGroups = true;
   const slashCommand = resolveDiscordSlashCommandConfig(discordCfg.slashCommand);
   const sessionPrefix = "discord:slash";
   const ephemeralDefault = slashCommand.ephemeral;
@@ -219,12 +213,29 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       ? discordCfg.applicationId.trim()
       : undefined;
   const parsedApplicationId = configuredApplicationId ?? parseApplicationIdFromToken(token);
-  const applicationId =
-    parsedApplicationId ??
-    (await discordProviderRuntime.fetchDiscordApplicationId(token, 4000, discordRestFetch));
-  if (!applicationId) {
-    throw new Error("Failed to resolve Discord application id");
+  const applicationIdProbe = parsedApplicationId
+    ? ({ kind: "resolved", applicationId: parsedApplicationId } as const)
+    : await discordProviderRuntime.probeDiscordApplicationId(token, 4000, discordRestFetch);
+  if (applicationIdProbe.kind !== "resolved") {
+    const at = Date.now();
+    const terminal = applicationIdProbe.kind === "rejected";
+    const probeError = formatErrorMessage(applicationIdProbe.error);
+    const message = `Failed to resolve Discord application id: ${probeError}`;
+    opts.setStatus?.({
+      connected: false,
+      lifecycle: terminal ? "blocked" : "recovering",
+      terminalDisconnect: terminal ? true : undefined,
+      lastEventAt: at,
+      lastDisconnect: {
+        at,
+        ...(applicationIdProbe.status !== null ? { status: applicationIdProbe.status } : {}),
+        error: probeError,
+      },
+      lastError: message,
+    });
+    throw new Error(message, { cause: applicationIdProbe.error });
   }
+  const applicationId = applicationIdProbe.applicationId;
   logDiscordStartupPhase({
     runtime,
     accountId: account.accountId,
@@ -375,7 +386,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     const logger = createSubsystemLogger("discord/monitor");
     const guildHistories = new Map<
       string,
-      import("openclaw/plugin-sdk/reply-history").HistoryEntry[]
+      import("./message-handler.history.js").DiscordHistoryEntry[]
     >();
     const { botUserId, botUserName } = await fetchDiscordBotIdentity({
       client,
@@ -487,7 +498,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       }),
     );
     if (lifecycleGateway?.isConnected) {
-      opts.setStatus?.(createConnectedChannelStatusPatch());
+      opts.setStatus?.(createDiscordReadyStatusPatch());
     }
 
     lifecycleStarted = true;

@@ -1,5 +1,6 @@
 // Xai provider module implements model/runtime integration.
 import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -59,7 +60,6 @@ const XAI_VIDEO_TERMINAL_FAILURE_STATUSES = new Set(["failed", "error", "expired
 const XAI_VIDEO_DEFAULT_DURATION_SECONDS = 8;
 const XAI_VIDEO_DEFAULT_ASPECT_RATIO = "16:9";
 const XAI_VIDEO_DEFAULT_RESOLUTION = "480p";
-const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
 
 type XaiVideoCreateResponse = {
   request_id?: string;
@@ -141,14 +141,6 @@ function resolveXaiVideoBaseUrl(req: VideoGenerationRequest): string {
   return (
     normalizeOptionalString(req.cfg?.models?.providers?.xai?.baseUrl) ?? DEFAULT_XAI_VIDEO_BASE_URL
   );
-}
-
-function resolveGeneratedVideoMaxBytes(req: VideoGenerationRequest): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
 }
 
 function resolveImageUrl(input: VideoGenerationSourceInput | undefined): string | undefined {
@@ -437,11 +429,7 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
         modes: ["imageToVideo"],
       },
     },
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: "xai",
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "xai", ...ctx }),
     capabilities: {
       generate: {
         maxVideos: 1,
@@ -561,7 +549,7 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
           allowPrivateNetwork,
           dispatcherPolicy,
           fetchFn,
-          maxBytes: resolveGeneratedVideoMaxBytes(req),
+          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "video"),
         });
         return {
           videos: [video],

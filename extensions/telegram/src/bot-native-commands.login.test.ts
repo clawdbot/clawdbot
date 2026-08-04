@@ -68,20 +68,27 @@ describe("registerTelegramNativeCommands /login", () => {
         provider?: string;
         method?: string;
         agent?: string;
-        prompter: { note: (message: string, title?: string) => Promise<void> };
+        prompter: {
+          deviceCode?: (params: {
+            title: string;
+            code: string;
+            expiresInMinutes?: number;
+            message?: string;
+          }) => Promise<void>;
+        };
       }) => {
         expect(params.provider).toBe("openai");
         expect(params.method).toBe("device-code");
         expect(params.agent).toBe("main");
-        await params.prompter.note(
-          [
+        await params.prompter.deviceCode?.({
+          title: "OpenAI Codex device code",
+          code: "ABCD-EFGH",
+          expiresInMinutes: 15,
+          message: [
             "Open this URL in your LOCAL browser and enter the code below.",
             "URL: https://auth.openai.com/codex/device",
-            "Code: ABCD-EFGH",
-            "Code expires in 15 minutes. Never share it.",
           ].join("\n"),
-          "OpenAI Codex device code",
-        );
+        });
         return {
           providerId: "openai",
           methodId: "device-code",
@@ -110,8 +117,9 @@ describe("registerTelegramNativeCommands /login", () => {
 
     const texts = sendMessage.mock.calls.map((call) => String(call[1]));
     expect(texts[0]).toContain("URL: https://auth.openai.com/codex/device");
-    expect(texts[0]).toContain("Code: ABCD-EFGH");
+    expect(texts[0]).toContain("Code: <code>ABCD-EFGH</code>");
     expect(texts[0]).toContain("Never share it.");
+    expect(sendMessage.mock.calls[0]?.[2]).toEqual(expect.objectContaining({ parse_mode: "HTML" }));
     expect(texts.at(-1)).toContain("Codex login complete. Try your request again now.");
   });
 

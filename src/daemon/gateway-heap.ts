@@ -1,6 +1,5 @@
 /** Adaptive Node heap policy for the managed Gateway service. */
 import os from "node:os";
-import { parseNodeOptionsTokens } from "../infra/node-options.js";
 
 const MEBIBYTE_BYTES = 1024 * 1024;
 const GATEWAY_HEAP_FLOOR_MIB = 2048;
@@ -64,6 +63,45 @@ function resolveGatewayHeapLimit(params: GatewayHeapMemoryInputs = {}): GatewayH
     capMiB: GATEWAY_HEAP_CAP_MIB,
     headroomCapMiB,
   };
+}
+
+function parseNodeOptionsTokens(nodeOptions: string): string[] | null {
+  // Match Node's NODE_OPTIONS splitter: space delimiters, double quotes, and
+  // backslash escapes only inside quotes. Other shell quoting does not apply.
+  const tokens: string[] = [];
+  let token = "";
+  let inQuotes = false;
+  let tokenStarted = false;
+  for (let index = 0; index < nodeOptions.length; index += 1) {
+    let char = nodeOptions[index];
+    if (char === "\\" && inQuotes) {
+      index += 1;
+      if (index >= nodeOptions.length) {
+        return null;
+      }
+      char = nodeOptions[index];
+    } else if (char === " " && !inQuotes) {
+      if (tokenStarted) {
+        tokens.push(token);
+        token = "";
+        tokenStarted = false;
+      }
+      continue;
+    } else if (char === '"') {
+      inQuotes = !inQuotes;
+      tokenStarted = true;
+      continue;
+    }
+    token += char;
+    tokenStarted = true;
+  }
+  if (inQuotes) {
+    return null;
+  }
+  if (tokenStarted) {
+    tokens.push(token);
+  }
+  return tokens;
 }
 
 function parseMaxOldSpaceSizeMiB(nodeOptions: string | undefined): number | null {
