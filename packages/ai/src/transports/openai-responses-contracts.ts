@@ -46,6 +46,25 @@ export type OpenAIResponsesOptions = BaseOpenAIStreamOptions & {
   toolChoice?: ResponseCreateParamsStreaming["tool_choice"];
 };
 
+const PROMPT_OBSERVER = Symbol("openaiResponsesPromptObserver");
+export type ResponsesPromptObservation = {
+  applicationAttempt: "initial" | "encrypted-content-retry";
+  promptSource: "instructions" | "input.developer" | "input.system" | "missing";
+  expectedChars: number;
+  observedChars: number;
+  matchesAssembledPrompt: boolean;
+};
+type ResponsesPromptObserver = (observation: ResponsesPromptObservation) => void;
+
+export const responsesPromptObserver = {
+  set(options: object, observer: ResponsesPromptObserver): void {
+    Reflect.set(options, PROMPT_OBSERVER, observer);
+  },
+  get(options: object) {
+    return Reflect.get(options, PROMPT_OBSERVER) as ResponsesPromptObserver | undefined;
+  },
+};
+
 export type OpenAIResponsesReplayContext = {
   provider: string;
   api: Api;

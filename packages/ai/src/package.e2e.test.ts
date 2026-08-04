@@ -136,6 +136,7 @@ const compatibility = {
       "resolveOpenAIProjectedToolsStrictToolFlag",
       "stripUnsupportedSchemaKeywords",
       "projectRuntimeToolInputSchema",
+      "responsesPromptObserver",
     ],
     types: [
       "OpenAICompletionsOptions",
@@ -157,6 +158,7 @@ const compatibility = {
       "OpenAICompletionsToolChoice",
       "RuntimeToolInputSchemaJson",
       "RuntimeToolInputSchemaProjection",
+      "ResponsesPromptObservation",
     ],
   },
 } as const;

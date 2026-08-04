@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AssistantMessage, Context, Model, StreamFn } from "@openclaw/llm-core";
 import OpenAI, { AzureOpenAI } from "openai";
+import type { EasyInputMessage } from "openai/resources/responses/responses.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import { resolveAzureDeploymentNameFromMap } from "../providers/azure-deployment-map.js";
@@ -12,12 +13,15 @@ import {
   getFirstStreamEventTimeoutHandler,
   getFirstStreamEventTimeoutMs,
 } from "../utils/stream-first-event-timeout.js";
+import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { buildGuardedModelFetch } from "./host-policy.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugBaseUrl } from "./model-transport-url.js";
 import {
   AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS,
+  responsesPromptObserver,
   type OpenAIResponsesOptions,
+  type OpenAIResponsesRequestParams,
 } from "./openai-responses-contracts.js";
 import {
   applyServiceTierPricing,
@@ -54,8 +58,34 @@ import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitiz
 import {
   assignTransportErrorDetails,
   mergeTransportMetadata,
+  sanitizeTransportPayloadText,
   transportAbortError,
 } from "./transport-stream-shared.js";
+
+function readFinalResponsesPrompt(request: OpenAIResponsesRequestParams) {
+  if (typeof request.instructions === "string") {
+    return ["instructions", request.instructions] as const;
+  }
+  const input = Array.isArray(request.input) ? request.input : [];
+  const message = input.find((item) => {
+    const role = (item as EasyInputMessage).role;
+    return role === "developer" || role === "system";
+  }) as EasyInputMessage | undefined;
+  if (!message) {
+    return ["missing", ""] as const;
+  }
+  const content = message.content;
+  const observedPrompt =
+    typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content.flatMap((part) => (part.type === "input_text" ? [part.text] : [])).join("")
+        : "";
+  return [
+    message.role === "developer" ? "input.developer" : "input.system",
+    observedPrompt,
+  ] as const;
+}
 
 function resolveProviderTransportTurnState(
   model: Model,
@@ -193,6 +223,23 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           enforceCodeModeResponsesToolSurface(params, visibleToolNames);
           assertCodeModeResponsesToolSurface(params, visibleToolNames);
         }
+        const promptObserver = responsesOptions && responsesPromptObserver.get(responsesOptions);
+        const expectedPrompt = sanitizeTransportPayloadText(
+          stripSystemPromptCacheBoundary(context.systemPrompt ?? ""),
+        );
+        const observePrompt: ResponsesStreamParams["observePrompt"] = promptObserver
+          ? (request, applicationAttempt) => {
+              const [promptSource, observedPrompt] = readFinalResponsesPrompt(request);
+              promptObserver({
+                applicationAttempt,
+                promptSource,
+                expectedChars: expectedPrompt.length,
+                observedChars: observedPrompt.length,
+                matchesAssembledPrompt:
+                  promptSource !== "missing" && observedPrompt === expectedPrompt,
+              });
+            }
+          : undefined;
         const requestStartedAt = Date.now();
         firstEventAbort = createFirstStreamEventAbortController(options?.signal);
         const requestOptions = buildOpenAISdkRequestOptions(model, firstEventAbort.signal, {
@@ -211,6 +258,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           request: params,
           requestOptions,
           model,
+          observePrompt,
         });
         await options?.onResponse?.(
           { status: response.status, headers: headersToRecord(response.headers) },
@@ -290,7 +338,8 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
         resolveAzureDeploymentName(model),
         metadata,
       ),
-    createResponseStream: async ({ client, request, requestOptions }) => {
+    createResponseStream: async ({ client, request, requestOptions, observePrompt }) => {
+      observePrompt?.(request, "initial");
       const { data, response } = await client.responses
         .create(request as never, requestOptions)
         .withResponse();

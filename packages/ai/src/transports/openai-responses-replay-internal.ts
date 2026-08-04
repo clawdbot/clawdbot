@@ -221,8 +221,13 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
   request: OpenAIResponsesRequestParams;
   requestOptions: unknown;
   model: Model;
+  observePrompt?: (
+    request: OpenAIResponsesRequestParams,
+    attempt: "initial" | "encrypted-content-retry",
+  ) => void;
 }): Promise<{ stream: AsyncIterable<unknown>; response: Response }> {
   try {
+    params.observePrompt?.(params.request, "initial");
     const { data, response } = await params.client.responses
       .create(params.request as never, params.requestOptions as never)
       .withResponse();
@@ -236,6 +241,7 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
       `[responses] retrying without encrypted reasoning content provider=${params.model.provider} ` +
         `api=${params.model.api} model=${params.model.id}`,
     );
+    params.observePrompt?.(retryRequest, "encrypted-content-retry");
     const { data, response } = await params.client.responses
       .create(retryRequest as never, params.requestOptions as never)
       .withResponse();
