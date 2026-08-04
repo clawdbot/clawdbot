@@ -53,6 +53,39 @@ describe("createEditorSubmitHandler", () => {
     expect(editor.getText()).toBe("");
   });
 
+  it("preserves whitespace bang routing across a blocked retry", () => {
+    const tui = { requestRender: vi.fn() } as unknown as TUI;
+    const editor = new CustomEditor(tui, editorTheme);
+    const sendMessage = vi.fn();
+    const handleBangLine = vi.fn();
+    const admitMessage = vi
+      .fn()
+      .mockReturnValueOnce({ status: "blocked", reason: "pending" })
+      .mockReturnValueOnce({ status: "allowed" });
+    editor.onSubmit = createEditorSubmitHandler({
+      editor,
+      handleCommand: vi.fn(),
+      sendMessage,
+      handleBangLine,
+      onSubmitError: vi.fn(),
+      admitMessage,
+    });
+    editor.setText("  !cmd");
+
+    editor.handleInput("\r");
+
+    expect(editor.getText()).toBe("  !cmd");
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(handleBangLine).not.toHaveBeenCalled();
+
+    editor.handleInput("\r");
+
+    expect(admitMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage).toHaveBeenCalledExactlyOnceWith("!cmd");
+    expect(handleBangLine).not.toHaveBeenCalled();
+    expect(editor.getText()).toBe("");
+  });
+
   it("trims normal messages before sending and adding to history", () => {
     const { editor, sendMessage, onSubmit } = createSubmitHarness();
 

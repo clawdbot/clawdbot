@@ -82,7 +82,7 @@ export function createEditorSubmitHandler(params: {
       ? params.admitMessage?.(value, snapshot)
       : params.admitMessage?.(value)) ?? { status: "allowed" };
     if (admission.status === "blocked") {
-      restoreBlockedEditor(value);
+      restoreBlockedEditor(/^\s+!/u.test(raw) ? raw : value);
       params.onBlockedMessageSubmit?.(value, admission);
       return;
     }
