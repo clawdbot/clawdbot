@@ -137,10 +137,8 @@ export async function detectSetupInference(
     (candidate) => candidate.kind === "existing-model",
   )?.modelRef;
   const configuredCandidateKind = resolveConfiguredCandidateKind(cfg, configuredModel);
-  const unavailableDetected = detected.filter((candidate) => candidate.unavailableReason);
   const raw = detected.filter(
     (candidate) =>
-      !candidate.unavailableReason &&
       candidate.kind !== "gemini-cli" &&
       !(
         candidate.kind === configuredCandidateKind &&
@@ -165,19 +163,6 @@ export async function detectSetupInference(
   const manualProviders = listSetupInferenceManualProviders(authChoices);
   const authOptions = listSetupInferenceAuthOptions(authChoices);
   const prepareOptions = listSetupInferencePrepareOptions(authChoices);
-  unavailableCandidates.push(
-    ...unavailableDetected.map((candidate) =>
-      Object.assign(
-        {
-          id: candidate.kind,
-          label: candidate.label,
-          detail: candidate.detail,
-          reason: candidate.unavailableReason ?? "Unavailable",
-        },
-        resolveCandidatePresentation(candidate, authChoices),
-      ),
-    ),
-  );
   unavailableCandidates.push(...deferredUnavailableCandidates);
   const candidates: SetupInferenceCandidate[] = raw.map((candidate) =>
     // Released macOS clients require this field. Keep it false so the wire

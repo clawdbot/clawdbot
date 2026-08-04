@@ -116,13 +116,17 @@ The `openclaw agent` command also has its own request deadline. Its 600-second f
 
 ### Claude CLI specifics
 
-OpenClaw's managed Claude stdio sessions require Claude Code 2.1.206 or newer.
-At runtime OpenClaw does not trust the version string alone: it waits for
+OpenClaw's managed Claude stdio sessions require the `msg_lifecycle_v1`
+capability, first observed in the published Claude Code 2.1.206 build. At
+runtime OpenClaw does not trust the version string alone: it waits for
 Claude Code's `system/init` record to advertise `msg_lifecycle_v1`, then accepts
 assistant, tool, and result records only after the matching input lifecycle has
 started. Unknown capabilities are ignored. A CLI that omits the required
 capability fails immediately with `claude update` and gateway-restart guidance
 instead of waiting for the no-output watchdog.
+
+Setup and Doctor treat 2.1.206 as advisory, so a lower-version compatible
+backport or wrapper remains selectable and is verified by the runtime gate.
 
 ```bash
 claude --version

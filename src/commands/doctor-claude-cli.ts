@@ -21,8 +21,8 @@ import type {
   TokenCredential,
 } from "../agents/auth-profiles/types.js";
 import {
-  formatCliBackendUpdateGuidance,
-  resolveCliBackendVersionSupport,
+  formatCliBackendVersionAdvisory,
+  resolveCliBackendVersionGuidance,
 } from "../agents/cli-backend-version-support.js";
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
 import { readClaudeCliCredentialsCached } from "../agents/cli-credentials.js";
@@ -258,13 +258,13 @@ export function noteClaudeCliHealth(
       liveSessionRequirement.versionArgs,
       env,
     );
-    const support = resolveCliBackendVersionSupport(versionOutput, liveSessionRequirement);
-    if (support.status === "unsupported") {
+    const guidance = resolveCliBackendVersionGuidance(versionOutput, liveSessionRequirement);
+    if (guidance.status === "below-known-floor") {
       lines.push(
-        `- Binary version: ${formatCliBackendUpdateGuidance({
+        `- Binary version advisory: ${formatCliBackendVersionAdvisory({
           label: "Claude Code",
           requirement: liveSessionRequirement,
-          version: support.version,
+          version: guidance.version,
         })}`,
       );
     }

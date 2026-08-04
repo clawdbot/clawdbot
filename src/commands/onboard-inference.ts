@@ -5,8 +5,8 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import {
-  formatCliBackendUpdateGuidance,
-  resolveCliBackendVersionSupport,
+  formatCliBackendVersionAdvisory,
+  resolveCliBackendVersionGuidance,
 } from "../agents/cli-backend-version-support.js";
 import { resolveCliBackendLiveSessionRequirement } from "../agents/cli-backends.js";
 import {
@@ -234,8 +234,8 @@ export async function detectInferenceBackends(
       (
         options.deps?.resolveClaudeLiveSessionRequirement ?? resolveCliBackendLiveSessionRequirement
       )("claude-cli") ?? undefined;
-    const versionSupport = liveSessionRequirement
-      ? resolveCliBackendVersionSupport(claudeProbe.version, liveSessionRequirement)
+    const versionGuidance = liveSessionRequirement
+      ? resolveCliBackendVersionGuidance(claudeProbe.version, liveSessionRequirement)
       : { status: "unknown" as const };
     const claudeCredential = readClaude();
     const credentials = detectCliCredentialState({
@@ -243,28 +243,25 @@ export async function detectInferenceBackends(
       hasStoredCredentials: claudeCredential !== null,
       platform,
     });
-    if (
-      versionSupport.status !== "unsupported" &&
-      credentials === true &&
-      claudeCredential?.type === "oauth"
-    ) {
+    if (credentials === true && claudeCredential?.type === "oauth") {
       subscriptionPromotionEligibleCliKinds.add("claude-cli");
     }
+    const detail = describeCliDetail(credentials, "run `claude auth login`");
+    // Only the live init record can prove capability support. Keep backports and
+    // wrappers selectable here even when their version predates the known release.
     cliCandidates.push({
       kind: "claude-cli",
       modelRef: CLAUDE_CLI_DEFAULT_MODEL_REF,
       label: "Claude Code",
-      detail: describeCliDetail(credentials, "run `claude auth login`"),
-      ...(credentials === undefined ? {} : { credentials }),
-      ...(versionSupport.status === "unsupported" && liveSessionRequirement
-        ? {
-            unavailableReason: formatCliBackendUpdateGuidance({
+      detail:
+        versionGuidance.status === "below-known-floor" && liveSessionRequirement
+          ? `${detail}; ${formatCliBackendVersionAdvisory({
               label: "Claude Code",
               requirement: liveSessionRequirement,
-              version: versionSupport.version,
-            }),
-          }
-        : {}),
+              version: versionGuidance.version,
+            })}`
+          : detail,
+      ...(credentials === undefined ? {} : { credentials }),
     });
   }
   if (codexProbe.found && !codexProbe.timedOut) {

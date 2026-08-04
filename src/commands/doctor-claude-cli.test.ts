@@ -162,7 +162,7 @@ describe("noteClaudeCliHealth", () => {
     });
   });
 
-  it("reports an installed Claude Code below the streamed-session floor", async () => {
+  it("advises on a version below the first-known floor without declaring it unsupported", async () => {
     await withTempHome(({ homeDir, workspaceDir }) => {
       cliBackendsTesting.setDepsForTest({
         resolvePluginSetupCliBackend: () => undefined,
@@ -201,7 +201,7 @@ describe("noteClaudeCliHealth", () => {
       );
 
       expect(noteBody(noteFn)).toContain(
-        "Claude Code 2.1.206 or newer is required; found 2.1.205. Run `claude update`, restart OpenClaw, and retry.",
+        "Binary version advisory: Claude Code 2.1.206 is the first published build known to advertise msg_lifecycle_v1; found 2.1.205. OpenClaw verifies this capability at runtime. If this build is rejected, run `claude update`, restart OpenClaw, and retry.",
       );
     });
   });

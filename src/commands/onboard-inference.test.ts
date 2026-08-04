@@ -152,7 +152,7 @@ describe("detectInferenceBackends", () => {
     expect(candidates[1]?.credentials).toBeUndefined();
   });
 
-  it("marks an installed Claude Code below the streamed-session floor unavailable", async () => {
+  it("keeps a lower-version Claude wrapper selectable with capability guidance", async () => {
     const candidates = await detectInferenceBackends({
       env: {},
       platform: "linux",
@@ -175,8 +175,9 @@ describe("detectInferenceBackends", () => {
     expect(candidates).toMatchObject([
       {
         kind: "claude-cli",
-        unavailableReason:
-          "Claude Code 2.1.206 or newer is required; found 2.1.205. Run `claude update`, restart OpenClaw, and retry.",
+        credentials: true,
+        detail:
+          "logged in; Claude Code 2.1.206 is the first published build known to advertise msg_lifecycle_v1; found 2.1.205. OpenClaw verifies this capability at runtime. If this build is rejected, run `claude update`, restart OpenClaw, and retry.",
       },
     ]);
   });

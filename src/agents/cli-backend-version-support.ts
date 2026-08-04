@@ -3,16 +3,16 @@ import { coerce as coerceSemver } from "semver";
 import { compareValidSemver } from "../infra/semver.js";
 import type { CliBackendLiveSessionRequirement } from "../plugins/cli-backend.types.js";
 
-type CliBackendVersionSupport =
-  | { status: "supported"; version: string }
-  | { status: "unsupported"; version: string }
+type CliBackendVersionGuidance =
+  | { status: "at-or-above-known-floor"; version: string }
+  | { status: "below-known-floor"; version: string }
   | { status: "unknown" };
 
-/** Compare human CLI version output with the provider's published compatibility floor. */
-export function resolveCliBackendVersionSupport(
+/** Compare human CLI version output with the provider's first-known compatible release. */
+export function resolveCliBackendVersionGuidance(
   versionOutput: string | undefined,
   requirement: CliBackendLiveSessionRequirement,
-): CliBackendVersionSupport {
+): CliBackendVersionGuidance {
   const parsed = versionOutput ? coerceSemver(versionOutput)?.version : undefined;
   if (!parsed) {
     return { status: "unknown" };
@@ -22,17 +22,16 @@ export function resolveCliBackendVersionSupport(
     return { status: "unknown" };
   }
   return {
-    status: comparison < 0 ? "unsupported" : "supported",
+    status: comparison < 0 ? "below-known-floor" : "at-or-above-known-floor",
     version: parsed,
   };
 }
 
-/** Actionable guidance shared by setup, Doctor, and live-session failures. */
-export function formatCliBackendUpdateGuidance(params: {
+/** Advisory guidance; runtime capability negotiation remains authoritative. */
+export function formatCliBackendVersionAdvisory(params: {
   label: string;
   requirement: CliBackendLiveSessionRequirement;
-  version?: string;
+  version: string;
 }): string {
-  const found = params.version ? `; found ${params.version}` : "";
-  return `${params.label} ${params.requirement.minimumVersion} or newer is required${found}. Run \`${params.requirement.updateCommand}\`, restart OpenClaw, and retry.`;
+  return `${params.label} ${params.requirement.minimumVersion} is the first published build known to advertise ${params.requirement.capability}; found ${params.version}. OpenClaw verifies this capability at runtime. If this build is rejected, run \`${params.requirement.updateCommand}\`, restart OpenClaw, and retry.`;
 }
