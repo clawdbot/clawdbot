@@ -83,7 +83,7 @@ describe("provider prompt admission", () => {
           outputSchema: { description: "y".repeat(30_000) },
         },
       ],
-    } as ProviderContext;
+    } as unknown as ProviderContext;
 
     const result = admit(context, undefined, {
       contextTokenBudget: 4_000,
