@@ -7,6 +7,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { commitConfigWriteWithPendingPluginInstalls } from "./install-record-commit.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
+import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index.js";
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
@@ -94,6 +95,7 @@ describe("plugin install record commit rollback", () => {
           installPath: "/tmp/successor",
         },
       });
+      expect(persisted?.policyHash).toBe(resolveInstalledPluginIndexPolicyHash({}));
     });
   });
 });

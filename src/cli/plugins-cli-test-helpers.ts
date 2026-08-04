@@ -6,6 +6,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import type { CliMockOutputRuntime } from "./test-runtime-capture.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
@@ -27,6 +28,14 @@ type UpdateNpmInstalledPluginsFn =
   (typeof import("../plugins/update.js"))["updateNpmInstalledPlugins"];
 type UpdateNpmInstalledHookPacksFn =
   (typeof import("../hooks/update.js"))["updateNpmInstalledHookPacks"];
+type ReadPersistedInstalledPluginIndexFn =
+  (typeof import("../plugins/installed-plugin-index-store.js"))["readPersistedInstalledPluginIndex"];
+type RestorePersistedInstalledPluginIndexIfCurrentFn =
+  (typeof import("../plugins/installed-plugin-index-store.js"))["restorePersistedInstalledPluginIndexIfCurrent"];
+type WritePersistedInstalledPluginIndexInstallRecordsFn =
+  (typeof import("../plugins/installed-plugin-index-records.js"))["writePersistedInstalledPluginIndexInstallRecords"];
+type WritePersistedInstalledPluginIndexInstallRecordsWithLeaseFn =
+  (typeof import("../plugins/installed-plugin-index-records.js"))["writePersistedInstalledPluginIndexInstallRecordsWithLease"];
 type PluginInstallRecordMap = Record<string, PluginInstallRecord>;
 
 function createEmptyUninstallActions() {
@@ -56,6 +65,24 @@ function clonePluginInstallRecords(records: PluginInstallRecordMap): PluginInsta
   return structuredClone(records);
 }
 
+export function createTestInstalledPluginIndex(params: {
+  policyHash: string;
+  installRecords: PluginInstallRecordMap;
+}): InstalledPluginIndex {
+  return {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: params.policyHash,
+    generatedAtMs: 0,
+    refreshReason: "source-changed",
+    installRecords: clonePluginInstallRecords(params.installRecords),
+    plugins: [],
+    diagnostics: [],
+  };
+}
+
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper preserves mock call and result types.
 function invokeMock<TArgs extends unknown[], TResult>(mock: unknown, ...args: TArgs): TResult {
   return (mock as (...args: TArgs) => TResult)(...args);
@@ -79,32 +106,31 @@ export const recordPluginInstall: UnknownMock = vi.fn();
 const loadInstalledPluginIndexInstallRecords: AsyncUnknownMock = vi.fn(async () =>
   clonePluginInstallRecords(mockInstalledPluginIndexInstallRecords),
 );
-export const writePersistedInstalledPluginIndexInstallRecords: AsyncUnknownMock = vi.fn(
-  async (records: unknown) => {
-    mockInstalledPluginIndexInstallRecords = clonePluginInstallRecords(
-      (records ?? {}) as PluginInstallRecordMap,
-    );
-  },
-);
-export const readPersistedInstalledPluginIndex: AsyncUnknownMock = vi.fn(async () => null);
-export const restorePersistedInstalledPluginIndex: AsyncUnknownMock = vi.fn(async () => undefined);
-export const writePersistedInstalledPluginIndexInstallRecordsWithLease: AsyncUnknownMock = vi.fn(
-  async (records: unknown, options: unknown) => {
+export const writePersistedInstalledPluginIndexInstallRecords: Mock<WritePersistedInstalledPluginIndexInstallRecordsFn> =
+  vi.fn<WritePersistedInstalledPluginIndexInstallRecordsFn>(async (records) => {
+    mockInstalledPluginIndexInstallRecords = clonePluginInstallRecords(records);
+    return "/tmp/openclaw-state/openclaw.sqlite";
+  });
+export const readPersistedInstalledPluginIndex: Mock<ReadPersistedInstalledPluginIndexFn> =
+  vi.fn<ReadPersistedInstalledPluginIndexFn>(async () => null);
+export const writePersistedInstalledPluginIndexInstallRecordsWithLease: Mock<WritePersistedInstalledPluginIndexInstallRecordsWithLeaseFn> =
+  vi.fn<WritePersistedInstalledPluginIndexInstallRecordsWithLeaseFn>(async (records) => {
     const previous = await readPersistedInstalledPluginIndex();
-    const writeOptions = { ...((options ?? {}) as Record<string, unknown>) };
-    delete writeOptions.filePath;
-    delete writeOptions.lease;
-    await writePersistedInstalledPluginIndexInstallRecords(records, writeOptions);
+    mockInstalledPluginIndexInstallRecords = clonePluginInstallRecords(records);
     mockInstalledPluginIndexRevision += 1;
     return { previous, revision: mockInstalledPluginIndexRevision };
-  },
-);
-export const restorePersistedInstalledPluginIndexIfCurrent: AsyncUnknownMock = vi.fn(
-  async (index: unknown) => {
-    await restorePersistedInstalledPluginIndex(index);
+  });
+export const restorePersistedInstalledPluginIndexIfCurrent: Mock<RestorePersistedInstalledPluginIndexIfCurrentFn> =
+  vi.fn<RestorePersistedInstalledPluginIndexIfCurrentFn>(async (index, expectedRevision) => {
+    if (mockInstalledPluginIndexRevision !== expectedRevision) {
+      return false;
+    }
+    mockInstalledPluginIndexInstallRecords = clonePluginInstallRecords(
+      (index?.installRecords ?? {}) as PluginInstallRecordMap,
+    );
+    mockInstalledPluginIndexRevision += 1;
     return true;
-  },
-);
+  });
 export const loadPluginManifestRegistry: UnknownMock = vi.fn();
 export const buildPluginSnapshotReport: UnknownMock = vi.fn();
 export const buildPluginRegistrySnapshotReport: UnknownMock = vi.fn();
@@ -368,10 +394,6 @@ vi.mock("../plugins/installed-plugin-index-store.js", async (importOriginal) => 
     ...actual,
     readPersistedInstalledPluginIndex: ((...args: unknown[]) =>
       invokeMock<unknown[], unknown>(readPersistedInstalledPluginIndex, ...args)) as (
-      ...args: unknown[]
-    ) => unknown,
-    restorePersistedInstalledPluginIndex: ((...args: unknown[]) =>
-      invokeMock<unknown[], unknown>(restorePersistedInstalledPluginIndex, ...args)) as (
       ...args: unknown[]
     ) => unknown,
     restorePersistedInstalledPluginIndexIfCurrent: ((...args: unknown[]) =>
@@ -801,7 +823,6 @@ export function resetPluginsCliTestState() {
   writePersistedInstalledPluginIndexInstallRecords.mockReset();
   writePersistedInstalledPluginIndexInstallRecordsWithLease.mockReset();
   readPersistedInstalledPluginIndex.mockReset();
-  restorePersistedInstalledPluginIndex.mockReset();
   restorePersistedInstalledPluginIndexIfCurrent.mockReset();
   loadPluginManifestRegistry.mockReset();
   buildPluginSnapshotReport.mockReset();
@@ -887,28 +908,29 @@ export function resetPluginsCliTestState() {
   loadInstalledPluginIndexInstallRecords.mockImplementation(async () =>
     clonePluginInstallRecords(mockInstalledPluginIndexInstallRecords),
   );
-  writePersistedInstalledPluginIndexInstallRecords.mockImplementation(async (records: unknown) => {
-    mockInstalledPluginIndexInstallRecords = clonePluginInstallRecords(
-      (records ?? {}) as PluginInstallRecordMap,
-    );
+  writePersistedInstalledPluginIndexInstallRecords.mockImplementation(async (records) => {
+    mockInstalledPluginIndexInstallRecords = clonePluginInstallRecords(records);
+    return "/tmp/openclaw-state/openclaw.sqlite";
   });
   readPersistedInstalledPluginIndex.mockResolvedValue(null);
-  restorePersistedInstalledPluginIndex.mockResolvedValue(undefined);
-  writePersistedInstalledPluginIndexInstallRecordsWithLease.mockImplementation(
-    async (records: unknown, options: unknown) => {
-      const previous = await readPersistedInstalledPluginIndex();
-      const writeOptions = { ...((options ?? {}) as Record<string, unknown>) };
-      delete writeOptions.filePath;
-      delete writeOptions.lease;
-      await writePersistedInstalledPluginIndexInstallRecords(records, writeOptions);
+  writePersistedInstalledPluginIndexInstallRecordsWithLease.mockImplementation(async (records) => {
+    const previous = await readPersistedInstalledPluginIndex();
+    mockInstalledPluginIndexInstallRecords = clonePluginInstallRecords(records);
+    mockInstalledPluginIndexRevision += 1;
+    return { previous, revision: mockInstalledPluginIndexRevision };
+  });
+  restorePersistedInstalledPluginIndexIfCurrent.mockImplementation(
+    async (index, expectedRevision) => {
+      if (mockInstalledPluginIndexRevision !== expectedRevision) {
+        return false;
+      }
+      mockInstalledPluginIndexInstallRecords = clonePluginInstallRecords(
+        (index?.installRecords ?? {}) as PluginInstallRecordMap,
+      );
       mockInstalledPluginIndexRevision += 1;
-      return { previous, revision: mockInstalledPluginIndexRevision };
+      return true;
     },
   );
-  restorePersistedInstalledPluginIndexIfCurrent.mockImplementation(async (index: unknown) => {
-    await restorePersistedInstalledPluginIndex(index);
-    return true;
-  });
   loadPluginManifestRegistry.mockReturnValue({
     plugins: [],
     diagnostics: [],

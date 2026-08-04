@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import {
   hasRetainedManagedNpmInstallMarker,
   markRetainedManagedNpmInstall,
@@ -22,13 +23,19 @@ const mocks = vi.hoisted(() => {
     lease,
     loadInstalledPluginIndexInstallRecords: vi.fn(),
     replaceConfigFile: vi.fn(),
-    restorePersistedInstalledPluginIndexIfCurrent: vi.fn(),
+    restorePersistedInstalledPluginIndexIfCurrent:
+      vi.fn<
+        typeof import("./installed-plugin-index-store.js").restorePersistedInstalledPluginIndexIfCurrent
+      >(),
     transformConfigFileWithRetry: vi.fn(),
     withPluginLifecycleLease: vi.fn(
       async (_options: unknown, run: (activeLease: typeof lease) => Promise<unknown>) =>
         await run(lease),
     ),
-    writePersistedInstalledPluginIndexInstallRecordsWithLease: vi.fn(),
+    writePersistedInstalledPluginIndexInstallRecordsWithLease:
+      vi.fn<
+        typeof import("./installed-plugin-index-records.js").writePersistedInstalledPluginIndexInstallRecordsWithLease
+      >(),
   };
 });
 
@@ -70,6 +77,24 @@ import {
   transformConfigWithPendingPluginInstalls,
   unchangedPendingPluginInstallRecordIds,
 } from "./install-record-commit.js";
+
+function createTestInstalledPluginIndex(params: {
+  policyHash: string;
+  installRecords: Record<string, PluginInstallRecord>;
+}): InstalledPluginIndex {
+  return {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: params.policyHash,
+    generatedAtMs: 0,
+    refreshReason: "source-changed",
+    installRecords: structuredClone(params.installRecords),
+    plugins: [],
+    diagnostics: [],
+  };
+}
 
 describe("commitConfigWithPendingPluginInstalls", () => {
   beforeEach(() => {
@@ -753,10 +778,10 @@ describe("commitConfigWithPendingPluginInstalls", () => {
         spec: "existing@1.0.0",
       },
     };
-    const previousPersistedIndex = {
+    const previousPersistedIndex = createTestInstalledPluginIndex({
       policyHash: "previous-policy",
       installRecords: existingRecords,
-    };
+    });
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(existingRecords);
     mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease.mockResolvedValue({
       previous: previousPersistedIndex,
