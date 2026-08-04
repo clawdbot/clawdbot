@@ -12,6 +12,7 @@ import {
 import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 
@@ -24,9 +25,19 @@ function createSnapshot(
     workspaceDir?: string;
   } = {},
 ): PluginMetadataSnapshot {
-  const plugins = params.normalizationAlias
-    ? ([
+  const plugins: PluginManifestRecord[] = params.normalizationAlias
+    ? [
         {
+          id: "fixture",
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          origin: "config",
+          rootDir: "/fixture",
+          source: "test",
+          manifestPath: "/fixture/openclaw.plugin.json",
           modelIdNormalization: {
             providers: {
               fixture: {
@@ -35,7 +46,7 @@ function createSnapshot(
             },
           },
         },
-      ] as PluginMetadataSnapshot["plugins"])
+      ]
     : [];
   return {
     policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
