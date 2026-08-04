@@ -78,6 +78,19 @@ function measureProviderContext(params: {
   });
 }
 
+function isProviderPressureIndependentOfTranscript(params: {
+  context: ProviderContext;
+  promptBudgetBeforeReserve: number;
+}): boolean {
+  const transcriptIndependentTokens = estimateLlmBoundaryTokenPressure({
+    messages: [],
+    systemPrompt: params.context.systemPrompt,
+    prompt: "",
+    tools: params.context.tools,
+  });
+  return transcriptIndependentTokens > params.promptBudgetBeforeReserve;
+}
+
 function toRecoveryRequest(
   result: ReturnType<typeof measureProviderContext>,
 ): MidTurnPrecheckRequest {
@@ -138,6 +151,22 @@ export function admitProviderPrompt(params: {
 
   const aggregateBudget = defaultPressure.toolResultAggregateBudgetChars;
   if (aggregateBudget === undefined || defaultPressure.toolResultReducibleChars <= 0) {
+    // Transcript compaction cannot reduce system instructions or tool schemas. Let the provider's
+    // authoritative tokenizer decide instead of entering a synthetic compaction loop that cannot
+    // make this context smaller.
+    if (
+      isProviderPressureIndependentOfTranscript({
+        context: defaultProjection.context,
+        promptBudgetBeforeReserve: defaultPressure.promptBudgetBeforeReserve,
+      })
+    ) {
+      return {
+        status: "ready",
+        context: defaultProjection.context,
+        projectionState: defaultProjectionState,
+        truncatedCount: defaultProjection.truncatedCount,
+      };
+    }
     return { status: "recovery_required", request: toRecoveryRequest(defaultPressure) };
   }
 
@@ -159,6 +188,19 @@ export function admitProviderPrompt(params: {
     toolResultMaxChars: params.toolResultMaxChars,
   });
   if (projectedPressure.route === "fits") {
+    return {
+      status: "ready",
+      context: pressureProjection.context,
+      projectionState: pressureProjectionState,
+      truncatedCount: pressureProjection.truncatedCount,
+    };
+  }
+  if (
+    isProviderPressureIndependentOfTranscript({
+      context: pressureProjection.context,
+      promptBudgetBeforeReserve: projectedPressure.promptBudgetBeforeReserve,
+    })
+  ) {
     return {
       status: "ready",
       context: pressureProjection.context,

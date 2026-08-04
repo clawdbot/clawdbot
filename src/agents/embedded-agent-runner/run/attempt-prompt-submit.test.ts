@@ -245,11 +245,15 @@ describe("submitEmbeddedAttemptPrompt", () => {
             await activeSession.agent.streamFn(
               {} as never,
               {
-                messages: activeSession.messages,
+                messages: [
+                  { role: "user", content: "earlier prompt", timestamp: 1 },
+                  { role: "assistant", content: "h".repeat(8_000), timestamp: 2 },
+                  ...activeSession.messages,
+                ],
                 tools: [
                   {
                     name: "large_tool",
-                    description: "x".repeat(30_000),
+                    description: "x".repeat(5_000),
                     parameters: { type: "object", properties: {} },
                   },
                 ],

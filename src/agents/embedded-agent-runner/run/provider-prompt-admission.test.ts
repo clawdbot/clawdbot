@@ -44,13 +44,17 @@ function admit(
 }
 
 describe("provider prompt admission", () => {
-  it("measures tool schemas from the exact provider context", () => {
+  it("measures provider tool schemas alongside compactable history", () => {
     const context = {
-      messages: [{ role: "user", content: "small prompt", timestamp: 1 }],
+      messages: [
+        { role: "user", content: "earlier prompt", timestamp: 1 },
+        { role: "assistant", content: "h".repeat(8_000), timestamp: 2 },
+        { role: "user", content: "small prompt", timestamp: 3 },
+      ],
       tools: [
         {
           name: "large_tool",
-          description: "x".repeat(30_000),
+          description: "x".repeat(5_000),
           parameters: { type: "object", properties: {} },
         },
       ],
@@ -69,6 +73,26 @@ describe("provider prompt admission", () => {
         result.request.promptBudgetBeforeReserve,
       );
     }
+  });
+
+  it("defers tool-schema-only pressure to the provider", () => {
+    const context = {
+      messages: [{ role: "user", content: "small prompt", timestamp: 1 }],
+      tools: [
+        {
+          name: "large_tool",
+          description: "x".repeat(30_000),
+          parameters: { type: "object", properties: {} },
+        },
+      ],
+    } as ProviderContext;
+
+    const result = admit(context, undefined, {
+      contextTokenBudget: 4_000,
+      reserveTokens: 1_000,
+    });
+
+    expect(result.status).toBe("ready");
   });
 
   it("does not recover for large runtime-only tool metadata", () => {
