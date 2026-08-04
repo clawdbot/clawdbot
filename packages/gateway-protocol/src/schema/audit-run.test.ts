@@ -2,6 +2,7 @@ import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
 import { validateAuditRunInspectParams, validateExecutionIdentityContextV1 } from "../index.js";
 import {
+  AuditRunInspectParamsSchema,
   AuditRunInspectResultSchema,
   DecisionReceiptV1Schema,
   type ExecutionIdentityContextV1,
@@ -85,6 +86,17 @@ describe("audit run inspection protocol", () => {
     expect(validateAuditRunInspectParams({ runId: "", decisionLimit: 50 })).toBe(false);
     expect(validateAuditRunInspectParams({ runId: "run-1", decisionLimit: 101 })).toBe(false);
     expect(validateAuditRunInspectParams({ runId: "run-1", extra: true })).toBe(false);
+  });
+
+  it("exports selector and discovery-pagination invariants for generated clients", () => {
+    const validate = Compile(AuditRunInspectParamsSchema);
+
+    expect(validate.Check({ runId: "run-1", executionCursor: "cursor-1" })).toBe(true);
+    expect(validate.Check({ executionId: "execution-1", decisionLimit: 100 })).toBe(true);
+    expect(validate.Check({})).toBe(false);
+    expect(validate.Check({ runId: "run-1", executionId: "execution-1" })).toBe(false);
+    expect(validate.Check({ executionId: "execution-1", executionCursor: "cursor-1" })).toBe(false);
+    expect(validate.Check({ executionId: "execution-1", executionLimit: 2 })).toBe(false);
   });
 
   it("accepts bounded ambiguous run discovery without selecting an execution", () => {

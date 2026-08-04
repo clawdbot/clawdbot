@@ -248,13 +248,33 @@ const AuditRunDecisionPageParams = {
   decisionLimit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
 };
 
-export const AuditRunInspectParamsSchema = closedObject({
-  runId: Type.Optional(ExecutionIdentityRefSchema),
-  executionId: Type.Optional(ExecutionIdentityRefSchema),
-  executionCursor: Type.Optional(ExecutionIdentityRefSchema),
-  executionLimit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })),
-  ...AuditRunDecisionPageParams,
-});
+export const AuditRunInspectParamsSchema = Type.Object(
+  {
+    runId: Type.Optional(ExecutionIdentityRefSchema),
+    executionId: Type.Optional(ExecutionIdentityRefSchema),
+    executionCursor: Type.Optional(ExecutionIdentityRefSchema),
+    executionLimit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })),
+    ...AuditRunDecisionPageParams,
+  },
+  {
+    additionalProperties: false,
+    // Keep exact selection and run discovery mutually exclusive in the exported
+    // wire schema so generated clients cannot construct server-rejected requests.
+    oneOf: [
+      { required: ["runId"], not: { required: ["executionId"] } },
+      {
+        required: ["executionId"],
+        not: {
+          anyOf: [
+            { required: ["runId"] },
+            { required: ["executionCursor"] },
+            { required: ["executionLimit"] },
+          ],
+        },
+      },
+    ],
+  },
+);
 
 export const AuditRunInspectResultSchema = closedObject({
   schemaVersion: Type.Literal(1),

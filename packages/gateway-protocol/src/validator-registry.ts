@@ -87,32 +87,6 @@ export const validateAuditActivityListParams = compile<AuditActivityListParams>(
 );
 export const validateAuditRunInspectParams = compile<AuditRunInspectParams>(
   S.AuditRunInspectParamsSchema,
-  (data) => {
-    if (!data || typeof data !== "object" || Array.isArray(data)) {
-      return undefined;
-    }
-    const record = data as Record<string, unknown>;
-    const hasRunId = typeof record.runId === "string";
-    const hasExecutionId = typeof record.executionId === "string";
-    if (hasRunId === hasExecutionId) {
-      return {
-        keyword: "oneOf",
-        instancePath: "",
-        message: "must select exactly one of runId or executionId",
-      };
-    }
-    if (
-      hasExecutionId &&
-      (record.executionCursor !== undefined || record.executionLimit !== undefined)
-    ) {
-      return {
-        keyword: "not",
-        instancePath: "",
-        message: "execution pagination is only valid with runId discovery",
-      };
-    }
-    return undefined;
-  },
 );
 export const validateExecutionIdentityContextV1 = compile(S.ExecutionIdentityContextV1Schema);
 export const validateAuditListParams = compile(S.AuditListParamsSchema);
