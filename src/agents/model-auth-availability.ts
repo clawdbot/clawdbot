@@ -279,6 +279,11 @@ export function createModelAuthAvailabilityResolver(
     const normalized = normalizeProviderIdForAuth(provider);
     return aliasMap[normalized] ?? normalized;
   };
+  // External-CLI-managed providers (e.g. claude-cli) delegate OAuth refresh to the
+  // owning CLI, so an expired-but-refreshable stored snapshot still reads available.
+  const externalCliProviderIdSet = new Set(
+    (params.externalCliProviderIds ?? []).map((id) => normalizeProvider(id)),
+  );
   const providerConfig = (provider: string) =>
     resolveMergedModelProviderConfig(params.cfg, provider);
   const prepareAuthTarget = (provider: string, ref: ModelAuthAvailabilityRef): AuthTarget => {
@@ -383,7 +388,9 @@ export function createModelAuthAvailabilityResolver(
       cfg: params.cfg,
       env,
       now,
-      canRefreshOAuth: provider === OPENAI_PROVIDER_ID,
+      canRefreshOAuth:
+        provider === OPENAI_PROVIDER_ID ||
+        externalCliProviderIdSet.has(normalizeProvider(provider)),
     });
   };
   const resolvedProfileAvailability = (

@@ -728,6 +728,37 @@ describe("createModelAuthAvailabilityResolver", () => {
     });
   });
 
+  it("treats an expired external-CLI OAuth snapshot with refresh material as available", () => {
+    const store = authStore({
+      "acme:cli": {
+        type: "oauth",
+        provider: "acme-cli",
+        access: "",
+        refresh: "stored-refresh",
+        expires: Date.now() - 60_000,
+      },
+    });
+    // Without external-CLI scope the caller cannot own OAuth refresh, so an
+    // expired-but-refreshable snapshot stays unknown (may hydrate at runtime).
+    expect(
+      createModelAuthAvailabilityResolver({
+        cfg: {} as OpenClawConfig,
+        authStore: store,
+        env: {},
+      }).resolveProviderAuthAvailability("acme-cli"),
+    ).toBeUndefined();
+    // Declaring the provider as external-CLI-managed means the CLI owns refresh,
+    // so the same expired snapshot reads as available.
+    expect(
+      createModelAuthAvailabilityResolver({
+        cfg: {} as OpenClawConfig,
+        authStore: store,
+        env: {},
+        externalCliProviderIds: ["acme-cli"],
+      }).resolveProviderAuthAvailability("acme-cli"),
+    ).toBe(true);
+  });
+
   it("keeps a non-OpenAI provider SecretRef unresolved without reading it", () => {
     const result = createModelAuthAvailabilityResolver({
       cfg: {

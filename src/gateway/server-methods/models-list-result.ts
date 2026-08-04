@@ -8,6 +8,7 @@ import {
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles.js";
+import { listCliRuntimeProviderIds } from "../../agents/cli-backends.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import {
@@ -170,7 +171,15 @@ function createModelsListAuthResolver(params: {
     metadataSnapshot: params.metadataSnapshot,
     skipSetupProviderFallback: true,
     syntheticAuthProviderRefs: listEnabledSyntheticAuthProviderRefs(params),
-    externalCliProviderIds: params.includeOpenAIExternalProfiles ? ["openai"] : [],
+    // OpenAI external profiles stay gated on visibility; CLI-runtime providers
+    // (e.g. claude-cli, when a provider like anthropic binds agentRuntime) are
+    // added so the live-keychain overlay and legacy CLI fallback can read them.
+    externalCliProviderIds: [
+      ...new Set([
+        ...(params.includeOpenAIExternalProfiles ? ["openai"] : []),
+        ...listCliRuntimeProviderIds({ config: params.cfg, env: process.env }),
+      ]),
+    ],
     routeResolverFactory: params.routeResolverFactory,
   });
 }
