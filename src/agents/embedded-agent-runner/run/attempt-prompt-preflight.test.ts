@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import type { AgentMessage } from "../../runtime/index.js";
+import { SessionManager } from "../../sessions/index.js";
 import {
   handleEmbeddedAttemptMidTurnPrecheck,
   prepareEmbeddedAttemptPromptPreflight,
@@ -24,6 +26,23 @@ const request = {
   toolResultReducibleChars: 0,
   effectiveReserveTokens: 20,
 };
+
+function makeToolResultMessage(text: string): AgentMessage {
+  return {
+    role: "toolResult",
+    toolCallId: "call-1",
+    toolName: "read",
+    content: [{ type: "text", text }],
+    isError: false,
+    timestamp: 1,
+  } as AgentMessage;
+}
+
+function createSessionManagerWithMessage(message: AgentMessage): SessionManager {
+  const sessionManager = SessionManager.inMemory();
+  sessionManager.appendMessage(message as Parameters<typeof sessionManager.appendMessage>[0]);
+  return sessionManager;
+}
 
 describe("attempt prompt preflight", () => {
   it("routes a mid-turn compaction request with its measured budget", () => {

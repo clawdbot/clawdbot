@@ -96,6 +96,10 @@ function makeAssistantMessage(
   };
 }
 
+function firstMockArgument(mock: { mock: { calls: ReadonlyArray<readonly unknown[]> } }) {
+  return mock.mock.calls[0]?.[0];
+}
+
 function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
   const promptError = Object.hasOwn(overrides, "promptError")
     ? overrides.promptError
@@ -310,10 +314,10 @@ describe("recoverEmbeddedRunOverflow", () => {
         }),
       }),
     );
-    expect(mocks.sessionLikelyHasOversizedToolResults.mock.calls[0]?.[0]).not.toHaveProperty(
+    expect(firstMockArgument(mocks.sessionLikelyHasOversizedToolResults)).not.toHaveProperty(
       "aggregateMaxCharsOverride",
     );
-    expect(mocks.truncateOversizedToolResults.mock.calls[0]?.[0]).not.toHaveProperty(
+    expect(firstMockArgument(mocks.truncateOversizedToolResults)).not.toHaveProperty(
       "aggregateMaxCharsOverride",
     );
   });
@@ -407,7 +411,7 @@ describe("recoverEmbeddedRunOverflow", () => {
         protectTrailingToolResults: true,
       }),
     );
-    expect(mocks.truncateOversizedToolResults.mock.calls[0]?.[0]).not.toHaveProperty(
+    expect(firstMockArgument(mocks.truncateOversizedToolResults)).not.toHaveProperty(
       "aggregateMaxCharsOverride",
     );
     expect(input.prepareCompactedTranscriptRetry).toHaveBeenCalledOnce();
