@@ -323,6 +323,9 @@ NODE
       ui_success() { :; }
       ui_error() { printf 'error:%s\\n' "$*"; }
       git() {
+        if [[ "$1" == "--git-dir=$repo/.git" && "$2" == "--work-tree=$repo" && "$3" == "rev-parse" && "$6" == "HEAD^{commit}" ]]; then
+          return 0
+        fi
         if [[ "$1" == "-C" && "$3" == "status" ]]; then
           return 0
         fi
@@ -342,6 +345,40 @@ NODE
     expect(result.stdout).toContain("/node-bin/node");
     expect(result.stdout).toContain("fake-node:");
     expect(result.stdout).toContain("/repo/dist/entry.js --version");
+  });
+
+  it("rejects a git checkout without a commit without modifying it", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      tmp="$(mktemp -d)"
+      parent="$tmp/parent"
+      repo="$parent/repo"
+      git -C "$tmp" init -q parent
+      git -C "$parent" config user.email test@example.invalid
+      git -C "$parent" config user.name test
+      touch "$parent/seed"
+      git -C "$parent" add seed
+      git -C "$parent" commit -qm seed
+      mkdir -p "$repo"
+      git -C "$repo" init -q
+      printf 'ref: refs/heads/main\\n' > "$repo/.git/HEAD"
+      mkdir -p "$repo/.git/refs/heads"
+      printf '1111111111111111111111111111111111111111\\n' > "$repo/.git/refs/heads/main"
+      printf 'keep\\n' > "$repo/local.txt"
+      ui_info() { :; }
+      ui_error() { :; }
+
+      set +e
+      validate_git_checkout_head "$repo"
+      status="$?"
+      set -e
+      [[ "$status" -eq 1 ]]
+      [[ -f "$repo/local.txt" ]]
+      [[ -d "$repo/.git" ]]
+    `);
+
+    expect(result.status).toBe(0);
   });
 
   it("accepts GNU and musl Linux shells in OS detection", () => {

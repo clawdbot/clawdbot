@@ -1,69 +1,73 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import {
   type InternalSessionEntry as SessionEntry,
   type RestartRecoveryRun,
   resolveAllAgentSessionStoreTargetsSync,
-  resolveSessionFilePath,
-  resolveSessionTranscriptPathInDir,
 } from "../config/sessions.js";
 import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewaySessionStoreTarget } from "../gateway/session-utils.js";
-import {
-  getAgentEventLifecycleGeneration,
-  listAgentRunsForSession,
-} from "../infra/agent-events.js";
+import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import { listAgentRunsForSession } from "../infra/agent-run-registry.js";
 import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
 } from "./embedded-agent-runner/run-state.js";
-import { transitionMainSessionRecovery } from "./main-session-recovery-state.js";
+import {
+  isMainRestartRecoveryCandidate,
+  normalizeMainSessionRecoveryRunFences,
+  transitionMainSessionRecovery,
+} from "./main-session-recovery-state.js";
 import {
   hasCurrentProcessOwner,
   log,
   normalizeFiniteTimestamp,
   normalizeStringSet,
   resolveRestartRecoveryStorePaths,
-  shouldSkipMainRecovery,
 } from "./main-session-restart-recovery-shared.js";
 import { resolveAgentSessionDirs } from "./session-dirs.js";
-import type { SessionLockInspection } from "./session-write-lock.js";
 
-function normalizeTranscriptLockPath(lockPath: string): string | undefined {
-  const trimmed = lockPath.trim();
-  if (!path.basename(trimmed).endsWith(".jsonl.lock")) {
-    return undefined;
-  }
-  const resolved = path.resolve(trimmed);
-  try {
-    return path.join(fs.realpathSync(path.dirname(resolved)), path.basename(resolved));
-  } catch {
-    return resolved;
-  }
-}
-
-function resolveEntryTranscriptLockPaths(params: {
-  entry: SessionEntry;
-  sessionsDir: string;
-}): string[] {
-  const paths = new Set<string>();
-  const push = (resolvePath: () => string) => {
-    try {
-      paths.add(path.resolve(`${resolvePath()}.lock`));
-    } catch {
-      // Keep restart recovery best-effort when session metadata is stale.
-    }
-  };
-  push(() =>
-    resolveSessionFilePath(params.entry.sessionId, params.entry, {
-      sessionsDir: params.sessionsDir,
-    }),
-  );
-  push(() => resolveSessionTranscriptPathInDir(params.entry.sessionId, params.sessionsDir));
-  return [...paths];
+async function markRecoveryStore(params: {
+  storePath: string;
+  statuses?: Array<NonNullable<SessionEntry["status"]>>;
+  plan: (
+    entry: SessionEntry,
+    sessionKey: string,
+  ) => { replaceRuns?: boolean; resetRuntime?: boolean; runs?: RestartRecoveryRun[] } | undefined;
+}) {
+  return await applySessionEntryReplacements<{ marked: number; skipped: number }>({
+    storePath: params.storePath,
+    statuses: params.statuses,
+    requireWriteSuccess: true,
+    update: (entries) => {
+      const replacements: Array<{ sessionKey: string; entry: SessionEntry }> = [];
+      const counts = { marked: 0, skipped: 0 };
+      for (const { sessionKey, entry } of entries) {
+        const plan = params.plan(entry, sessionKey);
+        if (!plan) {
+          continue;
+        }
+        if (!isMainRestartRecoveryCandidate(entry, sessionKey)) {
+          counts.skipped++;
+          continue;
+        }
+        if (plan.replaceRuns) {
+          entry.restartRecoveryRuns = plan.runs;
+        }
+        transitionMainSessionRecovery(entry, {
+          kind: "mark_interrupted",
+          cycleId: randomUUID(),
+          now: Date.now(),
+          ...plan,
+        });
+        replacements.push({ sessionKey, entry });
+        counts.marked++;
+      }
+      return { result: counts, replacements };
+    },
+  });
 }
 
 export async function markRestartAbortedMainSessions(params: {
@@ -149,85 +153,49 @@ export async function markRestartAbortedMainSessions(params: {
   }
 
   for (const storePath of storePaths) {
-    const storeResult = await applySessionEntryReplacements({
+    const storeResult = await markRecoveryStore({
       storePath,
-      requireWriteSuccess: true,
-      update: (entries) => {
-        const replacements: Array<{ sessionKey: string; entry: SessionEntry }> = [];
-        const counts = { marked: 0, skipped: 0 };
-        for (const { sessionKey, entry } of entries) {
-          const registeredActiveRuns = listAgentRunsForSession({
-            sessionKey,
-            sessionId: entry.sessionId,
-          });
-          const matchingActiveRuns = activeRuns.filter(
-            (run) =>
-              (run.sessionId ? run.sessionId === entry.sessionId : run.sessionKey === sessionKey) &&
-              (entry.status === "running" ||
-                run.observedAt === undefined ||
-                normalizeFiniteTimestamp(entry.updatedAt) === undefined ||
-                (entry.updatedAt < run.observedAt &&
-                  run.lifecycleGeneration !== currentLifecycleGeneration)) &&
-              params.isActiveRun?.(run) !== false,
-          );
-          if (
-            entry.status !== "running" &&
-            matchingActiveRuns.length === 0 &&
-            registeredActiveRuns.length === 0
-          ) {
-            continue;
-          }
-          const matches =
-            typeof entry.sessionId === "string" && sessionIds.has(entry.sessionId)
-              ? true
-              : !preferSessionIdMatch && sessionKeys.has(sessionKey);
-          if (!matches) {
-            continue;
-          }
-          if (shouldSkipMainRecovery(entry, sessionKey)) {
-            counts.skipped++;
-            continue;
-          }
-          const wasRunning = entry.status === "running";
-          const recoveryRuns = new Map<string, RestartRecoveryRun>();
-          for (const run of entry.restartRecoveryRuns ?? []) {
-            if (run.lifecycleGeneration === currentLifecycleGeneration) {
-              recoveryRuns.set(`${run.runId}\u0000${run.lifecycleGeneration}`, run);
-            }
-          }
-          const replaceActiveRunMarker = (run: RestartRecoveryRun) => {
-            for (const [key, existingRun] of recoveryRuns) {
-              if (existingRun.runId === run.runId) {
-                recoveryRuns.delete(key);
-              }
-            }
-            recoveryRuns.set(`${run.runId}\u0000${run.lifecycleGeneration}`, run);
-          };
-          for (const run of registeredActiveRuns) {
-            replaceActiveRunMarker(run);
-          }
-          for (const run of matchingActiveRuns) {
-            replaceActiveRunMarker({
-              runId: run.runId,
-              lifecycleGeneration: run.lifecycleGeneration,
-            });
-          }
-          entry.restartRecoveryRuns = [...recoveryRuns.values()].toSorted((a, b) =>
-            a.runId === b.runId
-              ? a.lifecycleGeneration.localeCompare(b.lifecycleGeneration)
-              : a.runId.localeCompare(b.runId),
-          );
-          transitionMainSessionRecovery(entry, {
-            kind: "mark_interrupted",
-            cycleId: randomUUID(),
-            now: Date.now(),
-            resetRuntime: !wasRunning,
-            runs: entry.restartRecoveryRuns,
-          });
-          replacements.push({ sessionKey, entry });
-          counts.marked++;
+      plan: (entry, sessionKey) => {
+        const registeredActiveRuns = listAgentRunsForSession({
+          sessionKey,
+          sessionId: entry.sessionId,
+        });
+        const matchingActiveRuns = activeRuns.filter(
+          (run) =>
+            (run.sessionId ? run.sessionId === entry.sessionId : run.sessionKey === sessionKey) &&
+            (entry.status === "running" ||
+              run.observedAt === undefined ||
+              normalizeFiniteTimestamp(entry.updatedAt) === undefined ||
+              (entry.updatedAt < run.observedAt &&
+                run.lifecycleGeneration !== currentLifecycleGeneration)) &&
+            params.isActiveRun?.(run) !== false,
+        );
+        if (
+          entry.status !== "running" &&
+          matchingActiveRuns.length === 0 &&
+          registeredActiveRuns.length === 0
+        ) {
+          return undefined;
         }
-        return { result: counts, replacements };
+        const matches =
+          typeof entry.sessionId === "string" && sessionIds.has(entry.sessionId)
+            ? true
+            : !preferSessionIdMatch && sessionKeys.has(sessionKey);
+        if (!matches) {
+          return undefined;
+        }
+        const wasRunning = entry.status === "running";
+        const runs = normalizeMainSessionRecoveryRunFences([
+          ...(entry.restartRecoveryRuns ?? []).filter(
+            (run) => run.lifecycleGeneration === currentLifecycleGeneration,
+          ),
+          ...registeredActiveRuns,
+          ...matchingActiveRuns.map(({ runId, lifecycleGeneration }) => ({
+            runId,
+            lifecycleGeneration,
+          })),
+        ]);
+        return { replaceRuns: true, resetRuntime: !wasRunning, runs };
       },
     });
     result.marked += storeResult.marked;
@@ -268,47 +236,32 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
     providedActiveSessionKeys ?? normalizeStringSet(listActiveEmbeddedRunSessionKeys());
 
   for (const storePath of await resolveRestartRecoveryStorePaths(params)) {
-    const storeResult = await applySessionEntryReplacements({
+    const storeResult = await markRecoveryStore({
       storePath,
       statuses: ["running"],
-      update: (entries) => {
-        const replacements: Array<{ sessionKey: string; entry: SessionEntry }> = [];
-        const counts = { marked: 0, skipped: 0 };
-        for (const { sessionKey, entry } of entries) {
-          if (entry.status !== "running" || entry.abortedLastRun === true) {
-            continue;
-          }
-          if (shouldSkipMainRecovery(entry, sessionKey)) {
-            counts.skipped++;
-            continue;
-          }
-          const updatedAt = normalizeFiniteTimestamp(entry.updatedAt);
-          if (
-            updatedBeforeMs !== undefined &&
-            updatedAt !== undefined &&
-            updatedAt > updatedBeforeMs
-          ) {
-            continue;
-          }
-          if (
-            hasCurrentProcessOwner({
-              activeSessionIds: resolveActiveSessionIds(),
-              activeSessionKeys: resolveActiveSessionKeys(),
-              entry,
-              sessionKey,
-            })
-          ) {
-            continue;
-          }
-          transitionMainSessionRecovery(entry, {
-            kind: "mark_interrupted",
-            cycleId: randomUUID(),
-            now: Date.now(),
-          });
-          replacements.push({ sessionKey, entry });
-          counts.marked++;
+      plan: (entry, sessionKey) => {
+        if (entry.status !== "running" || entry.abortedLastRun === true) {
+          return undefined;
         }
-        return { result: counts, replacements };
+        const updatedAt = normalizeFiniteTimestamp(entry.updatedAt);
+        if (
+          updatedBeforeMs !== undefined &&
+          updatedAt !== undefined &&
+          updatedAt > updatedBeforeMs
+        ) {
+          return undefined;
+        }
+        if (
+          hasCurrentProcessOwner({
+            activeSessionIds: resolveActiveSessionIds(),
+            activeSessionKeys: resolveActiveSessionKeys(),
+            entry,
+            sessionKey,
+          })
+        ) {
+          return undefined;
+        }
+        return {};
       },
     });
     result.marked += storeResult.marked;
@@ -317,60 +270,6 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
 
   if (result.marked > 0) {
     log.warn(`marked ${result.marked} startup-orphaned main session(s) for restart recovery`);
-  }
-  return result;
-}
-
-export async function markRestartAbortedMainSessionsFromLocks(params: {
-  sessionsDir: string;
-  cleanedLocks: SessionLockInspection[];
-}): Promise<{ marked: number; skipped: number }> {
-  const result = { marked: 0, skipped: 0 };
-  const sessionsDir = path.resolve(params.sessionsDir);
-  const interruptedLockPaths = new Set(
-    params.cleanedLocks
-      .map((lock) => normalizeTranscriptLockPath(lock.lockPath))
-      .filter((lockPath): lockPath is string => Boolean(lockPath)),
-  );
-  if (interruptedLockPaths.size === 0) {
-    return result;
-  }
-
-  const storePath = path.join(sessionsDir, "sessions.json");
-  const storeResult = await applySessionEntryReplacements({
-    storePath,
-    statuses: ["running"],
-    update: (entries) => {
-      const replacements: Array<{ sessionKey: string; entry: SessionEntry }> = [];
-      const counts = { marked: 0, skipped: 0 };
-      for (const { sessionKey, entry } of entries) {
-        if (entry.status !== "running") {
-          continue;
-        }
-        if (shouldSkipMainRecovery(entry, sessionKey)) {
-          counts.skipped++;
-          continue;
-        }
-        const entryLockPaths = resolveEntryTranscriptLockPaths({ entry, sessionsDir });
-        if (!entryLockPaths.some((lockPath) => interruptedLockPaths.has(lockPath))) {
-          continue;
-        }
-        transitionMainSessionRecovery(entry, {
-          kind: "mark_interrupted",
-          cycleId: randomUUID(),
-          now: Date.now(),
-        });
-        replacements.push({ sessionKey, entry });
-        counts.marked++;
-      }
-      return { result: counts, replacements };
-    },
-  });
-  result.marked += storeResult.marked;
-  result.skipped += storeResult.skipped;
-
-  if (result.marked > 0) {
-    log.warn(`marked ${result.marked} interrupted main session(s) from stale transcript locks`);
   }
   return result;
 }

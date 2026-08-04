@@ -1,8 +1,8 @@
 // Codex tests cover protocol validators plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
+  assertCodexModelListResponse,
   assertCodexThreadForkParams,
-  readCodexModelListResponse,
   readCodexTurn,
   assertCodexThreadStartResponse,
   assertCodexThreadResumeResponse,
@@ -104,9 +104,29 @@ describe("assertCodexThreadResumeResponse", () => {
   });
 });
 
-describe("readCodexModelListResponse", () => {
+describe("assertCodexModelListResponse", () => {
+  it.each([
+    { label: "missing response", value: undefined },
+    { label: "null response", value: null },
+    { label: "missing model data", value: {} },
+    { label: "non-array model data", value: { data: {} } },
+    { label: "null model row", value: { data: [null] } },
+    { label: "invalid pagination cursor", value: { data: [], nextCursor: 42 } },
+  ])("rejects $label", ({ value }) => {
+    expect(() => assertCodexModelListResponse(value)).toThrow(
+      /Invalid Codex app-server model\/list response/,
+    );
+  });
+
+  it.each([{ data: [] }, { data: [], nextCursor: null }])(
+    "accepts a genuinely empty model catalog",
+    (value) => {
+      expect(assertCodexModelListResponse(value)).toMatchObject({ data: [] });
+    },
+  );
+
   it("applies defaults from generated schemas behind local refs", () => {
-    const response = readCodexModelListResponse({
+    const response = assertCodexModelListResponse({
       data: [
         {
           id: "gpt-test",
@@ -121,8 +141,8 @@ describe("readCodexModelListResponse", () => {
       ],
     });
 
-    const model = response?.data[0] as
-      | (NonNullable<ReturnType<typeof readCodexModelListResponse>>["data"][number] & {
+    const model = response.data[0] as
+      | (ReturnType<typeof assertCodexModelListResponse>["data"][number] & {
           serviceTiers?: unknown;
           supportsPersonality?: unknown;
         })

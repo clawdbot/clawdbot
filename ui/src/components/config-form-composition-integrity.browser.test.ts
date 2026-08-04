@@ -37,6 +37,28 @@ describe("config form composition integrity", () => {
     expect(unsupportedUnion.unsupportedPaths).toEqual(["mixed"]);
   });
 
+  it("keeps literal and typed unions in Raw mode", () => {
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      properties: {
+        retention: {
+          anyOf: [{ type: "string" }, { const: false }],
+        },
+        mode: {
+          oneOf: [{ type: "boolean" }, { enum: ["auto", "manual"] }],
+        },
+      },
+    });
+
+    expect(analysis.unsupportedPaths).toEqual(["retention", "mode"]);
+    expect(analysis.schema?.properties?.retention).toMatchObject({
+      anyOf: [{ type: "string" }, { const: false }],
+    });
+    expect(analysis.schema?.properties?.mode).toMatchObject({
+      oneOf: [{ type: "boolean" }, { enum: ["auto", "manual"] }],
+    });
+  });
+
   it("marks required-only object branches as form-unsafe", () => {
     const analysis = analyzeConfigSchema({
       type: "object",

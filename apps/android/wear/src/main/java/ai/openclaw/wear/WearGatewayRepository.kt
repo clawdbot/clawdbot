@@ -377,6 +377,7 @@ internal class WearGatewayRepository(
     attemptId: String,
     language: String?,
     phoneNodeId: String,
+    attemptScopedAudio: Boolean,
   ): WearRealtimeTalkSnapshot {
     val response =
       requester.request(
@@ -385,6 +386,7 @@ internal class WearGatewayRepository(
           put("sessionKey", sessionKey)
           put("attemptId", attemptId)
           language?.let { put("language", it) }
+          if (attemptScopedAudio) put("attemptScopedAudio", true)
         },
         phoneNodeId,
         requirePreferredNode = true,

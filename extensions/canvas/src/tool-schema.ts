@@ -3,7 +3,6 @@
  */
 import {
   optionalFiniteNumberSchema,
-  optionalNonNegativeIntegerSchema,
   optionalPositiveIntegerSchema,
   stringEnum,
 } from "openclaw/plugin-sdk/channel-actions";
@@ -40,7 +39,6 @@ export const CanvasToolSchema = Type.Object({
   outputFormat: Type.Optional(stringEnum(CANVAS_SNAPSHOT_FORMATS)),
   maxWidth: optionalPositiveIntegerSchema(),
   quality: optionalFiniteNumberSchema({ minimum: 0, maximum: 1 }),
-  delayMs: optionalNonNegativeIntegerSchema(),
   jsonl: Type.Optional(Type.String()),
   jsonlPath: Type.Optional(Type.String()),
 });

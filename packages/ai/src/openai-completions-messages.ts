@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   ChatCompletionAssistantMessageParam,
   ChatCompletionContentPart,
@@ -57,7 +58,7 @@ export function convertMessages(
     }
 
     if (model.provider === "openai") {
-      return id.length > 40 ? id.slice(0, 40) : id;
+      return id.length > 40 ? truncateUtf16Safe(id, 40) : id;
     }
     return id;
   };
@@ -141,7 +142,9 @@ export function convertMessages(
               text: sanitizeSurrogates(block.text),
             }) satisfies ChatCompletionContentPartText,
         );
-      const assistantText = assistantTextParts.map((part) => part.text).join("");
+      // Separate content blocks are distinct utterances, so replay them the way
+      // the string-content flattener does rather than running them together.
+      const assistantText = assistantTextParts.map((part) => part.text).join("\n");
 
       const nonEmptyThinkingBlocks = msg.content
         .filter(isThinkingContentBlock)

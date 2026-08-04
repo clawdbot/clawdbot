@@ -4,6 +4,7 @@ import {
   findAvailableOllamaModelName,
   mergeUniqueModelNames,
   normalizeOllamaModelName,
+  selectAppGuidedOllamaModelId,
 } from "./setup-model-selection.js";
 
 describe("Ollama onboarding model selection", () => {
@@ -23,11 +24,12 @@ describe("Ollama onboarding model selection", () => {
 
   it("keeps failed model inspections distinct from uninspected models", () => {
     const models = buildOllamaModelsConfig(
-      ["broken", "uninspected"],
-      new Map([["broken", { name: "broken", capabilities: [] }]]),
+      ["deepseek-r1:14b", "uninspected"],
+      new Map([["deepseek-r1:14b", { name: "deepseek-r1:14b", showInspectionFailed: true }]]),
     );
 
     expect(models[0]?.compat?.supportsTools).toBe(false);
+    expect(models[0]?.reasoning).toBe(true);
     expect(models[1]?.compat?.supportsTools).toBe(true);
   });
 
@@ -53,5 +55,15 @@ describe("Ollama onboarding model selection", () => {
       contextWindow: 131_072,
       compat: { supportsTools: true },
     });
+  });
+
+  it("selects a deterministic tools-capable model with enough context", () => {
+    expect(
+      selectAppGuidedOllamaModelId([
+        { id: "llama3:8b", contextWindow: 32_768, supportsTools: true },
+        { id: "qwen3:0.6b", contextWindow: 40_960, supportsTools: true },
+        { id: "gemma4:e4b", contextWindow: 8_192, supportsTools: true },
+      ]),
+    ).toBe("qwen3:0.6b");
   });
 });

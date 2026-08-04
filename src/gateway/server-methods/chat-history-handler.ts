@@ -9,6 +9,7 @@ import {
   validateChatHistoryParams,
   validateChatMetadataParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { CHAT_HISTORY_MAX_ENTRIES } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import {
   listAgentIds,
   resolveDefaultAgentId,
@@ -25,6 +26,7 @@ import {
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
 } from "../../infra/diagnostics-timeline.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { normalizeAgentId, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
 import { listGatewayAgentsBasic } from "../agent-list.js";
@@ -104,18 +106,14 @@ async function handleChatMetadataRequest({
     );
     return;
   }
-  try {
-    respond(
-      true,
-      await buildChatMetadataResult({
-        cfg,
-        context,
-        agentId: requestedAgentId,
-      }),
-    );
-  } catch (err) {
-    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
-  }
+  respond(
+    true,
+    await buildChatMetadataResult({
+      cfg,
+      context,
+      agentId: requestedAgentId,
+    }),
+  );
 }
 
 async function buildChatMetadataResult(params: {
@@ -127,13 +125,13 @@ async function buildChatMetadataResult(params: {
     import("./models-list-result.js"),
     import("./commands-list-result.js"),
   ]);
-  const [models, commands] = await Promise.all([
+  const [modelsResult, commandsResult] = await Promise.allSettled([
     buildModelsListResult({
       context: params.context,
       agentId: params.agentId,
       params: { view: "configured" },
     }),
-    Promise.resolve(
+    Promise.resolve().then(() =>
       buildCommandsListResult({
         cfg: params.cfg,
         agentId: params.agentId,
@@ -142,9 +140,21 @@ async function buildChatMetadataResult(params: {
       }),
     ),
   ]);
+
+  if (modelsResult.status === "rejected") {
+    throw modelsResult.reason;
+  }
+
+  if (commandsResult.status === "rejected") {
+    params.context.logGateway.warn(
+      "chat.metadata continuing without text commands: " +
+        formatErrorMessage(commandsResult.reason),
+    );
+  }
+
   return {
-    ...models,
-    ...commands,
+    ...modelsResult.value,
+    ...(commandsResult.status === "fulfilled" ? commandsResult.value : {}),
     swarmEnabled: resolveSwarmConfig(params.cfg, params.agentId).enabled,
   };
 }
@@ -385,7 +395,7 @@ async function handleChatHistoryRequest({
     requestedSessionId && requestedSessionId !== entry?.sessionId ? undefined : entry;
   const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
   const requested = typeof limit === "number" ? limit : 200;
-  const max = Math.min(1000, requested);
+  const max = Math.min(CHAT_HISTORY_MAX_ENTRIES, requested);
   const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
   const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
   let historyPage: Awaited<ReturnType<typeof readChatHistoryPage>>;

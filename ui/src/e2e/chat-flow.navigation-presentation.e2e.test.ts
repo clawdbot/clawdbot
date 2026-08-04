@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import {
   SESSION_DRAG_MIME,
   captureSessionAccessibilityProof,
@@ -22,9 +23,9 @@ suite.define(() => {
       serviceWorkers: "block",
       viewport: { height: 900, width: 1440 },
     });
-    await context.addInitScript(() => {
+    await context.addInitScript((settingsKey) => {
       localStorage.setItem(
-        "openclaw.control.settings.v1:ws://127.0.0.1:18789",
+        settingsKey,
         JSON.stringify({
           chatSplitLayout: {
             activePaneId: "p1",
@@ -44,7 +45,7 @@ suite.define(() => {
           },
         }),
       );
-    });
+    }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["chat.startup", "chat.startup"],
@@ -560,6 +561,7 @@ suite.define(() => {
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.list"],
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
       historyMessages: [
         {
           content: [{ text: "History renders before sessions finish.", type: "text" }],
@@ -736,20 +738,35 @@ suite.define(() => {
         const state = (
           pane as HTMLElement & {
             state: {
-              chatQueueByScope: Record<string, unknown[]>;
+              settings?: { gatewayUrl?: string };
             };
           }
         ).state;
-        state.chatQueueByScope[`${targetKey}\u0000agent:main`] = [
-          {
-            id: "queued-before-switch",
-            text: "flush after idle reconciliation",
-            createdAt: Date.now(),
-            sendState: "waiting-idle",
-            sessionKey: targetKey,
-            agentId: "main",
-          },
-        ];
+        const gatewayOwner = state.settings?.gatewayUrl?.trim() || "default";
+        const key = `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayOwner)}`;
+        sessionStorage.setItem(
+          key,
+          JSON.stringify({
+            version: 2,
+            gatewayOwner,
+            sessions: {
+              [`${targetKey}\u0000agent:main`]: {
+                updatedAt: Date.now(),
+                queue: [
+                  {
+                    id: "queued-before-switch",
+                    text: "flush after idle reconciliation",
+                    createdAt: Date.now(),
+                    sendState: "waiting-idle",
+                    sessionKey: targetKey,
+                    agentId: "main",
+                  },
+                ],
+              },
+            },
+          }),
+        );
+        window.dispatchEvent(new StorageEvent("storage", { key }));
       }, firstKey);
       await page
         .locator(
@@ -814,6 +831,7 @@ suite.define(() => {
       },
     ]);
     const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.patch"],
       methodResponses: {
         "sessions.list": {
           cases: [

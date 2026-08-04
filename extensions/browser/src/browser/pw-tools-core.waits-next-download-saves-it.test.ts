@@ -444,12 +444,12 @@ describe("pw-tools-core", () => {
       suggestedFilename: "file.bin",
     });
     expect(typeof outPath).toBe("string");
-    const expectedRootedDownloadsDir = path.resolve(
-      path.join(path.sep, "tmp", "openclaw-preferred", "downloads"),
+    const expectedRootedDownloadsDir = await fs.realpath(
+      path.resolve(path.join(path.sep, "tmp", "openclaw-preferred", "downloads")),
     );
     const expectedDownloadsTail = `${path.join("tmp", "openclaw-preferred", "downloads")}${path.sep}`;
     expect(path.dirname(outPath)).toBe(expectedRootedDownloadsDir);
-    expect(path.dirname(res.path)).toBe(expectedRootedDownloadsDir);
+    await expect(fs.realpath(path.dirname(res.path))).resolves.toBe(expectedRootedDownloadsDir);
     expect(path.basename(outPath)).toContain(path.basename(res.path));
     expect(path.basename(outPath)).toMatch(/\.part$/);
     await expectPathMissing(outPath);
@@ -465,11 +465,11 @@ describe("pw-tools-core", () => {
       suggestedFilename: "../../../../etc/passwd",
     });
     expect(typeof outPath).toBe("string");
-    const expectedRootedDownloadsDir = path.resolve(
-      path.join(path.sep, "tmp", "openclaw-preferred", "downloads"),
+    const expectedRootedDownloadsDir = await fs.realpath(
+      path.resolve(path.join(path.sep, "tmp", "openclaw-preferred", "downloads")),
     );
     expect(path.dirname(outPath)).toBe(expectedRootedDownloadsDir);
-    expect(path.dirname(res.path)).toBe(expectedRootedDownloadsDir);
+    await expect(fs.realpath(path.dirname(res.path))).resolves.toBe(expectedRootedDownloadsDir);
     expect(path.basename(outPath)).toContain(path.basename(res.path));
     expect(path.basename(outPath)).toMatch(/\.part$/);
     expect(path.basename(res.path)).toMatch(/-passwd$/);

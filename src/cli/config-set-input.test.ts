@@ -60,6 +60,11 @@ describe("config set input parsing", () => {
   it.each([
     { name: "malformed payload", batchJson: "{", message: "Failed to parse --batch-json:" },
     {
+      name: "empty batch payload",
+      batchJson: "[]",
+      message: "--batch-json must contain at least one config update.",
+    },
+    {
       name: "non-array payload",
       batchJson: '{"path":"gateway.auth.mode","value":"token"}',
       message: "--batch-json must be a JSON array.",
@@ -114,6 +119,14 @@ describe("config set input parsing", () => {
     });
   });
 
+  it("rejects empty --batch-file payloads", () => {
+    withBatchFile("openclaw-config-set-input-empty-", "[]", (batchPath) => {
+      expect(() => parseBatchSource({ batchFile: batchPath })).toThrow(
+        "--batch-file must contain at least one config update.",
+      );
+    });
+  });
+
   it("rejects --batch-file payloads above the config mutation limit", () => {
     withBatchFile(
       "openclaw-config-set-input-oversized-",
@@ -127,10 +140,10 @@ describe("config set input parsing", () => {
   });
 
   it("accepts --batch-file at exactly the size limit", () => {
-    const content = "[]".padEnd(8 * 1024 * 1024, " ");
+    const content = '[{"path":"gateway.port","value":19000}]'.padEnd(8 * 1024 * 1024, " ");
     withBatchFile("openclaw-config-set-input-boundary-", content, (batchPath) => {
       const parsed = parseBatchSource({ batchFile: batchPath });
-      expect(parsed).toEqual([]);
+      expect(parsed).toEqual([{ path: "gateway.port", value: 19000 }]);
     });
   });
 });

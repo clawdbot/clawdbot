@@ -1,5 +1,6 @@
 package ai.openclaw.wear
 
+import ai.openclaw.wear.shared.WearProxyCapability
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -151,6 +152,86 @@ class WearSessionScopeTest {
         currentRouteGeneration = 5,
       ),
     )
+  }
+
+  @Test
+  fun delayedControlsRequireTheOriginalPhoneRouteGeneration() {
+    val phoneA = WearUiState(phoneNodeId = "phone-a", controlBusy = true)
+
+    assertTrue(
+      wearControlRouteIsCurrent(
+        requestedPhoneNodeId = "phone-a",
+        currentState = phoneA,
+        requestedRouteGeneration = 3,
+        currentRouteGeneration = 3,
+      ),
+    )
+    assertFalse(
+      wearControlRouteIsCurrent(
+        requestedPhoneNodeId = "phone-a",
+        currentState = WearUiState(phoneNodeId = "phone-b", controlBusy = true),
+        requestedRouteGeneration = 3,
+        currentRouteGeneration = 4,
+      ),
+    )
+    assertFalse(
+      wearControlRouteIsCurrent(
+        requestedPhoneNodeId = "phone-a",
+        currentState = phoneA,
+        requestedRouteGeneration = 3,
+        currentRouteGeneration = 5,
+      ),
+    )
+  }
+
+  @Test
+  fun staleControlCompletionCannotClearReplacementBusyOwner() {
+    val owners = WearControlBusyOwner()
+    val staleOwner = checkNotNull(owners.claim())
+
+    owners.reset()
+    val replacementOwner = checkNotNull(owners.claim())
+
+    assertFalse(owners.release(staleOwner))
+    assertTrue(owners.release(replacementOwner))
+  }
+
+  @Test
+  fun abandonedControlActionReleasesItsOwnBusyOwner() {
+    val owners = WearControlBusyOwner()
+    val owner = checkNotNull(owners.claim())
+
+    assertTrue(owners.release(owner))
+    assertTrue(owners.claim() != null)
+  }
+
+  @Test
+  fun gatewayControlResponseKeepsBusyUntilItsOwnerFinalizes() {
+    val updated =
+      applyWearGatewayControlStatus(
+        state =
+          WearUiState(
+            phoneNodeId = "phone-a",
+            controlBusy = true,
+            activeAgentId = "agent-a",
+          ),
+        status =
+          WearProxyStatus(
+            connected = true,
+            activeAgentId = "agent-b",
+            activeSessionKey = null,
+            selectedModelRef = null,
+            capabilities = setOf(WearProxyCapability.GatewayControls),
+            eventStreamId = null,
+            eventSequence = null,
+            phoneNodeId = "phone-b",
+          ),
+        enabled = true,
+      )
+
+    assertTrue(updated.controlBusy)
+    assertEquals("phone-b", updated.phoneNodeId)
+    assertEquals("agent-b", updated.activeAgentId)
   }
 
   @Test

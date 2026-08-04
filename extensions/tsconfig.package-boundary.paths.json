@@ -554,6 +554,9 @@
       "@openclaw/qa-channel/api.js": [
         "../dist/plugin-sdk/extensions/qa-channel/api.d.ts"
       ],
+      "@openclaw/memory-core/api.js": [
+        "../dist/plugin-sdk/extensions/memory-core/api.d.ts"
+      ],
       "@openclaw/matrix/test-api.js": [
         "../dist/plugin-sdk/extensions/matrix/test-api.d.ts"
       ],

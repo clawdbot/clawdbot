@@ -1,7 +1,4 @@
 // Loads plugin doctor contracts from manifest-owned metadata.
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
@@ -11,17 +8,12 @@ import type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
+import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
 import { pluginDoctorContractRegistryLoaderState } from "./doctor-contract-registry-loader-state.js";
 import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
-
-const CONTRACT_API_EXTENSIONS = [".js", ".mjs", ".cjs", ".ts", ".mts", ".cts"] as const;
-const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
-const RUNNING_FROM_BUILT_ARTIFACT =
-  CURRENT_MODULE_PATH.includes(`${path.sep}dist${path.sep}`) ||
-  CURRENT_MODULE_PATH.includes(`${path.sep}dist-runtime${path.sep}`);
 
 type PluginDoctorContractModule = {
   legacyConfigRules?: unknown;
@@ -59,10 +51,10 @@ export type PluginDoctorStateMigrationDetection = {
 
 export type PluginDoctorStateMigrationContext = {
   openPluginStateKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
-  /** Doctor-only batch import preserving source age for retention ordering. */
+  /** Doctor-only batch import preserving source age and remaining retention. */
   importPluginStateEntries?: (
     options: OpenKeyedStoreOptions,
-    entries: readonly { key: string; value: unknown; createdAt: number }[],
+    entries: readonly { key: string; value: unknown; createdAt: number; ttlMs?: number }[],
   ) => void;
   /** Plugin-wide live-row capacity for import preflight. Older test hosts may omit it. */
   getPluginStateCapacity?: () => { liveEntries: number; maxEntries: number };
@@ -110,23 +102,6 @@ function loadPluginDoctorContractModule(modulePath: string): PluginDoctorContrac
       ? { createLoader: pluginDoctorContractRegistryLoaderState.moduleLoaderFactory }
       : {}),
   })(modulePath) as PluginDoctorContractModule;
-}
-
-function resolveContractApiPath(rootDir: string): string | null {
-  const orderedExtensions = RUNNING_FROM_BUILT_ARTIFACT
-    ? CONTRACT_API_EXTENSIONS
-    : ([...CONTRACT_API_EXTENSIONS.slice(3), ...CONTRACT_API_EXTENSIONS.slice(0, 3)] as const);
-  for (const basename of ["doctor-contract-api", "contract-api"]) {
-    for (const extension of orderedExtensions) {
-      for (const baseDir of [rootDir, path.join(rootDir, "dist")]) {
-        const candidate = path.join(baseDir, `${basename}${extension}`);
-        if (fs.existsSync(candidate)) {
-          return candidate;
-        }
-      }
-    }
-  }
-  return null;
 }
 
 function coerceLegacyConfigRules(value: unknown): LegacyConfigRule[] {
@@ -356,7 +331,7 @@ export function collectRelevantDoctorPluginIdsForTouchedPaths(params: {
 function loadPluginDoctorContractEntry(
   record: PluginManifestRegistryRecord,
 ): PluginDoctorContractEntry | null {
-  const contractSource = resolveContractApiPath(record.rootDir);
+  const contractSource = resolvePluginDoctorContractArtifactPath(record.rootDir);
   if (!contractSource) {
     return null;
   }

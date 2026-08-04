@@ -1,5 +1,10 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
+import { isTrustedSecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
+import {
+  truncateSanitizedExternalContent,
+  wrapExternalContent,
+} from "../security/external-content.js";
 
 const TOOL_TIMEOUT_ERROR_CODES = new Set([
   "ERR_TIMEOUT",
@@ -9,6 +14,10 @@ const TOOL_TIMEOUT_ERROR_CODES = new Set([
   "UND_ERR_CONNECT_TIMEOUT",
   "UND_ERR_HEADERS_TIMEOUT",
 ]);
+const NETWORK_TOOL_ERROR_MAX_CHARS = 4_000;
+const protectedNetworkToolErrors = new WeakSet<object>();
+const protectedNetworkToolTimeoutErrors = new WeakSet<object>();
+const trustedToolInputErrors = new WeakSet<object>();
 
 function readToolErrorField(error: object, key: string): unknown {
   try {
@@ -120,10 +129,28 @@ export type ToolResultFailureKind = "blocked" | "cancelled" | "failed" | "timed_
 /** Classify a thrown tool error without inferring cancellation from message text. */
 export function resolveToolExecutionErrorKind(error: unknown): "failed" | "timed_out" {
   try {
-    return hasStructuredToolTimeoutIdentity(error) ? "timed_out" : "failed";
+    return (typeof error === "object" &&
+      error !== null &&
+      protectedNetworkToolTimeoutErrors.has(error)) ||
+      hasStructuredToolTimeoutIdentity(error)
+      ? "timed_out"
+      : "failed";
   } catch {
     return "failed";
   }
+}
+
+/** Authenticates host-owned preflight failures before a tool reaches untrusted network data. */
+export function isTrustedToolExecutionPreflightError(error: unknown): boolean {
+  return (
+    isTrustedSecretSurfaceUnavailableError(error) ||
+    (typeof error === "object" && error !== null && trustedToolInputErrors.has(error))
+  );
+}
+
+/** Records canonical host-created input failures without loading heavyweight tool implementations. */
+export function registerTrustedToolInputError(error: object): void {
+  trustedToolInputErrors.add(error);
 }
 
 /** Format a redacted tool error without allowing hostile getters to escape observability. */
@@ -133,6 +160,57 @@ export function formatToolExecutionErrorMessage(error: unknown, fallback: string
   } catch {
     return fallback;
   }
+}
+
+/** Protect network-controlled failures once while preserving trusted cancellation and identity. */
+export function protectNetworkToolExecutionError(
+  error: unknown,
+  fallback: string,
+  signal?: AbortSignal,
+): unknown {
+  if (
+    (signal?.aborted && error === signal.reason) ||
+    isTrustedToolExecutionPreflightError(error) ||
+    (typeof error === "object" && error !== null && protectedNetworkToolErrors.has(error))
+  ) {
+    return error;
+  }
+  const timedOut = resolveToolExecutionErrorKind(error) === "timed_out";
+  const { text: message } = truncateSanitizedExternalContent(
+    formatToolExecutionErrorMessage(error, fallback),
+    NETWORK_TOOL_ERROR_MAX_CHARS,
+  );
+  // Error coercion traverses inherited causes; shadow them before preserving safe identity.
+  const protectedError = new Error(wrapExternalContent(message, { source: "api" }));
+  Object.defineProperty(protectedError, "cause", { value: undefined });
+  try {
+    if (error instanceof Error) {
+      const prototype = Object.getPrototypeOf(error) as object;
+      const safeTypes = [TypeError, RangeError, ReferenceError, SyntaxError, URIError, EvalError];
+      if (safeTypes.some((kind) => prototype === kind.prototype)) {
+        Object.setPrototypeOf(protectedError, prototype);
+      }
+      for (const key of ["name", "code", "status"] as const) {
+        const value: unknown = Object.getOwnPropertyDescriptor(error, key)?.value;
+        const valid =
+          key === "status"
+            ? typeof value === "number" && Number.isSafeInteger(value)
+            : typeof value === "string" &&
+              /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(value) &&
+              (key === "name" || value === value.toUpperCase());
+        if (valid) {
+          Object.defineProperty(protectedError, key, { configurable: true, value });
+        }
+      }
+    }
+  } catch {
+    // Hostile reflection must never replace the already-protected network error.
+  }
+  protectedNetworkToolErrors.add(protectedError);
+  if (timedOut) {
+    protectedNetworkToolTimeoutErrors.add(protectedError);
+  }
+  return protectedError;
 }
 
 /** Classify a resolved structured tool result through the shared terminal contract. */

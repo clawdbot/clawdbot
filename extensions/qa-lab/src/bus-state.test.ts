@@ -113,6 +113,110 @@ describe("qa-bus state", () => {
     expect(typeof snapshot.messages[0]?.reactions[0]?.timestamp).toBe("number");
   });
 
+  it("keeps deleted messages inspectable but removes them from mutations and search", () => {
+    const state = createQaBusState();
+    const live = state.addOutboundMessage({ to: "channel:qa-room", text: "needle live" });
+    const deleted = state.addOutboundMessage({ to: "channel:qa-room", text: "needle deleted" });
+
+    state.deleteMessage({ messageId: deleted.id });
+    const cursorAfterDelete = state.getSnapshot().cursor;
+
+    expect(state.readMessage({ messageId: deleted.id }).deleted).toBe(true);
+    expect(state.getSnapshot().messages.map((message) => message.id)).toEqual([
+      live.id,
+      deleted.id,
+    ]);
+    expect(state.searchMessages({ query: "needle", limit: 1 })).toEqual([
+      expect.objectContaining({ id: live.id }),
+    ]);
+
+    expect(() =>
+      state.editMessage({ messageId: deleted.id, text: "edited after deletion" }),
+    ).toThrow("qa-bus message was deleted");
+    expect(() => state.reactToMessage({ messageId: deleted.id, emoji: "eyes" })).toThrow(
+      "qa-bus message was deleted",
+    );
+    expect(() => state.deleteMessage({ messageId: deleted.id })).toThrow(
+      "qa-bus message was deleted",
+    );
+    expect(state.getSnapshot().cursor).toBe(cursorAfterDelete);
+  });
+
+  it("adds each sender and emoji reaction at most once", () => {
+    const state = createQaBusState();
+    const message = state.addOutboundMessage({ to: "channel:qa-room", text: "react once" });
+
+    state.reactToMessage({ messageId: message.id, emoji: "eyes", senderId: " alice " });
+    const cursorAfterReaction = state.getSnapshot().cursor;
+
+    const repeated = state.reactToMessage({
+      messageId: message.id,
+      emoji: "eyes",
+      senderId: "alice",
+    });
+    expect(repeated.reactions).toHaveLength(1);
+    expect(state.getSnapshot().cursor).toBe(cursorAfterReaction);
+
+    state.reactToMessage({ messageId: message.id, emoji: "eyes", senderId: "bob" });
+    state.reactToMessage({ messageId: message.id, emoji: "wave", senderId: "alice" });
+    expect(state.readMessage({ messageId: message.id }).reactions).toEqual([
+      expect.objectContaining({ emoji: "eyes", senderId: "alice" }),
+      expect.objectContaining({ emoji: "eyes", senderId: "bob" }),
+      expect.objectContaining({ emoji: "wave", senderId: "alice" }),
+    ]);
+    expect(state.getSnapshot().cursor).toBe(cursorAfterReaction + 2);
+  });
+
+  it("keeps owned threads scoped to their account, channel, and conversation", () => {
+    const state = createQaBusState();
+    const thread = state.createThread({
+      accountId: "account-a",
+      conversationId: "qa-room",
+      title: "Owned thread",
+    });
+    const originalSnapshot = state.getSnapshot();
+
+    expect(() =>
+      state.addOutboundMessage({
+        accountId: "account-b",
+        to: `thread:qa-room/${thread.id}`,
+        text: "cross-account reply",
+      }),
+    ).toThrow("qa-bus thread not found in selected account and conversation");
+    expect(() =>
+      state.addOutboundMessage({
+        accountId: "account-a",
+        to: `thread:other-room/${thread.id}`,
+        text: "wrong-room reply",
+      }),
+    ).toThrow("qa-bus thread not found in selected account and conversation");
+    for (const kind of ["direct", "group"] as const) {
+      expect(() =>
+        state.addInboundMessage({
+          accountId: "account-a",
+          conversation: { id: "qa-room", kind },
+          senderId: "alice",
+          text: "wrong-kind reply",
+          threadId: thread.id,
+        }),
+      ).toThrow("qa-bus thread not found in selected account and conversation");
+    }
+    expect(state.getSnapshot()).toEqual(originalSnapshot);
+
+    const reply = state.addOutboundMessage({
+      accountId: "account-a",
+      to: `thread:qa-room/${thread.id}`,
+      text: "owned reply",
+    });
+    const external = state.addOutboundMessage({
+      accountId: "account-b",
+      to: "thread:other-room/external-thread",
+      text: "externally observed reply",
+    });
+    expect(reply.threadId).toBe(thread.id);
+    expect(external.threadId).toBe("external-thread");
+  });
+
   it("rejects cross-account message reads and mutations", () => {
     const state = createQaBusState();
     const message = state.addOutboundMessage({

@@ -4,11 +4,12 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { runManagedCommand } from "./lib/managed-child-process.mjs";
+import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mjs";
-
-const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const rootDir = resolveRepoRoot(import.meta.url);
 const VALID_PHASES = new Set(["build", "copy"]);
 // Each complete bundled-plugin asset generator gets the same 10-minute build ceiling.
 const BUNDLED_PLUGIN_ASSET_HOOK_TIMEOUT_MS = 600_000;
@@ -127,6 +128,9 @@ export async function runBundledPluginAssetHooks(options = {}) {
     const scope = options.plugins?.length ? ` for ${options.plugins.join(", ")}` : "";
     console.log(`No bundled plugin asset ${phase} hooks${scope}; skipping.`);
     return;
+  }
+  if (phase === "copy") {
+    assertRealOutputRoot(path.join(options.rootDir ?? rootDir, "dist"));
   }
 
   for (const hook of hooks) {

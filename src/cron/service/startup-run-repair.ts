@@ -3,7 +3,8 @@ import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-
 import { parseAbsoluteTimeMs } from "../parse.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
 import type { CronJob, CronRunStatus } from "../types.js";
-import type { CronServiceState } from "./state.js";
+import { maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
+import type { CronServiceState, DeferredCronNotifications } from "./state.js";
 import {
   applyJobResult,
   applyScriptRunResult,
@@ -54,6 +55,7 @@ export function markInterruptedStartupRun(params: {
   taskRunId?: string;
   runningAtMs: number;
   nowMs: number;
+  deferredNotifications?: DeferredCronNotifications;
 }): InterruptedStartupRun {
   const { job, runningAtMs, nowMs } = params;
   const replacementAtMs = resolveOneShotReplacementAtMs(job, runningAtMs);
@@ -89,6 +91,21 @@ export function markInterruptedStartupRun(params: {
   job.state.nextRunAtMs = replacementAtMs;
   job.updatedAtMs = nowMs;
 
+  if (
+    maybeAutoDisableCronJobAfterRunFailure({
+      state: params.state,
+      job,
+      atMs: nowMs,
+      error: STARTUP_INTERRUPTED_ERROR,
+      deferredNotifications: params.deferredNotifications,
+    })
+  ) {
+    params.state.deps.log.error(
+      { jobId: job.id, name: job.name, consecutiveErrors: job.state.consecutiveErrors },
+      "cron: auto-disabled interrupted job after consecutive run failures",
+    );
+  }
+
   if (job.schedule.kind === "at" && replacementAtMs === undefined) {
     job.enabled = false;
   }
@@ -109,6 +126,7 @@ export function restoreFinalizedStartupRun(params: {
   entry: CronRunLogEntry & { status: CronRunStatus };
   scriptResult?: { scriptStateChanged: true; scriptState?: unknown };
   triggerEval?: CronTriggerEvalOutcome;
+  deferredNotifications?: DeferredCronNotifications;
 }): { shouldDelete: boolean; replacementAtMs?: number } {
   const { state, job, runningAtMs, entry } = params;
   const startedAt = entry.runAtMs ?? runningAtMs;
@@ -122,7 +140,11 @@ export function restoreFinalizedStartupRun(params: {
       startedAt,
       endedAt: entry.ts,
     },
-    { replayFailureAlertAtMs: entry.ts, scheduleOwnership },
+    {
+      replayFailureAlertAtMs: entry.ts,
+      scheduleOwnership,
+      deferredNotifications: params.deferredNotifications,
+    },
   );
 
   // The finalized row captured post-run state before the stale cron store write.
@@ -134,7 +156,9 @@ export function restoreFinalizedStartupRun(params: {
   job.state.lastFailureNotificationDelivered = entry.failureNotificationDelivery?.delivered;
   job.state.lastFailureNotificationDeliveryStatus = entry.failureNotificationDelivery?.status;
   job.state.lastFailureNotificationDeliveryError = entry.failureNotificationDelivery?.error;
-  job.state.nextRunAtMs = replacementAtMs ?? entry.nextRunAtMs;
+  job.state.nextRunAtMs = job.state.autoDisabled
+    ? undefined
+    : (replacementAtMs ?? entry.nextRunAtMs);
   // The finalized ledger row owns the schedule decision made before the stale
   // store write. No next run means that one-shot was permanently disabled.
   if (

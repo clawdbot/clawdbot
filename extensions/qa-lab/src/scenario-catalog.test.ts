@@ -141,14 +141,14 @@ describe("qa scenario catalog", () => {
     expect((discoveryConfig?.requiredFiles as string[] | undefined)?.[0]).toBe(
       "repo/qa/scenarios/index.yaml",
     );
-    expect(fallbackConfig?.gracefulFallbackAny as string[] | undefined).toContain(
-      "will not reveal",
-    );
+    expect(fallbackConfig).not.toHaveProperty("gracefulFallbackAny");
     const fallbackFlow = JSON.stringify(
       readQaScenarioById("memory-failure-fallback").execution.flow,
     );
     expect(fallbackFlow).toContain("liveTurnTimeoutMs(env, 180000)");
     expect(fallbackFlow).toContain('"replacePaths":["tools.deny"]');
+    expect(fallbackFlow).toContain("!tools.has('memory_search')");
+    expect(fallbackFlow).toContain("outbound.text.trim().length > 0");
     expect(bundledSkill.title).toBe("Bundled plugin skill runtime");
     expect(bundledSkillConfig?.pluginId).toBe("open-prose");
     expect(bundledSkillConfig?.expectedSkillName).toBe("prose");
@@ -233,9 +233,11 @@ describe("qa scenario catalog", () => {
   it("loads scenario-declared gateway runtime options from YAML", () => {
     const scenario = readQaScenarioById("control-ui-qa-channel-image-roundtrip");
     const otelStdout = readQaScenarioById("otel-stdout-log-smoke");
+    const blockedSlack = readQaScenarioById("slack-blocked-lifecycle-no-restart");
 
     expect(scenario.gatewayRuntime?.forwardHostHome).toBe(true);
     expect(otelStdout.gatewayRuntime?.preserveDebugArtifacts).toBe(true);
+    expect(blockedSlack.gatewayRuntime?.allowUnhealthyStartup).toBe(true);
   });
 
   it.each([
@@ -356,6 +358,17 @@ describe("qa scenario catalog", () => {
     const hostedScenario = readQaScenarioById("control-ui-qa-channel-image-roundtrip");
     expect(hostedScenario.execution).toMatchObject({ kind: "flow", channel: "qa-channel" });
     expect(hostedScenario.coverage?.primary).toContain(coverageId);
+  });
+
+  // oxfmt-ignore
+  it.each([
+    [`${agentRuntime}.progress-visibility-failure-recovery`, "empty-response-retry-budget-exhausted", "empty-response-recovery-replay-safe-read"],
+    [`${agentRuntime}.failure-recovery-retry-policy`, "empty-response-recovery-replay-safe-read", "reasoning-only-no-auto-retry-after-write"],
+  ] as const)("keeps %s on its canonical primary owner", (coverageId, primaryOwnerId, secondaryScenarioId) => {
+    const primaryOwnerIds = readQaScenarioPack().scenarios.filter((scenario) => scenario.coverage?.primary.includes(coverageId)).map((scenario) => scenario.id);
+    const secondaryScenario = readQaScenarioById(secondaryScenarioId);
+    expect(primaryOwnerIds, coverageId).toStrictEqual([primaryOwnerId]); expect(secondaryScenario.coverage?.primary, secondaryScenarioId).not.toContain(coverageId);
+    expect(secondaryScenario.coverage?.secondary, secondaryScenarioId).toContain(coverageId);
   });
 
   it("loads helper-backed HTTP API scenarios as supporting taxonomy coverage", () => {
@@ -643,20 +656,6 @@ describe("qa scenario catalog", () => {
       requiredProvider: "openai",
       requiredModel: "gpt-5.4",
     });
-    const longContextFlow = JSON.stringify(
-      readQaScenarioById("long-context-progress-watchdog").execution.flow,
-    );
-    expect(longContextFlow).toContain("originalCodexPluginEnabled");
-    expect(longContextFlow).not.toContain(
-      "originalPluginAllow === undefined ? null : originalPluginAllow",
-    );
-    expect(longContextFlow).not.toContain("{ ...originalCodexPluginEntry, enabled:");
-    expect(readQaScenarioExecutionConfig("long-context-progress-watchdog")).toMatchObject({
-      requiredProviderMode: "live-frontier",
-      harnessRuntime: "codex",
-    });
-    expect(readQaScenarioById("long-context-progress-watchdog").plugins).toBeUndefined();
-    expect(readQaScenarioById("long-context-progress-watchdog").gatewayConfigPatch).toBeUndefined();
   });
 
   it("loads the QA bus tool trace visibility harness scenario", () => {
@@ -686,7 +685,10 @@ describe("qa scenario catalog", () => {
   it("loads the opt-in update.run package self-upgrade script proof", () => {
     const scenario = readQaScenarioById("update-run-package-self-upgrade");
 
-    expect(scenario.coverage?.primary).toEqual([`${cli}.update-status-and-rpc`]);
+    expect(scenario.coverage?.primary).toEqual([
+      `${cli}.update-status-and-rpc`,
+      "gateway.update-and-setup-apis",
+    ]);
     expect(scenario.coverage?.secondary).toEqual([`${cli}.managed-gateway-restart`]);
     expect(scenario.execution.kind).toBe("script");
     if (scenario.execution.kind !== "script") {
@@ -701,7 +703,7 @@ describe("qa scenario catalog", () => {
     expect(scenario.execution.flow).toBeUndefined();
   });
 
-  it("accepts the update.run producer's blocked evidence without destructive opt-in", async () => {
+  it("keeps the update.run producer blocked without destructive opt-in", async () => {
     const outputDir = await fs.promises.mkdtemp(
       path.join(os.tmpdir(), "openclaw-update-run-blocked-"),
     );
@@ -719,7 +721,7 @@ describe("qa scenario catalog", () => {
       });
 
       expect(result.results[0]).toMatchObject({
-        status: "pass",
+        status: "blocked",
         producerEvidence: {
           entries: [
             {

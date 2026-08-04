@@ -129,7 +129,7 @@ describe("format-docs", () => {
     writeDocsFixture(root);
     const oxfmtFileArgs: string[][] = [];
 
-    const spawnSync = (command: string, args: string[]) => {
+    const runCommandSync = (command: string, args: string[]) => {
       if (command === "git") {
         return {
           status: 0,
@@ -150,7 +150,7 @@ describe("format-docs", () => {
         },
         {
           existsSync: fs.existsSync,
-          spawnSync,
+          spawnSync: runCommandSync,
         },
       ),
     ).toEqual({ changed: [], fileCount: 2 });
@@ -164,7 +164,7 @@ describe("format-docs", () => {
         },
         {
           existsSync: fs.existsSync,
-          spawnSync,
+          spawnSync: runCommandSync,
         },
       ),
     ).toEqual({ changed: [], fileCount: 2 });

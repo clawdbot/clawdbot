@@ -1,22 +1,28 @@
 // Fast context runtime tests cover timeout and fast context generation behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  authorizeActiveMemorySearchHits: vi.fn(),
   getActiveMemorySearchManager: vi.fn(),
 }));
 
 vi.mock("../plugins/memory-runtime.js", () => ({
+  authorizeActiveMemorySearchHits: mocks.authorizeActiveMemorySearchHits,
   getActiveMemorySearchManager: mocks.getActiveMemorySearchManager,
 }));
 
 import { resolveRealtimeVoiceFastContextConsult } from "./fast-context-runtime.js";
 
 describe("resolveRealtimeVoiceFastContextConsult", () => {
+  beforeEach(() => {
+    mocks.authorizeActiveMemorySearchHits.mockReset().mockImplementation(async ({ hits }) => hits);
+    mocks.getActiveMemorySearchManager.mockReset();
+  });
+
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
-    mocks.getActiveMemorySearchManager.mockReset();
   });
 
   it("caps oversized fast-context timeouts before scheduling Node timers", async () => {
@@ -118,5 +124,59 @@ describe("resolveRealtimeVoiceFastContextConsult", () => {
         text: expect.stringContaining(`1. [memory] memory/test.md:1-1\n${safePrefix}...`),
       },
     });
+  });
+
+  it("removes unauthorized session hits before building caller context", async () => {
+    const cfg = {};
+    const hits = [
+      {
+        path: "memory/allowed.md",
+        startLine: 1,
+        endLine: 1,
+        snippet: "Visible memory",
+        source: "memory" as const,
+        score: 1,
+      },
+      {
+        path: "sessions/private.jsonl",
+        startLine: 1,
+        endLine: 1,
+        snippet: "Private session secret",
+        source: "sessions" as const,
+        score: 1,
+      },
+    ];
+    mocks.getActiveMemorySearchManager.mockResolvedValue({
+      manager: { search: vi.fn().mockResolvedValue(hits) },
+    });
+    mocks.authorizeActiveMemorySearchHits.mockResolvedValue([hits[0]]);
+
+    const result = await resolveRealtimeVoiceFastContextConsult({
+      cfg,
+      agentId: "main",
+      sessionKey: "agent:main:voice:15550001234",
+      config: {
+        enabled: true,
+        timeoutMs: 1_000,
+        maxResults: 2,
+        sources: ["memory", "sessions"],
+        fallbackToConsult: false,
+      },
+      args: { question: "What do you remember?" },
+      logger: {},
+    });
+
+    expect(mocks.authorizeActiveMemorySearchHits).toHaveBeenCalledWith({
+      cfg,
+      agentId: "main",
+      requesterSessionKey: "agent:main:voice:15550001234",
+      sandboxed: false,
+      hits,
+    });
+    expect(result).toEqual({
+      handled: true,
+      result: { text: expect.stringContaining("Visible memory") },
+    });
+    expect(result.handled && result.result.text).not.toContain("Private session secret");
   });
 });

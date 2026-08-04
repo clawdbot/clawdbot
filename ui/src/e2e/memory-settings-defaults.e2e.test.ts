@@ -1,0 +1,198 @@
+// Control UI tests cover Memory default provenance and persisted restore actions.
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
+import { chromium, type Browser, type Locator, type Page } from "playwright";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  canRunPlaywrightChromium,
+  installMockGateway,
+  resolvePlaywrightChromiumExecutablePath,
+  startControlUiE2eServer,
+  type ControlUiE2eServer,
+  type MockGatewayRequest,
+} from "../test-helpers/control-ui-e2e.ts";
+
+const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
+const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
+const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
+const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const uiProofArtifactDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "memory-settings-defaults",
+);
+
+let browser: Browser;
+let server: ControlUiE2eServer;
+
+const memoryPlugins = [
+  {
+    id: "memory-core",
+    name: "memory-core",
+    installed: true,
+    enabled: true,
+    state: "enabled",
+    kind: ["memory"],
+  },
+  {
+    id: "memory-lancedb",
+    name: "Memory LanceDB",
+    installed: true,
+    enabled: true,
+    state: "enabled",
+    kind: ["memory"],
+  },
+];
+
+function requestRaw(request: MockGatewayRequest): Record<string, unknown> {
+  const params = request.params;
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    throw new Error("Expected config.set params");
+  }
+  return JSON.parse(String((params as Record<string, unknown>).raw)) as Record<string, unknown>;
+}
+
+function settingsRow(page: Page, title: string): Locator {
+  return page.locator(".settings-row").filter({
+    has: page.locator(".settings-row__title").getByText(title, { exact: true }),
+  });
+}
+
+function scheduleSection(page: Page): Locator {
+  return page.locator(".settings-section").filter({
+    has: page.locator(".settings-section__heading").getByText("Schedule", { exact: true }),
+  });
+}
+
+async function captureProof(page: Page, name: string, locator?: Locator) {
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  await mkdir(uiProofArtifactDir, { recursive: true });
+  await locator?.scrollIntoViewIfNeeded();
+  await page.screenshot({
+    animations: "disabled",
+    path: path.join(uiProofArtifactDir, name),
+  });
+}
+
+describeControlUiE2e("Control UI Memory defaults mocked Gateway E2E", () => {
+  beforeAll(async () => {
+    if (!chromiumAvailable) {
+      throw new Error(
+        `Playwright Chromium is not available at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
+      );
+    }
+    server = await startControlUiE2eServer();
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+  });
+
+  afterAll(async () => {
+    await browser?.close();
+    await server?.close();
+  });
+
+  it("persists engine, backend, and dreaming resets and reloads inherited defaults", async () => {
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 1000, width: 1440 },
+    });
+    const page = await context.newPage();
+    const config = {
+      agents: { defaults: { userTimezone: "Asia/Singapore" } },
+      memory: { backend: "qmd" },
+      plugins: {
+        slots: { memory: "memory-core" },
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                frequency: "0 6 * * *",
+                verboseLogging: true,
+              },
+            },
+          },
+        },
+      },
+    };
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "config.get": {
+          config,
+          hash: "memory-defaults-e2e",
+          appliedConfigHash: "memory-defaults-e2e",
+          issues: [],
+          raw: JSON.stringify(config),
+          valid: true,
+        },
+        "plugins.list": {
+          plugins: memoryPlugins,
+          diagnostics: [],
+          mutationAllowed: true,
+        },
+      },
+    });
+
+    try {
+      const response = await page.goto(`${server.baseUrl}settings/memory/settings`);
+      expect(response?.status()).toBe(200);
+
+      const engineRow = settingsRow(page, "Memory engine");
+      const backendRow = settingsRow(page, "Retrieval backend");
+      const frequencyRow = settingsRow(page, "Dreaming frequency");
+      await expect.poll(() => engineRow.textContent()).toContain("Default: OpenClaw Memory");
+      await expect.poll(() => backendRow.textContent()).toContain("Default: Built-in");
+      await expect.poll(() => frequencyRow.textContent()).toContain("Default: 0 3 * * *");
+      await expect.poll(() => frequencyRow.getByRole("textbox").inputValue()).toBe("0 6 * * *");
+
+      await captureProof(page, "01-explicit-engine-backend.png");
+      await captureProof(page, "02-explicit-dreaming.png", scheduleSection(page));
+
+      await engineRow.getByRole("button", { name: "Reset to default" }).click();
+      await backendRow.getByRole("button", { name: "Reset to default" }).click();
+      await frequencyRow.getByRole("button", { name: "Reset to default" }).click();
+
+      const saved = requestRaw(await gateway.waitForRequest("config.set"));
+      expect(saved).not.toHaveProperty("plugins.slots.memory");
+      expect(saved).not.toHaveProperty("memory.backend");
+      expect(saved).not.toHaveProperty("plugins.entries.memory-core.config.dreaming.frequency");
+      expect(saved).toHaveProperty(
+        "plugins.entries.memory-core.config.dreaming.verboseLogging",
+        true,
+      );
+      await expect
+        .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
+        .toContain("Saved");
+
+      await page.reload();
+      const reloadedEngineRow = settingsRow(page, "Memory engine");
+      const reloadedBackendRow = settingsRow(page, "Retrieval backend");
+      const reloadedFrequencyRow = settingsRow(page, "Dreaming frequency");
+      await expect
+        .poll(() => reloadedEngineRow.textContent())
+        .toContain("Using default: OpenClaw Memory");
+      await expect
+        .poll(() => reloadedBackendRow.textContent())
+        .toContain("Using default: Built-in");
+      await expect
+        .poll(() => reloadedFrequencyRow.textContent())
+        .toContain("Using default: 0 3 * * *");
+      await expect.poll(() => reloadedFrequencyRow.getByRole("textbox").inputValue()).toBe("");
+      await expect
+        .poll(() => reloadedFrequencyRow.getByRole("textbox").getAttribute("placeholder"))
+        .toBe("0 3 * * *");
+      await expect
+        .poll(() => page.getByRole("button", { name: "Reset to default" }).count())
+        .toBe(1);
+
+      await captureProof(page, "03-inherited-engine-backend.png");
+      await captureProof(page, "04-inherited-dreaming.png", scheduleSection(page));
+    } finally {
+      await context.close();
+    }
+  });
+});

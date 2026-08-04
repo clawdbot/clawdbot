@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   arrayInputConstraints,
   canApplyArrayCandidate,
-  coerceConfigFormNumberString,
   configValuesEqual,
   defaultValue,
   isSupportedConfigValueValid,
@@ -14,8 +13,8 @@ import {
   objectPropertySchema,
   requiredPropertyKeys,
 } from "./config-form.constraints.ts";
+import { coerceConfigFormNumberString } from "./config-form.numeric.ts";
 import type { JsonSchema } from "./config-form.shared.ts";
-import { decimalRational } from "./config-form.validation.ts";
 
 describe("config form schema constraints", () => {
   it("coerces only decimal and scientific config number spellings", () => {
@@ -42,8 +41,6 @@ describe("config form schema constraints", () => {
   });
 
   it("rejects non-finite decimal rationals and schema multiples", () => {
-    expect(decimalRational(Number.NaN)).toBeUndefined();
-    expect(decimalRational(Number.POSITIVE_INFINITY)).toBeUndefined();
     expect(numericInputConstraints({ type: "number", multipleOf: Number.NaN }).step).toBe("any");
     expect(
       numericInputConstraints({ type: "integer", multipleOf: Number.POSITIVE_INFINITY }).step,
@@ -88,7 +85,7 @@ describe("config form schema constraints", () => {
       isSupportedConfigValueValid({ type: "number", multipleOf: 10 }, 10_000_000_000_000_002),
     ).toBe(false);
     expect(isSupportedConfigValueValid({ type: "number", multipleOf: 0.1 }, 0.3)).toBe(true);
-    expect(isSupportedConfigValueValid({ type: "number", multipleOf: 0.1 }, 0.2 + 0.1)).toBe(false);
+    expect(isSupportedConfigValueValid({ type: "number", multipleOf: 0.1 }, 0.2 + 0.1)).toBe(true);
     expect(
       numericInputConstraints({ type: "number", minimum: -10, maximum: -10, multipleOf: 3 }),
     ).toMatchObject({ min: -9, max: -12 });

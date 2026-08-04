@@ -122,20 +122,20 @@ describe("firecrawl scrape cache across case-equivalent URLs", () => {
       data: {
         markdown: "# Cached page",
         // Firecrawl reports a source URL of its own that happens to spell the first request.
-        metadata: { statusCode: 200, sourceURL: "HTTPS://EXAMPLE.com/Page" },
+        metadata: { statusCode: 200, sourceURL: "https://example.com/page" },
       },
     });
     const cfg = configFor(baseUrl);
 
-    await runFirecrawlScrape({ cfg, url: "HTTPS://EXAMPLE.com/Page", extractMode: "markdown" });
+    await runFirecrawlScrape({ cfg, url: "https://example.com/page", extractMode: "markdown" });
     const second = await runFirecrawlScrape({
       cfg,
-      url: "https://example.com/Page",
+      url: "HTTPS://EXAMPLE.com/page",
       extractMode: "markdown",
     });
 
     expect(requestCount()).toBe(1);
-    expect(second.url).toBe("https://example.com/Page");
-    expect(second.finalUrl).toBe("HTTPS://EXAMPLE.com/Page");
+    expect(second.url).toBe("HTTPS://EXAMPLE.com/page");
+    expect(second.finalUrl).toBe("https://example.com/page");
   });
 });

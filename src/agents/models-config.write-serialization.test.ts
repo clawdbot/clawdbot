@@ -624,6 +624,34 @@ describe("models-config write serialization", () => {
     });
   });
 
+  it("keeps full and scoped plugin metadata snapshots in distinct cache entries", async () => {
+    await withModelsTempHome(async (home) => {
+      planOpenClawModelsJsonMock.mockImplementation(async () => ({ action: "noop" }));
+      const workspaceDir = path.join(home, "workspace");
+      const agentDir = path.join(home, "agent");
+      const fullSnapshot = createPluginMetadataSnapshot(workspaceDir);
+      const scopedSnapshot = {
+        ...createPluginMetadataSnapshot(workspaceDir),
+        pluginIds: ["owner"],
+      };
+
+      await ensureOpenClawModelsJson({}, agentDir, {
+        workspaceDir,
+        pluginMetadataSnapshot: fullSnapshot,
+      });
+      await ensureOpenClawModelsJson({}, agentDir, {
+        workspaceDir,
+        pluginMetadataSnapshot: scopedSnapshot,
+      });
+      await ensureOpenClawModelsJson({}, agentDir, {
+        workspaceDir,
+        pluginMetadataSnapshot: fullSnapshot,
+      });
+
+      expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("serializes concurrent models.json writes to avoid overlap", async () => {
     await withModelsTempHome(async () => {
       const first = structuredClone(CUSTOM_PROXY_MODELS_CONFIG);

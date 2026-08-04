@@ -21,6 +21,7 @@ import type { GatewayRestartEmitter } from "../../infra/restart.js";
 import { flushLogger } from "../../logging/logger.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   findOpenClawAgentDatabaseMediaMigrationRequiredError,
@@ -1043,6 +1044,13 @@ export async function runGatewayLoop(params: {
       resetAllLanes();
       clearRuntimeConfigSnapshot();
       resetGatewayRestartStateForInProcessRestart();
+      // Rent: a failed startup has no server close handle, and restart hooks can
+      // recreate shared slots after close. Reset the same lifecycle before boot.
+      try {
+        await drainGlobalSingletonLifecycleState("restart");
+      } catch (error) {
+        gatewayLog.warn(`failed to reset ambient runtime state: ${formatErrorMessage(error)}`);
+      }
       reloadTaskRuntimeStateFromStore();
       markGatewayRestartTrace("restart.next-start");
     });

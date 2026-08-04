@@ -8,8 +8,10 @@ export type QaMockResponsesDispatchResult = {
   failure?: {
     status: number;
     type: string;
+    code?: string;
     message: string;
   };
+  onResponseSent?: () => void;
   previewPauseMs?: number;
 };
 
@@ -199,6 +201,7 @@ export function attachQaMockResponsesWebSocketServer(params: {
               status: dispatched.failure.status,
               error: {
                 type: dispatched.failure.type,
+                ...(dispatched.failure.code ? { code: dispatched.failure.code } : {}),
                 message: dispatched.failure.message,
               },
             });
@@ -232,6 +235,7 @@ export function attachQaMockResponsesWebSocketServer(params: {
             }
             sendEvent(event);
           }
+          dispatched.onResponseSent?.();
         })
         .catch(() => {
           cachedResponse = undefined;

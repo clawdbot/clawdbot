@@ -189,6 +189,22 @@ describe("pairing cli", () => {
     expect(listChannelPairingRequests).toHaveBeenCalledWith("telegram");
   });
 
+  it("rejects conflicting positional and option channels for list", async () => {
+    await expect(
+      runPairing(["pairing", "list", "discord", "--channel", "telegram"]),
+    ).rejects.toThrow(
+      'Conflicting pairing channels: "telegram" and "discord". Pass the channel either positionally or with --channel.',
+    );
+
+    expect(listChannelPairingRequests).not.toHaveBeenCalled();
+  });
+
+  it("accepts matching positional and option channel aliases for list", async () => {
+    await runPairing(["pairing", "list", "imsg", "--channel", "imessage"]);
+
+    expect(listChannelPairingRequests).toHaveBeenCalledWith("imessage");
+  });
+
   it("forwards --account for list", async () => {
     listChannelPairingRequests.mockResolvedValueOnce([]);
 

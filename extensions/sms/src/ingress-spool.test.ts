@@ -1,12 +1,16 @@
 // Sms tests cover durable Twilio webhook admission and replay.
+import { createHmac } from "node:crypto";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { saveRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SmsChannelRuntime } from "./inbound.js";
 import { createSmsIngressSpool } from "./ingress-spool.js";
 import type { ResolvedSmsAccount } from "./types.js";
+import { createSmsWebhookHandler } from "./webhook.js";
 
 type SmsIngressPayload = {
   version: 1;
@@ -64,6 +68,22 @@ async function drainSpool(spool: SmsIngressSpool): Promise<void> {
   await spool.waitForIdle();
 }
 
+async function listenSmsTestServer(server: ReturnType<typeof createServer>): Promise<string> {
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  disposers.push(async () => {
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("expected a loopback HTTP server address");
+  }
+  return `http://127.0.0.1:${address.port}`;
+}
+
 afterEach(async () => {
   for (const dispose of disposers.splice(0).toReversed()) {
     await dispose();
@@ -74,6 +94,173 @@ afterEach(async () => {
 });
 
 describe("createSmsIngressSpool", () => {
+  it("retries acknowledged MMS provider outages before adopting later same-sender messages", async () => {
+    const stateDir = await createStateDir();
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    disposers.push(() => {
+      vi.unstubAllEnvs();
+    });
+    const mediaBytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a0cAAAAASUVORK5CYII=",
+      "base64",
+    );
+    let mediaRequests = 0;
+    let authenticatedMediaRequests = 0;
+    const mediaOrigin = await listenSmsTestServer(
+      createServer((req, res) => {
+        mediaRequests += 1;
+        if (req.headers.authorization?.startsWith("Basic ")) {
+          authenticatedMediaRequests += 1;
+        }
+        if (mediaRequests === 1) {
+          res.statusCode = 429;
+          res.end("Twilio rate limited");
+          return;
+        }
+        res.setHeader("content-type", "image/png");
+        res.end(mediaBytes);
+      }),
+    );
+    const sender = "+15551234567";
+    const messageSid = `MM${"a".repeat(32)}`;
+    const testAccount = {
+      ...account,
+      accountSid: `AC${"c".repeat(32)}`,
+      dmPolicy: "allowlist" as const,
+      allowFrom: [sender],
+    };
+    const deliveries: Array<{ id: string; body: string; attachments: number }> = [];
+    const channelRuntime = {
+      commands: {
+        shouldComputeCommandAuthorized: () => false,
+        isControlCommandMessage: () => false,
+      },
+      pairing: { readAllowFromStore: async () => [] },
+      routing: {
+        resolveAgentRoute: () => ({
+          agentId: "main",
+          accountId: account.accountId,
+          sessionKey: `agent:main:sms:direct:${sender}`,
+        }),
+      },
+      media: {
+        saveRemoteMedia: async (options: Parameters<typeof saveRemoteMedia>[0]) =>
+          await saveRemoteMedia({
+            ...options,
+            fetchImpl: async (_url, init) =>
+              await fetch(`${mediaOrigin}/twilio-media`, {
+                headers: init?.headers,
+                signal: init?.signal,
+              }),
+          }),
+      },
+      inbound: {
+        buildContext: (input: Parameters<SmsChannelRuntime["inbound"]["buildContext"]>[0]) => {
+          deliveries.push({
+            id: String(input.extra?.MessageSid),
+            body: input.message.bodyForAgent ?? input.message.rawBody,
+            attachments: input.media?.length ?? 0,
+          });
+          return {};
+        },
+        run: async (input: Parameters<SmsChannelRuntime["inbound"]["run"]>[0]) => {
+          const turnInput = await input.adapter.ingest(input.raw);
+          if (!turnInput) {
+            throw new Error("expected normalized SMS turn");
+          }
+          await input.adapter.resolveTurn(
+            turnInput,
+            { kind: "message", canStartAgentTurn: true },
+            {},
+          );
+          await input.turnAdoptionLifecycle?.onAdopted();
+        },
+      },
+      reply: {},
+      session: {},
+    } as unknown as SmsChannelRuntime;
+    const queue = createQueue(stateDir);
+    const spool = createSmsIngressSpool({
+      cfg: {},
+      account: testAccount,
+      channelRuntime,
+      queue,
+      log: { warn: () => undefined },
+    });
+    disposers.push(spool.stop);
+    const webhookHandler = createSmsWebhookHandler({
+      cfg: {},
+      account: testAccount,
+      ingress: spool,
+    });
+    const webhookOrigin = await listenSmsTestServer(
+      createServer((req, res) => {
+        void webhookHandler(req, res).catch((error: unknown) => {
+          res.statusCode = 500;
+          res.end(error instanceof Error ? error.message : String(error));
+        });
+      }),
+    );
+    testAccount.publicWebhookUrl = `${webhookOrigin}/webhooks/sms`;
+    spool.start();
+
+    async function postSignedCallback(callback: Record<string, string>) {
+      const signatureData =
+        testAccount.publicWebhookUrl +
+        Object.keys(callback)
+          .toSorted()
+          .map((key) => `${key}${callback[key] ?? ""}`)
+          .join("");
+      const signature = createHmac("sha1", testAccount.authToken)
+        .update(signatureData)
+        .digest("base64");
+      return await fetch(testAccount.publicWebhookUrl, {
+        method: "POST",
+        headers: { "x-twilio-signature": signature },
+        body: new URLSearchParams(callback),
+      });
+    }
+
+    const mediaCallback = {
+      ...form(messageSid),
+      AccountSid: testAccount.accountSid,
+      Body: "keep this attachment",
+      NumMedia: "1",
+      MediaUrl0: `https://api.twilio.com/2010-04-01/Accounts/${testAccount.accountSid}/Messages/${messageSid}/Media/ME${"b".repeat(32)}`,
+      MediaContentType0: "image/png",
+    };
+    const firstResponse = await postSignedCallback(mediaCallback);
+    expect(firstResponse.status).toBe(200);
+    expect(firstResponse.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
+    await vi.waitFor(async () => {
+      expect(mediaRequests).toBe(1);
+      expect(await queue.listPending()).toEqual([
+        expect.objectContaining({ id: messageSid, lastError: expect.stringContaining("HTTP 429") }),
+      ]);
+    });
+    expect(deliveries).toEqual([]);
+
+    const secondSid = `SM${"d".repeat(32)}`;
+    const secondResponse = await postSignedCallback({
+      ...form(secondSid),
+      AccountSid: testAccount.accountSid,
+      Body: "the later message",
+    });
+    expect(secondResponse.status).toBe(200);
+    await vi.waitFor(() => expect(deliveries).toHaveLength(2), { timeout: 5_000 });
+    expect(deliveries).toEqual([
+      { id: messageSid, body: "keep this attachment", attachments: 1 },
+      { id: secondSid, body: "the later message", attachments: 0 },
+    ]);
+    expect(mediaRequests).toBe(2);
+    expect(authenticatedMediaRequests).toBe(2);
+    expect(await spool.enqueue(mediaCallback)).toMatchObject({
+      kind: "completed",
+      duplicate: true,
+    });
+    expect(await queue.listPending()).toEqual([]);
+  });
+
   it("recovers an uncompleted message with a fresh drain instance", async () => {
     const stateDir = await createStateDir();
     const first = createSmsIngressSpool({
@@ -309,15 +496,178 @@ describe("createSmsIngressSpool", () => {
     expect(reloadedDeliver).not.toHaveBeenCalled();
   });
 
+  it("dispatches callbacks bound to the configured Messaging Service", async () => {
+    const stateDir = await createStateDir();
+    const serviceAccount = {
+      ...account,
+      fromNumber: "",
+      messagingServiceSid: "MG123",
+    };
+    const deliver = vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
+      await lifecycle.onAdopted();
+    });
+    const spool = createSmsIngressSpool({
+      cfg: {},
+      account: serviceAccount,
+      channelRuntime: {} as SmsChannelRuntime,
+      queue: createQueue(stateDir),
+      deliver,
+    });
+    disposers.push(spool.stop);
+
+    await spool.enqueue({
+      ...form("SM-service"),
+      MessagingServiceSid: "MG123",
+    });
+    await drainSpool(spool);
+
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({ messagingServiceSid: "MG123" }),
+      expect.any(Object),
+      expect.any(Number),
+    );
+  });
+
   it.each([
-    ["invalid payload", { MessageSid: "SM-invalid", From: "+15551234567" }],
-    ["account mismatch", { ...form("SM-account"), AccountSid: "AC-other" }],
-  ])("dead-letters a permanent %s failure", async (_label, rawForm) => {
+    {
+      name: "fromNumber-only RCS compatibility",
+      ingressAccount: account,
+      rawForm: {
+        ...form("SM-rcs-number"),
+        From: "rcs:+15551234567",
+        To: "rcs:example-agent",
+      },
+    },
+    {
+      name: "Messaging Service RCS identity",
+      ingressAccount: { ...account, fromNumber: "", messagingServiceSid: "MG123" },
+      rawForm: {
+        ...form("SM-rcs-service"),
+        From: "rcs:+15551234567",
+        To: "rcs:example-agent",
+        MessagingServiceSid: "MG123",
+      },
+    },
+  ])("preserves $name", async ({ ingressAccount, rawForm }) => {
+    const stateDir = await createStateDir();
+    const deliver = vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
+      await lifecycle.onAdopted();
+    });
+    const spool = createSmsIngressSpool({
+      cfg: {},
+      account: ingressAccount,
+      channelRuntime: {} as SmsChannelRuntime,
+      queue: createQueue(stateDir),
+      deliver,
+    });
+    disposers.push(spool.stop);
+
+    await spool.enqueue(rawForm);
+    await drainSpool(spool);
+
+    expect(deliver).toHaveBeenCalledOnce();
+  });
+
+  it("preserves shipped RCS text while ignoring unsupported media fields", async () => {
+    const stateDir = await createStateDir();
+    const deliver = vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
+      await lifecycle.onAdopted();
+    });
+    const spool = createSmsIngressSpool({
+      cfg: {},
+      account,
+      channelRuntime: {} as SmsChannelRuntime,
+      queue: createQueue(stateDir),
+      deliver,
+    });
+    disposers.push(spool.stop);
+
+    await spool.enqueue({
+      ...form("SM-rcs-text-media"),
+      Body: "keep this RCS text",
+      From: "rcs:+15551234567",
+      To: "rcs:example-agent",
+      NumMedia: "1",
+      MediaUrl0: "https://api.twilio.com/media/photo",
+    });
+    await drainSpool(spool);
+
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: "keep this RCS text",
+        media: [],
+      }),
+      expect.any(Object),
+      expect.any(Number),
+    );
+  });
+
+  it.each([
+    {
+      name: "invalid payload",
+      ingressAccount: account,
+      rawForm: { MessageSid: "SM-invalid", From: "+15551234567" },
+    },
+    {
+      name: "missing account",
+      ingressAccount: account,
+      rawForm: { ...form("SM-account-missing"), AccountSid: "" },
+    },
+    {
+      name: "account mismatch",
+      ingressAccount: account,
+      rawForm: { ...form("SM-account"), AccountSid: "AC-other" },
+    },
+    {
+      name: "recipient mismatch",
+      ingressAccount: account,
+      rawForm: {
+        ...form("MM-recipient"),
+        To: "+15550000000",
+        NumMedia: "1",
+        MediaUrl0: "https://api.twilio.com/media/photo",
+      },
+    },
+    {
+      name: "Messaging Service mismatch",
+      ingressAccount: { ...account, fromNumber: "", messagingServiceSid: "MG123" },
+      rawForm: {
+        ...form("SM-service-mismatch"),
+        MessagingServiceSid: "MG-other",
+      },
+    },
+    {
+      name: "missing Messaging Service",
+      ingressAccount: { ...account, fromNumber: "", messagingServiceSid: "MG123" },
+      rawForm: form("SM-service-missing"),
+    },
+    {
+      name: "fromNumber precedence",
+      ingressAccount: { ...account, messagingServiceSid: "MG123" },
+      rawForm: {
+        ...form("SM-number-precedence"),
+        To: "+15550000000",
+        MessagingServiceSid: "MG123",
+      },
+    },
+    {
+      name: "RCS media-only",
+      ingressAccount: account,
+      rawForm: {
+        ...form("MM-rcs-media"),
+        Body: "",
+        From: "rcs:+15551234567",
+        To: "rcs:example-agent",
+        NumMedia: "1",
+        MediaUrl0: "https://api.twilio.com/media/photo",
+      },
+    },
+  ])("dead-letters a permanent $name failure", async ({ ingressAccount, rawForm }) => {
     const stateDir = await createStateDir();
     const deliver = vi.fn<SmsIngressDeliver>(async () => undefined);
     const spool = createSmsIngressSpool({
       cfg: {},
-      account,
+      account: ingressAccount,
       channelRuntime: {} as SmsChannelRuntime,
       queue: createQueue(stateDir),
       deliver,

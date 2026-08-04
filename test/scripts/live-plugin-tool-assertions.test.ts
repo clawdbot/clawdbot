@@ -123,7 +123,7 @@ describe("live plugin tool assertions", () => {
     }
   });
 
-  it("reads causal tool evidence from the canonical SQLite transcript", () => {
+  it("reads Code Mode exec evidence from the canonical SQLite transcript", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-plugin-tool-"));
     const databasePath = path.join(
       root,
@@ -161,7 +161,7 @@ describe("live plugin tool assertions", () => {
                 {
                   type: "tool_use",
                   id: "call-live-plugin-tool",
-                  name: "e2e_slug_probe",
+                  name: "exec",
                 },
               ],
             },
@@ -174,6 +174,33 @@ describe("live plugin tool assertions", () => {
             message: {
               role: "tool",
               tool_call_id: "call-live-plugin-tool",
+              content: "Code cell still running: cell-live-plugin-tool",
+            },
+          }),
+        );
+        insert.run(
+          "live-plugin-tool",
+          3,
+          JSON.stringify({
+            message: {
+              role: "assistant",
+              content: [
+                {
+                  type: "tool_use",
+                  id: "wait-live-plugin-tool",
+                  name: "wait",
+                },
+              ],
+            },
+          }),
+        );
+        insert.run(
+          "live-plugin-tool",
+          4,
+          JSON.stringify({
+            message: {
+              role: "tool",
+              tool_call_id: "wait-live-plugin-tool",
               content: "live-plugin-slug",
             },
           }),

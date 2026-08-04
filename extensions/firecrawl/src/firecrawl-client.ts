@@ -8,13 +8,16 @@ import {
   readCache,
   readResponseText,
   resolveCacheTtlMs,
-  truncateText,
   withSelfHostedWebToolsEndpoint,
   withStrictWebToolsEndpoint,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-fetch";
 import { normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
-import { wrapExternalContent, wrapWebContent } from "openclaw/plugin-sdk/security-runtime";
+import {
+  truncateSanitizedExternalContent,
+  wrapExternalContent,
+  wrapWebContent,
+} from "openclaw/plugin-sdk/security-runtime";
 import {
   SsrFBlockedError,
   isBlockedHostnameOrIp,
@@ -23,7 +26,6 @@ import {
   type LookupFn,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   DEFAULT_FIRECRAWL_BASE_URL,
   resolveFirecrawlApiKey,
@@ -33,55 +35,34 @@ import {
   resolveFirecrawlScrapeTimeoutSeconds,
   resolveFirecrawlSearchTimeoutSeconds,
 } from "./config.js";
+import {
+  canonicalizeUrlCacheDimension,
+  normalizeFirecrawlResultUrl,
+  readFirecrawlReportedSourceUrl,
+  rebindScrapeRequestUrl,
+  type ScrapeCacheEntry,
+} from "./firecrawl-result-url.js";
 
 const SEARCH_CACHE = new Map<
   string,
   { value: Record<string, unknown>; expiresAt: number; insertedAt: number }
 >();
-/**
- * One cached scrape result plus the provenance the result itself cannot express.
- *
- * `finalUrl` carries either a URL Firecrawl reported or the request URL the parser fell back to,
- * and the two are indistinguishable once stored: Firecrawl may report a source URL whose text
- * equals the request. Recording which one it was at parse time keeps the cache-hit rebind from
- * having to guess.
- */
-type ScrapeCacheEntry = {
-  result: Record<string, unknown>;
-  finalUrlReportedByProvider: boolean;
-};
 const SCRAPE_CACHE = new Map<
   string,
   { value: ScrapeCacheEntry; expiresAt: number; insertedAt: number }
 >();
 const DEFAULT_SEARCH_COUNT = 5;
+const FIRECRAWL_SEARCH_MAX_RESULTS = 100;
+const FIRECRAWL_SEARCH_MAX_CONTENT_CHARS = 20_000;
 const DEFAULT_SCRAPE_MAX_CHARS = 50_000;
+const FIRECRAWL_SCRAPE_METADATA_MAX_CHARS = 4_000;
 const FIRECRAWL_SCRAPE_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
 const ALLOWED_FIRECRAWL_HOSTS = new Set(["api.firecrawl.dev"]);
+const FIRECRAWL_PUBLISHED_DATE_RE = /^\d{4}-\d{2}-\d{2}(?:[T ][\d:.+Z-]{0,20})?$/u;
 const FIRECRAWL_SELF_HOSTED_PRIVATE_ERROR =
   "Firecrawl custom baseUrl must target a private or internal self-hosted endpoint.";
 const FIRECRAWL_HTTP_PRIVATE_ERROR =
   "Firecrawl HTTP baseUrl must target a private or internal self-hosted endpoint. Use https:// for public hosts.";
-
-/**
- * Canonicalizes one URL-valued cache-key dimension.
- *
- * `normalizeCacheKey` deliberately preserves case, because a composed key mixes dimensions
- * whose case is significant (paths, query values, model ids). URL-valued dimensions are the
- * exception: RFC 3986 §3.1/§6.2.2.1 make scheme and host case-insensitive, so leaving them
- * raw splits one resource across several cache entries. The owner of a key applies the rule to
- * its own URL dimension, so it lives with that key rather than inside `normalizeCacheKey`.
- *
- * Unparseable input is returned untouched: this runs while composing a cache key, before the
- * request that is entitled to reject a bad URL, so it must never be the thing that throws.
- */
-function canonicalizeUrlCacheDimension(value: string): string {
-  try {
-    return new URL(value).href;
-  } catch {
-    return value;
-  }
-}
 
 type FirecrawlEndpointMode = "selfHosted" | "strict";
 type FirecrawlResolvedEndpoint = {
@@ -120,6 +101,7 @@ type FirecrawlSearchParams = {
   location?: string;
   country?: string;
   access?: "credential" | "keyless";
+  signal?: AbortSignal;
 };
 
 type FirecrawlScrapeParams = {
@@ -133,6 +115,7 @@ type FirecrawlScrapeParams = {
   proxy?: "auto" | "basic" | "stealth";
   storeInCache?: boolean;
   timeoutSeconds?: number;
+  signal?: AbortSignal;
 };
 
 export function assertFirecrawlScrapeTargetAllowed(url: string): void {
@@ -227,6 +210,7 @@ async function postFirecrawlJson<T>(
     apiKey?: string;
     body: Record<string, unknown>;
     errorLabel: string;
+    signal?: AbortSignal;
   },
   parse: (response: Response) => Promise<T>,
 ): Promise<T> {
@@ -238,6 +222,7 @@ async function postFirecrawlJson<T>(
     {
       url: params.url,
       timeoutSeconds: params.timeoutSeconds,
+      ...(params.signal ? { signal: params.signal } : {}),
       init: {
         method: "POST",
         headers: {
@@ -284,7 +269,10 @@ async function postFirecrawlJson<T>(
             detail = errorBody.text;
           }
         }
-        const safeDetail = wrapWebContent(truncateUtf16Safe(detail, 1_000), "web_fetch");
+        const safeDetail = wrapWebContent(
+          truncateSanitizedExternalContent(detail, 1_000).text,
+          "web_fetch",
+        );
         throw new Error(`${params.errorLabel} API error (${response.status}): ${safeDetail}`);
       }
       return await parse(response);
@@ -315,7 +303,7 @@ function resolveSearchItems(payload: Record<string, unknown>): FirecrawlSearchIt
     return [];
   }
   const items: FirecrawlSearchItem[] = [];
-  for (const entry of rawItems) {
+  for (const entry of rawItems.slice(0, FIRECRAWL_SEARCH_MAX_RESULTS)) {
     if (!entry || typeof entry !== "object") {
       continue;
     }
@@ -324,12 +312,13 @@ function resolveSearchItems(payload: Record<string, unknown>): FirecrawlSearchIt
       record.metadata && typeof record.metadata === "object"
         ? (record.metadata as Record<string, unknown>)
         : undefined;
-    const url =
+    const rawUrl =
       (typeof record.url === "string" && record.url) ||
       (typeof record.sourceURL === "string" && record.sourceURL) ||
       (typeof record.sourceUrl === "string" && record.sourceUrl) ||
       (typeof metadata?.sourceURL === "string" && metadata.sourceURL) ||
       "";
+    const url = normalizeFirecrawlResultUrl(rawUrl);
     if (!url) {
       continue;
     }
@@ -347,12 +336,14 @@ function resolveSearchItems(payload: Record<string, unknown>): FirecrawlSearchIt
       (typeof record.content === "string" && record.content) ||
       (typeof record.text === "string" && record.text) ||
       undefined;
-    const published =
+    const rawPublished =
       (typeof record.publishedDate === "string" && record.publishedDate) ||
       (typeof record.published === "string" && record.published) ||
       (typeof metadata?.publishedTime === "string" && metadata.publishedTime) ||
       (typeof metadata?.publishedDate === "string" && metadata.publishedDate) ||
       undefined;
+    const published =
+      rawPublished && FIRECRAWL_PUBLISHED_DATE_RE.test(rawPublished) ? rawPublished : undefined;
     items.push({
       title,
       url,
@@ -372,6 +363,24 @@ function buildSearchPayload(params: {
   tookMs: number;
   scrapeResults: boolean;
 }): Record<string, unknown> {
+  let remainingContentChars = FIRECRAWL_SEARCH_MAX_CONTENT_CHARS;
+  let truncated = false;
+  const wrapBoundedContent = (value: string): string => {
+    const bounded = truncateSanitizedExternalContent(value, remainingContentChars);
+    truncated ||= bounded.truncated;
+    remainingContentChars -= bounded.text.length;
+    return wrapWebContent(bounded.text, "web_search");
+  };
+  const results = params.items.map((entry) => ({
+    title: entry.title ? wrapBoundedContent(entry.title) : "",
+    url: entry.url,
+    description: entry.description ? wrapBoundedContent(entry.description) : "",
+    ...(entry.published ? { published: entry.published } : {}),
+    ...(entry.siteName ? { siteName: entry.siteName } : {}),
+    ...(params.scrapeResults && entry.content
+      ? { content: wrapBoundedContent(entry.content) }
+      : {}),
+  }));
   return {
     query: params.query,
     provider: params.provider,
@@ -383,22 +392,15 @@ function buildSearchPayload(params: {
       provider: params.provider,
       wrapped: true,
     },
-    results: params.items.map((entry) => ({
-      title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
-      url: entry.url,
-      description: entry.description ? wrapWebContent(entry.description, "web_search") : "",
-      ...(entry.published ? { published: entry.published } : {}),
-      ...(entry.siteName ? { siteName: entry.siteName } : {}),
-      ...(params.scrapeResults && entry.content
-        ? { content: wrapWebContent(entry.content, "web_search") }
-        : {}),
-    })),
+    results,
+    ...(truncated ? { truncated: true } : {}),
   };
 }
 
 export async function runFirecrawlSearch(
   params: FirecrawlSearchParams,
 ): Promise<Record<string, unknown>> {
+  params.signal?.throwIfAborted();
   const keyless = params.access === "keyless";
   const providerId = keyless ? "firecrawl-free" : "firecrawl";
   const apiKey = keyless ? undefined : resolveFirecrawlApiKey(params.cfg);
@@ -491,6 +493,7 @@ export async function runFirecrawlSearch(
       apiKey,
       body,
       errorLabel: "Firecrawl Search",
+      ...(params.signal ? { signal: params.signal } : {}),
     },
     async (response) => {
       const payloadValue = await readFirecrawlJsonResponse(response, "Firecrawl Search API error");
@@ -501,7 +504,11 @@ export async function runFirecrawlSearch(
             : typeof payloadValue.message === "string"
               ? payloadValue.message
               : "unknown error";
-        throw new Error(`Firecrawl Search API error: ${error}`);
+        const safeError = wrapWebContent(
+          truncateSanitizedExternalContent(error, 1_000).text,
+          "web_search",
+        );
+        throw new Error(`Firecrawl Search API error: ${safeError}`);
       }
       return payloadValue;
     },
@@ -509,7 +516,7 @@ export async function runFirecrawlSearch(
   const result = buildSearchPayload({
     query: params.query,
     provider: providerId,
-    items: resolveSearchItems(payload),
+    items: resolveSearchItems(payload).slice(0, count),
     tookMs: Date.now() - start,
     scrapeResults,
   });
@@ -528,28 +535,6 @@ function resolveScrapeData(payload: Record<string, unknown>): Record<string, unk
     return data as Record<string, unknown>;
   }
   return {};
-}
-
-/**
- * Reads the source URL Firecrawl reported for a scrape, or `undefined` when it reported none.
- *
- * The scrape result's `finalUrl` falls back to the request URL when this returns `undefined`, so
- * callers that must tell a provider statement from an echo of their own input ask here rather than
- * comparing the stored strings: Firecrawl is free to report a source URL equal to the request.
- */
-function readFirecrawlReportedSourceUrl(payload: Record<string, unknown>): string | undefined {
-  const data = resolveScrapeData(payload);
-  const metadata =
-    data.metadata && typeof data.metadata === "object"
-      ? (data.metadata as Record<string, unknown>)
-      : undefined;
-  if (typeof metadata?.sourceURL === "string" && metadata.sourceURL) {
-    return metadata.sourceURL;
-  }
-  if (typeof data.url === "string" && data.url) {
-    return data.url;
-  }
-  return undefined;
 }
 
 export function parseFirecrawlScrapePayload(params: {
@@ -571,8 +556,16 @@ export function parseFirecrawlScrapePayload(params: {
     throw new Error("Firecrawl scrape returned no content.");
   }
   const rawText = params.extractMode === "text" ? markdownToText(markdown) : markdown;
-  const truncated = truncateText(rawText, params.maxChars);
-  const wrappedText = wrapExternalContent(truncated.text, {
+  const boundedText = truncateSanitizedExternalContent(rawText, params.maxChars);
+  let truncated = boundedText.truncated;
+  let remainingMetadataChars = FIRECRAWL_SCRAPE_METADATA_MAX_CHARS;
+  const wrapBoundedMetadata = (value: string): string => {
+    const bounded = truncateSanitizedExternalContent(value, remainingMetadataChars);
+    truncated ||= bounded.truncated;
+    remainingMetadataChars -= bounded.text.length;
+    return wrapExternalContent(bounded.text, { source: "web_fetch", includeWarning: false });
+  };
+  const wrappedText = wrapExternalContent(boundedText.text, {
     source: "web_fetch",
     includeWarning: false,
   });
@@ -582,18 +575,15 @@ export function parseFirecrawlScrapePayload(params: {
     undefined;
   const title =
     typeof metadata?.title === "string" && metadata.title
-      ? wrapExternalContent(metadata.title, { source: "web_fetch", includeWarning: false })
+      ? wrapBoundedMetadata(metadata.title)
       : undefined;
   const warning =
     typeof params.payload.warning === "string" && params.payload.warning
-      ? wrapExternalContent(params.payload.warning, {
-          source: "web_fetch",
-          includeWarning: false,
-        })
+      ? wrapBoundedMetadata(params.payload.warning)
       : undefined;
   return {
     url: params.url,
-    finalUrl: readFirecrawlReportedSourceUrl(params.payload) ?? params.url,
+    finalUrl: readFirecrawlReportedSourceUrl(data) ?? params.url,
     ...(status !== undefined ? { status } : {}),
     ...(title ? { title } : {}),
     extractor: "firecrawl",
@@ -603,7 +593,7 @@ export function parseFirecrawlScrapePayload(params: {
       source: "web_fetch",
       wrapped: true,
     },
-    truncated: truncated.truncated,
+    truncated,
     rawLength: rawText.length,
     length: wrappedText.length,
     text: wrappedText,
@@ -611,38 +601,10 @@ export function parseFirecrawlScrapePayload(params: {
   };
 }
 
-/**
- * Rebinds a cached scrape result onto the URL the current caller asked for.
- *
- * The scrape cache key canonicalizes its URL dimension, so one entry now serves every
- * case-equivalent spelling of the same resource. Two fields in a stored result echo the request
- * that populated it: `url` is the requested URL verbatim, and `finalUrl` falls back to it when
- * Firecrawl reports no source URL of its own. Replaying those would hand a later caller the first
- * caller's spelling, so both echoes are re-bound to the current request.
- *
- * Whether `finalUrl` is such an echo is read from the entry's recorded provenance, not from
- * `finalUrl === storedUrl`: Firecrawl may report a source URL whose text equals the request that
- * populated the entry, and that value is the provider's statement about the resource. It is left
- * untouched.
- */
-function rebindScrapeRequestUrl(
-  entry: ScrapeCacheEntry,
-  requestUrl: string,
-): Record<string, unknown> {
-  const storedUrl = entry.result.url;
-  if (typeof storedUrl !== "string" || storedUrl === requestUrl) {
-    return entry.result;
-  }
-  return {
-    ...entry.result,
-    url: requestUrl,
-    ...(entry.finalUrlReportedByProvider ? {} : { finalUrl: requestUrl }),
-  };
-}
-
 export async function runFirecrawlScrape(
   params: FirecrawlScrapeParams,
 ): Promise<Record<string, unknown>> {
+  params.signal?.throwIfAborted();
   assertFirecrawlScrapeTargetAllowed(params.url);
 
   const apiKey = resolveFirecrawlApiKey(params.cfg);
@@ -659,10 +621,18 @@ export async function runFirecrawlScrape(
   const maxAgeMs = resolveFirecrawlMaxAgeMs(params.cfg, params.maxAgeMs);
   const proxy = params.proxy ?? "auto";
   const storeInCache = params.storeInCache ?? true;
-  const maxChars =
+  const configuredMaxCharsCap = params.cfg?.tools?.web?.fetch?.maxCharsCap;
+  const maxCharsCap =
+    typeof configuredMaxCharsCap === "number" &&
+    Number.isFinite(configuredMaxCharsCap) &&
+    configuredMaxCharsCap > 0
+      ? Math.floor(configuredMaxCharsCap)
+      : DEFAULT_SCRAPE_MAX_CHARS;
+  const requestedMaxChars =
     typeof params.maxChars === "number" && Number.isFinite(params.maxChars) && params.maxChars > 0
       ? Math.floor(params.maxChars)
       : DEFAULT_SCRAPE_MAX_CHARS;
+  const maxChars = Math.min(requestedMaxChars, maxCharsCap);
   const cacheKey = normalizeCacheKey(
     JSON.stringify({
       type: "firecrawl-scrape",
@@ -689,6 +659,7 @@ export async function runFirecrawlScrape(
       timeoutSeconds,
       apiKey,
       errorLabel: "Firecrawl",
+      ...(params.signal ? { signal: params.signal } : {}),
       body: {
         url: params.url,
         formats: ["markdown"],
@@ -712,7 +683,10 @@ export async function runFirecrawlScrape(
               ? payloadLocal.message
               : response.statusText;
         throw new Error(
-          `Firecrawl fetch failed (${response.status}): ${wrapWebContent(detail, "web_fetch")}`.trim(),
+          `Firecrawl fetch failed (${response.status}): ${wrapWebContent(
+            truncateSanitizedExternalContent(detail, FIRECRAWL_SCRAPE_METADATA_MAX_CHARS).text,
+            "web_fetch",
+          )}`.trim(),
         );
       }
       return payloadLocal;
@@ -729,7 +703,8 @@ export async function runFirecrawlScrape(
     cacheKey,
     {
       result,
-      finalUrlReportedByProvider: readFirecrawlReportedSourceUrl(payload) !== undefined,
+      finalUrlReportedByProvider:
+        readFirecrawlReportedSourceUrl(resolveScrapeData(payload)) !== undefined,
     },
     resolveCacheTtlMs(undefined, DEFAULT_CACHE_TTL_MINUTES),
   );

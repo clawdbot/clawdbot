@@ -6,7 +6,13 @@ import {
 import { RetrySupervisor, sleepWithAbort } from "@openclaw/retry";
 import { GatewayEventListeners } from "./event-listeners.js";
 import type { GatewayPendingRequest } from "./pending-request.js";
+import {
+  GatewayProtocolRequestError,
+  type GatewayProtocolRequestOptions,
+} from "./protocol-request.js";
 import { clearGatewayConnectTimeout, startGatewayConnectTimeout } from "./timeouts.js";
+
+export { GatewayProtocolRequestError, type GatewayProtocolRequestOptions };
 
 export type GatewayProtocolSocket = {
   isOpen: () => boolean;
@@ -19,16 +25,10 @@ export type GatewayProtocolSocketHandlers = {
   close: (code: number, reason: string) => void;
   error: (error: Error) => void;
 };
-export type GatewayProtocolRequestOptions = {
-  timeoutMs?: number | null;
-  expectFinal?: boolean;
-  onSent?: () => void;
-  onAccepted?: (payload: unknown) => void;
-  signal?: AbortSignal;
-};
 type GatewayProtocolConnectContext<TPlan> = {
   generation: number;
   nonce: string | null;
+  challengeTs: number | null | undefined;
   plan: TPlan;
 };
 export type GatewayProtocolCloseContext = {
@@ -84,10 +84,11 @@ type GatewayProtocolClientOptions<TPlan> = {
   createSocket: (handlers: GatewayProtocolSocketHandlers) => GatewayProtocolSocket;
   createRequestId: () => string;
   createRequestError?: (error: Partial<ErrorShape>) => GatewayProtocolRequestError;
-  createRequestTimeoutError?: (method: string, timeoutMs: number) => Error;
+  createRequestTimeoutError?: (method: string, timeoutMs: number, requestSent: boolean) => Error;
   createRequestAbortError?: (method: string) => Error;
   buildConnectPlan: (params: {
     nonce: string | null;
+    challengeTs: number | null | undefined;
     generation: number;
   }) => TPlan | Promise<TPlan>;
   buildConnectParams: (plan: TPlan) => unknown;
@@ -123,24 +124,6 @@ type GatewayProtocolClientOptions<TPlan> = {
   shouldRetrySocketFactoryError?: (error: Error) => boolean;
   rethrowSocketFactoryError?: (error: Error) => boolean;
 };
-export class GatewayProtocolRequestError extends Error {
-  readonly code: string;
-  readonly gatewayCode: string;
-  readonly details?: unknown;
-  readonly retryable: boolean;
-  readonly retryAfterMs?: number;
-
-  constructor(error: Partial<ErrorShape>) {
-    super(error.message ?? "request failed");
-    this.name = "GatewayProtocolRequestError";
-    this.code = error.code ?? "UNAVAILABLE";
-    this.gatewayCode = this.code;
-    this.details = error.details;
-    this.retryable = error.retryable === true;
-    this.retryAfterMs = error.retryAfterMs;
-  }
-}
-
 type ConnectTimingState = {
   generation: number;
   startedAtMs: number;
@@ -162,6 +145,7 @@ export class GatewayProtocolClient<TPlan> {
   private generation = 0;
   private lastSeq: number | null = null;
   private connectNonce: string | null = null;
+  private connectChallengeTs: number | null | undefined;
   private connectSent = false;
   private connectRequestSent = false;
   private handshakeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -242,6 +226,7 @@ export class GatewayProtocolClient<TPlan> {
       options?.timeoutMs === null ? undefined : (options?.timeoutMs ?? this.opts.requestTimeoutMs);
     return new Promise<T>((resolve, reject) => {
       let timeout: ReturnType<typeof setTimeout> | undefined;
+      let requestSent = false;
       const pending: GatewayPendingRequest = {
         resolve: (value) => resolve(value as T),
         reject,
@@ -254,9 +239,7 @@ export class GatewayProtocolClient<TPlan> {
       };
       const onAbort = () => {
         this.pending.delete(id);
-        if (timeout) {
-          clearTimeout(timeout);
-        }
+        pending.cleanup?.();
         this.finishRequestTiming(id, pending, false, "CLIENT_ABORTED");
         reject(
           this.opts.createRequestAbortError?.(method) ??
@@ -279,11 +262,14 @@ export class GatewayProtocolClient<TPlan> {
       pending.cleanup = cleanup;
       if (timeoutMs !== undefined && timeoutMs >= 0) {
         timeout = setTimeout(() => {
+          if (this.pending.get(id) !== pending) {
+            return;
+          }
           this.pending.delete(id);
           options?.signal?.removeEventListener("abort", onAbort);
           this.finishRequestTiming(id, pending, false, "CLIENT_TIMEOUT");
           reject(
-            this.opts.createRequestTimeoutError?.(method, timeoutMs) ??
+            this.opts.createRequestTimeoutError?.(method, timeoutMs, requestSent) ??
               new Error(`gateway request timed out after ${timeoutMs}ms: ${method}`),
           );
         }, timeoutMs);
@@ -293,6 +279,7 @@ export class GatewayProtocolClient<TPlan> {
       this.pending.set(id, pending);
       try {
         socket.send(JSON.stringify({ type: "req", id, method, params }));
+        requestSent = true;
         this.invoke("sent", () => options?.onSent?.());
       } catch (error) {
         this.pending.delete(id);
@@ -354,6 +341,7 @@ export class GatewayProtocolClient<TPlan> {
     const generation = this.generation + 1;
     this.lastSeq = null; // Outer event sequences belong to one WebSocket generation.
     this.connectNonce = null;
+    this.connectChallengeTs = undefined;
     this.connectSent = this.connectRequestSent = false;
     this.socketOpened = false;
     this.helloReceived = false;
@@ -450,6 +438,7 @@ export class GatewayProtocolClient<TPlan> {
     try {
       planOrPromise = this.opts.buildConnectPlan({
         nonce: this.connectNonce,
+        challengeTs: this.connectChallengeTs,
         generation,
       });
     } catch (error) {
@@ -489,7 +478,12 @@ export class GatewayProtocolClient<TPlan> {
     if (!this.isActive(socket, generation) || !socket.isOpen()) {
       return;
     }
-    const context = { generation, nonce: this.connectNonce, plan };
+    const context = {
+      generation,
+      nonce: this.connectNonce,
+      challengeTs: this.connectChallengeTs,
+      plan,
+    };
     this.recordTiming("connect-plan-ready", generation, plan);
     this.recordTiming("request-sent", generation, plan);
     this.connectRequestSent = true;
@@ -543,7 +537,7 @@ export class GatewayProtocolClient<TPlan> {
     if (isGatewayEventFrame(parsed)) {
       this.opts.onActivity?.();
       if (parsed.event === "connect.challenge") {
-        const payload = parsed.payload as { nonce?: unknown } | undefined;
+        const payload = parsed.payload as { nonce?: unknown; ts?: unknown } | undefined;
         const nonce = typeof payload?.nonce === "string" ? payload.nonce.trim() : "";
         if (!nonce) {
           if (this.opts.handshake.mode === "require-challenge") {
@@ -554,6 +548,11 @@ export class GatewayProtocolClient<TPlan> {
           return;
         }
         this.connectNonce = nonce;
+        const challengeTs = payload?.ts;
+        this.connectChallengeTs =
+          typeof challengeTs === "number" && Number.isSafeInteger(challengeTs) && challengeTs >= 0
+            ? challengeTs
+            : null;
         this.recordTiming("challenge", generation);
         this.sendConnect(socket, generation);
         return;

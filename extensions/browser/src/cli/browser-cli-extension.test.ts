@@ -83,4 +83,25 @@ describe("browser extension pairing Gateway URL", () => {
       remote: false,
     });
   });
+
+  it("prints the relay CDP endpoint for external clients via cdp --json", async () => {
+    vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockReturnValue({});
+    const logSpy = vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(runtime.log);
+    const writeJsonSpy = vi
+      .spyOn(cliCoreApiModule.defaultRuntime, "writeJson")
+      .mockImplementation(runtime.writeJson);
+    const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
+    const program = new Command();
+    const browser = program.command("browser");
+    registerBrowserExtensionCommands(browser, () => ({}));
+
+    await program.parseAsync(["browser", "extension", "cdp", "--json"], { from: "user" });
+
+    expect(writeJsonSpy).toHaveBeenCalledWith({
+      browserUrl: "http://127.0.0.1:18799",
+      wsEndpoint: "ws://127.0.0.1:18799/cdp",
+      headers: { Authorization: "Bearer pair-token" },
+    });
+    expect(logSpy).not.toHaveBeenCalled();
+  });
 });

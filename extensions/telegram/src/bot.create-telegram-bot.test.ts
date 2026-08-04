@@ -79,11 +79,12 @@ type BuildModelsProviderDataMock = ReturnType<
 const { resolveTelegramFetch } = await import("./fetch.js");
 const messageDispatchDedupe = await import("./message-dispatch-dedupe.js");
 const { createTelegramBotCore: createTelegramBotBase } = await import("./bot-core.js");
-const { getTelegramSequentialKey } = await import("./sequential-key.js");
+const { getTelegramSequentialConstraints } = await import("./sequential-key.js");
 const {
   createTelegramSpooledReplayDeferredParticipant,
   recordTelegramMessageProcessingResult,
   runWithTelegramSpooledReplayUpdate,
+  runWithTelegramUpdateProcessingFrame,
   TelegramSpooledReplayProcessingError,
 } = await import("./bot-processing-outcome.js");
 const { TELEGRAM_RICH_TEXT_LIMIT } = await import("./rich-message.js");
@@ -308,21 +309,24 @@ function installPerKeySequentializer(): void {
   sequentializeSpy.mockImplementationOnce(() => {
     const lanes = new Map<string, Promise<void>>();
     return async (ctx: TelegramMiddlewareTestContext, next: () => Promise<void>) => {
-      const key = harness.sequentializeKey?.(ctx) ?? "default";
-      const previous = lanes.get(key) ?? Promise.resolve();
+      const constraint = harness.sequentializeKey?.(ctx) ?? "default";
+      const keys = Array.isArray(constraint) ? constraint : [constraint];
+      const previous = Promise.all(keys.map((key) => lanes.get(key) ?? Promise.resolve()));
       const current = previous.then(async () => {
         await next();
       });
-      lanes.set(
-        key,
-        current.catch(() => undefined),
-      );
+      const tracked = current.catch(() => undefined);
+      for (const key of keys) {
+        lanes.set(key, tracked);
+      }
 
       try {
         await current;
       } finally {
-        if (lanes.get(key) === current) {
-          lanes.delete(key);
+        for (const key of keys) {
+          if (lanes.get(key) === tracked) {
+            lanes.delete(key);
+          }
         }
       }
     };
@@ -589,7 +593,7 @@ describe("createTelegramBot", () => {
     createTelegramBot({ token: "tok" });
     expect(sequentializeSpy).toHaveBeenCalledTimes(1);
     expect(middlewareUseSpy).toHaveBeenCalledWith(sequentializeSpy.mock.results[0]?.value);
-    expect(harness.sequentializeKey).toBe(getTelegramSequentialKey);
+    expect(harness.sequentializeKey).toBe(getTelegramSequentialConstraints);
   });
 
   it("answers callback queries before same-chat sequentialize delays handlers", async () => {
@@ -1341,6 +1345,93 @@ describe("createTelegramBot", () => {
       expect(replySpy).toHaveBeenCalledTimes(1);
     } finally {
       commitSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("dispatches native poll messages through the ordinary inbound handler", async () => {
+    configureOpenDm();
+    replySpy.mockClear();
+    createTelegramBot({ token: "tok" });
+
+    await getMessageHandler()(
+      makePrivateTextContext({
+        text: "",
+        messageId: 551,
+        message: {
+          text: undefined,
+          poll: {
+            id: "poll-551",
+            question: "Approve deployment?",
+            options: [
+              { persistent_id: "yes", text: "Yes", voter_count: 3 },
+              { persistent_id: "no", text: "No", voter_count: 0 },
+            ],
+            total_voter_count: 3,
+            is_closed: false,
+            is_anonymous: false,
+            type: "regular",
+            allows_multiple_answers: false,
+          },
+        },
+      }),
+    );
+
+    expect(replySpy).toHaveBeenCalledOnce();
+    const payload = requireValue(replySpy.mock.calls[0]?.[0], "inbound poll payload");
+    expect(payload.BodyForAgent).toContain("[Poll] Approve deployment?");
+    expect(payload.BodyForAgent).toContain("1. Yes — 3 votes");
+    expect(payload.BodyForAgent).toContain("2. No — 0 votes");
+    expect(payload.BodyForAgent).toContain("Total voters: 3");
+  });
+
+  it("preserves formatting entities through the forwarded-message debounce boundary", async () => {
+    configureOpenDm({ timezone: "envelopeTimezone" });
+    replySpy.mockClear();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const messageHandler = getMessageHandler();
+      for (const [messageId, text, entities, origin] of [
+        [561, "😀 bold", [{ type: "bold", offset: 3, length: 4 }], "Original A"],
+        [
+          562,
+          "read docs",
+          [{ type: "text_link", offset: 5, length: 4, url: "https://docs.example" }],
+          "Original B",
+        ],
+      ] as const) {
+        await messageHandler(
+          makePrivateTextContext({
+            text,
+            messageId,
+            date: 1736380800 + messageId,
+            message: {
+              entities,
+              forward_origin: {
+                type: "hidden_user",
+                date: 500 + messageId,
+                sender_user_name: origin,
+              },
+            },
+          }),
+        );
+      }
+
+      takeLatestTimerCallback(80)();
+      await vi.waitFor(() => expect(replySpy).toHaveBeenCalledOnce());
+      const payload = requireValue(
+        replySpy.mock.calls[0]?.[0],
+        "formatted forwarded batch payload",
+      );
+      expect(payload.RawBody).toBe("😀 **bold**\nread [docs](https://docs.example)");
+      expect(payload.BodyForAgent).toContain("😀 **bold**");
+      expect(payload.BodyForAgent).toContain("read [docs](https://docs.example)");
+      expect(payload.BodyForAgent).toContain("[Forwarded from Original A");
+      expect(payload.BodyForAgent).toContain("[Forwarded from Original B");
+      expect(payload.CommandBody).toBe("😀 **bold**\nread [docs](https://docs.example)");
+    } finally {
       setTimeoutSpy.mockRestore();
     }
   });
@@ -2796,6 +2887,28 @@ describe("createTelegramBot", () => {
     await p101;
 
     expect(onUpdateId.mock.calls.map((call) => call[0])).toEqual([102]);
+  });
+
+  it("records synchronous update completion on the shared ingress frame", async () => {
+    const { run: runMiddlewareChain } = setupUpdateOffsetTracker({ lastUpdateId: 150 });
+
+    const { result } = await runWithTelegramUpdateProcessingFrame(async () => {
+      await runMiddlewareChain({ update: { update_id: 151 } }, async () => {});
+    });
+
+    expect(result).toEqual({ kind: "completed" });
+  });
+
+  it("preserves an intentionally skipped update through middleware completion", async () => {
+    const { run: runMiddlewareChain } = setupUpdateOffsetTracker({ lastUpdateId: 160 });
+
+    const { result } = await runWithTelegramUpdateProcessingFrame(async () => {
+      await runMiddlewareChain({ update: { update_id: 161 } }, async () => {
+        recordTelegramMessageProcessingResult({ kind: "skipped" });
+      });
+    });
+
+    expect(result).toEqual({ kind: "skipped" });
   });
   it("logs and swallows update watermark persistence failures", async () => {
     const onUpdateId = vi.fn().mockRejectedValueOnce(new Error("disk boom"));

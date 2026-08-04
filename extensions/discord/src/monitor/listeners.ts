@@ -14,6 +14,7 @@ import {
   MessageCreateListener,
   PresenceUpdateListener,
   ReadyListener,
+  ThreadDeleteListener,
   ThreadUpdateListener,
 } from "../internal/discord.js";
 import { canViewDiscordGuildChannel } from "../send.permissions.js";
@@ -34,6 +35,7 @@ import {
 } from "./presence-events.js";
 import { DiscordPresenceBaselineCache } from "./presence-transition-cache.js";
 import { isThreadArchived } from "./thread-bindings.discord-api.js";
+import { getThreadBindingManager } from "./thread-bindings.manager.js";
 import { closeDiscordThreadSessions } from "./thread-session-close.js";
 
 type Logger = ReturnType<typeof import("openclaw/plugin-sdk/runtime-env").createSubsystemLogger>;
@@ -509,6 +511,47 @@ export class DiscordThreadUpdateListener extends ThreadUpdateListener {
       onError: (err) => {
         const logger = this.logger ?? discordEventQueueLog;
         logger.error(danger(`discord thread-update handler failed: ${String(err)}`));
+      },
+    });
+  }
+}
+
+type ThreadDeleteEvent = Parameters<ThreadDeleteListener["handle"]>[0];
+
+export class DiscordThreadDeleteListener extends ThreadDeleteListener {
+  constructor(
+    private cfg: OpenClawConfig,
+    private accountId: string,
+    private logger?: Logger,
+  ) {
+    super();
+  }
+
+  async handle(data: ThreadDeleteEvent) {
+    await runDiscordListenerWithSlowLog({
+      logger: this.logger,
+      listener: this.constructor.name,
+      event: this.type,
+      run: async () => {
+        const threadId = data.id;
+        getThreadBindingManager(this.accountId)?.unbindThread({
+          threadId,
+          reason: "thread-delete",
+          sendFarewell: false,
+        });
+        const count = await closeDiscordThreadSessions({
+          cfg: this.cfg,
+          accountId: this.accountId,
+          threadId,
+        });
+        if (count > 0) {
+          const logger = this.logger ?? discordEventQueueLog;
+          logger.info("Discord thread deleted — reset sessions", { threadId, count });
+        }
+      },
+      onError: (err) => {
+        const logger = this.logger ?? discordEventQueueLog;
+        logger.error(danger(`discord thread-delete handler failed: ${String(err)}`));
       },
     });
   }

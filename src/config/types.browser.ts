@@ -1,4 +1,5 @@
 // Defines browser profile configuration types.
+import type { SsrFPolicyConfig } from "./types.ssrf.js";
 export type BrowserProfileConfig = {
   /** @deprecated Doctor-only legacy input; canonical schema rejects this field. */
   color?: string;
@@ -32,15 +33,7 @@ export type BrowserTabCleanupConfig = {
   /** Enable best-effort cleanup for tracked primary-agent browser tabs. Default: true */
   enabled?: boolean;
 };
-export type BrowserSsrFPolicyConfig = {
-  /** If true, permit browser navigation to private/internal networks. Default: false */
-  dangerouslyAllowPrivateNetwork?: boolean;
-  /**
-   * Explicitly allowed hostname patterns, including blocked names like localhost.
-   * Supports exact hosts and "*.example.com" wildcard subdomains.
-   */
-  allowedHostnames?: string[];
-};
+export type BrowserSsrFPolicyConfig = SsrFPolicyConfig;
 export type BrowserConfig = {
   /** @deprecated Doctor-only legacy input; canonical schema rejects this field. */
   color?: string;

@@ -162,7 +162,8 @@ function createSnapshot(
   catalogAccess: PreparedModelRuntimeCatalogAccess,
 ): PreparedModelRuntimeSnapshot {
   const { credentials, input } = agentFacts;
-  const { mediaCapabilityProviders, messageToolCatalog, pluginMetadataSnapshot } = workspaceFacts;
+  const { mediaCapabilityProviders, messageToolCatalog, pluginMetadataSnapshot, pluginRegistry } =
+    workspaceFacts;
   const { configuredRuntimeModels, inlineProviderModels, modelCatalog, templateModelRegistry } =
     catalogFacts;
   const createStores = (): PreparedModelRuntimeStores => {
@@ -179,6 +180,8 @@ function createSnapshot(
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     config: input.config,
     metadataSnapshot: pluginMetadataSnapshot,
+    allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
+    ...(pluginRegistry ? { pluginRegistry } : {}),
     ...(messageToolCatalog ? { messageToolCatalog } : {}),
     ...(mediaCapabilityProviders ? { mediaCapabilityProviders } : {}),
     modelCatalog,

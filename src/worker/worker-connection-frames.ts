@@ -4,27 +4,22 @@ import { WebSocket } from "ws";
 import {
   type WorkerConnectParams,
   type WorkerHeartbeatParams,
-  type WorkerHeartbeatRequestFrame,
   type WorkerHeartbeatResponseFrame,
   WorkerHeartbeatResponseFrameSchema,
   type WorkerLiveEventParams,
-  type WorkerLiveEventRequestFrame,
   type WorkerLiveEventResponseFrame,
   WorkerLiveEventResponseFrameSchema,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
   type WorkerTranscriptCommitParams,
-  type WorkerTranscriptCommitRequestFrame,
   type WorkerTranscriptCommitResponseFrame,
   WorkerTranscriptCommitResponseFrameSchema,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   type WorkerInferenceCancelParams,
-  type WorkerInferenceCancelRequestFrame,
   type WorkerInferenceCancelResponseFrame,
   WorkerInferenceCancelResponseFrameSchema,
   type WorkerInferenceEventFrame,
   type WorkerInferenceStartParams,
-  type WorkerInferenceStartRequestFrame,
   type WorkerInferenceStartResponseFrame,
   WorkerInferenceStartResponseFrameSchema,
   type WorkerInferenceTerminalFrame,
@@ -32,48 +27,58 @@ import {
   validateWorkerInferenceEventFrame,
   validateWorkerInferenceTerminalFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import {
+  createPendingRequestRegistry,
+  type PendingRequestEntry,
+} from "../shared/pending-request-registry.js";
 import { WorkerConnectionInterruptedError, toError } from "./worker-connection-contract.js";
 
-type PendingHeartbeat = {
-  kind: "heartbeat";
-  resolve: (frame: WorkerHeartbeatResponseFrame) => void;
-  reject: (error: Error) => void;
-};
+const WORKER_REQUEST_SPECS = {
+  heartbeat: {
+    method: "worker.heartbeat",
+    responseSchema: WorkerHeartbeatResponseFrameSchema,
+  },
+  transcript: {
+    method: "worker.transcript.commit",
+    responseSchema: WorkerTranscriptCommitResponseFrameSchema,
+  },
+  "live-event": {
+    method: "worker.live-event",
+    responseSchema: WorkerLiveEventResponseFrameSchema,
+  },
+  "inference-start": {
+    method: "worker.inference.start",
+    responseSchema: WorkerInferenceStartResponseFrameSchema,
+  },
+  "inference-cancel": {
+    method: "worker.inference.cancel",
+    responseSchema: WorkerInferenceCancelResponseFrameSchema,
+  },
+} as const;
 
-type PendingTranscript = {
-  kind: "transcript";
-  resolve: (frame: WorkerTranscriptCommitResponseFrame) => void;
-  reject: (error: Error) => void;
+type WorkerRequestKind = keyof typeof WORKER_REQUEST_SPECS;
+type WorkerRequestParams = {
+  heartbeat: WorkerHeartbeatParams;
+  transcript: WorkerTranscriptCommitParams;
+  "live-event": WorkerLiveEventParams;
+  "inference-start": WorkerInferenceStartParams;
+  "inference-cancel": WorkerInferenceCancelParams;
 };
-
-type PendingLiveEvent = {
-  kind: "live-event";
-  resolve: (frame: WorkerLiveEventResponseFrame) => void;
-  reject: (error: Error) => void;
+type WorkerResponseFrames = {
+  heartbeat: WorkerHeartbeatResponseFrame;
+  transcript: WorkerTranscriptCommitResponseFrame;
+  "live-event": WorkerLiveEventResponseFrame;
+  "inference-start": WorkerInferenceStartResponseFrame;
+  "inference-cancel": WorkerInferenceCancelResponseFrame;
 };
-
-type PendingInferenceStart = {
-  kind: "inference-start";
+type WorkerResponseFrame = WorkerResponseFrames[WorkerRequestKind];
+type PendingRequestValue = {
+  kind: WorkerRequestKind;
   // Durable replay can emit its terminal as the next socket frame. Reset the
   // consumer cursor synchronously after validation, before Promise continuation.
-  beforeResolve?: (frame: WorkerInferenceStartResponseFrame) => void;
-  resolve: (frame: WorkerInferenceStartResponseFrame) => void;
-  reject: (error: Error) => void;
+  beforeResolve?: (frame: WorkerResponseFrame) => void;
 };
-
-type PendingInferenceCancel = {
-  kind: "inference-cancel";
-  resolve: (frame: WorkerInferenceCancelResponseFrame) => void;
-  reject: (error: Error) => void;
-};
-
-type PendingRequest = (
-  | PendingHeartbeat
-  | PendingTranscript
-  | PendingLiveEvent
-  | PendingInferenceStart
-  | PendingInferenceCancel
-) & { timeout?: ReturnType<typeof setTimeout> };
+type PendingRequest = PendingRequestEntry<WorkerResponseFrame, PendingRequestValue>;
 
 type WorkerConnectionFrameDispatcherOptions = {
   connectParams: () => WorkerConnectParams;
@@ -100,7 +105,11 @@ export function closeInvalidWorkerFrame(socket: WebSocket): void {
 }
 
 export class WorkerConnectionFrameDispatcher {
-  private readonly pending = new Map<string, PendingRequest>();
+  private readonly pending = createPendingRequestRegistry<
+    string,
+    WorkerResponseFrame,
+    PendingRequestValue
+  >();
   private readonly inferenceEventListeners = new Set<(frame: WorkerInferenceEventFrame) => void>();
   private readonly inferenceTerminalListeners = new Set<
     (frame: WorkerInferenceTerminalFrame) => void
@@ -116,83 +125,6 @@ export class WorkerConnectionFrameDispatcher {
   onInferenceTerminal(listener: (frame: WorkerInferenceTerminalFrame) => void): () => void {
     this.inferenceTerminalListeners.add(listener);
     return () => this.inferenceTerminalListeners.delete(listener);
-  }
-
-  requestHeartbeat(params: WorkerHeartbeatParams): Promise<WorkerHeartbeatResponseFrame> {
-    const id = randomUUID();
-    const frame: WorkerHeartbeatRequestFrame = {
-      type: "req",
-      id,
-      method: "worker.heartbeat",
-      params,
-    };
-    return new Promise((resolve, reject) => {
-      this.sendRequest(id, frame, { kind: "heartbeat", resolve, reject });
-    });
-  }
-
-  requestTranscriptCommit(
-    params: WorkerTranscriptCommitParams,
-  ): Promise<WorkerTranscriptCommitResponseFrame> {
-    const id = randomUUID();
-    const frame: WorkerTranscriptCommitRequestFrame = {
-      type: "req",
-      id,
-      method: "worker.transcript.commit",
-      params,
-    };
-    return new Promise((resolve, reject) => {
-      this.sendRequest(id, frame, { kind: "transcript", resolve, reject });
-    });
-  }
-
-  requestLiveEvent(params: WorkerLiveEventParams): Promise<WorkerLiveEventResponseFrame> {
-    const id = randomUUID();
-    const frame: WorkerLiveEventRequestFrame = {
-      type: "req",
-      id,
-      method: "worker.live-event",
-      params,
-    };
-    return new Promise((resolve, reject) => {
-      this.sendRequest(id, frame, { kind: "live-event", resolve, reject });
-    });
-  }
-
-  requestInferenceStart(
-    params: WorkerInferenceStartParams,
-    beforeResolve?: (frame: WorkerInferenceStartResponseFrame) => void,
-  ): Promise<WorkerInferenceStartResponseFrame> {
-    const id = randomUUID();
-    const frame: WorkerInferenceStartRequestFrame = {
-      type: "req",
-      id,
-      method: "worker.inference.start",
-      params,
-    };
-    return new Promise((resolve, reject) => {
-      this.sendRequest(id, frame, {
-        kind: "inference-start",
-        ...(beforeResolve ? { beforeResolve } : {}),
-        resolve,
-        reject,
-      });
-    });
-  }
-
-  requestInferenceCancel(
-    params: WorkerInferenceCancelParams,
-  ): Promise<WorkerInferenceCancelResponseFrame> {
-    const id = randomUUID();
-    const frame: WorkerInferenceCancelRequestFrame = {
-      type: "req",
-      id,
-      method: "worker.inference.cancel",
-      params,
-    };
-    return new Promise((resolve, reject) => {
-      this.sendRequest(id, frame, { kind: "inference-cancel", resolve, reject });
-    });
   }
 
   dispatchReadyFrame(frame: unknown, socket: WebSocket): void {
@@ -228,15 +160,7 @@ export class WorkerConnectionFrameDispatcher {
   }
 
   rejectPending(error: Error): void {
-    const pending = [...this.pending.values()];
-    this.pending.clear();
-    for (const request of pending) {
-      if (request.timeout) {
-        clearTimeout(request.timeout);
-        request.timeout = undefined;
-      }
-      request.reject(error);
-    }
+    this.pending.rejectAll(error);
   }
 
   private matchesInferenceIdentity(payload: { runEpoch: number; sessionId: string }): boolean {
@@ -244,126 +168,98 @@ export class WorkerConnectionFrameDispatcher {
     return payload.runEpoch === admission.ownerEpoch && payload.sessionId === admission.sessionId;
   }
 
-  private resolvePendingFrame(id: string, pending: PendingRequest, frame: unknown): boolean {
-    switch (pending.kind) {
-      case "heartbeat": {
-        if (!Value.Check(WorkerHeartbeatResponseFrameSchema, frame)) {
-          return false;
-        }
-        this.deletePending(id, pending);
-        pending.resolve(frame as WorkerHeartbeatResponseFrame);
-        return true;
-      }
-      case "transcript": {
-        if (!Value.Check(WorkerTranscriptCommitResponseFrameSchema, frame)) {
-          return false;
-        }
-        this.deletePending(id, pending);
-        pending.resolve(frame as WorkerTranscriptCommitResponseFrame);
-        return true;
-      }
-      case "live-event": {
-        if (!Value.Check(WorkerLiveEventResponseFrameSchema, frame)) {
-          return false;
-        }
-        this.deletePending(id, pending);
-        pending.resolve(frame as WorkerLiveEventResponseFrame);
-        return true;
-      }
-      case "inference-start": {
-        if (!Value.Check(WorkerInferenceStartResponseFrameSchema, frame)) {
-          return false;
-        }
-        const response = frame as WorkerInferenceStartResponseFrame;
-        this.deletePending(id, pending);
-        try {
-          pending.beforeResolve?.(response);
-        } catch (error) {
-          pending.reject(toError(error));
-          return true;
-        }
-        pending.resolve(response);
-        return true;
-      }
-      case "inference-cancel": {
-        if (!Value.Check(WorkerInferenceCancelResponseFrameSchema, frame)) {
-          return false;
-        }
-        this.deletePending(id, pending);
-        pending.resolve(frame as WorkerInferenceCancelResponseFrame);
-        return true;
-      }
-    }
-    return false;
+  request<K extends WorkerRequestKind>(
+    kind: K,
+    params: WorkerRequestParams[K],
+    beforeResolve?: (frame: WorkerResponseFrames[K]) => void,
+  ): Promise<WorkerResponseFrames[K]> {
+    const id = randomUUID();
+    const spec = WORKER_REQUEST_SPECS[kind];
+    const frame = { type: "req", id, method: spec.method, params };
+    const wrappedBeforeResolve = beforeResolve
+      ? (response: WorkerResponseFrame) => beforeResolve(response as WorkerResponseFrames[K])
+      : undefined;
+    return this.sendRequest(id, frame, {
+      kind,
+      ...(wrappedBeforeResolve ? { beforeResolve: wrappedBeforeResolve } : {}),
+    }) as Promise<WorkerResponseFrames[K]>;
   }
 
-  private sendRequest(id: string, frame: object, pending: PendingRequest): void {
+  private resolvePendingFrame(id: string, pending: PendingRequest, frame: unknown): boolean {
+    const spec = WORKER_REQUEST_SPECS[pending.value.kind];
+    if (!Value.Check(spec.responseSchema, frame)) {
+      return false;
+    }
+    const completed = this.pending.take(id, pending);
+    if (!completed) {
+      return false;
+    }
+    const response = frame as WorkerResponseFrame;
+    try {
+      completed.value.beforeResolve?.(response);
+    } catch (error) {
+      completed.reject(toError(error));
+      return true;
+    }
+    completed.resolve(response);
+    return true;
+  }
+
+  private sendRequest(
+    id: string,
+    frame: object,
+    value: PendingRequestValue,
+  ): Promise<WorkerResponseFrame> {
     const ready = this.options.isReady();
     const readySocket = ready ? this.options.socket() : undefined;
     if (!ready || !readySocket || readySocket.readyState !== WebSocket.OPEN) {
-      pending.reject(
+      return Promise.reject(
         this.options.isTerminal()
           ? this.options.terminalError()
           : new WorkerConnectionInterruptedError("worker connection is not ready"),
       );
-      return;
-    }
-    if (this.pending.has(id)) {
-      pending.reject(new Error("worker request id collision"));
-      return;
     }
     let encoded: string;
     try {
       encoded = JSON.stringify(frame);
     } catch (error) {
-      pending.reject(toError(error));
-      return;
+      return Promise.reject(toError(error));
     }
     const payloadLimit =
-      pending.kind === "inference-start"
+      value.kind === "inference-start"
         ? WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES
         : WORKER_PROTOCOL_MAX_PAYLOAD_BYTES;
     if (Buffer.byteLength(encoded, "utf8") > payloadLimit) {
-      pending.reject(new Error("worker request exceeds the protocol payload limit"));
-      return;
+      return Promise.reject(new Error("worker request exceeds the protocol payload limit"));
     }
-    const socket = this.options.socket()!;
-    this.pending.set(id, pending);
-    pending.timeout = setTimeout(() => {
-      if (!this.deletePending(id, pending)) {
-        return;
-      }
-      pending.reject(
-        new WorkerConnectionInterruptedError(`worker ${pending.kind} response timed out`),
-      );
-      this.options.interruptReadySocket(socket);
-    }, this.options.requestTimeoutMs);
-    pending.timeout.unref?.();
+    const pending = this.pending.add(id, {
+      value,
+      timeoutMs: this.options.requestTimeoutMs,
+      timeoutError: () =>
+        new WorkerConnectionInterruptedError(`worker ${value.kind} response timed out`),
+      onTimeout: () => this.options.interruptReadySocket(readySocket),
+    });
+    if (!pending) {
+      return Promise.reject(new Error("worker request id collision"));
+    }
     try {
-      socket.send(encoded, (error) => {
-        if (!error || this.pending.get(id) !== pending) {
+      readySocket.send(encoded, (error) => {
+        if (!error) {
           return;
         }
-        this.deletePending(id, pending);
-        pending.reject(new WorkerConnectionInterruptedError(error.message));
-        this.options.interruptReadySocket(socket);
+        const failed = this.pending.take(id, pending);
+        if (!failed) {
+          return;
+        }
+        failed.reject(new WorkerConnectionInterruptedError(error.message));
+        this.options.interruptReadySocket(readySocket);
       });
     } catch (error) {
-      this.deletePending(id, pending);
-      pending.reject(new WorkerConnectionInterruptedError(toError(error).message));
-      this.options.interruptReadySocket(socket);
+      this.pending
+        .take(id, pending)
+        ?.reject(new WorkerConnectionInterruptedError(toError(error).message));
+      this.options.interruptReadySocket(readySocket);
     }
-  }
-
-  private deletePending(id: string, pending: PendingRequest): boolean {
-    if (this.pending.get(id) !== pending) {
-      return false;
-    }
-    this.pending.delete(id);
-    if (pending.timeout) {
-      clearTimeout(pending.timeout);
-      pending.timeout = undefined;
-    }
-    return true;
+    return pending.promise;
   }
 }

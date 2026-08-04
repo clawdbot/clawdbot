@@ -18,24 +18,22 @@ import {
 describe("resolveEmbeddedAttemptBasePrompt", () => {
   const refusalTrigger = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 
-  it("preserves prompts verbatim for native model-owned harnesses", () => {
+  it("scrubs the refusal marker for Anthropic transport", () => {
     expect(
       resolveEmbeddedAttemptBasePrompt({
-        nativeModelOwned: true,
         provider: "anthropic",
+        prompt: refusalTrigger,
+      }),
+    ).toBe("ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)");
+  });
+
+  it("keeps non-Anthropic prompts byte-for-byte", () => {
+    expect(
+      resolveEmbeddedAttemptBasePrompt({
+        provider: "openai",
         prompt: refusalTrigger,
       }),
     ).toBe(refusalTrigger);
-  });
-
-  it("keeps the outer Anthropic transport scrub for ordinary runs", () => {
-    expect(
-      resolveEmbeddedAttemptBasePrompt({
-        nativeModelOwned: false,
-        provider: "anthropic",
-        prompt: refusalTrigger,
-      }),
-    ).not.toContain(refusalTrigger);
   });
 });
 
@@ -219,19 +217,23 @@ describe("resolveLatestCallUsage", () => {
 });
 
 describe("buildUsageAgentMetaFields", () => {
-  it("keeps aggregate billing buckets out of the latest context snapshot", () => {
+  it("keeps cumulative usage separate from the latest context snapshot", () => {
     const usageAccumulator = createUsageAccumulator();
+    mergeUsageIntoAccumulator(usageAccumulator, {
+      input: 100,
+      output: 50,
+      total: 150,
+    });
     const latestCallUsage = {
-      input: 12,
-      output: 15_104,
-      cacheRead: 819_661,
-      cacheWrite: 93_130,
+      input: 80,
+      output: 20,
+      cacheRead: 100,
       contextUsage: {
         state: "available",
-        promptTokens: 148_874,
-        totalTokens: 163_978,
+        promptTokens: 180,
+        totalTokens: 200,
       },
-      total: 927_907,
+      total: 200,
     } satisfies NormalizedUsage;
     mergeUsageIntoAccumulator(usageAccumulator, latestCallUsage);
 
@@ -239,18 +241,44 @@ describe("buildUsageAgentMetaFields", () => {
       usageAccumulator,
       lastAssistantUsage: undefined,
       lastRunPromptUsage: latestCallUsage,
-      lastTurnTotal: latestCallUsage.total,
     });
 
     expect(fields.usage).toMatchObject({
-      input: 12,
-      output: 15_104,
-      cacheRead: 819_661,
-      cacheWrite: 93_130,
-      total: 927_907,
+      input: 180,
+      output: 70,
+      cacheRead: 100,
+      total: 350,
     });
     expect(fields.lastCallUsage).toEqual(latestCallUsage);
-    expect(fields.promptTokens).toBe(148_874);
+    expect(fields.promptTokens).toBe(180);
+  });
+
+  it("keeps cumulative usage and the latest call distinct across a zero-usage retry", () => {
+    const usageAccumulator = createUsageAccumulator();
+    mergeUsageIntoAccumulator(usageAccumulator, {
+      input: 100,
+      output: 50,
+      total: 150,
+    });
+    const latestCallUsage = {
+      input: 150,
+      output: 50,
+      total: 200,
+    } satisfies NormalizedUsage;
+    mergeUsageIntoAccumulator(usageAccumulator, latestCallUsage);
+
+    const fields = buildUsageAgentMetaFields({
+      usageAccumulator,
+      lastAssistantUsage: { input: 0, output: 0, total: 0 },
+      lastRunPromptUsage: latestCallUsage,
+    });
+
+    expect(fields.usage).toMatchObject({
+      input: 250,
+      output: 100,
+      total: 350,
+    });
+    expect(fields.lastCallUsage).toEqual(latestCallUsage);
   });
 
   it("does not derive a prompt override from unavailable context usage", () => {
@@ -269,7 +297,6 @@ describe("buildUsageAgentMetaFields", () => {
       usageAccumulator,
       lastAssistantUsage: latestCallUsage,
       lastRunPromptUsage: latestCallUsage,
-      lastTurnTotal: latestCallUsage.total,
     });
 
     expect(fields.lastCallUsage).toEqual(latestCallUsage);
@@ -298,6 +325,38 @@ describe("buildUsageAgentMetaFields", () => {
 });
 
 describe("buildErrorAgentMeta", () => {
+  it("keeps cumulative usage separate from the latest call on error exits", () => {
+    const usageAccumulator = createUsageAccumulator();
+    mergeUsageIntoAccumulator(usageAccumulator, {
+      input: 100,
+      output: 50,
+      total: 150,
+    });
+    const latestCallUsage = {
+      input: 150,
+      output: 50,
+      total: 200,
+    } satisfies NormalizedUsage;
+    mergeUsageIntoAccumulator(usageAccumulator, latestCallUsage);
+
+    const fields = buildErrorAgentMeta({
+      sessionId: "session-error",
+      sessionFile: "/tmp/session-error.jsonl",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      usageAccumulator,
+      lastRunPromptUsage: latestCallUsage,
+      lastAssistant: { usage: latestCallUsage },
+    });
+
+    expect(fields.usage).toMatchObject({
+      input: 250,
+      output: 100,
+      total: 350,
+    });
+    expect(fields.lastCallUsage).toEqual(latestCallUsage);
+  });
+
   it("preserves active session file for error exits after transcript rotation", () => {
     // Error metadata follows the active session after transcript rotation so
     // diagnostics and resume links point at the file that contains the failure.

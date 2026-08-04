@@ -112,6 +112,14 @@ export function createDiscordMessageRunQueue(
       const cleanupSkipped = async () => {
         try {
           await cleanupSkippedDiscordQueuedMessage({ job });
+        } catch (error) {
+          // Durable release is best-effort during shutdown. One failed claim
+          // must not strand the remaining accepted jobs or their pending tasks.
+          try {
+            params.runtime.error(danger(`discord queued message cleanup failed: ${String(error)}`));
+          } catch {
+            // Error reporting must not interrupt the remaining cleanup owners.
+          }
         } finally {
           settlePending();
         }

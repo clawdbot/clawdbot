@@ -48,10 +48,12 @@ function createRegistryView(params: {
   const matchesProviderFilter = (entry: Model) =>
     !providerFilter || normalizeProviderId(entry.provider) === providerFilter;
   const shouldNormalize = params.normalizeModels !== false;
+  const providerMetadataOwners = registry.getProviderMetadataOwners();
   const normalizeEntry = (entry: Model) =>
     shouldNormalize
       ? normalizeDiscoveredAgentModel(entry, params.agentDir, {
           config: params.config,
+          ...(providerMetadataOwners ? { providerMetadataOwners } : {}),
           ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
         })
       : entry;

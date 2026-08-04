@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   draftPayload,
@@ -7,7 +8,7 @@ import {
   selectedWorkboardBoardParams,
 } from "./card-state.ts";
 import { clearPendingStatusTransition, recordPendingStatusTransition } from "./lifecycle.ts";
-import { formatError, isRecord } from "./normalization-utils.ts";
+import { formatError } from "./normalization-utils.ts";
 import { normalizeCardPayload, normalizeCardsPayload } from "./normalization.ts";
 import {
   getWorkboardState,

@@ -5,13 +5,16 @@ scenario:
   surface: session-memory
   coverage:
     primary:
+      - session-memory.group-memory
       - session-memory.memory-tools
+      - session-memory.qa-channel-memory
     secondary:
       - channels.room-session-group-messages
-  objective: Verify the agent uses memory tools in a shared channel when the answer lives only in memory files, not the live transcript.
+  objective: Verify a shared QA-channel message causally recalls a fact from a nested memory file before the agent replies in the same room.
   successCriteria:
-    - Agent uses memory_search before answering.
-    - Final reply returns the memory-only fact correctly in-channel.
+    - The initial model request does not contain the memory-only fact and plans memory_search with the expected arguments.
+    - The matching memory_search result plans memory_get for the seeded path, whose correlated result supplies the recalled fact.
+    - The ordered tool chain produces exactly one visible final reply in the originating QA room.
   docsRefs:
     - docs/concepts/memory.md
     - docs/concepts/memory-search.md
@@ -20,12 +23,18 @@ scenario:
     - extensions/qa-lab/src/suite.ts
   execution:
     kind: flow
-    summary: Verify the agent uses memory tools in a shared channel when the answer lives only in memory files, not the live transcript.
+    channel: qa-channel
+    providerMode: mock-openai
+    retryCount: 0
+    summary: Prove a QA-channel group message consumes a matched nested-memory result before one in-room reply.
     config:
+      requiredProviderMode: mock-openai
       channelId: qa-memory-room
       channelTitle: QA Memory Room
+      expectedMemoryPath: memory/qa-shared-channel.md
       memoryFact: "Hidden QA fact: the project codename is ORBIT-9."
       memoryQuery: "hidden project codename"
+      expectedCorpus: null
       expectedNeedle: ORBIT-9
       prompt: "@openclaw Memory tools check: what is the hidden project codename stored only in memory? Use memory tools first."
       promptSnippet: "Memory tools check"
@@ -34,10 +43,18 @@ flow:
   steps:
     - name: uses memory_search before answering in-channel
       actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message:
+              expr: "`expected provider mode ${config.requiredProviderMode}, got ${env.providerMode}`"
         - call: reset
+        - call: fs.mkdir
+          args:
+            - expr: "path.dirname(path.join(env.gateway.workspaceDir, config.expectedMemoryPath))"
+            - recursive: true
         - call: fs.writeFile
           args:
-            - expr: "path.join(env.gateway.workspaceDir, 'MEMORY.md')"
+            - expr: "path.join(env.gateway.workspaceDir, config.expectedMemoryPath)"
             - expr: "`${config.memoryFact}\\n`"
             - utf8
         - call: forceMemoryIndex
@@ -56,6 +73,12 @@ flow:
           args:
             - ref: env
             - 60000
+        - set: requestCursorBeforeInbound
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.length"
         - sendInbound:
             conversation:
               id:
@@ -73,9 +96,49 @@ flow:
             - ref: state
             - lambda:
                 params: [candidate]
-                expr: "candidate.conversation.id === config.channelId && candidate.text.includes(config.expectedNeedle)"
+                expr: "candidate.direction === 'outbound' && candidate.conversation.id === config.channelId && candidate.conversation.kind === 'channel' && candidate.text.includes(config.expectedNeedle)"
             - expr: liveTurnTimeoutMs(env, 30000)
+            - sinceIndex:
+                ref: outboundStartIndex
+        - set: scenarioRequests
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforeInbound}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet))"
         - assert:
-            expr: "!env.mock || (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet)).some((request) => request.plannedToolName === 'memory_search')"
-            message: expected memory_search in mock request plan
-      detailsExpr: outbound.text
+            expr: scenarioRequests.length === 3
+            message:
+              expr: "`expected one memory_search plan, one matched result request, and one finalization request: ${JSON.stringify(scenarioRequests)}`"
+        - set: searchPlanRequest
+          value:
+            expr: scenarioRequests[0]
+        - set: searchResultRequest
+          value:
+            expr: scenarioRequests[1]
+        - set: finalRequest
+          value:
+            expr: scenarioRequests[2]
+        - assert:
+            expr: "searchPlanRequest.plannedToolName === 'memory_search' && searchPlanRequest.plannedToolArgs?.query === config.memoryQuery && (searchPlanRequest.plannedToolArgs?.corpus ?? null) === config.expectedCorpus && typeof searchPlanRequest.plannedToolCallId === 'string' && searchPlanRequest.plannedToolCallId.length > 0 && !searchPlanRequest.toolOutputCallId && !String(searchPlanRequest.allInputText ?? '').includes(config.expectedNeedle)"
+            message:
+              expr: "`initial request exposed the hidden fact or missed the expected memory_search plan: ${JSON.stringify(searchPlanRequest)}`"
+        - assert:
+            expr: "searchResultRequest.cursor > searchPlanRequest.cursor && searchResultRequest.toolOutputCallId === searchPlanRequest.plannedToolCallId && searchResultRequest.toolOutputStructuredError !== true && String(searchResultRequest.toolOutput ?? '').includes(config.expectedMemoryPath) && String(searchResultRequest.toolOutput ?? '').includes(config.expectedNeedle) && searchResultRequest.plannedToolName === 'memory_get' && searchResultRequest.plannedToolArgs?.path === config.expectedMemoryPath && typeof searchResultRequest.plannedToolCallId === 'string' && searchResultRequest.plannedToolCallId.length > 0 && searchResultRequest.plannedToolCallId !== searchPlanRequest.plannedToolCallId"
+            message:
+              expr: "`following request did not consume memory_search and plan a distinct memory_get call for the expected path: ${JSON.stringify(searchResultRequest)}`"
+        - assert:
+            expr: "finalRequest.cursor > searchResultRequest.cursor && finalRequest.toolOutputCallId === searchResultRequest.plannedToolCallId && finalRequest.toolOutputStructuredError !== true && String(finalRequest.toolOutput ?? '').includes(config.expectedMemoryPath) && String(finalRequest.toolOutput ?? '').includes(config.expectedNeedle) && !finalRequest.plannedToolName"
+            message:
+              expr: "`final request did not consume the matching successful memory_get result: ${JSON.stringify(finalRequest)}`"
+        - call: sleep
+          args: [4000]
+        - set: visibleChannelOutbounds
+          value:
+            expr: "state.getSnapshot().messages.slice(outboundStartIndex).filter((message) => message.direction === 'outbound' && !message.deleted && message.conversation.id === config.channelId && message.conversation.kind === 'channel')"
+        - assert:
+            expr: "visibleChannelOutbounds.length === 1 && visibleChannelOutbounds[0].id === outbound.id"
+            message:
+              expr: "`expected exactly one visible QA-room reply after the ordered memory result: ${JSON.stringify(visibleChannelOutbounds)}`"
+        - assert:
+            expr: "(outbound.text.match(new RegExp(config.expectedNeedle, 'g')) ?? []).length === 1"
+            message:
+              expr: "`final QA-room reply must contain ${config.expectedNeedle} exactly once: ${outbound.text}`"
+      detailsExpr: "`${outbound.text}; path=${config.expectedMemoryPath}; matched=${searchResultRequest.toolOutputCallId === searchPlanRequest.plannedToolCallId}; room=${config.channelId}`"

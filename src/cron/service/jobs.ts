@@ -33,6 +33,7 @@ import {
   resolveEveryAnchorMs,
 } from "./jobs-scheduling.js";
 import {
+  assertAnnounceDeliveryChannelSupport,
   assertCronExpressionSatisfiable,
   assertDeliverySupport,
   assertFailureDestinationSupport,
@@ -49,6 +50,7 @@ import { mergeCronPayload } from "./payload-merge.js";
 import type { CronServiceState } from "./state.js";
 
 const CRON_DECLARATIVE_LABEL_MAX_LENGTH = 200;
+type DeliveryValidationOptions = { configuredChannels?: readonly string[] };
 
 export { assertSupportedJobSpec };
 
@@ -61,7 +63,6 @@ export {
   findJobOrThrow,
   isJobEnabled,
   computeJobNextRunAtMs,
-  computeJobPreviousRunAtMs,
   computeJobPreviousRunAtOrBeforeMs,
   recordScheduleComputeError,
   recomputeNextRuns,
@@ -120,7 +121,7 @@ function reconcileScheduledToolPolicy(params: {
 export function createJob(
   state: CronServiceState,
   input: CronJobCreate,
-  opts?: { scheduledToolPolicy?: CronScheduledToolPolicy },
+  opts?: DeliveryValidationOptions & { scheduledToolPolicy?: CronScheduledToolPolicy },
 ): CronJob {
   const now = state.deps.nowMs();
   const id = normalizeOptionalString(input.id) ?? crypto.randomUUID();
@@ -236,6 +237,7 @@ export function createJob(
   });
   assertMainSessionAgentId(job, state.deps.defaultAgentId);
   assertDeliverySupport(job);
+  assertAnnounceDeliveryChannelSupport(job, opts?.configuredChannels);
   assertFailureDestinationSupport(job);
   assertCronExpressionSatisfiable(job, now, computeJobNextRunAtMs);
   job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
@@ -251,7 +253,7 @@ export function applyJobPatch(
     scheduleValidationNowMs?: number;
     cronConfig?: CronConfig;
     scheduledToolPolicy?: CronScheduledToolPolicy;
-  },
+  } & DeliveryValidationOptions,
 ) {
   const previouslyUsedToolRuntime = cronJobUsesToolRuntime(job);
   const explicitlyClearsToolsAllow = patch.payload?.toolsAllow === null;
@@ -302,9 +304,9 @@ export function applyJobPatch(
       const explicitStaggerMs = normalizeCronStaggerMs(patch.schedule.staggerMs);
       if (explicitStaggerMs !== undefined) {
         job.schedule = { ...patch.schedule, staggerMs: explicitStaggerMs };
-      } else if (job.schedule.kind === "cron") {
-        // Preserve an existing explicit stagger when editing only the cron
-        // expression; otherwise a patch could silently change fire timing.
+      } else if (job.schedule.kind === "cron" && job.schedule.expr === patch.schedule.expr) {
+        // Metadata-only resaves keep the existing stagger, but a replacement
+        // expression owns a fresh default and must not inherit stale timing.
         job.schedule = { ...patch.schedule, staggerMs: job.schedule.staggerMs };
       } else {
         const defaultStaggerMs = resolveDefaultCronStaggerMs(patch.schedule.expr);
@@ -385,7 +387,13 @@ export function applyJobPatch(
     // Runtime state patches may report execution progress, but the scheduler
     // alone owns the boundary that decides whether restart catch-up can run.
     delete statePatch.scheduleActivatedAtMs;
+    delete statePatch.autoDisabled;
     job.state = { ...job.state, ...statePatch };
+  }
+  if (patch.enabled === true) {
+    delete job.state.autoDisabled;
+    job.state.consecutiveErrors = 0;
+    job.state.scheduleErrorCount = 0;
   }
   if ("agentId" in patch) {
     job.agentId = normalizeOptionalAgentId((patch as { agentId?: unknown }).agentId);
@@ -418,6 +426,10 @@ export function applyJobPatch(
   assertScriptPayloadSupport(job, {
     cronConfig: opts?.cronConfig,
     requireEnabled: patch.payload?.kind === "script",
+    // Enabled-only/rename patches must keep working on jobs stored with a
+    // malformed script (pre-validation persistence); re-check syntax only
+    // when this patch rewrites the payload, or disable becomes a dead end.
+    validateSyntax: patch.payload !== undefined,
   });
   assertStreamScheduleSupport(job, {
     cronConfig: opts?.cronConfig,
@@ -425,6 +437,7 @@ export function applyJobPatch(
   });
   assertMainSessionAgentId(job, opts?.defaultAgentId);
   assertDeliverySupport(job);
+  assertAnnounceDeliveryChannelSupport(job, opts?.configuredChannels, patch);
   assertFailureDestinationSupport(job);
   if (
     opts?.scheduleValidationNowMs !== undefined &&
@@ -444,7 +457,7 @@ export function applyDeclarativeJobSpec(
     nowMs: number;
     cronConfig?: CronConfig;
     scheduledToolPolicy?: CronScheduledToolPolicy;
-  },
+  } & DeliveryValidationOptions,
 ) {
   const previouslyUsedToolRuntime = cronJobUsesToolRuntime(job);
   const explicitlyDeclaresToolsAllow = input.payload.toolsAllow !== undefined;
@@ -549,6 +562,7 @@ export function applyDeclarativeJobSpec(
   assertPacingSupport(job);
   assertMainSessionAgentId(job, opts.defaultAgentId);
   assertDeliverySupport(job);
+  assertAnnounceDeliveryChannelSupport(job, opts.configuredChannels);
   assertFailureDestinationSupport(job);
   assertCronExpressionSatisfiable(job, opts.nowMs, computeJobNextRunAtMs);
 }

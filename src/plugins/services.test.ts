@@ -19,11 +19,7 @@ vi.mock("../logging/subsystem.js", () => ({
 import { STATE_DIR } from "../config/paths.js";
 import { queuePluginSessionsChanged, subscribePluginSessionsChanged } from "./gateway-events.js";
 import { registerPluginHttpRoute } from "./http-registry.js";
-import {
-  pinActivePluginHttpRouteRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "./runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 import { startPluginServices } from "./services.js";
 
 function createRegistry(
@@ -167,6 +163,72 @@ describe("startPluginServices", () => {
     await handle.stop();
 
     expectServiceLifecycleState({ starts, stops, contexts, config });
+  });
+
+  it("rolls back partially started services before starting their siblings", async () => {
+    const acquired = new Set<string>();
+    const received = vi.fn();
+    const siblingStart = vi.fn();
+    const rollback = vi.fn((ctx: OpenClawPluginServiceContext) => {
+      acquired.delete("failed-service");
+      ctx.gatewayEvents?.emit("rolled-back", {}, { scope: "operator.read" });
+    });
+    const broadcastPluginEvent = vi.fn();
+
+    const handle = await startPluginServices({
+      registry: createRegistry([
+        {
+          id: "failed-service",
+          start: (ctx) => {
+            acquired.add("failed-service");
+            ctx.gatewayEvents?.onSessionsChanged(received);
+            throw new Error("start failed after acquiring resources");
+          },
+          stop: rollback,
+        },
+        { id: "sibling-service", start: siblingStart },
+      ]),
+      config: createServiceConfig(),
+      broadcastPluginEvent,
+    });
+
+    expect(rollback).toHaveBeenCalledOnce();
+    expect(acquired.size).toBe(0);
+    expect(siblingStart).toHaveBeenCalledOnce();
+    expect(broadcastPluginEvent).toHaveBeenCalledWith(
+      "plugin.plugin:test.rolled-back",
+      {},
+      "operator.read",
+    );
+
+    queuePluginSessionsChanged({ sessionKey: "agent:main:main" });
+    await Promise.resolve();
+    expect(received).not.toHaveBeenCalled();
+
+    await handle.stop();
+    expect(rollback).toHaveBeenCalledOnce();
+  });
+
+  it("runs concurrent and repeated shutdowns through one cleanup operation", async () => {
+    let releaseStop: (() => void) | undefined;
+    const stopping = new Promise<void>((resolve) => {
+      releaseStop = resolve;
+    });
+    const stop = vi.fn(() => stopping);
+    const handle = await startTrackingServices({
+      services: [{ id: "service", start: () => {}, stop }],
+    });
+
+    const firstStop = handle.stop();
+    const secondStop = handle.stop();
+    releaseStop?.();
+    await Promise.all([firstStop, secondStop]);
+
+    expect(firstStop).toBe(secondStop);
+    expect(stop).toHaveBeenCalledOnce();
+
+    await handle.stop();
+    expect(stop).toHaveBeenCalledOnce();
   });
 
   it("binds gateway events to the owning plugin namespace and scope", async () => {
@@ -400,7 +462,6 @@ describe("startPluginServices", () => {
     const pinnedRegistry = createEmptyPluginRegistry();
 
     setActivePluginRegistry(pinnedRegistry);
-    pinActivePluginHttpRouteRegistry(pinnedRegistry);
 
     const handle = await startPluginServices({
       registry: serviceRegistry,
@@ -443,6 +504,35 @@ describe("startPluginServices", () => {
     ]);
     expect(stopOk).toHaveBeenCalledOnce();
     expect(stopThrows).toHaveBeenCalledOnce();
+  });
+
+  it("continues starting siblings when rollback also fails", async () => {
+    const rollback = vi.fn(() => {
+      throw new Error("rollback failed");
+    });
+    const siblingStart = vi.fn();
+
+    const handle = await startTrackingServices({
+      services: [
+        {
+          id: "failed-service",
+          start: () => {
+            throw new Error("start failed");
+          },
+          stop: rollback,
+        },
+        { id: "sibling-service", start: siblingStart },
+      ],
+    });
+
+    expect(rollback).toHaveBeenCalledOnce();
+    expect(siblingStart).toHaveBeenCalledOnce();
+    expect(mockedLogger.warn).toHaveBeenCalledWith(
+      "plugin service stop failed (failed-service): Error: rollback failed",
+    );
+
+    await handle.stop();
+    expect(rollback).toHaveBeenCalledOnce();
   });
 
   it("emits per-service startup trace spans and summary", async () => {

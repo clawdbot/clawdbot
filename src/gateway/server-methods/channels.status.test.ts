@@ -463,11 +463,13 @@ describe("channelsHandlers channels.status", () => {
       configured: true,
       running: true,
       connected: true,
+      healthState: "stale",
       lastStartAt: now - 60 * 60_000,
       lastTransportActivityAt: now - 40 * 60_000,
     });
     const eventLoop = {
       degraded: true,
+      degradedSinceMs: 61_000,
       reasons: ["event_loop_delay"],
       intervalMs: 62_000,
       delayP99Ms: 62_000,
@@ -500,5 +502,65 @@ describe("channelsHandlers channels.status", () => {
     const payload = requireRespondPayload(respond);
     expect(payload.eventLoop).toBe(eventLoop);
     expect(firstChannelAccount(payload, "whatsapp").healthState).toBe("stale-socket");
+  });
+
+  it("preserves channel-authored health state when shared health is healthy", async () => {
+    mocks.applyPluginAutoEnable.mockReturnValue({ config: { autoEnabled: true }, changes: [] });
+    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      running: true,
+      connected: true,
+      healthState: "reconnecting",
+    });
+
+    const payload = await runChannelsStatus({ probe: false, timeoutMs: 2000 });
+
+    expect(firstChannelAccount(payload, "whatsapp").healthState).toBe("reconnecting");
+  });
+
+  it("preserves channel-authored conflict when recorded blocked lifecycle is unhealthy", async () => {
+    mocks.applyPluginAutoEnable.mockReturnValue({ config: { autoEnabled: true }, changes: [] });
+    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      linked: true,
+      running: false,
+      connected: false,
+      terminalDisconnect: true,
+      lifecycle: "blocked",
+      healthState: "conflict",
+      lastError: "status=440",
+    });
+
+    const payload = await runChannelsStatus({ probe: false, timeoutMs: 2000 });
+
+    expect(firstChannelAccount(payload, "whatsapp")).toMatchObject({
+      lifecycle: "blocked",
+      healthState: "conflict",
+      terminalDisconnect: true,
+    });
+  });
+
+  it("derives blocked health from recorded lifecycle", async () => {
+    mocks.applyPluginAutoEnable.mockReturnValue({ config: { autoEnabled: true }, changes: [] });
+    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      running: true,
+      connected: true,
+      lifecycle: "blocked",
+      lastError: "Slack identity unavailable",
+    });
+
+    const payload = await runChannelsStatus({ probe: false, timeoutMs: 2000 });
+
+    expect(firstChannelAccount(payload, "whatsapp")).toMatchObject({
+      lifecycle: "blocked",
+      healthState: "blocked",
+    });
   });
 });

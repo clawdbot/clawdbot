@@ -225,7 +225,7 @@ describe("handleControlUiHttpRequest", () => {
     trustedProxies?: string[];
     remoteAddress?: string;
   }) {
-    const { res, end } = makeMockHttpResponse();
+    const { res, end, setHeader } = makeMockHttpResponse();
     const handled = await handleControlUiAvatarRequest(
       {
         url: params.url,
@@ -241,7 +241,7 @@ describe("handleControlUiHttpRequest", () => {
         config: params.config,
       },
     );
-    return { res, end, handled };
+    return { res, end, setHeader, handled };
   }
 
   async function runAssistantMediaRequest(params: {
@@ -250,6 +250,7 @@ describe("handleControlUiHttpRequest", () => {
     basePath?: string;
     auth?: ResolvedGatewayAuth;
     headers?: IncomingMessage["headers"];
+    distinctHeaders?: IncomingMessage["headersDistinct"];
     trustedProxies?: string[];
     remoteAddress?: string;
   }) {
@@ -259,6 +260,14 @@ describe("handleControlUiHttpRequest", () => {
         url: params.url,
         method: params.method,
         headers: params.headers ?? {},
+        headersDistinct:
+          params.distinctHeaders ??
+          Object.fromEntries(
+            Object.entries(params.headers ?? {}).map(([name, value]) => [
+              name,
+              Array.isArray(value) ? value : [String(value)],
+            ]),
+          ),
         socket: { remoteAddress: params.remoteAddress ?? "127.0.0.1" },
       } as IncomingMessage,
       res,
@@ -565,6 +574,223 @@ describe("handleControlUiHttpRequest", () => {
         );
       },
     });
+  });
+
+  it.each(["GET", "HEAD"] as const)(
+    "revalidates assistant media ETags before ranges for %s",
+    async (method) => {
+      await withAllowedAssistantMediaRoot({
+        prefix: "ui-media-conditional-",
+        fn: async (tmpRoot) => {
+          const filePath = path.join(tmpRoot, "photo.png");
+          await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+          const url = `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`;
+          const auth = { mode: "token", token: "test-token", allowTailscale: false } as const;
+          const initial = await runAssistantMediaRequest({ url, method: "HEAD", auth });
+          const etag = initial.setHeader.mock.calls.find(([name]) => name === "ETag")?.[1];
+          expect(etag).toMatch(/^"[A-Za-z0-9_-]+"$/);
+
+          const conditional = await runAssistantMediaRequest({
+            url,
+            method,
+            auth,
+            headers: {
+              "if-none-match": `W/${String(etag)}`,
+              range: "bytes=0-3",
+              "if-range": '"stale"',
+            },
+          });
+
+          expect(conditional.handled).toBe(true);
+          expect(conditional.res.statusCode).toBe(304);
+          expect(conditional.setHeader).toHaveBeenCalledWith("ETag", etag);
+          expect(conditional.setHeader).not.toHaveBeenCalledWith(
+            "Content-Length",
+            expect.anything(),
+          );
+          expect(conditional.end).toHaveBeenCalledWith();
+        },
+      });
+    },
+  );
+
+  it.each(["GET", "HEAD"] as const)(
+    "revalidates assistant media with If-Modified-Since before ranges for %s",
+    async (method) => {
+      await withAllowedAssistantMediaRoot({
+        prefix: "ui-media-modified-since-",
+        fn: async (tmpRoot) => {
+          const filePath = path.join(tmpRoot, "photo.png");
+          await fs.writeFile(filePath, Buffer.from("assistant-media-bytes"));
+          const url = `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`;
+          const auth = { mode: "token", token: "test-token", allowTailscale: false } as const;
+          const initial = await runAssistantMediaRequest({ url, method: "HEAD", auth });
+          const lastModified = initial.setHeader.mock.calls.find(
+            ([name]) => name === "Last-Modified",
+          )?.[1];
+          expect(lastModified).toEqual(expect.any(String));
+
+          const unchanged = await runAssistantMediaRequest({
+            url,
+            method,
+            auth,
+            headers: {
+              "if-modified-since": String(lastModified),
+              range: "bytes=0-3",
+              "if-range": '"stale"',
+            },
+          });
+
+          expect(unchanged.res.statusCode).toBe(304);
+          expect(unchanged.setHeader).toHaveBeenCalledWith("Last-Modified", lastModified);
+          expect(unchanged.setHeader).not.toHaveBeenCalledWith("Content-Length", expect.anything());
+          expect(unchanged.end).toHaveBeenCalledWith();
+        },
+      });
+    },
+  );
+
+  it.each(["GET", "HEAD"] as const)(
+    "ignores duplicate assistant-media dates discarded by normalized Node headers for %s",
+    async (method) => {
+      await withAllowedAssistantMediaRoot({
+        prefix: "ui-media-duplicate-modified-since-",
+        fn: async (tmpRoot) => {
+          const filePath = path.join(tmpRoot, "photo.png");
+          await fs.writeFile(filePath, Buffer.from("assistant-media-bytes"));
+          const url = `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`;
+          const auth = { mode: "token", token: "test-token", allowTailscale: false } as const;
+          const initial = await runAssistantMediaRequest({ url, method: "HEAD", auth });
+          const lastModified = String(
+            initial.setHeader.mock.calls.find(([name]) => name === "Last-Modified")?.[1],
+          );
+
+          const duplicate = await runAssistantMediaRequest({
+            url,
+            method,
+            auth,
+            headers: { "if-modified-since": lastModified },
+            distinctHeaders: {
+              "if-modified-since": [lastModified, "not-an-http-date"],
+            },
+          });
+
+          expect(duplicate.res.statusCode).toBe(200);
+          expect(duplicate.setHeader).toHaveBeenCalledWith("Last-Modified", lastModified);
+        },
+      });
+    },
+  );
+
+  it("resumes assistant media only for an exact If-Range HTTP-date", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-if-range-date-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "photo.png");
+        const body = Buffer.from("assistant-media-bytes");
+        const modified = new Date("2025-07-08T18:40:00.789Z");
+        await fs.writeFile(filePath, body);
+        await fs.utimes(filePath, modified, modified);
+        const lastModified = (await fs.stat(filePath)).mtime.toUTCString();
+        const url = `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`;
+        const auth = { mode: "token", token: "test-token", allowTailscale: false } as const;
+
+        const initial = await runAssistantMediaRequest({ url, method: "HEAD", auth });
+        expect(initial.res.statusCode).toBe(200);
+        expect(initial.setHeader).toHaveBeenCalledWith("Last-Modified", lastModified);
+
+        const partial = await runAssistantMediaRequest({
+          url,
+          method: "GET",
+          auth,
+          headers: { range: "bytes=0-8", "if-range": lastModified },
+        });
+        expect(partial.res.statusCode).toBe(206);
+        expect(partial.setHeader).toHaveBeenCalledWith("Last-Modified", lastModified);
+        expect(partial.setHeader).toHaveBeenCalledWith(
+          "Content-Range",
+          `bytes 0-8/${body.byteLength}`,
+        );
+
+        const future = await runAssistantMediaRequest({
+          url,
+          method: "GET",
+          auth,
+          headers: {
+            range: "bytes=0-8",
+            "if-range": new Date(Date.parse(lastModified) + 1000).toUTCString(),
+          },
+        });
+        expect(future.res.statusCode).toBe(200);
+        expect(future.setHeader).toHaveBeenCalledWith("Last-Modified", lastModified);
+      },
+    });
+  });
+
+  it("bounds future-dated assistant media validators across conditional response plans", async () => {
+    const nowMs = Math.floor(Date.now() / 1000) * 1000;
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(nowMs);
+    try {
+      await withAllowedAssistantMediaRoot({
+        prefix: "ui-media-future-mtime-",
+        fn: async (tmpRoot) => {
+          const filePath = path.join(tmpRoot, "photo.png");
+          const body = Buffer.from("future-assistant-media");
+          const future = new Date(nowMs + 60_000);
+          await fs.writeFile(filePath, body);
+          await fs.utimes(filePath, future, future);
+          const futureLastModified = (await fs.stat(filePath)).mtime.toUTCString();
+          const expectedLastModified = new Date(nowMs).toUTCString();
+          const url = `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`;
+          const auth = { mode: "token", token: "test-token", allowTailscale: false } as const;
+
+          const initial = await runAssistantMediaRequest({ url, method: "HEAD", auth });
+          expect(initial.res.statusCode).toBe(200);
+          expect(initial.setHeader).toHaveBeenCalledWith("Last-Modified", expectedLastModified);
+          const etag = initial.setHeader.mock.calls.find(([name]) => name === "ETag")?.[1];
+
+          const partial = await runAssistantMediaRequest({
+            url,
+            method: "GET",
+            auth,
+            headers: { range: "bytes=0-5", "if-range": expectedLastModified },
+          });
+          expect(partial.res.statusCode).toBe(206);
+          expect(partial.setHeader).toHaveBeenCalledWith("Last-Modified", expectedLastModified);
+
+          const futureRange = await runAssistantMediaRequest({
+            url,
+            method: "GET",
+            auth,
+            headers: { range: "bytes=0-5", "if-range": futureLastModified },
+          });
+          expect(futureRange.res.statusCode).toBe(200);
+
+          const unchanged = await runAssistantMediaRequest({
+            url,
+            method: "GET",
+            auth,
+            headers: { "if-none-match": String(etag) },
+          });
+          expect(unchanged.res.statusCode).toBe(304);
+          expect(unchanged.setHeader).toHaveBeenCalledWith("Last-Modified", expectedLastModified);
+
+          const unsatisfiable = await runAssistantMediaRequest({
+            url,
+            method: "GET",
+            auth,
+            headers: { range: `bytes=${body.byteLength}-` },
+          });
+          expect(unsatisfiable.res.statusCode).toBe(416);
+          expect(unsatisfiable.setHeader).toHaveBeenCalledWith(
+            "Last-Modified",
+            expectedLastModified,
+          );
+        },
+      });
+    } finally {
+      dateNow.mockRestore();
+    }
   });
 
   it("returns 202 while assistant playback media is preparing", async () => {
@@ -2085,6 +2311,92 @@ describe("handleControlUiHttpRequest", () => {
   });
 
   it.each([
+    { name: "PNG", filename: "avatar.png", contentType: "image/png" },
+    { name: "JPEG", filename: "avatar.jpg", contentType: "image/jpeg" },
+    { name: "GIF", filename: "avatar.gif", contentType: "image/gif" },
+    { name: "WebP", filename: "avatar.webp", contentType: "image/webp" },
+    { name: "SVG", filename: "avatar.svg", contentType: "image/svg+xml" },
+  ])(
+    "preserves the pinned $name avatar byte length and metadata on HEAD",
+    async ({ contentType, filename }) => {
+      const tmp = testTempDirs.make("openclaw-avatar-head-metadata-");
+      const body = Buffer.from(`avatar 東京 ${filename}\n`, "utf8");
+      const read = vi.spyOn(fsSync, "read");
+      const closeSync = vi.spyOn(fsSync, "closeSync");
+      try {
+        await fs.writeFile(path.join(tmp, filename), body);
+        const config = createAvatarConfig(tmp, filename);
+        const head = await runAvatarRequest({ url: "/avatar/main", method: "HEAD", config });
+
+        expect(head.handled).toBe(true);
+        expect(head.res.statusCode).toBe(200);
+        expect(head.setHeader).toHaveBeenCalledWith("Content-Length", String(body.byteLength));
+        expect(head.setHeader).toHaveBeenCalledWith("Content-Type", contentType);
+        expect(head.setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
+        expect(head.end).toHaveBeenCalledWith();
+        expect(read).not.toHaveBeenCalled();
+        expect(closeSync).toHaveBeenCalledOnce();
+
+        const get = await runAvatarRequest({ url: "/avatar/main", method: "GET", config });
+        expect(get.res.statusCode).toBe(200);
+        expect(get.end).toHaveBeenCalledWith(body);
+        expect(get.setHeader).toHaveBeenCalledWith("Content-Type", contentType);
+        expect(get.setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
+        expect(get.setHeader).not.toHaveBeenCalledWith("Content-Length", expect.anything());
+      } finally {
+        read.mockRestore();
+        closeSync.mockRestore();
+        await fs.rm(tmp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["", "/openclaw"])(
+    "preserves authenticated avatar HEAD length under the %s Control UI base path",
+    async (basePath) => {
+      const tmp = testTempDirs.make("openclaw-avatar-head-base-");
+      const body = Buffer.from("authenticated avatar 東京", "utf8");
+      try {
+        await fs.writeFile(path.join(tmp, "main.png"), body);
+        const response = await runAvatarRequest({
+          url: `${basePath}/avatar/main`,
+          method: "HEAD",
+          config: createAvatarConfig(tmp, "main.png"),
+          ...(basePath ? { basePath } : {}),
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+          headers: { authorization: "Bearer test-token" },
+        });
+
+        expect(response.handled).toBe(true);
+        expect(response.res.statusCode).toBe(200);
+        expect(response.setHeader).toHaveBeenCalledWith("Content-Length", String(body.byteLength));
+        expect(response.end).toHaveBeenCalledWith();
+      } finally {
+        await fs.rm(tmp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("does not expose avatar HEAD representation length before authentication", async () => {
+    const tmp = testTempDirs.make("openclaw-avatar-head-unauthorized-");
+    try {
+      await fs.writeFile(path.join(tmp, "main.png"), REAL_PNG);
+      const response = await runAvatarRequest({
+        url: "/avatar/main",
+        method: "HEAD",
+        config: createAvatarConfig(tmp, "main.png"),
+        auth: { mode: "token", token: "test-token", allowTailscale: false },
+      });
+
+      expect(response.handled).toBe(true);
+      expect(response.res.statusCode).toBe(401);
+      expect(response.setHeader).not.toHaveBeenCalledWith("Content-Length", expect.anything());
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
     ["metadata", "/avatar/main?meta=1", "GET"],
     ["HEAD", "/avatar/main", "HEAD"],
   ] as const)(
@@ -2368,6 +2680,35 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("keeps JSON-Accept requests for explicit assets and plugin recovery routes", async () => {
+    await withControlUiRoot({
+      indexHtml: "<html><body>plugin-recovery</body></html>\n",
+      fn: async (tmp) => {
+        await writeAssetFile(tmp, "actual.txt", "inside-ok\n");
+
+        const asset = await runControlUiRequest({
+          url: "/assets/actual.txt",
+          method: "GET",
+          rootPath: tmp,
+          headers: { accept: "application/json" },
+        });
+        expect(asset.handled).toBe(true);
+        expect(asset.res.statusCode).toBe(200);
+        expect(responseBody(asset.end)).toBe("inside-ok\n");
+
+        const recovery = await runControlUiRequest({
+          url: "/settings/plugins",
+          method: "GET",
+          rootPath: tmp,
+          headers: { accept: "application/json" },
+        });
+        expect(recovery.handled).toBe(true);
+        expect(recovery.res.statusCode).toBe(200);
+        expect(responseBody(recovery.end)).toContain("plugin-recovery");
+      },
+    });
+  });
+
   it("compresses bundled assets and caches them immutably", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
@@ -2529,7 +2870,7 @@ describe("handleControlUiHttpRequest", () => {
               req: {
                 headers: { "accept-encoding": "br, identity;q=0" },
               } as IncomingMessage,
-              sourceFile: { path: filePath, fd },
+              sourceFile: { path: filePath, fd, size: fsSync.fstatSync(fd).size },
               precompressed: true,
               openPrecompressedFile: () => {
                 throw openError;
@@ -2711,6 +3052,38 @@ describe("handleControlUiHttpRequest", () => {
       },
     });
   });
+
+  it.each(["identity", "gzip", "br"] as const)(
+    "preserves the selected %s static-asset Content-Length for HEAD",
+    async (encoding) => {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          const source = "console.log('static asset metadata');\n".repeat(12);
+          const { filePath } = await writeAssetFile(tmp, "app-HeAd1234.js", source);
+          await fs.writeFile(`${filePath}.gz`, gzipSync(source));
+          await fs.writeFile(`${filePath}.br`, brotliCompressSync(source));
+          const request = {
+            url: "/assets/app-HeAd1234.js",
+            rootPath: tmp,
+            rootKind: "bundled" as const,
+            headers: { "accept-encoding": encoding },
+          };
+          const get = await runControlUiRequest({ ...request, method: "GET" });
+          const head = await runControlUiRequest({ ...request, method: "HEAD" });
+          const body = get.end.mock.calls[0]?.[0];
+
+          expect(Buffer.isBuffer(body)).toBe(true);
+          expect(head.setHeader).toHaveBeenCalledWith("Content-Length", String(body.byteLength));
+          expect(firstEndCallLength(head.end)).toBe(0);
+          if (encoding === "identity") {
+            expect(head.setHeader).not.toHaveBeenCalledWith("Content-Encoding", expect.anything());
+          } else {
+            expect(head.setHeader).toHaveBeenCalledWith("Content-Encoding", encoding);
+          }
+        },
+      });
+    },
+  );
 
   it.each([
     {

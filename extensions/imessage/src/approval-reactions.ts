@@ -2,12 +2,18 @@
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import {
   addApprovalReactionHintToText,
+  approvalReactionDecisionSetsMatch,
   buildApprovalReactionHint,
   createApprovalReactionTargetStore,
+  extractApprovalReactionPromptBinding,
   hasApprovalReactionHintText,
   listApprovalReactionBindings,
+  normalizeApprovalReactionDecision,
+  readApprovalReactionDeliveredBinding,
+  readApprovalReactionPresentationBinding,
   resolveTypedApprovalReactionTarget,
   type ApprovalReactionDecisionBinding,
+  type ApprovalReactionDeliveryBinding,
   type ApprovalReactionTargetRecord,
 } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
@@ -19,6 +25,7 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { getIMessageApprovalApprovers, imessageApprovalAuth } from "./approval-auth.js";
 import type { IMessageApprovalGatewayRuntime } from "./approval-resolver.js";
@@ -143,15 +150,12 @@ export function listPendingIMessageApprovalReactionPollTargets(params: {
   return [...targetByApprovalAndMessage.values()];
 }
 
-function reportPersistentApprovalReactionError(error: unknown): void {
-  try {
-    getOptionalIMessageRuntime()
-      ?.logging.getChildLogger({ plugin: "imessage", feature: "approval-reaction-state" })
-      .warn("iMessage persistent approval reaction state failed", { error: String(error) });
-  } catch {
-    // Best effort only: persistent state must never break iMessage reactions.
-  }
-}
+const reportPersistentApprovalReactionError = createPluginStateErrorReporter(
+  getOptionalIMessageRuntime,
+  "imessage",
+  "approval-reaction-state",
+  "iMessage persistent approval reaction state failed",
+);
 
 function reportApprovalBindingCorrelationMismatch(binding: {
   approvalId: string;
@@ -184,7 +188,7 @@ function readPersistedTarget(value: unknown): IMessageApprovalReactionTarget | n
   }
   const allowedDecisions = target.allowedDecisions
     .map((valueValue) =>
-      typeof valueValue === "string" ? normalizeApprovalDecision(valueValue) : null,
+      typeof valueValue === "string" ? normalizeApprovalReactionDecision(valueValue) : null,
     )
     .filter((valueLocal): valueLocal is ExecApprovalReplyDecision => Boolean(valueLocal));
   if (allowedDecisions.length === 0) {
@@ -240,99 +244,11 @@ export function appendIMessageApprovalReactionHintForOutboundMessage(text: strin
   });
 }
 
-type IMessageApprovalDeliveryBinding = {
-  approvalId: string;
+type IMessageApprovalDeliveryBinding = ApprovalReactionDeliveryBinding & {
   approvalSlug: string;
-  approvalKind: "exec" | "plugin";
-  allowedDecisions: ExecApprovalReplyDecision[];
 };
 
 const IMESSAGE_APPROVAL_DELIVERY_BINDING_KEY = "imessageApprovalReactionBindingV1";
-
-function readStrictDecisionList(value: unknown): ExecApprovalReplyDecision[] | null {
-  if (!Array.isArray(value) || value.length === 0) {
-    return null;
-  }
-  const decisions: ExecApprovalReplyDecision[] = [];
-  for (const entry of value) {
-    if (entry !== "allow-once" && entry !== "allow-always" && entry !== "deny") {
-      return null;
-    }
-    if (decisions.includes(entry)) {
-      return null;
-    }
-    decisions.push(entry);
-  }
-  return decisions;
-}
-
-function decisionSetsMatch(
-  left: readonly ExecApprovalReplyDecision[],
-  right: readonly ExecApprovalReplyDecision[],
-): boolean {
-  return left.length === right.length && left.every((decision) => right.includes(decision));
-}
-
-function readStrictApprovalMetadata(payload: ReplyPayload): IMessageApprovalDeliveryBinding | null {
-  const value = payload.channelData?.execApproval;
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  const record = value as Record<string, unknown>;
-  const approvalId = typeof record.approvalId === "string" ? record.approvalId.trim() : "";
-  const approvalSlug = typeof record.approvalSlug === "string" ? record.approvalSlug.trim() : "";
-  const approvalKind = record.approvalKind;
-  const allowedDecisions = readStrictDecisionList(record.allowedDecisions);
-  if (
-    !approvalId ||
-    !approvalSlug ||
-    (approvalKind !== "exec" && approvalKind !== "plugin") ||
-    !allowedDecisions
-  ) {
-    return null;
-  }
-  return { approvalId, approvalSlug, approvalKind, allowedDecisions };
-}
-
-function bindingsMatch(
-  left: IMessageApprovalDeliveryBinding,
-  right: IMessageApprovalDeliveryBinding,
-): boolean {
-  return (
-    left.approvalId === right.approvalId &&
-    left.approvalSlug === right.approvalSlug &&
-    left.approvalKind === right.approvalKind &&
-    decisionSetsMatch(left.allowedDecisions, right.allowedDecisions)
-  );
-}
-
-function readTypedApprovalPresentationBinding(
-  payload: ReplyPayload,
-): IMessageApprovalDeliveryBinding | null {
-  const metadata = readStrictApprovalMetadata(payload);
-  if (!metadata) {
-    return null;
-  }
-  const approvalActions = (payload.presentation?.blocks ?? [])
-    .flatMap((block) => (block.type === "buttons" ? block.buttons : []))
-    .map((button) => button.action)
-    .filter((action) => action?.type === "approval");
-  if (approvalActions.length === 0) {
-    return null;
-  }
-  const allowedDecisions: ExecApprovalReplyDecision[] = [];
-  for (const action of approvalActions) {
-    if (
-      action.approvalId !== metadata.approvalId ||
-      action.approvalKind !== metadata.approvalKind ||
-      allowedDecisions.includes(action.decision)
-    ) {
-      return null;
-    }
-    allowedDecisions.push(action.decision);
-  }
-  return decisionSetsMatch(metadata.allowedDecisions, allowedDecisions) ? metadata : null;
-}
 
 function visibleApprovalBindingMatches(
   text: string | undefined,
@@ -371,13 +287,13 @@ function visibleApprovalBindingMatches(
       continue;
     }
     for (const token of decisionsText.split(/[\s|,]+/)) {
-      const decision = normalizeApprovalDecision(token);
+      const decision = normalizeApprovalReactionDecision(token);
       if (decision && !visibleDecisions.includes(decision)) {
         visibleDecisions.push(decision);
       }
     }
   }
-  if (!decisionSetsMatch(binding.allowedDecisions, visibleDecisions)) {
+  if (!approvalReactionDecisionSetsMatch(binding.allowedDecisions, visibleDecisions)) {
     return false;
   }
   if (!options.requireReactionHint) {
@@ -387,43 +303,16 @@ function visibleApprovalBindingMatches(
   return Boolean(hint && text.includes(hint));
 }
 
-function readDeliveredApprovalBinding(
-  payload: ReplyPayload,
-): IMessageApprovalDeliveryBinding | null {
-  const metadata = readStrictApprovalMetadata(payload);
-  const value = payload.channelData?.[IMESSAGE_APPROVAL_DELIVERY_BINDING_KEY];
-  if (!metadata || !value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  const record = value as Record<string, unknown>;
-  const approvalId = typeof record.approvalId === "string" ? record.approvalId.trim() : "";
-  const approvalSlug = typeof record.approvalSlug === "string" ? record.approvalSlug.trim() : "";
-  const approvalKind = record.approvalKind;
-  const allowedDecisions = readStrictDecisionList(record.allowedDecisions);
-  if (
-    record.version !== 1 ||
-    !approvalId ||
-    !approvalSlug ||
-    (approvalKind !== "exec" && approvalKind !== "plugin") ||
-    !allowedDecisions
-  ) {
-    return null;
-  }
-  const marker: IMessageApprovalDeliveryBinding = {
-    approvalId,
-    approvalSlug,
-    approvalKind,
-    allowedDecisions,
-  };
-  return bindingsMatch(metadata, marker) ? metadata : null;
-}
-
 /** Preserve a validated typed approval binding until the iMessage GUID is known. */
 export function addIMessageApprovalReactionHintToStructuredPayload(params: {
   payload: ReplyPayload;
   approvalKind: "exec" | "plugin";
 }): ReplyPayload | null {
-  const metadata = readTypedApprovalPresentationBinding(params.payload);
+  const metadata = readApprovalReactionPresentationBinding({
+    payload: params.payload,
+    requireApprovalSlug: true,
+    trimApprovalId: true,
+  }) as IMessageApprovalDeliveryBinding | null;
   const text = params.payload.text;
   if (metadata?.approvalKind !== params.approvalKind || !text) {
     return null;
@@ -451,18 +340,6 @@ export function addIMessageApprovalReactionHintToStructuredPayload(params: {
   };
 }
 
-function normalizeApprovalDecision(value: string): ExecApprovalReplyDecision | null {
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "always") {
-    return "allow-always";
-  }
-  if (normalized === "allow-once" || normalized === "allow-always" || normalized === "deny") {
-    return normalized;
-  }
-  return null;
-}
-
-const APPROVAL_ID_LINE_RE = /^\s*ID:\s*([A-Za-z0-9][A-Za-z0-9._:-]*)\s*$/i;
 const APPROVE_COMMAND_LINE_RE = /\/approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(.+)$/i;
 
 export function extractIMessageApprovalPromptBinding(text: string): {
@@ -470,49 +347,7 @@ export function extractIMessageApprovalPromptBinding(text: string): {
   approvalKind: "exec" | "plugin";
   allowedDecisions: ExecApprovalReplyDecision[];
 } | null {
-  // Strip bold markers the prompt builder emits (**Exec approval required**,
-  // **ID:** …) so the canonical-format checks below still recognize the prompt.
-  const lines = text.split(/\r?\n/).map((line) => line.replace(/\*\*/g, ""));
-  const hasExecHeader = lines.some((line) =>
-    /^\s*[^A-Za-z0-9]*Exec approval required\s*$/i.test(line),
-  );
-  const hasPluginHeader = lines.some((line) =>
-    /^\s*[^A-Za-z0-9]*Plugin approval required\s*$/i.test(line),
-  );
-  if (hasExecHeader === hasPluginHeader) {
-    return null;
-  }
-  const approvalKind = hasPluginHeader ? "plugin" : "exec";
-  // Only treat as an approval prompt if it carries the canonical "ID: <approvalId>"
-  // header that the SDK payload builders emit. This prevents arbitrary outbound
-  // text containing `/approve <id> allow-once` (agent help text, quoted docs,
-  // pasted snippets) from getting a reaction binding registered against it.
-  const idHeaderMatch = lines
-    .map((line) => line.match(APPROVAL_ID_LINE_RE))
-    .find((match): match is RegExpMatchArray => Boolean(match));
-  if (!idHeaderMatch) {
-    return null;
-  }
-  const approvalId = idHeaderMatch[1];
-  if (!approvalId) {
-    return null;
-  }
-  const allowedDecisions: ExecApprovalReplyDecision[] = [];
-  for (const line of lines) {
-    const match = line.match(APPROVE_COMMAND_LINE_RE);
-    const decisionsText = match?.[2];
-    if (!match || match[1] !== approvalId || !decisionsText) {
-      continue;
-    }
-    const decisions = decisionsText.split(/[\s|,]+/);
-    for (const decisionText of decisions) {
-      const decision = normalizeApprovalDecision(decisionText);
-      if (decision && !allowedDecisions.includes(decision)) {
-        allowedDecisions.push(decision);
-      }
-    }
-  }
-  return allowedDecisions.length > 0 ? { approvalId, approvalKind, allowedDecisions } : null;
+  return extractApprovalReactionPromptBinding({ text });
 }
 
 export function registerIMessageApprovalReactionTarget(params: {
@@ -643,7 +478,12 @@ export function registerIMessageApprovalReactionTargetForDeliveredPayload(params
   if (params.target.channel.trim().toLowerCase() !== "imessage") {
     return false;
   }
-  const binding = readDeliveredApprovalBinding(params.payload);
+  const binding = readApprovalReactionDeliveredBinding({
+    payload: params.payload,
+    channelDataKey: IMESSAGE_APPROVAL_DELIVERY_BINDING_KEY,
+    requireApprovalSlug: true,
+    trimApprovalId: true,
+  }) as IMessageApprovalDeliveryBinding | null;
   if (!binding) {
     return false;
   }
@@ -921,4 +761,3 @@ export function clearIMessageApprovalReactionTargetsForTest(): void {
   pendingReactionPollTargets.clear();
   resolverRuntimeLoader.clear();
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

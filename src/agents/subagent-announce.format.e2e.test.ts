@@ -10,6 +10,7 @@ import {
 import * as configSessions from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import * as gatewayCall from "../gateway/call.js";
+import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import {
   testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
@@ -54,14 +55,16 @@ type MockSubagentRun = {
   task: string;
   cleanup: "keep" | "delete";
   createdAt: number;
-  endedAt?: number;
+  execution: {
+    endedAt?: number;
+    outcome?: {
+      status: "ok" | "timeout" | "error" | "unknown";
+      error?: string;
+    };
+  };
   cleanupCompletedAt?: number;
   label?: string;
   frozenResultText?: string | null;
-  outcome?: {
-    status: "ok" | "timeout" | "error" | "unknown";
-    error?: string;
-  };
 };
 type SessionEntryFixture = Partial<Omit<SessionEntry, "updatedAt">> & {
   updatedAt?: number;
@@ -183,7 +186,7 @@ const { subagentRegistryMock } = vi.hoisted(() => ({
       (_sessionKey: string, _scope?: { requesterRunId?: string }): MockSubagentRun[] => [],
     ),
     replaceSubagentRunAfterSteer: vi.fn(
-      (_params: { previousRunId: string; nextRunId: string }) => true,
+      (_params: { previousRunId: string; nextRunId: string; lifecycleGeneration?: string }) => true,
     ),
     resolveRequesterForChildSession: vi.fn((_sessionKey: string): RequesterResolution => null),
   },
@@ -871,6 +874,13 @@ describe("subagent announce formatting", () => {
   });
 
   it("suppresses announce flow for whitespace-padded ANNOUNCE_SKIP and still runs cleanup", async () => {
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-skip-whitespace",
+        lifecycleRevision: "child-lifecycle-skip-whitespace",
+      },
+    };
+
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
       childRunId: "run-direct-skip-whitespace",
@@ -903,6 +913,49 @@ describe("subagent announce formatting", () => {
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      name: "visible",
+      terminalReply: { disposition: "visible", text: "restored visible reply" } as const,
+      expectedAgentCalls: 1,
+      expectedMessage: "restored visible reply",
+    },
+    {
+      name: "silent",
+      terminalReply: { disposition: "silent" } as const,
+      expectedAgentCalls: 0,
+      expectedMessage: undefined,
+    },
+    {
+      name: "empty",
+      terminalReply: { disposition: "empty" } as const,
+      expectedAgentCalls: 1,
+      expectedMessage: "(no output)",
+    },
+  ])(
+    "replays restored durable $name output without transcript inference",
+    async ({ name, terminalReply, expectedAgentCalls, expectedMessage }) => {
+      const didAnnounce = await runSubagentAnnounceFlow({
+        childSessionKey: "agent:main:subagent:test",
+        childRunId: `run-restored-completion-${name}`,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        requesterOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
+        ...defaultOutcomeAnnounce,
+        expectsCompletionMessage: true,
+        terminalReply,
+      });
+
+      expect(didAnnounce).toBe(true);
+      expect(chatHistoryMock).not.toHaveBeenCalled();
+      expect(readLatestAssistantReplyMock).not.toHaveBeenCalled();
+      expect(agentSpy).toHaveBeenCalledTimes(expectedAgentCalls);
+      if (expectedMessage) {
+        expect(getAgentCall()?.params?.message).toContain(expectedMessage);
+      }
+    },
+  );
 
   it("uses fallback reply when wake continuation returns NO_REPLY", async () => {
     const didAnnounce = await runSubagentAnnounceFlow({
@@ -2474,10 +2527,9 @@ describe("subagent announce formatting", () => {
               label: "child-stale",
               cleanup: "keep",
               createdAt: 1,
-              endedAt: 2,
+              execution: { endedAt: 2, outcome: { status: "ok" } },
               cleanupCompletedAt: 3,
               frozenResultText: "stale result that should be filtered",
-              outcome: { status: "ok" },
             },
           ];
         }
@@ -2491,10 +2543,9 @@ describe("subagent announce formatting", () => {
             label: "child-a",
             cleanup: "keep",
             createdAt: 10,
-            endedAt: 20,
+            execution: { endedAt: 20, outcome: { status: "ok" } },
             cleanupCompletedAt: 21,
             frozenResultText: "result from child a",
-            outcome: { status: "ok" },
           },
           {
             runId: "run-child-b",
@@ -2505,10 +2556,9 @@ describe("subagent announce formatting", () => {
             label: "child-b",
             cleanup: "keep",
             createdAt: 11,
-            endedAt: 21,
+            execution: { endedAt: 21, outcome: { status: "ok" } },
             cleanupCompletedAt: 22,
             frozenResultText: "result from child b",
-            outcome: { status: "ok" },
           },
         ];
       },
@@ -2562,10 +2612,9 @@ describe("subagent announce formatting", () => {
             label: "child-a",
             cleanup: "keep",
             createdAt: 10,
-            endedAt: 20,
+            execution: { endedAt: 20, outcome: { status: "ok" } },
             cleanupCompletedAt: 21,
             frozenResultText: "stale result from child a",
-            outcome: { status: "ok" },
           },
           {
             runId: "run-child-current",
@@ -2576,10 +2625,9 @@ describe("subagent announce formatting", () => {
             label: "child-a",
             cleanup: "keep",
             createdAt: 11,
-            endedAt: 22,
+            execution: { endedAt: 22, outcome: { status: "ok" } },
             cleanupCompletedAt: 23,
             frozenResultText: "current result from child a",
-            outcome: { status: "ok" },
           },
           {
             runId: "run-child-b",
@@ -2590,10 +2638,9 @@ describe("subagent announce formatting", () => {
             label: "child-b",
             cleanup: "keep",
             createdAt: 12,
-            endedAt: 24,
+            execution: { endedAt: 24, outcome: { status: "ok" } },
             cleanupCompletedAt: 25,
             frozenResultText: "result from child b",
-            outcome: { status: "ok" },
           },
         ];
       },
@@ -2638,10 +2685,9 @@ describe("subagent announce formatting", () => {
             label: "shared-child",
             cleanup: "keep",
             createdAt: 10,
-            endedAt: 20,
+            execution: { endedAt: 20, outcome: { status: "ok" } },
             cleanupCompletedAt: 21,
             frozenResultText: "stale old parent result",
-            outcome: { status: "ok" },
           },
         ];
       },
@@ -2660,10 +2706,9 @@ describe("subagent announce formatting", () => {
           label: "shared-child",
           cleanup: "keep",
           createdAt: 11,
-          endedAt: 22,
+          execution: { endedAt: 22, outcome: { status: "ok" } },
           cleanupCompletedAt: 23,
           frozenResultText: "current new parent result",
-          outcome: { status: "ok" },
         };
       },
     );
@@ -2713,10 +2758,9 @@ describe("subagent announce formatting", () => {
             label: "child-a",
             cleanup: "keep",
             createdAt: 10,
-            endedAt: 20,
+            execution: { endedAt: 20, outcome: { status: "ok" } },
             cleanupCompletedAt: 21,
             frozenResultText: "result from child a",
-            outcome: { status: "ok" },
           },
           {
             runId: "run-child-b",
@@ -2727,16 +2771,16 @@ describe("subagent announce formatting", () => {
             label: "child-b",
             cleanup: "keep",
             createdAt: 11,
-            endedAt: 21,
+            execution: { endedAt: 21, outcome: { status: "ok" } },
             cleanupCompletedAt: 22,
             frozenResultText: "result from child b",
-            outcome: { status: "ok" },
           },
         ];
       },
     );
 
     agentSpy.mockResolvedValueOnce(visibleAgentResponse("run-parent-phase-2"));
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
 
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:parent",
@@ -2762,6 +2806,7 @@ describe("subagent announce formatting", () => {
     expect(subagentRegistryMock.replaceSubagentRunAfterSteer).toHaveBeenCalledWith({
       previousRunId: "run-parent-phase-1",
       nextRunId: "run-parent-phase-2",
+      lifecycleGeneration,
       preserveFrozenResultFallback: true,
       task: expect.stringContaining("All pending descendants for that run have now settled"),
     });
@@ -2793,10 +2838,9 @@ describe("subagent announce formatting", () => {
             label: "child-a",
             cleanup: "keep",
             createdAt: 10,
-            endedAt: 20,
+            execution: { endedAt: 20, outcome: { status: "ok" } },
             cleanupCompletedAt: 21,
             frozenResultText: "result from child a",
-            outcome: { status: "ok" },
           },
         ];
       },
@@ -2849,10 +2893,9 @@ describe("subagent announce formatting", () => {
             label: "grandchild",
             cleanup: "keep",
             createdAt: 10,
-            endedAt: 20,
+            execution: { endedAt: 20, outcome: { status: "ok" } },
             cleanupCompletedAt: 21,
             frozenResultText: "grandchild final output",
-            outcome: { status: "ok" },
           },
         ];
       }
@@ -2867,10 +2910,9 @@ describe("subagent announce formatting", () => {
             label: "child",
             cleanup: "keep",
             createdAt: 11,
-            endedAt: 21,
+            execution: { endedAt: 21, outcome: { status: "ok" } },
             cleanupCompletedAt: 22,
             frozenResultText: "child synthesized output from grandchild",
-            outcome: { status: "ok" },
           },
         ];
       }
@@ -3182,10 +3224,12 @@ describe("subagent announce formatting", () => {
         label: params.label,
         cleanup: "keep" as const,
         createdAt: params.createdAt,
-        endedAt: params.endedAt ?? params.createdAt + 1,
+        execution: {
+          endedAt: params.endedAt ?? params.createdAt + 1,
+          outcome: params.outcome ?? ({ status: "ok" } as const),
+        },
         cleanupCompletedAt: params.cleanupCompletedAt ?? params.createdAt + 2,
         frozenResultText: params.frozenResultText,
-        outcome: params.outcome ?? ({ status: "ok" } as const),
       };
     }
 

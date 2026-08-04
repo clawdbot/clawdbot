@@ -18,6 +18,7 @@ type ResolveCommandConfigParams = {
   commandName: string;
   targetIds: Set<string>;
   allowedPaths?: Set<string>;
+  optionalActivePaths?: Set<string>;
   runtime: RuntimeEnv;
 };
 
@@ -37,6 +38,8 @@ vi.mock("../cli/command-secret-targets.js", () => ({
       "models.providers.*.apiKey",
       ...(params?.includeChannelTargets === true ? ["channels.telegram.botToken"] : []),
     ]),
+  getAgentRuntimeOptionalCommandSecretPaths: () =>
+    new Set(["plugins.entries.firecrawl.config.webFetch.apiKey"]),
   getScopedChannelsCommandSecretTargets: (params: {
     config: OpenClawConfig;
     channel?: string;
@@ -248,6 +251,7 @@ describe("agentCommand runtime config", () => {
         config: loadedConfig,
         commandName: "agent",
         targetIds: new Set(["models.providers.*.apiKey"]),
+        optionalActivePaths: new Set(["plugins.entries.firecrawl.config.webFetch.apiKey"]),
         runtime,
       });
       const targetIds = requireResolveCommandConfigParams().targetIds;

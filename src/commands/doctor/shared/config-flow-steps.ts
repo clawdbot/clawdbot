@@ -4,8 +4,13 @@ import { protectActiveAuthProfileConfig } from "../../doctor-auth-profile-config
 import { stripUnknownConfigKeys } from "../../doctor-config-analysis.js";
 import type { DoctorConfigPreflightResult } from "../../doctor-config-preflight.js";
 import type { DoctorConfigMutationState } from "./config-mutation-state.js";
-import { containsAuthoredInclude } from "./include-migration-ownership.js";
+import {
+  classifyConfigPathMigrationOwnership,
+  containsAuthoredInclude,
+} from "./include-migration-ownership.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
+
+const OTEL_GRPC_PROTOCOL_PATH = "diagnostics.otel.protocol";
 
 /** Apply legacy config migrations and update preview/fix state for doctor config flow. */
 export function applyLegacyCompatibilityStep(params: {
@@ -18,6 +23,7 @@ export function applyLegacyCompatibilityStep(params: {
   issueLines: string[];
   changeLines: string[];
   partiallyValid?: boolean;
+  blocksWrite?: boolean;
 } {
   if (params.snapshot.legacyIssues.length === 0) {
     return {
@@ -28,6 +34,27 @@ export function applyLegacyCompatibilityStep(params: {
   }
 
   const issueLines = formatConfigIssueLines(params.snapshot.legacyIssues, "-");
+  if (params.snapshot.legacyIssues.some((issue) => issue.path === OTEL_GRPC_PROTOCOL_PATH)) {
+    const ownership = classifyConfigPathMigrationOwnership({
+      snapshot: params.snapshot,
+      configPath: ["diagnostics", "otel", "protocol"],
+    });
+    if (ownership.kind === "manual") {
+      const targets =
+        ownership.targetPaths.length > 0
+          ? ` Inspect these candidate source files and remove or replace ${OTEL_GRPC_PROTOCOL_PATH} = "grpc" from every definition: ${ownership.targetPaths.join(", ")}.`
+          : ` Remove or replace ${OTEL_GRPC_PROTOCOL_PATH} = "grpc" in the owning $include directive or included file.`;
+      return {
+        state: params.state,
+        issueLines: [
+          ...issueLines,
+          `- ${OTEL_GRPC_PROTOCOL_PATH}: Doctor cannot safely rewrite this $include ownership.${targets} No config files were changed.`,
+        ],
+        changeLines: [],
+        blocksWrite: true,
+      };
+    }
+  }
   const hasAuthoredIncludes = containsAuthoredInclude(params.snapshot.parsed);
   const migrationInput = hasAuthoredIncludes
     ? params.snapshot.sourceConfig
@@ -37,7 +64,10 @@ export function applyLegacyCompatibilityStep(params: {
     sourceConfig: migratedSource,
     changes,
     partiallyValid,
-  } = migrateLegacyConfig(migrationInput);
+  } = migrateLegacyConfig(migrationInput, {
+    authoredRaw: params.snapshot.parsed,
+    resolvedRaw: params.snapshot.sourceConfig,
+  });
   if (!migrated) {
     return {
       state: {

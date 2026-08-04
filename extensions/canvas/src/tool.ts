@@ -15,9 +15,13 @@ import {
   jsonResult,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
+import {
+  addTimerTimeoutGraceMs,
+  clampPositiveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { AnyAgentTool, OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
+import { readRegularFile, wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { validateSupportedA2UIJsonl } from "./a2ui-jsonl.js";
 import { normalizeCanvasSnapshotFileExtension, parseCanvasSnapshotPayload } from "./cli-helpers.js";
@@ -34,6 +38,8 @@ type CanvasImageSanitizationLimits = {
 };
 
 export const CANVAS_JSONL_MAX_BYTES = 16 * 1024 * 1024;
+const DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS = 30_000;
+const CANVAS_NODE_INVOKE_TRANSPORT_GRACE_MS = 10_000;
 
 function readGatewayCallOptions(params: Record<string, unknown>) {
   return {
@@ -102,6 +108,7 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
   return {
     label: "Canvas",
     name: "canvas",
+    resultContentSource: "network",
     description:
       "Control node canvases (present/hide/navigate/eval/snapshot/A2UI). Use snapshot to capture the rendered UI.",
     parameters: CanvasToolSchema,
@@ -113,13 +120,25 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
 
       const invoke = async (command: string, invokeParams?: Record<string, unknown>) => {
         const nodeId = await resolveNodeId(gatewayOpts, nodeQuery, true);
-        return await callGatewayTool("node.invoke", gatewayOpts, {
-          nodeId,
-          command,
-          params: invokeParams,
-          idempotencyKey: randomUUID(),
-          ...(options?.agentSessionKey ? { sessionKey: options.agentSessionKey } : {}),
-        });
+        const timeoutMs =
+          clampPositiveTimerTimeoutMs(
+            gatewayOpts.timeoutMs ?? DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS,
+          ) ?? DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS;
+        // Preserve the node lookup budget while letting Gateway outlive node execution.
+        const transportTimeoutMs =
+          addTimerTimeoutGraceMs(timeoutMs, CANVAS_NODE_INVOKE_TRANSPORT_GRACE_MS) ?? timeoutMs;
+        return await callGatewayTool(
+          "node.invoke",
+          { ...gatewayOpts, timeoutMs: transportTimeoutMs },
+          {
+            nodeId,
+            command,
+            params: invokeParams,
+            timeoutMs,
+            idempotencyKey: randomUUID(),
+            ...(options?.agentSessionKey ? { sessionKey: options.agentSessionKey } : {}),
+          },
+        );
       };
 
       switch (action) {
@@ -167,8 +186,15 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
           };
           const result = raw?.payload?.result;
           if (typeof result === "string") {
+            // Remote Canvas pages must not forge prompt boundaries or outbound attachments.
+            const text = result
+              ? wrapExternalContent(
+                  result.replace(/^([^\S\n]*)(MEDIA:)/gim, "$1[neutralized] $2"),
+                  { source: "browser", includeWarning: false },
+                )
+              : result;
             return {
-              content: [{ type: "text", text: result }],
+              content: [{ type: "text", text }],
               details: { result },
             };
           }
@@ -198,7 +224,8 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
           return await imageResultFromFile({
             label: "canvas:snapshot",
             path: filePath,
-            details: { format: payload.format },
+            // Rendered pages are model observations, never automatic outbound attachments.
+            details: { format: payload.format, media: { outbound: false } },
             imageSanitization,
           });
         }

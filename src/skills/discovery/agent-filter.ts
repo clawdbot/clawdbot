@@ -45,9 +45,10 @@ export function isSessionSkillEnabled(
   skillName: string,
   baseFilter: readonly string[] | undefined,
   overrides: Readonly<Record<string, boolean>> | undefined,
+  skillKey = skillName,
 ): boolean {
   const override =
-    overrides && Object.hasOwn(overrides, skillName) ? overrides[skillName] : undefined;
+    overrides && Object.hasOwn(overrides, skillKey) ? overrides[skillKey] : undefined;
   const baseAllows = baseFilter === undefined || baseFilter.includes(skillName);
   return override === true || (baseAllows && override !== false);
 }

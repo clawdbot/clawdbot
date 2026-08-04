@@ -167,7 +167,17 @@ export type ChannelAccountSnapshot = {
   lastTransportActivityAt?: number | null;
   stateReason?: string;
   lastError?: string | null;
+  /**
+   * Legacy channel-authored health label; channel plugins should publish `lifecycle` instead.
+   * Core-derived policy writes remain supported. There is no removal date; removal awaits
+   * external plugin adoption.
+   */
   healthState?: string;
+  /**
+   * Recorded account lifecycle, independent of inferred transport health.
+   * Optional so channels that never publish lifecycle remain unaffected.
+   */
+  lifecycle?: "starting" | "ready" | "recovering" | "blocked" | "stopped";
   /**
    * Inbound admission, which is a different failure domain from `connected`.
    * Optional-`true` on purpose: there is no `false` to mistake for "unknown",
@@ -244,7 +254,7 @@ export type ChannelGroupContext = {
 /** TTS voice delivery behavior advertised by a channel plugin. */
 /**
  * Container tokens (file-extension shape, no leading dot) that the host
- * speech-core pipeline knows how to pre-transcode synthesized audio into.
+ * TTS pipeline knows how to pre-transcode synthesized audio into.
  * Channels that benefit from a specific container — currently only
  * iMessage, which needs Apple's native voice-memo CAF descriptor — name
  * one here. Adding a new entry requires extending the host transcoder

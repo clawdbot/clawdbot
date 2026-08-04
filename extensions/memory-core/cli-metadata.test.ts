@@ -13,15 +13,17 @@ vi.mock("./src/cli.js", () => ({
 import plugin from "./cli-metadata.js";
 
 describe("memory-core CLI metadata", () => {
-  it("passes the bound SQLite lease host to the lazy CLI registrar", async () => {
+  it("passes SQLite state and lease hosts to the standalone CLI", async () => {
     let registrar: Parameters<OpenClawPluginApi["registerCli"]>[0] | undefined;
     const hostWithLease = vi.fn();
+    const keyedStore = {};
+    const openKeyedStore = vi.fn(() => keyedStore);
     const acquireLocalService = vi.fn(async () => undefined);
     plugin.register(
       createTestPluginApi({
         runtime: {
           llm: { acquireLocalService },
-          state: { withLease: hostWithLease },
+          state: { openKeyedStore, withLease: hostWithLease },
         } as unknown as OpenClawPluginApi["runtime"],
         registerCli(nextRegistrar) {
           registrar = nextRegistrar;
@@ -37,8 +39,18 @@ describe("memory-core CLI metadata", () => {
 
     expect(registerMemoryCliMock).toHaveBeenCalledWith(program, {
       acquireLocalService,
+      openKeyedStore: expect.any(Function),
       withLease: expect.any(Function),
     });
+    const boundOpenKeyedStore = registerMemoryCliMock.mock.calls[0]?.[1]?.openKeyedStore as
+      | ((options: unknown) => unknown)
+      | undefined;
+    if (!boundOpenKeyedStore) {
+      throw new Error("bound SQLite state hook missing");
+    }
+    const storeOptions = { namespace: "cli-status-regression", maxEntries: 1 };
+    expect(boundOpenKeyedStore(storeOptions)).toBe(keyedStore);
+    expect(openKeyedStore).toHaveBeenCalledWith(storeOptions);
     const withLease = registerMemoryCliMock.mock.calls[0]?.[1]?.withLease as
       | ((...args: unknown[]) => unknown)
       | undefined;

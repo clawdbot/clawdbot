@@ -14,15 +14,15 @@ export function createGoogleProvider(): ProviderPlugin {
       {
         id: "api-key",
         kind: "api_key",
-        label: "Google Gemini API key",
-        hint: "Free API key from aistudio.google.com/apikey",
+        label: "Google AI Studio API key",
+        hint: "Supported API-key access from aistudio.google.com/apikey",
         run: noopAuth,
         wizard: {
           choiceId: "gemini-api-key",
-          choiceLabel: "Google Gemini API key",
+          choiceLabel: "Google AI Studio API key",
           groupId: "google",
           groupLabel: "Google",
-          groupHint: "Gemini API key + OAuth",
+          groupHint: "Supported API-key setup",
         },
       },
     ],
@@ -48,31 +48,10 @@ export function createGoogleVertexProvider(): ProviderPlugin {
 export function createGoogleGeminiCliProvider(): ProviderPlugin {
   return {
     id: "google-gemini-cli",
-    label: "Gemini CLI OAuth",
+    label: "Gemini CLI runtime",
     docsPath: "/providers/models",
     aliases: ["gemini-cli"],
-    envVars: [
-      "OPENCLAW_GEMINI_OAUTH_CLIENT_ID",
-      "OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET",
-      "GEMINI_CLI_OAUTH_CLIENT_ID",
-      "GEMINI_CLI_OAUTH_CLIENT_SECRET",
-    ],
-    auth: [
-      {
-        id: "oauth",
-        kind: "oauth",
-        label: "Google OAuth",
-        hint: "PKCE + localhost callback",
-        run: noopAuth,
-      },
-    ],
-    wizard: {
-      setup: {
-        choiceId: "google-gemini-cli",
-        choiceLabel: "Gemini CLI OAuth",
-        choiceHint: "Sign in with your Google account (opens a browser)",
-        methodId: "oauth",
-      },
-    },
+    envVars: [],
+    auth: [],
   };
 }

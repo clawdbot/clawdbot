@@ -21,12 +21,13 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { normalizeBoardWidgetDeclared } from "./board-capabilities.js";
 import { applyBoardOps, BoardValidationError, normalizeBoardLayout } from "./board-layout.js";
 import {
   cloneBoardSnapshot,
+  createBoardWidgetPutResult,
   createBoardGrantSnapshot,
   createBoardWidgetPutSnapshot,
+  normalizeBoardWidgetPutParams,
   type BoardStore,
   type BoardSnapshotWithHtmlViewMetadata,
   type BoardWidgetHtmlDocument,
@@ -40,6 +41,7 @@ import {
   parseDescriptor,
   parseManifest,
   parsePluginContent,
+  resolveSqliteBoardWidgetPutParams,
   rowToTab,
   rowToHtmlViewMetadata,
   rowToWidget,
@@ -466,18 +468,9 @@ export class SqliteBoardStore implements BoardStore {
     );
   }
 
-  putWidget(params: BoardWidgetMaterializedPutParams): BoardSnapshot {
+  putWidget(params: BoardWidgetMaterializedPutParams) {
     const { database, resolved } = this.prepareWrite(params.sessionKey);
-    const declared = normalizeBoardWidgetDeclared(params.declared);
-    const canonicalParams: BoardWidgetMaterializedPutParams = {
-      ...params,
-      sessionKey: resolved.sessionKey,
-    };
-    if (declared) {
-      canonicalParams.declared = declared;
-    } else {
-      delete canonicalParams.declared;
-    }
+    const canonicalInput = normalizeBoardWidgetPutParams(params, resolved.sessionKey);
     const viewGeneration = randomBytes(16).toString("hex");
     return runOpenClawAgentWriteTransaction(
       (transactionDatabase) => {
@@ -488,6 +481,11 @@ export class SqliteBoardStore implements BoardStore {
           );
         }
         const previous = readStoredBoard(transactionDatabase, resolved.sessionKey);
+        const canonicalParams = resolveSqliteBoardWidgetPutParams(
+          previous.snapshot,
+          canonicalInput,
+          previous.widgetRows,
+        );
         const existing = previous.widgetRows.find((row) => row.name === canonicalParams.name);
         const grantScopeMatches = existing
           ? existing.content_kind === "html"
@@ -547,7 +545,7 @@ export class SqliteBoardStore implements BoardStore {
             ),
         );
         updateWidgetLayouts(transactionDatabase, next, now);
-        return cloneBoardSnapshot(next);
+        return createBoardWidgetPutResult(next, canonicalParams.name);
       },
       { agentId: resolved.agentId, path: database.path, env: this.options.env },
       { operationLabel: "board.put-widget" },
@@ -603,6 +601,7 @@ export class SqliteBoardStore implements BoardStore {
                   presentation: manifest.presentation,
                   heightMode: manifest.heightMode,
                 },
+                manifest.nameIdentity,
               ),
               updated_at: Date.now(),
             })

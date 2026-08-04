@@ -6,8 +6,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isPathInside } from "../../infra/path-guards.js";
+import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
+import { normalizeContainerPath } from "./path-utils.js";
 import type { SandboxWorkspaceAccess } from "./types.js";
 
 export const SANDBOX_MOUNT_FORMAT_VERSION = 3;
@@ -34,6 +36,10 @@ function containerJoin(root: string, ...parts: string[]): string {
     .filter(Boolean)
     .join("/");
   return suffix ? `${normalizedRoot}/${suffix}` : normalizedRoot;
+}
+
+function normalizeMountContainerPath(containerPath: string): string {
+  return normalizeContainerPath(containerPath).replace(/\/+$/, "") || "/";
 }
 
 /** Hidden workspace used to materialize non-workspace skills for rw sandboxes. */
@@ -113,6 +119,48 @@ export function formatReadOnlyWorkspaceSkillMountHashState(
   mounts: readonly ReadOnlyWorkspaceSkillMount[],
 ): string[] {
   return mounts.map((mount) => `${mount.hostPath}:${mount.containerPath}:ro`);
+}
+
+/**
+ * Returns the set of container paths that are protected by read-only skill mounts.
+ *
+ * User-defined binds that target any path in this set must be skipped so the
+ * container engine sees one authoritative read-only mount for each destination.
+ */
+export function resolveProtectedSkillMountContainerPaths(
+  mounts: readonly ReadOnlyWorkspaceSkillMount[],
+): Set<string> {
+  return new Set(mounts.map((mount) => normalizeMountContainerPath(mount.containerPath)));
+}
+
+/**
+ * Returns a filtered copy of `binds` with entries whose container path conflicts with a
+ * protected skill mount removed. Protected skill mounts always take precedence so checked-in
+ * skills cannot be made writable by a user bind.
+ */
+export function filterBindsConflictingWithProtectedMounts(
+  binds: readonly string[] | undefined,
+  protectedContainerPaths: ReadonlySet<string>,
+): string[] {
+  if (!binds?.length) {
+    return [];
+  }
+  if (protectedContainerPaths.size === 0) {
+    return [...binds];
+  }
+  const filtered: string[] = [];
+  for (const bind of binds) {
+    const spec = splitSandboxBindSpec(bind);
+    if (!spec) {
+      filtered.push(bind);
+      continue;
+    }
+    const containerPath = normalizeMountContainerPath(spec.container);
+    if (!protectedContainerPaths.has(containerPath)) {
+      filtered.push(bind);
+    }
+  }
+  return filtered;
 }
 
 /** Appends Docker `-v` args for read-only skill mounts. */

@@ -198,6 +198,7 @@ describe("monitorSignalProvider autostart", () => {
 
   it("fails fast when auto-started signal daemon exits during startup", async () => {
     const runtime = createMonitorRuntime();
+    const statusSink = vi.fn();
     setSignalAutoStartConfig();
     spawnSignalDaemonMock.mockReturnValueOnce(
       createMockSignalDaemonHandle({
@@ -232,8 +233,12 @@ describe("monitorSignalProvider autostart", () => {
         autoStart: true,
         baseUrl: SIGNAL_BASE_URL,
         runtime,
+        statusSink,
       }),
     ).rejects.toThrow(/signal daemon exited/i);
+    expect(statusSink).toHaveBeenCalledWith(
+      expect.objectContaining({ lifecycle: "recovering", connected: false }),
+    );
   });
 
   it("treats daemon exit after user abort as clean shutdown", async () => {

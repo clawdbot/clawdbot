@@ -571,11 +571,12 @@ describe("SQLite active transcript event projection", () => {
     }
   });
 
-  it("awaits queued completion work after the preparation worker exits", async () => {
+  it("skips the preparation worker when the projection is already current", async () => {
     await persistSessionTranscriptTurn(scope, {
       messages: [{ eventId: "seed", message: { role: "user", content: "seed" } }],
       touchSessionEntry: false,
     });
+    queuedSessionWrite.mockClear();
     let resolveCompletionQueued!: () => void;
     const completionQueued = new Promise<void>((resolve) => {
       resolveCompletionQueued = resolve;
@@ -601,21 +602,26 @@ describe("SQLite active transcript event projection", () => {
       },
     );
     await entered;
+    const createWorker = vi.fn(() => {
+      throw new Error("clean projection must not spawn a worker");
+    });
     const outcome = reconcileSessionTranscriptIndexes({
       agentId: scope.agentId,
+      createWorker,
       env: scope.env,
     }).then(
       (value) => ({ value }),
       (error: unknown) => ({ error }),
     );
 
-    // The second queued write is the orphan sweep issued after the worker's done message.
+    // The second queued write is the preflight transaction waiting behind the held writer.
     await completionQueued;
     expect(queuedSessionWrite).toHaveBeenCalledTimes(2);
     releaseWriter();
     await heldWriter;
 
     expect(await outcome).toEqual({ value: { reconciledSessions: 0 } });
+    expect(createWorker).not.toHaveBeenCalled();
   }, 10_000);
 
   it("keeps dirty batch appends off the synchronous writer stack", async () => {

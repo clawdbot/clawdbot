@@ -847,21 +847,39 @@ describe("doctor legacy state migrations", () => {
       },
     });
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    expect(detected.preview).toContain(
-      `- Sessions: repair migrated transcript paths in ${path.join(targetDir, "sessions.json")}`,
-    );
+    const realReadSync = fs.readSync.bind(fs);
+    let shortReadCalls = 0;
+    const readSpy = vi.spyOn(fs, "readSync").mockImplementation(((
+      fd: number,
+      buffer: NodeJS.ArrayBufferView,
+      offset: number,
+      length: number,
+      position: fs.ReadPosition | null,
+    ) => {
+      shortReadCalls += 1;
+      return realReadSync(fd, buffer, offset, Math.min(length, 16), position);
+    }) as typeof fs.readSync);
 
-    const result = await runLegacyStateMigrations({ detected });
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.changes).toContain("Repaired migrated session transcript paths");
-    const store = JSON.parse(
-      fs.readFileSync(path.join(targetDir, "sessions.json"), "utf8"),
-    ) as Record<string, object>;
-    expect(store["agent:main:main"]).not.toHaveProperty("sessionFile");
+    try {
+      const detected = await detectLegacyStateMigrations({
+        cfg: {},
+        env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+      });
+      expect(detected.preview).toContain(
+        `- Sessions: repair migrated transcript paths in ${path.join(targetDir, "sessions.json")}`,
+      );
+
+      const result = await runLegacyStateMigrations({ detected });
+      expect(result.warnings).toStrictEqual([]);
+      expect(result.changes).toContain("Repaired migrated session transcript paths");
+      const store = JSON.parse(
+        fs.readFileSync(path.join(targetDir, "sessions.json"), "utf8"),
+      ) as Record<string, object>;
+      expect(store["agent:main:main"]).not.toHaveProperty("sessionFile");
+      expect(shortReadCalls).toBeGreaterThan(1);
+    } finally {
+      readSpy.mockRestore();
+    }
   });
 
   it("does not bind stale session metadata to a colliding target transcript", async () => {

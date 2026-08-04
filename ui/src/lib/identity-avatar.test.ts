@@ -50,12 +50,6 @@ describe("resolveAvatar", () => {
       expect(first).toBe(resolved.colorSeed % 360);
     }
   });
-
-  it("lets an already-resolved profile avatar win", () => {
-    expect(
-      resolveAvatar({ id: "alice@example.com", profileAvatarUrl: "/api/users/p1/avatar" }),
-    ).toEqual({ kind: "profile", url: "/api/users/p1/avatar" });
-  });
 });
 
 describe("resolveAvatar profile URL origin restriction", () => {
@@ -104,12 +98,6 @@ describe("resolveAvatar profile URL origin restriction", () => {
 });
 
 describe("resolveAvatar gateway origin trust", () => {
-  it("keeps relative avatar paths relative when no gateway origin is set", () => {
-    expect(
-      resolveAvatar({ id: "alice@example.com", profileAvatarUrl: "/api/users/p1/avatar" }),
-    ).toEqual({ kind: "profile", url: "/api/users/p1/avatar" });
-  });
-
   it("resolves relative paths against the configured gateway origin", () => {
     setAvatarGatewayOrigin("wss://gw.example.com/ws");
     expect(

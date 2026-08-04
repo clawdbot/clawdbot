@@ -5,6 +5,11 @@ import type { RuntimeEnv } from "../runtime.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 import { runSetupModelAuthStep } from "./setup.model-auth.js";
 
+type ResolveManifestProviderAuthChoice =
+  typeof import("../plugins/provider-auth-choices.js").resolveManifestProviderAuthChoice;
+type ResolvePluginSetupProvider =
+  typeof import("../plugins/setup-registry.js").resolvePluginSetupProvider;
+
 const applyAuthChoice = vi.hoisted(() => vi.fn());
 const warnIfModelConfigLooksOff = vi.hoisted(() => vi.fn());
 const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn());
@@ -12,6 +17,19 @@ const promptDefaultModel = vi.hoisted(() => vi.fn());
 const applyPrimaryModel = vi.hoisted(() => vi.fn((config: unknown) => config));
 const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn());
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ profiles: {} })));
+const detectAvailableSetupProviderIds = vi.hoisted(() => vi.fn());
+const resolveManifestProviderAuthChoice = vi.hoisted(() =>
+  vi.fn<ResolveManifestProviderAuthChoice>(() => ({
+    pluginId: "anthropic",
+    providerId: "anthropic",
+    methodId: "anthropic-cli",
+    choiceId: "anthropic-cli",
+    choiceLabel: "Anthropic CLI",
+  })),
+);
+const resolvePluginSetupProvider = vi.hoisted(() =>
+  vi.fn<ResolvePluginSetupProvider>(() => undefined),
+);
 
 vi.mock("../commands/auth-choice.js", () => ({
   applyAuthChoice,
@@ -26,12 +44,24 @@ vi.mock("../commands/model-picker.js", () => ({
 }));
 
 vi.mock("../commands/auth-choice-prompt.js", () => ({
-  KEEP_CURRENT_AUTH_CHOICE: "__keep_current__",
+  isKeepCurrentAuthChoice: (value: unknown) => value === "__keep-current",
   promptAuthChoiceGrouped,
 }));
 
 vi.mock("../agents/auth-profiles.runtime.js", () => ({
   ensureAuthProfileStore,
+}));
+
+vi.mock("../plugins/provider-setup-availability.js", () => ({
+  detectAvailableSetupProviderIds,
+}));
+
+vi.mock("../plugins/provider-auth-choices.js", () => ({
+  resolveManifestProviderAuthChoice,
+}));
+
+vi.mock("../plugins/setup-registry.js", () => ({
+  resolvePluginSetupProvider,
 }));
 
 function createPrompter(): WizardPrompter {
@@ -72,6 +102,7 @@ describe("runSetupModelAuthStep", () => {
     vi.clearAllMocks();
     promptDefaultModel.mockResolvedValue({});
     warnIfModelConfigLooksOff.mockResolvedValue(undefined);
+    detectAvailableSetupProviderIds.mockResolvedValue(new Set(["ollama"]));
   });
 
   it("targets the configured default agent for auth and model setup", async () => {
@@ -95,7 +126,10 @@ describe("runSetupModelAuthStep", () => {
       readOnly: true,
     });
     expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: "/tmp/ops-workspace" }),
+      expect.objectContaining({
+        workspaceDir: "/tmp/ops-workspace",
+        detectedProviderIds: new Set(["ollama"]),
+      }),
     );
     expect(applyAuthChoice).toHaveBeenCalledWith(
       expect.objectContaining({

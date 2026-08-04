@@ -358,6 +358,11 @@ export class CodexAppServerClient {
     return redactCodexAppServerLinePreview(this.stderrTail) || undefined;
   }
 
+  /** Returns the terminal transport error that closed this physical client. */
+  getCloseError(): Error | undefined {
+    return this.closeError;
+  }
+
   /** Stable generation id for this exact physical client instance. */
   getInstanceId(): string {
     return this.instanceId;

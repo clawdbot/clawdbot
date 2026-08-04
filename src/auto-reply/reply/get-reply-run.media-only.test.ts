@@ -117,21 +117,6 @@ vi.mock("./groups.js", () => ({
   buildDirectChatContext: vi.fn().mockReturnValue(""),
   buildGroupIntro: vi.fn().mockReturnValue(""),
   buildGroupChatContext: vi.fn().mockReturnValue(""),
-  resolveGroupSilentReplyBehavior: vi.fn(
-    (params: {
-      sessionEntry?: SessionEntry;
-      defaultActivation: "always" | "mention";
-      silentReplyPolicy?: "allow" | "disallow";
-    }) => {
-      const activation = params.sessionEntry?.groupActivation ?? params.defaultActivation;
-      const canUseSilentReply = params.silentReplyPolicy !== "disallow";
-      return {
-        activation,
-        canUseSilentReply,
-        allowEmptyAssistantReplyAsSilent: params.silentReplyPolicy === "allow",
-      };
-    },
-  ),
 }));
 
 vi.mock("./inbound-meta.js", () => ({
@@ -477,6 +462,13 @@ describe("runPreparedReply media-only handling", () => {
     expect(resolveThinkingCatalog).toHaveBeenCalledOnce();
     const call = requireRunReplyAgentCall();
     expect(call.followupRun.run.thinkLevel).toBe("off");
+    expect(call.followupRun.run.thinkingCatalog).toEqual([
+      {
+        provider: "openai",
+        id: "chat-latest",
+        reasoning: false,
+      },
+    ]);
   });
 
   it("reports unsupported explicit one-turn thinking overrides", async () => {
@@ -3501,6 +3493,32 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
       __openclaw: { senderIsOwner: true },
     });
+  });
+
+  it("keeps the canonical current owner in bounded reply-run prompt guidance", async () => {
+    const ownerIds = Array.from({ length: 24 }, (_, index) =>
+      String(100_000_000_000_000_000n + BigInt(index)),
+    );
+    const currentOwnerId = ownerIds.at(-1)!;
+    const params = ownerParams();
+    params.command = {
+      ...params.command,
+      ownerList: ownerIds,
+      senderId: currentOwnerId,
+      senderIsOwner: true,
+    };
+    params.sessionCtx = {
+      ...params.sessionCtx,
+      SenderId: `<@!${currentOwnerId}>`,
+    };
+
+    await runPreparedReply(params);
+
+    const run = requireRunReplyAgentCall().followupRun.run;
+    expect(run.senderId).toBe(`<@!${currentOwnerId}>`);
+    expect(run.ownerNumbers).toHaveLength(16);
+    expect(run.ownerNumbers?.at(-1)).toBe(currentOwnerId);
+    expect(params.command.ownerList).toHaveLength(24);
   });
 
   it("keeps sender ownership when drained system events are present", async () => {

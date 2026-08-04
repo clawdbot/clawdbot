@@ -3,6 +3,7 @@
 export type GatewayRpcOpts = {
   url?: string;
   token?: string;
+  password?: string;
   timeout?: string;
   expectFinal?: boolean;
   json?: boolean;

@@ -4,7 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
+import { DEFAULT_REDACT_PATTERNS } from "./redact-patterns.js";
 import {
+  computeSensitiveRedactionBitmap,
   getDefaultRedactPatterns,
   redactSecrets,
   redactSensitiveFieldValue,
@@ -35,6 +37,12 @@ afterEach(() => {
     fs.rmSync(dir, { force: true, recursive: true });
   }
   tempDirs = [];
+});
+
+describe("default redact pattern ownership", () => {
+  it("exposes the browser-safe canonical pattern table without drift", () => {
+    expect(defaults).toEqual(DEFAULT_REDACT_PATTERNS);
+  });
 });
 
 describe("registered exact secret values", () => {
@@ -236,6 +244,16 @@ describe("redactSensitiveText", () => {
     const input = "cdp=https://browserless.example.com/?token=supersecret123";
     const output = redactSensitiveText(input, { mode: "tools" });
     expect(output).toBe("cdp=https://browserless.example.com/?token=***");
+  });
+
+  it("masks resource-scoped hosted-media bearer query tokens", () => {
+    const id = "a".repeat(24);
+    const token = "b".repeat(48);
+    const input = `GET https://gateway.example.com/webhooks/sms?safe=value&__openclaw_mms_token_${id}=${token}`;
+    const output = redactSensitiveText(input, { mode: "tools" });
+
+    expect(output).toContain(`safe=value&__openclaw_mms_token_${id}=`);
+    expect(output).not.toContain(token);
   });
 
   it("masks standalone lowercase token assignments in diagnostic output", () => {
@@ -755,11 +773,11 @@ describe("redactSensitiveText", () => {
 
   it("masks punctuation inside unquoted credential-style header values", () => {
     const keyHeader = ["api", "-", "key"].join("");
-    const output = redactSensitiveText(`${keyHeader}: prefix)sensitive-suffix`, {
+    const output = redactSensitiveText(`${keyHeader}: prefix)sensitive&suffix#tail`, {
       mode: "tools",
     });
 
-    expect(output).not.toContain("sensitive-suffix");
+    expect(output).not.toContain("sensitive&suffix#tail");
   });
 
   it("does not redact ordinary authorization prose", () => {
@@ -785,6 +803,31 @@ describe("redactSensitiveText", () => {
     expect(output).not.toContain(openClawToken);
     expect(output).not.toContain(pomeriumJwt);
     expect(output).not.toContain(apiKey);
+  });
+
+  it("masks URL punctuation inside named Gateway header values", () => {
+    expect(redactSensitiveText("X-Api-Key: prefix&secret#suffix", { mode: "tools" })).toBe(
+      "X-Api-Key: prefix…ffix",
+    );
+    expect(
+      redactSensitiveText("X-OpenClaw-Token=prefix&actual-secret#tail", { mode: "tools" }),
+    ).toBe("X-OpenClaw-Token=prefix…tail");
+    expect(redactSensitiveText("x-access-token=prefix&actual-secret#tail", { mode: "tools" })).toBe(
+      "x-access-token=prefix…tail",
+    );
+  });
+
+  it("keeps equals-assignment bitmap masking aligned with form parsing", () => {
+    const resolved = resolveRedactOptions({ mode: "tools" });
+    const form = "x-access-token=short-at-123&safe=value";
+    const formBitmap = computeSensitiveRedactionBitmap(form, resolved);
+    const safePairStart = form.indexOf("&safe=");
+    expect(formBitmap.slice(form.indexOf("=") + 1, safePairStart).every(Boolean)).toBe(true);
+    expect(formBitmap.slice(safePairStart).some(Boolean)).toBe(false);
+
+    const header = "X-OpenClaw-Token=prefix&actual-secret#tail";
+    const headerBitmap = computeSensitiveRedactionBitmap(header, resolved);
+    expect(headerBitmap.slice(header.indexOf("=") + 1).every(Boolean)).toBe(true);
   });
 
   it("masks token prefixes embedded after adjacent text", () => {
@@ -965,6 +1008,38 @@ describe("redactSensitiveText", () => {
     expect(output).toBe(
       "callback https://example.test/oauth?code=***&state=visible&x-amz-signature=***&x-amz-security-token=aws-se…-123&authorization=***&private_key=***&app_secret=***&credential=creden…-123",
     );
+  });
+
+  it("masks canonical URL auth aliases in form bodies without consuming safe fields", () => {
+    const input =
+      "sig=short-sig-123&x-api-key=short-key-123&x-access-token=short-at-123&x-auth-token=short-authtok&safe=value";
+    const output = redactSensitiveText(input, { mode: "tools" });
+    expect(output).toBe("sig=***&x-api-key=***&x-access-token=***&x-auth-token=***&safe=value");
+    expect(output).not.toContain("short-sig-123");
+    expect(output).not.toContain("short-key-123");
+  });
+
+  it("masks canonical URL auth aliases in generic URL text", () => {
+    const input =
+      "GET https://example.test/cb?sig=short-sig-123&X-Api-Key=long-api-key-1234567890&x-access-token=long-access-token-1234567890&x-auth-token=short-authtok&safe=value";
+    expect(redactSensitiveText(input, { mode: "tools" })).toBe(
+      "GET https://example.test/cb?sig=***&X-Api-Key=long-a…7890&x-access-token=long-a…7890&x-auth-token=***&safe=value",
+    );
+  });
+
+  it("reaches sig-only URLs and form bodies through the default prefilter", () => {
+    expect(redactSensitiveText("https://example.test/cb?sig=opaque-signed-value")).toBe(
+      "https://example.test/cb?sig=opaque…alue",
+    );
+    expect(redactSensitiveText("sig=opaque-signed-value&safe=visible")).toBe(
+      "sig=***&safe=visible",
+    );
+  });
+
+  it("preserves non-secret query names adjacent to signed and x-* aliases", () => {
+    const input =
+      "GET https://example.test/cb?signal=visible&sigmoid=visible&signature_algorithm=v4&x-api-version=1&x-request-id=req-123";
+    expect(redactSensitiveText(input, { mode: "tools" })).toBe(input);
   });
 
   it("masks URL userinfo and database connection-string passwords", () => {
@@ -1754,6 +1829,11 @@ describe("redactSensitiveText", () => {
     expect(redactSensitiveText("https://example.test/callback?security_code=123456")).toBe(
       "https://example.test/callback?security_code=***",
     );
+    expect(
+      redactSensitiveText(
+        "https://example.test/callback?id_token=id-value&private_key=private-value&x-amz-security-token=aws-value",
+      ),
+    ).toBe("https://example.test/callback?id_token=***&private_key=***&x-amz-security-token=***");
   });
 
   it("redacts standalone bearer tokens after the default prefilter", () => {

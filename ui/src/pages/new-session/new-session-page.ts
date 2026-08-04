@@ -16,6 +16,10 @@ import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import {
+  readSessionMethodAccess,
+  type SessionMethodAccess,
+} from "../../lib/session-method-access.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
@@ -533,6 +537,59 @@ class NewSessionPage extends OpenClawLightDomElement {
     return Boolean(folder) && folder !== this.workspacePath();
   }
 
+  private buildCreateParamsForAccess(
+    visibility: NewSessionVisibility = this.visibility,
+  ): Record<string, unknown> {
+    return buildDraftSessionCreateParams({
+      agentId: this.agentId,
+      message: "",
+      model: this.modelControl.selected,
+      thinkingLevel: this.modelControl.thinkingLevel,
+      visibility,
+      worktree: this.worktree,
+      baseRef: this.baseRef,
+      worktreeName: this.worktreeName,
+      cwd: this.folder,
+      workspace: this.workspacePath(),
+      execNode: this.execNode,
+      catalogId: this.data?.catalogId,
+    });
+  }
+
+  private submissionAccess(
+    createParams: Record<string, unknown> = this.pendingCloud.createParams ??
+      this.buildCreateParamsForAccess(),
+  ): SessionMethodAccess {
+    const gateway = this.context?.gateway.snapshot;
+    const pendingCloud = Boolean(this.pendingCloud.sessionKey);
+    if (!pendingCloud || this.pendingCloud.phase === "creating") {
+      const createAccess = readSessionMethodAccess(gateway, {
+        method: "sessions.create",
+        params: createParams,
+      });
+      if (!createAccess.allowed || !this.cloudProfileForSubmission()) {
+        return createAccess;
+      }
+    }
+    return readSessionMethodAccess(gateway, {
+      method: "sessions.dispatch",
+      requiredScope: "operator.admin",
+    });
+  }
+
+  private submitDisabledReason(): string | undefined {
+    const access = this.submissionAccess();
+    return access.allowed ? undefined : access.reason;
+  }
+
+  private incognitoDisabledReason(): string | undefined {
+    const access = readSessionMethodAccess(this.context?.gateway.snapshot, {
+      method: "sessions.create",
+      params: this.buildCreateParamsForAccess("incognito"),
+    });
+    return access.allowed ? undefined : access.reason;
+  }
+
   private preference(): NewSessionPreference | null {
     if (catalog.isTarget(this.data) || this.pendingCloud.sessionKey) {
       return null;
@@ -951,6 +1008,9 @@ class NewSessionPage extends OpenClawLightDomElement {
     ) {
       return false;
     }
+    if (!this.submissionAccess().allowed) {
+      return false;
+    }
     if (this.restoredFolderValidation !== "none") {
       return false;
     }
@@ -1095,6 +1155,11 @@ class NewSessionPage extends OpenClawLightDomElement {
               persistent: this.visibility !== "incognito",
             })
         : undefined;
+      const requestAccess = this.submissionAccess(cloudCreateParams ?? createParams);
+      if (!requestAccess.allowed) {
+        this.error = requestAccess.reason;
+        return;
+      }
       if (cloudProfileId && !pendingCloud && !cloudCreateParams) {
         this.error = t("newSession.cloudStartFailed", {
           error: "cloud recovery storage is unavailable",
@@ -1685,6 +1750,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           agentId: this.agentId,
           attachmentDraft: this.attachmentDraft,
           canSubmit: this.canSubmit(),
+          submitDisabledReason: this.submitDisabledReason(),
           context: this.context,
           isCatalogTarget: catalog.isTarget(this.data),
           message: this.message,
@@ -1695,6 +1761,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           submitting: this.submitting,
           textareaController: this.composerTextarea,
           messageLocked: Boolean(this.pendingCloud.sessionKey),
+          incognitoDisabledReason: this.incognitoDisabledReason(),
           onInput: (message) => {
             if (!this.submitting && !this.pendingCloud.sessionKey) {
               this.message = message;

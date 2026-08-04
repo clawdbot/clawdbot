@@ -11,7 +11,6 @@ import type {
   SimpleStreamOptions,
   StreamFunction,
   StreamOptions,
-  Usage,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { resolveCacheRetention } from "./cache-retention.js";
@@ -21,6 +20,7 @@ import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
 import {
   applyCommonResponsesParams,
+  applyResponsesServiceTierPricing,
   convertResponsesMessages,
   createResponsesAssistantOutput,
   resolveResponsesReasoningEffort,
@@ -103,7 +103,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
     processStreamOptions: {
       serviceTier: options?.serviceTier,
       applyServiceTierPricing: (usage, serviceTier) =>
-        applyServiceTierPricing(usage, serviceTier, model),
+        applyResponsesServiceTierPricing(usage, serviceTier, model),
     },
     formatError: formatOpenAIResponsesError,
   });
@@ -223,36 +223,4 @@ function buildParams(
   });
 
   return params;
-}
-
-function getServiceTierCostMultiplier(
-  model: Pick<Model<"openai-responses">, "id">,
-  serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-): number {
-  switch (serviceTier) {
-    case "flex":
-      return 0.5;
-    case "priority":
-      return model.id === "gpt-5.5" ? 2.5 : 2;
-    default:
-      return 1;
-  }
-}
-
-function applyServiceTierPricing(
-  usage: Usage,
-  serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-  model: Pick<Model<"openai-responses">, "id">,
-) {
-  const multiplier = getServiceTierCostMultiplier(model, serviceTier);
-  if (multiplier === 1) {
-    return;
-  }
-
-  usage.cost.input *= multiplier;
-  usage.cost.output *= multiplier;
-  usage.cost.cacheRead *= multiplier;
-  usage.cost.cacheWrite *= multiplier;
-  usage.cost.total =
-    usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
 }
