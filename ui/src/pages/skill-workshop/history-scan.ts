@@ -114,10 +114,16 @@ export async function runSkillWorkshopHistoryScan(params: {
     if (!params.state.result) {
       return false;
     }
-    client = params.gateway.snapshot.client;
-    if (!client || params.gateway.snapshot.phase !== "connected") {
+    if (
+      !canCallGatewayMethod(
+        params.gateway.snapshot,
+        "skills.proposals.historyScan",
+        "operator.admin",
+      )
+    ) {
       return false;
     }
+    client = params.gateway.snapshot.client;
   }
   const direction = params.state.result.hasScanned
     ? params.state.result.hasMore
