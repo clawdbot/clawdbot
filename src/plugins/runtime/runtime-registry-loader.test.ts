@@ -107,7 +107,7 @@ function requireLoadOptions(): Record<string, unknown> {
 describe("ensurePluginRegistryLoaded", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.resolvePluginMetadataSnapshot.mockReturnValue(undefined);
+    mocks.resolvePluginMetadataSnapshot.mockReset();
     mocks.isPluginMetadataSnapshotCompatible.mockReturnValue(true);
     mocks.applyPluginAutoEnable.mockImplementation((params) => ({
       config: params.config ?? {},
