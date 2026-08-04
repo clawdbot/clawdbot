@@ -59,6 +59,9 @@ dump_logs_on_error() {
       /tmp/cron-cli-agent-default.json \
       /tmp/cron-cli-agent-restricted.json \
       /tmp/cron-cli-agent-cleared.json \
+      /tmp/cron-cli-wake-add.json \
+      /tmp/cron-cli-wake-run.json \
+      /tmp/cron-cli-wake-runs.json \
       /tmp/cron-authority-operator-matrix.json \
       /tmp/cron-cli-edit-exact.json \
       /tmp/cron-cli-edit-timeout.json \
@@ -374,6 +377,31 @@ node --input-type=module -e '
   }
 '
 cron_cli rm "$agent_job_id" --json >/dev/null
+
+cron_cli add \
+  --name "wake-only occurrence smoke" \
+  --every 1h \
+  --wake-only \
+  --json > /tmp/cron-cli-wake-add.json
+wake_job_id="$(read_json_field /tmp/cron-cli-wake-add.json id)"
+
+cron_cli run "$wake_job_id" --wait --wait-timeout 120s --poll-interval 500ms > /tmp/cron-cli-wake-run.json
+cron_cli runs --id "$wake_job_id" --limit 5 > /tmp/cron-cli-wake-runs.json
+node --input-type=module -e '
+  const fs = await import("node:fs/promises");
+  const run = JSON.parse(await fs.readFile("/tmp/cron-cli-wake-run.json", "utf8"));
+  const history = JSON.parse(await fs.readFile("/tmp/cron-cli-wake-runs.json", "utf8"));
+  const matching = Array.isArray(history.entries)
+    ? history.entries.find((entry) => entry.status === "ok" && entry.summary === "wake-only occurrence")
+    : undefined;
+  if (run.completed !== true || run.status !== "ok" || !matching) {
+    throw new Error(`wake-only occurrence was not recorded: run=${JSON.stringify(run)} history=${JSON.stringify(history)}`);
+  }
+  if (matching.sessionId || matching.sessionKey || matching.model || matching.provider) {
+    throw new Error(`wake-only occurrence unexpectedly started an agent session: ${JSON.stringify(matching)}`);
+  }
+'
+cron_cli rm "$wake_job_id" --json >/dev/null
 
 cron_cli edit "$job_id" --exact > /tmp/cron-cli-edit-exact.json
 cron_cli edit "$job_id" --timeout-seconds 30 > /tmp/cron-cli-edit-timeout.json

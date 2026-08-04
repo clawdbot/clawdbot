@@ -330,6 +330,27 @@ describe("createCronToolSchema", () => {
     ).toBe(true);
   });
 
+  it("accepts wake-only payloads in create and patch schemas", () => {
+    expect(
+      Value.Check(schema, {
+        action: "add",
+        job: {
+          name: "host wake",
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "main",
+          payload: { kind: "wake" },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(schema, {
+        action: "update",
+        id: "job-1",
+        patch: { payload: { kind: "wake" } },
+      }),
+    ).toBe(true);
+  });
+
   it("job.failureAlert exposes after, channel, to, cooldownMs, includeSkipped, mode, accountId", () => {
     expect(keysAt(schemaRecord, "job.failureAlert")).toEqual(
       ["accountId", "after", "channel", "cooldownMs", "includeSkipped", "mode", "to"].toSorted(),

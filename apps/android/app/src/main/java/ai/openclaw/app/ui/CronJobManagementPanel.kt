@@ -565,6 +565,12 @@ private fun CronPayloadEditor(
         color = ClawTheme.colors.textMuted,
       )
     }
+    GatewayCronPayloadEdit.ReadOnlyWake ->
+      Text(
+        text = nativeString("Wake-only payloads are preserved unchanged."),
+        style = ClawTheme.type.caption,
+        color = ClawTheme.colors.textMuted,
+      )
   }
 }
 
@@ -643,6 +649,7 @@ private fun cronPayloadKindLabel(payload: GatewayCronPayloadEdit): String =
     is GatewayCronPayloadEdit.AgentTurn -> nativeString("Agent turn")
     is GatewayCronPayloadEdit.Command -> nativeString("Command")
     is GatewayCronPayloadEdit.ReadOnlyScript -> nativeString("Script · read-only")
+    GatewayCronPayloadEdit.ReadOnlyWake -> nativeString("Wake only · read-only")
   }
 
 internal data class CronWakeModeOption(

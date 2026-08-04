@@ -147,6 +147,22 @@ describe("cron tool flat-params", () => {
     });
   });
 
+  it("forwards wake-only payloads through cron.add", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-wake-only-add", {
+      action: "add",
+      name: "host wake",
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      payload: { kind: "wake" },
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{ payload?: unknown }>();
+    expect(method).toBe("cron.add");
+    expect(params.payload).toEqual({ kind: "wake" });
+  });
+
   it("recovers a flat trigger when adding a job", async () => {
     const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
 

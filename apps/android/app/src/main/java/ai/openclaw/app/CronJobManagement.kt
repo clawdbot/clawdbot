@@ -197,6 +197,8 @@ sealed interface GatewayCronPayloadEdit {
   data class ReadOnlyScript(
     val script: String,
   ) : GatewayCronPayloadEdit
+
+  data object ReadOnlyWake : GatewayCronPayloadEdit
 }
 
 data class GatewayCronJobEdit(
@@ -396,6 +398,7 @@ internal fun GatewayCronJobDetail.toCronJobEdit(): GatewayCronJobEdit =
             cwd = payloadCommandCwd.orEmpty(),
           )
         "script" -> GatewayCronPayloadEdit.ReadOnlyScript(script = payloadText.orEmpty())
+        "wake" -> GatewayCronPayloadEdit.ReadOnlyWake
         else -> error("Unsupported cron payload kind: $payloadKind")
       },
   )
@@ -627,6 +630,10 @@ private fun buildCronPayloadPatch(
       require(original.payloadKind == "script" && edit.script == original.payloadText) {
         "Script payloads are read-only on Android."
       }
+      null
+    }
+    GatewayCronPayloadEdit.ReadOnlyWake -> {
+      require(original.payloadKind == "wake") { "Changing payload type is not supported here." }
       null
     }
   }

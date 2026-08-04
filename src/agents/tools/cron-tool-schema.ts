@@ -33,7 +33,7 @@ const CRON_ACTIONS = [
 
 const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "stream"] as const;
 const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
-const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "script"] as const;
+const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "script", "wake"] as const;
 const CRON_DELIVERY_MODES = ["none", "announce", "webhook"] as const;
 const CRON_RUN_MODES = ["due", "force"] as const;
 
@@ -71,7 +71,9 @@ function cronPayloadObjectSchema(params: {
 }) {
   return Type.Object(
     {
-      kind: optionalStringEnum(CRON_PAYLOAD_KINDS, { description: "Payload kind" }),
+      kind: optionalStringEnum(CRON_PAYLOAD_KINDS, {
+        description: 'Payload kind; "wake" records the occurrence without executing work',
+      }),
       text: Type.Optional(Type.String({ description: "systemEvent text" })),
       message: Type.Optional(Type.String({ description: "agentTurn prompt" })),
       script: Type.Optional(Type.String({ description: "Headless code-mode script" })),
