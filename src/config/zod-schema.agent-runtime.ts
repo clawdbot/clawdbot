@@ -18,6 +18,7 @@ import {
   HumanDelaySchema,
   IdentitySchema,
   SecretInputSchema,
+  SsrFPolicyConfigSchema,
   ToolsLinksSchema,
   ToolsMediaSchema,
   TypingModeSchema,
@@ -92,17 +93,16 @@ export const HeartbeatSchema = z
   })
   .strict()
   .superRefine((val, ctx) => {
-    if (!val.every) {
-      return;
-    }
-    try {
-      parseDurationMs(val.every, { defaultUnit: "m" });
-    } catch {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["every"],
-        message: "invalid duration (use ms, s, m, h)",
-      });
+    if (val.every) {
+      try {
+        parseDurationMs(val.every, { defaultUnit: "m" });
+      } catch {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["every"],
+          message: "invalid duration (use ms, s, m, h)",
+        });
+      }
     }
 
     const active = val.activeHours;
@@ -427,15 +427,13 @@ const ToolsWebFetchSchema = z
     cacheTtlMinutes: z.number().nonnegative().optional(),
     maxRedirects: z.number().int().nonnegative().optional(),
     userAgent: z.string().optional(),
+    // Values are registered sensitive so exposed config redacts them. Names are
+    // validated at request time rather than here, because a fail-closed config
+    // error over one header typo would disable the whole surface.
+    headers: z.record(z.string(), z.string().register(sensitive)).optional(),
     readability: z.boolean().optional(),
     useTrustedEnvProxy: z.boolean().optional(),
-    ssrfPolicy: z
-      .object({
-        allowRfc2544BenchmarkRange: z.boolean().optional(),
-        allowIpv6UniqueLocalRange: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
+    ssrfPolicy: SsrFPolicyConfigSchema.optional(),
   })
   .strict()
   .optional();

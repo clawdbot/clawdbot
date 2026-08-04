@@ -8,8 +8,10 @@ import {
   pathForMemoryTab,
   pathForAgentPanel,
   pathForPluginsHubTab,
+  pathForWorkboardBoard,
   pluginsHubTabFromPath,
   routeIdFromPath,
+  type RouteId,
   type MemoryRouteTab,
   type PluginsHubRouteTab,
 } from "./app-route-paths.ts";
@@ -26,6 +28,167 @@ const AGENT_PANEL_CASES = [
   "cron",
   "memory",
 ] as const satisfies readonly AgentsPanel[];
+
+const DYNAMIC_STARTUP_CASES = [
+  {
+    label: "agent panel",
+    routeId: "agents",
+    location: {
+      pathname: pathForAgentPanel("team.writer", "tools"),
+      search: "?probe=1",
+      hash: "#catalog",
+    },
+  },
+  {
+    label: "chat session",
+    routeId: "chat",
+    location: {
+      pathname: "/chat/main/01JSESSIONA",
+      search: "?probe=1",
+      hash: "#message",
+    },
+  },
+  {
+    label: "dashboard session",
+    routeId: "dashboard",
+    location: {
+      pathname: "/dashboard/main/01JSESSIONA",
+      search: "?probe=1",
+      hash: "#dashboard",
+    },
+  },
+  {
+    label: "workboard board",
+    routeId: "workboard",
+    location: {
+      pathname: pathForWorkboardBoard("ops.v2"),
+      search: "?agent=main",
+      hash: "#queue",
+    },
+  },
+  {
+    label: "Memory tab",
+    routeId: "memory",
+    location: {
+      pathname: pathForMemoryTab("settings"),
+      search: "?probe=1",
+      hash: "#memory-backend",
+    },
+  },
+  {
+    label: "Plugins tab",
+    routeId: "plugins",
+    location: {
+      pathname: pathForPluginsHubTab("discover"),
+      search: "?query=calendar",
+      hash: "#featured",
+    },
+  },
+] as const satisfies readonly {
+  label: string;
+  routeId: RouteId;
+  location: RouteLocation;
+}[];
+
+describe("Dynamic route startup bridge", () => {
+  it.each(DYNAMIC_STARTUP_CASES)(
+    "loads the $label once while publishing its real location",
+    async ({ routeId, location: initialLocation }) => {
+      let location: RouteLocation = { ...initialLocation };
+      const history: RouterHistory = {
+        location: () => location,
+        push: vi.fn((next: RouteLocation) => {
+          location = next;
+        }),
+        replace: vi.fn((next: RouteLocation) => {
+          location = next;
+        }),
+        listen: () => () => undefined,
+      };
+      const router = createApplicationRouter();
+      const route = router.getRoute(routeId);
+      if (!route) {
+        throw new Error(`Route missing: ${routeId}`);
+      }
+      const loader = vi.fn(async () => ({ routeId }));
+      const originalLoader = route.loader;
+      const originalComponent = route.component;
+      try {
+        route.loader = loader;
+        route.component = async () => ({ render: () => null });
+
+        await startApplicationRouter(router, history, "", {
+          basePath: "",
+        } as unknown as ApplicationContext);
+
+        expect(loader).toHaveBeenCalledOnce();
+        expect(router.getState().location).toEqual(initialLocation);
+        expect(router.getState().matches[0]?.location).toEqual(initialLocation);
+      } finally {
+        router.stop();
+        route.loader = originalLoader;
+        route.component = originalComponent;
+      }
+    },
+  );
+
+  it("loads a later dynamic history destination exactly once", async () => {
+    let location: RouteLocation = {
+      pathname: "/chat/main/01JSESSIONA",
+      search: "",
+      hash: "#first",
+    };
+    let historyListener: ((next: RouteLocation) => void) | undefined;
+    const history: RouterHistory = {
+      location: () => location,
+      push: vi.fn((next: RouteLocation) => {
+        location = next;
+      }),
+      replace: vi.fn((next: RouteLocation) => {
+        location = next;
+      }),
+      listen: (listener) => {
+        historyListener = listener;
+        return () => {
+          historyListener = undefined;
+        };
+      },
+    };
+    const router = createApplicationRouter();
+    const route = router.getRoute("chat");
+    if (!route) {
+      throw new Error("Chat route missing");
+    }
+    const loader = vi.fn(async () => ({}));
+    const originalLoader = route.loader;
+    const originalComponent = route.component;
+    try {
+      route.loader = loader;
+      route.component = async () => ({ render: () => null });
+
+      await startApplicationRouter(router, history, "", {
+        basePath: "",
+      } as unknown as ApplicationContext);
+      expect(loader).toHaveBeenCalledOnce();
+
+      location = {
+        pathname: "/chat/main/01JSESSIONB",
+        search: "?probe=1",
+        hash: "#second",
+      };
+      historyListener?.(location);
+
+      await vi.waitFor(() => {
+        expect(loader).toHaveBeenCalledTimes(2);
+        expect(router.getState().location).toEqual(location);
+      });
+    } finally {
+      router.stop();
+      route.loader = originalLoader;
+      route.component = originalComponent;
+    }
+  });
+});
 
 describe("Agent panel route paths", () => {
   it.each(AGENT_PANEL_CASES)("round-trips the %s panel with an encoded agent id", (panel) => {

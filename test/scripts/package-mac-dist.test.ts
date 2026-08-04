@@ -91,6 +91,15 @@ describe("package-mac-dist plist validation", () => {
     expect(releaseBlock).not.toContain("*.debug");
   });
 
+  it("marks the distributed Control UI as an official release artifact", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const releaseMarkerIndex = script.indexOf("export OPENCLAW_CONTROL_UI_RELEASE_BUILD=1");
+    const packageAppIndex = script.indexOf('"$ROOT_DIR/scripts/package-mac-app.sh"');
+
+    expect(releaseMarkerIndex).toBeGreaterThanOrEqual(0);
+    expect(packageAppIndex).toBeGreaterThan(releaseMarkerIndex);
+  });
+
   it("does not mask canonical Sparkle build failures for release packaging", () => {
     const script = readFileSync(scriptPath, "utf8");
 

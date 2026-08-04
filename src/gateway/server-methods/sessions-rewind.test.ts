@@ -2,7 +2,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { saveMediaBuffer } from "../../media/store.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
@@ -13,7 +12,13 @@ const mocks = vi.hoisted(() => ({
   external: false,
   upstreamFork: vi.fn(),
   queueClear: vi.fn(),
+  readMediaBuffer: vi.fn(),
 }));
+
+vi.mock("../../media/store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../media/store.js")>();
+  return { ...actual, readMediaBuffer: mocks.readMediaBuffer };
+});
 
 vi.mock("../../agents/harness/registry.js", () => ({
   listRegisteredAgentHarnesses: () =>
@@ -63,11 +68,13 @@ import {
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
-import { sessionsHandlers } from "./sessions.js";
+import { sessionRewindHandlers } from "./sessions-rewind.js";
 import type { GatewayClient } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionKey = "agent:main:rewind-handler";
+const storedImageId = "stored-image.png";
+const storedImagePath = `/state/media/inbound/${storedImageId}`;
 const storedImageData = Buffer.from("stored-image");
 
 beforeEach(async () => {
@@ -76,8 +83,18 @@ beforeEach(async () => {
   mocks.external = false;
   mocks.upstreamFork.mockReset();
   mocks.queueClear.mockReset();
+  mocks.readMediaBuffer.mockReset().mockImplementation(async (id: string) => {
+    if (id !== storedImageId) {
+      throw new Error(`missing media: ${id}`);
+    }
+    return {
+      id,
+      path: storedImagePath,
+      buffer: storedImageData,
+      size: storedImageData.byteLength,
+    };
+  });
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-rewind-handler-"));
-  const storedImage = await saveMediaBuffer(storedImageData, "image/png", "inbound");
   await upsertSessionEntry(
     { agentId: "main", sessionKey },
     {
@@ -99,10 +116,10 @@ beforeEach(async () => {
         ],
         __openclaw: {
           media: [
-            { path: storedImage.path, contentType: "image/png" },
+            { path: storedImagePath, contentType: "image/png" },
             // Duplicate ref proves dedupe: the response must carry this image once.
-            { path: storedImage.path, contentType: "image/png" },
-            { path: `${storedImage.path}.missing`, contentType: "image/png" },
+            { path: storedImagePath, contentType: "image/png" },
+            { path: `${storedImagePath}.missing`, contentType: "image/png" },
           ],
         },
       },
@@ -167,7 +184,7 @@ async function invoke(
 ) {
   const respond = vi.fn();
   await expectDefined(
-    sessionsHandlers[method],
+    sessionRewindHandlers[method],
     `${method} handler`,
   )({
     req: { id: `${method}-request` } as never,
@@ -191,7 +208,7 @@ describe("session message-cut methods", () => {
   it("returns an empty branch list for a not-yet-materialized session", async () => {
     const respond = vi.fn() as unknown as RespondFn;
     await expectDefined(
-      sessionsHandlers["sessions.branches.list"],
+      sessionRewindHandlers["sessions.branches.list"],
       "sessions.branches.list handler",
     )({
       req: { id: "fresh-branches-list" } as never,
@@ -271,6 +288,7 @@ describe("session message-cut methods", () => {
       }),
       undefined,
     );
+    expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(2);
     const forkKey = (fork.mock.calls[0]?.[1] as { sessionKey?: string } | undefined)?.sessionKey;
     expect(forkKey).toBeTruthy();
     const forkEntry = loadSessionEntry({ agentId: "main", sessionKey: forkKey ?? "" });
@@ -299,6 +317,7 @@ describe("session message-cut methods", () => {
       },
       undefined,
     );
+    expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(4);
     expect(mocks.queueClear).toHaveBeenCalledTimes(1);
   });
 

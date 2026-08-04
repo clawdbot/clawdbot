@@ -7,7 +7,6 @@ import {
   type ControlUiPluginFrameGrantAck,
 } from "../../../src/gateway/control-ui-contract.js";
 import { normalizeAssistantIdentity } from "../lib/assistant-identity.ts";
-import { setUiTimeFormatPreference } from "../lib/format.ts";
 import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
 
 type ApplicationConfigAuthSource = {
@@ -213,7 +212,6 @@ async function loadApplicationConfig(params: {
       return null;
     }
     const parsed = (await res.json()) as ControlUiBootstrapConfig;
-    setUiTimeFormatPreference(parsed.timeFormat);
     applyControlUiSeamColor(parsed.seamColor);
     return normalizeApplicationConfig(parsed);
   } catch {

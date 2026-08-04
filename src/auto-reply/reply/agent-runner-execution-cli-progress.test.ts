@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createCliJsonlStreamingParser } from "../../agents/cli-output.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -722,6 +723,98 @@ describe("executeAgentTurn: CLI progress bridging", () => {
         requiresReasoningProgressOptIn: true,
       },
     ]);
+  });
+
+  it("bridges tagged Claude CLI reasoning separately from its visible answer", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "claude-opus-4-7"),
+      provider: "claude-cli",
+      model: "claude-opus-4-7",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+        "../../infra/agent-events.js",
+      );
+      const parser = createCliJsonlStreamingParser({
+        backend: {
+          command: "local-cli",
+          output: "jsonl",
+          jsonlDialect: "claude-stream-json",
+        },
+        providerId: "claude-cli",
+        onAssistantDelta: (delta) =>
+          realAgentEvents.emitAgentEvent({
+            runId: params.runId,
+            stream: "assistant",
+            data: delta,
+          }),
+        onThinkingDelta: (delta) =>
+          realAgentEvents.emitAgentEvent({
+            runId: params.runId,
+            stream: "thinking",
+            data: delta,
+          }),
+      });
+      parser.push(
+        [
+          JSON.stringify({
+            type: "stream_event",
+            event: {
+              type: "content_block_delta",
+              delta: {
+                type: "text_delta",
+                text: "<thinking>Private analysis.</thinking>Visible answer.",
+              },
+            },
+          }),
+          JSON.stringify({
+            type: "result",
+            result: "<thinking>Private analysis.</thinking>Visible answer.",
+          }),
+          "",
+        ].join("\n"),
+      );
+      parser.finish();
+      return { payloads: [{ text: parser.getOutput()?.text ?? "" }], meta: {} };
+    });
+
+    const onPartialReply = vi.fn<NonNullable<GetReplyOptions["onPartialReply"]>>(
+      async () => undefined,
+    );
+    const onReasoningStream = vi.fn<NonNullable<GetReplyOptions["onReasoningStream"]>>(
+      async () => undefined,
+    );
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-opus-4-7";
+
+    await executeAgentTurn({
+      commandBody: "hi",
+      followupRun,
+      sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
+      opts: { onPartialReply, onReasoningStream },
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(onReasoningStream.mock.calls.map(([payload]) => payload.text)).toEqual([
+      "Private analysis.",
+    ]);
+    expect(onPartialReply.mock.calls.map(([payload]) => payload.text)).toEqual(["Visible answer."]);
   });
 
   it("does not bridge CLI thinking events to onReasoningStream when silentExpected is set", async () => {

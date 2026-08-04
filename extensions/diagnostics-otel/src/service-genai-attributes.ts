@@ -1,8 +1,8 @@
 import { SpanKind } from "@opentelemetry/api";
 import { GEN_AI_OPERATION_NAME_VALUE_INVOKE_AGENT } from "@opentelemetry/semantic-conventions/incubating";
+import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { DiagnosticEventPayload } from "../api.js";
 import { redactSensitiveText } from "../api.js";
-import { lowCardinalityAttr } from "./service-attributes.js";
 import {
   GEN_AI_LATEST_EXPERIMENTAL_OPT_IN,
   OTEL_SEMCONV_STABILITY_OPT_IN_ENV,
@@ -161,13 +161,13 @@ export function assignGenAiSpanIdentityAttrs(
   },
 ): void {
   if (emitLatestGenAiSemconv()) {
-    attrs["gen_ai.provider.name"] = lowCardinalityAttr(input.provider);
+    attrs["gen_ai.provider.name"] = normalizeDiagnosticValue(input.provider);
   } else {
-    attrs["gen_ai.system"] = lowCardinalityAttr(input.provider);
+    attrs["gen_ai.system"] = normalizeDiagnosticValue(input.provider);
   }
   if (input.model) {
     // Span attributes carry the full model id; only metric labels need bounded cardinality
-    // (the gen_ai metrics below still use lowCardinalityAttr). The low-cardinality allowlist
+    // (the gen_ai metrics below still use normalizeDiagnosticValue). The low-cardinality allowlist
     // regex rejects "/", so provider-qualified ids like "anthropic/claude-sonnet-4.6" collapse
     // to "unknown" on the SPAN — breaking model attribution in trace backends (e.g. Langfuse
     // reads gen_ai.request.model). Keep the redacted raw model on the span.
@@ -206,7 +206,7 @@ export function modelCallSpanName(evt: {
   const operationName = genAiOperationName(evt.api, evt.observationUnit);
   return operationName === GEN_AI_OPERATION_NAME_VALUE_INVOKE_AGENT
     ? operationName
-    : `${operationName} ${lowCardinalityAttr(evt.model)}`;
+    : `${operationName} ${normalizeDiagnosticValue(evt.model)}`;
 }
 
 export function modelCallSpanKind(): SpanKind | undefined {
@@ -220,7 +220,7 @@ export function addUpstreamRequestIdSpanEvent(
   if (!upstreamRequestIdHash) {
     return;
   }
-  const boundedHash = lowCardinalityAttr(upstreamRequestIdHash);
+  const boundedHash = normalizeDiagnosticValue(upstreamRequestIdHash);
   if (boundedHash === "unknown") {
     return;
   }

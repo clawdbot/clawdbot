@@ -23,6 +23,7 @@ import { redactLoginFailureError } from "./login-gate.ts";
 import { renderOfflineSidebarStatus } from "./session-row-badges.ts";
 import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.ts";
 import "./settings-save-indicator.ts";
+import "./sidebar-build-chip.ts";
 import "./sidebar-update-card.ts";
 
 type SettingsSidebarProps = {
@@ -34,7 +35,7 @@ type SettingsSidebarProps = {
   offline: boolean;
   queuedOutboxCount?: number;
   lastError: string | null;
-  version: string;
+  gatewayVersion: string;
   updateAvailable: UpdateAvailable | null;
   updateRunning: boolean;
   onUpdate: () => void;
@@ -329,9 +330,12 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
           : html`<openclaw-settings-save-indicator
               .props=${props.saveIndicator}
             ></openclaw-settings-save-indicator>`}
-        ${props.version
-          ? html`<span class="settings-sidebar__footer-version">${props.version}</span>`
-          : nothing}
+        <openclaw-sidebar-build-chip
+          .basePath=${props.basePath}
+          .gatewayVersion=${props.gatewayVersion || null}
+          .variant=${"settings"}
+          .onNavigate=${() => props.onNavigate("about")}
+        ></openclaw-sidebar-build-chip>
       </footer>
     </aside>
   `;

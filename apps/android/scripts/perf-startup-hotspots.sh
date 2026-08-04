@@ -99,7 +99,7 @@ symbols_csv="$tmp_dir/symbols.csv"
 children_txt="$tmp_dir/children.txt"
 
 cd "$ANDROID_DIR"
-./gradlew :app:installDebug --console=plain >"$tmp_dir/install.log" 2>&1
+./gradlew :app:installPlayDebug --console=plain >"$tmp_dir/install.log" 2>&1
 
 if ! uv run --no-project python3 "$app_profiler" \
   -p "$PACKAGE" \

@@ -282,7 +282,7 @@ export function resolveFinalDoctorHealthContributions(params: {
       id: "doctor:heartbeat-task-cron-migration",
       label: "Heartbeat task cron migration",
       healthChecks: {
-        description: "Heartbeat scratch task blocks must migrate into cron jobs.",
+        description: "Heartbeat scratch task blocks must migrate into automations.",
         defaultEnabled: true,
         async detect(ctx) {
           const { collectHeartbeatTaskMigrationFindings } =

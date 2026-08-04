@@ -97,6 +97,10 @@ describe("bundled channel plugin shape coherence", () => {
         return;
       }
       expect(plugin?.setupContract, `${id} must expose setupContract`).toBeDefined();
+      expect(
+        plugin?.setup,
+        `${id} must not duplicate the released legacy setup adapter`,
+      ).toBeUndefined();
       expect(packageSetup, `${id} must expose package setup metadata`).toBeDefined();
       expect(plugin?.setupContract?.metadata).toEqual(packageSetup);
     });

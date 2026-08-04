@@ -13,15 +13,15 @@ function resolveStatus(
   if (entry.endedReason === SUBAGENT_ENDED_REASON_KILLED) {
     return "killed";
   }
-  if (entry.outcome?.status === "timeout") {
+  if (entry.execution.outcome?.status === "timeout") {
     return "timeout";
   }
-  if (entry.outcome?.status === "ok") {
+  if (entry.execution.outcome?.status === "ok") {
     return "done";
   }
   // Tool-only structured turns can surface the runner's synthetic completion
   // marker as an error despite having fulfilled the collector contract.
-  return hasStructuredResult && entry.outcome?.error === "completed" ? "done" : "failed";
+  return hasStructuredResult && entry.execution.outcome?.error === "completed" ? "done" : "failed";
 }
 
 /** Freeze the waitable collector record after raw completion capture. */

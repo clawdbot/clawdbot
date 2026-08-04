@@ -226,6 +226,42 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("recovers a directed turn when shared dispatch marks the empty fallback eligible", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+      noVisibleReplyFallbackEligible: true,
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        chatId: -1001234,
+        isGroup: true,
+        ctxPayload: {
+          SessionKey: "agent:test:telegram:group:-1001234",
+          ChatType: "group",
+        } as TelegramMessageContext["ctxPayload"],
+        primaryCtx: {
+          message: { chat: { id: -1001234, type: "supergroup" } },
+        } as TelegramMessageContext["primaryCtx"],
+        msg: {
+          chat: { id: -1001234, type: "supergroup" },
+          message_id: 456,
+        } as TelegramMessageContext["msg"],
+        threadSpec: { id: undefined, scope: "none" },
+        replyThreadId: undefined,
+      }),
+      streamMode: "off",
+    });
+
+    expect(deliverReplies).toHaveBeenCalledOnce();
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [{ text: "No response generated. Please try again." }],
+      }),
+    );
+  });
+
   describe("non-streaming media dedup", () => {
     const finalDeliveryPayload = () => {
       for (const [params] of deliverInboundReplyWithMessageSendContext.mock.calls) {

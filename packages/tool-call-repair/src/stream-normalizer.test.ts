@@ -14,6 +14,25 @@ const matcher: PlainTextToolCallNameMatcher = {
 
 type Terminal = "done" | "eof" | "error";
 
+function resolveTestFenceRanges(text: string): Array<{ end: number; start: number }> {
+  const ranges: Array<{ end: number; start: number }> = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    const backtick = text.indexOf("```", cursor);
+    const tilde = text.indexOf("~~~", cursor);
+    const start = backtick === -1 ? tilde : tilde === -1 ? backtick : Math.min(backtick, tilde);
+    if (start === -1) {
+      break;
+    }
+    const marker = text.slice(start, start + 3);
+    const close = text.indexOf(marker, start + marker.length);
+    const end = close === -1 ? text.length : close + marker.length;
+    ranges.push({ start, end });
+    cursor = end;
+  }
+  return ranges;
+}
+
 function parseSplitCall(parts: readonly string[]) {
   let offset = 0;
   const lineBreakOffsets = new Set(
@@ -27,31 +46,90 @@ function parseSplitCall(parts: readonly string[]) {
   });
 }
 
-function textContent(text: string) {
-  return [{ type: "text", text }];
+function textContent(...texts: string[]) {
+  return texts.map((text) => ({ type: "text", text }));
+}
+
+function assistantMessage(content: unknown, stopReason?: string) {
+  return { role: "assistant", content, ...(stopReason === undefined ? {} : { stopReason }) };
+}
+
+function streamEvent(type: string, fields: Record<string, unknown>) {
+  return { type, ...fields };
 }
 
 function textDelta(delta: string, snapshot: string) {
-  return {
-    type: "text_delta",
+  return streamEvent("text_delta", {
     contentIndex: 0,
     delta,
-    partial: { role: "assistant", content: textContent(snapshot) },
-  };
+    partial: assistantMessage(textContent(snapshot)),
+  });
 }
 
-async function normalize(events: readonly unknown[]): Promise<Record<string, unknown>[]> {
+function streamTextDelta(delta: string, contentIndex = 0, partial?: unknown) {
+  return streamEvent("text_delta", {
+    contentIndex,
+    delta,
+    ...(partial === undefined ? {} : { partial }),
+  });
+}
+
+function textStart(contentIndex: number, content = "", partial?: unknown) {
+  return streamEvent("text_start", {
+    contentIndex,
+    content,
+    ...(partial === undefined ? {} : { partial }),
+  });
+}
+
+function textEnd(content: string, contentIndex = 0, partial?: unknown) {
+  return streamEvent("text_end", {
+    contentIndex,
+    content,
+    ...(partial === undefined ? {} : { partial }),
+  });
+}
+
+function doneEvent(reason: string, message: unknown) {
+  return streamEvent("done", { reason, message });
+}
+
+function doneAssistantEvent(reason: string, content: unknown, stopReason: string) {
+  return doneEvent(reason, assistantMessage(content, stopReason));
+}
+
+function errorEvent(error: unknown, partial?: unknown) {
+  return streamEvent("error", { ...(partial === undefined ? {} : { partial }), error });
+}
+
+async function collectNormalizedEvents(
+  events: readonly unknown[],
+  options: Parameters<typeof normalizePlainTextToolCallStreamEvents>[1],
+): Promise<Record<string, unknown>[]> {
   async function* source() {
     yield* events;
   }
   const normalized: Record<string, unknown>[] = [];
-  const scrubMessage = (message: unknown, options?: { preserveEmptyTextBlocks?: boolean }) =>
+  for await (const event of normalizePlainTextToolCallStreamEvents(source(), options)) {
+    if (event && typeof event === "object") {
+      normalized.push(event as Record<string, unknown>);
+    }
+  }
+  return normalized;
+}
+
+async function normalize(
+  events: readonly unknown[],
+  options: { protectFences?: boolean } = {},
+): Promise<Record<string, unknown>[]> {
+  const scrubMessage = (message: unknown, scrubOptions?: { preserveEmptyTextBlocks?: boolean }) =>
     projectScrubbedPlainTextToolCallMessage({
       matcher,
       message,
-      preserveEmptyTextBlocks: options?.preserveEmptyTextBlocks,
+      preserveEmptyTextBlocks: scrubOptions?.preserveEmptyTextBlocks,
+      resolveProtectedRanges: options.protectFences ? resolveTestFenceRanges : undefined,
     });
-  for await (const event of normalizePlainTextToolCallStreamEvents(source(), {
+  return collectNormalizedEvents(events, {
     matcher,
     createPromotedToolCallEvents: () => [],
     normalizeTerminalMessage: ({
@@ -61,12 +139,12 @@ async function normalize(events: readonly unknown[]): Promise<Record<string, unk
       const scrubbed = scrubMessage(message, { preserveEmptyTextBlocks });
       return scrubbed ? { kind: "scrubbed", ...scrubbed } : undefined;
     },
-  })) {
-    if (event && typeof event === "object") {
-      normalized.push(event as Record<string, unknown>);
-    }
-  }
-  return normalized;
+    resolveProtectedRanges: options.protectFences ? resolveTestFenceRanges : undefined,
+  });
+}
+
+function normalizeTextDeltas(...deltas: string[]) {
+  return normalize(deltas.map((delta) => streamTextDelta(delta)));
 }
 
 function withTerminal(
@@ -77,14 +155,18 @@ function withTerminal(
   if (terminal === "eof") {
     return [...deltas];
   }
-  const message = { role: "assistant", content: textContent(snapshot), stopReason: "length" };
+  const message = assistantMessage(textContent(snapshot), "length");
   return terminal === "done"
-    ? [...deltas, { type: "done", reason: "length", message }]
-    : [...deltas, { type: "error", partial: message, error: { content: textContent(snapshot) } }];
+    ? [...deltas, doneEvent("length", message)]
+    : [...deltas, errorEvent({ content: textContent(snapshot) }, message)];
 }
 
 function textDeltas(events: readonly Record<string, unknown>[]): unknown[] {
   return events.filter((event) => event.type === "text_delta").map((event) => event.delta);
+}
+
+function eventTypes(events: readonly Record<string, unknown>[]): unknown[] {
+  return events.map((event) => event.type);
 }
 
 function expectTerminalContent(
@@ -172,22 +254,13 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
   });
 
   it("uses repaired text-block joins for done-only byte-over-cap calls", async () => {
-    const message = {
-      role: "assistant",
-      content: [
-        { type: "text", text: "[read]" },
-        {
-          type: "text",
-          text: `<parameter=path>${"\u00a0".repeat(128_001)}</parameter></function>`,
-        },
-      ],
-      stopReason: "length",
-    };
-    const events = await normalize([{ type: "done", reason: "length", message }]);
+    const message = assistantMessage(
+      textContent("[read]", `<parameter=path>${"\u00a0".repeat(128_001)}</parameter></function>`),
+      "length",
+    );
+    const events = await normalize([doneEvent("length", message)]);
 
-    expect(events).toEqual([
-      { type: "done", reason: "length", message: { ...message, content: [] } },
-    ]);
+    expect(events).toEqual([doneEvent("length", { ...message, content: [] })]);
   });
 
   it.each([
@@ -196,15 +269,8 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     `{"path":"${"x".repeat(256_001)}"}`,
     `{"path":"${"x".repeat(256_001)}"}\n[END_TOOL_REQU`,
   ])("scrubs incomplete split named calls", async (payload) => {
-    const message = {
-      role: "assistant",
-      content: [
-        { type: "text", text: "[read]" },
-        { type: "text", text: payload },
-      ],
-      stopReason: "length",
-    };
-    const events = await normalize([{ type: "done", reason: "length", message }]);
+    const message = assistantMessage(textContent("[read]", payload), "length");
+    const events = await normalize([doneEvent("length", message)]);
 
     expect(events.at(-1)?.message).toMatchObject({ content: [] });
     expect(JSON.stringify(events)).not.toContain("[read]");
@@ -212,25 +278,16 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
 
   it("scrubs an incomplete named call from a done-only snapshot", async () => {
     const raw = "<function=read><parameter=path>SECRET";
-    const message = { role: "assistant", content: textContent(raw), stopReason: "length" };
-    const events = await normalize([{ type: "done", reason: "length", message }]);
+    const message = assistantMessage(textContent(raw), "length");
+    const events = await normalize([doneEvent("length", message)]);
 
-    expect(events).toEqual([
-      { type: "done", reason: "length", message: { ...message, content: [] } },
-    ]);
+    expect(events).toEqual([doneEvent("length", { ...message, content: [] })]);
   });
 
   it("repairs split calls after visible text", async () => {
     const payload = `<parameter=path>${"x".repeat(256_001)}</parameter></function>`;
-    const message = {
-      role: "assistant",
-      content: [
-        { type: "text", text: "Visible\n[read]" },
-        { type: "text", text: payload },
-      ],
-      stopReason: "length",
-    };
-    const events = await normalize([{ type: "done", reason: "length", message }]);
+    const message = assistantMessage(textContent("Visible\n[read]", payload), "length");
+    const events = await normalize([doneEvent("length", message)]);
 
     expect(events.at(-1)?.message).toMatchObject({ content: textContent("Visible\n") });
   });
@@ -238,16 +295,8 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
   it("merges exact and repaired over-cap ranges", async () => {
     const exact = `<function=read>${"\u00a0".repeat(128_001)}</function>\n`;
     const split = `<parameter=path>${"y".repeat(256_001)}</parameter></function>`;
-    const message = {
-      role: "assistant",
-      content: [
-        { type: "text", text: exact },
-        { type: "text", text: "[read]" },
-        { type: "text", text: split },
-      ],
-      stopReason: "length",
-    };
-    const events = await normalize([{ type: "done", reason: "length", message }]);
+    const message = assistantMessage(textContent(exact, "[read]", split), "length");
+    const events = await normalize([doneEvent("length", message)]);
 
     expect(events.at(-1)?.message).toMatchObject({ content: [] });
   });
@@ -277,12 +326,11 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
   it("preserves non-text ordering around the visible suffix", async () => {
     const call = `<function=read>${"\u00a0".repeat(128_001)}</function>`;
     const image = { type: "image", data: "opaque" };
-    const message = {
-      role: "assistant",
-      content: [{ type: "text", text: call }, image, { type: "text", text: "Visible" }],
-      stopReason: "length",
-    };
-    const events = await normalize([{ type: "done", reason: "length", message }]);
+    const message = assistantMessage(
+      [{ type: "text", text: call }, image, { type: "text", text: "Visible" }],
+      "length",
+    );
+    const events = await normalize([doneEvent("length", message)]);
 
     expect(events.at(-1)?.message).toMatchObject({
       content: [image, { type: "text", text: "Visible" }],
@@ -293,13 +341,7 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     const overCap = `<function=read>${"\u00a0".repeat(128_001)}</function>`;
     const second = "<function=read></function>";
     const raw = `${overCap}\n${second}\nVisible`;
-    const events = await normalize([
-      {
-        type: "done",
-        reason: "length",
-        message: { role: "assistant", content: textContent(raw), stopReason: "length" },
-      },
-    ]);
+    const events = await normalize([doneAssistantEvent("length", textContent(raw), "length")]);
 
     expect(events.at(-1)?.message).toMatchObject({ content: textContent("Visible") });
   });
@@ -313,33 +355,24 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
 
   it("keeps an incomplete follow-on call private until terminal promotion", async () => {
     const raw = "<function=read></function>\n<function=read><parameter=path>SECRET";
-    async function* source() {
-      yield textDelta(raw, raw);
-      yield {
-        type: "done",
-        reason: "stop",
-        message: { role: "assistant", content: textContent(raw), stopReason: "stop" },
-      };
-    }
-    const message = {
-      role: "assistant",
-      content: [{ type: "toolCall", name: "read", arguments: { path: "SECRET" } }],
-      stopReason: "toolUse",
-    };
-    const events: Record<string, unknown>[] = [];
-    for await (const event of normalizePlainTextToolCallStreamEvents(source(), {
-      matcher,
-      createPromotedToolCallEvents: () => [],
-      normalizeTerminalMessage: () => ({
-        kind: "promoted",
-        message,
-        sourceToProjectedContentIndex: new Map(),
-      }),
-    })) {
-      events.push(event as Record<string, unknown>);
-    }
+    const message = assistantMessage(
+      [{ type: "toolCall", name: "read", arguments: { path: "SECRET" } }],
+      "toolUse",
+    );
+    const events = await collectNormalizedEvents(
+      [textDelta(raw, raw), doneAssistantEvent("stop", textContent(raw), "stop")],
+      {
+        matcher,
+        createPromotedToolCallEvents: () => [],
+        normalizeTerminalMessage: () => ({
+          kind: "promoted",
+          message,
+          sourceToProjectedContentIndex: new Map(),
+        }),
+      },
+    );
 
-    expect(events.map((event) => event.type)).toEqual(["start", "done"]);
+    expect(eventTypes(events)).toEqual(["start", "done"]);
     expect(JSON.stringify(events.slice(0, -1))).not.toContain("SECRET");
   });
 
@@ -350,34 +383,28 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
       for (let split = 1; split < marker.length; split += 1) {
         const first = call + marker.slice(0, split);
         const raw = call + marker;
-        async function* source() {
-          yield textDelta(first, first);
-          yield textDelta(marker.slice(split), raw);
-          yield {
-            type: "done",
-            reason: "stop",
-            message: { role: "assistant", content: textContent(raw), stopReason: "stop" },
-          };
-        }
-        const message = {
-          role: "assistant",
-          content: [{ type: "toolCall", name: "read", arguments: {} }],
-          stopReason: "toolUse",
-        };
-        const events: Record<string, unknown>[] = [];
-        for await (const event of normalizePlainTextToolCallStreamEvents(source(), {
-          matcher,
-          createPromotedToolCallEvents: () => [],
-          normalizeTerminalMessage: () => ({
-            kind: "promoted",
-            message,
-            sourceToProjectedContentIndex: new Map(),
-          }),
-        })) {
-          events.push(event as Record<string, unknown>);
-        }
+        const message = assistantMessage(
+          [{ type: "toolCall", name: "read", arguments: {} }],
+          "toolUse",
+        );
+        const events = await collectNormalizedEvents(
+          [
+            textDelta(first, first),
+            textDelta(marker.slice(split), raw),
+            doneAssistantEvent("stop", textContent(raw), "stop"),
+          ],
+          {
+            matcher,
+            createPromotedToolCallEvents: () => [],
+            normalizeTerminalMessage: () => ({
+              kind: "promoted",
+              message,
+              sourceToProjectedContentIndex: new Map(),
+            }),
+          },
+        );
 
-        expect(events.map((event) => event.type)).toEqual(["start", "done"]);
+        expect(eventTypes(events)).toEqual(["start", "done"]);
         expect(JSON.stringify(events.slice(0, -1))).not.toContain(marker.slice(0, split));
       }
     },
@@ -394,10 +421,10 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     const call = build(`{"path":"${"x".repeat(256_001)}"}`);
     const visible = "Visible";
     for (let split = 1; split < marker.length; split += 1) {
-      const events = await normalize([
-        { type: "text_delta", contentIndex: 0, delta: call + marker.slice(0, split) },
-        { type: "text_delta", contentIndex: 0, delta: marker.slice(split) + `\n${visible}` },
-      ]);
+      const events = await normalizeTextDeltas(
+        call + marker.slice(0, split),
+        marker.slice(split) + `\n${visible}`,
+      );
 
       expect(textDeltas(events)).toEqual([visible]);
       expect(JSON.stringify(events)).not.toContain(marker);
@@ -407,10 +434,7 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
   it("keeps an optional closer private when it starts after the over-cap payload", async () => {
     const call = `[tool:read] {"path":"${"x".repeat(256_001)}"}`;
     const marker = "<|call|>";
-    const events = await normalize([
-      { type: "text_delta", contentIndex: 0, delta: call },
-      { type: "text_delta", contentIndex: 0, delta: `${marker}\nVisible` },
-    ]);
+    const events = await normalizeTextDeltas(call, `${marker}\nVisible`);
 
     expect(textDeltas(events)).toEqual(["Visible"]);
     expect(JSON.stringify(events)).not.toContain(marker);
@@ -420,13 +444,7 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     const overCap = `<function=read>${"\u00a0".repeat(128_001)}</function>`;
     const visible = '[read]\n{"path":"/tmp"} visible';
     const raw = `${overCap}\n${visible}`;
-    const events = await normalize([
-      {
-        type: "done",
-        reason: "length",
-        message: { role: "assistant", content: textContent(raw), stopReason: "length" },
-      },
-    ]);
+    const events = await normalize([doneAssistantEvent("length", textContent(raw), "length")]);
 
     expect(events.at(-1)?.message).toMatchObject({ content: textContent(visible) });
   });
@@ -441,23 +459,19 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
   it("remaps buffered auxiliary indexes after compact terminal scrubbing", async () => {
     const raw = `[tool:read]\n<parameter=path>\n${"x".repeat(256_001)}`;
     const thinking = { type: "thinking", thinking: "checking" };
-    const message = {
-      role: "assistant",
-      content: [{ type: "text", text: raw }, thinking],
-      stopReason: "length",
-    };
+    const message = assistantMessage([{ type: "text", text: raw }, thinking], "length");
     const events = await normalize([
       textDelta(raw, raw),
       {
         type: "thinking_delta",
         contentIndex: 1,
         delta: "checking",
-        partial: { role: "assistant", content: [{ type: "text", text: raw }, thinking] },
+        partial: assistantMessage([{ type: "text", text: raw }, thinking]),
       },
-      { type: "done", reason: "length", message },
+      doneEvent("length", message),
     ]);
 
-    expect(events.map((event) => event.type)).toEqual(["thinking_delta", "done"]);
+    expect(eventTypes(events)).toEqual(["thinking_delta", "done"]);
     expect(events[0]).toMatchObject({ contentIndex: 0, partial: { content: [thinking] } });
     expect(events[1]?.message).toMatchObject({ content: [thinking] });
     expect(JSON.stringify(events)).not.toContain("[tool:read]");
@@ -466,7 +480,7 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
   it("uses the compact error projection when no partial is present", async () => {
     const raw = `[tool:read]\n<parameter=path>\n${"x".repeat(256_001)}`;
     const thinking = { type: "thinking", thinking: "checking" };
-    const error = { role: "assistant", content: [{ type: "text", text: raw }, thinking] };
+    const error = assistantMessage([{ type: "text", text: raw }, thinking]);
     const events = await normalize([
       textDelta(raw, raw),
       {
@@ -475,7 +489,7 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
         delta: "checking",
         partial: error,
       },
-      { type: "error", error },
+      errorEvent(error),
     ]);
 
     expect(events[0]).toMatchObject({ contentIndex: 0, partial: { content: [thinking] } });
@@ -496,10 +510,9 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
         type,
         contentIndex: type === "thinking_delta" ? 1 : 0,
         delta: visible,
-        partial: {
-          role: "assistant",
-          content: type === "thinking_delta" ? [{ type: "text", text: call }, block] : [block],
-        },
+        partial: assistantMessage(
+          type === "thinking_delta" ? [{ type: "text", text: call }, block] : [block],
+        ),
       };
       const events = await normalize([textDelta(call, call), later]);
 
@@ -514,10 +527,7 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
       { type: "thinking_start", contentIndex: index + 1 },
       { type: "thinking_end", contentIndex: index + 1, content: "" },
     ]).flat();
-    const events = await normalize([
-      { type: "text_delta", contentIndex: 0, delta: candidate },
-      ...lifecycles,
-    ]);
+    const events = await normalize([streamTextDelta(candidate), ...lifecycles]);
 
     expect(events[0]?.type).toBe("start");
     expect(events.filter((event) => event.type === "thinking_start")).toHaveLength(129);
@@ -530,7 +540,7 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     const candidate = '[tool:read] {"path":"SECRET"';
     const chunk = "x".repeat(128_001);
     const events = await normalize([
-      { type: "text_delta", contentIndex: 0, delta: candidate },
+      streamTextDelta(candidate),
       { type: "thinking_delta", contentIndex: 1, delta: chunk },
       { type: "thinking_delta", contentIndex: 1, delta: chunk },
       { type: "thinking_delta", contentIndex: 1, delta: chunk },
@@ -543,15 +553,12 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
 
   it("preserves clean required partials after scrubbing a call", async () => {
     const call = `<function=read><parameter=path>${"x".repeat(256_001)}</parameter></function>`;
-    const partial = {
-      role: "assistant",
-      content: [
-        { type: "text", text: "Visible" },
-        { type: "thinking", thinking: "checking" },
-      ],
-    };
+    const partial = assistantMessage([
+      { type: "text", text: "Visible" },
+      { type: "thinking", thinking: "checking" },
+    ]);
     const events = await normalize([
-      { type: "text_delta", contentIndex: 0, delta: `${call}\nVisible` },
+      streamTextDelta(`${call}\nVisible`),
       { type: "thinking_start", contentIndex: 1, partial },
     ]);
 
@@ -559,12 +566,9 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
   });
 
   it("preserves clean required partials while draining buffered auxiliary events", async () => {
-    const partial = {
-      role: "assistant",
-      content: [{ type: "thinking", thinking: "checking" }],
-    };
+    const partial = assistantMessage([{ type: "thinking", thinking: "checking" }]);
     const events = await normalize([
-      { type: "text_delta", contentIndex: 0, delta: '[tool:read] {"path":"SECRET"' },
+      streamTextDelta('[tool:read] {"path":"SECRET"'),
       { type: "thinking_start", contentIndex: 1, partial },
     ]);
 
@@ -575,13 +579,13 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     const prefix = "[tool:re";
     const visible = `${prefix} nope`;
     const sourceEvents = [
-      { type: "text_delta", contentIndex: 0, delta: prefix },
+      streamTextDelta(prefix),
       ...Array.from({ length: 257 }, () => ({
         type: "thinking_delta",
         contentIndex: 1,
         delta: "x",
       })),
-      { type: "text_delta", contentIndex: 0, delta: " nope" },
+      streamTextDelta(" nope"),
     ];
     const events = await normalize(sourceEvents);
 
@@ -603,17 +607,14 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     expect(
       projectScrubbedPlainTextToolCallMessage({
         matcher: countingMatcher,
-        message: { role: "assistant", content: text },
+        message: assistantMessage(text),
       }),
     ).toBeUndefined();
     expect(exactNameChecks).toBeLessThanOrEqual(callCount * 3);
   });
 
   it("scrubs an under-cap call after visible terminal text", () => {
-    const message = {
-      role: "assistant",
-      content: "Visible answer\n<function=read></function>",
-    };
+    const message = assistantMessage("Visible answer\n<function=read></function>");
 
     expect(projectScrubbedPlainTextToolCallMessage({ matcher, message })?.message).toEqual({
       ...message,
@@ -621,10 +622,142 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     });
   });
 
+  it("preserves a fenced call in terminal projections", () => {
+    const text = ["```json", "[read]", '{"path":"example.txt"}', "[/read]", "```"].join("\n");
+    const message = assistantMessage(text);
+
+    expect(
+      projectScrubbedPlainTextToolCallMessage({
+        matcher,
+        message,
+        resolveProtectedRanges: resolveTestFenceRanges,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("preserves fenced calls when the opener and call are split across live deltas", async () => {
+    const parts = ["`", "``json\n", "[re", 'ad]\n{"path":"example.txt"}\n[/read]\n', "```"];
+    const text = parts.join("");
+    const events = await normalize(
+      [
+        ...parts.map((delta) => streamTextDelta(delta)),
+        doneAssistantEvent("stop", textContent(text), "stop"),
+      ],
+      { protectFences: true },
+    );
+
+    expect(textDeltas(events).join("")).toBe(text);
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      message: { content: textContent(text), stopReason: "stop" },
+    });
+    expect(events.some((event) => String(event.type).startsWith("toolcall_"))).toBe(false);
+  });
+
+  it("preserves fence ownership across adjacent text content blocks", async () => {
+    const first = "```json\n";
+    const second = ["[read]", '{"path":"example.txt"}', "[/read]", "```"].join("\n");
+    const content = textContent(first, second);
+    const events = await normalize(
+      [
+        streamTextDelta(first),
+        textEnd(first, 0),
+        streamTextDelta(second, 1),
+        textEnd(second, 1),
+        doneAssistantEvent("stop", content, "stop"),
+      ],
+      { protectFences: true },
+    );
+
+    expect(textDeltas(events).join("")).toBe(first + second);
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      message: { content, stopReason: "stop" },
+    });
+    expect(events.some((event) => String(event.type).startsWith("toolcall_"))).toBe(false);
+  });
+
+  it("uses cumulative partials when earlier fenced blocks were not streamed", async () => {
+    const candidate = ["[read]", '{"path":"example.txt"}', "[/read]", "```"].join("\n");
+    const content = textContent("```json\n", candidate);
+    const events = await normalize([streamTextDelta(candidate, 1, assistantMessage(content))], {
+      protectFences: true,
+    });
+
+    expect(textDeltas(events)).toEqual([candidate]);
+    expect(events.some((event) => String(event.type).startsWith("toolcall_"))).toBe(false);
+  });
+
+  it("preserves candidate bytes after bounded protection history overflows", async () => {
+    const opening = `\`\`\`text\n${"x".repeat(1_000_000)}`;
+    const candidate = ["[read]", '{"path":"example.txt"}', "[/read]"].join("\n");
+    const events = await normalize([streamTextDelta(opening), streamTextDelta(candidate)], {
+      protectFences: true,
+    });
+
+    expect(textDeltas(events).join("")).toBe(opening + candidate);
+  });
+
+  it("does not resolve Markdown protection for ordinary streamed text", async () => {
+    let resolverCalls = 0;
+    const visibleChunks = Array.from({ length: 1_000 }, () => "ordinary prose\n");
+    const events = await collectNormalizedEvents(
+      visibleChunks.map((delta) => streamTextDelta(delta)),
+      {
+        matcher,
+        createPromotedToolCallEvents: () => [],
+        normalizeTerminalMessage: () => undefined,
+        resolveProtectedRanges: () => {
+          resolverCalls += 1;
+          return [];
+        },
+      },
+    );
+
+    expect(resolverCalls).toBe(0);
+    expect(textDeltas(events).join("")).toBe(visibleChunks.join(""));
+  });
+
+  it("materializes accumulated Markdown only after a candidate-shaped delta", async () => {
+    const resolvedLengths: number[] = [];
+    const visibleChunks = Array.from({ length: 1_000 }, () => "ordinary prose\n");
+    const candidate = ["[read]", '{"path":"example.txt"}', "[/read]"].join("\n");
+    const events = await collectNormalizedEvents(
+      [...visibleChunks.map((delta) => streamTextDelta(delta)), streamTextDelta(candidate)],
+      {
+        matcher,
+        createPromotedToolCallEvents: () => [],
+        normalizeTerminalMessage: () => undefined,
+        resolveProtectedRanges: (text) => {
+          resolvedLengths.push(text.length);
+          return [];
+        },
+      },
+    );
+
+    expect(resolvedLengths).toContain(visibleChunks.join("").length + candidate.length);
+    expect(resolvedLengths.length).toBeLessThanOrEqual(3);
+    expect(textDeltas(events).join("")).toBe(visibleChunks.join(""));
+  });
+
+  it("still scrubs an unfenced call from live deltas and the terminal message", async () => {
+    const text = ["[read]", '{"path":"secret.txt"}', "[/read]"].join("\n");
+    const events = await normalize(
+      [streamTextDelta(text), doneAssistantEvent("length", textContent(text), "length")],
+      { protectFences: true },
+    );
+
+    expect(textDeltas(events)).toEqual([]);
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      message: { content: [{ type: "text", text: "" }], stopReason: "length" },
+    });
+  });
+
   it.each(["comment", "analysis", "final", "<", "["])(
     "preserves the unnamed protocol prefix %s in terminal prose",
     (prefix) => {
-      const message = { role: "assistant", content: `Visible answer\n${prefix}` };
+      const message = assistantMessage(`Visible answer\n${prefix}`);
       expect(projectScrubbedPlainTextToolCallMessage({ matcher, message })).toBeUndefined();
     },
   );
@@ -669,15 +802,11 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     const tail = "[/read]\nVisible";
     const raw = `${prefix}"}${whitespaceChunks.join("")}${tail}`;
     const events = await normalize([
-      { type: "text_delta", contentIndex: 0, delta: prefix },
-      { type: "text_delta", contentIndex: 0, delta: '"}' },
-      ...whitespaceChunks.map((delta) => ({ type: "text_delta", contentIndex: 0, delta })),
-      { type: "text_delta", contentIndex: 0, delta: tail },
-      {
-        type: "done",
-        reason: "length",
-        message: { role: "assistant", content: textContent(raw), stopReason: "length" },
-      },
+      streamTextDelta(prefix),
+      streamTextDelta('"}'),
+      ...whitespaceChunks.map((delta) => streamTextDelta(delta)),
+      streamTextDelta(tail),
+      doneAssistantEvent("length", textContent(raw), "length"),
     ]);
 
     expect(textDeltas(events)).toEqual(["Visible"]);
@@ -689,9 +818,9 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     const call = "<function=read></function>\n";
     const whitespaceChunks = Array.from({ length: 65 }, () => "\n".repeat(4096));
     const events = await normalize([
-      { type: "text_delta", contentIndex: 0, delta: call },
-      ...whitespaceChunks.map((delta) => ({ type: "text_delta", contentIndex: 0, delta })),
-      { type: "text_delta", contentIndex: 0, delta: "Visible" },
+      streamTextDelta(call),
+      ...whitespaceChunks.map((delta) => streamTextDelta(delta)),
+      streamTextDelta("Visible"),
     ]);
 
     const deltas = textDeltas(events);
@@ -703,22 +832,14 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
   it("preserves visible whitespace when an optional JSON closer is absent", async () => {
     const prefix = `[tool:read] {"path":"${"x".repeat(256_001)}`;
     const suffix = '"}\n\nVisible';
-    const events = await normalize([
-      { type: "text_delta", contentIndex: 0, delta: prefix },
-      { type: "text_delta", contentIndex: 0, delta: suffix },
-    ]);
+    const events = await normalizeTextDeltas(prefix, suffix);
 
     expect(textDeltas(events)).toEqual(["\nVisible"]);
   });
 
   it("preserves split visible whitespace when an optional JSON closer is absent", async () => {
     const prefix = `[tool:read] {"path":"${"x".repeat(256_001)}`;
-    const events = await normalize([
-      { type: "text_delta", contentIndex: 0, delta: prefix },
-      { type: "text_delta", contentIndex: 0, delta: '"}' },
-      { type: "text_delta", contentIndex: 0, delta: "\n\n" },
-      { type: "text_delta", contentIndex: 0, delta: "Visible" },
-    ]);
+    const events = await normalizeTextDeltas(prefix, '"}', "\n\n", "Visible");
 
     expect(textDeltas(events)).toEqual(["\nVisible"]);
   });
@@ -727,9 +848,9 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     const call = "<function=read></function>\n";
     const suffix = "Visible";
     const events = await normalize([
-      { type: "text_delta", contentIndex: 0, delta: call },
-      { type: "text_start", contentIndex: 1, content: "" },
-      { type: "text_delta", contentIndex: 1, delta: suffix },
+      streamTextDelta(call),
+      textStart(1),
+      streamTextDelta(suffix, 1),
     ]);
 
     expect(events).toMatchObject([
@@ -739,10 +860,7 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
   });
 
   it("retains a new block supplied only by its authoritative text end", async () => {
-    const events = await normalize([
-      { type: "text_delta", contentIndex: 0, delta: "[read]" },
-      { type: "text_end", contentIndex: 1, content: "Visible answer" },
-    ]);
+    const events = await normalize([streamTextDelta("[read]"), textEnd("Visible answer", 1)]);
 
     expect(events).toEqual([
       { type: "text_delta", contentIndex: 0, delta: "[read]" },
@@ -754,10 +872,7 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     const visible = "Hello\n";
     const call = "<function=read><parameter=path>SECRET";
     const raw = visible + call;
-    const events = await normalize([
-      { type: "text_delta", contentIndex: 0, delta: raw },
-      { type: "text_end", contentIndex: 0, content: raw },
-    ]);
+    const events = await normalize([streamTextDelta(raw), textEnd(raw, 0)]);
 
     expect(textDeltas(events)).toEqual([visible]);
     expect(JSON.stringify(events)).not.toContain("SECRET");
@@ -767,20 +882,12 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     const intro = "Visible intro.\n";
     const call = "<function=read></function>\n";
     const suffix = "Visible suffix.";
-    const content = [
-      { type: "text", text: intro },
-      { type: "text", text: call },
-      { type: "text", text: suffix },
-    ];
+    const content = textContent(intro, call, suffix);
     const events = await normalize([
-      { type: "text_delta", contentIndex: 0, delta: intro },
-      { type: "text_delta", contentIndex: 1, delta: call },
-      { type: "text_delta", contentIndex: 2, delta: suffix },
-      {
-        type: "done",
-        reason: "length",
-        message: { role: "assistant", content, stopReason: "length" },
-      },
+      streamTextDelta(intro),
+      streamTextDelta(call, 1),
+      streamTextDelta(suffix, 2),
+      doneAssistantEvent("length", content, "length"),
     ]);
 
     expect(textDeltas(events)).toEqual([intro, suffix]);
@@ -793,18 +900,11 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
   it("preserves a later content index after a separately scrubbed over-cap call", async () => {
     const call = `<function=read><parameter=path>${"x".repeat(256_001)}</parameter></function>`;
     const suffix = "Visible suffix.";
-    const content = [
-      { type: "text", text: call },
-      { type: "text", text: suffix },
-    ];
+    const content = textContent(call, suffix);
     const events = await normalize([
-      { type: "text_delta", contentIndex: 0, delta: call },
-      { type: "text_delta", contentIndex: 1, delta: suffix },
-      {
-        type: "done",
-        reason: "length",
-        message: { role: "assistant", content, stopReason: "length" },
-      },
+      streamTextDelta(call),
+      streamTextDelta(suffix, 1),
+      doneAssistantEvent("length", content, "length"),
     ]);
 
     expect(textDeltas(events)).toEqual([suffix]);
@@ -817,11 +917,11 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     const call = `<function=read><parameter=path>${"x".repeat(256_001)}</parameter></function>`;
     const thinking = { type: "thinking", thinking: "checking" };
     const suffix = { type: "text", text: "Visible suffix." };
-    const error = { role: "assistant", content: [{ type: "text", text: call }, thinking, suffix] };
+    const error = assistantMessage([{ type: "text", text: call }, thinking, suffix]);
     const events = await normalize([
-      { type: "text_delta", contentIndex: 0, delta: call },
-      { type: "text_delta", contentIndex: 2, delta: suffix.text },
-      { type: "error", error },
+      streamTextDelta(call),
+      streamTextDelta(suffix.text, 2),
+      errorEvent(error),
     ]);
 
     expect(textDeltas(events)).toEqual([suffix.text]);
@@ -836,13 +936,9 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     const suffix = "Visible suffix.";
     const raw = `${intro}${call}${suffix}`;
     const events = await normalize([
-      { type: "text_delta", contentIndex: 0, delta: intro },
-      { type: "text_delta", contentIndex: 0, delta: `${call}${suffix}` },
-      {
-        type: "done",
-        reason: "length",
-        message: { role: "assistant", content: textContent(raw), stopReason: "length" },
-      },
+      streamTextDelta(intro),
+      streamTextDelta(`${call}${suffix}`),
+      doneAssistantEvent("length", textContent(raw), "length"),
     ]);
 
     expect(textDeltas(events)).toEqual([intro, suffix]);
@@ -856,22 +952,13 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     const second = `TWO\n${call}THREE`;
     const raw = first + second;
     const events = await normalize([
-      { type: "text_delta", contentIndex: 0, delta: first },
-      { type: "text_delta", contentIndex: 0, delta: second },
-      { type: "text_end", contentIndex: 0, content: raw },
-      {
-        type: "done",
-        reason: "length",
-        message: { role: "assistant", content: textContent(raw), stopReason: "length" },
-      },
+      streamTextDelta(first),
+      streamTextDelta(second),
+      textEnd(raw, 0),
+      doneAssistantEvent("length", textContent(raw), "length"),
     ]);
 
-    expect(events.map((event) => event.type)).toEqual([
-      "text_delta",
-      "text_delta",
-      "text_delta",
-      "done",
-    ]);
+    expect(eventTypes(events)).toEqual(["text_delta", "text_delta", "text_delta", "done"]);
     expect(textDeltas(events)).toEqual(["ONE\n", "TWO\n", "THREE"]);
     expectTerminalContent(events, "done", textContent("ONE\nTWO\nTHREE"));
   });
@@ -886,11 +973,7 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     const events = await normalize([
       { type: "text_delta", ...deltaIndex, delta: raw },
       { type: "text_end", ...endIndex, content: raw },
-      {
-        type: "done",
-        reason: "length",
-        message: { role: "assistant", content: textContent(raw), stopReason: "length" },
-      },
+      doneAssistantEvent("length", textContent(raw), "length"),
     ]);
 
     expect(textDeltas(events)).toEqual([visible]);
@@ -905,18 +988,9 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
       const chunks = segments.map((segment) => call + segment);
       const raw = chunks.join("");
       const events = await normalize([
-        ...chunks.map((delta) => ({ type: "text_delta", contentIndex: 0, delta })),
-        {
-          type: "text_end",
-          contentIndex: 0,
-          content: raw,
-          ...(withPartial ? { partial: { role: "assistant", content: textContent(raw) } } : {}),
-        },
-        {
-          type: "done",
-          reason: "length",
-          message: { role: "assistant", content: textContent(raw), stopReason: "length" },
-        },
+        ...chunks.map((delta) => streamTextDelta(delta)),
+        textEnd(raw, 0, withPartial ? assistantMessage(textContent(raw)) : undefined),
+        doneAssistantEvent("length", textContent(raw), "length"),
       ]);
 
       expect(textDeltas(events)).toEqual(segments);
@@ -930,14 +1004,10 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     const visible = chunks.join("");
     const raw = call + visible;
     const events = await normalize([
-      { type: "text_delta", contentIndex: 0, delta: call },
-      ...chunks.map((delta) => ({ type: "text_delta", contentIndex: 0, delta })),
-      { type: "text_end", contentIndex: 0, content: raw },
-      {
-        type: "done",
-        reason: "length",
-        message: { role: "assistant", content: textContent(raw), stopReason: "length" },
-      },
+      streamTextDelta(call),
+      ...chunks.map((delta) => streamTextDelta(delta)),
+      textEnd(raw, 0),
+      doneAssistantEvent("length", textContent(raw), "length"),
     ]);
 
     expect(textDeltas(events)).toEqual(chunks);
@@ -953,9 +1023,9 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
         type: "thinking_delta",
         contentIndex: 1,
         delta: "checking",
-        partial: { role: "assistant", content: [{ type: "text", text: call }, thinking] },
+        partial: assistantMessage([{ type: "text", text: call }, thinking]),
       },
-      { type: "error", error: { message: "stream failed" } },
+      errorEvent({ message: "stream failed" }),
     ]);
 
     expect(events.filter((event) => event.type === "thinking_delta")).toHaveLength(1);
@@ -973,10 +1043,7 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
         type: "thinking_delta",
         contentIndex: 1,
         delta: "x",
-        partial: {
-          role: "assistant",
-          content: [{ type: "text", text: `${visible}${prefix}` }, thinking],
-        },
+        partial: assistantMessage([{ type: "text", text: `${visible}${prefix}` }, thinking]),
       },
       textDelta(" nope", `${visible}${prefix} nope`),
     ]);
@@ -989,25 +1056,23 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
   it.each(["analysis", "commentary", "final"])(
     "replays the bare Harmony channel word %s at EOF",
     async (word) => {
-      expect(
-        textDeltas(await normalize([{ type: "text_delta", contentIndex: 0, delta: word }])),
-      ).toEqual([word]);
+      expect(textDeltas(await normalize([streamTextDelta(word)]))).toEqual([word]);
     },
   );
 
   it("reconciles false-prefix prose completed by text_end", async () => {
     const events = await normalize([
-      { type: "text_delta", contentIndex: 0, delta: "analysis" },
-      { type: "text_end", contentIndex: 0, content: "analysis is ordinary prose" },
+      streamTextDelta("analysis"),
+      textEnd("analysis is ordinary prose", 0),
     ]);
 
     expect(textDeltas(events)).toEqual(["analysis is ordinary prose"]);
-    expect(events.map((event) => event.type)).toEqual(["text_delta", "text_end"]);
+    expect(eventTypes(events)).toEqual(["text_delta", "text_end"]);
   });
 
   it("bounds unnamed Harmony prefixes before EOF", async () => {
     const raw = `analysis${" ".repeat(256_001)}`;
-    const events = await normalize([{ type: "text_delta", contentIndex: 0, delta: raw }]);
+    const events = await normalize([streamTextDelta(raw)]);
 
     expect(textDeltas(events)).toEqual([raw]);
   });
@@ -1015,10 +1080,7 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
   it("preserves a malformed parameter marker after over-cap XML", async () => {
     const prefix = `<function=read><parameter=path>${"x".repeat(256_001)}</parameter>`;
     const suffix = "<parameter=x!>Visible answer";
-    const events = await normalize([
-      { type: "text_delta", contentIndex: 0, delta: prefix },
-      { type: "text_delta", contentIndex: 0, delta: suffix },
-    ]);
+    const events = await normalizeTextDeltas(prefix, suffix);
 
     expect(textDeltas(events)).toEqual([suffix]);
   });
@@ -1026,10 +1088,7 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
   it("recovers a visible suffix delivered only by an over-cap text_end", async () => {
     const prefix = `<function=read><parameter=path>${"x".repeat(256_001)}`;
     const complete = `${prefix}</parameter></function>\nVisible answer`;
-    const events = await normalize([
-      { type: "text_delta", contentIndex: 0, delta: prefix },
-      { type: "text_end", contentIndex: 0, content: complete },
-    ]);
+    const events = await normalize([streamTextDelta(prefix), textEnd(complete, 0)]);
 
     expect(textDeltas(events)).toEqual(["Visible answer"]);
     expect(JSON.stringify(events)).not.toContain("<function=read>");
@@ -1037,7 +1096,7 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
 
   it("fails closed on an unresolved authoritative tool-name prefix", async () => {
     const content = "Hello\n[tool:re";
-    const event = { type: "text_end", contentIndex: 0, content };
+    const event = textEnd(content, 0);
 
     expect(textDeltas(await normalize([event]))).toEqual(["Hello\n"]);
   });
@@ -1047,17 +1106,12 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     const candidate = "[tool:re nope";
     const raw = visible + candidate;
     const events = await normalize([
-      {
-        type: "text_start",
-        contentIndex: 0,
-        content: "",
-        partial: { role: "assistant", content: textContent("") },
-      },
+      textStart(0, "", assistantMessage(textContent(""))),
       textDelta(`${visible}[tool:re`, `${visible}[tool:re`),
       textDelta(" nope", raw),
     ]);
 
-    expect(events.map((event) => event.type)).toEqual(["text_start", "text_delta", "text_delta"]);
+    expect(eventTypes(events)).toEqual(["text_start", "text_delta", "text_delta"]);
     expect(textDeltas(events)).toEqual([visible, candidate]);
   });
 
@@ -1066,10 +1120,7 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     async (header) => {
       const prefix = header + " ".repeat(256_001);
       const payload = '{"path":"SECRET"}<|call|>';
-      const events = await normalize([
-        { type: "text_delta", contentIndex: 0, delta: prefix },
-        { type: "text_delta", contentIndex: 0, delta: payload },
-      ]);
+      const events = await normalizeTextDeltas(prefix, payload);
 
       expect(events).toEqual([]);
     },
@@ -1083,9 +1134,7 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
       (["done", "error", "eof"] as const).map((terminal) => [raw, terminal] as const),
     ),
   )("fails closed on a known %s candidate at %s", async (raw, terminal) => {
-    const events = await normalize(
-      withTerminal([{ type: "text_delta", contentIndex: 0, delta: raw }], terminal, raw),
-    );
+    const events = await normalize(withTerminal([streamTextDelta(raw)], terminal, raw));
 
     expect(textDeltas(events)).toEqual([]);
     expect(JSON.stringify(events)).not.toContain("SECRET");
@@ -1109,52 +1158,36 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
   it("keeps block-local text_end checkpoints out of the candidate buffer", async () => {
     const header = "[read]";
     const payload = '{"path":"SECRET"}[/read]';
-    const rawMessage = {
-      role: "assistant",
-      content: [
-        { type: "text", text: header },
-        { type: "text", text: payload },
+    const rawMessage = assistantMessage(textContent(header, payload), "stop");
+    const promotedMessage = assistantMessage(
+      [{ type: "toolCall", id: "call_repaired", name: "read", arguments: { path: "SECRET" } }],
+      "toolUse",
+    );
+    const events = await collectNormalizedEvents(
+      [
+        textStart(0),
+        streamTextDelta(header),
+        textEnd(header, 0),
+        textStart(1),
+        streamTextDelta(payload, 1),
+        textEnd(payload, 1),
+        doneEvent("stop", rawMessage),
       ],
-      stopReason: "stop",
-    };
-    const promotedMessage = {
-      role: "assistant",
-      content: [
-        { type: "toolCall", id: "call_repaired", name: "read", arguments: { path: "SECRET" } },
-      ],
-      stopReason: "toolUse",
-    };
-    async function* source() {
-      yield { type: "text_start", contentIndex: 0, content: "" };
-      yield { type: "text_delta", contentIndex: 0, delta: header };
-      yield { type: "text_end", contentIndex: 0, content: header };
-      yield { type: "text_start", contentIndex: 1, content: "" };
-      yield { type: "text_delta", contentIndex: 1, delta: payload };
-      yield { type: "text_end", contentIndex: 1, content: payload };
-      yield { type: "done", reason: "stop", message: rawMessage };
-    }
-    const events: Record<string, unknown>[] = [];
-    for await (const event of normalizePlainTextToolCallStreamEvents(source(), {
-      matcher,
-      createPromotedToolCallEvents: (message) => [
-        { type: "toolcall_start", contentIndex: 0, partial: message },
-        { type: "toolcall_end", contentIndex: 0, partial: message },
-      ],
-      normalizeTerminalMessage: () => ({
-        kind: "promoted",
-        message: promotedMessage,
-        sourceToProjectedContentIndex: new Map(),
-      }),
-    })) {
-      events.push(event as Record<string, unknown>);
-    }
+      {
+        matcher,
+        createPromotedToolCallEvents: (message) => [
+          { type: "toolcall_start", contentIndex: 0, partial: message },
+          { type: "toolcall_end", contentIndex: 0, partial: message },
+        ],
+        normalizeTerminalMessage: () => ({
+          kind: "promoted",
+          message: promotedMessage,
+          sourceToProjectedContentIndex: new Map(),
+        }),
+      },
+    );
 
-    expect(events.map((event) => event.type)).toEqual([
-      "start",
-      "toolcall_start",
-      "toolcall_end",
-      "done",
-    ]);
+    expect(eventTypes(events)).toEqual(["start", "toolcall_start", "toolcall_end", "done"]);
     expect(events.at(-1)).toMatchObject({ reason: "toolUse", message: promotedMessage });
     expect(JSON.stringify(events)).not.toContain("[/read]");
   });
@@ -1162,10 +1195,7 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
   it("preserves native tool-call partials while replaying a false-positive prefix", async () => {
     const prefix = "[tool:re";
     const toolCall = { type: "toolCall", id: "call_native", name: "other", arguments: {} };
-    const partial = {
-      role: "assistant",
-      content: [{ type: "text", text: prefix }, toolCall],
-    };
+    const partial = assistantMessage([{ type: "text", text: prefix }, toolCall]);
     const events = await normalize([
       textDelta(prefix, prefix),
       { type: "toolcall_start", contentIndex: 1, partial },

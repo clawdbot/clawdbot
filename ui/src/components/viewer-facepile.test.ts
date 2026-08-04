@@ -166,6 +166,7 @@ const BUILD_INFO: ControlUiBuildInfo = {
   builtAt: "2026-07-20T10:30:00.000Z",
   branch: "main",
   dirty: true,
+  release: false,
   buildId: "test",
 };
 

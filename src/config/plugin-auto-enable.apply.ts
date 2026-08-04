@@ -2,6 +2,7 @@
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import { detectPluginAutoEnableCandidates } from "./plugin-auto-enable.detect.js";
 import {
   materializePluginAutoEnableCandidatesInternal,
@@ -29,6 +30,16 @@ type PluginAutoEnableConfigCache = WeakMap<object, PluginAutoEnableEnvCache>;
 
 let sameTurnApplyCache: PluginAutoEnableConfigCache | undefined;
 let sameTurnApplyCacheClearScheduled = false;
+let stableFingerprintMemo = new WeakMap<object, string>();
+let configFingerprintMemo = new WeakMap<object, string>();
+
+// Gateway metadata/config use replacement snapshots, and process.env selection is generation-fixed.
+// The plugin metadata lifecycle clear is the freshness boundary for these identity memos.
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  stableFingerprintMemo = new WeakMap();
+  configFingerprintMemo = new WeakMap();
+  sameTurnApplyCache = undefined;
+});
 
 function scheduleSameTurnApplyCacheClear(): void {
   if (sameTurnApplyCacheClearScheduled) {
@@ -61,22 +72,35 @@ function stableFingerprintValue(value: unknown): string {
   if (value === null || typeof value !== "object") {
     return JSON.stringify(value) ?? "null";
   }
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => stableFingerprintValue(entry)).join(",")}]`;
+  const cached = stableFingerprintMemo.get(value);
+  if (cached !== undefined) {
+    return cached;
   }
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record)
-    .toSorted((left, right) => left.localeCompare(right))
-    .map((key) => `${JSON.stringify(key)}:${stableFingerprintValue(record[key])}`)
-    .join(",")}}`;
+  const fingerprint = Array.isArray(value)
+    ? `[${value.map((entry) => stableFingerprintValue(entry)).join(",")}]`
+    : (() => {
+        const record = value as Record<string, unknown>;
+        return `{${Object.keys(record)
+          .toSorted((left, right) => left.localeCompare(right))
+          .map((key) => `${JSON.stringify(key)}:${stableFingerprintValue(record[key])}`)
+          .join(",")}}`;
+      })();
+  stableFingerprintMemo.set(value, fingerprint);
+  return fingerprint;
 }
 
-/** Fingerprints mutable config inputs used by plugin auto-enable detection. */
+/** Fingerprints config snapshots used by plugin auto-enable detection. */
 export function fingerprintPluginAutoEnableConfig(config: OpenClawConfig): string {
-  return hashRuntimeConfigValue(config);
+  const cached = configFingerprintMemo.get(config);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const fingerprint = hashRuntimeConfigValue(config);
+  configFingerprintMemo.set(config, fingerprint);
+  return fingerprint;
 }
 
-/** Fingerprints mutable environment inputs used by plugin auto-enable detection. */
+/** Fingerprints environment snapshots used by plugin auto-enable detection. */
 export function fingerprintPluginAutoEnableEnv(env: NodeJS.ProcessEnv): string {
   return stableFingerprintValue(env);
 }

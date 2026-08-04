@@ -40,7 +40,7 @@ describe("settings sidebar search", () => {
         activeRouteId: "model-setup",
         offline: false,
         lastError: null,
-        version: "",
+        gatewayVersion: "",
         updateAvailable: null,
         updateRunning: false,
         onUpdate: vi.fn(),
@@ -71,7 +71,7 @@ describe("settings sidebar search", () => {
         activeRouteId: "appearance",
         offline: false,
         lastError: null,
-        version: "",
+        gatewayVersion: "",
         updateAvailable: null,
         updateRunning: false,
         onUpdate: vi.fn(),
@@ -101,7 +101,7 @@ describe("settings sidebar search", () => {
         activeRouteId: "appearance",
         offline: false,
         lastError: null,
-        version: "",
+        gatewayVersion: "",
         updateAvailable: null,
         updateRunning: false,
         onUpdate: vi.fn(),
@@ -139,7 +139,7 @@ describe("settings sidebar search", () => {
         activeRouteId: "appearance",
         offline: false,
         lastError: null,
-        version: "",
+        gatewayVersion: "",
         updateAvailable: null,
         updateRunning: false,
         onUpdate: vi.fn(),
@@ -194,7 +194,7 @@ describe("settings sidebar search", () => {
         activeRouteId: "appearance",
         offline: false,
         lastError: null,
-        version: "",
+        gatewayVersion: "",
         updateAvailable: null,
         updateRunning: false,
         onUpdate: vi.fn(),
@@ -242,7 +242,7 @@ describe("settings sidebar search", () => {
         activeRouteId: "agents",
         offline: false,
         lastError: null,
-        version: "",
+        gatewayVersion: "",
         updateAvailable: null,
         updateRunning: false,
         onUpdate: vi.fn(),
@@ -273,7 +273,7 @@ describe("settings sidebar search", () => {
         activeHash: "#memory-backend",
         offline: false,
         lastError: null,
-        version: "",
+        gatewayVersion: "",
         updateAvailable: null,
         updateRunning: false,
         onUpdate: vi.fn(),
@@ -318,7 +318,7 @@ describe("settings sidebar search", () => {
           activeRouteId: "appearance",
           offline: false,
           lastError: null,
-          version: "",
+          gatewayVersion: "",
           updateAvailable: null,
           updateRunning: false,
           onUpdate: vi.fn(),
@@ -399,7 +399,7 @@ describe("settings sidebar search", () => {
         activeRouteId: "appearance",
         offline: false,
         lastError: null,
-        version: "",
+        gatewayVersion: "",
         updateAvailable: null,
         updateRunning: false,
         onUpdate: vi.fn(),
@@ -424,13 +424,14 @@ describe("settings sidebar search", () => {
 
   it("keeps the update card above the settings footer", async () => {
     const onUpdate = vi.fn();
+    const onNavigate = vi.fn();
     render(
       renderSettingsSidebar({
         basePath: "",
         activeRouteId: "appearance",
         offline: false,
         lastError: null,
-        version: "1.0.0",
+        gatewayVersion: "1.0.0",
         updateAvailable: {
           currentVersion: "1.0.0",
           latestVersion: "2.0.0",
@@ -441,7 +442,7 @@ describe("settings sidebar search", () => {
         searchQuery: "",
         onExit: vi.fn(),
         onRetryConnect: vi.fn(),
-        onNavigate: vi.fn(),
+        onNavigate,
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
         saveIndicator: saveIndicator(),
@@ -456,6 +457,19 @@ describe("settings sidebar search", () => {
     expect(card?.nextElementSibling?.classList.contains("settings-sidebar__footer")).toBe(true);
     card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
     expect(onUpdate).toHaveBeenCalledOnce();
+
+    const buildChip = container.querySelector<
+      HTMLElement & {
+        gatewayVersion: string | null;
+        variant: string;
+        updateComplete: Promise<boolean>;
+      }
+    >("openclaw-sidebar-build-chip");
+    await buildChip?.updateComplete;
+    expect(buildChip?.gatewayVersion).toBe("1.0.0");
+    expect(buildChip?.variant).toBe("settings");
+    buildChip?.querySelector<HTMLAnchorElement>(".sidebar-footer-build")?.click();
+    expect(onNavigate).toHaveBeenCalledWith("about");
   });
 
   it("shows the offline retry action without an online status", () => {
@@ -468,7 +482,7 @@ describe("settings sidebar search", () => {
           offline,
           queuedOutboxCount,
           lastError,
-          version: "1.0.0",
+          gatewayVersion: "1.0.0",
           updateAvailable: null,
           updateRunning: false,
           onUpdate: vi.fn(),

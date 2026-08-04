@@ -20,6 +20,7 @@ import { resolveChannelSetupWizardAdapterForPlugin } from "../commands/channel-s
 import type { ChannelChoice } from "../commands/onboard-types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   findBundledPluginSourceInMap,
   resolveBundledPluginSources,
@@ -355,22 +356,35 @@ export async function collectChannelStatus(params: {
       resolveChannelSetupWizardAdapterForPlugin(
         installedPlugins.find((plugin) => plugin.id === channel),
       ));
-  const statusEntries = await Promise.all(
-    installedPlugins.flatMap((plugin) => {
-      if (!shouldShowChannelInSetup(plugin.meta)) {
-        return [];
-      }
-      const adapter = resolveAdapter(plugin.id);
-      if (!adapter) {
-        return [];
-      }
-      return adapter.getStatus({
-        cfg: params.cfg,
-        options: params.options,
-        accountOverrides: params.accountOverrides,
-      });
-    }),
-  );
+  const statusEntries = (
+    await Promise.all(
+      installedPlugins
+        .filter((plugin) => shouldShowChannelInSetup(plugin.meta))
+        .map(async (plugin): Promise<ChannelSetupStatus | undefined> => {
+          try {
+            const adapter = resolveAdapter(plugin.id);
+            if (!adapter) {
+              return undefined;
+            }
+            return await adapter.getStatus({
+              cfg: params.cfg,
+              options: params.options,
+              accountOverrides: params.accountOverrides,
+            });
+          } catch (error) {
+            const detail = formatSetupFreeText(formatErrorMessage(error));
+            return {
+              channel: plugin.id,
+              configured: isChannelConfigured(params.cfg, plugin.id),
+              statusLines: [
+                `${formatSetupSelectionLabel(plugin.meta.label, plugin.id)}: status unavailable (${detail})`,
+              ],
+              selectionHint: "status unavailable",
+            };
+          }
+        }),
+    )
+  ).filter((status): status is ChannelSetupStatus => status !== undefined);
   const statusByChannel = new Map(
     statusEntries.map((entry: ChannelSetupStatus) => [entry.channel, entry]),
   );

@@ -93,6 +93,7 @@ vi.mock("./provider-local-service.js", () => ({
 
 vi.mock("./provider-request-config.js", () => ({
   buildProviderRequestDispatcherPolicy: buildProviderRequestDispatcherPolicyMock,
+  getModelProviderMetadataOwners: vi.fn(() => undefined),
   getModelProviderRequestTransport: vi.fn(() => undefined),
   mergeModelProviderRequestOverrides: mergeModelProviderRequestOverridesMock,
   resolveProviderRequestPolicyConfig: resolveProviderRequestPolicyConfigMock,

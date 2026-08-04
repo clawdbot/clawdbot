@@ -304,92 +304,63 @@ describe("admitFollowupTurn", () => {
     expect(state.refreshGoal).toHaveBeenCalledWith(undefined, undefined);
   });
 
-  it("restores the item when persisted state changes generation after admission", async () => {
+  it.each([
+    {
+      name: "restores the item when persisted state changes generation after admission",
+      mode: "persisted-session",
+    },
+    {
+      name: "restores the item when persisted lifecycle revision changes after admission",
+      mode: "persisted-revision",
+    },
+    {
+      name: "restores the item when an in-memory generation changes while admission awaits",
+      mode: "memory",
+    },
+    {
+      name: "restores the item when the admitted persisted generation disappears",
+      mode: "disappeared",
+    },
+  ] as const)("$name", async ({ mode }) => {
     const operation = createOperation();
-    const initialEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
-    const replacementEntry: SessionEntry = { sessionId: "replacement-session", updatedAt: 2 };
-    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
-    state.loadEntry.mockReturnValue(replacementEntry);
-
-    await expect(
-      admitFollowupTurn({
-        queued: createRun(),
-        defaults: createDefaults({ sessionEntry: initialEntry, storePath: "/tmp/sessions.json" }),
-      }),
-    ).rejects.toThrow("Follow-up session generation changed after reply admission");
-    expect(operation.complete).toHaveBeenCalledOnce();
-    expect(state.preflight).not.toHaveBeenCalled();
-  });
-
-  it("restores the item when persisted lifecycle revision changes after admission", async () => {
-    const operation = createOperation();
+    const hasRevision = mode === "persisted-revision" || mode === "memory";
     const initialEntry: SessionEntry = {
       sessionId: "queued-session",
-      lifecycleRevision: "admitted",
+      ...(hasRevision ? { lifecycleRevision: "admitted" } : {}),
       updatedAt: 1,
     };
     const replacementEntry: SessionEntry = {
-      ...initialEntry,
-      lifecycleRevision: "replacement",
-      updatedAt: 2,
-    };
-    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
-    state.loadEntry.mockReturnValue(replacementEntry);
-
-    await expect(
-      admitFollowupTurn({
-        queued: createRun(),
-        defaults: createDefaults({ sessionEntry: initialEntry, storePath: "/tmp/sessions.json" }),
-      }),
-    ).rejects.toThrow("Follow-up session generation changed after reply admission");
-    expect(operation.complete).toHaveBeenCalledOnce();
-    expect(state.preflight).not.toHaveBeenCalled();
-  });
-
-  it("restores the item when an in-memory generation changes while admission awaits", async () => {
-    const operation = createOperation();
-    const initialEntry: SessionEntry = {
-      sessionId: "queued-session",
-      lifecycleRevision: "admitted",
-      updatedAt: 1,
-    };
-    const replacementEntry: SessionEntry = {
-      sessionId: "replacement-session",
-      lifecycleRevision: "replacement",
+      ...(mode === "persisted-revision" ? initialEntry : {}),
+      sessionId: mode === "persisted-revision" ? initialEntry.sessionId : "replacement-session",
+      lifecycleRevision: hasRevision ? "replacement" : undefined,
       updatedAt: 2,
     };
     const sessionStore = { main: initialEntry };
     state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
-    const onQueuedFollowupAdmitted = vi.fn(async () => {
-      sessionStore.main = replacementEntry;
-    });
-
-    await expect(
-      admitFollowupTurn({
-        queued: createRun(),
-        defaults: createDefaults({
-          sessionEntry: initialEntry,
-          sessionStore,
-          opts: { onQueuedFollowupAdmitted },
+    if (mode === "memory") {
+      await expect(
+        admitFollowupTurn({
+          queued: createRun(),
+          defaults: createDefaults({
+            sessionEntry: initialEntry,
+            sessionStore,
+            opts: {
+              onQueuedFollowupAdmitted: vi.fn(async () => {
+                sessionStore.main = replacementEntry;
+              }),
+            },
+          }),
         }),
-      }),
-    ).rejects.toThrow("Follow-up session generation changed after reply admission");
-    expect(operation.complete).toHaveBeenCalledOnce();
-    expect(state.preflight).not.toHaveBeenCalled();
-  });
-
-  it("restores the item when the admitted persisted generation disappears", async () => {
-    const operation = createOperation();
-    const initialEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
-    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
-    state.loadEntry.mockReturnValue(undefined);
-
-    await expect(
-      admitFollowupTurn({
-        queued: createRun(),
-        defaults: createDefaults({ sessionEntry: initialEntry, storePath: "/tmp/sessions.json" }),
-      }),
-    ).rejects.toThrow("Follow-up session generation changed after reply admission");
+      ).rejects.toThrow("Follow-up session generation changed after reply admission");
+    } else {
+      state.loadEntry.mockReturnValue(mode === "disappeared" ? undefined : replacementEntry);
+      await expect(
+        admitFollowupTurn({
+          queued: createRun(),
+          defaults: createDefaults({ sessionEntry: initialEntry, storePath: "/tmp/sessions.json" }),
+        }),
+      ).rejects.toThrow("Follow-up session generation changed after reply admission");
+    }
     expect(operation.complete).toHaveBeenCalledOnce();
     expect(state.preflight).not.toHaveBeenCalled();
   });
@@ -667,82 +638,80 @@ describe("admitFollowupTurn", () => {
     expect(operation.complete).toHaveBeenCalledOnce();
   });
 
-  it("restores the item when preflight adoption races a replacement generation", async () => {
+  it.each([
+    {
+      name: "restores the item when preflight adoption races a replacement generation",
+      outcome: "rotated",
+      mutation: "replace",
+      loadPersisted: true,
+      error: "Follow-up session generation changed",
+      checksFailureText: true,
+    },
+    {
+      name: "restores the item when a no-op preflight observes a replacement generation",
+      outcome: "initial",
+      mutation: "replace",
+      loadPersisted: true,
+      error: "Follow-up session generation changed",
+      checksFailureText: false,
+    },
+    {
+      name: "restores the item when a successful preflight observes in-memory deletion",
+      outcome: "initial",
+      mutation: "delete",
+      loadPersisted: false,
+      error: "Follow-up session generation changed",
+      checksFailureText: false,
+    },
+    {
+      name: "restores the item when a failing preflight observes a replacement generation",
+      outcome: "failure",
+      mutation: "replace",
+      loadPersisted: false,
+      error: "Follow-up session generation changed after reply admission",
+      checksFailureText: true,
+    },
+    {
+      name: "restores the item when a failing preflight observes in-memory deletion",
+      outcome: "failure",
+      mutation: "delete",
+      loadPersisted: false,
+      error: "Follow-up session generation changed",
+      checksFailureText: true,
+    },
+  ] as const)("$name", async ({ outcome, mutation, loadPersisted, error, checksFailureText }) => {
     const operation = createOperation();
     const initialEntry: SessionEntry = {
       sessionId: "queued-session",
-      lifecycleRevision: "initial",
+      lifecycleRevision: outcome === "failure" ? "admitted" : "initial",
       updatedAt: 1,
-    };
-    const rotatedEntry: SessionEntry = {
-      sessionId: "compacted-session",
-      lifecycleRevision: "compacted",
-      updatedAt: 2,
     };
     const replacementEntry: SessionEntry = {
       sessionId: "replacement-session",
       lifecycleRevision: "replacement",
-      updatedAt: 3,
-    };
-    const sessionStore = { main: initialEntry };
-    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
-    state.loadEntry.mockReturnValue(initialEntry);
-    state.preflight.mockImplementation(async () => {
-      sessionStore.main = replacementEntry;
-      return rotatedEntry;
-    });
-
-    await expect(
-      admitFollowupTurn({
-        queued: createRun(),
-        defaults: createDefaults({ sessionStore, sessionEntry: initialEntry }),
-      }),
-    ).rejects.toThrow("Follow-up session generation changed");
-    expect(operation.complete).toHaveBeenCalledOnce();
-    expect(state.buildPreflightFailureText).not.toHaveBeenCalled();
-  });
-
-  it("restores the item when a no-op preflight observes a replacement generation", async () => {
-    const operation = createOperation();
-    const initialEntry: SessionEntry = {
-      sessionId: "queued-session",
-      lifecycleRevision: "initial",
-      updatedAt: 1,
-    };
-    const replacementEntry: SessionEntry = {
-      sessionId: "replacement-session",
-      lifecycleRevision: "replacement",
-      updatedAt: 2,
-    };
-    const sessionStore = { main: initialEntry };
-    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
-    state.loadEntry.mockReturnValue(initialEntry);
-    state.preflight.mockImplementation(async () => {
-      sessionStore.main = replacementEntry;
-      return initialEntry;
-    });
-
-    await expect(
-      admitFollowupTurn({
-        queued: createRun(),
-        defaults: createDefaults({ sessionStore, sessionEntry: initialEntry }),
-      }),
-    ).rejects.toThrow("Follow-up session generation changed");
-    expect(operation.complete).toHaveBeenCalledOnce();
-  });
-
-  it("restores the item when a successful preflight observes in-memory deletion", async () => {
-    const operation = createOperation();
-    const initialEntry: SessionEntry = {
-      sessionId: "queued-session",
-      lifecycleRevision: "initial",
-      updatedAt: 1,
+      updatedAt: outcome === "rotated" ? 3 : 2,
     };
     const sessionStore: Record<string, SessionEntry> = { main: initialEntry };
     state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
+    if (loadPersisted) {
+      state.loadEntry.mockReturnValue(initialEntry);
+    }
     state.preflight.mockImplementation(async () => {
-      delete sessionStore.main;
-      return initialEntry;
+      if (mutation === "replace") {
+        sessionStore.main = replacementEntry;
+      } else {
+        delete sessionStore.main;
+      }
+      if (outcome === "failure") {
+        throw new Error("preflight failed");
+      }
+      return outcome === "rotated"
+        ? ({
+            sessionId: "compacted-session",
+            lifecycleRevision: "compacted",
+            updatedAt: 2,
+          } satisfies SessionEntry)
+        : initialEntry;
     });
 
     await expect(
@@ -750,8 +719,11 @@ describe("admitFollowupTurn", () => {
         queued: createRun(),
         defaults: createDefaults({ sessionStore, sessionEntry: initialEntry }),
       }),
-    ).rejects.toThrow("Follow-up session generation changed");
+    ).rejects.toThrow(error);
     expect(operation.complete).toHaveBeenCalledOnce();
+    if (checksFailureText) {
+      expect(state.buildPreflightFailureText).not.toHaveBeenCalled();
+    }
   });
 
   it("refreshes send policy and goal context after preflight rotates the generation", async () => {
@@ -1027,59 +999,6 @@ describe("admitFollowupTurn", () => {
       kind: "admitted",
       turn: { sendPolicy: "deny", preflightFailurePayload: { text: "preflight failed" } },
     });
-  });
-
-  it("restores the item when a failing preflight observes a replacement generation", async () => {
-    const operation = createOperation();
-    const initialEntry: SessionEntry = {
-      sessionId: "queued-session",
-      lifecycleRevision: "admitted",
-      updatedAt: 1,
-    };
-    const replacementEntry: SessionEntry = {
-      sessionId: "replacement-session",
-      lifecycleRevision: "replacement",
-      updatedAt: 2,
-    };
-    const sessionStore = { main: initialEntry };
-    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
-    state.preflight.mockImplementation(async () => {
-      sessionStore.main = replacementEntry;
-      throw new Error("preflight failed");
-    });
-
-    await expect(
-      admitFollowupTurn({
-        queued: createRun(),
-        defaults: createDefaults({ sessionEntry: initialEntry, sessionStore }),
-      }),
-    ).rejects.toThrow("Follow-up session generation changed after reply admission");
-    expect(operation.complete).toHaveBeenCalledOnce();
-    expect(state.buildPreflightFailureText).not.toHaveBeenCalled();
-  });
-
-  it("restores the item when a failing preflight observes in-memory deletion", async () => {
-    const operation = createOperation();
-    const initialEntry: SessionEntry = {
-      sessionId: "queued-session",
-      lifecycleRevision: "admitted",
-      updatedAt: 1,
-    };
-    const sessionStore: Record<string, SessionEntry> = { main: initialEntry };
-    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
-    state.preflight.mockImplementation(async () => {
-      delete sessionStore.main;
-      throw new Error("preflight failed");
-    });
-
-    await expect(
-      admitFollowupTurn({
-        queued: createRun(),
-        defaults: createDefaults({ sessionEntry: initialEntry, sessionStore }),
-      }),
-    ).rejects.toThrow("Follow-up session generation changed");
-    expect(operation.complete).toHaveBeenCalledOnce();
-    expect(state.buildPreflightFailureText).not.toHaveBeenCalled();
   });
 
   it("uses admitted verbosity when formatting a preflight failure", async () => {

@@ -183,7 +183,10 @@ describe("Feishu DM delivery over the real Lark SDK", () => {
         sendMediaFeishu({
           cfg,
           to: "chat:oc_dm_conversation",
-          mediaBuffer: Buffer.from("loopback image"),
+          mediaBuffer: Buffer.from(
+            "89504e470d0a1a0a0000000d4948445200000001000000010802000000907753de",
+            "hex",
+          ),
           fileName: "loopback.png",
         }),
       ).resolves.toMatchObject({ chatId: "oc_dm_conversation" });

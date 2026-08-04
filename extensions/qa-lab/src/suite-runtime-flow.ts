@@ -71,11 +71,9 @@ import {
   formatTransportTranscript,
   readTransportTranscript,
   recentOutboundSummary,
-  waitForChannelOutboundMessage,
   waitForNoOutbound,
   waitForNoTransportOutbound,
   waitForOutboundMessage,
-  waitForTransportOutboundMessage,
 } from "./suite-runtime-transport.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import {
@@ -201,15 +199,23 @@ type QaSuiteScenarioFlowApiParams = QaSuiteScenarioDepsParams & {
 };
 
 function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
+  const waitForAccountOutboundMessage: typeof waitForOutboundMessage = (
+    state,
+    predicate,
+    timeoutMs,
+    options,
+  ) =>
+    waitForOutboundMessage(state, predicate, timeoutMs, {
+      ...options,
+      accountId: params.env.transport.accountId,
+    });
   return {
     fs,
     path,
     sleep,
     randomUUID,
     runScenario: params.runScenario,
-    waitForOutboundMessage,
-    waitForTransportOutboundMessage,
-    waitForChannelOutboundMessage,
+    waitForOutboundMessage: waitForAccountOutboundMessage,
     waitForNoOutbound,
     waitForNoTransportOutbound,
     recentOutboundSummary,
@@ -340,6 +346,8 @@ export function createQaSuiteScenarioStepRunner(
             gateway: env.gateway,
             outputDir: env.outputDir,
             primaryModel: env.primaryModel,
+            scenarioId: scenario.id,
+            scenarioTitle: scenario.title,
             timeoutMs: execution.timeoutMs ?? deps.liveTurnTimeoutMs(env, 60_000),
             waitForConfigRestartSettle: async (options) =>
               await waitForConfigRestartSettle(env, options?.restartDelayMs, options?.timeoutMs),

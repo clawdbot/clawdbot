@@ -297,6 +297,10 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
+        guard fcntl(stdinPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) != -1 else {
+            self.finishStartLocked(.failure(WorkerError.unavailable("could not protect worker input pipe")))
+            return
+        }
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = Array(command.dropFirst())
         var environment = ProcessInfo.processInfo.environment
@@ -389,14 +393,16 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     }
 
     private func consumeStdoutLocked(_ data: Data) {
+        var searchStart = self.stdoutBuffer.count
         self.stdoutBuffer.append(data)
         guard self.stdoutBuffer.count <= 25 * 1024 * 1024 else {
             self.stopLocked(reason: "worker response exceeded limit", notifyUnexpectedExit: true)
             return
         }
-        while let newline = self.stdoutBuffer.firstIndex(of: 0x0A) {
+        while let newline = self.stdoutBuffer[searchStart...].firstIndex(of: 0x0A) {
             let line = self.stdoutBuffer.prefix(upTo: newline)
             self.stdoutBuffer.removeSubrange(...newline)
+            searchStart = 0
             guard !line.isEmpty,
                   let message = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any]
             else { continue }

@@ -1,3 +1,4 @@
+import { listAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import { readPositiveIntegerParam, readStringParam } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -5,7 +6,6 @@ import {
   errorShape,
   type GatewayRequestHandlerOptions,
 } from "openclaw/plugin-sdk/gateway-runtime";
-import { resolveSessionAgentIds } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
@@ -91,10 +91,7 @@ function readRollbackParams(value: unknown): { agentId: string } {
 
 function resolveExecutionContext(api: OpenClawPluginApi, agentId: string) {
   const config = api.runtime.config.current() as OpenClawConfig;
-  const configuredAgentIds = (config.agents?.list ?? []).map((entry) => normalizeAgentId(entry.id));
-  if (configuredAgentIds.length === 0) {
-    configuredAgentIds.push(resolveSessionAgentIds({ config }).sessionAgentId);
-  }
+  const configuredAgentIds = listAgentIds(config);
   if (!configuredAgentIds.includes(agentId)) {
     throw new InvalidSessionBackfillRequestError(`Unknown agent id "${agentId}".`);
   }

@@ -1497,6 +1497,7 @@ async function listClaudeSessionCatalog(params: {
   const eligible = nodes
     .filter(
       (node) =>
+        node.gatewayLocal !== true &&
         node.commands?.includes(CLAUDE_SESSIONS_LIST_COMMAND) &&
         (!requested || requested.has(`node:${node.nodeId}`)),
     )

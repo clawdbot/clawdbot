@@ -212,6 +212,12 @@ export function createQaScriptEvidenceWriter(options: QaScriptEvidenceWriterOpti
       ],
     });
 
+  const writeLog = async () => {
+    await fs.mkdir(options.artifactBase, { recursive: true });
+    await fs.writeFile(logFile.absoluteFilePath, boundedLogText(), "utf8");
+    return { kind: "log", path: logFile.relativePath };
+  };
+
   return {
     appendLog(chunk: unknown) {
       log.append(String(chunk));
@@ -220,10 +226,10 @@ export function createQaScriptEvidenceWriter(options: QaScriptEvidenceWriterOpti
     logText() {
       return boundedLogText();
     },
+    writeLog,
     async write(result: QaScriptEvidenceResult) {
       const evidence = build(result);
-      await fs.mkdir(options.artifactBase, { recursive: true });
-      await fs.writeFile(logFile.absoluteFilePath, boundedLogText(), "utf8");
+      await writeLog();
       await writeJson(path.join(options.artifactBase, QA_EVIDENCE_FILENAME), evidence);
       await writeJson(path.join(options.artifactBase, "latest-run.json"), {
         qaEvidence: QA_EVIDENCE_FILENAME,

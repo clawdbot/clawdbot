@@ -49,6 +49,18 @@ export function isSystemAgentOnlyCodexDynamicToolAllowlist(
   );
 }
 
+/** True when a private source reply may use the message delivery tool only. */
+export function isMessageOnlyCodexSourceReply(params: {
+  toolsAllow?: readonly string[];
+  sourceReplyDeliveryMode?: string;
+}): boolean {
+  return (
+    params.sourceReplyDeliveryMode === "message_tool_only" &&
+    params.toolsAllow?.length === 1 &&
+    normalizeCodexDynamicToolName(params.toolsAllow[0] ?? "") === "message"
+  );
+}
+
 /** Returns true for private QA runs that force the Codex runtime profile. */
 export function isForcedPrivateQaCodexRuntime(
   env: CodexDynamicToolProfileEnv = process.env,

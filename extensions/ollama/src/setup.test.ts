@@ -56,12 +56,12 @@ function createOllamaFetchMock(params: {
       return jsonResponse({ models: (params.tags ?? []).map((name) => ({ name })) });
     }
     if (url.endsWith("/api/show")) {
-      const body = JSON.parse(requestBodyText(init?.body)) as { name?: string };
-      const contextWindow = body.name ? params.show?.[body.name] : undefined;
-      const capabilities = body.name
+      const body = JSON.parse(requestBodyText(init?.body)) as { model?: string };
+      const contextWindow = body.model ? params.show?.[body.model] : undefined;
+      const capabilities = body.model
         ? params.capabilities === undefined
           ? ["tools"]
-          : params.capabilities[body.name]
+          : params.capabilities[body.model]
         : undefined;
       return jsonResponse({
         ...(contextWindow ? { model_info: { "llama.context_length": contextWindow } } : {}),
@@ -361,8 +361,43 @@ describe("ollama setup", () => {
     expect(events).toEqual(["select", "text"]);
   });
 
-  it("shows cloud-mode unreachable guidance when the host is down", async () => {
+  it("retries the configured host after showing unreachable guidance", async () => {
     const prompter = createLocalPrompter();
+    prompter.confirm = vi.fn().mockResolvedValueOnce(true);
+    const reachableFetch = createOllamaFetchMock({ tags: ["qwen3:0.6b"] });
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("down"))
+      .mockImplementation(reachableFetch);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await promptAndConfigureOllama({
+      cfg: {},
+      prompter,
+    });
+
+    expect(prompter.note).toHaveBeenCalledWith(
+      [
+        "Ollama could not be reached at http://127.0.0.1:11434.",
+        "Start or restart the Ollama server for this address.",
+        "If Ollama is not installed on that machine, download it at https://ollama.com/download",
+        "",
+        "Continue when it is running. OpenClaw will retry this address.",
+      ].join("\n"),
+      "Ollama",
+    );
+    expect(prompter.confirm).toHaveBeenCalledWith({
+      message: "Retry this Ollama address now?",
+      initialValue: true,
+    });
+    expect(result.config.models?.providers?.ollama?.models).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "qwen3:0.6b" })]),
+    );
+  });
+
+  it("reports the configured host when the retry is still unreachable", async () => {
+    const prompter = createLocalPrompter();
+    prompter.confirm = vi.fn().mockResolvedValueOnce(true);
     const fetchMock = createOllamaFetchMock({ tagsError: new Error("down") });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -371,17 +406,9 @@ describe("ollama setup", () => {
         cfg: {},
         prompter,
       }),
-    ).rejects.toThrow("Ollama not reachable");
+    ).rejects.toThrow("Ollama is still not reachable at http://127.0.0.1:11434");
 
-    expect(prompter.note).toHaveBeenCalledWith(
-      [
-        "Ollama could not be reached at http://127.0.0.1:11434.",
-        "Download it at https://ollama.com/download",
-        "",
-        "Start Ollama and re-run setup.",
-      ].join("\n"),
-      "Ollama",
-    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("cloud + local mode falls back to local models when ollama signin is missing", async () => {
@@ -542,7 +569,7 @@ describe("ollama setup", () => {
     });
     const pullCall = fetchMock.mock.calls.find((call) => requestUrl(call[0]).endsWith("/api/pull"));
     expect(pullCall).toBeDefined();
-    expect(JSON.parse(requestBodyText(pullCall?.[1]?.body))).toEqual({ name: "gemma4:e4b" });
+    expect(JSON.parse(requestBodyText(pullCall?.[1]?.body))).toEqual({ model: "gemma4:e4b" });
     expect(progress.update).toHaveBeenCalledWith("Downloading gemma4:e4b - pulling part - 50%");
     expect(progress.stop).toHaveBeenCalledWith("Downloaded gemma4:e4b");
     expect(result.config.models?.providers?.ollama?.models?.map((model) => model.id)).toContain(
@@ -630,7 +657,7 @@ describe("ollama setup", () => {
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       if (requestUrl(input).endsWith("/api/show")) {
         const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
-        if (body.name === "broken:20b") {
+        if (body.model === "broken:20b") {
           return new Response("boom", { status: 500 });
         }
       }
@@ -687,8 +714,8 @@ describe("ollama setup", () => {
       markScanStarted = resolve;
     });
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const body = init?.body ? (JSON.parse(requestBodyText(init.body)) as { name?: string }) : {};
-      if (!requestUrl(input).endsWith("/api/show") || body.name !== "model-200") {
+      const body = init?.body ? (JSON.parse(requestBodyText(init.body)) as { model?: string }) : {};
+      if (!requestUrl(input).endsWith("/api/show") || body.model !== "model-200") {
         return await baseFetch(input, init);
       }
       markScanStarted();
@@ -972,7 +999,7 @@ describe("ollama setup", () => {
     });
 
     const pullRequest = mockCallArg(fetchMock, 1, 1) as RequestInit | undefined;
-    expect(JSON.parse(requestBodyText(pullRequest?.body))).toEqual({ name: "llama3.2:latest" });
+    expect(JSON.parse(requestBodyText(pullRequest?.body))).toEqual({ model: "llama3.2:latest" });
     expect(result.agents?.defaults?.model).toEqual({ primary: "ollama/llama3.2:latest" });
     expect(upsertAuthProfileWithLock).toHaveBeenCalledTimes(1);
   });
@@ -1048,7 +1075,8 @@ describe("ollama setup", () => {
     expect(runtime.error).toHaveBeenCalledWith(
       [
         "Ollama could not be reached at http://127.0.0.1:11435.",
-        "Download it at https://ollama.com/download",
+        "Start or restart the Ollama server for this address.",
+        "If Ollama is not installed on that machine, download it at https://ollama.com/download",
       ].join("\n"),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);

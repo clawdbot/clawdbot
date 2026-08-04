@@ -381,7 +381,7 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     expect(payload.configuredChannels).toStrictEqual([]);
   });
 
-  it("includes explicitly configured channels in JSON config-only fallback", async () => {
+  it("treats all as no filter in JSON config-only fallback", async () => {
     mocks.callGateway.mockRejectedValue(new Error("gateway closed"));
     mocks.requireValidConfigSnapshot.mockResolvedValue({
       channels: { clickclack: { enabled: true } },
@@ -394,7 +394,7 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     mocks.listConfiguredAnnounceChannelIdsForConfig.mockReturnValue(["clickclack"]);
     const { runtime, logs } = createCapturingTestRuntime();
 
-    await channelsStatusCommand({ json: true, probe: false }, runtime as never);
+    await channelsStatusCommand({ channel: "all", json: true, probe: false }, runtime as never);
 
     const payload = JSON.parse(logs.at(-1) ?? "{}");
     expect(payload.gatewayReachable).toBe(false);

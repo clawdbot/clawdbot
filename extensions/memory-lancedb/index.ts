@@ -7,6 +7,7 @@ import {
   optionalPositiveIntegerSchema,
 } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
@@ -24,7 +25,6 @@ import {
 import {
   buildMemoryRecallUnavailableResult,
   createEmbeddings,
-  formatMemoryRecallError,
   isMemoryRecallTimeoutError,
   MemoryRecallEmbeddingError,
   runWithTimeout,
@@ -231,6 +231,7 @@ export default definePluginEntry({
                   let vector: number[];
                   try {
                     vector = await embeddings.embed(
+                      agentId,
                       normalizeRecallQuery(query, currentCfg.recallMaxChars),
                       { timeoutMs: DEFAULT_TOOL_RECALL_TIMEOUT_MS },
                     );
@@ -250,7 +251,7 @@ export default definePluginEntry({
               if (!(error instanceof MemoryRecallEmbeddingError)) {
                 throw error;
               }
-              const message = formatMemoryRecallError(error.originalError);
+              const message = formatErrorMessage(error.originalError);
               if (isMemoryRecallTimeoutError(error.originalError)) {
                 recordMemoryRecallCooldown(agentId, message);
               }
@@ -369,7 +370,7 @@ export default definePluginEntry({
               };
             }
 
-            const vector = await embeddings.embed(text);
+            const vector = await embeddings.embed(agentId, text);
 
             const existing = await findCleanDuplicateMemory(db, agentId, vector);
             if (existing) {
@@ -442,6 +443,7 @@ export default definePluginEntry({
             if (query) {
               const currentCfg = resolveCurrentHookConfig();
               const vector = await embeddings.embed(
+                agentId,
                 normalizeRecallQuery(query, currentCfg.recallMaxChars),
               );
               const results = await db.search(agentId, vector, 5, 0.7);
@@ -536,7 +538,7 @@ export default definePluginEntry({
           task: async () => {
             let vector: number[];
             try {
-              vector = await embeddings.embed(recallQuery, {
+              vector = await embeddings.embed(agentId, recallQuery, {
                 timeoutMs: DEFAULT_AUTO_RECALL_TIMEOUT_MS,
               });
             } catch (error) {
@@ -587,7 +589,7 @@ export default definePluginEntry({
           err instanceof MemoryRecallEmbeddingError &&
           isMemoryRecallTimeoutError(err.originalError)
         ) {
-          recordMemoryRecallCooldown(agentId, formatMemoryRecallError(err.originalError));
+          recordMemoryRecallCooldown(agentId, formatErrorMessage(err.originalError));
         }
         api.logger.warn(`memory-lancedb: recall failed: ${String(err)}`);
       }
@@ -639,7 +641,7 @@ export default definePluginEntry({
               }
 
               const category = detectCategory(sanitized);
-              const vector = await embeddings.embed(sanitized);
+              const vector = await embeddings.embed(agentId, sanitized);
 
               const existing = await findCleanDuplicateMemory(db, agentId, vector);
               if (existing) {

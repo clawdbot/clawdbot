@@ -55,6 +55,7 @@ type QaRuntimeToolFixtureTranscriptToolResult = {
   tool?: string;
   text: string;
   failure: boolean;
+  hardFailure: boolean;
   structuredFailure: boolean;
 };
 
@@ -531,6 +532,19 @@ function isFailureLikeToolResult(params: {
   );
 }
 
+function isHardFailureToolResult(params: {
+  type?: string;
+  text: string;
+  isError?: unknown;
+  is_error?: unknown;
+}) {
+  return (
+    isStructuredFailureToolResult(params) ||
+    isHardFailureToolOutputText(params.text) ||
+    isWorkspaceBoundaryFailureToolOutput(params.text)
+  );
+}
+
 function isStructuredFailureToolResult(params: {
   type?: string;
   isError?: unknown;
@@ -566,6 +580,11 @@ function extractTranscriptToolResults(
         normalizeToolCallId(message.id),
       ...(tool ? { tool } : {}),
       text,
+      hardFailure: isHardFailureToolResult({
+        text,
+        isError: message.isError,
+        is_error: message.is_error,
+      }),
       structuredFailure,
       failure: isFailureLikeToolResult({
         text,
@@ -609,6 +628,12 @@ function extractTranscriptToolResults(
         normalizeToolCallId(block.id),
       ...(blockTool ? { tool: blockTool } : {}),
       text,
+      hardFailure: isHardFailureToolResult({
+        type,
+        text,
+        isError: block.isError,
+        is_error: block.is_error,
+      }),
       structuredFailure,
       failure: isFailureLikeToolResult({
         type,
@@ -1077,7 +1102,7 @@ export async function runRuntimeToolFixture(
         );
       }
     }
-    if (happyRequest.outputRequest?.failure) {
+    if (happyRequest.outputRequest?.hardFailure) {
       if (isKnownHarnessGap(config.knownHarnessGap)) {
         skipFixture(formatKnownHarnessGapDetails(toolName, config));
       }

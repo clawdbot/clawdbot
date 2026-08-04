@@ -10,7 +10,7 @@ import {
   dispatchReplyWithBufferedBlockDispatcher,
   dispatchWithContext,
   editMessageTelegram,
-  emitInternalMessageSentHook,
+  emitTelegramMessageSentHooks,
   expectDraftStreamParams,
   expectRecordFields,
   loadSessionStore,
@@ -25,11 +25,8 @@ import type {
   TelegramBotDeps,
   TelegramMessageContext,
 } from "./bot-message-dispatch.test-harness.js";
-import {
-  buildTelegramConversationContext,
-  createTelegramMessageCache,
-  resolveTelegramMessageCacheScope,
-} from "./message-cache.js";
+import { resolveTelegramMessageCacheScope } from "./message-cache-persistence.js";
+import { buildTelegramConversationContext, createTelegramMessageCache } from "./message-cache.js";
 import { recordOutboundMessageForPromptContext as recordOutboundMessageForPromptContextActual } from "./outbound-message-context.js";
 
 describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
@@ -85,7 +82,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
     expect(answerDraftStream.stop).toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(editMessageTelegram).not.toHaveBeenCalled();
-    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+    expectRecordFields(mockCallArg(emitTelegramMessageSentHooks), {
       content: "Final answer",
       messageId: 2001,
     });
@@ -618,7 +615,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
 
     expect(answerDraftStream.update).toHaveBeenCalledWith(fullAnswer);
     expect(answerDraftStream.update).not.toHaveBeenCalledWith(truncatedFinal);
-    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+    expectRecordFields(mockCallArg(emitTelegramMessageSentHooks), {
       content: fullAnswer,
       messageId: 2001,
     });

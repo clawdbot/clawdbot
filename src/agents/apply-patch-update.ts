@@ -16,6 +16,7 @@ type UpdateFileChunk = {
   changeContext?: string;
   oldLines: string[];
   newLines: string[];
+  contextOldIndexes: Array<number | undefined>;
   isEndOfFile: boolean;
 };
 
@@ -101,12 +102,39 @@ function computeReplacements(
       );
     }
 
-    replacements.push([found, pattern.length, newSlice]);
+    replacements.push([
+      found,
+      pattern.length,
+      keepContextBytes({
+        originalLines,
+        matchIndex: found,
+        patternLength: pattern.length,
+        newSlice,
+        contextOldIndexes: chunk.contextOldIndexes,
+      }),
+    ]);
     lineIndex = found + pattern.length;
   }
 
   replacements.sort((a, b) => a[0] - b[0]);
   return replacements;
+}
+
+function keepContextBytes(params: {
+  originalLines: string[];
+  matchIndex: number;
+  patternLength: number;
+  newSlice: string[];
+  contextOldIndexes: Array<number | undefined>;
+}): string[] {
+  const { originalLines, matchIndex, patternLength, newSlice, contextOldIndexes } = params;
+  return newSlice.map((line, index) => {
+    const oldIndex = contextOldIndexes.at(index);
+    if (oldIndex === undefined || oldIndex >= patternLength) {
+      return line;
+    }
+    return originalLines.at(matchIndex + oldIndex) ?? line;
+  });
 }
 
 function applyReplacements(

@@ -46,11 +46,11 @@ Optional default skill allowlist for agents that do not set
 {
   agents: {
     defaults: { skills: ["github", "weather"] },
-    list: [
-      { id: "writer" }, // inherits github, weather
-      { id: "docs", skills: ["docs-search"] }, // replaces defaults
-      { id: "locked-down", skills: [] }, // no skills
-    ],
+    entries: {
+      writer: { default: true }, // inherits github, weather
+      docs: { skills: ["docs-search"] }, // replaces defaults
+      "locked-down": { skills: [] }, // no skills
+    },
   },
 }
 ```
@@ -141,14 +141,14 @@ injection behavior from the shared defaults. Omitted fields inherit from
       bootstrapMaxChars: 20000,
       bootstrapTotalMaxChars: 60000,
     },
-    list: [
-      {
-        id: "strict-worker",
+    entries: {
+      "strict-worker": {
+        default: true,
         contextInjection: "always",
         bootstrapMaxChars: 50000,
         bootstrapTotalMaxChars: 300000,
       },
-    ],
+    },
   },
 }
 ```
@@ -254,14 +254,14 @@ from `agents.defaults.contextLimits`.
     defaults: {
       contextLimits: { memoryGetMaxChars: 12000 },
     },
-    list: [
-      {
-        id: "tiny-local",
+    entries: {
+      "tiny-local": {
+        default: true,
         contextLimits: {
           memoryGetMaxChars: 6000,
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -284,7 +284,9 @@ Per-agent override for the skills prompt budget.
 ```json5
 {
   agents: {
-    list: [{ id: "tiny-local", skillsLimits: { maxSkillsPromptChars: 6000 } }],
+    entries: {
+      "tiny-local": { default: true, skillsLimits: { maxSkillsPromptChars: 6000 } },
+    },
   },
 }
 ```
@@ -325,21 +327,12 @@ Values:
 
 ### `agents.defaults.userTimezone`
 
-Timezone for system prompt context (not message timestamps). Falls back to host timezone.
+Timezone for message envelopes, queued system events, and the system prompt's local
+date context. Falls back to the host timezone.
 
 ```json5
 {
   agents: { defaults: { userTimezone: "America/Chicago" } },
-}
-```
-
-### `agents.defaults.timeFormat`
-
-Time format in system prompt. Default: `auto` (OS preference).
-
-```json5
-{
-  agents: { defaults: { timeFormat: "auto" } }, // auto | 12 | 24
 }
 ```
 
@@ -736,7 +729,7 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
     defaults: {
       sandbox: {
         mode: "non-main", // off (default) | non-main | all
-        backend: "docker", // docker (default) | ssh | openshell
+        backend: "docker", // docker (default) | podman | openshell | ssh
         scope: "agent", // session | agent (default) | shared
         workspaceAccess: "none", // none (default) | ro | rw
         workspaceRoot: "~/.openclaw/sandboxes",
@@ -955,7 +948,7 @@ noVNC observer access is password-protected and brokered through a one-time, aut
 
 </Accordion>
 
-Browser sandboxing and `sandbox.docker.binds` are Docker-only.
+Browser sandboxing requires the Docker engine. `sandbox.docker.binds` applies to both the Docker and Podman backends.
 
 Build images (from a source checkout):
 
@@ -979,9 +972,8 @@ for provider examples and precedence.
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "main",
+    entries: {
+      main: {
         default: true,
         name: "Main Agent",
         workspace: "~/.openclaw/workspace",
@@ -1023,13 +1015,13 @@ for provider examples and precedence.
           elevated: { enabled: true },
         },
       },
-    ],
+    },
   },
 }
 ```
 
-- `id`: stable agent id (required).
-- `default`: when multiple are set, first wins (warning logged). If none set, first list entry is default.
+- Each key in `agents.entries` is the stable agent id.
+- `default`: exactly one agent entry must set `default: true`.
 - `model`: string form sets a strict per-agent primary with no model fallback; object form `{ primary }` is also strict unless you add `fallbacks`. Use `{ primary, fallbacks: [...] }` to opt that agent into fallback, or `{ primary, fallbacks: [] }` to make strict behavior explicit. Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
 - `utilityModel`: optional per-agent override for short internal tasks such as generated session and thread titles. Falls back to `agents.defaults.utilityModel`, then the effective session provider's declared small-model default. Dashboard titles retry once with the effective regular session model. An empty string skips the alternate utility route for this agent without disabling dashboard title generation.
 - `params`: per-agent stream params merged over the selected model entry in `agents.defaults.models`. Use this for agent-specific overrides like `cacheRetention`, `temperature`, or `maxTokens` without duplicating the whole model catalog.
@@ -1060,10 +1052,10 @@ Run multiple isolated agents inside one Gateway. See [Multi-Agent](/concepts/mul
 ```json5
 {
   agents: {
-    list: [
-      { id: "home", default: true, workspace: "~/.openclaw/workspace-home" },
-      { id: "work", workspace: "~/.openclaw/workspace-work" },
-    ],
+    entries: {
+      home: { default: true, workspace: "~/.openclaw/workspace-home" },
+      work: { workspace: "~/.openclaw/workspace-work" },
+    },
   },
   bindings: [
     { agentId: "home", match: { channel: "whatsapp", accountId: "personal" } },
@@ -1101,13 +1093,13 @@ For `type: "acp"` entries, OpenClaw resolves by exact conversation identity (`ma
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "personal",
+    entries: {
+      personal: {
+        default: true,
         workspace: "~/.openclaw/workspace-personal",
         sandbox: { mode: "off" },
       },
-    ],
+    },
   },
 }
 ```
@@ -1119,9 +1111,9 @@ For `type: "acp"` entries, OpenClaw resolves by exact conversation identity (`ma
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "family",
+    entries: {
+      family: {
+        default: true,
         workspace: "~/.openclaw/workspace-family",
         sandbox: { mode: "all", scope: "agent", workspaceAccess: "ro" },
         tools: {
@@ -1136,7 +1128,7 @@ For `type: "acp"` entries, OpenClaw resolves by exact conversation identity (`ma
           deny: ["write", "edit", "apply_patch", "exec", "process", "browser"],
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -1148,9 +1140,9 @@ For `type: "acp"` entries, OpenClaw resolves by exact conversation identity (`ma
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "public",
+    entries: {
+      public: {
+        default: true,
         workspace: "~/.openclaw/workspace-public",
         sandbox: { mode: "all", scope: "agent", workspaceAccess: "none" },
         tools: {
@@ -1182,7 +1174,7 @@ For `type: "acp"` entries, OpenClaw resolves by exact conversation identity (`ma
           ],
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -1340,6 +1332,7 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
 - Per-channel overrides: `channels.<channel>.ackReaction`, `channels.<channel>.accounts.<id>.ackReaction`.
 - Resolution order: account → channel → `messages.ackReaction` → identity fallback.
 - Scope: `group-mentions` (default), `group-all`, `direct`, `all`, or `off`/`none` (disables ack reactions entirely).
+- `group-mentions` acks group messages that mention the agent, including in groups with `requireMention: false`. Use `group-all` to ack every group message.
 - `messages.statusReactions.enabled`: enables lifecycle status reactions on Slack, Discord, Signal, Telegram, and WhatsApp.
   On Discord, unset keeps status reactions enabled when ack reactions are active.
   On Slack, Signal, Telegram, and WhatsApp, set it explicitly to `true` to enable lifecycle status reactions.

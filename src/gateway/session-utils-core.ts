@@ -2,7 +2,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   countActiveDescendantRuns,
   getSessionDisplaySubagentRunByChildSessionKey,
-  getSubagentSessionRuntimeMs,
   listSubagentRunsForController,
 } from "../agents/subagent-registry-read.js";
 import {
@@ -12,6 +11,7 @@ import {
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { isTerminalSessionStatus, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
 import { truncateUtf16Safe } from "../utils.js";
 import {
@@ -88,13 +88,6 @@ export function deriveSessionTitle(
   }
 
   return undefined;
-}
-
-export function resolveSessionRuntimeMs(
-  run: { startedAt?: number; endedAt?: number; accumulatedRuntimeMs?: number } | null,
-  now: number,
-) {
-  return getSubagentSessionRuntimeMs(run, now);
 }
 
 export function resolvePositiveNumber(value: number | null | undefined): number | undefined {
@@ -297,13 +290,7 @@ function rememberSingleRowChildSessionCandidateCacheEntry(
     singleRowChildSessionCandidateCache.delete(storePath);
   }
   singleRowChildSessionCandidateCache.set(storePath, entry);
-  if (singleRowChildSessionCandidateCache.size <= SINGLE_ROW_CONTEXT_CACHE_MAX_ENTRIES) {
-    return;
-  }
-  const oldestKey = singleRowChildSessionCandidateCache.keys().next().value;
-  if (oldestKey) {
-    singleRowChildSessionCandidateCache.delete(oldestKey);
-  }
+  pruneMapToMaxSize(singleRowChildSessionCandidateCache, SINGLE_ROW_CONTEXT_CACHE_MAX_ENTRIES);
 }
 
 function buildStoreChildSessionCandidateIndex(
@@ -418,6 +405,19 @@ function addChildSessionKey(
   childSessionsByKey.set(parentKey, [childKey]);
 }
 
+export function isCurrentSessionChildOwner(params: {
+  entry: Pick<SessionEntry, "parentSessionKey">;
+  ownerSessionKey: string;
+  controllerSessionKey: string | undefined;
+}): boolean {
+  // Live control supersedes stale spawnedBy, but explicit navigation lineage
+  // remains authoritative so dashboard parents can discover controlled children.
+  return (
+    params.controllerSessionKey === params.ownerSessionKey ||
+    normalizeOptionalString(params.entry.parentSessionKey) === params.ownerSessionKey
+  );
+}
+
 export function buildStoreChildSessionIndex(
   store: Record<string, SessionEntry>,
   now = Date.now(),
@@ -457,7 +457,14 @@ export function buildStoreChildSessionIndex(
       continue;
     }
     for (const parentKey of parentKeys) {
-      if (latestControllerSessionKey && latestControllerSessionKey !== parentKey) {
+      if (
+        latestControllerSessionKey &&
+        !isCurrentSessionChildOwner({
+          entry,
+          ownerSessionKey: parentKey,
+          controllerSessionKey: latestControllerSessionKey,
+        })
+      ) {
         continue;
       }
       addChildSessionKey(childSessionsByKey, parentKey, key);
@@ -483,7 +490,13 @@ export function resolveStoreChildSessionKeysFromCandidates(params: {
       const latestControllerSessionKey =
         normalizeOptionalString(latest.controllerSessionKey) ||
         normalizeOptionalString(latest.requesterSessionKey);
-      if (latestControllerSessionKey !== params.key) {
+      if (
+        !isCurrentSessionChildOwner({
+          entry,
+          ownerSessionKey: params.key,
+          controllerSessionKey: latestControllerSessionKey,
+        })
+      ) {
         continue;
       }
       if (

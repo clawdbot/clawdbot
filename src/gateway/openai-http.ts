@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
+import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -12,17 +13,12 @@ import { isClientToolNameConflictError } from "../agents/agent-tool-definition-a
 import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
-import {
-  hasNonzeroUsage,
-  normalizeUsage,
-  toOpenAiChatCompletionsUsage,
-  type NormalizedUsage,
-  type OpenAiChatCompletionsUsage,
-} from "../agents/usage.js";
+import { toOpenAiChatCompletionsUsage, type OpenAiChatCompletionsUsage } from "../agents/usage.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import {
   DEFAULT_INPUT_IMAGE_MAX_BYTES,
@@ -66,6 +62,7 @@ import {
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
+import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
 import { resolveOpenAiCompatError, validateOpenAiSamplingParams } from "./openai-compat-errors.js";
 import {
   isToolChoiceConstraintSatisfied,
@@ -519,11 +516,13 @@ function resolveImageUrlPart(part: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function extractImageUrls(content: unknown): string[] {
-  if (!Array.isArray(content)) {
-    return [];
-  }
+type ExtractedImageUrls = { kind: "valid"; urls: string[] } | { kind: "invalid" };
+
+function extractImageUrls(content: unknown): ExtractedImageUrls {
   const urls: string[] = [];
+  if (!Array.isArray(content)) {
+    return { kind: "valid", urls };
+  }
   for (const part of content) {
     if (!part || typeof part !== "object") {
       continue;
@@ -532,17 +531,18 @@ function extractImageUrls(content: unknown): string[] {
       continue;
     }
     const url = resolveImageUrlPart(part);
-    if (url) {
-      urls.push(url);
+    if (!url) {
+      return { kind: "invalid" };
     }
+    urls.push(url);
   }
-  return urls;
+  return { kind: "valid", urls };
 }
 
 type ActiveTurnContext = {
   activeTurnIndex: number;
   activeUserMessageIndex: number;
-  urls: string[];
+  imageUrls: ExtractedImageUrls;
 };
 
 function parseImageUrlToSource(url: string): InputImageSource {
@@ -585,20 +585,29 @@ function resolveActiveTurnContext(messagesUnknown: unknown): ActiveTurnContext {
     if (normalizedRole !== "user" && normalizedRole !== "tool") {
       continue;
     }
+    const imageUrls: ExtractedImageUrls =
+      normalizedRole === "user" ? extractImageUrls(msg.content) : { kind: "valid", urls: [] };
     return {
       activeTurnIndex: i,
       activeUserMessageIndex: normalizedRole === "user" ? i : -1,
-      urls: normalizedRole === "user" ? extractImageUrls(msg.content) : [],
+      imageUrls,
     };
   }
-  return { activeTurnIndex: -1, activeUserMessageIndex: -1, urls: [] };
+  return {
+    activeTurnIndex: -1,
+    activeUserMessageIndex: -1,
+    imageUrls: { kind: "valid", urls: [] },
+  };
 }
 
 async function resolveImagesForRequest(
-  activeTurnContext: Pick<ActiveTurnContext, "urls">,
+  activeTurnContext: Pick<ActiveTurnContext, "imageUrls">,
   limits: ResolvedOpenAiChatCompletionsLimits,
 ): Promise<ImageContent[]> {
-  const urls = activeTurnContext.urls;
+  if (activeTurnContext.imageUrls.kind === "invalid") {
+    throw new Error("image_url part is missing a valid URL");
+  }
+  const urls = activeTurnContext.imageUrls.urls;
   if (urls.length === 0) {
     return [];
   }
@@ -639,12 +648,14 @@ export const testOnlyOpenAiHttp = {
 
 function buildAgentPrompt(
   messagesUnknown: unknown,
-  activeUserMessageIndex: number,
+  activeTurnContext: Pick<ActiveTurnContext, "activeUserMessageIndex" | "imageUrls">,
 ): {
   message: string;
   extraSystemPrompt?: string;
 } {
   const messages = asMessages(messagesUnknown);
+  const hasActiveTurnImage =
+    activeTurnContext.imageUrls.kind === "valid" && activeTurnContext.imageUrls.urls.length > 0;
 
   const systemParts: string[] = [];
   const conversationEntries: ConversationEntry[] = [];
@@ -655,7 +666,6 @@ function buildAgentPrompt(
     }
     const role = normalizeOptionalString(msg.role) ?? "";
     const content = extractTextContent(msg.content).trim();
-    const hasImage = extractImageUrls(msg.content).length > 0;
     if (!role) {
       continue;
     }
@@ -678,7 +688,10 @@ function buildAgentPrompt(
     // Keep the image-only placeholder scoped to the active user turn so we don't
     // mention historical image-only turns whose bytes are intentionally not replayed.
     const baseMessageContent =
-      normalizedRole === "user" && !content && hasImage && i === activeUserMessageIndex
+      normalizedRole === "user" &&
+      !content &&
+      hasActiveTurnImage &&
+      i === activeTurnContext.activeUserMessageIndex
         ? IMAGE_ONLY_USER_MESSAGE
         : content;
     const messageContent = [baseMessageContent, assistantToolCallsSummary]
@@ -749,41 +762,11 @@ function resolveAgentResponseCommentary(result: unknown): string {
     .join("\n\n");
 }
 
-type AgentUsageMeta = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  total?: number;
-};
-
 type PendingToolCall = {
   id?: unknown;
   name?: unknown;
   arguments?: unknown;
 };
-
-function resolveAgentRunUsage(result: unknown): NormalizedUsage | undefined {
-  const agentMeta = (
-    result as {
-      meta?: {
-        agentMeta?: {
-          usage?: AgentUsageMeta;
-          lastCallUsage?: AgentUsageMeta;
-        };
-      };
-    } | null
-  )?.meta?.agentMeta;
-  const primary = normalizeUsage(agentMeta?.usage);
-  if (hasNonzeroUsage(primary)) {
-    return primary;
-  }
-  const fallback = normalizeUsage(agentMeta?.lastCallUsage);
-  if (hasNonzeroUsage(fallback)) {
-    return fallback;
-  }
-  return primary ?? fallback;
-}
 
 function resolveStopReasonAndPendingToolCalls(meta: unknown): {
   stopReason: string | undefined;
@@ -868,14 +851,15 @@ function resolveStopSequences(value: unknown): string[] | undefined {
   return sequences.length > 0 ? sequences : undefined;
 }
 
-function resolveErrorMessage(err: unknown): string {
-  if (err instanceof Error) {
-    const message = err.message.trim();
-    if (message) {
-      return message;
-    }
+function resolveChatCompletionTokenCap(value: unknown, field: string): number | undefined {
+  if (value == null) {
+    return undefined;
   }
-  return String(err);
+  const maxTokens = asPositiveSafeInteger(value);
+  if (maxTokens === undefined) {
+    throw new Error(`${field} must be a positive safe integer`);
+  }
+  return maxTokens;
 }
 
 export async function handleOpenAiHttpRequest(
@@ -913,12 +897,20 @@ export async function handleOpenAiHttpRequest(
   const streamIncludeUsage = stream && resolveIncludeUsageForStreaming(payload);
   const model = typeof payload.model === "string" ? payload.model : "openclaw";
   const user = typeof payload.user === "string" ? payload.user : undefined;
-  const maxTokens =
-    typeof payload.max_completion_tokens === "number"
-      ? payload.max_completion_tokens
-      : typeof payload.max_tokens === "number"
-        ? payload.max_tokens
-        : undefined;
+  let maxTokens: number | undefined;
+  try {
+    const maxCompletionTokens = resolveChatCompletionTokenCap(
+      payload.max_completion_tokens,
+      "max_completion_tokens",
+    );
+    const legacyMaxTokens = resolveChatCompletionTokenCap(payload.max_tokens, "max_tokens");
+    maxTokens = maxCompletionTokens ?? legacyMaxTokens;
+  } catch (err) {
+    sendJson(res, 400, {
+      error: { message: formatErrorMessage(err).trim(), type: "invalid_request_error" },
+    });
+    return true;
+  }
   const temperature = typeof payload.temperature === "number" ? payload.temperature : undefined;
   const topP = typeof payload.top_p === "number" ? payload.top_p : undefined;
   const frequencyPenalty =
@@ -932,7 +924,7 @@ export async function handleOpenAiHttpRequest(
   } catch (err) {
     sendJson(res, 400, {
       error: {
-        message: `Invalid response_format: ${resolveErrorMessage(err)}`,
+        message: `Invalid response_format: ${formatErrorMessage(err).trim()}`,
         type: "invalid_request_error",
       },
     });
@@ -944,7 +936,7 @@ export async function handleOpenAiHttpRequest(
   } catch (err) {
     sendJson(res, 400, {
       error: {
-        message: `Invalid stop: ${resolveErrorMessage(err)}`,
+        message: `Invalid stop: ${formatErrorMessage(err).trim()}`,
         type: "invalid_request_error",
       },
     });
@@ -1017,7 +1009,7 @@ export async function handleOpenAiHttpRequest(
     return true;
   }
   const activeTurnContext = resolveActiveTurnContext(payload.messages);
-  const prompt = buildAgentPrompt(payload.messages, activeTurnContext.activeUserMessageIndex);
+  const prompt = buildAgentPrompt(payload.messages, activeTurnContext);
   let resolvedClientTools: ClientToolDefinition[];
   let toolChoicePrompt: string | undefined;
   let toolChoiceConstraint: ToolChoiceConstraint | undefined;
@@ -1033,7 +1025,7 @@ export async function handleOpenAiHttpRequest(
   } catch (err) {
     sendJson(res, 400, {
       error: {
-        message: `Invalid tools/tool_choice: ${resolveErrorMessage(err)}`,
+        message: `Invalid tools/tool_choice: ${formatErrorMessage(err).trim()}`,
         type: "invalid_request_error",
       },
     });
@@ -1198,6 +1190,9 @@ export async function handleOpenAiHttpRequest(
   let finalizeFinishReason: "stop" | "tool_calls" = "stop";
   let resultResolved = false;
   let closed = false;
+  let observedTerminalLifecycle = false;
+  let terminalStreamError: { message: string; type: string; code?: string } | undefined;
+  let terminalLifecyclePhase: "end" | "error" = "end";
   let stopWatchingDisconnect = () => {};
 
   const maybeFinalize = () => {
@@ -1215,6 +1210,10 @@ export async function handleOpenAiHttpRequest(
     finalizeScheduled = true;
     queueMicrotask(() => {
       if (closed) {
+        return;
+      }
+      if (terminalStreamError) {
+        finishStreamWithError(terminalStreamError);
         return;
       }
       closed = true;
@@ -1263,6 +1262,20 @@ export async function handleOpenAiHttpRequest(
         return;
       }
 
+      // SSE deltas cannot retract bytes already delivered to the OpenAI client.
+      if (
+        replace &&
+        typeof text === "string" &&
+        !toolChoiceConstraint &&
+        !text.startsWith(streamedAssistantText)
+      ) {
+        terminalStreamError ??= {
+          message: "Assistant output cannot be represented as an append-only response stream.",
+          type: "api_error",
+        };
+        return;
+      }
+
       // Snapshots include prefixes held during tag-boundary filtering; the raw
       // delta alone can omit a literal leading less-than.
       const content =
@@ -1298,30 +1311,66 @@ export async function handleOpenAiHttpRequest(
 
     if (evt.stream === "lifecycle") {
       const phase = evt.data?.phase;
+      if (phase === "start") {
+        observedTerminalLifecycle = false;
+      }
       if (phase === "end" || phase === "error") {
+        observedTerminalLifecycle = true;
+        if (phase === "error" && terminalLifecyclePhase !== "error") {
+          terminalStreamError ??= {
+            message: normalizeOptionalString(evt.data?.error) ?? "Agent run failed",
+            type: "api_error",
+          };
+        }
         requestFinalize();
       }
     }
   });
 
+  const finishStreamWithError = (error: { message: string; type: string; code?: string }) => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    stopWatchingDisconnect();
+    unsubscribe();
+    writeSse(res, { error });
+    writeDone(res);
+    res.end();
+  };
+
+  // Agent cleanup and deferred SSE delivery have independent lifetimes;
+  // shutdown must wait until both have settled, whichever finishes last.
+  const releaseAgentRootWork = retainGatewayRootWorkAdmissionContinuation();
+  const releaseResponseRootWork = retainGatewayRootWorkAdmissionContinuation();
+  const releaseStreamRootWork = () => {
+    res.off("finish", releaseStreamRootWork);
+    res.off("close", releaseStreamRootWork);
+    releaseResponseRootWork?.();
+  };
+  res.once("finish", releaseStreamRootWork);
+  res.once("close", releaseStreamRootWork);
+
   stopWatchingDisconnect = watchClientDisconnect(req, res, abortController, () => {
     closed = true;
     unsubscribe();
+    releaseStreamRootWork();
   });
 
   wroteRole = true;
   writeAssistantRoleChunk(res, { runId, model });
 
-  // The streamed run outlives this handler, whose root-work admission is
-  // released on return. Without retaining it, subordinate session/lane
-  // admissions inherit a released lease and fail as GatewayDrainingError.
-  const releaseRootWork = retainGatewayRootWorkAdmissionContinuation();
   void (async () => {
     try {
       const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
       resultResolved = true;
 
       if (closed) {
+        return;
+      }
+
+      if (terminalStreamError) {
+        finishStreamWithError(terminalStreamError);
         return;
       }
 
@@ -1339,17 +1388,10 @@ export async function handleOpenAiHttpRequest(
           pendingToolCalls,
         })
       ) {
-        closed = true;
-        stopWatchingDisconnect();
-        unsubscribe();
-        writeSse(res, {
-          error: {
-            message: resolveUnsatisfiedToolChoiceMessage(toolChoiceConstraint),
-            type: "api_error",
-          },
+        finishStreamWithError({
+          message: resolveUnsatisfiedToolChoiceMessage(toolChoiceConstraint),
+          type: "api_error",
         });
-        writeDone(res);
-        res.end();
         return;
       }
 
@@ -1406,28 +1448,25 @@ export async function handleOpenAiHttpRequest(
       if (closed || abortController.signal.aborted) {
         return;
       }
+      terminalLifecyclePhase = "error";
       logWarn(`openai-compat: streaming chat completion failed: ${String(err)}`);
       if (isClientToolNameConflictError(err)) {
-        closed = true;
-        stopWatchingDisconnect();
-        unsubscribe();
-        writeSse(res, {
-          error: { message: "invalid tool configuration", type: "invalid_request_error" },
+        finishStreamWithError({
+          message: "invalid tool configuration",
+          type: "invalid_request_error",
         });
-        writeDone(res);
-        res.end();
         return;
       }
       const mapped = resolveOpenAiCompatError(err);
       if (mapped) {
-        closed = true;
-        stopWatchingDisconnect();
-        unsubscribe();
-        writeSse(res, { error: mapped.error });
-        writeDone(res);
-        res.end();
+        finishStreamWithError(mapped.error);
         return;
       }
+      if (terminalStreamError) {
+        finishStreamWithError(terminalStreamError);
+        return;
+      }
+      // Runs without a producer-owned terminal retain the visible-error fallback.
       const content = "Error: internal error";
       writeAssistantContentChunk(res, {
         runId,
@@ -1439,19 +1478,15 @@ export async function handleOpenAiHttpRequest(
         completion_tokens: 0,
         total_tokens: 0,
       };
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: { phase: "error" },
-      });
       requestFinalize();
     } finally {
-      releaseRootWork?.();
-      if (!closed) {
+      releaseAgentRootWork?.();
+      // The provider owns observed terminals; a second end would erase a failed session.
+      if (!observedTerminalLifecycle && (terminalLifecyclePhase === "error" || !closed)) {
         emitAgentEvent({
           runId,
           stream: "lifecycle",
-          data: { phase: "end" },
+          data: { phase: terminalLifecyclePhase },
         });
       }
     }

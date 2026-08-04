@@ -84,14 +84,14 @@ function assertScenarioOwnsEvidencePath(scenarioOutputDir: string, evidencePath:
 
 export async function readScriptProducerEvidence(params: {
   outputDir: string;
-  producerEvidenceStartedAtMs?: number;
+  requireCurrentRunEvidence?: boolean;
   repoRoot: string;
   scenario: { id: string };
 }): Promise<{ producerEvidence?: QaEvidenceSummaryJson }> {
   const scenarioOutputDir = path.join(params.outputDir, params.scenario.id);
   const latestRun = await readJsonFileIfExists(path.join(scenarioOutputDir, "latest-run.json"));
   if (
-    params.producerEvidenceStartedAtMs !== undefined &&
+    params.requireCurrentRunEvidence === true &&
     latestRun !== undefined &&
     (latestRun === null ||
       typeof latestRun !== "object" ||
@@ -117,7 +117,7 @@ export async function readScriptProducerEvidence(params: {
     const evidencePath = path.isAbsolute(candidate)
       ? candidate
       : path.join(scenarioOutputDir, candidate);
-    if (params.producerEvidenceStartedAtMs !== undefined) {
+    if (params.requireCurrentRunEvidence === true) {
       assertScenarioOwnsEvidencePath(scenarioOutputDir, evidencePath);
       const evidenceStat = await fs.stat(evidencePath).catch((error: unknown) => {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -127,9 +127,6 @@ export async function readScriptProducerEvidence(params: {
       });
       if (!evidenceStat) {
         continue;
-      }
-      if (evidenceStat.mtimeMs < params.producerEvidenceStartedAtMs) {
-        throw new Error("producer evidence was not written by the current scenario run");
       }
       assertScenarioOwnsEvidencePath(
         await fs.realpath(scenarioOutputDir),

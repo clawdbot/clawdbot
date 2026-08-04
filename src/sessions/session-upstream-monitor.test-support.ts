@@ -8,6 +8,7 @@ import "./session-upstream-monitor.js";
 type SessionUpstreamMonitorOptions = OpenClawStateDatabaseOptions & {
   providers?: readonly SessionCatalogProvider[];
   now?: () => number;
+  signal?: AbortSignal;
   loadEntry?: typeof loadSessionEntry;
   isRunActive?: typeof isEmbeddedAgentRunActive;
   loadOwnRecentUserTexts?: (params: {

@@ -113,9 +113,9 @@ Gateway startup uses the same effective port and bind when it seeds local Contro
 | `gateway.reload.mode` | Behavior                                   |
 | --------------------- | ------------------------------------------ |
 | `off`                 | No config reload                           |
-| `hot`                 | Apply only hot-safe changes                |
-| `restart`             | Restart on reload-required changes         |
 | `hybrid` (default)    | Hot-apply when safe, restart when required |
+
+The earlier `hot` and `restart` modes are retired; [`openclaw doctor --fix`](/cli/doctor) maps both to `hybrid`.
 
 ## Operator command set
 

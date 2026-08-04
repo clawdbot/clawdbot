@@ -9,6 +9,7 @@ import {
   memoryVisibleSchemaKeys,
   narrowMemorySchema,
   resolveMemoryBackend,
+  resolveMemoryBackendSelection,
 } from "./memory-schema.ts";
 import { renderMemory } from "./memory.ts";
 
@@ -26,11 +27,13 @@ function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps 
     engineSelection: { kind: "auto", engineId: "memory-core" },
     engineState: "enabled",
     engineBusy: false,
-    engineError: null,
+    engineOutcome: null,
     onEngineChange: vi.fn(),
-    backend: "builtin",
+    onEngineReset: vi.fn(),
+    backendSelection: { kind: "default", backend: "builtin" },
     backendBusy: false,
     onBackendChange: vi.fn(),
+    onBackendReset: vi.fn(),
     addons: [
       {
         id: "active-memory",
@@ -122,14 +125,61 @@ describe("renderMemory", () => {
     expect(values).toContain("");
   });
 
+  it.each([
+    { selection: { kind: "off" } as const, value: "Off" },
+    {
+      selection: { kind: "pinned", engineId: "memory-core" } as const,
+      value: "memory-core",
+    },
+  ])("keeps reset available without a catalog for $selection.kind", ({ selection, value }) => {
+    const onEngineReset = vi.fn();
+    const container = renderInto(
+      createProps({
+        engineOptions: [],
+        engineSelection: selection,
+        engineState: "unknown",
+        onEngineReset,
+      }),
+    );
+
+    expect(container.textContent).toContain(`Default: OpenClaw Memory`);
+    expect(container.textContent).toContain(value);
+    container.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
+    expect(onEngineReset).toHaveBeenCalledOnce();
+  });
+
+  it("disables catalog-free reset when the effective mutation gate is closed", () => {
+    const onEngineReset = vi.fn();
+    const container = renderInto(
+      createProps({
+        engineOptions: [],
+        engineSelection: { kind: "off" },
+        engineState: "unknown",
+        engineBusy: true,
+        onEngineReset,
+      }),
+    );
+    const reset = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Reset to default"]',
+    );
+
+    expect(reset?.disabled).toBe(true);
+    reset?.click();
+    expect(onEngineReset).not.toHaveBeenCalled();
+  });
+
   it("reports whether the engine came from config or from the slot default", () => {
     const auto = renderInto(createProps());
     expect(auto.textContent).toContain("falls back to its default owner");
+    expect(auto.textContent).toContain("Using default: OpenClaw Memory");
+    expect(auto.querySelector('button[aria-label="Reset to default"]')).toBeNull();
 
     const pinned = renderInto(
       createProps({ engineSelection: { kind: "pinned", engineId: "memory-core" } }),
     );
     expect(pinned.textContent).toContain("pinned in config");
+    expect(pinned.textContent).toContain("Default: OpenClaw Memory");
+    expect(pinned.querySelector('button[aria-label="Reset to default"]')).not.toBeNull();
   });
 
   it("keeps a configured missing engine selected and labels it unavailable", () => {
@@ -157,7 +207,9 @@ describe("renderMemory", () => {
   it("surfaces a failed engine write next to the control", () => {
     expect(renderInto(createProps()).textContent).not.toContain("Could not change");
 
-    const failed = renderInto(createProps({ engineError: "gateway rejected the change" }));
+    const failed = renderInto(
+      createProps({ engineOutcome: { kind: "error", message: "gateway rejected the change" } }),
+    );
     expect(failed.textContent).toContain("Could not change the memory engine");
     expect(failed.textContent).toContain("gateway rejected the change");
   });
@@ -172,12 +224,70 @@ describe("renderMemory", () => {
   });
 
   it("hides the retrieval backend row for an engine that owns its own retrieval", () => {
-    expect(renderInto(createProps({ backend: "builtin" })).textContent).toContain(
+    expect(
+      renderInto(createProps({ backendSelection: { kind: "default", backend: "builtin" } }))
+        .textContent,
+    ).toContain("Retrieval backend");
+    expect(renderInto(createProps({ backendSelection: null })).textContent).not.toContain(
       "Retrieval backend",
     );
-    expect(renderInto(createProps({ backend: null })).textContent).not.toContain(
-      "Retrieval backend",
+  });
+
+  it("shows backend provenance and only offers reset for an explicit value", () => {
+    const inherited = renderInto(createProps());
+    expect(inherited.textContent).toContain("Using default: Built-in");
+
+    const pinned = renderInto(
+      createProps({ backendSelection: { kind: "pinned", backend: "builtin" } }),
     );
+    const backendRow = [...pinned.querySelectorAll(".settings-row")].find((row) =>
+      row.textContent?.includes("Retrieval backend"),
+    );
+    expect(backendRow?.textContent).toContain("Default: Built-in");
+    expect(backendRow?.querySelector('button[aria-label="Reset to default"]')).not.toBeNull();
+  });
+
+  it("keeps a malformed explicit backend visible and repairable", () => {
+    const onBackendReset = vi.fn();
+    const container = renderInto(
+      createProps({
+        backendSelection: { kind: "invalid", backend: null, value: "retired-backend" },
+        onBackendReset,
+      }),
+    );
+    const backendRow = [...container.querySelectorAll(".settings-row")].find((row) =>
+      row.textContent?.includes("Retrieval backend"),
+    );
+    const active = backendRow?.querySelector("wa-radio.settings-segmented__btn--active");
+
+    expect(backendRow?.textContent).toContain("Invalid configured value");
+    expect(backendRow?.textContent).toContain("Default: Built-in");
+    expect(backendRow?.textContent).not.toContain("Using default: Built-in");
+    expect(active?.getAttribute("value")).toBe("__invalid__");
+    backendRow?.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
+    expect(onBackendReset).toHaveBeenCalledOnce();
+  });
+
+  it("routes engine and backend restore actions to their reset callbacks", () => {
+    const onEngineReset = vi.fn();
+    const onBackendReset = vi.fn();
+    const container = renderInto(
+      createProps({
+        engineSelection: { kind: "pinned", engineId: "memory-core" },
+        backendSelection: { kind: "pinned", backend: "qmd" },
+        onEngineReset,
+        onBackendReset,
+      }),
+    );
+    const resets = container.querySelectorAll<HTMLButtonElement>(
+      'button[aria-label="Reset to default"]',
+    );
+
+    resets[0]?.click();
+    resets[1]?.click();
+
+    expect(onEngineReset).toHaveBeenCalledOnce();
+    expect(onBackendReset).toHaveBeenCalledOnce();
   });
 
   it("renders enabled and disabled add-ons as accessible toggles", () => {
@@ -396,6 +506,26 @@ describe("resolveMemoryBackend", () => {
       }),
     ).toBeNull();
     expect(resolveMemoryBackend({ plugins: { slots: { memory: "none" } } })).toBeNull();
+  });
+
+  it("preserves whether the effective backend is inherited or pinned", () => {
+    expect(resolveMemoryBackendSelection({})).toEqual({ kind: "default", backend: "builtin" });
+    expect(resolveMemoryBackendSelection({ memory: { backend: "builtin" } })).toEqual({
+      kind: "pinned",
+      backend: "builtin",
+    });
+    expect(resolveMemoryBackendSelection({ memory: { backend: "qmd" } })).toEqual({
+      kind: "pinned",
+      backend: "qmd",
+    });
+    for (const value of ["retired-backend", null, { name: "qmd" }]) {
+      expect(resolveMemoryBackendSelection({ memory: { backend: value } })).toEqual({
+        kind: "invalid",
+        backend: null,
+        value,
+      });
+    }
+    expect(resolveMemoryBackend({ memory: { backend: "retired-backend" } })).toBeNull();
   });
 });
 

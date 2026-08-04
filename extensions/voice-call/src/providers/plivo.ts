@@ -71,6 +71,42 @@ export class PlivoProvider implements VoiceCallProvider {
   private pendingSpeakByCallId = new Map<string, PendingSpeak>();
   private pendingListenByCallId = new Map<string, PendingListen>();
 
+  /**
+   * Release all process-local metadata owned by one Plivo call.
+   * Terminal webhooks can be replayed, so this must stay idempotent.
+   */
+  private releaseCallState(params: {
+    callId?: string;
+    providerCallId?: string;
+    callUuid?: string;
+  }): void {
+    if (params.callId) {
+      this.callIdToWebhookUrl.delete(params.callId);
+      this.pendingSpeakByCallId.delete(params.callId);
+      this.pendingListenByCallId.delete(params.callId);
+    }
+
+    const callUuid =
+      params.callUuid ||
+      (params.providerCallId
+        ? (this.requestUuidToCallUuid.get(params.providerCallId) ?? params.providerCallId)
+        : undefined);
+    if (params.providerCallId) {
+      this.requestUuidToCallUuid.delete(params.providerCallId);
+      this.callUuidToWebhookUrl.delete(params.providerCallId);
+    }
+    if (!callUuid) {
+      return;
+    }
+
+    this.callUuidToWebhookUrl.delete(callUuid);
+    for (const [requestUuid, mappedCallUuid] of this.requestUuidToCallUuid) {
+      if (mappedCallUuid === callUuid) {
+        this.requestUuidToCallUuid.delete(requestUuid);
+      }
+    }
+  }
+
   constructor(config: PlivoConfig, options: PlivoProviderOptions = {}) {
     if (!config.authId) {
       throw new Error("Plivo Auth ID is required");
@@ -127,6 +163,7 @@ export class PlivoProvider implements VoiceCallProvider {
       reason: result.reason,
       isReplay: result.isReplay,
       verifiedRequestKey: result.verifiedRequestKey,
+      releaseReplay: result.releaseReplay,
     };
   }
 
@@ -286,18 +323,24 @@ export class PlivoProvider implements VoiceCallProvider {
       callStatus === "no-answer" ||
       callStatus === "failed"
     ) {
-      return {
+      const event = {
         ...baseEvent,
-        type: "call.ended",
+        type: "call.ended" as const,
         reason:
           callStatus === "completed"
-            ? "completed"
+            ? ("completed" as const)
             : callStatus === "busy"
-              ? "busy"
+              ? ("busy" as const)
               : callStatus === "no-answer"
-                ? "no-answer"
-                : "failed",
+                ? ("no-answer" as const)
+                : ("failed" as const),
       };
+      this.releaseCallState({
+        callId: baseEvent.callId || undefined,
+        providerCallId: callUuid || requestUuid || undefined,
+        callUuid: callUuid || undefined,
+      });
+      return event;
     }
 
     // Plivo will call our answer_url when the call is answered; if we don't have
@@ -357,6 +400,11 @@ export class PlivoProvider implements VoiceCallProvider {
         endpoint: `/Call/${callUuid}/`,
         allowNotFound: true,
       });
+      this.releaseCallState({
+        callId: input.callId,
+        providerCallId: input.providerCallId,
+        callUuid,
+      });
       return;
     }
 
@@ -370,6 +418,10 @@ export class PlivoProvider implements VoiceCallProvider {
       method: "DELETE",
       endpoint: `/Request/${input.providerCallId}/`,
       allowNotFound: true,
+    });
+    this.releaseCallState({
+      callId: input.callId,
+      providerCallId: input.providerCallId,
     });
   }
 

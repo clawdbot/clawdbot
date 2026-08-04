@@ -15,6 +15,7 @@ import {
 } from "../../lib/sessions/catalog-key.ts";
 import {
   findUiSessionRow,
+  SESSION_COMPOSER_FOCUS_PARAM,
   SESSION_FACE_PREFERENCE_PARAM,
   SESSION_NAVIGATION_KEY_PARAM,
 } from "../../lib/sessions/route-navigation.ts";
@@ -29,6 +30,7 @@ import {
   resolveUiConfiguredMainKey,
   resolveUiGlobalAliasAgentId,
 } from "../../lib/sessions/session-key.ts";
+import { draftRouteDataFromLocation, draftSearchFromLocation } from "./route-draft.ts";
 import {
   findCachedShortSession,
   incompleteShortSessionResolution,
@@ -56,6 +58,7 @@ export type ChatRouteData =
       sessionKey: string;
       agentId?: string;
       draft?: string;
+      focusComposer?: boolean;
       face: BoardFace;
       shortId?: string;
       canonicalLocation?: RouteLocation;
@@ -81,6 +84,7 @@ export type SessionChatRouteData = Omit<
 export function locationWithoutDraft(location: RouteLocation): RouteLocation {
   const params = new URLSearchParams(location.search);
   params.delete("draft");
+  params.delete(SESSION_COMPOSER_FOCUS_PARAM);
   const search = params.toString();
   return { ...location, search: search ? `?${search}` : "" };
 }
@@ -91,10 +95,13 @@ type SessionReferenceSearch = { agentId: string } & (
   | { kind: "slug"; value: string }
 );
 
-const resolutionCache = new WeakMap<
-  GatewayBrowserClient,
-  Map<string, Promise<SessionReferenceResolution | null>>
->();
+type PendingSessionReference = {
+  controller: AbortController;
+  promise: Promise<SessionReferenceResolution | null>;
+  subscribers: Set<AbortSignal>;
+};
+
+const resolutionCache = new WeakMap<GatewayBrowserClient, Map<string, PendingSessionReference>>();
 
 function uniqueShortIdPrefix(
   value: string,
@@ -205,21 +212,47 @@ async function querySessionReference(
   signal: AbortSignal,
 ): Promise<SessionReferenceResolution | null> {
   const client = await waitForGatewayClient(context.gateway, signal);
-  let cache = resolutionCache.get(client);
-  if (!cache) {
-    cache = new Map();
-    resolutionCache.set(client, cache);
-  }
+  signal.throwIfAborted();
+  const cache = resolutionCache.get(client) ?? new Map<string, PendingSessionReference>();
+  resolutionCache.set(client, cache);
   const cacheKey = `${normalizeAgentId(search.agentId)}:${search.kind}:${search.value}`;
   let pending = cache.get(cacheKey);
-  if (!pending) {
-    pending = querySessionReferencePages(context, search);
+  if (!pending || pending.controller.signal.aborted) {
+    const controller = new AbortController();
+    pending = {
+      controller,
+      promise: Promise.resolve().then(() =>
+        querySessionReferencePages(context, search, controller.signal),
+      ),
+      subscribers: new Set(),
+    };
     cache.set(cacheKey, pending);
   }
+  pending.subscribers.add(signal);
+  const shared = pending;
+  let rejectAbort: (reason: unknown) => void = () => undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    rejectAbort = reject;
+  });
+  const onAbort = () => {
+    shared.subscribers.delete(signal);
+    // The producer is shared: one cancelled navigation must not cancel another
+    // active route's lookup, but the final subscriber must stop later pages.
+    if (shared.subscribers.size === 0) {
+      shared.controller.abort(signal.reason);
+    }
+    rejectAbort(signal.reason);
+  };
+  signal.addEventListener("abort", onAbort, { once: true });
+  if (signal.aborted) {
+    onAbort();
+  }
   try {
-    return await pending;
+    return await Promise.race([shared.promise, aborted]);
   } finally {
-    if (cache.get(cacheKey) === pending) {
+    signal.removeEventListener("abort", onAbort);
+    shared.subscribers.delete(signal);
+    if (shared.subscribers.size === 0 && cache.get(cacheKey) === shared) {
       cache.delete(cacheKey);
     }
   }
@@ -228,10 +261,12 @@ async function querySessionReference(
 async function querySessionReferencePages(
   context: ApplicationContext,
   search: SessionReferenceSearch,
+  signal: AbortSignal,
 ): Promise<SessionReferenceResolution | null> {
   const matches = new Map<string, GatewaySessionRow>();
   let offset = 0;
   for (let page = 0; ; page += 1) {
+    signal.throwIfAborted();
     const result = await context.sessions.list({
       agentId: search.agentId,
       archivedFilter: "all",
@@ -240,6 +275,7 @@ async function querySessionReferencePages(
       search: sessionReferenceSearchText(context, search),
       ...(offset > 0 ? { offset } : {}),
     });
+    signal.throwIfAborted();
     if (!result) {
       return null;
     }
@@ -266,10 +302,6 @@ async function querySessionReferencePages(
     }
     offset = nextOffset;
   }
-}
-
-function draftFromLocation(location: RouteLocation): string | undefined {
-  return new URLSearchParams(location.search).get("draft") || undefined;
 }
 
 function isPreferenceDerivedFace(location: RouteLocation): boolean {
@@ -388,7 +420,7 @@ function candidatesForResolution(
   context: ApplicationContext,
   face: BoardFace,
   resolution: Extract<SessionReferenceResolution, { kind: "ambiguous" }>,
-  draft: string | undefined,
+  location: RouteLocation,
   preferenceDerived: boolean,
 ): SessionCandidate[] {
   const resolvedRows = resolution.sessions.flatMap((row) => {
@@ -413,7 +445,7 @@ function candidatesForResolution(
           {
             agentId,
             displayName: row.displayName?.trim() || row.key,
-            href: `${href}${draft ? `?${new URLSearchParams({ draft }).toString()}` : ""}`,
+            href: `${href}${draftSearchFromLocation(location)}`,
             idPrefix: prefix,
           },
         ]
@@ -446,7 +478,7 @@ function resolvedSessionRouteData(params: {
   return {
     kind: "session",
     sessionKey: params.row.key,
-    draft: draftFromLocation(params.location),
+    ...draftRouteDataFromLocation(params.location),
     face,
     ...(params.shortId && params.shortId.length > 8 ? { shortId: params.shortId } : {}),
     ...(canonicalLocation ? { canonicalLocation, canonicalLocationSource: params.location } : {}),
@@ -484,7 +516,7 @@ function resolvedMainSessionRouteData(params: {
     kind: "session",
     sessionKey: params.row.key,
     agentId: params.target.agentId,
-    draft: draftFromLocation(params.location),
+    ...draftRouteDataFromLocation(params.location),
     face,
     ...(canonicalLocation ? { canonicalLocation, canonicalLocationSource: params.location } : {}),
   };
@@ -534,7 +566,7 @@ export async function loadChatRoute(
       kind: "session",
       sessionKey,
       agentId: target.agentId,
-      draft: draftFromLocation(routeLocation),
+      ...draftRouteDataFromLocation(routeLocation),
       face: resolvedFace,
       // Non-null only on a preference-derived open, where it always at least drops the
       // marker from the URL.
@@ -568,7 +600,7 @@ export async function loadChatRoute(
     return {
       kind: "session",
       sessionKey,
-      draft: draftFromLocation(routeLocation),
+      ...draftRouteDataFromLocation(routeLocation),
       face,
       ...(canonicalLocation && canonicalLocation.search !== routeLocation.search
         ? { canonicalLocation, canonicalLocationSource: routeLocation }
@@ -627,7 +659,7 @@ export async function loadChatRoute(
               context,
               face,
               slugResolution,
-              draftFromLocation(routeLocation),
+              routeLocation,
               preferenceDerived,
             ),
             truncated: slugResolution.truncated,
@@ -666,7 +698,7 @@ export async function loadChatRoute(
     return {
       kind: "session",
       sessionKey: target.sessionKey,
-      draft: draftFromLocation(routeLocation),
+      ...draftRouteDataFromLocation(routeLocation),
       face,
       ...(canonicalLocation
         ? { canonicalLocation, canonicalLocationSource: routeLocation }
@@ -685,7 +717,7 @@ export async function loadChatRoute(
     return {
       kind: "session",
       sessionKey: cached.sessionKey,
-      draft: draftFromLocation(routeLocation),
+      ...draftRouteDataFromLocation(routeLocation),
       face,
       ...(target.shortId.length > 8 ? { shortId: target.shortId } : {}),
       ...(canonicalLocationChanged
@@ -716,7 +748,7 @@ export async function loadChatRoute(
         context,
         face,
         resolution,
-        draftFromLocation(routeLocation),
+        routeLocation,
         preferenceDerived,
       ),
       truncated: resolution.truncated,

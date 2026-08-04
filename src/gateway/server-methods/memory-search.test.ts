@@ -58,6 +58,7 @@ function createStubManager() {
     status: vi.fn(() => ({
       backend: "builtin" as const,
       provider: "none",
+      dirty: false,
       custom: { searchMode: "fts-only" },
     })),
     close: vi.fn(async () => undefined),
@@ -222,6 +223,34 @@ describe("memory.search gateway method", () => {
         code: "UNAVAILABLE",
         message: "memory plugin unavailable",
       }),
+    );
+  });
+
+  it("qualifies results from a dirty index", async () => {
+    const cfg = createConfig(testState.workspaceDir);
+    const manager = createStubManager();
+    manager.status.mockReturnValue({
+      backend: "builtin",
+      provider: "none",
+      dirty: true,
+      custom: { searchMode: "fts-only" },
+    });
+    getActiveMemorySearchManager.mockResolvedValue({ manager });
+
+    const respond = await invokeMemorySearch({ query: "hidden codeword" }, cfg);
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        agentId: "main",
+        provider: "none",
+        searchMode: "fts-only",
+        results: [],
+        stale: true,
+        warning: "Memory index is dirty. Search results may be incomplete.",
+        action: "Run: openclaw memory status --index --agent main",
+      },
+      undefined,
     );
   });
 });

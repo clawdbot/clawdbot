@@ -1,0 +1,81 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isIncognitoSessionKey } from "./incognito-session-key.js";
+
+export type SessionMutationOperatorScope = "operator.write" | "operator.admin";
+
+const SESSIONS_PATCH_WRITE_SCOPE_FIELDS: ReadonlySet<string> = new Set([
+  "key",
+  "agentId",
+  "label",
+  "category",
+  "boardFace",
+  "icon",
+  "pinned",
+  "archived",
+  "unread",
+]);
+
+const SESSIONS_DELETE_WRITE_SCOPE_FIELDS: ReadonlySet<string> = new Set([
+  "key",
+  "agentId",
+  "deleteTranscript",
+  "archivedOnly",
+]);
+
+function resolveSessionsPatchRequiredScope(params: unknown): SessionMutationOperatorScope {
+  if (!isRecord(params)) {
+    // Malformed params cannot mutate anything; let the handler return the
+    // precise validation error instead of a misleading missing-scope error.
+    return "operator.write";
+  }
+  return Object.keys(params).every((key) => SESSIONS_PATCH_WRITE_SCOPE_FIELDS.has(key))
+    ? "operator.write"
+    : "operator.admin";
+}
+
+function resolveSessionsCreateRequiredScope(params: unknown): SessionMutationOperatorScope {
+  if (!isRecord(params)) {
+    return "operator.write";
+  }
+  // Incognito creation and inheritance expose process-only session state; cwd and
+  // execNode target privileged host resources. All require operator.admin.
+  if (
+    params.incognito === true ||
+    (typeof params.key === "string" && isIncognitoSessionKey(params.key)) ||
+    (typeof params.parentSessionKey === "string" &&
+      isIncognitoSessionKey(params.parentSessionKey)) ||
+    Object.hasOwn(params, "cwd") ||
+    Object.hasOwn(params, "execNode")
+  ) {
+    return "operator.admin";
+  }
+  return "operator.write";
+}
+
+function resolveSessionsDeleteRequiredScope(params: unknown): SessionMutationOperatorScope {
+  // archivedOnly is the explicit archive-then-delete opt-in: write scope may
+  // delete only already-archived sessions. Internal controls stay admin-only.
+  if (!isRecord(params) || params.archivedOnly !== true) {
+    return "operator.admin";
+  }
+  return Object.keys(params).every((key) => SESSIONS_DELETE_WRITE_SCOPE_FIELDS.has(key))
+    ? "operator.write"
+    : "operator.admin";
+}
+
+/** Returns the exact scope for the Gateway's params-aware session mutations. */
+export function resolveDynamicSessionMutationRequiredScope(
+  method: string,
+  params?: unknown,
+): SessionMutationOperatorScope | undefined {
+  if (method === "sessions.create") {
+    return resolveSessionsCreateRequiredScope(params);
+  }
+  if (method === "sessions.patch") {
+    return resolveSessionsPatchRequiredScope(params);
+  }
+  if (method === "sessions.delete") {
+    return resolveSessionsDeleteRequiredScope(params);
+  }
+  return undefined;
+}

@@ -55,7 +55,7 @@ import { ZaloConfigSchema } from "./config-schema.js";
 import type { ZaloProbeResult } from "./probe.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveZaloOutboundSessionRoute } from "./session-route.js";
-import { createZaloSetupWizardProxy, zaloSetupAdapter, zaloSetupContract } from "./setup-core.js";
+import { createZaloSetupWizardProxy, zaloSetupContract } from "./setup-core.js";
 import { collectZaloStatusIssues } from "./status-issues.js";
 
 const meta = {
@@ -195,7 +195,6 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
     base: {
       id: "zalo",
       meta,
-      setup: zaloSetupAdapter,
       setupContract: zaloSetupContract,
       setupWizard: zaloSetupWizard,
       capabilities: {

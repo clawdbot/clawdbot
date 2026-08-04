@@ -311,6 +311,15 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 - Telegram Bot API has no read-receipt support (`sendReadReceipts` does not apply).
 
 <Note>
+  **Upgrade note: Telegram's default preview changed.** With `channels.telegram.streaming` unset, Telegram now keeps one editable status draft during the turn (the agent's current status plus its tool lines) and sends the final answer as a normal message. It previously streamed the answer text itself into the preview. No config becomes invalid and no `doctor --fix` is needed; to keep the previous behavior, set:
+
+```json5
+{ channels: { telegram: { streaming: { mode: "partial" } } } }
+```
+
+</Note>
+
+<Note>
   `channels.telegram.dm.threadReplies` and `channels.telegram.direct.<chatId>.threadReplies` were removed. Run `openclaw doctor --fix` after upgrading if your config still has those keys. DM topic routing now follows Telegram `getMe.has_topics_enabled` (controlled by BotFather threaded mode): topics-enabled bots use thread-scoped DM sessions when Telegram sends `message_thread_id`; other DMs stay on the flat session.
 </Note>
 
@@ -320,7 +329,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
   <Accordion title="Live stream preview (message edits)">
     OpenClaw streams partial replies in real time in direct chats, groups, and topics: send a preview message, then `editMessageText` repeatedly, finalizing in place.
 
-    - `channels.telegram.streaming` is `off | partial | block | progress` (default: `partial`)
+    - `channels.telegram.streaming` is `off | partial | block | progress` (default: `progress`); set `mode: "partial"` to stream answer text into the preview instead of a status draft
     - short initial answer previews are debounced, then materialized after a bounded delay if the run is still active
     - `progress` keeps one editable status draft for tool progress, shows the stable status label when answer activity arrives before tool progress, clears it at completion, and sends the final answer as a normal message
     - `streaming.preview.toolProgress` controls whether tool/progress updates reuse the same edited preview message (default: `true` when preview streaming is active)

@@ -70,11 +70,11 @@ struct DashboardGatewayCatalogTests {
         #expect(entries[0].name == "127.0.0.1")
     }
 
-    @Test @MainActor func `catalog maps only connected control state to healthy`() {
+    @Test @MainActor func `catalog maps live control health`() {
         #expect(DashboardGatewayCatalog.primaryHealth(for: .connected) == .ok)
         #expect(DashboardGatewayCatalog.primaryHealth(for: .disconnected) == .unknown)
         #expect(DashboardGatewayCatalog.primaryHealth(for: .connecting) == .unknown)
-        #expect(DashboardGatewayCatalog.primaryHealth(for: .degraded("offline")) == .unknown)
+        #expect(DashboardGatewayCatalog.primaryHealth(for: .degraded("offline")) == .error)
     }
 
     @Test func `local catalog does not deduplicate a retained remote profile`() throws {
@@ -294,6 +294,7 @@ struct DashboardManagerGatewayTargetTests {
                 token: "current",
                 password: nil),
             windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)")
+        let originalWindow = try #require(controller.window)
         let entries = DashboardGatewayTestEntries.withProfiles(["first", "second"])
         let manager = DashboardManager._testMake(
             profileEndpointProvider: { profileID in
@@ -316,6 +317,7 @@ struct DashboardManagerGatewayTargetTests {
 
         #expect(manager._testMainTarget() == .profile("second"))
         #expect(manager._testController()?.currentURL.port == 60003)
+        #expect(manager._testController()?.window === originalWindow)
     }
 
     @Test func `main menu switch replaces the frontmost dashboard in place`() async throws {
@@ -331,7 +333,8 @@ struct DashboardManagerGatewayTargetTests {
         controller.window?.setFrame(frame, display: false)
         controller.show()
         // CI display bounds clamp window frames during show, so compare replacement against the actual source frame.
-        let sourceFrame = try #require(controller.window).frame
+        let originalWindow = try #require(controller.window)
+        let sourceFrame = originalWindow.frame
         let entries = DashboardGatewayTestEntries.withProfiles(["studio"])
         let manager = DashboardManager._testMake(
             profileEndpointProvider: { profileID in
@@ -350,6 +353,7 @@ struct DashboardManagerGatewayTargetTests {
         #expect(manager.frontmostDashboardTarget == .profile("studio"))
         #expect(manager._testController() !== controller)
         #expect(manager._testController()?.currentURL.port == 60002)
+        #expect(manager._testController()?.window === originalWindow)
         #expect(manager._testController()?.window?.frame == sourceFrame)
     }
 

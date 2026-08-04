@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
-import type { TaskSummary } from "../../../lib/tasks/data.ts";
+import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 import {
   createBackgroundTasksProps,
   handleBackgroundTasksEvent,

@@ -102,15 +102,12 @@ export function convertAnthropicMessagesToResponsesInput(params: {
         continue;
       }
       if (block.type === "tool_result") {
-        const output = stringifyToolResultContent(block.content);
-        if (output.trim()) {
-          toolResultItems.push({
-            type: "function_call_output",
-            call_id: block.tool_use_id,
-            output,
-            ...(block.is_error === true ? { is_error: true } : {}),
-          });
-        }
+        toolResultItems.push({
+          type: "function_call_output",
+          call_id: block.tool_use_id,
+          output: stringifyToolResultContent(block.content),
+          ...(block.is_error === true ? { is_error: true } : {}),
+        });
         continue;
       }
       if (block.type === "tool_use") {

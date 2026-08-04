@@ -39,6 +39,7 @@ final class OnboardingAISetupModel {
     private(set) var manualProviders: [ManualProvider] = []
     private(set) var authOptions: [AuthOption] = []
     private(set) var recommendedInstalls: [RecommendedInstall] = []
+    private(set) var detectedPrepareOptions: [PrepareOption]?
     private(set) var prepareAvailable = false
     private(set) var candidatePresentation: [String: CandidatePresentation] = [:]
     private(set) var activeAuthOption: AuthOption?
@@ -70,7 +71,7 @@ final class OnboardingAISetupModel {
     private(set) var detectError: Failure?
     private(set) var pendingActivationVerification = false
     private(set) var waitingForPendingActivationDeadline = false
-    private(set) var configuredGatewayProbeUnavailable = false
+    private(set) var configuredGatewayBlocker: ConfiguredGatewayBlocker?
     /// Set once every detected candidate failed; opens the manual key form.
     private(set) var exhaustedAutoCandidates = false
 
@@ -88,9 +89,7 @@ final class OnboardingAISetupModel {
         guard self.prepareAvailable else { return [] }
         return Self.prepareOptions(
             candidates: self.candidates,
-            manualProviders: self.manualProviders,
-            authOptions: self.authOptions,
-            recommendedInstalls: self.recommendedInstalls)
+            advertisedOptions: self.detectedPrepareOptions)
     }
 
     var isPreparingModel: Bool {
@@ -109,7 +108,7 @@ final class OnboardingAISetupModel {
     /// Once setup starts changing inference, its successful result belongs to
     /// OpenClaw rather than the existing-Gateway onboarding bypass.
     var ownsInferenceTransition: Bool {
-        (self.phase == .detecting && !self.configuredGatewayProbeUnavailable) ||
+        (self.phase == .detecting && self.configuredGatewayBlocker == nil) ||
             self.phase == .testing || self.manualTesting || self.authBusy || self.connected ||
             self.pendingActivationVerification
     }
@@ -123,8 +122,13 @@ final class OnboardingAISetupModel {
     private let gateway: GatewayConnection
     private let defaults: UserDefaults
     private let routeIdentityProvider: @MainActor () -> String?
+    private let connectionModeProvider: @MainActor () -> AppState.ConnectionMode
     private var started = false
     private var attemptToken = UUID()
+    /// One-shot: the next detection pass lists choices without auto-activating,
+    /// so the connected-state "choose a different AI" path ends at a picker
+    /// instead of re-connecting the same auto candidate.
+    @ObservationIgnored private var suppressNextAutoActivation = false
     @ObservationIgnored private var pendingVerification: PendingVerification?
     @ObservationIgnored private var pendingActivationOwner: OnboardingSystemAgentResumeStore.ActivationOwner?
     @ObservationIgnored private var completedHandoff: CompletedHandoff?
@@ -136,7 +140,9 @@ final class OnboardingAISetupModel {
     /// Only a just-completed provider flow may trust setupComplete without re-probing.
     @ObservationIgnored private var providerAuthReconciliationPending = false
 
-    private struct PersistedActivationState: Equatable {
+    /// Internal (not private): the persisted-transition helper lives in
+    /// OnboardingAISetupSupport.swift with the other pure statics.
+    struct PersistedActivationState: Equatable {
         let setupComplete: Bool
         let configuredModel: String?
     }
@@ -161,11 +167,15 @@ final class OnboardingAISetupModel {
         defaults: UserDefaults = .standard,
         routeIdentityProvider: @escaping @MainActor () -> String? = {
             OnboardingSystemAgentResumeStore.selectedRouteIdentity()
+        },
+        connectionModeProvider: @escaping @MainActor () -> AppState.ConnectionMode = {
+            AppStateStore.shared.connectionMode
         })
     {
         self.gateway = gateway
         self.defaults = defaults
         self.routeIdentityProvider = routeIdentityProvider
+        self.connectionModeProvider = connectionModeProvider
     }
 
     private struct DetectResult: Decodable {
@@ -183,6 +193,7 @@ final class OnboardingAISetupModel {
         let unavailableCandidates: [UnavailableCandidate]?
         let manualProviders: [ManualProvider]?
         let authOptions: [AuthOption]?
+        let prepareOptions: [PrepareOption]?
         let recommendedInstalls: [RecommendedInstall]?
         let configuredModel: String?
         let setupComplete: Bool?
@@ -210,7 +221,7 @@ final class OnboardingAISetupModel {
             self.resetForGatewayChange(clearPendingHandoff: false)
         }
         guard !self.started else { return }
-        self.configuredGatewayProbeUnavailable = false
+        self.configuredGatewayBlocker = nil
         self.started = true
         self.phase = .detecting
         scheduleDetection()
@@ -219,7 +230,7 @@ final class OnboardingAISetupModel {
     func retryFromScratch() {
         // The configured-Gateway preflight has its own read-only retry. Never
         // turn an unavailable agents.list response into setup mutation.
-        guard !self.configuredGatewayProbeUnavailable else { return }
+        guard self.configuredGatewayBlocker == nil else { return }
         guard !self.waitingForPendingActivationDeadline else { return }
         if self.pendingActivationVerification {
             Task { await self.verifyPendingConfiguredInference() }
@@ -231,25 +242,23 @@ final class OnboardingAISetupModel {
         scheduleDetection()
     }
 
-    func showConfiguredGatewayProbeUnavailable() {
-        guard !self.ownsInferenceTransition ||
-            self.configuredGatewayProbeUnavailable ||
-            self.waitingForPendingActivationDeadline
-        else { return }
-        // Retire stale candidates and `started` state. A later successful
-        // missing-model probe must be able to run a fresh detect/activate flow.
-        self.resetForGatewayChange(clearPendingHandoff: false)
-        self.configuredGatewayProbeUnavailable = true
-        self.phase = .ready
-        self.detectError = Failure(
-            summary: "The Gateway did not answer the inference check. Nothing was changed.",
-            detail: nil)
+    /// Escape hatch from a successful auto-connect: re-detect and present every
+    /// candidate, provider, and API-key route without auto-activating, so the
+    /// user can replace the auto-chosen AI with one they pick themselves.
+    func chooseDifferentAI() {
+        guard self.beginChooseDifferentAI() else { return }
+        self.scheduleDetection()
     }
 
-    func beginConfiguredGatewayProbeRetry() {
-        guard self.configuredGatewayProbeUnavailable else { return }
+    /// Split from `chooseDifferentAI` so tests can drive the detection await.
+    @discardableResult
+    func beginChooseDifferentAI() -> Bool {
+        guard self.connected else { return false }
+        self.resetForGatewayChange()
+        self.suppressNextAutoActivation = true
+        self.started = true
         self.phase = .detecting
-        self.detectError = nil
+        return true
     }
 
     func waitForPendingActivationDeadline() {
@@ -266,6 +275,16 @@ final class OnboardingAISetupModel {
         self.beginPendingActivationDeadlineWait(
             deadline: deadline,
             routeIdentity: routeIdentity)
+    }
+
+    func updateConfiguredGatewayBlockerState(
+        _ blocker: ConfiguredGatewayBlocker?,
+        phase: Phase,
+        detectError: Failure?)
+    {
+        self.configuredGatewayBlocker = blocker
+        self.phase = phase
+        self.detectError = detectError
     }
 
     /// Restore only the pending handoff state. A configured model label is not
@@ -628,6 +647,7 @@ final class OnboardingAISetupModel {
         self.manualProviders = []
         self.authOptions = []
         self.recommendedInstalls = []
+        self.detectedPrepareOptions = nil
         self.prepareAvailable = false
         self.candidatePresentation = [:]
         self.activeAuthOption = nil
@@ -649,7 +669,7 @@ final class OnboardingAISetupModel {
         self.detectError = nil
         self.pendingActivationVerification = false
         self.waitingForPendingActivationDeadline = false
-        self.configuredGatewayProbeUnavailable = false
+        self.configuredGatewayBlocker = nil
         self.exhaustedAutoCandidates = false
         self.serverLease = nil
         self.manualProviderID = ""
@@ -657,6 +677,7 @@ final class OnboardingAISetupModel {
         self.manualError = nil
         self.manualTesting = false
         self.showManualEntry = false
+        self.suppressNextAutoActivation = false
         if let authSessionToCancel, let authServerLease {
             Task {
                 await self.gateway.cancelWizardSession(authSessionToCancel, on: authServerLease)
@@ -674,15 +695,27 @@ extension OnboardingAISetupModel {
         await self.detectAndAutoConnect(context: context)
     }
 
-    private func scheduleDetection() {
+    private func scheduleDetection(
+        preparedChoiceID: String? = nil,
+        preparedProviderLabel: String? = nil)
+    {
         guard let context = captureAttemptContext() else {
             self.failDetectionForMissingRoute()
             return
         }
-        Task { await self.detectAndAutoConnect(context: context) }
+        Task {
+            await self.detectAndAutoConnect(
+                context: context,
+                preparedChoiceID: preparedChoiceID,
+                preparedProviderLabel: preparedProviderLabel)
+        }
     }
 
-    private func detectAndAutoConnect(context: AttemptContext) async {
+    private func detectAndAutoConnect(
+        context: AttemptContext,
+        preparedChoiceID: String? = nil,
+        preparedProviderLabel: String? = nil) async
+    {
         // Gateway awaits can yield to a route reset or cancellation. Revalidate
         // before every activation side effect so stale attempts cannot hand off.
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
@@ -716,6 +749,7 @@ extension OnboardingAISetupModel {
             let authOptions = result.authOptions ?? []
             self.authOptions = authOptions
             self.recommendedInstalls = result.recommendedInstalls ?? []
+            self.detectedPrepareOptions = result.prepareOptions
             self.candidatePresentation = Dictionary(
                 result.candidates.map { candidate in
                     (candidate.kind, CandidatePresentation(icon: candidate.icon, website: candidate.website))
@@ -761,15 +795,45 @@ extension OnboardingAISetupModel {
                 self.statuses[candidate.kind] = .untried
             }
             self.phase = .ready
+            if self.suppressNextAutoActivation {
+                // "Choose a different AI" pass: list every route and let the
+                // user pick; auto-activating here would redo the undone choice.
+                self.suppressNextAutoActivation = false
+                self.showManualEntry = !self.manualProviders.isEmpty
+                return
+            }
+            if let preparedChoiceID {
+                // Detection kinds encode the provider-auth choice ID, while
+                // PrepareOption.brandId owns the model-ref namespace.
+                let preparedKind = "provider-auto:\(preparedChoiceID)"
+                if let prepared = candidates.first(where: {
+                    $0.kind == preparedKind && $0.credentials != false
+                }) {
+                    await self.activate(kind: prepared.kind, context: context)
+                } else {
+                    let label = preparedProviderLabel ?? preparedChoiceID
+                    self.detectError = Self.failure(
+                        label: label,
+                        status: "unavailable",
+                        error: "\(label) did not expose a usable local model. Review setup, then retry.")
+                    self.showManualEntry = !self.manualProviders.isEmpty
+                }
+                return
+            }
             if let first = autoCandidateAfter(kind: nil) {
-                // Candidate found: connect without asking. Switching later
-                // stays one click away while the test runs server-side.
+                // Candidate found: connect without asking. The connected banner
+                // keeps "Choose a different AI" so this choice stays reversible.
                 await self.activate(kind: first.kind, context: context)
             } else {
                 self.showManualEntry = !self.manualProviders.isEmpty
             }
         } catch {
             guard self.isCurrentAttempt(context) else { return }
+            self.suppressNextAutoActivation = false
+            if self.connectionModeProvider() == .remote, let authIssue = RemoteGatewayAuthIssue(error: error) {
+                self.enterGatewayAuthBlocker(authIssue)
+                return
+            }
             self.phase = .ready
             self.detectError = Self.transportFailure(error.localizedDescription)
             self.showManualEntry = self.candidates.isEmpty
@@ -807,16 +871,6 @@ extension OnboardingAISetupModel {
         self.phase = .ready
         self.detectError = Self.transportFailure(
             "No Gateway is selected. Select a Gateway, then try again.")
-    }
-
-    private static func activationTransitionWasPersisted(
-        expectedModel: String,
-        before: PersistedActivationState?,
-        after: PersistedActivationState?) -> Bool
-    {
-        guard let before, let after else { return false }
-        let wasAlreadyPersisted = before.setupComplete && before.configuredModel == expectedModel
-        return !wasAlreadyPersisted && after.setupComplete && after.configuredModel == expectedModel
     }
 
     /// Candidates the automatic ladder may try: skip definitively logged-out
@@ -1091,16 +1145,6 @@ extension OnboardingAISetupModel {
             activationOwner: activationOwner)
         return self.connected
     }
-
-    private static func remainingMilliseconds(
-        until deadline: ContinuousClock.Instant,
-        clock: ContinuousClock,
-        cappedAt capMs: Int) -> Int
-    {
-        let components = clock.now.duration(to: deadline).components
-        let milliseconds = components.seconds * 1000 + components.attoseconds / 1_000_000_000_000_000
-        return max(0, min(capMs, Int(milliseconds)))
-    }
 }
 
 extension OnboardingAISetupModel {
@@ -1324,9 +1368,14 @@ extension OnboardingAISetupModel {
             return
         }
         if done || status == "done" {
+            let preparedProvider = self.providerWizardKind == .prepare
+                ? self.activeAuthOption.map { (id: $0.id, label: $0.label) }
+                : nil
             self.providerAuthReconciliationPending = self.providerWizardKind == .auth
             self.clearProviderAuth()
-            self.scheduleDetection()
+            self.scheduleDetection(
+                preparedChoiceID: preparedProvider?.id,
+                preparedProviderLabel: preparedProvider?.label)
             return
         }
         self.authStep = step

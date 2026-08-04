@@ -55,6 +55,7 @@ suite.define(() => {
     const context = await createProofContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.patch"],
       models,
       sessionKey: "agent:main:main",
     });
@@ -114,7 +115,7 @@ suite.define(() => {
             "nvidia/moonshotai/kimi-k2.5": { alias: "Kimi K2.5 (NVIDIA)" },
           },
         },
-        list: [{ id: "main" }],
+        entries: { main: { default: true } },
       },
     };
     const gateway = await installMockGateway(page, {
@@ -143,8 +144,9 @@ suite.define(() => {
       expect(response?.status()).toBe(200);
       await gateway.waitForRequest("agents.list");
       await gateway.waitForRequest("config.get");
-      const modelRequest = await gateway.waitForRequest("models.list");
-      expect(modelRequest.params).toEqual({ view: "configured" });
+      const modelRequest = await gateway.waitForRequest("chat.metadata");
+      expect(modelRequest.params).toEqual({ agentId: "main" });
+      expect(await gateway.getRequests("models.list")).toHaveLength(0);
 
       const select = page.locator("select.settings-select").first();
       await select.waitFor({ state: "visible", timeout: 10_000 });

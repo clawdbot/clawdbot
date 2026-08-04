@@ -868,10 +868,11 @@ describe("heartbeat-wake", () => {
     const handlerB = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
     setHeartbeatWakeHandler(handlerB);
 
-    // The replacement must handle both fresh work and the interrupted wake.
+    // The replacement must handle both the interrupted global barrier and fresh
+    // targeted work. The recovered barrier runs first so the two cannot overlap.
     requestHeartbeat(wake("interval", { agentId: "ready", coalesceMs: 0 }));
     await vi.advanceTimersByTimeAsync(1);
-    expect(handlerB.mock.calls.map(([request]) => request.agentId)).toEqual(["ready", undefined]);
+    expect(handlerB.mock.calls.map(([request]) => request.agentId)).toEqual([undefined, "ready"]);
 
     // Clean up the hanging promise
     resolveHang!();

@@ -681,7 +681,7 @@ openclaw-settings-save-indicator {
   }
 }
 
-.settings-sidebar__footer-version {
+.settings-sidebar__footer .sidebar-footer-build {
   margin-left: auto;
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;

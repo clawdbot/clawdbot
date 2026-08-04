@@ -1,11 +1,14 @@
 // Feishu plugin module implements wiki behavior.
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
-import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
-import { toolExecutionErrorResult, unknownToolActionResult } from "./tool-result.js";
+import {
+  feishuExternalToolResult as jsonResult,
+  toolExecutionErrorResult,
+  unknownToolActionResult,
+} from "./tool-result.js";
 import { FeishuWikiSchema, type FeishuWikiParams } from "./wiki-schema.js";
 
 type ObjType = "doc" | "sheet" | "mindnote" | "bitable" | "file" | "docx" | "slides";
@@ -223,6 +226,7 @@ export function registerFeishuWikiTools(api: OpenClawPluginApi) {
       const defaultAccountId = ctx.agentAccountId;
       return {
         name: "feishu_wiki",
+        resultContentSource: "network",
         label: "Feishu Wiki",
         description:
           "Feishu knowledge base operations. Actions: spaces, nodes, get, create, move, rename",

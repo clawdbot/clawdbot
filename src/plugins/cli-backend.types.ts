@@ -227,6 +227,13 @@ export type CliBackendToolAvailabilityEnforcement = "execution-args" | "prepare-
 
 export type CliBackendSideQuestionToolMode = "disabled";
 
+type CliBackendExactToolAvailabilityVersionPolicy = Readonly<{
+  /** Inclusive floor for stable package releases. */
+  stableMinimum: string;
+  /** Inclusive floors keyed by the first SemVer prerelease identifier. */
+  prereleaseMinimums?: Readonly<Record<string, string>>;
+}>;
+
 export type CliBackendNormalizeConfigContext = {
   config?: OpenClawConfig;
   backendId: string;
@@ -240,6 +247,8 @@ export type CliBackendRuntimeArtifactPolicy = Readonly<{
   packageName: string;
   /** Only the command itself may be the package entrypoint. */
   entrypoint: "command";
+  /** Supported package release lines when a run requests exact tool availability. */
+  exactToolAvailabilityVersionPolicy?: CliBackendExactToolAvailabilityVersionPolicy;
   /** Canonical basenames allowed when this backend ships a self-contained native build. */
   nativeExecutableNames?: readonly string[];
 }>;

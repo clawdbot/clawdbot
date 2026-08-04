@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => {
   return {
     defaultRuntime,
     getRuntimeConfig: vi.fn(),
+    listMarketplacePlugins: vi.fn(),
     loadConfiguredHostedOfficialExternalPluginCatalogEntries: vi.fn(),
   };
 });
@@ -41,6 +42,10 @@ vi.mock("../plugins/official-external-plugin-catalog.js", async (importOriginal)
       mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries,
   };
 });
+
+vi.mock("../plugins/marketplace.js", () => ({
+  listMarketplacePlugins: mocks.listMarketplacePlugins,
+}));
 
 async function createTimelinePath(): Promise<string> {
   const dir = await mkdtemp(path.join(tmpdir(), "openclaw-marketplace-entries-"));
@@ -309,5 +314,77 @@ describe("plugins marketplace entries", () => {
     expect(JSON.stringify(event)).not.toContain("acme-root-2026");
     expect(JSON.stringify(event)).not.toContain("secret");
     expect(JSON.stringify(event)).not.toContain("token=leak");
+  });
+});
+
+describe("plugins marketplace list", () => {
+  const source = "owner/repo";
+  const manifest = {
+    name: "QA Marketplace",
+    version: "1.0.0",
+    plugins: [{ name: "demo", source: { kind: "path", path: "./plugins/demo" } }],
+  };
+
+  beforeEach(() => {
+    mocks.defaultRuntime.error.mockClear();
+    mocks.defaultRuntime.exit.mockClear();
+    mocks.defaultRuntime.log.mockClear();
+    mocks.defaultRuntime.writeJson.mockClear();
+    mocks.listMarketplacePlugins.mockReset();
+  });
+
+  function mockMarketplaceListResult(result: { ok: boolean; error?: string }) {
+    mocks.listMarketplacePlugins.mockImplementationOnce(
+      async ({ logger }: { logger?: { info?: (message: string) => void } }) => {
+        logger?.info?.(`Cloning marketplace source ${source}...`);
+        return result.ok
+          ? { ok: true, sourceLabel: source, manifest }
+          : { ok: false, error: result.error };
+      },
+    );
+  }
+
+  it("keeps remote source progress out of JSON output", async () => {
+    mockMarketplaceListResult({ ok: true });
+    const { runPluginMarketplaceListCommand } = await import("./plugins-cli.runtime.js");
+
+    await runPluginMarketplaceListCommand(source, { json: true });
+
+    expect(mocks.listMarketplacePlugins).toHaveBeenCalledOnce();
+    expect(mocks.defaultRuntime.log).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.error).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith({
+      source,
+      name: manifest.name,
+      version: manifest.version,
+      plugins: manifest.plugins,
+    });
+  });
+
+  it("preserves remote source progress and marketplace entries in human output", async () => {
+    mockMarketplaceListResult({ ok: true });
+    const { runPluginMarketplaceListCommand } = await import("./plugins-cli.runtime.js");
+
+    await runPluginMarketplaceListCommand(source, {});
+
+    const output = mocks.defaultRuntime.log.mock.calls.map(([line]) => String(line));
+    expect(output[0]).toBe(`Cloning marketplace source ${source}...`);
+    expect(output.join("\n")).toContain("demo");
+    expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.error).not.toHaveBeenCalled();
+  });
+
+  it("preserves remote source failure diagnostics without polluting JSON stdout", async () => {
+    mockMarketplaceListResult({ ok: false, error: "mock git remote unavailable" });
+    const { runPluginMarketplaceListCommand } = await import("./plugins-cli.runtime.js");
+
+    await expect(runPluginMarketplaceListCommand(source, { json: true })).rejects.toThrow("exit 1");
+
+    expect(mocks.defaultRuntime.log).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.error).toHaveBeenCalledExactlyOnceWith(
+      "mock git remote unavailable",
+    );
+    expect(mocks.defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
   });
 });

@@ -119,6 +119,10 @@ export type MessageContentItem =
         label: string;
         mimeType?: string;
         isVoiceNote?: boolean;
+        artifactId?: string;
+        playback?: "native" | "transcode";
+        sizeBytes?: number;
+        durationMs?: number;
         width?: number;
         height?: number;
       };

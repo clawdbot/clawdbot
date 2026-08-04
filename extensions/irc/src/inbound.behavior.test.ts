@@ -334,6 +334,70 @@ describe("irc inbound behavior", () => {
     expect(ctx?.OriginatingTo).toBe("channel:#ops");
   });
 
+  it.each([
+    { label: "ordinary nick", nick: "OpenClaw", text: "OpenClaw: hello", mentioned: true },
+    { label: "ASCII case folding", nick: "OpenClaw", text: "openclaw: hello", mentioned: true },
+    { label: "leading bracket", nick: "[Claw]", text: "[Claw]: hello", mentioned: true },
+    { label: "trailing bracket", nick: "Claw]", text: "hello Claw],", mentioned: true },
+    { label: "leading caret", nick: "^Claw", text: "^Claw, hello", mentioned: true },
+    { label: "trailing hyphen", nick: "Claw-", text: "Claw-: hello", mentioned: true },
+    { label: "escaped backslash", nick: "\\Claw", text: "\\Claw: hello", mentioned: true },
+    { label: "embedded brackets", nick: "Claw[Ops]", text: "Claw[Ops]: hi", mentioned: true },
+    { label: "RFC1459 opening bracket", nick: "[Claw", text: "{claw: hello", mentioned: true },
+    { label: "RFC1459 opening brace", nick: "{Claw", text: "[claw: hello", mentioned: true },
+    { label: "RFC1459 closing bracket", nick: "Claw]", text: "claw}: hello", mentioned: true },
+    { label: "RFC1459 closing brace", nick: "Claw}", text: "claw]: hello", mentioned: true },
+    { label: "RFC1459 backslash", nick: "\\Claw", text: "|claw: hello", mentioned: true },
+    { label: "RFC1459 vertical bar", nick: "|Claw", text: "\\claw: hello", mentioned: true },
+    { label: "RFC1459 caret", nick: "^Claw", text: "~claw: hello", mentioned: true },
+    { label: "RFC1459 tilde", nick: "~Claw", text: "^claw: hello", mentioned: true },
+    { label: "ordinary nick suffix", nick: "Claw", text: "Clawbot: hello", mentioned: false },
+    { label: "ordinary nick prefix", nick: "Claw", text: "overClaw: hello", mentioned: false },
+    { label: "IRC nick punctuation suffix", nick: "Claw", text: "Claw-bot: hi", mentioned: false },
+    { label: "RFC1459 tilde nick suffix", nick: "Claw", text: "Claw~bot: hi", mentioned: false },
+    {
+      label: "punctuated nick inside a longer nick",
+      nick: "[Claw]",
+      text: "prefix[Claw]: hello",
+      mentioned: false,
+    },
+  ])(
+    "recognizes only complete IRC nickname mentions: $label",
+    async ({ nick, text, mentioned }) => {
+      const coreRuntime = createPluginRuntimeMock();
+      const runtime = createRuntimeEnv();
+      setIrcRuntime(coreRuntime as never);
+
+      await handleIrcInbound({
+        message: createMessage({
+          target: "#ops",
+          isGroup: true,
+          text,
+        }),
+        account: createAccount({
+          nick,
+          config: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            groupPolicy: "open",
+            groupAllowFrom: [],
+            groups: {
+              "#ops": { enabled: true, requireMention: true },
+            },
+          },
+        }),
+        config: { channels: { irc: {} } } as CoreConfig,
+        runtime,
+        sendReply: vi.fn(async () => {}),
+      });
+
+      expect(coreRuntime.channel.inbound.dispatch).toHaveBeenCalledTimes(mentioned ? 1 : 0);
+      if (!mentioned) {
+        expect(runtime.log).toHaveBeenCalledWith("irc: drop channel #ops (missing-mention)");
+      }
+    },
+  );
+
   it("drops a spoofed sender for a host-less nick!user DM allowlist entry", async () => {
     const coreRuntime = createPluginRuntimeMock();
     const runtime = createRuntimeEnv();

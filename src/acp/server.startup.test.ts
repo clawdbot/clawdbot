@@ -71,6 +71,7 @@ vi.mock("node:stream", async (importOriginal) => {
         },
       }),
   );
+  vi.spyOn(actual.Writable, "toWeb").mockImplementation(() => new WritableStream());
   return actual;
 });
 

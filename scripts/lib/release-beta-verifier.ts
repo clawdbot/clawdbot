@@ -5,7 +5,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readPublicationArtifactArchive, sha256Digest } from "./actions-artifact-archive.mjs";
-import { readBoundedResponseText } from "./bounded-response.ts";
+import { readBoundedResponseText } from "./bounded-response.mjs";
 import { collectClawHubPublishablePluginPackages } from "./plugin-clawhub-release.ts";
 import {
   collectPublishablePluginPackages,

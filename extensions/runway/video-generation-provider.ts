@@ -5,6 +5,7 @@ import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
+  assertProviderBinaryResponseContent,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   fetchProviderDownloadResponse,
@@ -315,6 +316,13 @@ async function downloadRunwayVideos(params: {
       provider: "runway",
       requestFailedMessage: "Runway generated video download failed",
     });
+    try {
+      assertProviderBinaryResponseContent(response, "Runway generated video download", "video");
+    } catch (error) {
+      // A rejected binary response still owns a live socket until its unread body is canceled.
+      await response.body?.cancel().catch(() => undefined);
+      throw error;
+    }
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
     const buffer = await readResponseWithLimit(response, params.maxBytes, {
       timeoutMs,
@@ -325,6 +333,9 @@ async function downloadRunwayVideos(params: {
       onOverflow: ({ maxBytes }) =>
         new Error(`Runway generated video download exceeds ${maxBytes} bytes`),
     });
+    if (buffer.byteLength === 0) {
+      throw new Error("Runway generated video download: malformed video response");
+    }
     videos.push({
       buffer,
       mimeType,
@@ -341,11 +352,7 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
     label: "Runway",
     defaultModel: DEFAULT_RUNWAY_MODEL,
     models: ["gen4.5", "gen4_turbo", "gen4_aleph", "gen3a_turbo", "veo3.1", "veo3.1_fast", "veo3"],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: "runway",
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "runway", ...ctx }),
     capabilities: {
       generate: {
         maxVideos: 1,

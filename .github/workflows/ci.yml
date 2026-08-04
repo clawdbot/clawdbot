@@ -806,11 +806,20 @@ jobs:
       PRE_COMMIT_HOME: .cache/pre-commit-security-fast
     steps:
       - name: Checkout
+        if: github.event_name != 'workflow_dispatch' || inputs.target_ref == ''
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      # Manual target validation has a distinct fallback contract: a missing branch/tag
+      # falls back to the workflow SHA, while transport timeouts still fail closed.
+      - name: Checkout manual target
+        if: github.event_name == 'workflow_dispatch' && inputs.target_ref != ''
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_REF: ${{ inputs.target_ref || github.sha }}
+          CHECKOUT_REF: ${{ inputs.target_ref }}
           CHECKOUT_FALLBACK_REF: ${{ github.sha }}
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           git init "$GITHUB_WORKSPACE"
@@ -843,7 +852,7 @@ jobs:
               echo "::error::checkout fetch for '$CHECKOUT_REF' timed out"
               exit "$fetch_status"
             fi
-            if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ] || [ "$CHECKOUT_REF" = "$CHECKOUT_FALLBACK_REF" ]; then
+            if [ "$CHECKOUT_REF" = "$CHECKOUT_FALLBACK_REF" ]; then
               exit "$fetch_status"
             fi
             echo "::warning::workflow_dispatch target_ref '$CHECKOUT_REF' is unavailable; falling back to head SHA '$CHECKOUT_FALLBACK_REF'"
@@ -1058,11 +1067,12 @@ jobs:
     # check-lint/check-dependencies; tsdown parallelizes across the extra
     # cores for roughly the same billed core-minutes.
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
-    timeout-minutes: 20
+    timeout-minutes: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 35 || 20 }}
     outputs:
       channels-result: ${{ steps.built_artifact_checks.outputs['channels-result'] }}
       core-support-boundary-result: ${{ steps.built_artifact_checks.outputs['core-support-boundary-result'] }}
       gateway-watch-result: ${{ steps.built_artifact_checks.outputs['gateway-watch-result'] }}
+      tui-pty-result: ${{ steps.built_artifact_checks.outputs['tui-pty-result'] }}
     steps:
       - *linux_node_checkout_step
       - name: Ensure secrets base commit (PR fast path)
@@ -1089,7 +1099,7 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .artifacts/build-all-cache
-          key: ${{ runner.os }}-build-all-v4-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'scripts/build-all.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entries.mjs', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-private-local-only-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-public-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json', 'scripts/copy-export-html-templates.ts', 'scripts/lib/copy-assets.ts', 'tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'src/**', 'packages/**', '!src/**/dist/**', '!src/**/node_modules/**', '!packages/**/dist/**', '!packages/**/node_modules/**') }}
+          key: ${{ runner.os }}-build-all-v4-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'scripts/build-all.mjs', 'scripts/runtime-postbuild.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entries.mjs', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-private-local-only-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-public-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json', 'tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'src/**', 'packages/**', '!src/**/dist/**', '!src/**/node_modules/**', '!packages/**/dist/**', '!packages/**/node_modules/**') }}
           restore-keys: |
             ${{ runner.os }}-build-all-v4-
 
@@ -1193,6 +1203,7 @@ jobs:
           RUN_CHANNELS: ${{ needs.preflight.outputs.run_checks }}
           RUN_CORE_SUPPORT_BOUNDARY: ${{ needs.preflight.outputs.run_checks_node_core_dist }}
           RUN_GATEWAY_WATCH: ${{ needs.preflight.outputs.run_check_additional }}
+          RUN_TUI_PTY: ${{ needs.preflight.outputs.run_checks_node_core_dist }}
         shell: bash
         run: |
           set -uo pipefail
@@ -1204,6 +1215,7 @@ jobs:
             ["channels"]="skipped"
             ["core-support-boundary"]="skipped"
             ["gateway-watch"]="skipped"
+            ["tui-pty"]="skipped"
           )
 
           start_check() {
@@ -1254,6 +1266,15 @@ jobs:
               node scripts/run-vitest.mjs run --config test/vitest/vitest.full-core-support-boundary.config.ts
           fi
 
+          if [ "$RUN_TUI_PTY" = "true" ]; then
+            start_check "tui-pty" env \
+              NODE_OPTIONS=--max-old-space-size=8192 \
+              OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1 \
+              OPENCLAW_TUI_PTY_USE_BUILT_CLI=1 \
+              OPENCLAW_VITEST_MAX_WORKERS=2 \
+              node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts
+          fi
+
           if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" = "true" ]; then
             start_check "gateway-watch" \
               node scripts/check-gateway-watch-regression.mjs --skip-build
@@ -1269,12 +1290,12 @@ jobs:
             wait_checks
           fi
 
-          for name in channels core-support-boundary gateway-watch; do
+          for name in channels core-support-boundary gateway-watch tui-pty; do
             echo "${name}-result=${results[$name]}" >> "$GITHUB_OUTPUT"
           done
 
           failures=0
-          for name in channels core-support-boundary gateway-watch; do
+          for name in channels core-support-boundary gateway-watch tui-pty; do
             if [ "${results[$name]}" = "failure" ]; then
               echo "::error title=${name} failed::${name} failed"
               failures=1
@@ -1436,6 +1457,10 @@ jobs:
           --config test/vitest/vitest.ui-e2e.config.ts
           --configLoader runner
           --shard ${{ matrix.shard }}/4
+
+      - name: Test browser copilot end-to-end
+        if: matrix.shard == 1
+        run: pnpm test:e2e:browser-copilot
 
   control-ui-i18n:
     permissions:
@@ -1733,10 +1758,14 @@ jobs:
 
       - name: Build QA smoke runtime
         env:
-          OPENCLAW_BUILD_PRIVATE_QA: "1"
           NODE_OPTIONS: --max-old-space-size=8192
         run: |
+          # Pack the public runtime before overlaying private QA artifacts so they cannot leak.
+          unset OPENCLAW_BUILD_PRIVATE_QA
+          node scripts/build-all.mjs qaRuntime
+          pnpm ui:build
           package_args=(
+            --skip-build
             --output-dir .artifacts/qa-e2e/smoke-ci-package
             --output-name openclaw-current.tgz
           )
@@ -1744,8 +1773,7 @@ jobs:
             package_args=(--allow-unreleased-changelog "${package_args[@]}")
           fi
           node scripts/package-openclaw-for-docker.mjs "${package_args[@]}"
-          node scripts/build-all.mjs qaRuntime
-          pnpm ui:build
+          OPENCLAW_BUILD_PRIVATE_QA=1 node scripts/build-all.mjs qaRuntime
 
       - name: Run smoke profile part
         env:
@@ -2060,11 +2088,24 @@ jobs:
           echo "detected cores=$cores plan_concurrency=${SHARD_PLAN_CONCURRENCY:-default} -> workers=$workers"
           echo "OPENCLAW_VITEST_MAX_WORKERS=$workers" >> "$GITHUB_ENV"
 
+      - name: Checkout trusted Node shard runner
+        # Frozen release targets can predate the workflow-owned shard runner.
+        # Keep its implementation pinned to this workflow revision, while tests
+        # continue to run against the checked-out candidate.
+        if: ${{ hashFiles('scripts/ci-run-node-test-shard.mjs') == '' }}
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-workflow
+          sparse-checkout: |
+            scripts/ci-run-node-test-shard.mjs
+            scripts/lib/direct-run.mjs
+            scripts/lib/local-heavy-check-runtime.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - name: Run Node test shard
-        # actionlint 1.7.11 lacks GitHub's current job.workflow_* fields. Serialize the
-        # non-secret job context, then validate the defining workflow identity below.
         env:
-          JOB_CONTEXT_JSON: ${{ toJSON(job) }}
           NODE_OPTIONS: --max-old-space-size=8192
           OPENCLAW_NODE_TEST_GROUPS_JSON: ${{ toJson(matrix.groups || null) }}
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
@@ -2084,30 +2125,8 @@ jobs:
           set -euo pipefail
           runner="scripts/ci-run-node-test-shard.mjs"
           if [[ ! -f "$runner" ]]; then
-            # Frozen release targets can predate the workflow-owned shard runner.
-            # Load only that runner from the exact trusted workflow commit while
-            # keeping its child tests rooted in the checked-out candidate.
-            job_workflow_repository=$(jq -r '.workflow_repository // empty' <<<"$JOB_CONTEXT_JSON")
-            job_workflow_sha=$(jq -r '.workflow_sha // empty' <<<"$JOB_CONTEXT_JSON")
-            if [[ ! "$job_workflow_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
-              echo "invalid job workflow repository: $job_workflow_repository" >&2
-              exit 1
-            fi
-            if [[ ! "$job_workflow_sha" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "invalid job workflow SHA: $job_workflow_sha" >&2
-              exit 1
-            fi
-            harness_root="${RUNNER_TEMP}/openclaw-ci-shard-runner"
-            workflow_remote="https://github.com/${job_workflow_repository}.git"
-            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 "$workflow_remote" "$job_workflow_sha"
-            for file in \
-              scripts/ci-run-node-test-shard.mjs \
-              scripts/lib/direct-run.mjs \
-              scripts/lib/local-heavy-check-runtime.mjs; do
-              mkdir -p "${harness_root}/$(dirname "$file")"
-              git show "${job_workflow_sha}:${file}" > "${harness_root}/${file}"
-            done
-            runner="${harness_root}/${runner}"
+            runner=".ci-workflow/${runner}"
+            [[ -f "$runner" ]]
           fi
           node "$runner"
 
@@ -2271,11 +2290,18 @@ jobs:
               # The i18n verify covers keys extracted from every ui/ source,
               # not just ui/src/i18n; any ui-touching diff (run_ui_tests) or
               # i18n-tooling diff must run it. oxlint always runs.
+              lint_args=(--threads=8)
+              if [ "$(nproc)" -lt 8 ]; then
+                # Fork PRs run on 4-core hosted runners with 16GB. Bound both
+                # the core process size and its threads so type-aware oxlint
+                # does not intermittently lose the runner under memory pressure.
+                lint_args=(--split-core --threads=1)
+              fi
               if [ "$RUN_CONTROL_UI_I18N" = "true" ] || [ "$RUN_UI_TESTS" = "true" ]; then
-                pnpm lint --threads=8
+                pnpm lint "${lint_args[@]}"
               else
                 echo "[skip] changed scope cannot affect control-UI i18n catalogs"
-                node scripts/run-oxlint-shards.mjs --threads=8
+                node scripts/run-oxlint-shards.mjs "${lint_args[@]}"
               fi
               if [ "$FORMAT_CHECK" = "true" ]; then
                 pnpm format:check
@@ -2984,6 +3010,7 @@ jobs:
     timeout-minutes: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 30 || 20 }}
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
+      SWIFT_TEST_EXECUTION: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'serial' || 'parallel' }}
     steps:
       - *platform_checkout_step
 
@@ -3173,8 +3200,16 @@ jobs:
       - name: Swift test
         run: |
           set -euo pipefail
+          swift_test_args=(--package-path apps/macos --enable-code-coverage)
+          # Hosted release and retry runs have shown test-process contention;
+          # keep the faster first-attempt Blacksmith path parallel.
+          if [[ "$SWIFT_TEST_EXECUTION" == "parallel" ]]; then
+            swift_test_args+=(--parallel)
+          else
+            swift_test_args+=(--no-parallel)
+          fi
           for attempt in 1 2 3; do
-            if swift test --package-path apps/macos --parallel --enable-code-coverage; then
+            if swift test "${swift_test_args[@]}"; then
               exit 0
             fi
             echo "swift test failed (attempt $attempt/3). Retrying…"
@@ -3285,6 +3320,19 @@ jobs:
 
       - name: Build iOS app
         run: pnpm ios:build
+
+      # Debug's incremental compilation can miss actor-isolation diagnostics
+      # that Swift's optimized whole-module Release build enforces.
+      - name: Build iOS app (Release)
+        if: env.HISTORICAL_TARGET != 'true'
+        run: |
+          xcodebuild \
+            -project apps/ios/OpenClaw.xcodeproj \
+            -scheme OpenClaw \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
 
       # App compilation and screenshots do not execute approval or notification
       # lifecycles. Exercise both owners on the already provisioned simulator.
@@ -3417,6 +3465,12 @@ jobs:
         # Frozen targets keep their Gradle task contract, but CI toolchain pins remain
         # workflow-owned as before. Load them from the workflow revision so old targets work.
         uses: ./.ci-workflow/.github/actions/setup-android-toolchain
+
+      - name: Setup Node environment for native resources
+        if: needs.preflight.outputs.compatibility_target != 'true'
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
 
       # Same-repo runs carry the Gradle user home (dependency, wrapper, and
       # build caches) on a Blacksmith sticky disk: the setup-java gradle cache

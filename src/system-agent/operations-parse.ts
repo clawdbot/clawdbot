@@ -412,7 +412,7 @@ export function describeSystemAgentPersistentOperation(operation: SystemAgentOpe
     case "model-setup":
       return "configure a model provider and default model";
     case "doctor-fix":
-      return "exit OpenClaw and run openclaw doctor --fix";
+      return "run openclaw doctor --fix on the machine running OpenClaw, with OpenClaw stopped";
     case "plugin-install":
       return `install plugin ${operation.spec}`;
     case "plugin-uninstall":

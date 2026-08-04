@@ -7,7 +7,6 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   COPILOT_ASK_USER_AVAILABLE_TOOLS,
-  COPILOT_SETTLED_FINALIZATION_EXCLUDED_TOOLS,
   COPILOT_SETTLED_FINALIZATION_SYSTEM_MESSAGE,
   withPromptFailure,
   type AgentHarnessAttemptResult,
@@ -26,6 +25,7 @@ import { createPermissionBridge, rejectAllPolicy } from "./permission-bridge.js"
 import { resolveCopilotProvider, type ResolvedCopilotProvider } from "./provider-bridge.js";
 import { computeReplayMetadata, copilotToolMetasHavePotentialSideEffects } from "./replay-shim.js";
 import type { ClientCreateOptions, PoolKey } from "./runtime.js";
+import { createCopilotIsolatedSessionRestrictions } from "./session-restrictions.js";
 export function createResult(
   params: AttemptParamsLike,
   state: {
@@ -142,37 +142,6 @@ export function createPromptError(
   }
   return error;
 }
-function createSettledFinalizationSessionRestrictions(): Partial<CopilotSessionConfig> {
-  return {
-    availableTools: [],
-    coauthorEnabled: false,
-    customAgents: [],
-    customAgentsLocalOnly: true,
-    embeddingCacheStorage: "in-memory",
-    enableConfigDiscovery: false,
-    enableFileHooks: false,
-    enableHostGitOperations: false,
-    enableOnDemandInstructionDiscovery: false,
-    enableSessionStore: false,
-    enableSkills: false,
-    excludedTools: [...COPILOT_SETTLED_FINALIZATION_EXCLUDED_TOOLS],
-    includeSubAgentStreamingEvents: false,
-    infiniteSessions: { enabled: false },
-    instructionDirectories: [],
-    manageScheduleEnabled: false,
-    mcpOAuthTokenStorage: "in-memory",
-    mcpServers: {},
-    memory: { enabled: false },
-    pluginDirectories: [],
-    remoteSession: "off",
-    requestCanvasRenderer: false,
-    requestExtensions: false,
-    skillDirectories: [],
-    skipCustomInstructions: true,
-    skipEmbeddingRetrieval: true,
-    tools: [],
-  };
-}
 export function createSessionConfig(
   params: AttemptParamsLike,
   sdkModelId: string,
@@ -213,7 +182,7 @@ export function createSessionConfig(
     reasoningEffort: params.reasoningEffort,
     tools: sdkTools,
     availableTools: buildCopilotAvailableTools(sdkTools, options.includeAskUser),
-    ...(settledToolFinalization ? createSettledFinalizationSessionRestrictions() : {}),
+    ...(settledToolFinalization ? createCopilotIsolatedSessionRestrictions() : {}),
     workingDirectory:
       effectiveCwd ?? effectiveWorkspaceDir ?? readResolvedAttemptPath(params.workspaceDir),
     ...(!settledToolFinalization &&

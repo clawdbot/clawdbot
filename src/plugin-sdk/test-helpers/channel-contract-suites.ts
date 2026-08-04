@@ -1,5 +1,6 @@
 // Channel contract suites provide reusable expectations for channel plugin test coverage.
 import { expect, it } from "vitest";
+import { resolveChannelSetupExecutionAdapter } from "../../channels/plugins/setup-contract.js";
 import type { ChannelSetupDmPolicy } from "../../channels/plugins/setup-wizard-types.js";
 import type {
   ChannelAccountSnapshot,
@@ -131,9 +132,11 @@ export function installChannelSetupContractSuite<
   plugin: Pick<ChannelPlugin<ResolvedAccount>, "id" | "config" | "setup">;
   cases: readonly ChannelSetupContractCase<ResolvedAccount, SetupInput>[];
 }) {
+  const setup = resolveChannelSetupExecutionAdapter(
+    params.plugin as Pick<ChannelPlugin<ResolvedAccount>, "setup" | "setupContract">,
+  );
   it("exposes the base setup contract", () => {
-    expect(params.plugin.setup).toBeDefined();
-    expect(typeof params.plugin.setup?.applyAccountConfig).toBe("function");
+    expect(typeof setup?.applyAccountConfig).toBe("function");
   });
 
   for (const testCase of params.cases) {
@@ -141,7 +144,7 @@ export function installChannelSetupContractSuite<
       testCase.beforeTest?.();
 
       const resolvedAccountId =
-        params.plugin.setup?.resolveAccountId?.({
+        setup?.resolveAccountId?.({
           cfg: testCase.cfg,
           accountId: testCase.accountId,
           input: testCase.input,
@@ -152,14 +155,14 @@ export function installChannelSetupContractSuite<
       expect(resolvedAccountId).toBe(testCase.expectedAccountId ?? resolvedAccountId);
 
       const validation =
-        params.plugin.setup?.validateInput?.({
+        setup?.validateInput?.({
           cfg: testCase.cfg,
           accountId: resolvedAccountId,
           input: testCase.input,
         }) ?? null;
       expect(validation).toBe(testCase.expectedValidation ?? null);
 
-      const nextCfg = params.plugin.setup?.applyAccountConfig({
+      const nextCfg = setup?.applyAccountConfig({
         cfg: testCase.cfg,
         accountId: resolvedAccountId,
         input: testCase.input,

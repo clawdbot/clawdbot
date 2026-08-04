@@ -1,6 +1,7 @@
 import type {
   SessionApprovalReplay,
   SystemAgentChatQuestion,
+  WizardAnswer,
 } from "../../../packages/gateway-protocol/src/index.js";
 // Shared server-method types define the client, context, response, and handler
 // contracts used by every gateway RPC method module.
@@ -18,6 +19,7 @@ import type {
 } from "../../infra/plugin-approvals.js";
 import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
 import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
 import type { WizardSession } from "../../wizard/session.js";
@@ -93,13 +95,15 @@ export type GatewayClient = {
     agentRuntimeIdentity?: AgentRuntimeIdentity;
     pluginRuntimeOwnerId?: string;
     agentRunTracking?: "plugin_subagent";
+    /** Host-captured requester lineage for opt-in plugin subagent completion delivery. */
+    pluginSubagentRequester?: PluginSubagentRequesterContext;
     /** Host-owned exact media set for a scoped automatic recovery delivery. */
     internalDeliveryMediaUrls?: string[];
     internalDeliverySuppressText?: boolean;
     /** Plugin-owned tools authorized for this internal subagent run. */
     runtimePluginToolGrant?: RuntimePluginToolGrant;
-    /** In-process subagent-completion handoff eligible for verified policy inheritance. */
-    delegatedToolPolicyHandoff?: true;
+    /** Opaque in-process subagent-completion capability; never accepted from wire params. */
+    delegatedToolPolicyHandoffId?: string;
   };
 };
 
@@ -128,6 +132,12 @@ type GatewaySystemAgentSession = {
       message: string,
       options?: { uiContext?: { page: string } },
     ) => Promise<{
+      text: string;
+      action: "none" | "exit" | "open-tui" | "open-setup";
+      sensitive?: boolean;
+      question?: SystemAgentChatQuestion;
+    }>;
+    answerWizard: (answer: WizardAnswer) => Promise<{
       text: string;
       action: "none" | "exit" | "open-tui" | "open-setup";
       sensitive?: boolean;
@@ -202,6 +212,11 @@ export type GatewayRequestContext = {
     readOnly?: boolean;
     workspaceDir?: string;
   }) => Promise<GatewayModelCatalogSnapshot>;
+  readPreparedGatewayModelCatalog?: (params?: {
+    agentId?: string;
+    agentDir?: string;
+    workspaceDir?: string;
+  }) => Promise<ModelCatalogEntry[] | undefined>;
   getHealthCache: () => HealthSummary | null;
   refreshHealthSnapshot: (opts?: {
     probe?: boolean;

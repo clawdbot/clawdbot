@@ -154,12 +154,18 @@ describe("gateway startup import boundaries", () => {
     expect(serverImpl.slice(markHelperStart, markHelperEnd)).toContain(
       "cronReconciliation.invalidate();",
     );
+    expect(serverImpl.slice(markHelperStart, markHelperEnd)).toContain(
+      "void stopOutboundDeliveryRecoveryForClose();",
+    );
     expect(beginHelperStart).toBeGreaterThan(-1);
     expect(serverImpl.slice(beginHelperStart, beginHelperEnd)).toContain(
       "markClosePreludeStarted();",
     );
     expect(serverImpl.slice(beginHelperStart, beginHelperEnd)).toContain(
-      "await stopConfigReloaderForClose()",
+      "stopConfigReloaderForClose().catch",
+    );
+    expect(serverImpl.slice(beginHelperStart, beginHelperEnd)).toContain(
+      "stopOutboundDeliveryRecoveryForClose(),",
     );
     expect(postReadyStart).toBeGreaterThan(-1);
     expect(postReadyBlock).toContain("isClosing: () => lifecycle.closePreludeStarted");

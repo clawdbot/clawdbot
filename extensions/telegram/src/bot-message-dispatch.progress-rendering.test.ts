@@ -15,7 +15,7 @@ import {
   dispatchReplyWithBufferedBlockDispatcher,
   dispatchWithContext,
   editMessageTelegram,
-  emitInternalMessageSentHook,
+  emitTelegramMessageSentHooks,
   expectDeliveredReply,
   expectDraftStreamParams,
   expectRecordFields,
@@ -525,7 +525,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
 
     expect(deliverReplies).toHaveBeenCalledTimes(2);
     expect(answerDraftStream.update).toHaveBeenCalledWith("Buffered answer");
-    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+    expectRecordFields(mockCallArg(emitTelegramMessageSentHooks), {
       content: "Buffered answer",
       messageId: 2001,
     });
@@ -560,7 +560,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     expect(answerDraftStream.update).toHaveBeenCalledWith("Answer");
     expect(answerDraftStream.stop).toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
-    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+    expectRecordFields(mockCallArg(emitTelegramMessageSentHooks), {
       content: "Answer",
       messageId: 2001,
     });

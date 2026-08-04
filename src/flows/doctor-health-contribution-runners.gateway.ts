@@ -24,14 +24,18 @@ export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Pr
     note(NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON, "Gateway");
     return;
   }
-  const { maybeRepairGatewayServiceConfig, maybeScanExtraGatewayServices } =
-    await import("../commands/doctor-gateway-services.js");
+  const {
+    maybeRepairGatewayServiceConfig,
+    maybeResolveDuelingSystemdGatewayScopes,
+    maybeScanExtraGatewayServices,
+  } = await import("../commands/doctor-gateway-services.js");
   const {
     noteMacLaunchAgentOverrides,
     noteMacLaunchctlGatewayEnvOverrides,
     noteMacStaleOpenClawUpdateLaunchdJobs,
   } = await import("../commands/doctor-platform-notes.js");
   await maybeScanExtraGatewayServices(ctx.options, ctx.runtime, ctx.prompter);
+  await maybeResolveDuelingSystemdGatewayScopes(ctx.runtime, ctx.prompter);
   const updateDoctorRun = isUpdateDoctorRun(ctx.env ?? process.env);
   ctx.cfg = await maybeRepairGatewayServiceConfig(
     ctx.cfg,

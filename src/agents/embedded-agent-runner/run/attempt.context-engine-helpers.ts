@@ -36,8 +36,7 @@ export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFil
   bootstrapContextMode?: string;
   bootstrapContextRunKind?: BootstrapContextRunKind;
   bootstrapMode?: BootstrapMode;
-  sessionFile: string;
-  hasCompletedBootstrapTurn: (sessionFile: string) => Promise<boolean>;
+  hasCompletedBootstrapTurn: () => Promise<boolean>;
   resolveBootstrapContextForRun: () => Promise<
     AttemptBootstrapContext<TBootstrapFile, TContextFile>
   >;
@@ -52,7 +51,7 @@ export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFil
     params.bootstrapMode !== "full" &&
     params.contextInjectionMode === "continuation-skip" &&
     !isHeartbeatLifecycleRun &&
-    (await params.hasCompletedBootstrapTurn(params.sessionFile));
+    (await params.hasCompletedBootstrapTurn());
   // Continuation-skip and explicit never both produce an empty injection set,
   // but only a clean full bootstrap later records a durable completion marker.
   const shouldSkipBootstrapInjection =

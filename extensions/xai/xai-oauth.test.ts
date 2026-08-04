@@ -429,6 +429,11 @@ describe("xAI OAuth", () => {
       accountId: "acct-1",
       access: expect.any(String),
     });
+    expect(result.defaultModel).toBe("xai/auto");
+    expect(result.configPatch?.agents?.defaults?.model).toEqual({
+      primary: "xai/auto",
+    });
+    expect(result.configPatch?.agents?.defaults?.models?.["xai/auto"]?.alias).toBe("Grok");
     expect(progress.update).toHaveBeenCalledWith("Waiting for xAI device authorization...");
     expect(progress.stop).toHaveBeenCalledWith("xAI OAuth complete");
   });

@@ -662,127 +662,20 @@ type DirectMessageRequesterRoutingCase = {
   label: string;
   requesterSessionKey: string;
   dmScope: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
-  bindingDmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
-  defaultBindingDmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
   bindingAccountId?: string;
   bindingAgentId?: string;
-  bindingPeerId?: string;
-  bindingTeamId?: string;
   expectedReplySessionKey: string;
 };
 
 describe("sessions_send direct-message requester routing", () => {
+  // Exhaustive routing variants live in the sessions_send owner tests. Keep only
+  // opposite end-to-end outcomes here so Gateway composition is proven once.
   it.each<DirectMessageRequesterRoutingCase>([
-    {
-      label: "legacy peer direct route",
-      requesterSessionKey: "agent:main:direct:legacy-peer",
-      dmScope: "main",
-      expectedReplySessionKey: "agent:main:main",
-    },
-    {
-      label: "legacy peer dm route",
-      requesterSessionKey: "agent:main:dm:legacy-peer",
-      dmScope: "main",
-      expectedReplySessionKey: "agent:main:main",
-    },
     {
       label: "legacy channel direct route",
       requesterSessionKey: "agent:main:feishu:direct:legacy-peer",
       dmScope: "main",
       expectedReplySessionKey: "agent:main:main",
-    },
-    {
-      label: "legacy channel dm route",
-      requesterSessionKey: "agent:main:feishu:dm:legacy-peer",
-      dmScope: "main",
-      expectedReplySessionKey: "agent:main:main",
-    },
-    {
-      label: "legacy account direct route",
-      requesterSessionKey: "agent:main:feishu:default:direct:legacy-peer",
-      dmScope: "main",
-      expectedReplySessionKey: "agent:main:main",
-    },
-    {
-      label: "legacy account dm route",
-      requesterSessionKey: "agent:main:feishu:default:dm:legacy-peer",
-      dmScope: "main",
-      expectedReplySessionKey: "agent:main:main",
-    },
-    {
-      label: "isolated peer route",
-      requesterSessionKey: "agent:main:direct:legacy-peer",
-      dmScope: "per-peer",
-      expectedReplySessionKey: "agent:main:direct:legacy-peer",
-    },
-    {
-      label: "isolated channel route",
-      requesterSessionKey: "agent:main:feishu:direct:legacy-peer",
-      dmScope: "per-channel-peer",
-      expectedReplySessionKey: "agent:main:feishu:direct:legacy-peer",
-    },
-    {
-      label: "isolated account route",
-      requesterSessionKey: "agent:main:feishu:default:direct:legacy-peer",
-      dmScope: "per-account-channel-peer",
-      expectedReplySessionKey: "agent:main:feishu:default:direct:legacy-peer",
-    },
-    {
-      label: "binding-isolated peer route",
-      requesterSessionKey: "agent:main:direct:legacy-peer",
-      dmScope: "main",
-      bindingDmScope: "per-peer",
-      expectedReplySessionKey: "agent:main:direct:legacy-peer",
-    },
-    {
-      label: "binding-isolated channel route",
-      requesterSessionKey: "agent:main:feishu:direct:legacy-peer",
-      dmScope: "main",
-      bindingDmScope: "per-channel-peer",
-      expectedReplySessionKey: "agent:main:feishu:direct:legacy-peer",
-    },
-    {
-      label: "binding-isolated account route",
-      requesterSessionKey: "agent:main:feishu:default:direct:legacy-peer",
-      dmScope: "main",
-      bindingDmScope: "per-account-channel-peer",
-      expectedReplySessionKey: "agent:main:feishu:default:direct:legacy-peer",
-    },
-    {
-      label: "main binding overriding globally isolated peer route",
-      requesterSessionKey: "agent:main:direct:legacy-peer",
-      dmScope: "per-peer",
-      bindingDmScope: "main",
-      expectedReplySessionKey: "agent:main:main",
-    },
-    {
-      label: "unresolved named-account isolated peer route",
-      requesterSessionKey: "agent:main:direct:legacy-peer",
-      dmScope: "main",
-      bindingDmScope: "per-peer",
-      bindingAccountId: "work",
-      expectedReplySessionKey: "agent:main:direct:legacy-peer",
-    },
-    {
-      label: "unresolved named-account isolated channel route",
-      requesterSessionKey: "agent:main:feishu:direct:legacy-peer",
-      dmScope: "main",
-      bindingDmScope: "per-channel-peer",
-      bindingAccountId: "work",
-      expectedReplySessionKey: "agent:main:feishu:direct:legacy-peer",
-    },
-    {
-      label: "thread-scoped direct route",
-      requesterSessionKey: "agent:main:feishu:direct:legacy-peer:thread:reply-root",
-      dmScope: "main",
-      expectedReplySessionKey: "agent:main:feishu:direct:legacy-peer:thread:reply-root",
-    },
-    {
-      label: "direct route owned by another agent",
-      requesterSessionKey: "agent:main:feishu:direct:legacy-peer",
-      dmScope: "main",
-      bindingAgentId: "stranger",
-      expectedReplySessionKey: "agent:main:feishu:direct:legacy-peer",
     },
     {
       label: "erased named-account route owned by another agent",
@@ -792,45 +685,6 @@ describe("sessions_send direct-message requester routing", () => {
       bindingAccountId: "work",
       expectedReplySessionKey: "agent:main:feishu:direct:legacy-peer",
     },
-    {
-      label: "named-account route inheriting globally isolated DM scope",
-      requesterSessionKey: "agent:main:feishu:direct:legacy-peer",
-      dmScope: "per-peer",
-      defaultBindingDmScope: "main",
-      bindingAccountId: "work",
-      expectedReplySessionKey: "agent:main:feishu:direct:legacy-peer",
-    },
-    {
-      label: "named-account route with a trimmed wildcard peer",
-      requesterSessionKey: "agent:main:feishu:direct:legacy-peer",
-      dmScope: "main",
-      bindingDmScope: "per-peer",
-      bindingAccountId: "work",
-      bindingPeerId: " * ",
-      expectedReplySessionKey: "agent:main:feishu:direct:legacy-peer",
-    },
-    {
-      label: "isolated route with a case-preserving peer binding",
-      requesterSessionKey: "agent:main:feishu:direct:legacy-peer",
-      dmScope: "main",
-      bindingDmScope: "per-peer",
-      bindingPeerId: "LEGACY-PEER",
-      expectedReplySessionKey: "agent:main:feishu:direct:legacy-peer",
-    },
-    {
-      label: "isolated route with session-erased team metadata",
-      requesterSessionKey: "agent:main:feishu:direct:legacy-peer",
-      dmScope: "main",
-      bindingDmScope: "per-peer",
-      bindingTeamId: "T123",
-      expectedReplySessionKey: "agent:main:feishu:direct:legacy-peer",
-    },
-    {
-      label: "group route with an opaque direct segment",
-      requesterSessionKey: "agent:main:feishu:group:direct:legacy-peer",
-      dmScope: "main",
-      expectedReplySessionKey: "agent:main:feishu:group:direct:legacy-peer",
-    },
   ] as const)(
     "returns a real cross-agent reply to the $label",
     { timeout: SESSION_SEND_DM_ROUTING_E2E_TIMEOUT_MS },
@@ -838,12 +692,8 @@ describe("sessions_send direct-message requester routing", () => {
       label,
       requesterSessionKey,
       dmScope,
-      bindingDmScope,
-      defaultBindingDmScope,
       bindingAccountId,
       bindingAgentId,
-      bindingPeerId,
-      bindingTeamId,
       expectedReplySessionKey,
     }) => {
       const configPath = process.env.OPENCLAW_CONFIG_PATH;
@@ -856,33 +706,17 @@ describe("sessions_send direct-message requester routing", () => {
       const targetAgentId = `orion-${label.toLowerCase().replaceAll(" ", "-")}`;
       const targetSessionKey = `agent:${targetAgentId}:main`;
       const config: OpenClawConfig = {
-        ...(bindingDmScope || defaultBindingDmScope || bindingAccountId || bindingAgentId
+        ...(bindingAccountId || bindingAgentId
           ? {
               bindings: [
-                ...(defaultBindingDmScope
-                  ? [
-                      {
-                        type: "route" as const,
-                        agentId: "main",
-                        match: {
-                          channel: "feishu",
-                          accountId: "default",
-                          peer: { kind: "direct" as const, id: "legacy-peer" },
-                        },
-                        session: { dmScope: defaultBindingDmScope },
-                      },
-                    ]
-                  : []),
                 {
                   type: "route",
                   agentId: bindingAgentId ?? "main",
                   match: {
                     channel: "feishu",
                     accountId: bindingAccountId ?? "default",
-                    peer: { kind: "direct", id: bindingPeerId ?? "legacy-peer" },
-                    ...(bindingTeamId ? { teamId: bindingTeamId } : {}),
+                    peer: { kind: "direct", id: "legacy-peer" },
                   },
-                  ...(bindingDmScope ? { session: { dmScope: bindingDmScope } } : {}),
                 },
               ],
             }

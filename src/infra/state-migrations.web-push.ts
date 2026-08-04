@@ -2,8 +2,6 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { root, type Root } from "@openclaw/fs-safe";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import { formatErrorMessage } from "./errors.js";
-import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -20,12 +18,14 @@ import {
   type WebPushDatabase,
   type WebPushSubscription,
 } from "./push-web-store.js";
+import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
-  legacyMigrationSourceContentMatches as contentSnapshotsMatch,
+  claimLegacyMigrationSourceClaims,
+  LegacyMigrationSourceClaim,
   legacyMigrationSourceOrClaimMayExist as sourceOrClaimMayExist,
   legacyMigrationSourceSnapshotsMatch as sourceSnapshotsMatch,
   readLegacyMigrationSourceSnapshot,
-  resolveLegacyMigrationRelativePath,
+  restoreLegacyMigrationSourceClaims,
   type LegacyMigrationSourceSnapshot as LegacySourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
 import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
@@ -36,14 +36,11 @@ import {
 
 const LEGACY_SUBSCRIPTIONS_MAX_BYTES = 4 * 1024 * 1024;
 const LEGACY_VAPID_KEYS_MAX_BYTES = 64 * 1024;
-const MIGRATION_LOCK_TIMEOUT_MS = 250;
-const MIGRATION_LOCK_POLL_INTERVAL_MS = 25;
-const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
 
 type ParsedLegacyState = {
   subscriptions: Map<string, WebPushSubscription>;
   vapidKeys: VapidKeyPair | null;
-  snapshots: LegacySourceSnapshot[];
+  sources: { claim: LegacyMigrationSourceClaim; snapshot: LegacySourceSnapshot }[];
 };
 
 function resolveLegacyWebPushPaths(stateDir: string) {
@@ -51,10 +48,6 @@ function resolveLegacyWebPushPaths(stateDir: string) {
     subscriptionsPath: path.join(stateDir, "push", "web-push-subscriptions.json"),
     vapidKeysPath: path.join(stateDir, "push", "vapid-keys.json"),
   };
-}
-
-function relativeLegacyPath(stateDir: string, filePath: string): string {
-  return resolveLegacyMigrationRelativePath(stateDir, filePath, "Web Push");
 }
 
 export function detectLegacyWebPush(params: {
@@ -71,50 +64,27 @@ export function detectLegacyWebPush(params: {
   };
 }
 
-async function readLegacySourceSnapshot(
+function createLegacySourceClaim(
   stateRoot: Root,
   stateDir: string,
   sourcePath: string,
   maxBytes: number,
-): Promise<LegacySourceSnapshot> {
-  return readLegacyMigrationSourceSnapshot({
+): LegacyMigrationSourceClaim {
+  return new LegacyMigrationSourceClaim({
     stateRoot,
     stateDir,
     sourcePath,
-    maxBytes,
     label: "Web Push",
-    hashDecodedText: true,
+    readSnapshot: (snapshotPath) =>
+      readLegacyMigrationSourceSnapshot({
+        stateRoot,
+        stateDir,
+        sourcePath: snapshotPath,
+        maxBytes,
+        label: "Web Push",
+        hashDecodedText: true,
+      }),
   });
-}
-
-function maxBytesForSource(sourcePath: string, subscriptionsPath: string): number {
-  return sourcePath === subscriptionsPath
-    ? LEGACY_SUBSCRIPTIONS_MAX_BYTES
-    : LEGACY_VAPID_KEYS_MAX_BYTES;
-}
-
-async function recoverInterruptedClaim(
-  stateRoot: Root,
-  stateDir: string,
-  sourcePath: string,
-  maxBytes: number,
-): Promise<void> {
-  const claimPath = `${sourcePath}${DOCTOR_CLAIM_SUFFIX}`;
-  const claimRelativePath = relativeLegacyPath(stateDir, claimPath);
-  const sourceRelativePath = relativeLegacyPath(stateDir, sourcePath);
-  if (!(await stateRoot.exists(claimRelativePath))) {
-    return;
-  }
-  const claim = await readLegacySourceSnapshot(stateRoot, stateDir, claimPath, maxBytes);
-  if (!(await stateRoot.exists(sourceRelativePath))) {
-    await stateRoot.move(claimRelativePath, sourceRelativePath);
-    return;
-  }
-  const source = await readLegacySourceSnapshot(stateRoot, stateDir, sourcePath, maxBytes);
-  if (!contentSnapshotsMatch(claim, source)) {
-    throw new Error("interrupted Web Push doctor claim conflicts with its source");
-  }
-  await stateRoot.remove(claimRelativePath);
 }
 
 async function readLegacyState(
@@ -123,58 +93,39 @@ async function readLegacyState(
   detected: LegacyStateDetection["webPush"],
   env: NodeJS.ProcessEnv,
 ): Promise<ParsedLegacyState> {
-  await recoverInterruptedClaim(
+  const subscriptionsSource = createLegacySourceClaim(
     stateRoot,
     stateDir,
     detected.subscriptionsPath,
     LEGACY_SUBSCRIPTIONS_MAX_BYTES,
   );
-  await recoverInterruptedClaim(
+  const vapidSource = createLegacySourceClaim(
     stateRoot,
     stateDir,
     detected.vapidKeysPath,
     LEGACY_VAPID_KEYS_MAX_BYTES,
   );
-  const snapshots: LegacySourceSnapshot[] = [];
+  await subscriptionsSource.recover("interrupted Web Push doctor claim conflicts with its source");
+  await vapidSource.recover("interrupted Web Push doctor claim conflicts with its source");
+  const sources: ParsedLegacyState["sources"] = [];
   let subscriptions = new Map<string, WebPushSubscription>();
   let vapidKeys: VapidKeyPair | null = null;
-  if (await stateRoot.exists(relativeLegacyPath(stateDir, detected.subscriptionsPath))) {
-    const snapshot = await readLegacySourceSnapshot(
-      stateRoot,
-      stateDir,
-      detected.subscriptionsPath,
-      LEGACY_SUBSCRIPTIONS_MAX_BYTES,
-    );
+  if (await subscriptionsSource.exists()) {
+    const snapshot = await subscriptionsSource.read();
     subscriptions = parseLegacySubscriptions(snapshot.raw);
-    snapshots.push(snapshot);
+    sources.push({ claim: subscriptionsSource, snapshot });
   }
-  if (await stateRoot.exists(relativeLegacyPath(stateDir, detected.vapidKeysPath))) {
-    const snapshot = await readLegacySourceSnapshot(
-      stateRoot,
-      stateDir,
-      detected.vapidKeysPath,
-      LEGACY_VAPID_KEYS_MAX_BYTES,
-    );
+  if (await vapidSource.exists()) {
+    const snapshot = await vapidSource.read();
     vapidKeys = parseLegacyVapidKeys(snapshot.raw, env);
-    snapshots.push(snapshot);
+    sources.push({ claim: vapidSource, snapshot });
   }
-  return { subscriptions, vapidKeys, snapshots };
+  return { subscriptions, vapidKeys, sources };
 }
 
-async function assertSourcesUnchanged(
-  stateRoot: Root,
-  stateDir: string,
-  snapshots: readonly LegacySourceSnapshot[],
-  subscriptionsPath: string,
-): Promise<void> {
-  for (const snapshot of snapshots) {
-    const current = await readLegacySourceSnapshot(
-      stateRoot,
-      stateDir,
-      snapshot.sourcePath,
-      maxBytesForSource(snapshot.sourcePath, subscriptionsPath),
-    );
-    if (!sourceSnapshotsMatch(current, snapshot)) {
+async function assertSourcesUnchanged(sources: ParsedLegacyState["sources"]): Promise<void> {
+  for (const { claim, snapshot } of sources) {
+    if (!sourceSnapshotsMatch(await claim.read(), snapshot)) {
       throw new Error("legacy Web Push source changed after doctor loaded it");
     }
   }
@@ -339,92 +290,17 @@ function migrateIntoDatabase(params: {
   return { importedSubscriptions, importedVapidKeys };
 }
 
-async function restoreClaims(params: {
-  stateRoot: Root;
-  stateDir: string;
-  claimed: readonly LegacySourceSnapshot[];
-}): Promise<string[]> {
-  const errors: string[] = [];
-  for (const snapshot of params.claimed.toReversed()) {
-    const claimPath = `${snapshot.sourcePath}${DOCTOR_CLAIM_SUFFIX}`;
-    const claimRelativePath = relativeLegacyPath(params.stateDir, claimPath);
-    const sourceRelativePath = relativeLegacyPath(params.stateDir, snapshot.sourcePath);
-    try {
-      if (!(await params.stateRoot.exists(claimRelativePath))) {
-        continue;
-      }
-      if (await params.stateRoot.exists(sourceRelativePath)) {
-        errors.push(`source path already exists: ${snapshot.sourcePath}`);
-        continue;
-      }
-      await params.stateRoot.move(claimRelativePath, sourceRelativePath);
-    } catch (error) {
-      errors.push(String(error));
-    }
-  }
-  return errors;
-}
-
-async function claimLegacySources(params: {
-  stateRoot: Root;
-  stateDir: string;
-  snapshots: readonly LegacySourceSnapshot[];
-  subscriptionsPath: string;
-  beforeClaim?: () => void;
-}): Promise<LegacySourceSnapshot[]> {
-  params.beforeClaim?.();
-  const claimed: LegacySourceSnapshot[] = [];
-  try {
-    for (const snapshot of params.snapshots) {
-      const claimPath = `${snapshot.sourcePath}${DOCTOR_CLAIM_SUFFIX}`;
-      await params.stateRoot.move(
-        relativeLegacyPath(params.stateDir, snapshot.sourcePath),
-        relativeLegacyPath(params.stateDir, claimPath),
-      );
-      claimed.push(snapshot);
-      const current = await readLegacySourceSnapshot(
-        params.stateRoot,
-        params.stateDir,
-        claimPath,
-        maxBytesForSource(snapshot.sourcePath, params.subscriptionsPath),
-      );
-      if (!sourceSnapshotsMatch(current, snapshot)) {
-        throw new Error("legacy Web Push source changed before doctor could claim it");
-      }
-    }
-  } catch (error) {
-    const restoreErrors = await restoreClaims({
-      stateRoot: params.stateRoot,
-      stateDir: params.stateDir,
-      claimed,
-    });
-    throw new Error(
-      `${String(error)}${restoreErrors.length > 0 ? `; restore failures: ${restoreErrors.join("; ")}` : ""}`,
-      { cause: error },
-    );
-  }
-
-  return claimed;
-}
-
 async function removeClaimedSources(params: {
-  stateRoot: Root;
-  stateDir: string;
-  claimed: readonly LegacySourceSnapshot[];
+  claimed: readonly LegacyMigrationSourceClaim[];
   removeSource?: (sourcePath: string) => Promise<void> | void;
 }): Promise<void> {
-  for (const snapshot of params.claimed) {
-    if (await params.stateRoot.exists(relativeLegacyPath(params.stateDir, snapshot.sourcePath))) {
-      throw new Error(`legacy Web Push source reappeared during import: ${snapshot.sourcePath}`);
+  for (const claim of params.claimed) {
+    if (await claim.exists()) {
+      throw new Error(`legacy Web Push source reappeared during import: ${claim.sourcePath}`);
     }
   }
-  for (const snapshot of params.claimed) {
-    const claimPath = `${snapshot.sourcePath}${DOCTOR_CLAIM_SUFFIX}`;
-    if (params.removeSource) {
-      await params.removeSource(claimPath);
-    } else {
-      await params.stateRoot.remove(relativeLegacyPath(params.stateDir, claimPath));
-    }
+  for (const claim of params.claimed) {
+    await claim.remove({ removeSource: params.removeSource, skipSourceCheck: true });
   }
 }
 
@@ -452,24 +328,17 @@ async function migrateLegacyWebPushWithExclusiveStateOwnership(params: {
     return { changes, warnings };
   }
 
-  let claimed: LegacySourceSnapshot[];
+  let claimed: LegacyMigrationSourceClaim[];
   try {
     params.beforeVerify?.();
-    await assertSourcesUnchanged(
-      params.stateRoot,
-      params.stateDir,
-      legacy.snapshots,
-      params.detected.subscriptionsPath,
-    );
+    await assertSourcesUnchanged(legacy.sources);
     // Claim both sources before the database transaction. A legacy writer can no longer
     // overwrite the retired paths after SQLite becomes canonical.
-    claimed = await claimLegacySources({
-      stateRoot: params.stateRoot,
-      stateDir: params.stateDir,
-      snapshots: legacy.snapshots,
-      subscriptionsPath: params.detected.subscriptionsPath,
+    await claimLegacyMigrationSourceClaims(legacy.sources, {
       beforeClaim: params.beforeClaim,
+      mismatchMessage: "legacy Web Push source changed before doctor could claim it",
     });
+    claimed = legacy.sources.map(({ claim }) => claim);
   } catch (error) {
     warnings.push(`Failed migrating legacy Web Push state: ${String(error)}`);
     return { changes, warnings };
@@ -483,11 +352,7 @@ async function migrateLegacyWebPushWithExclusiveStateOwnership(params: {
       nowMs: Date.now(),
     });
   } catch (error) {
-    const restoreErrors = await restoreClaims({
-      stateRoot: params.stateRoot,
-      stateDir: params.stateDir,
-      claimed,
-    });
+    const restoreErrors = await restoreLegacyMigrationSourceClaims(claimed);
     warnings.push(
       `Failed migrating legacy Web Push state: ${String(error)}${
         restoreErrors.length > 0 ? `; restore failures: ${restoreErrors.join("; ")}` : ""
@@ -498,8 +363,6 @@ async function migrateLegacyWebPushWithExclusiveStateOwnership(params: {
 
   try {
     await removeClaimedSources({
-      stateRoot: params.stateRoot,
-      stateDir: params.stateDir,
       claimed,
       removeSource: params.removeSource,
     });
@@ -530,63 +393,23 @@ export async function migrateLegacyWebPush(params: {
     return { changes: [], warnings: [] };
   }
 
-  const env = { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir };
-  let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
-  try {
-    lock = await acquireGatewayLock({
-      allowInTests: true,
-      env,
-      pollIntervalMs: MIGRATION_LOCK_POLL_INTERVAL_MS,
-      role: "sqlite-maintenance",
-      timeoutMs: MIGRATION_LOCK_TIMEOUT_MS,
-    });
-  } catch (error) {
-    const detail =
-      error instanceof GatewayLockError
-        ? "the Gateway or another SQLite maintenance command owns this state directory"
-        : String(error);
-    return {
-      changes: [],
-      warnings: [
-        `Failed migrating legacy Web Push state: ${detail}. Stop the Gateway and run \`openclaw doctor --fix\` again.`,
-      ],
-    };
-  }
-  if (!lock) {
-    return {
-      changes: [],
-      warnings: ["Failed migrating legacy Web Push state: exclusive state ownership unavailable."],
-    };
-  }
-
-  let result: MigrationMessages = { changes: [], warnings: [] };
-  let releaseError: unknown;
-  try {
-    try {
+  return await withLegacyMigrationStateLock({
+    stateDir: params.stateDir,
+    env: params.env,
+    label: "legacy Web Push state",
+    releaseLabel: "Web Push",
+    errorLabel: "Failed reading legacy Web Push state",
+    run: async (env) => {
       const stateRoot = await root(params.stateDir, {
         hardlinks: "reject",
         maxBytes: LEGACY_SUBSCRIPTIONS_MAX_BYTES,
         symlinks: "reject",
       });
-      result = await migrateLegacyWebPushWithExclusiveStateOwnership({
+      return await migrateLegacyWebPushWithExclusiveStateOwnership({
         ...params,
         env,
         stateRoot,
       });
-    } catch (error) {
-      result.warnings.push(`Failed reading legacy Web Push state: ${String(error)}`);
-    }
-  } finally {
-    try {
-      await lock.release();
-    } catch (error) {
-      releaseError = error;
-    }
-  }
-  if (releaseError) {
-    result.warnings.push(
-      `Web Push migration lock release failed: ${formatErrorMessage(releaseError)}`,
-    );
-  }
-  return result;
+    },
+  });
 }

@@ -100,7 +100,7 @@ Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` sum
 ## Control UI, TUI, and extension lanes
 
 - **Control UI mocked E2E:** `pnpm test:ui:e2e` runs the Vitest + Playwright lane that starts the Vite Control UI and drives a real Chromium page against a mocked Gateway WebSocket. Tests live in `ui/src/**/*.e2e.test.ts`; shared mocks/controls live in `ui/src/test-helpers/control-ui-e2e.ts`. `pnpm test:e2e` includes this lane. Agent runs default to Testbox/Crabbox, including targeted proof; use `node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/ui/e2e/chat-flow.e2e.test.ts` only for an explicit local fallback.
-- **TUI PTY tests:** `node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts` runs the fast fake-backend PTY lane. `OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1` or `pnpm tui:pty:test:watch --mode local` runs the slower `tui --local` smoke, which mocks only the external model endpoint. Assert stable visible text or fixture calls, not raw ANSI snapshots.
+- **TUI PTY tests:** `node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts` runs the fast fake-backend PTY lane. `OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1` or `pnpm tui:pty:test:watch --mode local` runs the slower `tui --local` smoke, which mocks only the external model endpoint. CI also sets `OPENCLAW_TUI_PTY_USE_BUILT_CLI=1` after building `dist/`; use that flag only when exact-head built artifacts already exist. Assert stable visible text or fixture calls, not raw ANSI snapshots.
 - `pnpm test:extensions` and `pnpm test extensions` run all extension/plugin shards. Heavy channel plugins, the browser plugin, and OpenAI run as dedicated shards; other plugin groups stay batched. `pnpm test extensions/<id>` runs one bundled plugin lane.
 - Source files with sibling tests map to that sibling before falling back to wider directory globs. Helper edits under `src/channels/plugins/contracts/test-helpers`, `src/plugin-sdk/test-helpers`, and `src/plugins/contracts` use a local import graph to run importing tests instead of broad-running every shard when the dependency path is precise.
 - Contract directory targets fan out to their contract lanes: `pnpm test src/channels/plugins/contracts` runs the four channel contract configs and `pnpm test src/plugins/contracts` runs the plugin contracts config, since the generic `channels`/`plugins` projects exclude `contracts/**`.
@@ -111,7 +111,7 @@ Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` sum
 
 ## Gateway and E2E
 
-- Gateway integration is opt-in: `OPENCLAW_TEST_INCLUDE_GATEWAY=1 pnpm test` or `pnpm test:gateway`.
+- Gateway tests are included in the untargeted `pnpm test` full suite; run them alone with `pnpm test:gateway`.
 - `pnpm test:e2e`: repo E2E aggregate = `pnpm test:e2e:gateway && pnpm test:ui:e2e`.
 - `pnpm test:e2e:gateway`: gateway end-to-end smoke tests (multi-instance WS/HTTP/node pairing). Defaults to `threads` + `isolate: false` with adaptive workers in `vitest.e2e.config.ts`; tune with `OPENCLAW_E2E_WORKERS=<n>`, verbose logs with `OPENCLAW_E2E_VERBOSE=1`.
 - `pnpm test:live`: provider live tests (Claude/Minimax/DeepSeek/z.ai/etc, gated by `*.live.test.ts`). Requires API keys and `LIVE=1` (or `OPENCLAW_LIVE_TEST=1`) to unskip; verbose output with `OPENCLAW_LIVE_TEST_QUIET=0`.

@@ -1,17 +1,21 @@
 // Route-first machine-readable Gateway health command.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import type { GatewayRpcOpts } from "./call.js";
+
+type GatewayHealthRpcOpts = Parameters<
+  typeof import("../gateway-rpc.js").callGatewayFromCliWithTransport
+>[1];
 
 type GatewayHealthJsonRouteArgs = {
-  rpc: GatewayRpcOpts;
+  rpc: GatewayHealthRpcOpts;
   localPortOverride?: number;
 };
 
 type GatewayHealthRouteDependencies = {
-  callGateway?: typeof import("./call.js").callGatewayCli;
+  callGateway?: typeof import("../gateway-rpc.js").callGatewayFromCliWithTransport;
   readBestEffortConfig?: () => Promise<OpenClawConfig>;
   emitReachableGatewayAuthDiagnostic?: typeof import("../../commands/health.js").emitReachableGatewayAuthDiagnostic;
+  formatGatewayAuthErrorJson?: typeof import("../../gateway/call.js").formatGatewayAuthErrorJson;
   formatGatewayClientRequestErrorJson?: typeof import("../../gateway/call.js").formatGatewayClientRequestErrorJson;
   formatGatewayTransportErrorJson?: typeof import("../../gateway/call.js").formatGatewayTransportErrorJson;
 };
@@ -19,7 +23,7 @@ type GatewayHealthRouteDependencies = {
 async function resolveRouteRpcOptions(
   args: GatewayHealthJsonRouteArgs,
   deps: GatewayHealthRouteDependencies,
-): Promise<GatewayRpcOpts> {
+): Promise<GatewayHealthRpcOpts> {
   if (args.localPortOverride === undefined) {
     return args.rpc;
   }
@@ -47,11 +51,15 @@ export async function runGatewayHealthJsonRoute(
   runtime: RuntimeEnv,
   deps: GatewayHealthRouteDependencies = {},
 ): Promise<void> {
-  let rpc: GatewayRpcOpts | undefined;
+  let rpc: GatewayHealthRpcOpts | undefined;
   try {
     rpc = await resolveRouteRpcOptions(args, deps);
-    const callGateway = deps.callGateway ?? (await import("./call.js")).callGatewayCli;
-    writeRuntimeJson(runtime, await callGateway("health", rpc));
+    const callGateway =
+      deps.callGateway ?? (await import("../gateway-rpc.js")).callGatewayFromCliWithTransport;
+    writeRuntimeJson(
+      runtime,
+      await callGateway("health", rpc, undefined, { defaultTimeoutMs: 10_000 }),
+    );
   } catch (error) {
     if (!rpc) {
       runtime.error(String(error));
@@ -63,7 +71,9 @@ export async function runGatewayHealthJsonRoute(
       deps.readBestEffortConfig
         ? undefined
         : import("../../config/read-best-effort-config.runtime.js"),
-      deps.formatGatewayClientRequestErrorJson && deps.formatGatewayTransportErrorJson
+      deps.formatGatewayAuthErrorJson &&
+      deps.formatGatewayClientRequestErrorJson &&
+      deps.formatGatewayTransportErrorJson
         ? undefined
         : import("../../gateway/call.js"),
     ]);
@@ -86,12 +96,16 @@ export async function runGatewayHealthJsonRoute(
     if (handled) {
       return;
     }
+    const formatGatewayAuthErrorJson =
+      deps.formatGatewayAuthErrorJson ?? callModule?.formatGatewayAuthErrorJson;
     const formatGatewayClientRequestErrorJson =
       deps.formatGatewayClientRequestErrorJson ?? callModule?.formatGatewayClientRequestErrorJson;
     const formatGatewayTransportErrorJson =
       deps.formatGatewayTransportErrorJson ?? callModule?.formatGatewayTransportErrorJson;
     const payload =
-      formatGatewayClientRequestErrorJson?.(error) ?? formatGatewayTransportErrorJson?.(error);
+      formatGatewayAuthErrorJson?.(error) ??
+      formatGatewayClientRequestErrorJson?.(error) ??
+      formatGatewayTransportErrorJson?.(error);
     if (payload) {
       writeRuntimeJson(runtime, payload);
       runtime.exit(1);

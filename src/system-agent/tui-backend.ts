@@ -545,6 +545,7 @@ export async function runSystemAgentTui(
       welcome = (
         await buildOnboardingWelcome({
           engine,
+          localRecovery: true,
           ...(boundOpts.setupWorkspace ? { workspace: boundOpts.setupWorkspace } : {}),
         })
       ).text;

@@ -50,6 +50,7 @@ type UpdateFileChunk = {
   changeContext?: string;
   oldLines: string[];
   newLines: string[];
+  contextOldIndexes: Array<number | undefined>;
   isEndOfFile: boolean;
 };
 
@@ -608,6 +609,7 @@ function parseUpdateFileChunk(
     changeContext,
     oldLines: [],
     newLines: [],
+    contextOldIndexes: [],
     isEndOfFile: false,
   };
 
@@ -626,6 +628,7 @@ function parseUpdateFileChunk(
 
     const marker = line[0];
     if (!marker) {
+      chunk.contextOldIndexes.push(chunk.oldLines.length);
       chunk.oldLines.push("");
       chunk.newLines.push("");
       parsedLines += 1;
@@ -634,12 +637,14 @@ function parseUpdateFileChunk(
 
     if (marker === " ") {
       const content = line.slice(1);
+      chunk.contextOldIndexes.push(chunk.oldLines.length);
       chunk.oldLines.push(content);
       chunk.newLines.push(content);
       parsedLines += 1;
       continue;
     }
     if (marker === "+") {
+      chunk.contextOldIndexes.push(undefined);
       chunk.newLines.push(line.slice(1));
       parsedLines += 1;
       continue;

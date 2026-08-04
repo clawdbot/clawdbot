@@ -5,15 +5,36 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { createReadTool } from "openclaw/plugin-sdk/agent-sessions";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
-import { expectReadWriteEditTools, getTextContent } from "./test-helpers/agent-tools-fs-helpers.js";
+import {
+  createHostWorkspaceEditTool,
+  createHostWorkspaceWriteTool,
+  createOpenClawReadTool,
+  createSandboxedEditTool,
+  createSandboxedReadTool,
+  createSandboxedWriteTool,
+  wrapToolMemoryFlushAppendOnlyWrite,
+  wrapToolWorkspaceRootGuard,
+  wrapToolWorkspaceRootGuardWithOptions,
+} from "./agent-tools.read.js";
+import { createApplyPatchTool } from "./apply-patch.js";
+import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
+import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
+import {
+  expectReadWriteEditTools,
+  expectReadWriteTools,
+  getTextContent,
+} from "./test-helpers/agent-tools-fs-helpers.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
+import { withUnsafeMountedSandboxHarness } from "./test-helpers/unsafe-mounted-sandbox.js";
+import type { AnyAgentTool } from "./tools/common.js";
 
 vi.mock("../infra/shell-env.js", async () => {
   const mod =
@@ -164,53 +185,10 @@ describe("workspace path resolution", () => {
     });
   });
 
-  it("supports multi-edit edits[] payloads", async () => {
-    await withTempDir("openclaw-ws-", async (workspaceDir) => {
-      await withTempDir("openclaw-cwd-", async (otherDir) => {
-        const testFile = "batch.txt";
-        await fs.writeFile(path.join(workspaceDir, testFile), "alpha beta gamma delta", "utf8");
-
-        const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(otherDir);
-        try {
-          const tools = createOpenClawCodingTools({ workspaceDir });
-          const { editTool } = expectReadWriteEditTools(tools);
-
-          await editTool.execute("ws-edit-batch", {
-            path: testFile,
-            edits: [
-              { oldText: "alpha", newText: "ALPHA" },
-              { oldText: "delta", newText: "DELTA" },
-            ],
-          });
-
-          expect(await fs.readFile(path.join(workspaceDir, testFile), "utf8")).toBe(
-            "ALPHA beta gamma DELTA",
-          );
-        } finally {
-          cwdSpy.mockRestore();
-        }
-      });
-    });
-  });
-
   it("defaults exec cwd to workspaceDir when workdir is omitted", async () => {
     await withTempDir("openclaw-ws-", async (workspaceDir) => {
       const execTool = createExecTool(workspaceDir);
       await expectExecCwdResolvesTo(execTool, "ws-exec", { command: "echo ok" }, workspaceDir);
-    });
-  });
-
-  it("lets exec workdir override the workspace default", async () => {
-    await withTempDir("openclaw-ws-", async (workspaceDir) => {
-      await withTempDir("openclaw-override-", async (overrideDir) => {
-        const execTool = createExecTool(workspaceDir);
-        await expectExecCwdResolvesTo(
-          execTool,
-          "ws-exec-override",
-          { command: "echo ok", workdir: overrideDir },
-          overrideDir,
-        );
-      });
     });
   });
 
@@ -511,5 +489,630 @@ describe("sandboxed workspace paths", () => {
         expect(edited).toBe("sandbox edit");
       });
     });
+  });
+});
+
+type UnsafeMountedSandbox = Parameters<
+  Parameters<typeof withUnsafeMountedSandboxHarness>[0]
+>[0]["sandbox"];
+
+const APPLY_PATCH_PAYLOAD = `*** Begin Patch
+*** Add File: /agent/pwned.txt
++owned-by-apply-patch
+*** End Patch`;
+
+function resolveApplyPatchTool(params: { sandbox: UnsafeMountedSandbox; config: OpenClawConfig }) {
+  return createApplyPatchTool({
+    cwd: params.sandbox.workspaceDir,
+    sandbox: { root: params.sandbox.workspaceDir, bridge: params.sandbox.fsBridge! },
+    workspaceOnly: params.config.tools?.exec?.applyPatch?.workspaceOnly !== false,
+  });
+}
+
+function createSandboxFsTools(params: { sandbox: UnsafeMountedSandbox; workspaceOnly?: boolean }) {
+  const tools = [
+    createSandboxedReadTool({
+      root: params.sandbox.workspaceDir,
+      bridge: params.sandbox.fsBridge!,
+    }),
+    createSandboxedWriteTool({
+      root: params.sandbox.workspaceDir,
+      bridge: params.sandbox.fsBridge!,
+    }),
+    createSandboxedEditTool({
+      root: params.sandbox.workspaceDir,
+      bridge: params.sandbox.fsBridge!,
+    }),
+  ];
+  if (!params.workspaceOnly) {
+    return tools;
+  }
+  return tools.map((tool) =>
+    wrapToolWorkspaceRootGuardWithOptions(tool, params.sandbox.workspaceDir, {
+      additionalContainerMounts:
+        tool.name === "read"
+          ? [
+              ...(params.sandbox.workspaceAccess === "ro"
+                ? [
+                    {
+                      containerRoot: SANDBOX_AGENT_WORKSPACE_MOUNT,
+                      hostRoot: params.sandbox.agentWorkspaceDir,
+                    },
+                  ]
+                : []),
+              ...resolveReadOnlyWorkspaceSkillMounts({
+                workspaceDir: params.sandbox.workspaceDir,
+                agentWorkspaceDir: params.sandbox.agentWorkspaceDir,
+                skillsWorkspaceDir: params.sandbox.skillsWorkspaceDir,
+                workdir: params.sandbox.containerWorkdir,
+                workspaceAccess: params.sandbox.workspaceAccess,
+              }).map((mount) => ({
+                containerRoot: mount.containerPath,
+                hostRoot: mount.hostPath,
+              })),
+            ]
+          : undefined,
+      containerWorkdir: params.sandbox.containerWorkdir,
+    }),
+  );
+}
+
+describe("tools.fs.workspaceOnly", () => {
+  it("preserves valid UTF-8 BOM bytes through real sandbox edit and patch bridges", async () => {
+    await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, sandbox }) => {
+      const filePath = path.join(sandboxRoot, "source.txt");
+      const original = Buffer.from("\uFEFFheading\nprice: 5\n", "utf8");
+      const expected = Buffer.from("\uFEFFheading\nprice: 7\n", "utf8");
+      const editTool = createSandboxedEditTool({
+        root: sandbox.workspaceDir,
+        bridge: sandbox.fsBridge!,
+      });
+
+      await fs.writeFile(filePath, original);
+      await editTool.execute("sandbox-edit-bom", {
+        path: "source.txt",
+        edits: [{ oldText: "price: 5", newText: "price: 7" }],
+      });
+      await expect(fs.readFile(filePath)).resolves.toEqual(expected);
+
+      await fs.writeFile(filePath, original);
+      const patchTool = createApplyPatchTool({
+        cwd: sandbox.workspaceDir,
+        sandbox: { root: sandbox.workspaceDir, bridge: sandbox.fsBridge! },
+      });
+      await patchTool.execute("sandbox-patch-bom", {
+        input: `*** Begin Patch
+*** Update File: source.txt
+@@
+-price: 5
++price: 7
+*** End Patch`,
+      });
+      await expect(fs.readFile(filePath)).resolves.toEqual(expected);
+    });
+  });
+
+  it("preserves unrelated Unicode bytes through the real sandbox edit bridge", async () => {
+    await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, sandbox }) => {
+      const filePath = path.join(sandboxRoot, "source.txt");
+      const original =
+        "const value\u00A0= 1; // keep \uFF08\uFF13\uFF09 \uFF71\uFF72\uFF73 \u2014 unchanged\r\n";
+      const expected =
+        "const value = 2; // keep \uFF08\uFF13\uFF09 \uFF71\uFF72\uFF73 \u2014 unchanged\r\n";
+      const editTool = createSandboxedEditTool({
+        root: sandbox.workspaceDir,
+        bridge: sandbox.fsBridge!,
+      });
+
+      await fs.writeFile(filePath, original, "utf8");
+      await editTool.execute("sandbox-edit-fuzzy-unicode", {
+        path: "source.txt",
+        edits: [{ oldText: "const value = 1;", newText: "const value = 2;" }],
+      });
+
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe(expected);
+    });
+  });
+
+  it("rejects invalid UTF-8 before sandbox edit or patch bridge writes", async () => {
+    await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, sandbox }) => {
+      const filePath = path.join(sandboxRoot, "source.txt");
+      const original = Buffer.concat([
+        Buffer.from("heading\nprice: 5\n"),
+        Buffer.from([0xff, 0xfe]),
+      ]);
+      await fs.writeFile(filePath, original);
+      const editTool = createSandboxedEditTool({
+        root: sandbox.workspaceDir,
+        bridge: sandbox.fsBridge!,
+      });
+
+      await expect(
+        editTool.execute("sandbox-edit-invalid-utf8", {
+          path: "source.txt",
+          edits: [{ oldText: "price: 5", newText: "price: 7" }],
+        }),
+      ).rejects.toThrow(/not valid UTF-8/);
+      await expect(fs.readFile(filePath)).resolves.toEqual(original);
+
+      const patchTool = createApplyPatchTool({
+        cwd: sandbox.workspaceDir,
+        sandbox: { root: sandbox.workspaceDir, bridge: sandbox.fsBridge! },
+      });
+      await expect(
+        patchTool.execute("sandbox-patch-invalid-utf8", {
+          input: `*** Begin Patch
+*** Update File: source.txt
+@@
+-price: 5
++price: 7
+*** End Patch`,
+        }),
+      ).rejects.toThrow(/not valid UTF-8/);
+      await expect(fs.readFile(filePath)).resolves.toEqual(original);
+    });
+  });
+
+  it("defaults to allowing sandbox mounts outside the workspace root", async () => {
+    await withUnsafeMountedSandboxHarness(async ({ agentRoot, sandbox }) => {
+      await fs.writeFile(path.join(agentRoot, "secret.txt"), "shh", "utf8");
+
+      const tools = createSandboxFsTools({ sandbox });
+      const { readTool, writeTool } = expectReadWriteTools(tools);
+
+      const readResult = await readTool?.execute("t1", { path: "/agent/secret.txt" });
+      expect(getTextContent(readResult)).toContain("shh");
+
+      await writeTool?.execute("t2", { path: "/agent/owned.txt", content: "x" });
+      expect(await fs.readFile(path.join(agentRoot, "owned.txt"), "utf8")).toBe("x");
+    });
+  });
+
+  it("rejects sandbox mounts outside the workspace root when enabled", async () => {
+    await withUnsafeMountedSandboxHarness(async ({ agentRoot, sandbox }) => {
+      await fs.writeFile(path.join(agentRoot, "secret.txt"), "shh", "utf8");
+
+      const tools = createSandboxFsTools({ sandbox, workspaceOnly: true });
+      const { readTool, writeTool, editTool } = expectReadWriteEditTools(tools);
+
+      await expect(readTool?.execute("t1", { path: "/agent/secret.txt" })).rejects.toThrow(
+        /Path escapes sandbox root/i,
+      );
+
+      await expect(
+        writeTool?.execute("t2", { path: "/agent/owned.txt", content: "x" }),
+      ).rejects.toThrow(/Path escapes sandbox root/i);
+      const missingOwnedFile = await fs
+        .stat(path.join(agentRoot, "owned.txt"))
+        .catch((error: unknown) => error);
+      expect((missingOwnedFile as NodeJS.ErrnoException).code).toBe("ENOENT");
+
+      await expect(
+        editTool?.execute("t3", { path: "/agent/secret.txt", oldText: "shh", newText: "nope" }),
+      ).rejects.toThrow(/Path escapes sandbox root/i);
+      expect(await fs.readFile(path.join(agentRoot, "secret.txt"), "utf8")).toBe("shh");
+    });
+  });
+
+  it("allows read-only agent workspace mounts for sandbox reads only", async () => {
+    await withUnsafeMountedSandboxHarness(
+      async ({ agentRoot, sandbox }) => {
+        await fs.writeFile(path.join(agentRoot, "secret.txt"), "shh", "utf8");
+
+        const tools = createSandboxFsTools({ sandbox, workspaceOnly: true });
+        const { readTool, writeTool, editTool } = expectReadWriteEditTools(tools);
+
+        const readResult = await readTool?.execute("t1", { path: "/agent/secret.txt" });
+        expect(getTextContent(readResult)).toContain("shh");
+
+        await expect(
+          writeTool?.execute("t2", { path: "/agent/owned.txt", content: "x" }),
+        ).rejects.toThrow(/Path escapes sandbox root/i);
+        const missingOwnedFile = await fs
+          .stat(path.join(agentRoot, "owned.txt"))
+          .catch((error: unknown) => error);
+        expect((missingOwnedFile as NodeJS.ErrnoException).code).toBe("ENOENT");
+
+        await expect(
+          editTool?.execute("t3", { path: "/agent/secret.txt", oldText: "shh", newText: "nope" }),
+        ).rejects.toThrow(/Path escapes sandbox root/i);
+        expect(await fs.readFile(path.join(agentRoot, "secret.txt"), "utf8")).toBe("shh");
+      },
+      { workspaceAccess: "ro" },
+    );
+  });
+
+  it("allows read-only materialized sandbox skills for sandbox reads only", async () => {
+    await withUnsafeMountedSandboxHarness(
+      async ({ sandbox, skillsWorkspaceDir }) => {
+        expect(skillsWorkspaceDir).toBeTruthy();
+        const skillDir = path.join(skillsWorkspaceDir!, "skills", "demo");
+        const userOwnedShadowDir = path.join(
+          sandbox.workspaceDir,
+          ".openclaw",
+          "sandbox-skills",
+          "skills",
+          "demo",
+        );
+        await fs.mkdir(skillDir, { recursive: true });
+        await fs.mkdir(userOwnedShadowDir, { recursive: true });
+        await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Demo\nmaterialized\n", "utf8");
+        await fs.writeFile(
+          path.join(userOwnedShadowDir, "SKILL.md"),
+          "# Demo\nuser-owned shadow\n",
+          "utf8",
+        );
+
+        const tools = createSandboxFsTools({ sandbox, workspaceOnly: true });
+        const { readTool } = expectReadWriteEditTools(tools);
+        const containerSkillPath = "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md";
+
+        const readResult = await readTool?.execute("t1", { path: containerSkillPath });
+        expect(getTextContent(readResult)).toContain("materialized");
+        expect(getTextContent(readResult)).not.toContain("user-owned shadow");
+        const relativeReadResult = await readTool?.execute("t2", {
+          path: ".openclaw/sandbox-skills/skills/demo/SKILL.md",
+        });
+        expect(getTextContent(relativeReadResult)).toContain("materialized");
+        expect(getTextContent(relativeReadResult)).not.toContain("user-owned shadow");
+        const fileUrlReadResult = await readTool?.execute("t3", {
+          path: "file:///workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md",
+        });
+        expect(getTextContent(fileUrlReadResult)).toContain("materialized");
+        expect(getTextContent(fileUrlReadResult)).not.toContain("user-owned shadow");
+        expect(await fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).toContain(
+          "materialized",
+        );
+        expect(await fs.readFile(path.join(userOwnedShadowDir, "SKILL.md"), "utf8")).toContain(
+          "user-owned shadow",
+        );
+      },
+      { includeSkillsWorkspace: true, workspaceAccess: "rw" },
+    );
+  });
+
+  it("enforces apply_patch workspace-only in sandbox mounts by default", async () => {
+    await withUnsafeMountedSandboxHarness(async ({ agentRoot, sandbox }) => {
+      const applyPatchTool = resolveApplyPatchTool({
+        sandbox,
+        config: {
+          tools: {
+            allow: ["read", "write", "exec"],
+            exec: { applyPatch: {} },
+          },
+        } as OpenClawConfig,
+      });
+
+      await expect(applyPatchTool.execute("t1", { input: APPLY_PATCH_PAYLOAD })).rejects.toThrow(
+        /Path escapes sandbox root/i,
+      );
+      const missingPatchedFile = await fs
+        .stat(path.join(agentRoot, "pwned.txt"))
+        .catch((error: unknown) => error);
+      expect((missingPatchedFile as NodeJS.ErrnoException).code).toBe("ENOENT");
+    });
+  });
+
+  it("allows apply_patch outside workspace root when explicitly disabled", async () => {
+    await withUnsafeMountedSandboxHarness(async ({ agentRoot, sandbox }) => {
+      const applyPatchTool = resolveApplyPatchTool({
+        sandbox,
+        config: {
+          tools: {
+            allow: ["read", "write", "exec"],
+            exec: { applyPatch: { workspaceOnly: false } },
+          },
+        } as OpenClawConfig,
+      });
+
+      await applyPatchTool.execute("t2", { input: APPLY_PATCH_PAYLOAD });
+      expect(await fs.readFile(path.join(agentRoot, "pwned.txt"), "utf8")).toBe(
+        "owned-by-apply-patch\n",
+      );
+    });
+  });
+});
+
+vi.mock("openclaw/plugin-sdk/llm", async () => {
+  const original =
+    await vi.importActual<typeof import("openclaw/plugin-sdk/llm")>("openclaw/plugin-sdk/llm");
+  return {
+    ...original,
+  };
+});
+
+describe("FS tools with workspaceOnly=false", () => {
+  let tmpDir: string;
+  let workspaceDir: string;
+  let outsideFile: string;
+
+  const hasToolError = (result: { content: Array<{ type: string; text?: string }> }) =>
+    result.content.some((content) => {
+      if (content.type !== "text") {
+        return false;
+      }
+      return content.text?.toLowerCase().includes("error") ?? false;
+    });
+
+  const toolsFor = (workspaceOnly: boolean | undefined): AnyAgentTool[] => {
+    const read = createOpenClawReadTool(createReadTool(workspaceDir) as unknown as AnyAgentTool);
+    const write = createHostWorkspaceWriteTool(workspaceDir, { workspaceOnly });
+    const edit = createHostWorkspaceEditTool(workspaceDir, { workspaceOnly });
+    const tools = [read, write, edit];
+    return workspaceOnly
+      ? tools.map((tool) => wrapToolWorkspaceRootGuard(tool, workspaceDir))
+      : tools;
+  };
+
+  const requireTool = (tools: AnyAgentTool[], toolName: "write" | "edit" | "read") => {
+    const tool = tools.find((candidate) => candidate.name === toolName);
+    if (!tool) {
+      throw new Error(`expected ${toolName} tool`);
+    }
+    return tool;
+  };
+
+  const runFsTool = async (
+    toolName: "write" | "edit" | "read",
+    callId: string,
+    input: Record<string, unknown>,
+    workspaceOnly: boolean | undefined,
+  ) => {
+    const tool = requireTool(toolsFor(workspaceOnly), toolName);
+    const result = await tool.execute(callId, input);
+    expect(hasToolError(result)).toBe(false);
+    return result;
+  };
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
+    workspaceDir = path.join(tmpDir, "workspace");
+    await fs.mkdir(workspaceDir);
+    outsideFile = path.join(tmpDir, "outside.txt");
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("should allow write outside workspace when workspaceOnly=false", async () => {
+    await runFsTool(
+      "write",
+      "test-call-1",
+      {
+        path: outsideFile,
+        content: "test content",
+      },
+      false,
+    );
+    const content = await fs.readFile(outsideFile, "utf-8");
+    expect(content).toBe("test content");
+  });
+
+  it("should allow write outside workspace via ../ path when workspaceOnly=false", async () => {
+    const relativeOutsidePath = path.join("..", "outside-relative-write.txt");
+    const outsideRelativeFile = path.join(tmpDir, "outside-relative-write.txt");
+
+    await runFsTool(
+      "write",
+      "test-call-1b",
+      {
+        path: relativeOutsidePath,
+        content: "relative test content",
+      },
+      false,
+    );
+    const content = await fs.readFile(outsideRelativeFile, "utf-8");
+    expect(content).toBe("relative test content");
+  });
+
+  it("should allow edit outside workspace when workspaceOnly=false", async () => {
+    await fs.writeFile(outsideFile, "old content");
+
+    await runFsTool(
+      "edit",
+      "test-call-2",
+      {
+        path: outsideFile,
+        edits: [{ oldText: "old content", newText: "new content" }],
+      },
+      false,
+    );
+    const content = await fs.readFile(outsideFile, "utf-8");
+    expect(content).toBe("new content");
+  });
+
+  it("should allow edit outside workspace via ../ path when workspaceOnly=false", async () => {
+    const relativeOutsidePath = path.join("..", "outside-relative-edit.txt");
+    const outsideRelativeFile = path.join(tmpDir, "outside-relative-edit.txt");
+    await fs.writeFile(outsideRelativeFile, "old relative content");
+
+    await runFsTool(
+      "edit",
+      "test-call-2b",
+      {
+        path: relativeOutsidePath,
+        edits: [{ oldText: "old relative content", newText: "new relative content" }],
+      },
+      false,
+    );
+    const content = await fs.readFile(outsideRelativeFile, "utf-8");
+    expect(content).toBe("new relative content");
+  });
+
+  it("should allow read outside workspace when workspaceOnly=false", async () => {
+    await fs.writeFile(outsideFile, "test read content");
+
+    const result = await runFsTool(
+      "read",
+      "test-call-3",
+      {
+        path: outsideFile,
+      },
+      false,
+    );
+    expect(JSON.stringify(result.content)).toContain("test read content");
+  });
+
+  it("returns optional not-found context for missing date-only daily memory reads", async () => {
+    const result = await runFsTool(
+      "read",
+      "test-call-missing-daily-memory",
+      {
+        path: "memory/2026-05-15.md",
+      },
+      undefined,
+    );
+    expect(result).toStrictEqual({
+      content: [
+        {
+          type: "text",
+          text: "No daily memory file exists yet at memory/2026-05-15.md.",
+        },
+      ],
+      details: {
+        kind: "not_found",
+        status: "not_found",
+        path: "memory/2026-05-15.md",
+        optional: true,
+      },
+    });
+  });
+
+  it("still throws for ordinary missing read paths", async () => {
+    const readTool = requireTool(toolsFor(undefined), "read");
+
+    await expect(
+      readTool.execute("test-call-missing-ordinary-file", {
+        path: "notes/missing.md",
+      }),
+    ).rejects.toThrow(/ENOENT|no such file|not found/i);
+  });
+
+  it("should allow write outside workspace when workspaceOnly is unset", async () => {
+    const outsideUnsetFile = path.join(tmpDir, "outside-unset-write.txt");
+    await runFsTool(
+      "write",
+      "test-call-3a",
+      {
+        path: outsideUnsetFile,
+        content: "unset write content",
+      },
+      undefined,
+    );
+    const content = await fs.readFile(outsideUnsetFile, "utf-8");
+    expect(content).toBe("unset write content");
+  });
+
+  it("should allow edit outside workspace when workspaceOnly is unset", async () => {
+    const outsideUnsetFile = path.join(tmpDir, "outside-unset-edit.txt");
+    await fs.writeFile(outsideUnsetFile, "before");
+    await runFsTool(
+      "edit",
+      "test-call-3b",
+      {
+        path: outsideUnsetFile,
+        edits: [{ oldText: "before", newText: "after" }],
+      },
+      undefined,
+    );
+    const content = await fs.readFile(outsideUnsetFile, "utf-8");
+    expect(content).toBe("after");
+  });
+
+  it("should block write outside workspace when workspaceOnly=true", async () => {
+    const tools = toolsFor(true);
+    const writeTool = requireTool(tools, "write");
+
+    // When workspaceOnly=true, the guard throws an error
+    await expect(
+      writeTool.execute("test-call-4", {
+        path: outsideFile,
+        content: "test content",
+      }),
+    ).rejects.toThrow(/Path escapes (workspace|sandbox) root/);
+  });
+
+  it("restricts memory-triggered writes to append-only canonical memory files", async () => {
+    const allowedRelativePath = "memory/2026-03-07.md";
+    const allowedAbsolutePath = path.join(workspaceDir, allowedRelativePath);
+    await fs.mkdir(path.dirname(allowedAbsolutePath), { recursive: true });
+    await fs.writeFile(allowedAbsolutePath, "seed");
+
+    const tools = [
+      wrapToolMemoryFlushAppendOnlyWrite(createHostWorkspaceWriteTool(workspaceDir), {
+        root: workspaceDir,
+        relativePath: allowedRelativePath,
+      }),
+    ];
+
+    const writeTool = requireTool(tools, "write");
+    expect(tools.map((tool) => tool.name)).toEqual(["write"]);
+
+    await expect(
+      writeTool.execute("test-call-memory-deny", {
+        path: outsideFile,
+        content: "should not write here",
+      }),
+    ).rejects.toThrow(/Memory flush writes are restricted to memory\/2026-03-07\.md/);
+
+    const result = await writeTool.execute("test-call-memory-append", {
+      path: allowedRelativePath,
+      content: "new note",
+    });
+    expect(hasToolError(result)).toBe(false);
+    expect(result).toStrictEqual({
+      content: [{ type: "text", text: "Appended content to memory/2026-03-07.md." }],
+      details: {
+        path: "memory/2026-03-07.md",
+        appendOnly: true,
+      },
+    });
+    await expect(fs.readFile(allowedAbsolutePath, "utf-8")).resolves.toBe("seed\nnew note");
+  });
+
+  it("accepts memory-triggered append-only writes with malformed XML arg-value path suffixes", async () => {
+    const allowedRelativePath = "memory/2026-03-08.md";
+    const allowedAbsolutePath = path.join(workspaceDir, allowedRelativePath);
+
+    const writeTool = wrapToolMemoryFlushAppendOnlyWrite(
+      createHostWorkspaceWriteTool(workspaceDir),
+      {
+        root: workspaceDir,
+        relativePath: allowedRelativePath,
+      },
+    );
+
+    const result = await writeTool.execute("test-call-memory-suffix", {
+      path: `${allowedRelativePath}</arg_value>>`,
+      content: "new note",
+    });
+
+    expect(hasToolError(result)).toBe(false);
+    expect(result).toStrictEqual({
+      content: [{ type: "text", text: "Appended content to memory/2026-03-08.md." }],
+      details: {
+        path: "memory/2026-03-08.md",
+        appendOnly: true,
+      },
+    });
+    await expect(fs.readFile(allowedAbsolutePath, "utf-8")).resolves.toBe("new note");
+  });
+
+  it("rejects memory-triggered append-only paths that become empty after suffix stripping", async () => {
+    const writeTool = wrapToolMemoryFlushAppendOnlyWrite(
+      createHostWorkspaceWriteTool(workspaceDir),
+      {
+        root: workspaceDir,
+        relativePath: "memory/2026-03-09.md",
+      },
+    );
+
+    await expect(
+      writeTool.execute("test-call-memory-empty-suffix", {
+        path: "</arg_value>>",
+        content: "new note",
+      }),
+    ).rejects.toThrow(/Missing required parameter: path/);
   });
 });
