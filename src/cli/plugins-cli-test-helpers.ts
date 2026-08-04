@@ -106,7 +106,7 @@ export const recordPluginInstall: UnknownMock = vi.fn();
 const loadInstalledPluginIndexInstallRecords: AsyncUnknownMock = vi.fn(async () =>
   clonePluginInstallRecords(mockInstalledPluginIndexInstallRecords),
 );
-export const writePersistedInstalledPluginIndexInstallRecords: Mock<WritePersistedInstalledPluginIndexInstallRecordsFn> =
+const writePersistedInstalledPluginIndexInstallRecords: Mock<WritePersistedInstalledPluginIndexInstallRecordsFn> =
   vi.fn<WritePersistedInstalledPluginIndexInstallRecordsFn>(async (records) => {
     mockInstalledPluginIndexInstallRecords = clonePluginInstallRecords(records);
     return "/tmp/openclaw-state/openclaw.sqlite";
