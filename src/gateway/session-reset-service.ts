@@ -127,6 +127,9 @@ const mcpRunEndWatchers = mcpRunEndWatcherState.watchers;
 
 const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
 
+/** Tracks in-progress session reset keys to prevent unbounded recursion. */
+const activeResets = new Set<string>();
+
 export function archiveSessionTranscriptsForSessionDetailed(params: {
   sessionId: string | undefined;
   storePath: string;
@@ -1069,6 +1072,19 @@ export async function performGatewaySessionReset(params: {
   if (!resetTarget.ok) {
     return resetTarget;
   }
+  // Prevent unbounded recursion when reset is re-entered for the same
+  // canonical session key (e.g. during runtime cleanup of a stale session).
+  const canonicalResetKey = resetTarget.target.canonicalKey;
+  if (activeResets.has(canonicalResetKey)) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `Session ${params.key} reset is already in progress; try again in a moment.`,
+      ),
+    };
+  }
+  activeResets.add(canonicalResetKey);
   const initialResetEntry = loadSessionEntry(
     params.key,
     resetTarget.requestedAgentId ? { agentId: resetTarget.requestedAgentId } : undefined,
@@ -1080,6 +1096,7 @@ export async function performGatewaySessionReset(params: {
     pluginOwnerId: params.authorizedPluginId,
   });
   if (initialOwnershipError) {
+    activeResets.delete(canonicalResetKey);
     return { ok: false, error: initialOwnershipError };
   }
   const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
@@ -1087,6 +1104,7 @@ export async function performGatewaySessionReset(params: {
     initialResetEntry,
   );
   if (missingHarnessSessionError) {
+    activeResets.delete(canonicalResetKey);
     return {
       ok: false,
       error: errorShape(ErrorCodes.INVALID_REQUEST, missingHarnessSessionError),
@@ -1095,6 +1113,7 @@ export async function performGatewaySessionReset(params: {
   // Reject before interrupting admitted work or firing reset hooks. The model lock is
   // session-id scoped, so rotating first would silently detach native harness ownership.
   if (isModelSelectionLocked(initialResetEntry)) {
+    activeResets.delete(canonicalResetKey);
     return {
       ok: false,
       error: errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_RESET_MESSAGE),
@@ -1104,6 +1123,7 @@ export async function performGatewaySessionReset(params: {
     ? resolveSessionPlacementResetBlock(initialResetEntry.sessionId)
     : undefined;
   if (initialPlacementBlock) {
+    activeResets.delete(canonicalResetKey);
     return {
       ok: false,
       error: errorShape(
@@ -1127,6 +1147,7 @@ export async function performGatewaySessionReset(params: {
     "compaction",
   );
   if (activeLifecycleMutation && !activeCompaction) {
+    activeResets.delete(canonicalResetKey);
     return {
       ok: false,
       error: errorShape(
@@ -1137,6 +1158,7 @@ export async function performGatewaySessionReset(params: {
   }
   let admittedWorkReleased = true;
   let resetOwnershipError: ReturnType<typeof errorShape> | undefined;
+  try {
   return await runExclusiveSessionLifecycleMutation({
     scope: resetTarget.storePath,
     identities: resetLifecycleIdentities,
@@ -1671,5 +1693,8 @@ export async function performGatewaySessionReset(params: {
       };
     },
   });
+  } finally {
+    activeResets.delete(canonicalResetKey);
+  }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
