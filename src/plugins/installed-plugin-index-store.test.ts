@@ -1027,6 +1027,60 @@ describe("installed plugin index persistence", () => {
     });
   });
 
+  it("rebuilds linked local TypeScript records through the normal discovery path", async () => {
+    const stateDir = makeTempDir();
+    const bundledDir = path.join(stateDir, "bundled");
+    const pluginDir = path.join(stateDir, "plugins", "linked-source");
+    fs.mkdirSync(path.join(pluginDir, "src"), { recursive: true });
+    fs.mkdirSync(bundledDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@vendor/linked-source",
+        openclaw: { extensions: ["./src/index.ts"] },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({ id: "linked-source", configSchema: { type: "object" } }),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(pluginDir, "src", "index.ts"), "export default {};", "utf8");
+    const env = {
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_HOME: undefined,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    const installRecords = {
+      "linked-source": {
+        source: "path" as const,
+        sourcePath: pluginDir,
+        installPath: pluginDir,
+        spec: pluginDir,
+      },
+    };
+
+    await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [],
+      env,
+      installRecords,
+    });
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      env,
+      policyPluginIds: [],
+    });
+
+    expectPluginIds(refreshed, ["linked-source"]);
+  });
+
   it("keeps policy refreshes on the fast path for unavailable install records", async () => {
     const stateDir = makeTempDir();
     const missingPluginDir = path.join(stateDir, "plugins", "missing");
@@ -1074,57 +1128,6 @@ describe("installed plugin index persistence", () => {
       {
         level: "warn",
         message: "policy fast-path sentinel",
-      },
-    ]);
-  });
-
-  it("keeps policy refreshes on the fast path for existing retained paths discovery cannot materialize", async () => {
-    const stateDir = makeTempDir();
-    const invalidPluginDir = path.join(stateDir, "plugins", "invalid");
-    fs.mkdirSync(invalidPluginDir, { recursive: true });
-    const env = {
-      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-      OPENCLAW_VERSION: "2026.4.25",
-      VITEST: "true",
-    };
-    const installRecords = {
-      invalid: {
-        source: "npm" as const,
-        spec: "invalid-plugin@1.0.0",
-        installPath: invalidPluginDir,
-      },
-    };
-    await refreshPersistedInstalledPluginIndex({
-      reason: "manual",
-      stateDir,
-      candidates: [],
-      diagnostics: [
-        {
-          level: "warn",
-          message: "existing-path fast-path sentinel",
-        },
-      ],
-      env,
-      installRecords,
-    });
-
-    const refreshed = await refreshPersistedInstalledPluginIndex({
-      reason: "policy-changed",
-      stateDir,
-      env,
-      policyPluginIds: [],
-    });
-
-    expectPluginIds(refreshed, []);
-    expectInstallRecord(refreshed, "invalid", {
-      source: "npm",
-      spec: "invalid-plugin@1.0.0",
-      installPath: invalidPluginDir,
-    });
-    expect(refreshed.diagnostics).toEqual([
-      {
-        level: "warn",
-        message: "existing-path fast-path sentinel",
       },
     ]);
   });
@@ -1265,17 +1268,20 @@ describe("installed plugin index persistence", () => {
       };
       const discoverSpy = vi.fn(() => ({ candidates: [], diagnostics: [] }));
       vi.resetModules();
-      vi.doMock("./discovery.js", () => ({ discoverOpenClawPlugins: discoverSpy }));
+      vi.doMock("./discovery.js", async (importOriginal) => {
+        const actual = await importOriginal<typeof import("./discovery.js")>();
+        return { ...actual, discoverOpenClawPlugins: discoverSpy };
+      });
       const store = await importFreshModule<typeof import("./installed-plugin-index-store.js")>(
         import.meta.url,
         "./installed-plugin-index-store.js?case=scan-free-policy-refresh",
       );
       const missingPluginDir = path.join(stateDir, "plugins", "missing");
       const markerOnlyPluginDir = path.join(stateDir, "plugins", "marker-only");
-      fs.mkdirSync(markerOnlyPluginDir, { recursive: true });
+      fs.mkdirSync(path.join(markerOnlyPluginDir, ".codex-plugin"), { recursive: true });
       fs.writeFileSync(
-        path.join(markerOnlyPluginDir, "package.json"),
-        JSON.stringify({ name: "marker-only" }),
+        path.join(markerOnlyPluginDir, ".codex-plugin", "plugin.json"),
+        "'still not an object'",
         "utf8",
       );
       const installRecords = {
@@ -1284,9 +1290,9 @@ describe("installed plugin index persistence", () => {
           spec: "missing-plugin@1.0.0",
           installPath: missingPluginDir,
         },
-        "marker-only": {
+        "invalid-bundle": {
           source: "npm" as const,
-          spec: "marker-only@1.0.0",
+          spec: "invalid-bundle@1.0.0",
           installPath: markerOnlyPluginDir,
         },
       };
@@ -1319,9 +1325,9 @@ describe("installed plugin index persistence", () => {
         spec: "missing-plugin@1.0.0",
         installPath: missingPluginDir,
       });
-      expectInstallRecord(refreshed, "marker-only", {
+      expectInstallRecord(refreshed, "invalid-bundle", {
         source: "npm",
-        spec: "marker-only@1.0.0",
+        spec: "invalid-bundle@1.0.0",
         installPath: markerOnlyPluginDir,
       });
       expect(refreshed.diagnostics).toEqual([

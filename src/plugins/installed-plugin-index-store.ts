@@ -1,22 +1,15 @@
 /** Persists, inspects, and refreshes the installed plugin index in the state database. */
-<<<<<<< HEAD
-import { existsSync, statSync } from "node:fs";
+import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
-=======
-import { existsSync, statSync } from "node:fs";
->>>>>>> 06252ef8c29 (fix(plugins): tighten policy refresh recovery gating)
-import path from "node:path";
 import { z } from "zod";
-import { tryReadJsonSync } from "../infra/json-files.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import { resolveUserPath } from "../utils.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
-import { detectBundleManifestFormat } from "./bundle-manifest.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
+import { hasDiscoverableInstalledPluginRecords } from "./discovery.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveCompatRegistryVersion } from "./installed-plugin-index-policy.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-cache.js";
@@ -41,12 +34,6 @@ import {
   type LoadInstalledPluginIndexParams,
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
-import {
-  DEFAULT_PLUGIN_ENTRY_CANDIDATES,
-  resolvePackageExtensionEntries,
-  type PackageManifest,
-} from "./manifest.js";
-import { resolvePackageRuntimeExtensionSources } from "./package-entry-resolution.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 export {
   resolveInstalledPluginIndexStorePath,
@@ -483,73 +470,19 @@ function hasPolicyRefreshTargets(
   return policyPluginIds.every((pluginId) => pluginIds.has(pluginId));
 }
 
-const PLUGIN_ENTRY_EXTENSIONS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
-
-function resolveRecoverableInstallRecordPath(
-  record: InstalledPluginInstallRecordInfo | undefined,
-  env: NodeJS.ProcessEnv,
-): string | undefined {
-  const rawPath =
-    typeof record?.installPath === "string" && record.installPath.trim()
-      ? record.installPath
-      : typeof record?.sourcePath === "string" && record.sourcePath.trim()
-        ? record.sourcePath
-        : undefined;
-  return rawPath ? resolveUserPath(rawPath, env) : undefined;
-}
-
-function isSupportedPluginEntry(filePath: string): boolean {
-  return PLUGIN_ENTRY_EXTENSIONS.has(path.extname(filePath));
-}
-
-function hasDiscoverablePluginEntry(resolvedPath: string): boolean {
-  if (!existsSync(resolvedPath)) {
-    return false;
-  }
-  const stat = statSync(resolvedPath);
-  if (stat.isFile()) {
-    return isSupportedPluginEntry(resolvedPath);
-  }
-  if (!stat.isDirectory()) {
-    return false;
-  }
-  const packageManifest = tryReadJsonSync<PackageManifest>(path.join(resolvedPath, "package.json"));
-  const packageExtensionResolution = resolvePackageExtensionEntries(packageManifest ?? undefined);
-  if (
-    packageExtensionResolution.status === "ok" &&
-    resolvePackageRuntimeExtensionSources({
-      packageDir: resolvedPath,
-      manifest: packageManifest ?? null,
-      extensions: packageExtensionResolution.entries,
-      origin: "global",
-      sourceLabel: resolvedPath,
-      diagnostics: [],
-    }).length > 0
-  ) {
-    return true;
-  }
-  if (detectBundleManifestFormat(resolvedPath)) {
-    return true;
-  }
-  return DEFAULT_PLUGIN_ENTRY_CANDIDATES.some((candidate) => {
-    const candidatePath = path.join(resolvedPath, candidate);
-    return existsSync(candidatePath) && isSupportedPluginEntry(candidatePath);
-  });
-}
-
 function hasPotentiallyRecoverableInstallRecord(
   persisted: InstalledPluginIndex,
   missingInstallRecordPluginIds: readonly string[],
   env: NodeJS.ProcessEnv,
 ): boolean {
+  const installRecords = {} as Record<string, InstalledPluginInstallRecordInfo>;
   for (const pluginId of missingInstallRecordPluginIds) {
     const record = persisted.installRecords?.[pluginId];
-    const resolved = resolveRecoverableInstallRecordPath(record, env);
-    if (resolved && hasDiscoverablePluginEntry(resolved)) {
-      return true;
+    if (record) {
+      installRecords[pluginId] = record;
     }
   }
-  return false;
+  return hasDiscoverableInstalledPluginRecords({ installRecords, env });
 }
 
 function buildRecoverableInstallRecordRefresh(

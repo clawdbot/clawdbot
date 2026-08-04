@@ -569,6 +569,81 @@ function collectManagedPluginDirKeys(
   return dirs;
 }
 
+type InstalledPluginRecordDiscoveryParams = {
+  installRecords?: Record<string, PluginInstallRecord>;
+  ownershipUid?: number | null;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  candidates: PluginCandidate[];
+  diagnostics: PluginDiagnostic[];
+  seen: Set<string>;
+  realpathCache: Map<string, string>;
+  packageManifestCache?: Map<string, PackageManifest | null>;
+};
+
+type InstalledPluginRecordDiscovery = {
+  installedPluginDirKeys: Set<string>;
+  managedPluginDirs: Set<string>;
+};
+
+function discoverInstalledPluginRecordsInto(
+  params: InstalledPluginRecordDiscoveryParams,
+): InstalledPluginRecordDiscovery {
+  const installedPaths = collectInstalledPluginRecordPaths(
+    params.installRecords,
+    params.env,
+    params.realpathCache,
+  );
+  const installedPluginDirKeys = collectManagedPluginDirKeys(
+    installedPaths.map((installedPath) => installedPath.path),
+    params.realpathCache,
+  );
+  const managedPluginDirs = collectManagedPluginDirKeys(
+    collectManagedPluginRecordPaths(params.installRecords, params.env),
+    params.realpathCache,
+  );
+  for (const installedPath of installedPaths) {
+    discoverFromPath({
+      rawPath: installedPath.path,
+      origin: "global",
+      ownershipUid: params.ownershipUid,
+      workspaceDir: params.workspaceDir,
+      requireBuiltRuntimeEntry: installedPath.requireBuiltRuntimeEntry,
+      managedPluginDirs,
+      scanFiles: true,
+      env: params.env,
+      candidates: params.candidates,
+      diagnostics: params.diagnostics,
+      seen: params.seen,
+      realpathCache: params.realpathCache,
+      packageManifestCache: params.packageManifestCache,
+    });
+  }
+  return { installedPluginDirKeys, managedPluginDirs };
+}
+
+/** Returns whether any installed record can produce a normal discovery candidate. */
+export function hasDiscoverableInstalledPluginRecords(params: {
+  installRecords?: Record<string, PluginInstallRecord>;
+  ownershipUid?: number | null;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  const result = createDiscoveryResult();
+  discoverInstalledPluginRecordsInto({
+    installRecords: params.installRecords,
+    ...(params.ownershipUid !== undefined ? { ownershipUid: params.ownershipUid } : {}),
+    ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+    env: params.env ?? process.env,
+    candidates: result.candidates,
+    diagnostics: result.diagnostics,
+    seen: new Set<string>(),
+    realpathCache: new Map<string, string>(),
+    packageManifestCache: new Map<string, PackageManifest | null>(),
+  });
+  return result.candidates.length > 0;
+}
+
 function isManagedPluginDir(params: {
   dir: string;
   realpath?: string;
@@ -1548,36 +1623,17 @@ export function discoverOpenClawPlugins(params: {
         });
       }
       if (params.rootScope !== "bundled") {
-        const installedPaths = collectInstalledPluginRecordPaths(
-          params.installRecords,
+        const { installedPluginDirKeys, managedPluginDirs } = discoverInstalledPluginRecordsInto({
+          installRecords: params.installRecords,
+          ownershipUid: params.ownershipUid,
+          workspaceDir,
           env,
+          candidates: result.candidates,
+          diagnostics: result.diagnostics,
+          seen,
           realpathCache,
-        );
-        const installedPluginDirKeys = collectManagedPluginDirKeys(
-          installedPaths.map((installedPath) => installedPath.path),
-          realpathCache,
-        );
-        const managedPluginDirs = collectManagedPluginDirKeys(
-          collectManagedPluginRecordPaths(params.installRecords, env),
-          realpathCache,
-        );
-        for (const installedPath of installedPaths) {
-          discoverFromPath({
-            rawPath: installedPath.path,
-            origin: "global",
-            ownershipUid: params.ownershipUid,
-            workspaceDir,
-            requireBuiltRuntimeEntry: installedPath.requireBuiltRuntimeEntry,
-            managedPluginDirs,
-            scanFiles: true,
-            env,
-            candidates: result.candidates,
-            diagnostics: result.diagnostics,
-            seen,
-            realpathCache,
-            packageManifestCache,
-          });
-        }
+          packageManifestCache,
+        });
         // Keep auto-discovered global extensions behind bundled plugins.
         // Users can still intentionally override via plugins.load.paths (origin=config).
         discoverInDirectory({
