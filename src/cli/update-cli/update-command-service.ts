@@ -325,10 +325,11 @@ async function maybeSuspendWindowsTaskAutoStartForPackageUpdate(params: {
     suspended = await recovery.suspended;
   } catch (err) {
     if (err instanceof SchtasksAccessDeniedError) {
+      const restartCommand = replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME);
       defaultRuntime.log(
-        `Could not disable the Windows Scheduled Task before update: ${err.message}. ` +
-          "The update will proceed; if the task restarts the Gateway during installation, " +
-          "the update will continue automatically after the restart.",
+        theme.warn(
+          `Could not disable the Windows Scheduled Task before update (${String(err)}); leaving it enabled and continuing. Run \`${restartCommand}\` from an elevated shell if the gateway fails to restart after update.`,
+        ),
       );
       await recovery.restore().catch(() => undefined);
       recovery.complete();

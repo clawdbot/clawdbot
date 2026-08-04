@@ -4366,10 +4366,30 @@ describe("update-cli", () => {
     platformSpy.mockRestore();
 
     expect(suspendScheduledTaskAutoStartForUpdate).toHaveBeenCalledTimes(1);
-    expect(defaultRuntime.log).toHaveBeenCalledWith(
-      expect.stringContaining("Could not disable the Windows Scheduled Task"),
-    );
     expect(serviceStop).toHaveBeenCalled();
+    const warnLog = vi
+      .mocked(defaultRuntime.log)
+      .mock.calls.map((call) => String(call[0]))
+      .find((line) => line.includes("Could not disable the Windows Scheduled Task before update"));
+    expect(warnLog).toBeDefined();
+    expect(warnLog).toContain("openclaw gateway restart");
+  });
+
+  it("still hard-fails when Windows Scheduled Task disable fails for a non-access reason", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    mockPackageInstallStatus(createCaseDir("openclaw-update-task-non-access-failure"));
+    mockRunningManagedGateway();
+    suspendScheduledTaskAutoStartForUpdate.mockRejectedValue(
+      new Error("schtasks disable failed: schtasks timed out after 15000ms"),
+    );
+    serviceStop.mockResolvedValue(undefined);
+
+    await updateCommand({ yes: true });
+    platformSpy.mockRestore();
+
+    expect(suspendScheduledTaskAutoStartForUpdate).toHaveBeenCalledTimes(1);
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(serviceStop).not.toHaveBeenCalled();
   });
 
   it("preserves both the update and Scheduled Task recovery failures", async () => {
