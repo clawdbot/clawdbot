@@ -340,10 +340,26 @@ describe("live transport scenario timeouts", () => {
 
     expect(waitForReply).toMatchObject({
       waitForOutbound: {
-        textIncludes: "exec",
         timeoutMs: { expr: "liveTurnTimeoutMs(env, 60000)" },
       },
     });
+    expect(waitForReply).not.toHaveProperty("waitForOutbound.textIncludes");
+  });
+
+  it("reports the unexpected Telegram compact tools reply", async () => {
+    await expect(
+      runLoadedScenarioFlow("telegram-tools-compact-command", {
+        onWaitForOutboundMessage: ({ state }) => {
+          state.addOutboundMessage({
+            accountId: "qa-channel",
+            to: "channel:telegram-command-room",
+            text: "Couldn't load available tools right now. Try again in a moment.",
+          });
+        },
+      }),
+    ).rejects.toThrow(
+      "tools reply missing expected text: Couldn't load available tools right now. Try again in a moment.",
+    );
   });
 });
 
