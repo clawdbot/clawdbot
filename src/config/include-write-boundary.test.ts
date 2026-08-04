@@ -131,6 +131,24 @@ describe("resolveIncludeWriteBoundary", () => {
     ).toBeNull();
   });
 
+  it("keeps the innermost authored file in a same-path delegation chain", () => {
+    // Depth-first include processing records the innermost file before its
+    // delegating parent; the outer file still contains a $include directive.
+    const outerDelegate = {
+      path: alphaInclude.path,
+      kind: "single" as const,
+      hasSiblingOverrides: false,
+      hasArrayAncestor: false,
+      targetPath: "/cfg/alpha-delegate.json5",
+    };
+    expect(
+      resolveIncludeWriteBoundary({
+        provenance: [alphaInclude, outerDelegate],
+        changed: { paths: [[...alphaInclude.path, "model"]], rootChanged: false },
+      })?.includePath,
+    ).toBe("/cfg/alpha.json5");
+  });
+
   it("declines when a change falls outside the include", () => {
     expect(
       resolveIncludeWriteBoundary({

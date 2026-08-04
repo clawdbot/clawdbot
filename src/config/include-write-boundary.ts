@@ -113,7 +113,11 @@ export function resolveIncludeWriteBoundary(params: {
     if (!params.changed.paths.every((changedPath) => isPathPrefix(entry.path, changedPath))) {
       continue;
     }
-    if (entry.path.length >= bestDepth) {
+    // Include events fire depth-first, so a same-path delegation chain records
+    // the innermost authored file before its delegating parents. Strict
+    // comparison keeps that first candidate; replacing it would select an outer
+    // file that still contains a $include directive and cannot absorb a write.
+    if (entry.path.length > bestDepth) {
       best = { boundaryPath: entry.path, includePath: entry.targetPath };
       bestDepth = entry.path.length;
     }

@@ -505,7 +505,9 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
       single-file include at an object-key path, OpenClaw updates the deepest
       owning include and leaves `openclaw.json` intact. This works for both
       top-level sections such as `plugins: { $include: "./plugins.json5" }` and
-      nested object-map entries.
+      nested object-map entries. Write-through only targets include files inside
+      the top-level config directory; includes admitted through
+      `OPENCLAW_INCLUDE_ROOTS` stay read-only for OpenClaw-owned writes.
     - **Unsupported write-through**: root includes, actual array-entry includes,
       include arrays, sibling overrides, changes spanning ownership boundaries,
       and any nested include beneath a merged owner fail closed instead of

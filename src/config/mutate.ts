@@ -386,6 +386,27 @@ function getIncludeMutationBoundary(params: {
     : null;
 }
 
+/**
+ * Whether one authored $include file solely owns every changed path of this
+ * write. Callers that add root-level metadata before persisting (Doctor wizard
+ * state) must consult this first: an extra root key would push the change set
+ * outside the boundary and force the guarded root writer to reject the write.
+ */
+export function configWriteTargetsIncludeBoundary(params: {
+  snapshot: ConfigFileSnapshot;
+  nextConfig: OpenClawConfig;
+}): boolean {
+  const nextConfig = applyUnsetPathsForWrite(
+    params.nextConfig,
+    resolveManagedUnsetPathsForWrite(undefined),
+  );
+  const changed = collectChangedConfigPaths(params.snapshot.sourceConfig, nextConfig);
+  if (changed.rootChanged || changed.paths.length === 0) {
+    return false;
+  }
+  return getIncludeMutationBoundary({ snapshot: params.snapshot, changed }) !== null;
+}
+
 function containsConfigIncludeDirective(value: unknown): boolean {
   if (Array.isArray(value)) {
     return value.some((item) => containsConfigIncludeDirective(item));

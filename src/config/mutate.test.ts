@@ -14,6 +14,7 @@ import { createConfigIO as createActualConfigIO } from "./io.factory.js";
 import type { ConfigWriteOptions } from "./io.js";
 import {
   ConfigMutationConflictError,
+  configWriteTargetsIncludeBoundary,
   mutateConfigFile,
   replaceConfigFile,
   transformConfigFileWithRetry,
@@ -1053,6 +1054,92 @@ describe("config mutate helpers", () => {
       model: "new-model",
       workspace: "/w/alpha",
     });
+  });
+
+  it("writes a same-path delegation chain through to its innermost file", async () => {
+    const home = await suiteRootTracker.make("nested-include-chain");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const delegatePath = path.join(home, ".openclaw", "config", "agent-alpha.json5");
+    const basePath = path.join(home, ".openclaw", "config", "agent-alpha-base.json5");
+    await fs.mkdir(path.dirname(basePath), { recursive: true });
+    const authoredRoot = {
+      agents: { entries: { alpha: { $include: "./config/agent-alpha.json5" } } },
+    };
+    await fs.writeFile(configPath, `${JSON.stringify(authoredRoot, null, 2)}\n`, "utf-8");
+    await fs.writeFile(
+      delegatePath,
+      `${JSON.stringify({ $include: "./agent-alpha-base.json5" }, null, 2)}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(basePath, `${JSON.stringify({ model: "old-model" }, null, 2)}\n`, "utf-8");
+    const sourceConfig = {
+      agents: { entries: { alpha: { model: "old-model" } } },
+    } as OpenClawConfig;
+    const nextConfig = {
+      agents: { entries: { alpha: { model: "new-model" } } },
+    } as OpenClawConfig;
+    const snapshot: ConfigFileSnapshot = {
+      ...createSnapshot({
+        hash: "hash-nested-include-chain",
+        path: configPath,
+        parsed: authoredRoot,
+        sourceConfig,
+      }),
+      // Depth-first include processing records the innermost file first.
+      includeProvenance: [
+        {
+          path: ["agents", "entries", "alpha"],
+          kind: "single" as const,
+          hasSiblingOverrides: false,
+          hasArrayAncestor: false,
+          targetPath: basePath,
+        },
+        {
+          path: ["agents", "entries", "alpha"],
+          kind: "single" as const,
+          hasSiblingOverrides: false,
+          hasArrayAncestor: false,
+          targetPath: delegatePath,
+        },
+      ],
+    };
+    ioMocks.readConfigFileSnapshotForWrite
+      .mockResolvedValueOnce({
+        snapshot,
+        writeOptions: {
+          expectedConfigPath: configPath,
+          assertConfigPathForWrite: allowConfigPathWrite,
+          includeFileTargetsForWrite: { [basePath]: await resolveIncludeTarget(basePath) },
+        },
+      })
+      .mockResolvedValueOnce({
+        snapshot: createSnapshot({
+          hash: "hash-nested-include-chain-refreshed",
+          path: configPath,
+          parsed: authoredRoot,
+          sourceConfig: nextConfig,
+        }),
+        writeOptions: { expectedConfigPath: configPath },
+      });
+
+    await replaceConfigFile({
+      baseHash: snapshot.hash,
+      nextConfig,
+      writeOptions: { expectedConfigPath: configPath },
+      io: {
+        readConfigFileSnapshotForWrite: ioMocks.readConfigFileSnapshotForWrite,
+        writeConfigFile: ioMocks.writeConfigFile,
+      },
+    });
+
+    expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(JSON.parse(await fs.readFile(basePath, "utf-8"))).toEqual({ model: "new-model" });
+    await expect(fs.readFile(delegatePath, "utf-8")).resolves.toContain(
+      '"$include": "./agent-alpha-base.json5"',
+    );
+    await expect(fs.readFile(configPath, "utf-8")).resolves.toContain(
+      '"$include": "./config/agent-alpha.json5"',
+    );
   });
 
   it("writes through a nested include when a read-time migration added keys", async () => {
@@ -2757,6 +2844,68 @@ describe("config mutate helpers", () => {
     } finally {
       setRuntimeConfigSnapshotRefreshHandler(null);
     }
+  });
+});
+
+describe("configWriteTargetsIncludeBoundary", () => {
+  const nestedProvenance = [
+    {
+      path: ["agents", "entries", "alpha"],
+      kind: "single" as const,
+      hasSiblingOverrides: false,
+      hasArrayAncestor: false,
+      targetPath: "/cfg/config/agent-alpha.json5",
+    },
+  ];
+  const sourceConfig = {
+    agents: { entries: { alpha: { model: "old-model" } } },
+  } as OpenClawConfig;
+  const nestedSnapshot: ConfigFileSnapshot = {
+    ...createSnapshot({
+      hash: "hash-boundary-probe",
+      path: "/cfg/openclaw.json",
+      parsed: { agents: { entries: { alpha: { $include: "./config/agent-alpha.json5" } } } },
+      sourceConfig,
+    }),
+    includeProvenance: nestedProvenance,
+  };
+
+  it("accepts a change owned by a nested include", () => {
+    expect(
+      configWriteTargetsIncludeBoundary({
+        snapshot: nestedSnapshot,
+        nextConfig: { agents: { entries: { alpha: { model: "new-model" } } } } as OpenClawConfig,
+      }),
+    ).toBe(true);
+  });
+
+  it("declines once root-level wizard metadata joins the change set", () => {
+    // Doctor consults this before stamping wizard state; adding the root key
+    // first would push the change outside the boundary and fail the write.
+    expect(
+      configWriteTargetsIncludeBoundary({
+        snapshot: nestedSnapshot,
+        nextConfig: {
+          agents: { entries: { alpha: { model: "new-model" } } },
+          wizard: { lastRunCommand: "doctor" },
+        } as OpenClawConfig,
+      }),
+    ).toBe(false);
+  });
+
+  it("declines when nothing changed or no include owns the change", () => {
+    expect(
+      configWriteTargetsIncludeBoundary({ snapshot: nestedSnapshot, nextConfig: sourceConfig }),
+    ).toBe(false);
+    expect(
+      configWriteTargetsIncludeBoundary({
+        snapshot: {
+          ...nestedSnapshot,
+          includeProvenance: [],
+        },
+        nextConfig: { agents: { entries: { alpha: { model: "new-model" } } } } as OpenClawConfig,
+      }),
+    ).toBe(false);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
