@@ -10,6 +10,7 @@ import {
   installStreamsInboundMessageHooks,
 } from "./monitor-inbox.streams-inbound-messages.test-support.js";
 import {
+  DEFAULT_ACCOUNT_ID,
   mockLoadConfig,
   startInboxMonitor,
   waitForMessageCalls,
@@ -205,5 +206,76 @@ describe("web monitor inbox poll vote hook", () => {
     });
 
     expect(runPollVoteReceivedMock).toHaveBeenCalledTimes(1);
+  });
+
+  // Precedence of the channel.pluginHooks.pollVoteReceived opt-in vs. its
+  // per-account override — exercised end to end (not as an isolated unit
+  // test of the gate function) so the check stays a real production
+  // consumer of the gate logic instead of an orphaned test-only export.
+  it("fires when an account-level override enables it despite channel-level being off", async () => {
+    mockLoadConfig.mockReturnValue({
+      channels: {
+        whatsapp: {
+          allowFrom: ["*"],
+          pluginHooks: { pollVoteReceived: false },
+          accounts: { [DEFAULT_ACCOUNT_ID]: { pluginHooks: { pollVoteReceived: true } } },
+        },
+      },
+    });
+    const baileysCache = createBaileysCacheSupport();
+
+    await emitPollAndVote({
+      baileysCache,
+      pollMessageId: "POLL-ACCOUNT-OVERRIDE-ON",
+      voteMessageId: "VOTE-ACCOUNT-OVERRIDE-ON",
+    });
+
+    await waitForMessageCalls(runPollVoteReceivedMock, 1);
+  });
+
+  it("does not fire when an account-level override disables it despite channel-level being on", async () => {
+    mockLoadConfig.mockReturnValue({
+      channels: {
+        whatsapp: {
+          allowFrom: ["*"],
+          pluginHooks: { pollVoteReceived: true },
+          accounts: { [DEFAULT_ACCOUNT_ID]: { pluginHooks: { pollVoteReceived: false } } },
+        },
+      },
+    });
+    const baileysCache = createBaileysCacheSupport();
+
+    await emitPollAndVote({
+      baileysCache,
+      pollMessageId: "POLL-ACCOUNT-OVERRIDE-OFF",
+      voteMessageId: "VOTE-ACCOUNT-OVERRIDE-OFF",
+    });
+    // Give the fire-and-forget dispatch a tick to (not) run.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+
+    expect(runPollVoteReceivedMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the channel-level setting when the account has no override", async () => {
+    mockLoadConfig.mockReturnValue({
+      channels: {
+        whatsapp: {
+          allowFrom: ["*"],
+          pluginHooks: { pollVoteReceived: true },
+          accounts: { [DEFAULT_ACCOUNT_ID]: {} },
+        },
+      },
+    });
+    const baileysCache = createBaileysCacheSupport();
+
+    await emitPollAndVote({
+      baileysCache,
+      pollMessageId: "POLL-ACCOUNT-FALLBACK",
+      voteMessageId: "VOTE-ACCOUNT-FALLBACK",
+    });
+
+    await waitForMessageCalls(runPollVoteReceivedMock, 1);
   });
 });

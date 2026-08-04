@@ -312,7 +312,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: conversation-binding inspection result and runtime inspector.
       // +2: restore shipped channel setup helpers until stable packages migrate.
       // +1: canonical untrusted audio-transcript formatter for channel plugins.
-      4340,
+      // +1: WhatsApp poll_vote_received plugin hook event contract.
+      4341,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

@@ -174,7 +174,7 @@ const recentlyDispatchedPollVoteKeys: Map<string, { expiresAt: number; value: tr
  * overrides channel-level. Kept local rather than shared since it's the only
  * other privacy-gated inbound hook today.
  */
-export function shouldEmitWhatsAppPollVoteHooks(params: {
+function shouldEmitWhatsAppPollVoteHooks(params: {
   cfg: OpenClawConfig;
   accountId?: string;
 }): boolean {
