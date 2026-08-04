@@ -563,7 +563,7 @@ function validateGateCards(gate, records, validateInstrumentedPerformance) {
     count(gate.missingRequiredCount, "missing required count") === severities.info,
     "missing count drift",
   );
-  return cards;
+  return { cards, requiredInstrumented };
 }
 
 function validateEnvelope(reportValue, options = {}) {
@@ -603,8 +603,12 @@ function validateEnvelope(reportValue, options = {}) {
   validateSummary(report, records);
   validateTargetCleanup(report);
   const groups = validatePerformance(report, records, repeat);
-  const cards = validateGateCards(gate, records, validateInstrumentedPerformance);
-  return { report, gate, records, cards, groups };
+  const { cards, requiredInstrumented } = validateGateCards(
+    gate,
+    records,
+    validateInstrumentedPerformance,
+  );
+  return { report, gate, records, cards, groups, requiredInstrumented };
 }
 
 function deepProfiled(record) {
@@ -698,9 +702,13 @@ function evaluate(evaluator) {
 
 export function evaluateToleratedPartialKovaReport(report, options = {}) {
   return evaluate(() => {
-    const { gate, records, cards } = validateEnvelope(report, options);
+    const { gate, records, cards, requiredInstrumented } = validateEnvelope(report, options);
     check(gate.verdict === "PARTIAL", "gate verdict was not PARTIAL");
     check(gate.blockingCount === 0, "PARTIAL gate had blocking cards");
+    check(
+      requiredInstrumented === 0,
+      "PARTIAL gate had incomplete required instrumented performance evidence",
+    );
     check(
       cards.every((card) => card.severity !== "blocking"),
       "PARTIAL gate had a blocking card",

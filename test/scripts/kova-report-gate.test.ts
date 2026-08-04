@@ -424,7 +424,11 @@ function setCompleteInstrumentedAssessment(record: JsonObject): void {
   };
 }
 
-function attachInstrumentedPerformanceWarning(report: JsonObject, recordIndex = 0): void {
+function attachInstrumentedPerformanceWarning(
+  report: JsonObject,
+  recordIndex = 0,
+  required = true,
+): void {
   const metricId = "resourceByRole.status-cli.peakRssMb";
   const actual = 612.4;
   const threshold = 900;
@@ -453,6 +457,9 @@ function attachInstrumentedPerformanceWarning(report: JsonObject, recordIndex = 
     skippedCount: 1,
   };
   const gate = objectAt(report.gate);
+  if (!required) {
+    arrayAt(gate.warning).push({ scenario: SCENARIO, state: STATE });
+  }
   arrayAt(gate.cards).push({
     actual: `${metricId} ${actual}`,
     expected: `${metricId} <= ${threshold}`,
@@ -467,7 +474,7 @@ function attachInstrumentedPerformanceWarning(report: JsonObject, recordIndex = 
       firstThreshold: threshold,
       skippedCount: 1,
     },
-    required: true,
+    required,
     scenario: SCENARIO,
     severity: "warning",
     state: STATE,
@@ -479,7 +486,7 @@ function attachInstrumentedPerformanceWarning(report: JsonObject, recordIndex = 
   });
   gate.warningCount = Number(gate.warningCount) + 1;
   gate.instrumentedPerformanceIncompleteCount =
-    Number(gate.instrumentedPerformanceIncompleteCount) + 1;
+    Number(gate.instrumentedPerformanceIncompleteCount) + Number(required);
 }
 
 function eraseInstrumentedPerformanceEvidence(report: JsonObject): void {
@@ -621,15 +628,15 @@ describe("scripts/lib/kova-report-gate.mjs", () => {
     expectPartialRejection(report);
   });
 
-  it("accepts exact instrumented threshold warnings on a filtered PARTIAL report", () => {
+  it("rejects incomplete required instrumented evidence on a filtered PARTIAL report", () => {
     const report = partialReport();
     attachInstrumentedPerformanceWarning(report);
 
-    expect(evaluateToleratedPartialKovaReport(report)).toEqual({ ok: true });
-    expect(evaluateToleratedKovaReport(report)).toEqual({
-      classification: "filtered-partial",
-      ok: true,
+    expect(evaluateToleratedPartialKovaReport(report)).toEqual({
+      ok: false,
+      reason: "PARTIAL gate had incomplete required instrumented performance evidence",
     });
+    expect(evaluateToleratedKovaReport(report).ok).toBe(false);
   });
 
   it("accepts an explicit complete assessment when no thresholds were skipped", () => {
@@ -642,15 +649,15 @@ describe("scripts/lib/kova-report-gate.mjs", () => {
   it("reconciles repeated instrumented warnings one-to-one", () => {
     const report = partialReport();
     duplicatePassingRecord(report);
-    attachInstrumentedPerformanceWarning(report, 0);
-    attachInstrumentedPerformanceWarning(report, 1);
+    attachInstrumentedPerformanceWarning(report, 0, false);
+    attachInstrumentedPerformanceWarning(report, 1, false);
 
     expect(evaluateToleratedPartialKovaReport(report)).toEqual({ ok: true });
   });
 
   it("accepts nullable instrumented threshold values", () => {
     const report = partialReport();
-    attachInstrumentedPerformanceWarning(report);
+    attachInstrumentedPerformanceWarning(report, 0, false);
     setAt(report, ["records", 0, "performanceThresholdAssessment", "skipped", 0, "actual"], null);
     setAt(
       report,
@@ -665,10 +672,7 @@ describe("scripts/lib/kova-report-gate.mjs", () => {
 
   it("derives advisory instrumented evidence from the gate warning policy", () => {
     const report = partialReport();
-    attachInstrumentedPerformanceWarning(report);
-    setAt(report, ["gate", "warning"], [{ scenario: SCENARIO, state: STATE }]);
-    setAt(report, ["gate", "cards", 1, "required"], false);
-    setAt(report, ["gate", "instrumentedPerformanceIncompleteCount"], 0);
+    attachInstrumentedPerformanceWarning(report, 0, false);
 
     expect(evaluateToleratedPartialKovaReport(report)).toEqual({ ok: true });
   });
@@ -1319,6 +1323,32 @@ describe("scripts/lib/kova-report-gate.mjs", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("profiled-resource-only");
+  });
+
+  it("keeps required instrumented PARTIAL evidence non-zero at the CLI boundary", () => {
+    const report = partialReport();
+    attachInstrumentedPerformanceWarning(report);
+    const result = spawnSync(process.execPath, [SCRIPT_PATH, writeReport(report)], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "PARTIAL gate had incomplete required instrumented performance evidence",
+    );
+  });
+
+  it("allows advisory instrumented PARTIAL evidence at the CLI boundary", () => {
+    const report = partialReport();
+    attachInstrumentedPerformanceWarning(report, 0, false);
+    const result = spawnSync(process.execPath, [SCRIPT_PATH, writeReport(report)], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("filtered-partial");
   });
 
   it("requires the current producer contract when the CLI flag is present", () => {

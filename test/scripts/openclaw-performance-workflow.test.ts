@@ -13,10 +13,12 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const WORKFLOW = ".github/workflows/openclaw-performance.yml";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type WorkflowStep = {
   name?: string;
@@ -876,6 +878,71 @@ esac
     expect(runKova.run).toContain(
       "profiling-affected resource thresholds with no baseline regression",
     );
+  });
+
+  it("preserves required PARTIAL failures and clears only advisory PARTIAL failures", () => {
+    const run = findStep("Run Kova").run ?? "";
+    const startMarker = 'effective_status="$status"';
+    const endMarker = 'echo "effective_status=$effective_status" >> "$GITHUB_OUTPUT"';
+    const start = run.indexOf(startMarker);
+    const end = run.indexOf(endMarker, start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const gateScript = run.slice(start, end + endMarker.length);
+    const root = tempDirs.make("openclaw-kova-partial-gate-");
+    const binDir = join(root, "bin");
+    const fakeNode = join(binDir, "node");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(
+      fakeNode,
+      [
+        "#!/bin/sh",
+        'printf "%s\\n" "$*" >> "$GATE_INVOCATIONS"',
+        '[ "$PARTIAL_POLICY" = "advisory" ]',
+        "",
+      ].join("\n"),
+    );
+    chmodSync(fakeNode, 0o755);
+
+    for (const [partialPolicy, expectedStatus] of [
+      ["required", "17"],
+      ["advisory", "0"],
+    ] as const) {
+      const output = join(root, `${partialPolicy}.output`);
+      const summary = join(root, `${partialPolicy}.summary`);
+      const invocations = join(root, `${partialPolicy}.invocations`);
+      const result = spawnSync("bash", ["-c", gateScript], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          evidence_status: "0",
+          FAIL_ON_REGRESSION: "true",
+          GATE_INVOCATIONS: invocations,
+          GITHUB_OUTPUT: output,
+          GITHUB_STEP_SUMMARY: summary,
+          KOVA_CANONICAL_CONFIG_REF: "trusted",
+          KOVA_LEGACY_LIST_CONFIG_REF: "trusted",
+          KOVA_REF: "trusted",
+          PARTIAL_POLICY: partialPolicy,
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+          PERFORMANCE_HELPER_DIR: root,
+          report_json: join(root, `${partialPolicy}.json`),
+          status: "17",
+        },
+      });
+      expect(result.status).toBe(0);
+      expect(readFileSync(output, "utf8")).toBe(`effective_status=${expectedStatus}\n`);
+      expect(readFileSync(invocations, "utf8")).toContain(
+        "--require-instrumented-performance-contract",
+      );
+      if (partialPolicy === "advisory") {
+        expect(readFileSync(summary, "utf8")).toContain(
+          "trusted report adapter found only filtered coverage",
+        );
+      } else {
+        expect(existsSync(summary)).toBe(false);
+      }
+    }
   });
 
   it("passes one comma-delimited include set to the lane plan and run", () => {
