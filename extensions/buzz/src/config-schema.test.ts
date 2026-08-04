@@ -57,4 +57,34 @@ describe("BuzzConfigSchema", () => {
       expect(jsonSchemaResult.ok).toBe(valid);
     }
   });
+
+  it("accepts named accounts and validates their room keys", () => {
+    const roomId = "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c";
+    const valid = {
+      relayUrl: "wss://buzz.example.com",
+      groupPolicy: "allowlist",
+      defaultAccount: "support",
+      accounts: {
+        support: {
+          privateKey: "1".repeat(64),
+          groups: { [roomId]: {} },
+        },
+      },
+    };
+    const invalid = { accounts: { support: { groups: { general: {} } } } };
+
+    for (const [value, expected] of [
+      [valid, true],
+      [invalid, false],
+    ] as const) {
+      expect(parseBuzzConfig(value).success).toBe(expected);
+      expect(
+        validateJsonSchemaValue({
+          cacheKey: `buzz.config-schema.accounts.${expected}`,
+          schema: BuzzConfigSchema.schema,
+          value,
+        }).ok,
+      ).toBe(expected);
+    }
+  });
 });

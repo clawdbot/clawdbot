@@ -8,6 +8,7 @@ import {
 
 export const secretTargetRegistryEntries = createChannelSecretTargetRegistryEntries({
   channelKey: "buzz",
+  account: ["privateKey", "authTag"],
   channel: ["privateKey", "authTag"],
 });
 

@@ -299,6 +299,51 @@ workspace, or model while one Gateway and Buzz bot serve all of them:
 Without a room-specific binding, normal OpenClaw routing selects the default
 agent. See [Channel routing](/channels/channel-routing) for matching precedence.
 
+### Give each agent its own Buzz identity
+
+Configure named Buzz accounts when multiple agents should appear as different
+bots in the same room. Guided setup configures only the default account, so add
+named accounts manually. Shared channel fields are inherited by each account;
+account fields override them:
+
+```json5
+{
+  channels: {
+    buzz: {
+      relayUrl: "wss://buzz.example.com",
+      defaultAccount: "support",
+      groups: {
+        "<ROOM_UUID>": { requireMention: true },
+      },
+      accounts: {
+        support: {
+          name: "Support Agent",
+          privateKey: { source: "file", provider: "local", id: "/run/secrets/buzz-support" },
+        },
+        engineering: {
+          name: "Engineering Agent",
+          privateKey: { source: "file", provider: "local", id: "/run/secrets/buzz-engineering" },
+        },
+      },
+    },
+  },
+  bindings: [
+    { agentId: "support", match: { channel: "buzz", accountId: "support" } },
+    { agentId: "engineering", match: { channel: "buzz", accountId: "engineering" } },
+  ],
+}
+```
+
+Add both public keys to the room with the **Bot** role. Each account maintains
+its own relay connection, signing identity, profile, and routing scope even
+when the room UUID is identical. Keep `requireMention: true` in shared rooms so
+one bot's reply does not automatically activate another bot.
+
+`BUZZ_RELAY_URL`, `BUZZ_PRIVATE_KEY`, and `BUZZ_AUTH_TAG` apply only to the
+default account. Put named-account credentials under
+`channels.buzz.accounts.<accountId>`; plaintext and SecretRef values are both
+supported.
+
 ## Access control
 
 Buzz applies two independent controls:

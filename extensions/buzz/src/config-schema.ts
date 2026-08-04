@@ -1,5 +1,6 @@
 import {
   buildChannelConfigSchema,
+  buildMultiAccountChannelSchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
@@ -14,12 +15,12 @@ const BuzzGroupConfigSchema = z
   })
   .strict();
 
-const RawBuzzConfigSchema = z
+const BuzzAccountConfigSchema = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
-    markdown: MarkdownConfigSchema,
+    markdown: MarkdownConfigSchema.optional(),
     relayUrl: z
       .string()
       .url()
@@ -27,7 +28,7 @@ const RawBuzzConfigSchema = z
       .optional(),
     privateKey: buildSecretInputSchema().optional(),
     authTag: buildSecretInputSchema().optional(),
-    groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    groupPolicy: GroupPolicySchema.optional(),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groups: z
       .record(
@@ -38,6 +39,14 @@ const RawBuzzConfigSchema = z
     defaultTo: z.string().optional(),
   })
   .strict();
+
+const RawBuzzConfigSchema = buildMultiAccountChannelSchema(
+  BuzzAccountConfigSchema.extend({
+    markdown: MarkdownConfigSchema,
+    groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+  }),
+  { accountSchema: BuzzAccountConfigSchema },
+);
 
 export const BuzzConfigSchema = buildChannelConfigSchema(RawBuzzConfigSchema);
 export type BuzzConfigInput = z.input<typeof RawBuzzConfigSchema>;

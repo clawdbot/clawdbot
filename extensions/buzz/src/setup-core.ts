@@ -52,7 +52,7 @@ const buzzSetupAdapter: ChannelSetupAdapter<BuzzSetupInput> = {
     }),
   validateInput: ({ accountId, input }) => {
     if (accountId !== DEFAULT_ACCOUNT_ID) {
-      return "Buzz currently supports only the default account.";
+      return "Buzz guided setup currently supports only the default account; configure named accounts manually.";
     }
     if (!validRelayUrl(input.relayUrl)) {
       return "Buzz requires --relay-url with a ws:// or wss:// URL.";

@@ -33,6 +33,12 @@ Closed relays may also require the bot to be added as a relay member. Setup wait
 
 Restart the Gateway if it was already running.
 
+For multiple Buzz identities, configure `channels.buzz.accounts` manually and
+route each account to an agent with a binding that matches `accountId`. Named
+accounts can join the same room; keep mention gating enabled there to prevent
+automatic bot-to-bot reply loops. See the full Buzz documentation for an
+example.
+
 ## Verify
 
 ```bash
