@@ -275,7 +275,7 @@ async function getFreePort(): Promise<number> {
 }
 
 async function listen(port: number): Promise<Server> {
-  const server = net.createServer((socket) => socket.end());
+  const server = net.createServer((socket) => socket.destroy());
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, "127.0.0.1", resolve);
