@@ -194,6 +194,29 @@ function parseScheduledTaskXmlEnabled(output: string): boolean | null {
   return enabled === undefined ? true : enabled.toLowerCase() === "true";
 }
 
+/**
+ * Error thrown when schtasks /Change fails specifically because the caller lacks
+ * permission to modify the task. Carries the locale-localized stderr detail
+ * so callers can render a user-facing message without re-deriving the reason.
+ */
+export class SchtasksAccessDeniedError extends Error {
+  readonly code = "ACCESS_DENIED" as const;
+  constructor(detail: string) {
+    super(`schtasks disable failed: ${detail}`);
+    this.name = "SchtasksAccessDeniedError";
+  }
+}
+
+const WINDOWS_ACCESS_DENIED_PATTERNS: readonly RegExp[] = [
+  /access(?:\s+is)?\s+denied/iu,
+  /拒绝访问/u,
+  /zugriff\s+verweigert/iu,
+];
+
+function isSchtasksAccessDeniedStderr(stderr: string): boolean {
+  return WINDOWS_ACCESS_DENIED_PATTERNS.some((pattern) => pattern.test(stderr));
+}
+
 async function changeScheduledTaskEnabledState(params: {
   env: GatewayServiceEnv;
   enabled: boolean;
@@ -222,6 +245,9 @@ async function changeScheduledTaskEnabledState(params: {
   const result = await execSchtasks(["/Change", "/TN", taskName, action]);
   if (result.code !== 0) {
     const detail = (result.stderr || result.stdout).trim() || "unknown error";
+    if (!params.enabled && isSchtasksAccessDeniedStderr(detail)) {
+      throw new SchtasksAccessDeniedError(detail);
+    }
     const changeError = new Error(
       `schtasks ${params.enabled ? "enable" : "disable"} failed: ${detail}`,
     );

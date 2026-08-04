@@ -2,6 +2,7 @@
 export {
   restartScheduledTask,
   resumeScheduledTaskAutoStartAfterUpdate,
+  SchtasksAccessDeniedError,
   startScheduledTask,
   stopScheduledTask,
   suspendScheduledTaskAutoStartForUpdate,

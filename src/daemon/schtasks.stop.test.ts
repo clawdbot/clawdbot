@@ -273,6 +273,29 @@ describe("Scheduled Task stop/restart cleanup", () => {
     });
   });
 
+  it("throws SchtasksAccessDeniedError on access-denied disable", async () => {
+    await withPreparedGatewayTask(async ({ env }) => {
+      schtasksResponses.push(
+        {
+          ...SUCCESS_RESPONSE,
+          stdout: "<Task><Settings><Enabled>true</Enabled></Settings></Task>",
+        },
+        { code: 1, stdout: "", stderr: "ERROR: Access is denied." },
+      );
+
+      const { SchtasksAccessDeniedError } = await import("./schtasks.js");
+
+      await expect(suspendScheduledTaskAutoStartForUpdate(env)).rejects.toThrow(
+        SchtasksAccessDeniedError,
+      );
+
+      expect(schtasksCalls).toEqual([
+        ["/Query", "/TN", "OpenClaw Gateway", "/XML"],
+        ["/Change", "/TN", "OpenClaw Gateway", "/DISABLE"],
+      ]);
+    });
+  });
+
   it("leaves startup-folder fallback installs unchanged when the task is absent", async () => {
     await withPreparedGatewayTask(async ({ env }) => {
       const startupEntry = path.join(

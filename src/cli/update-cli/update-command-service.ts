@@ -24,6 +24,7 @@ import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import {
   resumeScheduledTaskAutoStartAfterUpdate,
+  SchtasksAccessDeniedError,
   suspendScheduledTaskAutoStartForUpdate,
 } from "../../daemon/schtasks.js";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
@@ -323,6 +324,16 @@ async function maybeSuspendWindowsTaskAutoStartForPackageUpdate(params: {
   try {
     suspended = await recovery.suspended;
   } catch (err) {
+    if (err instanceof SchtasksAccessDeniedError) {
+      defaultRuntime.log(
+        `Could not disable the Windows Scheduled Task before update: ${err.message}. ` +
+          "The update will proceed; if the task restarts the Gateway during installation, " +
+          "the update will continue automatically after the restart.",
+      );
+      await recovery.restore().catch(() => undefined);
+      recovery.complete();
+      return undefined;
+    }
     await recovery.restore().catch(() => undefined);
     recovery.complete();
     throw err;

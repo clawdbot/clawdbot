@@ -369,12 +369,16 @@ vi.mock("../daemon/launchd.js", async (importOriginal) => ({
     launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
 }));
 
-vi.mock("../daemon/schtasks.js", () => ({
-  suspendScheduledTaskAutoStartForUpdate: (...args: unknown[]) =>
-    suspendScheduledTaskAutoStartForUpdate(...args),
-  resumeScheduledTaskAutoStartAfterUpdate: (...args: unknown[]) =>
-    resumeScheduledTaskAutoStartAfterUpdate(...args),
-}));
+vi.mock("../daemon/schtasks.js", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("../daemon/schtasks.js")>();
+  return {
+    ...mod,
+    suspendScheduledTaskAutoStartForUpdate: (...args: unknown[]) =>
+      suspendScheduledTaskAutoStartForUpdate(...args),
+    resumeScheduledTaskAutoStartAfterUpdate: (...args: unknown[]) =>
+      resumeScheduledTaskAutoStartAfterUpdate(...args),
+  };
+});
 
 vi.mock("../config/paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/paths.js")>()),
@@ -4346,6 +4350,26 @@ describe("update-cli", () => {
     expect(requireValue(stopOrder, "service stop order")).toBeLessThan(
       requireValue(resumeOrder, "Scheduled Task resume order"),
     );
+  });
+
+  it("warns on SchtasksAccessDeniedError during suspend and continues to stop the service", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    mockPackageInstallStatus(createCaseDir("openclaw-update-access-denied"));
+    mockRunningManagedGateway();
+    const { SchtasksAccessDeniedError } = await import("../daemon/schtasks.js");
+    suspendScheduledTaskAutoStartForUpdate.mockRejectedValue(
+      new SchtasksAccessDeniedError("ERROR: Access is denied."),
+    );
+    serviceStop.mockResolvedValue(undefined);
+
+    await updateCommand({ yes: true });
+    platformSpy.mockRestore();
+
+    expect(suspendScheduledTaskAutoStartForUpdate).toHaveBeenCalledTimes(1);
+    expect(defaultRuntime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Could not disable the Windows Scheduled Task"),
+    );
+    expect(serviceStop).toHaveBeenCalled();
   });
 
   it("preserves both the update and Scheduled Task recovery failures", async () => {
