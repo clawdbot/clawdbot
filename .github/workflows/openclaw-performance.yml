@@ -472,8 +472,8 @@ jobs:
         id: kova
         if: steps.lane.outputs.run == 'true'
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          OPENAI_API_KEY: ${{ matrix.live == 'true' && secrets.OPENAI_API_KEY || '' }}
+          OPENAI_BASE_URL: ${{ matrix.live == 'true' && secrets.OPENAI_BASE_URL || '' }}
         shell: bash
         run: |
           set -euo pipefail

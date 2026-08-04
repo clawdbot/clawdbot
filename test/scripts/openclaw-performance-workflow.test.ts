@@ -965,6 +965,12 @@ esac
     expect(configureAuth.run).toContain("cannot run without live evidence");
     expect(configureAuth.run).toContain("exit 1");
     expect(configureAuth.run).not.toContain("will be skipped");
+    expect(runKova.env?.OPENAI_API_KEY).toBe(
+      "${{ matrix.live == 'true' && secrets.OPENAI_API_KEY || '' }}",
+    );
+    expect(runKova.env?.OPENAI_BASE_URL).toBe(
+      "${{ matrix.live == 'true' && secrets.OPENAI_BASE_URL || '' }}",
+    );
     expect(runKova.run).not.toContain('echo "skipped=true" >> "$GITHUB_OUTPUT"');
   });
 
