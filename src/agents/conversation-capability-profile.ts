@@ -7,6 +7,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { AgentRuntimeSessionHandoffRequester } from "../gateway/agent-runtime-identity-token.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { SkillSnapshot } from "../skills/types.js";
@@ -14,6 +15,7 @@ import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js"
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import {
   resolveEffectiveToolPolicy,
+  resolveGroupToolPolicy,
   resolveTrustedGroupId,
   sessionKeyNamesGroupConversation,
 } from "./agent-tools.policy.js";
@@ -23,6 +25,7 @@ import {
 } from "./requester-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
+import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagent-announce-handoff.js";
 import type { PromptMode } from "./system-prompt.types.js";
 import {
@@ -87,6 +90,8 @@ export type ConversationCapabilityProfileParams = {
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   /** Verified sessions_send authority; public callers cannot set this fact. */
   trustedSessionHandoff?: boolean;
+  /** Signed requester facts used only to evaluate target-owned sender restrictions. */
+  sessionHandoffRequester?: AgentRuntimeSessionHandoffRequester;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
 };
@@ -249,10 +254,43 @@ export function resolveConversationCapabilityProfile(
     groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
     requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
   });
-  // The signed projection already includes source sender/group policy. Keep
-  // target-owned subagent/inherited restrictions, but never select wildcards.
-  const groupPolicy = resolvedRequesterPolicies.groupPolicy;
-  const senderPolicy = sessionHandoffPolicy ? undefined : resolvedRequesterPolicies.senderPolicy;
+  const handoffRequester = sessionHandoffPolicy ? params.sessionHandoffRequester : undefined;
+  const handoffProvider = normalizeMessageChannel(handoffRequester?.messageProvider);
+  const targetProvider = normalizeMessageChannel(messageProvider);
+  const requesterMatchesTargetProvider =
+    handoffProvider !== undefined && handoffProvider === targetProvider;
+  // The signed projection owns source restrictions. The target still evaluates
+  // its current agent and room sender policy from signed requester facts.
+  const groupPolicy = sessionHandoffPolicy
+    ? resolveGroupToolPolicy({
+        config: params.config,
+        sessionKey: params.sessionKey,
+        spawnedBy: params.spawnedBy,
+        messageProvider: messageProvider ?? undefined,
+        groupId: trustedGroup.groupId,
+        groupChannel: trustedGroupChannel,
+        groupSpace: trustedGroupSpace,
+        accountId: params.agentAccountId,
+        senderId: requesterMatchesTargetProvider ? handoffRequester?.senderId : undefined,
+        senderName: requesterMatchesTargetProvider ? handoffRequester?.senderName : undefined,
+        senderUsername: requesterMatchesTargetProvider
+          ? handoffRequester?.senderUsername
+          : undefined,
+        senderE164: requesterMatchesTargetProvider ? handoffRequester?.senderE164 : undefined,
+        senderPolicyMode: "always",
+      })
+    : resolvedRequesterPolicies.groupPolicy;
+  const senderPolicy = sessionHandoffPolicy
+    ? resolveSenderToolPolicy({
+        config: params.config,
+        agentId: effective.agentId,
+        messageProvider: handoffRequester?.messageProvider,
+        senderId: handoffRequester?.senderId,
+        senderName: handoffRequester?.senderName,
+        senderUsername: handoffRequester?.senderUsername,
+        senderE164: handoffRequester?.senderE164,
+      })
+    : resolvedRequesterPolicies.senderPolicy;
   const { subagentPolicy, inheritedToolPolicy } = resolvedRequesterPolicies;
   const profilePolicy = resolveToolProfilePolicy(effective.profile);
   const providerProfilePolicy = resolveToolProfilePolicy(effective.providerProfile);

@@ -14,6 +14,7 @@ import type { ChatType } from "../channels/chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { AgentRuntimeSessionHandoffRequester } from "../gateway/agent-runtime-identity-token.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
@@ -473,6 +474,8 @@ type OpenClawCodingToolsOptions = {
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   /** Verified sessions_send authority; suppresses requester policy re-resolution. */
   trustedSessionHandoff?: boolean;
+  /** Signed requester facts for target-owned sender policy evaluation. */
+  sessionHandoffRequester?: AgentRuntimeSessionHandoffRequester;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
 };
@@ -536,6 +539,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       inputProvenance: options?.inputProvenance,
       trustedInternalHandoff: options?.trustedInternalHandoff,
       trustedSessionHandoff: options?.trustedSessionHandoff,
+      sessionHandoffRequester: options?.sessionHandoffRequester,
       scheduledToolPolicy: options?.scheduledToolPolicy,
     });
   const { agentId, runtimePluginToolGrant } = capabilityProfile.policy;
@@ -1073,6 +1077,21 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             inheritedToolAllowlist,
             inheritedToolDenylist,
             sessionsSendToolPolicy,
+            sessionsSendRequester: {
+              ...(capabilityProfile.conversation.messageProvider
+                ? { messageProvider: capabilityProfile.conversation.messageProvider }
+                : {}),
+              ...(capabilityProfile.sender.id ? { senderId: capabilityProfile.sender.id } : {}),
+              ...(capabilityProfile.sender.name
+                ? { senderName: capabilityProfile.sender.name }
+                : {}),
+              ...(capabilityProfile.sender.username
+                ? { senderUsername: capabilityProfile.sender.username }
+                : {}),
+              ...(capabilityProfile.sender.e164
+                ? { senderE164: capabilityProfile.sender.e164 }
+                : {}),
+            },
             onYield: options?.onYield,
             allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
             recordToolPrepStage: options?.recordToolPrepStage,

@@ -1205,6 +1205,7 @@ export function runAgentAttempt(params: {
       ? params.opts.trustedInternalHandoff
       : undefined,
     trustedSessionHandoff: params.opts.trustedSessionHandoff,
+    sessionHandoffRequester: params.opts.sessionHandoffRequester,
     scheduledToolPolicy: params.opts.scheduledToolPolicy,
     internalEvents: params.opts.internalEvents,
     inputProvenance: params.opts.inputProvenance,

@@ -136,6 +136,7 @@ export function createOpenClawTools(
     pluginToolAllowlist?: string[];
     pluginToolDenylist?: string[];
     sessionsSendToolPolicy?: AgentRuntimeSessionHandoffContext["inheritedToolPolicy"];
+    sessionsSendRequester?: AgentRuntimeSessionHandoffContext["requester"];
     /** Effective caller tool surface to persist on isolated cron agentTurn jobs. */
     cronCreatorToolAllowlist?: CronCreatorToolAllowlistEntry[];
     /** Current channel ID for auto-threading. */
@@ -655,6 +656,7 @@ export function createOpenClawTools(
             sandboxed: options?.sandboxed,
             config: resolvedConfig,
             toolPolicy: options?.sessionsSendToolPolicy,
+            requester: options?.sessionsSendRequester,
           }),
         ]),
     ...(includeSubagentSpawnTool

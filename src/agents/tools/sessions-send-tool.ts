@@ -464,6 +464,7 @@ export function createSessionsSendTool(opts?: {
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
   toolPolicy?: AgentRuntimeSessionHandoffContext["inheritedToolPolicy"];
+  requester?: AgentRuntimeSessionHandoffContext["requester"];
   callAgentWithHandoff?: (
     request: Parameters<GatewayCaller>[0],
     context: AgentRuntimeSessionHandoffContext,
@@ -488,6 +489,7 @@ export function createSessionsSendTool(opts?: {
               allow: [...opts.toolPolicy.allow],
               deny: [...opts.toolPolicy.deny],
             },
+            requester: { ...opts.requester },
           }
         : undefined;
       const agentCall: GatewayCaller = handoffContext

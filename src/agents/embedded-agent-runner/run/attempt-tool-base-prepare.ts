@@ -167,6 +167,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     inputProvenance: attempt.inputProvenance,
     trustedInternalHandoff: attempt.trustedInternalHandoff,
     trustedSessionHandoff: attempt.trustedSessionHandoff,
+    sessionHandoffRequester: attempt.sessionHandoffRequester,
     scheduledToolPolicy: attempt.scheduledToolPolicy,
   });
   const localModelLeanEnabled = isLocalModelLeanEnabled({

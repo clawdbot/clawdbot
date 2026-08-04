@@ -386,6 +386,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     inputProvenance: params.inputProvenance,
     trustedInternalHandoff: params.trustedInternalHandoff,
     trustedSessionHandoff: params.trustedSessionHandoff,
+    sessionHandoffRequester: params.sessionHandoffRequester,
     scheduledToolPolicy: params.scheduledToolPolicy,
     streamParams: params.streamParams,
     modelRun: params.modelRun,

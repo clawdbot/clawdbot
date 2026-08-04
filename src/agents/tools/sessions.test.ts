@@ -1186,6 +1186,7 @@ describe("sessions_send gating", () => {
       agentSessionKey: MAIN_AGENT_SESSION_KEY,
       agentChannel: MAIN_AGENT_CHANNEL,
       toolPolicy: { version: 1, allow: ["sessions_send", "read"], deny: ["message"] },
+      requester: { messageProvider: "discord", senderId: "alice" },
       callAgentWithHandoff,
     });
     callGatewayMock.mockImplementation(async (opts: unknown) => {
@@ -1220,6 +1221,7 @@ describe("sessions_send gating", () => {
           allow: ["sessions_send", "read"],
           deny: ["message"],
         },
+        requester: { messageProvider: "discord", senderId: "alice" },
       },
     );
     expect(vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0].handoffContext).toEqual({
@@ -1228,6 +1230,7 @@ describe("sessions_send gating", () => {
         allow: ["sessions_send", "read"],
         deny: ["message"],
       },
+      requester: { messageProvider: "discord", senderId: "alice" },
     });
   });
 

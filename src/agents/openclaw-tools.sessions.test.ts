@@ -1922,6 +1922,7 @@ describe("sessions tools", () => {
           allow: ["sessions_send"],
           deny: ["message"],
         },
+        requester: {},
       },
     );
   });

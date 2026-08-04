@@ -6,6 +6,7 @@ import { createAccountListHelpers } from "../channels/plugins/account-helpers.js
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GroupToolPolicyBySenderConfig } from "../config/types.tools.js";
 import { createAccountCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -340,16 +341,22 @@ describe("resolveConversationCapabilityProfile", () => {
     );
   });
 
-  it("treats a sessions_send runtime projection as authoritative requester policy", () => {
+  it("intersects a sessions_send projection with exact target agent sender policy", () => {
     const profile = resolveConversationCapabilityProfile({
       config: {
-        tools: {
-          allow: ["read", "sessions_send"],
-          toolsBySender: { "*": { allow: ["sessions_send"] } },
+        agents: {
+          list: [
+            {
+              id: "target",
+              tools: { toolsBySender: { "id:alice": { deny: ["exec"] } } },
+            },
+          ],
         },
       },
-      runtimeToolAllowlist: ["read", "sessions_send"],
+      agentId: "target",
+      runtimeToolAllowlist: ["exec", "read", "sessions_send"],
       trustedSessionHandoff: true,
+      sessionHandoffRequester: { messageProvider: "discord", senderId: "alice" },
       inputProvenance: {
         kind: "inter_session",
         sourceTool: "sessions_send",
@@ -357,30 +364,51 @@ describe("resolveConversationCapabilityProfile", () => {
     });
 
     expect(profile.policy.requesterPolicySource).toBe("session-handoff");
-    expect(profile.policy.senderPolicy).toBeUndefined();
+    expect(profile.policy.senderPolicy).toEqual({ deny: ["exec"] });
     expect(profile.policy.groupPolicy).toBeUndefined();
     expect(profile.policy.inheritedToolPolicy).toBeUndefined();
     expect(profile.policy.explicitToolAllowlist).toContain("read");
-  });
-
-  it("layers the target group policy onto a trusted sessions_send projection", () => {
-    const profile = resolveConversationCapabilityProfile({
-      config: {
-        channels: {
-          whatsapp: { groups: { team: { tools: { deny: ["exec"] } } } },
-        },
-      },
-      sessionKey: "agent:main:whatsapp:group:team",
-      messageProvider: "whatsapp",
-      runtimeToolAllowlist: ["exec", "read", "sessions_send"],
-      trustedSessionHandoff: true,
-      inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
-    });
-
-    expect(profile.policy.senderPolicy).toBeUndefined();
-    expect(profile.policy.groupPolicy).toEqual({ deny: ["exec"] });
     expect(profile.policy.explicitToolDenylist).toContain("exec");
   });
+
+  it.each([
+    {
+      label: "exact same-channel sender",
+      requester: { messageProvider: "whatsapp", senderId: "alice" },
+      toolsBySender: {
+        "id:alice": { deny: ["exec"] },
+      } as GroupToolPolicyBySenderConfig,
+    },
+    {
+      label: "wildcard for a cross-channel sender",
+      requester: { messageProvider: "discord", senderId: "alice" },
+      toolsBySender: {
+        "*": { deny: ["exec"] },
+      } as GroupToolPolicyBySenderConfig,
+    },
+  ])(
+    "layers target group $label policy onto a sessions_send projection",
+    ({ requester, toolsBySender }) => {
+      const profile = resolveConversationCapabilityProfile({
+        config: {
+          channels: {
+            whatsapp: { groups: { team: { toolsBySender } } },
+          },
+        },
+        sessionKey: "agent:main:whatsapp:group:team",
+        messageProvider: "whatsapp",
+        groupId: "team",
+        runtimeToolAllowlist: ["exec", "read", "sessions_send"],
+        trustedSessionHandoff: true,
+        sessionHandoffRequester: requester,
+        inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      });
+
+      expect(profile.policy.senderPolicy).toBeUndefined();
+      expect(profile.policy.groupPolicy).toEqual({ deny: ["exec"] });
+      expect(profile.policy.explicitToolDenylist).toContain("exec");
+    },
+  );
 
   it("does not classify the conversation as shared from a dropped caller group id", () => {
     // Non-group session key cannot vouch for the caller-supplied group facts:

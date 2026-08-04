@@ -125,6 +125,10 @@ describe("agent runtime identity token", () => {
           allow: [" sessions_send ", "read"],
           deny: ["message"],
         },
+        requester: {
+          messageProvider: " discord ",
+          senderId: " alice ",
+        },
       },
     });
 
@@ -139,6 +143,10 @@ describe("agent runtime identity token", () => {
           version: 1,
           allow: ["sessions_send", "read"],
           deny: ["message"],
+        },
+        requester: {
+          messageProvider: "discord",
+          senderId: "alice",
         },
       },
     });

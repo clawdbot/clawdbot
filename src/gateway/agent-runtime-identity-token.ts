@@ -46,6 +46,15 @@ export type AgentRuntimeSessionSpawnContext = {
 
 export type AgentRuntimeSessionHandoffContext = {
   inheritedToolPolicy: AgentRuntimeSessionSpawnContext["inheritedToolPolicy"];
+  requester: AgentRuntimeSessionHandoffRequester;
+};
+
+export type AgentRuntimeSessionHandoffRequester = {
+  messageProvider?: string;
+  senderId?: string;
+  senderName?: string;
+  senderUsername?: string;
+  senderE164?: string;
 };
 
 type AgentRuntimeIdentityTokenPayload = {
@@ -89,11 +98,36 @@ function decodeSessionSpawnContext(value: unknown): AgentRuntimeSessionSpawnCont
 function decodeSessionHandoffContext(
   value: unknown,
 ): AgentRuntimeSessionHandoffContext | undefined {
-  if (!isRecord(value)) {
+  if (!isRecord(value) || !isRecord(value.requester)) {
     return undefined;
   }
+  const requesterValue = value.requester;
   const decoded = decodeSessionSpawnContext({ inheritedToolPolicy: value.inheritedToolPolicy });
-  return decoded ? { inheritedToolPolicy: decoded.inheritedToolPolicy } : undefined;
+  if (!decoded) {
+    return undefined;
+  }
+  const requester = {
+    messageProvider: normalizeOptionalString(requesterValue.messageProvider),
+    senderId: normalizeOptionalString(requesterValue.senderId),
+    senderName: normalizeOptionalString(requesterValue.senderName),
+    senderUsername: normalizeOptionalString(requesterValue.senderUsername),
+    senderE164: normalizeOptionalString(requesterValue.senderE164),
+  };
+  if (
+    Object.entries(requester).some(
+      ([key, entry]) => entry === undefined && requesterValue[key] !== undefined,
+    )
+  ) {
+    return undefined;
+  }
+  return {
+    inheritedToolPolicy: decoded.inheritedToolPolicy,
+    requester: Object.fromEntries(
+      Object.entries(requester).filter(
+        (entry): entry is [string, string] => entry[1] !== undefined,
+      ),
+    ),
+  };
 }
 
 async function readSharedAgentRuntimeIdentitySecret(): Promise<string | null> {

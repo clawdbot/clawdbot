@@ -301,6 +301,13 @@ export function resolveGatewayScopedTools(params: {
     inheritedToolAllowlist,
     inheritedToolDenylist,
     sessionsSendToolPolicy,
+    sessionsSendRequester: {
+      ...(params.messageProvider ? { messageProvider: params.messageProvider } : {}),
+      ...(senderId ? { senderId } : {}),
+      ...(params.senderName ? { senderName: params.senderName } : {}),
+      ...(params.senderUsername ? { senderUsername: params.senderUsername } : {}),
+      ...(params.senderE164 ? { senderE164: params.senderE164 } : {}),
+    },
   });
   const execDefaults =
     nodeExecSurface || mediatedToolNames.size > 0
