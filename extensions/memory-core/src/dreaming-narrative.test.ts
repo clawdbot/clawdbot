@@ -543,6 +543,34 @@ describe("runDreamNarrative", () => {
     expectLogExcludes(logger.warn, "narrative fallback failed");
   });
 
+  // Regression: a nonblank invalid TZ (not an IANA zone) also threw RangeError in
+  // Intl.DateTimeFormat, suppressing both the diary entry and its fallback write.
+  it("writes the fallback diary entry when TZ is an invalid zone", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-bad-tz-");
+    const logger = createMockLogger();
+    const originalTz = process.env.TZ;
+    Reflect.set(process.env, "TZ", "Not/AZone");
+    try {
+      await appendFallbackNarrativeEntry({
+        workspaceDir,
+        data: { phase: "rem", snippets: ["An invalid TZ must not lose the diary entry."] },
+        nowMs: Date.parse("2026-04-05T03:00:00Z"),
+        logger,
+        reason: "the narrative run produced no text",
+      });
+    } finally {
+      if (originalTz === undefined) {
+        Reflect.deleteProperty(process.env, "TZ");
+      } else {
+        Reflect.set(process.env, "TZ", originalTz);
+      }
+    }
+
+    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(content).toContain("A memory trace surfaced, but details were unavailable in this run.");
+    expectLogExcludes(logger.warn, "narrative fallback failed");
+  });
+
   it("waits for persisted assistant text before falling back", async () => {
     vi.useFakeTimers();
     try {
