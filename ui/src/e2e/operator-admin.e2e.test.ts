@@ -160,6 +160,7 @@ describeControlUiE2e("Control UI operator administration", () => {
     const context = await createContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "skills.install", "skills.update"],
       methodResponses: {
         "agents.list": {
           agents: agentRoster,
@@ -262,6 +263,107 @@ describeControlUiE2e("Control UI operator administration", () => {
         )
         .toBe(true);
       await screenshot(page, "02-connected-node-inventory.png");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps read-only administration pages visible without dispatching mutations", async () => {
+    const context = await createContext();
+    const page = await context.newPage();
+    const proposal = {
+      id: "proposal-read-only",
+      kind: "create",
+      status: "pending",
+      title: "Read Only Proposal",
+      description: "Review without mutation access.",
+      skillName: "Read Only Proposal",
+      skillKey: "read-only-proposal",
+      createdAt: "2026-08-04T08:00:00.000Z",
+      updatedAt: "2026-08-04T08:00:00.000Z",
+      scanState: "clean",
+    };
+    const gateway = await installMockGateway(page, {
+      featureMethods: [
+        "agents.files.set",
+        "agents.update",
+        "chat.metadata",
+        "chat.startup",
+        "config.patch",
+        "config.set",
+        "openclaw.chat",
+        "skills.install",
+        "skills.proposals.apply",
+        "skills.proposals.evaluate",
+        "skills.proposals.historyScan",
+        "skills.proposals.reject",
+        "skills.proposals.requestRevision",
+        "skills.update",
+      ],
+      operatorScopes: ["operator.read"],
+      methodResponses: {
+        "agents.list": {
+          agents: agentRoster,
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "config.get": configResponse(),
+        "skills.proposals.inspect": {
+          content: "Review the proposed skill.",
+          record: {
+            ...proposal,
+            proposedVersion: "v1",
+            target: { skillKey: proposal.skillKey, skillName: proposal.skillName },
+          },
+          supportFiles: [],
+        },
+        "skills.proposals.list": {
+          proposals: [proposal],
+          schema: "openclaw.skill-workshop.proposals-manifest.v1",
+          updatedAt: proposal.updatedAt,
+        },
+        "skills.status": skillStatus(false),
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}agents`);
+      await gateway.waitForRequest("agents.list");
+      const setDefault = page.locator(".agents-toolbar-actions button").nth(1);
+      await expect.poll(() => setDefault.isDisabled()).toBe(true);
+      await setDefault.click({ force: true });
+      expect(await gateway.getRequests("config.set")).toHaveLength(0);
+      await screenshot(page, "05-read-only-agents.png");
+
+      await page.goto(`${server.baseUrl}skills`);
+      await gateway.waitForRequest("skills.status");
+      await page.getByRole("button", { name: "Open Deploy Helper details" }).click();
+      const skillDialog = page.locator("openclaw-modal-dialog", { hasText: "Deploy Helper" });
+      const install = skillDialog.getByRole("button", { name: "Install Deploy Helper" });
+      await expect.poll(() => install.isDisabled()).toBe(true);
+      await install.click({ force: true });
+      expect(await gateway.getRequests("skills.install")).toHaveLength(0);
+      await screenshot(page, "06-read-only-skills.png");
+
+      await page.goto(`${server.baseUrl}skills/workshop`);
+      await gateway.waitForRequest("skills.proposals.list");
+      await page.locator("#skill-workshop-mode-tab-board").click();
+      const actionButtons = page.locator(".sw-action-bar button");
+      const evaluate = actionButtons.nth(0);
+      const apply = actionButtons.nth(1);
+      await expect.poll(() => apply.isDisabled()).toBe(true);
+      await expect.poll(() => evaluate.isDisabled()).toBe(true);
+      await apply.click({ force: true });
+      await evaluate.click({ force: true });
+      expect(await gateway.getRequests("skills.proposals.apply")).toHaveLength(0);
+      expect(await gateway.getRequests("skills.proposals.evaluate")).toHaveLength(0);
+      await screenshot(page, "07-read-only-workshop.png");
+
+      await page.goto(`${server.baseUrl}custodian?intent=new-agent`);
+      await page.locator("openclaw-custodian-page").waitFor();
+      expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
+      await screenshot(page, "08-read-only-new-agent.png");
     } finally {
       await context.close();
     }
