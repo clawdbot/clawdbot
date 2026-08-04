@@ -327,6 +327,20 @@ describe("main session recovery store", () => {
     expect(read().mainRestartRecovery).toBeUndefined();
   });
 
+  it("inspects terminal recovery ownership on a healthy row without mutating it", async () => {
+    await write(terminalRecoveryEntry());
+    const before = read();
+
+    await expect(
+      inspectMainSessionRecoveryRequired({
+        expectedSessionId: "session-1",
+        lifecycleGeneration,
+        target: { sessionKey, storePath },
+      }),
+    ).resolves.toEqual({ kind: "not_required" });
+    expect(read()).toEqual(before);
+  });
+
   it.each([
     {
       name: "a nonterminal fence",

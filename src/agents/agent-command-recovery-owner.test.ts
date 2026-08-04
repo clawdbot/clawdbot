@@ -192,6 +192,42 @@ describe("agent command restart recovery ownership", () => {
     expect(stored.mainRestartRecovery).toBeUndefined();
   });
 
+  it("allows standalone work past terminal-only recovery ownership without mutating it", async () => {
+    const target = createTarget();
+    const residue: SessionEntry = {
+      sessionId: target.sessionId,
+      updatedAt: 100,
+      status: "running",
+      abortedLastRun: false,
+      restartRecoveryRuns: [
+        { runId: "recovery-1", lifecycleGeneration: "old-generation-1" },
+        { runId: "recovery-2", lifecycleGeneration: "old-generation-2" },
+      ],
+      restartRecoveryTerminalRunIds: ["recovery-1", "recovery-2"],
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 5,
+        chargedAttempts: 2,
+      },
+    };
+    await write(target, residue);
+    const run = vi.fn(async () => "ran");
+
+    await expect(
+      runWithAgentCommandRecoveryOwner({
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        mode: "reject_uncoordinated",
+        opts: {} as AgentCommandOpts,
+        prepare: async () => target,
+        run,
+      }),
+    ).resolves.toBe("ran");
+    expect(run).toHaveBeenCalledOnce();
+    expect(
+      loadSessionEntry({ sessionKey, storePath: target.storePath }) as SessionEntry,
+    ).toEqual(residue);
+  });
+
   it("runs a Gateway-admitted recovery without acquiring a foreground owner", async () => {
     const target = createTarget();
     await write(target, {
