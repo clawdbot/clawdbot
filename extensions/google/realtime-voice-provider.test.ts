@@ -1788,7 +1788,8 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     ["below telephony floor", "audio/L16;codec=pcm;rate=1"],
     ["above capture ceiling", "audio/pcm;rate=999999999"],
     ["non-numeric rate", "audio/pcm;rate=wideband"],
-  ])("falls back to 24 kHz for %s sample rate to avoid OOM resample", async (_label, mimeType) => {
+    ["in-range unsupported", "audio/pcm;rate=4000"],
+  ])("normalizes %s sample rate to 24 kHz to avoid OOM resample", async (_label, mimeType) => {
     const provider = buildGoogleRealtimeVoiceProvider();
     const onAudio = vi.fn();
     const bridge = provider.createBridge({
@@ -1809,9 +1810,11 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       },
     });
 
-    // Out-of-range rates collapse to the 24 kHz default, so input and output
-    // sample rates match and resamplePcm returns the buffer unchanged instead
-    // of allocating inputSamples * 24000 samples (gigabyte-scale OOM).
+    // Every non-24 kHz value normalizes to the declared 24 kHz provider
+    // output rate, so input and output sample rates match and resamplePcm
+    // returns the buffer unchanged instead of allocating inputSamples *
+    // (24000 / rate) samples (gigabyte-scale OOM for rate=1, sixfold
+    // expansion for rate=4000).
     expect(onAudio).toHaveBeenCalledTimes(1);
     expect(requireFirstAudio(onAudio)).toEqual(pcm24k);
   });
