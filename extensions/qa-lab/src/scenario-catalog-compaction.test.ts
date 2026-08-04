@@ -98,6 +98,14 @@ describe("qa compaction scenario catalog", () => {
         },
       },
     ]);
+    const runtimeGuard = scenario.execution.flow?.steps[0]?.actions[1] as
+      | Record<string, unknown>
+      | undefined;
+    expect(runtimeGuard?.assert).toMatchObject({
+      expr: expect.stringContaining(
+        "(env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME ?? 'openclaw') === 'openclaw'",
+      ),
+    });
 
     const knownGapIndex = flow.indexOf(knownGap);
     const gatewayWorkIndex = flow.indexOf('"call":"waitForGatewayHealthy"');
