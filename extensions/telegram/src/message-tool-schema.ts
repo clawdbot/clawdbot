@@ -19,12 +19,6 @@ export function createTelegramRichSendExtraToolSchemas() {
           "Send one video attachment as a round Telegram video note. Captions are delivered separately.",
       }),
     ),
-  };
-}
-
-/** Schema for Telegram's standalone location payload on the existing send action. */
-export function createTelegramLocationToolSchema() {
-  return {
     location: Type.Optional(
       Type.Object(
         {
@@ -46,7 +40,7 @@ export function createTelegramLocationToolSchema() {
         },
         {
           description:
-            'Standalone Telegram location for action="send". Coordinates send a pin; name plus address sends a venue. Do not combine with message or media.',
+            "Standalone Telegram location. Coordinates send a pin; name plus address sends a venue. Do not combine with message or media.",
         },
       ),
     ),

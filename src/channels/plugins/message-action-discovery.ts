@@ -370,12 +370,7 @@ export function resolveChannelMessageToolSchemaProperties(
         }
         continue;
       }
-      // Preserve the legacy unscoped surface for contributions that predate
-      // visibility metadata. Only an explicit current-channel declaration is
-      // hidden from cron and isolated-agent tools.
-      if (contribution.visibility === undefined || contribution.visibility === "all-configured") {
-        mergeToolSchemaProperties(properties, contribution.properties);
-      }
+      mergeToolSchemaProperties(properties, contribution.properties);
     }
   }
   if (currentChannel && !seenPluginIds.has(currentChannel)) {

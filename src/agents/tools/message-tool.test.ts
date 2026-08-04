@@ -5,7 +5,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
-import type { ChannelMessageToolSchemaContribution } from "../../channels/plugins/types.core.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
 import {
   mintMessageActionTurnCapability,
@@ -148,6 +147,7 @@ vi.mock("../../channels/plugins/bundled.js", async () => {
 });
 
 type RunMessageActionInput = {
+  actionOrigin?: "message-tool";
   agentId?: string;
   broadcastAccountPlan?: {
     accountId: string;
@@ -492,6 +492,38 @@ async function executeSendWithResult(params: {
 }
 
 describe("message tool gateway timeout", () => {
+  it("reports model-authored send normalization without inviting a retry", async () => {
+    const notice =
+      "Content sent; location omitted because locations must be sent separately. Do not retry this send. Send a standalone location only if the user explicitly requested it.";
+    mocks.runMessageAction.mockResolvedValue({
+      kind: "send",
+      action: "send",
+      channel: "telegram",
+      to: "telegram:123",
+      handledBy: "plugin",
+      payload: { ok: true },
+      normalization: { locationOmitted: true, notice },
+      toolResult: {
+        content: [{ type: "text", text: "sent" }],
+        details: { ok: true },
+      },
+      dryRun: false,
+    } satisfies MessageActionRunResult);
+
+    const { call, result } = await executeSendWithResult({
+      action: { channel: "telegram", target: "telegram:123", message: "hello" },
+    });
+
+    expect(call?.actionOrigin).toBe("message-tool");
+    expect(result).toEqual({
+      content: [
+        { type: "text", text: "sent" },
+        { type: "text", text: notice },
+      ],
+      details: { ok: true },
+    });
+  });
+
   it("does not advertise the Codex-only final delivery control", () => {
     expect(getToolProperties(createMessageTool())).not.toHaveProperty("final");
   });
@@ -2804,15 +2836,6 @@ describe("message tool schema scoping", () => {
     blurb: "Slack test plugin.",
     actions: ["send", "react"],
     capabilities: ["presentation"],
-    toolSchema: () => [
-      {
-        actions: ["send"],
-        properties: {
-          topLevel: Type.Optional(Type.Boolean()),
-          replyBroadcast: Type.Optional(Type.Boolean()),
-        },
-      },
-    ],
   });
 
   afterEach(() => {
@@ -2928,58 +2951,6 @@ describe("message tool schema scoping", () => {
       expect(properties).toHaveProperty("pollOptionId");
     },
   );
-
-  it("keeps legacy and all-configured schemas but omits explicit current-channel schemas from an unscoped message tool", () => {
-    const telegramWithScopedLocation = createChannelPlugin({
-      id: "telegram",
-      label: "Telegram",
-      docsPath: "/channels/telegram",
-      blurb: "Telegram test plugin.",
-      actions: ["send"],
-      toolSchema: (): ChannelMessageToolSchemaContribution[] => [
-        {
-          actions: ["send"],
-          properties: {
-            pollDurationSeconds: Type.Optional(Type.Number()),
-          },
-          visibility: "all-configured",
-        },
-        {
-          actions: ["send"],
-          properties: {
-            location: Type.Optional(
-              Type.Object({ latitude: Type.Number(), longitude: Type.Number() }),
-            ),
-          },
-          visibility: "current-channel",
-        },
-      ],
-    });
-    setActivePluginRegistry(
-      createTestRegistry([
-        { pluginId: "telegram", source: "test", plugin: telegramWithScopedLocation },
-        { pluginId: "discord", source: "test", plugin: discordPlugin },
-        { pluginId: "slack", source: "test", plugin: slackPlugin },
-      ]),
-    );
-
-    const unscopedProperties = getToolProperties(createMessageTool({ config: {} as never }));
-    const scopedProperties = getToolProperties(
-      createMessageTool({ config: {} as never, currentChannelProvider: "telegram" }),
-    );
-
-    expect(unscopedProperties.location).toMatchObject({ type: "string" });
-    expect(unscopedProperties.pollDurationSeconds).toMatchObject({ type: "number" });
-    expect(unscopedProperties.topLevel).toMatchObject({ type: "boolean" });
-    expect(unscopedProperties.replyBroadcast).toMatchObject({ type: "boolean" });
-    expect(scopedProperties.location).toMatchObject({
-      type: "object",
-      properties: {
-        latitude: { type: "number" },
-        longitude: { type: "number" },
-      },
-    });
-  });
 
   it("includes poll in the action enum when the current channel supports poll actions", () => {
     setActivePluginRegistry(

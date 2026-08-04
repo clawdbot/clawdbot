@@ -125,13 +125,6 @@ describe("telegram actions contract", () => {
     expect(discovery?.actions).not.toContain("sendLocation");
     expect(properties).toHaveProperty("asVideoNote");
     expect(properties).toHaveProperty("location");
-    expect(contributions.find((entry) => entry.properties.asVideoNote)?.visibility).toBe(
-      "all-configured",
-    );
-    expect(contributions.find((entry) => entry.properties.location)?.actions).toEqual(["send"]);
-    expect(contributions.find((entry) => entry.properties.location)?.visibility).toBe(
-      "current-channel",
-    );
   });
 
   it("does not advertise inline buttons for non-empty legacy Telegram capabilities without inlineButtons", () => {

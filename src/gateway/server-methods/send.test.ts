@@ -11,10 +11,7 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { jsonResult } from "../../agents/tools/common.js";
-import type {
-  ChannelMessageActionAdapter,
-  ChannelPlugin,
-} from "../../channels/plugins/types.public.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { SessionTranscriptAppendResult } from "../../config/sessions/transcript.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
@@ -93,11 +90,6 @@ vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
 
 const TEST_AGENT_WORKSPACE = "/tmp/openclaw-test-workspace";
 let sendHandlers: typeof import("./send.js").sendHandlers;
-
-const telegramGatewayTestActions: ChannelMessageActionAdapter = {
-  describeMessageTool: () => ({ actions: ["send"] }),
-  handleAction: async () => jsonResult({ ok: true }),
-};
 
 function resolveAgentIdFromSessionKeyForTests(params: { sessionKey?: string }): string {
   if (typeof params.sessionKey === "string") {
@@ -2749,62 +2741,6 @@ describe("gateway send mirroring", () => {
           currentMessagingTarget: "user:15551234567",
         }),
       }),
-    );
-  });
-
-  it("removes incidental model location before Telegram gateway dispatch", async () => {
-    mocks.getChannelPlugin.mockReturnValue({
-      actions: { handleAction: true, ...telegramGatewayTestActions },
-    });
-    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(jsonResult({ ok: true }));
-    const sessionKey = "agent:main:telegram:direct:123";
-
-    const { respond } = await runMessageActionRequest({
-      channel: "telegram",
-      action: "send",
-      params: {
-        to: "123",
-        message: "hello",
-        location: { latitude: 48.858844, longitude: 2.294351 },
-      },
-      sessionKey,
-      agentId: "main",
-      idempotencyKey: "idem-telegram-incidental-location",
-    });
-
-    expect(firstRespondCall(respond)[0]).toBe(true);
-    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-        action: "send",
-        params: { to: "123", message: "hello" },
-      }),
-    );
-  });
-
-  it("keeps direct gateway Telegram sends strict instead of applying model repair", async () => {
-    mocks.getChannelPlugin.mockReturnValue({
-      actions: { handleAction: true, ...telegramGatewayTestActions },
-    });
-    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(jsonResult({ ok: true }));
-    const mixedParams = {
-      to: "123",
-      message: "hello",
-      location: { latitude: 48.858844, longitude: 2.294351 },
-    };
-
-    await runMessageActionRequest(
-      {
-        channel: "telegram",
-        action: "send",
-        params: mixedParams,
-        idempotencyKey: "idem-telegram-direct-mixed",
-      },
-      directCliClient(),
-    );
-
-    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
-      expect.objectContaining({ action: "send", params: mixedParams }),
     );
   });
 
