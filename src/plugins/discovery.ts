@@ -839,6 +839,7 @@ function discoverBundleInRoot(params: {
       ...(rootRealPath !== undefined ? { rootRealPath } : {}),
       bundleFormat,
       rejectHardlinks,
+      loadAgentTemplates: false,
     });
     if (!bundleManifest.ok) {
       params.diagnostics.push({

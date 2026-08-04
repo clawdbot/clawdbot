@@ -2,7 +2,12 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationState } from "./config-state.js";
-import type { PluginBundleFormat, PluginDiagnosticCode, PluginFormat } from "./manifest-types.js";
+import type {
+  BundleAgentTemplate,
+  PluginBundleFormat,
+  PluginDiagnosticCode,
+  PluginFormat,
+} from "./manifest-types.js";
 import type {
   PluginManifestContracts,
   PluginManifestDashboard,
@@ -28,6 +33,7 @@ export function createPluginRecord(params: {
   format?: PluginFormat;
   bundleFormat?: PluginBundleFormat;
   bundleCapabilities?: string[];
+  bundleAgentTemplates?: BundleAgentTemplate[];
   source: string;
   rootDir?: string;
   origin: PluginRecord["origin"];
@@ -55,6 +61,7 @@ export function createPluginRecord(params: {
     format: params.format ?? "openclaw",
     bundleFormat: params.bundleFormat,
     bundleCapabilities: params.bundleCapabilities,
+    bundleAgentTemplates: params.bundleAgentTemplates,
     source: params.source,
     rootDir: params.rootDir,
     origin: params.origin,

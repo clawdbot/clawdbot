@@ -199,6 +199,7 @@ function hashManifestlessBundleRecord(record: PluginManifestRecord): string {
     format: record.format,
     bundleFormat: record.bundleFormat,
     bundleCapabilities: record.bundleCapabilities ?? [],
+    bundleAgentTemplates: record.bundleAgentTemplates ?? [],
     skills: record.skills ?? [],
     settingsFiles: record.settingsFiles ?? [],
     hooks: record.hooks ?? [],

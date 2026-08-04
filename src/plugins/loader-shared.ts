@@ -295,6 +295,7 @@ export function createManifestPluginRecord(params: {
     format: manifestRecord.format,
     bundleFormat: manifestRecord.bundleFormat,
     bundleCapabilities: manifestRecord.bundleCapabilities,
+    bundleAgentTemplates: manifestRecord.bundleAgentTemplates,
     source: candidate.source,
     rootDir: candidate.rootDir,
     origin: candidate.origin,

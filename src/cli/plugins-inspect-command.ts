@@ -1,3 +1,4 @@
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 // `openclaw plugins inspect`: renders plugin registry shape, capabilities, policy, diagnostics, and install records.
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
@@ -316,6 +317,15 @@ export async function runPluginsInspectCommand(
   }
   lines.push(
     ...formatInspectSection(
+      "Bundle agent templates (metadata only; not executable)",
+      inspect.bundleAgentTemplates.map(
+        (entry) =>
+          `${sanitizeTerminalText(entry.name)} [${entry.sourceFormat}] — ${sanitizeTerminalText(entry.description)} (${sanitizeTerminalText(entry.sourceFilePath)})`,
+      ),
+    ),
+  );
+  lines.push(
+    ...formatInspectSection(
       "Capabilities",
       inspect.capabilities.map(
         (entry) => `${entry.kind}: ${entry.ids.length > 0 ? entry.ids.join(", ") : "(registered)"}`,
@@ -397,7 +407,9 @@ export async function runPluginsInspectCommand(
   lines.push(
     ...formatInspectSection(
       "Diagnostics",
-      inspect.diagnostics.map((entry) => `${entry.level.toUpperCase()}: ${entry.message}`),
+      inspect.diagnostics.map(
+        (entry) => `${entry.level.toUpperCase()}: ${sanitizeTerminalText(entry.message)}`,
+      ),
     ),
   );
   lines.push(...formatInspectSection("Install", formatInstallLines(install)));

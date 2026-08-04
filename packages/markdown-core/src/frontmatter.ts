@@ -6,6 +6,7 @@ type ParsedFrontmatter = Record<string, string>;
 export type ParsedFrontmatterBlockResult = {
   frontmatter: ParsedFrontmatter;
   issues: FrontmatterParseIssue[];
+  structuredFields?: string[];
 };
 
 export type FrontmatterParseIssue = {
@@ -149,6 +150,7 @@ function parseYamlFrontmatterOnce(
     }
 
     const result: ParsedFrontmatter = {};
+    const structuredFields: string[] = [];
     for (const [rawKey, value] of Object.entries(parsed as Record<string, unknown>)) {
       const key = rawKey.trim();
       const coerced = key ? coerceYamlFrontmatterValue(value) : undefined;
@@ -156,10 +158,12 @@ function parseYamlFrontmatterOnce(
         continue;
       }
       const fallbackValue = Object.hasOwn(fallback, key) ? fallback[key] : undefined;
-      result[key] =
-        coerced.kind === "structured" && inlineColonKeys.has(key) && fallbackValue !== undefined
-          ? fallbackValue
-          : coerced.value;
+      const useFallback =
+        coerced.kind === "structured" && inlineColonKeys.has(key) && fallbackValue !== undefined;
+      result[key] = useFallback ? fallbackValue : coerced.value;
+      if (coerced.kind === "structured" && !useFallback) {
+        structuredFields.push(key);
+      }
     }
 
     for (const [key, value] of Object.entries(fallback)) {
@@ -167,7 +171,7 @@ function parseYamlFrontmatterOnce(
         result[key] = value;
       }
     }
-    return { frontmatter: result, issues: [] };
+    return { frontmatter: result, issues: [], structuredFields };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {

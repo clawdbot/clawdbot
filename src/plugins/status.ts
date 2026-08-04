@@ -22,7 +22,7 @@ import {
 } from "./inspect-shape.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
 import { loadPluginRegistryHandle, resolveCompatibleRuntimePluginRegistry } from "./loader.js";
-import type { PluginDiagnostic } from "./manifest-types.js";
+import type { BundleAgentTemplate, PluginDiagnostic } from "./manifest-types.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import {
   loadPluginMetadataSnapshot,
@@ -103,6 +103,8 @@ export type PluginInspectReport = {
   }>;
   httpRouteCount: number;
   bundleCapabilities: string[];
+  /** Metadata-only compatible-bundle templates. Prompt bodies are never included. */
+  bundleAgentTemplates: BundleAgentTemplate[];
   diagnostics: PluginDiagnostic[];
   policy: {
     allowPromptInjection?: boolean;
@@ -488,6 +490,7 @@ export function buildPluginInspectReport(params: {
     lspServers,
     httpRouteCount: plugin.httpRoutes,
     bundleCapabilities: plugin.bundleCapabilities ?? [],
+    bundleAgentTemplates: structuredClone(plugin.bundleAgentTemplates ?? []),
     diagnostics,
     policy: {
       allowPromptInjection: policyEntry?.hooks?.allowPromptInjection,

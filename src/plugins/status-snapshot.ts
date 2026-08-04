@@ -87,6 +87,12 @@ function buildPluginRecordFromInstalledIndex(
     ...(manifest?.description ? { description: manifest.description } : {}),
     format,
     ...(bundleFormat ? { bundleFormat } : {}),
+    ...(manifest?.bundleCapabilities
+      ? { bundleCapabilities: [...manifest.bundleCapabilities] }
+      : {}),
+    ...(manifest?.bundleAgentTemplates
+      ? { bundleAgentTemplates: structuredClone(manifest.bundleAgentTemplates) }
+      : {}),
     ...(manifest?.kind ? { kind: manifest.kind } : {}),
     source: plugin.source ?? plugin.manifestPath,
     rootDir: plugin.rootDir,
