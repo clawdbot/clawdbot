@@ -469,32 +469,35 @@ function hasPolicyRefreshTargets(
   return policyPluginIds.every((pluginId) => pluginIds.has(pluginId));
 }
 
-function hasCompletePersistedInstallRecordView(
+function buildRecoverableInstallRecordRefresh(
   persisted: InstalledPluginIndex,
   params: RefreshInstalledPluginIndexParams,
-): boolean {
+): InstalledPluginIndex | undefined {
   const pluginIds = new Set(persisted.plugins.map((plugin) => plugin.pluginId));
   const missingInstallRecordPluginIds = Object.keys(persisted.installRecords ?? {}).filter(
     (pluginId) => !pluginIds.has(pluginId),
   );
   if (missingInstallRecordPluginIds.length === 0) {
-    return true;
+    return undefined;
   }
-  const current = loadInstalledPluginIndex({
+  const current = refreshInstalledPluginIndex({
     ...params,
     installRecords:
       params.installRecords ?? extractPluginInstallRecordsFromInstalledPluginIndex(persisted),
   });
   const materializedPluginIds = new Set(current.plugins.map((plugin) => plugin.pluginId));
-  return missingInstallRecordPluginIds.every((pluginId) => !materializedPluginIds.has(pluginId));
+  if (missingInstallRecordPluginIds.every((pluginId) => !materializedPluginIds.has(pluginId))) {
+    return undefined;
+  }
+  return current;
 }
 
-function canRefreshPersistedPolicyState(
+function resolvePersistedPolicyRefresh(
   persisted: InstalledPluginIndex | null,
   params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
-): persisted is InstalledPluginIndex {
+): InstalledPluginIndex | undefined {
   if (!persisted || params.reason !== "policy-changed") {
-    return false;
+    return undefined;
   }
   const env = params.env ?? process.env;
   if (
@@ -504,18 +507,21 @@ function canRefreshPersistedPolicyState(
     persisted.migrationVersion !== INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION ||
     hasMissingConfigPathActivationMetadata(persisted)
   ) {
-    return false;
+    return undefined;
   }
   if (
     params.installRecords &&
     hashJson(params.installRecords) !== hashJson(persisted.installRecords ?? {})
   ) {
-    return false;
+    return undefined;
   }
-  if (!hasCompletePersistedInstallRecordView(persisted, params)) {
-    return false;
+  if (!hasPolicyRefreshTargets(persisted, params.policyPluginIds)) {
+    return undefined;
   }
-  return hasPolicyRefreshTargets(persisted, params.policyPluginIds);
+  return (
+    buildRecoverableInstallRecordRefresh(persisted, params) ??
+    refreshPersistedPolicyState(persisted, params)
+  );
 }
 
 function refreshPersistedPolicyState(
@@ -581,8 +587,9 @@ function resolveRefreshedPersistedInstalledPluginIndex(
     params.reason === "policy-changed" || !params.installRecords
       ? readPersistedInstalledPluginIndexSync(params)
       : null;
-  if (canRefreshPersistedPolicyState(persisted, params)) {
-    return refreshPersistedPolicyState(persisted, params);
+  const policyRefresh = resolvePersistedPolicyRefresh(persisted, params);
+  if (policyRefresh) {
+    return policyRefresh;
   }
   return refreshInstalledPluginIndex({
     ...params,

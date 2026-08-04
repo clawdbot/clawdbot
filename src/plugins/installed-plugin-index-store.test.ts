@@ -944,6 +944,11 @@ describe("installed plugin index persistence", () => {
       OPENCLAW_VERSION: "2026.4.25",
       VITEST: "true",
     };
+    let materializationCount = 0;
+    const now = () => {
+      materializationCount += 1;
+      return new Date(1777118400000 + materializationCount);
+    };
     const installRecords = {
       "path-demo": {
         source: "path" as const,
@@ -965,9 +970,11 @@ describe("installed plugin index persistence", () => {
       candidates: [pathCandidate, npmCandidate],
       env,
       installRecords,
+      now,
     });
     await writePersistedInstalledPluginIndex({ ...initial, plugins: [] }, { stateDir });
 
+    materializationCount = 0;
     const refreshed = await refreshPersistedInstalledPluginIndex({
       reason: "policy-changed",
       stateDir,
@@ -986,8 +993,10 @@ describe("installed plugin index persistence", () => {
         },
       },
       policyPluginIds: [],
+      now,
     });
 
+    expect(materializationCount).toBe(1);
     expectPluginIds(refreshed, ["path-demo", "npm-demo"]);
     expectPluginFields(refreshed, "path-demo", { enabled: false });
     expectPluginFields(refreshed, "npm-demo", { enabled: false });
