@@ -39,6 +39,26 @@ describe("doctor gateway startup recovery producer", () => {
     expect(env.OPENCLAW_SERVICE_REPAIR_POLICY).toBeUndefined();
   });
 
+  it("uses the stable built launcher for every child CLI command", () => {
+    expect(
+      testing.resolveOpenClawInvocation(
+        { artifactBase: "/tmp/artifacts", repoRoot: "/workspace/openclaw" },
+        "qa-doctor-stable",
+        ["gateway", "status", "--json"],
+      ),
+    ).toEqual({
+      args: [
+        path.join("/workspace/openclaw", "openclaw.mjs"),
+        "--profile",
+        "qa-doctor-stable",
+        "gateway",
+        "status",
+        "--json",
+      ],
+      command: process.execPath,
+    });
+  });
+
   it("requires an explicit native-systemd opt-in", () => {
     expect(resolveSystemdRecoveryPermission({})).toEqual({
       available: false,

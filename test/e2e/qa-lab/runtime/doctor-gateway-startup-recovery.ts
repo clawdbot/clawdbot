@@ -211,12 +211,21 @@ async function runOpenClaw(
   args: string[],
   env = commandEnv(profile),
 ): Promise<CommandResult> {
-  return await runCommand(
-    options.repoRoot,
-    process.execPath,
-    ["scripts/run-node.mjs", "--profile", profile, ...args],
-    env,
-  );
+  const invocation = resolveOpenClawInvocation(options, profile, args);
+  return await runCommand(options.repoRoot, invocation.command, invocation.args, env);
+}
+
+function resolveOpenClawInvocation(
+  options: ProducerOptions,
+  profile: string,
+  args: string[],
+): { args: string[]; command: string } {
+  // QA Suite builds once before this producer starts. Keep every client command on that
+  // immutable dist tree so a rebuild cannot remove chunks beneath the installed gateway.
+  return {
+    args: [path.join(options.repoRoot, "openclaw.mjs"), "--profile", profile, ...args],
+    command: process.execPath,
+  };
 }
 
 async function runSystemctl(
@@ -786,6 +795,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
 export const testing = {
   commandEnv,
   main,
+  resolveOpenClawInvocation,
   runProducer,
   writeRecoveryArtifacts,
 };
