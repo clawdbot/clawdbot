@@ -2,6 +2,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { expect } from "vitest";
 import { TUI_PTY_ASSISTANT_FIXTURE_SCRIPT } from "./tui-pty-assistant-fixture-test-support.js";
 import { TUI_PTY_GAP_HISTORY_FIXTURE_SCRIPT } from "./tui-pty-gap-fixture-test-support.js";
 import { TUI_PTY_RESET_FIXTURE } from "./tui-pty-reset-fixture-test-support.js";
@@ -40,6 +41,8 @@ export async function writeTuiPtyFixtureScript(dir: string) {
       let modeTargetTraceLevel: string | undefined;
       const launchThinkingLevel = process.env.OPENCLAW_TUI_PTY_LAUNCH_THINKING;
       const initialMessage = process.env.OPENCLAW_TUI_PTY_INITIAL_MESSAGE;
+      const disconnectReason = process.env.OPENCLAW_TUI_PTY_DISCONNECT_REASON;
+      let disconnectPending = disconnectReason !== undefined;
       const enablePickerFixture = process.env.OPENCLAW_TUI_PTY_PICKER_FIXTURE === "1";
       const xaiLimitError = '403 {"code":"The caller does not have permission to execute the specified operation","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}';
       let currentModel = footerModel ?? "fixture-provider/fixture-model";
@@ -105,7 +108,17 @@ export async function writeTuiPtyFixtureScript(dir: string) {
         connection = { url: "pty-fixture://local" };
         onEvent?: TuiBackend["onEvent"];
         onConnected?: TuiBackend["onConnected"];
+        onDisconnected?: TuiBackend["onDisconnected"];
         onGap?: TuiBackend["onGap"];
+
+        emitDisconnect() {
+          if (!disconnectPending || disconnectReason === undefined) {
+            return;
+          }
+          disconnectPending = false;
+          record("disconnect");
+          this.onDisconnected?.(disconnectReason);
+        }
 
         start() {
           queueMicrotask(() => this.onConnected?.());
@@ -491,6 +504,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
 
         async getGatewayStatus() {
           record("getGatewayStatus");
+          this.emitDisconnect();
           return gatewayStatus;
         }
 
@@ -643,6 +657,132 @@ export function objectFieldEquals(entry: FixtureLogEntry, field: string, value: 
   }
   const payload = entry.payload as Record<string, unknown>;
   return Object.hasOwn(payload, field) && payload[field] === value;
+}
+
+type StartTuiPtyFixture = Parameters<typeof exerciseFragmentedUnicodePrompt>[0];
+type StartedTuiPtyFixture = Awaited<ReturnType<StartTuiPtyFixture>>;
+type TerminalAttackPayload = { text: string; markers: string[]; attacks: string[] };
+function buildTerminalAttackPayload(tag: string): TerminalAttackPayload {
+  const attacks = [
+    "\x1b[38;5;201m",
+    "\x1b[3J",
+    `\x1b]0;${tag}_OSC_TITLE_PAYLOAD\x07`,
+    `\x1b]52;c;${tag}_OSC52_PAYLOAD\x07`,
+    "\u009b3J",
+    `\u009d0;${tag}_C1_TITLE_PAYLOAD\u009c`,
+  ];
+  const markers = Array.from(
+    { length: 14 },
+    (_, index) => `${tag}${index.toString(16).toUpperCase()}`,
+  );
+  return {
+    text: [
+      markers[0],
+      ...attacks.map(
+        (attack, index) => `${markers[index * 2 + 1]}${attack}${markers[index * 2 + 2]}`,
+      ),
+      `${markers[13]} café 東京 👩🏽‍💻`,
+    ].join(" "),
+    markers,
+    attacks: attacks.map((attack, index) => `${attack}${markers[index * 2 + 2]}`),
+  };
+}
+async function assertTerminalAttackSanitized(
+  fixture: StartedTuiPtyFixture,
+  payload: TerminalAttackPayload,
+  timeoutMs: number,
+) {
+  await fixture.run.waitForOutput(payload.markers[13] ?? "", timeoutMs);
+  const visible = fixture.run.visibleOutput();
+  expect(payload.markers.every((marker) => visible.includes(marker))).toBe(true);
+  expect(visible).toContain("café 東京 👩🏽‍💻");
+  const raw = fixture.run.output();
+  for (const attack of payload.attacks) {
+    expect(raw).not.toContain(attack);
+  }
+  expect(raw).not.toContain("\uFFFD");
+}
+function hasStatusFrame(raw: string, marker: string, status: RegExp) {
+  return raw
+    .split("\x1b[?2026h")
+    .slice(1)
+    .some((chunk) => {
+      const frame = chunk.split("\x1b[?2026l", 1)[0] ?? "";
+      return frame.includes(marker) && status.test(frame);
+    });
+}
+export async function exerciseNarrowTerminalRendering(
+  startFixture: StartTuiPtyFixture,
+  startupTimeoutMs: number,
+) {
+  const url =
+    "https://example.test/tui/copy-safe/very-long-path/with-query?mode=narrow&value=alpha%20beta#proof";
+  const message =
+    "terminal rendering proof Long output must wrap across several narrow terminal rows without " +
+    `losing text. Unicode stays intact: café 東京 👩🏽‍💻. Copy this URL exactly: ${url}`;
+  const fixture = await startFixture({
+    env: {
+      OPENCLAW_TUI_PTY_COLS: "28",
+      OPENCLAW_TUI_PTY_ROWS: "18",
+      OPENCLAW_TUI_PTY_INITIAL_MESSAGE: message,
+    },
+  });
+
+  try {
+    await fixture.run.waitForOutput("PTY_RESPONSE: terminal rendering proof", startupTimeoutMs);
+    await fixture.run.waitForOutput("café 東京 👩🏽‍💻", startupTimeoutMs);
+    const sent = await fixture.waitForLogEntry(
+      (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
+    );
+    expect(sent.payload).toMatchObject({ message });
+    const raw = fixture.run.output();
+    expect(raw.split(`\x1b]8;;${url}\x07`).length - 1).toBeGreaterThan(1);
+    expect(raw).not.toContain("\uFFFD");
+  } finally {
+    await fixture.cleanup();
+  }
+}
+export async function exerciseTerminalOutputSafety(
+  startFixture: StartTuiPtyFixture,
+  startupTimeoutMs: number,
+) {
+  const gatewayPayload = buildTerminalAttackPayload("T08G");
+  const idlePayload = buildTerminalAttackPayload("T08I");
+  const fixture = await startFixture({
+    env: {
+      OPENCLAW_TUI_PTY_COLS: "30",
+      OPENCLAW_TUI_PTY_ROWS: "18",
+      OPENCLAW_TUI_PTY_GATEWAY_STATUS: gatewayPayload.text,
+      OPENCLAW_TUI_PTY_DISCONNECT_REASON: idlePayload.text,
+    },
+  });
+
+  try {
+    await fixture.run.waitForOutput("local ready", startupTimeoutMs);
+    const outputOffset = fixture.run.output().length;
+    await fixture.run.write("/gateway-status\r", { delay: false });
+    await fixture.waitForLogEntry((entry) => entry.method === "getGatewayStatus");
+    await fixture.waitForLogEntry((entry) => entry.method === "disconnect");
+    await assertTerminalAttackSanitized(fixture, gatewayPayload, startupTimeoutMs);
+    await assertTerminalAttackSanitized(fixture, idlePayload, startupTimeoutMs);
+    expect(
+      hasStatusFrame(
+        fixture.run.output().slice(outputOffset),
+        idlePayload.markers[0] ?? "",
+        /\| idle/u,
+      ),
+    ).toBe(true);
+
+    const helpOffset = fixture.run.visibleOutput().length;
+    await fixture.run.write("/help\r", { delay: false });
+    await fixture.run.waitForOutput("Slash commands:", startupTimeoutMs);
+    await fixture.run.waitForOutput("/exit", startupTimeoutMs);
+    const helpOutput = fixture.run.visibleOutput().slice(helpOffset);
+    expect(helpOutput).toContain("/help");
+    expect(helpOutput).toContain("/exit");
+  } finally {
+    await fixture.cleanup();
+  }
 }
 
 /** Proves fixture-local fragmentation preserves a Unicode prompt through the real TUI loop. */

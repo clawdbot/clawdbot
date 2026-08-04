@@ -16,6 +16,7 @@ scenario:
     - Printable text surrounding hostile terminal controls remains visible.
   codeRefs:
     - src/tui/tui-pty-harness.e2e.test.ts
+    - src/tui/tui.ts
     - src/tui/tui-formatters.ts
     - src/tui/osc8-hyperlinks.ts
   execution:

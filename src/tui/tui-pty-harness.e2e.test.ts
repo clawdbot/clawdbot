@@ -7,6 +7,8 @@ import {
   approveWorkspaceSkill,
   COMPACT_TERMINAL_SIZES,
   exerciseFragmentedUnicodePrompt,
+  exerciseNarrowTerminalRendering,
+  exerciseTerminalOutputSafety,
   objectFieldEquals,
   readFixtureLog,
   waitForFixtureLogEntry,
@@ -688,8 +690,8 @@ describe.sequential("TUI PTY harness", () => {
   // Keep these producer-matched cases data-driven because this harness is at its line budget.
   // prettier-ignore
   const terminalSafetyCases = [
-    ["renders long Unicode output and copy-safe URLs in narrow real PTY frames", async () => { const url = "https://example.test/tui/copy-safe/very-long-path/with-query?mode=narrow&value=alpha%20beta#proof"; const message = `terminal rendering proof Long output must wrap across several narrow terminal rows without losing text. Unicode stays intact: café 東京 👩🏽‍💻. Copy this URL exactly: ${url}`; const renderingFixture = await startTuiFixture({ env: { OPENCLAW_TUI_PTY_COLS: "28", OPENCLAW_TUI_PTY_ROWS: "18", OPENCLAW_TUI_PTY_INITIAL_MESSAGE: message } }); try { await renderingFixture.run.waitForOutput("PTY_RESPONSE: terminal rendering proof", STARTUP_TIMEOUT_MS); await renderingFixture.run.waitForOutput("café 東京 👩🏽‍💻", STARTUP_TIMEOUT_MS); const sent = await renderingFixture.waitForLogEntry((entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message), STARTUP_TIMEOUT_MS); expect(sent.payload).toMatchObject({ message }); const raw = renderingFixture.run.output(); expect(raw.split(`\x1b]8;;${url}\x07`).length - 1).toBeGreaterThan(1); expect(raw).not.toContain("\uFFFD"); } finally { await renderingFixture.cleanup(); } }],
-    ["sanitizes ANSI OSC and C1 payloads in narrow real PTY frames", async () => { const attacks = ["\x1b[38;5;201mANSI_RED", "\x1b[3JERASE_SCREEN", "\x1b]0;T08_OSC_TITLE\x07", "\x1b]52;c;T08_CLIPBOARD_PAYLOAD\x07", "\u009b3JC1_ERASE", "\u009d0;T08_C1_TITLE\u009c"] as const; const gatewayStatus = ["terminal safety proof", `${attacks[0]}\x1b[0m`, ...attacks.slice(1), "Unicode remains visible: café 東京 👩🏽‍💻."].join(" "); const safetyFixture = await startTuiFixture({ env: { OPENCLAW_TUI_PTY_COLS: "30", OPENCLAW_TUI_PTY_ROWS: "18", OPENCLAW_TUI_PTY_GATEWAY_STATUS: gatewayStatus } }); try { await safetyFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS); await safetyFixture.run.write("/gateway-status\r", { delay: false }); await safetyFixture.run.waitForOutput("terminal safety proof ANSI_RED ERASE_SCREEN C1_ERASE", STARTUP_TIMEOUT_MS); await safetyFixture.run.waitForOutput("Unicode remains visible: café 東京 👩🏽‍💻.", STARTUP_TIMEOUT_MS); await safetyFixture.waitForLogEntry((entry) => entry.method === "getGatewayStatus", STARTUP_TIMEOUT_MS); const raw = safetyFixture.run.output(); for (const attack of attacks) { expect(raw).not.toContain(attack); } expect(raw).not.toContain("\uFFFD"); const helpOffset = safetyFixture.run.visibleOutput().length; await safetyFixture.run.write("/help\r", { delay: false }); await safetyFixture.run.waitForOutput("Slash commands:", STARTUP_TIMEOUT_MS); const helpOutput = safetyFixture.run.visibleOutput().slice(helpOffset); expect(helpOutput).toContain("/help"); expect(helpOutput).toContain("/exit"); } finally { await safetyFixture.cleanup(); } }],
+    ["renders long Unicode output and copy-safe URLs in narrow real PTY frames", () => exerciseNarrowTerminalRendering(startTuiFixture, STARTUP_TIMEOUT_MS)],
+    ["sanitizes ANSI OSC and C1 payloads in narrow real PTY frames", () => exerciseTerminalOutputSafety(startTuiFixture, STARTUP_TIMEOUT_MS)],
   ] as const;
   it.each(terminalSafetyCases)("%s", async (_name, runCase) => runCase(), STARTUP_TEST_TIMEOUT_MS);
 

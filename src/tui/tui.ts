@@ -43,7 +43,11 @@ import { editorTheme, theme } from "./theme/theme.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
-import { formatTuiFooter, formatTuiErrorMessage } from "./tui-formatters.js";
+import {
+  formatTuiErrorMessage,
+  formatTuiFooter,
+  sanitizeRenderableText,
+} from "./tui-formatters.js";
 import {
   buildTuiLastSessionScopeKey,
   readTuiLastSessionKey,
@@ -1135,7 +1139,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   };
 
   const setConnectionStatus = (text: string, ttlMs?: number) => {
-    state.connectionStatus = text;
+    state.connectionStatus = sanitizeRenderableText(text);
     renderStatus();
     if (state.statusTimeout) {
       stopStatusTimeout();
