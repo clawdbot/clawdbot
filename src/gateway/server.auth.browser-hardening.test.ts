@@ -5,13 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
-import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
 import { CONTROL_UI_CLIENT, TEST_OPERATOR_CLIENT } from "./server.auth.test-helpers.js";
 import {
@@ -53,6 +51,36 @@ const openWs = async (port: number, headers?: Record<string, string>) => {
   });
   return ws;
 };
+
+// The pre-handshake origin gate rejects a disallowed browser Origin at the HTTP
+// upgrade (403, no 101). Assert that rejection instead of a post-handshake
+// connect error: no socket ever opens.
+async function expectUpgradeRejected(port: number, headers: Record<string, string>): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`, { headers });
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      ws.terminate();
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+    const timer = setTimeout(() => finish(new Error("expected websocket upgrade to reject")), 5000);
+    ws.once("open", () => finish(new Error("expected websocket upgrade to be rejected")));
+    ws.once("unexpected-response", (_req, res) => {
+      expect(res.statusCode).toBe(403);
+      finish();
+    });
+    ws.once("error", (err) => finish(err instanceof Error ? err : new Error("websocket error")));
+  });
+}
 
 async function createSignedDevice(params: {
   token: string;
@@ -121,14 +149,6 @@ async function withTrustedProxyBrowserWs(origin: string, run: (ws: WebSocket) =>
       ws.close();
     }
   });
-}
-
-function expectOriginNotAllowed(res: GatewayConnectResponse) {
-  expect(res.ok).toBe(false);
-  expect(res.error?.message ?? "").toContain("origin not allowed");
-  expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
-    ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED,
-  );
 }
 
 function expectRetryLater(res: GatewayConnectResponse, retryLater: boolean) {
@@ -206,38 +226,21 @@ async function withSignedBrowserConnect(
   }
 }
 
-async function expectBrowserOriginConnectRejected(params: {
-  client?: {
-    id: string;
-    version: string;
-    platform: string;
-    mode: string;
-  };
-}) {
+async function expectBrowserOriginUpgradeRejected() {
   testState.gatewayAuth = { mode: "token", token: "secret" };
   await withGatewayServer(async ({ port }) => {
-    const ws = await openWs(port, { origin: "https://attacker.example" });
-    try {
-      const res = await connectReq(ws, {
-        token: "secret",
-        client: params.client ?? TEST_OPERATOR_CLIENT,
-        ...(params.client ? { device: null } : {}),
-      });
-      expectOriginNotAllowed(res);
-    } finally {
-      ws.close();
-    }
+    await expectUpgradeRejected(port, { origin: "https://attacker.example" });
   });
 }
 
 describe("gateway auth browser hardening", () => {
   test("rejects trusted-proxy browser connects from origins outside the allowlist", async () => {
-    await withTrustedProxyBrowserWs("https://evil.example", async (ws) => {
-      const res = await connectReq(ws, {
-        client: TEST_OPERATOR_CLIENT,
-        device: null,
+    await writeTrustedProxyBrowserAuthConfig();
+    await withGatewayServer(async ({ port }) => {
+      await expectUpgradeRejected(port, {
+        origin: "https://evil.example",
+        ...TRUSTED_PROXY_BROWSER_HEADERS,
       });
-      expectOriginNotAllowed(res);
     });
   });
 
@@ -289,6 +292,10 @@ describe("gateway auth browser hardening", () => {
     });
 
     await withGatewayServer(async ({ port }) => {
+      if (!ok) {
+        await expectUpgradeRejected(port, { origin });
+        return;
+      }
       const ws = await openWs(port, { origin });
       try {
         const res = await connectReq(ws, {
@@ -296,12 +303,8 @@ describe("gateway auth browser hardening", () => {
           client: TEST_OPERATOR_CLIENT,
           device: null,
         });
-        expect(res.ok).toBe(ok);
-        if (ok) {
-          expect((res.payload as { type?: string } | undefined)?.type).toBe("hello-ok");
-        } else {
-          expectOriginNotAllowed(res);
-        }
+        expect(res.ok).toBe(true);
+        expect((res.payload as { type?: string } | undefined)?.type).toBe("hello-ok");
       } finally {
         ws.close();
       }
@@ -330,19 +333,8 @@ describe("gateway auth browser hardening", () => {
     });
   });
 
-  test("rejects non-local browser origins for non-control-ui clients", async () => {
-    await expectBrowserOriginConnectRejected({});
-  });
-
-  test("rejects browser-origin connects that claim to be tui clients", async () => {
-    await expectBrowserOriginConnectRejected({
-      client: {
-        id: GATEWAY_CLIENT_NAMES.TUI,
-        version: "1.0.0",
-        platform: "macos",
-        mode: GATEWAY_CLIENT_MODES.UI,
-      },
-    });
+  test("rejects a disallowed browser origin at the upgrade before any client identity is read", async () => {
+    await expectBrowserOriginUpgradeRejected();
   });
 
   test("rate-limits browser-origin auth failures on loopback even when loopback exemption is enabled", async () => {
@@ -491,25 +483,10 @@ describe("gateway auth browser hardening", () => {
     });
     testState.gatewayAuth = { mode: "token", token: "secret" };
     await withGatewayServer(async ({ port }) => {
-      const ws = await openWs(port, {
+      await expectUpgradeRejected(port, {
         origin: "http://localhost:5173",
         "x-forwarded-for": "203.0.113.50",
       });
-      try {
-        const res = await connectReq(ws, {
-          token: "secret",
-          client: {
-            ...TEST_OPERATOR_CLIENT,
-            id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-            mode: GATEWAY_CLIENT_MODES.UI,
-          },
-          device: null,
-        });
-        expect(res.ok).toBe(false);
-        expect(res.error?.message ?? "").toContain("origin not allowed");
-      } finally {
-        ws.close();
-      }
     });
   });
 });
