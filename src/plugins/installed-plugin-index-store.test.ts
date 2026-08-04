@@ -1,6 +1,7 @@
 // Covers installed plugin index store persistence and recovery behavior.
 import fs from "node:fs";
 import path from "node:path";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
@@ -1224,6 +1225,72 @@ describe("installed plugin index persistence", () => {
       installRecords: {
         "clawpack-demo": expectedRecord,
       },
+    });
+  });
+
+  describe("scan-free policy refresh on the normal no-candidate caller path", () => {
+    afterEach(() => {
+      vi.doUnmock("./discovery.js");
+      vi.resetModules();
+    });
+
+    it("skips broad discovery when missing install records cannot be recovered", async () => {
+      const stateDir = makeTempDir();
+      const env = {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      };
+      const discoverSpy = vi.fn(() => ({ candidates: [], diagnostics: [] }));
+      vi.resetModules();
+      vi.doMock("./discovery.js", () => ({ discoverOpenClawPlugins: discoverSpy }));
+      const store = await importFreshModule<typeof import("./installed-plugin-index-store.js")>(
+        import.meta.url,
+        "./installed-plugin-index-store.js?case=scan-free-policy-refresh",
+      );
+      const missingPluginDir = path.join(stateDir, "plugins", "missing");
+      const installRecords = {
+        missing: {
+          source: "npm" as const,
+          spec: "missing-plugin@1.0.0",
+          installPath: missingPluginDir,
+        },
+      };
+      await store.refreshPersistedInstalledPluginIndex({
+        reason: "manual",
+        stateDir,
+        candidates: [],
+        diagnostics: [
+          {
+            level: "warn",
+            message: "policy fast-path sentinel",
+          },
+        ],
+        env,
+        installRecords,
+      });
+
+      discoverSpy.mockClear();
+      const refreshed = await store.refreshPersistedInstalledPluginIndex({
+        reason: "policy-changed",
+        stateDir,
+        env,
+        policyPluginIds: [],
+      });
+
+      expect(discoverSpy).not.toHaveBeenCalled();
+      expectPluginIds(refreshed, []);
+      expectInstallRecord(refreshed, "missing", {
+        source: "npm",
+        spec: "missing-plugin@1.0.0",
+        installPath: missingPluginDir,
+      });
+      expect(refreshed.diagnostics).toEqual([
+        {
+          level: "warn",
+          message: "policy fast-path sentinel",
+        },
+      ]);
     });
   });
 });

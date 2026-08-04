@@ -1,10 +1,12 @@
 /** Persists, inspects, and refreshes the installed plugin index in the state database. */
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import path from "node:path";
 import { z } from "zod";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { resolveUserPath } from "../utils.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
@@ -469,6 +471,28 @@ function hasPolicyRefreshTargets(
   return policyPluginIds.every((pluginId) => pluginIds.has(pluginId));
 }
 
+function hasPotentiallyRecoverableInstallRecord(
+  persisted: InstalledPluginIndex,
+  missingInstallRecordPluginIds: readonly string[],
+  env: NodeJS.ProcessEnv,
+): boolean {
+  for (const pluginId of missingInstallRecordPluginIds) {
+    const record = persisted.installRecords?.[pluginId];
+    const rawPath = record?.installPath ?? record?.sourcePath;
+    if (typeof rawPath !== "string" || !rawPath.trim()) {
+      continue;
+    }
+    const resolved = resolveUserPath(rawPath, env);
+    if (
+      existsSync(path.join(resolved, "openclaw.plugin.json")) ||
+      existsSync(path.join(resolved, "package.json"))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function buildRecoverableInstallRecordRefresh(
   persisted: InstalledPluginIndex,
   params: RefreshInstalledPluginIndexParams,
@@ -478,6 +502,20 @@ function buildRecoverableInstallRecordRefresh(
     (pluginId) => !pluginIds.has(pluginId),
   );
   if (missingInstallRecordPluginIds.length === 0) {
+    return undefined;
+  }
+  // Discovery can only re-materialize install records whose recorded path still
+  // holds a manifest. When none of the missing records is potentially
+  // recoverable, a recovery refresh would run broad bundled/global discovery
+  // without any chance of restoring them, so stay on the scan-free policy fast
+  // path like the pre-recovery behavior.
+  if (
+    !hasPotentiallyRecoverableInstallRecord(
+      persisted,
+      missingInstallRecordPluginIds,
+      params.env ?? process.env,
+    )
+  ) {
     return undefined;
   }
   const current = refreshInstalledPluginIndex({
