@@ -653,31 +653,32 @@ Use `contracts` only for static capability ownership metadata that OpenClaw can 
 
 Each list is optional:
 
-| Field                            | Type       | What it means                                                                                                                        |
-| -------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `embeddedExtensionFactories`     | `string[]` | Codex app-server extension factory ids, currently `codex-app-server`.                                                                |
-| `agentToolResultMiddleware`      | `string[]` | Runtime ids this plugin may register tool-result middleware for.                                                                     |
-| `trustedToolPolicies`            | `string[]` | Plugin-local trusted pre-tool policy ids an installed plugin may register. Bundled plugins may register policies without this field. |
-| `externalAuthProviders`          | `string[]` | Provider ids whose external auth profile hook this plugin owns.                                                                      |
-| `embeddingProviders`             | `string[]` | General embedding provider ids this plugin owns for reusable vector embedding use, including memory.                                 |
-| `speechProviders`                | `string[]` | Speech provider ids this plugin owns.                                                                                                |
-| `realtimeTranscriptionProviders` | `string[]` | Realtime-transcription provider ids this plugin owns.                                                                                |
-| `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                                                                                        |
-| `memoryEmbeddingProviders`       | `string[]` | Deprecated memory-specific embedding provider ids this plugin owns.                                                                  |
-| `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.                                                                                   |
-| `transcriptSourceProviders`      | `string[]` | Transcript source provider ids this plugin owns.                                                                                     |
-| `documentExtractors`             | `string[]` | Document (for example PDF) extractor provider ids this plugin owns.                                                                  |
-| `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                                                                                      |
-| `videoGenerationProviders`       | `string[]` | Video-generation provider ids this plugin owns.                                                                                      |
-| `musicGenerationProviders`       | `string[]` | Music-generation provider ids this plugin owns.                                                                                      |
-| `webContentExtractors`           | `string[]` | Web-page content-extraction provider ids this plugin owns.                                                                           |
-| `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                                                                                             |
-| `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                                                                                            |
-| `workerProviders`                | `string[]` | Cloud-worker provider ids this plugin owns for provisioning and profile-backed lease lifecycle.                                      |
-| `usageProviders`                 | `string[]` | Provider ids whose usage-auth and usage-snapshot hooks this plugin owns.                                                             |
-| `migrationProviders`             | `string[]` | Import provider ids this plugin owns for `openclaw migrate`.                                                                         |
-| `gatewayMethodDispatch`          | `string[]` | Reserved entitlement for authenticated plugin HTTP routes that dispatch Gateway methods in-process.                                  |
-| `tools`                          | `string[]` | Agent tool names this plugin owns.                                                                                                   |
+| Field                            | Type                       | What it means                                                                                                                        |
+| -------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `embeddedExtensionFactories`     | `string[]`                 | Codex app-server extension factory ids, currently `codex-app-server`.                                                                |
+| `agentToolResultMiddleware`      | `string[]`                 | Runtime ids this plugin may register tool-result middleware for.                                                                     |
+| `trustedToolPolicies`            | `string[]`                 | Plugin-local trusted pre-tool policy ids an installed plugin may register. Bundled plugins may register policies without this field. |
+| `externalAuthProviders`          | `string[]`                 | Provider ids whose external auth profile hook this plugin owns.                                                                      |
+| `embeddingProviders`             | `string[]`                 | General embedding provider ids this plugin owns for reusable vector embedding use, including memory.                                 |
+| `speechProviders`                | `string[]`                 | Speech provider ids this plugin owns.                                                                                                |
+| `realtimeTranscriptionProviders` | `string[]`                 | Realtime-transcription provider ids this plugin owns.                                                                                |
+| `realtimeVoiceProviders`         | `string[]`                 | Realtime-voice provider ids this plugin owns.                                                                                        |
+| `memoryEmbeddingProviders`       | `string[]`                 | Deprecated memory-specific embedding provider ids this plugin owns.                                                                  |
+| `mediaUnderstandingProviders`    | `string[]`                 | Media-understanding provider ids this plugin owns.                                                                                   |
+| `transcriptSourceProviders`      | `string[]`                 | Transcript source provider ids this plugin owns.                                                                                     |
+| `documentExtractors`             | `string[]`                 | Document (for example PDF) extractor provider ids this plugin owns.                                                                  |
+| `imageGenerationProviders`       | `string[]`                 | Image-generation provider ids this plugin owns.                                                                                      |
+| `videoGenerationProviders`       | `string[]`                 | Video-generation provider ids this plugin owns.                                                                                      |
+| `musicGenerationProviders`       | `string[]`                 | Music-generation provider ids this plugin owns.                                                                                      |
+| `webContentExtractors`           | `string[]`                 | Web-page content-extraction provider ids this plugin owns.                                                                           |
+| `webFetchProviders`              | `string[]`                 | Web-fetch provider ids this plugin owns.                                                                                             |
+| `webSearchProviders`             | `string[]`                 | Web-search provider ids this plugin owns.                                                                                            |
+| `workerProviders`                | `string[]`                 | Cloud-worker provider ids this plugin owns for provisioning and profile-backed lease lifecycle.                                      |
+| `usageProviders`                 | `string[]`                 | Provider ids whose usage-auth and usage-snapshot hooks this plugin owns.                                                             |
+| `migrationProviders`             | `string[]`                 | Import provider ids this plugin owns for `openclaw migrate`.                                                                         |
+| `gatewayMethodDispatch`          | `string[]`                 | Reserved entitlement for authenticated plugin HTTP routes that dispatch Gateway methods in-process.                                  |
+| `tools`                          | `string[]`                 | Agent tool names this plugin owns.                                                                                                   |
+| `providerCredentialTools`        | `Record<string, string[]>` | Provider ids mapped to the standalone tool ids that require the same credential. Must be a subset of `contracts.tools`.              |
 
 `contracts.embeddedExtensionFactories` is retained for bundled Codex app-server-only extension factories. Bundled tool-result transforms should declare `contracts.agentToolResultMiddleware` and register with `api.registerAgentToolResultMiddleware(...)` instead. Installed plugins may use the same middleware seam only when explicitly enabled and only for runtimes they declare in `contracts.agentToolResultMiddleware`.
 
