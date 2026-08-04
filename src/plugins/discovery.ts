@@ -622,28 +622,6 @@ function discoverInstalledPluginRecordsInto(
   return { installedPluginDirKeys, managedPluginDirs };
 }
 
-/** Returns whether any installed record can produce a normal discovery candidate. */
-export function hasDiscoverableInstalledPluginRecords(params: {
-  installRecords?: Record<string, PluginInstallRecord>;
-  ownershipUid?: number | null;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): boolean {
-  const result = createDiscoveryResult();
-  discoverInstalledPluginRecordsInto({
-    installRecords: params.installRecords,
-    ...(params.ownershipUid !== undefined ? { ownershipUid: params.ownershipUid } : {}),
-    ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-    env: params.env ?? process.env,
-    candidates: result.candidates,
-    diagnostics: result.diagnostics,
-    seen: new Set<string>(),
-    realpathCache: new Map<string, string>(),
-    packageManifestCache: new Map<string, PackageManifest | null>(),
-  });
-  return result.candidates.length > 0;
-}
-
 function isMaterializableInstalledPluginCandidate(params: {
   candidate: PluginCandidate;
   env: NodeJS.ProcessEnv;
