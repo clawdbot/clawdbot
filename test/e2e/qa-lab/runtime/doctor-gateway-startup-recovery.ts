@@ -35,11 +35,16 @@ type SystemdState = {
 };
 
 type GatewayStatusJson = {
-  rpc?: { ok?: boolean };
-  service?: { runtime?: { status?: string } };
+  [key: string]: unknown;
+  rpc?: { [key: string]: unknown; ok?: boolean };
+  service?: {
+    [key: string]: unknown;
+    runtime?: { [key: string]: unknown; status?: string };
+  };
 };
 
 type GatewayHealthJson = {
+  [key: string]: unknown;
   ok?: boolean;
 };
 
@@ -66,6 +71,12 @@ type RecoverySummary = {
   restartGuidanceObserved: boolean;
   startLimitObserved: boolean;
   startLimitResult: string;
+};
+
+type RecoveryResult = {
+  healthJson: GatewayHealthJson;
+  statusJson: GatewayStatusJson;
+  summary: RecoverySummary;
 };
 
 function formatErrorMessage(error: unknown): string {
@@ -98,9 +109,9 @@ export function resolveSystemdRecoveryPermission(
   };
 }
 
-function commandEnv(profile: string): NodeJS.ProcessEnv {
+function commandEnv(profile: string, baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...baseEnv,
     OPENCLAW_PROFILE: profile,
     OPENCLAW_SKIP_CHANNELS: "1",
     OPENCLAW_SKIP_PROVIDERS: "1",
@@ -117,6 +128,7 @@ function commandEnv(profile: string): NodeJS.ProcessEnv {
     "OPENCLAW_SYSTEMD_UNIT",
     "OPENCLAW_GATEWAY_TOKEN",
     "OPENCLAW_GATEWAY_PASSWORD",
+    "OPENCLAW_SERVICE_REPAIR_POLICY",
     "VITEST",
     "VITEST_WORKER_ID",
   ]) {
@@ -438,7 +450,7 @@ async function runCleanup(actions: Array<() => Promise<unknown>>): Promise<unkno
 async function runSystemdRecovery(
   options: ProducerOptions,
   appendLog: (chunk: unknown) => void,
-): Promise<RecoverySummary> {
+): Promise<RecoveryResult> {
   const profile = `qa-doctor-${randomUUID().slice(0, 8)}`;
   const env = commandEnv(profile);
   const home = os.homedir();
@@ -655,16 +667,20 @@ async function runSystemdRecovery(
   assert.ok(startLimit);
   assert.ok(recovered);
   return {
-    cleanupVerified,
-    foreignPortDiagnosed: true,
-    independentHealthHealthy: recovered.healthJson.ok === true,
-    independentStatusHealthy:
-      recovered.statusJson.service?.runtime?.status === "running" &&
-      recovered.statusJson.rpc?.ok === true,
-    restartCount: startLimit.nRestarts,
-    restartGuidanceObserved: true,
-    startLimitObserved: true,
-    startLimitResult: startLimit.result ?? "unknown",
+    healthJson: recovered.healthJson,
+    statusJson: recovered.statusJson,
+    summary: {
+      cleanupVerified,
+      foreignPortDiagnosed: true,
+      independentHealthHealthy: recovered.healthJson.ok === true,
+      independentStatusHealthy:
+        recovered.statusJson.service?.runtime?.status === "running" &&
+        recovered.statusJson.rpc?.ok === true,
+      restartCount: startLimit.nRestarts,
+      restartGuidanceObserved: true,
+      startLimitObserved: true,
+      startLimitResult: startLimit.result ?? "unknown",
+    },
   };
 }
 
@@ -694,6 +710,18 @@ function createEvidenceWriter(options: ProducerOptions) {
   });
 }
 
+async function writeRecoveryArtifacts(options: ProducerOptions, recovery: RecoveryResult) {
+  const summaryPath = path.join(options.artifactBase, "doctor-gateway-startup-summary.json");
+  const statusPath = path.join(options.artifactBase, "gateway-status.json");
+  const healthPath = path.join(options.artifactBase, "gateway-health.json");
+  await Promise.all([
+    writeJson(summaryPath, recovery.summary),
+    writeJson(statusPath, recovery.statusJson),
+    writeJson(healthPath, recovery.healthJson),
+  ]);
+  return { healthPath, statusPath, summaryPath };
+}
+
 async function runProducer(
   options: ProducerOptions,
   permissionEnv: NodeJS.ProcessEnv = process.env,
@@ -711,18 +739,9 @@ async function runProducer(
   }
 
   try {
-    const summary = await runSystemdRecovery(options, (chunk) => writer.appendLog(chunk));
-    const summaryPath = path.join(options.artifactBase, "doctor-gateway-startup-summary.json");
-    const statusPath = path.join(options.artifactBase, "gateway-status.json");
-    const healthPath = path.join(options.artifactBase, "gateway-health.json");
-    await Promise.all([
-      writeJson(summaryPath, summary),
-      writeJson(statusPath, {
-        rpc: { ok: summary.independentStatusHealthy },
-        service: { runtime: { status: summary.independentStatusHealthy ? "running" : "failed" } },
-      }),
-      writeJson(healthPath, { ok: summary.independentHealthHealthy }),
-    ]);
+    const recovery = await runSystemdRecovery(options, (chunk) => writer.appendLog(chunk));
+    const { healthPath, statusPath, summaryPath } = await writeRecoveryArtifacts(options, recovery);
+    const { summary } = recovery;
     writer.appendLog(`[qa-doctor-gateway-startup-recovery] ${JSON.stringify(summary)}\n`);
     return await writer.write({
       artifacts: [
@@ -765,6 +784,8 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
 }
 
 export const testing = {
+  commandEnv,
   main,
   runProducer,
+  writeRecoveryArtifacts,
 };

@@ -21,6 +21,24 @@ afterEach(async () => {
 });
 
 describe("doctor gateway startup recovery producer", () => {
+  it("isolates doctor commands from host lifecycle and credential policy", () => {
+    const env = testing.commandEnv("qa-doctor-policy", {
+      OPENCLAW_CONFIG_PATH: "/tmp/host-config.json",
+      OPENCLAW_GATEWAY_TOKEN: "host-token",
+      OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+      PATH: "/usr/bin",
+    });
+
+    expect(env).toMatchObject({
+      OPENCLAW_PROFILE: "qa-doctor-policy",
+      OPENCLAW_SKIP_CHANNELS: "1",
+      PATH: "/usr/bin",
+    });
+    expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+    expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
+    expect(env.OPENCLAW_SERVICE_REPAIR_POLICY).toBeUndefined();
+  });
+
   it("requires an explicit native-systemd opt-in", () => {
     expect(resolveSystemdRecoveryPermission({})).toEqual({
       available: false,
@@ -70,5 +88,47 @@ describe("doctor gateway startup recovery producer", () => {
     await expect(
       fs.readFile(path.join(artifactBase, "doctor-gateway-startup-recovery.log"), "utf8"),
     ).resolves.toContain("blocked native systemd recovery proof");
+  });
+
+  it("persists the observed status and health payloads without reconstructing them", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-artifacts-"));
+    const artifactBase = path.join(root, "artifacts");
+    tempRoots.push(root);
+    const statusJson = {
+      ok: true,
+      rpc: { latencyMs: 17, ok: true },
+      service: { runtime: { pid: 4242, status: "running" } },
+      targets: [{ id: "observed-target" }],
+    };
+    const healthJson = {
+      ok: true,
+      agents: [{ id: "main", status: "healthy" }],
+      ts: 123456789,
+    };
+
+    const paths = await testing.writeRecoveryArtifacts(
+      { artifactBase, repoRoot: process.cwd() },
+      {
+        healthJson,
+        statusJson,
+        summary: {
+          cleanupVerified: true,
+          foreignPortDiagnosed: true,
+          independentHealthHealthy: true,
+          independentStatusHealthy: true,
+          restartCount: 3,
+          restartGuidanceObserved: true,
+          startLimitObserved: true,
+          startLimitResult: "start-limit-hit",
+        },
+      },
+    );
+
+    await expect(fs.readFile(paths.statusPath, "utf8").then(JSON.parse)).resolves.toEqual(
+      statusJson,
+    );
+    await expect(fs.readFile(paths.healthPath, "utf8").then(JSON.parse)).resolves.toEqual(
+      healthJson,
+    );
   });
 });
