@@ -494,6 +494,21 @@ export async function runDoctorConfigPreflight(
         ? startupMigrationHeartbeatError
         : new Error("OpenClaw startup migration lease heartbeat failed.");
     }
+    if (
+      shouldRecordStateCheckpoint &&
+      stateMigrationsAllowed &&
+      freshConfigGuardAllowed &&
+      startupMigrationWarnings.length === 0 &&
+      snapshot.valid
+    ) {
+      if (!migrationCheckpoint) {
+        throw new Error("OpenClaw state migration checkpoint module was not loaded.");
+      }
+      migrationCheckpoint.recordSuccessfulStateMigrations({
+        env: startupMigrationEnv,
+        lease: startupMigrationLease,
+      });
+    }
     if (gatewayStartupCheckpointRequired) {
       if (shouldRecordStartupCheckpoint) {
         if (startupMigrationWarnings.length > 0) {
@@ -542,20 +557,6 @@ export async function runDoctorConfigPreflight(
         throw new Error("OpenClaw startup migration checkpoint module was not loaded.");
       }
       migrationCheckpoint.recordSuccessfulStartupMigrations({
-        env: startupMigrationEnv,
-        lease: startupMigrationLease,
-      });
-    } else if (
-      shouldRecordStateCheckpoint &&
-      stateMigrationsAllowed &&
-      freshConfigGuardAllowed &&
-      startupMigrationWarnings.length === 0 &&
-      snapshot.valid
-    ) {
-      if (!migrationCheckpoint) {
-        throw new Error("OpenClaw state migration checkpoint module was not loaded.");
-      }
-      migrationCheckpoint.recordSuccessfulStateMigrations({
         env: startupMigrationEnv,
         lease: startupMigrationLease,
       });
