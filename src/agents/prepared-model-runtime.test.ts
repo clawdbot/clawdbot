@@ -1,95 +1,8 @@
+import "./prepared-model-runtime.test-harness.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
-type LoadStaticCatalog =
-  typeof import("./embedded-agent-runner/model.static-catalog.js").loadBundledProviderStaticCatalogContextModels;
-type CreateStaticCatalogResolver =
-  typeof import("./embedded-agent-runner/model.static-catalog.js").createBundledStaticCatalogModelResolver;
-type StaticCatalogResolver = ReturnType<CreateStaticCatalogResolver>;
-
-const mocks = vi.hoisted(() => ({
-  authStorage: { getAll: vi.fn(() => ({ custom: { type: "api_key", key: "test-key" } })) },
-  modelRegistry: {
-    fork: vi.fn((authStorage: unknown) => ({ authStorage })),
-    getAll: vi.fn(() => []),
-  },
-  discoverAuthStorage: vi.fn(),
-  discoverModels: vi.fn(),
-  ensureOpenClawModelsJson: vi.fn(async (..._args: unknown[]) => ({
-    agentDir: "/tmp/agent",
-    wrote: false,
-  })),
-  buildPreparedModelCatalogSnapshot: vi.fn(async (..._args: unknown[]) => ({
-    entries: [],
-    routeVariants: [],
-  })),
-  ensureRuntimePluginsLoaded: vi.fn(),
-  loadStaticCatalog: vi.fn<LoadStaticCatalog>(async () => []),
-  resolveStaticCatalogModel: vi.fn<StaticCatalogResolver>(() => undefined),
-  createStaticCatalogResolver: vi.fn<CreateStaticCatalogResolver>(),
-  configuredAgentIds: [] as string[],
-  mutationListener: undefined as
-    | ((event: { agentDir?: string; affectsInheritedStores: boolean }) => void)
-    | undefined,
-}));
-
-vi.mock("./model-catalog.js", () => ({
-  buildPreparedModelCatalogSnapshot: (...args: unknown[]) =>
-    mocks.buildPreparedModelCatalogSnapshot(...args),
-}));
-
-vi.mock("./agent-model-discovery.js", () => ({
-  discoverAuthStorage: (...args: unknown[]) => {
-    mocks.discoverAuthStorage(...args);
-    return mocks.authStorage;
-  },
-  discoverModels: (...args: unknown[]) => {
-    mocks.discoverModels(...args);
-    return mocks.modelRegistry;
-  },
-}));
-
-vi.mock("./agent-scope.js", () => ({
-  listAgentIds: () => mocks.configuredAgentIds,
-  resolveAgentDir: (_config: unknown, agentId: string) =>
-    agentId === "default" ? "/tmp/unused-agent" : `/tmp/configured-${agentId}`,
-  resolveAgentWorkspaceDir: (_config: unknown, agentId: string) =>
-    agentId === "default" ? "/tmp/unused-workspace" : `/tmp/workspace-${agentId}`,
-  resolveDefaultAgentDir: () => "/tmp/unused-agent",
-  resolveDefaultAgentId: () => "default",
-}));
-
-vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
-  registerRuntimeAuthProfileStoreMutationListener: (
-    listener: (event: { agentDir?: string; affectsInheritedStores: boolean }) => void,
-  ) => {
-    mocks.mutationListener = listener;
-    return () => {};
-  },
-}));
-
-vi.mock("./model-discovery-context.js", () => ({
-  resolveModelPluginMetadataSnapshot: () => undefined,
-}));
-
-vi.mock("./models-config.js", () => ({
-  ensureOpenClawModelsJson: (...args: unknown[]) => mocks.ensureOpenClawModelsJson(...args),
-}));
-
-vi.mock("./runtime-plugins.js", () => ({
-  ensureRuntimePluginsLoaded: (...args: unknown[]) => mocks.ensureRuntimePluginsLoaded(...args),
-}));
-
-vi.mock("./embedded-agent-runner/model.static-catalog.js", () => ({
-  loadBundledProviderStaticCatalogContextModels: (...args: Parameters<LoadStaticCatalog>) =>
-    mocks.loadStaticCatalog(...args),
-  createBundledStaticCatalogModelResolver: (...args: Parameters<CreateStaticCatalogResolver>) =>
-    mocks.createStaticCatalogResolver(...args),
-}));
-
-vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({ warn: vi.fn() }),
-}));
-
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { requireActivePluginRegistry } from "../plugins/runtime.js";
+import { startSerializedSnapshotBuild } from "./prepared-model-runtime.build.js";
 import {
   acquireReadOnlyPreparedModelRuntime,
   activateStandalonePreparedModelRuntime,
@@ -101,29 +14,32 @@ import {
   rejectPendingPreparedModelRuntimeReplacement,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
+import { getPreparedPluginRuntimeLoadContext } from "./prepared-model-runtime.plugin-context.js";
+import {
+  getPreparedModelRuntimeMocks,
+  resetPreparedModelRuntimeHarness,
+} from "./prepared-model-runtime.test-harness.js";
+
+const mocks = getPreparedModelRuntimeMocks();
 
 describe("prepared model runtime snapshots", () => {
-  const getTesting = () =>
-    (globalThis as Record<PropertyKey, unknown>)[
-      Symbol.for("openclaw.preparedModelRuntimeTestApi")
-    ] as {
-      resetPreparedModelRuntimeSnapshotsForTest: () => void;
-      setModelRuntimeBuildTimeoutMsForTest: (timeoutMs: number) => void;
-    };
-
   beforeEach(() => {
-    getTesting().resetPreparedModelRuntimeSnapshotsForTest();
-    mocks.discoverAuthStorage.mockClear();
-    mocks.discoverModels.mockClear();
-    mocks.ensureOpenClawModelsJson.mockClear();
-    mocks.buildPreparedModelCatalogSnapshot.mockClear();
-    mocks.ensureRuntimePluginsLoaded.mockClear();
-    mocks.loadStaticCatalog.mockClear();
-    mocks.resolveStaticCatalogModel.mockReset();
-    mocks.createStaticCatalogResolver.mockReset();
-    mocks.createStaticCatalogResolver.mockReturnValue(mocks.resolveStaticCatalogModel);
-    mocks.modelRegistry.fork.mockClear();
-    mocks.configuredAgentIds = [];
+    resetPreparedModelRuntimeHarness();
+  });
+
+  it("allows a direct serialized build without a lifecycle generation guard", async () => {
+    const input = {
+      config: {},
+      agentDir: "/tmp/direct-prepared-model-runtime-build",
+      readOnly: true,
+    };
+    const build = startSerializedSnapshotBuild(input, new Map(), 1_000, "static");
+
+    await expect(build.pending).resolves.toMatchObject({
+      agentDir: input.agentDir,
+      config: input.config,
+    });
+    await expect(build.completion).resolves.toBeUndefined();
   });
 
   it("keeps an isolated setup probe exact after a gateway replacement", async () => {
@@ -199,31 +115,45 @@ describe("prepared model runtime snapshots", () => {
   });
 
   it("loads runtime plugins before discovering an immutable generation", async () => {
-    await publishPreparedModelRuntimeSnapshot({
+    const pluginRegistry = createEmptyPluginRegistry();
+    mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValueOnce(pluginRegistry);
+    mocks.discoverAuthStorage.mockImplementationOnce(() => {
+      expect(requireActivePluginRegistry()).toBe(pluginRegistry);
+    });
+    const snapshot = await publishPreparedModelRuntimeSnapshot({
       config: {},
       agentDir: "/tmp/prepared-model-runtime-plugin-order",
       workspaceDir: "/tmp/prepared-model-runtime-plugin-workspace",
     });
 
-    expect(mocks.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith({
       config: {},
+      env: process.env,
       workspaceDir: "/tmp/prepared-model-runtime-plugin-workspace",
+      selections: undefined,
     });
-    expect(mocks.ensureRuntimePluginsLoaded.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(snapshot.pluginRegistry).toBe(pluginRegistry);
+    expect(mocks.loadAgentRuntimePluginRegistryHandle.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.discoverAuthStorage.mock.invocationCallOrder[0]!,
     );
   });
 
   it("uses an explicit lifecycle environment for catalog and auth discovery", async () => {
     const env = { NVIDIA_API_KEY: "test-nvidia-api-key" };
-    await publishPreparedModelRuntimeSnapshot({
-      config: {},
+    const config = {};
+    const snapshot = await publishPreparedModelRuntimeSnapshot({
+      config,
       agentDir: "/tmp/prepared-model-runtime-explicit-env",
       env,
     });
 
+    expect(getPreparedPluginRuntimeLoadContext(snapshot.pluginRegistry)).toMatchObject({
+      rawConfig: config,
+      env,
+    });
+
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledWith(
-      {},
+      config,
       "/tmp/prepared-model-runtime-explicit-env",
       expect.objectContaining({ env }),
     );
@@ -258,11 +188,14 @@ describe("prepared model runtime snapshots", () => {
       workspaceDir: "/tmp/prepared-model-runtime-static-workspace",
     });
 
-    expect(mocks.loadStaticCatalog).toHaveBeenCalledWith({
-      cfg: {},
-      env: process.env,
-      workspaceDir: "/tmp/prepared-model-runtime-static-workspace",
-    });
+    expect(mocks.loadStaticCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: {},
+        env: process.env,
+        metadataSnapshot: snapshot.metadataSnapshot,
+        workspaceDir: "/tmp/prepared-model-runtime-static-workspace",
+      }),
+    );
     expect(snapshot.modelCatalog.staticEntries).toEqual([
       {
         provider: "nvidia",
@@ -310,11 +243,14 @@ describe("prepared model runtime snapshots", () => {
       workspaceDir: "/tmp/prepared-model-runtime-manifest-workspace",
     });
 
-    expect(mocks.loadStaticCatalog).toHaveBeenCalledWith({
-      cfg: config,
-      env: process.env,
-      workspaceDir: "/tmp/prepared-model-runtime-manifest-workspace",
-    });
+    expect(mocks.loadStaticCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: config,
+        env: process.env,
+        metadataSnapshot: snapshot.metadataSnapshot,
+        workspaceDir: "/tmp/prepared-model-runtime-manifest-workspace",
+      }),
+    );
     expect(mocks.createStaticCatalogResolver).toHaveBeenCalledOnce();
     expect(mocks.createStaticCatalogResolver).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -579,7 +515,8 @@ describe("prepared model runtime snapshots", () => {
     );
     expect(mocks.discoverModels).toHaveBeenCalledOnce();
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
-    expect(mocks.ensureRuntimePluginsLoaded).not.toHaveBeenCalled();
+    expect(mocks.planOpenClawModelsJsonSource).not.toHaveBeenCalled();
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
   });
 
   it("builds credential-free command owners separately from runtime owners", async () => {
@@ -613,6 +550,7 @@ describe("prepared model runtime snapshots", () => {
     expect(Object.isFrozen(first)).toBe(true);
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
     expect(mocks.discoverAuthStorage).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(1);
     expect(mocks.discoverModels).toHaveBeenCalledTimes(1);
     expect(mocks.buildPreparedModelCatalogSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({ authCredentials: mocks.authStorage.getAll() }),

@@ -7,6 +7,8 @@ const editSlackMessageMock = vi.fn();
 vi.mock("../../actions.js", () => ({
   editSlackMessage: (...args: unknown[]) =>
     editSlackMessageMock(...(args as Parameters<typeof editSlackMessageMock>)),
+  editSlackRenderedMessage: (...args: unknown[]) =>
+    editSlackMessageMock(...(args as Parameters<typeof editSlackMessageMock>)),
 }));
 
 let finalizeSlackPreviewEdit: typeof import("./preview-finalize.js").finalizeSlackPreviewEdit;
@@ -75,9 +77,52 @@ describe("finalizeSlackPreviewEdit", () => {
       channel: "C123",
       ts: "170000.111",
       latest: "171234.567",
+      oldest: "171234.567",
       inclusive: true,
-      limit: 100,
+      limit: 1,
     });
+  });
+
+  it("recovers an applied edit beyond the first busy-thread readback page", async () => {
+    editSlackMessageMock.mockRejectedValueOnce(new Error("socket closed after commit"));
+    const messageId = "171234.000101";
+    const threadMessages = Array.from({ length: 102 }, (_, index) => ({
+      ts: `171234.${String(index).padStart(6, "0")}`,
+      text: index === 101 ? "final answer" : `message ${String(index)}`,
+    }));
+    const client = createClient();
+    (client.conversations.replies as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      ({
+        oldest,
+        latest,
+        inclusive,
+        limit,
+      }: {
+        oldest?: string;
+        latest?: string;
+        inclusive?: boolean;
+        limit?: number;
+      }) => ({
+        messages: threadMessages
+          .filter(
+            (message) =>
+              (!oldest || message.ts > oldest || (inclusive && message.ts === oldest)) &&
+              (!latest || message.ts < latest || (inclusive && message.ts === latest)),
+          )
+          .slice(0, limit),
+      }),
+    );
+
+    await expect(
+      finalizeSlackPreviewEdit({
+        client,
+        token: "xoxb-test",
+        channelId: "C123",
+        messageId,
+        threadTs: "171234.000000",
+        text: "final answer",
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("rethrows when readback does not match the expected final text", async () => {

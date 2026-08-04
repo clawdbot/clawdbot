@@ -91,6 +91,10 @@ describe("live transport adapter factories", () => {
         expect.objectContaining({
           adapterOptions,
           channelId,
+          credentials: {
+            acquire: expect.any(Function),
+            startHeartbeat: expect.any(Function),
+          },
           driver: "live",
           messages: expect.objectContaining({
             addInboundMessage: expect.any(Function),

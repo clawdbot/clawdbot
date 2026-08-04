@@ -31,6 +31,7 @@ import {
   describe1BeforeEach0,
   describe2BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "./provider-request-error-classifier.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
@@ -434,6 +435,83 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
 
     expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+  });
+
+  it.each([
+    {
+      name: "direct turns",
+      ctx: buildTestCtx({
+        ChatType: "direct",
+        Surface: "feishu",
+        Provider: "feishu",
+        SessionKey: "agent:main:feishu:direct:ou_user",
+      }),
+      cfg: emptyConfig,
+    },
+    {
+      name: "mentioned group turns",
+      ctx: buildTestCtx({
+        ChatType: "group",
+        Surface: "feishu",
+        Provider: "feishu",
+        SessionKey: "agent:main:feishu:group:oc_group",
+        WasMentioned: true,
+      }),
+      cfg: {
+        agents: {
+          defaults: {
+            silentReply: {
+              group: "disallow",
+            },
+          },
+        },
+      } as OpenClawConfig,
+    },
+  ])("treats explicit NO_REPLY as intentional silence in $name", async ({ ctx, cfg }) => {
+    setNoAbort();
+    const deliver = vi.fn(async () => {});
+    const dispatcher = createReplyDispatcher({ deliver });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      (opts as InternalGetReplyOptions | undefined)?.onDeliberateSilentTerminalReply?.();
+      return undefined;
+    });
+
+    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+  });
+
+  it("does not infer terminal silence from a sibling NO_REPLY payload", async () => {
+    setNoAbort();
+    const deliveredTexts: string[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: vi.fn(async (payload) => {
+        deliveredTexts.push(payload.text ?? "");
+      }),
+      beforeDeliver: async (payload) =>
+        payload.text === NO_VISIBLE_REPLY_FALLBACK_TEXT ? payload : null,
+    });
+    const replyResolver = vi.fn(
+      async () => [{ text: "visible reply" }, { text: "NO_REPLY" }] satisfies ReplyPayload[],
+    );
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ ChatType: "direct" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(deliveredTexts).not.toContain("visible reply");
+    expect(deliveredTexts).toContain(NO_VISIBLE_REPLY_FALLBACK_TEXT);
+    expect(result.noVisibleReplyFallbackDelivered).toBe(true);
   });
 
   it("delivers core no-visible-reply fallback for disallowed empty mentioned group turns", async () => {

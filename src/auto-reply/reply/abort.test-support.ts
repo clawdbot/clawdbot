@@ -8,7 +8,7 @@ type AbortTestDeps = {
   resolveSessionAbortTarget: typeof import("../../config/sessions/session-accessor.js").resolveSessionAbortTarget;
   getLatestSubagentRunByChildSessionKey: typeof import("../../agents/subagent-registry.js").getLatestSubagentRunByChildSessionKey;
   listSubagentRunsForController: typeof import("../../agents/subagent-registry.js").listSubagentRunsForController;
-  markSubagentRunTerminated: typeof import("../../agents/subagent-registry.js").markSubagentRunTerminated;
+  killControlledSubagentRun: typeof import("../../agents/subagent-control.js").killControlledSubagentRun;
 };
 
 type AbortTestApi = {

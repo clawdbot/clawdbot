@@ -81,7 +81,6 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
 
 import {
   assertCodexAppServerClientStartSelectionCurrent,
-  detachSharedCodexAppServerClientIfCurrent,
   getSharedCodexAppServerClient,
   readCodexAppServerClientProcessIdentity,
 } from "./shared-client.js";
@@ -130,6 +129,7 @@ function firstMockArg(mock: unknown, label: string): unknown {
 function bridgeStartOptionsCall() {
   return firstMockArg(mocks.bridgeCodexAppServerStartOptions, "bridge start options") as {
     agentDir?: string;
+    agentId?: string;
     authProfileId?: string;
     authProfileStore?: unknown;
     preparedAuth?:
@@ -1283,6 +1283,7 @@ describe("shared Codex app-server client", () => {
       timeoutMs: 1000,
       authProfileId: null,
       agentDir: "/tmp/openclaw-target-agent",
+      agentId: "research",
       config,
     });
     await sendInitializeResult(harness, "openclaw/0.146.0 (macOS; test)");
@@ -1291,6 +1292,7 @@ describe("shared Codex app-server client", () => {
     expect(mocks.resolveCodexAppServerAuthProfileIdForAgent).not.toHaveBeenCalled();
     const bridgeCall = bridgeStartOptionsCall();
     expect(bridgeCall.agentDir).toBe("/tmp/openclaw-target-agent");
+    expect(bridgeCall.agentId).toBe("research");
     expect(bridgeCall.authProfileId).toBeNull();
     expect(bridgeCall.config).toBe(config);
     const applyCall = applyAuthProfileCall();
@@ -1643,35 +1645,6 @@ describe("shared Codex app-server client", () => {
     expect(second.process.stdin.destroyed).toBe(true);
   });
 
-  it("can detach the current shared client without closing it", async () => {
-    const first = createClientHarness();
-    const second = createClientHarness();
-    vi.spyOn(CodexAppServerClient, "start")
-      .mockReturnValueOnce(first.client)
-      .mockReturnValueOnce(second.client);
-
-    const firstList = listCodexAppServerModels({ timeoutMs: 1000 });
-    await sendInitializeResult(first, "openclaw/0.146.0 (macOS; test)");
-    await sendEmptyModelList(first);
-    await expect(firstList).resolves.toEqual({ models: [] });
-
-    expect(detachSharedCodexAppServerClientIfCurrent(first.client)).toBe(true);
-    expect(first.process.stdin.destroyed).toBe(false);
-
-    const secondList = listCodexAppServerModels({ timeoutMs: 1000 });
-    await sendInitializeResult(second, "openclaw/0.146.0 (macOS; test)");
-    await sendEmptyModelList(second);
-    await expect(secondList).resolves.toEqual({ models: [] });
-
-    expect(detachSharedCodexAppServerClientIfCurrent(first.client)).toBe(false);
-    first.client.close();
-    expect(first.process.stdin.destroyed).toBe(true);
-    expect(second.process.kill).not.toHaveBeenCalled();
-    expect(detachSharedCodexAppServerClientIfCurrent(second.client)).toBe(true);
-    second.client.close();
-    expect(second.process.stdin.destroyed).toBe(true);
-  });
-
   it("closes a retired shared app-server and forces active leases onto the retryable close path", async () => {
     const first = createClientHarness();
     const second = createClientHarness();
@@ -1767,6 +1740,14 @@ describe("shared Codex app-server client", () => {
     await vi.waitFor(() => expect(retainClient).toHaveBeenCalledTimes(1));
 
     expect(releaseLeasedSharedCodexAppServerClient(client)).toBe(true);
+    expect(retireSharedCodexAppServerClientIfCurrent(client)).toEqual({
+      activeLeases: 1,
+      closed: false,
+    });
+    expect(harness.process.stdin.destroyed).toBe(false);
+
+    // The ordinary lease is gone, but native completion still explicitly owns
+    // the detached process and repeated cleanup must not close that owner.
     expect(retireSharedCodexAppServerClientIfCurrent(client)).toEqual({
       activeLeases: 1,
       closed: false,

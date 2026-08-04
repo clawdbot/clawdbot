@@ -25,6 +25,29 @@ import {
   resolveLocalCapabilityRuntimeConfig,
 } from "./shared.js";
 
+function describeWebResultFailure(result: Record<string, unknown>): string | undefined {
+  const statusCode =
+    typeof result.statusCode === "number" && Number.isFinite(result.statusCode)
+      ? result.statusCode
+      : undefined;
+  const error = result.error;
+  const errorMessage =
+    typeof error === "string"
+      ? error
+      : error &&
+          typeof error === "object" &&
+          typeof (error as { message?: unknown }).message === "string"
+        ? (error as { message: string }).message
+        : undefined;
+  if (result.ok !== false && (statusCode === undefined || statusCode < 400) && !errorMessage) {
+    return undefined;
+  }
+  return (
+    errorMessage ??
+    (statusCode ? `provider returned status ${statusCode}` : "provider reported failure")
+  );
+}
+
 async function runWebSearchCommand(params: { query: string; provider?: string; limit?: number }) {
   const rawConfig = getRuntimeConfig();
   const scopedTargets = getCapabilityWebSearchCommandSecretTargets(rawConfig, {
@@ -51,13 +74,15 @@ async function runWebSearchCommand(params: { query: string; provider?: string; l
       limit: params.limit,
     },
   });
+  const error = describeWebResultFailure(result.result);
   return {
-    ok: true,
+    ok: error === undefined,
     capability: "web.search",
     transport: "local" as const,
     provider: result.provider,
     attempts: [],
     outputs: [{ result: result.result }],
+    ...(error ? { error } : {}),
   } satisfies CapabilityEnvelope;
 }
 
@@ -89,13 +114,15 @@ async function runWebFetchCommand(params: { url: string; provider?: string; form
     url: params.url,
     format: params.format,
   });
+  const error = describeWebResultFailure(result);
   return {
-    ok: true,
+    ok: error === undefined,
     capability: "web.fetch",
     transport: "local" as const,
     provider: resolved.provider.id,
     attempts: [],
     outputs: [{ result }],
+    ...(error ? { error } : {}),
   } satisfies CapabilityEnvelope;
 }
 
@@ -110,14 +137,19 @@ export function registerWebCapabilityCommands(capability: Command): void {
     .option("--limit <n>", "Result limit")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
+      let failed = false;
       await runCommandWithRuntime(defaultRuntime, async () => {
         const result = await runWebSearchCommand({
           query: String(opts.query),
           provider: opts.provider as string | undefined,
           limit: parseOptionalPositiveInteger(opts.limit, "--limit"),
         });
+        failed = !result.ok;
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
+      if (failed) {
+        defaultRuntime.exit(1);
+      }
     });
 
   web
@@ -128,14 +160,19 @@ export function registerWebCapabilityCommands(capability: Command): void {
     .option("--format <format>", "Format hint")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
+      let failed = false;
       await runCommandWithRuntime(defaultRuntime, async () => {
         const result = await runWebFetchCommand({
           url: String(opts.url),
           provider: opts.provider as string | undefined,
           format: opts.format as string | undefined,
         });
+        failed = !result.ok;
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
+      if (failed) {
+        defaultRuntime.exit(1);
+      }
     });
 
   web

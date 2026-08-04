@@ -2,7 +2,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLlmStreamSimpleMock } from "../../../test/helpers/agents/llm-stream-simple-mock.js";
 import type { Model } from "../../llm/types.js";
+import type { StreamFn } from "../runtime/index.js";
+import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import {
+  applyExtraParamsToAgent,
   resolvePreparedExtraParams,
   resolveAgentTransportOverride,
   resolveExplicitSettingsTransport,
@@ -44,6 +47,79 @@ afterEach(() => {
 });
 
 describe("extra-params: provider runtime handoff", () => {
+  it.each([
+    { label: "default", runtimeToolAllowlist: undefined, expectedHostedSearch: true },
+    {
+      label: "disabled tools",
+      runtimeToolAllowlist: undefined,
+      webSearchEnabled: false,
+      expectedHostedSearch: false,
+    },
+    { label: "no tools", runtimeToolAllowlist: [], expectedHostedSearch: false },
+    { label: "message only", runtimeToolAllowlist: ["message"], expectedHostedSearch: false },
+    { label: "wildcard", runtimeToolAllowlist: ["*"], expectedHostedSearch: true },
+    { label: "explicit search", runtimeToolAllowlist: ["web_search"], expectedHostedSearch: true },
+    {
+      label: "intersected wildcard",
+      runtimeToolAllowlist: attachToolAllowlistIntersection(["*", "message"], [["*"], ["message"]]),
+      expectedHostedSearch: false,
+    },
+  ])(
+    "keeps $label authority on the actual provider payload",
+    ({ runtimeToolAllowlist, webSearchEnabled, expectedHostedSearch }) => {
+      const payload: { tools: Array<Record<string, unknown>> } = {
+        tools: [{ type: "function", name: "message" }],
+      };
+      const baseStreamFn: StreamFn = (model, _context, options) => {
+        options?.onPayload?.(payload, model);
+        return {} as ReturnType<StreamFn>;
+      };
+      extraParamsTesting.setProviderRuntimeDepsForTest({
+        prepareProviderExtraParams: ({ context }) => context.extraParams,
+        resolveProviderExtraParamsForTransport: () => undefined,
+        wrapProviderStreamFn: ({ context }) => {
+          const underlying = context.streamFn;
+          if (!underlying || context.nativeWebSearchAllowedByToolPolicy === false) {
+            return underlying;
+          }
+          return (model, streamContext, options) =>
+            underlying(model, streamContext, {
+              ...options,
+              onPayload: (request, requestModel) => {
+                (request as typeof payload).tools.push({ type: "web_search" });
+                return options?.onPayload?.(request, requestModel);
+              },
+            });
+        },
+      });
+      const agent = { streamFn: baseStreamFn };
+      const model = {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">;
+
+      applyExtraParamsToAgent(
+        agent,
+        undefined,
+        "openai",
+        "gpt-5.4",
+        undefined,
+        undefined,
+        "main",
+        undefined,
+        model,
+        undefined,
+        undefined,
+        { nativeWebSearchPolicyContext: { runtimeToolAllowlist, webSearchEnabled } },
+      );
+      void agent.streamFn?.(model, { messages: [] }, {});
+
+      expect(payload.tools.some((tool) => tool.type === "web_search")).toBe(expectedHostedSearch);
+    },
+  );
+
   it("keeps provider-ready max stable through provider hooks and cache lookup", () => {
     const prepareProviderExtraParams = vi.fn(({ context }) => context.extraParams);
     const resolveProviderExtraParamsForTransport = vi.fn(() => undefined);

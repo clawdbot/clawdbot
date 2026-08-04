@@ -28,6 +28,7 @@ export function createBaseToolHandlerState() {
     assistantMessageIndex: 0,
     messagingToolSentTexts: [] as string[],
     messagingToolSentTextsNormalized: [] as string[],
+    currentSourceMessagingToolSentTextsNormalized: [] as string[],
     messagingToolSentMediaUrls: [] as string[],
     messagingToolSourceReplyPayloads: [],
     messageToolOnlySourceReplyDelivered: false,

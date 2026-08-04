@@ -144,6 +144,34 @@ skill overrides them. Gate a plugin skill's own eligibility via
 
 See [Plugins](/tools/plugin) and [Tools](/tools) for the full plugin system.
 
+## Reference a skill in a prompt
+
+Type `$` in the Control UI composer to search the skills available to the
+current agent. Selecting a result inserts its stable command name, for example
+`$release_notes`, without replacing the rest of your message. A prompt can
+reference more than one skill:
+
+```text
+Use $github and $release_notes to summarize this change for the release.
+```
+
+OpenClaw resolves these references against the current agent's eligible,
+user-invocable, model-visible skills and tells the model to read each referenced `SKILL.md`
+before acting. A single message can reference up to eight distinct skills;
+OpenClaw returns a visible error instead of ignoring extra references. The `$`
+form is composable prompt text; `/release_notes ...`
+remains the standalone command form and may use direct tool dispatch when the
+skill declares `command-dispatch: tool`. Common uppercase shell variables such
+as `$HOME`, `$PATH`, and `$EDITOR` remain ordinary text; use lowercase
+`$home`, `$path`, or `$editor` to reference skills with those names.
+
+Skills with `disable-model-invocation: true` stay out of the `$` picker because
+their instructions are intentionally absent from the model's prompt. Invoke
+those explicitly with their standalone slash command instead.
+
+`$` references are interpreted on WebChat/Control UI turns. Other messaging
+channels keep `$name` as ordinary text; use the skill's slash command there.
+
 ## Skill Workshop
 
 [Skill Workshop](/tools/skill-workshop) is a proposal queue between the agent

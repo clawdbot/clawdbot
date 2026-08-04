@@ -8,6 +8,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { Insertable, Selectable, Updateable } from "kysely";
 import { z } from "zod";
+import { acquireFileLock } from "../../infra/file-lock.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { withOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
@@ -15,17 +16,18 @@ import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-sta
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { safeParseJsonWithSchema } from "../../utils/zod-parse.js";
-import { acquireSessionWriteLock } from "../session-write-lock.js";
 import {
   SANDBOX_BROWSER_REGISTRY_PATH,
   SANDBOX_BROWSERS_DIR,
   SANDBOX_CONTAINERS_DIR,
   SANDBOX_REGISTRY_PATH,
 } from "./constants.js";
+import type { SandboxContainerEngineTarget } from "./container-engine.js";
 
 export type SandboxRegistryEntry = {
   containerName: string;
   backendId?: string;
+  backendTarget?: SandboxContainerEngineTarget;
   runtimeLabel?: string;
   sessionKey: string;
   createdAtMs: number;
@@ -174,6 +176,7 @@ function containerEntryToRow(entry: SandboxRegistryEntry, existing?: SandboxRegi
   const next: SandboxRegistryEntry = {
     ...entry,
     backendId: entry.backendId ?? existing?.backendId,
+    backendTarget: entry.backendTarget ?? existing?.backendTarget,
     runtimeLabel: entry.runtimeLabel ?? existing?.runtimeLabel,
     createdAtMs: existing?.createdAtMs ?? entry.createdAtMs,
     image: existing?.image ?? entry.image,
@@ -362,9 +365,9 @@ function normalizeSandboxRegistryEntry(entry: SandboxRegistryEntry): SandboxRegi
 }
 
 async function withRegistryLock<T>(registryPath: string, fn: () => Promise<T>): Promise<T> {
-  const lock = await acquireSessionWriteLock({
-    sessionFile: registryPath,
-    timeoutMs: 60_000,
+  const lock = await acquireFileLock(registryPath, {
+    stale: 30_000,
+    retries: { retries: 59, factor: 1, minTimeout: 1_000, maxTimeout: 1_000 },
   });
   try {
     return await fn();

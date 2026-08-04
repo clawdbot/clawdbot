@@ -19,6 +19,7 @@ import {
   decodePluginModelCatalogRelativePathPluginId,
   encodePluginModelCatalogRelativePath,
   loadPersistedPluginModelCatalogs,
+  loadPersistedPluginModelCatalogsReadOnly,
   migrateLegacyPluginModelCatalogs,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
   replacePersistedPluginModelCatalogs,
@@ -83,6 +84,31 @@ afterEach(() => {
 });
 
 describe("SQLite-backed plugin model catalogs", () => {
+  it("reads only named catalog rows without running migration or repair", () => {
+    const agentDir = createAgentDir();
+    const zai = catalogContents("zai");
+    const anthropic = catalogContents("anthropic");
+    replacePersistedPluginModelCatalogs({
+      agentDir,
+      pluginCatalogWrites: {
+        [encodePluginModelCatalogRelativePath("zai")]: zai,
+        [encodePluginModelCatalogRelativePath("anthropic")]: anthropic,
+      },
+    });
+    const legacyPath = join(agentDir, encodePluginModelCatalogRelativePath("legacy"));
+    mkdirSync(join(agentDir, "plugins", "legacy"), { recursive: true });
+    writeFileSync(legacyPath, catalogContents("legacy"), "utf8");
+
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir, ["zai"])).toEqual([
+      { pluginId: "zai", contents: zai },
+    ]);
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
+      { pluginId: "anthropic", contents: anthropic },
+      { pluginId: "zai", contents: zai },
+    ]);
+    expect(existsSync(legacyPath)).toBe(true);
+  });
+
   it("removes generated model rows whose API semantics cannot be derived", () => {
     const agentDir = createAgentDir();
     const relativePath = encodePluginModelCatalogRelativePath("nvidia");

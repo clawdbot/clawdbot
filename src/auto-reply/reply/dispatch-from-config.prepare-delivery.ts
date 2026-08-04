@@ -27,19 +27,13 @@ import { resolveReplyRoutingDecision } from "./routing-policy.js";
 
 export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyState) {
   const {
-    acpDispatchSessionKey,
     cfg,
     ctx,
-    getDispatchAbortSignal,
     groupId,
-    isGroup,
     markInboundDedupeReplayUnsafe,
-    params,
     replyRoute,
-    routeReplyThreadId,
     sessionStoreEntry,
     turnLedger,
-    workspaceDir,
   } = state;
   // Check if we should route replies to originating channel instead of dispatcher.
   // Only route when the originating channel is DIFFERENT from the current surface.
@@ -113,8 +107,8 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     const { createReplyMediaPathNormalizer } = await loadReplyMediaPathsRuntime();
     normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
       cfg,
-      sessionKey: acpDispatchSessionKey,
-      workspaceDir,
+      sessionKey: state.acpDispatchSessionKey,
+      workspaceDir: state.workspaceDir,
       messageProvider: deliveryChannel,
       accountId: replyContextAccountId,
       groupId,
@@ -170,15 +164,15 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
       requesterSenderName: ctx.SenderName,
       requesterSenderUsername: ctx.SenderUsername,
       requesterSenderE164: ctx.SenderE164,
-      threadId: routeReplyThreadId,
+      threadId: state.routeReplyThreadId,
       replyDelivery: routedReplyDelivery,
       cfg,
       abortSignal: options?.abortSignal,
       mirror: options?.mirror,
-      isGroup,
+      isGroup: state.isGroup,
       groupId,
       replyKind: options?.kind ?? "final",
-      runId: params.replyOptions?.runId,
+      runId: state.params.replyOptions?.runId,
       responsePrefixContext: options?.responsePrefixContext,
     });
     // Routed sends settle here: the transport result is the settlement. This is
@@ -206,7 +200,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     if (!routeReplyRuntime || !routeReplyChannel || !routeReplyTo) {
       return null;
     }
-    const effectiveAbortSignal = abortSignal ?? getDispatchAbortSignal();
+    const effectiveAbortSignal = abortSignal ?? state.getDispatchAbortSignal();
     if (effectiveAbortSignal?.aborted) {
       return null;
     }
@@ -266,26 +260,22 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
       ? turnLedger.sendQueued("tool", bindingPayload).queued
       : turnLedger.sendQueued("final", bindingPayload).queued;
   };
-  const nextState = extendPreparedDispatchState(
-    state,
-    {
-      suppressAcpChildUserDelivery,
-      normalizedCurrentSurface,
-      isInternalWebchatTurn,
-      routeReplyChannel,
-      shouldRouteToOriginating,
-      shouldSuppressTyping,
-      routeReplyTo,
-      deliveryChannel,
-      replyContextAccountId,
-      normalizeReplyMediaPayload,
-      routeReplyToOriginating,
-      isRoutedReplyDelivered,
-      sendPayloadAsync,
-      deliverBindingPayload,
-    },
-    {},
-  );
+  const nextState = extendPreparedDispatchState(state, {
+    suppressAcpChildUserDelivery,
+    normalizedCurrentSurface,
+    isInternalWebchatTurn,
+    routeReplyChannel,
+    shouldRouteToOriginating,
+    shouldSuppressTyping,
+    routeReplyTo,
+    deliveryChannel,
+    replyContextAccountId,
+    normalizeReplyMediaPayload,
+    routeReplyToOriginating,
+    isRoutedReplyDelivered,
+    sendPayloadAsync,
+    deliverBindingPayload,
+  });
   return { status: "ready" as const, state: nextState };
 }
 

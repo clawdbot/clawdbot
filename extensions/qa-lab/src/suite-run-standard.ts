@@ -128,6 +128,7 @@ export async function runQaFlowSuiteStandard(
       claudeCliAuthMode: params?.claudeCliAuthMode,
       controlUiEnabled: params?.controlUiEnabled ?? true,
       enabledPluginIds,
+      allowUnhealthyStartup: gatewayRuntimeOptions?.allowUnhealthyStartup,
       forwardHostHome: gatewayRuntimeOptions?.forwardHostHome,
       mutateConfig: gatewayConfigPatch
         ? (cfg) => applyQaMergePatch(cfg, gatewayConfigPatch) as OpenClawConfig
@@ -164,16 +165,20 @@ export async function runQaFlowSuiteStandard(
     };
     env = activeEnv;
 
-    const transportReadyTimeoutMs = resolveQaSuiteTransportReadyTimeoutMs(
-      params?.transportReadyTimeoutMs,
-    );
-    // The gateway child already waits for /readyz before returning, but the
-    // selected transport can still be finishing account startup. Pay that
-    // readiness cost once here so the first scenario does not race bootstrap.
-    await waitForTransportReady(activeEnv, transportReadyTimeoutMs).catch(async () => {
-      await waitForGatewayHealthy(activeEnv, transportReadyTimeoutMs);
-      await waitForTransportReady(activeEnv, transportReadyTimeoutMs);
-    });
+    // Lifecycle scenarios deliberately start a blocked channel. Waiting for
+    // connected-channel readiness here would prevent those scenarios from running.
+    if (!gatewayRuntimeOptions?.allowUnhealthyStartup) {
+      const transportReadyTimeoutMs = resolveQaSuiteTransportReadyTimeoutMs(
+        params?.transportReadyTimeoutMs,
+      );
+      // The gateway child already waits for /readyz before returning, but the
+      // selected transport can still be finishing account startup. Pay that
+      // readiness cost once here so the first scenario does not race bootstrap.
+      await waitForTransportReady(activeEnv, transportReadyTimeoutMs).catch(async () => {
+        await waitForGatewayHealthy(activeEnv, transportReadyTimeoutMs);
+        await waitForTransportReady(activeEnv, transportReadyTimeoutMs);
+      });
+    }
     const scenarios: QaSuiteScenarioResult[] = [];
     let runtimeParityCellTiming: QaRuntimeParityCellTiming | undefined;
     const liveScenarioOutcomes: QaLabScenarioOutcome[] = selectedScenarios.map((scenario) => ({

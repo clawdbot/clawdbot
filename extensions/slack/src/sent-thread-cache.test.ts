@@ -93,9 +93,14 @@ describe("slack sent-thread-cache", () => {
     expect(hasSlackThreadParticipation("A1", "C123", "1700000000.005000")).toBe(true);
   });
 
-  it("writes and reads persistent thread participation when runtime state is available", async () => {
+  it("restores persistent thread participation without extending its original expiry", async () => {
+    const repliedAt = 1_711_406_400_000;
+    const ttlMs = 24 * 60 * 60 * 1000;
+    const now = vi.spyOn(Date, "now").mockReturnValue(repliedAt);
     const register = vi.fn().mockResolvedValue(undefined);
-    const lookup = vi.fn().mockResolvedValue({ repliedAt: 123 });
+    const lookup = vi
+      .fn()
+      .mockImplementation(async () => (Date.now() < repliedAt + ttlMs ? { repliedAt } : undefined));
     const openKeyedStore = vi.fn(() => ({
       register,
       lookup,
@@ -109,14 +114,14 @@ describe("slack sent-thread-cache", () => {
       logging: { getChildLogger: () => ({ warn: vi.fn() }) },
     } as never);
 
-    vi.spyOn(Date, "now").mockReturnValue(1_711_406_400_000);
     recordSlackThreadParticipation("A1", "C123", "1700000000.000002");
 
     await vi.waitFor(() => expect(register).toHaveBeenCalledTimes(1));
     expect(register).toHaveBeenCalledWith("A1:C123:1700000000.000002", {
-      repliedAt: 1_711_406_400_000,
+      repliedAt,
     });
 
+    now.mockReturnValue(repliedAt + ttlMs - 1000);
     clearSlackThreadParticipationCache();
     await expect(
       hasSlackThreadParticipationWithPersistence({
@@ -137,6 +142,16 @@ describe("slack sent-thread-cache", () => {
       }),
     ).resolves.toBe(true);
     expect(lookup).not.toHaveBeenCalled();
+
+    now.mockReturnValue(repliedAt + ttlMs + 1000);
+    await expect(
+      hasSlackThreadParticipationWithPersistence({
+        accountId: "A1",
+        channelId: "C123",
+        threadTs: "1700000000.000002",
+      }),
+    ).resolves.toBe(false);
+    expect(lookup).toHaveBeenCalledWith("A1:C123:1700000000.000002");
   });
 
   it("falls back to in-memory thread participation when persistent state cannot open", async () => {

@@ -4,7 +4,6 @@ import { normalizePluginsConfigWithRegistry } from "./plugin-registry-contributi
 
 export type GatewayStartupPluginPlan = {
   channelPluginIds: readonly string[];
-  configuredDeferredChannelPluginIds: readonly string[];
   pluginIds: readonly string[];
 };
 

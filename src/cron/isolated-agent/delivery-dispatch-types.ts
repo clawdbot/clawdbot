@@ -27,6 +27,7 @@ export type DispatchCronDeliveryParams = {
   resolvedDelivery: DeliveryTargetResolution;
   deliveryRequested: boolean;
   skipHeartbeatDelivery: boolean;
+  spawnOnlyHandoff: boolean;
   sourceDeliveryOutcome: SourceDeliveryOutcome;
   deliveryBestEffort: boolean;
   deliveryPayloadHasStructuredContent: boolean;

@@ -75,34 +75,30 @@ export const chatHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
       return;
     }
-    try {
-      const sessionAgentId = resolveSessionAgentId({
-        sessionKey: params.sessionKey,
-        config: cfg,
-        agentId: selectedAgent.agentId,
-      });
-      // Session entry carries per-session model overrides; utility routing must
-      // derive its small-model default from the provider this session actually
-      // uses, not the agent's configured default.
-      const { cfg: sessionCfg, entry } = loadSessionEntryReadOnly(
-        params.sessionKey,
-        selectedAgent.agentId ? { agentId: selectedAgent.agentId } : undefined,
-      );
-      const sessionModel = resolveSessionModelRef(sessionCfg, entry, sessionAgentId);
-      // Title generation pulls in the simple-completion runtime; load it lazily
-      // so gateways that never enable the opt-in skip that cost.
-      const { generateToolCallTitles } = await import("../chat-tool-titles.js");
-      const titles = await generateToolCallTitles({
-        cfg: sessionCfg,
-        agentId: sessionAgentId,
-        sessionPrimaryProvider: sessionModel.provider,
-        sessionAuthProfile: entry?.authProfileOverride?.trim() || undefined,
-        items: params.items,
-      });
-      respond(true, { titles });
-    } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
-    }
+    const sessionAgentId = resolveSessionAgentId({
+      sessionKey: params.sessionKey,
+      config: cfg,
+      agentId: selectedAgent.agentId,
+    });
+    // Session entry carries per-session model overrides; utility routing must
+    // derive its small-model default from the provider this session actually
+    // uses, not the agent's configured default.
+    const { cfg: sessionCfg, entry } = loadSessionEntryReadOnly(
+      params.sessionKey,
+      selectedAgent.agentId ? { agentId: selectedAgent.agentId } : undefined,
+    );
+    const sessionModel = resolveSessionModelRef(sessionCfg, entry, sessionAgentId);
+    // Title generation pulls in the simple-completion runtime; load it lazily
+    // so gateways that never enable the opt-in skip that cost.
+    const { generateToolCallTitles } = await import("../chat-tool-titles.js");
+    const titles = await generateToolCallTitles({
+      cfg: sessionCfg,
+      agentId: sessionAgentId,
+      sessionPrimaryProvider: sessionModel.provider,
+      sessionAuthProfile: entry?.authProfileOverride?.trim() || undefined,
+      items: params.items,
+    });
+    respond(true, { titles });
   },
   "chat.abort": handleChatAbortRequest,
   "chat.send": handleChatSend,

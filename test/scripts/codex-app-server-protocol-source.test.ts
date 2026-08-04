@@ -6,12 +6,16 @@ import { stageCodexAppServerProtocolArtifacts } from "../../scripts/lib/codex-ap
 import {
   buildCodexProtocolExportArgs,
   canonicalizeCodexAppServerProtocolJson,
+  codexAppServerSharedDefinitionsSchema,
+  compactCodexAppServerProtocolJsonSchemas,
+  expandCodexAppServerProtocolJsonSchema,
   formatCodexAppServerProtocolJsonText,
   readCargoWorkspacePackageVersion,
   resolveCodexAppServerProtocolSource,
   resolveCodexProtocolCargoTargetDir,
   resolveCodexProtocolMinFreeBytes,
   resolveCodexProtocolPnpmCommand,
+  selectedCodexAppServerJsonSchemas,
   validateCodexProtocolSourceVersion,
   validateCodexProtocolGenerationHeadroom,
 } from "../../scripts/lib/codex-app-server-protocol-source.js";
@@ -349,6 +353,87 @@ describe("Codex app-server protocol JSON canonicalizer", () => {
         { type: "beta", z: 3 },
       ],
     });
+  });
+
+  it("factors repeated definitions and exactly reconstructs every source schema", () => {
+    const schemas = new Map<string, unknown>(
+      selectedCodexAppServerJsonSchemas.map((schemaPath) => [
+        schemaPath,
+        { $schema: "http://json-schema.org/draft-07/schema#", title: schemaPath, type: "object" },
+      ]),
+    );
+    const shared = { properties: { value: { $ref: "#/definitions/Leaf" } }, type: "object" };
+    const leaf = { type: "string" };
+    schemas.set("DynamicToolCallParams.json", {
+      definitions: { Leaf: leaf },
+      properties: { arguments: { $ref: "#/definitions/Leaf" } },
+      title: "DynamicToolCallParams",
+      type: "object",
+    });
+    schemas.set("v2/ErrorNotification.json", {
+      definitions: { Leaf: leaf, Shared: shared },
+      properties: { error: { $ref: "#/definitions/Shared" } },
+      title: "ErrorNotification",
+      type: "object",
+    });
+    schemas.set("v2/GetAccountResponse.json", {
+      definitions: { Leaf: leaf, Shared: shared },
+      properties: { account: { $ref: "#/definitions/Shared" } },
+      title: "GetAccountResponse",
+      type: "object",
+    });
+
+    const compacted = compactCodexAppServerProtocolJsonSchemas(schemas);
+    const sharedSchema = compacted.get(codexAppServerSharedDefinitionsSchema);
+    expect(sharedSchema).toMatchObject({
+      definitions: { Leaf: leaf, Shared: shared },
+      title: "CodexAppServerProtocolDefinitions",
+    });
+    expect(compacted.get("v2/ErrorNotification.json")).toMatchObject({
+      properties: {
+        error: {
+          $ref: "./CodexAppServerProtocolDefinitions.json#/definitions/Shared",
+        },
+      },
+    });
+    expect(compacted.get("DynamicToolCallParams.json")).toMatchObject({
+      properties: {
+        arguments: {
+          $ref: "./v2/CodexAppServerProtocolDefinitions.json#/definitions/Leaf",
+        },
+      },
+    });
+
+    for (const schemaPath of selectedCodexAppServerJsonSchemas) {
+      expect(
+        expandCodexAppServerProtocolJsonSchema({
+          schema: compacted.get(schemaPath),
+          schemaPath,
+          sharedSchema,
+        }),
+      ).toEqual(canonicalizeCodexAppServerProtocolJson(schemas.get(schemaPath)));
+    }
+  });
+
+  it("rejects same-name definitions with different schema semantics", () => {
+    const schemas = new Map<string, unknown>(
+      selectedCodexAppServerJsonSchemas.map((schemaPath) => [
+        schemaPath,
+        { title: schemaPath, type: "object" },
+      ]),
+    );
+    schemas.set("v2/ErrorNotification.json", {
+      definitions: { Shared: { type: "string" } },
+      $ref: "#/definitions/Shared",
+    });
+    schemas.set("v2/GetAccountResponse.json", {
+      definitions: { Shared: { type: "integer" } },
+      $ref: "#/definitions/Shared",
+    });
+
+    expect(() => compactCodexAppServerProtocolJsonSchemas(schemas)).toThrow(
+      /shared definition Shared differs across schemas/,
+    );
   });
 });
 

@@ -2,6 +2,7 @@
 // Tests in this list depend on module singletons or custom-element registration
 // matching the current registry, so they need a fresh graph in the isolated lane.
 export const uiIsolatedTestFiles = [
+  "ui/src/app/app-host.server-prefs.test.ts",
   "ui/src/app/bootstrap.test.ts",
   "ui/src/app/router-outlet.test.ts",
   "ui/src/components/resizable-divider.test.ts",
@@ -16,6 +17,8 @@ export const uiIsolatedTestFiles = [
   "ui/src/pages/chat/chat-pane.session-discussion.test.ts",
   "ui/src/pages/chat/chat-pane.test.ts",
   "ui/src/pages/chat/components/chat-thread.measure.test.ts",
+  "ui/src/pages/config/memory-mutation-owner.test.ts",
+  "ui/src/pages/config/memory-page.test.ts",
   "ui/src/pages/workboard/view.test.ts",
 ];
 

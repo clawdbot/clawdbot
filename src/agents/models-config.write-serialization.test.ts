@@ -57,6 +57,7 @@ let actualPrivateFileStore:
 installModelsConfigTestHooks();
 
 let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClawModelsJson;
+let planOpenClawModelsJsonSource: typeof import("./models-config.js").planOpenClawModelsJsonSource;
 let clearCurrentPluginMetadataSnapshot: typeof import("../plugins/current-plugin-metadata-state.js").clearCurrentPluginMetadataSnapshot;
 let setCurrentPluginMetadataSnapshot: typeof import("../plugins/current-plugin-metadata-snapshot.js").setCurrentPluginMetadataSnapshot;
 
@@ -159,7 +160,7 @@ beforeAll(async () => {
       },
     };
   });
-  ({ ensureOpenClawModelsJson } = await import("./models-config.js"));
+  ({ ensureOpenClawModelsJson, planOpenClawModelsJsonSource } = await import("./models-config.js"));
   ({ clearCurrentPluginMetadataSnapshot } =
     await import("../plugins/current-plugin-metadata-state.js"));
   ({ setCurrentPluginMetadataSnapshot } =
@@ -190,6 +191,54 @@ beforeEach(() => {
 });
 
 describe("models-config write serialization", () => {
+  it("materializes an authoritative plugin catalog replacement without mutating state", async () => {
+    await withModelsTempHome(async (home) => {
+      const agentDir = path.join(home, "agent");
+      const workspaceDir = path.join(home, "workspace");
+      const rootContents = `${JSON.stringify({ providers: { existing: { models: [] } } })}\n`;
+      const existingPluginContents = `${JSON.stringify({
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: {},
+      })}\n`;
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(path.join(agentDir, "models.json"), rootContents);
+      replacePersistedPluginModelCatalogs({
+        agentDir,
+        pluginCatalogWrites: {
+          [encodePluginModelCatalogRelativePath("existing-plugin")]: existingPluginContents,
+        },
+      });
+      const originalPluginRow = readRawCatalogCacheRow(agentDir, "existing-plugin");
+      const plannedPluginContents = `${JSON.stringify({
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: {},
+      })}\n`;
+      planOpenClawModelsJsonMock.mockResolvedValue({
+        action: "write",
+        contents: `${JSON.stringify({ providers: { discovered: { models: [] } } })}\n`,
+        pluginCatalogWrites: {
+          [encodePluginModelCatalogRelativePath("planned-plugin")]: plannedPluginContents,
+        },
+      });
+
+      const planned = await planOpenClawModelsJsonSource({}, agentDir, {
+        workspaceDir,
+        pluginMetadataSnapshot: createPluginMetadataSnapshot(workspaceDir),
+      });
+
+      expect(planned.modelsJsonContents).toContain("discovered");
+      expect(planned.pluginCatalogs).toEqual([
+        { pluginId: "planned-plugin", contents: plannedPluginContents },
+      ]);
+      expect(await fs.readFile(path.join(agentDir, "models.json"), "utf8")).toBe(rootContents);
+      expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
+        { pluginId: "existing-plugin", contents: existingPluginContents },
+      ]);
+      expect(readRawCatalogCacheRow(agentDir, "existing-plugin")).toEqual(originalPluginRow);
+      expect(writePrivateStoreTextWriteMock).not.toHaveBeenCalled();
+    });
+  });
+
   it("does not reuse default workspace plugin metadata for explicit agent dirs without workspace", async () => {
     await withModelsTempHome(async (home) => {
       const snapshot = createPluginMetadataSnapshot(path.join(home, "default-workspace"));

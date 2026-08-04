@@ -1,8 +1,5 @@
 // Media-understanding runner resolves providers/models, local roots, auth, and
 // per-capability execution decisions for message attachments.
-import { constants as fsConstants } from "node:fs";
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { mergeInboundPathRoots } from "@openclaw/media-core/inbound-path-policy";
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
@@ -11,10 +8,7 @@ import {
   normalizeNullableString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  normalizeStringEntries,
-  uniqueStrings,
-} from "@openclaw/normalization-core/string-normalization";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 import { isMediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
 import { providerSupportsCapability } from "../../packages/media-understanding-common/src/provider-supports.js";
@@ -36,13 +30,10 @@ import type {
   MediaUnderstandingModelConfig,
 } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { logWarn } from "../logger.js";
 import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-roots.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { normalizeMediaFacts } from "../media/media-facts.js";
-import { runExec } from "../process/exec.js";
-import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
 import { matchesMediaEntryCapability } from "./entry-capabilities.js";
@@ -357,12 +348,7 @@ export function resolveMediaAttachmentLocalRoots(params: {
   );
 }
 
-const binaryCache = new Map<string, Promise<string | null>>();
-const antigravityCliCache = new Map<string, Promise<string | null>>();
-
 function clearMediaUnderstandingBinaryCacheForTests(): void {
-  binaryCache.clear();
-  antigravityCliCache.clear();
   clearLocalAudioInspectionCacheForTests();
 }
 
@@ -370,152 +356,6 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[
     Symbol.for("openclaw.mediaUnderstandingRunnerTestApi")
   ] = { clearMediaUnderstandingBinaryCacheForTests };
-}
-
-function expandHomeDir(value: string): string {
-  if (!value.startsWith("~")) {
-    return value;
-  }
-  const home = os.homedir();
-  if (value === "~") {
-    return home;
-  }
-  if (value.startsWith("~/")) {
-    return path.join(home, value.slice(2));
-  }
-  return value;
-}
-
-function hasPathSeparator(value: string): boolean {
-  return value.includes("/") || value.includes("\\");
-}
-
-function candidateBinaryNames(name: string): string[] {
-  if (process.platform !== "win32") {
-    return [name];
-  }
-  const ext = path.extname(name);
-  if (ext) {
-    return [name];
-  }
-  const pathext = normalizeStringEntries(
-    (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";"),
-  ).map((item) => (item.startsWith(".") ? item : `.${item}`));
-  return [name, ...uniqueStrings(pathext).map((item) => `${name}${item}`)];
-}
-
-async function isExecutable(filePath: string): Promise<boolean> {
-  try {
-    const stat = await fs.stat(filePath);
-    if (!stat.isFile()) {
-      return false;
-    }
-    if (process.platform === "win32") {
-      return true;
-    }
-    await fs.access(filePath, fsConstants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function findBinary(name: string): Promise<string | null> {
-  return await getOrCreatePromise(binaryCache, name, async () => {
-    const direct = expandHomeDir(name.trim());
-    if (direct && hasPathSeparator(direct)) {
-      for (const candidate of candidateBinaryNames(direct)) {
-        if (await isExecutable(candidate)) {
-          return candidate;
-        }
-      }
-    }
-
-    const searchName = name.trim();
-    if (!searchName) {
-      return null;
-    }
-    const pathEntries = (process.env.PATH ?? "").split(path.delimiter);
-    const candidates = candidateBinaryNames(searchName);
-    for (const entryRaw of pathEntries) {
-      const entry = expandHomeDir(entryRaw.trim().replace(/^"(.*)"$/, "$1"));
-      if (!entry) {
-        continue;
-      }
-      for (const candidate of candidates) {
-        const fullPath = path.join(entry, candidate);
-        if (await isExecutable(fullPath)) {
-          return fullPath;
-        }
-      }
-    }
-
-    return null;
-  });
-}
-
-async function probeAntigravityCliCandidate(command: string): Promise<string | null> {
-  const resolved = await findBinary(command);
-  if (!resolved) {
-    return null;
-  }
-  const probeDir = await fs.mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-antigravity-probe-"),
-  );
-  try {
-    const { stdout } = await runExec(resolved, ["--help"], {
-      timeoutMs: 3000,
-      cwd: probeDir,
-    });
-    return stdout.includes("--print") &&
-      stdout.includes("--add-dir") &&
-      stdout.includes("--sandbox")
-      ? resolved
-      : null;
-  } catch {
-    return null;
-  } finally {
-    await fs.rm(probeDir, { recursive: true, force: true }).catch(() => {});
-  }
-}
-
-async function resolveAntigravityCliBinary(): Promise<string | null> {
-  return await getOrCreatePromise(antigravityCliCache, "agy", async () => {
-    const configured = process.env.OPENCLAW_ANTIGRAVITY_CLI?.trim();
-    const candidates = [configured, "agy", "antigravity"].filter((value): value is string =>
-      Boolean(value),
-    );
-    for (const candidate of candidates) {
-      const command = await probeAntigravityCliCandidate(candidate);
-      if (command) {
-        return command;
-      }
-    }
-    return null;
-  });
-}
-
-async function resolveAntigravityCliEntry(
-  capability: MediaUnderstandingCapability,
-): Promise<MediaUnderstandingModelConfig | null> {
-  if (capability === "audio") {
-    return null;
-  }
-  const command = await resolveAntigravityCliBinary();
-  if (!command) {
-    return null;
-  }
-  return {
-    type: "cli",
-    command,
-    args: [
-      "--sandbox",
-      "--add-dir",
-      "{{AttachmentDir}}",
-      "--print",
-      "{{Prompt}} Inspect {{AttachmentPath}} and reply with only the requested media description.",
-    ],
-  };
 }
 
 async function resolveKeyEntry(params: {
@@ -762,10 +602,6 @@ async function resolveAutoEntries(params: {
   if (keys) {
     return [keys];
   }
-  const antigravity = await resolveAntigravityCliEntry(params.capability);
-  if (antigravity) {
-    return [antigravity];
-  }
   return [];
 }
 
@@ -946,7 +782,7 @@ async function runAttachmentEntries(params: {
               config: params.config,
               secretOwnerId: candidate.secretOwnerId,
             });
-      if (result) {
+      if (result?.text) {
         const decision = buildModelDecision({ entry, entryType, outcome: "success" });
         if (result.provider) {
           decision.provider = result.provider;

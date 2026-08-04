@@ -1,6 +1,8 @@
 // Telegram tests cover sequential key plugin behavior.
 import type { Chat, Message } from "grammy/types";
 import { describe, expect, it } from "vitest";
+import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
+import { buildTelegramQuestionCallbackData } from "./question-callback-data.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 
 const mockChat = (chat: Pick<Chat, "id"> & Partial<Pick<Chat, "type" | "is_forum">>): Chat =>
@@ -17,6 +19,26 @@ describe("getTelegramSequentialKey", () => {
     [{ message: mockMessage({ chat: mockChat({ id: 123 }) }) }, "telegram:123"],
     [
       {
+        message: mockMessage({
+          chat: mockChat({ id: 123, type: "private" }),
+          message_thread_id: 9,
+        }),
+      },
+      "telegram:123",
+    ],
+    [
+      {
+        me: { has_topics_enabled: false } as never,
+        message: mockMessage({
+          chat: mockChat({ id: 123, type: "private" }),
+          message_thread_id: 9,
+        }),
+      },
+      "telegram:123",
+    ],
+    [
+      {
+        me: { has_topics_enabled: true } as never,
         message: mockMessage({
           chat: mockChat({ id: 123, type: "private" }),
           message_thread_id: 9,
@@ -282,6 +304,40 @@ describe("getTelegramSequentialKey", () => {
       },
       "telegram:789:approval",
     ],
+    ...(["exec", "plugin"] as const).map(
+      (approvalKind): [Parameters<typeof getTelegramSequentialKey>[0], string] => [
+        {
+          update: {
+            callback_query: {
+              message: mockMessage({ chat: mockChat({ id: 654 }) }),
+              data: buildTelegramApprovalCallbackData({
+                type: "approval",
+                approvalKind,
+                approvalId: "signed-approval",
+                decision: "allow-once",
+              }),
+            },
+          },
+        },
+        "telegram:654:approval",
+      ],
+    ),
+    [
+      {
+        update: {
+          callback_query: {
+            message: mockMessage({ chat: mockChat({ id: 655 }) }),
+            data: buildTelegramApprovalCallbackData({
+              type: "approval",
+              approvalKind: "exec",
+              approvalId: "signed-approval",
+              decision: "allow-once",
+            })?.replace(":o:", ":z:"),
+          },
+        },
+      },
+      "telegram:655:approval",
+    ],
     [
       {
         update: {
@@ -292,6 +348,20 @@ describe("getTelegramSequentialKey", () => {
         },
       },
       "telegram:321:question",
+    ],
+    [
+      {
+        update: {
+          callback_query: {
+            message: mockMessage({ chat: mockChat({ id: 322 }) }),
+            data: buildTelegramQuestionCallbackData({
+              questionId: "ask_0123456789abcdef0123456789abcdef",
+              optionIndex: 2,
+            })?.replace(/:2$/, ":9"),
+          },
+        },
+      },
+      "telegram:322:question",
     ],
     [
       {

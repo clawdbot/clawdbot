@@ -107,7 +107,7 @@ import { collectFeishuSecurityAuditFindings } from "./security-audit.js";
 import { createFeishuSendReceipt } from "./send-result.js";
 import { resolveFeishuSessionConversation } from "./session-conversation.js";
 import { resolveFeishuOutboundSessionRoute } from "./session-route.js";
-import { feishuSetupAdapter, feishuSetupContract } from "./setup-core.js";
+import { feishuSetupContract } from "./setup-core.js";
 import { feishuSetupWizard, runFeishuLogin } from "./setup-surface.js";
 import { looksLikeFeishuId, normalizeFeishuTarget } from "./targets.js";
 import type { FeishuConfig, FeishuProbeResult, ResolvedFeishuAccount } from "./types.js";
@@ -1095,7 +1095,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                   ...(audioAsVoice === undefined ? {} : { audioAsVoice }),
                 },
                 accountId: ctx.accountId ?? undefined,
+                ...(ctx.mediaAccess ? { mediaAccess: ctx.mediaAccess } : {}),
                 mediaLocalRoots: ctx.mediaLocalRoots,
+                ...(ctx.mediaReadFile ? { mediaReadFile: ctx.mediaReadFile } : {}),
                 ...(replyInThread
                   ? { threadId: replyToMessageId }
                   : { replyToId: replyToMessageId }),
@@ -1122,7 +1124,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 text: text ?? "",
                 mediaUrl,
                 accountId: ctx.accountId ?? undefined,
+                ...(ctx.mediaAccess ? { mediaAccess: ctx.mediaAccess } : {}),
                 mediaLocalRoots: ctx.mediaLocalRoots,
+                ...(ctx.mediaReadFile ? { mediaReadFile: ctx.mediaReadFile } : {}),
                 ...(replyInThread
                   ? { threadId: replyToMessageId }
                   : { replyToId: replyToMessageId }),
@@ -1648,7 +1652,6 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           }
         },
       },
-      setup: feishuSetupAdapter,
       setupContract: feishuSetupContract,
       setupWizard: feishuSetupWizard,
       messaging: {

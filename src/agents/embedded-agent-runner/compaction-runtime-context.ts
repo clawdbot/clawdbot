@@ -1,7 +1,7 @@
 /**
  * Builds runtime context for context-engine backed embedded compaction.
  */
-import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import type { ThinkLevel, ThinkingCatalogEntry } from "../../auto-reply/thinking.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
@@ -66,6 +66,7 @@ export function resolveEmbeddedCompactionThinkingLevel(params: {
   provider: string;
   modelId: string;
   inheritedLevel?: ThinkLevel;
+  catalog?: ThinkingCatalogEntry[];
   agentId?: string;
   sessionKey?: string;
   agentRuntime?: string | null;
@@ -84,6 +85,7 @@ export function resolveEmbeddedCompactionThinkingLevel(params: {
       provider: params.provider,
       modelId: params.modelId,
       level: requestedLevel,
+      catalog: params.catalog,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       agentRuntime: params.agentRuntime,

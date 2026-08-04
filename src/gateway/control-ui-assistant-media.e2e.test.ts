@@ -72,6 +72,24 @@ describe("Control UI assistant media e2e", () => {
         expect(head.headers.get("etag")).toBe(ranged.headers.get("etag"));
         expect(await head.text()).toBe("");
 
+        for (const method of ["GET", "HEAD"]) {
+          const notModified = await fetch(
+            `${route}?source=${sourceParam}&mediaTicket=${encodeURIComponent(payload.mediaTicket ?? "")}`,
+            {
+              method,
+              headers: {
+                "If-None-Match": `W/${ranged.headers.get("etag")}`,
+                Range: "bytes=9-15",
+                "If-Range": '"stale"',
+              },
+            },
+          );
+          expect(notModified.status).toBe(304);
+          expect(notModified.headers.get("etag")).toBe(ranged.headers.get("etag"));
+          expect(notModified.headers.get("content-length")).toBeNull();
+          expect(await notModified.text()).toBe("");
+        }
+
         const emptyFilePath = path.join(mediaDir, "empty.bin");
         await fs.writeFile(emptyFilePath, Buffer.alloc(0));
         const empty = await fetch(`${route}?source=${encodeURIComponent(emptyFilePath)}`, {

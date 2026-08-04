@@ -14,10 +14,12 @@ import {
   resolveProviderWebSearchPluginConfig,
   resolveSearchCount,
   resolveSiteName,
+  resolveWebSearchProviderCredential,
   truncateText,
   wrapWebContent,
   type WebSearchProviderPlugin,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
@@ -80,16 +82,42 @@ function isOllamaCloudBaseUrl(baseUrl: string): boolean {
   }
 }
 
-function resolveConfiguredOllamaWebSearchApiKey(config?: OpenClawConfig): string | undefined {
-  const providerApiKey = normalizeOptionalSecretInput(config?.models?.providers?.ollama?.apiKey);
-  if (providerApiKey && !isNonSecretApiKeyMarker(providerApiKey)) {
-    return providerApiKey;
-  }
-  return undefined;
+function normalizeOllamaWebSearchApiKey(value: unknown): string | undefined {
+  const apiKey = normalizeOptionalSecretInput(value);
+  return apiKey && !isNonSecretApiKeyMarker(apiKey) ? apiKey : undefined;
 }
 
 function resolveEnvOllamaWebSearchApiKey(): string | undefined {
-  return resolveEnvApiKey("ollama")?.apiKey;
+  return normalizeOllamaWebSearchApiKey(resolveEnvApiKey("ollama")?.apiKey);
+}
+
+function createOllamaWebSearchCredentialError(ref: { source: string; id: string }): Error {
+  return new Error(
+    ref.source === "env"
+      ? `models.providers.ollama.apiKey env SecretRef ${ref.id} is not available for Ollama web search.`
+      : "models.providers.ollama.apiKey SecretRef cannot be resolved by Ollama web search. Use an env SecretRef for this path.",
+  );
+}
+
+// Delegate configured-key resolution (literal value or env-backed SecretRef) to the shared
+// web-search resolver, then apply Ollama's marker filter so persisted non-secret placeholders
+// (e.g. the OAuth/signin marker) fall through to the ambient OLLAMA_API_KEY instead of being sent.
+function resolveConfiguredOllamaWebSearchApiKey(config?: OpenClawConfig): string | undefined {
+  const credentialValue = config?.models?.providers?.ollama?.apiKey;
+  const credentialRef = coerceSecretRef(credentialValue);
+  const resolvedValue = normalizeOllamaWebSearchApiKey(
+    resolveWebSearchProviderCredential({
+      credentialValue,
+      path: "models.providers.ollama.apiKey",
+      envVars: [],
+    }),
+  );
+  // An explicit ref selects one credential. Do not reinterpret an unavailable ref as no config,
+  // which would permit an unrelated ambient key and potentially route the query to Ollama Cloud.
+  if (credentialRef && !resolvedValue) {
+    throw createOllamaWebSearchCredentialError(credentialRef);
+  }
+  return resolvedValue;
 }
 
 function resolveOllamaWebSearchBaseUrl(config?: OpenClawConfig): string {
@@ -161,6 +189,7 @@ async function runOllamaWebSearch(params: {
   config?: OpenClawConfig;
   query: string;
   count?: number;
+  signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
   const query = params.query.trim();
   if (!query) {
@@ -169,6 +198,9 @@ async function runOllamaWebSearch(params: {
 
   const baseUrl = resolveOllamaWebSearchBaseUrl(params.config);
   const configuredApiKey = resolveConfiguredOllamaWebSearchApiKey(params.config);
+  // Resolve the ambient cloud key independently of the configured selected-host key so a mixed
+  // setup still reaches the Ollama Cloud fallback with OLLAMA_API_KEY after the selected-host
+  // attempts fail. Gating this on configuredApiKey would drop that final authenticated attempt.
   const envApiKey = resolveEnvOllamaWebSearchApiKey();
   const count = resolveSearchCount(params.count, DEFAULT_OLLAMA_WEB_SEARCH_COUNT);
   const startedAt = Date.now();
@@ -178,6 +210,7 @@ async function runOllamaWebSearch(params: {
   let payload: OllamaWebSearchResponse | undefined;
   let lastError: Error | undefined;
   for (const attempt of attempts) {
+    params.signal?.throwIfAborted();
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (attempt.apiKey) {
       headers.Authorization = `Bearer ${attempt.apiKey}`;
@@ -191,6 +224,7 @@ async function runOllamaWebSearch(params: {
       },
       // Guard-owned timeoutMs also bounds DNS/proxy preflight; init.signal does not.
       timeoutMs: DEFAULT_OLLAMA_WEB_SEARCH_TIMEOUT_MS,
+      ...(params.signal ? { signal: params.signal } : {}),
       policy: buildOllamaBaseUrlSsrFPolicy(attempt.baseUrl),
       auditContext: "ollama-web-search.search",
     });
@@ -215,6 +249,7 @@ async function runOllamaWebSearch(params: {
         throw new Error(message);
       }
       payload = await readOllamaWebSearchResponse(response);
+      params.signal?.throwIfAborted();
       break;
     } catch (error) {
       if (error instanceof Error) {
@@ -224,6 +259,12 @@ async function runOllamaWebSearch(params: {
       }
       throw lastError;
     } finally {
+      // The 401/403 branches throw before the stream is touched, leaving release
+      // to force-close the active dispatcher. Start cancellation first; awaiting
+      // it can deadlock when capture tees the stream.
+      if (!response.bodyUsed) {
+        void response.body?.cancel().catch(() => undefined);
+      }
       await release();
     }
   }
@@ -321,15 +362,18 @@ export function createOllamaWebSearchProvider(): WebSearchProviderPlugin {
       description:
         "Search the web using Ollama's web search API. Returns titles, URLs, and snippets from the configured Ollama host.",
       parameters: OLLAMA_WEB_SEARCH_SCHEMA,
-      execute: async (args) =>
-        await runOllamaWebSearch({
+      execute: async (args, context) => {
+        context?.signal?.throwIfAborted();
+        return await runOllamaWebSearch({
           config: ctx.config,
           query: readStringParam(args, "query", { required: true }),
           count: readPositiveIntegerParam(args, "count", {
             max: 10,
             message: "count must be an integer from 1 to 10.",
           }),
-        }),
+          signal: context?.signal,
+        });
+      },
     }),
   };
 }

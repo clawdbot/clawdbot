@@ -141,9 +141,9 @@ vi.mock("../agents/openclaw-tools.js", () => {
       },
     },
     {
-      name: "cron",
+      name: "automations",
       parameters: { type: "object", properties: {} },
-      execute: async () => ({ ok: true, result: "cron" }),
+      execute: async () => ({ ok: true, result: "automations" }),
     },
     {
       name: "exec",
@@ -797,7 +797,7 @@ describe("POST /tools/invoke", () => {
 
     const body = await expectOkInvokeResponse(res);
     expect(body.result?.inheritedToolDenylist).toEqual(
-      expect.arrayContaining(["cron", "gateway", "nodes"]),
+      expect.arrayContaining(["automations", "gateway", "nodes"]),
     );
   });
 
@@ -1227,7 +1227,8 @@ describe("tools.invoke Gateway RPC", () => {
 
       expect(call?.[0], tool).toBe(true);
       expect(call?.[1]?.ok, tool).toBe(false);
-      expect(call?.[1]?.toolName, tool).toBe(tool);
+      // Legacy "cron" requests canonicalize before dispatch and report the canonical id.
+      expect(call?.[1]?.toolName, tool).toBe(tool === "cron" ? "automations" : tool);
       const error = call?.[1]?.error as { code?: string; message?: string } | undefined;
       expect(error?.code, tool).toBe("not_found");
     }

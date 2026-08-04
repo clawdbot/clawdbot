@@ -34,6 +34,298 @@ describe("SQLite lifecycle cleanup races", () => {
     closeOpenClawAgentDatabasesForTest();
   });
 
+  it("ages transcript-free session rows before reclaiming them", async () => {
+    const now = Date.now();
+    const activeSessionKey = "agent:main:cleanup-race-active";
+    const orphanSessionKey = "agent:main:cleanup-race-orphan";
+    await replaceSessionEntry(
+      { sessionKey: activeSessionKey, storePath },
+      { sessionId: "active-without-transcript", updatedAt: now },
+    );
+    await replaceSessionEntry(
+      { sessionKey: orphanSessionKey, storePath },
+      { sessionId: "orphan-without-transcript", updatedAt: now - 600_000 },
+    );
+
+    await expect(
+      cleanupSessionLifecycleArtifacts({
+        storePath,
+        sessionKeySegmentPrefix: "cleanup-race-",
+        transcriptContentMarker: "cleanup-race-marker",
+        orphanTranscriptMinAgeMs: 300_000,
+        nowMs: now,
+      }),
+    ).resolves.toEqual({ removedEntries: 1, archivedTranscriptArtifacts: 0 });
+
+    expect(loadSessionEntry({ sessionKey: activeSessionKey, storePath })).toMatchObject({
+      sessionId: "active-without-transcript",
+    });
+    expect(loadSessionEntry({ sessionKey: orphanSessionKey, storePath })).toBeUndefined();
+  });
+
+  it("preserves newly admitted sessions reusing an older transcript", async () => {
+    const now = Date.now();
+    const sessionKey = "agent:main:cleanup-race-reused";
+    const sessionId = "reused-active-session";
+    await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: now });
+    await replaceSqliteTranscriptEvents({ sessionKey, sessionId, storePath }, [
+      {
+        runId: "cleanup-race-marker-reused",
+        timestamp: new Date(now - 600_000).toISOString(),
+        type: "metadata",
+      },
+    ]);
+
+    await expect(
+      cleanupSessionLifecycleArtifacts({
+        storePath,
+        sessionKeySegmentPrefix: "cleanup-race-",
+        transcriptContentMarker: "cleanup-race-marker",
+        orphanTranscriptMinAgeMs: 300_000,
+        nowMs: now,
+      }),
+    ).resolves.toEqual({ removedEntries: 0, archivedTranscriptArtifacts: 0 });
+
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({ sessionId });
+  });
+
+  it("preserves foreign plugin ownership while reclaiming owned and legacy rows", async () => {
+    const now = Date.now();
+    const staleUpdatedAt = now - 600_000;
+    const ownedKey = "agent:main:cleanup-race-owned";
+    const legacyKey = "agent:main:cleanup-race-legacy";
+    const foreignKey = "agent:main:cleanup-race-foreign";
+    await replaceSessionEntry(
+      { sessionKey: ownedKey, storePath },
+      { sessionId: "owned-session", updatedAt: staleUpdatedAt, pluginOwnerId: "memory-core" },
+    );
+    await replaceSessionEntry(
+      { sessionKey: legacyKey, storePath },
+      { sessionId: "legacy-session", updatedAt: staleUpdatedAt },
+    );
+    await replaceSessionEntry(
+      { sessionKey: foreignKey, storePath },
+      { sessionId: "foreign-session", updatedAt: staleUpdatedAt, pluginOwnerId: "other-plugin" },
+    );
+
+    await expect(
+      cleanupSessionLifecycleArtifacts({
+        storePath,
+        pluginOwnerId: "memory-core",
+        sessionKeySegmentPrefix: "cleanup-race-",
+        transcriptContentMarker: "cleanup-race-marker",
+        orphanTranscriptMinAgeMs: 300_000,
+        nowMs: now,
+      }),
+    ).resolves.toEqual({ removedEntries: 2, archivedTranscriptArtifacts: 0 });
+
+    expect(loadSessionEntry({ sessionKey: ownedKey, storePath })).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey: legacyKey, storePath })).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey: foreignKey, storePath })).toMatchObject({
+      pluginOwnerId: "other-plugin",
+    });
+  });
+
+  it("keeps another agent's current and historical sessions in a shared SQLite store", async () => {
+    const now = Date.now();
+    const staleUpdatedAt = now - 600_000;
+    const sharedStorePath = path.join(tempDir, "shared.sqlite");
+    const mainKey = "agent:main:cleanup-race-main";
+    const researcherKey = "agent:researcher:cleanup-race-researcher";
+    const researcherHistoryKey = "agent:researcher:normal-session";
+    const researcherHistoryId = "researcher-orphaned-history";
+
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: mainKey, storePath: sharedStorePath },
+      { sessionId: "main-orphan", updatedAt: staleUpdatedAt, pluginOwnerId: "memory-core" },
+    );
+    await replaceSessionEntry(
+      { agentId: "researcher", sessionKey: researcherKey, storePath: sharedStorePath },
+      { sessionId: "researcher-orphan", updatedAt: staleUpdatedAt, pluginOwnerId: "memory-core" },
+    );
+    await replaceSessionEntry(
+      { agentId: "researcher", sessionKey: researcherHistoryKey, storePath: sharedStorePath },
+      { sessionId: researcherHistoryId, updatedAt: staleUpdatedAt },
+    );
+    const researcherHistoryEvent = {
+      runId: "cleanup-race-marker-researcher-history",
+      timestamp: new Date(staleUpdatedAt).toISOString(),
+      type: "metadata",
+    };
+    await replaceSqliteTranscriptEvents(
+      {
+        agentId: "researcher",
+        sessionKey: researcherHistoryKey,
+        sessionId: researcherHistoryId,
+        storePath: sharedStorePath,
+      },
+      [researcherHistoryEvent],
+    );
+    await replaceSessionEntry(
+      { agentId: "researcher", sessionKey: researcherHistoryKey, storePath: sharedStorePath },
+      { sessionId: "researcher-current", updatedAt: now },
+    );
+
+    await expect(
+      cleanupSessionLifecycleArtifacts({
+        agentId: "main",
+        storePath: sharedStorePath,
+        pluginOwnerId: "memory-core",
+        sessionKeySegmentPrefix: "cleanup-race-",
+        transcriptContentMarker: "cleanup-race-marker",
+        orphanTranscriptMinAgeMs: 300_000,
+        nowMs: now,
+      }),
+    ).resolves.toEqual({ removedEntries: 1, archivedTranscriptArtifacts: 0 });
+
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey: mainKey, storePath: sharedStorePath }),
+    ).toBeUndefined();
+    expect(
+      loadSessionEntry({
+        agentId: "researcher",
+        sessionKey: researcherKey,
+        storePath: sharedStorePath,
+      }),
+    ).toMatchObject({ sessionId: "researcher-orphan" });
+    await expect(
+      loadTranscriptEvents({
+        agentId: "researcher",
+        sessionKey: researcherHistoryKey,
+        sessionId: researcherHistoryId,
+        storePath: sharedStorePath,
+      }),
+    ).resolves.toEqual([researcherHistoryEvent]);
+  });
+
+  it("does not reclaim orphaned historical windows owned by another plugin", async () => {
+    const now = Date.now();
+    const staleUpdatedAt = now - 600_000;
+    const foreignKey = "agent:main:foreign-history";
+    const foreignHistoryId = "foreign-history-previous";
+    await replaceSessionEntry(
+      { sessionKey: foreignKey, storePath },
+      { sessionId: foreignHistoryId, updatedAt: staleUpdatedAt, pluginOwnerId: "other-plugin" },
+    );
+    const foreignEvent = {
+      type: "metadata",
+      timestamp: new Date(staleUpdatedAt).toISOString(),
+      runId: "cleanup-race-marker-foreign",
+    };
+    await replaceSqliteTranscriptEvents(
+      { sessionKey: foreignKey, sessionId: foreignHistoryId, storePath },
+      [foreignEvent],
+    );
+    await replaceSessionEntry(
+      { sessionKey: foreignKey, storePath },
+      { sessionId: "foreign-history-current", updatedAt: now, pluginOwnerId: "other-plugin" },
+    );
+
+    await expect(
+      cleanupSessionLifecycleArtifacts({
+        storePath,
+        pluginOwnerId: "memory-core",
+        sessionKeySegmentPrefix: "cleanup-race-",
+        transcriptContentMarker: "cleanup-race-marker",
+        orphanTranscriptMinAgeMs: 300_000,
+        nowMs: now,
+      }),
+    ).resolves.toEqual({ removedEntries: 0, archivedTranscriptArtifacts: 0 });
+
+    await expect(
+      loadTranscriptEvents({ sessionKey: foreignKey, sessionId: foreignHistoryId, storePath }),
+    ).resolves.toEqual([foreignEvent]);
+  });
+
+  it("preserves foreign current windows when their session node is a placeholder", async () => {
+    const now = Date.now();
+    const sessionKey = "agent:main:cleanup-race-placeholder";
+    const sessionId = "foreign-placeholder-session";
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      { sessionId, updatedAt: now - 600_000, pluginOwnerId: "other-plugin" },
+    );
+    const event = {
+      runId: "cleanup-race-marker-foreign-placeholder",
+      timestamp: new Date(now - 600_000).toISOString(),
+      type: "metadata",
+    };
+    await replaceSqliteTranscriptEvents({ sessionKey, sessionId, storePath }, [event]);
+    const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: "main",
+    }).path;
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    database.db
+      .prepare("UPDATE session_nodes SET entry_json = ?, entry_valid = ? WHERE session_key = ?")
+      .run("{}", -1, sessionKey);
+
+    await expect(
+      cleanupSessionLifecycleArtifacts({
+        storePath,
+        pluginOwnerId: "memory-core",
+        sessionKeySegmentPrefix: "cleanup-race-",
+        transcriptContentMarker: "cleanup-race-marker",
+        orphanTranscriptMinAgeMs: 300_000,
+        nowMs: now,
+      }),
+    ).resolves.toEqual({ removedEntries: 0, archivedTranscriptArtifacts: 0 });
+
+    expect(
+      database.db
+        .prepare("SELECT current_session_id FROM session_nodes WHERE session_key = ?")
+        .get(sessionKey),
+    ).toEqual({ current_session_id: sessionId });
+    await expect(loadTranscriptEvents({ sessionKey, sessionId, storePath })).resolves.toEqual([
+      event,
+    ]);
+  });
+
+  it("preserves owned nodes that still reference another plugin's historical generation", async () => {
+    const now = Date.now();
+    const sessionKey = "agent:main:cleanup-race-mixed-generations";
+    const foreignSessionId = "mixed-foreign-history";
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: foreignSessionId,
+        updatedAt: now - 600_000,
+        pluginOwnerId: "other-plugin",
+      },
+    );
+    await replaceSqliteTranscriptEvents({ sessionKey, sessionId: foreignSessionId, storePath }, [
+      {
+        runId: "cleanup-race-marker-mixed-foreign",
+        timestamp: new Date(now - 600_000).toISOString(),
+        type: "metadata",
+      },
+    ]);
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      {
+        previousSessionId: foreignSessionId,
+        sessionId: "mixed-owned-current",
+        updatedAt: now - 600_000,
+        pluginOwnerId: "memory-core",
+      },
+    );
+
+    await expect(
+      cleanupSessionLifecycleArtifacts({
+        storePath,
+        pluginOwnerId: "memory-core",
+        sessionKeySegmentPrefix: "cleanup-race-",
+        transcriptContentMarker: "cleanup-race-marker",
+        orphanTranscriptMinAgeMs: 300_000,
+        nowMs: now,
+      }),
+    ).resolves.toEqual({ removedEntries: 0, archivedTranscriptArtifacts: 0 });
+
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      sessionId: "mixed-owned-current",
+      previousSessionId: foreignSessionId,
+    });
+  });
+
   it("revalidates entries before deleting their transcript state", async () => {
     const sessionKey = "agent:main:cleanup-race";
     const sessionId = "cleanup-race-session";

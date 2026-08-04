@@ -149,6 +149,9 @@ function buildMockFunctionCall(name, args) {
 // commentary, which channels render as the draft's status headline. Streaming
 // text and then a call in one response is the only way to exercise
 // headline-plus-tool-line composition without a live model.
+// The Responses API carries that tag as `phase` on the message item, and the
+// transport reads it straight off the item, so an untagged item produces no
+// preamble at all and the scenario silently proves nothing.
 function preambleThenToolCallEvents(preamble, name, args) {
   const messageItemId = "msg_e2e_preamble";
   const call = buildMockFunctionCall(name, args);
@@ -184,6 +187,7 @@ function preambleThenToolCallEvents(preamble, name, args) {
         id: messageItemId,
         role: "assistant",
         status: "completed",
+        phase: "commentary",
         content: [{ type: "output_text", text: preamble, annotations: [] }],
       },
     },
@@ -210,6 +214,7 @@ function preambleThenToolCallEvents(preamble, name, args) {
             id: messageItemId,
             role: "assistant",
             status: "completed",
+            phase: "commentary",
             content: [{ type: "output_text", text: preamble, annotations: [] }],
           },
           call.item,

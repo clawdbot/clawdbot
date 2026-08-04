@@ -141,9 +141,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         return;
       }
 
-      const endpoint = normalizeEndpoint(
-        otel.endpoint ?? process.env[OTEL_EXPORTER_OTLP_ENDPOINT_ENV],
-      );
+      const sharedEnvEndpoint = process.env[OTEL_EXPORTER_OTLP_ENDPOINT_ENV];
+      const endpoint = normalizeEndpoint(otel.endpoint ?? sharedEnvEndpoint);
       const headers = otel.headers ?? undefined;
       const serviceName =
         otel.serviceName?.trim() || process.env.OTEL_SERVICE_NAME || DEFAULT_SERVICE_NAME;
@@ -155,35 +154,48 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         [ATTR_SERVICE_NAME]: serviceName,
       });
 
-      const logUrl = resolveSignalOtelUrl({
-        signalEndpoint: otel.logsEndpoint,
-        signalEnvEndpoint: process.env[OTEL_EXPORTER_OTLP_LOGS_ENDPOINT_ENV],
-        endpoint,
-        path: "v1/logs",
-      });
+      const logUrl = logsToOtlp
+        ? resolveSignalOtelUrl({
+            signalEndpoint: otel.logsEndpoint,
+            signalEnvEndpoint: process.env[OTEL_EXPORTER_OTLP_LOGS_ENDPOINT_ENV],
+            sharedEnvEndpoint,
+            endpoint,
+            path: "v1/logs",
+          })
+        : undefined;
+      const traceUrl =
+        !sdkPreloaded && tracesEnabled
+          ? resolveSignalOtelUrl({
+              signalEndpoint: otel.tracesEndpoint,
+              signalEnvEndpoint: process.env[OTEL_EXPORTER_OTLP_TRACES_ENDPOINT_ENV],
+              sharedEnvEndpoint,
+              endpoint,
+              path: "v1/traces",
+            })
+          : undefined;
+      const metricUrl =
+        !sdkPreloaded && metricsEnabled
+          ? resolveSignalOtelUrl({
+              signalEndpoint: otel.metricsEndpoint,
+              signalEnvEndpoint: process.env[OTEL_EXPORTER_OTLP_METRICS_ENDPOINT_ENV],
+              sharedEnvEndpoint,
+              endpoint,
+              path: "v1/metrics",
+            })
+          : undefined;
+      // Validate every owned signal before any SDK can export with downgraded TLS trust.
+      const logHttpAgentOptions = logsToOtlp
+        ? resolveOtelHttpAgentOptions({ url: logUrl, signalIdentifier: "LOGS" })
+        : undefined;
+      const traceHttpAgentOptions =
+        !sdkPreloaded && tracesEnabled
+          ? resolveOtelHttpAgentOptions({ url: traceUrl, signalIdentifier: "TRACES" })
+          : undefined;
+      const metricHttpAgentOptions =
+        !sdkPreloaded && metricsEnabled
+          ? resolveOtelHttpAgentOptions({ url: metricUrl, signalIdentifier: "METRICS" })
+          : undefined;
       if (!sdkPreloaded && (tracesEnabled || metricsEnabled)) {
-        const traceUrl = resolveSignalOtelUrl({
-          signalEndpoint: otel.tracesEndpoint,
-          signalEnvEndpoint: process.env[OTEL_EXPORTER_OTLP_TRACES_ENDPOINT_ENV],
-          endpoint,
-          path: "v1/traces",
-        });
-        const metricUrl = resolveSignalOtelUrl({
-          signalEndpoint: otel.metricsEndpoint,
-          signalEnvEndpoint: process.env[OTEL_EXPORTER_OTLP_METRICS_ENDPOINT_ENV],
-          endpoint,
-          path: "v1/metrics",
-        });
-        const traceHttpAgentOptions = resolveOtelHttpAgentOptions({
-          url: traceUrl,
-          signalIdentifier: "TRACES",
-          logger: ctx.logger,
-        });
-        const metricHttpAgentOptions = resolveOtelHttpAgentOptions({
-          url: metricUrl,
-          signalIdentifier: "METRICS",
-          logger: ctx.logger,
-        });
         const traceExporter = tracesEnabled
           ? new OTLPTraceExporter({
               ...(traceUrl ? { url: traceUrl } : {}),
@@ -219,8 +231,15 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
         sdk = new NodeSDK({
           resource,
-          ...(spanProcessors ? { spanProcessors } : traceExporter ? { traceExporter } : {}),
-          ...(metricReader ? { metricReader } : {}),
+          // Explicit empty arrays keep NodeSDK from restoring disabled exporters
+          // from ambient OTEL_* settings; OpenClaw owns every signal exporter.
+          ...(spanProcessors
+            ? { spanProcessors }
+            : traceExporter
+              ? { traceExporter }
+              : { spanProcessors: [] }),
+          metricReaders: metricReader ? [metricReader] : [],
+          logRecordProcessors: [],
           ...(sampleRate !== undefined
             ? {
                 sampler: new ParentBasedSampler({
@@ -257,7 +276,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const tracer = trace.getTracer("openclaw");
       const diagnosticsTrace = createDiagnosticsTraceRuntime(tracer);
       stopActiveTrustedSpans = diagnosticsTrace.stopActiveTrustedSpans;
-      const diagnosticMetrics = createDiagnosticsMetrics(meter);
+      const diagnosticMetrics = createDiagnosticsMetrics(meter, otel.metricNamePrefix);
 
       const diagnosticsLogs = createDiagnosticsLogExporter({
         contentCapturePolicy,
@@ -268,6 +287,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         logsEnabled,
         logsToOtlp,
         logsToStdout,
+        logHttpAgentOptions,
         logUrl,
         resource,
         serviceName,

@@ -1,8 +1,8 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeAutomation,
   normalizeDiagnosticAction,
 } from "./metadata-contract-normalization.ts";
-import { isRecord } from "./normalization-utils.ts";
 import {
   WORKBOARD_ATTEMPT_STATUSES,
   WORKBOARD_DIAGNOSTIC_KINDS,

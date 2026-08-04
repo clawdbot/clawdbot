@@ -682,6 +682,20 @@ describe("browser control server", () => {
     expect(String(traceCall.path)).toContain("safe-trace.zip");
   });
 
+  it("trace stop returns the path committed by the Playwright trace owner", async () => {
+    const committedPath = path.join(DEFAULT_TRACE_DIR, "committed-trace.zip");
+    requirePwMock("traceStopViaPlaywright").mockResolvedValueOnce(committedPath);
+    const base = await startServerAndBase();
+
+    const res = await postJson<{ ok?: boolean; path?: string }>(`${base}/trace/stop`, {
+      path: "requested-trace.zip",
+    });
+
+    expect(res).toMatchObject({ ok: true, path: committedPath });
+    const traceCall = requireMockArg(requirePwMock("traceStopViaPlaywright"));
+    expect(String(traceCall.path)).toContain("requested-trace.zip");
+  });
+
   it.each(guardedCurrentTabRouteCases)(
     "blocks $method $path on disallowed current tab URLs",
     async (routeCase) => {

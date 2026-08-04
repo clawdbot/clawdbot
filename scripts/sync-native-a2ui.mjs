@@ -1,42 +1,80 @@
 #!/usr/bin/env node
 
-// Keeps the native OpenClawKit Canvas A2UI resources in sync with the plugin-owned bundle.
+// Generates native Canvas A2UI resources from the plugin-owned source.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-
-const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+import { pathToFileURL } from "node:url";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
+const rootDir = resolveRepoRoot(import.meta.url);
 const REQUIRED_RESOURCE_FILES = ["a2ui.bundle.js", "index.html"];
 
 export function getNativeA2uiResourcePaths(repoRoot = rootDir) {
   return {
     sourceDir: path.join(repoRoot, "extensions", "canvas", "src", "host", "a2ui"),
-    nativeDir: path.join(
-      repoRoot,
-      "apps",
-      "shared",
-      "OpenClawKit",
-      "Sources",
-      "OpenClawKit",
-      "Resources",
-      "CanvasA2UI",
-    ),
     linuxConsumerFile: path.join(repoRoot, "apps", "linux", "src-tauri", "src", "canvas.rs"),
+    linuxBuildFile: path.join(repoRoot, "apps", "linux", "src-tauri", "build.rs"),
+    androidBuildFile: path.join(repoRoot, "apps", "android", "app", "build.gradle.kts"),
+    iosProjectFile: path.join(repoRoot, "apps", "ios", "project.yml"),
   };
 }
 
 export async function checkLinuxCanvasA2uiReferences({ linuxConsumerFile }) {
   const source = await fs.readFile(linuxConsumerFile, "utf8");
   const expectedReferences = [
-    "../../../../apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/CanvasA2UI/index.html",
-    "../../../../apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/CanvasA2UI/a2ui.bundle.js",
+    'include_bytes!(env!("OPENCLAW_CANVAS_A2UI_INDEX_HTML"))',
+    'include_bytes!(env!("OPENCLAW_CANVAS_A2UI_BUNDLE_JS"))',
   ];
   const missing = expectedReferences.filter((reference) => !source.includes(reference));
   if (missing.length > 0) {
     throw new Error(
-      `Linux Canvas must embed the synced native A2UI resources.\nMissing references:\n${formatList(missing)}`,
+      `Linux Canvas must embed the staged native A2UI resources.\nMissing references:\n${formatList(missing)}`,
+    );
+  }
+}
+
+export async function checkNativeA2uiBuildReferences({
+  linuxBuildFile,
+  androidBuildFile,
+  iosProjectFile,
+}) {
+  const [linuxBuild, androidBuild, iosProject] = await Promise.all([
+    fs.readFile(linuxBuildFile, "utf8"),
+    fs.readFile(androidBuildFile, "utf8"),
+    fs.readFile(iosProjectFile, "utf8"),
+  ]);
+  const stagingCommand = "scripts/sync-native-a2ui.mjs";
+  const missing = [];
+  if (
+    !linuxBuild.includes(stagingCommand) ||
+    !linuxBuild.includes('"--write"') ||
+    !linuxBuild.includes('"--output"')
+  ) {
+    missing.push("Linux Cargo build script");
+  }
+  if (
+    !androidBuild.includes(stagingCommand) ||
+    !androidBuild.includes("addGeneratedSourceDirectory") ||
+    !androidBuild.includes("StageCanvasA2uiTask::outputDirectory") ||
+    !androidBuild.includes('"--output"')
+  ) {
+    missing.push("Android Gradle preBuild task");
+  }
+  if (
+    !iosProject.includes("Stage Canvas A2UI resources") ||
+    !iosProject.includes(stagingCommand) ||
+    !iosProject.includes("pwd -P") ||
+    !iosProject.includes("--output") ||
+    !iosProject.includes("$BUILT_PRODUCTS_DIR/OpenClawKit_OpenClawKit.bundle") ||
+    !iosProject.includes("$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH") ||
+    !iosProject.includes('cp -R "$resource_product/CanvasA2UI"')
+  ) {
+    missing.push("iOS app post-build resource stage");
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `Native A2UI build staging is incomplete.\nMissing owners:\n${formatList(missing)}`,
     );
   }
 }
@@ -94,8 +132,10 @@ async function assertSourceResourcesExist(sourceDir) {
 
 export async function syncNativeA2uiResources({ sourceDir, nativeDir }) {
   await assertSourceResourcesExist(sourceDir);
-  await fs.rm(nativeDir, { recursive: true, force: true });
   await fs.mkdir(nativeDir, { recursive: true });
+  for (const entry of await fs.readdir(nativeDir)) {
+    await fs.rm(path.join(nativeDir, entry), { recursive: true, force: true });
+  }
   for (const fileName of REQUIRED_RESOURCE_FILES) {
     await fs.copyFile(path.join(sourceDir, fileName), path.join(nativeDir, fileName));
   }
@@ -112,7 +152,7 @@ export async function checkNativeA2uiResources({ sourceDir, nativeDir }) {
   if (missing.length > 0 || unexpected.length > 0) {
     throw new Error(
       [
-        'Native A2UI resource tree is stale. Run "pnpm canvas:a2ui:native:sync".',
+        "Native A2UI resource generation is incomplete.",
         `Missing:\n${formatList(missing)}`,
         `Unexpected:\n${formatList(unexpected)}`,
       ].join("\n"),
@@ -131,18 +171,36 @@ export async function checkNativeA2uiResources({ sourceDir, nativeDir }) {
   }
   if (mismatched.length > 0) {
     throw new Error(
-      `Native A2UI resources differ from generated source. Run "pnpm canvas:a2ui:native:sync".\nMismatched:\n${formatList(mismatched)}`,
+      `Native A2UI resources differ from generated source.\nMismatched:\n${formatList(mismatched)}`,
     );
   }
 }
 
-function parseMode(argv) {
-  const check = argv.includes("--check");
-  const write = argv.includes("--write");
-  if (check === write) {
-    throw new Error("Usage: node scripts/sync-native-a2ui.mjs --check|--write");
+function parseOptions(argv) {
+  let mode = null;
+  let outputDir = null;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--check" || arg === "--write") {
+      if (mode) {
+        throw new Error("Only one native A2UI staging mode may be selected.");
+      }
+      mode = arg.slice(2);
+      continue;
+    }
+    if (arg === "--output") {
+      outputDir = argv[index + 1] ?? null;
+      index += 1;
+      continue;
+    }
+    throw new Error(`Unknown native A2UI staging argument: ${arg}`);
   }
-  return write ? "write" : "check";
+  if (!mode || (mode === "write") !== Boolean(outputDir)) {
+    throw new Error(
+      "Usage: node scripts/sync-native-a2ui.mjs --check|--write [--output <directory>]",
+    );
+  }
+  return { mode, outputDir };
 }
 
 function bundleA2ui(repoRoot = rootDir, env = process.env) {
@@ -174,19 +232,23 @@ async function withFreshBundleCheckSource(sourceDir, run) {
 }
 
 async function main() {
-  const mode = parseMode(process.argv.slice(2));
+  const { mode, outputDir } = parseOptions(process.argv.slice(2));
   const paths = getNativeA2uiResourcePaths();
   if (mode === "write") {
-    bundleA2ui();
-    await syncNativeA2uiResources(paths);
-    console.log("[canvas] native A2UI resources synced.");
+    await withFreshBundleCheckSource(paths.sourceDir, async (sourceDir) => {
+      await syncNativeA2uiResources({ sourceDir, nativeDir: path.resolve(outputDir) });
+    });
+    console.log("[canvas] native A2UI resources generated.");
     return;
   }
-  await withFreshBundleCheckSource(paths.sourceDir, async (sourceDir) => {
-    await checkNativeA2uiResources({ sourceDir, nativeDir: paths.nativeDir });
+  await withFreshBundleCheckSource(paths.sourceDir, async (firstSourceDir) => {
+    await withFreshBundleCheckSource(paths.sourceDir, async (secondSourceDir) => {
+      await checkNativeA2uiResources({ sourceDir: firstSourceDir, nativeDir: secondSourceDir });
+    });
   });
   await checkLinuxCanvasA2uiReferences(paths);
-  console.log("[canvas] native A2UI resources up to date.");
+  await checkNativeA2uiBuildReferences(paths);
+  console.log("[canvas] native A2UI resources are reproducible and build-owned.");
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

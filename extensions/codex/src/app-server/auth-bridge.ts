@@ -68,29 +68,34 @@ const scopedOAuthRefreshQueues = new WeakMap<
 
 export async function bridgeCodexAppServerStartOptions(params: {
   startOptions: CodexAppServerStartOptions;
+  agentId?: string;
   agentDir: string;
   authProfileId?: string | null;
   authProfileStore?: AuthProfileStore;
   preparedAuth?: CodexAppServerPreparedAuth;
+  authRequirement?: CodexAppServerAuthRequirement;
   config?: AuthProfileOrderConfig;
   pluginConfig?: unknown;
 }): Promise<CodexAppServerStartOptions> {
   if (params.startOptions.transport !== "stdio") {
     return params.startOptions;
   }
-  const scopedStartOptions = await withCodexHomeEnvironment(
-    withEphemeralCodexAuthStore(params),
-    params.agentDir,
-    params.pluginConfig,
-  );
+  const scopeStartOptions = () =>
+    withCodexHomeEnvironment(
+      withEphemeralCodexAuthStore(params),
+      params.agentDir,
+      params.pluginConfig,
+    );
+
   if (params.preparedAuth) {
+    const scopedStartOptions = await scopeStartOptions();
     return withClearedEnvironmentVariables(
       scopedStartOptions,
       CODEX_APP_SERVER_PREPARED_AUTH_ENV_VARS,
     );
   }
   if (params.authProfileId === null) {
-    return scopedStartOptions;
+    return scopeStartOptions();
   }
   const store = resolveCodexAppServerAuthProfileStore({
     agentDir: params.agentDir,
@@ -103,6 +108,11 @@ export async function bridgeCodexAppServerStartOptions(params: {
     store,
     config: params.config,
   });
+  if (!authProfileId) {
+    assertNoUnimportedAgentCodexAuthFile(params);
+  }
+
+  const scopedStartOptions = await scopeStartOptions();
   const shouldClearInheritedOpenAiApiKey = shouldClearOpenAiApiKeyForCodexAuthProfile({
     store,
     authProfileId,
@@ -110,6 +120,53 @@ export async function bridgeCodexAppServerStartOptions(params: {
   return shouldClearInheritedOpenAiApiKey
     ? withClearedEnvironmentVariables(scopedStartOptions, CODEX_APP_SERVER_API_KEY_ENV_VARS)
     : scopedStartOptions;
+}
+
+function assertNoUnimportedAgentCodexAuthFile(params: {
+  startOptions: CodexAppServerStartOptions;
+  agentId?: string;
+  agentDir: string;
+  authRequirement?: CodexAppServerAuthRequirement;
+}): void {
+  // Ephemeral managed starts cannot load this stale file, and the shared-client key
+  // separates auth requirements plus fallback identities. Preserve the supported
+  // stdio API-key login instead of turning a leftover file into a hard failure.
+  if (
+    params.authRequirement === "api-key" &&
+    resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions: params.startOptions })
+  ) {
+    return;
+  }
+  const message = resolveUnimportedAgentCodexAuthMessage(params);
+  if (message) {
+    throw new AgentHarnessPreflightError(message);
+  }
+}
+
+function resolveUnimportedAgentCodexAuthMessage(params: {
+  startOptions: CodexAppServerStartOptions;
+  agentId?: string;
+  agentDir: string;
+}): string | undefined {
+  const managedCodexCli =
+    params.startOptions.commandSource === "managed" ||
+    params.startOptions.commandSource === "resolved-managed";
+  if (
+    params.startOptions.transport !== "stdio" ||
+    !managedCodexCli ||
+    params.startOptions.homeScope === "user"
+  ) {
+    return undefined;
+  }
+  const codexHome = resolveCodexAppServerHomeDir(params.agentDir);
+  const authPath = path.join(codexHome, CODEX_AUTH_JSON_FILENAME);
+  // Managed starts force ephemeral Codex auth, so this file would otherwise be
+  // ignored and the operator would receive only the downstream authentication error.
+  if (!fsSync.existsSync(authPath)) {
+    return undefined;
+  }
+  const targetAgentId = params.agentId?.trim() || "<agent-id>";
+  return `A Codex auth file exists at ${authPath}, but agent-scoped Codex runs use OpenClaw's auth store and do not read that file. Preview only that credential import with \`openclaw migrate plan codex --from <codex-home> --agent ${targetAgentId} --include-secrets --item auth:openai\`, then run \`openclaw migrate apply codex --from <codex-home> --agent ${targetAgentId} --include-secrets --item auth:openai --yes\`. If the plan finds no credentials, remove the stale auth file.`;
 }
 
 export function resolveCodexAppServerAuthProfileId(params: {
@@ -455,6 +512,7 @@ async function withCodexHomeEnvironment(
     } catch (error) {
       throw new AgentHarnessPreflightError("Codex Computer Use client provisioning failed.", {
         cause: error,
+        scope: "harness",
       });
     }
   }

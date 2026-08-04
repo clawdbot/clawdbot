@@ -11,6 +11,34 @@ import {
 describe("ingress retry policy", () => {
   it.each([
     {
+      name: "default cap",
+      config: undefined,
+      expected: [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 64_000, 128_000, 180_000, 180_000],
+    },
+    {
+      name: "independent exponent cap",
+      config: { baseMs: 1_000, maxMs: 1_000_000 },
+      expected: [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 64_000, 128_000, 256_000, 256_000],
+    },
+  ])("preserves the exact retry schedule through attempt 10: $name", ({ config, expected }) => {
+    expect(
+      expected.map((_, index) =>
+        resolveIngressRetryDelayMs(
+          {
+            receivedAt: 0,
+            attempts: index + 1,
+            lastAttemptAt: 0,
+            lastError: "boom",
+          },
+          config,
+          0,
+        ),
+      ),
+    ).toEqual(expected);
+  });
+
+  it.each([
+    {
       name: "no prior error → immediate",
       event: { receivedAt: 0, attempts: 2 },
       now: 10_000,

@@ -7,11 +7,11 @@
 
 import crypto from "node:crypto";
 import path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveLocalPathFromRootsSync } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { MediaFileType, type GatewayAccount } from "../types.js";
 import { formatFileSize, getImageMimeType, getMaxUploadSize } from "../utils/file-utils.js";
-import { formatErrorMessage } from "../utils/format.js";
 import {
   parseQQBotPayload,
   encodePayloadForCron,

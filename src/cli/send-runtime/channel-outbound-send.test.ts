@@ -83,6 +83,8 @@ describe("createChannelOutboundRuntimeSend", () => {
       cfg: {},
       accountId: "default",
       deliveryQueueId: "queue-1",
+      deliveryPartIndex: 3,
+      deliveryPartCount: 4,
       onPlatformSendDispatch,
     });
 
@@ -92,6 +94,8 @@ describe("createChannelOutboundRuntimeSend", () => {
     expect(params.text).toBe("hello");
     expect(params.accountId).toBe("default");
     expect(params.deliveryQueueId).toBe("queue-1");
+    expect(params.deliveryPartIndex).toBe(3);
+    expect(params.deliveryPartCount).toBe(4);
     expect(params.onPlatformSendDispatch).toBe(onPlatformSendDispatch);
   });
 

@@ -14,7 +14,11 @@ import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { SLASH_COMMANDS } from "../../lib/chat/commands.ts";
+import {
+  buildFallbackSlashCommands,
+  replaceSlashCommands,
+  SLASH_COMMANDS,
+} from "../../lib/chat/commands.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
 import type { SessionPatchOptions } from "../../lib/sessions/patch.ts";
 import {
@@ -22,6 +26,7 @@ import {
   createSessionsListResult,
   DEFAULT_CHAT_MODEL_CATALOG,
 } from "../../test-helpers/chat-model.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   getChatAttachmentDataUrl,
@@ -46,6 +51,7 @@ import {
   renderChatModelControls,
   type ChatModelControlsProps,
 } from "./components/chat-model-controls.ts";
+import { ChatSessionRailElement } from "./components/chat-session-rail.ts";
 import {
   resetChatThreadPresentationState,
   resetChatThreadSessionPresentationState,
@@ -1842,8 +1848,134 @@ afterEach(() => {
   renderMessageGroupMock.mockClear();
   assistantAttachmentRenderVersionMock.value = 0;
   resetChatViewState();
+  replaceSlashCommands(buildFallbackSlashCommands());
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+});
+
+describe("session rail open requests", () => {
+  it("does not replay the pane's retained generation after an A-B-A round trip", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    localStorage.setItem("openclaw.chat.observerHud.display", "pill");
+    const container = document.createElement("div");
+    document.body.append(container);
+    let consumedOpenRequest = 0;
+    const onSessionRailOpenRequestConsumed = vi.fn((openRequest: number) => {
+      consumedOpenRequest = openRequest;
+    });
+    const onObserverVisibilityChange = vi.fn();
+    const companion = {
+      exchanges: [],
+      pendingQuestion: null,
+      failedQuestion: null,
+      hint: null,
+      draft: "What changed?",
+    };
+    const renderSession = async (sessionKey: string, sessionRailOpenRequest: number) => {
+      render(
+        renderChat(
+          createChatProps({
+            sessionKey,
+            sessionRailReady: true,
+            sessionRailOpenRequest,
+            sessionRailConsumedOpenRequest: consumedOpenRequest,
+            sessionRailCompanion: companion,
+            onSessionRailOpenRequestConsumed,
+            onObserverVisibilityChange,
+          }),
+        ),
+        container,
+      );
+      const rail = container.querySelector(
+        "openclaw-chat-session-rail",
+      ) as ChatSessionRailElement | null;
+      expect(rail).not.toBeNull();
+      await rail?.updateComplete;
+      return rail;
+    };
+
+    try {
+      let rail = await renderSession("agent:main:a", 1);
+      expect(rail?.querySelector(".chat-session-rail--expanded")).not.toBeNull();
+      expect(consumedOpenRequest).toBe(1);
+
+      rail = await renderSession("agent:main:b", 0);
+      expect(rail?.querySelector(".chat-session-rail--pill")).not.toBeNull();
+
+      rail = await renderSession("agent:main:a", 1);
+      expect(rail?.querySelector(".chat-session-rail--pill")).not.toBeNull();
+      expect(onObserverVisibilityChange).toHaveBeenCalledOnce();
+
+      rail = await renderSession("agent:main:a", 2);
+      expect(rail?.querySelector(".chat-session-rail--expanded")).not.toBeNull();
+      expect(onSessionRailOpenRequestConsumed).toHaveBeenCalledTimes(2);
+      expect(onObserverVisibilityChange).toHaveBeenCalledTimes(2);
+      expect(localStorage.getItem("openclaw.chat.observerHud.display")).toBe("pill");
+    } finally {
+      container.remove();
+    }
+  });
+
+  it("does not replay a consumed generation after the rail unmounts and remounts", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    localStorage.setItem("openclaw.chat.observerHud.display", "pill");
+    const container = document.createElement("div");
+    document.body.append(container);
+    let consumedOpenRequest = 0;
+    const onSessionRailOpenRequestConsumed = vi.fn((openRequest: number) => {
+      consumedOpenRequest = openRequest;
+    });
+    const onObserverVisibilityChange = vi.fn();
+    const renderRail = async (sessionRailReady: boolean, sessionRailOpenRequest: number) => {
+      render(
+        renderChat(
+          createChatProps({
+            sessionKey: "agent:main:a",
+            sessionRailReady,
+            sessionRailOpenRequest,
+            sessionRailConsumedOpenRequest: consumedOpenRequest,
+            sessionRailCompanion: {
+              exchanges: [],
+              pendingQuestion: null,
+              failedQuestion: null,
+              hint: null,
+              draft: "What changed?",
+            },
+            onSessionRailOpenRequestConsumed,
+            onObserverVisibilityChange,
+          }),
+        ),
+        container,
+      );
+      const rail = container.querySelector(
+        "openclaw-chat-session-rail",
+      ) as ChatSessionRailElement | null;
+      await rail?.updateComplete;
+      return rail;
+    };
+
+    try {
+      let rail = await renderRail(true, 1);
+      expect(rail?.querySelector(".chat-session-rail--expanded")).not.toBeNull();
+      expect(consumedOpenRequest).toBe(1);
+
+      rail = await renderRail(false, 1);
+      expect(rail).toBeNull();
+
+      rail = await renderRail(true, 1);
+      expect(rail?.querySelector(".chat-session-rail--pill")).not.toBeNull();
+      expect(onSessionRailOpenRequestConsumed).toHaveBeenCalledOnce();
+      expect(onObserverVisibilityChange).toHaveBeenCalledOnce();
+
+      rail = await renderRail(true, 2);
+      expect(rail?.querySelector(".chat-session-rail--expanded")).not.toBeNull();
+      expect(onSessionRailOpenRequestConsumed).toHaveBeenCalledTimes(2);
+      expect(onObserverVisibilityChange).toHaveBeenCalledTimes(2);
+      expect(localStorage.getItem("openclaw.chat.observerHud.display")).toBe("pill");
+    } finally {
+      container.remove();
+    }
+  });
 });
 
 describe("per-pane chat presentation state", () => {
@@ -3255,6 +3387,491 @@ describe("chat slash menu accessibility", () => {
     expect(onSlashIntent).toHaveBeenCalledTimes(1);
   });
 
+  it("hydrates the skill catalog once per active $ reference", async () => {
+    replaceSlashCommands([
+      ...buildFallbackSlashCommands(),
+      {
+        key: "prose",
+        name: "prose",
+        description: "Prose skill.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+    ]);
+    let draft = "";
+    const onSlashIntent = vi.fn(async () => undefined);
+    const container = document.createElement("div");
+    const renderCurrent = () => {
+      render(
+        renderChat(
+          createChatProps({
+            draft,
+            getDraft: () => draft,
+            onDraftChange: (next) => {
+              draft = next;
+            },
+            onRequestUpdate: renderCurrent,
+            onSlashIntent,
+          }),
+        ),
+        container,
+      );
+    };
+    const type = async (value: string) => {
+      const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+      textarea.value = value;
+      textarea.setSelectionRange(value.length, value.length);
+      textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+      await Promise.resolve();
+      await Promise.resolve();
+    };
+    renderCurrent();
+
+    await type("Use $");
+    await type("Use $p");
+    await type("Use $pro");
+
+    expect(onSlashIntent).toHaveBeenCalledOnce();
+  });
+
+  it("opens a skill picker for $ references anywhere in a normal prompt", async () => {
+    replaceSlashCommands([
+      ...buildFallbackSlashCommands(),
+      {
+        key: "prose",
+        name: "prose",
+        description: "Draft polished prose.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+    ]);
+    let draft = "";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    const onSlashIntent = vi.fn(async () => undefined);
+    const container = document.createElement("div");
+    const renderCurrent = () => {
+      render(
+        renderChat(
+          createChatProps({
+            draft,
+            getDraft: () => draft,
+            onDraftChange,
+            onRequestUpdate: renderCurrent,
+            onSlashIntent,
+          }),
+        ),
+        container,
+      );
+    };
+    renderCurrent();
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.value = "Polish this with $pro:";
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const listbox = container.querySelector<HTMLElement>("#chat-single-skill-menu-listbox");
+    const renderedTextarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(listbox?.getAttribute("aria-label")).toBe("Skill references");
+    expect(listbox?.querySelector(".slash-menu-name")?.textContent).toBe("$prose");
+    expect(renderedTextarea?.getAttribute("aria-controls")).toBe("chat-single-skill-menu-listbox");
+    expect(renderedTextarea?.getAttribute("aria-expanded")).toBe("true");
+    expect(onSlashIntent).toHaveBeenCalledOnce();
+  });
+
+  it("fills a selected $ skill without submitting the surrounding prompt", async () => {
+    replaceSlashCommands([
+      ...buildFallbackSlashCommands(),
+      {
+        key: "prose",
+        name: "prose",
+        description: "Draft polished prose.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+    ]);
+    let draft = "";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    const onSend = vi.fn();
+    const container = document.createElement("div");
+    const renderCurrent = () => {
+      render(
+        renderChat(
+          createChatProps({
+            draft,
+            getDraft: () => draft,
+            onDraftChange,
+            onRequestUpdate: renderCurrent,
+            onSend,
+          }),
+        ),
+        container,
+      );
+    };
+    renderCurrent();
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.value = "Polish this with $pro:";
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+
+    keydownComposer(container, "Enter");
+
+    expect(draft).toBe("Polish this with $prose:");
+    expect(onSend).not.toHaveBeenCalled();
+    expect(container.querySelector(".skill-menu")).toBeNull();
+    await Promise.resolve();
+    const completed = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(completed?.selectionStart).toBe("Polish this with $prose:".length);
+  });
+
+  it("consumes a trailing hyphen from an incomplete skill query", () => {
+    replaceSlashCommands([
+      ...buildFallbackSlashCommands(),
+      {
+        key: "release_notes",
+        name: "release_notes",
+        description: "Draft release notes.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+    ]);
+    let draft = "";
+    const container = document.createElement("div");
+    const renderCurrent = () => {
+      render(
+        renderChat(
+          createChatProps({
+            draft,
+            getDraft: () => draft,
+            onDraftChange: (next) => {
+              draft = next;
+            },
+            onRequestUpdate: renderCurrent,
+          }),
+        ),
+        container,
+      );
+    };
+    renderCurrent();
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.value = "Use $release-";
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+
+    keydownComposer(container, "Enter");
+
+    expect(draft).toBe("Use $release_notes ");
+  });
+
+  it("does not treat common uppercase shell variables as skill references", () => {
+    replaceSlashCommands([
+      ...buildFallbackSlashCommands(),
+      {
+        key: "home",
+        name: "home",
+        description: "Home skill.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+      {
+        key: "editor",
+        name: "editor",
+        description: "Editor skill.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+    ]);
+    let draft = "";
+    const container = document.createElement("div");
+    const renderCurrent = () => {
+      render(
+        renderChat(
+          createChatProps({
+            draft,
+            getDraft: () => draft,
+            onDraftChange: (next) => {
+              draft = next;
+            },
+            onRequestUpdate: renderCurrent,
+          }),
+        ),
+        container,
+      );
+    };
+    renderCurrent();
+    for (const variable of ["HOME", "EDITOR"]) {
+      const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+      textarea.value = `Inspect $${variable}`;
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+      textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+      expect(container.querySelector(".skill-menu")).toBeNull();
+    }
+  });
+
+  it("does not offer skill references inside a slash-command draft", () => {
+    replaceSlashCommands([
+      ...buildFallbackSlashCommands(),
+      {
+        key: "prose",
+        name: "prose",
+        description: "Prose skill.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+    ]);
+    let draft = "";
+    const container = document.createElement("div");
+    const renderCurrent = () => {
+      render(
+        renderChat(
+          createChatProps({
+            draft,
+            getDraft: () => draft,
+            onDraftChange: (next) => {
+              draft = next;
+            },
+            onRequestUpdate: renderCurrent,
+          }),
+        ),
+        container,
+      );
+    };
+    renderCurrent();
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.value = "/status $pro";
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+
+    expect(container.querySelector(".skill-menu")).toBeNull();
+  });
+
+  it("does not submit an incomplete skill reference while the catalog is loading", () => {
+    replaceSlashCommands(buildFallbackSlashCommands());
+    const refresh = createDeferred<void>();
+    let draft = "";
+    const onSend = vi.fn();
+    const container = document.createElement("div");
+    const renderCurrent = () => {
+      render(
+        renderChat(
+          createChatProps({
+            draft,
+            getDraft: () => draft,
+            onDraftChange: (next) => {
+              draft = next;
+            },
+            onRequestUpdate: renderCurrent,
+            onSend,
+            onSlashIntent: () => refresh.promise,
+          }),
+        ),
+        container,
+      );
+    };
+    renderCurrent();
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.value = "Use $pro";
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+    expect(container.querySelector(".skill-menu")?.textContent).toContain("Loading skills");
+    const send = container.querySelector<HTMLButtonElement>(".chat-send-btn");
+    expect(send?.disabled).toBe(true);
+
+    keydownComposer(container, "Enter");
+    send?.click();
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(draft).toBe("Use $pro");
+  });
+
+  it("keeps skill keyboard navigation and selection on the same highlighted item", () => {
+    replaceSlashCommands([
+      ...buildFallbackSlashCommands(),
+      {
+        key: "alpha",
+        name: "alpha",
+        description: "Alpha skill.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+      {
+        key: "beta",
+        name: "beta",
+        description: "Beta skill.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+    ]);
+    let draft = "";
+    const container = document.createElement("div");
+    const renderCurrent = () => {
+      render(
+        renderChat(
+          createChatProps({
+            draft,
+            getDraft: () => draft,
+            onDraftChange: (next) => {
+              draft = next;
+            },
+            onRequestUpdate: renderCurrent,
+          }),
+        ),
+        container,
+      );
+    };
+    renderCurrent();
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.value = "Use $";
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+
+    keydownComposer(container, "ArrowDown");
+    expect(
+      container.querySelector(".skill-menu .slash-menu-item--active .slash-menu-name")?.textContent,
+    ).toBe("$beta");
+    keydownComposer(container, "Enter");
+
+    expect(draft).toBe("Use $beta ");
+    expect(container.querySelector(".skill-menu")).toBeNull();
+  });
+
+  it("does not reopen a dismissed skill picker after a slow refresh", async () => {
+    replaceSlashCommands([
+      ...buildFallbackSlashCommands(),
+      {
+        key: "prose",
+        name: "prose",
+        description: "Prose skill.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+    ]);
+    const refresh = createDeferred<void>();
+    let draft = "";
+    const container = document.createElement("div");
+    const renderCurrent = () => {
+      render(
+        renderChat(
+          createChatProps({
+            draft,
+            getDraft: () => draft,
+            onDraftChange: (next) => {
+              draft = next;
+            },
+            onRequestUpdate: renderCurrent,
+            onSlashIntent: () => refresh.promise,
+          }),
+        ),
+        container,
+      );
+    };
+    renderCurrent();
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.value = "$pro";
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+    expect(container.querySelector(".skill-menu")?.textContent).toContain("Loading skills");
+    expect(container.querySelectorAll(".skill-menu [role='option']")).toHaveLength(0);
+
+    keydownComposer(container, "Escape");
+    expect(container.querySelector(".skill-menu")).toBeNull();
+    refresh.resolve();
+    await refresh.promise;
+    await Promise.resolve();
+
+    expect(container.querySelector(".skill-menu")).toBeNull();
+  });
+
+  it("closes a stale skill picker when the caret leaves its token", () => {
+    replaceSlashCommands([
+      ...buildFallbackSlashCommands(),
+      {
+        key: "prose",
+        name: "prose",
+        description: "Prose skill.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+    ]);
+    let draft = "";
+    const container = document.createElement("div");
+    const renderCurrent = () => {
+      render(
+        renderChat(
+          createChatProps({
+            draft,
+            getDraft: () => draft,
+            onDraftChange: (next) => {
+              draft = next;
+            },
+            onRequestUpdate: renderCurrent,
+          }),
+        ),
+        container,
+      );
+    };
+    renderCurrent();
+    let textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.value = "Use $pro then continue";
+    textarea.setSelectionRange("Use $pro".length, "Use $pro".length);
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+    expect(container.querySelector(".skill-menu")).not.toBeNull();
+
+    textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    textarea.dispatchEvent(new Event("select", { bubbles: true }));
+
+    expect(container.querySelector(".skill-menu")).toBeNull();
+  });
+
+  it("matches backend escape parity and absorbs rejected skill refreshes", async () => {
+    replaceSlashCommands([
+      ...buildFallbackSlashCommands(),
+      {
+        key: "prose",
+        name: "prose",
+        description: "Prose skill.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+    ]);
+    let draft = "";
+    const container = document.createElement("div");
+    const renderCurrent = () => {
+      render(
+        renderChat(
+          createChatProps({
+            draft,
+            getDraft: () => draft,
+            onDraftChange: (next) => {
+              draft = next;
+            },
+            onRequestUpdate: renderCurrent,
+            onSlashIntent: async () => {
+              throw new Error("catalog unavailable");
+            },
+          }),
+        ),
+        container,
+      );
+    };
+    renderCurrent();
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.value = String.raw`Use \\$pro`;
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(container.querySelector(".skill-menu")).not.toBeNull();
+  });
+
   it("does not reopen slash suggestions when command hydration finishes after plain typing", async () => {
     let draft = "";
     const hydration = createDeferred<void>();
@@ -3526,7 +4143,7 @@ describe("chat slash menu accessibility", () => {
     expect(wrapper?.hasAttribute("aria-haspopup")).toBe(false);
     expect(wrapper?.hasAttribute("aria-controls")).toBe(false);
     expect(textarea?.hasAttribute("role")).toBe(false);
-    expect(textarea?.hasAttribute("aria-expanded")).toBe(false);
+    expect(textarea?.getAttribute("aria-expanded")).toBe("true");
     expect(textarea?.hasAttribute("aria-haspopup")).toBe(false);
     expect(textarea?.getAttribute("aria-controls")).toBe("chat-single-slash-menu-listbox");
     expect(textarea?.getAttribute("aria-autocomplete")).toBe("list");
@@ -4381,8 +4998,8 @@ describe("chat welcome", () => {
       canSend: false,
       disabledBanner: {
         kind: "composer-replacement",
-        text: "OpenClaw couldn't find a provider and model configured for this agent. Add one before starting a conversation.",
-        actionLabel: "Configure a provider",
+        text: "We couldn't find a provider and model configured for this agent. Choose a supported connection; OpenClaw will test it before enabling chat.",
+        actionLabel: "Connect an AI provider",
         onAction: () => undefined,
       },
       modelSetupRequired: true,
@@ -4531,6 +5148,38 @@ describe("chat model controls", () => {
     modelOption?.click();
 
     expect(onModelSelect).toHaveBeenCalledWith(modelOption?.dataset.chatModelOption, "main");
+  });
+
+  it("disables runtime overrides with the exact mutation reason", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      models: [
+        { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+      ],
+    });
+    const onFastModeSelect = vi.fn(async () => true);
+    const onModelSelect = vi.fn(async () => true);
+    const onThinkingSelect = vi.fn(async () => true);
+    const reason = "Operator admin access is required.";
+    const container = renderModelControls(state, {
+      mutationDisabledReason: reason,
+      onFastModeSelect,
+      onModelSelect,
+      onThinkingSelect,
+    });
+
+    const modelSelect = getChatModelSelect(container);
+    expect(modelSelect.getAttribute("aria-disabled")).toBe("true");
+    expect(modelSelect.getAttribute("title")).toBe(reason);
+    modelSelect.click();
+    container.querySelector<HTMLButtonElement>("[data-chat-speed-toggle]")?.click();
+    getThinkingSlider(container)?.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onFastModeSelect).not.toHaveBeenCalled();
+    expect(onModelSelect).not.toHaveBeenCalled();
+    expect(onThinkingSelect).not.toHaveBeenCalled();
   });
 
   it("marks the inherited default muted and resets an override from the provenance row", () => {
@@ -4860,6 +5509,45 @@ describe("chat model controls", () => {
       "1.1M context",
     );
     expect(modelOption?.closest("openclaw-tooltip")).toBeNull();
+  });
+
+  it("marks chat-only models in the active control and picker", () => {
+    const { state } = createChatHeaderState({
+      model: "qwen3-8b",
+      modelProvider: "lmstudio",
+      models: [
+        {
+          id: "qwen3-8b",
+          name: "Qwen3 8B",
+          provider: "lmstudio",
+          contextWindow: 32_768,
+          supportsTools: false,
+        },
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          provider: "openai",
+          supportsTools: true,
+        },
+      ],
+    });
+    const container = renderModelControls(state);
+    const trigger = getChatModelSelect(container);
+
+    expect(trigger.dataset.chatModelTools).toBe("unavailable");
+    expect(
+      trigger.querySelector(".chat-controls__model-capability-badge")?.textContent?.trim(),
+    ).toBe("Chat only");
+    expect(trigger.getAttribute("aria-label")).toContain("Chat only");
+    expect(
+      container
+        .querySelector('[data-chat-model-option="lmstudio/qwen3-8b"]')
+        ?.querySelector(".chat-controls__model-option-meta")
+        ?.textContent?.trim(),
+    ).toBe("32.8k context · Chat only");
+    expect(
+      container.querySelector('[data-chat-model-option="openai/gpt-5.5"]')?.textContent,
+    ).not.toContain("Chat only");
   });
 
   it("shows canonical OpenAI model names instead of command aliases", () => {
@@ -5343,6 +6031,72 @@ describe("chat model controls", () => {
     expect(host.chatThinkingLevel).toBe("high");
   });
 
+  it.each([
+    { sessionKey: "global", mainKey: "main" },
+    { sessionKey: "agent:work:main", mainKey: "main" },
+    { sessionKey: "agent:work:home", mainKey: "home" },
+  ])(
+    "does not report a failed selected-global model switch after the selected agent changes for $sessionKey",
+    async ({ sessionKey, mainKey }) => {
+      const modelPatch = createDeferred<unknown>();
+      const modelOverrides: Record<string, string | null> = {
+        [sessionKey]: "openai/gpt-agent-a-old",
+      };
+      let patchOptions: SessionPatchOptions | undefined;
+      const sessions = {
+        state: { modelOverrides },
+        patch: vi.fn(
+          async (_key: string, _patch: Record<string, unknown>, options?: SessionPatchOptions) => {
+            patchOptions = options;
+            return await modelPatch.promise;
+          },
+        ),
+        refresh: async () => {},
+        setModelOverride: vi.fn((key: string, value: string | null | undefined) => {
+          if (value === undefined) {
+            delete modelOverrides[key];
+          } else {
+            modelOverrides[key] = value;
+          }
+        }),
+        patchRowLocal: vi.fn(),
+      };
+      const host = {
+        assistantAgentId: "work",
+        agentsList: { defaultId: "main", mainKey, scope: "global" },
+        client: {},
+        connected: true,
+        sessionKey,
+        chatModelCatalog: [],
+        chatModelSwitchPromises: {},
+        chatThinkingLevel: null,
+        sessions,
+        sessionsResult: createSessionsResultFromRows([
+          {
+            key: sessionKey,
+            kind: "direct",
+            updatedAt: 1,
+            model: "gpt-agent-a-old",
+            modelProvider: "openai",
+          },
+        ]),
+      } as unknown as Parameters<typeof switchChatModel>[0];
+
+      const switching = switchChatModel(host, "openai/gpt-agent-a-new");
+      await waitForFast(() => expect(patchOptions).toBeDefined());
+      expect(patchOptions?.ownsModelOverride?.()).toBe(true);
+
+      host.assistantAgentId = "main";
+      modelPatch.reject(new Error("agent A patch failed"));
+
+      await expect(switching).resolves.toBe(false);
+      expect(patchOptions?.ownsModelOverride?.()).toBe(false);
+      expect(modelOverrides[sessionKey]).toBe("openai/gpt-agent-a-old");
+      expect(host.lastError ?? null).toBeNull();
+      expect(host.chatError ?? null).toBeNull();
+    },
+  );
+
   it("keeps the newest speed selection when an older patch fails late", async () => {
     const pendingPatches: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
     // Minimal host: the factory's mock gateway rebuilds session rows on every
@@ -5681,12 +6435,10 @@ describe("right-click Reply", () => {
   it("keeps inline actions in the context menu alongside user rewind and fork", () => {
     const onRewindMessage = vi.fn().mockResolvedValue(true);
     const onForkMessage = vi.fn();
-    const onOpenSidebar = vi.fn();
     const onCopy = vi.fn();
     const container = renderChatView({
       onRewindMessage,
       onForkMessage,
-      onOpenSidebar,
       onSetReply: vi.fn(),
     });
     const { bubble, group } = appendChatBubble(container, {
@@ -5707,38 +6459,24 @@ describe("right-click Reply", () => {
     expect(onForkMessage).toHaveBeenCalledWith("persisted-user");
 
     group.className = "chat-group assistant";
-    const onSiblingExpand = vi.fn();
     const siblingActionOwner = document.createElement("div");
     siblingActionOwner.dataset.messageActionsFor = "message-0";
-    const siblingExpandButton = document.createElement("button");
-    siblingExpandButton.className = "chat-expand-btn";
-    siblingExpandButton.addEventListener("click", onSiblingExpand);
-    siblingActionOwner.append(siblingExpandButton);
-    const expandButton = document.createElement("button");
-    expandButton.className = "chat-expand-btn";
-    expandButton.addEventListener("click", () =>
-      onOpenSidebar({ kind: "markdown", content: "hello" }),
-    );
     const copyButton = document.createElement("button");
     copyButton.className = "chat-copy-btn";
     copyButton.addEventListener("click", onCopy);
     const actionOwner = document.createElement("div");
     actionOwner.dataset.messageActionsFor = "message-1";
-    actionOwner.append(expandButton, copyButton);
+    actionOwner.append(copyButton);
     group.append(siblingActionOwner, actionOwner);
     bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     expect(
       [...document.querySelectorAll(".chat-reply-context-menu button")].map((button) =>
         button.textContent?.trim(),
       ),
-    ).toEqual(["Reply", "Hide message", "Open in canvas", "Copy as markdown"]);
+    ).toEqual(["Reply", "Hide message", "Copy as markdown"]);
     expect(
       document.querySelector('.chat-reply-context-menu [aria-label="Reply to message"] svg'),
     ).toBeNull();
-
-    document.querySelector<HTMLButtonElement>('[aria-label="Open in canvas"]')!.click();
-    expect(onOpenSidebar).toHaveBeenCalledWith({ kind: "markdown", content: "hello" });
-    expect(onSiblingExpand).not.toHaveBeenCalled();
 
     bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     document.querySelector<HTMLButtonElement>('[aria-label="Copy as markdown"]')!.click();

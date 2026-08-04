@@ -48,6 +48,10 @@ type JsonResult<T> = Promise<T>;
 const QA_BUS_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 /** Total deadline for local qa-bus POST requests and long-poll response grace. */
 const QA_BUS_REQUEST_TIMEOUT_MS = 10_000;
+// Final replies can contend with CPU-heavy QA lanes on the shared release
+// runner. Keep delivery inside the outer turn budget without treating a brief
+// local scheduling stall as a channel failure.
+const QA_BUS_MESSAGE_REQUEST_TIMEOUT_MS = 30_000;
 /** Total deadline for local qa-bus state requests. */
 const QA_BUS_STATE_TIMEOUT_MS = 10_000;
 
@@ -190,7 +194,9 @@ export async function sendQaBusMessage(params: {
   attachments?: import("./protocol.js").QaBusAttachment[];
   toolCalls?: QaBusToolCall[];
 }) {
-  return await postJson<{ message: QaBusMessage }>(params.baseUrl, "/v1/outbound/message", params);
+  return await postJson<{ message: QaBusMessage }>(params.baseUrl, "/v1/outbound/message", params, {
+    timeoutMs: QA_BUS_MESSAGE_REQUEST_TIMEOUT_MS,
+  });
 }
 
 export async function createQaBusThread(params: {

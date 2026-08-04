@@ -1,18 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { clearAgentHarnesses } from "../agents/harness/registry.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { activateContextEngineRegistrations } from "../context-engine/registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_MEMORY_DREAMING_PLUGIN_ID,
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingPluginConfig,
 } from "../memory-host-sdk/dreaming.js";
-import { clearDetachedTaskLifecycleRuntimeRegistration } from "../tasks/detached-task-runtime-state.js";
-import { clearPluginCommands } from "./command-registry-state.js";
-import { clearCompactionProviders } from "./compaction-provider.js";
 import {
   resolveEffectiveEnableState,
   type NormalizedPluginsConfig,
@@ -21,22 +21,24 @@ import {
 } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import type { PluginCandidate } from "./discovery.js";
-import { clearEmbeddingProviders } from "./embedding-providers.js";
-import { initializeGlobalHookRunner } from "./hook-runner-global.js";
+import {
+  getGlobalPluginRegistry,
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "./hook-runner-global.js";
 import { collectPluginManifestCompatCodes } from "./installed-plugin-index-record-builder.js";
-import { clearPluginInteractiveHandlers } from "./interactive-registry.js";
-import { clearLegacyPluginInternalHooks } from "./legacy-internal-hook-state.js";
 import { createPluginRecord } from "./loader-records.js";
 import type { PluginLoadOptions, PluginRuntimeSubagentMode } from "./loader-types.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
-import { clearMemoryEmbeddingProviders } from "./memory-embedding-providers.js";
-import { clearMemoryPluginState } from "./memory-state.js";
-import { clearPluginRuntimeArtifactResolutionMemo } from "./plugin-runtime-artifact-resolution.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
-import { setActivePluginRegistry } from "./runtime.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  commitStagedPluginRegistry,
+  restoreActivePluginRegistrySnapshot,
+  stageActivePluginRegistry,
+} from "./runtime.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
-import { clearSessionDiscussionProvider } from "./session-discussion-registry.js";
 import { hasKind } from "./slots.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type { PluginLogger } from "./types.js";
@@ -166,23 +168,6 @@ export function createPluginCandidatesFromManifestRegistry(
   }));
 }
 
-export function clearActivatedPluginRuntimeState(): void {
-  clearPluginRuntimeArtifactResolutionMemo();
-  clearAgentHarnesses();
-  clearPluginCommands();
-  clearCompactionProviders();
-  clearDetachedTaskLifecycleRuntimeRegistration();
-  clearPluginInteractiveHandlers();
-  // Legacy api.registerHook callbacks are process-global compatibility state.
-  // Retire them with the active registry so disabled or removed plugins cannot
-  // keep running.
-  clearLegacyPluginInternalHooks();
-  clearEmbeddingProviders();
-  clearMemoryEmbeddingProviders();
-  clearMemoryPluginState();
-  clearSessionDiscussionProvider();
-}
-
 class PluginLoadFailureError extends Error {
   readonly pluginIds: string[];
   readonly registry: PluginRegistry;
@@ -303,7 +288,9 @@ export function createManifestPluginRecord(params: {
     description: manifestRecord.description,
     packageVersion: manifestRecord.packageVersion,
     version: manifestRecord.version,
-    builtWithOpenClawVersion: candidate.packageManifest?.build?.openclawVersion?.trim(),
+    builtWithOpenClawVersion: normalizeOptionalString(
+      candidate.packageManifest?.build?.openclawVersion,
+    ),
     packageName: manifestRecord.packageName,
     format: manifestRecord.format,
     bundleFormat: manifestRecord.bundleFormat,
@@ -359,14 +346,28 @@ export function maybeThrowOnPluginLoadError(
 
 export function activatePluginRegistry(
   registry: PluginRegistry,
-  cacheKey: string,
+  cacheKey: string | null,
   runtimeSubagentMode: PluginRuntimeSubagentMode,
   workspaceDir?: string,
 ): void {
-  // Reinitialize from the live registry set so activation order and scope cannot
-  // drop hooks through a stale runner (#91918).
-  setActivePluginRegistry(registry, cacheKey, runtimeSubagentMode, workspaceDir);
-  initializeGlobalHookRunner(registry);
+  const activeSnapshot = captureActivePluginRegistrySnapshot();
+  const previousHookRegistry = getGlobalPluginRegistry();
+  try {
+    // Install the complete bundle before hook-runner initialization so hook composition never
+    // observes contributions from two loads. Activation failure restores the prior selection.
+    stageActivePluginRegistry(registry, cacheKey, runtimeSubagentMode, workspaceDir);
+    initializeGlobalHookRunner(registry);
+    activateContextEngineRegistrations(registry);
+    commitStagedPluginRegistry(activeSnapshot.activeRegistry, registry);
+  } catch (error) {
+    restoreActivePluginRegistrySnapshot(activeSnapshot);
+    if (previousHookRegistry) {
+      initializeGlobalHookRunner(previousHookRegistry);
+    } else {
+      resetGlobalHookRunner();
+    }
+    throw error;
+  }
 }
 
 export function safeRealpathOrResolve(value: string): string {

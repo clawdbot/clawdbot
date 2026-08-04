@@ -78,7 +78,7 @@
     "agents_list",
     "message",
     "sessions_spawn",
-    "cron",
+    "automations",
     "gateway",
     "nodes",
     "session_status",
@@ -221,20 +221,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 61437,
-    "roughTokens": 15360
+    "chars": 61490,
+    "roughTokens": 15373
   },
   "openClawDeveloperInstructions": {
-    "chars": 3804,
-    "roughTokens": 951
+    "chars": 3811,
+    "roughTokens": 953
   },
   "totalTextOnly": {
-    "chars": 28187,
-    "roughTokens": 7047
+    "chars": 28194,
+    "roughTokens": 7049
   },
   "totalWithDynamicToolsJson": {
-    "chars": 89626,
-    "roughTokens": 22407
+    "chars": 89686,
+    "roughTokens": 22422
   },
   "userInputText": {
     "chars": 1300,
@@ -421,7 +421,7 @@ Approval policy is currently never. Do not provide the `sandbox_permissions` for
 ````text
 You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.
 
-Deferred searchable OpenClaw dynamic tools available: cron, gateway, nodes, session_status, sessions_history, sessions_list, sessions_search, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
+Deferred searchable OpenClaw dynamic tools available: automations, gateway, nodes, session_status, sessions_history, sessions_list, sessions_search, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
 
 Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred: when `spawn_agent` is not directly listed, load it with `tool_search` before spawning. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.
 
@@ -517,7 +517,7 @@ can you audit whether this prompt path has conflicting silence instructions?
 
 ### Tools: Dynamic Tool Catalog
 
-Full JSON: `codex-dynamic-tools.discord-group.json`
+Full tool overrides: `codex-dynamic-tools.discord-group.json` (base: `codex-dynamic-tools.telegram-direct.json`)
 
 ## Dynamic Tool Names
 
@@ -526,7 +526,7 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
   "agents_list",
   "message",
   "sessions_spawn",
-  "cron",
+  "automations",
   "gateway",
   "nodes",
   "session_status",

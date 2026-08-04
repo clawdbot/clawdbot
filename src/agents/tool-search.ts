@@ -27,6 +27,8 @@ import {
 import { applyToolSchemaDirectoryCatalog } from "./tool-search-directory.js";
 import { MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS } from "./tool-search-directory.js";
 import {
+  formatToolSearchControlError,
+  formatToolSearchControlResult,
   readToolSearchArgs,
   readToolSearchCallArgs,
   readToolSearchId,
@@ -155,17 +157,30 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
         args: unknown,
         signal?: AbortSignal,
         onUpdate?: AgentToolUpdateCallback,
-      ): Promise<AgentToolResult<unknown>> =>
-        jsonResult(
-          await runCodeMode({
+      ): Promise<AgentToolResult<unknown>> => {
+        let executionRuntime: ToolSearchRuntime | undefined;
+        try {
+          const result = await runCodeMode({
             toolCallId,
             ctx,
             code: readToolSearchCode(args),
             config,
             signal,
             onUpdate,
-          }),
-        ),
+            onRuntime: (value) => {
+              executionRuntime = value;
+            },
+          });
+          return formatToolSearchControlResult(result, executionRuntime);
+        } catch (error) {
+          throw formatToolSearchControlError(
+            error,
+            executionRuntime,
+            toolCallId,
+            signal ?? ctx.abortSignal,
+          );
+        }
+      },
     },
     {
       name: TOOL_SEARCH_RAW_TOOL_NAME,
@@ -213,13 +228,16 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
         onUpdate?: AgentToolUpdateCallback,
       ): Promise<AgentToolResult<unknown>> => {
         const call = readToolSearchCallArgs(args, resolveCatalog(ctx));
-        return jsonResult(
-          await runtime.call(call.id, call.input, {
+        try {
+          const result = await runtime.call(call.id, call.input, {
             parentToolCallId: toolCallId,
             signal,
             onUpdate,
-          }),
-        );
+          });
+          return formatToolSearchControlResult(result, runtime, toolCallId);
+        } catch (error) {
+          throw formatToolSearchControlError(error, runtime, toolCallId, signal ?? ctx.abortSignal);
+        }
       },
     },
   ];

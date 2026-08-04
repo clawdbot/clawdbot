@@ -49,7 +49,7 @@ export async function editForumTopicTelegram(
   if (nameProvided && !trimmedName) {
     throw new Error("Telegram forum topic name is required");
   }
-  if (trimmedName && trimmedName.length > 128) {
+  if (trimmedName && Array.from(trimmedName).length > 128) {
     throw new Error("Telegram forum topic name must be 128 characters or fewer");
   }
   const iconProvided = opts.iconCustomEmojiId !== undefined;
@@ -177,7 +177,7 @@ export async function createForumTopicTelegram(
     throw new Error("Forum topic name is required");
   }
   const trimmedName = name.trim();
-  if (trimmedName.length > 128) {
+  if (Array.from(trimmedName).length > 128) {
     throw new Error("Forum topic name must be 128 characters or fewer");
   }
 

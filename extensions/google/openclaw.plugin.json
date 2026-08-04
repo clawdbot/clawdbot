@@ -669,6 +669,7 @@
             "type": "local-file-with-env",
             "fileEnvVar": "GOOGLE_APPLICATION_CREDENTIALS",
             "fallbackPaths": [
+              "${CLOUDSDK_CONFIG}/application_default_credentials.json",
               "${HOME}/.config/gcloud/application_default_credentials.json",
               "${APPDATA}/gcloud/application_default_credentials.json"
             ],
@@ -692,28 +693,16 @@
       "method": "api-key",
       "choiceId": "gemini-api-key",
       "appGuidedSecret": true,
-      "choiceLabel": "Google Gemini API key",
-      "choiceHint": "Free API key from aistudio.google.com/apikey",
+      "choiceLabel": "Google AI Studio API key",
+      "choiceHint": "Supported API-key access from aistudio.google.com/apikey",
       "groupId": "google",
       "groupLabel": "Google",
-      "groupHint": "Gemini API key + OAuth",
+      "groupHint": "Supported API-key setup",
       "onboardingFeatured": true,
       "optionKey": "geminiApiKey",
       "cliFlag": "--gemini-api-key",
       "cliOption": "--gemini-api-key <key>",
       "cliDescription": "Gemini API key"
-    },
-    {
-      "provider": "google-gemini-cli",
-      "method": "oauth",
-      "choiceId": "google-gemini-cli",
-      "appGuidedAuth": "oauth",
-      "choiceLabel": "Gemini CLI OAuth",
-      "choiceHint": "Sign in with your Google account (opens a browser)",
-      "groupId": "google",
-      "groupLabel": "Google",
-      "groupHint": "Gemini API key + OAuth",
-      "onboardingFeatured": true
     }
   ],
   "uiHints": {
@@ -730,6 +719,16 @@
     "webSearch.baseUrl": {
       "label": "Gemini Search Base URL",
       "help": "Optional Gemini API base URL for web search grounding proxies."
+    },
+    "webSearch.headers": {
+      "label": "Gemini Search Headers",
+      "help": "Optional headers merged into Gemini web search requests. Use a SecretRef value when a header contains a secret.",
+      "advanced": true
+    }
+  },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [{ "path": "webSearch.headers.*", "expected": "string" }]
     }
   },
   "contracts": {
@@ -740,8 +739,7 @@
     "realtimeVoiceProviders": ["google"],
     "speechProviders": ["google"],
     "videoGenerationProviders": ["google"],
-    "webSearchProviders": ["gemini"],
-    "usageProviders": ["google-gemini-cli"]
+    "webSearchProviders": ["gemini"]
   },
   "mediaUnderstandingProviderMetadata": {
     "google": {
@@ -775,6 +773,12 @@
           },
           "baseUrl": {
             "type": "string"
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": ["string", "object"]
+            }
           }
         }
       }

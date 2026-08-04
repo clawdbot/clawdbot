@@ -12,6 +12,7 @@ import {
   ArchiveSecurityError,
   extractArchive,
 } from "../infra/archive.js";
+import { createBackupLinkCache } from "../infra/backup-volatile-stat-cache.js";
 import { formatErrorMessage as errorMessage } from "../infra/errors.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import {
@@ -48,18 +49,6 @@ const BACKUP_LEASE_PROBE_INTERVAL_MS = 30_000;
 const RESTORE_VERIFY_TIMEOUT_MS = 60_000;
 const RESTORE_VERIFY_POLL_MS = 1_000;
 const RESTORE_EXTRACT_TIMEOUT_MS = 30 * 60_000;
-
-type BackupLinkCacheKey = `${number}:${number}`;
-
-class BackupLinkCache extends Map<BackupLinkCacheKey, string> {
-  override get(_key: BackupLinkCacheKey): undefined {
-    return undefined;
-  }
-
-  override set(_key: BackupLinkCacheKey, _value: string): this {
-    return this;
-  }
-}
 
 type FleetBackupManifest = {
   schemaVersion: 1;
@@ -316,7 +305,7 @@ export async function backupFleetCell(params: {
           gzip: true,
           portable: true,
           preservePaths: true,
-          linkCache: new BackupLinkCache(),
+          linkCache: createBackupLinkCache(),
           filter,
           onWriteEntry: (entry) => {
             entry.path = remapArchivePath(entry.path, manifestPath, dataTarget, authTarget);

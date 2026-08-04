@@ -2,6 +2,10 @@ import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runt
 // Qa Lab plugin module implements qa transport registry behavior.
 import type { QaBusState } from "./bus-state.js";
 import {
+  acquireQaCredentialLease,
+  startQaCredentialLeaseHeartbeat,
+} from "./live-transports/shared/credential-lease.runtime.js";
+import {
   createQaChannelTransport,
   QA_CHANNEL_DEFAULT_SUITE_CONCURRENCY,
 } from "./qa-channel-transport.js";
@@ -102,6 +106,10 @@ function createQaTransportAdapterFactoryRegistry(
           const definition = await factory.create({
             adapterOptions: context.adapterOptions,
             channelId: context.channelId,
+            credentials: {
+              acquire: acquireQaCredentialLease,
+              startHeartbeat: startQaCredentialLeaseHeartbeat,
+            },
             driver: context.driver,
             messages: {
               addInboundMessage: (input) => context.state.addInboundMessage(input),

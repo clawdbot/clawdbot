@@ -13,6 +13,7 @@ import {
   makePersistedCall,
   writeCallsToStore,
 } from "./manager.test-harness.js";
+import { MAX_CALL_REPLAY_KEYS } from "./manager/replay-keys.js";
 import { loadActiveCallsFromStore } from "./manager/store.js";
 import { setVoiceCallStateRuntime } from "./runtime-state.js";
 
@@ -391,11 +392,15 @@ describe("CallManager verification on restore", () => {
 
   it("restores dedupe keys from terminal persisted calls so replayed webhooks stay ignored", async () => {
     const storePath = createTestStorePath();
+    const replayKeys = Array.from(
+      { length: MAX_CALL_REPLAY_KEYS + 2 },
+      (_, index) => `evt-terminal-${index}`,
+    );
     const persisted = makePersistedCall({
       state: "completed",
       endedAt: Date.now() - 5_000,
       endReason: "completed",
-      processedEventIds: ["evt-terminal-init"],
+      processedEventIds: replayKeys,
     });
     writeCallsToStore(storePath, [persisted]);
 
@@ -409,7 +414,7 @@ describe("CallManager verification on restore", () => {
     await manager.initialize(provider, "https://example.com/voice/webhook");
 
     manager.processEvent({
-      id: "evt-terminal-init",
+      id: replayKeys.at(-1) as string,
       type: "call.initiated",
       callId: String(persisted.providerCallId),
       providerCallId: String(persisted.providerCallId),
@@ -420,5 +425,18 @@ describe("CallManager verification on restore", () => {
     });
 
     expect(manager.getActiveCalls()).toHaveLength(0);
+
+    manager.processEvent({
+      id: replayKeys[0] as string,
+      type: "call.initiated",
+      callId: String(persisted.providerCallId),
+      providerCallId: String(persisted.providerCallId),
+      timestamp: Date.now(),
+      direction: "outbound",
+      from: "+15550000000",
+      to: "+15550000001",
+    });
+
+    expect(manager.getActiveCalls()).toHaveLength(1);
   });
 });

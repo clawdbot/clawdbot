@@ -11,6 +11,7 @@ import {
 } from "../app/context.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import type { ThemeMode } from "../app/theme.ts";
+import { readSessionMethodAccess, type SessionMethodAccess } from "../lib/session-method-access.ts";
 import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-handoff.ts";
 import { SESSION_NAVIGATION_KEY_PARAM } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
@@ -90,6 +91,31 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   ): void {
     if (!new URLSearchParams(options.search ?? "").has(SESSION_NAVIGATION_KEY_PARAM)) {
       this.setApplicationSession(sessionKey, fallbackAgentId);
+    }
+  }
+
+  readNewSessionAccess(): SessionMethodAccess {
+    return readSessionMethodAccess(this.connected ? this.context?.gateway.snapshot : null, {
+      method: "sessions.create",
+      params: {},
+    });
+  }
+
+  readSessionMutationAccess(request: {
+    method: string;
+    params?: unknown;
+    requiredScope?: "operator.write" | "operator.admin";
+  }): SessionMethodAccess {
+    return readSessionMethodAccess(this.connected ? this.context?.gateway.snapshot : null, request);
+  }
+
+  requestOpenNewSession(agentId: string, target?: NewSessionTarget): void {
+    if (this.readNewSessionAccess().allowed) {
+      if (target) {
+        this.onOpenNewSession?.(agentId, target);
+      } else {
+        this.onOpenNewSession?.(agentId);
+      }
     }
   }
 }

@@ -66,6 +66,8 @@ export type SkillCommandSpec = {
   skillFile?: string;
   skillName: string;
   description: string;
+  /** Whether the model can resolve this skill from its available-skills prompt. */
+  modelVisible?: boolean;
   /** Bounded source label used for diagnostics. */
   skillSource?: SkillTelemetrySource;
   /** Localized descriptions for native command surfaces that support them. */

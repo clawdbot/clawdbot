@@ -110,6 +110,7 @@ export type ToolSearchCatalogEntry = {
 
 export type ToolSearchCatalogSession = {
   entries: ToolSearchCatalogEntry[];
+  counterScope: string;
   searchCount: number;
   describeCount: number;
   callCount: number;

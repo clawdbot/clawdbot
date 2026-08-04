@@ -207,7 +207,15 @@ function hostGroupedNativeCatalogs() {
 
 async function expandCodingSection(page: Page) {
   const toggle = page.locator('[data-session-section="work"] .sidebar-session-group-toggle');
-  await toggle.waitFor({ state: "visible" });
+  await page.waitForFunction(() =>
+    Boolean(
+      document.querySelector('[data-session-section="work"]') ??
+      document.querySelector('[data-session-section^="catalog:"]'),
+    ),
+  );
+  if ((await toggle.count()) === 0) {
+    return;
+  }
   if ((await toggle.getAttribute("aria-expanded")) === "false") {
     await toggle.click();
   }
@@ -259,6 +267,9 @@ suite("Claude native session catalog", () => {
         expect(await gatewayHost.getByText("Gateway Mac", { exact: true }).count()).toBe(0);
         expect(await gatewayHost.locator(".sidebar-recent-session").count()).toBe(1);
         expect(await buildHost.locator(".sidebar-recent-session").count()).toBe(1);
+        expect(await section.getByText(`${catalogLabel} local plan`, { exact: true }).count()).toBe(
+          1,
+        );
       }
 
       const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();

@@ -154,6 +154,8 @@ describe("normalizePluginsConfig", () => {
         llm: {
           allowModelOverride: true,
           allowedModels: [" openai/gpt-5.4 ", "", "anthropic/claude-sonnet-4-6"],
+          allowedCompletionModels: [" openai/gpt-5.4 ", "", "google/gemini-3-flash"],
+          allowAuthProfileOverride: true,
           allowAgentIdOverride: false,
         },
       })?.llm,
@@ -161,6 +163,9 @@ describe("normalizePluginsConfig", () => {
       allowModelOverride: true,
       hasAllowedModelsConfig: true,
       allowedModels: ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"],
+      hasAllowedCompletionModelsConfig: true,
+      allowedCompletionModels: ["openai/gpt-5.4", "google/gemini-3-flash"],
+      allowAuthProfileOverride: true,
       allowAgentIdOverride: false,
     });
   });

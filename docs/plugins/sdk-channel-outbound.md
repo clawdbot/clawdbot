@@ -201,6 +201,37 @@ Use `payloadOutcomes` when a batch mixes sent, suppressed, and failed
 payloads. Do not infer hook cancellation from an empty legacy
 direct-delivery result.
 
+### Automatic unknown-send reconciliation
+
+Set `message.durableFinal.automaticUnknownSendReconciliation` only when the
+plugin can reconcile an ambiguous provider send from persisted, post-policy
+state without rerunning modifying hooks or regenerating provider payloads.
+Core considers this opt-in after hooks and cancellation, and only for exactly
+one accepted prepared payload. Multi-payload batches do not opt in
+automatically.
+
+The adapter must also advertise `capabilities.reconcileUnknownSend: true` and
+provide `reconcileUnknownSend(...)`. Use `reconcileUnknownSendKinds` to name
+the concrete transport branches the plugin can prove, such as `text` or
+`media`. If the kind map is present, the selected branch must be `true`.
+Omitting the map means the callback claims every selected branch, so prefer an
+explicit map for new plugins.
+
+The callback must use provider-owned idempotency or authoritative readback to
+return `sent` with the actual provider receipt, `not_sent` only when a fresh
+send is provably safe, or `unresolved` when neither outcome can be proven.
+When reconciliation is explicitly required, unsupported prepared shapes fail
+before provider I/O. During recovery, missing, incomplete, or mismatched
+provider proof must fail closed rather than replaying content that could
+already be visible.
+
+If reconciliation needs provider-owned persisted evidence, implement
+`afterUnknownSendTerminal(...)`. Core calls it after the ambiguous queue row
+has authoritatively moved to failed, including retry-budget exhaustion. Use it
+to remove provider-owned plans or payloads that are no longer needed. Cleanup
+is best effort and must be idempotent; a failure is logged without making the
+terminal queue row replayable again.
+
 ## Deferred delivery admission
 
 Use `message.durableFinal.admitDeferredDelivery(...)` when a resolved account

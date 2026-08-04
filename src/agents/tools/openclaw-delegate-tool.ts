@@ -48,7 +48,7 @@ function createOpenClawDelegateTool(options?: {
     name: "openclaw",
     label: "OpenClaw",
     description:
-      "Ask system expert. Config, channels, plugins, agents, models/providers, updates. Writes need human approval.",
+      "Ask system expert. Gateway restart, config, channels, plugins, agents, models/providers, updates. Changes need human approval.",
     parameters: OpenClawDelegateSchema,
     outputSchema: OpenClawDelegateOutputSchema,
     execute: async (_toolCallId, args) => {

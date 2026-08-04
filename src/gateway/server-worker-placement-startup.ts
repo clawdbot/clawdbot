@@ -41,7 +41,8 @@ const loadWorkerPlacementSessionRuntimeModule = createLazyRuntimeModule(async ()
     managedWorktrees,
     resolveWorkerPlacementSessionRuntime:
       placementSessionRuntime.resolveWorkerPlacementSessionRuntime,
-    resolveFreshestSessionEntryFromStoreKeys: sessionUtils.resolveFreshestSessionEntryFromStoreKeys,
+    resolveCanonicalSessionEntryFromStoreKeys:
+      sessionUtils.resolveCanonicalSessionEntryFromStoreKeys,
     resolveGatewaySessionStoreTargetWithStore:
       sessionUtils.resolveGatewaySessionStoreTargetWithStore,
   };
@@ -166,7 +167,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
   }): Promise<string> => {
     const {
       managedWorktrees,
-      resolveFreshestSessionEntryFromStoreKeys,
+      resolveCanonicalSessionEntryFromStoreKeys,
       resolveGatewaySessionStoreTargetWithStore,
     } = await loadWorkerPlacementSessionRuntimeModule();
     const target = resolveGatewaySessionStoreTargetWithStore({
@@ -175,7 +176,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
       agentId,
       clone: false,
     });
-    const sessionEntry = resolveFreshestSessionEntryFromStoreKeys(target.store, target.storeKeys);
+    const sessionEntry = resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
     const worktree = managedWorktrees.findLiveByOwner("session", target.canonicalKey);
     if (
       sessionEntry?.sessionId !== sessionId ||
@@ -197,7 +198,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         const {
           isWorkerPlacementSessionRuntimeSupported,
           managedWorktrees,
-          resolveFreshestSessionEntryFromStoreKeys,
+          resolveCanonicalSessionEntryFromStoreKeys,
           resolveGatewaySessionStoreTargetWithStore,
           resolveWorkerPlacementSessionRuntime,
         } = await loadWorkerPlacementSessionRuntimeModule();
@@ -225,7 +226,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
               agentId,
               clone: false,
             });
-            const currentEntry = resolveFreshestSessionEntryFromStoreKeys(
+            const currentEntry = resolveCanonicalSessionEntryFromStoreKeys(
               currentTarget.store,
               currentTarget.storeKeys,
             );
@@ -299,7 +300,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         const {
           isWorkerPlacementSessionRuntimeSupported,
           managedWorktrees,
-          resolveFreshestSessionEntryFromStoreKeys,
+          resolveCanonicalSessionEntryFromStoreKeys,
           resolveGatewaySessionStoreTargetWithStore,
           resolveWorkerPlacementSessionRuntime,
         } = await loadWorkerPlacementSessionRuntimeModule();
@@ -327,7 +328,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
               agentId,
               clone: false,
             });
-            const currentEntry = resolveFreshestSessionEntryFromStoreKeys(
+            const currentEntry = resolveCanonicalSessionEntryFromStoreKeys(
               currentTarget.store,
               currentTarget.storeKeys,
             );
@@ -376,7 +377,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
       runReclaimBarrier: async ({ sessionId, sessionKey, agentId, reclaim }) => {
         const {
           managedWorktrees,
-          resolveFreshestSessionEntryFromStoreKeys,
+          resolveCanonicalSessionEntryFromStoreKeys,
           resolveGatewaySessionStoreTargetWithStore,
         } = await loadWorkerPlacementSessionRuntimeModule();
         const target = resolveGatewaySessionStoreTargetWithStore({
@@ -403,7 +404,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
               agentId,
               clone: false,
             });
-            const currentEntry = resolveFreshestSessionEntryFromStoreKeys(
+            const currentEntry = resolveCanonicalSessionEntryFromStoreKeys(
               currentTarget.store,
               currentTarget.storeKeys,
             );

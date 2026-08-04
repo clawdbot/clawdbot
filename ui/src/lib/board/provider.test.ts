@@ -1,12 +1,12 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayBoardProvider } from "./gateway-provider.ts";
 import { registerBoardProviderLeaseCases } from "./provider.lease-cases.test-support.ts";
 import {
   acquireBoardProviderForSession,
   boardExists,
   boardProviderForSession,
   canvasWidgetNameForDocument,
-  GatewayBoardProvider,
   hasLoadedBoardSnapshot,
   mcpAppWidgetNameForViewId,
   recordSessionBoardAvailability,

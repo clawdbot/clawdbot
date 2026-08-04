@@ -7,7 +7,7 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 vi.mock("../../plugins/runtime.js", () => ({
-  getActivePluginSessionExtensionRegistry: () => hoisted.activeRegistry,
+  getActivePluginRegistry: () => hoisted.activeRegistry,
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({

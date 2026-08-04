@@ -8,6 +8,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
+import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_UNIFIED_CONFIG_GROUP,
@@ -75,13 +76,18 @@ function removeDistPluginNodeModulesSymlinks(rootDir) {
   }
 }
 
-function pruneStaleRuntimeSymlinks() {
-  const cwd = process.cwd();
+export function pruneStaleRuntimeSymlinks(params = {}) {
+  const cwd = params.cwd ?? process.cwd();
+  const fsImpl = params.fs ?? fs;
+  const distRoot = path.join(cwd, "dist");
+  const distRuntimeRoot = path.join(cwd, "dist-runtime");
+  assertRealOutputRoot(distRoot, { fs: fsImpl });
+  assertRealOutputRoot(distRuntimeRoot, { fs: fsImpl });
   // runtime-postbuild stages plugin-owned node_modules into dist/ and links the
   // dist-runtime overlay back to that tree. Remove only those symlinks up front
   // so tsdown's clean step cannot traverse stale runtime overlays on rebuilds.
-  removeDistPluginNodeModulesSymlinks(path.join(cwd, "dist"));
-  removeDistPluginNodeModulesSymlinks(path.join(cwd, "dist-runtime"));
+  removeDistPluginNodeModulesSymlinks(distRoot);
+  removeDistPluginNodeModulesSymlinks(distRuntimeRoot);
 }
 
 /**
@@ -92,6 +98,12 @@ export function cleanTsdownOutputRoots(params = {}) {
   const fsImpl = params.fs ?? fs;
   const env = params.env ?? process.env;
   const roots = params.roots ?? listTsdownOutputRoots();
+  const rootPaths = roots.map((root) => path.join(cwd, root));
+  // Validate the complete mutation set before traversing protected children or
+  // cleaning any earlier root; otherwise a later symlink can leave a partial build.
+  for (const rootPath of rootPaths) {
+    assertRealOutputRoot(rootPath, { fs: fsImpl });
+  }
   const protectedDeclarationPaths =
     env[RUN_NODE_SKIP_DTS_BUILD_ENV] === "1"
       ? listExistingDeclarationOutputPaths({
@@ -104,8 +116,7 @@ export function cleanTsdownOutputRoots(params = {}) {
     ...protectedDeclarationPaths,
     ...listExistingPreservedOutputPaths({ cwd, env, fs: fsImpl }),
   ]);
-  for (const root of roots) {
-    const rootPath = path.join(cwd, root);
+  for (const rootPath of rootPaths) {
     try {
       if (hasProtectedChild({ rootPath, protectedPaths })) {
         cleanOutputRootExcept(rootPath, protectedPaths, fsImpl);
@@ -203,6 +214,9 @@ export function pruneStaleRootChunkFiles(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const fsImpl = params.fs ?? fs;
   const roots = listTsdownOutputRoots({ cwd, fs: fsImpl }).map((root) => path.join(cwd, root));
+  for (const root of roots) {
+    assertRealOutputRoot(root, { fs: fsImpl });
+  }
   for (const root of roots) {
     let entries;
     try {

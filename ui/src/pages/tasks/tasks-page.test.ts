@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { sessionRefFromPath } from "../../app-session-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { TaskStatus, TaskSummary } from "../../lib/tasks/data.ts";
+import type { TaskStatus, TaskSummary } from "../../lib/tasks/task-summary.ts";
 import "./tasks-page.ts";
 
 type TasksPageTestElement = HTMLElement & {
@@ -11,6 +11,7 @@ type TasksPageTestElement = HTMLElement & {
   error: string | null;
   cancellingTaskIds: Set<string>;
   cancelTask: (taskId: string) => Promise<void>;
+  recoverTask: (taskId: string, action: "retry" | "dismiss") => Promise<void>;
   refreshTasks: () => Promise<void>;
 };
 
@@ -380,5 +381,108 @@ describe("TasksPage cancellation lifecycle", () => {
 
     expect(page.error).toBeNull();
     expect(page.cancellingTaskIds.size).toBe(0);
+  });
+
+  it("retries a blocked completion and applies the returned delivery projection", async () => {
+    const blocked = createTask("task-blocked", "completed", {
+      deliveryStatus: "failed",
+      terminalOutcome: "blocked",
+    });
+    const request = vi.fn((method: string) => {
+      if (method === "tasks.retry") {
+        return Promise.resolve({
+          results: [
+            {
+              taskId: blocked.taskId,
+              ok: true,
+              duplicateRisk: true,
+              task: {
+                ...blocked,
+                deliveryStatus: "session_queued",
+                terminalOutcome: "succeeded",
+                updatedAt: 200,
+              },
+            },
+          ],
+        });
+      }
+      return Promise.resolve({ tasks: [blocked] });
+    });
+    const source = createGateway({ request } as unknown as GatewayBrowserClient);
+    const page = document.createElement("openclaw-tasks-page") as TasksPageTestElement;
+    page.context = createContext(source.gateway);
+    document.body.append(page);
+    await vi.waitFor(() => expect(page.tasks).toHaveLength(1));
+
+    await page.recoverTask(blocked.taskId, "retry");
+
+    expect(request).toHaveBeenCalledWith("tasks.retry", { taskIds: [blocked.taskId] });
+    expect(page.tasks[0]).toMatchObject({
+      deliveryStatus: "session_queued",
+      terminalOutcome: "succeeded",
+    });
+  });
+
+  it("discards a recovery response across a same-client reconnect", async () => {
+    const blocked = createTask("task-recovery-reconnect", "completed", {
+      deliveryStatus: "failed",
+      terminalOutcome: "blocked",
+    });
+    const pendingRecovery = deferred<{
+      results: Array<{ taskId: string; ok: true; task: TaskSummary }>;
+    }>();
+    const request = vi.fn((method: string) => {
+      if (method === "tasks.retry") {
+        return pendingRecovery.promise;
+      }
+      return Promise.resolve({ tasks: [blocked] });
+    });
+    const source = createGateway({ request } as unknown as GatewayBrowserClient);
+    const page = document.createElement("openclaw-tasks-page") as TasksPageTestElement;
+    page.context = createContext(source.gateway);
+    document.body.append(page);
+    await vi.waitFor(() => expect(page.tasks).toHaveLength(1));
+
+    const recovery = page.recoverTask(blocked.taskId, "retry");
+    await vi.waitFor(() => expect(page.cancellingTaskIds.has(blocked.taskId)).toBe(true));
+    source.emitConnected(false);
+    source.emitConnected(true);
+    pendingRecovery.resolve({
+      results: [
+        {
+          taskId: blocked.taskId,
+          ok: true,
+          task: { ...blocked, deliveryStatus: "session_queued", terminalOutcome: "succeeded" },
+        },
+      ],
+    });
+    await recovery;
+
+    expect(page.tasks[0]).toMatchObject({
+      deliveryStatus: "failed",
+      terminalOutcome: "blocked",
+    });
+    expect(page.cancellingTaskIds.size).toBe(0);
+  });
+
+  it("keeps a dismissed completion result copyable without offering another recovery", async () => {
+    const dismissed = createTask("task-dismissed", "completed", {
+      deliveryStatus: "dismissed",
+      terminalOutcome: "blocked",
+      terminalSummary: "Task completed; result delivery was dismissed by the operator.",
+    });
+    const request = vi.fn(() => Promise.resolve({ tasks: [dismissed] }));
+    const source = createGateway({ request } as unknown as GatewayBrowserClient);
+    const page = document.createElement("openclaw-tasks-page") as TasksPageTestElement;
+    page.context = createContext(source.gateway);
+    document.body.append(page);
+    await vi.waitFor(() => expect(page.tasks).toHaveLength(1));
+
+    const text = page.textContent ?? "";
+    expect(text).toContain("Completed; result delivery was dismissed.");
+    expect(text).toContain("Copy result");
+    expect(text).not.toContain("Retry delivery");
+    expect(text).not.toContain("Dismiss delivery");
+    expect(text).not.toContain("Retrying may duplicate a result");
   });
 });

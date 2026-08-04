@@ -214,7 +214,7 @@ const slackSetupAdapterBase = createPatchedAccountSetupAdapter({
   },
 });
 
-export const slackSetupAdapter: ChannelSetupAdapter = {
+const slackSetupAdapter: ChannelSetupAdapter = {
   ...slackSetupAdapterBase,
   singleAccountKeysToMove: ["appToken"],
   applyAccountConfig: ({ cfg, accountId, input }) => {

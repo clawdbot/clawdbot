@@ -28,7 +28,14 @@ type LeaseKysely = ReturnType<typeof getNodeSqliteKysely<LeaseDatabase>>;
 
 type OpenClawStateLeaseDatabase =
   | { scope: "shared"; options?: OpenClawStateDatabaseOptions }
-  | { scope: "agent"; agentId: string };
+  | { scope: "agent"; agentId: string; path?: string };
+
+type OpenClawStateLeaseProcessOwner = {
+  pid: number;
+  startTime: number | null;
+  isAlive(pid: number): boolean;
+  readStartTime(pid: number): number | null;
+};
 
 type OpenClawStateLeaseOptions = {
   scope: string;
@@ -41,6 +48,10 @@ type OpenClawStateLeaseOptions = {
   leaseLabel?: string;
   /** Stable transaction label used by SQLite diagnostics. */
   operationLabel?: string;
+  /** Live process owners remain authoritative even when their advisory TTL expires. */
+  processOwner?: OpenClawStateLeaseProcessOwner;
+  /** Propagate an exhausted release retry instead of silently relying on expiry. */
+  strictRelease?: boolean;
 };
 
 export type OpenClawStateLeaseContext = {
@@ -49,6 +60,12 @@ export type OpenClawStateLeaseContext = {
   assertOwned(): void;
   /** Verify ownership using the caller's active write transaction. */
   assertOwnedInTransaction(database: DatabaseSync): void;
+};
+
+export type OpenClawStateLeaseHandle = OpenClawStateLeaseContext & {
+  release(): Promise<void>;
+  /** Release a manually held process lease during synchronous termination cleanup. */
+  releaseSynchronously(): void;
 };
 
 export type OpenClawStateLeaseErrorCode =
@@ -185,6 +202,8 @@ function validateOptions(options: OpenClawStateLeaseOptions) {
     signal: options.signal,
     leaseLabel,
     operationLabel,
+    processOwner: options.processOwner,
+    strictRelease: options.strictRelease === true,
   };
 }
 
@@ -227,11 +246,15 @@ function withLeaseWriteTransaction<T>(
       );
     return withBusyTimeout(stateDatabase.db, busyTimeoutMs, run);
   }
-  const agentDatabase = openOpenClawAgentDatabase({ agentId: database.agentId });
+  const agentOptions = {
+    agentId: database.agentId,
+    ...(database.path ? { path: database.path } : {}),
+  };
+  const agentDatabase = openOpenClawAgentDatabase(agentOptions);
   const run = () =>
     runOpenClawAgentWriteTransaction(
       ({ db }) => operation(db, getNodeSqliteKysely<AgentLeaseDatabase>(db)),
-      { agentId: database.agentId },
+      agentOptions,
       { operationLabel, busyTimeoutMs },
     );
   return withBusyTimeout(agentDatabase.db, busyTimeoutMs, run);
@@ -244,7 +267,10 @@ function withLeaseRead<T>(
   const sqlite =
     database.scope === "shared"
       ? openOpenClawStateDatabase(database.options).db
-      : openOpenClawAgentDatabase({ agentId: database.agentId }).db;
+      : openOpenClawAgentDatabase({
+          agentId: database.agentId,
+          ...(database.path ? { path: database.path } : {}),
+        }).db;
   return operation(sqlite, getNodeSqliteKysely<LeaseDatabase>(sqlite));
 }
 
@@ -253,7 +279,35 @@ type LeaseIdentity = {
   key: string;
   owner: string;
   leaseLabel: string;
+  processOwner?: OpenClawStateLeaseProcessOwner;
 };
+
+function processLeaseIsReclaimable(
+  row: { expires_at: number | null; payload_json: string | null },
+  processOwner: OpenClawStateLeaseProcessOwner,
+): boolean {
+  let payload: { pid?: unknown; starttime?: unknown } | undefined;
+  try {
+    payload = row.payload_json ? (JSON.parse(row.payload_json) as typeof payload) : undefined;
+  } catch {
+    // A malformed owner can only be reclaimed after its persisted deadline.
+  }
+  const pid = payload?.pid;
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) {
+    return Number(row.expires_at) <= Date.now();
+  }
+  if (!processOwner.isAlive(pid)) {
+    return true;
+  }
+  const observedStartTime = processOwner.readStartTime(pid);
+  return (
+    typeof payload?.starttime === "number" &&
+    Number.isInteger(payload.starttime) &&
+    payload.starttime >= 0 &&
+    observedStartTime !== null &&
+    payload.starttime !== observedStartTime
+  );
+}
 
 function tryAcquire(
   params: LeaseIdentity & {
@@ -262,18 +316,38 @@ function tryAcquire(
     leaseMs: number;
   },
 ): number | undefined {
+  const observed = params.processOwner
+    ? withLeaseRead(params.database, (db, kysely) =>
+        executeSqliteQueryTakeFirstSync(
+          db,
+          kysely
+            .selectFrom("state_leases")
+            .select(["owner", "expires_at", "payload_json"])
+            .where("scope", "=", params.scope)
+            .where("lease_key", "=", params.key),
+        ),
+      )
+    : undefined;
+  // Process inspection may perform filesystem/subprocess work, so gather it
+  // before BEGIN and fence deletion against the observed owner inside it.
+  const reclaimableOwner =
+    observed && params.processOwner && processLeaseIsReclaimable(observed, params.processOwner)
+      ? observed.owner
+      : undefined;
   return withLeaseWriteTransaction(params.database, params.operationLabel, (db, kysely) => {
     // BEGIN IMMEDIATE may wait on SQLite. Sample only after admission so a
     // successful insert never commits an already-expired lease.
     const now = Date.now();
-    executeSqliteQuerySync(
-      db,
-      kysely
+    if (!params.processOwner || reclaimableOwner) {
+      let stale = kysely
         .deleteFrom("state_leases")
         .where("scope", "=", params.scope)
-        .where("lease_key", "=", params.key)
-        .where("expires_at", "<=", now),
-    );
+        .where("lease_key", "=", params.key);
+      stale = reclaimableOwner
+        ? stale.where("owner", "=", reclaimableOwner)
+        : stale.where("expires_at", "<=", now);
+      executeSqliteQuerySync(db, stale);
+    }
     const expiresAt = now + params.leaseMs;
     const inserted = executeSqliteQuerySync(
       db,
@@ -285,7 +359,14 @@ function tryAcquire(
           owner: params.owner,
           expires_at: expiresAt,
           heartbeat_at: now,
-          payload_json: null,
+          payload_json: params.processOwner
+            ? JSON.stringify({
+                pid: params.processOwner.pid,
+                ...(params.processOwner.startTime === null
+                  ? {}
+                  : { starttime: params.processOwner.startTime }),
+              })
+            : null,
           created_at: now,
           updated_at: now,
         })
@@ -305,20 +386,16 @@ function renew(
   return withLeaseWriteTransaction(params.database, params.operationLabel, (db, kysely) => {
     const now = Date.now();
     const expiresAt = now + params.leaseMs;
-    const updated = executeSqliteQuerySync(
-      db,
-      kysely
-        .updateTable("state_leases")
-        .set({
-          expires_at: expiresAt,
-          heartbeat_at: now,
-          updated_at: now,
-        })
-        .where("scope", "=", params.scope)
-        .where("lease_key", "=", params.key)
-        .where("owner", "=", params.owner)
-        .where("expires_at", ">", now),
-    );
+    let update = kysely
+      .updateTable("state_leases")
+      .set({ expires_at: expiresAt, heartbeat_at: now, updated_at: now })
+      .where("scope", "=", params.scope)
+      .where("lease_key", "=", params.key)
+      .where("owner", "=", params.owner);
+    if (!params.processOwner) {
+      update = update.where("expires_at", ">", now);
+    }
+    const updated = executeSqliteQuerySync(db, update);
     if (updated.numAffectedRows !== 1n) {
       throw leaseError(
         "OPENCLAW_STATE_LEASE_LOST",
@@ -335,16 +412,16 @@ function assertLeaseOwnedInDatabase(
   params: LeaseIdentity,
 ): void {
   const now = Date.now();
-  const row = executeSqliteQueryTakeFirstSync(
-    database,
-    kysely
-      .selectFrom("state_leases")
-      .select("owner")
-      .where("scope", "=", params.scope)
-      .where("lease_key", "=", params.key)
-      .where("owner", "=", params.owner)
-      .where("expires_at", ">", now),
-  );
+  let query = kysely
+    .selectFrom("state_leases")
+    .select("owner")
+    .where("scope", "=", params.scope)
+    .where("lease_key", "=", params.key)
+    .where("owner", "=", params.owner);
+  if (!params.processOwner) {
+    query = query.where("expires_at", ">", now);
+  }
+  const row = executeSqliteQueryTakeFirstSync(database, query);
   if (!row) {
     throw leaseError(
       "OPENCLAW_STATE_LEASE_LOST",
@@ -399,7 +476,10 @@ function release(
   });
 }
 
-async function releaseBestEffort(params: Parameters<typeof release>[0]): Promise<void> {
+async function releaseBestEffort(
+  params: Parameters<typeof release>[0],
+  strict = false,
+): Promise<void> {
   const deadline = performance.now() + RELEASE_RETRY_TIMEOUT_MS;
   let attempt = 0;
   while (true) {
@@ -407,11 +487,11 @@ async function releaseBestEffort(params: Parameters<typeof release>[0]): Promise
       release(params);
       return;
     } catch (error) {
-      if (!isSqliteLockError(error)) {
-        return;
-      }
       const now = performance.now();
-      if (now >= deadline) {
+      if (!isSqliteLockError(error) || now >= deadline) {
+        if (strict) {
+          throw error;
+        }
         return;
       }
       attempt += 1;
@@ -434,11 +514,10 @@ function abortError(
   );
 }
 
-/** Run one trusted operation under a host-owned SQLite lease. */
-export async function withOpenClawStateLease<T>(
+/** Acquire a host-owned SQLite lease for callers whose lifecycle spans callbacks. */
+export async function acquireOpenClawStateLease(
   options: OpenClawStateLeaseOptions,
-  run: (lease: OpenClawStateLeaseContext) => Promise<T>,
-): Promise<T> {
+): Promise<OpenClawStateLeaseHandle> {
   const validated = validateOptions(options);
   if (validated.signal?.aborted) {
     throw abortError(validated.signal, "acquisition", validated.leaseLabel);
@@ -462,6 +541,7 @@ export async function withOpenClawStateLease<T>(
         owner,
         leaseMs: validated.leaseMs,
         leaseLabel: validated.leaseLabel,
+        processOwner: validated.processOwner,
       });
     } catch (error) {
       if (error instanceof OpenClawStateLeaseError) {
@@ -519,6 +599,7 @@ export async function withOpenClawStateLease<T>(
     key: validated.key,
     owner,
     leaseLabel: validated.leaseLabel,
+    processOwner: validated.processOwner,
   };
   // `process.exit()` skips async `finally` blocks. Release synchronously so a normal CLI error
   // cannot strand the lease until its TTL and block the next lifecycle command.
@@ -558,7 +639,9 @@ export async function withOpenClawStateLease<T>(
     );
     expiryTimer.unref?.();
   };
-  scheduleExpiry();
+  if (!validated.processOwner) {
+    scheduleExpiry();
+  }
   const heartbeat = setInterval(() => {
     try {
       confirmedExpiresAt = renew({
@@ -567,11 +650,17 @@ export async function withOpenClawStateLease<T>(
         operationLabel: validated.operationLabel,
         leaseMs: validated.leaseMs,
       });
-      scheduleExpiry();
+      if (!validated.processOwner) {
+        scheduleExpiry();
+      }
     } catch (error) {
       if (error instanceof OpenClawStateLeaseError && error.code === "OPENCLAW_STATE_LEASE_LOST") {
         abortLost(error);
-      } else if (confirmedExpiresAt !== undefined && Date.now() >= confirmedExpiresAt) {
+      } else if (
+        !validated.processOwner &&
+        confirmedExpiresAt !== undefined &&
+        Date.now() >= confirmedExpiresAt
+      ) {
         abortLost(error);
       }
     }
@@ -596,48 +685,74 @@ export async function withOpenClawStateLease<T>(
     }
     verifyLeaseOwnership({ ...identity, transaction: database });
   };
-
-  try {
-    let result: T;
-    try {
-      if (validated.signal?.aborted) {
-        throw abortError(validated.signal, "operation", validated.leaseLabel);
-      }
-      // Acquisition and callback entry are separate scheduling points. A
-      // suspended process must not enter after its persisted lease expires.
-      assertOperationOwned();
-      result = await run({
-        signal: operationSignal,
-        assertOwned: assertOperationOwned,
-        assertOwnedInTransaction: assertOperationOwnedInTransaction,
-      });
-    } catch (error) {
-      if (leaseLost.signal.aborted) {
-        throw leaseLost.signal.reason;
-      }
-      if (validated.signal?.aborted) {
-        throw abortError(validated.signal, "operation", validated.leaseLabel);
-      }
-      throw error;
-    }
-    if (leaseLost.signal.aborted) {
-      throw leaseLost.signal.reason;
-    }
-    if (validated.signal?.aborted) {
-      throw abortError(validated.signal, "operation", validated.leaseLabel);
-    }
-    verifyLeaseOwnership({ ...identity, database: validated.database });
-    return result;
-  } finally {
+  let released = false;
+  let releasePromise: Promise<void> | undefined;
+  const clearLeaseLifecycle = () => {
     unregisterProcessExitCleanup();
     clearInterval(heartbeat);
     if (expiryTimer) {
       clearTimeout(expiryTimer);
     }
-    await releaseBestEffort({
+  };
+  const releaseSynchronously = () => {
+    if (released) {
+      return;
+    }
+    release({
       ...identity,
       database: validated.database,
       operationLabel: validated.operationLabel,
     });
+    released = true;
+    clearLeaseLifecycle();
+  };
+  return {
+    signal: operationSignal,
+    assertOwned: assertOperationOwned,
+    assertOwnedInTransaction: assertOperationOwnedInTransaction,
+    releaseSynchronously,
+    release: () => {
+      if (released) {
+        return Promise.resolve();
+      }
+      releasePromise ??= releaseBestEffort(
+        { ...identity, database: validated.database, operationLabel: validated.operationLabel },
+        validated.strictRelease,
+      ).then(
+        () => {
+          released = true;
+          clearLeaseLifecycle();
+        },
+        (error: unknown) => {
+          releasePromise = undefined;
+          throw error;
+        },
+      );
+      return releasePromise;
+    },
+  };
+}
+
+/** Run one trusted operation under a host-owned SQLite lease. */
+export async function withOpenClawStateLease<T>(
+  options: OpenClawStateLeaseOptions,
+  run: (lease: OpenClawStateLeaseContext) => Promise<T>,
+): Promise<T> {
+  const lease = await acquireOpenClawStateLease(options);
+  try {
+    lease.assertOwned();
+    const result = await run(lease);
+    lease.assertOwned();
+    return result;
+  } catch (error) {
+    if (options.signal?.aborted) {
+      throw abortError(options.signal, "operation", options.leaseLabel ?? "state lease");
+    }
+    if (lease.signal.aborted) {
+      throw lease.signal.reason;
+    }
+    throw error;
+  } finally {
+    await lease.release();
   }
 }

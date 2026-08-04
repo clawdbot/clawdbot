@@ -15,6 +15,7 @@
  *    it is treated as a new message.
  */
 
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getNextMsgSeq } from "../api/routes.js";
 import type { GatewayAccount } from "../types.js";
@@ -36,10 +37,6 @@ import {
   type SendQueueItem,
   type MediaSendContext,
 } from "./streaming-media-send.js";
-
-function formatStreamErr(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
 
 // ============ 常量 ============
 
@@ -485,7 +482,7 @@ export class StreamingController {
       () => this.handlePartialReply(payload),
       (err: unknown) => {
         // 上一次如果异常，不阻塞后续调用
-        this.logError(`onPartialReply chain error: ${formatStreamErr(err)}`);
+        this.logError(`onPartialReply chain error: ${formatErrorMessage(err)}`);
         return this.handlePartialReply(payload);
       },
     );
@@ -590,7 +587,7 @@ export class StreamingController {
     this.callbackChain = this.callbackChain.then(
       () => this.handleIdle(payload),
       (err: unknown) => {
-        this.logError(`onIdle chain error: ${formatStreamErr(err)}`);
+        this.logError(`onIdle chain error: ${formatErrorMessage(err)}`);
         return this.handleIdle(payload);
       },
     );
@@ -674,7 +671,7 @@ export class StreamingController {
         await this.sendStreamChunk(safeText, StreamInputState.DONE, "onIdle");
         this.logInfo(`streaming completed, final text length: ${safeText.length}`);
       } catch (err) {
-        this.logError(`failed to send final stream chunk: ${formatStreamErr(err)}`);
+        this.logError(`failed to send final stream chunk: ${formatErrorMessage(err)}`);
       }
     } else if (this.sentStreamChunkCount > 0) {
       // 没有活跃流式会话，但之前发过流式分片或媒体 → 正常完成
@@ -693,7 +690,7 @@ export class StreamingController {
    * 处理错误
    */
   async onError(err: unknown): Promise<void> {
-    this.logError(`reply error: ${formatStreamErr(err)}`);
+    this.logError(`reply error: ${formatErrorMessage(err)}`);
 
     if (this.isTerminalPhase) {
       return;
@@ -726,7 +723,7 @@ export class StreamingController {
           : "**Error**: 生成响应时发生错误。";
         await this.sendStreamChunk(errorText, StreamInputState.DONE, "onError");
       } catch (sendErr) {
-        this.logError(`failed to send error stream chunk: ${formatStreamErr(sendErr)}`);
+        this.logError(`failed to send error stream chunk: ${formatErrorMessage(sendErr)}`);
       }
     }
 
@@ -759,7 +756,7 @@ export class StreamingController {
         await this.sendStreamChunk(abortText, StreamInputState.DONE, "abortStreaming");
         this.logInfo(`streaming aborted, sent final chunk`);
       } catch (err) {
-        this.logError(`abort send failed: ${formatStreamErr(err)}`);
+        this.logError(`abort send failed: ${formatErrorMessage(err)}`);
       }
     }
   }
@@ -871,7 +868,7 @@ export class StreamingController {
       }
       await this.flush.throttledUpdate(this.throttleMs);
     } catch (err) {
-      this.logError(`processMediaTags failed: ${formatStreamErr(err)}`);
+      this.logError(`processMediaTags failed: ${formatErrorMessage(err)}`);
     }
   }
 
@@ -907,7 +904,7 @@ export class StreamingController {
         await this.sendStreamChunk(safeText, StreamInputState.DONE, caller);
         this.logDebug(`${caller}: current stream session ended`);
       } catch (err) {
-        this.logError(`${caller}: failed to end stream: ${formatStreamErr(err)}`);
+        this.logError(`${caller}: failed to end stream: ${formatErrorMessage(err)}`);
       }
     } else if (safeText && safeText.trim()) {
       // 没有活跃流式会话，但有非空白文本未发送 → 启动流式 → 立即终结
@@ -926,7 +923,7 @@ export class StreamingController {
           await this.sendStreamChunk(safeText, StreamInputState.DONE, caller);
           this.logDebug(`${caller}: started and ended stream for pre-tag text`);
         } catch (err) {
-          this.logError(`${caller}: failed to send pre-tag text: ${formatStreamErr(err)}`);
+          this.logError(`${caller}: failed to send pre-tag text: ${formatErrorMessage(err)}`);
         }
       }
     }
@@ -1023,7 +1020,7 @@ export class StreamingController {
       this.flush.setReady(true);
       this.logInfo(`stream started, stream_msg_id=${resp.id}`);
     } catch (err) {
-      this.logError(`failed to start streaming: ${formatStreamErr(err)}`);
+      this.logError(`failed to start streaming: ${formatErrorMessage(err)}`);
       this.transition("idle", "doStartStreaming", "start_failed_will_retry");
     }
   }

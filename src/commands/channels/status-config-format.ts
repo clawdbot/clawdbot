@@ -1,4 +1,5 @@
 // Config-only channel status formatter used when the gateway is unreachable.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
@@ -68,7 +69,9 @@ export async function formatConfigChannelsStatusLines(
     });
 
   const sourceConfig = opts?.sourceConfig ?? cfg;
-  const requestedChannel = opts?.channel ? normalizeChannelId(opts.channel) : null;
+  const requestedChannel = opts?.channel
+    ? (normalizeChannelId(opts.channel) ?? normalizeOptionalLowercaseString(opts.channel))
+    : null;
   const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
     activationSourceConfig: sourceConfig,
     includeSetupFallbackPlugins: true,

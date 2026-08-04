@@ -15,7 +15,7 @@ import {
   type SupportedGatewaySecretInputPath,
 } from "../gateway/secret-input-paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry.js";
+import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry-contributions.js";
 import {
   analyzeCommandSecretAssignmentsFromSnapshot,
   type UnresolvedCommandSecretAssignment,

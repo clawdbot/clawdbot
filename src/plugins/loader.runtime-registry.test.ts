@@ -11,25 +11,36 @@ import {
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
 import {
   clearPluginRegistryLoadCache,
+  loadAndActivateRootPluginRegistry,
   loadOpenClawPlugins,
+  loadPluginRegistryHandle,
   resolveRuntimePluginRegistry,
 } from "./loader.js";
 import { makeTempDir, resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
 import {
-  getMemoryEmbeddingProvider,
+  getRegisteredMemoryEmbeddingProvider,
   registerMemoryEmbeddingProvider,
 } from "./memory-embedding-providers.js";
 import { buildMemoryPromptSection, registerMemoryCapability } from "./memory-state.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry.js";
-import { setActivePluginRegistry } from "./runtime.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "./runtime.js";
+import type { PluginRuntime } from "./runtime/types.js";
 
 afterEach(() => {
   resetPluginLoaderTestStateForTest();
 });
 
+it("keeps an empty scoped handle load from replacing the root registry", () => {
+  const root = loadAndActivateRootPluginRegistry({ cache: false, config: {} });
+  const handle = loadPluginRegistryHandle({ cache: false, config: {}, onlyPluginIds: [] });
+
+  expect(handle).not.toBe(root);
+  expect(getActivePluginRegistry()).toBe(root);
+});
+
 function requireMemoryEmbeddingProvider(providerId: string) {
-  const provider = getMemoryEmbeddingProvider(providerId);
+  const provider = getRegisteredMemoryEmbeddingProvider(providerId)?.adapter;
   if (!provider) {
     throw new Error(`expected ${providerId} memory embedding provider`);
   }
@@ -70,6 +81,43 @@ function setLoaderMetadataSnapshot(params: { pluginIds?: readonly string[] } = {
 }
 
 describe("resolvePluginLoadCacheContext", () => {
+  it("partitions full and setup channel plugin load intent", () => {
+    const fullKey = resolvePluginLoadCacheContext({ config: {} }).cacheKey;
+    const setupKey = resolvePluginLoadCacheContext({
+      config: {},
+      channelPluginLoadIntent: "setup",
+    }).cacheKey;
+
+    expect(setupKey).not.toBe(fullKey);
+    expect(resolvePluginLoadCacheContext({ config: {} }).channelPluginLoadIntent).toBe("full");
+  });
+
+  it("keys concrete runtime bindings by identity", () => {
+    const firstNodes = {} as PluginRuntime["nodes"];
+    const firstSubagent = {} as PluginRuntime["subagent"];
+    const firstOptions = {
+      config: {},
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+        nodes: firstNodes,
+        subagent: firstSubagent,
+      },
+    };
+    const firstKey = resolvePluginLoadCacheContext(firstOptions).cacheKey;
+
+    expect(resolvePluginLoadCacheContext(firstOptions).cacheKey).toBe(firstKey);
+    expect(
+      resolvePluginLoadCacheContext({
+        ...firstOptions,
+        runtimeOptions: {
+          ...firstOptions.runtimeOptions,
+          nodes: {} as PluginRuntime["nodes"],
+          subagent: {} as PluginRuntime["subagent"],
+        },
+      }).cacheKey,
+    ).not.toBe(firstKey);
+  });
+
   it("reuses prepared install records from the compatible metadata generation", () => {
     const { config, env, installRecords, snapshot, workspaceDir } = setLoaderMetadataSnapshot();
 

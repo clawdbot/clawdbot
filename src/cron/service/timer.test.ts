@@ -780,8 +780,8 @@ describe("cron service timer seam coverage", () => {
       throw new Error("expected active cron task ledger record");
     }
     expect(task.status).toBe("running");
-    expect(task.progressSummary).toBe("Running cron job.");
-    expect(formatTaskStatusDetail(task)).toBe("Running cron job.");
+    expect(task.progressSummary).toBe("Running automation.");
+    expect(formatTaskStatusDetail(task)).toBe("Running automation.");
 
     resolveRun?.({ status: "ok", summary: "done" });
     await timerRun;

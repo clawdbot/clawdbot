@@ -50,8 +50,21 @@ describe("isDurablyRetryableInboundMediaError", () => {
 });
 
 describe("isRecoverableMediaGroupError preserves album partial delivery (#55216)", () => {
-  it("still skips-and-warns transient and permanent album fetch failures", () => {
+  it("still skips-and-warns unclassified and permanent album fetch failures", () => {
     expect(isRecoverableMediaGroupError(new MediaFetchError("fetch_failed", "x"))).toBe(true);
     expect(isRecoverableMediaGroupError(new MediaFetchError("max_bytes", "x"))).toBe(true);
+  });
+
+  it("classifies transient album failures for durable retry while preserving live partial delivery", () => {
+    for (const status of [408, 429, 500, 502, 503, 504]) {
+      const error = new MediaFetchError("http_error", "temporary", { status });
+      expect(isDurablyRetryableInboundMediaError(error)).toBe(true);
+      expect(isRecoverableMediaGroupError(error)).toBe(true);
+    }
+    const networkError = new MediaFetchError("fetch_failed", "temporary", {
+      cause: Object.assign(new Error("connection reset"), { code: "ECONNRESET" }),
+    });
+    expect(isDurablyRetryableInboundMediaError(networkError)).toBe(true);
+    expect(isRecoverableMediaGroupError(networkError)).toBe(true);
   });
 });

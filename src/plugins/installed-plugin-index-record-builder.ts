@@ -27,8 +27,6 @@ function buildStartupInfo(record: PluginManifestRecord): InstalledPluginStartupI
   return {
     sidecar: record.activation?.onStartup === true,
     memory: hasKind(record.kind, "memory"),
-    deferConfiguredChannelFullLoadUntilAfterListen:
-      record.startupDeferConfiguredChannelFullLoadUntilAfterListen === true,
     agentHarnesses: normalizeSortedUniqueStringEntries([
       ...(record.activation?.onAgentHarnesses ?? []),
       ...(record.cliBackends ?? []),
