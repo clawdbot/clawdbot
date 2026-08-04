@@ -13,6 +13,11 @@ import { withSecureTestNodeCommand } from "../secrets/test-node-command.test-sup
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 
 const readActiveGatewayLockPortMock = vi.hoisted(() => vi.fn());
+const loadGatewayTlsRuntimeMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../infra/tls/gateway.js", () => ({
+  loadGatewayTlsRuntime: loadGatewayTlsRuntimeMock,
+}));
 
 vi.mock("../config/config.js", async () => {
   const mocks = await import("../gateway/gateway-connection.test-mocks.js");
@@ -129,6 +134,10 @@ describe("resolveGatewayConnection", () => {
     ]);
     loadConfig.mockReset();
     readActiveGatewayLockPortMock.mockReset().mockResolvedValue(undefined);
+    loadGatewayTlsRuntimeMock.mockReset().mockResolvedValue({
+      enabled: false,
+      required: false,
+    });
     resolveGatewayPort.mockReset();
     resolveStateDir.mockReset();
     resolveConfigPath.mockReset();
@@ -254,6 +263,37 @@ describe("resolveGatewayConnection", () => {
 
     expect(result.url).toBe("wss://127.0.0.1:18789");
     expect(result.tlsFingerprint).toBe("sha256:local-self-signed-fingerprint");
+  });
+
+  it("pins to the local gateway TLS fingerprint when TLS is enabled and no override is set", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        tls: { enabled: true },
+        auth: { mode: "token", token: "config-token" },
+      },
+    });
+    loadGatewayTlsRuntimeMock.mockResolvedValue({
+      enabled: true,
+      required: true,
+      fingerprintSha256: "sha256:derived-from-cert",
+    });
+
+    const result = await resolveGatewayConnection({});
+
+    expect(result.url).toBe("wss://127.0.0.1:18789");
+    expect(result.tlsFingerprint).toBe("sha256:derived-from-cert");
+  });
+
+  it("skips local TLS fingerprint resolution when TLS is disabled", async () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", auth: { mode: "token", token: "config-token" } },
+    });
+
+    const result = await resolveGatewayConnection({});
+
+    expect(result.tlsFingerprint).toBeUndefined();
+    expect(loadGatewayTlsRuntimeMock).not.toHaveBeenCalled();
   });
 
   it("uses a verified active local Gateway port when no target is explicit", async () => {

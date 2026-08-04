@@ -31,6 +31,7 @@ import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-re
 import { GatewayClient, GatewayClientRequestError } from "../gateway/client.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readActiveGatewayLockPort } from "../infra/gateway-lock.js";
+import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { sleep } from "../utils/sleep.js";
 import { VERSION } from "../version.js";
@@ -473,6 +474,29 @@ function resolveBoundGatewayConnection(
   };
 }
 
+/**
+ * Resolve the TLS certificate fingerprint to pin when connecting to the local
+ * gateway. An explicit `--tls-fingerprint` wins; otherwise, when the local
+ * gateway has TLS enabled, the on-disk gateway certificate fingerprint is used.
+ * This mirrors the resolution the CLI call path (`src/gateway/call.ts`) and
+ * `openclaw status` already perform. Without it the TUI connects to `wss://`
+ * with strict TLS verification and fails against the self-signed local gateway
+ * certificate.
+ */
+async function resolveLocalGatewayTlsFingerprint(
+  config: OpenClawConfig,
+  overrideFingerprint?: string,
+): Promise<string | undefined> {
+  const override =
+    typeof overrideFingerprint === "string" && overrideFingerprint.trim()
+      ? overrideFingerprint.trim()
+      : undefined;
+  if (override) return override;
+  if (config.gateway?.tls?.enabled !== true) return undefined;
+  const tlsRuntime = await loadGatewayTlsRuntime(config.gateway?.tls);
+  return tlsRuntime?.enabled ? tlsRuntime.fingerprintSha256 : undefined;
+}
+
 async function resolveGatewayConnection(
   opts: GatewayConnectionOptions,
 ): Promise<ResolvedGatewayConnection> {
@@ -506,6 +530,10 @@ async function resolveGatewayConnection(
     ...(activeLocalGatewayPort ? { localPortOverride: activeLocalGatewayPort } : {}),
   }).url;
   const allowInsecureLocalOperatorUi = false;
+  const localTlsFingerprint =
+    urlOverride || isRemoteMode
+      ? undefined
+      : await resolveLocalGatewayTlsFingerprint(config, opts.tlsFingerprint);
 
   if (urlOverride) {
     return {
@@ -550,7 +578,7 @@ async function resolveGatewayConnection(
       url,
       token: resolved.token,
       password: resolved.password,
-      ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
+      ...(localTlsFingerprint ? { tlsFingerprint: localTlsFingerprint } : {}),
       allowInsecureLocalOperatorUi,
     };
   }
@@ -575,7 +603,7 @@ async function resolveGatewayConnection(
     url,
     token: resolved.token,
     password: resolved.password,
-    ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
+    ...(localTlsFingerprint ? { tlsFingerprint: localTlsFingerprint } : {}),
     allowInsecureLocalOperatorUi,
   };
 }
