@@ -13,11 +13,16 @@ import { whatsappMessageAdapter } from "./channel-outbound.js";
 import { whatsappOutbound } from "./outbound-adapter.js";
 
 const hoisted = vi.hoisted(() => ({
+  sendLocationWhatsApp: vi.fn(async () => ({
+    messageId: "location-live-1",
+    toJid: "jid-live",
+  })),
   sendMessageWhatsApp: vi.fn(async () => ({ messageId: "wa-live-1", toJid: "jid-live" })),
   sendPollWhatsApp: vi.fn(async () => ({ messageId: "poll-live-1", toJid: "jid-live" })),
 }));
 
 vi.mock("./send.js", () => ({
+  sendLocationWhatsApp: hoisted.sendLocationWhatsApp,
   sendMessageWhatsApp: hoisted.sendMessageWhatsApp,
   sendPollWhatsApp: hoisted.sendPollWhatsApp,
 }));
@@ -87,6 +92,78 @@ describe("WhatsApp outbound payload contract", () => {
     );
   });
 
+  it("delivers canonical locations through the native WhatsApp payload path", async () => {
+    const onDeliveryResult = vi.fn();
+
+    await expect(
+      whatsappOutbound.sendPayload!({
+        cfg: {},
+        to: "5511999999999@c.us",
+        text: "",
+        replyToId: "msg-1",
+        payload: {
+          location: {
+            latitude: 37.7749,
+            longitude: -122.4194,
+            name: "QA Location",
+            address: "Market Street",
+          },
+        },
+        onDeliveryResult,
+      }),
+    ).resolves.toMatchObject({
+      channel: "whatsapp",
+      messageId: "location-live-1",
+      toJid: "jid-live",
+    });
+
+    expect(hoisted.sendLocationWhatsApp).toHaveBeenCalledWith(
+      "5511999999999@c.us",
+      {
+        latitude: 37.7749,
+        longitude: -122.4194,
+        name: "QA Location",
+        address: "Market Street",
+      },
+      {
+        verbose: false,
+        cfg: {},
+        accountId: undefined,
+        quotedMessageKey: {
+          id: "msg-1",
+          remoteJid: "5511999999999@c.us",
+          fromMe: false,
+          participant: undefined,
+          messageText: undefined,
+        },
+      },
+    );
+    expect(onDeliveryResult).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "whatsapp", messageId: "location-live-1" }),
+    );
+  });
+
+  it.each([
+    { conflicting: { text: "caption" }, name: "text" },
+    { conflicting: { mediaUrl: "/tmp/photo.jpg" }, name: "media" },
+    { conflicting: { channelData: { custom: true } }, name: "channel data" },
+  ])("rejects locations combined with $name", async ({ conflicting }) => {
+    await expect(
+      whatsappOutbound.sendPayload!({
+        cfg: {},
+        to: "5511999999999@c.us",
+        text: "",
+        payload: {
+          location: { latitude: 1, longitude: 2 },
+          ...conflicting,
+        },
+      }),
+    ).rejects.toThrow(
+      "WhatsApp location sends cannot be combined with text, media, or other structured content.",
+    );
+    expect(hoisted.sendLocationWhatsApp).not.toHaveBeenCalled();
+  });
+
   it("backs declared durable final capabilities with delivery proofs", async () => {
     const sendWhatsApp = vi.fn();
     primeChannelOutboundSendMock(sendWhatsApp, { messageId: "wa-1", toJid: "jid-1" });
@@ -140,6 +217,16 @@ describe("WhatsApp outbound payload contract", () => {
       proofs: {
         text: proveText,
         replyTo: proveReplyTo,
+        payload: async () => {
+          await expect(
+            whatsappOutbound.sendPayload!({
+              cfg: {} as never,
+              to: "5511999999999@c.us",
+              text: "",
+              payload: { location: { latitude: 1, longitude: 2 } },
+            }),
+          ).resolves.toMatchObject({ messageId: "location-live-1" });
+        },
         messageSendingHooks: () => {
           expect(whatsappOutbound.sendText).toBeTypeOf("function");
         },
@@ -207,6 +294,18 @@ describe("WhatsApp outbound payload contract", () => {
             },
           );
           expect(result?.receipt.platformMessageIds).toEqual(["wa-live-1"]);
+        },
+        payload: async () => {
+          const result = await whatsappMessageAdapter.send.payload?.({
+            cfg: {} as never,
+            to: "5511999999999@c.us",
+            text: "",
+            payload: { location: { latitude: 1, longitude: 2 } },
+          });
+          expect(result?.receipt).toMatchObject({
+            platformMessageIds: ["location-live-1"],
+            parts: [{ kind: "card", platformMessageId: "location-live-1" }],
+          });
         },
         messageSendingHooks: () => {
           expect(whatsappMessageAdapter.send.text).toBeTypeOf("function");

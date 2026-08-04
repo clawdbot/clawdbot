@@ -7,6 +7,7 @@ import {
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OutboundLocation } from "openclaw/plugin-sdk/core";
 import { sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 import { resolveDefaultWhatsAppAccountId } from "./account-ids.js";
 import {
@@ -50,9 +51,20 @@ type WhatsAppSendPoll = (
   poll: Parameters<NonNullable<ChannelOutboundAdapter["sendPoll"]>>[0]["poll"],
   options: { verbose: boolean; accountId?: string; cfg: OpenClawConfig },
 ) => Promise<{ messageId: string; toJid: string }>;
+type WhatsAppSendLocation = (
+  to: string,
+  location: OutboundLocation,
+  options: {
+    verbose: boolean;
+    accountId?: string;
+    cfg: OpenClawConfig;
+    quotedMessageKey?: WhatsAppQuotedMessageKey;
+  },
+) => Promise<{ messageId: string; toJid: string }>;
 
 type CreateWhatsAppOutboundBaseParams = {
   chunker: WhatsAppChunker;
+  sendLocationWhatsApp: WhatsAppSendLocation;
   sendMessageWhatsApp: WhatsAppSendMessage;
   sendPollWhatsApp: WhatsAppSendPoll;
   shouldLogVerbose: () => boolean;
@@ -86,6 +98,7 @@ type WhatsAppOutboundBaseCore = Pick<
 
 export function createWhatsAppOutboundBase({
   chunker,
+  sendLocationWhatsApp,
   sendMessageWhatsApp,
   sendPollWhatsApp,
   shouldLogVerbose,
@@ -138,6 +151,7 @@ export function createWhatsAppOutboundBase({
     deliveryCapabilities: {
       durableFinal: {
         text: true,
+        payload: true,
         replyTo: true,
         messageSendingHooks: true,
       },
@@ -249,6 +263,39 @@ export function createWhatsAppOutboundBase({
         return { channel: "whatsapp", messageId: "" };
       }
       const payload = normalizeWhatsAppOutboundPayload(ctx.payload, { normalizeText });
+      if (payload.location) {
+        if (
+          payload.text?.trim() ||
+          payload.mediaUrl ||
+          payload.mediaUrls?.length ||
+          payload.presentation ||
+          payload.interactive ||
+          payload.channelData ||
+          payload.audioAsVoice === true ||
+          payload.videoAsNote === true
+        ) {
+          throw new Error(
+            "WhatsApp location sends cannot be combined with text, media, or other structured content.",
+          );
+        }
+        const lookupAccountId = resolveQuoteLookupAccountId(ctx.cfg, ctx.accountId);
+        const quotedMessageKey = resolveQuotedMessageKey({
+          accountId: lookupAccountId,
+          to: ctx.to,
+          replyToId: ctx.replyToId,
+        });
+        const result = attachChannelToResult(
+          "whatsapp",
+          await sendLocationWhatsApp(ctx.to, payload.location, {
+            verbose: false,
+            cfg: ctx.cfg,
+            accountId: ctx.accountId ?? undefined,
+            ...(quotedMessageKey ? { quotedMessageKey } : {}),
+          }),
+        );
+        await ctx.onDeliveryResult?.(result);
+        return result;
+      }
       if (!payload.text && !(payload.mediaUrl || payload.mediaUrls?.length)) {
         if (ctx.payload.interactive || ctx.payload.presentation || ctx.payload.channelData) {
           throw new Error(

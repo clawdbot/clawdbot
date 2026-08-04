@@ -135,6 +135,34 @@ describe("whatsapp channel action helpers", () => {
     ]);
   });
 
+  it("advertises canonical location fields on the existing send action", () => {
+    const discovery = describeWhatsAppMessageActions({
+      cfg: {
+        channels: {
+          whatsapp: {
+            allowFrom: ["*"],
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "default",
+    });
+
+    expect(discovery?.actions).not.toContain("location");
+    expect(discovery?.schema).toMatchObject({
+      visibility: "all-configured",
+      properties: {
+        location: {
+          type: "object",
+          properties: {
+            latitude: { minimum: -90, maximum: 90 },
+            longitude: { minimum: -180, maximum: 180 },
+            accuracy: { minimum: 0, maximum: 1500 },
+          },
+        },
+      },
+    });
+  });
+
   it("returns null when WhatsApp is not configured", () => {
     expect(
       describeWhatsAppMessageActions({ cfg: {} as OpenClawConfig, accountId: "default" }),

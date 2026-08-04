@@ -67,6 +67,7 @@ const registerChannelRuntimeContextMock = runtimeContextMocks.register;
 
 function createListenerStub(messageId = "ok") {
   return {
+    sendLocation: vi.fn(async () => createAcceptedWhatsAppSendResult("location", messageId)),
     sendMessage: vi.fn(async () => createAcceptedWhatsAppSendResult("text", messageId)),
     sendPoll: vi.fn(async () => createAcceptedWhatsAppSendResult("poll", messageId)),
     sendReaction: vi.fn(async () => createAcceptedWhatsAppSendResult("reaction", messageId)),

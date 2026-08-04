@@ -33,6 +33,7 @@ describe("createWhatsAppOutboundBase", () => {
   it("exposes the provided chunker", () => {
     const outbound = createWhatsAppOutboundBase({
       chunker: (text, limit) => [text.slice(0, limit)],
+      sendLocationWhatsApp: vi.fn(),
       sendMessageWhatsApp: vi.fn(),
       sendPollWhatsApp: vi.fn(),
       shouldLogVerbose: () => false,
@@ -49,6 +50,7 @@ describe("createWhatsAppOutboundBase", () => {
     }));
     const outbound = createWhatsAppOutboundBase({
       chunker: (text) => [text],
+      sendLocationWhatsApp: vi.fn(),
       sendMessageWhatsApp,
       sendPollWhatsApp: vi.fn(),
       shouldLogVerbose: () => false,
@@ -84,6 +86,7 @@ describe("createWhatsAppOutboundBase", () => {
     }));
     const outbound = createWhatsAppOutboundBase({
       chunker: (text) => [text],
+      sendLocationWhatsApp: vi.fn(),
       sendMessageWhatsApp,
       sendPollWhatsApp: vi.fn(),
       shouldLogVerbose: () => false,
@@ -119,6 +122,7 @@ describe("createWhatsAppOutboundBase", () => {
     });
     const outbound = createWhatsAppOutboundBase({
       chunker: (text) => [text],
+      sendLocationWhatsApp: vi.fn(),
       sendMessageWhatsApp,
       sendPollWhatsApp: vi.fn(),
       shouldLogVerbose: () => false,
@@ -152,6 +156,7 @@ describe("createWhatsAppOutboundBase", () => {
     }));
     const outbound = createWhatsAppOutboundBase({
       chunker: (text) => [text],
+      sendLocationWhatsApp: vi.fn(),
       sendMessageWhatsApp,
       sendPollWhatsApp: vi.fn(),
       shouldLogVerbose: () => false,
@@ -197,6 +202,7 @@ describe("createWhatsAppOutboundBase", () => {
     }));
     const outbound = createWhatsAppOutboundBase({
       chunker: (text) => [text],
+      sendLocationWhatsApp: vi.fn(),
       sendMessageWhatsApp,
       sendPollWhatsApp: vi.fn(),
       shouldLogVerbose: () => false,
@@ -241,6 +247,7 @@ describe("createWhatsAppOutboundBase", () => {
     }));
     const outbound = createWhatsAppOutboundBase({
       chunker: (text) => [text],
+      sendLocationWhatsApp: vi.fn(),
       sendMessageWhatsApp,
       sendPollWhatsApp: vi.fn(),
       shouldLogVerbose: () => false,
@@ -286,6 +293,7 @@ describe("createWhatsAppOutboundBase", () => {
     }));
     const outbound = createWhatsAppOutboundBase({
       chunker: (text) => [text],
+      sendLocationWhatsApp: vi.fn(),
       sendMessageWhatsApp,
       sendPollWhatsApp: vi.fn(),
       shouldLogVerbose: () => false,
@@ -331,6 +339,7 @@ describe("createWhatsAppOutboundBase", () => {
     }));
     const outbound = createWhatsAppOutboundBase({
       chunker: (text) => [text],
+      sendLocationWhatsApp: vi.fn(),
       sendMessageWhatsApp,
       sendPollWhatsApp: vi.fn(),
       shouldLogVerbose: () => false,
@@ -381,6 +390,7 @@ describe("createWhatsAppOutboundBase", () => {
     }));
     const outbound = createWhatsAppOutboundBase({
       chunker: (text) => [text],
+      sendLocationWhatsApp: vi.fn(),
       sendMessageWhatsApp,
       sendPollWhatsApp: vi.fn(),
       shouldLogVerbose: () => false,
@@ -428,6 +438,7 @@ describe("createWhatsAppOutboundBase", () => {
     }));
     const outbound = createWhatsAppOutboundBase({
       chunker: (text) => [text],
+      sendLocationWhatsApp: vi.fn(),
       sendMessageWhatsApp,
       sendPollWhatsApp: vi.fn(),
       shouldLogVerbose: () => false,
@@ -484,6 +495,7 @@ describe("createWhatsAppOutboundBase", () => {
     }));
     const outbound = createWhatsAppOutboundBase({
       chunker: (text) => [text],
+      sendLocationWhatsApp: vi.fn(),
       sendMessageWhatsApp,
       sendPollWhatsApp: vi.fn(),
       shouldLogVerbose: () => false,
@@ -546,6 +558,7 @@ describe("createWhatsAppOutboundBase", () => {
     }));
     const outbound = createWhatsAppOutboundBase({
       chunker: (text) => [text],
+      sendLocationWhatsApp: vi.fn(),
       sendMessageWhatsApp,
       sendPollWhatsApp: vi.fn(),
       shouldLogVerbose: () => false,
@@ -581,6 +594,7 @@ describe("createWhatsAppOutboundBase", () => {
     }));
     const outbound = createWhatsAppOutboundBase({
       chunker: (text) => [text],
+      sendLocationWhatsApp: vi.fn(),
       sendMessageWhatsApp,
       sendPollWhatsApp: vi.fn(),
       shouldLogVerbose: () => false,
@@ -622,6 +636,7 @@ describe("createWhatsAppOutboundBase", () => {
     }));
     const outbound = createWhatsAppOutboundBase({
       chunker: (text) => [text],
+      sendLocationWhatsApp: vi.fn(),
       sendMessageWhatsApp,
       sendPollWhatsApp: vi.fn(),
       shouldLogVerbose: () => false,
@@ -657,6 +672,7 @@ describe("createWhatsAppOutboundBase", () => {
     }));
     const outbound = createWhatsAppOutboundBase({
       chunker: (text) => [text],
+      sendLocationWhatsApp: vi.fn(),
       sendMessageWhatsApp,
       sendPollWhatsApp: vi.fn(),
       shouldLogVerbose: () => false,
@@ -690,6 +706,7 @@ describe("createWhatsAppOutboundBase", () => {
     }));
     const outbound = createWhatsAppOutboundBase({
       chunker: (text) => [text],
+      sendLocationWhatsApp: vi.fn(),
       sendMessageWhatsApp,
       sendPollWhatsApp: vi.fn(),
       shouldLogVerbose: () => false,
@@ -719,6 +736,7 @@ describe("createWhatsAppOutboundBase", () => {
     }));
     const outbound = createWhatsAppOutboundBase({
       chunker: (text) => [text],
+      sendLocationWhatsApp: vi.fn(),
       sendMessageWhatsApp: vi.fn(),
       sendPollWhatsApp,
       shouldLogVerbose: () => false,

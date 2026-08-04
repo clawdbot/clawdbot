@@ -1,11 +1,12 @@
 // Whatsapp plugin module implements channel actions behavior.
+import { Type } from "typebox";
 import {
+  createActionGate,
   listWhatsAppAccountIds,
   resolveWhatsAppAccount,
-  createActionGate,
+  resolveWhatsAppReactionLevel,
   type ChannelMessageActionName,
   type OpenClawConfig,
-  resolveWhatsAppReactionLevel,
 } from "./channel-actions.runtime.js";
 
 function areWhatsAppAgentReactionsEnabled(params: { cfg: OpenClawConfig; accountId?: string }) {
@@ -62,7 +63,7 @@ export function resolveWhatsAppAgentReactionGuidance(params: {
 export function describeWhatsAppMessageActions(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
-}): { actions: ChannelMessageActionName[] } | null {
+}) {
   if (!params.cfg.channels?.whatsapp) {
     return null;
   }
@@ -82,5 +83,27 @@ export function describeWhatsAppMessageActions(params: {
     actions.add("poll");
   }
   actions.add("upload-file");
-  return { actions: Array.from(actions) };
+  return {
+    actions: Array.from(actions),
+    schema: {
+      properties: {
+        location: Type.Optional(
+          Type.Object(
+            {
+              latitude: Type.Number({ minimum: -90, maximum: 90 }),
+              longitude: Type.Number({ minimum: -180, maximum: 180 }),
+              accuracy: Type.Optional(Type.Number({ minimum: 0, maximum: 1500 })),
+              name: Type.Optional(Type.String({ minLength: 1 })),
+              address: Type.Optional(Type.String({ minLength: 1 })),
+            },
+            {
+              description:
+                "Standalone WhatsApp location pin. Do not combine with message or media.",
+            },
+          ),
+        ),
+      },
+      visibility: "all-configured" as const,
+    },
+  };
 }

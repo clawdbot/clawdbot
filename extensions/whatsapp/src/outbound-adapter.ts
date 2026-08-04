@@ -15,6 +15,8 @@ function normalizeOutboundText(text: string | undefined): string {
 
 export const whatsappOutbound: ChannelOutboundAdapter = createWhatsAppOutboundBase({
   chunker: chunkText,
+  sendLocationWhatsApp: async (to, location, options) =>
+    await (await loadWhatsAppSendModule()).sendLocationWhatsApp(to, location, options),
   sendMessageWhatsApp: async (to, text, options) =>
     await (
       await loadWhatsAppSendModule()

@@ -21,6 +21,7 @@ const WHATSAPP_ACTIVE_LISTENER_TEST_CFG = {
 
 function makeListener() {
   return {
+    sendLocation: vi.fn(async () => ({ messageId: "location-1" })),
     sendMessage: vi.fn(async () => ({ messageId: "msg-1" })),
     sendPoll: vi.fn(async () => ({ messageId: "poll-1" })),
     sendReaction: vi.fn(async () => {}),

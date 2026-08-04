@@ -17,6 +17,7 @@ const hoisted = vi.hoisted(() => ({
 }));
 const loadWebMediaMock = vi.fn();
 let sendMessageWhatsApp: typeof import("./send.js").sendMessageWhatsApp;
+let sendLocationWhatsApp: typeof import("./send.js").sendLocationWhatsApp;
 let sendPollWhatsApp: typeof import("./send.js").sendPollWhatsApp;
 let sendReactionWhatsApp: typeof import("./send.js").sendReactionWhatsApp;
 let sendTypingWhatsApp: typeof import("./send.js").sendTypingWhatsApp;
@@ -75,14 +76,22 @@ vi.mock("./text-runtime.js", async () => {
 describe("web outbound", () => {
   const sendComposingTo = vi.fn(async () => {});
   const sendMessage = vi.fn(async () => createAcceptedWhatsAppSendResult("text", "msg123"));
+  const sendLocation = vi.fn(async () =>
+    createAcceptedWhatsAppSendResult("location", "location123"),
+  );
   const sendPoll = vi.fn(async () => createAcceptedWhatsAppSendResult("poll", "poll123"));
   const sendReaction = vi.fn(async () =>
     createAcceptedWhatsAppSendResult("reaction", "reaction123"),
   );
 
   beforeAll(async () => {
-    ({ sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp, sendTypingWhatsApp } =
-      await import("./send.js"));
+    ({
+      sendLocationWhatsApp,
+      sendMessageWhatsApp,
+      sendPollWhatsApp,
+      sendReactionWhatsApp,
+      sendTypingWhatsApp,
+    } = await import("./send.js"));
     const { resetLogger: loadedResetLogger, setLoggerOverride: loadedSetLoggerOverride } =
       await import("openclaw/plugin-sdk/runtime-env");
     resetLogger = loadedResetLogger;
@@ -116,6 +125,7 @@ describe("web outbound", () => {
     hoisted.controllerListeners.clear();
     hoisted.controllerListeners.set("default", {
       sendComposingTo,
+      sendLocation,
       sendMessage,
       sendPoll,
       sendReaction,
@@ -139,6 +149,53 @@ describe("web outbound", () => {
     });
     expect(sendComposingTo).toHaveBeenCalledWith("+1555");
     expect(sendMessage).toHaveBeenCalledWith("+1555", "hi", undefined, undefined);
+  });
+
+  it("sends locations through the active listener native helper", async () => {
+    await expect(
+      sendLocationWhatsApp(
+        "+1555",
+        {
+          latitude: 37.7749,
+          longitude: -122.4194,
+          accuracy: 8,
+          name: "QA Location",
+          address: "Market Street",
+        },
+        {
+          verbose: false,
+          cfg: WHATSAPP_TEST_CFG,
+          accountId: "default",
+          quotedMessageKey: {
+            id: "quoted-1",
+            remoteJid: "1555@s.whatsapp.net",
+            fromMe: false,
+          },
+        },
+      ),
+    ).resolves.toEqual({
+      messageId: "location123",
+      toJid: "1555@s.whatsapp.net",
+    });
+
+    expect(sendLocation).toHaveBeenCalledWith(
+      "+1555",
+      {
+        degreesLatitude: 37.7749,
+        degreesLongitude: -122.4194,
+        accuracyInMeters: 8,
+        name: "QA Location",
+        address: "Market Street",
+      },
+      {
+        accountId: "default",
+        quotedMessageKey: {
+          id: "quoted-1",
+          remoteJid: "1555@s.whatsapp.net",
+          fromMe: false,
+        },
+      },
+    );
   });
 
   it.each([
