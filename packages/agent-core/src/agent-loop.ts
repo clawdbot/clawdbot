@@ -1640,7 +1640,13 @@ async function finalizeExecutedToolCall(
       isError,
       executionStarted: executed.executionStarted,
       ...(prepared.tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
-      ...(resultContentSource ? { resultContentSource } : {}),
+      // Preserve main's caller-cancellation guard: provenance is only stamped
+      // when the tool actually ran and the caller did not abort it, but resolve
+      // the source per-invocation (result wins over the static tool marker) so
+      // mixed-source tools classify each call precisely.
+      ...(executed.executionStarted && !executed.callerCancelled && resultContentSource
+        ? { resultContentSource }
+        : {}),
     },
     finalArgs,
     config,
