@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
+import { cronStoreKey } from "./store/key.js";
 import { cronStreamScheduleKey } from "./stream-schedule.js";
+import { readCronTaskRunHistoryPage } from "./task-run-history.js";
 import type { CronJobCreate } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-stream-validation-" });
@@ -172,6 +174,45 @@ describe("cron stream schedule validation", () => {
         expect.stringContaining("stream source exhausted restarts"),
         expect.any(Object),
       );
+    } finally {
+      cron.stop();
+    }
+  });
+
+  it("records restart exhaustion in the cron task run history", async () => {
+    const { storePath } = await makeStorePath();
+    const cron = new CronService({
+      storePath,
+      cronEnabled: true,
+      cronConfig: {
+        triggers: { enabled: true },
+        failureAlert: { enabled: true, after: 5, cooldownMs: 0 },
+      },
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    await cron.start();
+    try {
+      const created = await cron.add(streamJob());
+      await cron.recordExternalFailure(created.id, "stream source exhausted restarts", {
+        streamStatus: "error",
+        streamRestartExhausted: true,
+        streamConsecutiveFailures: 5,
+      });
+      const history = readCronTaskRunHistoryPage({
+        storeKey: cronStoreKey(storePath),
+        jobId: created.id,
+        limit: 10,
+      });
+      expect(history.total).toBe(1);
+      expect(history.entries[0]).toMatchObject({
+        jobId: created.id,
+        action: "finished",
+        status: "error",
+        error: "stream source exhausted restarts",
+      });
     } finally {
       cron.stop();
     }

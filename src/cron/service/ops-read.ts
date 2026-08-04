@@ -17,6 +17,7 @@ import type {
 import { locked } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
 import { updateLoadedJob } from "./ops-mutations.js";
+import { emitCronRunFinished } from "./ops-run-preparation.js";
 import {
   ensureLoadedForRead,
   ownsStreamSource,
@@ -24,7 +25,6 @@ import {
   resolveEffectiveJobAgentId,
 } from "./ops-shared.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
-import { emit } from "./state.js";
 import { ensureLoaded, persistOrRestore, snapshotStoreForRollback } from "./store.js";
 import { applyJobResult, armTimer } from "./timer.js";
 
@@ -133,7 +133,7 @@ export async function recordExternalFailure(
     // Stream schedules are event-driven; applyJobResult's generic recurring
     // backoff must never turn source failure into a time-due payload run.
     job.state.nextRunAtMs = undefined;
-    emit(state, {
+    emitCronRunFinished(state, {
       jobId: job.id,
       action: "finished",
       job,
