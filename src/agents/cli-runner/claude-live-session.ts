@@ -91,6 +91,8 @@ type ClaudeLiveTurn = {
   /** UUID sent with this input; terminal records belong to the turn only after its started event. */
   inputUuid: string;
   inputStarted: boolean;
+  /** Reports process identity from init even when the current input has not started yet. */
+  onSessionId?: (sessionId: string) => void;
   /** Only resumed turns may replay a lifecycle-only stall through a fork. */
   useResume: boolean;
   /** True after output that makes replaying the submitted input unsafe. */
@@ -1305,6 +1307,9 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   const parsedSessionId = parseSessionId(parsed);
   if (parsedSessionId) {
     session.sessionId = parsedSessionId;
+    if (parsed.type === "system" && parsed.subtype === "init") {
+      turn?.onSessionId?.(parsedSessionId);
+    }
   }
   if (handleClaudeLiveControlResponse(session, parsed)) {
     return;
@@ -1650,6 +1655,7 @@ function createTurn(params: {
     observedStdout: false,
     inputUuid: params.inputUuid,
     inputStarted: false,
+    onSessionId: params.onSessionId,
     useResume: params.useResume,
     hasReplayUnsafeActivity: false,
     completedToolCallIds: new Set(),

@@ -79,6 +79,13 @@ export function createTestMcpLoopbackServerConfig(port: number) {
   };
 }
 
+export function createClaudeInputStartedEvent(data: string) {
+  const input = JSON.parse(data) as { type?: string; uuid?: string };
+  return input.type === "user" && typeof input.uuid === "string"
+    ? { type: "command_lifecycle" as const, command_uuid: input.uuid, state: "started" as const }
+    : undefined;
+}
+
 export function createTestMcpLoopbackClientGrant(params: {
   context: McpLoopbackRequestContext;
 }): McpLoopbackClientGrant {
@@ -552,13 +559,9 @@ export function mockClaudeLiveRun(
     write: vi.fn((data: string, callback?: (error?: Error | null) => void) => {
       writes.push(data);
       const writeIndex = writes.length - 1;
-      const input = JSON.parse(data) as { type?: string; uuid?: string };
-      if (
-        options.inputLifecycle !== false &&
-        input.type === "user" &&
-        typeof input.uuid === "string"
-      ) {
-        emit([{ type: "command_lifecycle", command_uuid: input.uuid, state: "started" }]);
+      const inputStartedEvent = createClaudeInputStartedEvent(data);
+      if (options.inputLifecycle !== false && inputStartedEvent) {
+        emit([inputStartedEvent]);
       }
       if (options.onWrite) {
         options.onWrite({ data, emit, writeIndex });

@@ -43,6 +43,7 @@ import {
   buildClaudeLiveRunContext,
   buildPreparedCliRunContext,
   captureModelCallDiagnostics,
+  createClaudeInputStartedEvent,
   createCancelableLiveRunLifecycle,
   expectPathMissing,
   expectRejectsWithFields,
@@ -120,11 +121,9 @@ type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
 type SupervisorSpawnFn = ProcessSupervisor["spawn"];
 
 function emitClaudeInputStarted(stdout: ((chunk: string) => void) | undefined, data: string): void {
-  const input = JSON.parse(data) as { type?: string; uuid?: string };
-  if (input.type === "user" && typeof input.uuid === "string") {
-    stdout?.(
-      `${JSON.stringify({ type: "command_lifecycle", command_uuid: input.uuid, state: "started" })}\n`,
-    );
+  const event = createClaudeInputStartedEvent(data);
+  if (event) {
+    stdout?.(`${JSON.stringify(event)}\n`);
   }
 }
 
