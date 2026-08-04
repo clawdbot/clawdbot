@@ -219,6 +219,8 @@ export function recordCodexTrajectoryCompletion(
     promptError: normalizeCodexTrajectoryError(terminal.promptError),
     usage: params.result.attemptUsage,
     assistantTexts: params.result.assistantTexts,
+    // Codex turn/completed carries terminal status, not an assistant stop reason.
+    // Preserve the projector's final assistant fact instead of inferring one from the turn.
     stopReason: params.result.lastAssistant?.stopReason,
     messagesSnapshot: params.result.messagesSnapshot,
   });
