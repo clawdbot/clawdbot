@@ -11,6 +11,7 @@ import { createTempDirTracker } from "../helpers/temp-dir.ts";
 declare module "vitest" {
   export interface ProvidedContext {
     controlUiE2eServerBaseUrl: string | null;
+    controlUiE2eServerOutDir: string | null;
   }
 }
 
@@ -18,6 +19,7 @@ export default async function setup(project: TestProject) {
   const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
   if (!canRunPlaywrightChromium(executablePath)) {
     project.provide("controlUiE2eServerBaseUrl", null);
+    project.provide("controlUiE2eServerOutDir", null);
     // No-op teardown keeps both paths value-returning for Vitest's setup contract.
     return () => {};
   }
@@ -34,6 +36,7 @@ export default async function setup(project: TestProject) {
   });
   try {
     project.provide("controlUiE2eServerBaseUrl", server.baseUrl);
+    project.provide("controlUiE2eServerOutDir", outDir);
     return async () => {
       try {
         await server.close();

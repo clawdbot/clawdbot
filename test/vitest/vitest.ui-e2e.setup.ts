@@ -5,10 +5,12 @@ import { setSharedControlUiE2eServerBaseUrl } from "../../ui/src/test-helpers/co
 declare module "vitest" {
   export interface ProvidedContext {
     controlUiE2eServerBaseUrl: string | null;
+    controlUiE2eServerOutDir: string | null;
   }
 }
 
 const serverBaseUrl = inject("controlUiE2eServerBaseUrl");
+const serverOutDir = inject("controlUiE2eServerOutDir");
 if (serverBaseUrl) {
-  setSharedControlUiE2eServerBaseUrl(serverBaseUrl);
+  setSharedControlUiE2eServerBaseUrl(serverBaseUrl, serverOutDir);
 }

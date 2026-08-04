@@ -259,6 +259,8 @@ export type ControlUiE2eServer = {
 };
 
 type ControlUiE2eServerOptions = {
+  /** Serve the shard-owned production bundle from a distinct origin. */
+  isolatedBundledOrigin?: boolean;
   source?: boolean;
 };
 
@@ -274,9 +276,14 @@ const DEFAULT_CONTROL_UI_E2E_BUILD_INFO: ControlUiBuildInfo = {
 };
 
 let sharedControlUiE2eServerBaseUrl: string | null = null;
+let sharedControlUiE2eServerOutDir: string | null = null;
 
-export function setSharedControlUiE2eServerBaseUrl(baseUrl: string | null): void {
+export function setSharedControlUiE2eServerBaseUrl(
+  baseUrl: string | null,
+  outDir: string | null = null,
+): void {
   sharedControlUiE2eServerBaseUrl = baseUrl;
+  sharedControlUiE2eServerOutDir = outDir;
 }
 
 export type MockGatewayControls = {
@@ -356,6 +363,15 @@ export async function startControlUiE2eServer(
   buildInfo?: ControlUiBuildInfo,
   options: ControlUiE2eServerOptions = {},
 ): Promise<ControlUiE2eServer> {
+  if (options.isolatedBundledOrigin) {
+    if (buildInfo !== undefined || options.source === true) {
+      throw new Error("An isolated bundled Control UI origin cannot use source build options");
+    }
+    if (sharedControlUiE2eServerOutDir === null) {
+      throw new Error("An isolated bundled Control UI origin requires the shared E2E build");
+    }
+    return startBuiltControlUiE2eServer(sharedControlUiE2eServerOutDir);
+  }
   // Ordinary E2E files exercise the shipped bundle. Source-module and custom
   // build-info tests retain a private Vite server through the same lease API.
   if (
