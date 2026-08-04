@@ -826,10 +826,19 @@ async function startGatewayModeTui(
     model: `tui-pty-mock/${scenario.modelId}`,
   });
   const run = shared.run;
-  const outputOffset = run.visibleOutput().length;
-  // Session adoption is the per-case isolation boundary for the shared PTY.
+  const adoptionOffset = run.visibleOutput().length;
   await run.write(`/session ${sessionKey}\r`, { delay: false });
-  await waitForOutputAfter(run, `session ${sessionKey.split(":").at(-1)}`, outputOffset);
+  const sessionAcknowledgement = `session ${sessionKey.split(":").at(-1)}`;
+  await waitForOutputAfter(run, sessionAcknowledgement, adoptionOffset);
+  await waitFor({
+    timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+    read: () => {
+      const screen = synchronizedFrameRows(run.output(), run)[0]?.join("\n") ?? "";
+      return screen.includes(sessionAcknowledgement) && screen.includes("| idle") ? true : null;
+    },
+    onTimeout: () => new Error("adopted Gateway session did not reach an idle final screen"),
+  });
+  const outputOffset = run.visibleOutput().length;
   const cleanup = createIdempotentCleanup(async () => {
     shared.mockModel.releaseFirstResponse(scenario.modelId);
     for (const key of sessionKeys) {
