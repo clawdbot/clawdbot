@@ -14,7 +14,11 @@ scenario:
     - Wrapped URLs retain their complete copy-safe OSC 8 target.
     - ANSI, OSC, clipboard, and C1 payloads cannot reach raw terminal frames.
     - Printable text surrounding hostile terminal controls remains visible.
+    - Selector labels, descriptions, and footer fields render as sanitized one-line copies while preserving printable Unicode markers.
+    - Model and session selections pass exact unmodified backend values to patchSession and loadHistory.
   codeRefs:
+    - src/tui/components/filterable-select-list.ts
+    - src/tui/components/searchable-select-list.ts
     - src/tui/tui-pty-harness.e2e.test.ts
     - src/tui/tui.ts
     - src/tui/tui-formatters.ts

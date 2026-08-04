@@ -62,7 +62,7 @@ export function formatTuiFooter(params: {
   const traceLabel = trace === "raw" ? "trace:raw" : trace === "on" ? "trace" : null;
   const reasoningLabel =
     reasoning === "on" ? "reasoning" : reasoning === "stream" ? "reasoning:stream" : null;
-  return [
+  const footer = [
     `agent ${params.agentLabel}`,
     `session ${params.sessionLabel}`,
     formatModelFooter({ model: sessionInfo.model, thinkingLevel: params.thinkingLevel }),
@@ -76,6 +76,7 @@ export function formatTuiFooter(params: {
   ]
     .filter(Boolean)
     .join(" | ");
+  return sanitizeRenderableLine(footer);
 }
 
 function hasControlChars(text: string): boolean {
@@ -256,6 +257,10 @@ export function sanitizeRenderableText(text: string): string {
       )
     : redacted;
   return applyRtlIsolation(tokenSafe);
+}
+
+export function sanitizeRenderableLine(text: string): string {
+  return stripControlChars(stripAnsi(text)).replace(/\s+/gu, " ").trim();
 }
 
 /** Render error causes without exposing secrets or terminal control sequences. */

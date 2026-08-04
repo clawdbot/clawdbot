@@ -62,6 +62,33 @@ describe("formatTuiFooter", () => {
     expect(new Text(summary, 1, 0).render(48).every((line) => visibleWidth(line) <= 48)).toBe(true);
   });
 
+  it("sanitizes terminal controls and collapses footer fields to one line", () => {
+    const attacks = [
+      "\u001b[38;5;201m",
+      "\u001b[3J",
+      "\u001b]0;footer-title\u0007",
+      "\u001b]52;c;footer-clipboard\u0007",
+      "\u009b2K",
+      "\u009d0;footer-c1-title\u009c",
+    ];
+    const footer = formatTuiFooter({
+      agentLabel: `agent-start${attacks[0]}agent-end\n東京`,
+      sessionLabel: `session-start${attacks[2]}session-end\r\ncafé`,
+      sessionInfo: {
+        model: `provider/model-start${attacks[1]}middle${attacks[3]}${attacks[4]}${attacks[5]}model-end\tUnicode`,
+      },
+      deliver: true,
+    });
+
+    expect(footer).toContain("agent-startagent-end 東京");
+    expect(footer).toContain("session-startsession-end café");
+    expect(footer).toContain("model-startmiddlemodel-end Unicode");
+    expect(footer).not.toMatch(/[\r\n\t]/u);
+    for (const attack of attacks) {
+      expect(footer).not.toContain(attack);
+    }
+  });
+
   it("renders active goal usage", () => {
     const footer = formatTuiFooter({
       agentLabel: "Main",

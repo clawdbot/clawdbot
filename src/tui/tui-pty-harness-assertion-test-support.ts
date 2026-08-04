@@ -91,12 +91,25 @@ function buildTerminalAttackPayload(tag: string): TerminalAttackPayload {
   };
 }
 
+function buildCompactTerminalAttackPayload(tag: string, attack: string): TerminalAttackPayload {
+  const markers = [`${tag}a`, `${tag}b`];
+  return {
+    text: `${markers[0]}${attack}${markers[1]} café 東京 👩🏽‍💻`,
+    markers,
+    attacks: [`${attack}${markers[1]}`],
+  };
+}
+
+function compactPayloadVisibleText(payload: TerminalAttackPayload) {
+  return `${payload.markers.join("")} café 東京 👩🏽‍💻`;
+}
+
 async function assertTerminalAttackSanitized(
   fixture: StartedTuiPtyFixture,
   payload: TerminalAttackPayload,
   timeoutMs: number,
 ) {
-  await fixture.run.waitForOutput(payload.markers[13] ?? "", timeoutMs);
+  await fixture.run.waitForOutput(payload.markers.at(-1) ?? "", timeoutMs);
   const visible = fixture.run.visibleOutput();
   expect(payload.markers.every((marker) => visible.includes(marker))).toBe(true);
   expect(visible).toContain("café 東京 👩🏽‍💻");
@@ -115,6 +128,80 @@ function hasStatusFrame(raw: string, marker: string, status: RegExp) {
       const frame = chunk.split("\x1b[?2026l", 1)[0] ?? "";
       return frame.includes(marker) && status.test(frame);
     });
+}
+
+async function exerciseSelectorOutputSafety(
+  startFixture: StartTuiPtyFixture,
+  startupTimeoutMs: number,
+) {
+  const modelValue = buildCompactTerminalAttackPayload("t08mv", "\x1b[3J");
+  const modelName = buildCompactTerminalAttackPayload("t08mn", "\x1b]52;c;t08_model_clipboard\x07");
+  const sessionTitle = buildCompactTerminalAttackPayload("t08st", "\x1b]0;t08_session_title\x07");
+  const sessionPreview = buildCompactTerminalAttackPayload(
+    "t08sp",
+    "\u009d0;t08_session_preview\u009c",
+  );
+  const sessionDisplay = buildCompactTerminalAttackPayload("t08sd", "\x1b[38;5;202m");
+  const selectedModel = `fixture-provider/${modelValue.text}`;
+  const selectedSessionKey = "agent:main:t08-session-key-café-東京";
+  const fixture = await startFixture({
+    env: {
+      OPENCLAW_TUI_PTY_COLS: "180",
+      OPENCLAW_TUI_PTY_ROWS: "24",
+      OPENCLAW_TUI_PTY_MODEL: "fixture-provider/fixture-model",
+      OPENCLAW_TUI_PTY_PICKER_FIXTURE: "1",
+      OPENCLAW_TUI_PTY_PICKER_MODEL_VALUE: selectedModel,
+      OPENCLAW_TUI_PTY_PICKER_MODEL_NAME: modelName.text,
+      OPENCLAW_TUI_PTY_PICKER_SESSION_KEY: selectedSessionKey,
+      OPENCLAW_TUI_PTY_PICKER_SESSION_TITLE: sessionTitle.text,
+      OPENCLAW_TUI_PTY_PICKER_SESSION_PREVIEW: sessionPreview.text,
+      OPENCLAW_TUI_PTY_PICKER_SESSION_DISPLAY_NAME: sessionDisplay.text,
+    },
+  });
+
+  try {
+    await fixture.run.waitForOutput("local ready", startupTimeoutMs);
+    await fixture.run.write("\u000c", { delay: false });
+    await fixture.waitForLogEntry((entry) => entry.method === "listModels");
+    await assertTerminalAttackSanitized(fixture, modelValue, 5_000);
+    await assertTerminalAttackSanitized(fixture, modelName, 5_000);
+
+    await fixture.run.write("\x1b[B", { delay: false });
+    await fixture.run.write("\r", { delay: false });
+    const modelPatch = await fixture.waitForLogEntry(
+      (entry) =>
+        entry.method === "patchSession" && objectFieldEquals(entry, "model", selectedModel),
+    );
+    expect(modelPatch.payload).toMatchObject({ model: selectedModel });
+    await fixture.run.waitForOutput(
+      `session main (Main) | fixture-provider/${compactPayloadVisibleText(modelValue)} | deliver:off`,
+      5_000,
+    );
+
+    await fixture.run.write("\u0010", { delay: false });
+    await fixture.waitForLogEntry(
+      (entry) => entry.method === "listSessions" && objectFieldEquals(entry, "purpose", "picker"),
+    );
+    await assertTerminalAttackSanitized(fixture, sessionTitle, 5_000);
+    await assertTerminalAttackSanitized(fixture, sessionPreview, 5_000);
+
+    await fixture.run.write("\x1b[B", { delay: false });
+    await fixture.run.write("\r", { delay: false });
+    const historyLoad = await fixture.waitForLogEntry(
+      (entry) =>
+        entry.method === "loadHistory" &&
+        objectFieldEquals(entry, "sessionKey", selectedSessionKey),
+    );
+    expect(historyLoad.payload).toMatchObject({ sessionKey: selectedSessionKey });
+    await fixture.run.waitForOutput(
+      `session t08-session-key-café-東京 (${compactPayloadVisibleText(sessionDisplay)}) | fixture-provider/${compactPayloadVisibleText(modelValue)} | deliver:off`,
+      5_000,
+    );
+    await assertTerminalAttackSanitized(fixture, sessionDisplay, 5_000);
+    expect(fixture.run.output()).not.toContain("\uFFFD");
+  } finally {
+    await fixture.cleanup();
+  }
 }
 
 export async function exerciseNarrowTerminalRendering(
@@ -149,7 +236,7 @@ export async function exerciseNarrowTerminalRendering(
   }
 }
 
-export async function exerciseTerminalOutputSafety(
+async function exerciseGatewayOutputSafety(
   startFixture: StartTuiPtyFixture,
   startupTimeoutMs: number,
 ) {
@@ -190,6 +277,16 @@ export async function exerciseTerminalOutputSafety(
   } finally {
     await fixture.cleanup();
   }
+}
+
+export async function exerciseTerminalOutputSafety(
+  startFixture: StartTuiPtyFixture,
+  startupTimeoutMs: number,
+) {
+  await Promise.all([
+    exerciseGatewayOutputSafety(startFixture, startupTimeoutMs),
+    exerciseSelectorOutputSafety(startFixture, startupTimeoutMs),
+  ]);
 }
 
 /** Proves fixture-local fragmentation preserves a Unicode prompt through the real TUI loop. */

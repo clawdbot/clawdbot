@@ -44,6 +44,12 @@ export async function writeTuiPtyFixtureScript(dir: string) {
       const disconnectReason = process.env.OPENCLAW_TUI_PTY_DISCONNECT_REASON;
       let disconnectPending = disconnectReason !== undefined;
       const enablePickerFixture = process.env.OPENCLAW_TUI_PTY_PICKER_FIXTURE === "1";
+      const pickerModelValue = process.env.OPENCLAW_TUI_PTY_PICKER_MODEL_VALUE ?? "fixture-provider/fixture-model-2";
+      const pickerModelName = process.env.OPENCLAW_TUI_PTY_PICKER_MODEL_NAME ?? "Fixture 2";
+      const pickerSessionKey = process.env.OPENCLAW_TUI_PTY_PICKER_SESSION_KEY ?? "agent:main:picker-target";
+      const pickerSessionTitle = process.env.OPENCLAW_TUI_PTY_PICKER_SESSION_TITLE;
+      const pickerSessionPreview = process.env.OPENCLAW_TUI_PTY_PICKER_SESSION_PREVIEW;
+      const pickerSessionDisplayName = process.env.OPENCLAW_TUI_PTY_PICKER_SESSION_DISPLAY_NAME ?? "Picker target";
       const xaiLimitError = '403 {"code":"The caller does not have permission to execute the specified operation","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}';
       let currentModel = footerModel ?? "fixture-provider/fixture-model";
       let currentThinkingLevel = footerThinkingLevel;
@@ -88,7 +94,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
         const entryReasoningLevel = isModeSource ? "stream" : undefined;
         return {
           key,
-          displayName: "Main",
+          displayName: key === pickerSessionKey ? pickerSessionDisplayName : "Main",
           model: currentModel,
           modelProvider: "fixture-provider",
           contextTokens: 128,
@@ -440,7 +446,14 @@ export async function writeTuiPtyFixtureScript(dir: string) {
             purpose: opts?.includeDerivedTitles ? "picker" : "refresh",
           });
           const sessions = enablePickerFixture
-            ? [sessionEntry("main"), { ...sessionEntry("agent:main:picker-target"), displayName: "Picker target" }]
+            ? [
+                sessionEntry("main"),
+                {
+                  ...sessionEntry(pickerSessionKey),
+                  derivedTitle: pickerSessionTitle,
+                  lastMessagePreview: pickerSessionPreview,
+                },
+              ]
             : [];
           return {
             ts: Date.now(),
@@ -512,7 +525,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           record("listModels");
           return [
             { id: "fixture-provider/fixture-model", name: "Fixture", provider: "fixture-provider" },
-            { id: "fixture-provider/fixture-model-2", name: "Fixture 2", provider: "fixture-provider" },
+            { id: pickerModelValue, name: pickerModelName, provider: "fixture-provider" },
           ];
         }
 
