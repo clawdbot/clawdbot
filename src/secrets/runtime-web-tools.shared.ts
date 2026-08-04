@@ -11,6 +11,7 @@ import {
   type RuntimeWebProviderMetadataBase,
   type RuntimeWebProviderSelectionParams,
   type RuntimeWebProviderSelectionResult,
+  type RuntimeWebSecretOwner,
   type RuntimeWebUnavailableProvider,
   type RuntimeWebWarningCode,
   type SecretResolutionResult,
@@ -84,6 +85,10 @@ function normalizeKnownProvider(
     return normalized;
   }
   return undefined;
+}
+
+function runtimeWebSecretOwnerKey(owner: { providerId: string; refKey?: string }): string {
+  return `${owner.providerId}:${owner.refKey ?? ""}`;
 }
 
 /**
@@ -620,13 +625,13 @@ export async function resolveRuntimeWebProviderSelection<
     }
   }
 
-  if (params.enabled) {
-    await resolveStandaloneProviderCredentials({
-      selection: params,
-      selectedProvider,
-      unavailableProviders,
-    });
-  }
+  const standaloneOwners = params.enabled
+    ? await resolveStandaloneProviderCredentials({
+        selection: params,
+        selectedProvider,
+        unavailableProviders,
+      })
+    : [];
 
   if (params.enabled && !params.configuredProvider && params.metadata.selectedProvider) {
     pushInactiveProviderCredentialWarnings({
@@ -666,8 +671,16 @@ export async function resolveRuntimeWebProviderSelection<
           ...(selectedResolution.value ? { resolvedValue: selectedResolution.value } : {}),
         }
       : undefined;
+  const baseSecretOwners: RuntimeWebSecretOwner[] = selectedSecretOwner
+    ? [selectedSecretOwner]
+    : unavailableProviders;
+  const existingKeys = new Set(baseSecretOwners.map(runtimeWebSecretOwnerKey));
+  const secretOwners = [
+    ...baseSecretOwners,
+    ...standaloneOwners.filter((owner) => !existingKeys.has(runtimeWebSecretOwnerKey(owner))),
+  ];
   return {
-    secretOwners: selectedSecretOwner ? [selectedSecretOwner] : unavailableProviders,
+    secretOwners,
     unavailableProviders,
   };
 }

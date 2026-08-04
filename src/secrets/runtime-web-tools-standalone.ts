@@ -4,6 +4,7 @@ import { digestRuntimeWebOwnerContract } from "./runtime-owner-contract.js";
 import type {
   RuntimeWebProviderMetadataBase,
   RuntimeWebProviderSelectionParams,
+  RuntimeWebSecretOwner,
   RuntimeWebUnavailableProvider,
 } from "./runtime-web-tools-selection.types.js";
 
@@ -50,10 +51,11 @@ export async function resolveStandaloneProviderCredentials<
   selection: RuntimeWebProviderSelectionParams<TProvider, TToolConfig, TSource, TMetadata>;
   selectedProvider?: string;
   unavailableProviders: RuntimeWebUnavailableProvider[];
-}): Promise<void> {
+}): Promise<RuntimeWebSecretOwner[]> {
   const { selection, selectedProvider, unavailableProviders } = params;
+  const owners: RuntimeWebSecretOwner[] = [];
   if (!selection.standaloneToolProviderIds) {
-    return;
+    return owners;
   }
   for (const provider of selection.providers) {
     if (provider.id === selectedProvider || !selection.standaloneToolProviderIds.has(provider.id)) {
@@ -93,12 +95,22 @@ export async function resolveStandaloneProviderCredentials<
         provider,
         value: resolution.value,
       });
+      if (resolution.secretRef && resolution.secretRefKey) {
+        owners.push({
+          providerId: provider.id,
+          path,
+          ref: resolution.secretRef,
+          refKey: resolution.secretRefKey,
+          contractDigest,
+          resolvedValue: resolution.value,
+        });
+      }
     } else if (resolution.secretRefConfigured && resolution.unresolvedRefReason) {
       const ref = resolution.secretRef;
       const refKey = resolution.secretRefKey;
       if (ref && refKey) {
         for (const inactivePath of paths) {
-          unavailableProviders.push({
+          const unavailable: RuntimeWebUnavailableProvider = {
             providerId: provider.id,
             path: inactivePath,
             ref,
@@ -111,11 +123,14 @@ export async function resolveStandaloneProviderCredentials<
                 provider,
                 value: resolvedValue,
               }),
-          });
+          };
+          unavailableProviders.push(unavailable);
+          owners.push(unavailable);
         }
       }
     }
   }
+  return owners;
 }
 
 /**
@@ -135,7 +150,7 @@ export async function resolveMissingStandaloneProviderCredentials<
   missingStandalonePluginIds: ReadonlySet<string>;
   resolveProviders: (pluginId: string) => Promise<TProvider[]>;
   unavailableProviders: RuntimeWebUnavailableProvider[];
-}): Promise<void> {
+}): Promise<RuntimeWebSecretOwner[]> {
   const {
     selection,
     configuredProvider,
@@ -143,8 +158,9 @@ export async function resolveMissingStandaloneProviderCredentials<
     resolveProviders,
     unavailableProviders,
   } = params;
+  const owners: RuntimeWebSecretOwner[] = [];
   if (missingStandalonePluginIds.size === 0) {
-    return;
+    return owners;
   }
   for (const pluginId of missingStandalonePluginIds) {
     const providers = await resolveProviders(pluginId);
@@ -152,10 +168,12 @@ export async function resolveMissingStandaloneProviderCredentials<
       continue;
     }
     const standaloneToolProviderIds = new Set(providers.map((provider) => provider.id));
-    await resolveStandaloneProviderCredentials({
+    const pluginOwners = await resolveStandaloneProviderCredentials({
       selection: { ...selection, providers, standaloneToolProviderIds },
       selectedProvider: configuredProvider,
       unavailableProviders,
     });
+    owners.push(...pluginOwners);
   }
+  return owners;
 }
