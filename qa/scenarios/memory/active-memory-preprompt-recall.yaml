@@ -174,11 +174,12 @@ flow:
             expr: "normalizeLowercaseStringOrEmpty(baselineReply.text)"
         - set: baselineMockRequests
           value:
-            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforeBaseline}`))"
+            # Heartbeats share this mock provider, so bind the trace to this scenario's turn.
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforeBaseline}`)).filter((request) => String(request.allInputText ?? '').includes(config.turnMarker))"
         - assert:
             expr: baselineMockRequests.length === 1
             message:
-              expr: "`disabled baseline expected exactly one model request: ${JSON.stringify(baselineMockRequests)}`"
+              expr: "`disabled baseline expected exactly one marked model request: ${JSON.stringify(baselineMockRequests)}`"
         - set: baselineMainRequest
           value:
             expr: baselineMockRequests[0]
@@ -243,7 +244,8 @@ flow:
             message: active memory recall left a transient SQLite session behind
         - set: activeRequests
           value:
-            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforeActive}`))"
+            # The marker propagates through the helper context and excludes unrelated background turns.
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforeActive}`)).filter((request) => String(request.allInputText ?? '').includes(config.turnMarker))"
         - assert:
             expr: activeRequests.length === 4
             message:

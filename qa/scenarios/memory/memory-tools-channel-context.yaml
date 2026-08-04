@@ -139,11 +139,15 @@ flow:
           value:
             expr: "state.getSnapshot().messages.slice(outboundStartIndex).filter((message) => message.direction === 'outbound' && !message.deleted && message.conversation.id === config.channelId && message.conversation.kind === 'channel')"
         - assert:
-            expr: "visibleChannelOutbounds.length === 1 && visibleChannelOutbounds[0].id === outbound.id"
+            # Tool-backed finals replace their streamed preview; only the durable visible reply is contractual.
+            expr: visibleChannelOutbounds.length === 1
             message:
               expr: "`expected exactly one visible QA-room reply after the ordered memory result: ${JSON.stringify(visibleChannelOutbounds)}`"
+        - set: visibleChannelOutbound
+          value:
+            expr: visibleChannelOutbounds[0]
         - assert:
-            expr: "(outbound.text.match(new RegExp(config.expectedNeedle, 'g')) ?? []).length === 1"
+            expr: "(visibleChannelOutbound.text.match(new RegExp(config.expectedNeedle, 'g')) ?? []).length === 1"
             message:
-              expr: "`final QA-room reply must contain ${config.expectedNeedle} exactly once: ${outbound.text}`"
-      detailsExpr: "`${outbound.text}; path=${config.expectedMemoryPath}; matched=${searchResultRequest.toolOutputCallId === searchPlanRequest.plannedToolCallId}; room=${config.channelId}`"
+              expr: "`final QA-room reply must contain ${config.expectedNeedle} exactly once: ${visibleChannelOutbound.text}`"
+      detailsExpr: "`${visibleChannelOutbound.text}; path=${config.expectedMemoryPath}; matched=${searchResultRequest.toolOutputCallId === searchPlanRequest.plannedToolCallId}; room=${config.channelId}`"
