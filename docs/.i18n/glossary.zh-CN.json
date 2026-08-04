@@ -92,6 +92,22 @@
     "target": "clawrouter"
   },
   {
+    "source": "Nexforce Router (multi-provider routing)",
+    "target": "Nexforce Router（多提供商路由）"
+  },
+  {
+    "source": "Nexforce Router",
+    "target": "Nexforce Router"
+  },
+  {
+    "source": "Nexforce plugin",
+    "target": "Nexforce 插件"
+  },
+  {
+    "source": "nexforce",
+    "target": "nexforce"
+  },
+  {
     "source": "OpenAI",
     "target": "OpenAI"
   },

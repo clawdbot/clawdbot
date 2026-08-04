@@ -565,6 +565,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/moonshot/**"
+"extensions: nexforce":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/nexforce/**"
+          - "docs/providers/nexforce.md"
 "extensions: nvidia":
   - changed-files:
       - any-glob-to-any-file:

@@ -22,6 +22,7 @@ const providerExtensionIds = [
   "mistral",
   "qwen",
   "moonshot",
+  "nexforce",
   "nvidia",
   "ollama",
   "openrouter",
