@@ -5801,6 +5801,107 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     );
   });
 
+  it("budgets macOS Swift time by runner, so every hosted path gets the hosted timeout", () => {
+    const workflow = readCiWorkflow();
+    const macosSwift = workflow.jobs["macos-swift"];
+    const runsOnExpression = macosSwift["runs-on"];
+    const timeoutExpression = macosSwift["timeout-minutes"];
+
+    // Both expressions must route on the same set of conditions: whichever
+    // path sends runs-on to hosted macos-26 has to send timeout-minutes to
+    // the hosted budget too, or that path keeps the tighter Blacksmith
+    // budget on a slower runner and gets cancelled mid-compile.
+    const scenarios = [
+      {
+        name: "same-repo pull request, first attempt, default backend",
+        context: {
+          eventName: "pull_request",
+          headRepository: "openclaw/openclaw",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+        },
+        hosted: false,
+      },
+      {
+        name: "same-repo pull request, breaker routed to GitHub-hosted",
+        context: {
+          eventName: "pull_request",
+          headRepository: "openclaw/openclaw",
+          repository: "openclaw/openclaw",
+          runnerBackend: "github",
+          runAttempt: 1,
+        },
+        hosted: true,
+      },
+      {
+        name: "same-repo pull request retry",
+        context: {
+          eventName: "pull_request",
+          headRepository: "openclaw/openclaw",
+          repository: "openclaw/openclaw",
+          runAttempt: 2,
+        },
+        hosted: true,
+      },
+      {
+        name: "fork pull request, default backend",
+        context: {
+          eventName: "pull_request",
+          headRepository: "contributor/openclaw",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+        },
+        hosted: true,
+      },
+      {
+        name: "fork pull request, breaker routed to GitHub-hosted",
+        context: {
+          eventName: "pull_request",
+          headRepository: "contributor/openclaw",
+          repository: "openclaw/openclaw",
+          runnerBackend: "github",
+          runAttempt: 1,
+        },
+        hosted: true,
+      },
+      {
+        name: "manual workflow dispatch",
+        context: {
+          eventName: "workflow_dispatch",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+        },
+        hosted: true,
+      },
+      {
+        name: "canonical main push, default backend",
+        context: {
+          eventName: "push",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+        },
+        hosted: false,
+      },
+      {
+        name: "canonical main push, breaker routed to GitHub-hosted",
+        context: {
+          eventName: "push",
+          repository: "openclaw/openclaw",
+          runnerBackend: "github",
+          runAttempt: 1,
+        },
+        hosted: true,
+      },
+    ] as const;
+
+    for (const { context, hosted, name } of scenarios) {
+      expect(evaluateWorkflowExpression(runsOnExpression, context), name).toBe(
+        hosted ? "macos-26" : "blacksmith-12vcpu-macos-26",
+      );
+      expect(evaluateWorkflowExpression(timeoutExpression, context), name).toBe(hosted ? 30 : 20);
+    }
+  });
+
   it("serializes macOS Swift tests only on hosted dispatches and retries", () => {
     const workflow = readCiWorkflow();
     const macosSwift = workflow.jobs["macos-swift"];
