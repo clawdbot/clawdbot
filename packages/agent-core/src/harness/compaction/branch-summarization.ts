@@ -19,6 +19,7 @@ import {
   computeFileLists,
   createFileOps,
   extractFileOpsFromMessage,
+  extractSummaryText,
   type FileOperations,
   formatFileOperations,
   serializeConversation,
@@ -292,16 +293,22 @@ export async function generateBranchSummary(
     );
   }
 
-  let summary = response.content
-    .filter((c): c is { type: "text"; text: string } => c.type === "text")
-    .map((c) => c.text)
-    .join("\n");
-  summary = BRANCH_SUMMARY_PREAMBLE + summary;
+  const summaryText = extractSummaryText(response);
+  if (summaryText === undefined) {
+    return err(
+      new BranchSummaryError(
+        "summarization_failed",
+        "Branch summary failed: model returned no summary text",
+      ),
+    );
+  }
+
+  let summary = BRANCH_SUMMARY_PREAMBLE + summaryText;
   const { readFiles, modifiedFiles } = computeFileLists(fileOps);
   summary += formatFileOperations(readFiles, modifiedFiles);
 
   return ok({
-    summary: summary || "No summary generated",
+    summary,
     readFiles,
     modifiedFiles,
   });

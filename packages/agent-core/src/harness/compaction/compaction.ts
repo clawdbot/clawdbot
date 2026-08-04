@@ -31,6 +31,7 @@ import {
   type CompactionEntry,
   CompactionError,
   err,
+  InvalidSummaryOutputError,
   ok,
   type Result,
   type SessionTreeEntry,
@@ -39,6 +40,7 @@ import {
   computeFileLists,
   createFileOps,
   extractFileOpsFromMessage,
+  extractSummaryText,
   type FileOperations,
   formatFileOperations,
   getCompactionContentBlockText,
@@ -646,12 +648,13 @@ async function runSummarizationCompletion(params: {
     );
   }
 
-  return ok(
-    response.content
-      .filter((c): c is { type: "text"; text: string } => c.type === "text")
-      .map((c) => c.text)
-      .join("\n"),
-  );
+  const summary = extractSummaryText(response);
+  if (summary === undefined) {
+    return err(
+      new InvalidSummaryOutputError(`${params.errorLabel} failed: model returned no summary text`),
+    );
+  }
+  return ok(summary);
 }
 
 /** Generate or update a conversation summary for compaction. */
