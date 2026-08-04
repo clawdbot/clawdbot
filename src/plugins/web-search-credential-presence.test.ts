@@ -52,7 +52,11 @@ describe("hasConfiguredWebSearchCredential", () => {
         config: {
           models: {
             providers: {
-              google: { apiKey: "google-model-key", models: [] },
+              google: {
+                baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+                apiKey: "google-model-key",
+                models: [],
+              },
             },
           },
         } as OpenClawConfig,
