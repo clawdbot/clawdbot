@@ -28,7 +28,7 @@ export function terminateManagedChild(
       },
     ) => { error?: Error; status: number | null };
   },
-): void;
+): { processTreeState: "indeterminate" | "signaled" | "terminated" } | undefined;
 /**
  * Run a child command while forwarding termination signals to the managed process group.
  *
@@ -44,6 +44,7 @@ export function terminateManagedChild(
  *   comSpec?: string;
  *   timeoutMs?: number;
  *   requireProcessTreeExit?: boolean;
+ *   runTaskkill?: typeof spawnSync;
  *   onReady?: (child: import("node:child_process").ChildProcess) => void;
  * }} options
  * @returns {Promise<number>}
@@ -60,6 +61,7 @@ export function runManagedCommand({
   comSpec,
   timeoutMs,
   requireProcessTreeExit,
+  runTaskkill,
   onReady,
 }: {
   bin: string;
@@ -73,6 +75,15 @@ export function runManagedCommand({
   comSpec?: string;
   timeoutMs?: number;
   requireProcessTreeExit?: boolean;
+  runTaskkill?: (
+    command: string,
+    args?: string[],
+    options?: {
+      killSignal?: NodeJS.Signals;
+      stdio?: import("node:child_process").StdioOptions;
+      timeout?: number;
+    },
+  ) => { error?: Error; status: number | null };
   onReady?: (child: import("node:child_process").ChildProcess) => void;
 }): Promise<number>;
 /**

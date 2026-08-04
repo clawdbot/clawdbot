@@ -1813,6 +1813,91 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     },
   );
 
+  test("retains a manual-recovery lock when Windows timeout cleanup is unverified", async () => {
+    const { root, mirror } = makeFixture();
+    writeBuild(mirror);
+    const lockPath = path.join(root, "maintenance.lock");
+    const plistPath = path.join(root, "ai.openclaw.gateway.plist");
+    writeFileSync(plistPath, "plist\n", { mode: 0o600 });
+    const deployment = {
+      configPath: path.join(root, "openclaw.json"),
+      entrypoint: path.join(mirror, "dist/index.js"),
+      entrypointIndex: 1,
+      executable: process.execPath,
+      invocationPrefix: [path.join(mirror, "dist/index.js")],
+      label: "ai.openclaw.gateway",
+      plistPath,
+      port: 18789,
+      runtime: process.execPath,
+    };
+    const events: string[] = [];
+
+    await expect(
+      maintainFixture(
+        { checkout: mirror, remote: "origin", lockPath },
+        {
+          inspectGatewayDeployment: () => deployment,
+          runManagedCommand: async ({ args }: { args: string[] }) => {
+            const command = args.join(" ");
+            events.push(command);
+            if (command === "install --frozen-lockfile") {
+              throw Object.assign(new Error("Windows process tree remained unverified"), {
+                code: "EPROCESSGROUP_CLEANUP_FAILED",
+                manualRecoveryRequired: true,
+                processTreeState: "indeterminate",
+              });
+            }
+            return 0;
+          },
+          proveGatewayStopped: () => ({
+            runtimeStatus: "stopped",
+            port: 18789,
+            portStatus: "free",
+            proofSource: "fixture",
+          }),
+          waitForGatewayProcess: () => {
+            events.push("previous process started");
+          },
+        },
+      ),
+    ).rejects.toMatchObject({
+      code: "command_cleanup_failed",
+      details: {
+        lockPath,
+        lockRetained: true,
+        manualRecoveryRequired: true,
+        phase: "dependency install",
+        processTreeState: "indeterminate",
+        serviceState: "stopped",
+      },
+    });
+
+    expect(events.some((event) => event.startsWith("enable gui/"))).toBe(false);
+    expect(events).not.toContain("previous process started");
+    expect(existsSync(lockPath)).toBe(true);
+    expect(acquireMaintenanceLock(mirror, lockPath)).toMatchObject({
+      acquired: false,
+      owner: {
+        manualRecoveryRequired: true,
+        reason: "command_cleanup_failed",
+        serviceState: "stopped",
+      },
+    });
+
+    const ownerPath = path.join(lockPath, "owner.json");
+    const retainedOwner = JSON.parse(readFileSync(ownerPath, "utf8"));
+    writeFileSync(ownerPath, `${JSON.stringify({ ...retainedOwner, pid: 2_147_483_647 })}\n`, {
+      mode: 0o600,
+    });
+    expect(acquireMaintenanceLock(mirror, lockPath)).toMatchObject({
+      acquired: false,
+      owner: {
+        manualRecoveryRequired: true,
+      },
+    });
+    rmSync(lockPath, { recursive: true });
+  });
+
   test("resumes a prepared suspension when stopped proof never converges", async () => {
     const { root, mirror } = makeFixture();
     mkdirSync(path.join(mirror, "node_modules"));

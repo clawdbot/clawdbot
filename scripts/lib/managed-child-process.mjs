@@ -27,6 +27,7 @@ export function signalExitCode(signal) {
  * @param {import("node:child_process").ChildProcess} child
  * @param {NodeJS.Signals} [signal]
  * @param {{ platform?: NodeJS.Platform; runTaskkill?: typeof spawnSync }} [options]
+ * @returns {{ processTreeState: "indeterminate" | "signaled" | "terminated" } | undefined}
  */
 export function terminateManagedChild(
   child,
@@ -34,13 +35,13 @@ export function terminateManagedChild(
   { platform = process.platform, runTaskkill = spawnSync } = {},
 ) {
   if (!child.pid) {
-    return;
+    return platform === "win32" ? { processTreeState: "indeterminate" } : undefined;
   }
 
   try {
     if (platform !== "win32") {
       process.kill(-child.pid, signal);
-      return;
+      return { processTreeState: "signaled" };
     }
   } catch (error) {
     if (!isMissingProcessError(error)) {
@@ -50,7 +51,7 @@ export function terminateManagedChild(
         // The process may have already exited between the group kill and fallback kill.
       }
     }
-    return;
+    return isMissingProcessError(error) ? { processTreeState: "terminated" } : undefined;
   }
 
   if (platform === "win32") {
@@ -66,17 +67,21 @@ export function terminateManagedChild(
     };
     const result = runTaskkill(taskkillPath, args, taskkillOptions);
     if (!result?.error && result?.status === 0) {
-      return;
+      return { processTreeState: "terminated" };
     }
     if (signal !== "SIGKILL") {
       const forceResult = runTaskkill(taskkillPath, [...args, "/F"], taskkillOptions);
       if (!forceResult?.error && forceResult?.status === 0) {
-        return;
+        return { processTreeState: "terminated" };
       }
     }
+    try {
+      child.kill(signal);
+    } catch {
+      // The leader may already be gone, but failed taskkill leaves descendants unverified.
+    }
+    return { processTreeState: "indeterminate" };
   }
-
-  child.kill(signal);
 }
 
 /**
@@ -94,6 +99,7 @@ export function terminateManagedChild(
  *   comSpec?: string;
  *   timeoutMs?: number;
  *   requireProcessTreeExit?: boolean;
+ *   runTaskkill?: typeof spawnSync;
  *   onReady?: (child: import("node:child_process").ChildProcess) => void;
  * }} options
  * @returns {Promise<number>}
@@ -110,6 +116,7 @@ export async function runManagedCommand({
   comSpec,
   timeoutMs,
   requireProcessTreeExit = false,
+  runTaskkill = spawnSync,
   onReady,
 }) {
   const spawnSpec = createManagedCommandSpawnSpec({
@@ -134,6 +141,7 @@ export async function runManagedCommand({
   let signalTimeout;
   let timedOut = false;
   let childResult;
+  let timeoutTermination;
   const timeoutTriggered = new Promise((resolve) => {
     signalTimeout = resolve;
   });
@@ -164,7 +172,10 @@ export async function runManagedCommand({
         timeoutTimer = setTimeout(() => {
           timedOut = true;
           // Shell commands may spawn grandchildren, so timeout cleanup owns the whole tree.
-          terminateManagedChild(child, "SIGKILL", { platform });
+          timeoutTermination = terminateManagedChild(child, "SIGKILL", {
+            platform,
+            runTaskkill,
+          });
           signalTimeout();
         }, timeoutMs);
       }
@@ -176,9 +187,14 @@ export async function runManagedCommand({
     try {
       onReady?.(child);
     } catch (error) {
-      terminateManagedChild(child, "SIGKILL", { platform });
+      const setupTermination = terminateManagedChild(child, "SIGKILL", {
+        platform,
+        runTaskkill,
+      });
       try {
-        await ensureManagedProcessTreeExit(child, platform);
+        await ensureManagedProcessTreeExit(child, platform, {
+          windowsTermination: setupTermination,
+        });
       } catch (cleanupError) {
         throw createManagedCommandSetupCleanupError(error, cleanupError);
       }
@@ -189,12 +205,16 @@ export async function runManagedCommand({
         ? await childOutcome
         : await Promise.race([childOutcome, timeoutTriggered.then(() => ({ type: "timeout" }))]);
     if (outcome.type === "timeout") {
-      await ensureManagedProcessTreeExit(child, platform);
+      await ensureManagedProcessTreeExit(child, platform, {
+        windowsTermination: timeoutTermination,
+      });
       throw createManagedCommandTimeoutError(timeoutMs);
     }
     if (outcome.type === "failed") {
       if (timedOut) {
-        await ensureManagedProcessTreeExit(child, platform);
+        await ensureManagedProcessTreeExit(child, platform, {
+          windowsTermination: timeoutTermination,
+        });
       }
       throw outcome.error;
     }
@@ -243,9 +263,17 @@ function processGroupStatus(pid) {
 async function ensureManagedProcessTreeExit(
   child,
   platform,
-  { rejectIfLive = false, terminateIfLive = false } = {},
+  { rejectIfLive = false, terminateIfLive = false, windowsTermination } = {},
 ) {
   if (platform === "win32") {
+    if (windowsTermination?.processTreeState === "indeterminate") {
+      throw createManagedCommandCleanupError(
+        "Windows taskkill could not verify managed process tree exit",
+        child,
+        platform,
+        "indeterminate",
+      );
+    }
     return;
   }
   const initialStatus = processGroupStatus(child.pid);
@@ -296,6 +324,7 @@ function createManagedCommandCleanupError(message, child, platform, processTreeS
       : undefined;
   return Object.assign(new Error(message), {
     code: "EPROCESSGROUP_CLEANUP_FAILED",
+    ...(platform === "win32" ? { manualRecoveryRequired: true } : {}),
     ...(processGroupId === undefined ? {} : { processGroupId }),
     processTreeState,
   });

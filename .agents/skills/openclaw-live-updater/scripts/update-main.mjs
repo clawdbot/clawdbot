@@ -67,6 +67,7 @@ const SAFE_INVARIANT_DETAIL_KEYS = [
   "exitTimeoutSeconds",
   "listenerClosed",
   "lockRetained",
+  "manualRecoveryRequired",
   "phase",
   "processExited",
   "processTreeState",
@@ -347,9 +348,10 @@ function findUpdateInvariantError(value, code) {
 
 function findUnsafeCommandCleanupFailure(value) {
   const failure = findUpdateInvariantError(value, "command_cleanup_failed");
-  return failure &&
-    Number.isSafeInteger(failure.details?.processGroupId) &&
-    ["indeterminate", "live"].includes(failure.details?.processTreeState)
+  const unsafeTreeState = ["indeterminate", "live"].includes(failure?.details?.processTreeState);
+  const retainedByProcessGroup = Number.isSafeInteger(failure?.details?.processGroupId);
+  const retainedForManualRecovery = failure?.details?.manualRecoveryRequired === true;
+  return failure && unsafeTreeState && (retainedByProcessGroup || retainedForManualRecovery)
     ? failure
     : null;
 }
@@ -848,7 +850,8 @@ export function acquireMaintenanceLock(checkout, requestedPath) {
       const ownerProcessAlive = Number.isInteger(owner.pid) && processAlive(owner.pid);
       const blockedProcessGroupAlive =
         Number.isInteger(owner.processGroupId) && processGroupAlive(owner.processGroupId);
-      if (ownerProcessAlive || blockedProcessGroupAlive) {
+      const manualRecoveryRequired = owner.manualRecoveryRequired === true;
+      if (ownerProcessAlive || blockedProcessGroupAlive || manualRecoveryRequired) {
         return { acquired: false, lockPath, owner };
       }
       const staleClaim = `${lockPath}.stale-${process.pid}-${randomUUID()}`;
@@ -874,11 +877,16 @@ export function acquireMaintenanceLock(checkout, requestedPath) {
     acquired: true,
     lockPath,
     owner,
-    retainForProcessGroup(processGroupId, details = {}) {
-      if (!Number.isSafeInteger(processGroupId) || processGroupId <= 1) {
+    retainForCleanupFailure(details = {}) {
+      const processGroupId = details.processGroupId;
+      const manualRecoveryRequired = details.manualRecoveryRequired === true;
+      if (
+        (!Number.isSafeInteger(processGroupId) || processGroupId <= 1) &&
+        !manualRecoveryRequired
+      ) {
         throw new UpdateInvariantError(
-          "invalid_process_group",
-          `refusing to retain maintenance lock for invalid process group: ${processGroupId}`,
+          "invalid_cleanup_lock",
+          "refusing to retain maintenance lock without a process group or manual recovery state",
         );
       }
       const ownerPath = path.join(lockPath, "owner.json");
@@ -889,9 +897,13 @@ export function acquireMaintenanceLock(checkout, requestedPath) {
       const retainedOwner = {
         ...current,
         blockedAt: new Date().toISOString(),
-        processGroupId,
         reason: "command_cleanup_failed",
+        ...(Number.isSafeInteger(processGroupId) ? { processGroupId } : {}),
+        ...(manualRecoveryRequired ? { manualRecoveryRequired: true } : {}),
         ...(typeof details.phase === "string" ? { phase: details.phase } : {}),
+        ...(typeof details.processTreeState === "string"
+          ? { processTreeState: details.processTreeState }
+          : {}),
         ...(typeof details.serviceState === "string" ? { serviceState: details.serviceState } : {}),
       };
       writeFileSync(ownerPath, `${JSON.stringify(retainedOwner)}\n`, { mode: 0o600 });
@@ -938,6 +950,7 @@ async function defaultRunCommand(command, args, checkout, options = {}) {
           ...(typeof error.processTreeState === "string"
             ? { processTreeState: error.processTreeState }
             : {}),
+          ...(error.manualRecoveryRequired === true ? { manualRecoveryRequired: true } : {}),
           serviceState: options.serviceState ?? "running",
           timeoutMs,
         },
@@ -3009,6 +3022,10 @@ export async function maintainMain(options, dependencies = {}) {
         ...(Number.isInteger(lock.owner.processGroupId)
           ? { processGroupId: lock.owner.processGroupId }
           : {}),
+        ...(lock.owner.manualRecoveryRequired === true ? { manualRecoveryRequired: true } : {}),
+        ...(typeof lock.owner.processTreeState === "string"
+          ? { processTreeState: lock.owner.processTreeState }
+          : {}),
         ...(typeof lock.owner.reason === "string" ? { reason: lock.owner.reason } : {}),
       },
     };
@@ -3546,9 +3563,8 @@ export async function maintainMain(options, dependencies = {}) {
   } catch (error) {
     const cleanupFailure = findUnsafeCommandCleanupFailure(error);
     if (cleanupFailure) {
-      const processGroupId = cleanupFailure.details.processGroupId;
       retainMaintenanceLock = true;
-      lock.retainForProcessGroup(processGroupId, cleanupFailure.details);
+      lock.retainForCleanupFailure(cleanupFailure.details);
       cleanupFailure.details = {
         ...cleanupFailure.details,
         lockPath: lock.lockPath,

@@ -293,6 +293,55 @@ setInterval(() => {}, 1_000);
     expect(Date.now() - startedAt).toBeLessThan(2_000);
   });
 
+  it("fails closed when Windows taskkill cannot verify timeout cleanup", async () => {
+    const originalSystemRoot = process.env.SystemRoot;
+    const originalWindir = process.env.WINDIR;
+    let childPid = 0;
+    const runTaskkill = vi.fn(() => ({
+      error: Object.assign(new Error("taskkill timed out"), { code: "ETIMEDOUT" }),
+      status: null,
+    }));
+    try {
+      process.env.SystemRoot = "C:\\Windows";
+      delete process.env.WINDIR;
+      await expect(
+        runManagedCommand({
+          bin: process.execPath,
+          args: ["-e", "setInterval(() => {}, 1_000)"],
+          onReady: (child) => {
+            childPid = expectProcessPid(child.pid);
+          },
+          platform: "win32",
+          runTaskkill,
+          shell: false,
+          stdio: "ignore",
+          timeoutMs: 200,
+        }),
+      ).rejects.toMatchObject({
+        code: "EPROCESSGROUP_CLEANUP_FAILED",
+        manualRecoveryRequired: true,
+        processTreeState: "indeterminate",
+      });
+
+      expect(runTaskkill).toHaveBeenCalledWith(
+        taskkillPath,
+        ["/PID", String(childPid), "/T", "/F"],
+        {
+          killSignal: "SIGKILL",
+          stdio: "ignore",
+          timeout: 10_000,
+        },
+      );
+      await waitFor(() => !isProcessAlive(childPid));
+    } finally {
+      restoreEnvValue("SystemRoot", originalSystemRoot);
+      restoreEnvValue("WINDIR", originalWindir);
+      if (childPid && isProcessAlive(childPid)) {
+        process.kill(childPid, "SIGKILL");
+      }
+    }
+  });
+
   posixIt("does not wait indefinitely when a timed-out child omits close", async () => {
     const startedAt = Date.now();
     let childPid = 0;
