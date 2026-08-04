@@ -10,6 +10,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentRuntimeSessionHandoffRequester } from "../gateway/agent-runtime-identity-token.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
+import { parseCanonicalSessionPeerShape } from "../sessions/session-chat-type-shared.js";
+import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
@@ -256,7 +258,16 @@ export function resolveConversationCapabilityProfile(
   });
   const handoffRequester = sessionHandoffPolicy ? params.sessionHandoffRequester : undefined;
   const handoffProvider = normalizeMessageChannel(handoffRequester?.messageProvider);
-  const targetProvider = normalizeMessageChannel(messageProvider);
+  const targetSessionKey = params.runSessionKey ?? params.sessionKey;
+  const targetScopedSessionKey =
+    parseAgentSessionKey(targetSessionKey)?.rest ?? targetSessionKey?.trim();
+  // Derived runs enter through the internal channel, so the canonical target
+  // session owns the provider used for room sender-policy evaluation.
+  const targetProvider = normalizeMessageChannel(
+    (targetScopedSessionKey
+      ? parseCanonicalSessionPeerShape(targetScopedSessionKey)?.channel
+      : undefined) ?? messageProvider,
+  );
   const requesterMatchesTargetProvider =
     handoffProvider !== undefined && handoffProvider === targetProvider;
   // The signed projection owns source restrictions. The target still evaluates
@@ -266,7 +277,7 @@ export function resolveConversationCapabilityProfile(
         config: params.config,
         sessionKey: params.sessionKey,
         spawnedBy: params.spawnedBy,
-        messageProvider: messageProvider ?? undefined,
+        messageProvider: targetProvider,
         groupId: trustedGroup.groupId,
         groupChannel: trustedGroupChannel,
         groupSpace: trustedGroupSpace,

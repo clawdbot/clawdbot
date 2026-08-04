@@ -105,6 +105,9 @@ export async function runAgentStep(params: {
       allowModelOverride: false,
       ...(handoffPolicy ? { toolsAllow: [...handoffPolicy.allow] } : {}),
       ...(handoffPolicy ? { trustedSessionHandoff: true } : {}),
+      ...(params.handoffContext
+        ? { sessionHandoffRequester: params.handoffContext.requester }
+        : {}),
       ...(handoffPolicy && !handoffAllowsMessage ? { disableMessageTool: true } : {}),
     });
     await retireSessionMcpRuntimeForSessionKey({

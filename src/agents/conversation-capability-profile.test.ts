@@ -375,6 +375,7 @@ describe("resolveConversationCapabilityProfile", () => {
     {
       label: "exact same-channel sender",
       requester: { messageProvider: "whatsapp", senderId: "alice" },
+      messageProvider: INTERNAL_MESSAGE_CHANNEL,
       toolsBySender: {
         "id:alice": { deny: ["exec"] },
       } as GroupToolPolicyBySenderConfig,
@@ -382,13 +383,14 @@ describe("resolveConversationCapabilityProfile", () => {
     {
       label: "wildcard for a cross-channel sender",
       requester: { messageProvider: "discord", senderId: "alice" },
+      messageProvider: INTERNAL_MESSAGE_CHANNEL,
       toolsBySender: {
         "*": { deny: ["exec"] },
       } as GroupToolPolicyBySenderConfig,
     },
   ])(
     "layers target group $label policy onto a sessions_send projection",
-    ({ requester, toolsBySender }) => {
+    ({ requester, messageProvider, toolsBySender }) => {
       const profile = resolveConversationCapabilityProfile({
         config: {
           channels: {
@@ -396,7 +398,7 @@ describe("resolveConversationCapabilityProfile", () => {
           },
         },
         sessionKey: "agent:main:whatsapp:group:team",
-        messageProvider: "whatsapp",
+        messageProvider,
         groupId: "team",
         runtimeToolAllowlist: ["exec", "read", "sessions_send"],
         trustedSessionHandoff: true,

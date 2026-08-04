@@ -134,6 +134,41 @@ describe("runAgentStep", () => {
     expect(ingress?.transcriptMessage).toBe("");
   });
 
+  it("forwards signed requester facts into transcript-mode handoffs", async () => {
+    const agentCommandFromIngress = vi.fn(async () => ({
+      payloads: [{ text: "done", mediaUrl: null }],
+      meta: { durationMs: 1 },
+    }));
+    testing.setDepsForTest({
+      agentCommandFromIngress,
+      callGateway: async <T = unknown>(): Promise<T> => ({ runId: "unused" }) as T,
+    });
+
+    await runAgentStep({
+      sessionKey: "agent:target:whatsapp:group:team",
+      message: "internal announce step",
+      transcriptMessage: "",
+      extraSystemPrompt: "announce only",
+      timeoutMs: 10_000,
+      handoffContext: {
+        inheritedToolPolicy: {
+          version: 1,
+          allow: ["read", "sessions_send"],
+          deny: ["exec"],
+        },
+        requester: { messageProvider: "whatsapp", senderId: "alice" },
+      },
+    });
+
+    expect(agentCommandFromIngress).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolsAllow: ["read", "sessions_send"],
+        trustedSessionHandoff: true,
+        sessionHandoffRequester: { messageProvider: "whatsapp", senderId: "alice" },
+      }),
+    );
+  });
+
   it("does not return failed transcript-mode output as an announce reply", async () => {
     const agentCommandFromIngress = vi.fn(async () => ({
       payloads: [
