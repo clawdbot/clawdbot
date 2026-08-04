@@ -204,9 +204,9 @@ function replayTerminalState(
   }
   for (const segment of ansiSequences.splitAnsiSegments(raw)) {
     if (segment.kind === "text") {
-      // pi-tui expands visible tabs before terminal output, so a captured literal HT is invalid
-      // evidence rather than a terminal-layout operation we should replay.
-      if (segment.value.includes("\t")) {
+      // pi-tui expands visible tabs and does not use literal HT/BS for output layout.
+      // Captured HT/BS bytes are invalid evidence, not terminal operations to replay.
+      if (segment.value.includes("\t") || segment.value.includes("\b")) {
         return undefined;
       }
       if (!synchronized && completedFrame && segment.value) {

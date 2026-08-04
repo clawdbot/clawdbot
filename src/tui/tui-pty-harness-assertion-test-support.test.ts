@@ -26,6 +26,14 @@ describe("hasSynchronizedFrameRow", () => {
         TERMINAL,
       ),
     ).toBe(false);
+    expect(
+      oracle.hasSynchronizedFrameRow(
+        frame("\x1b[2J\x1b[H1234567X\b safe T08B"),
+        ["1234567", "T08B"],
+        "1234567 safe T08B",
+        TERMINAL,
+      ),
+    ).toBe(false);
     expect(hasExpected(frame("T08A  safe T08B"))).toBe(false);
     expect(parse(frame("界X\r\x1b[2G?"))[0]).toEqual([" ?X"]);
     expect(parse(frame("界X\r\x1b[2G\x1b[K"))[0]).toEqual([""]);
