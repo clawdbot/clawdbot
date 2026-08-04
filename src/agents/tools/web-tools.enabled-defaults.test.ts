@@ -186,7 +186,7 @@ describe("web tools defaults", () => {
     });
   });
 
-  it("uses the selected provider model schema without constructing its runtime tool", () => {
+  it("uses the selected provider tool schema through runtime-compatible resolution", () => {
     const registry = createEmptyPluginRegistry();
     const modelParameters = {
       type: "object",
@@ -212,7 +212,6 @@ describe("web tools defaults", () => {
         credentialPath: "tools.web.search.custom.apiKey",
         getCredentialValue: () => "configured",
         setCredentialValue: () => {},
-        modelParameters,
         createTool,
       },
     });
@@ -228,7 +227,7 @@ describe("web tools defaults", () => {
     });
 
     expect(tool?.parameters).toBe(modelParameters);
-    expect(createTool).not.toHaveBeenCalled();
+    expect(createTool).toHaveBeenCalledOnce();
   });
 
   it("late-binds the model schema to the current selected provider", () => {
@@ -253,7 +252,6 @@ describe("web tools defaults", () => {
           credentialPath: `tools.web.search.${id}.apiKey`,
           getCredentialValue: () => "configured",
           setCredentialValue: () => {},
-          modelParameters,
           createTool: () => ({
             description: `${id} runtime tool`,
             parameters: modelParameters,
@@ -312,7 +310,6 @@ describe("web tools defaults", () => {
           credentialPath: `tools.web.search.${id}.apiKey`,
           getCredentialValue: () => "configured",
           setCredentialValue: () => {},
-          modelParameters,
           createTool: () => ({
             description: `${id} runtime tool`,
             parameters: modelParameters,

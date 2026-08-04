@@ -123,7 +123,6 @@ describe("google web search provider", () => {
     expect(parameters.properties).toBeDefined();
     expect(parameters.properties).not.toHaveProperty("country");
     expect(parameters.properties).not.toHaveProperty("language");
-    expect(provider.modelParameters).toBe(tool.parameters);
   });
 
   it.each([

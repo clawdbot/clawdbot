@@ -117,7 +117,6 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
     id: "gemini",
     label: "Gemini (Google Search)",
     hint: "Requires Google Gemini API key · Google Search grounding",
-    modelParameters: GEMINI_TOOL_PARAMETERS,
     onboardingScopes: ["text-inference"],
     credentialLabel: "Google Gemini API key",
     envVars: ["GEMINI_API_KEY"],

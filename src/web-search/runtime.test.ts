@@ -166,6 +166,7 @@ function createDuckDuckGoSearchProvider(
 
 describe("web search runtime", () => {
   let hasUsableWebSearchProvider: typeof import("./runtime.js").hasUsableWebSearchProvider;
+  let resolveWebSearchDefinition: typeof import("./runtime.js").resolveWebSearchDefinition;
   let runWebSearch: typeof import("./runtime.js").runWebSearch;
   let activateSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").activateSecretsRuntimeSnapshot;
   let clearSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").clearSecretsRuntimeSnapshot;
@@ -174,7 +175,8 @@ describe("web search runtime", () => {
   const tempDirs: string[] = [];
 
   beforeAll(async () => {
-    ({ hasUsableWebSearchProvider, runWebSearch } = await import("./runtime.js"));
+    ({ hasUsableWebSearchProvider, resolveWebSearchDefinition, runWebSearch } =
+      await import("./runtime.js"));
     ({ activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } =
       await import("../secrets/runtime.js"));
     ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
@@ -225,6 +227,39 @@ describe("web search runtime", () => {
       provider: "custom",
       result: { query: "hello", ok: true },
     });
+  });
+
+  it("resolves model parameters through a scoped runtime provider load", () => {
+    const parameters = {
+      type: "object",
+      required: ["query"],
+      properties: { query: { type: "string" } },
+    };
+    const createTool = vi.fn(() => ({
+      description: "Gemini search",
+      parameters,
+      execute: async () => ({ ok: true }),
+    }));
+    const provider = createCustomSearchProvider({
+      pluginId: "google",
+      id: "gemini",
+      createTool,
+    });
+    resolveManifestContractOwnerPluginIdMock.mockReturnValue("google");
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
+
+    const resolved = resolveWebSearchDefinition({
+      config: { tools: { web: { search: { provider: "gemini" } } } },
+      preferRuntimeProviders: true,
+      providerId: "gemini",
+    });
+
+    expect(resolved?.provider.id).toBe("gemini");
+    expect(resolved?.definition.parameters).toBe(parameters);
+    expect(resolveRuntimeWebSearchProvidersMock).toHaveBeenCalledWith(
+      expect.objectContaining({ onlyPluginIds: ["google"] }),
+    );
+    expect(createTool).toHaveBeenCalledOnce();
   });
 
   it("accepts the prepared provider selection without rediscovering providers", () => {

@@ -4,7 +4,6 @@
  * Runs the configured runtime provider and returns normalized cached search results.
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
@@ -12,7 +11,7 @@ import {
   truncateSanitizedExternalContent,
   wrapWebContent,
 } from "../../security/external-content.js";
-import { runWebSearch } from "../../web-search/runtime.js";
+import { resolveWebSearchDefinition, runWebSearch } from "../../web-search/runtime.js";
 import type { AnyAgentTool } from "./common.js";
 import { asToolParamsRecord, jsonResult, textResult } from "./common.js";
 import { normalizeWebSearchOutput, WebSearchOutputSchema } from "./web-search-output.js";
@@ -94,19 +93,24 @@ function isWebSearchDisabled(config?: OpenClawConfig): boolean {
 function resolveWebSearchModelParameters(
   options: WebSearchToolOptions | undefined,
 ): AnyAgentTool["parameters"] {
-  const { providerSelectionId } = resolveWebSearchToolRuntimeContext({
-    config: options?.config,
-    lateBindRuntimeConfig: options?.lateBindRuntimeConfig,
-    runtimeWebSearch: options?.runtimeWebSearch,
-  });
-  const providerId = providerSelectionId.trim().toLowerCase();
-  if (!providerId) {
+  const { config, preferRuntimeProviders, providerSelectionId, runtimeWebSearch } =
+    resolveWebSearchToolRuntimeContext({
+      config: options?.config,
+      lateBindRuntimeConfig: options?.lateBindRuntimeConfig,
+      runtimeWebSearch: options?.runtimeWebSearch,
+    });
+  if (!providerSelectionId.trim()) {
     return WebSearchSchema;
   }
-  const selectedProvider = getActivePluginRegistry()?.webSearchProviders.find(
-    (entry) => entry.provider.id.trim().toLowerCase() === providerId,
-  )?.provider;
-  return selectedProvider?.modelParameters ?? WebSearchSchema;
+  return (
+    resolveWebSearchDefinition({
+      config,
+      agentDir: options?.agentDir,
+      sandboxed: options?.sandboxed,
+      runtimeWebSearch,
+      preferRuntimeProviders,
+    })?.definition.parameters ?? WebSearchSchema
+  );
 }
 
 /** Creates the `web_search` tool, or `null` when web search is disabled by config. */

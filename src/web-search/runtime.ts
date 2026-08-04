@@ -14,7 +14,10 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry-contributions.js";
-import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
+import type {
+  PluginWebSearchProviderEntry,
+  WebSearchProviderToolDefinition,
+} from "../plugins/types.js";
 import {
   resolvePluginWebSearchProviders,
   resolveRuntimeWebSearchProviders,
@@ -402,6 +405,29 @@ function resolveWebSearchCandidates(
     ...fallbackProviders.filter((entry) => !preferredIds.includes(entry.id)),
   ];
   return orderedProviders;
+}
+
+/** Resolves the selected provider's public tool definition through the execution load path. */
+export function resolveWebSearchDefinition(options?: ResolveWebSearchDefinitionParams): {
+  provider: PluginWebSearchProviderEntry;
+  definition: WebSearchProviderToolDefinition;
+} | null {
+  const { config, search, runtimeWebSearch } = resolveWebSearchRequestContext(options);
+  const provider = resolveWebSearchCandidates({
+    ...options,
+    config,
+    runtimeWebSearch,
+  })[0];
+  if (!provider) {
+    return null;
+  }
+  const definition = provider.createTool({
+    config,
+    agentDir: options?.agentDir,
+    searchConfig: search as Record<string, unknown> | undefined,
+    runtimeMetadata: runtimeWebSearch,
+  });
+  return definition ? { provider, definition } : null;
 }
 
 /** Reports whether web_search can use the prepared selection or resolve an agent-scoped provider. */
