@@ -82,6 +82,7 @@ export function terminateManagedChild(
     }
     return { processTreeState: "indeterminate" };
   }
+  return undefined;
 }
 
 /**
