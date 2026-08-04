@@ -165,8 +165,7 @@ function hasTerminalOnlyMainRestartRecoveryAggregate(
   }
   const terminalRunIds = new Set(entry.restartRecoveryTerminalRunIds ?? []);
   return runs.every(
-    (run) =>
-      run.lifecycleGeneration !== lifecycleGeneration && terminalRunIds.has(run.runId),
+    (run) => run.lifecycleGeneration !== lifecycleGeneration && terminalRunIds.has(run.runId),
   );
 }
 
@@ -477,11 +476,7 @@ export function transitionMainSessionRecovery(
     case "claim_foreground": {
       if (
         entry.sessionId === command.sessionId &&
-        hasOrphanedMainRestartRecoveryFences(
-          entry,
-          command.sessionKey,
-          command.lifecycleGeneration,
-        )
+        hasOrphanedMainRestartRecoveryFences(entry, command.sessionKey, command.lifecycleGeneration)
       ) {
         Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
         return { kind: "applied" };
