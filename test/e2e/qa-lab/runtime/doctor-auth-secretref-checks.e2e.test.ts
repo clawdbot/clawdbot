@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { stripAnsi } from "../../../../packages/terminal-core/src/ansi.js";
+import { stripAnsiSequences } from "../../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { withSecureTestNodeCommand } from "../../../../src/secrets/test-node-command.test-support.js";
 import {
@@ -23,7 +23,7 @@ function outputOf(result: { stderr: string; stdout: string }): string {
 }
 
 function normalizedOutputOf(result: { stderr: string; stdout: string }): string {
-  return stripAnsi(outputOf(result)).replace(/\s+/g, " ").trim();
+  return stripAnsiSequences(outputOf(result)).replace(/\s+/g, " ").trim();
 }
 
 async function writeConfig(config: OpenClawConfig): Promise<void> {
@@ -132,8 +132,8 @@ describe("doctor auth and SecretRef product proof", () => {
           { timeoutMs: 120_000 },
         );
         expect(execGated.code).toBe(0);
-        expect(normalizedOutputOf(execGated)).toContain(
-          "Gateway health probes skipped because gateway credentials use an exec SecretRef.",
+        expect(normalizedOutputOf(execGated)).toMatch(
+          /Gateway health probes skipped because gateway credentials use an exec(?:\s|│)*SecretRef\./,
         );
         await expect(fs.access(execMarker)).rejects.toThrow();
 
