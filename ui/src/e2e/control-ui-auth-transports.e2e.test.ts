@@ -529,7 +529,7 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     }
     await mkdir(artifactDir, { recursive: true });
     allowedUi = await startControlUiE2eServer();
-    rejectedUi = await startControlUiE2eServer(undefined, { source: true });
+    rejectedUi = await startControlUiE2eServer(undefined, { isolatedBundledOrigin: true });
     gateway = await startRealGateway(new URL(allowedUi.baseUrl).origin);
     proxy = await startRealTransportProxy(gateway.url);
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
