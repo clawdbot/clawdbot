@@ -289,6 +289,68 @@ describe("Google image-generation provider", () => {
     ).rejects.toThrow("Google image generation response malformed");
   });
 
+  it("accepts URL-safe base64 image bytes", async () => {
+    mockGoogleApiKeyAuth();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType: "image/png",
+                      data: Buffer.from("png-data").toString("base64url"),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      ),
+    );
+
+    const result = await buildGoogleImageGenerationProvider().generateImage({
+      provider: "google",
+      model: "gemini-3.1-flash-image",
+      prompt: "draw a cat",
+      cfg: {},
+    });
+
+    expect(result.images[0]?.buffer).toEqual(Buffer.from("png-data"));
+  });
+
+  it("rejects mixed-alphabet inline image data", async () => {
+    mockGoogleApiKeyAuth();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          candidates: [
+            {
+              content: {
+                parts: [{ inlineData: { mimeType: "image/png", data: "aGVsbG8+_" } }],
+              },
+            },
+          ],
+        }),
+      ),
+    );
+
+    const provider = buildGoogleImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "google",
+        model: "gemini-3.1-flash-image",
+        prompt: "draw a cat",
+        cfg: {},
+      }),
+    ).rejects.toThrow("Google image generation response malformed");
+  });
+
   it("accepts OAuth JSON auth and inline_data responses", async () => {
     vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: JSON.stringify({ token: "oauth-token" }),

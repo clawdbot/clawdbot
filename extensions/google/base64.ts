@@ -5,14 +5,23 @@
 // malformed-base64 guard for any surface.
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 
-export function canonicalizeGoogleProviderBase64(value: string): string | undefined {
+/**
+ * Convert a ProtoJSON URL-safe Base64 payload to the standard alphabet without
+ * validating the payload. Returns undefined when the input mixes alphabets, so
+ * callers can reject it before the shared strict validator runs once.
+ */
+export function toStandardGoogleProviderBase64(value: string): string | undefined {
   const usesStandardAlphabet = value.includes("+") || value.includes("/");
   const usesUrlSafeAlphabet = value.includes("-") || value.includes("_");
   if (usesStandardAlphabet && usesUrlSafeAlphabet) {
     return undefined;
   }
-  if (!usesUrlSafeAlphabet) {
-    return canonicalizeBase64(value);
-  }
-  return canonicalizeBase64(value.replace(/[-_]/g, (symbol) => (symbol === "-" ? "+" : "/")));
+  return usesUrlSafeAlphabet
+    ? value.replace(/[-_]/g, (symbol) => (symbol === "-" ? "+" : "/"))
+    : value;
+}
+
+export function canonicalizeGoogleProviderBase64(value: string): string | undefined {
+  const standard = toStandardGoogleProviderBase64(value);
+  return standard === undefined ? undefined : canonicalizeBase64(standard);
 }
