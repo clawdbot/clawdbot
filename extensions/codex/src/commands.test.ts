@@ -586,6 +586,55 @@ describe("codex command", () => {
     ).resolves.toMatchObject({ threadId: "thread-new" });
   });
 
+  it("recovers a same-ID retired stable tombstone through /codex resume", async () => {
+    const sessionKey = "agent:main:test:chat-1";
+    const sessionId = "session-same";
+    const storePath = path.join(tempDir, "sessions.json");
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId,
+      sessionKey,
+    };
+
+    await writeTestBinding(identity, { threadId: "thread-before-reset", cwd: "/repo" });
+    await testCodexAppServerBindingStore.retireSessionGeneration(identity);
+
+    // A same-ID cleared/retired tombstone permanently fences withLease.
+    await expect(
+      testCodexAppServerBindingStore.withLease(identity, async () => {}),
+    ).rejects.toThrow("Codex binding generation was retired");
+
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: { sessionId, updatedAt: Date.now() },
+    });
+
+    const codexControlRequest = vi.fn(async () =>
+      createThreadResumeResponse({ threadId: "thread-resumed" }),
+    );
+
+    const result = await handleCodexCommand(
+      createContext("resume thread-resumed", undefined, {
+        sessionId,
+        sessionKey,
+        config: { session: { store: storePath } },
+      }),
+      { deps: createDeps({ codexControlRequest }) },
+    );
+
+    expect(result.text).toBe("Attached this OpenClaw session to Codex thread thread-resumed.");
+    expect(codexControlRequest).toHaveBeenCalledTimes(1);
+    expect(requestParams(codexControlRequest, 0)).toEqual({
+      threadId: "thread-resumed",
+      excludeTurns: true,
+    });
+    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+      threadId: "thread-resumed",
+    });
+  });
+
   it("does not report a resumed thread as attached after a generation conflict", async () => {
     const mutate = vi.fn(async () => false);
     const codexControlRequest = vi.fn(async () =>
