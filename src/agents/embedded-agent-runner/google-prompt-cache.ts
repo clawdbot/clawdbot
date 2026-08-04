@@ -31,6 +31,7 @@ import type { StreamFn } from "../runtime/index.js";
 import { isSessionWriteLockAcquireError } from "../session-write-lock-error.js";
 import { log } from "./logger.js";
 import { isGooglePromptCacheEligible, resolveCacheRetention } from "./prompt-cache-retention.js";
+import { attachProviderPromptAccountingContext } from "./provider-prompt-state.js";
 import { EmbeddedAttemptSessionTakeoverError } from "./run/attempt.session-lock.js";
 
 const GOOGLE_PROMPT_CACHE_CUSTOM_TYPE = "openclaw.google-prompt-cache";
@@ -624,14 +625,15 @@ export async function prepareGooglePromptCacheStreamFn(
       return inner(model, context, options);
     }
 
-    return streamWithPayloadPatch(
-      inner,
-      model,
+    const managedContext = attachProviderPromptAccountingContext(
       buildManagedContextForCachedContent(context),
-      options,
-      (payload) => {
-        payload.cachedContent = cachedContent;
+      {
+        systemPrompt,
+        tools: context.tools,
       },
     );
+    return streamWithPayloadPatch(inner, model, managedContext, options, (payload) => {
+      payload.cachedContent = cachedContent;
+    });
   };
 }

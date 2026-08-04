@@ -75,6 +75,33 @@ describe("provider prompt admission", () => {
     }
   });
 
+  it("includes a managed provider cache prefix in admission accounting", () => {
+    const context = {
+      messages: [{ role: "user", content: "m".repeat(4_000), timestamp: 1 }],
+    } as ProviderContext;
+    const limits = {
+      contextTokenBudget: 4_000,
+      reserveTokens: 1_000,
+    };
+
+    expect(admit(context, undefined, limits).status).toBe("ready");
+
+    const result = admit(context, undefined, {
+      ...limits,
+      accountingContext: {
+        systemPrompt: "cached system prompt ".repeat(400),
+        tools: [],
+      },
+    });
+
+    expect(result.status).toBe("recovery_required");
+    if (result.status === "recovery_required") {
+      expect(result.request.estimatedPromptTokens).toBeGreaterThan(
+        result.request.promptBudgetBeforeReserve,
+      );
+    }
+  });
+
   it("defers tool-schema-only pressure to the provider", () => {
     const context = {
       messages: [{ role: "user", content: "small prompt", timestamp: 1 }],

@@ -93,9 +93,10 @@ export async function submitEmbeddedAttemptPrompt(input: {
     let providerCalls = 0;
     return installProviderPromptContextAdmission(
       getProviderPromptState(attempt.runId),
-      (_model, context) => {
+      (_model, context, accountingContext) => {
         const admission = admitProviderPrompt({
           context,
+          accountingContext,
           contextTokenBudget: input.contextTokenBudget,
           midTurnPrecheckEnabled: input.midTurnPrecheckEnabled && providerCalls > 0,
           reserveTokens: input.reserveTokens,

@@ -1,6 +1,7 @@
 /** Admits the exact provider context without mutating persisted conversation history. */
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { AgentMessage } from "../../runtime/index.js";
+import type { ProviderPromptAccountingContext } from "../provider-prompt-state.js";
 import {
   cloneToolResultPromptProjectionState,
   type ToolResultPromptProjectionState,
@@ -54,15 +55,16 @@ function projectProviderContext(params: {
 
 function measureProviderContext(params: {
   context: ProviderContext;
+  accountingContext?: ProviderPromptAccountingContext;
   contextTokenBudget: number;
   reserveTokens: number;
   toolResultMaxChars: number;
 }) {
   const estimatedPromptTokens = estimateLlmBoundaryTokenPressure({
     messages: params.context.messages as AgentMessage[],
-    systemPrompt: params.context.systemPrompt,
+    systemPrompt: params.accountingContext?.systemPrompt ?? params.context.systemPrompt,
     prompt: "",
-    tools: params.context.tools,
+    tools: params.accountingContext?.tools ?? params.context.tools,
   });
   return shouldPreemptivelyCompactBeforePrompt({
     messages: params.context.messages as AgentMessage[],
@@ -80,13 +82,14 @@ function measureProviderContext(params: {
 
 function isProviderPressureIndependentOfTranscript(params: {
   context: ProviderContext;
+  accountingContext?: ProviderPromptAccountingContext;
   promptBudgetBeforeReserve: number;
 }): boolean {
   const transcriptIndependentTokens = estimateLlmBoundaryTokenPressure({
     messages: [],
-    systemPrompt: params.context.systemPrompt,
+    systemPrompt: params.accountingContext?.systemPrompt ?? params.context.systemPrompt,
     prompt: "",
-    tools: params.context.tools,
+    tools: params.accountingContext?.tools ?? params.context.tools,
   });
   return transcriptIndependentTokens > params.promptBudgetBeforeReserve;
 }
@@ -110,6 +113,7 @@ function toRecoveryRequest(
  */
 export function admitProviderPrompt(params: {
   context: ProviderContext;
+  accountingContext?: ProviderPromptAccountingContext;
   contextTokenBudget: number;
   midTurnPrecheckEnabled: boolean;
   reserveTokens: number;
@@ -136,6 +140,7 @@ export function admitProviderPrompt(params: {
 
   const defaultPressure = measureProviderContext({
     context: defaultProjection.context,
+    accountingContext: params.accountingContext,
     contextTokenBudget: params.contextTokenBudget,
     reserveTokens: params.reserveTokens,
     toolResultMaxChars: params.toolResultMaxChars,
@@ -157,6 +162,7 @@ export function admitProviderPrompt(params: {
     if (
       isProviderPressureIndependentOfTranscript({
         context: defaultProjection.context,
+        accountingContext: params.accountingContext,
         promptBudgetBeforeReserve: defaultPressure.promptBudgetBeforeReserve,
       })
     ) {
@@ -183,6 +189,7 @@ export function admitProviderPrompt(params: {
   });
   const projectedPressure = measureProviderContext({
     context: pressureProjection.context,
+    accountingContext: params.accountingContext,
     contextTokenBudget: params.contextTokenBudget,
     reserveTokens: params.reserveTokens,
     toolResultMaxChars: params.toolResultMaxChars,
@@ -198,6 +205,7 @@ export function admitProviderPrompt(params: {
   if (
     isProviderPressureIndependentOfTranscript({
       context: pressureProjection.context,
+      accountingContext: params.accountingContext,
       promptBudgetBeforeReserve: projectedPressure.promptBudgetBeforeReserve,
     })
   ) {

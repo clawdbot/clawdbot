@@ -11,16 +11,29 @@ type ProviderPromptSnapshot = {
   byteWeight: number;
 };
 
+export type ProviderPromptAccountingContext = Pick<Context, "systemPrompt" | "tools">;
+
 export type ProviderPromptState = {
   lastAttempt?: ProviderPromptSnapshot;
   lastRejected?: ProviderPromptSnapshot;
-  contextAdmission?: (model: Model, context: Context) => Context;
+  contextAdmission?: (
+    model: Model,
+    context: Context,
+    accountingContext?: ProviderPromptAccountingContext,
+  ) => Context;
 };
 
 const PROVIDER_PROMPT_STATES_KEY = Symbol.for("openclaw.providerPromptStates");
+const PROVIDER_PROMPT_ACCOUNTING_CONTEXTS_KEY = Symbol.for(
+  "openclaw.providerPromptAccountingContexts",
+);
 const providerPromptStates = resolveGlobalSingleton(
   PROVIDER_PROMPT_STATES_KEY,
   () => new Map<string, ProviderPromptState>(),
+);
+const providerPromptAccountingContexts = resolveGlobalSingleton(
+  PROVIDER_PROMPT_ACCOUNTING_CONTEXTS_KEY,
+  () => new WeakMap<Context, ProviderPromptAccountingContext>(),
 );
 
 class ProviderPromptRetryNoProgressError extends Error {
@@ -54,6 +67,15 @@ export function getProviderPromptState(runId: string): ProviderPromptState {
 
 export function clearProviderPromptState(runId: string): void {
   providerPromptStates.delete(runId);
+}
+
+/** Keeps cached provider-prefix fields available to admission without restoring them to payloads. */
+export function attachProviderPromptAccountingContext(
+  context: Context,
+  accountingContext: ProviderPromptAccountingContext,
+): Context {
+  providerPromptAccountingContexts.set(context, accountingContext);
+  return context;
 }
 
 /** Installs a run-scoped admission hook at the innermost provider-context boundary. */
@@ -138,7 +160,11 @@ export function wrapStreamFnWithProviderPromptState(params: {
     beginProviderPromptAttempt(params.state);
     const admittedContext =
       context && typeof context === "object" && params.state.contextAdmission
-        ? params.state.contextAdmission(model, context)
+        ? params.state.contextAdmission(
+            model,
+            context,
+            providerPromptAccountingContexts.get(context),
+          )
         : context;
     const originalOnPayload = options?.onPayload;
     const stream = await params.streamFn(model, admittedContext, {

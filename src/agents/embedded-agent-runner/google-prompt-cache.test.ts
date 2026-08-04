@@ -7,6 +7,12 @@ import { describe, expect, it, vi } from "vitest";
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
 import { mintSecretSentinel, resolveSecretSentinel } from "../../secrets/sentinel.js";
 import { prepareGooglePromptCacheStreamFn } from "./google-prompt-cache.js";
+import {
+  clearProviderPromptState,
+  getProviderPromptState,
+  installProviderPromptContextAdmission,
+  wrapStreamFnWithProviderPromptState,
+} from "./provider-prompt-state.js";
 import { EmbeddedAttemptSessionTakeoverError } from "./run/attempt.session-lock.js";
 
 type SessionCustomEntry = {
@@ -355,6 +361,67 @@ describe("google prompt cache", () => {
         },
       },
     ]);
+  });
+
+  it("keeps the cached prefix visible to provider admission accounting", async () => {
+    const runId = "google-cache-admission-accounting";
+    const state = getProviderPromptState(runId);
+    const innerStreamFn = vi.fn(() => "stream" as never);
+    const admission = vi.fn((_model, context, accountingContext) => {
+      expect(accountingContext).toEqual({
+        systemPrompt: "Follow policy.",
+        tools: [
+          {
+            name: "lookup",
+            description: "Look up a value",
+            parameters: { type: "object" },
+          },
+        ],
+      });
+      return context;
+    });
+    const removeAdmission = installProviderPromptContextAdmission(state, admission);
+    const providerBoundary = wrapStreamFnWithProviderPromptState({
+      streamFn: innerStreamFn,
+      state,
+      effectiveContextTokenBudget: 128_000,
+    });
+    const wrapped = await preparePromptCacheStream({
+      fetchMock: createCacheFetchMock({
+        name: "cachedContents/admission-accounting",
+        expireTime: new Date(2_000_000).toISOString(),
+      }),
+      now: 1_000_000,
+      sessionManager: makeSessionManager(),
+      streamFn: providerBoundary,
+    });
+
+    try {
+      await Promise.resolve(
+        wrapped?.(
+          makeGoogleModel(),
+          {
+            systemPrompt: "Follow policy.",
+            messages: [],
+            tools: [
+              {
+                name: "lookup",
+                description: "Look up a value",
+                parameters: { type: "object" },
+              },
+            ],
+          } as never,
+          {} as never,
+        ),
+      );
+
+      expect(admission).toHaveBeenCalledOnce();
+      expect(streamContext(innerStreamFn).systemPrompt).toBeUndefined();
+      expect(streamContext(innerStreamFn).tools).toBeUndefined();
+    } finally {
+      removeAdmission();
+      clearProviderPromptState(runId);
+    }
   });
 
   it("reuses managed cached content when tool discovery order changes", async () => {
