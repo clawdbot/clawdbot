@@ -28,6 +28,7 @@ import type {
 import { resolveTelegramMessageCacheScope } from "./message-cache-persistence.js";
 import { buildTelegramConversationContext, createTelegramMessageCache } from "./message-cache.js";
 import { recordOutboundMessageForPromptContext as recordOutboundMessageForPromptContextActual } from "./outbound-message-context.js";
+import { wasSentByBot } from "./sent-message-cache.js";
 
 describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
   it("keeps the Telegram edit cap for non-block previews regardless of chunk config", async () => {
@@ -242,6 +243,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
     });
 
     expect(recordResults).toEqual([true, true]);
+    expect(wasSentByBot("123", 1497, { session: { store: storePath } })).toBe(true);
 
     const cache = createTelegramMessageCache({
       scope: resolveTelegramMessageCacheScope(storePath),
