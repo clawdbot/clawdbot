@@ -6,6 +6,7 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
 import { mintSecretSentinel, resolveSecretSentinel } from "../../secrets/sentinel.js";
+import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
 import { prepareGooglePromptCacheStreamFn } from "./google-prompt-cache.js";
 import {
   clearProviderPromptState,
@@ -363,7 +364,7 @@ describe("google prompt cache", () => {
     ]);
   });
 
-  it("keeps the cached prefix visible to provider admission accounting", async () => {
+  it("keeps the cached prefix visible to admission through input context transforms", async () => {
     const runId = "google-cache-admission-accounting";
     const state = getProviderPromptState(runId);
     const innerStreamFn = vi.fn(() => "stream" as never);
@@ -386,6 +387,11 @@ describe("google prompt cache", () => {
       state,
       effectiveContextTokenBudget: 128_000,
     });
+    const transformedProviderBoundary = wrapStreamFnTextTransforms({
+      streamFn: providerBoundary,
+      input: [{ from: "original", to: "transformed" }],
+      transformSystemPrompt: false,
+    });
     const wrapped = await preparePromptCacheStream({
       fetchMock: createCacheFetchMock({
         name: "cachedContents/admission-accounting",
@@ -393,7 +399,7 @@ describe("google prompt cache", () => {
       }),
       now: 1_000_000,
       sessionManager: makeSessionManager(),
-      streamFn: providerBoundary,
+      streamFn: transformedProviderBoundary,
     });
 
     try {
