@@ -2098,7 +2098,7 @@ describe("CLI attempt execution", () => {
     });
   });
 
-  it("writes zero usage to the CLI transcript when only cumulative usage exists", async () => {
+  it("writes an unavailable-usage marker when only cumulative usage exists", async () => {
     const sessionKey = "agent:main:subagent:cli-transcript-cumulative-only";
     const sessionFile = path.join(tmpDir, "session-cli-transcript-cumulative-only.jsonl");
     const sessionEntry: SessionEntry = {
@@ -2116,7 +2116,8 @@ describe("CLI attempt execution", () => {
     clearSessionStoreCacheForTest();
 
     // makeCliResult provides only cumulative `usage`; without a per-call
-    // `lastCallUsage` the transcript must not carry a nonzero prompt snapshot.
+    // `lastCallUsage` the transcript must carry an explicit unavailable marker
+    // so fallback scans stop here instead of reviving older cumulative records.
     await persistCliTranscriptEntry({
       body: "cumulative only",
       result: makeCliResult("cumulative reply"),
@@ -2143,6 +2144,7 @@ describe("CLI attempt execution", () => {
       cacheRead: 0,
       cacheWrite: 0,
       totalTokens: 0,
+      contextUsage: { state: "unavailable" },
     });
   });
 

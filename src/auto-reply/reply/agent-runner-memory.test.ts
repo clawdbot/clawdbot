@@ -2233,6 +2233,71 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
+  it("stops the fallback scan at an unavailable CLI snapshot instead of reviving an older cumulative record", async () => {
+    // Upgrade sequence: an older assistant message carries cumulative run usage
+    // (pre-fix transcripts), followed by the explicit unavailable marker the
+    // fixed CLI writer persists when per-call usage is absent. The fallback
+    // must stop at the marker and not promote the older cumulative record.
+    const sessionFile = path.join(rootDir, "memory-flush-upgrade-sequence.jsonl");
+    await writeTestSessionTranscript({
+      rootDir,
+      events: [
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: "older cumulative run",
+            usage: { input: 12, output: 4, cacheRead: 3, cacheWrite: 0, totalTokens: 19 },
+          },
+        },
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: "after fix",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              contextUsage: { state: "unavailable" },
+            },
+          },
+        },
+      ],
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+    };
+    const sessionStore: Record<string, SessionEntry> = { main: sessionEntry };
+
+    await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "main",
+      }),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(sessionStore["main"]?.totalTokens).toBeUndefined();
+    expect(sessionStore["main"]?.totalTokensFresh).toBe(false);
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
   it("fails when required preflight compaction returns an unknown successful no-op", async () => {
     compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
       ok: true,

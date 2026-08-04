@@ -158,6 +158,15 @@ const ACP_TRANSCRIPT_USAGE = {
     total: 0,
   },
 } as const;
+
+const CLI_TRANSCRIPT_UNAVAILABLE_USAGE = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  total: 0,
+  contextUsage: { state: "unavailable" },
+} as const;
 function shouldSuppressEmbeddedLiveStreamOutput(params: { opts: AgentCommandOpts }): boolean {
   return params.opts.sessionEffects === "internal" && params.opts.deliver !== true;
 }
@@ -168,6 +177,11 @@ type TranscriptUsage = {
   cacheRead?: number;
   cacheWrite?: number;
   total?: number;
+  contextUsage?: {
+    state: "available" | "unavailable";
+    promptTokens?: number;
+    totalTokens?: number;
+  };
 };
 
 type PersistTextTurnTranscriptParams = {
@@ -292,13 +306,16 @@ function resolveTranscriptUsage(usage: PersistTextTurnTranscriptParams["assistan
   if (!usage) {
     return ACP_TRANSCRIPT_USAGE;
   }
-  return buildUsageWithNoCost({
+  const resolved = buildUsageWithNoCost({
     input: usage.input,
     output: usage.output,
     cacheRead: usage.cacheRead,
     cacheWrite: usage.cacheWrite,
     totalTokens: usage.total,
   });
+  return usage.contextUsage?.state === "unavailable"
+    ? { ...resolved, contextUsage: { state: "unavailable" as const } }
+    : resolved;
 }
 
 async function persistTextTurnTranscript(
@@ -481,7 +498,9 @@ export async function persistCliTurnTranscript(params: {
         // Transcript usage feeds later context reads (memory-flush fallback,
         // fork estimates). Only per-call usage is a valid prompt snapshot;
         // cumulative run usage would be promoted back as fresh context later.
-        usage: params.result.meta.agentMeta?.lastCallUsage,
+        // Without per-call usage, persist an explicit unavailable marker so
+        // the fallback scan stops here instead of reviving older records.
+        usage: params.result.meta.agentMeta?.lastCallUsage ?? CLI_TRANSCRIPT_UNAVAILABLE_USAGE,
       },
       skipAssistantTurn: params.skipAssistantTurn,
     });

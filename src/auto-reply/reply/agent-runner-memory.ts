@@ -417,6 +417,12 @@ function readLatestNonzeroUsageSnapshotFromTranscriptEvents(
         ? (record.message as { usage?: UsageLike })
         : undefined;
     const usage = normalizeUsage(message?.usage ?? record.usage);
+    if (usage?.contextUsage?.state === "unavailable") {
+      // CLI runs without per-call usage persist an explicit unavailable marker.
+      // Stop here: older transcript records predate the per-call usage policy
+      // and must not be promoted back into a fresh context snapshot.
+      return undefined;
+    }
     if (usage && hasNonzeroUsage(usage)) {
       return { usage, trailingBytes };
     }
