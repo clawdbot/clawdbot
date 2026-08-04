@@ -566,6 +566,12 @@ describe("createGatewayRequestContext", () => {
         scopes: ["operator.admin"],
       }),
       makeGatewayClient({
+        connId: "macos",
+        clientId: GATEWAY_CLIENT_IDS.MACOS_APP,
+        mode: GATEWAY_CLIENT_MODES.UI,
+        scopes: ["operator.admin"],
+      }),
+      makeGatewayClient({
         connId: "bridge",
         clientId: GATEWAY_CLIENT_IDS.CLI,
         scopes: ["operator.approvals"],
@@ -610,13 +616,15 @@ describe("createGatewayRequestContext", () => {
 
     expect(context.hasExecApprovalClients?.()).toBe(true);
     expect(context.getApprovalClientConnIds?.()).toEqual(
-      new Set(["control-ui", "ios", "bridge", "acp", "runtime"]),
+      new Set(["control-ui", "ios", "macos", "bridge", "acp", "runtime"]),
     );
     expect(context.getApprovalClientConnIds?.({ approvalKind: "plugin" })).toEqual(
       new Set(["control-ui", "bridge", "tui", "plugin-bridge", "runtime"]),
     );
+    // macOS is the only native app that presents openclaw.approval.requested; it
+    // must keep receiving these once they are routed under their true kind.
     expect(context.getApprovalClientConnIds?.({ approvalKind: "system-agent" })).toEqual(
-      new Set(["control-ui", "bridge", "runtime"]),
+      new Set(["control-ui", "macos", "bridge", "runtime"]),
     );
     expect(context.hasExecApprovalClients?.("control-ui")).toBe(true);
     expect(

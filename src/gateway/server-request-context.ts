@@ -133,6 +133,15 @@ const EXEC_APPROVAL_CLIENT_IDS: ReadonlySet<GatewayClientId> = new Set([
 
 const PLUGIN_APPROVAL_CLIENT_IDS: ReadonlySet<GatewayClientId> = new Set([GATEWAY_CLIENT_IDS.TUI]);
 
+// The macOS app has presented `openclaw.approval.requested` and resolved it as
+// `system-agent` since the delegation feature shipped, but advertises no approvals
+// cap — it reached these requests only while they were mislabeled `exec`. Routing
+// them under their true kind makes this list the one thing keeping that prompt
+// alive. iOS/Android declare no handler for the event, so they stay exec-only.
+const SYSTEM_AGENT_APPROVAL_CLIENT_IDS: ReadonlySet<GatewayClientId> = new Set([
+  GATEWAY_CLIENT_IDS.MACOS_APP,
+]);
+
 function canDeliverApprovals(
   gatewayClient: GatewayRequestContextClient,
   approvalKind: "exec" | "plugin" | "system-agent",
@@ -157,7 +166,9 @@ function canDeliverApprovals(
         hasGatewayClientCap(gatewayClient.connect.caps, GATEWAY_CLIENT_CAPS.EXEC_APPROVALS))) ||
     (approvalKind === "plugin" &&
       (PLUGIN_APPROVAL_CLIENT_IDS.has(gatewayClient.connect.client.id) ||
-        hasGatewayClientCap(gatewayClient.connect.caps, GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS)))
+        hasGatewayClientCap(gatewayClient.connect.caps, GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS))) ||
+    (approvalKind === "system-agent" &&
+      SYSTEM_AGENT_APPROVAL_CLIENT_IDS.has(gatewayClient.connect.client.id))
   );
 }
 
