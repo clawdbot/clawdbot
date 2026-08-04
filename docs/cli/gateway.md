@@ -279,7 +279,7 @@ openclaw gateway stability --json
   Output path for `--export`.
 </ParamField>
 <ParamField path="--port <port>" type="number">
-  Target a local loopback Gateway on this port. Overrides `OPENCLAW_GATEWAY_URL` and `OPENCLAW_GATEWAY_PORT` for this call. Cannot combine with `--url`. Applies to the live stability query; `--bundle` reads from disk and `--export` collects its snapshots through the support-export path, so neither is redirected by `--port`.
+  Target a local loopback Gateway on this port for the live stability query. Overrides `OPENCLAW_GATEWAY_URL` and `OPENCLAW_GATEWAY_PORT` for this call. Cannot combine with `--url`, and is rejected with `--export` because the support export always targets the configured Gateway. `--bundle` reads from disk, so `--port` has no effect there.
 </ParamField>
 
 <AccordionGroup>

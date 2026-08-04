@@ -725,6 +725,15 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
             );
             const bundleTarget = normalizeStabilityBundleTarget(opts.bundle);
             if (opts.export) {
+              // The support export collects its status/health snapshots through
+              // writeSupportExportFromCli, which narrows RPC options to url/token/password/
+              // timeout and drops the local-port override. Accepting --port here would
+              // silently export a different Gateway than the one named.
+              if (rpcOpts.localPortOverride !== undefined) {
+                throw new Error(
+                  "--port is not supported with --export; the support export targets the configured Gateway. Run the export against that Gateway, or use --port without --export for a live stability query.",
+                );
+              }
               await writeSupportExportFromCli({
                 json: rpcOpts.json,
                 output: opts.output,

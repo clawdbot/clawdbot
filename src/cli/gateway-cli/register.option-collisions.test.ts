@@ -345,6 +345,19 @@ describe("gateway register option collisions", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
+  it("rejects --port with gateway stability --export instead of silently ignoring it", async () => {
+    await sharedProgram.parseAsync(
+      ["gateway", "stability", "--export", "--port", "19092", "--json"],
+      { from: "user" },
+    );
+
+    expect(callGatewayCli).not.toHaveBeenCalled();
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("--port is not supported with --export"),
+    );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("keeps gateway stability --bundle a local read that ignores --port", async () => {
     await sharedProgram.parseAsync(
       ["gateway", "stability", "--bundle", "latest", "--port", "19091", "--json"],
