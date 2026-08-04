@@ -33,12 +33,10 @@ describe("btw inline message", () => {
     let lines = message.render(140);
     let raw = lines.join("\n");
     let rendered = normalizeTestText(raw);
-    expect(rendered).toContain("BTW: first question");
+    expect(rendered).toContain("BTW: \u2067first question مرحبا שלום\u2069");
     expect(rendered).toContain("مرحبا שלום");
     expect(rendered).toContain("first café");
     expect(rendered).toContain("second body");
-    expect(lines[1]).toContain("\u2067");
-    expect(lines[1]).toContain("\u2069");
     expect(lines[1]).not.toMatch(/[\r\n\t]/u);
     expect(raw).toContain(`\x1b]8;;${url}\x07`);
     expect(raw).not.toContain(firstQuestionAttack);
@@ -52,7 +50,7 @@ describe("btw inline message", () => {
     lines = message.render(140);
     raw = lines.join("\n");
     rendered = normalizeTestText(raw);
-    expect(rendered).toContain("BTW: next question");
+    expect(rendered).toContain("BTW: \u2067next question שלום مرحبا\u2069");
     expect(rendered).toContain("שלום مرحبا");
     expect(rendered).toContain("next 東京");
     expect(rendered).not.toContain("first question");
@@ -73,7 +71,7 @@ describe("btw inline message", () => {
 
     const raw = message.render(100).join("\n");
     const rendered = normalizeTestText(raw);
-    expect(rendered).toContain("BTW: why failed?");
+    expect(rendered).toContain("BTW: \u2067why failed? مرحبا שלום\u2069");
     expect(rendered).toContain("مرحبا שלום");
     expect(rendered).toContain("retry safely café");
     expect(raw).not.toContain(questionAttack);

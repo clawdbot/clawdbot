@@ -67,7 +67,7 @@ describe("sanitizeAutocompleteProvider", () => {
     provider.applyCompletion(["@"], 0, 1, suggestions!.items[0]!, "@");
     expect(applyCompletion).toHaveBeenCalledWith(["@"], 0, 1, original, "@");
     expect(provider.triggerCharacters).toEqual(["@"]);
-    expect(provider.shouldTriggerFileCompletion(["@"], 0, 1)).toBe(true);
+    expect(provider.shouldTriggerFileCompletion?.(["@"], 0, 1)).toBe(true);
   });
 
   it("returns null when every completion value is unsafe", async () => {

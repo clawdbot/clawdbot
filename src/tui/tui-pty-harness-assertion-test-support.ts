@@ -2,7 +2,7 @@
 import { readFile } from "node:fs/promises";
 import { expect } from "vitest";
 import * as ansiSequences from "../../packages/terminal-core/src/ansi-sequences.js";
-import { splitGraphemes, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
+import * as ansi from "../../packages/terminal-core/src/ansi.js";
 import { formatTuiFooter, sanitizeRenderableLine } from "./tui-formatters.js";
 import { sleep, type PtyRun, waitFor } from "./tui-pty-test-support.js";
 
@@ -106,7 +106,7 @@ function clearScreenCell(row: string[], col: number) {
   while (lead > 0 && row[lead] === "") {
     lead -= 1;
   }
-  const width = Math.max(1, visibleWidth(row[lead] ?? ""));
+  const width = Math.max(1, ansi.visibleWidth(row[lead] ?? ""));
   return row.fill(" ", lead, lead + width);
 }
 
@@ -121,8 +121,8 @@ function writeScreenText(screen: TestScreen, text: string) {
     } else if (part === "\b") {
       screen.col = Math.max(0, screen.col - 1);
     } else {
-      for (const grapheme of splitGraphemes(part)) {
-        if (/[\x00-\x1f\x7f-\x9f]/u.test(grapheme)) {
+      for (const grapheme of ansi.splitGraphemes(part)) {
+        if (ansi.sanitizeForLog(grapheme) !== grapheme) {
           throw new Error("unsupported terminal control in TUI PTY evidence");
         }
         const row = screenRow(screen);
@@ -130,7 +130,7 @@ function writeScreenText(screen: TestScreen, text: string) {
         if (/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(grapheme)) {
           continue;
         }
-        const width = visibleWidth(grapheme);
+        const width = ansi.visibleWidth(grapheme);
         for (let col = screen.col; col < screen.col + width; col += 1) {
           clearScreenCell(row, col);
         }
@@ -212,8 +212,9 @@ function applyScreenCsi(screen: TestScreen, value: string) {
 function trimIncompleteTrailingAnsi(raw: string) {
   const lastFrameEnd = raw.lastIndexOf("\x1b[?2026l");
   const oscStart = Math.max(raw.lastIndexOf("\x1b]"), raw.lastIndexOf("\u009d"));
-  const oscTail = raw.slice(oscStart + (raw[oscStart] === "\x1b" ? 2 : 1)).replace(/\x1b$/u, "");
-  if (oscStart > lastFrameEnd && !/[\x00-\x1f\x7f-\x9f]/u.test(oscTail)) {
+  const oscRemainder = raw.slice(oscStart + (raw[oscStart] === "\x1b" ? 2 : 1));
+  const oscTail = oscRemainder.endsWith("\x1b") ? oscRemainder.slice(0, -1) : oscRemainder;
+  if (oscStart > lastFrameEnd && ansi.sanitizeForLog(oscTail) === oscTail) {
     return raw.slice(0, oscStart);
   }
   const csiStart = Math.max(raw.lastIndexOf("\x1b["), raw.lastIndexOf("\u009b"));
