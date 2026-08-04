@@ -62,6 +62,8 @@ const QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT = {
 const QA_COMPACTION_RETRY_PROMPT =
   "Compaction retry mutating tool check. Current durable context marker: QA-COMPACTION-DURABLE-MARKER. Create compaction-retry-summary.txt.";
 const QA_COMPACTION_RETRY_OVERFLOW_PADDING = "x".repeat(300_000);
+const QA_COMPACTION_EMPTY_RECOVERY_SUMMARY_MARKER = "QA-COMPACTION-EMPTY-RECOVERED-SUMMARY";
+const QA_COMPACTION_REASONING_RECOVERY_SUMMARY_MARKER = "QA-COMPACTION-REASONING-RECOVERED-SUMMARY";
 const QA_COMPACTION_SUMMARY_INSTRUCTIONS = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
 
 Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`;
@@ -2348,6 +2350,150 @@ describe("qa mock openai server", () => {
     expect(Number(summaryRequest.rawByteLength)).toBeGreaterThan(256 * 1024);
     expect(summaryRequest.errorCode).toBeUndefined();
     expect(summaryRequest.allInputText).toContain("[Chunk 1 - oldest messages]");
+  });
+
+  it.each([
+    {
+      faultMode: "empty-output-once",
+      markerPrefix: "QA-COMPACTION-EMPTY-OUTPUT-ONCE",
+      recoveredMarker: QA_COMPACTION_EMPTY_RECOVERY_SUMMARY_MARKER,
+      reasoningOnly: false,
+    },
+    {
+      faultMode: "reasoning-only-output-once",
+      markerPrefix: "QA-COMPACTION-REASONING-ONLY-OUTPUT-ONCE",
+      recoveredMarker: QA_COMPACTION_REASONING_RECOVERY_SUMMARY_MARKER,
+      reasoningOnly: true,
+    },
+  ] as const)(
+    "injects one coded overflow for $faultMode scenario markers",
+    async ({ markerPrefix }) => {
+      const server = await startMockServer();
+      const body = {
+        model: "gpt-5.6-luna",
+        instructions: `Runtime: embedded | sessionId=compaction-output-${markerPrefix}`,
+        input: [makeUserInput(`${markerPrefix}-http\n${"x".repeat(100_000)}`)],
+      };
+
+      const first = await postNonStreamingResponses(server, body);
+      expect(first.status).toBe(400);
+      expect(await first.json()).toMatchObject({
+        error: { code: "context_length_exceeded" },
+      });
+      expect((await postNonStreamingResponses(server, body)).status).toBe(200);
+
+      const requests = requireArray(
+        await getJson(server, "/debug/requests"),
+        "compaction output overflow requests",
+      ).map((request) => requireRecord(request, "compaction output overflow request"));
+      expect(requests).toHaveLength(2);
+      expect(Number(requests[0]?.rawByteLength)).toBeLessThan(256 * 1024);
+      expect(requests[0]).toMatchObject({
+        requestKind: "agent-initial",
+        compactionSummaryFaultMode: "none",
+        outcome: "error",
+        errorCode: "context_length_exceeded",
+      });
+      expect(requests[1]).toMatchObject({
+        requestKind: "agent-initial",
+        compactionSummaryFaultMode: "none",
+        outcome: "success",
+      });
+    },
+  );
+
+  it.each([
+    {
+      faultMode: "empty-output-once",
+      markerPrefix: "QA-COMPACTION-EMPTY-OUTPUT-ONCE",
+      recoveredMarker: QA_COMPACTION_EMPTY_RECOVERY_SUMMARY_MARKER,
+      reasoningOnly: false,
+    },
+    {
+      faultMode: "reasoning-only-output-once",
+      markerPrefix: "QA-COMPACTION-REASONING-ONLY-OUTPUT-ONCE",
+      recoveredMarker: QA_COMPACTION_REASONING_RECOVERY_SUMMARY_MARKER,
+      reasoningOnly: true,
+    },
+  ] as const)(
+    "scopes $faultMode compaction faults to one scenario session",
+    async ({ faultMode, markerPrefix, recoveredMarker, reasoningOnly }) => {
+      const server = await startMockServer();
+      const requestFor = (session: string) => ({
+        model: "gpt-5.6-luna",
+        instructions: QA_COMPACTION_SUMMARY_INSTRUCTIONS,
+        input: `<conversation>\n${markerPrefix}-${session}\nretain current work\n</conversation>\n\nCreate a structured summary.`,
+      });
+
+      const first = await expectOpenAiNonStreamingResponsesJson(server, requestFor("session-a"));
+      if (reasoningOnly) {
+        expect(JSON.stringify(first)).toContain("reasoning_compaction_summary_fault");
+        expect(JSON.stringify(first)).not.toContain(recoveredMarker);
+      } else {
+        expect(outputText(first)).toBe("");
+      }
+      const recovered = await expectOpenAiNonStreamingResponsesJson(
+        server,
+        requestFor("session-a"),
+      );
+      const recoveredText = outputText(recovered);
+      expect(recoveredText).toContain(recoveredMarker);
+      expect(recoveredText).toContain(`${markerPrefix}-session-a`);
+      expect(recoveredText).toContain("## Decisions");
+      expect(recoveredText).toContain("## Open TODOs");
+      expect(recoveredText).toContain("## Constraints/Rules");
+      expect(recoveredText).toContain("## Pending user asks");
+      expect(recoveredText).toContain("## Exact identifiers");
+      const independent = await expectOpenAiNonStreamingResponsesJson(
+        server,
+        requestFor("session-b"),
+      );
+      if (reasoningOnly) {
+        expect(JSON.stringify(independent)).toContain("reasoning_compaction_summary_fault");
+        expect(JSON.stringify(independent)).not.toContain(recoveredMarker);
+      } else {
+        expect(outputText(independent)).toBe("");
+      }
+
+      const requests = requireArray(
+        await getJson(server, "/debug/requests"),
+        "compaction output fault requests",
+      ).map((request) => requireRecord(request, "compaction output fault request"));
+      expect(requests.map((request) => request.compactionSummaryFaultMode)).toEqual([
+        faultMode,
+        "none",
+        faultMode,
+      ]);
+      expect(requests.every((request) => request.requestKind === "compaction-summary")).toBe(true);
+    },
+  );
+
+  it("classifies developer-role compaction instructions before applying a typed fault", async () => {
+    const server = await startMockServer();
+    const response = await expectOpenAiNonStreamingResponsesJson(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        {
+          role: "developer",
+          content: [{ type: "input_text", text: QA_COMPACTION_SUMMARY_INSTRUCTIONS }],
+        },
+        makeUserInput(
+          "<conversation>QA-COMPACTION-EMPTY-OUTPUT-ONCE-developer-wire</conversation>",
+        ),
+      ],
+    });
+
+    expect(outputText(response)).toBe("");
+    const requests = requireArray(
+      await getJson(server, "/debug/requests"),
+      "developer-role compaction requests",
+    ).map((request) => requireRecord(request, "developer-role compaction request"));
+    expect(requests).toEqual([
+      expect.objectContaining({
+        requestKind: "compaction-summary",
+        compactionSummaryFaultMode: "empty-output-once",
+      }),
+    ]);
   });
 
   it("handles staged scalar compaction summaries and promotes the durable merge without state leakage", async () => {

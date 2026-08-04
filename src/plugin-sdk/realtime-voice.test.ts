@@ -164,7 +164,7 @@ describe("RealtimeVoiceSessionLifecycle", () => {
     expect(openTransport).not.toHaveBeenCalled();
   });
 
-  it("settles connect attempts once and releases timeout and abort ownership", async () => {
+  it("starts connect timeouts explicitly and releases timeout and abort ownership", async () => {
     vi.useFakeTimers();
     try {
       const lifecycle = new RealtimeVoiceSessionLifecycle("Test");
@@ -179,6 +179,7 @@ describe("RealtimeVoiceSessionLifecycle", () => {
         timeoutMs: 10,
       });
 
+      attempt.startTimeout();
       attempt.resolve(true);
       attempt.reject(new Error("late failure"));
       await expect(attempt.promise).resolves.toBeUndefined();
@@ -200,6 +201,11 @@ describe("RealtimeVoiceSessionLifecycle", () => {
         timeoutMs: 10,
       });
       const rejected = expect(timeoutAttempt.promise).rejects.toThrow("timed out");
+      await vi.advanceTimersByTimeAsync(10);
+      expect(onTimeout).not.toHaveBeenCalled();
+
+      timeoutAttempt.startTimeout();
+      timeoutAttempt.startTimeout();
       await vi.advanceTimersByTimeAsync(10);
       await rejected;
 

@@ -250,7 +250,23 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
     requestedPath?: string,
   ): {
     acquired: boolean;
-    owner: { pid: number; checkout?: string; startedAt?: string };
+    owner: {
+      pid: number;
+      checkout?: string;
+      manualRecoveryRequired?: boolean;
+      processGroupId?: number;
+      processTreeState?: string;
+      reason?: string;
+      serviceState?: string;
+      startedAt?: string;
+    };
+    retainForCleanupFailure?: (details?: {
+      manualRecoveryRequired?: boolean;
+      phase?: string;
+      processGroupId?: number;
+      processTreeState?: string;
+      serviceState?: string;
+    }) => Record<string, unknown>;
     release?: () => void;
   };
   export function parseGatewayLogAudit(
@@ -289,10 +305,15 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
     options?: { stderr?: "inherit" | "pipe"; timeoutMs?: number },
   ): string;
   export function verifyGatewayReadiness(
-    runCommand: (command: string, args: string[], checkout: string) => unknown,
+    runCommand: (
+      command: string,
+      args: string[],
+      checkout: string,
+      options?: Record<string, unknown>,
+    ) => unknown | Promise<unknown>,
     checkout: string,
     expectedSha: string,
-    sleep?: (ms: number) => void,
+    sleep?: (ms: number) => void | Promise<void>,
     deployment?: GatewayDeployment | null,
     options?: {
       now?: () => number;
@@ -303,7 +324,7 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
       };
       timing?: Record<string, unknown>;
     },
-  ): Record<string, unknown>;
+  ): Promise<Record<string, unknown>>;
   export function findExactMacTarget(
     processes: string,
     executable: string,
@@ -311,5 +332,9 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
   export function maintainMain(
     options: Record<string, unknown>,
     dependencies?: Record<string, unknown>,
-  ): UpdateResult;
+  ): Promise<UpdateResult>;
+  export function runLiveUpdaterMain(
+    argv?: string[],
+    dependencies?: Record<string, unknown>,
+  ): Promise<void>;
 }

@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import crypto from "node:crypto";
+import { responsesPromptObserver } from "@openclaw/ai/internal/openai";
 import { stableStringify } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
@@ -42,23 +43,13 @@ class ProviderPromptRetryNoProgressError extends Error {
   }
 }
 
-function digest(serialized: string): string {
-  return crypto.createHash("sha256").update(serialized).digest("hex");
-}
-
-function createProviderPromptState(): ProviderPromptState {
-  return {};
-}
+const digest = (serialized: string) => crypto.createHash("sha256").update(serialized).digest("hex");
 
 /** Returns run-local retry state; restarts and new run ids intentionally have no baseline. */
 export function getProviderPromptState(runId: string): ProviderPromptState {
-  const existing = providerPromptStates.get(runId);
-  if (existing) {
-    return existing;
-  }
-  const created = createProviderPromptState();
-  providerPromptStates.set(runId, created);
-  return created;
+  const state = providerPromptStates.get(runId) ?? {};
+  providerPromptStates.set(runId, state);
+  return state;
 }
 
 export function clearProviderPromptState(runId: string): void {
@@ -106,25 +97,9 @@ function assertProviderPromptRetryProgress(
   candidate: ProviderPromptSnapshot,
 ): void {
   const rejected = state.lastRejected;
-  if (!rejected || rejected.scopeDigest !== candidate.scopeDigest) {
-    return;
-  }
-  if (rejected.digest === candidate.digest) {
+  if (rejected?.scopeDigest === candidate.scopeDigest && rejected.digest === candidate.digest) {
     throw new ProviderPromptRetryNoProgressError(candidate.byteWeight);
   }
-}
-
-function beginProviderPromptAttempt(state: ProviderPromptState): void {
-  // A transport that does not implement onPayload must not leave a stale body
-  // eligible to be marked as the current provider rejection.
-  state.lastAttempt = undefined;
-}
-
-function recordProviderPromptAttempt(
-  state: ProviderPromptState,
-  snapshot: ProviderPromptSnapshot,
-): void {
-  state.lastAttempt = snapshot;
 }
 
 export function markLastProviderPromptContextRejected(
@@ -137,21 +112,22 @@ export function markLastProviderPromptContextRejected(
   return attempted;
 }
 
-/** Observes the request body after every provider wrapper and caller payload hook. */
+/** Hashes the post-onPayload body for context-retry admission. */
 export function wrapStreamFnWithProviderPromptState(params: {
   streamFn: StreamFn;
   state: ProviderPromptState;
   effectiveContextTokenBudget: number;
+  recordEvent?: (type: string, data?: Record<string, unknown>) => void;
 }): StreamFn {
   return async (model, context, options) => {
-    beginProviderPromptAttempt(params.state);
+    params.state.lastAttempt = undefined; // Custom transports must not leave a stale candidate.
     const accountingContext = readProviderPromptAccountingContext(options);
     const admittedContext =
       context && typeof context === "object" && params.state.contextAdmission
         ? params.state.contextAdmission(model, context, accountingContext)
         : context;
     const originalOnPayload = options?.onPayload;
-    const transportOptions = withoutProviderPromptAccountingContext({
+    const observedOptions = withoutProviderPromptAccountingContext({
       ...options,
       onPayload: async (payload, payloadModel) => {
         const replacement = await originalOnPayload?.(payload, payloadModel);
@@ -162,11 +138,15 @@ export function wrapStreamFnWithProviderPromptState(params: {
           effectiveContextTokenBudget: params.effectiveContextTokenBudget,
         });
         assertProviderPromptRetryProgress(params.state, snapshot);
-        recordProviderPromptAttempt(params.state, snapshot);
+        params.state.lastAttempt = snapshot;
         return finalPayload;
       },
     });
-    const stream = await params.streamFn(model, admittedContext, transportOptions);
-    return stream;
+    if (params.recordEvent) {
+      responsesPromptObserver.set(observedOptions, (observation) =>
+        params.recordEvent?.("provider.prompt.observed", { ...observation }),
+      );
+    }
+    return params.streamFn(model, admittedContext, observedOptions);
   };
 }

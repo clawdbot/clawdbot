@@ -4286,7 +4286,7 @@ describe("requester settle wake trigger", () => {
     expect(later.requesterSettleWake).toEqual({ status: "pending", attemptCount: 0 });
   });
 
-  it("preserves a yielded batch re-armed during an earlier successful wake", async () => {
+  it("keeps a yielded completion parked until its requester turn settles", async () => {
     const entry = createRunEntry({
       requesterTurnRunId: "run-requester",
       requesterTurnYielded: true,
@@ -4300,25 +4300,8 @@ describe("requester settle wake trigger", () => {
           LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]
         >[0],
       ) => {
-        const firstInvocation = settleWake.mock.calls.length === 1;
-        if (firstInvocation) {
-          controller.settleRequesterTurnAfterSessionSpawns({
-            requesterSessionKey: entry.requesterSessionKey,
-            requesterTurnRunId: "run-requester",
-            requesterYielded: true,
-            acceptedSessionSpawns: [{ runId: entry.runId, childSessionKey: entry.childSessionKey }],
-          });
-          params.transitionBatch([entry.runId], {
-            status: "dispatching",
-            attemptCount: 1,
-            batchRunIds: [entry.runId],
-          });
-        }
-        params.completeBatch(
-          [entry.runId],
-          firstInvocation ? undefined : entry.requesterSettleWake?.rearmGeneration,
-        );
-        return firstInvocation;
+        params.completeBatch([entry.runId], entry.requesterSettleWake?.rearmGeneration);
+        return true;
       },
     );
     const controller = createLifecycleController({
@@ -4333,7 +4316,17 @@ describe("requester settle wake trigger", () => {
       completedAt: 5_000,
     });
 
-    await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledTimes(2));
+    await Promise.resolve();
+    expect(settleWake).not.toHaveBeenCalled();
+
+    controller.settleRequesterTurnAfterSessionSpawns({
+      requesterSessionKey: entry.requesterSessionKey,
+      requesterTurnRunId: "run-requester",
+      requesterYielded: true,
+      acceptedSessionSpawns: [{ runId: entry.runId, childSessionKey: entry.childSessionKey }],
+    });
+
+    await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledOnce());
     expect(entry.requesterSettleWake).toBeUndefined();
   });
 

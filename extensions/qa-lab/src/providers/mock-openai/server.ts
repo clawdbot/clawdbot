@@ -22,6 +22,7 @@ import {
   type MockOpenAiRequestSnapshot,
   type MockOpenAiRequestSnapshotInput,
   type MockOpenAiRequestKind,
+  type MockCompactionSummaryFaultMode,
   type AnthropicMessagesRequest,
   TINY_PNG_BASE64,
   QA_REASONING_ONLY_RECOVERY_PROMPT_RE,
@@ -177,8 +178,15 @@ const QA_COMPACTION_RETRY_PROMPT_RE = /compaction retry mutating tool check/i;
 const QA_COMPACTION_SUMMARY_INSTRUCTIONS_RE =
   /context summarization assistant[\s\S]*structured summary[\s\S]*do not continue/i;
 const QA_COMPACTION_RETRY_OVERFLOW_THRESHOLD_BYTES = 256 * 1024;
+const QA_COMPACTION_OUTPUT_RECOVERY_OVERFLOW_THRESHOLD_BYTES = 96 * 1024;
 const QA_COMPACTION_RETRY_DURABLE_MARKER = "QA-COMPACTION-DURABLE-MARKER";
 const QA_COMPACTION_RETRY_BULKY_MARKER = "QA-COMPACTION-BULKY-HISTORICAL-MARKER";
+const QA_COMPACTION_EMPTY_OUTPUT_ONCE_MARKER_RE =
+  /\bQA-COMPACTION-EMPTY-OUTPUT-ONCE-[A-Za-z0-9_-]+\b/u;
+const QA_COMPACTION_REASONING_ONLY_OUTPUT_ONCE_MARKER_RE =
+  /\bQA-COMPACTION-REASONING-ONLY-OUTPUT-ONCE-[A-Za-z0-9_-]+\b/u;
+const QA_COMPACTION_EMPTY_RECOVERY_SUMMARY_MARKER = "QA-COMPACTION-EMPTY-RECOVERED-SUMMARY";
+const QA_COMPACTION_REASONING_RECOVERY_SUMMARY_MARKER = "QA-COMPACTION-REASONING-RECOVERED-SUMMARY";
 const QA_COMPACTION_RETRY_SUMMARY = `## Goal
 Complete the compaction retry mutating tool check.
 
@@ -228,6 +236,40 @@ Preserve the active conversation context.
 
 ## Critical Context
 - Refer to the retained recent turns for current task details.`;
+const QA_COMPACTION_OUTPUT_RECOVERY_SUMMARY = `## Decisions
+- Retry the typed compaction-summary fault at the compaction owner.
+
+## Open TODOs
+- Continue the active task after compaction.
+
+## Constraints/Rules
+- Preserve the historical recovery user block and current continuation.
+
+## Pending user asks
+- Retain the historical recovery user block context.
+
+## Exact identifiers`;
+
+function resolveCompactionRecoverySummary(allInputText: string) {
+  const faultMarker =
+    QA_COMPACTION_EMPTY_OUTPUT_ONCE_MARKER_RE.exec(allInputText)?.[0] ??
+    QA_COMPACTION_REASONING_ONLY_OUTPUT_ONCE_MARKER_RE.exec(allInputText)?.[0];
+  const recoveryMarker = faultMarker?.startsWith("QA-COMPACTION-EMPTY-")
+    ? QA_COMPACTION_EMPTY_RECOVERY_SUMMARY_MARKER
+    : faultMarker
+      ? QA_COMPACTION_REASONING_RECOVERY_SUMMARY_MARKER
+      : undefined;
+  return recoveryMarker && faultMarker
+    ? `${QA_COMPACTION_OUTPUT_RECOVERY_SUMMARY}\n- ${recoveryMarker}\n- ${faultMarker}`
+    : QA_GENERIC_COMPACTION_SUMMARY;
+}
+
+function hasCompactionOutputRecoveryMarker(allInputText: string) {
+  return (
+    QA_COMPACTION_EMPTY_OUTPUT_ONCE_MARKER_RE.test(allInputText) ||
+    QA_COMPACTION_REASONING_ONLY_OUTPUT_ONCE_MARKER_RE.test(allInputText)
+  );
+}
 
 const QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE =
   /(?:partial|quiet) streaming qa check|final-only marker streaming qa check|block streaming qa check|tool progress(?: error)? qa check/i;
@@ -602,10 +644,44 @@ function classifyMockOpenAiRequest(
   input: ResponsesInputItem[],
   body: Record<string, unknown>,
 ): MockOpenAiRequestKind {
-  if (QA_COMPACTION_SUMMARY_INSTRUCTIONS_RE.test(extractInstructionsText(body))) {
+  const instructionText = extractAllRequestTexts(
+    input.filter((item) => item.role === "developer" || item.role === "system"),
+    body,
+  );
+  if (QA_COMPACTION_SUMMARY_INSTRUCTIONS_RE.test(instructionText)) {
     return "compaction-summary";
   }
   return hasToolOutput(input) ? "tool-continuation" : "agent-initial";
+}
+
+function resolveCompactionSummaryFaultMode(params: {
+  allInputText: string;
+  requestKind: MockOpenAiRequestKind;
+  servedFaultMarkers: Set<string>;
+}): MockCompactionSummaryFaultMode {
+  if (params.requestKind !== "compaction-summary") {
+    return "none";
+  }
+  const emptyMarker = QA_COMPACTION_EMPTY_OUTPUT_ONCE_MARKER_RE.exec(params.allInputText)?.[0];
+  const reasoningMarker = QA_COMPACTION_REASONING_ONLY_OUTPUT_ONCE_MARKER_RE.exec(
+    params.allInputText,
+  )?.[0];
+  const selected = emptyMarker
+    ? {
+        key: emptyMarker,
+        mode: "empty-output-once" as const,
+      }
+    : reasoningMarker
+      ? {
+          key: reasoningMarker,
+          mode: "reasoning-only-output-once" as const,
+        }
+      : undefined;
+  if (!selected?.key || params.servedFaultMarkers.has(selected.key)) {
+    return "none";
+  }
+  params.servedFaultMarkers.add(selected.key);
+  return selected.mode;
 }
 
 async function buildResponsesPayload(
@@ -614,6 +690,7 @@ async function buildResponsesPayload(
   options: {
     waitForTerminalRequesterSettled?: (caseName: string, childSessionKey: string) => Promise<void>;
     requestKind?: MockOpenAiRequestKind;
+    compactionSummaryFaultMode?: MockCompactionSummaryFaultMode;
   } = {},
 ) {
   const providerVariant = resolveProviderVariant(
@@ -651,10 +728,19 @@ async function buildResponsesPayload(
     allInputText.includes(QA_COMPACTION_RETRY_BULKY_MARKER);
   const requestKind = options.requestKind ?? classifyMockOpenAiRequest(input, body);
   if (requestKind === "compaction-summary") {
+    if (options.compactionSummaryFaultMode === "empty-output-once") {
+      return buildAssistantEvents("");
+    }
+    if (options.compactionSummaryFaultMode === "reasoning-only-output-once") {
+      return buildReasoningOnlyEvents(
+        "Compaction summary reasoning completed without final summary text.",
+        "reasoning_compaction_summary_fault",
+      );
+    }
     return buildAssistantEvents(
       hasCompactionRetryDurableContext
         ? QA_COMPACTION_RETRY_SUMMARY
-        : QA_GENERIC_COMPACTION_SUMMARY,
+        : resolveCompactionRecoverySummary(allInputText),
     );
   }
   if (
@@ -2097,6 +2183,7 @@ export async function startQaMockOpenAiServer(params?: {
   const finalOnlyMarkerPauseMs = params?.finalOnlyMarkerPauseMs ?? 1_500;
   const terminalRequesterSettleGate = createTerminalRequesterSettleGate();
   const scenarioStates = new Map<string, MockScenarioState>();
+  const servedCompactionSummaryFaultMarkers = new Set<string>();
   const scenarioStateFor = (body: Record<string, unknown>): MockScenarioState => {
     const input =
       typeof body.input === "string" || Array.isArray(body.input)
@@ -2149,10 +2236,18 @@ export async function startQaMockOpenAiServer(params?: {
     const allInputText = extractAllRequestTexts(input, request.body);
     const scenarioState = scenarioStateFor(request.body);
     const requestKind = classifyMockOpenAiRequest(input, request.body);
+    const compactionSummaryFaultMode = resolveCompactionSummaryFaultMode({
+      allInputText,
+      requestKind,
+      servedFaultMarkers: servedCompactionSummaryFaultMarkers,
+    });
     if (requestKind !== "compaction-summary" && QA_COMPACTION_RETRY_PROMPT_RE.test(allInputText)) {
       scenarioState.compactionRetryActive = true;
     }
     const rawByteLength = Buffer.byteLength(request.raw);
+    const compactionOverflowThresholdBytes = hasCompactionOutputRecoveryMarker(allInputText)
+      ? QA_COMPACTION_OUTPUT_RECOVERY_OVERFLOW_THRESHOLD_BYTES
+      : QA_COMPACTION_RETRY_OVERFLOW_THRESHOLD_BYTES;
     const resolvedModel = typeof request.body.model === "string" ? request.body.model : "";
     const requestSnapshotBase = {
       raw: request.raw,
@@ -2165,6 +2260,7 @@ export async function startQaMockOpenAiServer(params?: {
       providerVariant: resolveProviderVariant(resolvedModel),
       imageInputCount: countImageInputs(input),
       requestKind,
+      compactionSummaryFaultMode,
       rawByteLength,
     } satisfies Omit<
       MockOpenAiRequestSnapshotInput,
@@ -2179,8 +2275,9 @@ export async function startQaMockOpenAiServer(params?: {
     >;
     if (
       requestKind === "agent-initial" &&
-      QA_COMPACTION_RETRY_PROMPT_RE.test(allInputText) &&
-      rawByteLength > QA_COMPACTION_RETRY_OVERFLOW_THRESHOLD_BYTES &&
+      (QA_COMPACTION_RETRY_PROMPT_RE.test(allInputText) ||
+        hasCompactionOutputRecoveryMarker(allInputText)) &&
+      rawByteLength > compactionOverflowThresholdBytes &&
       !scenarioState.compactionOverflowInjected
     ) {
       scenarioState.compactionOverflowInjected = true;
@@ -2206,6 +2303,7 @@ export async function startQaMockOpenAiServer(params?: {
       events = await buildResponsesPayload(request.body, scenarioState, {
         waitForTerminalRequesterSettled: terminalRequesterSettleGate.waitUntilSettled,
         requestKind,
+        compactionSummaryFaultMode,
       });
     } finally {
       inflightRequests.delete(inflightRequestId);
@@ -2472,6 +2570,7 @@ export async function startQaMockOpenAiServer(params?: {
           providerVariant: resolveProviderVariant(normalizedModel),
           imageInputCount: countImageInputs(input),
           requestKind: classifyMockOpenAiRequest(input, body as Record<string, unknown>),
+          compactionSummaryFaultMode: "none",
           outcome: "success",
           rawByteLength: Buffer.byteLength(raw),
           plannedToolCallId: extractPlannedToolCallId(events),

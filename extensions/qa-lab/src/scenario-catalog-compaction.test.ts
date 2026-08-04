@@ -3,6 +3,55 @@ import { readQaScenarioById } from "./scenario-catalog.js";
 import { requireFlowScenario } from "./scenario-catalog.test-utils.js";
 
 describe("qa compaction scenario catalog", () => {
+  it.each([
+    {
+      id: "compaction-empty-response-recovery",
+      coverage: "session-memory.compaction-empty-response-recovery",
+      faultMode: "empty-output-once",
+      summaryMarker: "QA-COMPACTION-EMPTY-RECOVERED-SUMMARY",
+    },
+    {
+      id: "compaction-reasoning-only-recovery",
+      coverage: "session-memory.compaction-reasoning-only-recovery",
+      faultMode: "reasoning-only-output-once",
+      summaryMarker: "QA-COMPACTION-REASONING-RECOVERED-SUMMARY",
+    },
+  ])("keeps $id on the OpenClaw compaction owner", ({ id, coverage, faultMode, summaryMarker }) => {
+    const scenario = requireFlowScenario(readQaScenarioById(id));
+    const flow = JSON.stringify(scenario.execution.flow);
+    const serializedScenario = JSON.stringify(scenario);
+
+    expect(scenario.runtimePairLane).toBeUndefined();
+    expect(scenario.coverage?.primary).toEqual([coverage]);
+    expect(scenario.coverage?.secondary ?? []).toEqual([]);
+    expect(scenario.gatewayConfigPatch).toMatchObject({
+      agents: { defaults: { compaction: { mode: "default" } } },
+    });
+    expect(flow).toContain("OPENCLAW_QA_FORCE_RUNTIME === 'openclaw'");
+    expect(flow).toContain("initialRequests[0].errorCode === 'context_length_exceeded'");
+    expect(flow).toContain("initialRequests.length === 2");
+    expect(flow).toContain("compactionSummaryRequests.length === 2");
+    expect(flow).toContain(
+      `compactionSummaryRequests[0].compactionSummaryFaultMode === config.faultMode`,
+    );
+    expect(flow).toContain("compactionSummaryRequests[1].compactionSummaryFaultMode === 'none'");
+    expect(flow).toContain(
+      "compactionSummaryRequests[0].cursor < compactionSummaryRequests[1].cursor",
+    );
+    expect(flow).toContain(
+      "scenarioRequests.every((request) => request.model === scenarioRequests[0].model)",
+    );
+    expect(flow).toContain("transcript.compactionSummaries.length === 1");
+    expect(flow).toContain("transcript.compactionSummaries[0].includes(config.summaryMarker)");
+    expect(flow).toContain("String(transcript.finalText ?? '').trim() === config.finalMarker");
+    expect(flow).toContain("sessionEntry?.compactionCount === 1");
+    expect(flow).toContain("request.requestKind === 'tool-continuation'");
+    expect(flow).toContain("finalOutbound.length === 1");
+    expect(serializedScenario).toContain(faultMode);
+    expect(serializedScenario).toContain(summaryMarker);
+    expect(serializedScenario).not.toContain("codex");
+  });
+
   it("assigns compaction retry and pruning to OpenClaw with an early Codex gap", () => {
     const scenario = requireFlowScenario(readQaScenarioById("compaction-retry-mutating-tool"));
     const flow = JSON.stringify(scenario.execution.flow);

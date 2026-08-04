@@ -3,10 +3,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { exerciseTuiCommandSurface } from "./tui-pty-command-surfaces-test-support.js";
 import {
   approveWorkspaceSkill,
   COMPACT_TERMINAL_SIZES,
   exerciseFragmentedUnicodePrompt,
+  exerciseNarrowTerminalRendering,
+  exerciseTerminalOutputSafety,
   objectFieldEquals,
   readFixtureLog,
   waitForFixtureLogEntry,
@@ -685,6 +688,14 @@ describe.sequential("TUI PTY harness", () => {
     TEST_TIMEOUT_MS,
   );
 
+  // Keep these producer-matched cases data-driven because this harness is at its line budget.
+  // prettier-ignore
+  const terminalSafetyCases = [
+    ["renders long Unicode output and copy-safe URLs in narrow real PTY frames", () => exerciseNarrowTerminalRendering(startTuiFixture, STARTUP_TIMEOUT_MS)],
+    ["sanitizes ANSI OSC and C1 payloads across real PTY display boundaries", () => exerciseTerminalOutputSafety(startTuiFixture, STARTUP_TIMEOUT_MS)],
+  ] as const;
+  it.each(terminalSafetyCases)("%s", async (_name, runCase) => runCase(), STARTUP_TEST_TIMEOUT_MS);
+
   it(
     "preserves xAI account limit errors in terminal output",
     async () => {
@@ -891,22 +902,14 @@ describe.sequential("TUI PTY harness", () => {
     STARTUP_TEST_TIMEOUT_MS,
   );
 
-  it(
-    "renders slash command help",
-    async () => {
-      await fixture.run.write("/help\r", { delay: false });
-      await fixture.run.waitForOutput("Slash commands:");
-      await fixture.run.waitForOutput("/help");
-      await fixture.run.waitForOutput("/verbose <on|off|full>");
-      await fixture.run.waitForOutput("/reasoning <on|off|stream>");
-      await fixture.run.waitForOutput("/goal");
-      await fixture.run.waitForOutput("/goal start <objective>");
-      await fixture.run.waitForOutput("/btw <side question>");
-      await fixture.run.waitForOutput("/queue");
-      await fixture.run.waitForOutput("/stop");
-      await fixture.run.waitForOutput("/exit");
-    },
-    TEST_TIMEOUT_MS,
+  it.each([
+    ["lists and executes slash commands through authenticated real PTY frames", "slash-commands"],
+    ["selects model and session pickers through authenticated real PTY frames", "pickers"],
+    ["updates settings through an authenticated real PTY overlay", "settings"],
+  ] as const)(
+    "%s",
+    (_name, surface) => exerciseTuiCommandSurface(startTuiFixture, surface, STARTUP_TIMEOUT_MS),
+    STARTUP_TEST_TIMEOUT_MS,
   );
 
   it(
