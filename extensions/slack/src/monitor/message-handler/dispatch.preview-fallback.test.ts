@@ -3749,6 +3749,37 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(draftStream.update).toHaveBeenCalledTimes(updateCount);
   });
 
+  it("preserves Markdown in Slack commentary drafts for the outbound renderer", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      {
+        kind: "item",
+        itemKind: "preamble",
+        itemId: "preamble-1",
+        progressText: "I’m using the `monorepo` skill on Linux x86_64.",
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: {
+          streaming: {
+            mode: "progress",
+            progress: { label: false, commentary: true, toolProgress: false },
+          },
+        },
+      }),
+    );
+
+    expect(draftStream.update).toHaveBeenLastCalledWith(
+      "💬 I’m using the `monorepo` skill on Linux x86_64.",
+    );
+  });
+
   it("uses the enterprise event client for Slack commentary drafts", async () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
