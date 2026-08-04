@@ -6,10 +6,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   inspectPersistedAuthProfileStateRaw,
   inspectPersistedAuthProfileStoreRaw,
+  resolveAuthProfileDatabasePath,
   runAuthProfileWriteTransaction,
   writePersistedAuthProfileStateRaw,
   writePersistedAuthProfileStoreRaw,
 } from "../src/agents/auth-profiles/sqlite.js";
+import { closeOpenClawAgentDatabaseByPath } from "../src/state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../src/state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../src/state/openclaw-state-db.paths.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
 import { installTestEnv } from "./test-env.js";
@@ -156,6 +160,15 @@ describe("installTestEnv", () => {
       },
       { stateDir: realStateDir },
     );
+    cleanupFns.push(() => {
+      closeOpenClawAgentDatabaseByPath(resolveAuthProfileDatabasePath(realAgentDir));
+      closeOpenClawStateDatabaseByPath(
+        resolveOpenClawStateSqlitePath({
+          ...process.env,
+          OPENCLAW_STATE_DIR: realStateDir,
+        }),
+      );
+    });
     writeFile(path.join(realHome, ".claude", ".credentials.json"), '{"accessToken":"token"}\n');
     writeFile(path.join(realHome, ".claude", "projects", "old-session.jsonl"), "session\n");
     fs.mkdirSync(path.join(realHome, ".claude", "settings.local.json"), { recursive: true });

@@ -3,10 +3,13 @@ import path from "node:path";
 import {
   inspectPersistedAuthProfileStateRaw,
   inspectPersistedAuthProfileStoreRaw,
+  resolveAuthProfileDatabaseOwnerId,
+  resolveAuthProfileDatabasePath,
   runAuthProfileWriteTransaction,
   writePersistedAuthProfileStateRaw,
   writePersistedAuthProfileStoreRaw,
 } from "../../src/agents/auth-profiles/sqlite.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../src/state/openclaw-agent-db-readonly.js";
 
 const [realStateDir, tempStateDir] = process.argv.slice(2);
 
@@ -24,8 +27,39 @@ for (const entry of fs.readdirSync(agentsDir, { withFileTypes: true })) {
     continue;
   }
   const sourceAgentDir = path.join(agentsDir, entry.name, "agent");
-  const sourceStore = inspectPersistedAuthProfileStoreRaw(sourceAgentDir);
-  const sourceState = inspectPersistedAuthProfileStateRaw(sourceAgentDir);
+  const sourceDatabasePath = resolveAuthProfileDatabasePath(sourceAgentDir);
+  const sourceSnapshot = withOpenClawAgentDatabaseReadOnly(
+    (database) => {
+      database.db.exec("BEGIN");
+      try {
+        const snapshot = {
+          store: inspectPersistedAuthProfileStoreRaw(sourceAgentDir, database),
+          state: inspectPersistedAuthProfileStateRaw(sourceAgentDir, database),
+        };
+        database.db.exec("COMMIT");
+        return snapshot;
+      } catch (error) {
+        if (database.db.isTransaction) {
+          database.db.exec("ROLLBACK");
+        }
+        throw error;
+      }
+    },
+    {
+      agentId: resolveAuthProfileDatabaseOwnerId(sourceAgentDir),
+      path: sourceDatabasePath,
+    },
+  );
+  if (!sourceSnapshot.found) {
+    if (sourceSnapshot.reason === "schema-missing") {
+      throw new Error(
+        `Could not safely stage SQLite auth profiles for live agent "${entry.name}".`,
+      );
+    }
+    continue;
+  }
+  const sourceStore = sourceSnapshot.value.store;
+  const sourceState = sourceSnapshot.value.state;
   if (sourceStore.status === "unreadable" || sourceState.status === "unreadable") {
     throw new Error(`Could not safely stage SQLite auth profiles for live agent "${entry.name}".`);
   }

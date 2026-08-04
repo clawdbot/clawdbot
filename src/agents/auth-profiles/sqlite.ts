@@ -184,7 +184,7 @@ function readAuthProfileJsonCellReadOnly(pathname: string, target: "store" | "st
 /** Distinguishes an absent auth row from a present store that could not be read. */
 export function inspectPersistedAuthProfileStoreRaw(
   agentDir?: string,
-  database?: OpenClawAgentDatabase,
+  database?: Pick<OpenClawAgentDatabase, "db">,
 ): PersistedAuthProfileStoreInspection {
   if (database) {
     return inspectAuthProfileJsonCell(database.db, "store");
@@ -199,7 +199,7 @@ export function inspectPersistedAuthProfileStoreRaw(
 /** Distinguishes an absent auth-state row from state that could not be read. */
 export function inspectPersistedAuthProfileStateRaw(
   agentDir?: string,
-  database?: OpenClawAgentDatabase,
+  database?: Pick<OpenClawAgentDatabase, "db">,
 ): PersistedAuthProfileStoreInspection {
   if (database) {
     return inspectAuthProfileJsonCell(database.db, "state");
