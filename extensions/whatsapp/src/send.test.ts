@@ -293,6 +293,7 @@ describe("web outbound", () => {
     hoisted.controllerListeners.set("default", {
       assertSendReady,
       sendComposingTo,
+      sendLocation,
       sendMessage,
       sendPoll,
       sendReaction,
@@ -358,6 +359,7 @@ describe("web outbound", () => {
     hoisted.controllerListeners.clear();
     hoisted.controllerListeners.set("work", {
       sendComposingTo,
+      sendLocation,
       sendMessage,
       sendPoll,
       sendReaction,
@@ -436,6 +438,7 @@ describe("web outbound", () => {
     hoisted.controllerListeners.set("default", {
       assertSendReady,
       sendComposingTo,
+      sendLocation,
       sendMessage,
       sendPoll,
       sendReaction,
@@ -456,6 +459,7 @@ describe("web outbound", () => {
     hoisted.controllerListeners.set("default", {
       assertSendReady,
       sendComposingTo,
+      sendLocation,
       sendMessage,
       sendPoll,
       sendReaction,
@@ -776,6 +780,7 @@ describe("web outbound", () => {
   it("uses account-aware WhatsApp media caps for outbound uploads", async () => {
     hoisted.controllerListeners.set("work", {
       sendComposingTo,
+      sendLocation,
       sendMessage,
       sendPoll,
       sendReaction,
@@ -886,6 +891,7 @@ describe("web outbound", () => {
     hoisted.controllerListeners.set("default", {
       assertSendReady,
       sendComposingTo,
+      sendLocation,
       sendMessage,
       sendPoll,
       sendReaction,
