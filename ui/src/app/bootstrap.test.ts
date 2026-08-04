@@ -11,9 +11,10 @@ import {
   normalizeInitialApplicationLocation,
   resolveInitialApplicationLocation,
 } from "./bootstrap-location.ts";
-import { bootstrapApplication, createSkillWorkshopRevisionHandoff } from "./bootstrap.ts";
+import { bootstrapApplication } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
 import { loadSettings, saveSettings } from "./settings.ts";
+import { createSkillWorkshopRevisionHandoff } from "./skill-workshop-revision-handoff.ts";
 
 // Startup progress (dynamic imports, gateway subscribe, router start) is not a
 // performance assertion, so these waits must not inherit vi.waitFor's 1s default:
