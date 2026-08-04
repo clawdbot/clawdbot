@@ -17,6 +17,7 @@ const ALLOW_ENV = "OPENCLAW_QA_ALLOW_SYSTEMD_RECOVERY";
 const SCENARIO_ID = "doctor-gateway-startup-recovery";
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/doctor-gateway-startup-recovery.ts";
 const commandTimeoutMs = 120_000;
+const gatewayRecoveryArgs = ["gateway", "restart", "--json"] as const;
 
 type CommandResult = {
   code: number | null;
@@ -595,14 +596,20 @@ async function runSystemdRecovery(
       "systemctl daemon-reload after override removal",
     );
 
-    const repair = await runOpenClaw(
-      options,
-      profile,
-      ["doctor", "--repair", "--yes", "--non-interactive", "--no-workspace-suggestions"],
-      env,
-    );
-    appendLog(outputOf(repair));
-    assertCommandSucceeded(repair, "doctor repair");
+    const restart = await runOpenClaw(options, profile, [...gatewayRecoveryArgs], env);
+    appendLog(outputOf(restart));
+    assertCommandSucceeded(restart, "gateway restart");
+    const restartJson = JSON.parse(restart.stdout) as {
+      action?: string;
+      ok?: boolean;
+      result?: string;
+      service?: { label?: string; loaded?: boolean };
+    };
+    assert.equal(restartJson.action, "restart");
+    assert.equal(restartJson.ok, true);
+    assert.equal(restartJson.result, "restarted");
+    assert.equal(restartJson.service?.label, unit);
+    assert.equal(restartJson.service?.loaded, true);
     recovered = await waitForGatewayHealthy(options, profile, env);
     assert.equal(recovered.statusJson.service?.runtime?.status, "running");
     assert.equal(recovered.statusJson.rpc?.ok, true);
@@ -806,6 +813,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
 
 export const testing = {
   commandEnv,
+  gatewayRecoveryArgs,
   main,
   resolveOpenClawInvocation,
   runProducer,

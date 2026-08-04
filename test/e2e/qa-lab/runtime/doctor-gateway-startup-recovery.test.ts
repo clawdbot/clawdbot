@@ -68,6 +68,10 @@ describe("doctor gateway startup recovery producer", () => {
     });
   });
 
+  it("follows the exact managed restart guidance after systemd exhausts retries", () => {
+    expect(testing.gatewayRecoveryArgs).toEqual(["gateway", "restart", "--json"]);
+  });
+
   it("requires an explicit native-systemd opt-in", () => {
     expect(resolveSystemdRecoveryPermission({})).toEqual({
       available: false,
