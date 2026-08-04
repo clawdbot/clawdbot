@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createClickClackClient, isClickClackTimeoutError } from "./http-client.js";
+import { createClickClackClient } from "./http-client.js";
 
 describe("ClickClack HTTP client timeouts", () => {
   it("aborts a REST request that stalls before response headers", async () => {
@@ -202,7 +202,6 @@ describe("ClickClack HTTP client timeouts", () => {
         name: "TimeoutError",
         message: "ClickClack response body stalled for 30000ms",
       });
-      expect(isClickClackTimeoutError(error)).toBe(true);
       expect(bodyCanceled).toBe(true);
     } finally {
       vi.useRealTimers();
