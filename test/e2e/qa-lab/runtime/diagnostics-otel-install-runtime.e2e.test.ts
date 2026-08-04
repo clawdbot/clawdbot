@@ -10,7 +10,7 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, test } from "vitest";
 import { startQaGatewayChild, startQaMockOpenAiServer } from "../../../../extensions/qa-lab/api.js";
-import { readPluginInstallRecords } from "../../../../scripts/e2e/lib/plugins/plugin-index-sqlite.mjs";
+import { readPluginInstallRecords } from "../../../../scripts/e2e/lib/plugin-index-sqlite.mjs";
 import { startLocalOtlpReceiver } from "./otel-test-support.js";
 
 const execFileAsync = promisify(execFile);

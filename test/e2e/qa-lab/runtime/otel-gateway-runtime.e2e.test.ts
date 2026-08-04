@@ -151,7 +151,9 @@ describe("diagnostics-otel gateway runtime", () => {
       }>;
       const readPlans = scenarioRequests.filter((request) => request.plannedToolName === "read");
       const finalizations = scenarioRequests.filter((request) =>
-        String(request.allInputText ?? "").includes("Continue from the settled tool result"),
+        String(request.allInputText ?? "").includes(
+          "The previous assistant turn completed its tool calls but did not produce a user-visible answer.",
+        ),
       );
       expect(readPlans).toHaveLength(1);
       expect(readPlans[0]?.plannedWireToolName).toBe("exec");
