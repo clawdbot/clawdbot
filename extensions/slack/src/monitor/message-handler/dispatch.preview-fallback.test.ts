@@ -1966,7 +1966,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
 
     expect(draftStream.update).toHaveBeenLastCalledWith(
-      ["Shelling", "", "• exec", "🧠 \\_Reading the Slack handler\\_"].join("\n"),
+      ["Shelling", "", "• exec", "🧠 _Reading the Slack handler_"].join("\n"),
     );
     const updates = draftStream.update.mock.calls.map((call) => String(call[0]));
     expect(updates.join("\n")).not.toContain("Reasoning");
@@ -1995,7 +1995,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
 
     expect(draftStream.update).toHaveBeenLastCalledWith(
-      ["Shelling", "", "• exec", "🧠 \\_Reading Checking\\_"].join("\n"),
+      ["Shelling", "", "• exec", "🧠 _Reading Checking_"].join("\n"),
     );
     const updates = draftStream.update.mock.calls.map((call) => String(call[0]));
     expect(updates.join("\n")).not.toContain("Checking Reading");
@@ -2022,7 +2022,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
 
     expect(draftStream.update).toHaveBeenLastCalledWith(
-      ["Shelling", "", "🧠 \\_Reading Checking\\_"].join("\n"),
+      ["Shelling", "", "🧠 _Reading Checking_"].join("\n"),
     );
     const updates = draftStream.update.mock.calls.map((call) => String(call[0]));
     expect(updates.join("\n")).toContain("Reading Checking");
@@ -2049,7 +2049,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
 
     expect(draftStream.update).toHaveBeenLastCalledWith(
-      ["Shelling", "", "🧠 \\_Thinking about Slack preview state\\_"].join("\n"),
+      ["Shelling", "", "🧠 _Thinking about Slack preview state_"].join("\n"),
     );
   });
 
