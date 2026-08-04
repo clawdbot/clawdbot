@@ -26,6 +26,7 @@ scenario:
     - extensions/diagnostics-otel/src/service-recorders-tools.ts
     - extensions/diagnostics-otel/src/service-recorders-usage.ts
     - test/e2e/qa-lab/runtime/otel-gateway-runtime.e2e.test.ts
+    - test/e2e/qa-lab/runtime/otel-test-support.ts
   execution:
     kind: vitest
     path: test/e2e/qa-lab/runtime/otel-gateway-runtime.e2e.test.ts
