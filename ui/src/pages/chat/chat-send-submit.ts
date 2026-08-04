@@ -39,6 +39,7 @@ import { chatOutboxDrainDependencies, deliverChatQueueItem } from "./chat-send-d
 import {
   canSendVolatileQueueItem,
   enqueuePendingSendMessage,
+  isSkillWorkshopRevisionConnectionCurrent,
   reconnectSafeQueuedSendState,
   setChatError,
   waitForPendingChatSettings,
@@ -437,8 +438,9 @@ export async function handleSendChat(
     const admittedDurably = admitQueuedMessageForSession(host, submittedSessionKey, queued);
     const canSendFromMemory =
       !admittedDurably &&
-      !waitingForSettings &&
-      canSendVolatileQueueItem(host, queued, submittedSessionKey);
+      (skillWorkshopRevision
+        ? isSkillWorkshopRevisionConnectionCurrent(host, queued)
+        : !waitingForSettings && canSendVolatileQueueItem(host, queued, submittedSessionKey));
     if (!admittedDurably && !canSendFromMemory) {
       cancelChatDelivery(host, queued, {
         previousDraft: cleared.previousDraft,

@@ -256,6 +256,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           needsApply: runtimeConfig.configNeedsApply,
           applying: runtimeConfig.configApplying,
           applyDisabled:
+            context.runtimeConfig.canApply === false ||
             runtimeConfig.configLoading ||
             runtimeConfig.configSaving ||
             (runtimeConfig.configFormDirty && runtimeConfig.configFormMode === "raw") ||

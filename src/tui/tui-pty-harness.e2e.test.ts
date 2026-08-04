@@ -16,6 +16,12 @@ import {
   writeTuiPtyFixtureScript,
   type FixtureLogEntry,
 } from "./tui-pty-harness-fixture-test-support.js";
+import {
+  exerciseStreamingRendering,
+  exerciseToolCardRendering,
+  streamingPrefixFrame,
+  toolFrame,
+} from "./tui-pty-rendering-test-support.js";
 import { sleep, startPty, type PtyRun } from "./tui-pty-test-support.js";
 
 const activeRuns: PtyRun[] = [];
@@ -53,6 +59,14 @@ async function startTuiFixture(opts: { env?: NodeJS.ProcessEnv } = {}) {
     },
   };
 }
+
+it("rejects rendering oracle false positives", () => {
+  const tokens = Array.from({ length: 64 }, (_, i) => `T${String(i).padStart(3, "0")}`);
+  const promptFrame = [`burst streaming proof ${tokens.join(" ")}`, "local ready | idle"];
+  const reversedTool = ["PTY_BEFORE_TOOL PTY_TOOL_PARTIAL Read File (running)"];
+  expect(streamingPrefixFrame(promptFrame)).toBe(false);
+  expect(toolFrame(reversedTool, false)).toBe(false);
+});
 
 describe.sequential("TUI PTY harness", () => {
   let fixture: Awaited<ReturnType<typeof startTuiFixture>>;
@@ -728,34 +742,8 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
-    "renders cumulative streamed text below the intervening tool in a real terminal",
-    async () => {
-      const chronologyFixture = await startTuiFixture({
-        env: {
-          OPENCLAW_TUI_PTY_MODEL: "fixture-provider/fixture-model",
-          OPENCLAW_TUI_PTY_VERBOSE_LEVEL: "on",
-        },
-      });
-
-      try {
-        await chronologyFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
-        await chronologyFixture.run.write("tool chronology proof\r");
-        await chronologyFixture.waitForLogEntry(
-          (entry) => entry.method === "toolChronologyComplete",
-        );
-        await chronologyFixture.run.waitForOutput("PTY_AFTER_TOOL");
-
-        const rendered = chronologyFixture.run.visibleOutput();
-        expect(rendered.lastIndexOf("PTY_BEFORE_TOOL")).toBeLessThan(
-          rendered.lastIndexOf("Read File"),
-        );
-        expect(rendered.lastIndexOf("Read File")).toBeLessThan(
-          rendered.lastIndexOf("PTY_AFTER_TOOL"),
-        );
-      } finally {
-        await chronologyFixture.cleanup();
-      }
-    },
+    "authenticates running partial and completed tool cards in real terminal frames",
+    async () => await exerciseToolCardRendering(startTuiFixture, STARTUP_TIMEOUT_MS),
     STARTUP_TEST_TIMEOUT_MS,
   );
 
@@ -822,18 +810,9 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
-    "renders all 128 ordered chat deltas without losing the final streamed token",
-    async () => {
-      await fixture.run.write("burst streaming proof\r", { delay: false });
-      const burst = await fixture.waitForLogEntry(
-        (entry) => entry.method === "streamBurstComplete" && objectFieldEquals(entry, "count", 128),
-      );
-
-      expect(burst.payload).toMatchObject({ count: 128 });
-      await fixture.run.waitForOutput("PTY_STREAM_BURST:");
-      await fixture.run.waitForOutput("T127");
-    },
-    TEST_TIMEOUT_MS,
+    "authenticates a streamed prefix before the complete ordered final frame",
+    async () => await exerciseStreamingRendering(startTuiFixture, STARTUP_TIMEOUT_MS),
+    STARTUP_TEST_TIMEOUT_MS,
   );
 
   it(

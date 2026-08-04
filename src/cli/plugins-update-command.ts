@@ -437,6 +437,7 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
         await commitPluginInstallRecordsOnly({
           previousInstallRecords: persistedPluginInstallRecords,
           nextInstallRecords: nextPluginInstallRecords,
+          nextConfig,
           verifyConfigFresh: async () => {
             await assertRecordsOnlyUpdateConfigFresh({
               baseHash: sourceSnapshot?.snapshot.hash,
