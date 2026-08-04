@@ -349,9 +349,38 @@ suite.define(() => {
         });
 
         await page.goto(`${suite.server.baseUrl}custodian`);
+        await page.addStyleTag({
+          content: ".custodian__wizard-step * { transition: none !important; }",
+        });
         await page.getByLabel("Twitch").waitFor();
         expect(await page.locator("openclaw-option-card").count()).toBe(0);
         expect(await page.locator(".agent-chat__composer-shell").count()).toBe(0);
+
+        const twitchOption = page.locator(".wizard-step__option", { hasText: "Twitch" });
+        const continueButton = page.getByRole("button", { name: "Continue" });
+        const cancelButton = page.getByRole("button", { name: "Cancel" });
+        const readInteractionStyle = (element: Element) => {
+          const style = getComputedStyle(element);
+          return {
+            backgroundColor: style.backgroundColor,
+            borderColor: style.borderColor,
+            cursor: style.cursor,
+          };
+        };
+
+        const optionRestingStyle = await twitchOption.evaluate(readInteractionStyle);
+        await twitchOption.hover();
+        const optionHoverStyle = await twitchOption.evaluate(readInteractionStyle);
+        expect(optionRestingStyle.cursor).toBe("pointer");
+        expect(optionHoverStyle.borderColor).not.toBe(optionRestingStyle.borderColor);
+
+        const disabledContinueStyle = await continueButton.evaluate(readInteractionStyle);
+        await continueButton.hover();
+        expect(await continueButton.evaluate(readInteractionStyle)).toEqual(disabledContinueStyle);
+        expect(disabledContinueStyle.cursor).toBe("not-allowed");
+        expect(await cancelButton.evaluate((element) => getComputedStyle(element).cursor)).toBe(
+          "pointer",
+        );
 
         await gateway.setMethodResponse("openclaw.chat", {
           sessionId: "e2e-rich-wizard",
@@ -370,6 +399,9 @@ suite.define(() => {
           },
         });
         await page.getByLabel("Twitch").check();
+        expect(await continueButton.evaluate((element) => getComputedStyle(element).cursor)).toBe(
+          "pointer",
+        );
         await page.getByRole("button", { name: "Continue" }).click();
         await page.getByLabel("Announcements").waitFor();
 

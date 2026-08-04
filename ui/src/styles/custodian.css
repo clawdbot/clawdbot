@@ -289,6 +289,20 @@ openclaw-custodian-page {
   min-height: 44px;
 }
 
+.custodian__wizard-step .btn:not(:disabled) {
+  cursor: pointer;
+}
+
+.custodian__wizard-step .btn.primary:disabled:hover {
+  border-color: var(--accent);
+  background: var(--primary);
+  box-shadow: 0 1px 3px var(--accent-subtle);
+}
+
+.custodian__wizard-cancel:not(:disabled) {
+  color: var(--text);
+}
+
 .custodian__thinking {
   display: flex;
   flex-direction: row;

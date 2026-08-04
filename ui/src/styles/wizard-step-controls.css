@@ -36,6 +36,25 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   cursor: var(--cursor-action);
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.wizard-step__option:has(input:not(:disabled)):hover {
+  border-color: var(--border-hover);
+  background: var(--bg-hover);
+}
+
+.wizard-step__option:has(input:focus-visible) {
+  border-color: var(--border-hover);
+  box-shadow: var(--focus-ring);
+}
+
+.wizard-step__option:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .wizard-step__option small {
