@@ -220,7 +220,7 @@ function createRuntimeCore(cfg: OpenClawConfig) {
       options,
     }),
   );
-  const recordInboundSession = vi.fn(async () => {});
+  const recordInboundSession = vi.fn(async (_turn?: unknown) => {});
   const dispatchPlanForTest = vi.fn(
     async (turn: {
       cfg: OpenClawConfig;
