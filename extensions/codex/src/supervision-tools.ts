@@ -1062,7 +1062,16 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
             if (error instanceof CodexSupervisionPolicyError) {
               throw error;
             }
-            health.push({ endpointId: endpoint.id, ok: false, detail: error instanceof Error ? error.message : String(error) });
+            const includeDetail = resolveToolPolicy(options, pluginConfig).allowRawTranscripts;
+            health.push(
+              includeDetail
+                ? {
+                    endpointId: endpoint.id,
+                    ok: false,
+                    detail: error instanceof Error ? error.message : String(error),
+                  }
+                : { endpointId: endpoint.id, ok: false },
+            );
           }
         }
         requireCurrentEndpointSet(options, endpoints);

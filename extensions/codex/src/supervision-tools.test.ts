@@ -146,12 +146,40 @@ describe("Codex supervision compatibility tools", () => {
     );
   });
 
-  it("preserves the endpoint failure detail in probe health results", async () => {
+  it("suppresses endpoint failure detail when raw transcript access is not enabled", async () => {
     const failureDetail = "ECONNREFUSED /tmp/codex-app-server.sock";
     requestCodexAppServerJsonMock.mockRejectedValue(new Error(failureDetail));
     const tools = createCodexSupervisionTools({
       getPluginConfig: () => ({
         supervision: { enabled: true, endpoints: [{ id: "local", transport: "stdio-proxy" }] },
+      }),
+      senderIsOwner: true,
+      env: {},
+    });
+
+    const result = await toolByName(tools, "codex_endpoint_probe").execute("probe", {});
+
+    expect(result).toMatchObject({
+      details: {
+        health: [{ endpointId: "local", ok: false }],
+      },
+    });
+    // detail must NOT be present when raw transcript access is disabled (default)
+    expect(
+      (result as { details: { health: Array<{ detail?: string }> } }).details.health[0],
+    ).not.toHaveProperty("detail");
+  });
+
+  it("preserves the endpoint failure detail when raw transcript access is enabled", async () => {
+    const failureDetail = "ECONNREFUSED /tmp/codex-app-server.sock";
+    requestCodexAppServerJsonMock.mockRejectedValue(new Error(failureDetail));
+    const tools = createCodexSupervisionTools({
+      getPluginConfig: () => ({
+        supervision: {
+          enabled: true,
+          allowRawTranscripts: true,
+          endpoints: [{ id: "local", transport: "stdio-proxy" }],
+        },
       }),
       senderIsOwner: true,
       env: {},
