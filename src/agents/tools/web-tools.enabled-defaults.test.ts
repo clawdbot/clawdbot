@@ -20,6 +20,7 @@ const runWebSearchCalls = vi.hoisted(
       runtimeWebSearch?: unknown;
     }>,
 );
+const resolveWebSearchDefinitionCalls = vi.hoisted(() => [] as Array<{ config?: unknown }>);
 const activeSecretsRuntimeSnapshot = vi.hoisted(() => ({
   current: null as null | { config: unknown },
 }));
@@ -64,9 +65,21 @@ vi.mock("../../web-search/runtime.js", async () => {
       getActiveRuntimeWebToolsMetadata()?.search?.selectedProvider ??
       getActiveRuntimeWebToolsMetadata()?.search?.providerConfigured ??
       readConfiguredSearchProvider(options?.config);
-    const registration = getActivePluginRegistry()?.webSearchProviders.find(
-      (entry) => entry.provider.id === providerId,
-    );
+    const registrations = getActivePluginRegistry()?.webSearchProviders ?? [];
+    const registration = providerId
+      ? registrations.find((entry) => entry.provider.id === providerId)
+      : registrations
+          .toSorted(
+            (left, right) =>
+              (left.provider.autoDetectOrder ?? Number.MAX_SAFE_INTEGER) -
+              (right.provider.autoDetectOrder ?? Number.MAX_SAFE_INTEGER),
+          )
+          .find((entry) =>
+            Boolean(
+              entry.provider.getConfiguredCredentialValue?.(options?.config as never) ??
+                entry.provider.getCredentialValue(),
+            ),
+          );
     const definition = registration?.provider.createTool({
       config: options?.config as never,
       runtimeMetadata: options?.runtimeWebSearch as never,
@@ -82,7 +95,10 @@ vi.mock("../../web-search/runtime.js", async () => {
       : null;
   };
   return {
-    resolveWebSearchDefinition: resolveRuntimeDefinition,
+    resolveWebSearchDefinition: (options?: { config?: unknown }) => {
+      resolveWebSearchDefinitionCalls.push({ config: options?.config });
+      return resolveRuntimeDefinition(options);
+    },
     resolveWebSearchProviderId: () => "",
     runWebSearch: async (options: {
       config?: unknown;
@@ -112,6 +128,7 @@ beforeEach(() => {
   clearActiveRuntimeWebToolsMetadata();
   activeSecretsRuntimeSnapshot.current = null;
   runWebSearchCalls.length = 0;
+  resolveWebSearchDefinitionCalls.length = 0;
 });
 
 afterEach(() => {
@@ -127,6 +144,17 @@ describe("web tools defaults", () => {
     expect(fetchTool?.name).toBe("web_fetch");
     expect(fetchTool?.resultContentSource).toBe("network");
     expect(searchTool?.resultContentSource).toBe("network");
+  });
+
+  it("keeps the generic web_search schema fast when no provider signal exists", () => {
+    const tool = createWebSearchTool({ config: {} });
+
+    expect(tool?.parameters).toMatchObject({
+      type: "object",
+      required: ["query"],
+      properties: { query: { type: "string" } },
+    });
+    expect(resolveWebSearchDefinitionCalls).toHaveLength(0);
   });
 
   it("disables web_fetch when explicitly disabled", () => {

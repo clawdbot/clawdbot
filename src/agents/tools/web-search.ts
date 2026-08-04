@@ -4,6 +4,7 @@
  * Runs the configured runtime provider and returns normalized cached search results.
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
@@ -90,15 +91,53 @@ function isWebSearchDisabled(config?: OpenClawConfig): boolean {
   return Boolean(search && typeof search === "object" && search.enabled === false);
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function hasConfiguredWebSearchProviderSignal(config?: OpenClawConfig): boolean {
+  const pluginEntries = config?.plugins?.entries ?? {};
+  const hasPluginSearchConfig = Object.values(pluginEntries).some((entry) => {
+    const pluginConfig = asRecord(entry?.config);
+    return asRecord(pluginConfig?.webSearch) !== null;
+  });
+  if (hasPluginSearchConfig) {
+    return true;
+  }
+
+  // Gemini web search explicitly accepts the Google model provider API key as
+  // a credential fallback, even when plugin-owned web-search config is absent.
+  return asRecord(config?.models?.providers?.google)?.apiKey !== undefined;
+}
+
+function shouldResolveWebSearchModelParameters(params: {
+  config?: OpenClawConfig;
+  providerSelectionId: string;
+}): boolean {
+  return Boolean(
+    params.providerSelectionId.trim() ||
+    getActivePluginRegistry()?.webSearchProviders.length ||
+    hasConfiguredWebSearchProviderSignal(params.config),
+  );
+}
+
 function resolveWebSearchModelParameters(
   options: WebSearchToolOptions | undefined,
 ): AnyAgentTool["parameters"] {
-  const { config, preferRuntimeProviders, runtimeWebSearch } =
+  const { config, preferRuntimeProviders, providerSelectionId, runtimeWebSearch } =
     resolveWebSearchToolRuntimeContext({
       config: options?.config,
       lateBindRuntimeConfig: options?.lateBindRuntimeConfig,
       runtimeWebSearch: options?.runtimeWebSearch,
     });
+  // A generic schema read must not trigger an unscoped plugin source load. A
+  // selected, registered, or config-backed provider still resolves through the
+  // same candidate path as execution so metadata-free auto-detection works.
+  if (!shouldResolveWebSearchModelParameters({ config, providerSelectionId })) {
+    return WebSearchSchema;
+  }
   return (
     resolveWebSearchDefinition({
       config,
