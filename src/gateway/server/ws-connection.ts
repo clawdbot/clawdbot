@@ -41,6 +41,10 @@ import {
 } from "./ws-connection/handshake-auth-log-limiter.js";
 import type { WsOriginCheckMetrics } from "./ws-connection/message-handler.js";
 import {
+  GatewayNodeLifecycleDispatchTracker,
+  NODE_LIFECYCLE_DISPATCH_DRAIN_TIMEOUT_MS,
+} from "./ws-connection/node-lifecycle-dispatch.js";
+import {
   attachWorkerWsMessageHandler,
   type WorkerConnectionService,
 } from "./ws-connection/worker-connection.js";
@@ -318,6 +322,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     let lastFrameMethod: string | undefined;
     let lastFrameId: string | undefined;
     let hasReceivedPreauthFrame = false;
+    const nodeLifecycleDispatch = new GatewayNodeLifecycleDispatchTracker();
 
     socket.once("message", () => {
       hasReceivedPreauthFrame = true;
@@ -476,7 +481,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       normalizeLowercaseStringOrEmpty(requestUserAgent).startsWith("openclaw/") &&
       isLoopbackAddress(remoteAddr);
 
-    socket.once("close", (code, reason) => {
+    const handleSocketClose = async (code: number, reason: Buffer) => {
       const durationMs = Date.now() - openedAt;
       const logForwardedFor = sanitizeLogValue(forwardedFor);
       const logOrigin = sanitizeLogValue(requestOrigin);
@@ -565,6 +570,16 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         context.terminalSessions?.handleDisconnect(connId);
         let currentDisconnectedNodeId: string | null = null;
         if (client?.connect?.role === "node") {
+          // The transport is already gone, but an earlier result/progress frame can
+          // still own asynchronous pairing validation. Retire the socket now, then
+          // drain only that admitted chain before rejecting unresolved invokes.
+          close();
+          const drained = await nodeLifecycleDispatch.drain();
+          if (!drained) {
+            logGateway.warn(
+              `node lifecycle dispatch drain timed out after ${NODE_LIFECYCLE_DISPATCH_DRAIN_TIMEOUT_MS}ms conn=${connId}`,
+            );
+          }
           currentDisconnectedNodeId = context.nodeRegistry.unregister(connId);
         }
         if (
@@ -597,6 +612,12 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         endpoint,
       });
       close();
+    };
+    socket.once("close", (code, reason) => {
+      void handleSocketClose(code, reason).catch((error: unknown) => {
+        logGateway.error(`websocket close cleanup failed conn=${connId}: ${formatError(error)}`);
+        close();
+      });
     });
 
     const setClient = (next: GatewayWsClient) => {
@@ -697,6 +718,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       extraHandlers,
       getMethodRegistry,
       buildRequestContext,
+      nodeLifecycleDispatch,
       refreshHealthSnapshot,
       send,
       close,
