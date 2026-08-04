@@ -91,9 +91,21 @@ export async function submitEmbeddedAttemptPrompt(input: {
 
   const installProviderPromptHistoryTransform = (): (() => void) => {
     let providerCalls = 0;
+    let pendingDispatchCommit: (() => void) | undefined;
+    const providerPromptState = getProviderPromptState(attempt.runId);
     return installProviderPromptContextAdmission(
-      getProviderPromptState(attempt.runId),
+      providerPromptState,
       (_model, context, accountingContext) => {
+        if (pendingDispatchCommit) {
+          // A transport that never observes payloads settles silently; adopt its candidate when
+          // the next provider call begins so precheck gating keeps working for it. An observed
+          // but never dispatched candidate means a payload hook failed pre-dispatch: drop it.
+          const commit = pendingDispatchCommit;
+          pendingDispatchCommit = undefined;
+          if (providerPromptState.previousAttemptPayloadObserved !== true) {
+            commit();
+          }
+        }
         const admission = admitProviderPrompt({
           context,
           accountingContext,
@@ -114,23 +126,33 @@ export async function submitEmbeddedAttemptPrompt(input: {
           );
           throw new MidTurnPrecheckSignal(admission.request);
         }
-        replaceToolResultPromptProjectionState(
-          input.toolResultPromptProjectionState,
-          admission.projectionState,
-        );
-        providerCalls += 1;
         const providerMessages = admission.context.messages as AgentMessage[];
-        // Mark the current turn sent at provider dispatch so late media appends
-        // instead of rewriting its prompt-cache slot (#99495).
-        markSessionUserTurnsSent(input.sessionPromptState, providerMessages);
-        const recorder = attempt.userTurnTranscriptRecorder;
-        if (
-          recorder &&
-          hasSessionUserTurnBeenSent(input.sessionPromptState, recorder.message) !== false
-        ) {
-          recorder.markSentToProvider?.();
-        }
+        const admittedProjectionState = admission.projectionState;
+        // Adopt the admitted candidate only once the final payload actually reaches transport,
+        // so a pre-dispatch failure cannot record an unsent prompt as sent.
+        pendingDispatchCommit = () => {
+          replaceToolResultPromptProjectionState(
+            input.toolResultPromptProjectionState,
+            admittedProjectionState,
+          );
+          providerCalls += 1;
+          // Mark the current turn sent at provider dispatch so late media appends
+          // instead of rewriting its prompt-cache slot (#99495).
+          markSessionUserTurnsSent(input.sessionPromptState, providerMessages);
+          const recorder = attempt.userTurnTranscriptRecorder;
+          if (
+            recorder &&
+            hasSessionUserTurnBeenSent(input.sessionPromptState, recorder.message) !== false
+          ) {
+            recorder.markSentToProvider?.();
+          }
+        };
         return admission.context;
+      },
+      () => {
+        const commit = pendingDispatchCommit;
+        pendingDispatchCommit = undefined;
+        commit?.();
       },
     );
   };

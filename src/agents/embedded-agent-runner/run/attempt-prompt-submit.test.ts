@@ -352,4 +352,108 @@ describe("submitEmbeddedAttemptPrompt", () => {
       content: [{ type: "text", text: "old answer" }],
     });
   });
+
+  it("records the prompt as sent only after the payload reaches transport", async () => {
+    const { activeSession } = createSession();
+    const input = createBaseInput();
+    activeSession.agent.state.messages = [
+      { role: "user", content: "first turn", idempotencyKey: "turn-1", timestamp: 1 },
+    ] as AgentMessage[];
+    activeSession.agent.streamFn = wrapProviderBoundary((async (
+      _model: unknown,
+      _context: unknown,
+      options: unknown,
+    ) => {
+      await (
+        options as { onPayload?: (payload: unknown, model: unknown) => Promise<unknown> }
+      ).onPayload?.({ input: "raw" }, {});
+      return undefined as never;
+    }) as unknown as StreamFn);
+
+    await submitEmbeddedAttemptPrompt({
+      ...input,
+      activeSession,
+      promptActiveSession: async () => {
+        await activeSession.agent.streamFn(
+          {} as never,
+          { messages: activeSession.messages } as never,
+          {} as never,
+        );
+      },
+    });
+
+    expect(input.sessionPromptState.sentUserTurnIds.has("turn-1")).toBe(true);
+  });
+
+  it("does not record an unsent prompt as sent when a payload hook fails before dispatch", async () => {
+    const { activeSession } = createSession();
+    const input = createBaseInput();
+    activeSession.agent.state.messages = [
+      { role: "user", content: "first turn", idempotencyKey: "turn-1", timestamp: 1 },
+    ] as AgentMessage[];
+    const dispatchSettled = vi.fn();
+    activeSession.agent.streamFn = wrapProviderBoundary((async (
+      _model: unknown,
+      _context: unknown,
+      options: unknown,
+    ) => {
+      await (
+        options as { onPayload?: (payload: unknown, model: unknown) => Promise<unknown> }
+      ).onPayload?.({ input: "raw" }, {});
+      dispatchSettled();
+      return undefined as never;
+    }) as unknown as StreamFn);
+
+    await submitEmbeddedAttemptPrompt({
+      ...input,
+      activeSession,
+      promptActiveSession: async () => {
+        await expect(
+          activeSession.agent.streamFn(
+            {} as never,
+            { messages: activeSession.messages } as never,
+            {
+              onPayload: () => {
+                throw new Error("payload hook failed");
+              },
+            } as never,
+          ),
+        ).rejects.toThrow("payload hook failed");
+      },
+    });
+
+    expect(dispatchSettled).not.toHaveBeenCalled();
+    expect(input.sessionPromptState.sentUserTurnIds.has("turn-1")).toBe(false);
+  });
+
+  it("adopts an unobserved transport candidate when the next provider call begins", async () => {
+    const { activeSession } = createSession();
+    const input = createBaseInput();
+    activeSession.agent.state.messages = [
+      { role: "user", content: "first turn", idempotencyKey: "turn-1", timestamp: 1 },
+    ] as AgentMessage[];
+    const silentDispatch = vi.fn(() => undefined as never);
+    activeSession.agent.streamFn = wrapProviderBoundary(silentDispatch as unknown as StreamFn);
+
+    await submitEmbeddedAttemptPrompt({
+      ...input,
+      activeSession,
+      promptActiveSession: async () => {
+        await activeSession.agent.streamFn(
+          {} as never,
+          { messages: activeSession.messages } as never,
+          {} as never,
+        );
+        expect(input.sessionPromptState.sentUserTurnIds.has("turn-1")).toBe(false);
+        await activeSession.agent.streamFn(
+          {} as never,
+          { messages: activeSession.messages } as never,
+          {} as never,
+        );
+      },
+    });
+
+    expect(silentDispatch).toHaveBeenCalledTimes(2);
+    expect(input.sessionPromptState.sentUserTurnIds.has("turn-1")).toBe(true);
+  });
 });

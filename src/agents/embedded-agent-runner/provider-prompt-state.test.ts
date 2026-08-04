@@ -446,9 +446,9 @@ describe("provider prompt state", () => {
       caught = error;
     }
     expect(String(caught)).toContain("Context overflow: final provider payload exceeds");
-    expect(
-      isLikelyContextOverflowError(caught instanceof Error ? caught.message : undefined),
-    ).toBe(true);
+    expect(isLikelyContextOverflowError(caught instanceof Error ? caught.message : undefined)).toBe(
+      true,
+    );
     expect(networkSend).not.toHaveBeenCalled();
 
     markLastProviderPromptContextRejected(state);
@@ -456,6 +456,43 @@ describe("provider prompt state", () => {
       "byte-identical provider payload",
     );
     expect(networkSend).not.toHaveBeenCalled();
+    clearProviderPromptState(runId);
+  });
+
+  it("runs the installed dispatch hook only after every pre-dispatch check passes", async () => {
+    const runId = "dispatch-hook-boundary";
+    const state = getProviderPromptState(runId);
+    const context = { systemPrompt: "system", messages: [], tools: [] } as Context;
+    const dispatch = vi.fn();
+    const transport = vi.fn<StreamFn>(async (_model, _context, options) => {
+      await options?.onPayload?.({ input: "raw", model: model.id }, model);
+      return createResultStream("stop");
+    });
+    const wrapped = wrapStreamFnWithProviderPromptState({
+      streamFn: transport,
+      state,
+      effectiveContextTokenBudget: 128_000,
+    });
+    const removeHooks = installProviderPromptContextAdmission(
+      state,
+      (_model, providerContext) => providerContext,
+      dispatch,
+    );
+
+    const first = await wrapped(model, context);
+    await first.result();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+
+    await expect(
+      wrapped(model, context, {
+        onPayload: () => {
+          throw new Error("payload hook failed");
+        },
+      }),
+    ).rejects.toThrow("payload hook failed");
+    expect(dispatch).toHaveBeenCalledTimes(1);
+
+    removeHooks();
     clearProviderPromptState(runId);
   });
 

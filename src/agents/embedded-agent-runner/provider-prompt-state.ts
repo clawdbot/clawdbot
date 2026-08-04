@@ -26,6 +26,12 @@ export type ProviderPromptState = {
     context: Context,
     accountingContext?: ProviderPromptAccountingContext,
   ) => Context;
+  /** Runs once the final payload passed every pre-dispatch check, right before transport send. */
+  promptDispatch?: () => void;
+  /** Set when the current attempt's transport invoked its payload hook at least once. */
+  attemptPayloadObserved?: boolean;
+  /** Observation result of the previous attempt; lets admission settle silent transports. */
+  previousAttemptPayloadObserved?: boolean;
 };
 
 const PROVIDER_PROMPT_STATES_KEY = Symbol.for("openclaw.providerPromptStates");
@@ -67,16 +73,22 @@ export function clearProviderPromptState(runId: string): void {
   providerPromptStates.delete(runId);
 }
 
-/** Installs a run-scoped admission hook at the innermost provider-context boundary. */
+/** Installs run-scoped admission and dispatch hooks at the innermost provider boundary. */
 export function installProviderPromptContextAdmission(
   state: ProviderPromptState,
   admission: NonNullable<ProviderPromptState["contextAdmission"]>,
+  dispatch?: ProviderPromptState["promptDispatch"],
 ): () => void {
-  const previous = state.contextAdmission;
+  const previousAdmission = state.contextAdmission;
+  const previousDispatch = state.promptDispatch;
   state.contextAdmission = admission;
+  state.promptDispatch = dispatch;
   return () => {
     if (state.contextAdmission === admission) {
-      state.contextAdmission = previous;
+      state.contextAdmission = previousAdmission;
+    }
+    if (state.promptDispatch === dispatch) {
+      state.promptDispatch = previousDispatch;
     }
   };
 }
@@ -150,6 +162,8 @@ export function wrapStreamFnWithProviderPromptState(params: {
 }): StreamFn {
   return async (model, context, options) => {
     params.state.lastAttempt = undefined; // Custom transports must not leave a stale candidate.
+    params.state.previousAttemptPayloadObserved = params.state.attemptPayloadObserved;
+    params.state.attemptPayloadObserved = false;
     const accountingContext = readProviderPromptAccountingContext(options);
     const admittedContext =
       context && typeof context === "object" && params.state.contextAdmission
@@ -159,6 +173,7 @@ export function wrapStreamFnWithProviderPromptState(params: {
     const observedOptions = withoutProviderPromptAccountingContext({
       ...options,
       onPayload: async (payload, payloadModel) => {
+        params.state.attemptPayloadObserved = true;
         const replacement = await originalOnPayload?.(payload, payloadModel);
         const finalPayload = replacement === undefined ? payload : replacement;
         const snapshot = snapshotProviderPrompt({
@@ -172,6 +187,9 @@ export function wrapStreamFnWithProviderPromptState(params: {
           payload: finalPayload,
           effectiveContextTokenBudget: params.effectiveContextTokenBudget,
         });
+        // Every pre-dispatch check passed and the transport sends next; admitted
+        // candidates may only be adopted from this point on.
+        params.state.promptDispatch?.();
         return finalPayload;
       },
     });
