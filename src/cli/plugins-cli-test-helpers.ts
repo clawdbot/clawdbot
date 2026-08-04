@@ -45,6 +45,7 @@ function createEmptyUninstallActions() {
 
 let mockInstalledPluginIndexInstallRecords: PluginInstallRecordMap = {};
 let mockHookInstallRecords: Record<string, HookInstallRecord> = {};
+let mockInstalledPluginIndexRevision = 0;
 
 export function setHookInstallRecords(records: Record<string, HookInstallRecord>): void {
   mockHookInstallRecords = structuredClone(records);
@@ -87,6 +88,23 @@ export const writePersistedInstalledPluginIndexInstallRecords: AsyncUnknownMock 
 );
 export const readPersistedInstalledPluginIndex: AsyncUnknownMock = vi.fn(async () => null);
 export const restorePersistedInstalledPluginIndex: AsyncUnknownMock = vi.fn(async () => undefined);
+export const writePersistedInstalledPluginIndexInstallRecordsWithLease: AsyncUnknownMock = vi.fn(
+  async (records: unknown, options: unknown) => {
+    const previous = await readPersistedInstalledPluginIndex();
+    const writeOptions = { ...((options ?? {}) as Record<string, unknown>) };
+    delete writeOptions.filePath;
+    delete writeOptions.lease;
+    await writePersistedInstalledPluginIndexInstallRecords(records, writeOptions);
+    mockInstalledPluginIndexRevision += 1;
+    return { previous, revision: mockInstalledPluginIndexRevision };
+  },
+);
+export const restorePersistedInstalledPluginIndexIfCurrent: AsyncUnknownMock = vi.fn(
+  async (index: unknown) => {
+    await restorePersistedInstalledPluginIndex(index);
+    return true;
+  },
+);
 export const loadPluginManifestRegistry: UnknownMock = vi.fn();
 export const buildPluginSnapshotReport: UnknownMock = vi.fn();
 export const buildPluginRegistrySnapshotReport: UnknownMock = vi.fn();
@@ -321,6 +339,11 @@ vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) =
         writePersistedInstalledPluginIndexInstallRecords,
         ...args,
       )) as (...args: unknown[]) => unknown,
+    writePersistedInstalledPluginIndexInstallRecordsWithLease: ((...args: unknown[]) =>
+      invokeMock<unknown[], unknown>(
+        writePersistedInstalledPluginIndexInstallRecordsWithLease,
+        ...args,
+      )) as (...args: unknown[]) => unknown,
     recordPluginInstallInRecords: (
       records: Record<string, unknown>,
       update: { pluginId: string; installedAt?: string } & Record<string, unknown>,
@@ -349,6 +372,10 @@ vi.mock("../plugins/installed-plugin-index-store.js", async (importOriginal) => 
     ) => unknown,
     restorePersistedInstalledPluginIndex: ((...args: unknown[]) =>
       invokeMock<unknown[], unknown>(restorePersistedInstalledPluginIndex, ...args)) as (
+      ...args: unknown[]
+    ) => unknown,
+    restorePersistedInstalledPluginIndexIfCurrent: ((...args: unknown[]) =>
+      invokeMock<unknown[], unknown>(restorePersistedInstalledPluginIndexIfCurrent, ...args)) as (
       ...args: unknown[]
     ) => unknown,
   };
@@ -769,10 +796,13 @@ export function resetPluginsCliTestState() {
   enablePluginInConfig.mockReset();
   recordPluginInstall.mockReset();
   mockInstalledPluginIndexInstallRecords = {};
+  mockInstalledPluginIndexRevision = 0;
   loadInstalledPluginIndexInstallRecords.mockReset();
   writePersistedInstalledPluginIndexInstallRecords.mockReset();
+  writePersistedInstalledPluginIndexInstallRecordsWithLease.mockReset();
   readPersistedInstalledPluginIndex.mockReset();
   restorePersistedInstalledPluginIndex.mockReset();
+  restorePersistedInstalledPluginIndexIfCurrent.mockReset();
   loadPluginManifestRegistry.mockReset();
   buildPluginSnapshotReport.mockReset();
   buildPluginRegistrySnapshotReport.mockReset();
@@ -864,6 +894,21 @@ export function resetPluginsCliTestState() {
   });
   readPersistedInstalledPluginIndex.mockResolvedValue(null);
   restorePersistedInstalledPluginIndex.mockResolvedValue(undefined);
+  writePersistedInstalledPluginIndexInstallRecordsWithLease.mockImplementation(
+    async (records: unknown, options: unknown) => {
+      const previous = await readPersistedInstalledPluginIndex();
+      const writeOptions = { ...((options ?? {}) as Record<string, unknown>) };
+      delete writeOptions.filePath;
+      delete writeOptions.lease;
+      await writePersistedInstalledPluginIndexInstallRecords(records, writeOptions);
+      mockInstalledPluginIndexRevision += 1;
+      return { previous, revision: mockInstalledPluginIndexRevision };
+    },
+  );
+  restorePersistedInstalledPluginIndexIfCurrent.mockImplementation(async (index: unknown) => {
+    await restorePersistedInstalledPluginIndex(index);
+    return true;
+  });
   loadPluginManifestRegistry.mockReturnValue({
     plugins: [],
     diagnostics: [],

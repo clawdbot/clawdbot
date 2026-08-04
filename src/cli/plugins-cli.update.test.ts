@@ -17,6 +17,7 @@ import {
   replaceConfigFile,
   resetPluginsCliTestState,
   restorePersistedInstalledPluginIndex,
+  restorePersistedInstalledPluginIndexIfCurrent,
   runPluginsCommand,
   runtimeErrors,
   runtimeLogs,
@@ -26,6 +27,7 @@ import {
   updateNpmInstalledPlugins,
   writeConfigFile,
   writePersistedInstalledPluginIndexInstallRecords,
+  writePersistedInstalledPluginIndexInstallRecordsWithLease,
 } from "./plugins-cli-test-helpers.js";
 
 const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
@@ -809,7 +811,23 @@ describe("plugins cli update", () => {
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(nextRecords, {
       config: cfg,
     });
+    expect(writePersistedInstalledPluginIndexInstallRecordsWithLease).toHaveBeenCalledWith(
+      nextRecords,
+      expect.objectContaining({
+        config: cfg,
+        filePath: expect.any(String),
+        lease: expect.anything(),
+      }),
+    );
     expect(restorePersistedInstalledPluginIndex).toHaveBeenCalledWith(previousPersistedIndex);
+    expect(restorePersistedInstalledPluginIndexIfCurrent).toHaveBeenCalledWith(
+      previousPersistedIndex,
+      expect.any(Number),
+      expect.objectContaining({
+        filePath: expect.any(String),
+        lease: expect.anything(),
+      }),
+    );
     expect(writeConfigFile).not.toHaveBeenCalled();
     expect(replaceConfigFile).not.toHaveBeenCalled();
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
@@ -866,7 +884,23 @@ describe("plugins cli update", () => {
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(nextRecords, {
       config: cfg,
     });
+    expect(writePersistedInstalledPluginIndexInstallRecordsWithLease).toHaveBeenCalledWith(
+      nextRecords,
+      expect.objectContaining({
+        config: cfg,
+        filePath: expect.any(String),
+        lease: expect.anything(),
+      }),
+    );
     expect(restorePersistedInstalledPluginIndex).toHaveBeenCalledWith(previousPersistedIndex);
+    expect(restorePersistedInstalledPluginIndexIfCurrent).toHaveBeenCalledWith(
+      previousPersistedIndex,
+      expect.any(Number),
+      expect.objectContaining({
+        filePath: expect.any(String),
+        lease: expect.anything(),
+      }),
+    );
     expect(writeConfigFile).not.toHaveBeenCalled();
     expect(replaceConfigFile).not.toHaveBeenCalled();
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
@@ -916,7 +950,23 @@ describe("plugins cli update", () => {
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(nextRecords, {
       config: cfg,
     });
+    expect(writePersistedInstalledPluginIndexInstallRecordsWithLease).toHaveBeenCalledWith(
+      nextRecords,
+      expect.objectContaining({
+        config: cfg,
+        filePath: expect.any(String),
+        lease: expect.anything(),
+      }),
+    );
     expect(restorePersistedInstalledPluginIndex).toHaveBeenCalledWith(previousPersistedIndex);
+    expect(restorePersistedInstalledPluginIndexIfCurrent).toHaveBeenCalledWith(
+      previousPersistedIndex,
+      expect.any(Number),
+      expect.objectContaining({
+        filePath: expect.any(String),
+        lease: expect.anything(),
+      }),
+    );
     expect(writeConfigFile).not.toHaveBeenCalled();
     expect(replaceConfigFile).not.toHaveBeenCalled();
     expect(refreshPluginRegistry).not.toHaveBeenCalled();

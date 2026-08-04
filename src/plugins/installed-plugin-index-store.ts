@@ -369,23 +369,6 @@ function writePersistedInstalledPluginIndexToSqlite(
   }, resolveInstalledPluginIndexStateDatabaseOptions(options));
 }
 
-function deletePersistedInstalledPluginIndexFromSqlite(
-  options: InstalledPluginIndexStoreOptions = {},
-): void {
-  assertWritableInstalledPluginIndexStoreOptions(options);
-  if (!existsSync(resolveInstalledPluginIndexStorePath(options))) {
-    return;
-  }
-  runOpenClawStateWriteTransaction(({ db }) => {
-    db.prepare(
-      `
-        DELETE FROM installed_plugin_index
-         WHERE index_key = ?
-      `,
-    ).run(INSTALLED_PLUGIN_INDEX_SQLITE_KEY);
-  }, resolveInstalledPluginIndexStateDatabaseOptions(options));
-}
-
 function clearPersistedInstalledPluginIndexCaches(): void {
   clearPluginMetadataLifecycleCaches();
   clearLoadInstalledPluginIndexInstallRecordsCache();
@@ -408,19 +391,6 @@ export async function writePersistedInstalledPluginIndex(
   options: InstalledPluginIndexStoreOptions = {},
 ): Promise<string> {
   return writePersistedInstalledPluginIndexSync(index, options);
-}
-
-/** Restore the exact logical index snapshot, including its prior absence. */
-export async function restorePersistedInstalledPluginIndex(
-  index: InstalledPluginIndex | null,
-  options: InstalledPluginIndexStoreOptions = {},
-): Promise<void> {
-  if (index) {
-    writePersistedInstalledPluginIndexSync(index, options);
-    return;
-  }
-  deletePersistedInstalledPluginIndexFromSqlite(options);
-  clearPersistedInstalledPluginIndexCaches();
 }
 
 /** Restore a snapshot only while the caller's tentative write is still current. */

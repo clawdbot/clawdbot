@@ -19,12 +19,14 @@ import {
   replaceConfigFile,
   resetPluginsCliTestState,
   restorePersistedInstalledPluginIndex,
+  restorePersistedInstalledPluginIndexIfCurrent,
   runPluginsCommand,
   runtimeErrors,
   runtimeLogs,
   setInstalledPluginIndexInstallRecords,
   writeConfigFile,
   writePersistedInstalledPluginIndexInstallRecords,
+  writePersistedInstalledPluginIndexInstallRecordsWithLease,
 } from "./plugins-cli-test-helpers.js";
 
 const CLI_STATE_ROOT = "/tmp/openclaw-state";
@@ -506,7 +508,23 @@ describe("plugins cli uninstall", () => {
       {},
       { config: { plugins: { entries: {} } } },
     );
+    expect(writePersistedInstalledPluginIndexInstallRecordsWithLease).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        config: { plugins: { entries: {} } },
+        filePath: expect.any(String),
+        lease: expect.anything(),
+      }),
+    );
     expect(restorePersistedInstalledPluginIndex).toHaveBeenCalledWith(previousPersistedIndex);
+    expect(restorePersistedInstalledPluginIndexIfCurrent).toHaveBeenCalledWith(
+      previousPersistedIndex,
+      expect.any(Number),
+      expect.objectContaining({
+        filePath: expect.any(String),
+        lease: expect.anything(),
+      }),
+    );
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
     expect(applyPluginUninstallDirectoryRemoval).not.toHaveBeenCalled();
   });

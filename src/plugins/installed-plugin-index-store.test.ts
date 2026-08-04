@@ -22,7 +22,6 @@ import {
   readPersistedInstalledPluginIndex,
   refreshPersistedInstalledPluginIndex,
   resolveInstalledPluginIndexStorePath,
-  restorePersistedInstalledPluginIndex,
   restorePersistedInstalledPluginIndexIfCurrent,
   writePersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndexWithLeaseSync,
@@ -287,33 +286,6 @@ describe("installed plugin index persistence", () => {
     expect(receipt.previous).toEqual(predecessor);
     expect(receipt.revision).toBe(requirePersistedRevision(readPersistedIndexRevision(stateDir)));
     expect(lease.assertOwnedInTransaction).toHaveBeenCalledOnce();
-  });
-
-  it("restores the complete previous index snapshot", async () => {
-    const stateDir = makeTempDir();
-    await writePersistedInstalledPluginIndex(
-      createIndex({ policyHash: "previous", refreshReason: "source-changed" }),
-      { stateDir },
-    );
-    const previous = requirePersisted(await readPersistedInstalledPluginIndex({ stateDir }));
-    await writePersistedInstalledPluginIndex(
-      createIndex({ policyHash: "replacement", refreshReason: "policy-changed" }),
-      { stateDir },
-    );
-
-    await restorePersistedInstalledPluginIndex(previous, { stateDir });
-
-    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toEqual(previous);
-  });
-
-  it("restores prior index absence by deleting a tentative write", async () => {
-    const stateDir = makeTempDir();
-    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
-    await writePersistedInstalledPluginIndex(createIndex(), { stateDir });
-
-    await restorePersistedInstalledPluginIndex(null, { stateDir });
-
-    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
   });
 
   it("conditionally restores a matching tentative index revision", async () => {
