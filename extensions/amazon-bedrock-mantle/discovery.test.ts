@@ -1,6 +1,20 @@
 // Amazon Bedrock Mantle tests cover discovery plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const discoveryDebugSpy = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/core")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "bedrock-mantle-discovery"
+        ? { ...logger, debug: discoveryDebugSpy }
+        : logger;
+    },
+  };
+});
+
 const {
   discoverMantleModels,
   generateBearerTokenFromIam,
@@ -74,6 +88,7 @@ describe("bedrock mantle discovery", () => {
   beforeEach(() => {
     process.env = { ...originalEnv };
     vi.restoreAllMocks();
+    discoveryDebugSpy.mockClear();
     resetMantleDiscoveryCacheForTest();
     resetIamTokenCacheForTest();
   });
@@ -190,6 +205,46 @@ describe("bedrock mantle discovery", () => {
     await expect(
       generateBearerTokenFromIam({ region: "us-east-1", tokenProviderFactory }),
     ).resolves.toBeUndefined();
+  });
+
+  it("logs a new IAM token failure after the credential chain recovers", async () => {
+    const tokenProviderFactory = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error("first failure");
+      })
+      .mockImplementationOnce(() => async () => "recovered-token")
+      .mockImplementationOnce(() => {
+        throw new Error("later failure");
+      });
+
+    await generateBearerTokenFromIam({
+      region: "us-east-1",
+      now: () => 0,
+      tokenProviderFactory,
+    });
+    await generateBearerTokenFromIam({
+      region: "us-east-1",
+      now: () => 1,
+      tokenProviderFactory,
+    });
+    await generateBearerTokenFromIam({
+      region: "us-east-1",
+      now: () => 7200_001,
+      tokenProviderFactory,
+    });
+
+    expect(discoveryDebugSpy).toHaveBeenCalledTimes(2);
+    expect(discoveryDebugSpy).toHaveBeenNthCalledWith(
+      1,
+      "Mantle IAM token generation unavailable",
+      { region: "us-east-1", error: "first failure" },
+    );
+    expect(discoveryDebugSpy).toHaveBeenNthCalledWith(
+      2,
+      "Mantle IAM token generation unavailable",
+      { region: "us-east-1", error: "later failure" },
+    );
   });
 
   it("skips IAM token generation when plugin discovery is disabled", async () => {
@@ -594,17 +649,25 @@ describe("bedrock mantle discovery", () => {
     }
   });
 
-  it("returns null when no auth is available", async () => {
+  it("retries missing IAM credentials while logging once per region", async () => {
     const tokenProviderFactory = vi.fn(() => {
       throw new Error("no credentials");
     });
 
-    const provider = await resolveImplicitMantleProvider({
-      env: {} as NodeJS.ProcessEnv,
-      tokenProviderFactory,
-    });
+    for (const region of ["us-east-1", "us-east-1", "us-west-2"]) {
+      await expect(
+        resolveImplicitMantleProvider({
+          env: { AWS_REGION: region } as NodeJS.ProcessEnv,
+          tokenProviderFactory,
+        }),
+      ).resolves.toBeNull();
+    }
 
-    expect(provider).toBeNull();
+    expect(tokenProviderFactory).toHaveBeenCalledTimes(3);
+    expect(discoveryDebugSpy.mock.calls).toEqual([
+      ["Mantle IAM token generation unavailable", { region: "us-east-1", error: "no credentials" }],
+      ["Mantle IAM token generation unavailable", { region: "us-west-2", error: "no credentials" }],
+    ]);
   });
 
   it("uses a generated IAM token when no explicit token is set", async () => {

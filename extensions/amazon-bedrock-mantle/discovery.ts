@@ -116,6 +116,8 @@ export function resolveMantleBearerToken(env: NodeJS.ProcessEnv = process.env): 
 
 /** Token cache for IAM-derived bearer tokens, keyed by region. */
 const iamTokenCache = new Map<string, { token: string; expiresAt: number }>();
+/** Regions whose current IAM token failure streak has already been logged. */
+const iamTokenFailureLogged = new Set<string>();
 const IAM_TOKEN_TTL_MS = 7200_000; // Matches the 2h token lifetime we request below.
 
 function resolveMantleRegion(env: NodeJS.ProcessEnv): string {
@@ -167,12 +169,17 @@ export async function generateBearerTokenFromIam(params: {
     if (expiresAt !== undefined) {
       iamTokenCache.set(params.region, { token, expiresAt });
     }
+    iamTokenFailureLogged.delete(params.region);
     return token;
   } catch (error) {
-    log.debug?.("Mantle IAM token generation unavailable", {
-      region: params.region,
-      error: formatErrorMessage(error),
-    });
+    // Keep retrying the credential chain, but collapse diagnostics until it recovers.
+    if (!iamTokenFailureLogged.has(params.region)) {
+      iamTokenFailureLogged.add(params.region);
+      log.debug?.("Mantle IAM token generation unavailable", {
+        region: params.region,
+        error: formatErrorMessage(error),
+      });
+    }
     return undefined;
   }
 }
@@ -225,6 +232,7 @@ export async function resolveMantleRuntimeBearerToken(params: {
 /** Clear the IAM token cache for tests. */
 export function resetIamTokenCacheForTest(): void {
   iamTokenCache.clear();
+  iamTokenFailureLogged.clear();
 }
 
 // ---------------------------------------------------------------------------
