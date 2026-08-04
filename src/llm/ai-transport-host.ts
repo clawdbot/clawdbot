@@ -3,6 +3,7 @@
 // process-default stream facade.
 import { configureAiTransportHost } from "@openclaw/ai";
 import { resolveOpenAIStrictToolSetting } from "../agents/openai-strict-tool-setting.js";
+import { unwrapModelHeaderSentinelsForProviderEgress } from "../agents/provider-secret-egress.js";
 import {
   buildGuardedModelFetch,
   resolveModelRequestTimeoutMs,
@@ -35,6 +36,8 @@ configureAiTransportHost({
     }
     return swapped.text;
   },
+  unwrapModelTransportSentinels: (model, boundary) =>
+    unwrapModelHeaderSentinelsForProviderEgress(model, boundary),
   redactSecrets,
   redactToolPayloadText,
   normalizeAnthropicInlineContentBlocks,

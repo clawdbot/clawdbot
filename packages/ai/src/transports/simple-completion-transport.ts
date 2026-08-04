@@ -146,9 +146,14 @@ function prepareCodexSimpleTransportModel<TApi extends Api>(
   return projectModel(transportModel, { api });
 }
 
-function resolveModelHeaderSentinels<TApi extends Api>(model: Model<TApi>): Model<TApi> {
-  const headers = resolveAiTransportHeaderSentinels(model.headers);
-  return headers === model.headers ? model : (projectModel(model, { headers }) as Model<TApi>);
+function resolveModelTransportSentinels<TApi extends Api>(
+  model: Model<TApi>,
+  boundary: string,
+): Model<TApi> {
+  // Plugin transports read the symbol-attached request overrides as well as the
+  // visible headers, so resolving `model.headers` alone would hand the plugin a
+  // raw sentinel in `request.auth`. Delegate to the host, which owns both halves.
+  return getAiTransportHost().unwrapModelTransportSentinels(model, boundary);
 }
 
 function wrapPluginProviderStream(streamFn: StreamFn): StreamFn {
@@ -157,7 +162,7 @@ function wrapPluginProviderStream(streamFn: StreamFn): StreamFn {
     const apiKey = options?.apiKey ? host.resolveSecretSentinel(options.apiKey) : options?.apiKey;
     const headers = resolveAiTransportHeaderSentinels(options?.headers);
     return streamFn(
-      resolveModelHeaderSentinels(model),
+      resolveModelTransportSentinels(model, "plugin simple-completion stream egress"),
       context,
       apiKey === options?.apiKey && headers === options?.headers
         ? options
@@ -171,7 +176,10 @@ function registerProviderStreamForModel<TApi extends Api>(params: {
   cfg?: unknown;
   apiRegistry: ApiRegistry;
 }): StreamFn | undefined {
-  const pluginModel = resolveModelHeaderSentinels(params.model);
+  const pluginModel = resolveModelTransportSentinels(
+    params.model,
+    "plugin simple-completion stream construction",
+  );
   const providerStreamFn = getAiTransportHost().plugin.resolveProviderStream({
     provider: params.model.provider,
     config: params.cfg,

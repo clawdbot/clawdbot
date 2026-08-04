@@ -100,6 +100,33 @@ describe("prepareModelForSimpleCompletion", () => {
         model: Model,
       ) => Model,
       resolveSecretSentinel: (value) => value.replaceAll(TEST_SECRET_SENTINEL, TEST_SECRET),
+      // Mirrors the real host: resolves sentinels across the model's whole egress
+      // surface, not just visible headers. The symbol-attached request overrides
+      // are modeled here as a plain `request` field so the package test can assert
+      // that the transport delegates instead of resolving headers on its own.
+      unwrapModelTransportSentinels: ((model: Record<string, unknown>) => {
+        const swap = (value: string) => value.replaceAll(TEST_SECRET_SENTINEL, TEST_SECRET);
+        const headers = model.headers as Record<string, unknown> | undefined;
+        const request = model.request as
+          | { auth?: { token?: string }; headers?: Record<string, string> }
+          | undefined;
+        const nextHeaders = headers
+          ? Object.fromEntries(
+              Object.entries(headers).map(([name, value]) => [
+                name,
+                typeof value === "string" ? swap(value) : value,
+              ]),
+            )
+          : headers;
+        const nextRequest =
+          request?.auth?.token === undefined
+            ? request
+            : { ...request, auth: { ...request.auth, token: swap(request.auth.token) } };
+        if (nextHeaders === headers && nextRequest === request) {
+          return model;
+        }
+        return { ...model, headers: nextHeaders, ...(nextRequest ? { request: nextRequest } : {}) };
+      }) as never,
     });
   });
 
@@ -169,6 +196,45 @@ describe("prepareModelForSimpleCompletion", () => {
     expect(stream).toBe(sourceResult);
     expect(stream).not.toBeInstanceOf(Promise);
     expect(capturedApi).toBe(sourceApi);
+  });
+
+  it("resolves request-transport sentinels, not only visible headers, before the plugin stream", () => {
+    // Regression: the transport used to resolve `model.headers` on its own, which
+    // left sentinels minted into the symbol-attached request overrides untouched.
+    // Plugin-owned streams read both, so the plugin received a raw sentinel where
+    // the credential belonged. Both halves are the host's contract.
+    const secret = TEST_SECRET;
+    const sentinel = TEST_SECRET_SENTINEL;
+    const model = {
+      id: "llama3",
+      name: "Llama 3",
+      api: "ollama",
+      provider: "ollama",
+      baseUrl: "http://localhost:11434",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 8192,
+      maxTokens: 4096,
+      headers: { Authorization: `Bearer ${sentinel}` },
+      request: { auth: { token: sentinel } },
+    } as unknown as Model<"ollama">;
+
+    resolveProviderStreamFn.mockReturnValueOnce(pluginStreamFn);
+    prepareModelForSimpleCompletion({ model, cfg: undefined });
+
+    const [request] = resolveProviderStreamFn.mock.calls.at(0) as [
+      { context?: { model?: { request?: { auth?: { token?: string } } } } },
+    ];
+    expect(request.context?.model?.request?.auth?.token).toBe(secret);
+
+    const registeredStream = ensureCustomApiRegistered.mock.calls[0]?.[2] as StreamFn;
+    void registeredStream(model as never, {} as never, {} as never);
+    expect(pluginStreamFn).toHaveBeenCalledWith(
+      expect.objectContaining({ request: { auth: { token: secret } } }),
+      {},
+      {},
+    );
   });
 
   it("registers the configured Ollama transport and keeps the original api", () => {

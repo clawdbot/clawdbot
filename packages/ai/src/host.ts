@@ -127,6 +127,16 @@ export interface AiTransportHost {
   ): typeof fetch | undefined;
   /** Resolves host-owned process-local secret sentinel substrings immediately before egress. */
   resolveSecretSentinel(value: string): string;
+  /**
+   * Resolves sentinels across a model's full egress surface before handing it to a
+   * plugin transport: visible headers AND the symbol-attached request overrides,
+   * which can each carry sentinels minted by the host's runtime-auth protection.
+   * Header-only resolution is not sufficient for plugin-owned streams.
+   */
+  unwrapModelTransportSentinels<T extends { headers?: Record<string, unknown> }>(
+    model: T,
+    boundary: string,
+  ): T;
   /** Redacts secrets inside structured tool-result payloads. */
   redactSecrets<T>(value: T): T;
   /** Redacts secret-bearing text in tool payload strings. */
@@ -218,6 +228,7 @@ type ActiveAiTransportHost = Omit<AiTransportHost, "normalizeAnthropicInlineCont
 const inertAiTransportHost: ActiveAiTransportHost = {
   buildModelFetch: () => undefined,
   resolveSecretSentinel: (value) => value,
+  unwrapModelTransportSentinels: (model) => model,
   redactSecrets: (value) => value,
   redactToolPayloadText: (text) => text,
   normalizeAnthropicInlineContentBlocks: async (content) => [...content],
