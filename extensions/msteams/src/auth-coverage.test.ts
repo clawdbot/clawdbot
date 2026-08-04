@@ -34,7 +34,7 @@
 
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { withOverrides, PUBLIC } from "@microsoft/teams.api";
+import { PUBLIC, withOverrides } from "@microsoft/teams.api/dist/auth/cloud-environment.js";
 // Internal subpath imports. See file header for the rationale.
 import {
   createEntraTokenValidator,
