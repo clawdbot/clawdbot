@@ -520,6 +520,7 @@ export function mockClaudeLiveRun(
     cancelable?: boolean;
     beforeSpawn?: () => Promise<void>;
     events?: Array<Record<string, unknown> | string>;
+    inputLifecycle?: boolean;
     exitImmediately?: RunExit;
     exitOnWrite?: RunExit;
     onWrite?: (params: {
@@ -551,6 +552,14 @@ export function mockClaudeLiveRun(
     write: vi.fn((data: string, callback?: (error?: Error | null) => void) => {
       writes.push(data);
       const writeIndex = writes.length - 1;
+      const input = JSON.parse(data) as { type?: string; uuid?: string };
+      if (
+        options.inputLifecycle !== false &&
+        input.type === "user" &&
+        typeof input.uuid === "string"
+      ) {
+        emit([{ type: "command_lifecycle", command_uuid: input.uuid, state: "started" }]);
+      }
       if (options.onWrite) {
         options.onWrite({ data, emit, writeIndex });
       } else if (writeIndex === 0 && options.events) {

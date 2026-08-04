@@ -118,6 +118,16 @@ const mockCallGatewayTool = vi.mocked(callGatewayTool);
 
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
 type SupervisorSpawnFn = ProcessSupervisor["spawn"];
+
+function emitClaudeInputStarted(stdout: ((chunk: string) => void) | undefined, data: string): void {
+  const input = JSON.parse(data) as { type?: string; uuid?: string };
+  if (input.type === "user" && typeof input.uuid === "string") {
+    stdout?.(
+      `${JSON.stringify({ type: "command_lifecycle", command_uuid: input.uuid, state: "started" })}\n`,
+    );
+  }
+}
+
 type ClaudeControlPolicyTestCase = {
   name: string;
   requestId: string;
@@ -1981,6 +1991,7 @@ describe("runCliAgent spawn path", () => {
     const stdin = {
       write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
         writes.push(data);
+        emitClaudeInputStarted(stdoutListener, data);
         stdoutListener?.(interimChunk);
         cb?.();
       }),
@@ -2037,12 +2048,21 @@ describe("runCliAgent spawn path", () => {
       });
       expectModelCallTypes(diagnostics, ["model.call.started", "model.call.completed"]);
       const completed = diagnostics.events[1];
+      const inputUuid = (JSON.parse(writes[0] ?? "{}") as { uuid?: string }).uuid;
+      const lifecycleChunk = `${JSON.stringify({
+        type: "command_lifecycle",
+        command_uuid: inputUuid,
+        state: "started",
+      })}\n`;
       expect(completed?.event).toMatchObject({
         api: "claude-code",
         transport: "stdio-live",
         observationUnit: "turn",
         requestPayloadBytes: Buffer.byteLength(writes[0] ?? ""),
-        responseStreamBytes: Buffer.byteLength(interimChunk) + Buffer.byteLength(finalChunk),
+        responseStreamBytes:
+          Buffer.byteLength(lifecycleChunk) +
+          Buffer.byteLength(interimChunk) +
+          Buffer.byteLength(finalChunk),
         usage: {
           input: 10,
           output: 3,
@@ -2336,7 +2356,8 @@ describe("runCliAgent spawn path", () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     const cancel = vi.fn();
     const stdin = {
-      write: vi.fn((_data: string, callback?: (error?: Error | null) => void) => {
+      write: vi.fn((data: string, callback?: (error?: Error | null) => void) => {
+        emitClaudeInputStarted(stdoutListener, data);
         stdoutListener?.(
           [
             JSON.stringify({ type: "system", subtype: "init", session_id: "live-quiet-tool" }),
@@ -3144,7 +3165,8 @@ describe("runCliAgent spawn path", () => {
     });
     let turn = 0;
     const stdin = {
-      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+      write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
+        emitClaudeInputStarted(stdoutListener, data);
         turn += 1;
         stdoutListener?.(
           [
@@ -3255,6 +3277,7 @@ describe("runCliAgent spawn path", () => {
       await spawnReady;
       const stdin = {
         write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
+          emitClaudeInputStarted(input.onStdout, dataValue);
           input.onStdout?.(
             [
               JSON.stringify({
@@ -3562,6 +3585,7 @@ describe("runCliAgent spawn path", () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     const stdin = {
       write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
+        emitClaudeInputStarted(stdoutListener, data);
         stdoutListener?.(
           [
             JSON.stringify({
@@ -3729,7 +3753,8 @@ describe("runCliAgent spawn path", () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     let captureKey = "";
     const stdin = {
-      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+      write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
+        emitClaudeInputStarted(stdoutListener, data);
         const captureHandle = markMcpLoopbackToolCallStarted({
           captureKey,
           toolName: "message",
@@ -3842,7 +3867,8 @@ describe("runCliAgent spawn path", () => {
     let captureKey = "";
     const toolArgs = { action: "react", emoji: "same" };
     const stdin = {
-      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+      write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
+        emitClaudeInputStarted(stdoutListener, data);
         stdoutListener?.(
           [
             JSON.stringify({ type: "system", subtype: "init", session_id: "live-identical" }),
@@ -3995,7 +4021,8 @@ describe("runCliAgent spawn path", () => {
       });
       let stdoutListener: ((chunk: string) => void) | undefined;
       const stdin = {
-        write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+        write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
+          emitClaudeInputStarted(stdoutListener, data);
           stdoutListener?.(
             [
               JSON.stringify({ type: "system", subtype: "init", session_id: "live-timeout" }),
@@ -4554,6 +4581,7 @@ describe("runCliAgent spawn path", () => {
         startedAtMs: Date.now(),
         stdin: {
           write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
+            emitClaudeInputStarted(input.onStdout, dataValue);
             const result = turnResults[turnIndex] ?? "ok";
             turnIndex += 1;
             input.onStdout?.(
@@ -4752,6 +4780,7 @@ describe("runCliAgent spawn path", () => {
   ])("$name", async (testCase) => {
     mockClaudeLiveRun(supervisorSpawnMock, {
       events: testCase.events,
+      inputLifecycle: testCase.events.length > 0,
       exitOnWrite: {
         reason: "exit",
         exitCode: testCase.exitCode,
@@ -4803,6 +4832,7 @@ describe("runCliAgent spawn path", () => {
       cancels.push(cancel);
       const stdin = {
         write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
+          emitClaudeInputStarted(stdoutListener, dataValue);
           if (spawnIndex === 2) {
             stdoutListener?.(
               [
@@ -4956,6 +4986,7 @@ describe("runCliAgent spawn path", () => {
       cancels.push(cancel);
       const stdin = {
         write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
+          emitClaudeInputStarted(input.onStdout, dataValue);
           const text = spawnIndex === 1 ? "weather-ok" : "git-ok";
           input.onStdout?.(
             [
@@ -5109,6 +5140,7 @@ describe("runCliAgent spawn path", () => {
     let writeCount = 0;
     const stdin = {
       write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
+        emitClaudeInputStarted(stdoutListener, dataValue);
         writeCount += 1;
         if (writeCount === 1) {
           stderrListener?.("stale stderr from first turn");
