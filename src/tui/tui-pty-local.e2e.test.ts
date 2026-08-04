@@ -1293,10 +1293,8 @@ describe("TUI PTY real backends", () => {
         const newOffset = fixture.run.visibleOutput().length;
         await fixture.run.write("/new\r", { delay: false });
         await waitForOutputAfter(fixture.run, "new session: agent:", newOffset);
-        const createdKey = fixture.run
-          .visibleOutput()
-          .slice(newOffset)
-          .match(/new session: (agent:\S+)/)?.[1];
+        const createdOutput = fixture.run.visibleOutput().slice(newOffset);
+        const createdKey = createdOutput.match(/new session: (agent:\S+)/)?.[1];
         fixture.trackSessionKey(createdKey!);
         const created = await waitForHistoryMessages(
           controlClient,
@@ -1330,6 +1328,7 @@ describe("TUI PTY real backends", () => {
           createdKey!,
           ({ sessionInfo }) =>
             sessionInfo?.sessionId === seededInfo.sessionId &&
+            typeof sessionInfo?.updatedAt === "number" &&
             (sessionInfo?.updatedAt as number) >= (seededInfo.updatedAt as number) &&
             Boolean(sessionInfo?.activeLeafEntryId) &&
             [sessionInfo?.modelProvider, sessionInfo?.model].join("/") === alternateModel,
@@ -1359,6 +1358,7 @@ describe("TUI PTY real backends", () => {
           return (
             Boolean(sessionInfo?.activeLeafEntryId) &&
             sessionInfo?.sessionId === selectedInfo.sessionId &&
+            typeof sessionInfo?.updatedAt === "number" &&
             (sessionInfo?.updatedAt as number) >= (reset.sessionInfo?.updatedAt as number) &&
             sessionInfo?.activeLeafEntryId !== reset.sessionInfo?.activeLeafEntryId &&
             [sessionInfo?.modelProvider, sessionInfo?.model].join("/") === alternateModel &&
