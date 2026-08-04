@@ -238,7 +238,6 @@ async function installAndConfigure(params: {
 }) {
   const gateway = await startQaGatewayChild({
     repoRoot: params.repoRoot,
-    useRepoCli: true,
     providerBaseUrl: `${params.mockBaseUrl}/v1`,
     providerMode: "mock-openai",
     transportBaseUrl: "http://127.0.0.1:9",
