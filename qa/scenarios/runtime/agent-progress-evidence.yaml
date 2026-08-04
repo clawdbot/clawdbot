@@ -132,7 +132,6 @@ flow:
               ref: config.completionText
             timeoutMs:
               expr: liveTurnTimeoutMs(env, 60000)
-          saveAs: outbound
         - call: fs.readFile
           saveAs: artifact
           args:
@@ -193,28 +192,32 @@ flow:
         - set: completionEvents
           value:
             expr: "busEvents.filter((event) => event.message.text.includes(config.completionText))"
-        - set: finalCompletionEvent
-          value:
-            expr: "completionEvents.findLast((event) => event.message.id === outbound.id)"
         - set: completionMessages
           value:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId && message.text.includes(config.completionText) && !message.deleted)"
         - assert:
-            expr: "completionMessages.length === 1 && completionMessages[0].id === outbound.id"
+            # Tool-backed finals replace their streamed preview; only the durable visible reply is contractual.
+            expr: completionMessages.length === 1
             message:
               expr: "`expected exactly one durable completion reply: ${JSON.stringify(completionMessages)}`"
+        - set: durableCompletion
+          value:
+            expr: completionMessages[0]
+        - set: finalCompletionEvent
+          value:
+            expr: "completionEvents.findLast((event) => event.message.id === durableCompletion.id)"
         - assert:
             expr: "completionEvents.length >= 1 && finalCompletionEvent && completionEvents.every((event) => artifactStat.mtimeMs <= (event.message.editedAt ?? event.message.timestamp))"
             message:
               expr: "`completion appeared before the write-backed terminal request: artifactMtime=${artifactStat.mtimeMs} events=${JSON.stringify(completionEvents)}`"
         - assert:
-            expr: "completionEvents.filter((event) => event.message.id !== outbound.id).every((event) => allBusEvents.some((candidate) => candidate.kind === 'message-deleted' && candidate.cursor > event.cursor && candidate.message.id === event.message.id))"
+            expr: "completionEvents.filter((event) => event.message.id !== durableCompletion.id).every((event) => allBusEvents.some((candidate) => candidate.kind === 'message-deleted' && candidate.cursor > event.cursor && candidate.message.id === event.message.id))"
             message:
               expr: "`a transient completion preview remained durable: ${JSON.stringify(allBusEvents)}`"
         - assert:
-            expr: "outbound.replyToId === inbound.id && outbound.text.includes(config.artifactFile) && outbound.text.includes(config.completionMarker)"
+            expr: "durableCompletion.replyToId === inbound.id && durableCompletion.text.includes(config.artifactFile) && durableCompletion.text.includes(config.completionMarker)"
             message:
-              expr: "`durable completion did not cite the artifact and marker: ${JSON.stringify(outbound)}`"
+              expr: "`durable completion did not cite the artifact and marker: ${JSON.stringify(durableCompletion)}`"
         - assert:
             expr: "artifactStat.mtimeMs <= (finalCompletionEvent.message.editedAt ?? finalCompletionEvent.message.timestamp)"
             message:
