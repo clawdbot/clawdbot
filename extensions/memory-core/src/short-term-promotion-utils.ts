@@ -3,7 +3,7 @@ import path from "node:path";
 import type { MemoryEntryProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { deriveConceptTags, MAX_CONCEPT_TAGS } from "./concept-vocabulary.js";
+import { deriveConceptTags } from "./concept-vocabulary.js";
 import type {
   PromotionWeights,
   ShortTermRecallEntry,
