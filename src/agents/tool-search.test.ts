@@ -525,7 +525,7 @@ describe("Tool Search", () => {
     }
   });
 
-  it("drops oversized untrusted candidate metadata before batch serialization", async () => {
+  it("preserves bounded callable identity while dropping oversized optional metadata", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const config = {
       tools: { toolSearch: { enabled: true, mode: "tools", maxSearchLimit: 10 } },
@@ -565,9 +565,32 @@ describe("Tool Search", () => {
     );
     expect(JSON.stringify(result, null, 2).length).toBeLessThanOrEqual(4_000);
     expect(result.truncated).toBe(true);
-    for (const group of result.results as Array<{ candidates: unknown[]; truncated?: true }>) {
-      expect(group).toEqual({ candidates: [], query: expect.any(String), truncated: true });
+    const groups = result.results as Array<{
+      candidates: Array<{ id: string; label?: string; name: string }>;
+      truncated?: true;
+    }>;
+    const retained = groups.flatMap((group) => group.candidates);
+    expect(retained.length).toBeGreaterThan(0);
+    for (const group of groups) {
+      expect(group.truncated).toBe(true);
+      for (const candidate of group.candidates) {
+        expect(candidate).toEqual(
+          expect.objectContaining({
+            id: "mcp:remoteDemo:remote_large_label",
+            name: "remote_large_label",
+          }),
+        );
+        expect(candidate.label).toBeUndefined();
+      }
     }
+    expect(retained).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "mcp:remoteDemo:remote_large_label",
+          name: "remote_large_label",
+        }),
+      ]),
+    );
   });
 
   it("searches batch queries independently while preserving scalar results", async () => {

@@ -95,34 +95,7 @@ const MAX_BATCH_CANDIDATE_DESCRIPTION_CHARS = 180;
 const MAX_BATCH_CANDIDATE_DESCRIPTION_SCAN_CHARS = MAX_BATCH_CANDIDATE_DESCRIPTION_CHARS * 4;
 const MAX_BATCH_CANDIDATE_METADATA_CHARS = 2_000;
 
-function hasBoundedBatchCandidateMetadata(candidate: ToolSearchCandidate): boolean {
-  const metadata = [
-    candidate.id,
-    candidate.source,
-    candidate.sourceName,
-    candidate.name,
-    candidate.label,
-    candidate.input,
-    candidate.output,
-    candidate.mcp?.serverName,
-    candidate.mcp?.safeServerName,
-    candidate.mcp?.toolName,
-    candidate.mcp?.operation,
-  ];
-  let total = 0;
-  for (const value of metadata) {
-    if (typeof value !== "string") {
-      continue;
-    }
-    total += value.length;
-    if (total > MAX_BATCH_CANDIDATE_METADATA_CHARS) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function compactBatchCandidate(candidate: ToolSearchCandidate): ToolSearchCandidate {
+function compactBatchCandidateDescription(candidate: ToolSearchCandidate): ToolSearchCandidate {
   // Remote catalog descriptions are untrusted. Bound the scanned prefix before
   // normalization so repeated batch matches cannot amplify attacker-sized text.
   const prefix = truncateUtf16Safe(
@@ -146,14 +119,52 @@ function compactBatchCandidate(candidate: ToolSearchCandidate): ToolSearchCandid
   };
 }
 
+function compactBatchCandidate(candidate: ToolSearchCandidate): ToolSearchCandidate | undefined {
+  // Callable identity must stay exact. Optional provenance/display metadata is
+  // omitted when it would make a repeated batch candidate attacker-sized.
+  const mandatoryChars =
+    candidate.id.length + candidate.source.length + candidate.name.length + candidate.input.length;
+  if (mandatoryChars > MAX_BATCH_CANDIDATE_METADATA_CHARS) {
+    return undefined;
+  }
+  let remaining = MAX_BATCH_CANDIDATE_METADATA_CHARS - mandatoryChars;
+  const retain = (value: string | undefined): string | undefined => {
+    if (value === undefined || value.length > remaining) {
+      return undefined;
+    }
+    remaining -= value.length;
+    return value;
+  };
+  const sourceName = retain(candidate.sourceName);
+  const label = retain(candidate.label);
+  const mcpChars = candidate.mcp
+    ? candidate.mcp.serverName.length +
+      candidate.mcp.safeServerName.length +
+      candidate.mcp.toolName.length +
+      candidate.mcp.operation.length
+    : 0;
+  const mcp = candidate.mcp && mcpChars <= remaining ? candidate.mcp : undefined;
+  if (mcp) {
+    remaining -= mcpChars;
+  }
+  const output = retain(candidate.output);
+  return {
+    ...compactBatchCandidateDescription(candidate),
+    sourceName,
+    label,
+    mcp,
+    output,
+  };
+}
+
 function boundToolSearchBatchResponse(results: ToolSearchBatchGroup[]): {
   results: ToolSearchBatchGroup[];
   truncated?: true;
 } {
   const bounded: ToolSearchBatchGroup[] = results.map((result) => {
     const candidates = result.candidates
-      .filter(hasBoundedBatchCandidateMetadata)
-      .map(compactBatchCandidate);
+      .map(compactBatchCandidate)
+      .filter((candidate): candidate is ToolSearchCandidate => candidate !== undefined);
     const groupTruncated = candidates.length < result.candidates.length;
     return {
       ...result,
