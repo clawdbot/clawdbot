@@ -602,10 +602,11 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
       .option("--days <days>", "Number of days to include", "30")
       .option("--agent <id>", "Scope the cost summary to a specific agent id")
       .option("--all-agents", "Aggregate the cost summary across all agents", false)
+      .option("--port <port>", "Local Gateway port")
       .action(async (opts, command) => {
         await runGatewayCommand(
           async () => {
-            const rpcOpts = resolveGatewayRpcOptions(opts, command);
+            const rpcOpts = await resolveGatewayRpcOptionsWithLocalPort(opts, command);
             const days = parseDaysOption(opts.days);
             const agentId = typeof opts.agent === "string" ? opts.agent.trim() : undefined;
             // The gateway honors agentScope only when no agentId is set, so reject the
@@ -707,12 +708,13 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
       )
       .option("--export", "Write a shareable support diagnostics export", false)
       .option("--output <path>", "Diagnostics export output .zip path")
+      .option("--port <port>", "Local Gateway port")
       .action(async (opts, command) => {
         await runGatewayCommand(
           async () => {
             const { normalizeDiagnosticStabilityQuery, selectDiagnosticStabilitySnapshot } =
               await import("../../logging/diagnostic-stability.js");
-            const rpcOpts = resolveGatewayRpcOptions(opts, command);
+            const rpcOpts = await resolveGatewayRpcOptionsWithLocalPort(opts, command);
             const query = normalizeDiagnosticStabilityQuery(
               {
                 limit: opts.limit,

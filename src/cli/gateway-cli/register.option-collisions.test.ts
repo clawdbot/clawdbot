@@ -278,6 +278,34 @@ describe("gateway register option collisions", () => {
         expect(params).toEqual({ days: 30 });
       },
     },
+    {
+      name: "projects gateway usage-cost --port into local config",
+      argv: ["gateway", "usage-cost", "--port", "19086", "--json"],
+      assert: () => {
+        expectLocalGatewayCall("usage.cost", 19086, { days: 30 });
+      },
+    },
+    {
+      name: "inherits parent --port for gateway usage-cost",
+      argv: ["gateway", "--port", "19087", "usage-cost", "--json"],
+      assert: () => {
+        expectLocalGatewayCall("usage.cost", 19087);
+      },
+    },
+    {
+      name: "projects gateway stability --port into local config",
+      argv: ["gateway", "stability", "--port", "19088", "--json"],
+      assert: () => {
+        expectLocalGatewayCall("diagnostics.stability", 19088, { limit: 25 });
+      },
+    },
+    {
+      name: "inherits parent --port for gateway stability",
+      argv: ["gateway", "--port", "19089", "stability", "--json"],
+      assert: () => {
+        expectLocalGatewayCall("diagnostics.stability", 19089);
+      },
+    },
   ])("$name", async ({ argv, assert }) => {
     await sharedProgram.parseAsync(argv, { from: "user" });
     assert();
@@ -294,6 +322,38 @@ describe("gateway register option collisions", () => {
       "Gateway call failed: Error: Use either --url or --port, not both.",
     );
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it.each([
+    {
+      name: "usage-cost",
+      argv: ["gateway", "usage-cost", "--url", "ws://127.0.0.1:19090", "--port", "19090", "--json"],
+      failurePrefix: "Gateway usage cost failed",
+    },
+    {
+      name: "stability",
+      argv: ["gateway", "stability", "--url", "ws://127.0.0.1:19090", "--port", "19090", "--json"],
+      failurePrefix: "Gateway stability failed",
+    },
+  ])("rejects combining --url and --port for gateway $name", async ({ argv, failurePrefix }) => {
+    await sharedProgram.parseAsync(argv, { from: "user" });
+
+    expect(callGatewayCli).not.toHaveBeenCalled();
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      `${failurePrefix}: Error: Use either --url or --port, not both.`,
+    );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("keeps gateway stability --bundle a local read that ignores --port", async () => {
+    await sharedProgram.parseAsync(
+      ["gateway", "stability", "--bundle", "latest", "--port", "19091", "--json"],
+      { from: "user" },
+    );
+
+    // --bundle reads a persisted bundle from disk and must never open an RPC
+    // connection, so the local-port resolver has no target to redirect.
+    expect(callGatewayCli).not.toHaveBeenCalled();
   });
 
   it("uses the effective local port config for gateway health auth diagnostics", async () => {

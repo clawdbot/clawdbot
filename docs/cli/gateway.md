@@ -229,6 +229,8 @@ openclaw gateway usage-cost
 openclaw gateway usage-cost --days 7
 openclaw gateway usage-cost --agent work --json
 openclaw gateway usage-cost --all-agents
+openclaw gateway usage-cost --port 18999
+openclaw gateway --port 18999 usage-cost
 openclaw gateway usage-cost --json
 ```
 
@@ -241,6 +243,9 @@ openclaw gateway usage-cost --json
 <ParamField path="--all-agents" type="boolean">
   Aggregate across all configured agents. Cannot combine with `--agent`.
 </ParamField>
+<ParamField path="--port <port>" type="number">
+  Target a local loopback Gateway on this port. Overrides `OPENCLAW_GATEWAY_URL` and `OPENCLAW_GATEWAY_PORT` for this call. Cannot combine with `--url`.
+</ParamField>
 
 ### `gateway stability`
 
@@ -251,6 +256,7 @@ openclaw gateway stability
 openclaw gateway stability --type payload.large
 openclaw gateway stability --bundle latest
 openclaw gateway stability --bundle latest --export
+openclaw gateway --port 18999 stability
 openclaw gateway stability --json
 ```
 
@@ -271,6 +277,9 @@ openclaw gateway stability --json
 </ParamField>
 <ParamField path="--output <path>" type="string">
   Output path for `--export`.
+</ParamField>
+<ParamField path="--port <port>" type="number">
+  Target a local loopback Gateway on this port. Overrides `OPENCLAW_GATEWAY_URL` and `OPENCLAW_GATEWAY_PORT` for this call. Cannot combine with `--url`. Applies to the live stability query; `--bundle` reads from disk and `--export` collects its snapshots through the support-export path, so neither is redirected by `--port`.
 </ParamField>
 
 <AccordionGroup>
