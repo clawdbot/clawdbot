@@ -89,6 +89,12 @@ export async function stageSandboxMedia(params: {
       ? path.join("media", "inbound", `openclaw-staged-${crypto.randomUUID()}`)
       : undefined;
 
+  if (hostWorkspaceStagingDir) {
+    // Prune leftover empty one-shot staging dirs from earlier runs; dirs that
+    // still hold staged files are left untouched (#104358).
+    await pruneEmptyStagedMediaDirs(effectiveWorkspaceDir);
+  }
+
   for (const entry of pathEntries) {
     const source = await resolveStageableMediaSource(entry.path);
     if (!source) {
@@ -264,6 +270,24 @@ async function stageLocalFileIntoRoot(params: {
   });
 }
 
+/** Removes leftover empty one-shot staging dirs under media/inbound
+ * (openclaw-staged-*). Directories that still hold staged files are left
+ * untouched; only empty ones are pruned (#104358). */
+async function pruneEmptyStagedMediaDirs(workspaceDir: string): Promise<void> {
+  const inboundDir = path.join(workspaceDir, "media", "inbound");
+  const entries = await fs.readdir(inboundDir, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith("openclaw-staged-")) {
+      continue;
+    }
+    const dirPath = path.join(inboundDir, entry.name);
+    const children = await fs.readdir(dirPath).catch(() => null);
+    if (children !== null && children.length === 0) {
+      await fs.rmdir(dirPath).catch(() => {});
+    }
+  }
+}
+
 async function stageRemoteFileIntoRoot(params: {
   remoteHost: string;
   remotePath: string;
@@ -415,5 +439,6 @@ function appendScpStderrTail(
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.stageSandboxMediaTestApi")] = {
     scpFile,
+    pruneEmptyStagedMediaDirs,
   };
 }

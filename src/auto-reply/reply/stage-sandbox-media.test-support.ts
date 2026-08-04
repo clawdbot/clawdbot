@@ -2,6 +2,7 @@ import "./stage-sandbox-media.js";
 
 type StageSandboxMediaTestApi = {
   scpFile(remoteHost: string, remotePath: string, localPath: string): Promise<void>;
+  pruneEmptyStagedMediaDirs(workspaceDir: string): Promise<void>;
 };
 
 function getTestApi(): StageSandboxMediaTestApi {
@@ -17,5 +18,8 @@ function getTestApi(): StageSandboxMediaTestApi {
 export const testing = {
   async scpFile(remoteHost: string, remotePath: string, localPath: string): Promise<void> {
     await getTestApi().scpFile(remoteHost, remotePath, localPath);
+  },
+  async pruneEmptyStagedMediaDirs(workspaceDir: string): Promise<void> {
+    await getTestApi().pruneEmptyStagedMediaDirs(workspaceDir);
   },
 };
