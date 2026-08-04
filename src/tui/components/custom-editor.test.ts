@@ -213,16 +213,32 @@ describe("CustomEditor", () => {
     expect(onSubmit).toHaveBeenCalledWith("/help");
   });
 
-  it("preserves whitespace that keeps bang input on the chat path", () => {
+  it.each(["  !cmd", "  !cmd\n", "!cmd\n", "\n!cmd\n"])(
+    "preserves %j when trimming would create executable bang input",
+    (input) => {
+      const tui = { requestRender: vi.fn() } as unknown as TUI;
+      const editor = new CustomEditor(tui, editorTheme);
+      const onSubmit = vi.fn();
+      editor.onSubmit = onSubmit;
+      editor.setText(input);
+
+      editor.handleInput("\r");
+
+      expect(onSubmit).toHaveBeenCalledExactlyOnceWith(input);
+      expect(editor.getText()).toBe("");
+    },
+  );
+
+  it("leaves harmless bang-prefixed multiline chat on pi-tui's normal submit path", () => {
     const tui = { requestRender: vi.fn() } as unknown as TUI;
     const editor = new CustomEditor(tui, editorTheme);
     const onSubmit = vi.fn();
     editor.onSubmit = onSubmit;
-    editor.setText("  !echo stays in chat");
+    editor.setText(" \n!cmd\nnotes");
 
     editor.handleInput("\r");
 
-    expect(onSubmit).toHaveBeenCalledExactlyOnceWith("  !echo stays in chat");
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith("!cmd\nnotes");
     expect(editor.getText()).toBe("");
   });
 

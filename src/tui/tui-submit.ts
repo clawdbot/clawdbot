@@ -8,6 +8,14 @@ import type {
 
 export type TuiSubmitAction = "local shell" | "command" | "message";
 
+function isExecutableBangLine(text: string): boolean {
+  return !text.includes("\n") && text.startsWith("!") && text !== "!";
+}
+
+export function trimWouldCreateExecutableBangLine(text: string): boolean {
+  return !isExecutableBangLine(text) && isExecutableBangLine(text.trim());
+}
+
 function runSubmitAction(
   action: TuiSubmitAction,
   run: () => Promise<void> | void,
@@ -53,7 +61,7 @@ export function createEditorSubmitHandler(params: {
     const raw = text;
     const value = raw.trim();
     const multiline = raw.includes("\n");
-    const hasWhitespacePrefixedBang = /^\s+!/u.test(raw);
+    const trimCreatesExecutableBangLine = trimWouldCreateExecutableBangLine(raw);
 
     // Keep previous behavior: ignore empty/whitespace-only submissions.
     if (!value) {
@@ -64,7 +72,7 @@ export function createEditorSubmitHandler(params: {
     // Bash mode: only if the very first character is '!' and it's not just '!'.
     // IMPORTANT: use the raw (untrimmed) text so leading spaces do NOT trigger.
     // Per requirement: a lone '!' should be treated as a normal message.
-    if (!multiline && raw.startsWith("!") && raw !== "!") {
+    if (isExecutableBangLine(raw)) {
       clearSubmittedEditor();
       params.editor.addToHistory(raw);
       runSubmitAction("local shell", () => params.handleBangLine(raw), params.onSubmitError);
@@ -83,14 +91,14 @@ export function createEditorSubmitHandler(params: {
       ? params.admitMessage?.(value, snapshot)
       : params.admitMessage?.(value)) ?? { status: "allowed" };
     if (admission.status === "blocked") {
-      restoreBlockedEditor(hasWhitespacePrefixedBang ? raw : value);
+      restoreBlockedEditor(trimCreatesExecutableBangLine ? raw : value);
       params.onBlockedMessageSubmit?.(value, admission);
       return;
     }
 
     clearSubmittedEditor();
-    // pi-tui trims history, which could turn recalled chat text into a shell command.
-    if (!hasWhitespacePrefixedBang) {
+    // Omit chat text whose trimmed history recall would become executable shell input.
+    if (!trimCreatesExecutableBangLine) {
       params.editor.addToHistory(value);
     }
     runSubmitAction("message", () => params.sendMessage(value), params.onSubmitError);
