@@ -53,6 +53,7 @@ export function createEditorSubmitHandler(params: {
     const raw = text;
     const value = raw.trim();
     const multiline = raw.includes("\n");
+    const hasWhitespacePrefixedBang = /^\s+!/u.test(raw);
 
     // Keep previous behavior: ignore empty/whitespace-only submissions.
     if (!value) {
@@ -82,14 +83,16 @@ export function createEditorSubmitHandler(params: {
       ? params.admitMessage?.(value, snapshot)
       : params.admitMessage?.(value)) ?? { status: "allowed" };
     if (admission.status === "blocked") {
-      restoreBlockedEditor(/^\s+!/u.test(raw) ? raw : value);
+      restoreBlockedEditor(hasWhitespacePrefixedBang ? raw : value);
       params.onBlockedMessageSubmit?.(value, admission);
       return;
     }
 
     clearSubmittedEditor();
-    // Enable built-in editor prompt history navigation (up/down).
-    params.editor.addToHistory(value);
+    // pi-tui trims history, which could turn recalled chat text into a shell command.
+    if (!hasWhitespacePrefixedBang) {
+      params.editor.addToHistory(value);
+    }
     runSubmitAction("message", () => params.sendMessage(value), params.onSubmitError);
   };
 }

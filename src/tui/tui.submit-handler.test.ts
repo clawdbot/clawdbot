@@ -12,12 +12,13 @@ import {
 
 describe("createEditorSubmitHandler", () => {
   it("routes lines starting with ! to handleBangLine", () => {
-    const { handleCommand, sendMessage, handleBangLine, onSubmit } = createSubmitHarness();
+    const { editor, handleCommand, sendMessage, handleBangLine, onSubmit } = createSubmitHarness();
 
     onSubmit("!ls");
 
     expect(handleBangLine).toHaveBeenCalledTimes(1);
     expect(handleBangLine).toHaveBeenCalledWith("!ls");
+    expect(editor.addToHistory).toHaveBeenCalledWith("!ls");
     expect(sendMessage).not.toHaveBeenCalled();
     expect(handleCommand).not.toHaveBeenCalled();
   });
@@ -49,8 +50,16 @@ describe("createEditorSubmitHandler", () => {
     editor.handleInput("\r");
 
     expect(handleBangLine).not.toHaveBeenCalled();
-    expect(sendMessage).toHaveBeenCalledWith("!ls");
+    expect(sendMessage).toHaveBeenCalledExactlyOnceWith("!ls");
     expect(editor.getText()).toBe("");
+
+    editor.handleInput("\u001b[A");
+    expect(editor.getText()).toBe("");
+
+    editor.handleInput("\r");
+
+    expect(sendMessage).toHaveBeenCalledExactlyOnceWith("!ls");
+    expect(handleBangLine).not.toHaveBeenCalled();
   });
 
   it("preserves whitespace bang routing across a blocked retry", () => {
