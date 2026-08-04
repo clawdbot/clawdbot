@@ -533,6 +533,47 @@ describe("claude live session provisional results", () => {
     expect(driver.cancel).not.toHaveBeenCalled();
   });
 
+  it("fails a resumed turn that only replays the synthetic interrupted placeholder (#115037)", async () => {
+    const driver = installLiveStdoutDriver({ autoStart: false });
+    const resultPromise = startLiveTurn({ runId: "run-resume-synthetic-empty", useResume: true });
+    await driver.stdout.waitReady();
+
+    driver.stdout.emit(
+      jsonl([{ type: "system", subtype: "init", session_id: "live-synthetic-resume" }]),
+    );
+    driver.stdout.startCurrentInput();
+    driver.stdout.emit(
+      jsonl([
+        {
+          type: "assistant",
+          session_id: "live-synthetic-resume",
+          message: {
+            model: "<synthetic>",
+            role: "assistant",
+            content: [{ type: "text", text: "No response requested." }],
+          },
+        },
+        {
+          type: "result",
+          subtype: "success",
+          session_id: "live-synthetic-resume",
+          result: "",
+        },
+      ]),
+    );
+
+    // The resumed transcript replays the interrupted-turn placeholder as the
+    // answer to the new input without calling the model. The turn must fail
+    // with an empty_response FailoverError so the caller retries on the same
+    // model with a fresh session instead of falling into model fallback.
+    const rejection = expect(resultPromise).rejects.toMatchObject({
+      name: "FailoverError",
+      code: "cli_unknown_empty_failure",
+    });
+    await rejection;
+    expect(driver.cancel).toHaveBeenCalled();
+  });
+
   it("ignores markerless prior results until the matching input starts", async () => {
     const driver = installLiveStdoutDriver({ autoStart: false });
     const resultPromise = startLiveTurn({ runId: "run-markerless-prior-result", useResume: true });

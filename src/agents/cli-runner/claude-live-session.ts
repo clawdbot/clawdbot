@@ -100,6 +100,8 @@ type ClaudeLiveTurn = {
   useResume: boolean;
   /** True after output that makes replaying the submitted input unsafe. */
   hasReplayUnsafeActivity: boolean;
+  /** True after the CLI replays the synthetic interrupted-turn placeholder. */
+  sawSyntheticPlaceholder: boolean;
   completedToolCallIds: Set<string>;
   toolEventCount: number;
   streamingParser: ReturnType<typeof createCliJsonlStreamingParser>;
@@ -1330,6 +1332,29 @@ function handleClaudeLiveControlRequest(
   })();
 }
 
+function isClaudeSyntheticInterruptedPlaceholder(parsed: Record<string, unknown>): boolean {
+  // Claude Code answers an interrupted turn with a synthetic assistant message
+  // (model "<synthetic>", text "No response requested.") instead of calling the
+  // model. On resume that placeholder replays as the response to the new input.
+  if (parsed.type !== "assistant" || !isRecord(parsed.message)) {
+    return false;
+  }
+  if (parsed.message.model !== "<synthetic>") {
+    return false;
+  }
+  const content = parsed.message.content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some(
+    (block) =>
+      isRecord(block) &&
+      block.type === "text" &&
+      typeof block.text === "string" &&
+      block.text.trim() === "No response requested.",
+  );
+}
+
 function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   const turn = session.currentTurn;
   const trimmed = line.trim();
@@ -1379,6 +1404,9 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
     parsed.type !== "command_lifecycle"
   ) {
     turn.hasReplayUnsafeActivity = true;
+  }
+  if (isClaudeSyntheticInterruptedPlaceholder(parsed)) {
+    turn.sawSyntheticPlaceholder = true;
   }
   turn.rawChars += trimmed.length + 1;
   if (
@@ -1436,6 +1464,34 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
     // An interim result is not terminal; background work returns the run to send.
     turn.onPhase?.("send");
     emitClaudeLiveProgress(turn, "cli_live:result_deferred_background_tasks");
+    return;
+  }
+  if (
+    turn.useResume &&
+    turn.sawSyntheticPlaceholder &&
+    !output.text?.trim() &&
+    !output.didSendViaMessagingTool
+  ) {
+    // A reused session whose transcript ends with an interrupted turn replays the
+    // CLI's synthetic "No response requested." placeholder as the answer to the
+    // new input without calling the model (#115037). Settling with empty output
+    // would classify this as a normal empty response and route the user's turn
+    // into model fallback; classify it like an exit-before-output instead so the
+    // caller retries the turn on the same model with a fresh session.
+    failTurn(
+      session,
+      new FailoverError(
+        "Claude CLI resumed session replayed the interrupted-turn placeholder without calling the model.",
+        {
+          reason: "empty_response",
+          provider: session.providerId,
+          model: session.modelId,
+          status: resolveFailoverStatus("empty_response"),
+          code: "cli_unknown_empty_failure",
+        },
+      ),
+    );
+    scheduleIdleClose(session);
     return;
   }
   finishTurn(session, output);
@@ -1713,6 +1769,7 @@ function createTurn(params: {
     onSessionId: params.onSessionId,
     useResume: params.useResume,
     hasReplayUnsafeActivity: false,
+    sawSyntheticPlaceholder: false,
     completedToolCallIds: new Set(),
     toolEventCount: 0,
     streamingParser: createCliJsonlStreamingParser({
