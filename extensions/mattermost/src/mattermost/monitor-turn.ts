@@ -14,6 +14,10 @@ import {
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import type { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
+import {
+  createMattermostAckReactionRuntime,
+  type MattermostAckReactionGateFacts,
+} from "./ack-reactions.js";
 import type { MattermostPost } from "./client.js";
 import {
   createMattermostDraftPreviewBoundaryController,
@@ -50,6 +54,7 @@ type MattermostInboundTurnParams = {
   channelHistories: Map<string, HistoryEntry[]>;
   pinnedMainDmOwner: string | null;
   turnAdoptionLifecycle?: MattermostIngressLifecycle;
+  ackGate: Omit<MattermostAckReactionGateFacts, "isDirect" | "isGroup">;
 };
 
 function createDisabledMattermostDraftStream(): ReturnType<typeof createMattermostDraftStream> {
@@ -73,8 +78,9 @@ export async function dispatchMattermostInboundTurn(
   monitor: MattermostMonitorContext,
   params: MattermostInboundTurnParams,
 ): Promise<void> {
-  const { account, cfg, client, core, runtime } = monitor;
+  const { account, botUserId, cfg, client, core, runtime } = monitor;
   const {
+    ackGate,
     channelHistories,
     ctxPayload,
     eventPlan,
@@ -87,6 +93,22 @@ export async function dispatchMattermostInboundTurn(
   } = params;
   const { channelId, kind, route, senderId, thread, to } = eventPlan;
   const { effectiveReplyToId } = thread;
+  const ackReaction = createMattermostAckReactionRuntime({
+    cfg,
+    client,
+    botUserId,
+    agentId: route.agentId,
+    accountId: account.accountId,
+    postId: post.id ?? "",
+    gate: {
+      isDirect: kind === "direct",
+      isGroup: kind !== "direct",
+      canDetectMention: ackGate.canDetectMention,
+      effectiveWasMentioned: ackGate.effectiveWasMentioned,
+      shouldBypassMention: ackGate.shouldBypassMention,
+    },
+    log: monitor.logVerboseMessage,
+  });
   const {
     deliveryBarrier,
     replyOptions,
@@ -428,6 +450,7 @@ export async function dispatchMattermostInboundTurn(
             sessionKey: route.sessionKey,
           },
           ctxPayload,
+          afterRecord: ackReaction.queueAfterRecord,
           record: {
             updateLastRoute:
               kind === "direct"

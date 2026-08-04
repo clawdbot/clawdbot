@@ -440,6 +440,11 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       channelHistories,
       pinnedMainDmOwner,
       turnAdoptionLifecycle,
+      ackGate: {
+        canDetectMention,
+        effectiveWasMentioned: kind !== "direct" ? mentionDecision.effectiveWasMentioned : false,
+        shouldBypassMention,
+      },
     });
   };
 }

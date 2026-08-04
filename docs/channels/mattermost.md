@@ -357,6 +357,21 @@ Config:
 - `channels.mattermost.actions.reactions`: enable/disable reaction actions (default true).
 - Per-account override: `channels.mattermost.accounts.<id>.actions.reactions`.
 
+## Ack reactions
+
+`messages.ackReaction` reacts to an inbound post with an emoji while OpenClaw is processing it. `messages.ackReactionScope` decides _when_ that happens: `"group-mentions"` (default) only acks group/channel posts that mention the agent; `"group-all"` acks every group/channel post; `"direct"` acks DMs; `"all"` acks everything; `"off"`/`"none"` disables ack reactions entirely.
+
+```json5
+{
+  messages: {
+    ackReaction: "eyes", // emoji name or ":shortcode:"; empty string disables
+    ackReactionScope: "all", // react in DMs and channels/groups too
+  },
+}
+```
+
+The ack reaction fires only after the accepted post is durably recorded, so a replayed or dropped post never double-reacts. Mattermost keeps the ack reaction on the post after the reply is delivered.
+
 ## Interactive buttons (message tool)
 
 Send messages with clickable buttons. When a user clicks a button, the agent receives the selection and can respond.

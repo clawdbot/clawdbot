@@ -31,7 +31,7 @@ type ReactionParams = {
   fetchImpl?: MattermostFetch;
 };
 type ReactionMutation = (client: MattermostClient, params: MutationPayload) => Promise<void>;
-type MutationPayload = { userId: string; postId: string; emojiName: string };
+export type MutationPayload = { userId: string; postId: string; emojiName: string };
 
 const BOT_USER_CACHE_TTL_MS = 10 * 60_000;
 const botUserIdCache = new Map<string, { userId: string; expiresAt: number }>();
@@ -72,7 +72,7 @@ export async function addMattermostReaction(params: {
 }): Promise<Result> {
   return runMattermostReaction(params, {
     action: "add",
-    mutation: createReaction,
+    mutation: createMattermostReactionMutation,
   });
 }
 
@@ -87,7 +87,7 @@ export async function removeMattermostReaction(params: {
 }): Promise<Result> {
   return runMattermostReaction(params, {
     action: "remove",
-    mutation: deleteReaction,
+    mutation: deleteMattermostReactionMutation,
   });
 }
 
@@ -209,7 +209,10 @@ async function runMattermostReaction(
   return { ok: true };
 }
 
-async function createReaction(client: MattermostClient, params: MutationPayload): Promise<void> {
+export async function createMattermostReactionMutation(
+  client: MattermostClient,
+  params: MutationPayload,
+): Promise<void> {
   await client.request<Record<string, unknown>>("/reactions", {
     method: "POST",
     body: JSON.stringify({
@@ -220,7 +223,10 @@ async function createReaction(client: MattermostClient, params: MutationPayload)
   });
 }
 
-async function deleteReaction(client: MattermostClient, params: MutationPayload): Promise<void> {
+export async function deleteMattermostReactionMutation(
+  client: MattermostClient,
+  params: MutationPayload,
+): Promise<void> {
   const emoji = encodeURIComponent(params.emojiName);
   await client.request<unknown>(
     `/users/${params.userId}/posts/${params.postId}/reactions/${emoji}`,
