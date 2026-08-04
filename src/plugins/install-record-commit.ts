@@ -289,15 +289,15 @@ async function commitPluginInstallRecordsWithWriter(params: {
   committed: ConfigReplaceResult | void;
   nextInstallRecords: Record<string, PluginInstallRecord>;
 }> {
-  let tentativeWrite: InstalledPluginIndexWriteReceipt | undefined;
-  const retainedMarkerPaths: string[] = [];
-  const clearedMarkerSnapshots: Array<{ markerPath: string; contents: string }> = [];
-  try {
-    const prepared = await withPluginLifecycleLease({}, async (lease) => {
+  return await withPluginLifecycleLease({}, async (lease) => {
+    let tentativeWrite: InstalledPluginIndexWriteReceipt | undefined;
+    const retainedMarkerPaths: string[] = [];
+    const clearedMarkerSnapshots: Array<{ markerPath: string; contents: string }> = [];
+    try {
       const storeOptions = { filePath: lease.databasePath };
-      const installRecords = await params.prepareInstallRecords(storeOptions);
+      const prepared = await params.prepareInstallRecords(storeOptions);
       tentativeWrite = await writePersistedInstalledPluginIndexInstallRecordsWithLease(
-        installRecords.nextInstallRecords,
+        prepared.nextInstallRecords,
         {
           ...storeOptions,
           config: params.nextConfig,
@@ -305,35 +305,32 @@ async function commitPluginInstallRecordsWithWriter(params: {
         },
       );
       await markRetainedReplacedManagedNpmInstallRecords({
-        previousInstallRecords: installRecords.previousInstallRecords,
-        nextInstallRecords: installRecords.nextInstallRecords,
+        previousInstallRecords: prepared.previousInstallRecords,
+        nextInstallRecords: prepared.nextInstallRecords,
         // Keep partial progress visible to the rollback path.
         createdMarkerPaths: retainedMarkerPaths,
       });
       clearedMarkerSnapshots.push(
-        ...(await clearActiveRetainedManagedNpmInstallMarkers(installRecords.nextInstallRecords)),
+        ...(await clearActiveRetainedManagedNpmInstallMarkers(prepared.nextInstallRecords)),
       );
-      return installRecords;
-    });
-    const installRecordsChanged = !isDeepStrictEqual(
-      prepared.previousInstallRecords,
-      prepared.nextInstallRecords,
-    );
-    const committed = await params.commit(params.nextConfig, {
-      ...params.writeOptions,
-      ...(installRecordsChanged && params.writeOptions?.afterWrite === undefined
-        ? { afterWrite: { mode: "restart", reason: PLUGIN_SOURCE_CHANGED_RESTART_REASON } }
-        : {}),
-      unsetPaths: mergeUnsetPaths(params.writeOptions?.unsetPaths, [
-        Array.from(PLUGIN_INSTALLS_CONFIG_PATH),
-      ]),
-    });
-    return { committed, nextInstallRecords: prepared.nextInstallRecords };
-  } catch (error) {
-    const tentative = tentativeWrite;
-    if (tentative) {
-      try {
-        await withPluginLifecycleLease({}, async (lease) => {
+      const installRecordsChanged = !isDeepStrictEqual(
+        prepared.previousInstallRecords,
+        prepared.nextInstallRecords,
+      );
+      const committed = await params.commit(params.nextConfig, {
+        ...params.writeOptions,
+        ...(installRecordsChanged && params.writeOptions?.afterWrite === undefined
+          ? { afterWrite: { mode: "restart", reason: PLUGIN_SOURCE_CHANGED_RESTART_REASON } }
+          : {}),
+        unsetPaths: mergeUnsetPaths(params.writeOptions?.unsetPaths, [
+          Array.from(PLUGIN_INSTALLS_CONFIG_PATH),
+        ]),
+      });
+      return { committed, nextInstallRecords: prepared.nextInstallRecords };
+    } catch (error) {
+      const tentative = tentativeWrite;
+      if (tentative) {
+        try {
           const restored = await restorePersistedInstalledPluginIndexIfCurrent(
             tentative.previous,
             tentative.revision,
@@ -342,23 +339,22 @@ async function commitPluginInstallRecordsWithWriter(params: {
               lease,
             },
           );
-          if (!restored) {
-            return;
+          if (restored) {
+            // Marker compensation belongs to the same tentative revision. A newer
+            // index owner may rely on the current marker state.
+            await restoreClearedRetainedManagedNpmInstallMarkers(clearedMarkerSnapshots);
+            await removeCreatedRetainedManagedNpmInstallMarkers(retainedMarkerPaths);
           }
-          // Marker compensation belongs to the same tentative revision. A newer
-          // index owner may rely on the current marker state.
-          await restoreClearedRetainedManagedNpmInstallMarkers(clearedMarkerSnapshots);
-          await removeCreatedRetainedManagedNpmInstallMarkers(retainedMarkerPaths);
-        });
-      } catch (rollbackError) {
-        throw new Error(
-          "Failed to commit plugin install records and could not roll back tentative plugin state",
-          { cause: rollbackError },
-        );
+        } catch (rollbackError) {
+          throw new Error(
+            "Failed to commit plugin install records and could not roll back tentative plugin state",
+            { cause: rollbackError },
+          );
+        }
       }
+      throw error;
     }
-    throw error;
-  }
+  });
 }
 
 /** Persist plugin install records and commit the matching config update to disk. */
