@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import readline from "node:readline";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -23,6 +24,19 @@ import {
 import { QmdManagerSearch } from "./qmd-manager-search.js";
 
 type SqliteDatabase = import("node:sqlite").DatabaseSync;
+
+function qmdIndexExists(indexPath: string): boolean {
+  try {
+    fsSync.statSync(indexPath);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return false;
+    }
+    throw err;
+  }
+}
 
 export abstract class QmdManagerIo extends QmdManagerSearch {
   async readFile(params: {
@@ -141,6 +155,11 @@ export abstract class QmdManagerIo extends QmdManagerSearch {
       this.vectorStatusDetail = null;
       return false;
     }
+    if (!qmdIndexExists(this.indexPath)) {
+      this.vectorAvailable = false;
+      this.vectorStatusDetail = "QMD index is missing; semantic search is unavailable";
+      return false;
+    }
     try {
       const result = await this.runQmd(["status"], {
         timeoutMs: this.qmd.limits.timeoutMs,
@@ -243,6 +262,12 @@ export abstract class QmdManagerIo extends QmdManagerSearch {
     totalDocuments: number;
     sourceCounts: Array<{ source: MemorySource; files: number; chunks: number }>;
   } {
+    if (!qmdIndexExists(this.indexPath)) {
+      return {
+        totalDocuments: 0,
+        sourceCounts: Array.from(this.sources).map((source) => ({ source, files: 0, chunks: 0 })),
+      };
+    }
     try {
       const rows = this.ensureDb()
         .prepare(
