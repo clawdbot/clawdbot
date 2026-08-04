@@ -65,6 +65,21 @@ type PendingFinalDeliveryState = {
   intentId?: string;
 } & ({ kind: "replayable"; text: string } | { kind: "transport-only" });
 
+/**
+ * Durable transcript-repair record: an assistant final that was delivered to
+ * the user but could not be appended to the canonical transcript. Kept
+ * separate from `pendingFinalDelivery` so transport-replay cleanup never drops
+ * the only copy of the missing assistant turn.
+ */
+export type PendingTranscriptRepairState = {
+  /** Stable identity for retry-safe transcript insertion. */
+  id: string;
+  text: string;
+  provider?: string;
+  model?: string;
+  createdAt: number;
+};
+
 type FallbackNoticeState = {
   kind: "active";
   selectedModel: string;
@@ -514,6 +529,13 @@ type SessionEntryCore = SessionRestartRecoveryState &
     outputTokens?: number;
     totalTokens?: number;
     pendingFinalDelivery?: PendingFinalDeliveryState;
+    /**
+     * Ordered durable backlog of delivered assistant finals that failed to
+     * reach the canonical transcript. Session admission restores each item
+     * before another turn can extend that transcript. Kept as a list so
+     * independently admitted writers never overwrite an earlier reply.
+     */
+    pendingTranscriptRepair?: PendingTranscriptRepairState[];
     /**
      * Whether totalTokens reflects a fresh context snapshot for the latest run.
      * Undefined means legacy/unknown freshness; false forces consumers to treat

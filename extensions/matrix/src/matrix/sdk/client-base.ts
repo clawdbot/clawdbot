@@ -22,6 +22,7 @@ import {
 import {
   MATRIX_AUTOMATIC_REPAIR_BOOTSTRAP_OPTIONS,
   MATRIX_INITIAL_CRYPTO_BOOTSTRAP_OPTIONS,
+  isMatrixAccessTokenInvalidatedError,
   resolveMatrixLocalTimeoutMs,
   type MatrixOwnDeviceInfo,
   type MatrixOwnDeviceVerificationStatus,
@@ -100,6 +101,7 @@ export abstract class MatrixClientBase {
     eventType: string,
     stateKey?: string,
   ): Promise<Record<string, unknown>>;
+  abstract getMessageWireEventType(roomId: string): Promise<"m.room.message" | "m.room.encrypted">;
   abstract downloadContent(
     mxcUrl: string,
     opts?: { allowRemote?: boolean; maxBytes?: number; readIdleTimeoutMs?: number },
@@ -136,6 +138,7 @@ export abstract class MatrixClientBase {
   protected stopPersistPromise: Promise<void> | null = null;
   protected verificationSummaryListenerBound = false;
   protected currentSyncState: MatrixSyncState | null = null;
+  protected currentSyncError: unknown = undefined;
   protected readonly transactionScopeHomeserver: string;
   protected readonly transactionScopeAccessTokenHash: string;
   protected transactionScopeDeviceId: string | null;
@@ -350,8 +353,8 @@ export abstract class MatrixClientBase {
         client: this.client,
         verificationManager: this.verificationManager,
         recoveryKeyStore: this.recoveryKeyStore,
-        getRoomStateEvent: (roomId, eventType, stateKey = "") =>
-          this.getRoomStateEvent(roomId, eventType, stateKey),
+        isRoomEncrypted: async (roomId) =>
+          (await this.getMessageWireEventType(roomId)) === "m.room.encrypted",
         downloadContent: (mxcUrl, opts) => this.downloadContent(mxcUrl, opts),
       });
     }
@@ -380,6 +383,11 @@ export abstract class MatrixClientBase {
     const timeoutMs = params.timeoutMs ?? 30_000;
     if (isMatrixReadySyncState(this.currentSyncState)) {
       return;
+    }
+    if (isMatrixAccessTokenInvalidatedError(this.currentSyncError)) {
+      throw this.currentSyncError instanceof Error
+        ? this.currentSyncError
+        : new Error("Matrix access token invalidated", { cause: this.currentSyncError });
     }
     if (isMatrixTerminalSyncState(this.currentSyncState)) {
       throw new Error(`Matrix sync entered ${this.currentSyncState} during startup`);
@@ -421,6 +429,12 @@ export abstract class MatrixClientBase {
       const onSyncState = (state: MatrixSyncState, _prevState: string | null, error?: unknown) => {
         if (isMatrixReadySyncState(state)) {
           settleResolve();
+          return;
+        }
+        if (isMatrixAccessTokenInvalidatedError(error)) {
+          settleReject(
+            error instanceof Error ? error : new Error("Matrix access token invalidated"),
+          );
           return;
         }
         if (isMatrixTerminalSyncState(state)) {
@@ -527,6 +541,7 @@ export abstract class MatrixClientBase {
       this.idbPersistTimer = null;
     }
     this.currentSyncState = null;
+    this.currentSyncError = undefined;
     this.client.stopClient();
     this.started = false;
   }

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { WORKBOARD_STATUSES } from "@openclaw/workboard-contract";
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type {
@@ -2616,6 +2617,59 @@ describe("WorkboardStore", () => {
       ],
       count: 1,
     });
+  });
+
+  it.each(WORKBOARD_STATUSES)(
+    "reports archived %s cards according to terminal state",
+    async (status) => {
+      const store = new WorkboardStore(createMemoryStore());
+      const card = await store.create({ title: `Archived ${status}`, status });
+
+      await store.archive(card.id, true);
+
+      const result = await store.diagnostics(Date.now());
+      if (status === "done") {
+        expect(result).toEqual({ diagnostics: [], count: 0 });
+        return;
+      }
+      expect(result).toMatchObject({
+        diagnostics: [
+          expect.objectContaining({
+            card: expect.objectContaining({ id: card.id }),
+            diagnostics: [
+              expect.objectContaining({
+                kind: "archived_but_active",
+                severity: "warning",
+                actions: [],
+              }),
+            ],
+          }),
+        ],
+        count: 1,
+      });
+    },
+  );
+
+  it("keeps archived-card diagnostics transient across lifecycle changes", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Archived but ready", status: "ready" });
+    const now = Date.now();
+
+    await store.archive(card.id, true);
+
+    await expect(store.refreshDiagnostics(now)).resolves.toEqual({ diagnostics: [], count: 0 });
+    await expect(store.get(card.id)).resolves.not.toHaveProperty("metadata.diagnostics");
+    await expect(store.diagnostics(now)).resolves.toMatchObject({
+      diagnostics: [expect.objectContaining({ card: expect.objectContaining({ id: card.id }) })],
+      count: 1,
+    });
+
+    await store.archive(card.id, false);
+    await expect(store.diagnostics(now + 1)).resolves.toEqual({ diagnostics: [], count: 0 });
+
+    await store.archive(card.id, true);
+    await store.move(card.id, "done", undefined);
+    await expect(store.diagnostics(now + 2)).resolves.toEqual({ diagnostics: [], count: 0 });
   });
 
   it("does not drop concurrent updates while refreshing diagnostics", async () => {

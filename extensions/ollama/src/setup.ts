@@ -73,7 +73,7 @@ function isTruthyEnvValue(value: string | undefined): boolean {
   return ["1", "true", "yes", "on"].includes(value?.trim().toLowerCase() ?? "");
 }
 
-function resolveOllamaSetupDefaultBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+export function resolveOllamaSetupDefaultBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
   return isTruthyEnvValue(env.OPENCLAW_DOCKER_SETUP)
     ? OLLAMA_DOCKER_HOST_BASE_URL
     : OLLAMA_DEFAULT_BASE_URL;
@@ -142,7 +142,9 @@ export async function checkOllamaCloudAuth(
       }
       return { signedIn: true };
     } finally {
-      await response.body?.cancel().catch(() => undefined);
+      // Capture can retain a cloned tee branch, so cancellation must not delay
+      // the guard's bounded dispatcher release.
+      void response.body?.cancel().catch(() => undefined);
       await release();
     }
   } catch {

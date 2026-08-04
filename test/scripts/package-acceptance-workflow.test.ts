@@ -1121,16 +1121,51 @@ describe("package acceptance workflow", () => {
     expect(hydratePnpm.if).toBeUndefined();
     expect(hydratePnpm.run).toContain('corepack enable --install-directory "$PNPM_HOME"');
     expect(hydratePnpm.run).toContain("COREPACK_HOME");
-    expect(workflowText).toContain('PNPM_CONFIG_STORE_DIR: "/var/cache/crabbox/pnpm/store"');
-    expect(hydratePnpm.run).toContain("prepare_crabbox_pnpm_dirs");
-    expect(hydratePnpm.run).toContain('case "${PNPM_CONFIG_MODULES_DIR:?}" in "$volatile_root"/*)');
+    expect(workflowText).not.toContain('PNPM_CONFIG_STORE_DIR: "/var/cache/crabbox/pnpm/store"');
+    expect(hydratePnpm.run).toContain('preferred_pnpm_store="/var/cache/crabbox/pnpm/store"');
+    expect(hydratePnpm.run).toContain('mkdir -p "$preferred_pnpm_store" 2>/dev/null');
+    expect(hydratePnpm.run).toContain('[ -w "$preferred_pnpm_store" ]');
     expect(hydratePnpm.run).toContain(
-      'case "${PNPM_CONFIG_VIRTUAL_STORE_DIR:?}" in "$volatile_root"/*)',
+      'pnpm_cache_root="${XDG_CACHE_HOME:-$HOME/.cache}/openclaw/pnpm"',
     );
-    expect(hydratePnpm.run).toContain('rm -rf -- "$volatile_root"');
-    expect(hydratePnpm.run).toContain('mkdir -p "$volatile_root" "$PNPM_CONFIG_STORE_DIR"');
+    expect(hydratePnpm.run).toContain('pnpm_install_root="$pnpm_cache_root/install"');
+    expect(hydratePnpm.run).toContain('export PNPM_CONFIG_STORE_DIR="$pnpm_cache_root/store"');
+    expect(hydratePnpm.run).toContain(
+      'export PNPM_CONFIG_MODULES_DIR="$pnpm_install_root/node_modules"',
+    );
+    expect(hydratePnpm.run).toContain('export PNPM_CONFIG_PACKAGE_IMPORT_METHOD="hardlink"');
+    expect(hydratePnpm.run).toContain(
+      'export PNPM_CONFIG_VIRTUAL_STORE_DIR="$pnpm_install_root/virtual-store"',
+    );
+    expect(hydratePnpm.run).toContain('echo "PNPM_CONFIG_STORE_DIR=$PNPM_CONFIG_STORE_DIR"');
+    expect(hydratePnpm.run).toContain('echo "PNPM_CONFIG_MODULES_DIR=$PNPM_CONFIG_MODULES_DIR"');
+    expect(hydratePnpm.run).toContain(
+      'echo "PNPM_CONFIG_PACKAGE_IMPORT_METHOD=${PNPM_CONFIG_PACKAGE_IMPORT_METHOD:-}"',
+    );
+    expect(hydratePnpm.run).toContain(
+      'echo "PNPM_CONFIG_VIRTUAL_STORE_DIR=$PNPM_CONFIG_VIRTUAL_STORE_DIR"',
+    );
+    expect(hydratePnpm.run).toContain('} >> "$GITHUB_ENV"');
+    expect(hydratePnpm.run).toContain("prepare_crabbox_pnpm_dirs");
+    expect(hydratePnpm.run).toContain(
+      'case "${PNPM_CONFIG_MODULES_DIR:?}" in "$pnpm_install_root"/*)',
+    );
+    expect(hydratePnpm.run).toContain(
+      'case "${PNPM_CONFIG_VIRTUAL_STORE_DIR:?}" in "$pnpm_install_root"/*)',
+    );
+    expect(hydratePnpm.run).toContain('rm -rf -- "$pnpm_install_root"');
+    expect(hydratePnpm.run).toContain('mkdir -p "$pnpm_install_root" "$PNPM_CONFIG_STORE_DIR"');
     expect(hydratePnpm.run).toContain(
       'mkdir -p "$PNPM_CONFIG_MODULES_DIR" "$PNPM_CONFIG_VIRTUAL_STORE_DIR"',
+    );
+    expect(hydratePnpm.run).toContain(
+      '"$(stat -c %d "$PNPM_CONFIG_STORE_DIR")" != "$(stat -c %d "$PNPM_CONFIG_MODULES_DIR")"',
+    );
+    expect(hydratePnpm.run).toContain(
+      "Fallback pnpm store and modules directories must share a filesystem",
+    );
+    expect(hydratePnpm.run).toContain(
+      "append_pnpm_option_arg PNPM_CONFIG_PACKAGE_IMPORT_METHOD package-import-method",
     );
     expect(hydratePnpm.run).toContain("Refusing unsafe pnpm directory");
     expect(hydratePnpm.run).not.toContain('rm -rf -- "${PNPM_CONFIG_MODULES_DIR:?}"');
@@ -1162,10 +1197,33 @@ describe("package acceptance workflow", () => {
     expect(prepareCrabboxShell).toContain('readlink -f "$source"');
     expect(prepareCrabboxShell).toContain('readlink -f "$target"');
     expect(prepareCrabboxShell).toContain("link_node_tool corepack");
-    expect(workflowStep(hydrate, "Ensure Docker is running").if).toBeUndefined();
+    const ensureDocker = workflowStep(hydrate, "Ensure Docker is running");
+    expect(ensureDocker.if).toBeUndefined();
+    expect(ensureDocker.env).toEqual({
+      CRABBOX_JOB: "${{ inputs.crabbox_job }}",
+    });
+    expect(ensureDocker.run).toContain("docker_required=false");
+    expect(ensureDocker.run).toContain('if [ "${CRABBOX_JOB:-hydrate}" = "hydrate-docker" ]; then');
+    expect(ensureDocker.run).toContain("other marker names do not");
+    expect(ensureDocker.run).toContain('if [ "$docker_required" = true ]; then');
+    expect(ensureDocker.run).toContain(
+      "Docker is unavailable for ${CRABBOX_JOB:-hydrate}; route this workload to a Docker-capable provider",
+    );
+    expect(ensureDocker.run).toContain(
+      "Docker is unavailable; standard hydration will continue without Docker",
+    );
+    expect(ensureDocker.run).toContain(
+      'echo "OPENCLAW_CRABBOX_DOCKER_AVAILABLE=0" >> "$GITHUB_ENV"',
+    );
+    expect(ensureDocker.run).toContain(
+      'echo "OPENCLAW_CRABBOX_DOCKER_AVAILABLE=1" >> "$GITHUB_ENV"',
+    );
     expect(workflowStep(hydrate, "Ensure SSH is available").if).toBeUndefined();
     expect(workflowStep(hydrate, "Hydrate provider env helper").if).toBeUndefined();
-    expect(workflowStep(hydrate, "Mark Crabbox ready").run).toContain("COREPACK_HOME");
+    const markCrabboxReady = workflowStep(hydrate, "Mark Crabbox ready").run;
+    expect(markCrabboxReady).toContain("COREPACK_HOME");
+    expect(markCrabboxReady).toContain("OPENCLAW_CRABBOX_DOCKER_AVAILABLE");
+    expect(markCrabboxReady).toContain("PNPM_CONFIG_PACKAGE_IMPORT_METHOD");
     expect(workflowStep(hydrate, "Hydrate provider env helper").env).toBeUndefined();
 
     expect(hydrateWindowsDaemon.if).toBe("${{ inputs.crabbox_job == 'hydrate-windows-daemon' }}");
@@ -1243,6 +1301,9 @@ describe("package acceptance workflow", () => {
     expect(hydrateGithubCrabboxShell).toContain('readlink -f "$source"');
     expect(hydrateGithubCrabboxShell).toContain('readlink -f "$target"');
     expect(hydrateGithubCrabboxShell).toContain("link_node_tool corepack");
+    const markHydrateGithubReady = workflowStep(hydrateGithub, "Mark Crabbox ready").run;
+    expect(markHydrateGithubReady).toContain("OPENCLAW_CRABBOX_DOCKER_AVAILABLE");
+    expect(markHydrateGithubReady).toContain("PNPM_CONFIG_PACKAGE_IMPORT_METHOD");
     expect(workflowStep(hydrateGithub, "Hydrate provider env helper").env?.FACTORY_API_KEY).toBe(
       "${{ secrets.FACTORY_API_KEY }}",
     );
@@ -2297,7 +2358,7 @@ describe("package artifact reuse", () => {
       "OPENCLAW_LIVE_GATEWAY_MODELS=google/gemini-3.1-pro-preview node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles",
     );
     expect(workflow).toContain(
-      "OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M2.7,minimax-portal/MiniMax-M2.7 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2",
+      "OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M3,minimax-portal/MiniMax-M3 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2",
     );
     expect(workflow).toMatch(
       /suite_id: native-live-src-gateway-profiles-fireworks[\s\S]*?timeout_minutes: 30[\s\S]*?advisory: true/u,
@@ -2470,7 +2531,7 @@ describe("package artifact reuse", () => {
       "command: OPENCLAW_LIVE_GATEWAY_THINKING=off OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.6-luna OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1",
     );
     expect(workflow).toContain(
-      "command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M2.7,minimax-portal/MiniMax-M2.7 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2",
+      "command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M3,minimax-portal/MiniMax-M3 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2",
     );
     expect(workflow).toContain(
       'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 45m bash .release-harness/scripts/test-live-cli-backend-docker.sh',
@@ -3173,6 +3234,14 @@ describe("package artifact reuse", () => {
     expect(workflowStep(buzzJob, "Upload Buzz QA artifacts").with?.path).toBe(
       "${{ steps.resolve_buzz.outputs.output_dir }}",
     );
+    const requireBuzz = workflowStep(buzzJob, "Require requested Buzz QA runner");
+    expect(requireBuzz.if).toBe(
+      "always() && inputs.expected_sha == '' && steps.resolve_buzz.outcome == 'success' && steps.resolve_buzz.outputs.available != 'true'",
+    );
+    expect(requireBuzz.run).toContain(
+      "The selected ref does not declare the requested Buzz QA runner.",
+    );
+    expect(requireBuzz.run).toContain("exit 1");
   });
 
   it("runs live transport lanes nightly while release checks stay gated", () => {
@@ -3576,22 +3645,41 @@ describe("package artifact reuse", () => {
 
   it("runs full release children from the trusted workflow ref", () => {
     const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
+    const evidenceReuseJob = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "evidence_reuse");
     const npmTelegramJob = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "npm_telegram");
     const performanceJob = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "performance");
+    const summaryJob = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "summary");
+    const evidenceReuseStep = workflowStep(evidenceReuseJob, "Find reusable validation evidence");
     const dispatchStep = workflowStep(npmTelegramJob, "Dispatch and monitor npm Telegram E2E");
+    const manifestStep = workflowStep(summaryJob, "Write release validation manifest");
 
     expect(workflow).toContain("CHILD_WORKFLOW_REF: ${{ github.ref_name }}");
     expect(workflow).toContain('gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1');
     expect(npmTelegramJob.name).toBe("Run package Telegram E2E");
-    expect(npmTelegramJob.needs).toEqual(["resolve_target"]);
+    expect(npmTelegramJob.needs).toEqual(["resolve_target", "evidence_reuse"]);
     expect(npmTelegramJob["timeout-minutes"]).toBe(
       "${{ inputs.release_profile == 'full' && 360 || 60 }}",
     );
     expect(performanceJob["timeout-minutes"]).toBe(
       "${{ inputs.release_profile == 'full' && 360 || 120 }}",
     );
-    expect(npmTelegramJob.if).toContain("inputs.rerun_group == 'npm-telegram'");
-    expect(npmTelegramJob.if).not.toContain("inputs.rerun_group == 'all'");
+    expect(npmTelegramJob.if).toContain(
+      'contains(fromJSON(\'["all","npm-telegram"]\'), inputs.rerun_group)',
+    );
+    expect(npmTelegramJob.if).toContain("needs.evidence_reuse.outputs.reuse != 'true'");
+    expect(evidenceReuseStep.env).toMatchObject({
+      ALLOW_UNRELEASED_CHANGELOG:
+        "${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}",
+      NPM_TELEGRAM_PACKAGE_SPEC: "${{ inputs.npm_telegram_package_spec }}",
+      NPM_TELEGRAM_PROVIDER_MODE: "${{ inputs.npm_telegram_provider_mode }}",
+      NPM_TELEGRAM_SCENARIO: "${{ inputs.npm_telegram_scenario }}",
+    });
+    expectTextToIncludeAll(evidenceReuseStep.run, [
+      "npmTelegramPackageSpec: $npmTelegramPackageSpec",
+      "npmTelegramProviderMode: $npmTelegramProviderMode",
+      "npmTelegramScenario: $npmTelegramScenario",
+      "allowUnreleasedChangelog: $allowUnreleasedChangelog",
+    ]);
     expect(dispatchStep.env).toEqual({
       CHILD_WORKFLOW_KIND: "npm-telegram",
       CHILD_WORKFLOW_REF: "${{ github.ref_name }}",
@@ -3603,6 +3691,19 @@ describe("package artifact reuse", () => {
       SCENARIO: "${{ inputs.npm_telegram_scenario }}",
       TARGET_SHA: "${{ needs.resolve_target.outputs.sha }}",
     });
+    expect(manifestStep.env).toMatchObject({
+      ALLOW_UNRELEASED_CHANGELOG:
+        "${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}",
+      NPM_TELEGRAM_PACKAGE_SPEC: "${{ inputs.npm_telegram_package_spec }}",
+      NPM_TELEGRAM_PROVIDER_MODE: "${{ inputs.npm_telegram_provider_mode }}",
+      NPM_TELEGRAM_SCENARIO: "${{ inputs.npm_telegram_scenario }}",
+    });
+    expectTextToIncludeAll(manifestStep.run, [
+      "npmTelegramPackageSpec: $npmTelegramPackageSpec",
+      "npmTelegramProviderMode: $npmTelegramProviderMode",
+      "npmTelegramScenario: $npmTelegramScenario",
+      "allowUnreleasedChangelog: $allowUnreleasedChangelog",
+    ]);
     expectTextToIncludeAll(dispatchStep.run, [
       'dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-npm-telegram"',
       'dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"',
@@ -3626,6 +3727,10 @@ describe("package artifact reuse", () => {
       "Verify release checks accepted Tideclaw alpha advisory lanes",
       "release_checks_advisory_only",
       "release_check_blocking_job",
+      'if [[ "$RERUN_GROUP" == "npm-telegram" || ( "$RERUN_GROUP" == "all"',
+      "npm_telegram_required=1",
+      "Reused evidence did not record the required npm Telegram child run.",
+      'check_child "npm_telegram" "" "$npm_telegram_required"',
       'if [[ "$RELEASE_PROFILE" == "beta" && "$1" == "Run package acceptance / Telegram package acceptance / "* ]]; then',
       'or (.name | startswith("Run QA Lab runtime-pair lane ("))',
       'or .name == "Run QA Lab live Discord lane"',

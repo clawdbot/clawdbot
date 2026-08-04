@@ -52,7 +52,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   private audioAppendAbortController: AbortController | null = null;
   private readonly pendingAudioAppends = new Set<Promise<unknown>>();
   private readonly outputQueue = new RealtimeTalkPcmOutputQueue();
-  private readonly consultAbortControllers = new Map<string, AbortController>();
+  private readonly toolAbortControllers = new Map<string, AbortController>();
   private readonly completedToolCalls = new Set<string>();
   private readonly submittingToolCalls = new Set<string>();
   private readonly delayedToolResults = new Set<DelayedToolResult>();
@@ -350,6 +350,9 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
             this.reportToolResultSubmissionError(error);
           });
           return;
+        case "toolCallCancelled":
+          this.cancelToolCall(event.callId);
+          return;
         case "toolResult":
           if (this.isFinalToolResult(event)) {
             this.completeToolCall(event.callId);
@@ -423,13 +426,19 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       return;
     }
     if (name === REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME) {
-      await submitRealtimeTalkAgentControl({
-        ctx: this.ctx,
-        callId,
-        args: event.args ?? {},
-        sessionId: this.session.relaySessionId,
-        submit: (toolCallId, result) => this.submitToolResult(toolCallId, result),
-      });
+      const abortController = this.startToolExecution(callId);
+      try {
+        await submitRealtimeTalkAgentControl({
+          ctx: this.ctx,
+          callId,
+          args: event.args ?? {},
+          sessionId: this.session.relaySessionId,
+          signal: abortController.signal,
+          submit: (toolCallId, result) => this.submitToolResult(toolCallId, result),
+        });
+      } finally {
+        this.finishToolExecution(callId, abortController);
+      }
       return;
     }
     if (name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
@@ -438,8 +447,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       });
       return;
     }
-    const abortController = new AbortController();
-    this.consultAbortControllers.set(callId, abortController);
+    const abortController = this.startToolExecution(callId);
     try {
       if (event.forced) {
         await this.submitToolResult(
@@ -469,7 +477,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
         submit: (toolCallId, result) => this.submitToolResult(toolCallId, result),
       });
     } finally {
-      this.consultAbortControllers.delete(callId);
+      this.finishToolExecution(callId, abortController);
     }
   }
 
@@ -610,8 +618,35 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     if (this.submittingToolCalls.has(callId)) {
       return;
     }
-    this.consultAbortControllers.get(callId)?.abort();
-    this.consultAbortControllers.delete(callId);
+    this.toolAbortControllers.get(callId)?.abort();
+    this.toolAbortControllers.delete(callId);
+  }
+
+  private cancelToolCall(callIdRaw: string | undefined): void {
+    const callId = callIdRaw?.trim();
+    if (!callId) {
+      return;
+    }
+    this.completedToolCalls.add(callId);
+    this.toolAbortControllers.get(callId)?.abort();
+    this.toolAbortControllers.delete(callId);
+    for (const pending of this.delayedToolResults) {
+      if (pending.callId === callId) {
+        this.discardDelayedToolResult(pending);
+      }
+    }
+  }
+
+  private startToolExecution(callId: string): AbortController {
+    const abortController = new AbortController();
+    this.toolAbortControllers.set(callId, abortController);
+    return abortController;
+  }
+
+  private finishToolExecution(callId: string, abortController: AbortController): void {
+    if (this.toolAbortControllers.get(callId) === abortController) {
+      this.toolAbortControllers.delete(callId);
+    }
   }
 
   private isFinalToolResult(event: GatewayRelayEvent): boolean {
@@ -660,10 +695,10 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   }
 
   private abortConsults(): void {
-    for (const controller of this.consultAbortControllers.values()) {
+    for (const controller of this.toolAbortControllers.values()) {
       controller.abort();
     }
-    this.consultAbortControllers.clear();
+    this.toolAbortControllers.clear();
   }
 
   private detectBargeInSpeech(samples: Float32Array): boolean {

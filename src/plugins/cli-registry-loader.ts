@@ -184,7 +184,7 @@ async function loadPluginCliCommandRegistryWithContext(params: {
         ...params.loaderOptions,
         ...(onlyPluginIds && onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
         cache: false,
-        forceFullRuntimeForChannelPlugins: true,
+        channelPluginLoadIntent: "full",
         runtimeOptions: {
           nodes: createPluginCliGatewayNodesRuntime(),
         },

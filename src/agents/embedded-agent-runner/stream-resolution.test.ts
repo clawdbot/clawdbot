@@ -19,6 +19,11 @@ import {
 const streamMocks = vi.hoisted(() => ({
   delegate: undefined as StreamFn | undefined,
   streamSimple: vi.fn(),
+  anthropicVertex: vi.fn(),
+}));
+
+vi.mock("../anthropic-vertex-stream.js", () => ({
+  createAnthropicVertexStreamFnForModel: streamMocks.anthropicVertex,
 }));
 
 vi.mock("../../llm/stream.js", async (importOriginal) => {
@@ -89,6 +94,7 @@ async function expectStreamResultRecord(
 
 afterEach(() => {
   streamMocks.streamSimple.mockReset();
+  streamMocks.anthropicVertex.mockReset();
   if (streamMocks.delegate) {
     streamMocks.streamSimple.mockImplementation(streamMocks.delegate);
   }
@@ -646,6 +652,64 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     );
     expect(result.sessionId).toBe("run-session");
     expect(result.promptCacheKey).toBe("cron-cache-key");
+  });
+
+  it.each(["custom", "anthropic-vertex"] as const)(
+    "preserves %s stream identity without cache or run cancellation",
+    (provider) => {
+      const currentStreamFn = vi.fn(async (_model, _context, options) => options);
+      if (provider === "anthropic-vertex") {
+        streamMocks.anthropicVertex.mockReturnValueOnce(currentStreamFn);
+      }
+      const streamFn = resolveEmbeddedAgentStreamFn({
+        currentStreamFn: currentStreamFn as never,
+        sessionId: "session-1",
+        model: {
+          api: provider === "anthropic-vertex" ? "anthropic-messages" : "custom-api",
+          provider,
+          id: "custom-model",
+        } as never,
+      });
+
+      expect(streamFn).toBe(currentStreamFn);
+    },
+  );
+
+  it.each([
+    ["custom", "run"],
+    ["custom", "caller"],
+    ["anthropic-vertex", "run"],
+    ["anthropic-vertex", "caller"],
+  ] as const)("cancels %s streams when their %s owner aborts", async (provider, signalOwner) => {
+    // Attempt transport and compaction both resolve streams through this owner.
+    const currentStreamFn = vi.fn(async (_model, _context, options) => options);
+    if (provider === "anthropic-vertex") {
+      streamMocks.anthropicVertex.mockReturnValueOnce(currentStreamFn);
+    }
+    const runController = new AbortController();
+    const callerController = new AbortController();
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: currentStreamFn as never,
+      sessionId: "session-1",
+      signal: runController.signal,
+      model: {
+        api: provider === "anthropic-vertex" ? "anthropic-messages" : "custom-api",
+        provider,
+        id: "custom-model",
+      } as never,
+    });
+
+    const result = await expectStreamResultRecord(
+      streamFn({ provider, id: "custom-model" } as never, {} as never, {
+        signal: callerController.signal,
+      }),
+      `${provider} composed signal`,
+    );
+    expect(result.signal).toMatchObject({ aborted: false });
+
+    const abortReason = new Error(`${signalOwner} canceled`);
+    (signalOwner === "run" ? runController : callerController).abort(abortReason);
+    expect(result.signal).toMatchObject({ aborted: true, reason: abortReason });
   });
 
   it.each(["run", "caller"] as const)(

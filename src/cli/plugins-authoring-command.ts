@@ -18,7 +18,7 @@ import {
 import { buildPluginLoaderAliasMap } from "../plugins/sdk-alias.js";
 import { defaultRuntime } from "../runtime.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
-import { isRecord } from "../utils.js";
+import { isRecord, shortenHomeInString } from "../utils.js";
 import { VERSION } from "../version.js";
 
 type JsonObject = Record<string, unknown>;
@@ -32,7 +32,12 @@ export type PluginsBuildOptions = {
 export type PluginsValidateOptions = {
   root?: string;
   entry?: string;
+  json?: boolean;
 };
+
+type PluginsValidationResult =
+  | { valid: true; pluginId: string; errors: [] }
+  | { valid: false; pluginId?: string; errors: string[] };
 
 export type PluginsInitOptions = {
   directory?: string;
@@ -321,15 +326,16 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
   defaultRuntime.log(`Updated ${formatOutputPath(packagePath, "package.json")}`);
 }
 
-export async function runPluginsValidateCommand(opts: PluginsValidateOptions): Promise<void> {
+async function collectPluginsValidationResult(
+  opts: PluginsValidateOptions,
+): Promise<PluginsValidationResult> {
   const rootDir = resolveRootDir(opts.root);
   const entryPath = resolveEntryPath(rootDir, opts.entry);
   const entryRelative = normalizeRelativePath(rootDir, entryPath);
   const packageManifest = readPackageManifest(rootDir);
   const manifestResult = loadPluginManifest(rootDir, false);
   if (!manifestResult.ok) {
-    defaultRuntime.error(manifestResult.error);
-    return defaultRuntime.exit(1);
+    return { valid: false, errors: [manifestResult.error] };
   }
   const manifest = readJsonFile(path.join(rootDir, PLUGIN_MANIFEST_FILENAME));
   const { metadata } = await loadToolPlugin({ rootDir, entryPath });
@@ -340,12 +346,43 @@ export async function runPluginsValidateCommand(opts: PluginsValidateOptions): P
     entry: entryRelative,
   });
   if (errors.length > 0) {
-    for (const error of errors) {
+    return { valid: false, pluginId: metadata.id, errors };
+  }
+
+  return { valid: true, pluginId: metadata.id, errors: [] };
+}
+
+export async function runPluginsValidateCommand(opts: PluginsValidateOptions): Promise<void> {
+  let result: PluginsValidationResult;
+  try {
+    result = await collectPluginsValidationResult(opts);
+  } catch (err) {
+    if (!opts.json) {
+      throw err;
+    }
+    result = {
+      valid: false,
+      errors: [err instanceof Error ? err.message : String(err)],
+    };
+  }
+
+  if (!result.valid) {
+    for (const error of result.errors) {
       defaultRuntime.error(error);
     }
-    return defaultRuntime.exit(1);
+    if (opts.json) {
+      defaultRuntime.writeJson({
+        ...result,
+        errors: result.errors.map(shortenHomeInString),
+      });
+    }
+    return defaultRuntime.exit(1, opts.json ? { resetStream: process.stderr } : undefined);
   }
-  defaultRuntime.log(`Plugin ${metadata.id} is valid.`);
+  if (opts.json) {
+    defaultRuntime.writeJson(result);
+    return;
+  }
+  defaultRuntime.log(`Plugin ${result.pluginId} is valid.`);
 }
 
 function assertCanCreate(filePath: string, force: boolean): void {

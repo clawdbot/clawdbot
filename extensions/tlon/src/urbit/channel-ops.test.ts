@@ -17,6 +17,9 @@ const CHANNEL_DEPS = {
 function mockGuardedResponse(response: Response, finalUrl: string) {
   const state = { bodyUsedAtRelease: undefined as boolean | undefined };
   const release = vi.fn(async () => {
+    if (!response.bodyUsed) {
+      void response.body?.cancel().catch(() => undefined);
+    }
     state.bodyUsedAtRelease = response.bodyUsed;
   });
   vi.mocked(urbitFetch).mockResolvedValueOnce({ response, finalUrl, release });
@@ -99,6 +102,7 @@ describe("Urbit channel operations", () => {
     vi.spyOn(body, "cancel").mockImplementation(() => new Promise<void>(() => {}));
     let released = false;
     const release = vi.fn(async () => {
+      void body.cancel().catch(() => undefined);
       released = true;
     });
     vi.mocked(urbitFetch).mockResolvedValueOnce({

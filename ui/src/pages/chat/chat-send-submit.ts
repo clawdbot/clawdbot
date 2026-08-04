@@ -9,7 +9,11 @@ import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
-import { dispatchChatSlashCommand, shouldQueueLocalSlashCommand } from "./chat-commands.ts";
+import {
+  dispatchChatSlashCommand,
+  requireChatSessionAction,
+  shouldQueueLocalSlashCommand,
+} from "./chat-commands.ts";
 import type { ChatState } from "./chat-history.ts";
 import {
   admitQueuedMessageForSession,
@@ -62,7 +66,6 @@ import {
 } from "./steer-lifecycle.ts";
 
 type ChatSendOptions = {
-  confirmReset?: boolean;
   restoreDraft?: boolean;
   skillWorkshopRevision?: ChatQueueSkillWorkshopRevision;
   /** Lets request-scoped UI actions recover from rejected local commands. */
@@ -206,24 +209,16 @@ export async function handleSendChat(
     return;
   }
 
-  if (
-    messageOverride != null &&
-    opts?.confirmReset &&
-    isChatResetCommand(message) &&
-    (typeof globalThis.confirm !== "function" ||
-      !globalThis.confirm("Start a new thread? This will reset the current chat."))
-  ) {
-    return;
-  }
-
-  host.chatRunError = null;
-
   if (!skillWorkshopRevision) {
     // Natural stop aliases require a run; explicit /stop is always available.
     if (
       isChatStopCommand(message) &&
       (message.trim().startsWith("/") || hasAbortableSessionRun(host))
     ) {
+      if (host.connected && !requireChatSessionAction(host, "abort")) {
+        return;
+      }
+      host.chatRunError = null;
       if (messageOverride == null) {
         recordNonTranscriptInputHistory(host, message);
       }
@@ -231,6 +226,7 @@ export async function handleSendChat(
       return;
     }
 
+    host.chatRunError = null;
     const parsed = parseSlashCommand(message);
     if (/^\/(?:btw|side)(?::|\s|$)/i.test(message)) {
       const question = extractCompanionCommandQuestion(message);

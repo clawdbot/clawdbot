@@ -28,7 +28,6 @@ const mocks = vi.hoisted(() => {
       },
     ),
     resolveGatewayPort: vi.fn(),
-    ensureControlUiAssetsBuilt: vi.fn(),
     createClackPrompter: vi.fn(),
     note: vi.fn(),
     printWizardHeader: vi.fn(),
@@ -88,10 +87,6 @@ vi.mock("../config/config.js", () => ({
   writeConfigFile: mocks.writeConfigFile,
   replaceConfigFile: mocks.replaceConfigFile,
   resolveGatewayPort: mocks.resolveGatewayPort,
-}));
-
-vi.mock("../infra/control-ui-assets.js", () => ({
-  ensureControlUiAssetsBuilt: mocks.ensureControlUiAssetsBuilt,
 }));
 
 vi.mock("../infra/windows-gateway-firewall-diagnostics.js", () => ({
@@ -326,7 +321,6 @@ describe("runConfigureWizard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.assertConfigPathForWrite.mockImplementation(() => {});
-    mocks.ensureControlUiAssetsBuilt.mockResolvedValue({ ok: true });
     mocks.resolvePluginContributionOwners.mockReturnValue(["firecrawl"]);
     mocks.resolveSearchProviderOptions.mockReturnValue([
       {
@@ -633,7 +627,6 @@ describe("runConfigureWizard", () => {
     expect(mocks.probeGatewayReachable).not.toHaveBeenCalledWith(
       expect.objectContaining({ timeoutMs: 300 }),
     );
-    expect(mocks.ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
     expect(mocks.resolveControlUiLinks).not.toHaveBeenCalled();
     expect(requireWriteConfig().gateway).toBeUndefined();
   });
@@ -648,7 +641,6 @@ describe("runConfigureWizard", () => {
     expect(mocks.promptAuthConfig).toHaveBeenCalledOnce();
     expect(mocks.promptRemoteGatewayConfig).not.toHaveBeenCalled();
     expect(getGateway(requireWriteConfig()).mode).toBe("remote");
-    expect(mocks.ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
     expect(mocks.resolveControlUiLinks).not.toHaveBeenCalled();
     expect(mocks.probeGatewayReachable).not.toHaveBeenCalled();
     expect(mocks.note).toHaveBeenCalledWith(

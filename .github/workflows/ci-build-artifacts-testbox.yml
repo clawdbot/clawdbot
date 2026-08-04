@@ -145,6 +145,12 @@ jobs:
             packages/*/dist/
           key: ${{ runner.os }}-dist-build-v2-${{ github.sha }}
 
+      - name: Ensure Testbox base commit
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event.pull_request.base.ref }}
       - name: Prepare Testbox shell
         uses: ./.github/actions/prepare-testbox-shell
         with:

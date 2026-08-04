@@ -9,13 +9,19 @@ import {
   listMockOpenAiServerModelIds,
 } from "../shared/mock-model-config.js";
 import { buildMessagesPayload } from "./mock-anthropic-messages.js";
-import { buildAssistantText } from "./mock-openai-assistant-text.js";
+import { convertAnthropicMessagesToResponsesInput } from "./mock-anthropic-wire.js";
+import {
+  buildAssistantText,
+  isCanonicalCompactionRetryWriteResult,
+  QA_COMPACTION_RETRY_FINAL_MARKER,
+} from "./mock-openai-assistant-text.js";
 import {
   type ResponsesInputItem,
   type StreamEvent,
   resolveProviderVariant,
   type MockOpenAiRequestSnapshot,
   type MockOpenAiRequestSnapshotInput,
+  type MockOpenAiRequestKind,
   type AnthropicMessagesRequest,
   TINY_PNG_BASE64,
   QA_REASONING_ONLY_RECOVERY_PROMPT_RE,
@@ -51,10 +57,14 @@ import {
   QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE,
   QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE,
   QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE,
+  QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE,
+  QA_SUBAGENT_TERMINAL_MATRIX_WORKER_RE,
   buildStrandedFinalRecoveryText,
   buildStrandedFinalRetryFailureText,
   isStrandedFinalRetryFailureRequest,
   QA_SUBAGENT_DIRECT_FALLBACK_MARKER,
+  QA_SUBAGENT_TERMINAL_MARKERS,
+  QA_SUBAGENT_TERMINAL_METADATA_SENTINEL,
   QA_NATIVE_STOP_DELAY_PROMPT_RE,
   QA_NATIVE_STOP_DELAY_MS,
   QA_IMAGE_GENERATION_PROMPT_RE,
@@ -98,6 +108,8 @@ import {
   shouldUseWhatsAppContactMarker,
   shouldUseWhatsAppStickerMarker,
   extractBlockStreamingMarkerDirectives,
+  extractSlackProgressCommentaryDirectives,
+  QA_SLACK_PROGRESS_COMMENTARY_MARKER_RE,
   hasDeclaredTool,
   hasToolDefinition,
   isQaToolSearchFixture,
@@ -124,6 +136,7 @@ import {
 import {
   extractLastUserText,
   extractLastMatchingUserTurn,
+  hasToolOutput,
   extractToolOutput,
   extractToolOutputStructuredError,
   extractToolOutputCallId,
@@ -160,11 +173,68 @@ import {
   extractSnackPreference,
 } from "./mock-openai-tooling.js";
 
+const QA_COMPACTION_RETRY_PROMPT_RE = /compaction retry mutating tool check/i;
+const QA_COMPACTION_SUMMARY_INSTRUCTIONS_RE =
+  /context summarization assistant[\s\S]*structured summary[\s\S]*do not continue/i;
+const QA_COMPACTION_RETRY_OVERFLOW_THRESHOLD_BYTES = 256 * 1024;
+const QA_COMPACTION_RETRY_DURABLE_MARKER = "QA-COMPACTION-DURABLE-MARKER";
+const QA_COMPACTION_RETRY_BULKY_MARKER = "QA-COMPACTION-BULKY-HISTORICAL-MARKER";
+const QA_COMPACTION_RETRY_SUMMARY = `## Goal
+Complete the compaction retry mutating tool check.
+
+## Constraints & Preferences
+- Preserve ${QA_COMPACTION_RETRY_DURABLE_MARKER}.
+
+## Progress
+### Done
+- [x] Historical context compacted after overflow.
+
+### In Progress
+- [ ] Write compaction-retry-summary.txt exactly once.
+
+### Blocked
+- (none)
+
+## Key Decisions
+- **Retry once**: Continue from compacted context without replaying a completed mutation.
+
+## Next Steps
+1. Write the required file.
+2. Return the final replay-safety marker.
+
+## Critical Context
+- ${QA_COMPACTION_RETRY_DURABLE_MARKER}`;
+const QA_GENERIC_COMPACTION_SUMMARY = `## Goal
+Preserve the active conversation context.
+
+## Constraints & Preferences
+- Keep current requirements and identifiers.
+
+## Progress
+### Done
+- [x] Historical context summarized.
+
+### In Progress
+- [ ] Continue the active task.
+
+### Blocked
+- (none)
+
+## Key Decisions
+- **Continue from summary**: Do not restart completed work.
+
+## Next Steps
+1. Continue the active task from the retained context.
+
+## Critical Context
+- Refer to the retained recent turns for current task details.`;
+
 const QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE =
   /(?:partial|quiet) streaming qa check|final-only marker streaming qa check|block streaming qa check|tool progress(?: error)? qa check/i;
 const QA_STREAMING_TOOL_PROGRESS_CONTINUATION_RE =
   /^Continue with (?:the current Matrix QA scenario|the QA scenario plan and report worked, failed, and blocked items)\.$/i;
 const QA_CODE_MODE_TARGET_MARKER = "qa-code-mode-target:";
+const QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE = /failed tool terminal recovery qa check/i;
 
 function isStreamingToolProgressContinuationText(text: string) {
   const trimmed = text.trim();
@@ -454,16 +524,105 @@ function extractScenarioPlannedTool(events: StreamEvent[]) {
     : { name: wireName, args: wireArgs, wireName };
 }
 
+type TerminalRequesterSettleGate = {
+  markSettled: (caseName: string, childSessionKey: string) => void;
+  waitUntilSettled: (caseName: string, childSessionKey: string) => Promise<void>;
+};
+
+function createTerminalRequesterSettleGate(): TerminalRequesterSettleGate {
+  const settledChildren = new Set<string>();
+  const waiterPromises = new Map<string, Promise<void>>();
+  const waiters = new Map<string, () => void>();
+  const childKey = (caseName: string, childSessionKey: string) => `${caseName}\n${childSessionKey}`;
+  return {
+    markSettled(caseName, childSessionKey) {
+      const key = childKey(caseName, childSessionKey);
+      settledChildren.add(key);
+      waiters.get(key)?.();
+    },
+    async waitUntilSettled(caseName, childSessionKey) {
+      const key = childKey(caseName, childSessionKey);
+      if (settledChildren.has(key)) {
+        return;
+      }
+      const existing = waiterPromises.get(key);
+      if (existing) {
+        return await existing;
+      }
+      const promise = new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          waiters.delete(key);
+          waiterPromises.delete(key);
+          reject(new Error(`terminal requester did not settle: ${caseName} (${childSessionKey})`));
+        }, 30_000);
+        const finish = () => {
+          clearTimeout(timeout);
+          waiters.delete(key);
+          waiterPromises.delete(key);
+          resolve();
+        };
+        waiters.set(key, finish);
+      });
+      waiterPromises.set(key, promise);
+      await promise;
+    },
+  };
+}
+
+function resolveQaRuntimeSessionId(input: ResponsesInputItem[], body: Record<string, unknown>) {
+  return /\bRuntime:\s*[^\n]*\bsessionId=([^\s|]+)/u.exec(extractAllRequestTexts(input, body))?.[1];
+}
+
+function normalizeResponsesInput(value: unknown): ResponsesInputItem[] {
+  if (Array.isArray(value)) {
+    return value as ResponsesInputItem[];
+  }
+  if (typeof value === "string") {
+    return [{ role: "user", content: [{ type: "input_text", text: value }] }];
+  }
+  return [];
+}
+
+function resolveQaChildSessionKey(input: ResponsesInputItem[], body: Record<string, unknown>) {
+  const systemPrompt = extractAllRequestTexts(
+    input.filter((item) => item.role === "developer" || item.role === "system"),
+    body,
+  );
+  return /^- Your session:\s*(.+?)\.\s*$/mu.exec(systemPrompt)?.[1]?.trim();
+}
+
+function resolveAcceptedChildSessionKey(input: ResponsesInputItem[]) {
+  const output = parseToolOutputJson(extractToolOutput(input));
+  return output?.status === "accepted" && typeof output.childSessionKey === "string"
+    ? output.childSessionKey.trim() || undefined
+    : undefined;
+}
+
+function classifyMockOpenAiRequest(
+  input: ResponsesInputItem[],
+  body: Record<string, unknown>,
+): MockOpenAiRequestKind {
+  if (QA_COMPACTION_SUMMARY_INSTRUCTIONS_RE.test(extractInstructionsText(body))) {
+    return "compaction-summary";
+  }
+  return hasToolOutput(input) ? "tool-continuation" : "agent-initial";
+}
+
 async function buildResponsesPayload(
   body: Record<string, unknown>,
   scenarioState: MockScenarioState,
+  options: {
+    waitForTerminalRequesterSettled?: (caseName: string, childSessionKey: string) => Promise<void>;
+    requestKind?: MockOpenAiRequestKind;
+  } = {},
 ) {
   const providerVariant = resolveProviderVariant(
     typeof body.model === "string" ? body.model : undefined,
   );
-  const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
+  const input = normalizeResponsesInput(body.input);
   const toolDeclarationBody = resolveCurrentToolDeclarationSurface(body, input);
   const prompt = extractLastUserText(input);
+  const hasCompletedToolOutput = hasToolOutput(input);
   const rawToolOutput = extractToolOutput(input);
   const codeModeControlJson = isCodeModeControlToolOutput(toolDeclarationBody, input)
     ? parseToolOutputJson(rawToolOutput)
@@ -472,9 +631,40 @@ async function buildResponsesPayload(
     codeModeControlJson?.status === "completed" && Object.hasOwn(codeModeControlJson, "value")
       ? stringifyScenarioToolOutput(codeModeControlJson.value)
       : rawToolOutput;
+  const completedToolCall = findToolCallByCallId(input, extractToolOutputCallId(input));
+  const completedToolName = (() => {
+    if (completedToolCall?.name !== "exec") {
+      return completedToolCall?.name;
+    }
+    const code = parseToolCallArguments(completedToolCall)?.code;
+    return typeof code === "string" ? decodeCodeModeTarget(code)?.name : undefined;
+  })();
   const buildToolCallEventsWithArgs = (name: string, args: Record<string, unknown>) =>
     buildScenarioToolCallEvents(toolDeclarationBody, name, args);
   const allInputText = extractAllRequestTexts(input, body);
+  const hasCompactionRetryDurableContext = allInputText.includes(
+    QA_COMPACTION_RETRY_DURABLE_MARKER,
+  );
+  const hasCompactionRetryMarker =
+    QA_COMPACTION_RETRY_PROMPT_RE.test(allInputText) ||
+    hasCompactionRetryDurableContext ||
+    allInputText.includes(QA_COMPACTION_RETRY_BULKY_MARKER);
+  const requestKind = options.requestKind ?? classifyMockOpenAiRequest(input, body);
+  if (requestKind === "compaction-summary") {
+    return buildAssistantEvents(
+      hasCompactionRetryDurableContext
+        ? QA_COMPACTION_RETRY_SUMMARY
+        : QA_GENERIC_COMPACTION_SUMMARY,
+    );
+  }
+  if (
+    QA_COMPACTION_RETRY_PROMPT_RE.test(allInputText) ||
+    /compaction-retry-summary\.txt/i.test(toolOutput)
+  ) {
+    scenarioState.compactionRetryActive = true;
+  }
+  const compactionRetryScenarioActive =
+    scenarioState.compactionRetryActive || hasCompactionRetryMarker;
   const scenarioToolOutput =
     toolOutput ||
     (/thread memory check|session memory ranking check|memory tools check|repo contract followthrough check/i.test(
@@ -489,6 +679,18 @@ async function buildResponsesPayload(
     hasToolDefinition(toolDeclarationBody, "wait")
   ) {
     return buildRawToolCallEventsWithArgs("wait", { runId: codeModeControlJson.runId });
+  }
+  if (compactionRetryScenarioActive) {
+    if (isCanonicalCompactionRetryWriteResult(toolOutput)) {
+      return buildAssistantEvents(QA_COMPACTION_RETRY_FINAL_MARKER);
+    }
+    if (!hasCompletedToolOutput) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "compaction-retry-summary.txt",
+        content: "Replay safety: unsafe after write.\n",
+      });
+    }
+    return buildAssistantEvents("");
   }
   const memoryToolUnavailable =
     toolJson?.unavailable === true ||
@@ -533,6 +735,10 @@ async function buildResponsesPayload(
     QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(prompt) ||
     (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
       QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(allInputText));
+  const isActiveFailedToolTerminalRecovery =
+    QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE.test(prompt) ||
+    (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
+      QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE.test(allInputText));
   const hasCallableCodeMode = hasCodeModeExecSurface(toolDeclarationBody);
   const canCallSessionsSpawn =
     hasToolDefinition(toolDeclarationBody, "sessions_spawn") || hasCallableCodeMode;
@@ -554,8 +760,18 @@ async function buildResponsesPayload(
     const command = execCommandFromToolProgressPrompt(scenarioFamilyPrompt);
     return command ? buildToolCallEventsWithArgs("exec", { command }) : null;
   };
+  const slackProgressTurn = extractLastMatchingUserTurn(
+    input,
+    QA_SLACK_PROGRESS_COMMENTARY_MARKER_RE,
+  );
+  const slackProgressDirectives = slackProgressTurn
+    ? extractSlackProgressCommentaryDirectives(slackProgressTurn.text)
+    : null;
+  const hasSlackProgressToolOutput = slackProgressTurn
+    ? hasToolOutput(input.slice(slackProgressTurn.index))
+    : false;
   if (QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE.test(allInputText)) {
-    if (!toolOutput) {
+    if (!hasCompletedToolOutput) {
       scenarioState.toolLoopReadAttempts = 0;
     }
     if (/global circuit breaker/i.test(toolOutput)) {
@@ -570,7 +786,7 @@ async function buildResponsesPayload(
   if (
     (QA_TOOL_SEARCH_PROMPT_RE.test(allInputText) ||
       QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText)) &&
-    !toolOutput
+    !hasCompletedToolOutput
   ) {
     const targetTool = extractToolSearchTarget(allInputText);
     const plannedArgs = targetTool
@@ -617,7 +833,7 @@ async function buildResponsesPayload(
     ) {
       return buildToolCallEventsWithArgs("wait", { runId: toolJson.runId });
     }
-    if (!toolOutput && hasDeclaredTool(body, "exec")) {
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "exec")) {
       return buildToolCallEventsWithArgs("exec", {
         language: "javascript",
         restartSafe: true,
@@ -634,7 +850,7 @@ async function buildResponsesPayload(
     QA_MCP_CODE_MODE_API_FILE_PROMPT_RE.test(allInputText) ||
     QA_MCP_CODE_MODE_PROMPT_RE.test(allInputText)
   ) {
-    if (!toolOutput && hasDeclaredTool(body, "exec")) {
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "exec")) {
       const useApiFiles = QA_MCP_CODE_MODE_API_FILE_PROMPT_RE.test(allInputText);
       return buildToolCallEventsWithArgs("exec", {
         language: "javascript",
@@ -697,6 +913,101 @@ async function buildResponsesPayload(
   if (QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE.test(prompt)) {
     return buildAssistantEvents(QA_SUBAGENT_DIRECT_FALLBACK_MARKER);
   }
+  const terminalCompletionCase = extractLastMatchingUserTurn(
+    input,
+    QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE,
+  )
+    ?.text.match(QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE)?.[1]
+    ?.toLowerCase();
+  if (terminalCompletionCase && /Internal task completion event/i.test(allInputText)) {
+    if (terminalCompletionCase === "empty") {
+      if (completedToolName === "message") {
+        return buildAssistantEvents("");
+      }
+      if (hasToolDefinition(toolDeclarationBody, "message") || hasCallableCodeMode) {
+        const deliveryInstructions = extractAllRequestTexts(
+          input.filter((item) => item.role === "system" || item.role === "developer"),
+          body,
+        );
+        const requiresFinal =
+          /visible source replies are not automatically delivered for this run\.[\s\S]*set `?final=true`?/i.test(
+            deliveryInstructions,
+          );
+        return buildToolCallEventsWithArgs("message", {
+          action: "send",
+          message: QA_SUBAGENT_TERMINAL_MARKERS.empty,
+          ...(requiresFinal ? { final: true } : {}),
+        });
+      }
+      return buildAssistantEvents(QA_SUBAGENT_TERMINAL_MARKERS.empty);
+    }
+    // The direct delivery fallback owns visible, silent, restart, and sanitized
+    // fallback results. Use explicit silence so generic empty-response recovery
+    // cannot replay the historical spawn before that fallback runs.
+    return buildAssistantEvents("NO_REPLY");
+  }
+  const terminalWorkerCase = Array.from(
+    allInputText.matchAll(
+      new RegExp(
+        QA_SUBAGENT_TERMINAL_MATRIX_WORKER_RE.source,
+        `${QA_SUBAGENT_TERMINAL_MATRIX_WORKER_RE.flags.replaceAll("g", "")}g`,
+      ),
+    ),
+  )
+    .at(-1)?.[1]
+    ?.toLowerCase();
+  if (terminalWorkerCase) {
+    const childSessionKey = resolveQaChildSessionKey(input, body);
+    if (options.waitForTerminalRequesterSettled && childSessionKey) {
+      await options.waitForTerminalRequesterSettled(terminalWorkerCase, childSessionKey);
+    }
+  }
+  if (terminalWorkerCase === "silent") {
+    return buildAssistantEvents("NO_REPLY");
+  }
+  if (terminalWorkerCase === "empty") {
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "write")) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "qa-terminal-empty-side-effect.txt",
+        content: "empty terminal QA side effect completed\n",
+      });
+    }
+    return buildAssistantEvents(
+      [
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+        QA_SUBAGENT_TERMINAL_METADATA_SENTINEL,
+        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      ].join("\n"),
+    );
+  }
+  if (terminalWorkerCase === "fallback") {
+    return buildAssistantEvents(
+      [
+        QA_SUBAGENT_TERMINAL_MARKERS.fallback,
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+        QA_SUBAGENT_TERMINAL_METADATA_SENTINEL,
+        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      ].join("\n"),
+    );
+  }
+  if (terminalWorkerCase === "visible" || terminalWorkerCase === "restart") {
+    return buildAssistantEvents(QA_SUBAGENT_TERMINAL_MARKERS[terminalWorkerCase]);
+  }
+  if (terminalCompletionCase) {
+    if (!hasCompletedToolOutput && canCallSessionsSpawn) {
+      return buildToolCallEventsWithArgs("sessions_spawn", {
+        task: `Subagent terminal reply QA worker: ${terminalCompletionCase}.`,
+        label: `qa-terminal-${terminalCompletionCase}`,
+        thread: false,
+        mode: "run",
+      });
+    }
+    if (hasCompletedToolOutput) {
+      // End the requester turn before the delayed worker settles. The terminal
+      // result must therefore use the runtime's direct channel fallback.
+      return buildAssistantEvents("NO_REPLY");
+    }
+  }
   // Protected completion context is excluded from the current user prompt;
   // ignoring it replays the historical kickoff and recursively spawns workers.
   if (
@@ -706,7 +1017,7 @@ async function buildResponsesPayload(
     return buildAssistantEvents("");
   }
   if (QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE.test(allInputText)) {
-    if (!toolOutput && canCallSessionsSpawn) {
+    if (!hasCompletedToolOutput && canCallSessionsSpawn) {
       return buildToolCallEventsWithArgs("sessions_spawn", {
         task: `Subagent direct fallback worker: finish with exactly ${QA_SUBAGENT_DIRECT_FALLBACK_MARKER}.`,
         label: "qa-direct-fallback-worker",
@@ -714,7 +1025,7 @@ async function buildResponsesPayload(
         mode: "run",
       });
     }
-    if (toolOutput && canCallSessionsYield && !/\byielded\b/i.test(toolOutput)) {
+    if (hasCompletedToolOutput && canCallSessionsYield && !/\byielded\b/i.test(toolOutput)) {
       return buildToolCallEventsWithArgs("sessions_yield", {
         message: `Waiting for ${QA_SUBAGENT_DIRECT_FALLBACK_MARKER}.`,
       });
@@ -729,13 +1040,26 @@ async function buildResponsesPayload(
         exactMarkerDirective ?? exactReplyDirective ?? "TELEGRAM-EMPTY-WRITE-RECOVERED-OK",
       );
     }
-    if (!toolOutput) {
+    if (!hasCompletedToolOutput) {
       return buildToolCallEventsWithArgs("write", {
         path: "qa-empty-response-side-effect.txt",
         content: "side effect completed once\n",
       });
     }
     return buildAssistantEvents("");
+  }
+  if (isActiveFailedToolTerminalRecovery) {
+    if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
+      if (!allInputText.includes("state that failure plainly and do not claim it succeeded")) {
+        return buildAssistantEvents("FAILED-TOOL-HONESTY-INSTRUCTION-MISSING");
+      }
+      const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-FAILED-TOOL-FINALIZED-OK";
+      return buildAssistantEvents(`The requested file could not be read: ENOENT. ${marker}`);
+    }
+    if (!hasCompletedToolOutput) {
+      return buildToolCallEventsWithArgs("read", { path: "qa-failed-terminal-missing-file.txt" });
+    }
+    return buildAssistantEvents("FAILED-TOOL-TERMINAL-WAS-REPLAYED");
   }
   if (isHeartbeatPrompt(prompt)) {
     return buildAssistantEvents("HEARTBEAT_OK");
@@ -799,7 +1123,7 @@ async function buildResponsesPayload(
     return buildAssistantEvents("THINKING-OFF-OK");
   }
   if (QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE.test(allInputText)) {
-    if (!toolOutput) {
+    if (!hasCompletedToolOutput) {
       return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
     }
     if (!hasEmptyResponseRetryInstruction) {
@@ -808,7 +1132,7 @@ async function buildResponsesPayload(
     return buildAssistantEvents("EMPTY-RECOVERED-OK");
   }
   if (QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE.test(allInputText)) {
-    if (!toolOutput) {
+    if (!hasCompletedToolOutput) {
       return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
     }
     return buildAssistantEvents("");
@@ -873,7 +1197,7 @@ async function buildResponsesPayload(
   }
   const slackChartMatch = QA_SLACK_CHART_PRESENTATION_PROMPT_RE.exec(allInputText);
   if (slackChartMatch?.[1] && slackChartMatch[2]) {
-    if (!toolOutput && hasDeclaredTool(body, "message")) {
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
       return buildToolCallEventsWithArgs("message", {
         action: "send",
         message: slackChartMatch[1],
@@ -892,24 +1216,24 @@ async function buildResponsesPayload(
         },
       });
     }
-    if (toolOutput) {
+    if (hasCompletedToolOutput) {
       return buildAssistantEvents(slackChartMatch[2]);
     }
   }
   if (QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE.test(allInputText)) {
-    if (!toolOutput && hasDeclaredTool(body, "message")) {
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
       return buildToolCallEventsWithArgs("message", {
         action: "react",
         emoji: "👍",
       });
     }
-    if (toolOutput) {
+    if (hasCompletedToolOutput) {
       return buildAssistantEvents("");
     }
   }
   const whatsAppUploadMatch = QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE.exec(allInputText);
   if (whatsAppUploadMatch?.[1]) {
-    if (!toolOutput && hasDeclaredTool(body, "message")) {
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
       return buildToolCallEventsWithArgs("message", {
         action: "upload-file",
         buffer: TINY_PNG_BASE64,
@@ -918,7 +1242,7 @@ async function buildResponsesPayload(
         filename: "whatsapp-qa-agent-upload.png",
       });
     }
-    if (toolOutput) {
+    if (hasCompletedToolOutput) {
       return buildAssistantEvents("");
     }
   }
@@ -958,6 +1282,30 @@ async function buildResponsesPayload(
       },
     ]);
   }
+  if (slackProgressDirectives) {
+    if (hasSlackProgressToolOutput) {
+      return buildAssistantEvents([
+        {
+          id: "msg_mock_slack_progress_final",
+          phase: "final_answer",
+          streamDeltas: splitMockStreamingText(slackProgressDirectives.finalMarker),
+          text: slackProgressDirectives.finalMarker,
+        },
+      ]);
+    }
+    if (hasDeclaredTool(body, "exec")) {
+      return buildAssistantThenToolCallEvents(
+        {
+          id: "msg_mock_slack_progress_commentary",
+          phase: "commentary",
+          streamDeltas: splitMockStreamingText(slackProgressDirectives.commentaryMarker),
+          text: slackProgressDirectives.commentaryMarker,
+        },
+        "exec",
+        { command: slackProgressDirectives.execCommand },
+      );
+    }
+  }
   const toolProgressReplyDirective =
     extractExactReplyDirective(toolProgressToolOutput) ??
     extractExactMarkerDirective(toolProgressToolOutput) ??
@@ -983,7 +1331,7 @@ async function buildResponsesPayload(
     }
   }
   if (QA_BLOCK_STREAMING_PROMPT_RE.test(scenarioFamilyPrompt) && blockStreamingMarkers) {
-    if (!toolOutput) {
+    if (!hasCompletedToolOutput) {
       return buildAssistantThenToolCallEvents(
         {
           id: "msg_mock_block_1",
@@ -1011,7 +1359,7 @@ async function buildResponsesPayload(
   }
   if (QA_STRANDED_FINAL_RECOVERY_PROMPT_RE.test(allInputText)) {
     if (QA_STRANDED_FINAL_RETRY_PROMPT_RE.test(allInputText)) {
-      if (!toolOutput && hasDeclaredTool(body, "message")) {
+      if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
         return buildToolCallEventsWithArgs("message", {
           action: "send",
           message: buildStrandedFinalRecoveryText(),
@@ -1022,7 +1370,7 @@ async function buildResponsesPayload(
     return buildAssistantEvents(buildStrandedFinalRecoveryText());
   }
   if (QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE.test(prompt)) {
-    if (toolOutput) {
+    if (hasCompletedToolOutput) {
       return buildAssistantEvents("");
     }
     const sessionsSendArgs = buildQaA2aMessageToolMirrorSessionsSendArgs(prompt);
@@ -1032,7 +1380,7 @@ async function buildResponsesPayload(
   }
   if (QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE.test(allInputText)) {
     const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-GROUP-TOOL-OK";
-    if (!toolOutput && hasDeclaredTool(body, "message")) {
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
       return buildToolCallEventsWithArgs("message", {
         action: "send",
         message: marker,
@@ -1043,7 +1391,7 @@ async function buildResponsesPayload(
   if (QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE.test(allInputText)) {
     const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-MSTEAMS-THREAD-DEDUPE-OK";
     const target = /msteams message target:\s*`([^`]+)`/iu.exec(prompt)?.[1]?.trim();
-    if (!toolOutput && hasDeclaredTool(body, "message")) {
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
       return buildToolCallEventsWithArgs("message", {
         action: "send",
         message: marker,
@@ -1088,9 +1436,9 @@ async function buildResponsesPayload(
   }
   const isTelegramCurrentSessionStatusTurn =
     QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE.test(prompt) ||
-    (Boolean(toolOutput) && QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE.test(allInputText));
+    (hasCompletedToolOutput && QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE.test(allInputText));
   if (isTelegramCurrentSessionStatusTurn) {
-    if (!toolOutput && hasDeclaredTool(body, "session_status")) {
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "session_status")) {
       return buildToolCallEventsWithArgs("session_status", { sessionKey: "current" });
     }
     const sessionKey = extractSessionStatusSessionKey(toolJson, toolOutput);
@@ -1127,7 +1475,7 @@ async function buildResponsesPayload(
       }),
     );
   }
-  if (QA_SKILL_WORKSHOP_GIF_PROMPT_RE.test(prompt) && !toolOutput) {
+  if (QA_SKILL_WORKSHOP_GIF_PROMPT_RE.test(prompt) && !hasCompletedToolOutput) {
     return buildToolCallEventsWithArgs("write", {
       path: "animated-gif-qa-checklist.md",
       content: [
@@ -1142,7 +1490,7 @@ async function buildResponsesPayload(
     });
   }
   if (QA_RELEASE_AUDIT_PROMPT_RE.test(prompt)) {
-    if (!toolOutput) {
+    if (!hasCompletedToolOutput) {
       return buildToolCallEventsWithArgs("read", { path: "audit-fixture/README.md" });
     }
     if (/Release readiness task|current checklist/i.test(toolOutput)) {
@@ -1289,7 +1637,7 @@ async function buildResponsesPayload(
     }
   }
   if (/lobster invaders/i.test(prompt)) {
-    if (!toolOutput) {
+    if (!hasCompletedToolOutput) {
       return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
     }
     if (toolOutput.includes("QA mission") || toolOutput.includes("Testing")) {
@@ -1300,21 +1648,6 @@ async function buildResponsesPayload(
   <head><meta charset="utf-8" /><title>Lobster Invaders</title></head>
   <body><h1>Lobster Invaders</h1><p>Tiny playable stub.</p></body>
 </html>`,
-      });
-    }
-  }
-  if (
-    /compaction retry mutating tool check/i.test(allInputText) ||
-    /compaction retry evidence/i.test(toolOutput) ||
-    /compaction-retry-summary\.txt/i.test(toolOutput)
-  ) {
-    if (!toolOutput) {
-      return buildToolCallEventsWithArgs("read", { path: "COMPACTION_RETRY_CONTEXT.md" });
-    }
-    if (toolOutput.includes("compaction retry evidence")) {
-      return buildToolCallEventsWithArgs("write", {
-        path: "compaction-retry-summary.txt",
-        content: "Replay safety: unsafe after write.\n",
       });
     }
   }
@@ -1344,7 +1677,7 @@ async function buildResponsesPayload(
     }
   }
   if (isActiveMemorySubagentPrompt(allInputText) && isSnackRecallPrompt(allInputText)) {
-    if (!toolOutput) {
+    if (!hasCompletedToolOutput) {
       if (!hasDeclaredTool(body, "memory_recall")) {
         return buildToolCallEventsWithArgs("memory_search", {
           query: "QA movie night snack lemon pepper wings blue cheese",
@@ -1506,7 +1839,7 @@ async function buildResponsesPayload(
   }
   if (
     QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) &&
-    !toolOutput &&
+    !hasCompletedToolOutput &&
     (hasToolDefinition(body, "image_generate") || hasCodeModeExecSurface(body))
   ) {
     return buildToolCallEventsWithArgs("image_generate", {
@@ -1535,7 +1868,11 @@ async function buildResponsesPayload(
   const fanoutRequiresMessageTool =
     fanoutHasPrivateSourceReply &&
     (hasToolDefinition(toolDeclarationBody, "message") || hasCallableCodeMode);
-  if (scenarioState.subagentFanoutPhase === 3 && fanoutRequiresMessageTool && toolOutput) {
+  if (
+    scenarioState.subagentFanoutPhase === 3 &&
+    fanoutRequiresMessageTool &&
+    hasCompletedToolOutput
+  ) {
     return buildAssistantEvents("");
   }
   const completeSubagentFanout = () => {
@@ -1550,7 +1887,7 @@ async function buildResponsesPayload(
       : buildAssistantEvents(message);
   };
   if (
-    !toolOutput &&
+    !hasCompletedToolOutput &&
     /subagent fanout synthesis check/i.test(prompt) &&
     scenarioState.subagentFanoutPhase !== 0
   ) {
@@ -1562,7 +1899,7 @@ async function buildResponsesPayload(
     return buildAssistantEvents("subagent-1: ok\nsubagent-2: ok");
   }
   if (canCallSessionsSpawn && isSubagentFanoutPrompt) {
-    if (!toolOutput && scenarioState.subagentFanoutPhase === 0) {
+    if (!hasCompletedToolOutput && scenarioState.subagentFanoutPhase === 0) {
       scenarioState.subagentFanoutPhase = 1;
       return buildToolCallEventsWithArgs("sessions_spawn", {
         task: subagentFanoutTaskForProvider(providerVariant, "alpha"),
@@ -1570,7 +1907,7 @@ async function buildResponsesPayload(
         thread: false,
       });
     }
-    if (toolOutput && scenarioState.subagentFanoutPhase === 1) {
+    if (hasCompletedToolOutput && scenarioState.subagentFanoutPhase === 1) {
       scenarioState.subagentFanoutPhase = 2;
       return buildToolCallEventsWithArgs("sessions_spawn", {
         task: subagentFanoutTaskForProvider(providerVariant, "beta"),
@@ -1604,15 +1941,19 @@ async function buildResponsesPayload(
       // workers settle instead of advancing past the sole visible reply.
       return buildAssistantEvents("");
     }
-    if (toolOutput) {
+    if (hasCompletedToolOutput) {
       return completeSubagentFanout();
     }
   }
   const explicitSessionsSpawnArgs = buildExplicitSessionsSpawnArgs(prompt);
-  if (explicitSessionsSpawnArgs && canCallSessionsSpawn && !toolOutput) {
+  if (explicitSessionsSpawnArgs && canCallSessionsSpawn && !hasCompletedToolOutput) {
     return buildToolCallEventsWithArgs("sessions_spawn", explicitSessionsSpawnArgs);
   }
-  if (canCallSessionsSpawn && /forked subagent context qa check/i.test(prompt) && !toolOutput) {
+  if (
+    canCallSessionsSpawn &&
+    /forked subagent context qa check/i.test(prompt) &&
+    !hasCompletedToolOutput
+  ) {
     return buildToolCallEventsWithArgs("sessions_spawn", {
       task: "Report the visible code from the requester transcript.",
       label: "qa-fork-context",
@@ -1620,7 +1961,7 @@ async function buildResponsesPayload(
       context: "fork",
     });
   }
-  if (/tool continuity check/i.test(prompt) && !toolOutput) {
+  if (/tool continuity check/i.test(prompt) && !hasCompletedToolOutput) {
     return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
   }
   if (/repo contract followthrough check/i.test(allInputText)) {
@@ -1710,7 +2051,7 @@ async function buildResponsesPayload(
     canCallSessionsSpawn &&
     (/delegate (?:one |a )bounded qa task/i.test(allInputText) ||
       /subagent handoff/i.test(allInputText)) &&
-    !toolOutput &&
+    !hasCompletedToolOutput &&
     !scenarioState.subagentHandoffSpawned
   ) {
     scenarioState.subagentHandoffSpawned = true;
@@ -1722,22 +2063,22 @@ async function buildResponsesPayload(
   }
   if (
     /(worked, failed, blocked|worked\/failed\/blocked|source and docs)/i.test(prompt) &&
-    !toolOutput
+    !hasCompletedToolOutput
   ) {
     return buildToolCallEventsWithArgs("read", {
       path: sourceDiscoveryReadPathForProvider(providerVariant),
     });
   }
-  if (!toolOutput && /\b(read|inspect|repo|docs|scenario|kickoff)\b/i.test(prompt)) {
+  if (!hasCompletedToolOutput && /\b(read|inspect|repo|docs|scenario|kickoff)\b/i.test(prompt)) {
     return buildToolCallEvents(prompt);
   }
-  if (/visible skill marker/i.test(prompt) && !toolOutput) {
+  if (/visible skill marker/i.test(prompt) && !hasCompletedToolOutput) {
     return buildAssistantEvents("VISIBLE-SKILL-OK");
   }
-  if (/hot install marker/i.test(prompt) && !toolOutput) {
+  if (/hot install marker/i.test(prompt) && !hasCompletedToolOutput) {
     return buildAssistantEvents("HOT-INSTALL-OK");
   }
-  if (isGroupChat && isBaselineUnmentionedChannelChatter && !toolOutput) {
+  if (isGroupChat && isBaselineUnmentionedChannelChatter && !hasCompletedToolOutput) {
     return buildAssistantEvents("NO_REPLY");
   }
   if (QA_NATIVE_STOP_DELAY_PROMPT_RE.test(prompt)) {
@@ -1754,12 +2095,32 @@ export async function startQaMockOpenAiServer(params?: {
 }) {
   const host = params?.host ?? "127.0.0.1";
   const finalOnlyMarkerPauseMs = params?.finalOnlyMarkerPauseMs ?? 1_500;
-  const scenarioState: MockScenarioState = {
-    anthropicThinkingErrorScenarioKeys: new Set<string>(),
-    subagentFanoutCompletedWorkers: new Set<"alpha" | "beta">(),
-    subagentFanoutPhase: 0,
-    subagentHandoffSpawned: false,
-    toolLoopReadAttempts: 0,
+  const terminalRequesterSettleGate = createTerminalRequesterSettleGate();
+  const scenarioStates = new Map<string, MockScenarioState>();
+  const scenarioStateFor = (body: Record<string, unknown>): MockScenarioState => {
+    const input =
+      typeof body.input === "string" || Array.isArray(body.input)
+        ? normalizeResponsesInput(body.input)
+        : convertAnthropicMessagesToResponsesInput({
+            system: body.system as AnthropicMessagesRequest["system"],
+            messages: [],
+          });
+    const sessionId =
+      resolveQaRuntimeSessionId(input, body) ??
+      (body.client_metadata as { session_id?: unknown } | undefined)?.session_id;
+    const key = typeof sessionId === "string" ? sessionId : "";
+    // Runtime session identity survives provider switches and cache-boundary changes.
+    const state = scenarioStates.get(key) ?? {
+      anthropicThinkingErrorScenarioKeys: new Set<string>(),
+      compactionOverflowInjected: false,
+      compactionRetryActive: false,
+      subagentFanoutCompletedWorkers: new Set<"alpha" | "beta">(),
+      subagentFanoutPhase: 0,
+      subagentHandoffSpawned: false,
+      toolLoopReadAttempts: 0,
+    };
+    scenarioStates.set(key, state);
+    return state;
   };
   let lastRequest: MockOpenAiRequestSnapshot | null = null;
   const requests: MockOpenAiRequestSnapshot[] = [];
@@ -1780,25 +2141,20 @@ export async function startQaMockOpenAiServer(params?: {
     body: Record<string, unknown>;
     raw: string;
   }): Promise<QaMockResponsesDispatchResult> => {
-    const input = Array.isArray(request.body.input)
-      ? (request.body.input as ResponsesInputItem[])
-      : [];
+    const input = normalizeResponsesInput(request.body.input);
     if (isRemoteCompactionV2Request(input)) {
       return { events: buildRemoteCompactionV2Events() };
     }
     const prompt = extractLastUserText(input);
     const allInputText = extractAllRequestTexts(input, request.body);
-    const inflightRequestId = nextInflightRequestId++;
-    inflightRequests.set(inflightRequestId, { prompt, allInputText });
-    let events: StreamEvent[];
-    try {
-      events = await buildResponsesPayload(request.body, scenarioState);
-    } finally {
-      inflightRequests.delete(inflightRequestId);
+    const scenarioState = scenarioStateFor(request.body);
+    const requestKind = classifyMockOpenAiRequest(input, request.body);
+    if (requestKind !== "compaction-summary" && QA_COMPACTION_RETRY_PROMPT_RE.test(allInputText)) {
+      scenarioState.compactionRetryActive = true;
     }
+    const rawByteLength = Buffer.byteLength(request.raw);
     const resolvedModel = typeof request.body.model === "string" ? request.body.model : "";
-    const plannedTool = extractScenarioPlannedTool(events);
-    recordRequest({
+    const requestSnapshotBase = {
       raw: request.raw,
       body: request.body,
       prompt,
@@ -1808,6 +2164,79 @@ export async function startQaMockOpenAiServer(params?: {
       model: resolvedModel,
       providerVariant: resolveProviderVariant(resolvedModel),
       imageInputCount: countImageInputs(input),
+      requestKind,
+      rawByteLength,
+    } satisfies Omit<
+      MockOpenAiRequestSnapshotInput,
+      | "outcome"
+      | "errorCode"
+      | "plannedToolCallId"
+      | "plannedToolName"
+      | "plannedWireToolName"
+      | "plannedToolArgs"
+      | "toolOutputCallId"
+      | "toolOutputStructuredError"
+    >;
+    if (
+      requestKind === "agent-initial" &&
+      QA_COMPACTION_RETRY_PROMPT_RE.test(allInputText) &&
+      rawByteLength > QA_COMPACTION_RETRY_OVERFLOW_THRESHOLD_BYTES &&
+      !scenarioState.compactionOverflowInjected
+    ) {
+      scenarioState.compactionOverflowInjected = true;
+      recordRequest({
+        ...requestSnapshotBase,
+        outcome: "error",
+        errorCode: "context_length_exceeded",
+      });
+      return {
+        events: [],
+        failure: {
+          status: 400,
+          type: "invalid_request_error",
+          code: "context_length_exceeded",
+          message: "This model's maximum context length was exceeded.",
+        },
+      };
+    }
+    const inflightRequestId = nextInflightRequestId++;
+    inflightRequests.set(inflightRequestId, { prompt, allInputText });
+    let events: StreamEvent[];
+    try {
+      events = await buildResponsesPayload(request.body, scenarioState, {
+        waitForTerminalRequesterSettled: terminalRequesterSettleGate.waitUntilSettled,
+        requestKind,
+      });
+    } finally {
+      inflightRequests.delete(inflightRequestId);
+    }
+    const plannedTool = extractScenarioPlannedTool(events);
+    const terminalRequesterCase = extractLastMatchingUserTurn(
+      input,
+      QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE,
+    )
+      ?.text.match(QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE)?.[1]
+      ?.toLowerCase();
+    const settledTerminalRequester =
+      terminalRequesterCase && resolveQaRuntimeSessionId(input, request.body)
+        ? {
+            caseName: terminalRequesterCase,
+            childSessionKey: resolveAcceptedChildSessionKey(input),
+          }
+        : undefined;
+    const settledTerminalCaseName = settledTerminalRequester?.caseName;
+    const settledChildSessionKey = settledTerminalRequester?.childSessionKey;
+    const failure =
+      QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE.test(allInputText) && hasToolOutput(input)
+        ? {
+            status: 503,
+            type: "server_error",
+            message: "Service Unavailable",
+          }
+        : undefined;
+    recordRequest({
+      ...requestSnapshotBase,
+      outcome: failure ? "error" : "success",
       plannedToolCallId: extractPlannedToolCallId(events),
       plannedToolName: plannedTool.name,
       ...(plannedTool.wireName && plannedTool.wireName !== plannedTool.name
@@ -1819,15 +2248,16 @@ export async function startQaMockOpenAiServer(params?: {
     });
     return {
       events,
-      ...(QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE.test(allInputText) && extractToolOutput(input)
+      ...(settledTerminalCaseName && settledChildSessionKey
         ? {
-            failure: {
-              status: 503,
-              type: "server_error",
-              message: "Service Unavailable",
-            },
+            onResponseSent: () =>
+              terminalRequesterSettleGate.markSettled(
+                settledTerminalCaseName,
+                settledChildSessionKey,
+              ),
           }
         : {}),
+      ...(failure ? { failure } : {}),
       ...(QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText)
         ? { previewPauseMs: finalOnlyMarkerPauseMs }
         : {}),
@@ -1964,7 +2394,7 @@ export async function startQaMockOpenAiServer(params?: {
           writeOpenAiMalformedJsonError(res, "OpenAI Responses");
           return;
         }
-        const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
+        const input = normalizeResponsesInput(body.input);
         if (isRemoteCompactionV2Request(input)) {
           const events = buildRemoteCompactionV2Events();
           if (body.stream === false) {
@@ -1979,6 +2409,7 @@ export async function startQaMockOpenAiServer(params?: {
           writeJson(res, dispatched.failure.status, {
             error: {
               type: dispatched.failure.type,
+              ...(dispatched.failure.code ? { code: dispatched.failure.code } : {}),
               message: dispatched.failure.message,
             },
           });
@@ -1992,6 +2423,7 @@ export async function startQaMockOpenAiServer(params?: {
             return;
           }
           writeJson(res, 200, completion.response);
+          dispatched.onResponseSent?.();
           return;
         }
         if (dispatched.previewPauseMs !== undefined) {
@@ -1999,6 +2431,7 @@ export async function startQaMockOpenAiServer(params?: {
         } else {
           writeSse(res, events);
         }
+        dispatched.onResponseSent?.();
         return;
       }
       if (req.method === "POST" && url.pathname === "/v1/messages") {
@@ -2014,6 +2447,7 @@ export async function startQaMockOpenAiServer(params?: {
           });
           return;
         }
+        const scenarioState = scenarioStateFor(body as Record<string, unknown>);
         const {
           events,
           input,
@@ -2037,6 +2471,9 @@ export async function startQaMockOpenAiServer(params?: {
           model: normalizedModel,
           providerVariant: resolveProviderVariant(normalizedModel),
           imageInputCount: countImageInputs(input),
+          requestKind: classifyMockOpenAiRequest(input, body as Record<string, unknown>),
+          outcome: "success",
+          rawByteLength: Buffer.byteLength(raw),
           plannedToolCallId: extractPlannedToolCallId(events),
           plannedToolName: plannedTool.name,
           ...(plannedTool.wireName && plannedTool.wireName !== plannedTool.name

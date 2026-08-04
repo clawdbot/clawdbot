@@ -236,7 +236,7 @@ describe("Plugin SDK session write-lock adapter", () => {
   });
 
   it("cancels contended infinite admission without affecting the owner", async () => {
-    const sessionFile = path.join(root, "session.jsonl");
+    const sessionFile = path.join(await fs.realpath(root), "session.jsonl");
     const held = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
     const lockPath = `${sessionFile}.lock`;
     const originalReadFile = fs.readFile.bind(fs);

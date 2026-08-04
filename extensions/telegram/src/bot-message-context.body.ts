@@ -44,6 +44,7 @@ import {
   buildSenderName,
   extractTelegramLocation,
   getTelegramTextParts,
+  hasLeadingBotCommandAddressedToOtherBot,
   hasBotMentionInText,
   hasBotMention,
   renderTelegramTextEntities,
@@ -191,6 +192,15 @@ export async function resolveTelegramInboundBody(params: {
     providerPolicy: providerMentionPatterns,
   });
   const messageTextParts = getTelegramTextParts(msg);
+  if (botUsername && hasLeadingBotCommandAddressedToOtherBot(msg, botUsername)) {
+    logInboundDrop({
+      log: logVerbose,
+      channel: "telegram",
+      reason: "command addressed to another bot",
+      target: senderId ?? "unknown",
+    });
+    return null;
+  }
   const allowForCommands = isGroup ? effectiveGroupAllow : effectiveDmAllow;
   const useAccessGroups = true;
   const hasControlCommandInMessage = hasControlCommand(messageTextParts.text, cfg, {

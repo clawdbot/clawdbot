@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import {
@@ -42,6 +42,10 @@ beforeEach(() => {
   resolveGatewayScopedTools.mockReturnValue(
     scopedToolFixture(["memory_search", "memory_get", "message", "cron"]),
   );
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("resolveMcpLoopbackScopedTools", () => {
@@ -159,6 +163,26 @@ describe("resolveMcpLoopbackScopedTools", () => {
 });
 
 describe("McpLoopbackToolCache", () => {
+  it("expires at the ttl boundary and partitions rows by config identity", () => {
+    vi.useFakeTimers();
+    const cache = new McpLoopbackToolCache();
+    const cfgA = {} as OpenClawConfig;
+    const cfgB = {} as OpenClawConfig;
+    const paramsA = scopeParams({ cfg: cfgA });
+
+    cache.resolve(paramsA);
+    cache.resolve(paramsA);
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(30_000);
+    cache.resolve(paramsA);
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+
+    cache.resolve(scopeParams({ cfg: cfgB }));
+    cache.resolve(paramsA);
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
+  });
+
   it("does not share cache rows across different grant allowlists", () => {
     const cache = new McpLoopbackToolCache();
     const cfg = {} as OpenClawConfig;

@@ -15,6 +15,8 @@ import type { AgentRouteBinding } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { normalizeRouteBindingChannelId } from "../../routing/binding-scope.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import {
@@ -85,6 +87,8 @@ const SessionsSendToolSchema = Type.Object({
   timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
   watch: Type.Optional(Type.Boolean()),
 });
+
+const log = createSubsystemLogger("agents/sessions-send");
 
 const SessionsSendDeliverySchema = Type.Object(
   {
@@ -904,20 +908,29 @@ export function createSessionsSendTool(opts?: {
               flowTargetSessionKey === fallbackA2ASessionKey
                 ? fallbackBaselineReply
                 : baselineReply;
-            void runSessionsSendA2AFlow({
-              targetSessionKey: flowTargetSessionKey,
-              displayKey: flowDisplayKey,
-              message,
-              announceTimeoutMs,
-              // Cron runs are isolated jobs; target replies must not become new
-              // requester turns, but the target-side announce still runs.
-              maxPingPongTurns: isIsolatedCronRequester ? 0 : maxPingPongTurns,
-              requesterSessionKey: replyRequesterSessionKey,
-              requesterChannel,
-              baseline: flowBaseline,
-              roundOneReply,
-              waitRunId,
-              notifyRequesterOnWaitFailure,
+            // This detached flow can outlive the tool request that launched it.
+            // Own a fresh root so parent release cannot retire later nested turns.
+            void runWithGatewayIndependentRootWorkContinuation(() =>
+              runSessionsSendA2AFlow({
+                targetSessionKey: flowTargetSessionKey,
+                displayKey: flowDisplayKey,
+                message,
+                announceTimeoutMs,
+                // Cron runs are isolated jobs; target replies must not become new
+                // requester turns, but the target-side announce still runs.
+                maxPingPongTurns: isIsolatedCronRequester ? 0 : maxPingPongTurns,
+                requesterSessionKey: replyRequesterSessionKey,
+                requesterChannel,
+                baseline: flowBaseline,
+                roundOneReply,
+                waitRunId,
+                notifyRequesterOnWaitFailure,
+              }),
+            ).catch((err: unknown) => {
+              log.warn("sessions_send announce flow admission failed", {
+                runId: waitRunId ?? "unknown",
+                error: formatErrorMessage(err),
+              });
             });
           };
 

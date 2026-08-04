@@ -4,12 +4,18 @@ import { nothing, render } from "lit";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../../app/context.ts";
+import {
+  showConfirmDialog,
+  type ConfirmDialogOptions,
+} from "../../../components/confirm-dialog.ts";
 import { i18n } from "../../../i18n/index.ts";
 import type { TranslationMap } from "../../../i18n/lib/types.ts";
 import { en } from "../../../i18n/locales/en.ts";
 import type { DreamingState } from "./dreaming.ts";
 import type { DreamingViewState } from "./view.ts";
 import "./memory-panel.ts";
+
+vi.mock("../../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 
 type TestMemoryPanel = HTMLElement & {
   context: ApplicationContext;
@@ -29,6 +35,10 @@ type TestMemoryPanel = HTMLElement & {
     overridden: boolean;
     engineOff: boolean;
   }) => Promise<void>;
+  confirmDreamingTask: (
+    task: (state: DreamingState) => Promise<boolean>,
+    confirmation: ConfirmDialogOptions,
+  ) => Promise<void>;
   render: () => unknown;
   requestUpdate: () => void;
   readonly updateComplete: Promise<boolean>;
@@ -118,10 +128,28 @@ async function replaceContext(page: TestMemoryPanel, context: ApplicationContext
 
 afterEach(() => {
   document.body.replaceChildren();
+  vi.mocked(showConfirmDialog).mockReset();
   vi.restoreAllMocks();
 });
 
 describe("AgentMemoryPanel gateway lifecycle", () => {
+  it("does not run a confirmed dreaming action after the selected agent changes", async () => {
+    const confirmation = deferred<boolean>();
+    vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
+    const page = createPage(contextWithGateway({} as GatewayBrowserClient, true));
+    const task = vi.fn(async () => true);
+    document.body.append(page);
+    await page.updateComplete;
+
+    const pending = page.confirmDreamingTask(task, { message: "Repair?" });
+    page.agentId = "support";
+    await page.updateComplete;
+    confirmation.resolve(true);
+    await pending;
+
+    expect(task).not.toHaveBeenCalled();
+  });
+
   it("loads the selected agent on the first gateway bind", async () => {
     const client = {} as GatewayBrowserClient;
     const context = contextWithGateway(client, true);

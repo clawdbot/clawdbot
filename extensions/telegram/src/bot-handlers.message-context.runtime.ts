@@ -11,6 +11,7 @@ import type {
 } from "./bot-message-context.types.js";
 import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 import type { TelegramContext } from "./bot/types.js";
+import { resolveTelegramDmHistoryLimit } from "./dm-history.js";
 import {
   buildTelegramSelfSenderName,
   isTelegramHistoryEntryAfterAmbientWatermark,
@@ -155,6 +156,10 @@ export function createTelegramMessageContextRuntime({
         runtimeCfg.messages?.groupChat?.historyLimit ??
         DEFAULT_GROUP_HISTORY_LIMIT,
     );
+    const dmHistoryLimit = resolveTelegramDmHistoryLimit({
+      config: runtimeTelegramCfg,
+      senderId: msg.from?.id,
+    });
     const messageId = typeof msg.message_id === "number" ? String(msg.message_id) : undefined;
     const currentNode = await messageCache.get({ accountId, chatId: msg.chat.id, messageId });
     const threadId = currentNode?.threadId ? Number(currentNode.threadId) : undefined;
@@ -168,8 +173,8 @@ export function createTelegramMessageContextRuntime({
             chatId: msg.chat.id,
             ...(Number.isFinite(threadId) ? { threadId } : {}),
             replyChainNodes,
-            recentLimit: isGroup ? groupHistoryLimit : 10,
-            replyTargetWindowSize: 2,
+            recentLimit: isGroup ? groupHistoryLimit : dmHistoryLimit,
+            replyTargetWindowSize: isGroup || dmHistoryLimit > 0 ? 2 : 0,
             ...(options?.promptContextMinTimestampMs !== undefined
               ? { minTimestampMs: options.promptContextMinTimestampMs }
               : {}),

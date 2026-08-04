@@ -8,12 +8,12 @@ import { writeSessionStore } from "./test-helpers.js";
 import {
   sessionLifecycleHookMocks,
   sessionStoreEntry,
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
   subagentLifecycleHookMocks,
   threadBindingMocks,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();

@@ -424,7 +424,7 @@ final class DashboardManager {
         Task { _ = try? await ControlChannel.shared.health(timeout: 3) }
     }
 
-    func show(atPath path: String) async {
+    func show(atPath path: String, search: String? = nil) async {
         self.navigationGeneration &+= 1
         let generation = self.navigationGeneration
         do {
@@ -433,9 +433,13 @@ final class DashboardManager {
             guard let controller,
                   let fallbackURL = DashboardRouteMap.dashboardURL(
                       byAppendingSameAppPath: path,
+                      search: search,
                       to: controller.dashboardBaseURL)
             else { return }
-            controller.dispatchNativeNavigation(DashboardNativeNavigation(path: path, fallbackURL: fallbackURL))
+            controller.dispatchNativeNavigation(DashboardNativeNavigation(
+                path: path,
+                search: search,
+                fallbackURL: fallbackURL))
         } catch {
             guard generation == self.navigationGeneration else { return }
             self.showFailure(error)

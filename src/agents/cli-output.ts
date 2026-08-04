@@ -282,14 +282,15 @@ function unwrapCliErrorText(raw: string): string {
 }
 
 function toCliUsage(raw: Record<string, unknown>): CliUsage | undefined {
-  const readNestedCached = (key: "input_tokens_details" | "prompt_tokens_details") => {
+  const readNestedCached = (
+    key: "input_tokens_details" | "prompt_tokens_details",
+    field: "cached_tokens" | "cache_write_tokens" = "cached_tokens",
+  ) => {
     const nested = raw[key];
     if (!isRecord(nested)) {
       return undefined;
     }
-    return typeof nested.cached_tokens === "number" && nested.cached_tokens > 0
-      ? nested.cached_tokens
-      : undefined;
+    return typeof nested[field] === "number" && nested[field] > 0 ? nested[field] : undefined;
   };
   const pick = (key: string) =>
     typeof raw[key] === "number" && raw[key] > 0 ? raw[key] : undefined;
@@ -309,13 +310,24 @@ function toCliUsage(raw: Record<string, unknown>): CliUsage | undefined {
     pick("cacheRead") ??
     pick("cached") ??
     nestedCached;
+  const nestedCacheWrite =
+    readNestedCached("input_tokens_details", "cache_write_tokens") ??
+    readNestedCached("prompt_tokens_details", "cache_write_tokens");
+  const cacheWrite =
+    pick("cache_creation_input_tokens") ??
+    pick("cache_write_input_tokens") ??
+    pick("cacheWrite") ??
+    nestedCacheWrite;
   const input =
     pick("input") ??
-    ((Object.hasOwn(raw, "cached") || nestedCached !== undefined) && typeof totalInput === "number"
-      ? Math.max(0, totalInput - (cacheRead ?? 0))
+    ((Object.hasOwn(raw, "cached") ||
+      Object.hasOwn(raw, "cached_input_tokens") ||
+      Object.hasOwn(raw, "cache_write_input_tokens") ||
+      nestedCached !== undefined ||
+      nestedCacheWrite !== undefined) &&
+    typeof totalInput === "number"
+      ? Math.max(0, totalInput - (cacheRead ?? 0) - (cacheWrite ?? 0))
       : totalInput);
-  const cacheWrite =
-    pick("cache_creation_input_tokens") ?? pick("cache_write_input_tokens") ?? pick("cacheWrite");
   const total = pick("total_tokens") ?? pick("total");
   if (!input && !output && !cacheRead && !cacheWrite && !total) {
     return undefined;

@@ -53,6 +53,35 @@ export function extractExactMarkerDirective(text: string) {
   );
 }
 
+export const QA_SLACK_PROGRESS_COMMENTARY_MARKER_RE =
+  /\bSLACK-QA-COMMENTARY-(?!DONE-)[A-F0-9]{8}\b/u;
+
+export function extractSlackProgressCommentaryDirectives(text: string) {
+  const commentaryMarker = extractLastCapture(
+    text,
+    /\b(SLACK-QA-COMMENTARY-(?!DONE-)[A-F0-9]{8})\b/u,
+  );
+  const toolMarker = extractLastCapture(text, /\b(SLACK-QA-TOOL-[A-F0-9]{8})\b/u);
+  const finalMarker = extractLastCapture(text, /\b(SLACK-QA-COMMENTARY-DONE-[A-F0-9]{8})\b/u);
+  if (!commentaryMarker || !toolMarker || !finalMarker) {
+    return null;
+  }
+  const suffix = commentaryMarker.slice("SLACK-QA-COMMENTARY-".length);
+  const execCommand = `grep 'SLACK-QA-TOOL-${suffix}' /dev/null || sleep 5`;
+  const commandDirective = extractLastCapture(
+    text,
+    /\b(grep 'SLACK-QA-TOOL-[A-F0-9]{8}' \/dev\/null \|\| sleep 5)(?=[.`\s]|$)/u,
+  );
+  if (
+    toolMarker !== `SLACK-QA-TOOL-${suffix}` ||
+    finalMarker !== `SLACK-QA-COMMENTARY-DONE-${suffix}` ||
+    commandDirective !== execCommand
+  ) {
+    return null;
+  }
+  return { commentaryMarker, execCommand, finalMarker, toolMarker };
+}
+
 export function extractWhatsAppLocationMarkerDirective(text: string) {
   return extractLastCapture(
     text,

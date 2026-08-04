@@ -26,7 +26,6 @@ function createPluginRecord(id: string, enabled: boolean): InstalledPluginIndex[
     startup: {
       sidecar: false,
       memory: false,
-      deferConfiguredChannelFullLoadUntilAfterListen: false,
       agentHarnesses: [],
     },
     compat: [],

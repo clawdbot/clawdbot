@@ -1,8 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   formatNodeInvokeFailureFollowup,
   invokeNodeSystemRun,
 } from "./bash-tools.exec-host-node-failure.js";
+import { invokeNodeSystemRunDirect } from "./bash-tools.exec-host-node-phases.js";
 
 const callGatewayToolMock = vi.hoisted(() => vi.fn());
 
@@ -120,5 +121,73 @@ describe("invokeNodeSystemRun failure classification", () => {
     expect(text).toContain("Exec outcome unknown (node=node-1 id=approval-1, outcome-unknown)");
     expect(text).toContain("The command may have executed. Do not rerun it automatically.");
     expect(text).toContain("Command:\nprintf 'one\\ntwo'\necho done");
+  });
+});
+
+type DirectNodeRun = Parameters<typeof invokeNodeSystemRunDirect>[0];
+
+function createDirectNodeRun(signal?: AbortSignal): DirectNodeRun {
+  return {
+    request: {
+      command: "tool --version",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      ...(signal ? { signal } : {}),
+    },
+    target: {
+      nodeId: "node-1",
+      argv: ["tool", "--version"],
+      env: undefined,
+      invokeDeadlineMs: 30_000,
+      invokeWaitMs: 35_000,
+      runTimeoutSec: 30,
+      supportsSystemRunPrepare: true,
+    },
+  };
+}
+
+describe("direct node run cancellation", () => {
+  beforeEach(() => {
+    callGatewayToolMock.mockReset();
+    callGatewayToolMock.mockResolvedValue({
+      payload: { success: true, stdout: "ok", stderr: "", exitCode: 0 },
+    });
+  });
+
+  it.each([
+    { name: "with its original cancellation signal", withSignal: true },
+    { name: "without a signal argument", withSignal: false },
+  ])("forwards the gateway call $name", async ({ withSignal }) => {
+    const controller = new AbortController();
+    await invokeNodeSystemRunDirect(
+      createDirectNodeRun(withSignal ? controller.signal : undefined),
+    );
+
+    const baseArgs = [
+      "node.invoke",
+      { timeoutMs: 35_000 },
+      expect.objectContaining({ command: "system.run" }),
+    ] as const;
+    if (withSignal) {
+      expect(callGatewayToolMock).toHaveBeenCalledWith(...baseArgs, { signal: controller.signal });
+    } else {
+      expect(callGatewayToolMock).toHaveBeenCalledWith(...baseArgs);
+    }
+  });
+
+  it("never dispatches a direct node run after cancellation", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled before direct node dispatch");
+    controller.abort(reason);
+
+    await expect(invokeNodeSystemRunDirect(createDirectNodeRun(controller.signal))).rejects.toBe(
+      reason,
+    );
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 });

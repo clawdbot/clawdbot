@@ -363,7 +363,11 @@ export async function modelsStatusCommand(
     throw new Error("--probe cannot be used with --plain output.");
   }
   const configPath = createConfigIO().configPath;
-  const cfg = await loadModelsConfig({ commandName: "models status", runtime });
+  const cfg = await loadModelsConfig({
+    commandName: "models status",
+    runtime,
+    skipPluginValidation: opts.probe !== true,
+  });
   const agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent });
   const workspaceAgentId = agentId ?? resolveDefaultAgentId(cfg);
   const agentDir = agentId
@@ -401,8 +405,6 @@ export async function modelsStatusCommand(
   const selectedPluginRootDirs = new Map(
     [...metadataSnapshot.byPluginId].map(([pluginId, plugin]) => [pluginId, plugin.rootDir]),
   );
-  const { runPluginPayloadSmokeCheckForManifestRecords } =
-    await import("../../cli/update-cli/plugin-payload-validation.js");
   const codexRuntimeAvailabilityByProvider = new Map<
     string,
     Promise<AgentHarnessRuntimeAvailability>
@@ -415,6 +417,8 @@ export async function modelsStatusCommand(
       return cached;
     }
     const pending = (async () => {
+      const { runPluginPayloadSmokeCheckForManifestRecords } =
+        await import("../../cli/update-cli/plugin-payload-validation.js");
       const ownerPluginIds = resolveAgentHarnessOwnerPluginIds({
         runtime: "codex",
         provider,
@@ -617,9 +621,38 @@ export async function modelsStatusCommand(
         registryDiagnostics: metadataSnapshot.registryDiagnostics,
       }).map((provider) => normalizeProviderId(provider)),
     );
+    const createStatusAuthResolver = (
+      authStore: Parameters<typeof createModelAuthAvailabilityResolver>[0]["authStore"],
+    ) =>
+      createModelAuthAvailabilityResolver({
+        cfg,
+        authStore,
+        agentDir,
+        workspaceDir,
+        env: process.env,
+        // A generic Codex runtime marker proves only that the harness can be
+        // contacted. It is not an OpenAI model credential.
+        syntheticAuthProviderRefs: [...syntheticAuthProviderRefs].filter(
+          (provider) => provider !== "codex",
+        ),
+        metadataSnapshot,
+      });
+    let authResolver = createStatusAuthResolver(store);
+    // Status already owns the complete provider/auth use set. Carry it into the
+    // catalog owner so a read-only status does not discover every provider plugin.
+    const probedProvider = normalizeOptionalString(opts.probeProvider);
+    const providerDiscoveryProviderIds = [
+      ...new Set([
+        ...authResolver.providerDiscoveryProviderIds,
+        ...providersFromConfig,
+        ...providersFromModels,
+        ...(probedProvider ? [normalizeProviderId(probedProvider)] : []),
+      ]),
+    ].toSorted((left, right) => left.localeCompare(right));
     const catalog = await loadPreparedModelCatalogSnapshot({
       config: cfg,
       ...(agentId ? { agentId } : {}),
+      providerDiscoveryProviderIds,
       readOnly: true,
     });
     const visibilityPolicy = createModelVisibilityPolicy({
@@ -661,23 +694,6 @@ export async function modelsStatusCommand(
       sources.push({ api: entry.api, baseUrl: entry.baseUrl });
       routeSourcesByModel.set(key, sources);
     }
-    const createStatusAuthResolver = (
-      authStore: Parameters<typeof createModelAuthAvailabilityResolver>[0]["authStore"],
-    ) =>
-      createModelAuthAvailabilityResolver({
-        cfg,
-        authStore,
-        agentDir,
-        workspaceDir,
-        env: process.env,
-        // A generic Codex runtime marker proves only that the harness can be
-        // contacted. It is not an OpenAI model credential.
-        syntheticAuthProviderRefs: [...syntheticAuthProviderRefs].filter(
-          (provider) => provider !== "codex",
-        ),
-        metadataSnapshot,
-      });
-    let authResolver = createStatusAuthResolver(store);
     const resolveProviderUses = async (
       resolver: ModelAuthAvailabilityResolver,
     ): Promise<StatusProviderUse[]> =>

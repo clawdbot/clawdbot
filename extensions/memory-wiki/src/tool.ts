@@ -1,6 +1,7 @@
 // Memory Wiki plugin module implements tool behavior.
 import path from "node:path";
 import { optionalFiniteNumberSchema } from "openclaw/plugin-sdk/channel-actions";
+import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "typebox";
 import type { AnyAgentTool, OpenClawConfig } from "../api.js";
 import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
@@ -112,6 +113,7 @@ type WikiToolMemoryContext = {
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
 };
 
 export function createWikiStatusTool(
@@ -165,6 +167,7 @@ export function createWikiSearchTool(
         agentId: memoryContext.agentId,
         agentSessionKey: memoryContext.agentSessionKey,
         sandboxed: memoryContext.sandboxed,
+        conversationRecall: memoryContext.conversationRecall,
         query: params.query,
         maxResults: params.maxResults,
         ...(params.backend ? { searchBackend: params.backend } : {}),
@@ -288,6 +291,7 @@ export function createWikiGetTool(
         agentId: memoryContext.agentId,
         agentSessionKey: memoryContext.agentSessionKey,
         sandboxed: memoryContext.sandboxed,
+        conversationRecall: memoryContext.conversationRecall,
         lookup: params.lookup,
         fromLine: params.fromLine,
         lineCount: params.lineCount,

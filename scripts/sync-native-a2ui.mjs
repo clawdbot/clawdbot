@@ -5,9 +5,9 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-
-const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+import { pathToFileURL } from "node:url";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
+const rootDir = resolveRepoRoot(import.meta.url);
 const REQUIRED_RESOURCE_FILES = ["a2ui.bundle.js", "index.html"];
 
 export function getNativeA2uiResourcePaths(repoRoot = rootDir) {

@@ -1617,6 +1617,27 @@ describe("session accessor seam", () => {
     expect(loadSessionEntry(scope)?.model).toBeUndefined();
   });
 
+  it("rejects a patch when its commit-edge ownership guard retires", async () => {
+    const scope = {
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    await upsertSessionEntry(scope, {
+      sessionId: "session-1",
+      updatedAt: 10,
+    });
+
+    await expect(
+      patchSessionEntry(scope, () => ({ model: "gpt-5.5" }), {
+        assertCommitAllowed: () => {
+          throw new Error("owner retired");
+        },
+      }),
+    ).rejects.toThrow("owner retired");
+
+    expect(loadSessionEntry(scope)?.model).toBeUndefined();
+  });
+
   it("can patch metadata without refreshing session activity", async () => {
     const scope = {
       sessionKey: "agent:main:main",
@@ -3640,6 +3661,50 @@ describe("session accessor seam", () => {
     expect(target).toEqual({
       agentId: "main",
       sessionId: "custom-topic-session",
+      sessionKey,
+      storePath,
+    });
+  });
+
+  it("preserves a matching preloaded entry identity without rereading the session row", () => {
+    const sessionKey = "agent:main:preloaded-read";
+    const target = resolveSessionTranscriptReadTarget({
+      agentId: "main",
+      sessionEntry: { sessionId: "preloaded-session" },
+      sessionId: "preloaded-session",
+      sessionKey,
+      storePath,
+    });
+
+    expect(target).toEqual({
+      agentId: "main",
+      sessionId: "preloaded-session",
+      sessionKey,
+      storePath,
+    });
+  });
+
+  it("does not trust a preloaded entry for a different session id", async () => {
+    const sessionKey = "agent:main:mismatched-preloaded-read";
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "stored-session",
+        updatedAt: 10,
+      },
+    );
+
+    const target = resolveSessionTranscriptReadTarget({
+      agentId: "main",
+      sessionEntry: { sessionId: "different-session" },
+      sessionId: "stored-session",
+      sessionKey,
+      storePath,
+    });
+
+    expect(target).toEqual({
+      agentId: "main",
+      sessionId: "stored-session",
       sessionKey,
       storePath,
     });

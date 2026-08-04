@@ -36,8 +36,8 @@ const detection: SystemAgentSetupDetectResult = {
     {
       id: "llama-cpp",
       brandId: "llama-cpp",
-      label: "Local model (llama.cpp)",
-      hint: "Download and run a private GGUF model",
+      label: "llama.cpp",
+      hint: "Run one private GGUF model directly inside this Gateway",
     },
     {
       id: "lmstudio",
@@ -400,7 +400,7 @@ describe("ModelSetupPage catalog icons", () => {
 
     await vi.waitFor(() => {
       expect(page.textContent).toContain(
-        "Local model (llama.cpp) did not expose a usable local model. Review the setup result, then retry.",
+        "llama.cpp did not expose a usable local model. Review the setup result, then retry.",
       );
     });
     expect(page.textContent).not.toContain("llama-cpp/persisted-before-verification");

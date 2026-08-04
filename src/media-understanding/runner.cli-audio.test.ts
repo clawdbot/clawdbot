@@ -196,6 +196,38 @@ describe("media-understanding CLI audio entry", () => {
   });
 
   it.each([
+    { source: "model entry", entryLanguage: "de", configLanguage: "fr", expected: "de" },
+    {
+      source: "capability default",
+      entryLanguage: undefined,
+      configLanguage: "fr",
+      expected: "fr",
+    },
+  ])("applies the configured $source language to CLI templating", async (testCase) => {
+    await withAudioFixture("openclaw-cli-language", async ({ ctx, media, cache }) => {
+      await runCliEntry({
+        capability: "audio",
+        entry: {
+          type: "cli",
+          command: "mock-transcriber",
+          args: ["--language", "{{Language}}", "--file", "{{MediaPath}}"],
+          language: testCase.entryLanguage,
+        },
+        cfg: {
+          tools: { media: { audio: { language: testCase.configLanguage } } },
+        } as OpenClawConfig,
+        ctx,
+        attachment: requireFirstAttachment(media),
+        cache,
+        config: { language: testCase.configLanguage } as never,
+      });
+    });
+
+    const [, args] = requireFirstRunExecCall();
+    expect(args).toEqual(["--language", testCase.expected, "--file", expect.any(String)]);
+  });
+
+  it.each([
     { name: "one attachment", count: 1, leadingEmpty: false },
     { name: "many attachments after an empty slot", count: 2, leadingEmpty: true },
   ])(

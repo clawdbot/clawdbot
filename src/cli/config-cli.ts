@@ -278,10 +278,15 @@ export async function runConfigUnset(opts: {
   }
 }
 
-async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
+async function runConfigFile(opts: { json?: boolean; runtime?: RuntimeEnv }) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
-    writeRuntimeStdout(runtime, `${resolveConfigPath()}\n`);
+    const path = resolveConfigPath();
+    if (opts.json) {
+      writeRuntimeJson(runtime, { path });
+      return;
+    }
+    writeRuntimeStdout(runtime, `${path}\n`);
   } catch (err) {
     runtime.error(danger(String(err)));
     runtime.exit(1);
@@ -524,10 +529,15 @@ export function registerConfigCli(program: Command) {
       await runConfigUnset({ path, cliOptions: options });
     });
 
-  cmd.command("file").description("Print the active config file path").action(runConfigFile);
+  cmd
+    .command("file")
+    .description("Print the active config file path")
+    .option("--json", "Output JSON", false)
+    .action((opts: { json?: boolean }) => runConfigFile(opts));
   cmd
     .command("schema")
     .description("Print the JSON schema for openclaw.json")
+    .option("--json", "Output JSON", false)
     .action(runConfigSchema);
   cmd
     .command("validate")

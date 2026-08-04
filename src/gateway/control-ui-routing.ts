@@ -1,5 +1,5 @@
 // Control UI route classifier for base-path and root-mounted SPA serving.
-import { isReadHttpMethod } from "./control-ui-http-utils.js";
+import { acceptsControlUiHtmlResponse, isReadHttpMethod } from "./control-ui-http-utils.js";
 import {
   classifyGatewayProbePath,
   classifyMcpAppStandalonePath,
@@ -9,7 +9,7 @@ type ControlUiRequestClassification =
   | { kind: "not-control-ui" }
   | { kind: "not-found" }
   | { kind: "redirect"; location: string }
-  | { kind: "serve" };
+  | { kind: "serve"; spaFallback: boolean };
 
 const CONTROL_UI_PLUGIN_MANAGER_PATH = "/settings/plugins";
 
@@ -49,8 +49,13 @@ export function classifyControlUiRequest(params: {
   pathname: string;
   search: string;
   method: string | undefined;
+  accept?: string;
 }): ControlUiRequestClassification {
   const { basePath, pathname, search, method } = params;
+  // SPA fallback owns ambiguous browser reads, while plugin recovery is explicit.
+  // Decline only clearly non-HTML Accept values so headerless/wildcard clients keep working.
+  const spaFallback =
+    isControlUiPluginManagerRequest(params) || acceptsControlUiHtmlResponse(params.accept);
   if (!basePath) {
     if (pathname === "/ui" || pathname.startsWith("/ui/")) {
       return { kind: "not-found" };
@@ -80,7 +85,7 @@ export function classifyControlUiRequest(params: {
     if (!isReadHttpMethod(method)) {
       return { kind: "not-control-ui" };
     }
-    return { kind: "serve" };
+    return { kind: "serve", spaFallback };
   }
 
   if (!pathname.startsWith(`${basePath}/`) && pathname !== basePath) {
@@ -92,5 +97,5 @@ export function classifyControlUiRequest(params: {
   if (pathname === basePath) {
     return { kind: "redirect", location: `${basePath}/${search}` };
   }
-  return { kind: "serve" };
+  return { kind: "serve", spaFallback };
 }

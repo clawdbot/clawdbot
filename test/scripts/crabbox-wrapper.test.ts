@@ -39,6 +39,24 @@ const defaultProviderHelp =
 const brokerProviderHelp = "provider: aws, azure, blacksmith-testbox, or daytona\n";
 const azureProviderHelp =
   "provider: hetzner, aws, azure, local-container, blacksmith-testbox, or cloudflare\n";
+const fakeRunValueOptionHelp = [
+  "artifact-glob value",
+  "blacksmith-ref string",
+  "capture-stderr string",
+  "capture-stdout string",
+  "download value",
+  "id string",
+  "idle-timeout duration",
+  "label string",
+  "market string",
+  "provider string",
+  "script string",
+  "target string",
+  "ttl duration",
+  "windows-mode string",
+]
+  .map((option) => `  -${option}\n`)
+  .join("");
 const defaultGitResponses: Record<string, { status?: number; stdout?: string; stderr?: string }> = {
   [GIT_CONFIG_SPARSE_KEY]: { stdout: "false\n" },
   [GIT_SPARSE_LIST_KEY]: { status: 1 },
@@ -59,312 +77,110 @@ function makeFakeCrabbox(helpText: string): string {
 function writeFakeCrabbox(binDir: string, helpText: string): string {
   mkdirSync(binDir, { recursive: true });
   const crabboxPath = path.join(binDir, "crabbox");
-  const helperPath = path.join(binDir, "fake-crabbox-json.cjs");
   const stampClaimScript = [
-    "const fs = require('node:fs');",
     "const claimPaths = [process.env.OPENCLAW_FAKE_CRABBOX_CLAIM_PATH, process.env.OPENCLAW_FAKE_CRABBOX_EXTRA_CLAIM_PATH].filter(Boolean);",
-    "for (const claimPath of claimPaths) {",
-    "  const claim = fs.existsSync(claimPath) ? JSON.parse(fs.readFileSync(claimPath, 'utf8')) : { leaseID: process.env.OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID };",
-    "  claim.repoRoot = process.env.OPENCLAW_FAKE_CRABBOX_CLAIM_REPO_ROOT || process.cwd();",
-    "  fs.mkdirSync(require('node:path').dirname(claimPath), { recursive: true });",
-    "  fs.writeFileSync(claimPath, JSON.stringify(claim) + '\\n', 'utf8');",
-    "}",
-    "if (process.env.OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID) {",
-    "  process.stderr.write(JSON.stringify({ provider: 'blacksmith-testbox', leaseId: process.env.OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID, exitCode: 0 }) + '\\n');",
-    "}",
-  ].join("\n");
-
-  if (process.platform !== "win32") {
-    const signalIgnoringDescendantScript = [
-      "import fs from 'node:fs';",
-      "process.on('SIGHUP', () => {});",
-      "process.on('SIGINT', () => {});",
-      "process.on('SIGTERM', () => {});",
-      "const pidPath = process.env.OPENCLAW_FAKE_CRABBOX_DESCENDANT_PID_PATH;",
-      "const pidTmpPath = `${pidPath}.tmp.${process.pid}`;",
-      "fs.writeFileSync(pidTmpPath, String(process.pid));",
-      "fs.renameSync(pidTmpPath, pidPath);",
-      "setInterval(() => {}, 1000);",
-    ].join("");
-    const script = [
-      "#!/bin/sh",
-      'if [ "$1" = "--version" ]; then',
-      '  printf "%s\\n" "${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.22.1}"',
-      "  exit 0",
-      "fi",
-      'if [ "$1" = "run" ] && [ "$2" = "--help" ]; then',
-      `  printf "%s" ${shellSingleQuote(helpText)}`,
-      "  exit 0",
-      "fi",
-      'if [ "$1" = "doctor" ]; then',
-      '  provider=""',
-      '  target=""',
-      '  windows_mode=""',
-      '  previous_arg=""',
-      '  for arg in "$@"; do',
-      '    if [ "$previous_arg" = "--provider" ] || [ "$previous_arg" = "-provider" ]; then provider="$arg"; fi',
-      '    if [ "$previous_arg" = "--target" ] || [ "$previous_arg" = "-target" ]; then target="$arg"; fi',
-      '    if [ "$previous_arg" = "--windows-mode" ] || [ "$previous_arg" = "-windows-mode" ]; then windows_mode="$arg"; fi',
-      '    case "$arg" in',
-      '      --provider=*|-provider=*) provider="${arg#*=}" ;;',
-      '      --target=*|-target=*) target="${arg#*=}" ;;',
-      '      --windows-mode=*|-windows-mode=*) windows_mode="${arg#*=}" ;;',
-      "    esac",
-      '    previous_arg="$arg"',
-      "  done",
-      '  if [ -n "${OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_TARGET:-}" ] && [ "$target" != "$OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_TARGET" ]; then',
-      '    printf "%s\\n" "doctor target mismatch: got=$target" >&2',
-      "    exit 64",
-      "  fi",
-      '  if [ -n "${OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_WINDOWS_MODE:-}" ] && [ "$windows_mode" != "$OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_WINDOWS_MODE" ]; then',
-      '    printf "%s\\n" "doctor windows mode mismatch: got=$windows_mode" >&2',
-      "    exit 64",
-      "  fi",
-      '  case ",${OPENCLAW_FAKE_CRABBOX_UNREADY_PROVIDERS:-}," in',
-      '    *,"$provider",*) printf "%s\\n" "{\\"ok\\":false,\\"provider\\":\\"$provider\\"}" >&2; exit 1 ;;',
-      "  esac",
-      '  printf "%s\\n" "{\\"ok\\":true,\\"provider\\":\\"$provider\\"}"',
-      "  exit 0",
-      "fi",
-      'if { [ "$1" = "run" ] || [ "$1" = "warmup" ]; } && { [ -n "${OPENCLAW_FAKE_CRABBOX_CLAIM_PATH:-}" ] || [ -n "${OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID:-}" ]; }; then',
-      `  ${shellSingleQuote(process.execPath)} --eval ${shellSingleQuote(stampClaimScript)}`,
-      "fi",
-      'if [ "$1" = "run" ] && [ -n "${OPENCLAW_FAKE_CRABBOX_RUN_STATUS:-}" ] && [ "$OPENCLAW_FAKE_CRABBOX_RUN_STATUS" != "0" ]; then',
-      '  printf "%s\\n" "fake run failure" >&2',
-      '  exit "$OPENCLAW_FAKE_CRABBOX_RUN_STATUS"',
-      "fi",
-      'if [ "$1" = "config" ] && [ "$2" = "show" ]; then',
-      '  for arg in "$@"; do',
-      '    if [ "$arg" = "--json" ]; then',
-      '      status="${OPENCLAW_FAKE_CRABBOX_CONFIG_STATUS:-0}"',
-      '      if [ "$status" != "0" ]; then',
-      '        printf "%s\\n" "config unavailable" >&2',
-      '        exit "$status"',
-      "      fi",
-      '      if [ -n "${OPENCLAW_FAKE_CRABBOX_CONFIG_JSON+x}" ]; then',
-      '        printf "%s" "$OPENCLAW_FAKE_CRABBOX_CONFIG_JSON"',
-      "      else",
-      '        printf "%s" "{\\"coordinator\\":\\"configured-broker\\",\\"brokerMode\\":\\"managed\\",\\"brokerAuth\\":\\"configured\\"}"',
-      "      fi",
-      "      exit 0",
-      "    fi",
-      "  done",
-      "fi",
-      'if [ "$1" = "whoami" ]; then',
-      '  status="${OPENCLAW_FAKE_CRABBOX_WHOAMI_STATUS:-0}"',
-      '  if [ "$status" != "0" ]; then',
-      '    printf "%s\\n" "coordinator GET /v1/whoami: http 401: {\\"error\\":\\"unauthorized\\"}" >&2',
-      '    exit "$status"',
-      "  fi",
-      '  printf "%s\\n" "fake-crabbox-user"',
-      "  exit 0",
-      "fi",
-      'for arg in "$@"; do',
-      '  if [ "$arg" = "--artifact-glob" ] || [ "$arg" = "-artifact-glob" ]; then',
-      "    mkdir -p .crabbox/runs/run_fake",
-      '    printf "%s\\n" "fake artifact" > .crabbox/runs/run_fake/fake-artifacts.tgz',
-      "  fi",
-      "done",
-      'script_path=""',
-      'previous_arg=""',
-      'for arg in "$@"; do',
-      '  if [ "$previous_arg" = "--script" ] || [ "$previous_arg" = "-script" ]; then',
-      '    script_path="$arg"',
-      "    break",
-      "  fi",
-      '  previous_arg="$arg"',
-      "done",
-      'if [ "${OPENCLAW_FAKE_CRABBOX_DELETE_CWD_AND_EXIT:-}" = "1" ]; then',
-      // Let the wrapper finish its synchronous keepalive check so this fixture
-      // exercises the post-exit checkout guard, not the active-child monitor.
-      "  sleep 0.1",
-      '  deleted_cwd="$PWD"',
-      "  cd / || exit 1",
-      '  rm -rf "$deleted_cwd"',
-      "  exit 0",
-      "fi",
-      'if [ "${OPENCLAW_FAKE_CRABBOX_DELETE_CWD_ONCE:-}" = "1" ]; then',
-      '  deleted_cwd="$PWD"',
-      "  cd / || exit 1",
-      '  rm -rf "$deleted_cwd"',
-      // Fail-safe only: the wrapper normally kills this child mid-loop. The
-      // deadline just has to outlast wrapper timer starvation under
-      // parallel-suite load, or the child exits 66 before the wrapper reacts
-      // and the test asserts on the wrong stderr message.
-      "  deadline=1000",
-      '  while [ "$deadline" -gt 0 ] && [ ! -d "$deleted_cwd" ]; do',
-      "    deadline=$((deadline - 1))",
-      "    sleep 0.01",
-      "  done",
-      '  if [ ! -d "$deleted_cwd" ]; then',
-      '    printf "%s\\n" "cwd was not restored: $deleted_cwd" >&2',
-      "    exit 66",
-      "  fi",
-      '  cd "$deleted_cwd" || exit 1',
-      "fi",
-      'if [ -n "${OPENCLAW_FAKE_CRABBOX_DESCENDANT_PID_PATH:-}" ]; then',
-      // The descendant publishes its own PID only after its signal handlers exist.
-      // Atomic rename makes path existence a complete readiness handshake.
-      `  ${shellSingleQuote(process.execPath)} --input-type=module --eval ${shellSingleQuote(signalIgnoringDescendantScript)} &`,
-      '  trap "exit 0" INT TERM HUP',
-      "  while :; do sleep 1; done",
-      "fi",
-      'if [ -n "${OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE+x}" ]; then',
-      '  expected_bundle="$(mktemp)" || exit 67',
-      '  printf "%s" "$OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE" > "$expected_bundle"',
-      '  if [ ! -f .openclaw-crabbox-changed-gate.bundle ] || ! cmp -s .openclaw-crabbox-changed-gate.bundle "$expected_bundle"; then',
-      '    rm -f "$expected_bundle"',
-      '    printf "%s\\n" "changed-gate bundle mismatch" >&2',
-      "    exit 67",
-      "  fi",
-      '  rm -f "$expected_bundle"',
-      "fi",
-      'if [ -n "${OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE_BYTES:-}" ]; then',
-      '  actual_bundle_bytes="$(wc -c < .openclaw-crabbox-changed-gate.bundle 2>/dev/null | tr -d " ")"',
-      '  if [ "$actual_bundle_bytes" != "$OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE_BYTES" ]; then',
-      '    printf "%s\\n" "changed-gate bundle size mismatch" >&2',
-      "    exit 67",
-      "  fi",
-      "fi",
-      'if [ "${OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_FORCE_ADD:-}" = "1" ] && [ ! -f "${OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER:-}" ]; then',
-      '  printf "%s\\n" "changed-gate bundle was not force-added" >&2',
-      "  exit 67",
-      "fi",
-      'printf "%s\\0" "__OPENCLAW_FAKE_CRABBOX_V1__"',
-      'printf "%s\\0" "$PWD"',
-      'printf "%s\\0" "$#"',
-      'for arg in "$@"; do',
-      '  printf "%s\\0" "$arg"',
-      "done",
-      'if [ -n "$script_path" ] && [ -f "$script_path" ]; then',
-      '  cat "$script_path"',
-      "fi",
-    ].join("\n");
-    writeFileSync(crabboxPath, `${script}\n`, "utf8");
-    chmodSync(crabboxPath, 0o755);
-    return crabboxPath;
+    "for (const claimPath of claimPaths) { const claim = fs.existsSync(claimPath) ? JSON.parse(fs.readFileSync(claimPath, 'utf8')) : { leaseID: process.env.OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID }; claim.repoRoot = process.env.OPENCLAW_FAKE_CRABBOX_CLAIM_REPO_ROOT || process.cwd(); fs.mkdirSync(path.dirname(claimPath), { recursive: true }); fs.writeFileSync(claimPath, JSON.stringify(claim) + '\\n', 'utf8'); }",
+    "if (process.env.OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID) process.stderr.write(JSON.stringify({ provider: 'blacksmith-testbox', leaseId: process.env.OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID, exitCode: 0 }) + '\\n');",
+  ].join("");
+  // Keep the descendant in the fake's process group, and publish readiness only
+  // after its signal handlers exist so the wrapper's group cleanup is deterministic.
+  const signalIgnoringDescendantScript =
+    "import fs from 'node:fs'; process.on('SIGHUP', () => {}); process.on('SIGINT', () => {}); process.on('SIGTERM', () => {}); const pidPath = process.env.OPENCLAW_FAKE_CRABBOX_DESCENDANT_PID_PATH; const tmpPath = pidPath + '.tmp.' + process.pid; fs.writeFileSync(tmpPath, String(process.pid)); fs.renameSync(tmpPath, pidPath); setInterval(() => {}, 1000);";
+  // The two cwd-loss modes distinguish active-child monitoring from the post-exit
+  // guard; both must chdir away before deleting the temporary checkout.
+  const script = String.raw`
+const fs = require("node:fs"); const path = require("node:path"); const { spawn } = require("node:child_process");
+const args = process.argv.slice(2); const helpText = ${JSON.stringify(`${helpText}${fakeRunValueOptionHelp}`)};
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const optionValue = (name) => {
+  const index = args.findIndex((arg) => arg === "--" + name || arg === "-" + name); const assigned = args.find((arg) => arg.startsWith("--" + name + "=") || arg.startsWith("-" + name + "="));
+  return index >= 0 ? args[index + 1] || "" : assigned?.slice(assigned.indexOf("=") + 1) || "";
+};
+async function main() {
+  if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.22.1"); return; }
+  if (args[0] === "run" && args[1] === "--help") { process.stdout.write(helpText); return; }
+  if (args[0] === "doctor") {
+    const provider = optionValue("provider"); const target = optionValue("target"); const windowsMode = optionValue("windows-mode");
+    if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_TARGET && target !== process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_TARGET) { process.stderr.write("doctor target mismatch: got=" + target + "\n"); process.exit(64); }
+    if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_WINDOWS_MODE && windowsMode !== process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_WINDOWS_MODE) { process.stderr.write("doctor windows mode mismatch: got=" + windowsMode + "\n"); process.exit(64); }
+    const unready = new Set((process.env.OPENCLAW_FAKE_CRABBOX_UNREADY_PROVIDERS || "").split(",").filter(Boolean));
+    const ready = !unready.has(provider); process[ready ? "stdout" : "stderr"].write(JSON.stringify({ ok: ready, provider }) + "\n");
+    process.exit(ready ? 0 : 1);
   }
-
-  const helperScript = [
-    "const args = process.argv.slice(2);",
-    'if (args[0] === "config" && args[1] === "show" && args.includes("--json")) {',
-    "  const status = Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_CONFIG_STATUS || '0', 10);",
-    "  if (status !== 0) {",
-    "    process.stderr.write('config unavailable\\n');",
-    "    process.exit(status);",
-    "  }",
-    '  process.stdout.write(process.env.OPENCLAW_FAKE_CRABBOX_CONFIG_JSON || \'{"coordinator":"configured-broker","brokerMode":"managed","brokerAuth":"configured"}\');',
-    "  process.exit(0);",
-    "}",
-    'if (args[0] === "whoami") {',
-    "  const status = Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_WHOAMI_STATUS || '0', 10);",
-    "  if (status !== 0) {",
-    '    process.stderr.write(\'coordinator GET /v1/whoami: http 401: {"error":"unauthorized"}\\n\');',
-    "    process.exit(status);",
-    "  }",
-    "  process.stdout.write('fake-crabbox-user\\n');",
-    "  process.exit(0);",
-    "}",
-    "const scriptIndex = args.findIndex((arg) => arg === '--script' || arg === '-script');",
-    "const scriptPath = scriptIndex >= 0 ? args[scriptIndex + 1] : '';",
-    "const scriptContent = scriptPath ? require('node:fs').readFileSync(scriptPath, 'utf8') : '';",
-    "if (args.includes('--artifact-glob') || args.includes('-artifact-glob')) {",
-    "  require('node:fs').mkdirSync('.crabbox/runs/run_fake', { recursive: true });",
-    "  require('node:fs').writeFileSync('.crabbox/runs/run_fake/fake-artifacts.tgz', 'fake artifact\\n');",
-    "}",
-    "if (Object.hasOwn(process.env, 'OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE')) {",
-    "  const bundlePath = '.openclaw-crabbox-changed-gate.bundle';",
-    "  const bundle = require('node:fs').existsSync(bundlePath) ? require('node:fs').readFileSync(bundlePath, 'utf8') : null;",
-    "  if (bundle !== process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE) { process.stderr.write('changed-gate bundle mismatch\\n'); process.exit(67); }",
-    "}",
-    "if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE_BYTES) {",
-    "  const bundlePath = '.openclaw-crabbox-changed-gate.bundle';",
-    "  const size = require('node:fs').existsSync(bundlePath) ? require('node:fs').statSync(bundlePath).size : -1;",
-    "  if (size !== Number(process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE_BYTES)) { process.stderr.write('changed-gate bundle size mismatch\\n'); process.exit(67); }",
-    "}",
-    "if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_FORCE_ADD === '1' && !require('node:fs').existsSync(process.env.OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER || '')) { process.stderr.write('changed-gate bundle was not force-added\\n'); process.exit(67); }",
-    "console.log(JSON.stringify({ args, cwd: process.cwd(), scriptContent }));",
-  ].join("\n");
-  writeFileSync(helperPath, `${helperScript}\n`, "utf8");
-
-  const script = [
-    "#!/usr/bin/env node",
-    "const args = process.argv.slice(2);",
-    'if (args[0] === "--version") {',
-    "  console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || 'crabbox 0.22.1');",
-    "  process.exit(0);",
-    "}",
-    'if (args[0] === "run" && args[1] === "--help") {',
-    `  process.stdout.write(${JSON.stringify(helpText)});`,
-    "  process.exit(0);",
-    "}",
-    'if (args[0] === "doctor") {',
-    "  const optionValue = (name) => { const index = args.findIndex((arg) => arg === `--${name}` || arg === `-${name}`); const assigned = args.find((arg) => arg.startsWith(`--${name}=`) || arg.startsWith(`-${name}=`)); return index >= 0 ? args[index + 1] || '' : assigned?.slice(assigned.indexOf('=') + 1) || ''; };",
-    "  const providerIndex = args.findIndex((arg) => arg === '--provider' || arg === '-provider');",
-    "  const providerArg = args.find((arg) => arg.startsWith('--provider=') || arg.startsWith('-provider='));",
-    "  const provider = providerIndex >= 0 ? args[providerIndex + 1] : providerArg?.slice(providerArg.indexOf('=') + 1) || '';",
-    "  const target = optionValue('target');",
-    "  const windowsMode = optionValue('windows-mode');",
-    "  if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_TARGET && target !== process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_TARGET) { process.stderr.write(`doctor target mismatch: got=${target}\\n`); process.exit(64); }",
-    "  if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_WINDOWS_MODE && windowsMode !== process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_WINDOWS_MODE) { process.stderr.write(`doctor windows mode mismatch: got=${windowsMode}\\n`); process.exit(64); }",
-    "  const unready = new Set((process.env.OPENCLAW_FAKE_CRABBOX_UNREADY_PROVIDERS || '').split(',').filter(Boolean));",
-    "  if (unready.has(provider)) { process.stderr.write(JSON.stringify({ ok: false, provider }) + '\\n'); process.exit(1); }",
-    "  process.stdout.write(JSON.stringify({ ok: true, provider }) + '\\n');",
-    "  process.exit(0);",
-    "}",
-    `if (args[0] === "run" || args[0] === "warmup") { ${stampClaimScript} }`,
-    'if (args[0] === "run" && Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_RUN_STATUS || "0", 10) !== 0) {',
-    "  process.stderr.write('fake run failure\\n');",
-    "  process.exit(Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_RUN_STATUS, 10));",
-    "}",
-    `require(${JSON.stringify(helperPath)});`,
-  ].join("\n");
-  writeFileSync(crabboxPath, `${script}\n`, "utf8");
-  writeFileSync(`${crabboxPath}.cmd`, windowsNodeCmdShim("crabbox"), "utf8");
-  chmodSync(crabboxPath, 0o755);
+  if (args[0] === "run" || args[0] === "warmup") { ${stampClaimScript} }
+  const runStatus = Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_RUN_STATUS || "0", 10); if (args[0] === "run" && runStatus !== 0) { process.stderr.write("fake run failure\n"); process.exit(runStatus); }
+  if (args[0] === "config" && args[1] === "show" && args.includes("--json")) {
+    const status = Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_CONFIG_STATUS || "0", 10);
+    if (status !== 0) { process.stderr.write("config unavailable\n"); process.exit(status); }
+    process.stdout.write(Object.hasOwn(process.env, "OPENCLAW_FAKE_CRABBOX_CONFIG_JSON") ? process.env.OPENCLAW_FAKE_CRABBOX_CONFIG_JSON : '{"coordinator":"configured-broker","brokerMode":"managed","brokerAuth":"configured"}');
+    return;
+  }
+  if (args[0] === "whoami") {
+    const status = Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_WHOAMI_STATUS || "0", 10);
+    if (status !== 0) { process.stderr.write('coordinator GET /v1/whoami: http 401: {"error":"unauthorized"}\n'); process.exit(status); }
+    process.stdout.write("fake-crabbox-user\n"); return;
+  }
+  if (args.includes("--artifact-glob") || args.includes("-artifact-glob")) { fs.mkdirSync(".crabbox/runs/run_fake", { recursive: true }); fs.writeFileSync(".crabbox/runs/run_fake/fake-artifacts.tgz", "fake artifact\n"); }
+  const scriptIndex = args.findIndex((arg) => arg === "--script" || arg === "-script"); const scriptPath = scriptIndex >= 0 ? args[scriptIndex + 1] : "";
+  const scriptContent = scriptPath ? fs.readFileSync(scriptPath, "utf8") : "";
+  if (process.env.OPENCLAW_FAKE_CRABBOX_DELETE_CWD_AND_EXIT === "1") {
+    await wait(100); const deletedCwd = process.cwd(); process.chdir(path.parse(deletedCwd).root || "/");
+    fs.rmSync(deletedCwd, { recursive: true, force: true }); process.exit(0);
+  }
+  if (process.env.OPENCLAW_FAKE_CRABBOX_DELETE_CWD_ONCE === "1") {
+    const deletedCwd = process.cwd(); process.chdir(path.parse(deletedCwd).root || "/");
+    fs.rmSync(deletedCwd, { recursive: true, force: true }); let attempts = 1000;
+    while (attempts-- > 0 && !fs.existsSync(deletedCwd)) await wait(10);
+    if (!fs.existsSync(deletedCwd)) { process.stderr.write("cwd was not restored: " + deletedCwd + "\n"); process.exit(66); }
+    process.chdir(deletedCwd);
+  }
+  if (process.env.OPENCLAW_FAKE_CRABBOX_DESCENDANT_PID_PATH) {
+    spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(signalIgnoringDescendantScript)}], { stdio: "ignore" });
+    setInterval(() => {}, 1000); return;
+  }
+  const bundlePath = ".openclaw-crabbox-changed-gate.bundle";
+  if (Object.hasOwn(process.env, "OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE")) {
+    const bundle = fs.existsSync(bundlePath) ? fs.readFileSync(bundlePath, "utf8") : null;
+    if (bundle !== process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE) { process.stderr.write("changed-gate bundle mismatch\n"); process.exit(67); }
+  }
+  if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE_BYTES) {
+    const bytes = fs.existsSync(bundlePath) ? fs.statSync(bundlePath).size : -1;
+    if (bytes !== Number(process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE_BYTES)) { process.stderr.write("changed-gate bundle size mismatch\n"); process.exit(67); }
+  }
+  if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_FORCE_ADD === "1" && !fs.existsSync(process.env.OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER || "")) { process.stderr.write("changed-gate bundle was not force-added\n"); process.exit(67); }
+  process.stdout.write(JSON.stringify({ args, cwd: process.cwd(), scriptContent }) + "\n");
+}
+main().catch((error) => { process.stderr.write(String(error?.stack || error) + "\n"); process.exit(1); });`;
+  writeNodeCommand(crabboxPath, script);
   return crabboxPath;
 }
 
 function makeSlowVersionCrabbox(helpText: string): string {
-  const binDir = mkdtempSync(path.join(tmpdir(), "openclaw-slow-crabbox-"));
-  tempDirs.push(binDir);
-  const crabboxPath = path.join(binDir, "crabbox");
-
-  const script = [
-    "#!/usr/bin/env node",
-    "const args = process.argv.slice(2);",
-    'if (args[0] === "--version") { setTimeout(() => process.exit(0), 1_000); }',
-    `else if (args[0] === "run" && args[1] === "--help") { process.stdout.write(${JSON.stringify(helpText)}); }`,
-  ].join("\n");
-  writeFileSync(crabboxPath, `${script}\n`, "utf8");
-  writeFileSync(`${crabboxPath}.cmd`, windowsNodeCmdShim("crabbox"), "utf8");
-  chmodSync(crabboxPath, 0o755);
-  return binDir;
+  return makeSlowCrabbox(helpText, "version", 1_000);
 }
 
 // Fake Crabbox whose `run --help` is slow on every call and, like real Crabbox
 // 0.36, renders the provider help to stderr. Used to prove the wrapper retries a
 // cold/slow metadata probe instead of hard-failing.
 function makeSlowHelpCrabbox(helpText: string, delayMs: number): string {
-  const binDir = mkdtempSync(path.join(tmpdir(), "openclaw-slow-help-crabbox-"));
+  return makeSlowCrabbox(helpText, "help", delayMs);
+}
+
+function makeSlowCrabbox(helpText: string, mode: "help" | "version", delayMs: number): string {
+  const binDir = mkdtempSync(path.join(tmpdir(), `openclaw-slow-${mode}-crabbox-`));
   tempDirs.push(binDir);
   const crabboxPath = path.join(binDir, "crabbox");
-
-  const script = [
-    "#!/usr/bin/env node",
-    "const args = process.argv.slice(2);",
-    "if (args[0] === '--version') {",
-    "  console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || 'crabbox 0.22.1');",
-    "  process.exit(0);",
-    "} else if (args[0] === 'run' && args[1] === '--help') {",
-    `  setTimeout(() => { process.stderr.write(${JSON.stringify(helpText)}); process.exit(0); }, ${delayMs});`,
-    "} else {",
-    "  process.exit(0);",
-    "}",
-  ].join("\n");
-  writeFileSync(crabboxPath, `${script}\n`, "utf8");
-  writeFileSync(`${crabboxPath}.cmd`, windowsNodeCmdShim("crabbox"), "utf8");
-  chmodSync(crabboxPath, 0o755);
+  const runHelpText = `${helpText}${fakeRunValueOptionHelp}`;
+  const script = String.raw`
+const args = process.argv.slice(2); const mode = ${JSON.stringify(mode)};
+if (args[0] === "--version") {
+  if (mode === "version") setTimeout(() => process.exit(0), ${delayMs});
+  else console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.22.1");
+} else if (args[0] === "run" && args[1] === "--help") {
+  if (mode === "help") setTimeout(() => { process.stderr.write(${JSON.stringify(runHelpText)}); process.exit(0); }, ${delayMs});
+  else process.stdout.write(${JSON.stringify(runHelpText)});
+}`;
+  writeNodeCommand(crabboxPath, script);
   return binDir;
 }
 
@@ -423,8 +239,13 @@ function windowsNodeCmdShim(target: string): string {
   ].join("\r\n");
 }
 
-function shellSingleQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
+function writeNodeCommand(commandPath: string, script: string): void {
+  writeFileSync(commandPath, `#!/usr/bin/env node\n${script.trimStart()}\n`, "utf8");
+  if (process.platform === "win32") {
+    const shim = windowsNodeCmdShim(path.basename(commandPath));
+    writeFileSync(`${commandPath}.cmd`, shim, "utf8");
+  }
+  chmodSync(commandPath, 0o755);
 }
 
 function makeFakeGit(
@@ -438,123 +259,39 @@ function makeFakeGit(
   const binDir = mkdtempSync(path.join(tmpdir(), "openclaw-fake-git-"));
   tempDirs.push(binDir);
   const gitPath = path.join(binDir, "git");
-  if (process.platform !== "win32") {
-    const script = [
-      "#!/bin/sh",
-      'if [ "$1" = "worktree" ] && [ "$2" = "add" ]; then',
-      '  mkdir -p "$4"',
-      '  if [ -n "${OPENCLAW_FAKE_GIT_CHANGED_GATE_BUNDLE_SYMLINK_TARGET:-}" ]; then',
-      '    ln -s "$OPENCLAW_FAKE_GIT_CHANGED_GATE_BUNDLE_SYMLINK_TARGET" "$4/.openclaw-crabbox-changed-gate.bundle"',
-      "  fi",
-      "  exit 0",
-      "fi",
-      'if [ "$1" = "-C" ] && [ "$3" = "sparse-checkout" ] && [ "$4" = "disable" ]; then',
-      "  exit 0",
-      "fi",
-      'if [ "$1" = "-C" ] && [ "$3" = "rev-parse" ]; then',
-      '  if [ "$4" = "HEAD" ]; then',
-      '    printf "%s\\n" "${OPENCLAW_FAKE_GIT_HEAD_SHA:-def456}"',
-      '  elif [ "$4" = "HEAD^{tree}" ]; then',
-      '    printf "%s\\n" "${OPENCLAW_FAKE_GIT_HEAD_TREE_SHA:-tree456}"',
-      "  else",
-      '    printf "%s\\n" "${OPENCLAW_FAKE_GIT_BASE_SHA:-abc123}"',
-      "  fi",
-      "  exit 0",
-      "fi",
-      'if [ "$1" = "-C" ] && [ "$3" = "-c" ] && [ "$7" = "commit-tree" ]; then',
-      '  if [ -n "${OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER:-}" ]; then',
-      '    for arg in "$@"; do [ "$arg" != "-p" ] || exit 68; done',
-      '    : > "$OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER"',
-      "  fi",
-      '  if [ -n "${OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER:-}" ]; then',
-      '    : > "$OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER"',
-      "  fi",
-      '  printf "%s\\n" "${OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_SHA:-synthetic789}"',
-      "  exit 0",
-      "fi",
-      'if [ "$1" = "-C" ] && [ "$3" = "update-ref" ] && [ "$4" = "HEAD" ]; then',
-      '  if [ -n "${OPENCLAW_FAKE_GIT_SYNTHETIC_HEAD_MARKER:-}" ]; then',
-      '    : > "$OPENCLAW_FAKE_GIT_SYNTHETIC_HEAD_MARKER"',
-      "  fi",
-      "  exit 0",
-      "fi",
-      'if [ "$1" = "-C" ] && [ "$3" = "bundle" ] && [ "$4" = "create" ]; then',
-      '  if [ -n "${OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER:-}" ]; then',
-      '    [ "$#" = "6" ] && [ "$6" = "HEAD" ] || exit 68',
-      '    : > "$OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER"',
-      "  fi",
-      '  if [ -n "${OPENCLAW_FAKE_GIT_BUNDLE_BYTES:-}" ]; then',
-      '    head -c "$OPENCLAW_FAKE_GIT_BUNDLE_BYTES" /dev/zero | tr "\\000" x > "$5"',
-      "  else",
-      '    printf "%s" "${OPENCLAW_FAKE_GIT_BUNDLE:-fake-bundle}" > "$5"',
-      "  fi",
-      "  exit 0",
-      "fi",
-      'if [ "$1" = "-C" ] && [ "$3" = "add" ] && [ "$4" = "-f" ]; then',
-      '  if [ -n "${OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER:-}" ]; then',
-      '    : > "$OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER"',
-      "  fi",
-      "  exit 0",
-      "fi",
-      'if [ "$1" = "-C" ] && [ "$3" = "reset" ] && [ "$4" = "--mixed" ]; then',
-      "  exit 0",
-      "fi",
-      'if [ "$1" = "worktree" ] && [ "$2" = "remove" ]; then',
-      '  rm -rf "$4"',
-      "  exit 0",
-      "fi",
-      ...Object.entries(responses).flatMap(([responseKey, response]) => {
-        const args = responseKey.split("\u0000");
-        return [
-          `if ${shellArgListCondition(args)}; then`,
-          response.stdout ? `  printf "%s" ${shellSingleQuote(response.stdout)}` : "",
-          response.stderr ? `  printf "%s" ${shellSingleQuote(response.stderr)} >&2` : "",
-          `  exit ${response.status ?? 0}`,
-          "fi",
-        ].filter(Boolean);
-      }),
-      "exit 1",
-    ].join("\n");
-    writeFileSync(gitPath, `${script}\n`, "utf8");
-    chmodSync(gitPath, 0o755);
-    fakeGitBinDirs.set(key, binDir);
-    return binDir;
-  }
-
-  const script = [
-    "#!/usr/bin/env node",
-    "const fs = require('node:fs');",
-    "const responses = new Map(Object.entries(JSON.parse(process.env.OPENCLAW_FAKE_GIT_RESPONSES || '{}')));",
-    "const args = process.argv.slice(2);",
-    "if (args[0] === 'worktree' && args[1] === 'add') { fs.mkdirSync(args[3], { recursive: true }); if (process.env.OPENCLAW_FAKE_GIT_CHANGED_GATE_BUNDLE_SYMLINK_TARGET) fs.symlinkSync(process.env.OPENCLAW_FAKE_GIT_CHANGED_GATE_BUNDLE_SYMLINK_TARGET, require('node:path').join(args[3], '.openclaw-crabbox-changed-gate.bundle')); process.exit(0); }",
-    "if (args[0] === '-C' && args[2] === 'sparse-checkout' && args[3] === 'disable') { process.exit(0); }",
-    "if (args[0] === '-C' && args[2] === 'rev-parse') { const value = args[3] === 'HEAD' ? process.env.OPENCLAW_FAKE_GIT_HEAD_SHA || 'def456' : args[3] === 'HEAD^{tree}' ? process.env.OPENCLAW_FAKE_GIT_HEAD_TREE_SHA || 'tree456' : process.env.OPENCLAW_FAKE_GIT_BASE_SHA || 'abc123'; process.stdout.write(`${value}\\n`); process.exit(0); }",
-    "if (args[0] === '-C' && args[2] === '-c' && args[6] === 'commit-tree') { if (process.env.OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER) { if (args.includes('-p')) process.exit(68); fs.writeFileSync(process.env.OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER, ''); } if (process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER) fs.writeFileSync(process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER, ''); process.stdout.write(`${process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_SHA || 'synthetic789'}\\n`); process.exit(0); }",
-    "if (args[0] === '-C' && args[2] === 'update-ref' && args[3] === 'HEAD') { if (process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_HEAD_MARKER) fs.writeFileSync(process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_HEAD_MARKER, ''); process.exit(0); }",
-    "if (args[0] === '-C' && args[2] === 'bundle' && args[3] === 'create') { if (process.env.OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER) { if (args.length !== 6 || args[5] !== 'HEAD') process.exit(68); fs.writeFileSync(process.env.OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER, ''); } const bytes = Number(process.env.OPENCLAW_FAKE_GIT_BUNDLE_BYTES || 0); fs.writeFileSync(args[4], bytes ? 'x'.repeat(bytes) : process.env.OPENCLAW_FAKE_GIT_BUNDLE || 'fake-bundle'); process.exit(0); }",
-    "if (args[0] === '-C' && args[2] === 'add' && args[3] === '-f') { if (process.env.OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER) fs.writeFileSync(process.env.OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER, ''); process.exit(0); }",
-    "if (args[0] === '-C' && args[2] === 'reset' && args[3] === '--mixed') { process.exit(0); }",
-    "if (args[0] === 'worktree' && args[1] === 'remove') { fs.rmSync(args[3], { recursive: true, force: true }); process.exit(0); }",
-    "const key = args.join('\\u0000');",
-    "const response = responses.get(key);",
-    "if (!response) { process.exit(1); }",
-    "if (response.stdout) process.stdout.write(response.stdout);",
-    "if (response.stderr) process.stderr.write(response.stderr);",
-    "process.exit(response.status ?? 0);",
-  ].join("\n");
-  writeFileSync(gitPath, `${script}\n`, "utf8");
-  writeFileSync(`${gitPath}.cmd`, windowsNodeCmdShim("git"), "utf8");
-  chmodSync(gitPath, 0o755);
+  const script = String.raw`
+const fs = require("node:fs"); const path = require("node:path"); const args = process.argv.slice(2);
+const touch = (name) => { if (process.env[name]) fs.writeFileSync(process.env[name], ""); };
+if (args[0] === "worktree" && args[1] === "add") {
+  fs.mkdirSync(args[3], { recursive: true });
+  if (process.env.OPENCLAW_FAKE_GIT_CHANGED_GATE_BUNDLE_SYMLINK_TARGET) fs.symlinkSync(process.env.OPENCLAW_FAKE_GIT_CHANGED_GATE_BUNDLE_SYMLINK_TARGET, path.join(args[3], ".openclaw-crabbox-changed-gate.bundle")); process.exit(0);
+}
+if (args[0] === "-C" && args[2] === "sparse-checkout" && args[3] === "disable") process.exit(0);
+if (args[0] === "-C" && args[2] === "rev-parse") {
+  const value = args[3] === "HEAD" ? process.env.OPENCLAW_FAKE_GIT_HEAD_SHA || "def456" : args[3] === "HEAD^{tree}" ? process.env.OPENCLAW_FAKE_GIT_HEAD_TREE_SHA || "tree456" : process.env.OPENCLAW_FAKE_GIT_BASE_SHA || "abc123";
+  process.stdout.write(value + "\n"); process.exit(0);
+}
+if (args[0] === "-C" && args[2] === "-c" && args[6] === "commit-tree") {
+  if (process.env.OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER && args.includes("-p")) process.exit(68);
+  touch("OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER"); touch("OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER");
+  process.stdout.write((process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_SHA || "synthetic789") + "\n"); process.exit(0);
+}
+if (args[0] === "-C" && args[2] === "update-ref" && args[3] === "HEAD") { touch("OPENCLAW_FAKE_GIT_SYNTHETIC_HEAD_MARKER"); process.exit(0); }
+if (args[0] === "-C" && args[2] === "bundle" && args[3] === "create") {
+  if (process.env.OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER && (args.length !== 6 || args[5] !== "HEAD")) process.exit(68);
+  touch("OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER"); const bytes = Number(process.env.OPENCLAW_FAKE_GIT_BUNDLE_BYTES || 0);
+  fs.writeFileSync(args[4], bytes ? "x".repeat(bytes) : process.env.OPENCLAW_FAKE_GIT_BUNDLE || "fake-bundle"); process.exit(0);
+}
+if (args[0] === "-C" && args[2] === "add" && args[3] === "-f") { touch("OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER"); process.exit(0); }
+if (args[0] === "-C" && args[2] === "reset" && args[3] === "--mixed") process.exit(0);
+if (args[0] === "worktree" && args[1] === "remove") { fs.rmSync(args[3], { recursive: true, force: true }); process.exit(0); }
+const response = new Map(Object.entries(JSON.parse(process.env.OPENCLAW_FAKE_GIT_RESPONSES || "{}"))).get(args.join("\u0000"));
+if (!response) process.exit(1);
+if (response.stdout) process.stdout.write(response.stdout); if (response.stderr) process.stderr.write(response.stderr);
+process.exit(response.status ?? 0);`;
+  writeNodeCommand(gitPath, script);
   fakeGitBinDirs.set(key, binDir);
   return binDir;
-}
-
-function shellArgListCondition(args: string[]): string {
-  const checks = [`[ "$#" -eq ${args.length} ]`];
-  for (const [index, arg] of args.entries()) {
-    checks.push(`[ "$${index + 1}" = ${shellSingleQuote(arg)} ]`);
-  }
-  return checks.join(" && ");
 }
 
 function runWrapper(helpText: string, args: string[], options: WrapperOptions = {}) {
@@ -635,24 +372,6 @@ type FakeCrabboxOutput = {
 };
 
 function parseFakeCrabboxOutput(result: ReturnType<typeof runWrapper>): FakeCrabboxOutput {
-  const marker = "__OPENCLAW_FAKE_CRABBOX_V1__\0";
-  if (result.stdout.startsWith(marker)) {
-    let offset = marker.length;
-    const readField = () => {
-      const end = result.stdout.indexOf("\0", offset);
-      if (end < 0) {
-        throw new Error("missing fake Crabbox output field terminator");
-      }
-      const value = result.stdout.slice(offset, end);
-      offset = end + 1;
-      return value;
-    };
-    const cwd = readField();
-    const argCount = Number.parseInt(readField(), 10);
-    const args = Array.from({ length: argCount }, () => readField());
-    const scriptContent = result.stdout.slice(offset);
-    return { args, cwd, scriptContent };
-  }
   return JSON.parse(result.stdout.trim()) as FakeCrabboxOutput;
 }
 
@@ -1035,6 +754,87 @@ describe("scripts/crabbox-wrapper", () => {
     });
     expect(output.args).not.toContain("--provider");
     expect(result.stderr).not.toContain("route workload=");
+  });
+
+  it("derives run option arity from the probed Crabbox help", () => {
+    const helpText = `${defaultProviderHelp}${[
+      "sandbox-session-timeout duration",
+      "sandbox-memory float",
+      "sandbox-retries int",
+      "sandbox-setting string",
+      "sandbox-attachment value",
+    ]
+      .map((option) => `  -${option}\n`)
+      .join("")}`;
+    const { output } = runSuccessfulWrapper(helpText, [
+      "run",
+      "--sandbox-session-timeout",
+      "30s",
+      "--sandbox-memory",
+      "1.5",
+      "--sandbox-retries",
+      "2",
+      "--sandbox-setting",
+      "safe",
+      "--sandbox-attachment",
+      "name=proof",
+      "--provider",
+      "local-container",
+      "--",
+      "echo",
+      "ok",
+    ]);
+
+    expect(output.args).toEqual([
+      "run",
+      "--sandbox-session-timeout",
+      "30s",
+      "--sandbox-memory",
+      "1.5",
+      "--sandbox-retries",
+      "2",
+      "--sandbox-setting",
+      "safe",
+      "--sandbox-attachment",
+      "name=proof",
+      "--provider",
+      "local-container",
+      "--",
+      "echo",
+      "ok",
+    ]);
+  });
+
+  it("routes the provider-neutral changed gate without consuming its run option values", () => {
+    const { output, result } = runSuccessfulBrokerWrapper(
+      [
+        "run",
+        "--workload",
+        "ci-fast",
+        "--idle-timeout",
+        "90m",
+        "--ttl",
+        "240m",
+        "--timing-json",
+        "--",
+        "env",
+        "OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1",
+        "OPENCLAW_CHANGED_LANES_RAW_SYNC=1",
+        "CI=1",
+        "PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false",
+        "corepack",
+        "pnpm",
+        "check:changed",
+      ],
+      { env: { OPENCLAW_FAKE_CRABBOX_UNREADY_PROVIDERS: "blacksmith-testbox" } },
+    );
+
+    expect(output.args).toContain("daytona");
+    expect(output.args).not.toContain("blacksmith-testbox");
+    expect(output.args).toContain("90m");
+    expect(output.args).toContain("240m");
+    expect(output.args.slice(-3)).toEqual(["corepack", "pnpm", "check:changed"]);
+    expect(result.stderr).toContain("route workload=ci-fast selected=daytona");
   });
 
   it("requires the originating provider when reusing a workload-routed lease", () => {

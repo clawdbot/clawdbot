@@ -65,6 +65,57 @@ function readCompletedImageGenerationMediaPath(prompt: string): string | undefin
   return /^MEDIA:\s*([^\r\n]+)$/im.exec(completionEvent)?.[1]?.trim() || undefined;
 }
 
+export const QA_COMPACTION_RETRY_FINAL_MARKER = "Protocol note: replay unsafe after write.";
+
+function isCompactionRetryWritePatch(value: unknown): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const lines = value.split(/\r?\n/);
+  for (let index = 0; index < lines.length - 1; index += 1) {
+    if (
+      lines[index] !== "--- compaction-retry-summary.txt" ||
+      lines[index + 1] !== "+++ compaction-retry-summary.txt"
+    ) {
+      continue;
+    }
+    let sectionEnd = lines.length;
+    for (let candidate = index + 2; candidate < lines.length - 1; candidate += 1) {
+      if (lines[candidate]?.startsWith("--- ") && lines[candidate + 1]?.startsWith("+++ ")) {
+        sectionEnd = candidate;
+        break;
+      }
+    }
+    if (lines.slice(index + 2, sectionEnd).includes("+Replay safety: unsafe after write.")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function isCanonicalCompactionRetryWriteResult(toolOutput: string): boolean {
+  if (
+    /^Successfully wrote \d+ bytes to compaction-retry-summary\.txt\.?$/i.test(toolOutput.trim())
+  ) {
+    return true;
+  }
+  const parsed = parseToolOutputJson(toolOutput);
+  if (!parsed || parsed.status !== "completed" || parsed.replaySafe !== false) {
+    return false;
+  }
+  const value = parsed.value;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const result = value as Record<string, unknown>;
+  return (
+    result.changed === true &&
+    result.created === true &&
+    result.firstChangedLine === 1 &&
+    isCompactionRetryWritePatch(result.patch)
+  );
+}
+
 export function buildAssistantText(input: ResponsesInputItem[], body: Record<string, unknown>) {
   const prompt = extractLastUserText(input);
   const latestRawUserText = extractAllUserTexts(input).at(-1) ?? "";
@@ -351,13 +402,8 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
     (/compaction retry mutating tool check/i.test(allInputText) ||
       /compaction-retry-summary\.txt/i.test(toolOutput))
   ) {
-    if (
-      toolOutput.includes("Replay safety: unsafe after write.") ||
-      /compaction-retry-summary\.txt/i.test(toolOutput) ||
-      /successfully (?:wrote|replaced)/i.test(toolOutput) ||
-      /\bwrote\b.*\bcompaction-retry-summary\.txt\b/i.test(toolOutput)
-    ) {
-      return "Protocol note: replay unsafe after write.";
+    if (isCanonicalCompactionRetryWriteResult(toolOutput)) {
+      return QA_COMPACTION_RETRY_FINAL_MARKER;
     }
     return "";
   }

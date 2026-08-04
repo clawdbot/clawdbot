@@ -1187,10 +1187,10 @@ async function* parseGoogleSseChunks(
   signal?.addEventListener("abort", abortHandler);
   try {
     while (true) {
-      if (signal?.aborted) {
-        throw new Error("Request was aborted");
-      }
+      signal?.throwIfAborted();
       const { done, value } = await reader.read();
+      // Cancellation settles a pending read as done; never mistake that for EOF.
+      signal?.throwIfAborted();
       if (done) {
         buffer += decoder.decode();
         if (

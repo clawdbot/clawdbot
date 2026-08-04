@@ -1,17 +1,6 @@
-// TTS runtime exports expose text-to-speech runtime helpers through the plugin SDK.
-import { maybeApplyTtsToPayload as maybeApplyTtsToPayloadCore } from "../../packages/speech-core/src/tts-payload.js";
-import { textToSpeech as textToSpeechCore } from "../../packages/speech-core/src/tts-synthesis.js";
-import { persistTtsAudioToMediaStore } from "../tts/tts-audio-store.js";
-
-export type { TtsResult } from "../../packages/speech-core/src/tts-types.js";
-
-export function textToSpeech(params: Parameters<typeof textToSpeechCore>[0]) {
-  return textToSpeechCore(params, persistTtsAudioToMediaStore);
-}
-
-export function maybeApplyTtsToPayload(params: Parameters<typeof maybeApplyTtsToPayloadCore>[0]) {
-  return maybeApplyTtsToPayloadCore(params, persistTtsAudioToMediaStore);
-}
+// TTS runtime exports expose host-owned text-to-speech helpers through the plugin SDK.
+export { maybeApplyTtsToPayload, textToSpeech } from "../tts/tts.js";
+export type { TtsResult } from "../tts/tts-runtime-types.js";
 
 export {
   TtsAutoSchema,
@@ -23,8 +12,6 @@ export {
 /** Compatibility no-op retained for callers that prewarm facade runtimes generically. */
 export function prewarmTtsRuntimeFacade(): void {}
 
-// Pure synthesis stays in speech-core. File-backed helpers above inject the
-// core media-store owner so package code never imports from src.
 export {
   buildTtsSystemPromptHint,
   getLastTtsAttempt,
@@ -63,4 +50,4 @@ export {
   type TtsSynthesisStreamResult,
   type TtsStreamResult,
   type TtsTelephonyResult,
-} from "../../packages/speech-core/runtime-api.js";
+} from "../tts/runtime-api.js";

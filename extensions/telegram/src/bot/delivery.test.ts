@@ -323,6 +323,25 @@ describe("deliverReplies", () => {
     expect(firstMockCallArg(sendMessage, 1)).toBe("hello");
   });
 
+  it("keeps native-command tables visible in non-rich block-mode replies", async () => {
+    const { runtime, sendMessage, bot } = createSendMessageHarness();
+    const table = "| A | B |\n| --- | --- |\n| 1 | 2 |";
+
+    await deliverWith({
+      replies: [{ text: `Before\n\n${table}\n\nAfter` }],
+      runtime,
+      bot,
+      tableMode: "block",
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    const sent = firstSendText(sendMessage);
+    expect(sent).toContain("Before");
+    expect(sent).toContain(`<pre><code>${table}\n</code></pre>`);
+    expect(sent).toContain("After");
+    expectRecordFields(firstMockCallArg(sendMessage, 2), { parse_mode: "HTML" });
+  });
+
   it("delivers prepared HTML without reparsing visible syntax as Markdown", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 1, chat: { id: "123" } });

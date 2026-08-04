@@ -10,7 +10,7 @@ import {
   handleTelegramAction as handleTelegramActionRuntime,
   telegramActionRuntime,
 } from "./action-runtime.js";
-import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-delivery.js";
+import { telegramInboundEventDelivery } from "./inbound-event-delivery.js";
 import { setTelegramRuntime } from "./runtime.js";
 import {
   clearTelegramRuntimeForTest,
@@ -1062,7 +1062,7 @@ describe("handleTelegramAction", () => {
 
   it("marks the matching inbound event delivered after a successful send", async () => {
     let count = 0;
-    const end = beginTelegramInboundEventDeliveryCorrelation("telegram-session", {
+    const end = telegramInboundEventDelivery.begin("telegram-session", {
       outboundTo: "@testchannel",
       markInboundEventDelivered: () => {
         count += 1;
@@ -1084,7 +1084,7 @@ describe("handleTelegramAction", () => {
   it("marks room-event delivery correlations separately", async () => {
     let roomEventCount = 0;
     let userRequestCount = 0;
-    const endRoomEvent = beginTelegramInboundEventDeliveryCorrelation(
+    const endRoomEvent = telegramInboundEventDelivery.begin(
       "telegram-session",
       {
         outboundTo: "@testchannel",
@@ -1094,7 +1094,7 @@ describe("handleTelegramAction", () => {
       },
       { inboundEventKind: "room_event" },
     );
-    const endUserRequest = beginTelegramInboundEventDeliveryCorrelation("telegram-session", {
+    const endUserRequest = telegramInboundEventDelivery.begin("telegram-session", {
       outboundTo: "@testchannel",
       markInboundEventDelivered: () => {
         userRequestCount += 1;
@@ -1119,7 +1119,7 @@ describe("handleTelegramAction", () => {
 
   it("marks topic room-event delivery when send uses a separate thread id", async () => {
     let count = 0;
-    const end = beginTelegramInboundEventDeliveryCorrelation(
+    const end = telegramInboundEventDelivery.begin(
       "telegram-session",
       {
         outboundTo: "-100123:topic:77",
@@ -1147,7 +1147,7 @@ describe("handleTelegramAction", () => {
 
   it("marks topic room-event delivery when send uses topic shorthand", async () => {
     let count = 0;
-    const end = beginTelegramInboundEventDeliveryCorrelation(
+    const end = telegramInboundEventDelivery.begin(
       "telegram-session",
       {
         outboundTo: "-100123:topic:77",
@@ -1194,7 +1194,7 @@ describe("handleTelegramAction", () => {
     },
   ])("marks room-event delivery after successful $name actions", async ({ params, cfg }) => {
     let count = 0;
-    const end = beginTelegramInboundEventDeliveryCorrelation(
+    const end = telegramInboundEventDelivery.begin(
       "telegram-session",
       {
         outboundTo: "@testchannel",

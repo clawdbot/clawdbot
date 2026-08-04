@@ -20,6 +20,8 @@ import { escapeMarkdownHtml, isMarkdownBlockArtText } from "./markdown-text.ts";
 
 const blockArtCopyPayloadPrefix = "openclaw:block-art-code:";
 const blockArtCodeBlockCopyPayloadEncoding = "block-art-json";
+const codeBlockCopyAttempts = new WeakMap<HTMLElement, number>();
+const codeBlockCopyResetTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
 
 for (const [language, definition] of Object.entries({
   bash,
@@ -74,12 +76,28 @@ export function handleMarkdownCodeBlockCopy(event: Event): void {
     return;
   }
   const code = decodeCodeBlockCopyPayload(button.dataset.code ?? "", button.dataset.codeEncoding);
+  const attempt = (codeBlockCopyAttempts.get(button) ?? 0) + 1;
+  codeBlockCopyAttempts.set(button, attempt);
   void copyToClipboard(code).then((copied) => {
-    if (!copied) {
+    // Clipboard writes can finish out of click order; older attempts must not own feedback.
+    if (codeBlockCopyAttempts.get(button) !== attempt) {
       return;
     }
-    button.classList.add("copied");
-    setTimeout(() => button.classList.remove("copied"), 1500);
+    const idleLabel = button.querySelector(".code-block-copy__idle");
+    idleLabel?.replaceChildren(t(copied ? "common.copy" : "common.copyFailed"));
+    button.classList.toggle("copied", copied);
+    button.setAttribute("aria-label", t(copied ? "common.copied" : "common.copyFailed"));
+    clearTimeout(codeBlockCopyResetTimers.get(button));
+    const resetTimer = setTimeout(
+      () => {
+        button.classList.remove("copied");
+        idleLabel?.replaceChildren(t("common.copy"));
+        button.setAttribute("aria-label", t("common.copyCode"));
+        codeBlockCopyResetTimers.delete(button);
+      },
+      copied ? 1500 : 2000,
+    );
+    codeBlockCopyResetTimers.set(button, resetTimer);
   });
 }
 

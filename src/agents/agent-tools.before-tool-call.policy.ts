@@ -184,7 +184,7 @@ export async function runBeforeToolCallHook(args: {
         }
       }
 
-      if (args.ctx.loopDetection?.enabled !== false) {
+      if (args.ctx.loopDetection?.enabled === true) {
         recordToolCall(
           sessionState,
           toolName,

@@ -1,6 +1,6 @@
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveVoiceModelRefs } from "../../packages/speech-core/voice-models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveVoiceModelRefs } from "../tts/voice-models.js";
 import {
   getLoadedRuntimePluginRegistry,
   registryContainsRuntimePluginIds,
@@ -14,6 +14,7 @@ import { resolveRuntimePluginRegistry, type PluginLoadOptions } from "./loader.j
 import {
   hasManifestContractValue,
   isManifestPluginAvailableForControlPlane,
+  isManifestPluginOwnerAllowedByControlPlanePolicy,
   loadManifestContractSnapshot,
 } from "./manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
@@ -106,27 +107,28 @@ function resolveCapabilityPluginIds(params: {
 }): CapabilityPluginResolution {
   const contractKey = CAPABILITY_CONTRACT_KEY[params.key];
   const snapshot = loadCapabilityManifestSnapshot(params);
-  const contractPlugins = snapshot.plugins.filter((plugin) =>
-    hasManifestContractValue({
-      plugin,
-      contract: contractKey,
-      value: params.providerId,
-    }),
+  const availableContractPlugins = snapshot.plugins.filter(
+    (plugin) =>
+      hasManifestContractValue({
+        plugin,
+        contract: contractKey,
+        value: params.providerId,
+      }) &&
+      isManifestPluginAvailableForControlPlane({
+        snapshot,
+        plugin,
+        config: params.cfg,
+        // Legacy TTS remains available when the operator disables plugins globally.
+        allowRestrictiveAllowlistBypass:
+          params.key === "speechProviders" && params.cfg?.plugins?.enabled === false,
+      }),
   );
   return {
-    runtimePluginIds: sortUniqueStrings(
-      contractPlugins
-        .filter((plugin) =>
-          isManifestPluginAvailableForControlPlane({
-            snapshot,
-            plugin,
-            config: params.cfg,
-          }),
-        )
-        .map((plugin) => plugin.id),
-    ),
+    runtimePluginIds: sortUniqueStrings(availableContractPlugins.map((plugin) => plugin.id)),
     bundledCompatPluginIds: sortUniqueStrings(
-      contractPlugins.filter((plugin) => plugin.origin === "bundled").map((plugin) => plugin.id),
+      availableContractPlugins
+        .filter((plugin) => plugin.origin === "bundled")
+        .map((plugin) => plugin.id),
     ),
   };
 }
@@ -419,23 +421,54 @@ function resolveRequestedCapabilityPluginIds(params: {
     : undefined;
 }
 
+function filterPolicyAllowedCapabilityProviders<K extends CapabilityProviderRegistryKey>(params: {
+  entries: PluginRegistry[K];
+  registry?: PluginRegistry;
+  cfg?: OpenClawConfig;
+  key: K;
+  bundledPluginIds?: ReadonlySet<string>;
+}): PluginRegistry[K] {
+  if (!params.cfg?.plugins) {
+    return params.entries;
+  }
+  const origins = new Map(
+    (params.registry?.plugins ?? []).map((plugin) => [plugin.id, plugin.origin]),
+  );
+  return params.entries.filter((entry) => {
+    const origin =
+      origins.get(entry.pluginId) ??
+      (params.bundledPluginIds?.has(entry.pluginId) ? "bundled" : "global");
+    return isManifestPluginOwnerAllowedByControlPlanePolicy({
+      plugin: { id: entry.pluginId, origin },
+      config: params.cfg,
+      allowRestrictiveAllowlistBypass:
+        params.key === "speechProviders" && params.cfg?.plugins?.enabled === false,
+    });
+  }) as PluginRegistry[K];
+}
+
 function loadCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>(params: {
   key: K;
   bundledCompatPluginIds: string[];
   loadOptions: PluginLoadOptions;
   requested?: Set<string>;
 }): PluginRegistry[K] {
+  const allowedPluginIds = new Set(params.loadOptions.onlyPluginIds);
+  const filterAllowedEntries = (registry: PluginRegistry | undefined): PluginRegistry[K] =>
+    (registry?.[params.key] ?? []).filter((entry) =>
+      allowedPluginIds.has(entry.pluginId),
+    ) as PluginRegistry[K];
   const loadedRegistry = getLoadedRuntimePluginRegistry({
     env: params.loadOptions.env,
     loadOptions: params.loadOptions,
     workspaceDir: params.loadOptions.workspaceDir,
     requiredPluginIds: params.loadOptions.onlyPluginIds,
   });
-  const loadedEntries = loadedRegistry?.[params.key] ?? [];
+  const loadedEntries = filterAllowedEntries(loadedRegistry);
   const coldRegistry = loadedRegistry
     ? undefined
     : resolveRuntimePluginRegistry(params.loadOptions);
-  const coldEntries = coldRegistry?.[params.key] ?? [];
+  const coldEntries = filterAllowedEntries(coldRegistry);
   const entries =
     loadedEntries.length > 0 && coldEntries.length > 0
       ? mergeCapabilityProviderEntries(loadedEntries, coldEntries)
@@ -453,11 +486,14 @@ function loadCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>(
   if (params.bundledCompatPluginIds.length === 0) {
     return entries;
   }
-  const captured = loadBundledCapabilityRuntimeRegistry({
-    pluginIds: params.bundledCompatPluginIds,
-    env: process.env,
-    pluginSdkResolution: params.loadOptions.pluginSdkResolution,
-  })[params.key] as PluginRegistry[K];
+  const captured = filterAllowedEntries(
+    loadBundledCapabilityRuntimeRegistry({
+      pluginIds: params.bundledCompatPluginIds,
+      env: process.env,
+      ...(params.loadOptions.config ? { config: params.loadOptions.config } : {}),
+      pluginSdkResolution: params.loadOptions.pluginSdkResolution,
+    }),
+  );
   return entries.length > 0 ? mergeCapabilityProviderEntries(entries, captured) : captured;
 }
 
@@ -471,7 +507,13 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
   }
 
   const activeRegistry = getLoadedRuntimePluginRegistry();
-  const activeProvider = findProviderById(activeRegistry?.[params.key] ?? [], params.providerId);
+  const activeProviders = filterPolicyAllowedCapabilityProviders({
+    entries: activeRegistry?.[params.key] ?? [],
+    registry: activeRegistry,
+    cfg: params.cfg,
+    key: params.key,
+  });
+  const activeProvider = findProviderById(activeProviders, params.providerId);
   if (activeProvider) {
     return activeProvider;
   }
@@ -513,7 +555,12 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
   }
 
   const activeRegistry = getLoadedRuntimePluginRegistry();
-  const activeProviders = activeRegistry?.[params.key] ?? [];
+  const activeProviders = filterPolicyAllowedCapabilityProviders({
+    entries: activeRegistry?.[params.key] ?? [],
+    registry: activeRegistry,
+    cfg: params.cfg,
+    key: params.key,
+  });
   const missingRequestedProviders =
     activeProviders.length > 0
       ? nonEmptyRequestedProviders(
@@ -609,19 +656,34 @@ export function prepareMediaCapabilityProviders(params: {
       cfg: params.cfg,
       pluginMetadataSnapshot: params.pluginMetadataSnapshot,
     });
-    const requiredPluginIds = sortUniqueStrings([
-      ...resolution.runtimePluginIds,
-      ...resolution.bundledCompatPluginIds,
-    ]);
+    const requiredPluginIds = resolution.runtimePluginIds;
+    if (
+      requiredPluginIds.length === 0 &&
+      params.pluginMetadataSnapshot.plugins.some((plugin) =>
+        hasManifestContractValue({
+          plugin,
+          contract: CAPABILITY_CONTRACT_KEY[key],
+        }),
+      )
+    ) {
+      return Object.freeze([]);
+    }
     if (!params.registry || !registryContainsRuntimePluginIds(params.registry, requiredPluginIds)) {
       return undefined;
     }
     const eligiblePluginIds = new Set(requiredPluginIds);
-    if (params.registry[key].some((entry) => !eligiblePluginIds.has(entry.pluginId))) {
+    const availableEntries = filterPolicyAllowedCapabilityProviders({
+      entries: params.registry[key],
+      registry: params.registry,
+      cfg: params.cfg,
+      key,
+      bundledPluginIds: new Set(resolution.bundledCompatPluginIds),
+    });
+    if (availableEntries.some((entry) => !eligiblePluginIds.has(entry.pluginId))) {
       return undefined;
     }
     return Object.freeze(
-      params.registry[key].map((entry) => entry.provider),
+      availableEntries.map((entry) => entry.provider),
     ) as readonly ProviderFor<K>[];
   };
   return Object.freeze({

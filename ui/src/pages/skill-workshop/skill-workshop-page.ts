@@ -9,6 +9,7 @@ import { loadSettings } from "../../app/settings.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
@@ -75,7 +76,11 @@ async function resolveRevisionSessionKey(
   context: SkillWorkshopPageContext,
   proposal: SkillWorkshopProposal,
   proposalAgentId: string,
+  isCurrent: () => boolean,
 ): Promise<string | null> {
+  if (!isCurrent()) {
+    return null;
+  }
   const gatewayHello = context.gateway.snapshot.hello;
   if (state.skillWorkshopUseCurrentChatForRevisions) {
     return resolveSessionKey(loadSettings().sessionKey, gatewayHello).trim() || null;
@@ -83,15 +88,29 @@ async function resolveRevisionSessionKey(
 
   const agentId = normalizeAgentId(proposal.origin?.agentId ?? proposalAgentId);
   const sessions = await loadRevisionSessionsForAgent(context, agentId);
+  if (!isCurrent()) {
+    return null;
+  }
   const originRow = findRevisionSessionRow(sessions, proposal.origin?.sessionKey);
   if (isUsableRevisionSession(originRow)) {
     return originRow.key;
   }
 
-  const createdKey = await context.sessions.create({
+  const createParams = {
     agentId,
     label: truncateUtf16Safe(`Skill Workshop: ${proposal.slug || proposal.key}`, 80),
+  };
+  const createAccess = readSessionMethodAccess(context.gateway.snapshot, {
+    method: "sessions.create",
+    params: createParams,
   });
+  if (!createAccess.allowed) {
+    throw new Error(createAccess.reason);
+  }
+  if (!isCurrent()) {
+    return null;
+  }
+  const createdKey = await context.sessions.create(createParams);
   const sessionKey = resolveSessionKey(createdKey, gatewayHello).trim();
   if (!sessionKey) {
     throw new Error(context.sessions.state.error ?? "Could not prepare a Skill Workshop thread.");
@@ -320,6 +339,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
   private contextSource?: SkillWorkshopPageContext;
   private gatewaySource?: SkillWorkshopPageContext["gateway"];
   private gatewayClient: SkillWorkshopPageContext["gateway"]["snapshot"]["client"] = null;
+  private gatewayHello: SkillWorkshopPageContext["gateway"]["snapshot"]["hello"] = null;
   private gatewayConnected = false;
   private hasBoundAgentSelection = false;
   private agentSelectionSource?: SkillWorkshopPageContext["agentSelection"];
@@ -358,6 +378,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
           const gateway = context.gateway;
           this.gatewaySource = gateway;
           this.gatewayClient = gateway.snapshot.client;
+          this.gatewayHello = gateway.snapshot.hello;
           this.gatewayConnected = gateway.snapshot.phase === "connected";
           this.agentSelectionSource = context.agentSelection;
           this.selectedAgentId = context.agentSelection.state.selectedId;
@@ -377,10 +398,12 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
         const connectionChanged =
           this.gatewaySource !== undefined &&
           this.gatewayConnected !== (snapshot.phase === "connected");
+        const helloChanged =
+          this.gatewaySource !== undefined && this.gatewayHello !== snapshot.hello;
         this.applyGatewaySnapshot(
           gateway,
           snapshot,
-          sourceChanged || clientChanged || connectionChanged,
+          sourceChanged || clientChanged || connectionChanged || helloChanged,
         );
         const cleanup = gateway.subscribe((nextSnapshot) => {
           if (this.gatewaySource !== gateway || this.context?.gateway !== gateway) {
@@ -388,7 +411,8 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
           }
           const sourceEpochChanged =
             nextSnapshot.client !== this.gatewayClient ||
-            (nextSnapshot.phase === "connected") !== this.gatewayConnected;
+            (nextSnapshot.phase === "connected") !== this.gatewayConnected ||
+            nextSnapshot.hello !== this.gatewayHello;
           this.applyGatewaySnapshot(gateway, nextSnapshot, sourceEpochChanged);
         });
         return cleanup;
@@ -465,6 +489,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
         scope.context,
         proposal,
         proposalAgentId,
+        () => this.isCurrentSourceScope(scope),
       );
     } catch (error) {
       if (!this.isCurrentSourceScope(scope)) {
@@ -568,6 +593,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
   ) {
     this.gatewaySource = gateway;
     this.gatewayClient = snapshot.client;
+    this.gatewayHello = snapshot.hello;
     this.gatewayConnected = snapshot.phase === "connected";
     if (sourceEpochChanged) {
       this.resetSourceState();

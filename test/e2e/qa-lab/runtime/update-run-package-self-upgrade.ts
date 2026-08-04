@@ -23,6 +23,25 @@ type UpdateRunSelfUpgradeSummary = {
   source?: { version?: string };
   target?: { resolvedVersion?: string; tag?: string };
   restartSentinel?: { message?: string; status?: string };
+  wizardFlow?: {
+    authenticated?: boolean;
+    duplicateStartRejected?: boolean;
+    cancelledSessionPurged?: boolean;
+    runningStatusRetained?: boolean;
+    status?: string;
+  };
+  targetWizardFlow?: {
+    activeSession?: {
+      duplicateStartRejected?: boolean;
+      purged?: boolean;
+    };
+    authenticated?: boolean;
+    status?: string;
+    statusSession?: {
+      purged?: boolean;
+      runningStatusRetained?: boolean;
+    };
+  };
 };
 
 function formatErrorMessage(error: unknown) {
@@ -63,6 +82,8 @@ export function resolveUpdateRunSelfUpgradePermission(
 
 export function formatUpdateRunSelfUpgradeDetails(summary: UpdateRunSelfUpgradeSummary) {
   return [
+    `wizard=${summary.wizardFlow?.status ?? "unknown"}:${summary.wizardFlow?.authenticated === true ? "authenticated" : "unauthenticated"}:${summary.wizardFlow?.runningStatusRetained === true ? "status-retained" : "status-unknown"}:${summary.wizardFlow?.duplicateStartRejected === true ? "exclusive" : "overlap-unknown"}:${summary.wizardFlow?.cancelledSessionPurged === true ? "purged" : "cleanup-unknown"}`,
+    `target-wizard=${summary.targetWizardFlow?.status ?? "unknown"}:${summary.targetWizardFlow?.authenticated === true ? "authenticated" : "unauthenticated"}:${summary.targetWizardFlow?.statusSession?.runningStatusRetained === true ? "status-retained" : "status-unknown"}:${summary.targetWizardFlow?.statusSession?.purged === true ? "status-purged" : "status-cleanup-unknown"}:${summary.targetWizardFlow?.activeSession?.duplicateStartRejected === true ? "exclusive" : "overlap-unknown"}:${summary.targetWizardFlow?.activeSession?.purged === true ? "purged" : "cleanup-unknown"}`,
     `source=${summary.source?.version ?? "unknown"}`,
     `target=${summary.target?.tag ?? "unknown"}:${summary.target?.resolvedVersion ?? "unknown"}`,
     `installed=${summary.installedVersion ?? "unknown"}`,
@@ -111,7 +132,7 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
   const writer = createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
     logFileName: "update-run-package-self-upgrade.log",
-    primaryModel: "gateway/update.run",
+    primaryModel: "gateway/update-and-setup",
     providerMode: "mock-openai",
     repoRoot: options.repoRoot,
     target: {
@@ -122,6 +143,7 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
         "scripts/e2e/lib/upgrade-survivor/assertions.mjs",
         "scripts/lib/docker-e2e-scenarios.mjs",
         "src/gateway/server-methods/update.ts",
+        "src/gateway/server-methods/wizard.ts",
       ],
       docsRefs: [
         "docs/cli/update.md",
@@ -159,6 +181,8 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
     return await writer.write({
       artifacts: [
         { kind: "summary", filePath: path.join("lane", "summary.json") },
+        { kind: "rpc", filePath: path.join("lane", "wizard-flow.json") },
+        { kind: "rpc", filePath: path.join("lane", "target-wizard-flow.json") },
         { kind: "rpc", filePath: path.join("lane", "update-rpc.json") },
         { kind: "sentinel", filePath: path.join("lane", "update-status.json") },
         {
@@ -169,6 +193,11 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
         { kind: "summary", filePath: path.join("lane", "source-plugin-inspect.json") },
         { kind: "summary", filePath: path.join("lane", "target-plugin-index.json") },
         { kind: "log", filePath: path.join("lane", "historical-qa-channel-build.log") },
+        { kind: "log", filePath: path.join("lane", "historical-package-install.log") },
+        {
+          kind: "summary",
+          filePath: path.join("lane", "historical-package-preflight.json"),
+        },
         {
           kind: "summary",
           filePath: path.join("lane", "qa-channel-fixture-provenance.json"),

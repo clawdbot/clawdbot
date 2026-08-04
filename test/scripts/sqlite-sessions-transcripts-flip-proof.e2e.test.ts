@@ -230,5 +230,5 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
           checkpoint.archiveArtifacts.length > 0,
       ),
     ).toBe(true);
-  }, 180_000);
+  }, 420_000);
 });

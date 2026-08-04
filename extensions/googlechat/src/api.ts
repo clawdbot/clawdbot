@@ -1,6 +1,7 @@
 // Googlechat API module exposes the plugin public contract.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  MediaFetchError,
   parseMediaContentLength,
   readResponseTextSnippet,
 } from "openclaw/plugin-sdk/media-runtime";
@@ -165,12 +166,16 @@ async function fetchBuffer(
       if (lengthHeader) {
         const length = parseMediaContentLength(lengthHeader);
         if (length !== null && length > maxBytes) {
-          throw new Error(`Google Chat media exceeds max bytes (${maxBytes})`);
+          throw new MediaFetchError(
+            "max_bytes",
+            `Google Chat media exceeds max bytes (${maxBytes})`,
+          );
         }
       }
       const buffer = await readResponseWithLimit(res, maxBytes, {
         chunkTimeoutMs: GOOGLECHAT_RESPONSE_READ_IDLE_TIMEOUT_MS,
-        onOverflow: () => new Error(`Google Chat media exceeds max bytes (${maxBytes})`),
+        onOverflow: () =>
+          new MediaFetchError("max_bytes", `Google Chat media exceeds max bytes (${maxBytes})`),
       });
       const contentType = res.headers.get("content-type") ?? undefined;
       return { buffer, contentType };

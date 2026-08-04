@@ -36,6 +36,7 @@ import { extensionCatchAllExcludedTestRoots } from "../vitest/vitest.extensions.
 
 const scriptPath = path.join(process.cwd(), "scripts", "test-extension.mjs");
 const posixIt = process.platform === "win32" ? it.skip : it;
+const MATRIX_TEST_PROCESS_FILE_LIMIT = 40;
 
 type RunGroupParams = VitestBatchRunParams;
 
@@ -93,6 +94,11 @@ function findExtensionWithoutTests() {
 
 function listExtensionTestFiles(extensionId: string): string[] {
   return listTrackedTestFilesForRoots([bundledPluginRoot(extensionId)]);
+}
+
+function expectedMatrixTestProcessCount() {
+  const testFileCount = listExtensionTestFilesForRoots([bundledPluginRoot("matrix")]).length;
+  return Math.max(1, Math.ceil(testFileCount / MATRIX_TEST_PROCESS_FILE_LIMIT));
 }
 
 function expectPositiveIntegerMetric(value: number) {
@@ -183,8 +189,8 @@ describe("scripts/test-extension.mjs", () => {
     const expectedFiles = listExtensionTestFilesForRoots(roots);
     const chunks = createExtensionTestProcessTargetChunks(config, roots);
 
-    expect(chunks).toHaveLength(3);
-    expect(chunks.every((chunk) => chunk.length <= 40)).toBe(true);
+    expect(chunks).toHaveLength(expectedMatrixTestProcessCount());
+    expect(chunks.every((chunk) => chunk.length <= MATRIX_TEST_PROCESS_FILE_LIMIT)).toBe(true);
     expect(Math.max(...chunks.map((chunk) => chunk.length))).toBeLessThanOrEqual(
       Math.min(...chunks.map((chunk) => chunk.length)) + 1,
     );
@@ -846,6 +852,7 @@ describe("scripts/test-extension.mjs", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-test-extension-chunks-"));
     const fakePnpmPath = path.join(root, "pnpm");
     const countPath = path.join(root, "count");
+    const expectedProcessCount = expectedMatrixTestProcessCount();
 
     writeFakePnpm(fakePnpmPath);
     try {
@@ -855,13 +862,15 @@ describe("scripts/test-extension.mjs", () => {
         env: {
           ...process.env,
           OPENCLAW_FAKE_PNPM_CALL_COUNT_PATH: countPath,
-          OPENCLAW_FAKE_PNPM_EXIT_CODES: "1,0,0",
+          OPENCLAW_FAKE_PNPM_EXIT_CODES: ["1", ...Array(expectedProcessCount - 1).fill("0")].join(
+            ",",
+          ),
           npm_execpath: fakePnpmPath,
         },
       });
 
       expect(result.status).toBe(1);
-      expect(readFileSync(countPath, "utf8")).toBe("3");
+      expect(readFileSync(countPath, "utf8")).toBe(String(expectedProcessCount));
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
@@ -966,9 +975,9 @@ describe("scripts/test-extension.mjs", () => {
     );
 
     expect(result).toBe(0);
-    expect(runGroup).toHaveBeenCalledTimes(3);
+    expect(runGroup).toHaveBeenCalledTimes(expectedMatrixTestProcessCount());
     const calls = runGroup.mock.calls.map(([params]) => params as RunGroupParams);
-    expect(calls.every((call) => call.targets.length <= 40)).toBe(true);
+    expect(calls.every((call) => call.targets.length <= MATRIX_TEST_PROCESS_FILE_LIMIT)).toBe(true);
     expect(calls.flatMap((call) => call.targets)).toEqual(expectedFiles);
   });
 
@@ -984,7 +993,7 @@ describe("scripts/test-extension.mjs", () => {
     );
 
     expect(result).toBe(1);
-    expect(runGroup).toHaveBeenCalledTimes(3);
+    expect(runGroup).toHaveBeenCalledTimes(expectedMatrixTestProcessCount());
   });
 
   it.each([

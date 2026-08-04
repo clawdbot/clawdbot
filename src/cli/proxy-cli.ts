@@ -123,6 +123,7 @@ export function registerProxyCli(program: Command) {
   proxy
     .command("coverage")
     .description("Report current debug proxy transport coverage and remaining gaps")
+    .option("--json", "Print machine-readable JSON")
     .action(async () => {
       const runtime = await loadProxyCliRuntime();
       await runtime.runDebugProxyCoverageCommand();
@@ -131,10 +132,11 @@ export function registerProxyCli(program: Command) {
   proxy
     .command("sessions")
     .description("List recent capture sessions")
+    .option("--json", "Print machine-readable JSON")
     .option("--limit <count>", "Maximum sessions to show", (value) =>
       parsePositiveIntegerOption(value, "--limit"),
     )
-    .action(async (opts: { limit?: number }) => {
+    .action(async (opts: { json?: boolean; limit?: number }) => {
       const runtime = await loadProxyCliRuntime();
       await runtime.runDebugProxySessionsCommand(opts);
     });
@@ -146,10 +148,12 @@ export function registerProxyCli(program: Command) {
       "--preset <name>",
       "Query preset: double-sends, retry-storms, cache-busting, ws-duplicate-frames, missing-ack, error-bursts",
     )
+    .option("--json", "Print machine-readable JSON")
     .option("--session <id>", "Restrict to a capture session id")
-    .action(async (opts: { preset: CaptureQueryPreset; session?: string }) => {
+    .action(async (opts: { json?: boolean; preset: CaptureQueryPreset; session?: string }) => {
       const runtime = await loadProxyCliRuntime();
       await runtime.runDebugProxyQueryCommand({
+        json: opts.json,
         preset: opts.preset,
         sessionId: opts.session,
       });

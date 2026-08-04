@@ -44,7 +44,6 @@ describe("command-execution-startup", () => {
         argv: ["node", "openclaw", "status", "--json"],
         jsonOutputMode: true,
         env: {},
-        routeMode: true,
       }),
     ).toEqual({
       invocation: {
@@ -58,7 +57,7 @@ describe("command-execution-startup", () => {
       startupPolicy: {
         suppressDoctorStdout: true,
         hideBanner: false,
-        skipConfigGuard: false,
+        skipConfigGuard: true,
         loadPlugins: false,
         pluginRegistry: { scope: "channels" },
       },

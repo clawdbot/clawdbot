@@ -651,12 +651,19 @@ type CronWakeMode = "next-heartbeat" | "now";
 
 export type CronPayload = CoreCronPayload;
 
+type CronCompletionDestination = {
+  mode: "webhook";
+  to: string;
+};
+
 type CronDelivery = {
   mode: "none" | "announce" | "webhook";
   channel?: string;
   to?: string;
+  threadId?: string | number;
   accountId?: string;
   bestEffort?: boolean;
+  completionDestination?: CronCompletionDestination;
   failureDestination?: CronFailureDestination;
 };
 
@@ -686,6 +693,11 @@ type CronJobState = {
   lastErrorReason?: string;
   lastDurationMs?: number;
   consecutiveErrors?: number;
+  autoDisabled?: {
+    reason: "consecutive-failures" | "schedule-errors";
+    atMs: number;
+    consecutiveErrors: number;
+  };
   lastDelivered?: boolean;
   lastDeliveryStatus?: CronDeliveryStatus;
   lastDeliveryError?: string;

@@ -15,10 +15,14 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../commands/doctor/shared/missing-configured-plugin-install.js", () => ({
   repairMissingConfiguredPluginInstalls: mocks.repairMissingConfiguredPluginInstalls,
 }));
-vi.mock("../../plugins/plugin-peer-link.js", () => ({
-  relinkOpenClawPeerDependenciesInManagedNpmRoot:
-    mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot,
-}));
+vi.mock("../../plugins/plugin-peer-link.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../plugins/plugin-peer-link.js")>();
+  return {
+    ...actual,
+    relinkOpenClawPeerDependenciesInManagedNpmRoot:
+      mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot,
+  };
+});
 vi.mock("../../plugins/npm-project-roots.js", () => ({
   listManagedPluginNpmRoots: mocks.listManagedPluginNpmRoots,
 }));
@@ -233,6 +237,55 @@ describe("runPostCorePluginConvergence", () => {
       ),
     );
   });
+
+  it.each(["peerDependencies", "dependencies"] as const)(
+    "repairs a registered extensions-root %s stale host before the real payload smoke check",
+    async (dependencyField) => {
+      const stateDir = makeTempDir();
+      const packageDir = path.join(stateDir, "extensions", "email");
+      const staleHostDir = path.join(packageDir, "node_modules", "openclaw");
+      fs.mkdirSync(staleHostDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(packageDir, "package.json"),
+        JSON.stringify({
+          name: "@clawemail/email",
+          version: "2026.7.1",
+          [dependencyField]: { openclaw: ">=2026.7.1" },
+          openclaw: { extensions: ["./index.js"] },
+        }),
+      );
+      fs.writeFileSync(path.join(packageDir, "index.js"), "export default {};\n");
+      fs.writeFileSync(
+        path.join(staleHostDir, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.7.1-beta.2" }),
+      );
+      const records = {
+        email: { source: "npm" as const, installPath: packageDir },
+      };
+      mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+        changes: [],
+        warnings: [],
+        records,
+      });
+      mocks.runPluginPayloadSmokeCheck.mockImplementation(async (params) => {
+        const actual = await vi.importActual<typeof import("./plugin-payload-validation.js")>(
+          "./plugin-payload-validation.js",
+        );
+        return await actual.runPluginPayloadSmokeCheck(params);
+      });
+
+      const result = await runPostCorePluginConvergence({
+        cfg: { plugins: { entries: { email: { enabled: true } } } },
+        env: { OPENCLAW_STATE_DIR: stateDir },
+        baselineInstallRecords: records,
+      });
+
+      expect(fs.lstatSync(staleHostDir).isSymbolicLink()).toBe(true);
+      expect(fs.realpathSync(staleHostDir)).toBe(fs.realpathSync(process.cwd()));
+      expect(result.errored).toBe(false);
+      expect(result.smokeFailures).toEqual([]);
+    },
+  );
 
   it("forwards baselineInstallRecords to repair so sync/npm in-memory mutations are preserved", async () => {
     const baseline = { matrix: { source: "npm" as const, installPath: "/p/matrix" } };

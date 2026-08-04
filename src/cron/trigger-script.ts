@@ -41,6 +41,7 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -343,15 +344,6 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
   // concurrent cold evaluations for one job single-flight.
   const runtimeCache = new Map<string, TriggerRuntimeCacheEntry>();
 
-  const trimRuntimeCache = () => {
-    while (runtimeCache.size > MAX_CACHED_TRIGGER_RUNTIMES) {
-      const oldestJobId = runtimeCache.keys().next().value;
-      if (oldestJobId === undefined) {
-        return;
-      }
-      runtimeCache.delete(oldestJobId);
-    }
-  };
   const resolveCachedRuntime = async (request: {
     runtimeConfig: OpenClawConfig;
     jobId: string;
@@ -404,7 +396,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     };
     runtimeCache.delete(request.jobId);
     runtimeCache.set(request.jobId, entry);
-    trimRuntimeCache();
+    pruneMapToMaxSize(runtimeCache, MAX_CACHED_TRIGGER_RUNTIMES);
     // Failed preparations evict themselves so the next tick retries cold.
     void promise.catch(() => {
       if (runtimeCache.get(request.jobId) === entry) {

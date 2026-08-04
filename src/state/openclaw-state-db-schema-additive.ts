@@ -11,6 +11,7 @@ import {
   repairLegacyTaskAgentAttribution,
   repairLegacyTaskDeliveryStatuses,
   repairLegacySubagentExecutionPayloads,
+  repairLegacySubagentRetainedResults,
 } from "./openclaw-state-db-legacy-backfills.js";
 import { ensureColumn } from "./openclaw-state-db-schema-helpers.js";
 
@@ -343,6 +344,7 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "subagent_runs", "swarm_schema_error TEXT");
   ensureColumn(db, "subagent_runs", "swarm_usage_json TEXT");
   repairLegacySubagentExecutionPayloads(db);
+  repairLegacySubagentRetainedResults(db);
   ensureColumn(db, "worker_environments", "bootstrap_bundle_hash TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_openclaw_version TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_protocol_features_json TEXT");

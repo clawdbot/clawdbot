@@ -335,6 +335,37 @@ async function preserveLegacyMemorySidecarRetryPath(params: {
   );
 }
 
+/**
+ * List the sidecar files when every persisted byte is absent: the main file is
+ * zero bytes and no WAL/journal sidecar holds content. Returns null when any
+ * file carries bytes, because WAL frames alone can contain legacy rows.
+ */
+async function listEmptyLegacySidecarFiles(legacyPath: string): Promise<string[] | null> {
+  const emptyFiles: string[] = [];
+  for (const suffix of LEGACY_MEMORY_SIDECAR_SUFFIXES) {
+    const candidate = `${legacyPath}${suffix}`;
+    try {
+      const stat = await fs.stat(candidate);
+      if (!stat.isFile()) {
+        continue;
+      }
+      if (stat.size > 0) {
+        return null;
+      }
+      emptyFiles.push(candidate);
+    } catch (err: unknown) {
+      // Only ENOENT means the sidecar is genuinely absent (never written or
+      // cleaned up by SQLite).  Other errors (EACCES, EIO, ELOOP, EMFILE)
+      // mean we cannot determine the state — fail closed by treating the
+      // sidecar as non-empty so no legacy data is silently dropped.
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        return null;
+      }
+    }
+  }
+  return emptyFiles.length > 0 ? emptyFiles : null;
+}
+
 async function migrateLegacyMemorySidecarSource(params: {
   source: LegacyMemorySidecarSource;
   config: unknown;
@@ -342,6 +373,29 @@ async function migrateLegacyMemorySidecarSource(params: {
   changes: string[];
   warnings: string[];
 }): Promise<{ archiveReady: boolean }> {
+  // OpenClaw itself can leave a zero-byte placeholder at the legacy sidecar
+  // path while the live index is the per-agent SQLite database. An empty file
+  // holds no legacy rows, so remove it quietly instead of emitting a permanent
+  // self-inflicted "not a legacy memory index" warning.
+  const emptySidecarFiles = await listEmptyLegacySidecarFiles(params.source.legacyPath);
+  if (emptySidecarFiles) {
+    let removedAll = true;
+    for (const emptyPath of emptySidecarFiles) {
+      try {
+        await fs.rm(emptyPath, { force: true });
+      } catch {
+        removedAll = false;
+      }
+    }
+    if (removedAll) {
+      params.changes.push(
+        `Removed empty Memory Core legacy memory index sidecar placeholder: ${params.source.legacyPath}`,
+      );
+      return { archiveReady: false };
+    }
+    // Fall through to the regular import path when cleanup fails so the file
+    // is still diagnosed instead of silently ignored.
+  }
   await fs.mkdir(path.dirname(params.source.agentDatabasePath), { recursive: true });
   const db = openNodeSqliteDatabase(params.source.agentDatabasePath, { allowExtension: true });
   try {

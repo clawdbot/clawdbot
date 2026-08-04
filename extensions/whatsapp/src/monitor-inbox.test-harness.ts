@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import {
@@ -10,6 +11,7 @@ import {
   resetPairingSecurityMocks,
   upsertPairingRequestMock as pairingUpsertPairingRequestMock,
 } from "./pairing-security.test-harness.js";
+import { setWhatsAppRuntime } from "./runtime.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
 type AnyMockFn = any;
@@ -131,26 +133,6 @@ vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
   };
 });
 
-vi.mock("./runtime.js", async () => {
-  const { createChannelIngressQueueForTests: createChannelIngressQueue } = await Promise.resolve(
-    vi.importActual<typeof import("openclaw/plugin-sdk/plugin-state-test-runtime")>(
-      "openclaw/plugin-sdk/plugin-state-test-runtime",
-    ),
-  );
-  return {
-    getWhatsAppRuntime: () => ({
-      state: {
-        resolveStateDir: pluginRuntimeMocks.stateDir,
-        openKeyedStore: pluginRuntimeMocks.openKeyedStore,
-        openChannelIngressQueue: (
-          options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
-        ) => createChannelIngressQueue({ ...options, channelId: "whatsapp" }),
-      },
-    }),
-    setWhatsAppRuntime: vi.fn(),
-  };
-});
-
 const inboundRuntimeMocks = vi.hoisted(() => {
   const wrapperKeys = [
     "ephemeralMessage",
@@ -204,6 +186,13 @@ function createResolvedMock() {
   return vi.fn().mockResolvedValue(undefined);
 }
 
+function createAcceptedSendMessageMock() {
+  let sequence = 0;
+  return vi.fn().mockImplementation(async () => ({
+    key: { id: `mock-accepted-${++sequence}` },
+  }));
+}
+
 function createMockSock(): MockSock {
   const ev = new EventEmitter();
   return {
@@ -211,7 +200,7 @@ function createMockSock(): MockSock {
     end: vi.fn(),
     ws: { close: vi.fn() },
     sendPresenceUpdate: createResolvedMock(),
-    sendMessage: createResolvedMock(),
+    sendMessage: createAcceptedSendMessageMock(),
     fetchAccountReachoutTimelock: vi.fn().mockResolvedValue({ isActive: false }),
     readMessages: createResolvedMock(),
     groupMetadata: vi.fn().mockImplementation(async (jid: string) => ({
@@ -391,6 +380,16 @@ export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }
     vi.clearAllMocks();
     channelActivityMocks.recordChannelActivity.mockClear();
     pluginRuntimeMocks.reset();
+    setWhatsAppRuntime({
+      channel: {},
+      state: {
+        resolveStateDir: pluginRuntimeMocks.stateDir,
+        openKeyedStore: pluginRuntimeMocks.openKeyedStore,
+        openChannelIngressQueue: (
+          options?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
+        ) => createChannelIngressQueueForTests({ ...options, channelId: "whatsapp" }),
+      },
+    } as never);
     sessionState.sock = createMockSock();
     resetPairingSecurityMocks(DEFAULT_WEB_INBOX_CONFIG);
     if (!monitorWebInbox || !resetWebInboundDedupe) {

@@ -27,9 +27,9 @@ const localPrepareOptions = [
   {
     id: "llama-cpp",
     brandId: "llama-cpp",
-    label: "Local model (llama.cpp)",
-    hint: "Download and run a private GGUF model",
-    actionLabel: "Review download",
+    label: "llama.cpp",
+    hint: "Run one private GGUF model directly inside this Gateway",
+    actionLabel: "Set up model",
   },
   {
     id: "lmstudio",
@@ -447,7 +447,7 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
         ],
         recommendedInstalls: [],
       });
-      await page.getByRole("button", { name: "Yes" }).click();
+      await page.getByRole("button", { name: "Continue" }).click();
       await page.getByRole("heading", { name: "Connection verified" }).waitFor();
       await expect
         .poll(() => page.locator(".model-setup-success").textContent())

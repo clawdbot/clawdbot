@@ -238,6 +238,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           busy: false,
           lastRunActivityAt: null,
           healthState: "stopped",
+          lifecycle: "stopped" as const,
         }),
         collectStatusIssues: collectWhatsAppStatusIssues,
         buildChannelSummary: async ({ account, snapshot }) => {
@@ -290,6 +291,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             lastRunActivityAt: snapshot.lastRunActivityAt ?? null,
             lastError: snapshot.lastError ?? null,
             healthState: snapshot.healthState ?? undefined,
+            lifecycle: snapshot.lifecycle ?? undefined,
             ...(snapshot.terminalDisconnect
               ? { terminalDisconnect: snapshot.terminalDisconnect }
               : {}),

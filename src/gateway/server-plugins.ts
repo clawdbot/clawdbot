@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
 import { activatePluginRegistry } from "../plugins/loader-shared.js";
+import type { ChannelPluginLoadIntent } from "../plugins/loader-types.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { loadPluginLookUpTable, type PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
@@ -587,7 +588,7 @@ export function loadGatewayPlugins(params: {
   baseMethods: string[];
   pluginIds?: string[];
   pluginLookUpTable?: PluginLookUpTable;
-  preferSetupRuntimeForChannelPlugins?: boolean;
+  channelPluginLoadIntent?: ChannelPluginLoadIntent;
   suppressPluginInfoLogs?: boolean;
   startupTrace?: {
     detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
@@ -688,7 +689,7 @@ export function loadGatewayPlugins(params: {
       allowGatewaySubagentBinding: true,
       ...gatewayRuntimeBindings,
     },
-    preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
+    channelPluginLoadIntent: params.channelPluginLoadIntent,
     preferBuiltPluginArtifacts: true,
     ...(params.startupTrace !== undefined && {
       startupTrace: params.startupTrace,

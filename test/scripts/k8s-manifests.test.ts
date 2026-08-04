@@ -47,7 +47,7 @@ describe("k8s manifests", () => {
       apiVersion: "kustomize.config.k8s.io/v1beta1",
       kind: "Kustomization",
     });
-    expect(asStrings(kustomization.resources, "kustomization resources").sort()).toEqual([
+    expect(asStrings(kustomization.resources, "kustomization resources").toSorted()).toEqual([
       "configmap.yaml",
       "deployment.yaml",
       "pvc.yaml",

@@ -1,0 +1,27 @@
+title: OpenClaw exec process lifecycle
+
+scenario:
+  id: openclaw-exec-process-lifecycle
+  surface: runtime-tools
+  coverage:
+    primary:
+      - tools.exec-routing-bash
+      - tools.exec-routing-exec
+      - tools.process-lifecycle
+  objective: Verify OpenClaw executes shell commands and owns their full foreground, background, yielded, timed-out, and PTY process lifecycle.
+  successCriteria:
+    - Foreground shell execution preserves shell semantics and exposes OPENCLAW_SHELL=exec.
+    - Explicit and yielded background commands remain visible to the same scoped process tool through list, log, and poll until terminal.
+    - Real timeout and PTY execution report their observed terminal outcomes.
+    - Kill and clear remove the child process and leave no scoped process session behind.
+  docsRefs:
+    - docs/tools/exec.md
+  codeRefs:
+    - src/agents/bash-tools.exec-run.ts
+    - src/agents/bash-tools.exec-runtime.ts
+    - src/agents/bash-tools.process.ts
+    - test/e2e/qa-lab/runtime/openclaw-exec-process-lifecycle.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/openclaw-exec-process-lifecycle.e2e.test.ts
+    summary: Run real child processes through OpenClaw's production exec and process tools.

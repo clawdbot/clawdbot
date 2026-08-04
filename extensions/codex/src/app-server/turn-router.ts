@@ -389,13 +389,16 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
       return undefined;
     }
     const route = this.routes.get(scope.threadId);
-    if (!route || route.released) {
+    if (!route) {
       return undefined;
     }
-    if (!route.handlers && !(await waitForPromiseOrAbort(route.activated.promise, signal))) {
+    // A retired route owns its in-flight tools and approvals; upstream can
+    // cancel their callbacks before sending the terminal turn notification.
+    const requestSignal = AbortSignal.any([signal, route.controller.signal]);
+    if (!route.handlers && !(await waitForPromiseOrAbort(route.activated.promise, requestSignal))) {
       return undefined;
     }
-    if (signal.aborted || route.released || !route.handlers) {
+    if (requestSignal.aborted || !route.handlers) {
       return undefined;
     }
     const handler = route.handlers.onRequest;
@@ -406,25 +409,20 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
     // new OpenClaw turn, whose requests must wait for its accepted turn id.
     while (route.gate === "armed") {
       const binding = route.binding?.promise;
-      if (!binding || !(await waitForPromiseOrAbort(binding, signal))) {
+      if (!binding || !(await waitForPromiseOrAbort(binding, requestSignal))) {
         return undefined;
       }
-      if (signal.aborted || route.released) {
-        return undefined;
-      }
-    }
-    if (route.gate === "bound") {
-      if (scope.turnId && scope.turnId !== route.turnId) {
-        return undefined;
-      }
-      if (route.released) {
+      if (requestSignal.aborted) {
         return undefined;
       }
     }
-    if (!(await waitForPromiseOrAbort(this.waitForNotifications(route), signal))) {
+    if (route.gate === "bound" && scope.turnId && scope.turnId !== route.turnId) {
       return undefined;
     }
-    if (signal.aborted || route.released) {
+    if (!(await waitForPromiseOrAbort(this.waitForNotifications(route), requestSignal))) {
+      return undefined;
+    }
+    if (requestSignal.aborted) {
       return undefined;
     }
     try {
@@ -434,11 +432,11 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
           threadId: scope.threadId,
           ...(scope.turnId ? { turnId: scope.turnId } : {}),
         },
-        signal,
+        requestSignal,
       );
-      return signal.aborted || route.released ? undefined : result;
+      return requestSignal.aborted ? undefined : result;
     } catch (error) {
-      if (signal.aborted || route.released) {
+      if (requestSignal.aborted) {
         return undefined;
       }
       throw error;

@@ -5,6 +5,13 @@
  * steering a subagent and directly delivering a message, with phase evidence.
  */
 type SubagentDeliveryPath = "steered" | "direct" | "queued" | "none";
+type SubagentAnnounceDeliveryDisposition =
+  | "delivered"
+  | "session_queued"
+  | "intentional_non_delivery"
+  | "retryable"
+  | "ambiguous"
+  | "permanent_failure";
 /** Stable reasons an announcement delivery can fail without throwing. */
 type SubagentAnnounceDeliveryFailureReason =
   | "completion_handoff_pending"
@@ -12,11 +19,12 @@ type SubagentAnnounceDeliveryFailureReason =
   | "generated_media_missing"
   | "message_tool_delivery_missing"
   | "requester_abandoned"
+  | "source_owner_changed"
   | "visible_reply_missing";
 
 type SubagentAnnounceSteerOutcome =
   | { status: "steered"; deliveredAt?: number; enqueuedAt?: number }
-  | { status: "none" | "dropped" };
+  | { status: "none" | "dropped" | "source_owner_changed" };
 
 /** Result of trying to deliver a subagent announcement. */
 export type SubagentAnnounceDeliveryResult = {
@@ -26,7 +34,10 @@ export type SubagentAnnounceDeliveryResult = {
   enqueuedAt?: number;
   reason?: SubagentAnnounceDeliveryFailureReason;
   error?: string;
+  // Stops fallback delivery when ownership changed or another terminal result
+  // makes trying a second path unsafe.
   terminal?: boolean;
+  disposition?: SubagentAnnounceDeliveryDisposition;
   missingMediaUrls?: string[];
   phases?: SubagentAnnounceDispatchPhaseResult[];
 };
@@ -53,6 +64,16 @@ function mapSteerOutcomeToDeliveryResult(
       path: "steered",
       deliveredAt: outcome.deliveredAt,
       enqueuedAt: outcome.enqueuedAt,
+    };
+  }
+  if (outcome.status === "source_owner_changed") {
+    return {
+      delivered: false,
+      path: "none",
+      reason: "source_owner_changed",
+      error: "subagent source lifecycle changed before completion delivery",
+      terminal: true,
+      disposition: "intentional_non_delivery",
     };
   }
   return {
@@ -111,6 +132,9 @@ export async function runSubagentAnnounceDispatch(params: {
     if (primarySteer.delivered) {
       return withPhases(primarySteer);
     }
+    if (primarySteer.terminal) {
+      return withPhases(primarySteer);
+    }
     if (primarySteerOutcome.status === "dropped") {
       return withPhases(primarySteer);
     }
@@ -124,7 +148,13 @@ export async function runSubagentAnnounceDispatch(params: {
   // final visible message wins before falling back to steering.
   const primaryDirect = await params.direct();
   appendPhase("direct-primary", primaryDirect);
-  if (primaryDirect.delivered || primaryDirect.terminal) {
+  if (
+    primaryDirect.delivered ||
+    primaryDirect.disposition === "session_queued" ||
+    primaryDirect.disposition === "intentional_non_delivery" ||
+    primaryDirect.disposition === "ambiguous" ||
+    primaryDirect.disposition === "permanent_failure"
+  ) {
     return withPhases(primaryDirect);
   }
 
@@ -136,6 +166,9 @@ export async function runSubagentAnnounceDispatch(params: {
   const fallbackSteer = mapSteerOutcomeToDeliveryResult(fallbackSteerOutcome);
   appendPhase("steer-fallback", fallbackSteer);
   if (fallbackSteer.delivered) {
+    return withPhases(fallbackSteer);
+  }
+  if (fallbackSteer.terminal) {
     return withPhases(fallbackSteer);
   }
 

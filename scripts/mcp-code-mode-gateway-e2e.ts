@@ -23,7 +23,7 @@ import {
   validateMcpCodeModeResult,
 } from "./e2e/lib/mcp-code-mode-validation.ts";
 import { countSessionLogMentions } from "./e2e/lib/session-log-mentions.ts";
-import { readBoundedResponseText } from "./lib/bounded-response.ts";
+import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 
 async function freePort(): Promise<number> {
   return await new Promise((resolve, reject) => {

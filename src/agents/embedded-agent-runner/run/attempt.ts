@@ -6,8 +6,8 @@ import {
 import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
 import { materializeBundleMcpToolsForRun } from "../../agent-bundle-mcp-tools.js";
+import { AgentRunTerminalOutcomeError } from "../../agent-run-terminal-error.js";
 import {
-  AgentRunTerminalOutcomeError,
   buildAgentRunTerminalOutcomeFromAttempt,
   mergeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,

@@ -36,7 +36,6 @@ vi.mock("../plugins/plugin-registry.js", () => ({
             startup: {
               sidecar: false,
               memory: false,
-              deferConfiguredChannelFullLoadUntilAfterListen: false,
               agentHarnesses: [],
             },
             compat: [],
@@ -82,12 +81,8 @@ vi.mock("../plugins/setup-registry.js", () => ({
   resolvePluginSetupProvider: () => undefined,
 }));
 
-vi.mock("../plugins/provider-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
-    "../plugins/provider-runtime.js",
-  );
+vi.mock("../plugins/provider-runtime.js", () => {
   return {
-    ...actual,
     buildProviderMissingAuthMessageWithPlugin: () => undefined,
     resolveExternalAuthProfilesWithPlugins: () => [],
     shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
@@ -1342,6 +1337,66 @@ describe("resolveApiKeyForProvider", () => {
       mode: "api-key",
     });
   });
+
+  // Regression: a 402 cooldown recorded under inline-api-key:<provider> must be
+  // enforced for managed (file/exec) SecretRef provider keys too, not just
+  // literal/env keys — otherwise the cooldown is written but never honored and
+  // the exhausted provider keeps resolving and reporting available. Covers both
+  // resolution paths: the synthetic-runtime path and the explicit api-key
+  // override path.
+  it.each([
+    { name: "no auth override (synthetic-runtime path)", auth: undefined },
+    { name: "explicit api-key override path", auth: "api-key" as const },
+  ])(
+    "blocks a managed file SecretRef apiKey while its inline provider cooldown is active — $name",
+    async ({ auth }) => {
+      const cliproxyConfig = {
+        api: "openai-responses" as const,
+        apiKey: { source: "file", provider: "vault", id: "/cliproxy/api-key" } as const,
+        baseUrl: "https://cliproxy.example/v1",
+        models: [],
+        ...(auth ? { auth } : {}),
+      };
+      const sourceConfig = { models: { providers: { cliproxyapi: cliproxyConfig } } };
+      const runtimeConfig = {
+        models: {
+          providers: {
+            cliproxyapi: {
+              ...cliproxyConfig,
+              apiKey: "sk-runtime-cliproxy", // pragma: allowlist secret
+            },
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+      const store = {
+        version: 1 as const,
+        profiles: {},
+        usageStats: {
+          "inline-api-key:cliproxyapi": {
+            disabledUntil: Date.now() + 60_000,
+            disabledReason: "billing" as const,
+          },
+        },
+      };
+
+      await expect(
+        resolveApiKeyForProvider({ provider: "cliproxyapi", cfg: sourceConfig, store }),
+      ).rejects.toThrow(/Inline API key for provider "cliproxyapi" is temporarily disabled/);
+      await expect(
+        hasAvailableAuthForProvider({ provider: "cliproxyapi", cfg: sourceConfig, store }),
+      ).resolves.toBe(false);
+      expect(
+        hasRuntimeAvailableProviderAuth({
+          provider: "cliproxyapi",
+          cfg: sourceConfig,
+          allowPluginSyntheticAuth: false,
+          store,
+        }),
+      ).toBe(false);
+    },
+  );
 
   it("does not treat a custom provider managed SecretRef marker as auth without a runtime snapshot", async () => {
     const sourceConfig = {

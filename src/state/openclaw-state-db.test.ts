@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import {
@@ -52,6 +52,7 @@ type StateDbTestDatabase = Pick<
 >;
 
 const stateDbTempDirs: string[] = [];
+let canonicalStateDatabaseTemplatePath: string | undefined;
 
 function createTempStateDir(): string {
   return makeTempDir(stateDbTempDirs, "openclaw-state-db-");
@@ -418,9 +419,13 @@ function createLegacyAuditStateDatabase(stateDir: string): string {
 }
 
 function createCanonicalAuditStateDatabase(stateDir: string): string {
-  const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
-  const databasePath = database.path;
-  closeOpenClawStateDatabaseForTest();
+  if (!canonicalStateDatabaseTemplatePath) {
+    throw new Error("canonical state database template was not initialized");
+  }
+  // These cases own post-initialization schema drift; fresh creation and migrations stay real below.
+  const databasePath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir });
+  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+  fs.copyFileSync(canonicalStateDatabaseTemplatePath, databasePath);
   return databasePath;
 }
 
@@ -1027,6 +1032,14 @@ function runConcurrentSchemaProbe(params: {
   }
   return JSON.parse(resultLine) as string[];
 }
+
+beforeAll(() => {
+  const stateDir = createTempStateDir();
+  canonicalStateDatabaseTemplatePath = openOpenClawStateDatabase({
+    env: { OPENCLAW_STATE_DIR: stateDir },
+  }).path;
+  closeOpenClawStateDatabaseForTest();
+});
 
 afterAll(() => {
   cleanupTempDirs(stateDbTempDirs);
@@ -2817,6 +2830,17 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       withOpenClawStateStartupMigrationCheckpointDatabase(checkpointCallback, options),
     ).toThrow(/integrity_check failed.*missing from index unsafe_index_records_value/iu);
     expect(checkpointCallback).not.toHaveBeenCalled();
+  });
+
+  it("configures checkpoint lock waits before schema mutation", () => {
+    const stateDir = createTempStateDir();
+
+    withOpenClawStateStartupMigrationCheckpointDatabase(
+      (db) => {
+        expect(readSqliteNumberPragma(db, "busy_timeout")).toBe(OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
+      },
+      { env: { OPENCLAW_STATE_DIR: stateDir } },
+    );
   });
 
   it("runs full integrity before a pending state schema migration", () => {

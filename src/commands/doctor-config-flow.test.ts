@@ -716,8 +716,11 @@ vi.mock("./doctor/shared/plugin-tool-allowlist-warnings.js", () => ({
   collectPluginToolAllowlistWarnings: vi.fn(() => []),
 }));
 
+vi.mock("../doctor-plugin-host-links.js", () => ({
+  maybeRepairPluginOpenClawHostLinks: vi.fn(async () => undefined),
+}));
+
 vi.mock("../doctor-plugin-registry.js", () => ({
-  maybeRepairManagedNpmOpenClawPeerLinks: vi.fn(async () => undefined),
   maybeRepairStaleManagedNpmBundledPlugins: vi.fn(() => undefined),
 }));
 
@@ -766,7 +769,7 @@ vi.mock("./doctor/shared/stale-oauth-profile-shadows.js", () => ({
 vi.mock("./doctor/channel-capabilities.js", () => {
   const byChannel = {
     googlechat: {
-      dmAllowFromMode: "nestedOnly",
+      dmAllowFromMode: "topOnly",
       groupModel: "route",
       groupAllowFromFallbackToAllowFrom: false,
       warnOnEmptyGroupSenderAllowlist: false,
@@ -1953,6 +1956,28 @@ describe("doctor config flow", () => {
     });
   });
 
+  it("keeps the Codex session auth migration plan outside persisted config", async () => {
+    const openAICodexAuthProfileIdMap = new Map([
+      ["openai-codex:default", "openai:chatgpt-default"],
+    ]);
+    runDoctorRepairSequenceMock.mockImplementation(async (params: { state: unknown }) => ({
+      state: params.state,
+      changeNotes: [],
+      warningNotes: [],
+      authProfilesRepaired: false,
+      openAICodexAuthProfileIdMap,
+    }));
+
+    const result = await runDoctorConfigWithInput({
+      config: {},
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.openAICodexAuthProfileIdMap).toBe(openAICodexAuthProfileIdMap);
+    expect(result.cfg).not.toHaveProperty("openAICodexAuthProfileIdMap");
+  });
+
   it("does not refresh gateway before writing a config-only auth repair", async () => {
     runDoctorRepairSequenceMock.mockImplementation(
       async (params: {
@@ -3064,9 +3089,7 @@ describe("doctor config flow", () => {
           googlechat: {
             accounts: {
               work: {
-                dm: {
-                  policy: "open",
-                },
+                dmPolicy: "open",
               },
             },
           },
@@ -3081,11 +3104,9 @@ describe("doctor config flow", () => {
         googlechat: {
           accounts: {
             work: {
-              dm: {
-                policy: string;
-                allowFrom: string[];
-              };
-              allowFrom?: string[];
+              dmPolicy: string;
+              allowFrom: string[];
+              dm?: unknown;
             };
           };
         };
@@ -3093,8 +3114,9 @@ describe("doctor config flow", () => {
     };
     expect(cfg.channels.discord.allowFrom).toEqual(["*"]);
     expect(cfg.channels.discord.dmPolicy).toBe("open");
-    expect(cfg.channels.googlechat.accounts.work.dm.allowFrom).toEqual(["*"]);
-    expect(cfg.channels.googlechat.accounts.work.allowFrom).toBeUndefined();
+    expect(cfg.channels.googlechat.accounts.work.dmPolicy).toBe("open");
+    expect(cfg.channels.googlechat.accounts.work.allowFrom).toEqual(["*"]);
+    expect(cfg.channels.googlechat.accounts.work.dm).toBeUndefined();
   });
 
   it('repairs dmPolicy="allowlist" by restoring allowFrom from pairing store on repair', async () => {
@@ -3444,16 +3466,14 @@ describe("doctor config flow", () => {
     }
   });
 
-  it("recovers from stale googlechat top-level allowFrom by repairing dm.allowFrom", async () => {
+  it("preserves valid googlechat top-level DM policy and allowFrom", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,
       config: {
         channels: {
           googlechat: {
+            dmPolicy: "open",
             allowFrom: ["*"],
-            dm: {
-              policy: "open",
-            },
           },
         },
       },
@@ -3462,13 +3482,15 @@ describe("doctor config flow", () => {
     const cfg = result.cfg as {
       channels: {
         googlechat: {
-          dm: { allowFrom: string[] };
-          allowFrom?: string[];
+          dmPolicy: string;
+          allowFrom: string[];
+          dm?: unknown;
         };
       };
     };
-    expect(cfg.channels.googlechat.dm.allowFrom).toEqual(["*"]);
-    expect(cfg.channels.googlechat.allowFrom).toBeUndefined();
+    expect(cfg.channels.googlechat.dmPolicy).toBe("open");
+    expect(cfg.channels.googlechat.allowFrom).toEqual(["*"]);
+    expect(cfg.channels.googlechat.dm).toBeUndefined();
   });
 
   it("does not report repeat talk provider normalization on consecutive repair runs", async () => {

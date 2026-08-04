@@ -8,6 +8,7 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import { getConfiguredChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { collectChannelStatusIssues } from "../../infra/channels-status-issues.js";
+import { formatDurationCompact } from "../../infra/format-time/format-duration.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { formatPhoneNumberForCli } from "../../infra/phone-number-presentation.js";
 import { listConfiguredAnnounceChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
@@ -47,7 +48,17 @@ function formatEventLoopBits(value: unknown): string | null {
     typeof record.cpuCoreRatio === "number" && Number.isFinite(record.cpuCoreRatio)
       ? record.cpuCoreRatio
       : null;
+  const degradedSinceMs =
+    typeof record.degradedSinceMs === "number" && Number.isFinite(record.degradedSinceMs)
+      ? Math.max(0, record.degradedSinceMs)
+      : null;
+  const delayP99Ms =
+    typeof record.delayP99Ms === "number" && Number.isFinite(record.delayP99Ms)
+      ? Math.round(record.delayP99Ms)
+      : null;
   return [
+    degradedSinceMs != null ? `for ${formatDurationCompact(degradedSinceMs) ?? "0s"}` : null,
+    delayP99Ms != null ? `(p99 ${delayP99Ms}ms)` : null,
     reasons.length ? `reasons=${reasons.join(",")}` : null,
     delayMaxMs != null ? `eventLoopDelayMaxMs=${delayMaxMs}` : null,
     utilization != null ? `eventLoopUtilization=${utilization}` : null,
@@ -63,7 +74,7 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
   lines.push(theme.success("Gateway reachable."));
   const eventLoopLine = formatEventLoopBits(payload.eventLoop);
   if (eventLoopLine) {
-    lines.push(theme.warn(`Gateway event loop degraded: ${eventLoopLine}`));
+    lines.push(theme.warn(`Gateway event loop degraded ${eventLoopLine}`));
   }
   const channelLabels =
     payload.channelLabels && typeof payload.channelLabels === "object"

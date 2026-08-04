@@ -66,6 +66,11 @@ export class TerminalOutputController {
     this.lastInputAtMs = this.now();
   }
 
+  /** Reassesses flow control immediately when the live recipient set changes. */
+  reconcileRecipients(): void {
+    this.reconcile(this.getConnIds());
+  }
+
   /** Flushes existing viewers, then aligns live frames after the attach snapshot. */
   prepareViewerAttach(): void {
     this.coalescer.flush();

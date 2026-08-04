@@ -8,6 +8,7 @@ import type {
   SubagentCompletionToolHandoffRegistration,
   TrustedSubagentCompletionHandoff,
 } from "../agents/subagent-announce-handoff.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 
 const SUBAGENT_COMPLETION_TOOL_HANDOFF_TTL_MS = 5 * 60 * 1000;
 
@@ -15,7 +16,10 @@ type SubagentCompletionToolHandoffEntry = SubagentCompletionToolHandoffRegistrat
   expiresAtMs: number;
 };
 
-const handoffs = new Map<string, SubagentCompletionToolHandoffEntry>();
+const handoffs = resolveGlobalMap<string, SubagentCompletionToolHandoffEntry>(
+  Symbol.for("openclaw.subagentCompletionToolHandoffs"),
+  "close-and-restart",
+);
 
 function normalizeRegistration(
   params: SubagentCompletionToolHandoffRegistration,

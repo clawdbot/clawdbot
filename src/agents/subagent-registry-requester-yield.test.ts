@@ -79,6 +79,48 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     expect(schedule).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    ["matches", "agent:main:subagent:worker", true],
+    ["rejects", "agent:main:subagent:other", false],
+  ] as const)("%s the exact child session after same-turn steer", (_, sessionKey, expected) => {
+    const originalRunId = "run-original";
+    const entry = makeRun("run-steered", false);
+    entry.taskRunId = originalRunId;
+    entry.childSessionKey = "agent:main:subagent:worker";
+    const runs = new Map([[entry.runId, entry]]);
+    const persistOrThrow = vi.fn();
+    const schedule = vi.fn();
+
+    expect(
+      markRequesterTurnYieldedInRuns({
+        requesterSessionKey: REQUESTER,
+        requesterTurnRunId: REQUESTER_TURN,
+        runs,
+        persistOrThrow,
+      }),
+    ).toBe(1);
+    expect(
+      settleRequesterTurnAfterSessionSpawns({
+        requesterSessionKey: REQUESTER,
+        requesterTurnRunId: REQUESTER_TURN,
+        requesterYielded: true,
+        acceptedSessionSpawns: [{ runId: originalRunId, childSessionKey: sessionKey }],
+        runs,
+        persistOrThrow,
+        schedule,
+      }),
+    ).toBe(expected);
+    expect(persistOrThrow).toHaveBeenCalledTimes(expected ? 2 : 1);
+    if (expected) {
+      expect(entry.requesterSettleWake?.batchRunIds).toEqual([entry.runId]);
+      expect(schedule).toHaveBeenCalledExactlyOnceWith(entry.runId, entry);
+    } else {
+      expect(entry.requesterSettleWake).toBeUndefined();
+      expect(entry.requesterTurnRunId).toBe(REQUESTER_TURN);
+      expect(schedule).not.toHaveBeenCalled();
+    }
+  });
+
   it("freezes active yielded children without scheduling before terminal delivery", () => {
     const entry = makeRun("run-child");
     entry.execution = { ...entry.execution, status: "running", endedAt: undefined };

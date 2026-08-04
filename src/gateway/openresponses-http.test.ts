@@ -1549,11 +1549,44 @@ describe("OpenResponses HTTP API (e2e)", () => {
   });
 
   it.each([
-    { name: "completed", failed: false },
-    { name: "failed", failed: true },
+    {
+      name: "completed",
+      label: "completed response without a provider terminal",
+      failed: false,
+      providerTerminal: false,
+      reject: false,
+    },
+    {
+      name: "completed",
+      label: "completed response with a provider terminal",
+      failed: false,
+      providerTerminal: true,
+      reject: false,
+    },
+    {
+      name: "failed",
+      label: "provider-failed response with a resolved run",
+      failed: true,
+      providerTerminal: true,
+      reject: false,
+    },
+    {
+      name: "failed",
+      label: "rejected response with a provider terminal",
+      failed: true,
+      providerTerminal: true,
+      reject: true,
+    },
+    {
+      name: "failed",
+      label: "rejected response without a provider terminal",
+      failed: true,
+      providerTerminal: false,
+      reject: true,
+    },
   ])(
-    "keeps the $name response admitted until its deferred SSE terminal is written",
-    async ({ name, failed }) => {
+    "keeps the $label admitted until its deferred SSE terminal is written",
+    async ({ name, failed, providerTerminal, reject }) => {
       const idleRootCount = getActiveGatewayRootWorkCount();
       const terminalAdmission = createDeferred<{
         active: number;
@@ -1561,15 +1594,17 @@ describe("OpenResponses HTTP API (e2e)", () => {
       }>();
       const wireResponse = createDeferred<string>();
       const continueAgent = createDeferred();
+      const lifecycleTerminals: string[] = [];
       let activeRunId: string | undefined;
       const unsubscribe = onAgentEvent((event) => {
-        if (
-          event.runId !== activeRunId ||
-          event.stream !== "lifecycle" ||
-          event.data?.phase !== "end"
-        ) {
+        const phase = event.data?.phase;
+        if (event.runId !== activeRunId || event.stream !== "lifecycle") {
           return;
         }
+        if (phase !== "end" && phase !== "error") {
+          return;
+        }
+        lifecycleTerminals.push(phase);
         // Restart drains run before the next-turn SSE finalizer, so inspect the real
         // root owner at that boundary instead of observing eventual client delivery.
         queueMicrotask(() => {
@@ -1588,12 +1623,15 @@ describe("OpenResponses HTTP API (e2e)", () => {
         }
         await continueAgent.promise;
         emitAgentEvent({ runId: activeRunId, stream: "assistant", data: { delta: "answer" } });
-        if (failed) {
+        if (providerTerminal) {
           emitAgentEvent({
             runId: activeRunId,
             stream: "lifecycle",
-            data: { phase: "error", error: "provider request failed" },
+            data: failed ? { phase: "error", error: "provider request failed" } : { phase: "end" },
           });
+        }
+        if (reject) {
+          throw new Error("provider request failed");
         }
         return {
           payloads: [{ text: "answer" }],
@@ -1637,6 +1675,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         expect(admission.drained).toEqual({ drained: false, active: idleRootCount + 1 });
         expect(response.status).toBe(name);
         expect(terminalEvents).toEqual([`response.${name}`]);
+        expect(lifecycleTerminals).toEqual([failed ? "error" : "end"]);
         expect(parseSseEvents(wire).at(-1)?.data).toBe("[DONE]");
         await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
       } finally {
@@ -1825,6 +1864,56 @@ describe("OpenResponses HTTP API (e2e)", () => {
               expect(firstAgentOpts().senderIsOwner).toBe(senderIsOwner);
             }
           }
+
+          agentCommand.mockClear();
+          agentCommand.mockResolvedValue({ payloads: [{ text: "hello" }] } as never);
+          const forwardedHeaders = {
+            "x-forwarded-proto": "https",
+            authorization: "Bearer forwarded-untrusted",
+          };
+          const aliceResponse = await postResponses(
+            port,
+            { model: "openclaw", user: "alice", input: "private alice history" },
+            { ...forwardedHeaders, "x-forwarded-user": "Alice@example.com" },
+          );
+          expect(aliceResponse.status).toBe(200);
+          const aliceResponseId = ((await aliceResponse.json()) as { id: string }).id;
+          const aliceSessionKey = requireSessionKey(
+            firstAgentOpts().sessionKey as string | undefined,
+            "Alice trusted-proxy response",
+          );
+
+          const aliceContinuation = await postResponses(
+            port,
+            {
+              model: "openclaw",
+              user: "alice",
+              previous_response_id: aliceResponseId,
+              input: "continue alice history",
+            },
+            {
+              ...forwardedHeaders,
+              authorization: "Bearer different-forwarded-untrusted",
+              "x-forwarded-user": "Alice@example.com",
+            },
+          );
+          expect(aliceContinuation.status).toBe(200);
+          await ensureResponseConsumed(aliceContinuation);
+
+          const bobContinuation = await postResponses(
+            port,
+            {
+              model: "openclaw",
+              user: "bob",
+              previous_response_id: aliceResponseId,
+              input: "attempt alice history",
+            },
+            { ...forwardedHeaders, "x-forwarded-user": "bob@example.com" },
+          );
+          expect(bobContinuation.status).toBe(200);
+          await ensureResponseConsumed(bobContinuation);
+          expect(firstAgentOpts(2).sessionKey).not.toBe(aliceSessionKey);
+          expect(firstAgentOpts(1).sessionKey).toBe(aliceSessionKey);
 
           agentCommand.mockClear();
           const unauthorized = await postResponses(

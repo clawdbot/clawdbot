@@ -1035,6 +1035,8 @@ describe("config schema", () => {
       web: {
         fetch: {
           ssrfPolicy: {
+            dangerouslyAllowPrivateNetwork: true,
+            allowedHostnames: ["127.0.0.1"],
             allowRfc2544BenchmarkRange: true,
             allowIpv6UniqueLocalRange: true,
           },
@@ -1043,6 +1045,8 @@ describe("config schema", () => {
     });
 
     expect(parsed?.web?.fetch?.ssrfPolicy).toEqual({
+      dangerouslyAllowPrivateNetwork: true,
+      allowedHostnames: ["127.0.0.1"],
       allowRfc2544BenchmarkRange: true,
       allowIpv6UniqueLocalRange: true,
     });

@@ -1,0 +1,30 @@
+title: Media guarded fetch boundaries
+
+scenario:
+  id: media-fetch-boundaries
+  surface: media
+  category: media.media-intake-and-access
+  coverage:
+    primary:
+      - media.safe-remote-fetch
+      - media.size-caps-and-bounded-reads
+  objective: Prove remote media intake enforces SSRF, redirect, header, and bounded-write policy before publishing media-store artifacts.
+  successCriteria:
+    - A private loopback target is rejected before any network request or media-store publication.
+    - Redirect targets are revalidated against exact-origin policy.
+    - Cross-origin redirects preserve safe headers while stripping authorization, cookie, and API-key material.
+    - Declared content-length and chunked streaming overflows fail at the configured byte cap.
+    - Failed guarded fetches leave no final or temporary media-store artifact.
+  docsRefs:
+    - docs/tools/media-overview.md
+    - docs/gateway/security/secure-file-operations.md
+    - docs/help/testing.md
+  codeRefs:
+    - src/infra/net/fetch-guard.ts
+    - src/media/fetch.ts
+    - src/media/store.ts
+    - test/e2e/qa-lab/media/media-fetch-boundaries.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/media/media-fetch-boundaries.e2e.test.ts
+    summary: Runs real loopback HTTP redirects and bounded streams through canonical guarded media fetch and atomic store publication.

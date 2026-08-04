@@ -169,27 +169,41 @@ describe("program routes", () => {
     );
   });
 
-  it("routes plugins list JSON without importing the full plugins CLI", async () => {
-    const route = expectRoute(["plugins", "list"]);
-    expect(route.loadPlugins).toBeUndefined();
-    expect(route.canRun?.(["node", "openclaw", "plugins", "list"])).toBe(false);
+  it.each([
+    { label: "default", flags: [], options: { json: false, enabled: false, verbose: false } },
+    {
+      label: "enabled",
+      flags: ["--enabled"],
+      options: { json: false, enabled: true, verbose: false },
+    },
+    {
+      label: "verbose",
+      flags: ["--verbose"],
+      options: { json: false, enabled: false, verbose: true },
+    },
+    {
+      label: "JSON",
+      flags: ["--json", "--enabled", "--verbose"],
+      options: { json: true, enabled: true, verbose: true },
+    },
+  ])(
+    "routes plugins list $label without importing the full plugins CLI",
+    async ({ flags, options }) => {
+      const route = expectRoute(["plugins", "list"]);
+      expect(route.loadPlugins).toBeUndefined();
+      expect(route.canRun?.(["node", "openclaw", "plugins", "list", ...flags])).toBe(true);
 
-    await expect(
-      route.run(["node", "openclaw", "plugins", "list", "--json", "--enabled", "--verbose"]),
-    ).resolves.toBe(true);
+      await expect(route.run(["node", "openclaw", "plugins", "list", ...flags])).resolves.toBe(
+        true,
+      );
 
-    expect(runPluginsListCommandMock).toHaveBeenCalledWith(
-      { json: true, enabled: true, verbose: true },
-      defaultRuntime,
-    );
-    expect(pluginsCliLoadedMock).not.toHaveBeenCalled();
-  });
+      expect(runPluginsListCommandMock).toHaveBeenCalledWith(options, defaultRuntime);
+      expect(pluginsCliLoadedMock).not.toHaveBeenCalled();
+    },
+  );
 
-  it("returns false for plugins list JSON route with unsupported arguments", async () => {
-    await expectRunFalse(
-      ["plugins", "list"],
-      ["node", "openclaw", "plugins", "list", "--json", "--wat"],
-    );
+  it("returns false for plugins list route with unsupported arguments", async () => {
+    await expectRunFalse(["plugins", "list"], ["node", "openclaw", "plugins", "list", "--wat"]);
   });
 
   it("matches gateway status route without plugin preload", () => {

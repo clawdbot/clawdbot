@@ -141,14 +141,14 @@ describe("qa scenario catalog", () => {
     expect((discoveryConfig?.requiredFiles as string[] | undefined)?.[0]).toBe(
       "repo/qa/scenarios/index.yaml",
     );
-    expect(fallbackConfig?.gracefulFallbackAny as string[] | undefined).toContain(
-      "will not reveal",
-    );
+    expect(fallbackConfig).not.toHaveProperty("gracefulFallbackAny");
     const fallbackFlow = JSON.stringify(
       readQaScenarioById("memory-failure-fallback").execution.flow,
     );
     expect(fallbackFlow).toContain("liveTurnTimeoutMs(env, 180000)");
     expect(fallbackFlow).toContain('"replacePaths":["tools.deny"]');
+    expect(fallbackFlow).toContain("!tools.has('memory_search')");
+    expect(fallbackFlow).toContain("outbound.text.trim().length > 0");
     expect(bundledSkill.title).toBe("Bundled plugin skill runtime");
     expect(bundledSkillConfig?.pluginId).toBe("open-prose");
     expect(bundledSkillConfig?.expectedSkillName).toBe("prose");
@@ -674,7 +674,10 @@ describe("qa scenario catalog", () => {
   it("loads the opt-in update.run package self-upgrade script proof", () => {
     const scenario = readQaScenarioById("update-run-package-self-upgrade");
 
-    expect(scenario.coverage?.primary).toEqual([`${cli}.update-status-and-rpc`]);
+    expect(scenario.coverage?.primary).toEqual([
+      `${cli}.update-status-and-rpc`,
+      "gateway.update-and-setup-apis",
+    ]);
     expect(scenario.coverage?.secondary).toEqual([`${cli}.managed-gateway-restart`]);
     expect(scenario.execution.kind).toBe("script");
     if (scenario.execution.kind !== "script") {

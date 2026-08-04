@@ -5,8 +5,8 @@ import { cronStreamScheduleKey } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
 import { recomputeNextRunsForMaintenance } from "./jobs.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
-import type { CronServiceState } from "./state.js";
-import { ensureLoaded, persist } from "./store.js";
+import type { CronServiceState, DeferredCronNotifications } from "./state.js";
+import { ensureLoaded, persistOrRestore, snapshotStoreForRollback } from "./store.js";
 import {
   type IsolatedAgentSetupTimeoutSignal,
   maybeNotifyIsolatedAgentSetupTimeout,
@@ -74,9 +74,13 @@ export async function ensureLoadedForRead(state: CronServiceState) {
   }
   // Use the maintenance-only version so that read-only operations never
   // advance a past-due nextRunAtMs without executing the job (#16156).
-  const changed = recomputeNextRunsForMaintenance(state);
+  const rollbackSnapshot = snapshotStoreForRollback(state);
+  const postPersistNotifications: DeferredCronNotifications = [];
+  const changed = recomputeNextRunsForMaintenance(state, {
+    deferredNotifications: postPersistNotifications,
+  });
   if (changed) {
-    await persist(state);
+    await persistOrRestore(state, rollbackSnapshot, { postPersistNotifications });
   }
 }
 

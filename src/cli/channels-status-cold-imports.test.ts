@@ -1,4 +1,4 @@
-// The real route-first channel status path must stay out of local config/plugin runtimes.
+// The real route-first channel status path must honor the shared catalog guard policy.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loaded = vi.hoisted(() => {
@@ -55,10 +55,19 @@ describe("routed channels status cold imports", () => {
     vi.clearAllMocks();
   });
 
-  it("keeps successful JSON routes cold with and without probing", async () => {
+  it("keeps successful all-channel JSON routes cold with and without probing", async () => {
     for (const probe of [false, true]) {
       vi.clearAllMocks();
-      const argv = ["node", "openclaw", "channels", "status", "--json"];
+      const timeoutMs = probe ? 30000 : 10000;
+      const argv = [
+        "node",
+        "openclaw",
+        "channels",
+        "status",
+        "--json",
+        "--channel",
+        probe ? " ALL " : "all",
+      ];
       if (probe) {
         argv.push("--probe");
       }
@@ -66,6 +75,11 @@ describe("routed channels status cold imports", () => {
       await expect(tryRouteCli(argv)).resolves.toBe(true);
 
       expect(callGatewayMock).toHaveBeenCalledOnce();
+      expect(callGatewayMock).toHaveBeenCalledWith({
+        method: "channels.status",
+        params: { probe, timeoutMs },
+        timeoutMs,
+      });
       expect(runtime.writeJson).toHaveBeenCalledWith({ channelAccounts: {} }, 2);
       expect(loaded.modules).not.toContain("config-guard");
       expect(loaded.modules).not.toContain("channels-status-runtime");

@@ -51,47 +51,6 @@ export function resolveChannelPluginIdsFromRegistry(params: {
     .map((plugin) => plugin.id);
 }
 
-export function resolveConfiguredDeferredChannelPluginIdsFromRegistry(params: {
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  index: PluginRegistrySnapshot;
-  manifestRegistry: PluginManifestRegistry;
-  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
-}): string[] {
-  const configuredChannelIds = new Set(
-    listPotentialEnabledChannelIds(params.config, params.env, params.ambientEnvTriggers),
-  );
-  if (configuredChannelIds.size === 0) {
-    return [];
-  }
-  const pluginsConfig = normalizePluginsConfigWithRegistry(params.config.plugins, params.index, {
-    manifestRegistry: params.manifestRegistry,
-  });
-  const activationSource = {
-    plugins: pluginsConfig,
-    rootConfig: params.config,
-  };
-  const manifestLookup = createManifestRegistryLookup(params.manifestRegistry);
-  return params.index.plugins
-    .filter(
-      (plugin) =>
-        hasConfiguredStartupChannel({
-          plugin,
-          manifestLookup,
-          configuredChannelIds,
-        }) &&
-        plugin.startup.deferConfiguredChannelFullLoadUntilAfterListen &&
-        canStartConfiguredChannelPlugin({
-          plugin,
-          config: params.config,
-          pluginsConfig,
-          activationSource,
-          manifestLookup,
-        }),
-    )
-    .map((plugin) => plugin.pluginId);
-}
-
 export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
@@ -128,7 +87,6 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   const explicitlyDisabledChannelIds = new Set(
     listExplicitlyDisabledChannelIdsForConfig(params.config),
   );
-  const configuredDeferredChannelPluginIds: string[] = [];
   const requiredAgentHarnessRuntimes = new Set(
     collectConfiguredAgentHarnessRuntimes(activationSourceConfig),
   );
@@ -207,9 +165,6 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
       });
       if (canStartConfiguredChannel) {
         pluginIds.push(plugin.pluginId);
-        if (plugin.startup.deferConfiguredChannelFullLoadUntilAfterListen) {
-          configuredDeferredChannelPluginIds.push(plugin.pluginId);
-        }
       }
       continue;
     }
@@ -275,7 +230,6 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   }
   return {
     channelPluginIds,
-    configuredDeferredChannelPluginIds,
     pluginIds,
   };
 }
