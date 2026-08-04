@@ -416,6 +416,8 @@ export type PluginManifest = {
   videoGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
   /** Cheap music-generation provider auth metadata without importing plugin runtime. */
   musicGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
+  /** Cheap web-search provider auth metadata without importing plugin runtime. */
+  webSearchProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
   /** Cheap plugin-tool availability metadata without importing plugin runtime. */
   toolMetadata?: Record<string, PluginManifestToolMetadata>;
   /** Manifest-owned config behavior consumed by generic core helpers. */

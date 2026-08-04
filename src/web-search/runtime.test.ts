@@ -426,6 +426,58 @@ describe("web search runtime", () => {
     );
   });
 
+  it("drops omitted CLI options before validating a query-only fallback", async () => {
+    const geminiExecute = vi.fn(async (args: Record<string, unknown>) => ({
+      ...args,
+      provider: "gemini",
+    }));
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createCustomSearchProvider({
+        pluginId: "brave",
+        id: "brave",
+        autoDetectOrder: 1,
+        getConfiguredCredentialValue: () => "brave-configured",
+        getCredentialValue: () => "brave-configured",
+        createTool: () => ({
+          description: "Brave search",
+          parameters: {
+            type: "object",
+            properties: { query: { type: "string" }, count: { type: "integer" } },
+          },
+          execute: async () => {
+            throw new Error("brave unavailable");
+          },
+        }),
+      }),
+      createCustomSearchProvider({
+        pluginId: "google",
+        id: "gemini",
+        autoDetectOrder: 2,
+        getConfiguredCredentialValue: () => "gemini-configured",
+        getCredentialValue: () => "gemini-configured",
+        createTool: () => ({
+          description: "Gemini search",
+          parameters: {
+            type: "object",
+            properties: { query: { type: "string" } },
+          },
+          execute: geminiExecute,
+        }),
+      }),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: {},
+        args: { query: "fallback", count: undefined, limit: undefined },
+      }),
+    ).resolves.toEqual({
+      provider: "gemini",
+      result: { query: "fallback", provider: "gemini" },
+    });
+    expect(geminiExecute).toHaveBeenCalledWith({ query: "fallback" }, { signal: undefined });
+  });
+
   it("does not pass provider-specific arguments to an incompatible fallback", async () => {
     const geminiExecute = vi.fn(async () => ({ ok: true }));
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([

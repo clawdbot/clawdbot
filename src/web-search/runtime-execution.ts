@@ -52,15 +52,19 @@ function normalizeFallbackArguments(
   if (schema?.type !== "object" || !properties) {
     return args;
   }
-  const hasUnsupportedCliAlias = Object.keys(args).some(
-    (name) => CLI_FALLBACK_ARGUMENT_ALIASES.has(name) && !Object.hasOwn(properties, name),
+  const hasOmittedOrUnsupportedCliArgument = Object.entries(args).some(
+    ([name, value]) =>
+      value === undefined ||
+      (CLI_FALLBACK_ARGUMENT_ALIASES.has(name) && !Object.hasOwn(properties, name)),
   );
-  if (!hasUnsupportedCliAlias) {
+  if (!hasOmittedOrUnsupportedCliArgument) {
     return args;
   }
   return Object.fromEntries(
     Object.entries(args).filter(
-      ([name]) => !CLI_FALLBACK_ARGUMENT_ALIASES.has(name) || Object.hasOwn(properties, name),
+      ([name, value]) =>
+        value !== undefined &&
+        (!CLI_FALLBACK_ARGUMENT_ALIASES.has(name) || Object.hasOwn(properties, name)),
     ),
   );
 }

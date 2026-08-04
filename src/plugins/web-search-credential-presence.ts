@@ -3,6 +3,7 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { manifestConfigSignalPasses } from "./manifest-tool-availability.js";
 
 function hasConfiguredCredentialValue(value: unknown): boolean {
   if (typeof value === "string") {
@@ -11,7 +12,9 @@ function hasConfiguredCredentialValue(value: unknown): boolean {
   return value !== undefined && value !== null;
 }
 
-function hasConfiguredSearchCredentialCandidate(searchConfig: unknown): boolean {
+function hasConfiguredSearchCredentialCandidate(
+  searchConfig: unknown,
+): boolean {
   const record = asOptionalObjectRecord(searchConfig);
   if (!record) {
     return false;
@@ -21,38 +24,60 @@ function hasConfiguredSearchCredentialCandidate(searchConfig: unknown): boolean 
   );
 }
 
-function hasConfiguredPluginWebSearchCandidate(config: OpenClawConfig): boolean {
+function hasConfiguredPluginWebSearchCandidate(
+  config: OpenClawConfig,
+): boolean {
   const entries = asOptionalObjectRecord(config.plugins?.entries);
   if (!entries) {
     return false;
   }
   return Object.values(entries).some((entry) => {
     const pluginConfig = asOptionalObjectRecord(entry)?.config;
-    return hasConfiguredSearchCredentialCandidate(asOptionalObjectRecord(pluginConfig)?.webSearch);
+    return hasConfiguredSearchCredentialCandidate(
+      asOptionalObjectRecord(pluginConfig)?.webSearch,
+    );
   });
 }
 
-function hasManifestWebSearchEnvCredentialCandidate(params: {
+function hasManifestWebSearchCredentialCandidate(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   origin?: PluginManifestRecord["origin"];
 }): boolean {
-  const env = params.env;
-  if (!env) {
-    return false;
-  }
   return loadManifestMetadataSnapshot({
     config: params.config,
-    env,
+    env: params.env,
   }).plugins.some((plugin) => {
     if (params.origin && plugin.origin !== params.origin) {
       return false;
     }
-    if ((plugin.contracts?.webSearchProviders?.length ?? 0) === 0) {
+    const providerIds = plugin.contracts?.webSearchProviders ?? [];
+    if (providerIds.length === 0) {
       return false;
     }
-    const envVars = (plugin.setup?.providers ?? []).flatMap((provider) => provider.envVars ?? []);
-    return envVars.some((envVar) => hasConfiguredCredentialValue(env[envVar]));
+    if (
+      providerIds.some((providerId) =>
+        plugin.webSearchProviderMetadata?.[providerId]?.configSignals?.some(
+          (signal) =>
+            manifestConfigSignalPasses({
+              config: params.config,
+              env: params.env ?? process.env,
+              signal,
+            }),
+        ),
+      )
+    ) {
+      return true;
+    }
+    if (!params.env) {
+      return false;
+    }
+    const envVars = (plugin.setup?.providers ?? []).flatMap(
+      (provider) => provider.envVars ?? [],
+    );
+    return envVars.some((envVar) =>
+      hasConfiguredCredentialValue(params.env?.[envVar]),
+    );
   });
 }
 
@@ -68,7 +93,7 @@ export function hasConfiguredWebSearchCredential(params: {
   return (
     hasConfiguredSearchCredentialCandidate(searchConfig) ||
     hasConfiguredPluginWebSearchCandidate(params.config) ||
-    hasManifestWebSearchEnvCredentialCandidate({
+    hasManifestWebSearchCredentialCandidate({
       config: params.config,
       env: params.env,
       origin: params.origin,

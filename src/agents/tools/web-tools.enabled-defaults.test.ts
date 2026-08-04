@@ -20,8 +20,12 @@ const runWebSearchCalls = vi.hoisted(
       runtimeWebSearch?: unknown;
     }>,
 );
-const resolveWebSearchDefinitionCalls = vi.hoisted(() => [] as Array<{ config?: unknown }>);
-const configuredWebSearchCredentialSignal = vi.hoisted(() => ({ current: false }));
+const resolveWebSearchDefinitionCalls = vi.hoisted(
+  () => [] as Array<{ config?: unknown }>,
+);
+const configuredWebSearchCredentialSignal = vi.hoisted(() => ({
+  current: false,
+}));
 const activeSecretsRuntimeSnapshot = vi.hoisted(() => ({
   current: null as null | { config: unknown },
 }));
@@ -47,11 +51,13 @@ function readConfiguredSearchProvider(config: unknown): string | undefined {
 }
 
 vi.mock("../../secrets/runtime-state.js", () => ({
-  getActiveSecretsRuntimeConfigSnapshot: () => activeSecretsRuntimeSnapshot.current,
+  getActiveSecretsRuntimeConfigSnapshot: () =>
+    activeSecretsRuntimeSnapshot.current,
 }));
 
 vi.mock("../../plugins/web-search-credential-presence.js", () => ({
-  hasConfiguredWebSearchCredential: () => configuredWebSearchCredentialSignal.current,
+  hasConfiguredWebSearchCredential: () =>
+    configuredWebSearchCredentialSignal.current,
 }));
 
 vi.mock("../../web-search/runtime.js", async () => {
@@ -60,7 +66,10 @@ vi.mock("../../web-search/runtime.js", async () => {
     await import("../../secrets/runtime-web-tools-state.js");
   const resolveRuntimeDefinition = (options?: {
     config?: unknown;
-    runtimeWebSearch?: { selectedProvider?: string; providerConfigured?: string };
+    runtimeWebSearch?: {
+      selectedProvider?: string;
+      providerConfigured?: string;
+    };
   }) => {
     // The mock mirrors production provider resolution order closely enough to
     // catch stale construction-time metadata in late-bound tool instances.
@@ -81,8 +90,9 @@ vi.mock("../../web-search/runtime.js", async () => {
           )
           .find((entry) =>
             Boolean(
-              entry.provider.getConfiguredCredentialValue?.(options?.config as never) ??
-                entry.provider.getCredentialValue(),
+              entry.provider.getConfiguredCredentialValue?.(
+                options?.config as never,
+              ) ?? entry.provider.getCredentialValue(),
             ),
           );
     const definition = registration?.provider.createTool({
@@ -218,7 +228,9 @@ describe("web tools defaults", () => {
       },
     });
 
-    const result = await tool?.execute?.("call-runtime-provider", { query: "openclaw" });
+    const result = await tool?.execute?.("call-runtime-provider", {
+      query: "openclaw",
+    });
 
     expect(tool?.description).toContain("Search current web");
     expect(result?.details).toMatchObject({
@@ -349,8 +361,14 @@ describe("web tools defaults", () => {
 
   it("late-binds the model schema to the current selected provider", () => {
     const registry = createEmptyPluginRegistry();
-    const staleParameters = { type: "object", properties: { stale: { type: "string" } } };
-    const freshParameters = { type: "object", properties: { fresh: { type: "string" } } };
+    const staleParameters = {
+      type: "object",
+      properties: { stale: { type: "string" } },
+    };
+    const freshParameters = {
+      type: "object",
+      properties: { fresh: { type: "string" } },
+    };
     for (const [id, modelParameters] of [
       ["stale", staleParameters],
       ["fresh", freshParameters],
@@ -407,8 +425,14 @@ describe("web tools defaults", () => {
 
   it("keeps the selected provider schema live through agent tool assembly", () => {
     const registry = createEmptyPluginRegistry();
-    const staleParameters = { type: "object", properties: { stale: { type: "string" } } };
-    const freshParameters = { type: "object", properties: { fresh: { type: "string" } } };
+    const staleParameters = {
+      type: "object",
+      properties: { stale: { type: "string" } },
+    };
+    const freshParameters = {
+      type: "object",
+      properties: { fresh: { type: "string" } },
+    };
     for (const [id, modelParameters] of [
       ["stale", staleParameters],
       ["fresh", freshParameters],
@@ -507,11 +531,16 @@ describe("web tools defaults", () => {
       sandboxed: true,
     });
 
-    const result = await tool?.execute?.("call-runtime-provider-without-metadata", {
-      query: "openclaw",
-    });
+    const result = await tool?.execute?.(
+      "call-runtime-provider-without-metadata",
+      {
+        query: "openclaw",
+      },
+    );
 
-    expect((result?.details as { provider?: string } | undefined)?.provider).toBe("custom");
+    expect(
+      (result?.details as { provider?: string } | undefined)?.provider,
+    ).toBe("custom");
     expect(runWebSearchCalls).toHaveLength(1);
     expect(runWebSearchCalls[0]?.preferRuntimeProviders).toBe(true);
   });
@@ -582,7 +611,11 @@ describe("web tools defaults", () => {
       diagnostics: [],
     });
     const runtimeConfig = {
-      tools: { web: { search: { provider: "fresh", fresh: { apiKey: "runtime-key" } } } },
+      tools: {
+        web: {
+          search: { provider: "fresh", fresh: { apiKey: "runtime-key" } },
+        },
+      },
     };
     activeSecretsRuntimeSnapshot.current = { config: runtimeConfig };
 
@@ -599,14 +632,20 @@ describe("web tools defaults", () => {
       lateBindRuntimeConfig: true,
     });
 
-    const result = await tool?.execute?.("call-runtime-provider", { query: "openclaw" });
+    const result = await tool?.execute?.("call-runtime-provider", {
+      query: "openclaw",
+    });
 
-    expect((result?.details as { provider?: string } | undefined)?.provider).toBe("fresh");
+    expect(
+      (result?.details as { provider?: string } | undefined)?.provider,
+    ).toBe("fresh");
     expect(runWebSearchCalls).toHaveLength(1);
     expect(runWebSearchCalls[0]?.config).toBe(runtimeConfig);
     expect(
-      (runWebSearchCalls[0]?.runtimeWebSearch as { selectedProvider?: string } | undefined)
-        ?.selectedProvider,
+      (
+        runWebSearchCalls[0]?.runtimeWebSearch as
+          { selectedProvider?: string } | undefined
+      )?.selectedProvider,
     ).toBe("fresh");
   });
 });

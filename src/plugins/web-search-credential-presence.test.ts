@@ -45,4 +45,20 @@ describe("hasConfiguredWebSearchCredential", () => {
       }),
     ).toBe(true);
   });
+
+  it("detects manifest-declared model credential fallbacks without provider-specific core logic", () => {
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: {
+          models: {
+            providers: {
+              google: { apiKey: "google-model-key", models: [] },
+            },
+          },
+        } as OpenClawConfig,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(true);
+  });
 });
