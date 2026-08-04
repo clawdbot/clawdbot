@@ -10,6 +10,7 @@ import {
   withoutProviderPromptAccountingContext,
 } from "../../llm/providers/stream-wrappers/provider-prompt-accounting.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { estimateProviderPayloadTokenPressure } from "./provider-payload-pressure.js";
 
 type ProviderPromptSnapshot = {
   scopeDigest: string;
@@ -40,6 +41,16 @@ class ProviderPromptRetryNoProgressError extends Error {
         `context rejection (payloadBytes=${payloadBytes}).`,
     );
     this.name = "ProviderPromptRetryNoProgressError";
+  }
+}
+
+class ProviderPromptFinalPayloadOverflowError extends Error {
+  constructor(estimatedTokens: number, contextTokenBudget: number) {
+    super(
+      "Context overflow: final provider payload exceeds the model context window after outbound " +
+        `transforms (estimatedTokens=${estimatedTokens} contextTokenBudget=${contextTokenBudget}).`,
+    );
+    this.name = "ProviderPromptFinalPayloadOverflowError";
   }
 }
 
@@ -102,6 +113,24 @@ function assertProviderPromptRetryProgress(
   }
 }
 
+/**
+ * Rejects a final request body that post-admission transforms grew past the full context window.
+ * Admission budgets with reserve and a safety margin, so an unmargined estimate beyond the entire
+ * window is unreachable from any admitted context and always means outbound payload drift.
+ */
+function assertFinalProviderPromptWithinBudget(params: {
+  payload: unknown;
+  effectiveContextTokenBudget: number;
+}): void {
+  const estimatedTokens = estimateProviderPayloadTokenPressure(params.payload);
+  if (estimatedTokens > params.effectiveContextTokenBudget) {
+    throw new ProviderPromptFinalPayloadOverflowError(
+      estimatedTokens,
+      params.effectiveContextTokenBudget,
+    );
+  }
+}
+
 export function markLastProviderPromptContextRejected(
   state: ProviderPromptState,
 ): ProviderPromptSnapshot | undefined {
@@ -139,6 +168,10 @@ export function wrapStreamFnWithProviderPromptState(params: {
         });
         assertProviderPromptRetryProgress(params.state, snapshot);
         params.state.lastAttempt = snapshot;
+        assertFinalProviderPromptWithinBudget({
+          payload: finalPayload,
+          effectiveContextTokenBudget: params.effectiveContextTokenBudget,
+        });
         return finalPayload;
       },
     });

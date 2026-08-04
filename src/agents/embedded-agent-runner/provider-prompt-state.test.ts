@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { createCodexNativeWebSearchWrapper } from "../../llm/providers/stream-wrappers/openai.js";
+import { isLikelyContextOverflowError } from "../embedded-agent-helpers.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
   clearProviderPromptState,
@@ -411,6 +412,116 @@ describe("provider prompt state", () => {
     expect(transport).not.toHaveBeenCalled();
 
     removeAdmission();
+    clearProviderPromptState(runId);
+  });
+
+  it("rejects a final payload that outbound transforms grew past the context window", async () => {
+    const runId = "final-payload-overflow";
+    const state = getProviderPromptState(runId);
+    const context = {
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "small prompt", timestamp: 1 }],
+      tools: [],
+    } as Context;
+    const networkSend = vi.fn();
+    const transport = vi.fn<StreamFn>(async (_model, _context, options) => {
+      await options?.onPayload?.({ input: "raw", model: model.id }, model);
+      networkSend();
+      return createResultStream("stop");
+    });
+    const oversizedPayload = {
+      messages: [{ role: "user", content: "x".repeat(100_000) }],
+      model: model.id,
+    };
+    const wrapped = wrapStreamFnWithProviderPromptState({
+      streamFn: transport,
+      state,
+      effectiveContextTokenBudget: 4_000,
+    });
+
+    let caught: unknown;
+    try {
+      await wrapped(model, context, { onPayload: () => oversizedPayload });
+    } catch (error) {
+      caught = error;
+    }
+    expect(String(caught)).toContain("Context overflow: final provider payload exceeds");
+    expect(
+      isLikelyContextOverflowError(caught instanceof Error ? caught.message : undefined),
+    ).toBe(true);
+    expect(networkSend).not.toHaveBeenCalled();
+
+    markLastProviderPromptContextRejected(state);
+    await expect(wrapped(model, context, { onPayload: () => oversizedPayload })).rejects.toThrow(
+      "byte-identical provider payload",
+    );
+    expect(networkSend).not.toHaveBeenCalled();
+    clearProviderPromptState(runId);
+  });
+
+  it("flat-rates base64 media blobs in the final payload instead of counting serialized bytes", async () => {
+    const runId = "final-payload-media";
+    const state = getProviderPromptState(runId);
+    const context = { systemPrompt: "system", messages: [], tools: [] } as Context;
+    const transport = vi.fn<StreamFn>(async (_model, _context, options) => {
+      await options?.onPayload?.({ input: [] }, model);
+      return createResultStream("stop");
+    });
+    const wrapped = wrapStreamFnWithProviderPromptState({
+      streamFn: transport,
+      state,
+      effectiveContextTokenBudget: 8_000,
+    });
+
+    const dataUrlImage = `data:image/png;base64,${"A".repeat(2_000_000)}`;
+    const first = await wrapped(model, context, {
+      onPayload: () => ({
+        input: [{ type: "input_image", image_url: dataUrlImage }],
+        model: model.id,
+      }),
+    });
+    await first.result();
+
+    const second = await wrapped(model, context, {
+      onPayload: () => ({
+        contents: [
+          { parts: [{ inline_data: { mime_type: "image/png", data: "B".repeat(2_000_000) } }] },
+        ],
+      }),
+    });
+    await second.result();
+
+    expect(transport).toHaveBeenCalledTimes(2);
+    clearProviderPromptState(runId);
+  });
+
+  it("admits a final payload whose raw estimate stays below the context window", async () => {
+    const runId = "final-payload-within-window";
+    const state = getProviderPromptState(runId);
+    const context = {
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "q".repeat(100_000), timestamp: 1 }],
+      tools: [],
+    } as Context;
+    const transport = vi.fn<StreamFn>(async (_model, _context, options) => {
+      await options?.onPayload?.({ input: "raw", model: model.id }, model);
+      return createResultStream("stop");
+    });
+    const wrapped = wrapStreamFnWithProviderPromptState({
+      streamFn: transport,
+      state,
+      effectiveContextTokenBudget: 40_000,
+    });
+
+    const result = await wrapped(model, context, {
+      onPayload: () => ({
+        messages: [{ role: "user", content: "q".repeat(100_000) }],
+        model: model.id,
+      }),
+    });
+    await result.result();
+
+    expect(transport).toHaveBeenCalledTimes(1);
     clearProviderPromptState(runId);
   });
 });
