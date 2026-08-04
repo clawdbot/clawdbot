@@ -44,9 +44,42 @@ type TelegramSequentialKeyContext = {
     channel_post?: Message;
     edited_channel_post?: Message;
     callback_query?: { message?: Message; data?: string };
-    message_reaction?: { chat?: { id?: number } };
+    message_reaction?: {
+      chat?: { id?: number; type?: string; is_forum?: boolean };
+      message_id?: number;
+    };
   };
 };
+
+function getTelegramMessageReactionSequentialKey(
+  ctx: TelegramSequentialKeyContext,
+): string | undefined {
+  const reaction = ctx.update?.message_reaction;
+  if (
+    reaction?.chat?.is_forum === true &&
+    typeof reaction.chat.id === "number" &&
+    typeof reaction.message_id === "number"
+  ) {
+    return `telegram:${reaction.chat.id}:message:${reaction.message_id}`;
+  }
+  const msg =
+    ctx.message ??
+    ctx.channelPost ??
+    ctx.editedMessage ??
+    ctx.editedChannelPost ??
+    ctx.update?.message ??
+    ctx.update?.edited_message ??
+    ctx.update?.channel_post ??
+    ctx.update?.edited_channel_post;
+  const isForum = resolveTelegramMessageForumFlagHint({
+    chatType: msg?.chat?.type,
+    isForum: msg?.chat?.is_forum,
+    isTopicMessage: msg?.is_topic_message,
+  });
+  return isForum && typeof msg?.chat.id === "number" && typeof msg.message_id === "number"
+    ? `telegram:${msg.chat.id}:message:${msg.message_id}`
+    : undefined;
+}
 
 export function isTelegramReadOnlyControlLaneText(params: {
   rawText?: string;
@@ -217,4 +250,14 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
     return threadId != null ? `telegram:${chatId}:topic:${threadId}` : `telegram:${chatId}`;
   }
   return "telegram:unknown";
+}
+
+export function getTelegramSequentialConstraints(
+  ctx: TelegramSequentialKeyContext,
+): string | string[] {
+  const key = getTelegramSequentialKey(ctx);
+  const messageKey = getTelegramMessageReactionSequentialKey(ctx);
+  // A forum reaction reads the topic fact recorded by the message update it targets.
+  // Bridge that exact message without serializing unrelated forum topics.
+  return messageKey ? [key, messageKey] : key;
 }
