@@ -1078,7 +1078,7 @@ async function prepareToolCall(
   if (validation.kind === "immediate") {
     return validation.outcome;
   }
-  const { tool, args: validatedArgs } = validation.prepared;
+  const { args: validatedArgs } = validation.prepared;
 
   try {
     if (config.beforeToolCall) {
