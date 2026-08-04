@@ -239,11 +239,23 @@ async function requestHttp(params: {
   port: number;
 }): Promise<{ body: string; latencyMs: number; status: number }> {
   const startedAt = performance.now();
-  const timeoutMs = Math.max(
-    1,
-    Math.min(HTTP_TIMEOUT_MS, requireRemainingMs(params.deadlineAt, `requesting ${params.path}`)),
-  );
+  const requestDeadlineAt = Math.min(params.deadlineAt, startedAt + HTTP_TIMEOUT_MS);
+  requireRemainingMs(requestDeadlineAt, `requesting ${params.path}`);
   return await new Promise((resolve, reject) => {
+    let settled = false;
+    const settle = (run: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      run();
+    };
+    const fail = (error: Error) =>
+      settle(() => {
+        req.destroy();
+        reject(error);
+      });
     const req = request(
       {
         headers: { accept: params.accept },
@@ -251,7 +263,6 @@ async function requestHttp(params: {
         method: "GET",
         path: params.path,
         port: params.port,
-        timeout: timeoutMs,
       },
       (res) => {
         const chunks: Buffer[] = [];
@@ -259,22 +270,31 @@ async function requestHttp(params: {
         res.on("data", (chunk: Buffer) => {
           bytes += chunk.length;
           if (bytes > MAX_HTTP_BODY_BYTES) {
-            req.destroy(new Error(`${params.path} response exceeded ${MAX_HTTP_BODY_BYTES} bytes`));
+            fail(new Error(`${params.path} response exceeded ${MAX_HTTP_BODY_BYTES} bytes`));
             return;
           }
           chunks.push(chunk);
         });
-        res.on("end", () => {
-          resolve({
-            body: Buffer.concat(chunks).toString("utf8"),
-            latencyMs: performance.now() - startedAt,
-            status: res.statusCode ?? 0,
-          });
-        });
+        res.once("aborted", () => fail(new Error(`${params.path} response aborted`)));
+        res.once("error", fail);
+        res.once("end", () =>
+          settle(() =>
+            resolve({
+              body: Buffer.concat(chunks).toString("utf8"),
+              latencyMs: performance.now() - startedAt,
+              status: res.statusCode ?? 0,
+            }),
+          ),
+        );
       },
     );
-    req.once("error", reject);
-    req.once("timeout", () => req.destroy(new Error(`${params.path} request timed out`)));
+    req.once("error", fail);
+    // Request/socket timeouts measure inactivity; this timer owns the wall-clock deadline.
+    const timer = setTimeout(
+      () => fail(new Error(`${params.path} request timed out`)),
+      Math.max(1, Math.ceil(remainingMs(requestDeadlineAt))),
+    );
+    timer.unref?.();
     req.end();
   });
 }
@@ -841,6 +861,7 @@ export const testing = {
   parseOptions,
   formatProbeFailure,
   formatRunFailure,
+  requestHttp,
   runTurn,
   sampleGateway,
   summarizeNumbers,

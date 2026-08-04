@@ -7,6 +7,8 @@ import {
   approveWorkspaceSkill,
   COMPACT_TERMINAL_SIZES,
   exerciseFragmentedUnicodePrompt,
+  exerciseNarrowTerminalRendering,
+  exerciseTerminalOutputSafety,
   objectFieldEquals,
   readFixtureLog,
   waitForFixtureLogEntry,
@@ -685,6 +687,14 @@ describe.sequential("TUI PTY harness", () => {
     TEST_TIMEOUT_MS,
   );
 
+  // Keep these producer-matched cases data-driven because this harness is at its line budget.
+  // prettier-ignore
+  const terminalSafetyCases = [
+    ["renders long Unicode output and copy-safe URLs in narrow real PTY frames", () => exerciseNarrowTerminalRendering(startTuiFixture, STARTUP_TIMEOUT_MS)],
+    ["sanitizes ANSI OSC and C1 payloads across real PTY display boundaries", () => exerciseTerminalOutputSafety(startTuiFixture, STARTUP_TIMEOUT_MS)],
+  ] as const;
+  it.each(terminalSafetyCases)("%s", async (_name, runCase) => runCase(), STARTUP_TEST_TIMEOUT_MS);
+
   it(
     "preserves xAI account limit errors in terminal output",
     async () => {
@@ -895,16 +905,8 @@ describe.sequential("TUI PTY harness", () => {
     "renders slash command help",
     async () => {
       await fixture.run.write("/help\r", { delay: false });
-      await fixture.run.waitForOutput("Slash commands:");
-      await fixture.run.waitForOutput("/help");
-      await fixture.run.waitForOutput("/verbose <on|off|full>");
-      await fixture.run.waitForOutput("/reasoning <on|off|stream>");
-      await fixture.run.waitForOutput("/goal");
-      await fixture.run.waitForOutput("/goal start <objective>");
-      await fixture.run.waitForOutput("/btw <side question>");
-      await fixture.run.waitForOutput("/queue");
-      await fixture.run.waitForOutput("/stop");
-      await fixture.run.waitForOutput("/exit");
+      // prettier-ignore
+      for (const text of ["Slash commands:", "/help", "/verbose <on|off|full>", "/reasoning <on|off|stream>", "/goal", "/goal start <objective>", "/btw <side question>", "/queue", "/stop", "/exit"]) { await fixture.run.waitForOutput(text); }
     },
     TEST_TIMEOUT_MS,
   );

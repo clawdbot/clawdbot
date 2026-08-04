@@ -189,7 +189,11 @@ describe("ModelSetupWizardRunner", () => {
         const message = messages[nextIndex];
         nextIndex += 1;
         if (message === undefined) {
-          return Promise.resolve({ done: true, status: "done" });
+          return Promise.resolve({
+            done: true,
+            status: "done",
+            preparedModelRef: "llama-cpp/gemma-4-e4b-it-q4_k_m",
+          });
         }
         return Promise.resolve({
           done: false,
@@ -217,7 +221,10 @@ describe("ModelSetupWizardRunner", () => {
 
     await runner.start("llama-cpp", "openclaw.setup.prepare.start");
     await vi.waitFor(() => {
-      expect(onDone).toHaveBeenCalledWith("openclaw.setup.prepare.start");
+      expect(onDone).toHaveBeenCalledWith(
+        "openclaw.setup.prepare.start",
+        "llama-cpp/gemma-4-e4b-it-q4_k_m",
+      );
     });
 
     expect(seen).toEqual(messages);

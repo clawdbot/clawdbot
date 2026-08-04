@@ -57,6 +57,7 @@ import {
 } from "../rich-message.js";
 import { isTelegramPhotoLimitError } from "../send-error-predicates.js";
 import { buildInlineKeyboard, reactMessageTelegram } from "../send.js";
+import { recordSentMessage } from "../sent-message-cache.js";
 import { resolveTelegramTargetChatType } from "../targets.js";
 import {
   buildTelegramSendParams,
@@ -249,6 +250,7 @@ async function deliverTextReply(params: {
   replyToId?: number;
   replyToMode: ReplyToMode;
   progress: DeliveryProgress;
+  recordMessageId: (messageId: number) => void;
   quoteOnlyOnFirstChunk?: boolean;
 }): Promise<number | undefined> {
   let firstDeliveredMessageId: number | undefined;
@@ -261,6 +263,11 @@ async function deliverTextReply(params: {
     replyMarkup: params.replyMarkup,
     replyQuoteText: params.replyQuoteText,
     quoteOnlyOnFirstChunk: params.quoteOnlyOnFirstChunk,
+    invalidate: () => params.progress.promptContext?.invalidate(),
+    onRejected: (error) =>
+      params.runtime.error?.(
+        danger(`telegram reply chunk rejected; continuing: ${formatErrorMessage(error)}`),
+      ),
     markDelivered,
     sendChunk: async ({ chunk, isFirstChunk, replyToMessageId, replyMarkup, replyQuoteText }) => {
       const includeQuoteMetadata = params.quoteOnlyOnFirstChunk !== true || isFirstChunk;
@@ -287,9 +294,14 @@ async function deliverTextReply(params: {
           replyMarkup,
         },
       );
+      return messageId;
+    },
+    recordChunk: async (result, chunk) => {
+      const messageId = result;
       if (firstDeliveredMessageId == null) {
         firstDeliveredMessageId = messageId;
       }
+      params.recordMessageId(messageId);
       await params.progress.promptContext?.accept({ messageId, text: chunk.plainText });
     },
   });
@@ -344,6 +356,7 @@ async function deliverMediaReply(params: {
   replyToId?: number;
   replyToMode: ReplyToMode;
   progress: DeliveryProgress;
+  recordMessageId: (messageId: number) => void;
   textMode?: "html";
 }): Promise<{ firstDeliveredMessageId?: number; visibleFallbackText?: string }> {
   let firstDeliveredMessageId: number | undefined;
@@ -380,6 +393,7 @@ async function deliverMediaReply(params: {
         }),
     });
     firstDeliveredMessageId ??= message.message_id;
+    params.recordMessageId(message.message_id);
     await recordPromptContextMessage(message, options.text);
     markDelivered(params.progress);
   };
@@ -481,6 +495,7 @@ async function deliverMediaReply(params: {
           replyMarkup: params.replyMarkup,
           replyToMode: options.replyToMode ?? params.replyToMode,
           progress: createVoiceFallbackProgress(),
+          recordMessageId: params.recordMessageId,
           quoteOnlyOnFirstChunk: true,
         });
 
@@ -562,6 +577,7 @@ async function deliverMediaReply(params: {
         replyToId: params.replyToId,
         replyToMode: params.replyToMode,
         progress: params.progress,
+        recordMessageId: params.recordMessageId,
       });
       pendingFollowUpText = undefined;
     }
@@ -722,6 +738,8 @@ export async function deliverReplies(params: {
     deliveredCount: 0,
     ...(params.promptContextSequence ? { promptContext: params.promptContextSequence } : {}),
   };
+  const recordMessageId = (messageId: number) =>
+    recordSentMessage(params.chatId, messageId, params.cfg);
   const mediaLoader = params.mediaLoader ?? loadWebMedia;
   const transcriptMirror = params.transcriptMirror;
   const deliveredContents: Array<{ text: string; mediaUrls: string[] }> = [];
@@ -890,6 +908,7 @@ export async function deliverReplies(params: {
           replyToId,
           replyToMode: params.replyToMode,
           progress,
+          recordMessageId,
         });
       } else if (mediaList.length > 0) {
         const mediaDelivery = await deliverMediaReply({
@@ -916,6 +935,7 @@ export async function deliverReplies(params: {
           replyToId,
           replyToMode: params.replyToMode,
           progress,
+          recordMessageId,
           ...(params.textMode ? { textMode: params.textMode } : {}),
         });
         firstDeliveredMessageId = mediaDelivery.firstDeliveredMessageId;

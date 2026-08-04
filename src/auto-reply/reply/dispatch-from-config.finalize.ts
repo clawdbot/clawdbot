@@ -36,6 +36,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     isRoutedReplyDelivered,
     markInboundDedupeReplayUnsafe,
     noVisibleReplyFallbackDirected,
+    pendingContinuation,
     replyResult,
     replyRoute,
     routeReplyToOriginating,
@@ -273,6 +274,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     state.sourceReplyDeliveryMode !== "message_tool_only" &&
     !emptyFinalAllowedAsSilent &&
     !deliberateSilentTerminalReply &&
+    !pendingContinuation &&
     !getObservedReplyDelivery() &&
     !replyAcceptedByActiveRun &&
     !turnLedger.hasVisibleDelivery() &&
@@ -288,8 +290,8 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   }
   let counts = dispatcher.getQueuedCounts();
   let noVisibleReplyFallbackDelivered = false;
-  // The agent-result classifier owns terminal silence; carry that fact here
-  // because reply payloads are filtered projections and cannot safely rederive it.
+  // The agent-result classifier owns deliberate silence and pending continuation;
+  // carry those facts here because filtered reply payloads cannot safely rederive either.
   // An aborted or timed-out settle leaves delivery state unknown; admission
   // then keeps its legacy trust and the turn ends without a fallback.
   if (queuedSettleResult === "settled" && noVisibleReplyFallbackAllowed()) {
@@ -375,7 +377,8 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       !getObservedReplyDelivery() &&
       !replyAcceptedByActiveRun &&
       !emptyFinalAllowedAsSilent &&
-      !deliberateSilentTerminalReply
+      !deliberateSilentTerminalReply &&
+      !pendingContinuation
         ? { noVisibleReplyFallbackEligible: true }
         : {}),
       ...(noVisibleReplyFallbackDelivered ? { noVisibleReplyFallbackDelivered: true } : {}),
