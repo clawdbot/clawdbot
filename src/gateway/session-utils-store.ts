@@ -123,7 +123,14 @@ function readAcpMetaForDeletedAgentCheck(params: {
 
 function loadSessionEntryWithMode(
   sessionKey: string,
-  opts: { agentId?: string; clone?: boolean; includeStoreChildEntries?: boolean } | undefined,
+  opts:
+    | {
+        agentId?: string;
+        clone?: boolean;
+        includeStoreChildEntries?: boolean;
+        strictRead?: boolean;
+      }
+    | undefined,
   readOnly: boolean,
 ) {
   const cfg = getRuntimeConfig();
@@ -138,6 +145,7 @@ function loadSessionEntryWithMode(
           exactRead: true,
           readOnly: true,
           ...(opts?.includeStoreChildEntries ? { includeStoreChildEntries: true } : {}),
+          ...(opts?.strictRead ? { strictRead: true } : {}),
         }
       : {}),
   });
@@ -166,7 +174,12 @@ export function loadSessionEntry(sessionKey: string, opts?: { agentId?: string; 
 
 export function loadSessionEntryReadOnly(
   sessionKey: string,
-  opts?: { agentId?: string; clone?: boolean; includeStoreChildEntries?: boolean },
+  opts?: {
+    agentId?: string;
+    clone?: boolean;
+    includeStoreChildEntries?: boolean;
+    strictRead?: boolean;
+  },
 ) {
   return loadSessionEntryWithMode(sessionKey, opts, true);
 }

@@ -151,11 +151,13 @@ function loadGatewaySessionLookupStore(
     cache?: GatewaySessionStoreCache;
     exactKeys?: readonly string[];
     projection?: SessionEntryListScope["projection"];
+    /** Propagate store-read failures instead of degrading to an empty store. */
+    strict?: boolean;
   } = {},
 ): Record<string, SessionEntry> {
   const cache = options.cache;
   const cacheKey = cache
-    ? `${storePath}\u0000${agentId ?? ""}\u0000${clone === false ? "0" : "1"}\u0000${options.readOnly ? "1" : "0"}\u0000${options.projection ?? "full"}\u0000${options.exactKeys?.join("\u0001") ?? ""}`
+    ? `${storePath}\u0000${agentId ?? ""}\u0000${clone === false ? "0" : "1"}\u0000${options.readOnly ? "1" : "0"}\u0000${options.projection ?? "full"}\u0000${options.exactKeys?.join("\u0001") ?? ""}\u0000${options.strict ? "1" : "0"}`
     : "";
   if (cache) {
     const cached = cache.get(cacheKey);
@@ -176,6 +178,8 @@ function loadGatewaySessionLookupStoreUncached(
     exactKeys?: readonly string[];
     readOnly?: boolean;
     projection?: SessionEntryListScope["projection"];
+    /** Propagate store-read failures instead of degrading to an empty store. */
+    strict?: boolean;
   } = {},
 ): Record<string, SessionEntry> {
   try {
@@ -205,7 +209,12 @@ function loadGatewaySessionLookupStoreUncached(
         storePath,
       }).map(({ sessionKey, entry }) => [sessionKey, entry]),
     );
-  } catch {
+  } catch (error) {
+    if (options.strict) {
+      // Fail-closed callers (destructive cleanup) must observe an unreadable
+      // store instead of receiving an empty store that looks like "no sessions".
+      throw error;
+    }
     return {};
   }
 }
@@ -221,6 +230,7 @@ function resolveGatewaySessionStoreLookup(params: {
   readOnly?: boolean;
   exactRead?: boolean;
   deferCanonicalValidation?: boolean;
+  strictRead?: boolean;
   storeCache?: GatewaySessionStoreCache;
   targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
 }): {
@@ -253,6 +263,7 @@ function resolveGatewaySessionStoreLookup(params: {
       readOnly: params.readOnly || !configured,
       ...(params.exactRead ? { exactKeys: scanTargets } : {}),
       ...(params.projection ? { projection: params.projection } : {}),
+      ...(params.strictRead ? { strict: true } : {}),
       ...(params.storeCache ? { cache: params.storeCache } : {}),
     });
   const firstCandidate = candidates[0] ?? fallback;
@@ -316,6 +327,7 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
   projection?: SessionEntryListScope["projection"];
   readOnly?: boolean;
   exactRead?: boolean;
+  strictRead?: boolean;
   storeCache?: GatewaySessionStoreCache;
   targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
 }): GatewaySessionStoreTargetWithStore | null {
@@ -367,6 +379,7 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
       readOnly: true,
       ...(params.exactRead ? { exactKeys: lookupSeeds } : {}),
       ...(params.projection ? { projection: params.projection } : {}),
+      ...(params.strictRead ? { strict: true } : {}),
       ...(params.storeCache ? { cache: params.storeCache } : {}),
     });
     const match = findCanonicalStoreMatch(store, lookupSeeds, recordCanonicalError);
@@ -417,6 +430,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
   readOnly?: boolean;
   exactRead?: boolean;
   deferCanonicalValidation?: boolean;
+  strictRead?: boolean;
   includeStoreChildEntries?: boolean;
   store?: Record<string, SessionEntry>;
   storeCache?: GatewaySessionStoreCache;
@@ -430,6 +444,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
     ...(params.deferCanonicalValidation ? { deferCanonicalValidation: true } : {}),
     readOnly: params.readOnly,
     exactRead: params.exactRead,
+    ...(params.strictRead ? { strictRead: true } : {}),
     ...(params.projection ? { projection: params.projection } : {}),
     ...(params.storeCache ? { storeCache: params.storeCache } : {}),
     ...(params.targetDiscoveryCache ? { targetDiscoveryCache: params.targetDiscoveryCache } : {}),
@@ -457,6 +472,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
       readOnly: true,
       ...(params.exactRead ? { exactKeys: [canonicalKey] } : {}),
       ...(params.projection ? { projection: params.projection } : {}),
+      ...(params.strictRead ? { strict: true } : {}),
       ...(params.storeCache ? { cache: params.storeCache } : {}),
     });
     return includeDirectChildEntries(
@@ -479,6 +495,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
     readOnly: params.readOnly,
     exactRead: params.exactRead,
     deferCanonicalValidation: params.deferCanonicalValidation,
+    strictRead: params.strictRead,
     initialStore: params.store,
     ...(params.projection ? { projection: params.projection } : {}),
     ...(params.storeCache ? { storeCache: params.storeCache } : {}),

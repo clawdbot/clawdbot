@@ -15,6 +15,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { SessionEntry } from "../config/sessions.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { assertLocalMediaAllowed, resolveLocalMediaRoots } from "../media/local-media-access.js";
@@ -112,6 +113,15 @@ type CleanupManagedOutgoingMediaRecordsResult = {
 };
 
 type SessionManagedOutgoingAttachmentIndex = Set<string>;
+
+/**
+ * Transcript attachment lookup outcome. Cleanup must not delete media when the
+ * owning session store is unreadable: an unavailable store is unknown retention
+ * state, not proof that a record is unreferenced.
+ */
+type SessionManagedOutgoingAttachmentIndexResult =
+  | { kind: "index"; index: SessionManagedOutgoingAttachmentIndex | null }
+  | { kind: "unavailable" };
 
 type SessionManagedOutgoingAttachmentIndexCacheEntry = {
   transcriptPath: string;
@@ -612,7 +622,7 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
   let retainedCount = 0;
   const transcriptAttachmentIndexCache = new Map<
     string,
-    SessionManagedOutgoingAttachmentIndex | null
+    SessionManagedOutgoingAttachmentIndexResult
   >();
   for (const entry of entries) {
     const { record } = entry;
@@ -639,10 +649,18 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
     ) {
       shouldDelete = true;
     } else if (!entry.cleanupPending && record.messageId) {
-      shouldDelete = !(await recordMatchesTranscriptMessage(
+      const referenced = await recordMatchesTranscriptMessage(
         record,
         transcriptAttachmentIndexCache,
-      ));
+        { strictStore: true },
+      );
+      if (referenced === "unavailable") {
+        // Unreadable session store is unknown retention state. Retain the record
+        // and its backing file; a later sweep on a healthy store decides.
+        retainedCount += 1;
+        continue;
+      }
+      shouldDelete = !referenced;
     } else if (!entry.cleanupPending) {
       const createdAtMs = Date.parse(record.createdAt);
       shouldDelete = Number.isFinite(createdAtMs) && nowMs - createdAtMs >= transientMaxAgeMs;
@@ -851,21 +869,42 @@ function sameManagedOutgoingAttachmentTranscriptStat(
 
 async function getSessionManagedOutgoingAttachmentIndex(
   sessionKey: string,
-  cache?: Map<string, SessionManagedOutgoingAttachmentIndex | null>,
+  cache?: Map<string, SessionManagedOutgoingAttachmentIndexResult>,
   agentId?: string,
-) {
+  opts?: { strictStore?: boolean },
+): Promise<SessionManagedOutgoingAttachmentIndexResult> {
   const cacheKey = buildSessionManagedOutgoingAttachmentIndexCacheKey(sessionKey, agentId);
   if (cache?.has(cacheKey)) {
-    return cache.get(cacheKey) ?? null;
+    return cache.get(cacheKey) ?? { kind: "index", index: null };
   }
-  const { storePath, entry } = loadSessionEntryReadOnly(
-    sessionKey,
-    sessionKey === "global" && agentId ? { agentId } : undefined,
-  );
+  let storePath: string;
+  let entry: SessionEntry | undefined;
+  try {
+    const readParams =
+      sessionKey === "global" && agentId
+        ? { agentId, ...(opts?.strictStore ? { strictRead: true } : {}) }
+        : opts?.strictStore
+          ? { strictRead: true }
+          : undefined;
+    const loaded = readParams
+      ? loadSessionEntryReadOnly(sessionKey, readParams)
+      : loadSessionEntryReadOnly(sessionKey);
+    storePath = loaded.storePath;
+    entry = loaded.entry;
+  } catch {
+    // Fail closed: an unreadable session store is unknown retention state, not
+    // proof the record is unreferenced. Cleanup retains the artifact and the
+    // next healthy sweep can decide. HTTP/artifact readers never pass
+    // strictStore, so they keep their existing unavailable-to-404 behavior.
+    const unavailable: SessionManagedOutgoingAttachmentIndexResult = { kind: "unavailable" };
+    cache?.set(cacheKey, unavailable);
+    return unavailable;
+  }
   const sessionId = entry?.sessionId;
   if (!sessionId) {
-    cache?.set(cacheKey, null);
-    return null;
+    const empty: SessionManagedOutgoingAttachmentIndexResult = { kind: "index", index: null };
+    cache?.set(cacheKey, empty);
+    return empty;
   }
 
   let transcriptStat: SessionManagedOutgoingAttachmentTranscriptStat | null = null;
@@ -891,8 +930,12 @@ async function getSessionManagedOutgoingAttachmentIndex(
         transcriptStat,
       );
       if (cachedIndex) {
-        cache?.set(cacheKey, cachedIndex);
-        return cachedIndex;
+        const result: SessionManagedOutgoingAttachmentIndexResult = {
+          kind: "index",
+          index: cachedIndex,
+        };
+        cache?.set(cacheKey, result);
+        return result;
       }
     } catch {
       sessionManagedOutgoingAttachmentIndexCache.delete(cacheKey);
@@ -957,24 +1000,32 @@ async function getSessionManagedOutgoingAttachmentIndex(
   if (transcriptStat) {
     setCachedSessionManagedOutgoingAttachmentIndex(sessionKey, agentId, transcriptStat, index);
   }
-  cache?.set(cacheKey, index);
-  return index;
+  const result: SessionManagedOutgoingAttachmentIndexResult = { kind: "index", index };
+  cache?.set(cacheKey, result);
+  return result;
 }
 
 async function recordMatchesTranscriptMessage(
   record: ManagedImageRecord,
-  cache?: Map<string, SessionManagedOutgoingAttachmentIndex | null>,
-) {
+  cache?: Map<string, SessionManagedOutgoingAttachmentIndexResult>,
+  opts?: { strictStore?: boolean },
+): Promise<boolean | "unavailable"> {
   if (!record.messageId) {
     return false;
   }
-  const index = await getSessionManagedOutgoingAttachmentIndex(
+  const result = await getSessionManagedOutgoingAttachmentIndex(
     record.sessionKey,
     cache,
     record.agentId,
+    opts,
   );
+  if (result.kind === "unavailable") {
+    return "unavailable";
+  }
   return (
-    index?.has(buildManagedOutgoingAttachmentRefKey(record.messageId, record.attachmentId)) ?? false
+    result.index?.has(
+      buildManagedOutgoingAttachmentRefKey(record.messageId, record.attachmentId),
+    ) ?? false
   );
 }
 

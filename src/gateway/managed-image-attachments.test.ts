@@ -2106,7 +2106,10 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       agentId: "main",
     });
 
-    expect(loadSessionEntryMock).toHaveBeenCalledWith("global", { agentId: "main" });
+    expect(loadSessionEntryMock).toHaveBeenCalledWith("global", {
+      agentId: "main",
+      strictRead: true,
+    });
     expect(result.deletedRecordCount).toBe(1);
     expect(result.retainedCount).toBe(1);
     await expect(fs.access(retainedFixture.originalPath)).resolves.toBeUndefined();
@@ -2161,6 +2164,22 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     expect(result.deletedRecordCount).toBe(1);
     expect(result.retainedCount).toBe(0);
     await expectPathMissing(fixture.originalPath);
+  });
+
+  it("retains records when the owning session store is unreadable (fail closed)", async () => {
+    const fixture = await createFixture(stateDir);
+    // A real unreadable store surfaces as a thrown read failure in strict mode
+    // (the store-lookup layer propagates it instead of degrading to an empty
+    // store). Cleanup must retain the record and its backing file.
+    loadSessionEntryMock.mockImplementation(() => {
+      throw new Error("session store is unreadable");
+    });
+
+    const result = await cleanupManagedOutgoingImageRecords({ stateDir });
+
+    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    expect(readSessionMessagesMock).not.toHaveBeenCalled();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
