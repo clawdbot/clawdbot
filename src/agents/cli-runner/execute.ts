@@ -4,7 +4,10 @@ import { parse as parseSemver } from "semver";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
-import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
+import {
+  sanitizeHostExecEnv,
+  sanitizeHostExecEnvOverrides,
+} from "../../infra/host-env-security.js";
 import { compareValidSemver } from "../../infra/semver.js";
 import type { CliBackendThinkingLevel } from "../../plugins/cli-backend.types.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
@@ -415,7 +418,7 @@ export async function executePreparedCliRun(
             ...resolveNodeClaudeAuthEnv(context),
           }
         : undefined;
-      let env = sanitizeHostExecEnv({ baseEnv: process.env, blockPathOverrides: true });
+      const env = sanitizeHostExecEnv({ baseEnv: process.env, blockPathOverrides: true });
       const preservedEnv = parseCliBackendPreserveEnv(process.env[CLI_BACKEND_PRESERVE_ENV]);
       for (const key of backend.clearEnv ?? []) {
         if (!preservedEnv.has(key) || selectedClaudeClearEnv?.has(key)) {
@@ -423,11 +426,13 @@ export async function executePreparedCliRun(
         }
       }
       if (Object.keys(backendEnv).length > 0) {
-        env = sanitizeHostExecEnv({
-          baseEnv: env,
-          overrides: backendEnv,
-          blockPathOverrides: true,
-        });
+        Object.assign(
+          env,
+          sanitizeHostExecEnvOverrides({
+            overrides: backendEnv,
+            blockPathOverrides: true,
+          }),
+        );
       }
       Object.assign(env, mcpCaptureAttempt.env);
       // Never mark Claude CLI as host-managed. That marker routes runs into
