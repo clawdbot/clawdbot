@@ -3,7 +3,6 @@ import {
   getInternalDiagnosticEventSequence,
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
-  type DiagnosticSessionActiveWorkKind,
 } from "../infra/diagnostic-events.js";
 import {
   applyArgumentChurnObservation,
@@ -13,20 +12,32 @@ import {
   type DiagnosticArgumentChurnObservationParams,
   mergeArgumentChurnActivity,
   recordDiagnosticActivityProgress,
-  resolveArgumentChurnProgress,
 } from "./diagnostic-argument-churn-activity.js";
 import { createDiagnosticEmbeddedRunIndex } from "./diagnostic-embedded-run-index.js";
+import {
+  clearRepeatedRequestActivity,
+  type DiagnosticRepeatedRequestActivity,
+  mergeRepeatedRequestActivity,
+  recordRepeatedRequestObservation,
+} from "./diagnostic-repeated-request-activity.js";
+import {
+  buildDiagnosticSessionActivitySnapshot,
+  type DiagnosticSessionActivitySnapshot,
+} from "./diagnostic-run-activity-snapshot.js";
 
-type SessionActivity = DiagnosticArgumentChurnActivity & {
-  sessionId?: string;
-  sessionKey?: string;
-  activeEmbeddedRuns: Map<string, ActiveEmbeddedRun>;
-  activeTools: Map<string, ActiveTool>;
-  activeModelCalls: Map<string, ActiveModelCall>;
-  recoveredOwnerStartEventCutoffs: Map<string, number>;
-  lastProgressAt: number;
-  lastProgressReason?: string;
-};
+export type { DiagnosticSessionActivitySnapshot } from "./diagnostic-run-activity-snapshot.js";
+
+type SessionActivity = DiagnosticArgumentChurnActivity &
+  DiagnosticRepeatedRequestActivity & {
+    sessionId?: string;
+    sessionKey?: string;
+    activeEmbeddedRuns: Map<string, ActiveEmbeddedRun>;
+    activeTools: Map<string, ActiveTool>;
+    activeModelCalls: Map<string, ActiveModelCall>;
+    recoveredOwnerStartEventCutoffs: Map<string, number>;
+    lastProgressAt: number;
+    lastProgressReason?: string;
+  };
 
 type ActiveEmbeddedRun = {
   runId: string;
@@ -60,12 +71,12 @@ type DiagnosticToolStartedActivityEvent = Pick<
 
 type DiagnosticModelStartedActivityEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "model.call.started" }>,
-  "runId" | "sessionId" | "sessionKey" | "provider" | "model"
+  "runId" | "sessionId" | "sessionKey" | "provider" | "model" | "observationUnit"
 > & { seq?: number };
 
 type DiagnosticRunProgressActivityEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "run.progress" }>,
-  "runId" | "sessionId" | "sessionKey" | "reason"
+  "runId" | "sessionId" | "sessionKey" | "reason" | "progressKind"
 >;
 
 // Quiet-but-alive tools are normal agent behavior; the CLI byte watchdog kills
@@ -76,16 +87,6 @@ export const BLOCKED_TOOL_CALL_ABORT_FLOOR_MS = 15 * 60_000;
 
 // Default quiet-run reclaim window for steer/takeover. Evidence clocks stay local.
 export const RUN_STALE_TAKEOVER_MS = 10 * 60_000;
-
-export type DiagnosticSessionActivitySnapshot = {
-  activeWorkKind?: DiagnosticSessionActiveWorkKind;
-  hasActiveEmbeddedRun?: boolean;
-  activeToolName?: string;
-  activeToolCallId?: string;
-  activeToolAgeMs?: number;
-  lastProgressAgeMs?: number;
-  lastProgressReason?: string;
-};
 
 // Quiet-but-alive tool phases get the blocked-tool floor so a human message
 // cannot reclaim a healthy long tool that stuck recovery would not touch yet.
@@ -175,6 +176,7 @@ function mergeSessionActivity(target: SessionActivity, source: SessionActivity):
     target.lastProgressSequence = source.lastProgressSequence;
   }
   mergeArgumentChurnActivity(target, source);
+  mergeRepeatedRequestActivity(target, source);
   replaceSessionActivityReferences(source, target);
 }
 
@@ -232,6 +234,15 @@ function touchSessionActivity(activity: SessionActivity, reason: string, now = D
   recordDiagnosticActivityProgress(activity);
 }
 
+function touchSemanticSessionActivity(
+  activity: SessionActivity,
+  reason: string,
+  params: { runId?: string; now?: number } = {},
+): void {
+  clearRepeatedRequestActivity(activity, { runId: params.runId });
+  touchSessionActivity(activity, reason, params.now);
+}
+
 function toolKey(event: {
   runId?: string;
   sessionId?: string;
@@ -267,7 +278,10 @@ function recordToolStarted(event: DiagnosticToolStartedActivityEvent): void {
     startedAt: now,
     lastProgressAt: now,
   });
-  touchSessionActivity(activity, `tool:${event.toolName}:started`, now);
+  touchSemanticSessionActivity(activity, `tool:${event.toolName}:started`, {
+    runId: event.runId,
+    now,
+  });
 }
 
 function recordToolEnded(
@@ -281,7 +295,7 @@ function recordToolEnded(
     return;
   }
   activity.activeTools.delete(toolKey(event));
-  touchSessionActivity(activity, `tool:${event.toolName}:ended`);
+  touchSemanticSessionActivity(activity, `tool:${event.toolName}:ended`, { runId: event.runId });
 }
 
 function recordModelStarted(event: DiagnosticModelStartedActivityEvent): void {
@@ -292,6 +306,7 @@ function recordModelStarted(event: DiagnosticModelStartedActivityEvent): void {
   if (shouldIgnoreRecoveredOwnerStartEvent(activity, event)) {
     return;
   }
+  recordRepeatedRequestObservation(activity, activity.activeEmbeddedRuns.values(), event);
   activity.activeModelCalls.set(modelCallKey(event), {
     runId: event.runId,
     sessionId: event.sessionId,
@@ -330,7 +345,11 @@ export function markDiagnosticRunProgress(params: DiagnosticRunProgressActivityE
   if (!activity) {
     return;
   }
-  touchSessionActivity(activity, params.reason);
+  if (params.progressKind === "liveness") {
+    touchSessionActivity(activity, params.reason);
+    return;
+  }
+  touchSemanticSessionActivity(activity, params.reason, { runId: params.runId });
 }
 
 function recordRunCompleted(
@@ -346,7 +365,7 @@ function recordRunCompleted(
   embeddedRunIndex.clear(activity);
   clearArgumentChurnActivity(activity, { runId: event.runId });
   clearArgumentChurnPolicyWaits(activity, { runId: event.runId });
-  touchSessionActivity(activity, "run:completed");
+  touchSemanticSessionActivity(activity, "run:completed", { runId: event.runId });
 }
 
 export function markDiagnosticEmbeddedRunStarted(params: {
@@ -362,6 +381,7 @@ export function markDiagnosticEmbeddedRunStarted(params: {
   }
   // Registration is the ownership boundary. A replacement or re-armed run
   // must never inherit the prior owner's semantic-stall clock.
+  clearRepeatedRequestActivity(activity);
   if (activity.argumentChurnStartedAt !== undefined) {
     clearArgumentChurnActivity(activity, { runId: ownerRunId });
   }
@@ -398,8 +418,9 @@ export function markDiagnosticEmbeddedRunEnded(params: {
   if (activity.activeEmbeddedRuns.size === 0) {
     clearArgumentChurnActivity(activity);
     clearArgumentChurnPolicyWaits(activity);
+    clearRepeatedRequestActivity(activity);
   }
-  touchSessionActivity(activity, "embedded_run:ended");
+  touchSemanticSessionActivity(activity, "embedded_run:ended");
 }
 
 function resolveEmbeddedRunWorkKey(params: { sessionId: string; workKey?: string }): string {
@@ -619,8 +640,9 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
     const clearedPolicyWait = clearArgumentChurnPolicyWaits(activity, {
       runId: params.activeSessionId,
     });
+    const clearedRepeatedRequests = clearRepeatedRequestActivity(activity);
     return {
-      cleared: clearedChurn || clearedPolicyWait,
+      cleared: clearedChurn || clearedPolicyWait || clearedRepeatedRequests,
       blockedByActiveEmbeddedRun: false,
     };
   }
@@ -650,7 +672,8 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
   activity.activeModelCalls.clear();
   clearArgumentChurnActivity(activity, { runId: params.activeSessionId });
   clearArgumentChurnPolicyWaits(activity, { runId: params.activeSessionId });
-  touchSessionActivity(activity, "embedded_run:ended");
+  clearRepeatedRequestActivity(activity);
+  touchSemanticSessionActivity(activity, "embedded_run:ended");
   return { cleared: true, blockedByActiveEmbeddedRun: false };
 }
 
@@ -663,35 +686,7 @@ export function getDiagnosticSessionActivitySnapshot(
     return {};
   }
 
-  let activeWorkKind: DiagnosticSessionActiveWorkKind | undefined;
-  if (activity.activeTools.size > 0) {
-    activeWorkKind = "tool_call";
-  } else if (activity.activeModelCalls.size > 0) {
-    activeWorkKind = "model_call";
-  } else if (activity.activeEmbeddedRuns.size > 0) {
-    activeWorkKind = "embedded_run";
-  }
-
-  let activeTool: ActiveTool | undefined;
-  for (const tool of activity.activeTools.values()) {
-    if (!activeTool || tool.startedAt < activeTool.startedAt) {
-      activeTool = tool;
-    }
-  }
-  const churnProgress = resolveArgumentChurnProgress(
-    activity,
-    activity.activeEmbeddedRuns.values(),
-    now,
-  );
-  return {
-    activeWorkKind,
-    ...(activity.activeEmbeddedRuns.size > 0 ? { hasActiveEmbeddedRun: true } : {}),
-    activeToolName: activeTool?.toolName,
-    activeToolCallId: activeTool?.toolCallId,
-    activeToolAgeMs: activeTool ? Math.max(0, now - activeTool.startedAt) : undefined,
-    lastProgressAgeMs: Math.max(0, now - churnProgress.lastProgressAt),
-    lastProgressReason: churnProgress.lastProgressReason,
-  };
+  return buildDiagnosticSessionActivitySnapshot(activity, now);
 }
 
 export function getDiagnosticEmbeddedRunActivitySequence(): number {
@@ -718,6 +713,17 @@ function markDiagnosticModelStartedForTest(params: DiagnosticModelStartedActivit
 
 export function resetDiagnosticRunActivityForTest(): void {
   stopDiagnosticRunActivityTracking();
+  installDiagnosticRunActivityTestApi();
+}
+
+function installDiagnosticRunActivityTestApi(): void {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.diagnosticRunActivityTestApi")
+  ] = {
+    markDiagnosticModelStartedForTest,
+    markDiagnosticRunProgressForTest,
+    markDiagnosticToolStartedForTest,
+  };
 }
 
 let unregisterDiagnosticRunActivityListener: (() => void) | undefined;
@@ -769,11 +775,5 @@ export function stopDiagnosticRunActivityTracking(): void {
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.diagnosticRunActivityTestApi")
-  ] = {
-    markDiagnosticModelStartedForTest,
-    markDiagnosticRunProgressForTest,
-    markDiagnosticToolStartedForTest,
-  };
+  installDiagnosticRunActivityTestApi();
 }

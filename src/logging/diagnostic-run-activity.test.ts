@@ -15,15 +15,17 @@ import {
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
   markDiagnosticRunProgress,
+  resetDiagnosticRunActivityForTest,
   resolveRunStaleThresholdMs,
   RUN_STALE_TAKEOVER_MS,
   startDiagnosticRunActivityTracking,
   stopDiagnosticRunActivityTracking,
 } from "./diagnostic-run-activity.js";
+import { markDiagnosticModelStartedForTest } from "./diagnostic-run-activity.test-support.js";
 
 afterEach(() => {
   vi.useRealTimers();
-  stopDiagnosticRunActivityTracking();
+  resetDiagnosticRunActivityForTest();
   resetDiagnosticEventsForTest();
 });
 
@@ -366,6 +368,203 @@ describe("argument-churn liveness", () => {
       lastProgressAgeMs: 6 * 60_000,
       lastProgressReason: "tool_loop:argument_churn",
     });
+  });
+});
+
+describe("repeated request liveness", () => {
+  it("ages repeated requests across mechanical progress until semantic progress arrives", () => {
+    vi.useFakeTimers();
+    const startedAt = Date.parse("2026-08-04T00:00:00Z");
+    vi.setSystemTime(startedAt);
+    const ref = { sessionId: "retry-session", sessionKey: "agent:main:retry" };
+    const runId = "retry-run";
+
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId });
+    markDiagnosticModelStartedForTest({
+      ...ref,
+      runId,
+      provider: "mock",
+      model: "retrying-model",
+      observationUnit: "request",
+    });
+    expect(
+      getDiagnosticSessionActivitySnapshot(ref).repeatedRequestNoProgressAgeMs,
+    ).toBeUndefined();
+
+    for (let attempt = 2; attempt <= 11; attempt += 1) {
+      vi.setSystemTime(startedAt + (attempt - 1) * 30_000);
+      markDiagnosticModelStartedForTest({
+        ...ref,
+        runId,
+        provider: "mock",
+        model: "retrying-model",
+        observationUnit: "request",
+      });
+      markDiagnosticRunProgress({
+        ...ref,
+        runId,
+        reason: "model_call:stream_progress",
+        progressKind: "liveness",
+      });
+    }
+
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      activeWorkKind: "model_call",
+      lastProgressAgeMs: 0,
+      repeatedRequestNoProgressAgeMs: 5 * 60_000,
+    });
+
+    markDiagnosticRunProgress({
+      ...ref,
+      runId,
+      reason: "assistant:progress",
+      progressKind: "semantic",
+    });
+    expect(
+      getDiagnosticSessionActivitySnapshot(ref).repeatedRequestNoProgressAgeMs,
+    ).toBeUndefined();
+  });
+
+  it("ignores turn observations and clears request evidence across owner lifecycle", () => {
+    vi.useFakeTimers();
+    const startedAt = Date.parse("2026-08-04T01:00:00Z");
+    vi.setSystemTime(startedAt);
+    const ref = { sessionId: "owner-session", sessionKey: "agent:main:owner" };
+
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId: "first-owner" });
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      markDiagnosticModelStartedForTest({
+        ...ref,
+        runId: "first-owner",
+        provider: "cli",
+        model: "turn-model",
+        observationUnit: "turn",
+      });
+    }
+    expect(
+      getDiagnosticSessionActivitySnapshot(ref).repeatedRequestNoProgressAgeMs,
+    ).toBeUndefined();
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      markDiagnosticModelStartedForTest({
+        ...ref,
+        runId: "first-owner",
+        provider: "mock",
+        model: "request-model",
+        observationUnit: "request",
+      });
+    }
+    vi.setSystemTime(startedAt + 6 * 60_000);
+    expect(getDiagnosticSessionActivitySnapshot(ref).repeatedRequestNoProgressAgeMs).toBe(
+      6 * 60_000,
+    );
+
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId: "replacement-owner" });
+    markDiagnosticModelStartedForTest({
+      ...ref,
+      runId: "first-owner",
+      provider: "mock",
+      model: "delayed-request",
+      observationUnit: "request",
+    });
+    expect(
+      getDiagnosticSessionActivitySnapshot(ref).repeatedRequestNoProgressAgeMs,
+    ).toBeUndefined();
+
+    markDiagnosticModelStartedForTest({
+      ...ref,
+      runId: "replacement-owner",
+      provider: "mock",
+      model: "request-model",
+      observationUnit: "request",
+    });
+    markDiagnosticModelStartedForTest({
+      ...ref,
+      runId: "replacement-owner",
+      provider: "mock",
+      model: "request-model",
+      observationUnit: "request",
+    });
+    vi.setSystemTime(startedAt + 7 * 60_000);
+    markDiagnosticRunProgress({
+      ...ref,
+      runId: "first-owner",
+      reason: "delayed-old-owner-output",
+      progressKind: "semantic",
+    });
+    expect(getDiagnosticSessionActivitySnapshot(ref).repeatedRequestNoProgressAgeMs).toBe(60_000);
+    expect(
+      clearDiagnosticEmbeddedRunActivityForSession({
+        ...ref,
+        activeSessionId: "replacement-owner",
+      }).cleared,
+    ).toBe(true);
+    expect(
+      getDiagnosticSessionActivitySnapshot(ref).repeatedRequestNoProgressAgeMs,
+    ).toBeUndefined();
+  });
+
+  it("orders semantic progress across merged session aliases", () => {
+    vi.useFakeTimers();
+    const startedAt = Date.parse("2026-08-04T02:00:00Z");
+    vi.setSystemTime(startedAt);
+    const sessionId = "merge-session";
+    const sessionKey = "agent:main:merge";
+    const runId = "merge-run";
+
+    markDiagnosticEmbeddedRunStarted({ sessionId, runId });
+    markDiagnosticModelStartedForTest({
+      sessionId,
+      runId,
+      provider: "mock",
+      model: "request-model",
+      observationUnit: "request",
+    });
+    markDiagnosticRunProgress({
+      sessionKey,
+      reason: "reply:delivered",
+      progressKind: "semantic",
+    });
+
+    vi.setSystemTime(startedAt + 6 * 60_000);
+    expect(
+      getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })
+        .repeatedRequestNoProgressAgeMs,
+    ).toBeUndefined();
+  });
+
+  it("clears repeated request evidence on run completion and listener restart", async () => {
+    const ref = { sessionId: "completed-session", sessionKey: "agent:main:completed" };
+    const runId = "completed-run";
+
+    startDiagnosticRunActivityTracking();
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId });
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      markDiagnosticModelStartedForTest({
+        ...ref,
+        runId,
+        provider: "mock",
+        model: "request-model",
+        observationUnit: "request",
+      });
+    }
+    expect(getDiagnosticSessionActivitySnapshot(ref).repeatedRequestNoProgressAgeMs).toBe(0);
+
+    emitTrustedDiagnosticEvent({
+      type: "run.completed",
+      ...ref,
+      runId,
+      durationMs: 1,
+      outcome: "completed",
+    });
+    await waitForDiagnosticEventsDrained();
+    expect(
+      getDiagnosticSessionActivitySnapshot(ref).repeatedRequestNoProgressAgeMs,
+    ).toBeUndefined();
+
+    stopDiagnosticRunActivityTracking();
+    startDiagnosticRunActivityTracking();
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toEqual({});
   });
 });
 

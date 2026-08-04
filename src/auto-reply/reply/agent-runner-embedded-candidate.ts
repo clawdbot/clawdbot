@@ -356,6 +356,7 @@ export async function runEmbeddedFallbackCandidate(params: {
           messageToolDeliveryState: params.messageToolDeliveryState,
           provider: params.provider,
           model: params.model,
+          runId: params.runId,
           effectiveSessionId: params.effectiveRun.sessionId,
           notifyUserAboutCompaction: params.notifyUserAboutCompaction,
           onCompactionCompleted: () => {

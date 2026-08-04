@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDraftStreamLoop } from "../../channels/draft-stream-loop.js";
+import {
+  getDiagnosticSessionActivitySnapshot,
+  markDiagnosticEmbeddedRunStarted,
+  resetDiagnosticRunActivityForTest,
+} from "../../logging/diagnostic-run-activity.js";
+import { markDiagnosticModelStartedForTest } from "../../logging/diagnostic-run-activity.test-support.js";
 import type { PartialReplyPayload } from "../get-reply-options.types.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -39,6 +45,7 @@ const state = setupAgentRunnerExecutionTestState();
 
 beforeEach(() => {
   sanitizerState.sanitizeUserFacingText.mockClear();
+  resetDiagnosticRunActivityForTest();
 });
 
 async function executeTestTurn(
@@ -50,6 +57,40 @@ async function executeTestTurn(
 }
 
 describe("executeAgentTurn: lifecycle progress", () => {
+  it("records assistant events as semantic run progress", async () => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      const sessionId = params.sessionId ?? "session";
+      const sessionKey = params.sessionKey ?? "main";
+      markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId: params.runId });
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        markDiagnosticModelStartedForTest({
+          sessionId,
+          sessionKey,
+          runId: params.runId,
+          provider: "mock",
+          model: "request-model",
+          observationUnit: "request",
+        });
+      }
+      expect(
+        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })
+          .repeatedRequestNoProgressAgeMs,
+      ).toBe(0);
+
+      await params.onAgentEvent?.({
+        stream: "assistant",
+        data: { phase: "commentary", text: "Working" },
+      });
+      expect(
+        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })
+          .repeatedRequestNoProgressAgeMs,
+      ).toBeUndefined();
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    await executeTestTurn();
+  });
+
   it("forwards item lifecycle events to reply options", async () => {
     const onItemEvent = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
