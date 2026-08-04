@@ -11,6 +11,7 @@ import {
   renderSettingsToggle,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { formatTimeMs } from "../../lib/format.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import type { LogEntry, LogLevel } from "./log-lines.ts";
 
@@ -34,7 +35,7 @@ type LogsProps = {
   onScroll: (event: Event) => void;
 };
 
-function formatTime(value?: string | null) {
+function formatLogTime(value?: string | null) {
   if (!value) {
     return "";
   }
@@ -42,7 +43,7 @@ function formatTime(value?: string | null) {
   if (Number.isNaN(date.getTime())) {
     return value;
   }
-  return date.toLocaleTimeString();
+  return formatTimeMs(date.getTime(), undefined, value);
 }
 
 function matchesFilter(entry: LogEntry, needle: string) {
@@ -148,7 +149,7 @@ export function renderLogs(props: LogsProps) {
           : filtered.map(
               (entry) => html`
                 <div class="log-row">
-                  <div class="log-time mono">${formatTime(entry.time)}</div>
+                  <div class="log-time mono">${formatLogTime(entry.time)}</div>
                   <div class="log-level ${entry.level ?? ""}">${entry.level ?? ""}</div>
                   <div class="log-subsystem mono">${entry.subsystem ?? ""}</div>
                   <div class="log-message mono">${entry.message ?? entry.raw}</div>

@@ -4,10 +4,7 @@ import {
   embeddedAgentLog,
   setActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  interruptCodexTurnBestEffort,
-  retireCodexAppServerClientAfterTimedOutTurn,
-} from "./attempt-client-cleanup.js";
+import { retireCodexAppServerClientAfterTimedOutTurn } from "./attempt-client-cleanup.js";
 import { isTerminalTurnStatus } from "./attempt-notifications.js";
 import { createCodexSteeringQueue, type CodexSteeringQueueOptions } from "./attempt-steering.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
@@ -55,7 +52,8 @@ export async function activateCodexAttemptTurn(
     effectiveCwd,
   } = connection;
   const { dynamicToolParams, computerContextEpoch, toolBridge } = attemptTools;
-  const { state, userInputBridgeRef, steeringQueueRef, turnWatches } = turnRuntime;
+  const { state, userInputBridgeRef, steeringQueueRef, turnWatches, completeTurn, interruptTurn } =
+    turnRuntime;
   const { emitExecutionPhaseOnce, emitLifecycleStart, maybeAnnounceFastModeAutoOff } = lifecycle;
   const { enqueueNotification } = notifications;
   const activeTurnId = turn.turn.id;
@@ -246,14 +244,10 @@ export async function activateCodexAttemptTurn(
           reason: String(runAbortController.signal.reason ?? "timeout"),
           suspectPhysicalClient: state.turnWatchTimeoutKind === "terminal",
         });
-      })().finally(() => state.resolveCompletion?.());
+      })().finally(completeTurn);
       return;
     }
-    interruptCodexTurnBestEffort(resourceState.client, {
-      threadId: resourceState.thread.threadId,
-      turnId: activeTurnId,
-    });
-    state.resolveCompletion?.();
+    void interruptTurn(activeTurnId).finally(completeTurn);
   };
   runAbortController.signal.addEventListener("abort", abortListener, { once: true });
   if (runAbortController.signal.aborted) {

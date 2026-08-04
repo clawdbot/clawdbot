@@ -133,8 +133,22 @@ export async function removeStartupEntries(
     try {
       await fs.unlink(startupEntryPath);
       stdout.write(`${formatLine("Removed Windows login item", startupEntryPath)}\n`);
-    } catch {}
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") {
+        throw createStartupEntryRemovalError(error);
+      }
+    }
   }
+}
+
+function createStartupEntryRemovalError(error: unknown): Error {
+  const code = (error as NodeJS.ErrnoException).code;
+  // Native filesystem errors include the private Startup-folder path in their messages.
+  return new Error(
+    `Windows login item removal failed${code ? ` (${code})` : ""}. Check permissions and retry.`,
+    { cause: code ? { code } : undefined },
+  );
 }
 
 export async function hasScheduledTaskRunningEvidence(env: GatewayServiceEnv): Promise<boolean> {

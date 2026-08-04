@@ -30,6 +30,35 @@ vi.mock("../../config/io.js", async () => {
   };
 });
 
+// This suite owns config patch/merge behavior, while plugin validation is covered by
+// config.plugin-validation.test.ts and validation.channel-metadata.test.ts.
+vi.mock("../../config/validation.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/validation.js")>(
+    "../../config/validation.js",
+  );
+  return {
+    ...actual,
+    validateConfigObjectRawWithPlugins: vi.fn((config: OpenClawConfig) => ({
+      ok: true,
+      config,
+      warnings: [],
+    })),
+    validateConfigObjectWithPlugins: vi.fn((config: OpenClawConfig) => ({
+      ok: true,
+      config,
+      warnings: [],
+    })),
+  };
+});
+
+// Secret materialization has dedicated runtime suites; keep these handler tests on
+// their config-write boundary instead of loading every provider and plugin artifact.
+vi.mock("../../secrets/runtime.js", () => ({
+  prepareSecretsRuntimeSnapshot: vi.fn(async ({ config }: { config: OpenClawConfig }) => ({
+    config,
+  })),
+}));
+
 vi.mock("./config-write-flow.js", async () => {
   const actual =
     await vi.importActual<typeof import("./config-write-flow.js")>("./config-write-flow.js");

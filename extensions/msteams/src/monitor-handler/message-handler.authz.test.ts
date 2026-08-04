@@ -1031,6 +1031,8 @@ describe("msteams monitor handler authz", () => {
       }),
     );
     const ctx = recordFromMockCall(firstSettledDispatch().ctxPayload);
+    expect(ctx.To).toBe("user:user-aad");
+    expect(ctx.OriginatingTo).toBe("conversation:19:dm@thread.v2");
     expect(ctx.ReplyToId).toBe("message-1");
     expect(ctx.ReplyToBody).toBe("complete quoted message");
     expect(ctx.ReplyToSender).toBe("Bot");

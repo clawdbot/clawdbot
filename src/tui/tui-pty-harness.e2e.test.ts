@@ -132,9 +132,75 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
+    "keeps session modes scoped while trace changes and delivery stays process-owned",
+    async () => {
+      const modeFixture = await startTuiFixture({
+        env: {
+          OPENCLAW_TUI_PTY_DELIVER: "1",
+          OPENCLAW_TUI_PTY_MODEL: "fixture-model",
+        },
+      });
+      try {
+        await modeFixture.run.waitForOutput("deliver:on", STARTUP_TIMEOUT_MS);
+        await modeFixture.run.write("/session agent:main:mode-source\r", { delay: false });
+        await modeFixture.waitForLogEntry(
+          (entry) =>
+            entry.method === "loadHistory" &&
+            objectFieldEquals(entry, "sessionKey", "agent:main:mode-source"),
+        );
+        await modeFixture.run.waitForOutput(
+          "trace:raw | reasoning:stream | deliver:on",
+          STARTUP_TIMEOUT_MS,
+        );
+
+        const targetOutputOffset = modeFixture.run.visibleOutput().length;
+        await modeFixture.run.write("/session agent:main:mode-target\r", { delay: false });
+        await modeFixture.waitForLogEntry(
+          (entry) =>
+            entry.method === "loadHistory" &&
+            objectFieldEquals(entry, "sessionKey", "agent:main:mode-target"),
+        );
+        await modeFixture.run.waitForOutput("session mode-target", STARTUP_TIMEOUT_MS);
+        const targetOutput = modeFixture.run.visibleOutput().slice(targetOutputOffset);
+        expect(targetOutput).toContain("deliver:on");
+        expect(targetOutput).not.toContain("fast:auto");
+        expect(targetOutput).not.toContain("verbose full");
+        expect(targetOutput).not.toContain("trace:raw");
+        expect(targetOutput).not.toContain("reasoning:stream");
+
+        await modeFixture.run.write("/trace on\r", { delay: false });
+        await modeFixture.waitForLogEntry(
+          (entry) =>
+            entry.method === "patchSession" && objectFieldEquals(entry, "traceLevel", "on"),
+        );
+        await modeFixture.run.waitForOutput("trace | deliver:on", STARTUP_TIMEOUT_MS);
+
+        await modeFixture.run.write("delivery proof\r", { delay: false });
+        const sent = await modeFixture.waitForLogEntry(
+          (entry) =>
+            entry.method === "sendChat" && objectFieldEquals(entry, "message", "delivery proof"),
+        );
+        expect(sent.payload).toMatchObject({ deliver: true });
+        console.log(
+          `[behavior-evidence] tui-session-footer ${JSON.stringify({
+            terminal: "real PTY",
+            sourceModesVisible: true,
+            targetModesCleared: true,
+            traceTransitionVisible: true,
+            fixedDeliveryPropagated: true,
+          })}`,
+        );
+      } finally {
+        await modeFixture.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
+
+  it(
     "keeps the launch thinking override active across session-level changes",
     async () => {
-      const footerNeedle = "fixture-provider/fixture-model high | tokens";
+      const footerNeedle = "fixture-provider/fixture-model high | deliver:off | tokens";
       await thinkingOverrideFixture.run.waitForOutput(footerNeedle, STARTUP_TIMEOUT_MS);
       await thinkingOverrideFixture.run.waitForOutput(
         "PTY_RESPONSE: thinking override proof",
@@ -167,9 +233,11 @@ describe.sequential("TUI PTY harness", () => {
         .visibleOutput()
         .slice(sessionChangeOutputOffset);
       expect(outputAfterSessionChange).toContain(footerNeedle);
-      expect(outputAfterSessionChange).not.toContain("fixture-provider/fixture-model low | tokens");
       expect(outputAfterSessionChange).not.toContain(
-        "fixture-provider/fixture-model medium | tokens",
+        "fixture-provider/fixture-model low | deliver:off | tokens",
+      );
+      expect(outputAfterSessionChange).not.toContain(
+        "fixture-provider/fixture-model medium | deliver:off | tokens",
       );
     },
     STARTUP_TEST_TIMEOUT_MS,
@@ -276,6 +344,49 @@ describe.sequential("TUI PTY harness", () => {
     },
     STARTUP_TEST_TIMEOUT_MS,
   );
+  // prettier-ignore
+  const editorInputCases = [
+    ["recalls submitted input history through literal terminal navigation", [["w", "history recall proof\r"], ["s", "history recall proof"], ["o", "PTY_RESPONSE: history recall proof"], ["w", "\u001b[A\u0005 edited\r"], ["s", "history recall proof edited"]]],
+    ["applies literal terminal shortcuts before submitting editor input",
+      [["w", "discard this input"], ["w", "\u0003"], ["o", "cleared input; press ctrl+c again to exit"], ["w", "shortcut kept input\r"], ["s", "shortcut kept input"], ["n", "discard this input"]]],
+    ["handles bracketed paste and rejects the pasted submit while busy",
+      [["w", "\u001b[200~bracketed paste proof\u001b[201~\r"], ["s", "bracketed paste proof"], ["o", "PTY_RESPONSE: bracketed paste proof"], ["w", "slow prompt\r"], ["s", "slow prompt"],
+        ["w", "\u001b[200~busy pasted prompt\u001b[201~\r"], ["o", "agent is busy"], ["o", "PTY_RESPONSE: slow prompt"], ["n", "busy pasted prompt"]]],
+    ["submits fragmented IME text and Kitty AltGr printable bytes", [["w", "日本"], ["w", "語 "], ["w", "\u001b[64::113;7u\u001b[8364::101;7u\r"], ["s", "日本語 @€"], ["o", "PTY_RESPONSE: 日本語 @€"]]],
+  ] as const;
+  it.each(editorInputCases)(
+    "%s",
+    async (_name, steps) => {
+      const tui = await startTuiFixture();
+      try {
+        await tui.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+        for (const [action, value] of steps) {
+          // prettier-ignore
+          const sent = (entry: FixtureLogEntry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", value);
+          // prettier-ignore
+          await { w: () => tui.run.write(value, { delay: false }), o: () => tui.run.waitForOutput(value), s: () => tui.waitForLogEntry(sent), n: async () => expect((await readFixtureLog(tui.logPath)).some(sent)).toBe(false) }[action]();
+        }
+      } finally {
+        await tui.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
+  it(
+    "preserves consecutive backspaces received in the same terminal input chunk",
+    async () => {
+      await fixture.run.write("abc\x7f\x7f\r", { delay: false });
+
+      const sent = await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "sendChat" &&
+          (objectFieldEquals(entry, "message", "a") || objectFieldEquals(entry, "message", "ab")),
+      );
+      expect(sent.payload).toMatchObject({ message: "a" });
+      await fixture.run.waitForOutput("PTY_RESPONSE: a");
+    },
+    TEST_TIMEOUT_MS,
+  );
 
   it(
     "deletes forward with Ctrl+D without exiting a nonempty terminal editor",
@@ -304,6 +415,40 @@ describe.sequential("TUI PTY harness", () => {
         expect((await emptyFixture.run.waitForExit()).exitCode).toBe(0);
       } finally {
         await emptyFixture.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "cancels a buffered submit before Ctrl+D shutdown",
+    async () => {
+      const bufferedFixture = await startTuiFixture({
+        env: { OPENCLAW_TUI_PTY_SUBMIT_BURST_WINDOW_MS: "500" },
+      });
+      try {
+        const message = "buffered shutdown proof";
+        await bufferedFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+        await bufferedFixture.run.write(`${message}\r`, { delay: false });
+        await bufferedFixture.waitForLogEntry(
+          (entry) =>
+            entry.method === "submitBurstCaptured" && objectFieldEquals(entry, "value", message),
+        );
+
+        await bufferedFixture.run.write("\u0004", { delay: false });
+        expect((await bufferedFixture.run.waitForExit()).exitCode).toBe(0);
+
+        const entries = await readFixtureLog(bufferedFixture.logPath);
+        expect(entries).toEqual(
+          expect.arrayContaining([expect.objectContaining({ method: "stop" })]),
+        );
+        expect(
+          entries.some(
+            (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
+          ),
+        ).toBe(false);
+      } finally {
+        await bufferedFixture.cleanup();
       }
     },
     STARTUP_TEST_TIMEOUT_MS,
@@ -526,6 +671,21 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
+    "renders an attachment-only assistant reply without exposing its source",
+    async () => {
+      await fixture.run.write("attachment-only assistant proof\r");
+      await fixture.waitForLogEntry((entry) => entry.method === "attachmentOnlyComplete");
+      await fixture.run.waitForOutput("Attached image");
+
+      const rendered = fixture.run.visibleOutput();
+      expect(rendered).not.toContain("SECRET_PTY_IMAGE_BYTES");
+      expect(rendered).not.toContain("SECRET_PTY_ARTIFACT");
+      expect(rendered).not.toContain("/Users/operator/private");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     "preserves xAI account limit errors in terminal output",
     async () => {
       await fixture.run.write("xai limit proof\r");
@@ -739,6 +899,11 @@ describe.sequential("TUI PTY harness", () => {
       await fixture.run.waitForOutput("/help");
       await fixture.run.waitForOutput("/verbose <on|off|full>");
       await fixture.run.waitForOutput("/reasoning <on|off|stream>");
+      await fixture.run.waitForOutput("/goal");
+      await fixture.run.waitForOutput("/goal start <objective>");
+      await fixture.run.waitForOutput("/btw <side question>");
+      await fixture.run.waitForOutput("/queue");
+      await fixture.run.waitForOutput("/stop");
       await fixture.run.waitForOutput("/exit");
     },
     TEST_TIMEOUT_MS,

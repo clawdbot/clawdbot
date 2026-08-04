@@ -1,3 +1,4 @@
+import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { normalizeWebInboundMessage } from "../../inbound/message-aliases.js";
 import type { WebInboundMessageInput } from "../../inbound/types.js";
 import { getRuntimeConfig } from "../config.runtime.js";
@@ -28,12 +29,15 @@ function resolveWhatsAppScopedDebounceMs(params: {
 export function resolveWhatsAppConversationDebounceMs(params: {
   cfg: ReturnType<typeof getRuntimeConfig>;
   msg: WebInboundMessageInput;
-  defaultMs: number;
 }): number {
+  const defaultMs = resolveInboundDebounceMs({
+    cfg: params.cfg,
+    channel: "whatsapp",
+  });
   const normalized = normalizeWebInboundMessage(params.msg);
   const admission = normalized.admission;
   if (!admission || admission.ingress.decision !== "allow") {
-    return params.defaultMs;
+    return defaultMs;
   }
   const channel = params.cfg.channels?.whatsapp;
   const scoped =
@@ -46,5 +50,5 @@ export function resolveWhatsAppConversationDebounceMs(params: {
           entries: channel?.direct,
           id: admission.conversation.id,
         });
-  return scoped ?? params.defaultMs;
+  return scoped ?? defaultMs;
 }

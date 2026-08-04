@@ -13,6 +13,7 @@ import {
   buildGatewayProbeConnectionDetails,
   callGateway,
   formatGatewayAuthErrorJson,
+  formatGatewayClientRequestErrorJson,
   formatGatewayTransportErrorJson,
   isGatewayCredentialsRequiredError,
 } from "../gateway/call.js";
@@ -26,7 +27,10 @@ import type { AgentHealthSummary, HealthSummary } from "../gateway/health/types.
 import { info } from "../globals.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { formatDurationHuman } from "../infra/format-time/format-duration.js";
+import {
+  formatDurationCompact,
+  formatDurationHuman,
+} from "../infra/format-time/format-duration.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
@@ -139,8 +143,12 @@ function formatEventLoopHealthLine(summary: HealthSummary): string | null {
     return null;
   }
   const state = eventLoop.degraded ? "degraded" : "ok";
+  const degradedFor =
+    eventLoop.degraded && eventLoop.degradedSinceMs != null
+      ? ` for ${formatDurationCompact(eventLoop.degradedSinceMs) ?? "0s"}`
+      : "";
   const reasons = eventLoop.reasons.length > 0 ? ` reasons=${eventLoop.reasons.join(",")}` : "";
-  return `Gateway event loop: ${state}${reasons} max=${Math.round(
+  return `Gateway event loop: ${state}${degradedFor}${reasons} max=${Math.round(
     eventLoop.delayMaxMs,
   )}ms p99=${Math.round(eventLoop.delayP99Ms)}ms util=${eventLoop.utilization} cpu=${
     eventLoop.cpuCoreRatio
@@ -242,7 +250,10 @@ export async function healthCommand(
       return;
     }
     if (opts.json) {
-      const payload = formatGatewayAuthErrorJson(error) ?? formatGatewayTransportErrorJson(error);
+      const payload =
+        formatGatewayAuthErrorJson(error) ??
+        formatGatewayClientRequestErrorJson(error) ??
+        formatGatewayTransportErrorJson(error);
       if (payload) {
         writeRuntimeJson(runtime, payload);
         runtime.exit(1);

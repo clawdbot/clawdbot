@@ -483,6 +483,7 @@ const testConfig: OpenClawConfig = {
 
 vi.mock("../runtime.js", () => ({
   getMattermostRuntime: () => mockState.runtimeCore,
+  getOptionalMattermostRuntime: () => mockState.runtimeCore,
 }));
 
 const testRuntime = (): RuntimeEnv =>
@@ -565,6 +566,84 @@ describe("mattermost inbound user posts", () => {
     mockState.dispatchInboundMessage.mockImplementation(async () => {
       mockState.abortController?.abort();
     });
+  });
+
+  it("publishes recovering while API authentication retries, including 401", async () => {
+    const abortController = new AbortController();
+    const statusSink = vi.fn();
+    mockState.fetchMattermostMe.mockRejectedValue(new Error("HTTP 401 Unauthorized"));
+
+    const monitor = monitorMattermostProvider({
+      config: testConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      statusSink,
+    });
+
+    await vi.waitFor(() => {
+      expect(statusSink).toHaveBeenCalledWith({
+        connected: false,
+        lifecycle: "recovering",
+        lastError: "Error: HTTP 401 Unauthorized",
+      });
+    });
+    abortController.abort();
+    await monitor;
+  });
+
+  it("rejects startup before opening the websocket when interactions cannot bind", async () => {
+    const statusSink = vi.fn();
+    const webSocketFactory = vi.fn(() => new FakeWebSocket());
+    mockState.registerPluginHttpRoute.mockImplementationOnce(() => {
+      throw new Error("Mattermost interactions route conflict");
+    });
+
+    await expect(
+      monitorMattermostProvider({
+        config: testConfig,
+        runtime: testRuntime(),
+        abortSignal: new AbortController().signal,
+        statusSink,
+        webSocketFactory,
+      }),
+    ).rejects.toThrow("Mattermost interactions route conflict");
+
+    expect(mockState.registerPluginHttpRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        pluginId: "mattermost",
+        source: "mattermost-interactions",
+        replaceExisting: true,
+        throwOnFailure: true,
+      }),
+    );
+    expect(mockState.registerMattermostMonitorSlashCommands).not.toHaveBeenCalled();
+    expect(webSocketFactory).not.toHaveBeenCalled();
+    expect(statusSink).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
+  });
+
+  it("unregisters interactions when slash command startup rejects", async () => {
+    const unregisterInteractions = vi.fn();
+    const statusSink = vi.fn();
+    const webSocketFactory = vi.fn(() => new FakeWebSocket());
+    mockState.registerPluginHttpRoute.mockReturnValueOnce(unregisterInteractions);
+    mockState.registerMattermostMonitorSlashCommands.mockRejectedValueOnce(
+      new Error("Mattermost slash setup failed"),
+    );
+
+    await expect(
+      monitorMattermostProvider({
+        config: testConfig,
+        runtime: testRuntime(),
+        abortSignal: new AbortController().signal,
+        statusSink,
+        webSocketFactory,
+      }),
+    ).rejects.toThrow("Mattermost slash setup failed");
+
+    expect(unregisterInteractions).toHaveBeenCalledOnce();
+    expect(webSocketFactory).not.toHaveBeenCalled();
+    expect(statusSink).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
   });
 
   it("does not enqueue regular user posts as system events", async () => {

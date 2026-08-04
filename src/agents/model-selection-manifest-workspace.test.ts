@@ -131,6 +131,29 @@ describe("configured model manifest workspace scope", () => {
     expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 
+  it("builds configured catalog facts once when resolving allowed models", async () => {
+    getCurrentPluginMetadataSnapshotMock.mockReturnValue({ plugins: [] });
+    const { buildAllowedModelSetWithFallbacks } = await import("./model-selection-shared.js");
+    const cfg = {
+      models: {
+        providers: {
+          custom: { models: [{ id: "fast-model" }] },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      buildAllowedModelSetWithFallbacks({
+        cfg,
+        catalog: [],
+        defaultProvider: "custom",
+        fallbackModels: [],
+      }).allowedCatalog,
+    ).toMatchObject([{ provider: "custom", id: "fast-model" }]);
+    expect(getCurrentPluginMetadataSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
+  });
+
   it("does not load manifest metadata for empty configured model aliases", async () => {
     // Alias indexing is a hot config path. Empty inputs should avoid manifest
     // scans entirely.

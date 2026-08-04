@@ -43,6 +43,7 @@ describe("defineChannelPluginEntry", () => {
   it("runs tool registrations without channel runtime wiring during tool discovery", () => {
     const setRuntime = vi.fn<(runtime: PluginRuntime) => void>();
     const registerCliMetadata = vi.fn<(api: OpenClawPluginApi) => void>();
+    const registerCapabilities = vi.fn<(api: OpenClawPluginApi) => void>();
     const registerFull = vi.fn<(api: OpenClawPluginApi) => void>((api) => {
       api.registerTool(
         {
@@ -63,6 +64,7 @@ describe("defineChannelPluginEntry", () => {
       setRuntime,
       registerCliMetadata,
       registerFull,
+      registerCapabilities,
     });
 
     const api = createApi("tool-discovery");
@@ -72,6 +74,7 @@ describe("defineChannelPluginEntry", () => {
     expect(setRuntime).not.toHaveBeenCalled();
     expect(registerCliMetadata).not.toHaveBeenCalled();
     expect(registerFull).toHaveBeenCalledWith(api);
+    expect(registerCapabilities).toHaveBeenCalledExactlyOnceWith(api);
     expect(api.registerTool).toHaveBeenCalledTimes(1);
   });
 
@@ -79,6 +82,7 @@ describe("defineChannelPluginEntry", () => {
     const setRuntime = vi.fn<(runtime: PluginRuntime) => void>();
     const registerCliMetadata = vi.fn<(api: OpenClawPluginApi) => void>();
     const registerFull = vi.fn<(api: OpenClawPluginApi) => void>();
+    const registerCapabilities = vi.fn<(api: OpenClawPluginApi) => void>();
     const entry = defineChannelPluginEntry({
       id: "runtime-discovery",
       name: "Runtime Discovery",
@@ -87,6 +91,7 @@ describe("defineChannelPluginEntry", () => {
       setRuntime,
       registerCliMetadata,
       registerFull,
+      registerCapabilities,
     });
 
     const api = createApi("discovery");
@@ -96,12 +101,14 @@ describe("defineChannelPluginEntry", () => {
     expect(registerCliMetadata).toHaveBeenCalledTimes(1);
     expect(setRuntime).toHaveBeenCalledWith(api.runtime);
     expect(registerFull).not.toHaveBeenCalled();
+    expect(registerCapabilities).toHaveBeenCalledExactlyOnceWith(api);
   });
 
   it("keeps setup-runtime and full registration wired to runtime helpers", () => {
     const setRuntime = vi.fn<(runtime: PluginRuntime) => void>();
     const registerCliMetadata = vi.fn<(api: OpenClawPluginApi) => void>();
     const registerFull = vi.fn<(api: OpenClawPluginApi) => void>();
+    const registerCapabilities = vi.fn<(api: OpenClawPluginApi) => void>();
     const entry = defineChannelPluginEntry({
       id: "runtime-activation",
       name: "Runtime Activation",
@@ -110,13 +117,24 @@ describe("defineChannelPluginEntry", () => {
       setRuntime,
       registerCliMetadata,
       registerFull,
+      registerCapabilities,
     });
+
+    const cliApi = createApi("cli-metadata");
+    entry.register(cliApi);
+    expect(registerCliMetadata).toHaveBeenCalledWith(cliApi);
+    expect(registerCapabilities).not.toHaveBeenCalled();
+    registerCliMetadata.mockClear();
+
+    entry.register(createApi("setup-only"));
+    expect(registerCapabilities).not.toHaveBeenCalled();
 
     const setupApi = createApi("setup-runtime");
     entry.register(setupApi);
     expect(setRuntime).toHaveBeenCalledWith(setupApi.runtime);
     expect(registerCliMetadata).not.toHaveBeenCalled();
     expect(registerFull).not.toHaveBeenCalled();
+    expect(registerCapabilities).not.toHaveBeenCalled();
 
     setRuntime.mockClear();
     const fullApi = createApi("full");
@@ -124,6 +142,7 @@ describe("defineChannelPluginEntry", () => {
     expect(setRuntime).toHaveBeenCalledWith(fullApi.runtime);
     expect(registerCliMetadata).toHaveBeenCalledWith(fullApi);
     expect(registerFull).toHaveBeenCalledWith(fullApi);
+    expect(registerCapabilities).toHaveBeenCalledExactlyOnceWith(fullApi);
   });
 });
 

@@ -25,6 +25,7 @@ import {
   textToSpeech,
 } from "../../tts/tts.js";
 import { getTtsCommandSecretTargetIds } from "../command-secret-targets.js";
+import { publishOutputFileAtomically } from "../media-output.js";
 import type { CapabilityEnvelope, CapabilityTransport } from "./metadata.js";
 import {
   pinRuntimeConfigSnapshot,
@@ -32,6 +33,15 @@ import {
   resolveLocalCapabilityRuntimeConfig,
   resolveSelectedProviderFromModelRef,
 } from "./shared.js";
+
+async function copyTtsOutputAtomically(sourcePath: string, targetPath: string): Promise<void> {
+  await publishOutputFileAtomically({
+    filePath: targetPath,
+    writeTemp: async (tempPath) => {
+      await fs.copyFile(sourcePath, tempPath);
+    },
+  });
+}
 
 export async function runTtsConvert(params: {
   text: string;
@@ -71,8 +81,7 @@ export async function runTtsConvert(params: {
         );
       }
       const target = path.resolve(params.output);
-      await fs.mkdir(path.dirname(target), { recursive: true });
-      await fs.copyFile(result.audioPath, target);
+      await copyTtsOutputAtomically(result.audioPath, target);
       outputPath = target;
     }
     return {
@@ -134,8 +143,7 @@ export async function runTtsConvert(params: {
   let outputPath = result.audioPath;
   if (params.output) {
     const target = path.resolve(params.output);
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.copyFile(result.audioPath, target);
+    await copyTtsOutputAtomically(result.audioPath, target);
     outputPath = target;
   }
   return {

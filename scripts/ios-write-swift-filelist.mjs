@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { existsSync, lstatSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-
-const repoRoot = path.resolve(import.meta.dirname, "..");
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
+const repoRoot = resolveRepoRoot(import.meta.url);
 const iosRoot = path.join(repoRoot, "apps", "ios");
 const outputPath = path.join(iosRoot, "SwiftSources.input.xcfilelist");
 

@@ -499,14 +499,18 @@ describe("createModelAuthAvailabilityResolver", () => {
       route: subscriptionRoute,
       mode: "oauth",
     },
-  ])("selects $label", ({ cfg, env, mode, profile, profileId, route }) => {
-    expect(evaluate({ cfg, env, store: authStore({ [profileId]: profile }) })).toMatchObject({
-      availability: true,
-      evidence: "environment",
-      selectedAuthMode: mode,
-      selectedRoute: route,
-    });
-  });
+    // An environment credential named nowhere in config is not authorized to
+    // stand in for a declared profile, including a declared profile that turned
+    // out to be unusable. Availability mirrors the runtime rule here so status
+    // does not advertise a credential the run would refuse to use.
+  ])(
+    "reports $label unavailable rather than substituting an ambient credential",
+    ({ cfg, env, profile, profileId }) => {
+      expect(evaluate({ cfg, env, store: authStore({ [profileId]: profile }) })).toMatchObject({
+        availability: false,
+      });
+    },
+  );
 
   it.each([
     { env: { OPENAI_API_KEY: "resolved-key" }, availability: true },

@@ -215,6 +215,7 @@ describe("resolveConfigIncludes", () => {
         value: { enabled: true, mode: "strict" },
         kind: "multiple",
         hasSiblingOverrides: true,
+        targetPaths: [configPath("second.json"), configPath("third.json")],
       },
     ]);
   });
@@ -239,21 +240,24 @@ describe("resolveConfigIncludes", () => {
       ),
     ).toEqual({ agents: { mode: "override" } });
     expect(
-      events.map(({ path: logicalPath, kind, targetPath }) => ({
+      events.map(({ path: logicalPath, kind, targetPath, targetPaths }) => ({
         path: logicalPath,
         kind,
         targetPath,
+        targetPaths,
       })),
     ).toEqual([
       {
         path: ["agents"],
         kind: "single",
         targetPath: configPath("nested.json"),
+        targetPaths: undefined,
       },
       {
         path: ["agents"],
         kind: "multiple",
         targetPath: undefined,
+        targetPaths: [configPath("delegating.json"), configPath("override.json")],
       },
     ]);
   });

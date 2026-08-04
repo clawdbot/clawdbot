@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../shared/deferred.js";
 import { buildBlockedToolResult } from "./agent-tools.before-tool-call.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import {
@@ -217,29 +218,24 @@ describe("Code Mode bridge settlement and cancellation", () => {
       const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
       let auditCompleted = false;
       let auditAborted = false;
+      const auditStarted = createDeferred();
+      const auditRelease = createDeferred();
       const audit = pluginToolWithExecute(
         "fake_early_audit",
         "Early detached audit",
         async (_toolCallId, _input, signal) => {
-          await new Promise<void>((resolve, reject) => {
-            const timer = setTimeout(resolve, 250);
-            signal?.addEventListener(
-              "abort",
-              () => {
-                clearTimeout(timer);
-                auditAborted = true;
-                reject(new Error("aborted"));
-              },
-              { once: true },
-            );
-          });
+          auditStarted.resolve();
+          signal?.addEventListener("abort", () => (auditAborted = true), { once: true });
+          await auditRelease.promise;
           auditCompleted = true;
           return jsonResult({ recorded: true });
         },
       );
-      const fast = pluginToolWithExecute("fake_awaited_fast", "Awaited fast helper", async () =>
-        jsonResult({ winner: "fast" }),
-      );
+      const fast = pluginToolWithExecute("fake_awaited_fast", "Awaited fast helper", async () => {
+        await auditStarted.promise;
+        setImmediate(() => auditRelease.resolve());
+        return jsonResult({ winner: "fast" });
+      });
       applyCodeModeCatalog({
         tools: [...codeModeTools, audit, fast],
         config,

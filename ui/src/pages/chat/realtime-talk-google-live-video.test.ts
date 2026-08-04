@@ -84,6 +84,30 @@ function createTransport(callbacks: RealtimeTalkCallbacks, videoDeviceId?: strin
   );
 }
 
+async function beginTransport(transport: GoogleLiveRealtimeTalkTransport): Promise<{
+  start: Promise<"ready" | "cancelled">;
+  ws: FakeGoogleLiveWebSocket;
+}> {
+  const start = transport.start();
+  await vi.advanceTimersByTimeAsync(0);
+  const ws = FakeGoogleLiveWebSocket.instance;
+  if (!ws) {
+    throw new Error("missing Google Live WebSocket");
+  }
+  return { start, ws };
+}
+
+async function startTransport(
+  transport: GoogleLiveRealtimeTalkTransport,
+): Promise<FakeGoogleLiveWebSocket> {
+  const { start, ws } = await beginTransport(transport);
+  ws.emitOpen();
+  ws.emitMessage({ setupComplete: {} });
+  await expect(start).resolves.toBe("ready");
+  transport.activate();
+  return ws;
+}
+
 describe("Google Live Video Talk", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -142,16 +166,15 @@ describe("Google Live Video Talk", () => {
     const onVideoStream = vi.fn();
     const transport = createTransport({ onStatus, onVideoStream });
 
-    await transport.start();
+    const { start, ws } = await beginTransport(transport);
     expect(getUserMedia).toHaveBeenCalledOnce();
     expect(onVideoStream).not.toHaveBeenCalled();
     await transport.setVideoEnabled(true);
-    const ws = FakeGoogleLiveWebSocket.instance;
-    if (!ws) {
-      throw new Error("missing Google Live WebSocket");
-    }
     ws.emitOpen();
     ws.emitMessage({ setupComplete: {} });
+    await expect(start).resolves.toBe("ready");
+    expect(ws.sent.some((message) => JSON.stringify(message).includes('"video"'))).toBe(false);
+    transport.activate();
     await vi.advanceTimersByTimeAsync(0);
 
     expect(ws.sent).toContainEqual({
@@ -273,7 +296,7 @@ describe("Google Live Video Talk", () => {
     const onVideoStream = vi.fn();
     const transport = createTransport({ onVideoStream });
 
-    await transport.start();
+    await startTransport(transport);
     await transport.setVideoEnabled(true);
     firstVideoTrack.dispatchEvent(new Event("ended"));
 
@@ -304,7 +327,7 @@ describe("Google Live Video Talk", () => {
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
     const transport = createTransport({});
 
-    await transport.start();
+    await startTransport(transport);
     const enabling = transport.setVideoEnabled(true);
     await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
     transport.stop();
@@ -314,6 +337,45 @@ describe("Google Live Video Talk", () => {
     expect(audioStop).toHaveBeenCalledOnce();
     expect(videoStop).toHaveBeenCalledOnce();
     expect(FakeGoogleLiveWebSocket.instance?.readyState).toBe(3);
+  });
+
+  it("finishes active camera cleanup when the stream callback throws", async () => {
+    const audioStop = vi.fn();
+    const videoStop = vi.fn();
+    const audioTrack = { stop: audioStop } as unknown as MediaStreamTrack;
+    const videoTrack = Object.assign(new EventTarget(), {
+      stop: videoStop,
+      readyState: "live",
+      enabled: true,
+      muted: false,
+    }) as unknown as MediaStreamTrack;
+    const audio = {
+      getAudioTracks: () => [audioTrack],
+      getTracks: () => [audioTrack],
+    } as unknown as MediaStream;
+    const camera = {
+      getVideoTracks: () => [videoTrack],
+      getTracks: () => [videoTrack],
+    } as unknown as MediaStream;
+    vi.stubGlobal("navigator", {
+      mediaDevices: {
+        getUserMedia: vi.fn().mockResolvedValueOnce(audio).mockResolvedValueOnce(camera),
+      },
+    });
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    const onVideoStream = vi.fn((stream: MediaStream | null) => {
+      if (!stream) {
+        throw new Error("stream callback failed");
+      }
+    });
+    const transport = createTransport({ onVideoStream });
+    const ws = await startTransport(transport);
+    await transport.setVideoEnabled(true);
+
+    expect(() => transport.stop()).toThrow("stream callback failed");
+    expect(audioStop).toHaveBeenCalledOnce();
+    expect(videoStop).toHaveBeenCalledOnce();
+    expect(ws.readyState).toBe(3);
   });
 
   it("switches an active camera and keeps video frame capture running", async () => {
@@ -355,7 +417,7 @@ describe("Google Live Video Talk", () => {
     const onVideoStream = vi.fn();
     const transport = createTransport({ onVideoStream }, "front");
 
-    await transport.start();
+    await startTransport(transport);
     await transport.setVideoEnabled(true);
     await transport.switchCamera("back");
 
@@ -369,5 +431,52 @@ describe("Google Live Video Talk", () => {
     expect(onVideoStream).toHaveBeenLastCalledWith(backCamera);
 
     transport.stop();
+  });
+
+  it("releases camera media when Google setup times out", async () => {
+    const audioStop = vi.fn();
+    const videoStop = vi.fn();
+    const audioTrack = { stop: audioStop } as unknown as MediaStreamTrack;
+    const videoTrack = Object.assign(new EventTarget(), {
+      stop: videoStop,
+      readyState: "live",
+      enabled: true,
+      muted: false,
+    }) as unknown as MediaStreamTrack;
+    const audio = {
+      getAudioTracks: () => [audioTrack],
+      getTracks: () => [audioTrack],
+    } as unknown as MediaStream;
+    const camera = {
+      getVideoTracks: () => [videoTrack],
+      getTracks: () => [videoTrack],
+    } as unknown as MediaStream;
+    const getUserMedia = vi.fn().mockResolvedValueOnce(audio).mockResolvedValueOnce(camera);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const originalCreateElement = document.createElement.bind(document);
+    vi.spyOn(document, "createElement").mockImplementation((tagName: string) => {
+      const element = originalCreateElement(tagName);
+      if (element instanceof HTMLVideoElement) {
+        vi.spyOn(element, "play").mockResolvedValue(undefined);
+      }
+      return element;
+    });
+    const onStatus = vi.fn();
+    const onVideoStream = vi.fn();
+    const transport = createTransport({ onStatus, onVideoStream });
+
+    const { start, ws } = await beginTransport(transport);
+    await transport.setVideoEnabled(true);
+    ws.emitOpen();
+    const rejected = expect(start).rejects.toThrow("Realtime connection timed out after 30000ms");
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    await rejected;
+    expect(onStatus).not.toHaveBeenCalled();
+    expect(audioStop).toHaveBeenCalledOnce();
+    expect(videoStop).toHaveBeenCalledOnce();
+    expect(getUserMedia).toHaveBeenNthCalledWith(2, { video: true });
+    expect(onVideoStream).not.toHaveBeenCalled();
+    expect(ws.readyState).toBe(3);
   });
 });

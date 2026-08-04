@@ -486,6 +486,7 @@ export function renderConfig(props: ConfigProps) {
                       disabled: configBusy || !props.formValue,
                       unsupportedPaths: analysis.unsupportedPaths,
                       onPatch: props.onFormPatch,
+                      onRemove: props.onFormRemove,
                       activeSection: props.activeSection,
                       activeSubsection: effectiveSubsection,
                       showAdvanced: effectiveShowAdvanced,

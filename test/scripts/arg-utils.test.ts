@@ -4,11 +4,22 @@ import {
   booleanFlag,
   intFlag,
   parseFlagArgs,
+  readFlagValue,
   stringFlag,
   stringListFlag,
 } from "../../scripts/lib/arg-utils.mjs";
 
 describe("scripts/lib/arg-utils parseFlagArgs", () => {
+  it("uses the last value when a flag is repeated", () => {
+    expect(readFlagValue(["-p", "first.json", "-p", "second.json"], "-p")).toBe("second.json");
+    expect(
+      readFlagValue(
+        ["--tsBuildInfoFile=first.tsbuildinfo", "--tsBuildInfoFile", "second.tsbuildinfo"],
+        "--tsBuildInfoFile",
+      ),
+    ).toBe("second.tsbuildinfo");
+  });
+
   it("ignores the conventional option separator by default", () => {
     const parsed = parseFlagArgs(["--", "--limit", "30"], { limit: 10 }, [
       intFlag("--limit", "limit", { min: 1 }),
@@ -36,6 +47,31 @@ describe("scripts/lib/arg-utils parseFlagArgs", () => {
     ]);
 
     expect(parsed.match).toEqual(["alpha", "beta"]);
+  });
+
+  it("supports split-only, empty, transformed, and last-value-wins string contracts", () => {
+    expect(() =>
+      parseFlagArgs(["--value=inline"], { value: "" }, [
+        stringFlag("--value", "value", { allowInline: false }),
+      ]),
+    ).toThrow("Unknown option: --value=inline");
+    expect(
+      parseFlagArgs(["--value", "", "--value", "SECOND"], { value: "" }, [
+        stringFlag("--value", "value", {
+          allowEmpty: true,
+          repeatable: true,
+          transform: (value) => value.toLowerCase(),
+        }),
+      ]).value,
+    ).toBe("second");
+  });
+
+  it("supports idempotent boolean flags", () => {
+    expect(
+      parseFlagArgs(["--verbose", "--verbose"], { verbose: false }, [
+        booleanFlag("--verbose", "verbose", true, { repeatable: true }),
+      ]).verbose,
+    ).toBe(true);
   });
 
   it("rejects duplicate single-value flags", () => {

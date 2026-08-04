@@ -29,12 +29,10 @@ export {
   normalizeWhitespace,
   prepareSimpleCompletionModelForAgent,
   validateJsonSchemaValue,
-  resolveNodeIdFromList,
   saveMediaBuffer,
   sanitizeHtml,
-  selectDefaultNodeFromList,
 } from "./sdk-setup-tools.js";
-export type { AnyAgentTool, NodeListNode } from "./sdk-setup-tools.js";
+export type { AnyAgentTool } from "./sdk-setup-tools.js";
 export { wrapExternalContent } from "./sdk-security-runtime.js";
 export {
   normalizeOptionalString,

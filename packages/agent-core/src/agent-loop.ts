@@ -692,9 +692,6 @@ async function executeToolCallsSequential(
           executionStarted: false,
           ...(preparation.errorKind ? { errorKind: preparation.errorKind } : {}),
           ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-          ...(preparation.resultContentSource
-            ? { resultContentSource: preparation.resultContentSource }
-            : {}),
         },
         toolCall.arguments,
         config,
@@ -724,6 +721,25 @@ async function executeToolCallsSequential(
     messages.push(toolResultMessage);
 
     if (signal?.aborted) {
+      // Complete the skipped tail through the normal lifecycle and outcome hook
+      // so the committed tool-call turn stays paired and subscriber-safe.
+      for (let i = finalizedCalls.length; i < toolCalls.length; i++) {
+        const skippedToolCall = toolCalls[i];
+        if (!skippedToolCall) {
+          continue;
+        }
+        const completed = await completeAbortedToolCall(
+          currentContext,
+          assistantMessage,
+          skippedToolCall,
+          resolvedToolCalls,
+          config,
+          signal,
+          emit,
+        );
+        finalizedCalls.push(completed.finalized);
+        messages.push(completed.message);
+      }
       break;
     }
   }
@@ -778,9 +794,6 @@ async function executeToolCallsParallel(
           executionStarted: false,
           ...(preparation.errorKind ? { errorKind: preparation.errorKind } : {}),
           ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-          ...(preparation.resultContentSource
-            ? { resultContentSource: preparation.resultContentSource }
-            : {}),
         },
         toolCall.arguments,
         config,
@@ -827,6 +840,28 @@ async function executeToolCallsParallel(
     messages.push(toolResultMessage);
   }
 
+  // Complete calls skipped before queueing through the same lifecycle contract
+  // as the sequential path.
+  if (signal?.aborted && orderedFinalizedCalls.length < toolCalls.length) {
+    for (let i = orderedFinalizedCalls.length; i < toolCalls.length; i++) {
+      const skippedToolCall = toolCalls[i];
+      if (!skippedToolCall) {
+        continue;
+      }
+      const completed = await completeAbortedToolCall(
+        currentContext,
+        assistantMessage,
+        skippedToolCall,
+        resolvedToolCalls,
+        config,
+        signal,
+        emit,
+      );
+      orderedFinalizedCalls.push(completed.finalized);
+      messages.push(completed.message);
+    }
+  }
+
   return {
     messages,
     terminate: shouldTerminateToolBatch(orderedFinalizedCalls),
@@ -845,13 +880,13 @@ type ImmediateToolCallOutcome = {
   result: AgentToolResult<unknown>;
   isError: boolean;
   errorKind?: "argument-validation";
-  resultContentSource?: ToolResultContentSource;
 };
 
 type ExecutedToolCallOutcome = {
   result: AgentToolResult<unknown>;
   isError: boolean;
   executionStarted: boolean;
+  callerCancelled?: true;
 };
 
 type FinalizedToolCallOutcome = {
@@ -977,7 +1012,6 @@ async function prepareToolCall(
       kind: "immediate",
       result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
       isError: true,
-      ...(tool.resultContentSource ? { resultContentSource: tool.resultContentSource } : {}),
     };
   }
 
@@ -990,7 +1024,6 @@ async function prepareToolCall(
       result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
       isError: true,
       errorKind: "argument-validation",
-      ...(tool.resultContentSource ? { resultContentSource: tool.resultContentSource } : {}),
     };
   }
 
@@ -1010,7 +1043,6 @@ async function prepareToolCall(
           kind: "immediate",
           result: createErrorToolResult("Operation aborted"),
           isError: true,
-          ...(tool.resultContentSource ? { resultContentSource: tool.resultContentSource } : {}),
         };
       }
       if (beforeResult?.block) {
@@ -1018,7 +1050,6 @@ async function prepareToolCall(
           kind: "immediate",
           result: createErrorToolResult(beforeResult.reason || "Tool execution was blocked"),
           isError: true,
-          ...(tool.resultContentSource ? { resultContentSource: tool.resultContentSource } : {}),
         };
       }
     }
@@ -1027,7 +1058,6 @@ async function prepareToolCall(
         kind: "immediate",
         result: createErrorToolResult("Operation aborted"),
         isError: true,
-        ...(tool.resultContentSource ? { resultContentSource: tool.resultContentSource } : {}),
       };
     }
     return {
@@ -1041,7 +1071,6 @@ async function prepareToolCall(
       kind: "immediate",
       result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
       isError: true,
-      ...(tool.resultContentSource ? { resultContentSource: tool.resultContentSource } : {}),
     };
   }
 }
@@ -1102,6 +1131,7 @@ async function executePreparedToolCall(
       result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
       isError: true,
       executionStarted: true,
+      ...(signal?.aborted && error === signal.reason ? { callerCancelled: true } : {}),
     };
   } finally {
     acceptingUpdates = false;
@@ -1156,7 +1186,9 @@ async function finalizeExecutedToolCall(
       isError,
       executionStarted: executed.executionStarted,
       ...(prepared.tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
-      ...(prepared.tool.resultContentSource
+      ...(executed.executionStarted &&
+      !executed.callerCancelled &&
+      prepared.tool.resultContentSource
         ? { resultContentSource: prepared.tool.resultContentSource }
         : {}),
     },
@@ -1219,6 +1251,47 @@ async function finalizeToolCallOutcome(
       isError: true,
     };
   }
+}
+
+async function completeAbortedToolCall(
+  currentContext: AgentContext,
+  assistantMessage: AssistantMessage,
+  toolCall: AgentToolCall,
+  resolvedToolCalls: Map<AgentToolCall, ResolvedToolCallOutcome>,
+  config: AgentLoopConfig,
+  signal: AbortSignal | undefined,
+  emit: AgentEventSink,
+): Promise<{ finalized: FinalizedToolCallOutcome; message: ToolResultMessage }> {
+  const hideFromChannelProgress = hidesToolCallFromChannelProgress(
+    currentContext,
+    toolCall,
+    resolvedToolCalls,
+  );
+  await emit({
+    type: "tool_execution_start",
+    toolCallId: toolCall.id,
+    toolName: toolCall.name,
+    args: toolCall.arguments,
+    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+  });
+  const finalized = await finalizeToolCallOutcome(
+    currentContext,
+    assistantMessage,
+    {
+      toolCall,
+      result: createErrorToolResult("Operation aborted"),
+      isError: true,
+      executionStarted: false,
+      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+    },
+    toolCall.arguments,
+    config,
+    signal,
+  );
+  await emitToolExecutionEnd(finalized, emit);
+  const message = createToolResultMessage(finalized);
+  await emitToolResultMessage(message, emit);
+  return { finalized, message };
 }
 
 function createErrorToolResult(message: string): AgentToolResult<unknown> {

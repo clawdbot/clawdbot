@@ -36,9 +36,15 @@ function runPreflight(
       outputSchema: swarmOutputSchema,
       swarmLaunchIdempotencyKey: "collector-run",
       swarmLaunchPending: options?.launchPending ?? true,
-      execution: { status: options?.launchPending === false ? "running" : "queued" },
+      execution: {
+        status: options?.ended
+          ? "terminal"
+          : options?.launchPending === false
+            ? "running"
+            : "queued",
+        endedAt: options?.ended ? 2 : undefined,
+      },
       collectorCompletion: options?.completed ? { status: "done" } : undefined,
-      endedAt: options?.ended ? 2 : undefined,
     });
   }
   const respond = vi.fn();
@@ -213,7 +219,7 @@ describe("agent request Swarm preflight", () => {
     if (!registered) {
       throw new Error("expected collector registration");
     }
-    registered.endedAt = 2;
+    registered.execution = { ...registered.execution, status: "terminal", endedAt: 2 };
 
     const retry = runPreflight({ type: "object" }, true, {
       enabled: true,

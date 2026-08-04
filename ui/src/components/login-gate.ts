@@ -142,6 +142,7 @@ function resolveLoginFailureFeedback(
           ? "login.failure.pairing.summary"
           : "login.failure.pairing.upgradeSummary",
       stepKeys: [
+        "login.failure.pairing.stepDashboard",
         "login.failure.pairing.stepList",
         pairing.requestId
           ? "login.failure.pairing.stepApproveId"

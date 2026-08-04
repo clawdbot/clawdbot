@@ -331,6 +331,9 @@ Code mode attaches a `telemetry` object to every `tool_search_code` result:
 
 - `catalogSize`: number of catalog entries the runtime resolved
 - `sources`: catalog entry counts split into `openclaw`, `mcp`, and `client`
+- `counterScope`: opaque identifier for the counter lifetime; it stays stable
+  when tools are appended or prompt policy narrows the catalog, and changes
+  when the catalog is replaced or restored
 - `searchCount`, `describeCount`, `callCount`: running totals for the catalog
   session, carried across calls rather than reset per call
 

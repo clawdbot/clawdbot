@@ -1,13 +1,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAccountCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
-import { PLUGIN_REGISTRY_STATE } from "../plugins/runtime-state-key.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
@@ -382,31 +383,21 @@ describe("resolveConversationCapabilityProfile", () => {
 
 describe("resolveConversationCapabilityProfile scheduled account authority", () => {
   const ownerSessionKey = "agent:main:whatsapp:group:safe-room";
-  const globalState = globalThis as Record<symbol, unknown>;
-  let previousRegistryState: unknown;
 
-  beforeAll(() => {
-    previousRegistryState = globalState[PLUGIN_REGISTRY_STATE];
-    globalState[PLUGIN_REGISTRY_STATE] = {
-      channel: {
-        version: 1,
-        registry: {
-          channels: [
-            {
-              plugin: {
-                id: "whatsapp",
-                meta: {},
-                config: createAccountListHelpers("whatsapp"),
-              },
-            },
-          ],
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "whatsapp",
+          source: "test",
+          plugin: {
+            id: "whatsapp",
+            meta: {},
+            config: createAccountListHelpers("whatsapp"),
+          },
         },
-      },
-    };
-  });
-
-  afterAll(() => {
-    globalState[PLUGIN_REGISTRY_STATE] = previousRegistryState;
+      ]),
+    );
   });
 
   function scheduledProfile(accounts: Record<string, unknown>) {

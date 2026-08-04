@@ -3,9 +3,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import ts from "typescript";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectFileViolations,
-  resolveRepoRoot,
+  getPropertyNameText,
   resolveSourceRoots,
   runAsScript,
   toLine,
@@ -92,7 +93,6 @@ const gatewaySessionServerMethodFiles = [
   "src/gateway/server-methods/sessions-read.ts",
   "src/gateway/server-methods/sessions-shared.ts",
   "src/gateway/server-methods/sessions-subscriptions.ts",
-  "src/gateway/server-methods/sessions.ts",
 ];
 
 export const migratedSessionAccessorFiles = new Set([
@@ -315,13 +315,6 @@ function propertyAccessName(expression) {
   return null;
 }
 
-function propertyNameText(name) {
-  if (ts.isIdentifier(name) || ts.isStringLiteralLike(name) || ts.isNumericLiteral(name)) {
-    return name.text;
-  }
-  return null;
-}
-
 function bindingName(node) {
   if (node.propertyName && ts.isIdentifier(node.propertyName)) {
     return node.propertyName.text;
@@ -335,6 +328,12 @@ function bindingName(node) {
 function findNamedBoundaryViolations(content, fileName, legacyNames, subject) {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   const violations = [];
+  const addViolation = (node, action, name) => {
+    violations.push({
+      line: toLine(sourceFile, node),
+      reason: `${action} ${subject} "${name}"`,
+    });
+  };
 
   const visit = (node) => {
     if (ts.isImportDeclaration(node)) {
@@ -343,10 +342,7 @@ function findNamedBoundaryViolations(content, fileName, legacyNames, subject) {
         for (const specifier of namedBindings.elements) {
           const importedName = specifier.propertyName?.text ?? specifier.name.text;
           if (legacyNames.has(importedName)) {
-            violations.push({
-              line: toLine(sourceFile, specifier),
-              reason: `imports ${subject} "${importedName}"`,
-            });
+            addViolation(specifier, "imports", importedName);
           }
         }
       }
@@ -355,18 +351,12 @@ function findNamedBoundaryViolations(content, fileName, legacyNames, subject) {
     if (ts.isBindingElement(node)) {
       const name = bindingName(node);
       if (name && legacyNames.has(name)) {
-        violations.push({
-          line: toLine(sourceFile, node),
-          reason: `aliases ${subject} "${name}"`,
-        });
+        addViolation(node, "aliases", name);
       }
     }
 
     if (ts.isPropertyAccessExpression(node) && legacyNames.has(node.name.text)) {
-      violations.push({
-        line: toLine(sourceFile, node.name),
-        reason: `references ${subject} "${node.name.text}"`,
-      });
+      addViolation(node.name, "references", node.name.text);
     }
 
     if (
@@ -374,10 +364,7 @@ function findNamedBoundaryViolations(content, fileName, legacyNames, subject) {
       ts.isStringLiteral(node.argumentExpression) &&
       legacyNames.has(node.argumentExpression.text)
     ) {
-      violations.push({
-        line: toLine(sourceFile, node.argumentExpression),
-        reason: `references ${subject} "${node.argumentExpression.text}"`,
-      });
+      addViolation(node.argumentExpression, "references", node.argumentExpression.text);
     }
 
     if (ts.isCallExpression(node)) {
@@ -387,10 +374,7 @@ function findNamedBoundaryViolations(content, fileName, legacyNames, subject) {
         legacyNames.has(calleeName) &&
         ts.isIdentifier(unwrapExpression(node.expression))
       ) {
-        violations.push({
-          line: toLine(sourceFile, node.expression),
-          reason: `calls ${subject} "${calleeName}"`,
-        });
+        addViolation(node.expression, "calls", calleeName);
       }
     }
 
@@ -512,7 +496,10 @@ export function findEmbeddedAgentSessionTargetViolations(content, fileName = "so
 
   const visitRunOptions = (options) => {
     for (const property of options.properties) {
-      if (ts.isPropertyAssignment(property) && propertyNameText(property.name) === "sessionFile") {
+      if (
+        ts.isPropertyAssignment(property) &&
+        getPropertyNameText(property.name) === "sessionFile"
+      ) {
         recordDeprecatedSessionFile(property.name);
       } else if (
         ts.isShorthandPropertyAssignment(property) &&
@@ -641,39 +628,27 @@ const transcriptWriterSourceRootPaths = [
   "src/sessions",
 ];
 
-function declarationName(node) {
-  if (ts.isFunctionDeclaration(node) && node.name) {
-    return node.name.text;
-  }
-  if (!ts.isVariableStatement(node)) {
-    return null;
-  }
-  const declaration = node.declarationList.declarations[0];
-  return declaration && ts.isIdentifier(declaration.name) ? declaration.name.text : null;
-}
-
-function functionBodyForDeclaration(node) {
-  if (ts.isFunctionDeclaration(node)) {
-    return node.body ?? null;
-  }
-  if (!ts.isVariableStatement(node)) {
-    return null;
-  }
-  const declaration = node.declarationList.declarations[0];
-  const initializer = declaration?.initializer;
-  if (initializer && (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer))) {
-    return initializer.body;
-  }
-  return null;
-}
-
 function collectTopLevelFunctionBodies(sourceFile) {
   const bodies = new Map();
   for (const statement of sourceFile.statements) {
-    const name = declarationName(statement);
-    const body = functionBodyForDeclaration(statement);
-    if (name && body) {
-      bodies.set(name, body);
+    if (ts.isFunctionDeclaration(statement)) {
+      if (statement.name && statement.body) {
+        bodies.set(statement.name.text, statement.body);
+      }
+      continue;
+    }
+    if (!ts.isVariableStatement(statement)) {
+      continue;
+    }
+    const declaration = statement.declarationList.declarations[0];
+    const initializer = declaration?.initializer;
+    if (
+      declaration &&
+      ts.isIdentifier(declaration.name) &&
+      initializer &&
+      (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer))
+    ) {
+      bodies.set(declaration.name.text, initializer.body);
     }
   }
   return bodies;
@@ -870,6 +845,27 @@ async function writeSessionAccessorDebtBaseline(repoRoot) {
   await fs.writeFile(resolveDebtBaselinePath(repoRoot), `${JSON.stringify(counts, null, 2)}\n`);
 }
 
+function compareMigratedFilePaths(left, right, sourceRootPaths) {
+  const rootIndex = (filePath) =>
+    sourceRootPaths.findIndex((sourceRoot) => filePath.startsWith(`${sourceRoot}/`));
+  const leftRoot = rootIndex(left);
+  const rightRoot = rootIndex(right);
+  const rootOrder =
+    (leftRoot < 0 ? sourceRootPaths.length : leftRoot) -
+    (rightRoot < 0 ? sourceRootPaths.length : rightRoot);
+  if (rootOrder !== 0) {
+    return rootOrder;
+  }
+  // Recursive directory walks visit nested files before same-prefix sibling files.
+  const leftTraversalPath = left.replaceAll("/", "\0");
+  const rightTraversalPath = right.replaceAll("/", "\0");
+  return leftTraversalPath < rightTraversalPath
+    ? -1
+    : leftTraversalPath > rightTraversalPath
+      ? 1
+      : 0;
+}
+
 export async function main() {
   const repoRoot = resolveRepoRoot(import.meta.url);
   if (process.argv.includes("--update-debt-baseline")) {
@@ -877,110 +873,52 @@ export async function main() {
     console.log(`Wrote ${sessionAccessorDebtBaselineRelativePath}`);
     return;
   }
-  const readSourceRoots = resolveSourceRoots(repoRoot, readSourceRootPaths);
-  const writeSourceRoots = resolveSourceRoots(repoRoot, writeSourceRootPaths);
-  const transcriptWriterSourceRoots = resolveSourceRoots(repoRoot, transcriptWriterSourceRootPaths);
-  const readViolations = await collectFileViolations({
-    repoRoot,
-    sourceRoots: readSourceRoots,
-    skipFile: (filePath) => {
-      const relativePath = normalizeRelativePath(path.relative(repoRoot, filePath));
-      return (
-        !migratedSessionAccessorFiles.has(relativePath) &&
-        !migratedBundledPluginSessionAccessorFiles.has(relativePath)
-      );
+  const debtConcerns = Object.fromEntries(
+    sessionAccessorDebtConcerns.map((concern) => [concern.key, concern]),
+  );
+  const enforcementConcerns = [
+    debtConcerns.sessionAccessorRead,
+    debtConcerns.sessionAccessorWrite,
+    debtConcerns.transcriptWriter,
+    {
+      sourceRootPaths: ["src/gateway/server-methods"],
+      migratedFiles: new Set(["src/gateway/server-methods/sessions-create.ts"]),
+      findViolations: findGatewaySessionCreateLifecycleViolations,
     },
-    findViolations: findSessionAccessorBoundaryViolations,
-  });
-  const writeViolations = await collectFileViolations({
-    repoRoot,
-    sourceRoots: writeSourceRoots,
-    skipFile: (filePath) =>
-      !migratedSessionAccessorWriteFiles.has(
-        normalizeRelativePath(path.relative(repoRoot, filePath)),
-      ),
-    findViolations: findSessionAccessorWriteBoundaryViolations,
-  });
-  const transcriptWriterViolations = await collectFileViolations({
-    repoRoot,
-    sourceRoots: transcriptWriterSourceRoots,
-    skipFile: (filePath) =>
-      !migratedTranscriptWriterFiles.has(normalizeRelativePath(path.relative(repoRoot, filePath))),
-    findViolations: findTranscriptWriterBoundaryViolations,
-  });
-  const sessionCreateLifecycleViolations = await collectFileViolations({
-    repoRoot,
-    sourceRoots: resolveSourceRoots(repoRoot, ["src/gateway/server-methods"]),
-    skipFile: (filePath) =>
-      normalizeRelativePath(path.relative(repoRoot, filePath)) !==
-      "src/gateway/server-methods/sessions-create.ts",
-    findViolations: findGatewaySessionCreateLifecycleViolations,
-  });
-  const manualCompactTrimViolations = await collectFileViolations({
-    repoRoot,
-    sourceRoots: resolveSourceRoots(repoRoot, ["src/gateway/server-methods"]),
-    skipFile: (filePath) =>
-      !migratedSessionCompactManualTrimFiles.has(
-        normalizeRelativePath(path.relative(repoRoot, filePath)),
-      ),
-    findViolations: findSessionCompactManualTrimBoundaryViolations,
-  });
-  const lifecycleCleanupViolations = await collectFileViolations({
-    repoRoot,
-    sourceRoots: readSourceRoots,
-    skipFile: (filePath) =>
-      !migratedSessionLifecycleCleanupFiles.has(
-        normalizeRelativePath(path.relative(repoRoot, filePath)),
-      ),
-    findViolations: findSessionLifecycleCleanupBoundaryViolations,
-  });
-  const memoryHostSessionCorpusViolations = await collectFileViolations({
-    repoRoot,
-    sourceRoots: resolveSourceRoots(repoRoot, ["packages/memory-host-sdk/src/host"]),
-    skipFile: (filePath) =>
-      !migratedMemoryHostSessionCorpusFiles.has(
-        normalizeRelativePath(path.relative(repoRoot, filePath)),
-      ),
-    findViolations: findMemoryHostSessionCorpusBoundaryViolations,
-  });
-  const embeddedAgentSessionTargetViolations = await collectFileViolations({
-    repoRoot,
-    sourceRoots: resolveSourceRoots(repoRoot, ["extensions/voice-call/src"]),
-    skipFile: (filePath) =>
-      !migratedEmbeddedAgentSessionTargetFiles.has(
-        normalizeRelativePath(path.relative(repoRoot, filePath)),
-      ),
-    findViolations: findEmbeddedAgentSessionTargetViolations,
-  });
-  const readOnlyGatewaySessionAccessorViolations = await collectFileViolations({
-    repoRoot,
-    sourceRoots: resolveSourceRoots(repoRoot, ["src/gateway"]),
-    skipFile: (filePath) =>
-      !readOnlyGatewaySessionAccessorFiles.has(
-        normalizeRelativePath(path.relative(repoRoot, filePath)),
-      ),
-    findViolations: findReadOnlySessionAccessorViolations,
-  });
+    debtConcerns.sessionCompactManualTrim,
+    debtConcerns.sessionLifecycleCleanup,
+    debtConcerns.memoryHostSessionCorpus,
+    debtConcerns.embeddedAgentSessionTarget,
+    {
+      sourceRootPaths: ["src/gateway"],
+      migratedFiles: readOnlyGatewaySessionAccessorFiles,
+      findViolations: findReadOnlySessionAccessorViolations,
+    },
+  ];
+  const violations = [];
+  for (const concern of enforcementConcerns) {
+    violations.push(
+      ...(await collectFileViolations({
+        repoRoot,
+        sourceRoots: resolveSourceRoots(
+          repoRoot,
+          [...concern.migratedFiles].toSorted((left, right) =>
+            compareMigratedFilePaths(left, right, concern.sourceRootPaths),
+          ),
+        ),
+        findViolations: concern.findViolations,
+      })),
+    );
+  }
   const sessionStoreRuntimePath = path.join(repoRoot, "src/plugin-sdk/session-store-runtime.ts");
-  const sessionStoreRuntimeCompatViolations =
-    findSessionStoreRuntimeFileBackedCompatExportViolations(
+  violations.push(
+    ...findSessionStoreRuntimeFileBackedCompatExportViolations(
       await fs.readFile(sessionStoreRuntimePath, "utf8"),
       sessionStoreRuntimePath,
     ).map((violation) =>
       Object.assign({ path: "src/plugin-sdk/session-store-runtime.ts" }, violation),
-    );
-  const violations = [
-    ...readViolations,
-    ...writeViolations,
-    ...transcriptWriterViolations,
-    ...sessionCreateLifecycleViolations,
-    ...manualCompactTrimViolations,
-    ...lifecycleCleanupViolations,
-    ...memoryHostSessionCorpusViolations,
-    ...embeddedAgentSessionTargetViolations,
-    ...readOnlyGatewaySessionAccessorViolations,
-    ...sessionStoreRuntimeCompatViolations,
-  ];
+    ),
+  );
 
   const baselineCounts = await readSessionAccessorDebtBaseline(repoRoot);
   if (!baselineCounts) {

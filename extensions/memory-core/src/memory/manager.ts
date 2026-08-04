@@ -483,10 +483,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected override sessionPendingFiles = new Set<string>();
   protected override sessionPendingTargets = new Map<string, MemorySessionSyncTarget>();
   private indexIdentityDirty = false;
-  protected override sessionDeltas = new Map<
-    string,
-    { lastSize: number; pendingBytes: number; pendingMessages: number }
-  >();
   private sessionWarm = new Set<string>();
   private syncing: Promise<void> | null = null;
   private queuedArchiveFiles = new Set<string>();

@@ -10,6 +10,7 @@ import {
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/core";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { runReefChannelLifecycle } from "./channel-lifecycle.js";
 import {
   ReefChannelConfigSchema,
@@ -31,7 +32,7 @@ import {
 } from "./owner-notice.js";
 import { isRephrasedReefResend } from "./rejection-resend.js";
 import { getActiveReef, getOptionalReefRuntime, getReefRuntime, setActiveReef } from "./runtime.js";
-import { reefSetupAdapter, reefSetupContract, reefSetupWizard } from "./setup.js";
+import { reefSetupContract, reefSetupWizard } from "./setup.js";
 import { assertReefIdentityBinding, loadKeys, openStores, ReefInboxCursorStore } from "./state.js";
 import {
   ReefInboxConnection,
@@ -115,7 +116,6 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
   },
   reload: { configPrefixes: ["channels.reef"] },
   configSchema: buildChannelConfigSchema(ReefChannelConfigSchema),
-  setup: reefSetupAdapter,
   setupContract: reefSetupContract,
   setupWizard: reefSetupWizard as never,
   config: {
@@ -210,6 +210,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
       configured: account.configured,
       running: runtime?.running ?? false,
       connected: runtime?.connected ?? false,
+      lifecycle: runtime?.lifecycle,
       lastConnectedAt: runtime?.lastConnectedAt ?? null,
       lastError: runtime?.lastError ?? null,
       extra: { handle: account.config.handle },
@@ -438,14 +439,13 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
             }
             ctx.setStatus(
               state === "connected"
-                ? {
+                ? channelReadyPatch({ accountId: "default" })
+                : {
                     accountId: "default",
                     running: true,
-                    connected: true,
-                    lastConnectedAt: Date.now(),
-                    lastError: null,
-                  }
-                : { accountId: "default", running: true, connected: false },
+                    connected: false,
+                    lifecycle: "recovering",
+                  },
             );
           },
           onError: (error) => {
@@ -457,6 +457,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
               accountId: "default",
               running: true,
               connected: false,
+              lifecycle: "recovering",
               lastError: error.message,
             });
           },

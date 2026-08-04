@@ -3,6 +3,8 @@ import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { brotliCompress, constants as zlibConstants, gzip } from "node:zlib";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 
 const CONTROL_UI_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
 const CONTROL_UI_HTML_COMPRESSION_CACHE_MAX_ENTRIES = 4;
@@ -159,16 +161,16 @@ export function resolveControlUiHtmlEncoding(req: IncomingMessage): ControlUiEnc
 }
 
 type OpenedControlUiRepresentation = {
-  bodyFile: { path: string; fd: number };
+  bodyFile: { path: string; fd: number; size: number };
   contentPath: string;
   encoding?: ControlUiContentEncoding;
 };
 
 export function resolveOpenedControlUiRepresentation(params: {
   req: IncomingMessage;
-  sourceFile: { path: string; fd: number };
+  sourceFile: { path: string; fd: number; size: number };
   precompressed: boolean;
-  openPrecompressedFile: (filePath: string) => { path: string; fd: number } | null;
+  openPrecompressedFile: (filePath: string) => { path: string; fd: number; size: number } | null;
 }): OpenedControlUiRepresentation | null {
   const { req, sourceFile, precompressed, openPrecompressedFile } = params;
   const extension = path.extname(sourceFile.path).toLowerCase();
@@ -187,7 +189,7 @@ export function resolveOpenedControlUiRepresentation(params: {
     }
 
     const suffix = selected === "br" ? ".br" : ".gz";
-    let compressedFile: { path: string; fd: number } | null;
+    let compressedFile: { path: string; fd: number; size: number } | null;
     try {
       compressedFile = openPrecompressedFile(`${sourceFile.path}${suffix}`);
     } catch (error) {
@@ -236,10 +238,13 @@ function setControlUiFileHeaders(
 export function respondHeadForControlUiFile(
   res: ServerResponse,
   filePath: string,
-  options?: { immutable?: boolean; encoding?: ControlUiContentEncoding },
+  options?: { immutable?: boolean; encoding?: ControlUiContentEncoding; contentLength?: number },
 ) {
   res.statusCode = 200;
   setControlUiFileHeaders(res, filePath, options);
+  if (options?.contentLength !== undefined) {
+    res.setHeader("Content-Length", String(options.contentLength));
+  }
   res.end();
 }
 
@@ -293,20 +298,13 @@ function cachedCompressedControlUiHtml(
   // Index HTML is process-stable for a configured root. Keep its few rewritten
   // variants single-flight and bounded so unauthenticated requests cannot fan
   // out zlib work; large hashed assets use build-time sidecars instead.
-  const compression = compressControlUiBody(Buffer.from(body), encoding);
-  controlUiHtmlCompressionCache.set(key, compression);
-  void compression.catch(() => {
-    if (controlUiHtmlCompressionCache.get(key) === compression) {
-      controlUiHtmlCompressionCache.delete(key);
-    }
-  });
-  while (controlUiHtmlCompressionCache.size > CONTROL_UI_HTML_COMPRESSION_CACHE_MAX_ENTRIES) {
-    const oldestKey = controlUiHtmlCompressionCache.keys().next().value;
-    if (oldestKey === undefined) {
-      break;
-    }
-    controlUiHtmlCompressionCache.delete(oldestKey);
-  }
+  const compression = getOrCreatePromise(
+    controlUiHtmlCompressionCache,
+    key,
+    () => compressControlUiBody(Buffer.from(body), encoding),
+    { cacheRejections: false },
+  );
+  pruneMapToMaxSize(controlUiHtmlCompressionCache, CONTROL_UI_HTML_COMPRESSION_CACHE_MAX_ENTRIES);
   return compression;
 }
 

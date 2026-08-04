@@ -301,6 +301,42 @@ describe("withDurableMessageSendContext", () => {
     ]);
   });
 
+  it("keeps acknowledged multipart sends without platform ids authoritative", async () => {
+    deliverOutboundPayloads.mockResolvedValueOnce(
+      [123, 456].map((sentAt) => ({
+        channel: "synology-chat",
+        messageId: "",
+        chatId: "42",
+        receipt: {
+          platformMessageIds: [],
+          parts: [],
+          threadId: "42",
+          sentAt,
+        },
+      })),
+    );
+    const onCommitReceipt = vi.fn();
+
+    const result = await sendDurableMessageBatch({
+      cfg,
+      channel: "synology-chat",
+      to: "42",
+      payloads: [{ text: "first" }, { text: "second" }],
+      onCommitReceipt,
+    });
+
+    expectBatchStatus(result, "sent");
+    expect(result.results).toHaveLength(2);
+    expect(result.receipt).toMatchObject({
+      platformMessageIds: [],
+      parts: [],
+      threadId: "42",
+      sentAt: 123,
+    });
+    expect(result.receipt.primaryPlatformMessageId).toBeUndefined();
+    expect(onCommitReceipt).toHaveBeenCalledWith(result.receipt);
+  });
+
   it("supports preview, edit, and delete send-context hooks", async () => {
     const receipt = {
       primaryPlatformMessageId: "preview-1",

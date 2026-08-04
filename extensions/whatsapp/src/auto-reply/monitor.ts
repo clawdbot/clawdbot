@@ -286,7 +286,6 @@ export async function monitorWebChannel(
                 resolveWhatsAppConversationDebounceMs({
                   cfg: loadCurrentMonitorConfig(),
                   msg,
-                  defaultMs: inboundDebounceMs,
                 }),
               appendReplyWindow: connectionLocal.openedAfterRecentInbound
                 ? {

@@ -10,6 +10,8 @@ type TaskRegistryProcessState = {
   taskIdsByParentFlowId: Map<string, Set<string>>;
   taskIdsByRelatedSessionKey: Map<string, Set<string>>;
   tasksWithPendingDelivery: Set<string>;
+  // Listener ownership must survive module reloads alongside the task indexes it updates.
+  listenerStop?: (() => void) | null;
 };
 
 const TASK_REGISTRY_PROCESS_STATE_KEY = Symbol.for("openclaw.taskRegistry.state");

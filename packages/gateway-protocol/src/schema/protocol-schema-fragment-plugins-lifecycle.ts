@@ -1,11 +1,13 @@
 import * as config from "./config.js";
 import * as devices from "./devices.js";
 import * as frames from "./frames.js";
+import * as hooks from "./hooks.js";
 import * as logsChat from "./logs-chat.js";
 import * as pluginApprovals from "./plugin-approvals.js";
 import * as plugins from "./plugins.js";
 
 export const PluginLifecycleProtocolSchemas = {
+  HooksStatusParams: hooks.HooksStatusParamsSchema,
   PluginApprovalRequestParams: pluginApprovals.PluginApprovalRequestParamsSchema,
   PluginApprovalResolveParams: pluginApprovals.PluginApprovalResolveParamsSchema,
   PluginCatalogClawHubInstall: plugins.PluginCatalogClawHubInstallSchema,

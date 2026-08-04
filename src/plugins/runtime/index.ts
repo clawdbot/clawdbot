@@ -23,7 +23,6 @@ import {
   listRuntimeVideoGenerationProviders,
 } from "../../video-generation/runtime.js";
 import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
-import { gatewaySubagentState } from "./gateway-bindings.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
@@ -183,40 +182,6 @@ function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
   };
 }
 
-// ── Process-global gateway subagent runtime ─────────────────────────
-// The gateway creates a real subagent runtime during startup, but gateway-owned
-// plugin registries may be loaded (and cached) before the gateway path runs.
-// A process-global holder lets explicitly gateway-bindable runtimes resolve the
-// active gateway subagent dynamically without changing the default behavior for
-// ordinary plugin runtimes.
-
-/**
- * Create a late-binding subagent that resolves to:
- * 1. An explicitly provided subagent (from runtimeOptions), OR
- * 2. The process-global gateway subagent when the caller explicitly opts in, OR
- * 3. The unavailable fallback (throws with a clear error message).
- */
-function createLateBindingSubagent(
-  explicit?: PluginRuntime["subagent"],
-  allowGatewaySubagentBinding = false,
-): PluginRuntime["subagent"] {
-  if (explicit) {
-    return explicit;
-  }
-
-  const unavailable = createUnavailableSubagentRuntime();
-  if (!allowGatewaySubagentBinding) {
-    return unavailable;
-  }
-
-  return new Proxy(unavailable, {
-    get(_target, prop, _receiver) {
-      const resolved = gatewaySubagentState.subagent ?? unavailable;
-      return Reflect.get(resolved, prop, resolved);
-    },
-  });
-}
-
 function createUnavailableNodesRuntime(): PluginRuntime["nodes"] {
   const unavailable = () => {
     throw new Error("Plugin node runtime is only available inside the Gateway.");
@@ -225,19 +190,6 @@ function createUnavailableNodesRuntime(): PluginRuntime["nodes"] {
     list: unavailable,
     invoke: unavailable,
   };
-}
-
-function createLateBindingNodes(allowGatewayBinding = false): PluginRuntime["nodes"] {
-  const unavailable = createUnavailableNodesRuntime();
-  if (!allowGatewayBinding) {
-    return unavailable;
-  }
-  return new Proxy(unavailable, {
-    get(_target, prop, _receiver) {
-      const resolved = gatewaySubagentState.nodes ?? unavailable;
-      return Reflect.get(resolved, prop, resolved);
-    },
-  });
 }
 
 function createRuntimeWorktrees(): PluginRuntime["worktrees"] {
@@ -317,11 +269,8 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     gateway: createRuntimeGateway(),
     config: createRuntimeConfig(),
     agent,
-    subagent: createLateBindingSubagent(
-      _options.subagent,
-      _options.allowGatewaySubagentBinding === true,
-    ),
-    nodes: _options.nodes ?? createLateBindingNodes(_options.allowGatewaySubagentBinding === true),
+    subagent: _options.subagent ?? createUnavailableSubagentRuntime(),
+    nodes: _options.nodes ?? createUnavailableNodesRuntime(),
     sandbox: createRuntimeSandbox(agent),
     worktrees: createRuntimeWorktrees(),
     system: createRuntimeSystem(),

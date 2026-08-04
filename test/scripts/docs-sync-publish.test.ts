@@ -2,10 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { renderDocsHeadingMap } from "../../scripts/docs-list.js";
 import {
   composeDocsConfig,
   parseArgs,
   reportOrphanLocaleDocs,
+  writePublishedDocsMap,
 } from "../../scripts/docs-sync-publish.mjs";
 
 function collectPages(entry: unknown, pages: string[] = []): string[] {
@@ -33,6 +35,18 @@ function collectPages(entry: unknown, pages: string[] = []): string[] {
 }
 
 describe("docs-sync-publish", () => {
+  it("materializes the public docs map only in the publish tree", () => {
+    const targetDocsDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-map-publish-"));
+    try {
+      const outputPath = writePublishedDocsMap(targetDocsDir);
+      expect(fs.readFileSync(outputPath, "utf8")).toBe(
+        renderDocsHeadingMap(path.resolve(import.meta.dirname, "../../docs")),
+      );
+    } finally {
+      fs.rmSync(targetDocsDir, { recursive: true, force: true });
+    }
+  });
+
   it("parses docs sync provenance args", () => {
     expect(
       parseArgs([

@@ -29,8 +29,6 @@ export const taskIdsByOwnerKey = taskRegistryProcessState.taskIdsByOwnerKey;
 export const taskIdsByParentFlowId = taskRegistryProcessState.taskIdsByParentFlowId;
 export const taskIdsByRelatedSessionKey = taskRegistryProcessState.taskIdsByRelatedSessionKey;
 export const tasksWithPendingDelivery = taskRegistryProcessState.tasksWithPendingDelivery;
-let listenerStarted = false;
-let listenerStop: (() => void) | null = null;
 type TaskRegistryRestoreState =
   | { status: "uninitialized" }
   | { status: "restoring" }
@@ -83,21 +81,20 @@ export function setTaskRegistryListenerStarter(starter: () => void): void {
 }
 
 export function claimTaskRegistryListenerStart(): boolean {
-  if (listenerStarted) {
+  if (taskRegistryProcessState.listenerStop !== undefined) {
     return false;
   }
-  listenerStarted = true;
+  taskRegistryProcessState.listenerStop = null;
   return true;
 }
 
 export function setTaskRegistryListenerStop(stop: (() => void) | null): void {
-  listenerStop = stop;
+  taskRegistryProcessState.listenerStop = stop;
 }
 
 export function resetTaskRegistryListenerState(): void {
-  listenerStop?.();
-  listenerStop = null;
-  listenerStarted = false;
+  taskRegistryProcessState.listenerStop?.();
+  taskRegistryProcessState.listenerStop = undefined;
 }
 
 function clearTaskFlowSyncRetries(): void {

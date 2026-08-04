@@ -25,6 +25,12 @@ describe("anthropic vertex region helpers", () => {
     ).toBe("europe-west4");
   });
 
+  it.each(["us", "eu"])("parses the %s multi-region Vertex endpoint", (region) => {
+    expect(
+      resolveAnthropicVertexRegionFromBaseUrl(`https://aiplatform.${region}.rep.googleapis.com`),
+    ).toBe(region);
+  });
+
   it("treats the global Vertex endpoint as global", () => {
     expect(resolveAnthropicVertexRegionFromBaseUrl("https://aiplatform.googleapis.com")).toBe(
       "global",

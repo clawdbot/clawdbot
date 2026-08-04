@@ -31,6 +31,7 @@ export function createConfigFileSnapshot(params: {
           includeProvenance: params.includeProvenance.map((entry) => ({
             ...entry,
             path: [...entry.path],
+            ...(entry.targetPaths ? { targetPaths: [...entry.targetPaths] } : {}),
           })),
         }
       : {}),

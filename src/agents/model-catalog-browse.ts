@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   buildConfiguredModelCatalog,
+  LEGACY_MODEL_POLICY_ALLOW_CONFIG_PATH,
   parseConfiguredModelVisibilityEntries,
 } from "./model-selection-shared.js";
 
@@ -37,14 +38,30 @@ export function buildProviderConfigModelCatalogForBrowse(params: {
 /** True when a browse view requires the full published catalog generation. */
 export function modelCatalogBrowseRequiresFullDiscovery(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   view?: ModelCatalogBrowseView;
 }): boolean {
   const view = params.view ?? "default";
-  return (
-    view === "all" ||
-    (view === "configured" &&
-      parseConfiguredModelVisibilityEntries({ cfg: params.cfg }).providerWildcards.size > 0)
-  );
+  if (view === "all") {
+    return true;
+  }
+  const visibility = parseConfiguredModelVisibilityEntries({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
+  if (visibility.providerWildcards.size === 0) {
+    return false;
+  }
+  // An explicit modelPolicy.allow provider wildcard makes model pickers,
+  // configured views, and provider-config inventory resolve against the
+  // discovered catalog so key-scoped runtime rows appear without an explicit
+  // allowlist entry (see openclaw#115953). Legacy agents.defaults.models
+  // wildcard entries keep the historical read-only default path and only
+  // escalate the configured view, as before.
+  if (visibility.configPath === LEGACY_MODEL_POLICY_ALLOW_CONFIG_PATH) {
+    return view === "configured";
+  }
+  return true;
 }
 
 function resolveModelCatalogBrowseTimeoutMs(value: number | undefined): number {
@@ -56,6 +73,7 @@ function resolveModelCatalogBrowseTimeoutMs(value: number | undefined): number {
 
 async function loadCatalogForBrowse<T>(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   view?: ModelCatalogBrowseView;
   loadCatalog: (params: { readOnly: boolean }) => Promise<T>;
   empty: T;
@@ -64,8 +82,18 @@ async function loadCatalogForBrowse<T>(params: {
   onTimeout?: (timeoutMs: number) => void;
 }): Promise<T> {
   const view = params.view ?? "default";
-  const requiresFullDiscovery = modelCatalogBrowseRequiresFullDiscovery({ cfg: params.cfg, view });
-  if (requiresFullDiscovery && !params.timeoutFullDiscovery) {
+  const requiresFullDiscovery = modelCatalogBrowseRequiresFullDiscovery({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    view,
+  });
+  // Provider-policy wildcards newly escalate ordinary inventory views to live discovery.
+  // Keep those implicit loads within the browse deadline; explicit all/configured loads retain
+  // their existing completion semantics unless the caller requests a timeout.
+  const shouldTimeoutFullDiscovery =
+    params.timeoutFullDiscovery ||
+    (requiresFullDiscovery && (view === "default" || view === "provider-config"));
+  if (requiresFullDiscovery && !shouldTimeoutFullDiscovery) {
     return await params.loadCatalog({ readOnly: false });
   }
 
@@ -97,6 +125,7 @@ async function loadCatalogForBrowse<T>(params: {
 /** Loads an explicit logical/physical catalog snapshot for route-aware browse surfaces. */
 export function loadPreparedModelCatalogSnapshotForBrowse(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   view?: ModelCatalogBrowseView;
   loadCatalog: (params: { readOnly: boolean }) => Promise<ModelCatalogSnapshot>;
   timeoutFullDiscovery?: boolean;

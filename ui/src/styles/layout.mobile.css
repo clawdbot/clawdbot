@@ -338,11 +338,6 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     font-size: 12px;
   }
 
-  /* Content */
-  .content-header {
-    display: none;
-  }
-
   /* Hide the entire content-header on mobile chat — controls are in mobile gear menu */
   .content--chat .content-header {
     display: none;

@@ -15,6 +15,7 @@ vi.mock("./ddg-client.js", () => ({
 describe("duckduckgo web search provider", () => {
   let createDuckDuckGoWebSearchProvider: typeof import("./ddg-search-provider.js").createDuckDuckGoWebSearchProvider;
   let ddgClientTesting: typeof import("./ddg-client.js").testing;
+  let runActualDuckDuckGoSearch: typeof import("./ddg-client.js").runDuckDuckGoSearch;
 
   afterAll(() => {
     vi.doUnmock("./ddg-client.js");
@@ -23,7 +24,7 @@ describe("duckduckgo web search provider", () => {
 
   beforeAll(async () => {
     ({ createDuckDuckGoWebSearchProvider } = await import("./ddg-search-provider.js"));
-    ({ testing: ddgClientTesting } =
+    ({ testing: ddgClientTesting, runDuckDuckGoSearch: runActualDuckDuckGoSearch } =
       await vi.importActual<typeof import("./ddg-client.js")>("./ddg-client.js"));
     await import("../index.js");
   });
@@ -103,6 +104,66 @@ describe("duckduckgo web search provider", () => {
       "count must be an integer from 1 to 10.",
     );
     expect(runDuckDuckGoSearch).not.toHaveBeenCalled();
+  });
+
+  it("forwards caller cancellation without starting an already canceled search", async () => {
+    const tool = createDuckDuckGoWebSearchProvider().createTool({ config: {} });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    const active = new AbortController();
+
+    await tool.execute({ query: "duckduckgo cancellation forwarding" }, { signal: active.signal });
+
+    expect(runDuckDuckGoSearch).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: active.signal }),
+    );
+    runDuckDuckGoSearch.mockClear();
+    const canceled = new AbortController();
+    canceled.abort(new Error("DuckDuckGo caller canceled"));
+
+    await expect(
+      tool.execute({ query: "duckduckgo pre-canceled" }, { signal: canceled.signal }),
+    ).rejects.toThrow("DuckDuckGo caller canceled");
+    expect(runDuckDuckGoSearch).not.toHaveBeenCalled();
+  });
+
+  it("aborts an in-flight DuckDuckGo request without caching its result", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (_url, init) =>
+        await new Promise<Response>((_resolve, reject) => {
+          if (!init?.signal) {
+            reject(new Error("DuckDuckGo request lost caller cancellation"));
+            return;
+          }
+          init.signal.addEventListener("abort", () => reject(init.signal?.reason as Error), {
+            once: true,
+          });
+        }),
+    );
+    const controller = new AbortController();
+    const result = runActualDuckDuckGoSearch({
+      query: "duckduckgo in-flight cancellation",
+      signal: controller.signal,
+    });
+
+    try {
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+      controller.abort(new Error("DuckDuckGo request canceled in flight"));
+      await expect(result).rejects.toThrow("DuckDuckGo request canceled in flight");
+      expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+      fetchMock.mockResolvedValueOnce(
+        new Response('<a class="result__a" href="https://example.com">Example</a>', {
+          headers: { "content-type": "text/html" },
+        }),
+      );
+
+      await runActualDuckDuckGoSearch({ query: "duckduckgo in-flight cancellation" });
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   it("bounds successful DuckDuckGo HTML bodies without using response.text()", async () => {

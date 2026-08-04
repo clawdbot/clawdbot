@@ -52,7 +52,7 @@ export function createChannelIngressError(
 }
 
 /** Stable identity and serialization lane extracted before durable admission. */
-type ChannelIngressMonitorFacts = { eventId: string; laneKey: string };
+export type ChannelIngressMonitorFacts = { eventId: string; laneKey: string };
 
 /** Versioned body presented to a channel's persisted-payload encoder. */
 type ChannelIngressPayloadEnvelope<TBody> = { version: number; body: TBody };
@@ -84,7 +84,7 @@ type ChannelIngressMonitorInspectionContext =
 
 type ChannelIngressMonitorClaimErrorKind = "invalid-version" | "identity-mismatch";
 
-type ChannelIngressMonitorPayloadCodec<TRaw, TBody, TStoredPayload, TMetadata> = {
+export type ChannelIngressMonitorPayloadCodec<TRaw, TBody, TStoredPayload, TMetadata> = {
   version: number;
   serialize: (
     raw: TRaw,
@@ -129,12 +129,12 @@ export const CHANNEL_INGRESS_RETENTION_DEFAULTS = Object.freeze({
   failedMaxEntries: 20_000,
 } satisfies ChannelIngressMonitorRetention);
 
-type ChannelIngressMonitorDrainOptions<TStoredPayload, TMetadata> = Omit<
+export type ChannelIngressMonitorDrainOptions<TStoredPayload, TMetadata> = Omit<
   CreateChannelIngressDrainOptions<TStoredPayload, TMetadata>,
   "queue" | "dispatchClaimedEvent" | "abortSignal" | "now" | "ownerId" | "claimLeaseMs"
 >;
 
-type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata> = {
+export type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata> = {
   queue:
     | ChannelIngressQueue<TStoredPayload, TMetadata>
     | (() => ChannelIngressQueue<TStoredPayload, TMetadata>);

@@ -9,10 +9,12 @@ import {
   type SlackQaScenarioImplementation,
   type SlackQaScenarioContext,
 } from "./slack-live.contracts.js";
+import { waitForSlackScenarioReply } from "./slack-live.message-observations.js";
 import {
   isExpectedSlackNativeChartMessage,
   isExpectedSlackNativeTableMessage,
   runSlackTableInvalidBlocksFallbackScenario,
+  sendSlackChannelMessage,
   waitForSlackStoredMessage,
 } from "./slack-live.observations.js";
 import {
@@ -46,9 +48,14 @@ export const slackQaMentionGatingScenario: SlackQaScenarioImplementation = {
 };
 
 export const slackQaMpimAppMentionDedupeScenario: SlackQaScenarioImplementation = {
-  configOverrides: { groupDmEnabled: true },
+  // Keep the event-dedupe assertion independent from Slack's separate
+  // streaming preview/final message lifecycle.
+  configOverrides: { groupDmEnabled: true, replyToMode: "all", streamingMode: "off" },
   buildRun: (sutUserId) => {
-    const token = `SLACK_QA_MPIM_${randomUUID().slice(0, 8).toUpperCase()}`;
+    const suffix = randomUUID().slice(0, 8).toUpperCase();
+    const seedMarker = `SLACK_QA_MPIM_SEED_${suffix}`;
+    const recallMarker = `SLACK_QA_MPIM_RECALL_${suffix}`;
+    const missingMarker = `SLACK_QA_MPIM_MISSING_${suffix}`;
     let openedChannelId: string | undefined;
     const closeOpenedChannel = async (context: Omit<SlackQaScenarioContext, "sentTs">) => {
       if (!openedChannelId) {
@@ -72,8 +79,13 @@ export const slackQaMpimAppMentionDedupeScenario: SlackQaScenarioImplementation 
     };
     return {
       expectReply: true,
-      input: `<@${sutUserId}> reply with only this exact marker: ${token}`,
-      matchText: token,
+      input: [
+        `<@${sutUserId}> Slack MPIM assistant-history seed check.`,
+        `Reply with only a marker in this exact format: ${seedMarker}_BOT_<NONCE>.`,
+        "Replace <NONCE> with 8 to 32 new uppercase letters or digits.",
+        "Do not include angle brackets, spaces, Markdown, or punctuation.",
+      ].join(" "),
+      matchText: seedMarker,
       settleObservedMs: 60_000,
       beforeRun: async (context) => {
         const driverAuth = await context.driverClient.auth.test();
@@ -115,7 +127,7 @@ export const slackQaMpimAppMentionDedupeScenario: SlackQaScenarioImplementation 
       verifyObserved: ({ messages }) => {
         const uniqueReplies = new Map(messages.map((message) => [message.ts, message]));
         const matchingReplies = [...uniqueReplies.values()].filter((message) =>
-          message.text.includes(token),
+          message.text.includes(seedMarker),
         );
         if (uniqueReplies.size !== 1 || matchingReplies.length !== 1) {
           throw new Error(
@@ -123,6 +135,55 @@ export const slackQaMpimAppMentionDedupeScenario: SlackQaScenarioImplementation 
           );
         }
         return "one MPIM reply observed after message/app_mention twin delivery";
+      },
+      afterReply: async (message, context) => {
+        if (message.thread_ts !== context.sentTs) {
+          throw new Error("MPIM seed reply escaped the native Slack thread");
+        }
+        const botReplyMarker = message.text?.trim() ?? "";
+        const botReplyPrefix = `${seedMarker}_BOT_`;
+        const botNonce = botReplyMarker.startsWith(botReplyPrefix)
+          ? botReplyMarker.slice(botReplyPrefix.length)
+          : "";
+        if (!/^[A-Z0-9]{8,32}$/u.test(botNonce)) {
+          throw new Error("MPIM seed reply did not contain the provider-generated bot nonce");
+        }
+        const expectedRecallMarker = `${recallMarker}_${botNonce}`;
+        const sent = await sendSlackChannelMessage({
+          channelId: context.channelId,
+          client: context.driverClient,
+          text: [
+            `<@${sutUserId}> Slack MPIM assistant-history recall check.`,
+            `Recall the nonce from your immediately previous reply beginning with ${botReplyPrefix}.`,
+            `Reply with only this exact format: ${recallMarker}_<NONCE>, using that same nonce.`,
+            `Otherwise reply with only: ${missingMarker}`,
+          ].join(" "),
+          threadTs: context.sentTs,
+        });
+        const reply = await waitForSlackScenarioReply({
+          channelId: context.channelId,
+          client: context.sutReadClient,
+          matchText: expectedRecallMarker,
+          observedMessages: [],
+          observationScenarioId: "slack-mpim-app-mention-dedupe",
+          observationScenarioTitle: "Slack MPIM app mention dispatches once with thread context",
+          sentTs: sent.ts,
+          sutIdentity: context.sutIdentity,
+          threadTs: context.sentTs,
+          timeoutMs: 60_000,
+        });
+        if (reply.message.thread_ts !== context.sentTs) {
+          throw new Error("MPIM assistant-history recall reply escaped the native Slack thread");
+        }
+        if (reply.message.text?.trim() !== expectedRecallMarker) {
+          throw new Error("MPIM assistant-history recall reply did not reproduce the hidden nonce");
+        }
+        return [
+          "threadHistoryHeader=true",
+          "assistantAttributedSeed=true",
+          "recalledNonceMatched=true",
+          "threaded MPIM follow-up recovered the prior bot reply as assistant history",
+        ].join("; ");
       },
       cleanup: closeOpenedChannel,
     };
@@ -212,7 +273,7 @@ export const slackQaProgressCommentaryTrueScenario: SlackQaScenarioImplementatio
   },
   buildRun: (sutUserId) =>
     buildSlackProgressCommentaryRun(sutUserId, {
-      commentary: "draft",
+      commentary: "lane",
       toolProgress: "absent",
     }),
 };
@@ -223,7 +284,7 @@ export const slackQaProgressCommentaryFalseScenario: SlackQaScenarioImplementati
   },
   buildRun: (sutUserId) =>
     buildSlackProgressCommentaryRun(sutUserId, {
-      commentary: "absent",
+      commentary: "headline",
       toolProgress: "absent",
     }),
 };
@@ -234,7 +295,7 @@ export const slackQaProgressCommentaryOmittedScenario: SlackQaScenarioImplementa
   },
   buildRun: (sutUserId) =>
     buildSlackProgressCommentaryRun(sutUserId, {
-      commentary: "draft",
+      commentary: "headline",
       toolProgress: "draft",
     }),
 };
@@ -287,16 +348,14 @@ export const slackQaTablePresentationNativeScenario: SlackQaScenarioImplementati
   buildRun: (sutUserId) => {
     const suffix = randomUUID().slice(0, 8).toUpperCase();
     const summaryText = `SLACK_QA_TABLE_SUMMARY_${suffix}`;
-    const finalMarker = `SLACK_QA_TABLE_DONE_${suffix}`;
     const messageToolArgs = buildSlackTableMessageToolArgs(summaryText);
     return {
       expectReply: true,
       input: [
         `<@${sutUserId}> Slack native table QA check ${summaryText}.`,
         `Call the message tool exactly once with these exact arguments: ${JSON.stringify(messageToolArgs)}.`,
-        `After the table send succeeds, reply with only this exact marker: ${finalMarker}`,
       ].join(" "),
-      matchText: finalMarker,
+      matchText: summaryText,
       afterReply: async (_message, context) => {
         await waitForSlackStoredMessage({
           channelId: context.channelId,

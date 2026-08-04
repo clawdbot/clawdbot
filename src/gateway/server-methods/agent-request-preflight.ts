@@ -130,7 +130,7 @@ export function prepareAgentRequestPreflight(
     const pendingCollectorLaunch =
       registeredCollector?.swarmLaunchPending === true &&
       !registeredCollector.collectorCompletion &&
-      typeof registeredCollector.endedAt !== "number";
+      typeof registeredCollector.execution.endedAt !== "number";
     if (
       (!swarmEnabled && !collectorDedupe) ||
       !canUseInternalRuntimeHandoff ||

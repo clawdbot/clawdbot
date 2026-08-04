@@ -12,13 +12,15 @@ import {
   mergeLegacyObjectPropertyValues,
   mergeLegacyPathBranchAssignments,
 } from "./lib/legacy-store-path-domain.mjs";
-import { resolveRepoRoot, runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
+import { runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mjs";
 
 const databaseFirstLegacyStoreSourceRoots = ["src", "extensions", "packages"];
 const databaseFirstNativeSourceRoots = ["apps/macos/Sources/OpenClaw"];
 const nativeLegacyPortGuardianMigrationPath =
   "apps/macos/Sources/OpenClaw/PortGuardianRecordStore.swift";
 const nativeLegacyPortGuardianFilenamePattern = /\bport-guard\.(?:json|lock)\b/u;
+const unknownComputedPropertyName = "\0";
 
 const legacyWriteCallees = new Set([
   "appendFile",
@@ -175,59 +177,25 @@ const allowedRuntimeMigrationPaths = [
 
 const allowedFixturePaths = new Set(["extensions/qa-lab/src/providers/shared/auth-store.ts"]);
 
-const allowedCurrentLegacyWriteViolations = [];
-
 const sourceFileExtensions = new Set([".cjs", ".cts", ".js", ".mjs", ".mts", ".ts", ".tsx"]);
 
+const sourceTestExtensions = ["js", "mjs", "ts"];
+const sourceTestHelperStems = [
+  "test-fixtures",
+  "test-helper",
+  "test-helpers",
+  "test-harness",
+  "test-mocks",
+  "test-support",
+  "test-utils",
+];
 const sourceTestSuffixes = [
-  ".e2e-harness.js",
-  ".e2e-harness.mjs",
-  ".e2e-harness.ts",
-  ".test-fixtures.js",
-  ".test-fixtures.mjs",
-  ".test-fixtures.ts",
-  ".test-helper.js",
-  ".test-helper.mjs",
-  ".test-helper.ts",
-  ".test-helpers.js",
-  ".test-helpers.mjs",
-  ".test-helpers.ts",
-  ".test-harness.js",
-  ".test-harness.mjs",
-  ".test-harness.ts",
-  ".test-mocks.js",
-  ".test-mocks.mjs",
-  ".test-mocks.ts",
-  ".test-support.js",
-  ".test-support.mjs",
-  ".test-support.ts",
-  ".test-utils.js",
-  ".test-utils.mjs",
-  ".test-utils.ts",
-  ".test.js",
-  ".test.mjs",
-  ".test.ts",
-  "test-fixtures.js",
-  "test-fixtures.mjs",
-  "test-fixtures.ts",
-  "test-helper.js",
-  "test-helper.mjs",
-  "test-helper.ts",
-  "test-helpers.js",
-  "test-helpers.mjs",
-  "test-helpers.ts",
-  "test-harness.js",
-  "test-harness.mjs",
-  "test-harness.ts",
-  "test-mocks.js",
-  "test-mocks.mjs",
-  "test-mocks.ts",
-  "test-support.js",
-  "test-support.mjs",
-  "test-support.ts",
-  "test-utils.js",
-  "test-utils.mjs",
-  "test-utils.ts",
+  ...["e2e-harness", ...sourceTestHelperStems, "test"].flatMap((stem) =>
+    sourceTestExtensions.map((extension) => `.${stem}.${extension}`),
+  ),
+  ...sourceTestHelperStems.flatMap((stem) =>
+    sourceTestExtensions.map((extension) => `${stem}.${extension}`),
+  ),
 ];
 
 function isAllowedLegacyOwnerPath(relativePath) {
@@ -240,20 +208,8 @@ function isAllowedLegacyOwnerPath(relativePath) {
   );
 }
 
-function normalizedSourceText(sourceFile, node) {
-  return node.getText(sourceFile).replace(/\s+/gu, " ");
-}
-
 function lastScope(scopes) {
   return scopes[scopes.length - 1];
-}
-
-function visibleMap(scopes) {
-  return new Map(scopes.flatMap((scope) => [...scope]));
-}
-
-function visibleSet(scopes) {
-  return new Set(scopes.flatMap((scope) => [...scope]));
 }
 
 function scopeForRead(scopes, name) {
@@ -262,44 +218,6 @@ function scopeForRead(scopes, name) {
 
 function scopeForWrite(scopes, name) {
   return scopeForRead(scopes, name) ?? lastScope(scopes);
-}
-
-function currentLegacyWriteViolationAllowances(relativePath = null) {
-  const allowances = new Map();
-  const relativePrefix = typeof relativePath === "string" ? relativePath.concat(":") : null;
-  for (const fingerprint of allowedCurrentLegacyWriteViolations) {
-    if (relativePrefix !== null && !fingerprint.startsWith(relativePrefix)) {
-      continue;
-    }
-    allowances.set(fingerprint, (allowances.get(fingerprint) ?? 0) + 1);
-  }
-  return allowances;
-}
-
-function currentLegacyWriteViolationPath(fingerprint) {
-  const marker = ":legacy store filesystem write:";
-  const markerIndex = fingerprint.indexOf(marker);
-  return markerIndex === -1 ? null : fingerprint.slice(0, markerIndex);
-}
-
-function consumeAllowedCurrentLegacyViolation(
-  allowances,
-  relativePath,
-  sourceFile,
-  fingerprintNode,
-  kind,
-) {
-  const fingerprint = `${relativePath}:${kind}:${normalizedSourceText(sourceFile, fingerprintNode)}`;
-  const remaining = allowances.get(fingerprint) ?? 0;
-  if (remaining === 0) {
-    return false;
-  }
-  if (remaining === 1) {
-    allowances.delete(fingerprint);
-  } else {
-    allowances.set(fingerprint, remaining - 1);
-  }
-  return true;
 }
 
 function isSourceFile(filePath) {
@@ -326,7 +244,7 @@ function isTestLikeSourceFile(filePath) {
   return sourceTestSuffixes.some((suffix) => filePath.endsWith(suffix));
 }
 
-async function collectSourceFiles(targetPath) {
+async function collectFiles(targetPath, includeFile, skipEntry = () => false) {
   let stat;
   try {
     stat = await fs.stat(targetPath);
@@ -338,67 +256,44 @@ async function collectSourceFiles(targetPath) {
   }
 
   if (stat.isFile()) {
-    return isSourceFile(targetPath) &&
-      !isTestLikeSourceFile(targetPath) &&
-      !isGeneratedAssetSourceFile(targetPath)
-      ? [targetPath]
-      : [];
+    return includeFile(targetPath) ? [targetPath] : [];
   }
 
   const entries = await fs.readdir(targetPath, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
-    if (entry.name === "node_modules") {
-      continue;
-    }
     const entryPath = path.join(targetPath, entry.name);
-    if (isGeneratedAssetSourcePath(entryPath)) {
+    if (skipEntry(entryPath, entry)) {
       continue;
     }
     if (entry.isDirectory()) {
-      files.push(...(await collectSourceFiles(entryPath)));
+      files.push(...(await collectFiles(entryPath, includeFile, skipEntry)));
       continue;
     }
-    if (
-      entry.isFile() &&
-      isSourceFile(entryPath) &&
-      !isTestLikeSourceFile(entryPath) &&
-      !isGeneratedAssetSourceFile(entryPath)
-    ) {
+    if (entry.isFile() && includeFile(entryPath)) {
       files.push(entryPath);
     }
   }
   return files;
+}
+
+function collectSourceFiles(targetPath) {
+  return collectFiles(
+    targetPath,
+    (filePath) =>
+      isSourceFile(filePath) &&
+      !isTestLikeSourceFile(filePath) &&
+      !isGeneratedAssetSourceFile(filePath),
+    (entryPath, entry) => entry.name === "node_modules" || isGeneratedAssetSourcePath(entryPath),
+  );
 }
 
 export async function collectDatabaseFirstLegacyStoreSourceFiles(sourceRoots) {
   return (await Promise.all(sourceRoots.map((root) => collectSourceFiles(root)))).flat();
 }
 
-async function collectNativeSourceFiles(targetPath) {
-  let stat;
-  try {
-    stat = await fs.stat(targetPath);
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-      return [];
-    }
-    throw error;
-  }
-  if (stat.isFile()) {
-    return path.extname(targetPath) === ".swift" ? [targetPath] : [];
-  }
-  const entries = await fs.readdir(targetPath, { withFileTypes: true });
-  const files = [];
-  for (const entry of entries) {
-    const entryPath = path.join(targetPath, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await collectNativeSourceFiles(entryPath)));
-    } else if (entry.isFile() && path.extname(entryPath) === ".swift") {
-      files.push(entryPath);
-    }
-  }
-  return files;
+function collectNativeSourceFiles(targetPath) {
+  return collectFiles(targetPath, (filePath) => path.extname(filePath) === ".swift");
 }
 
 export function collectDatabaseFirstNativeLegacyStoreViolations(content, relativePath) {
@@ -732,7 +627,6 @@ function legacyCandidateTexts(sourceFile, node) {
 export function collectDatabaseFirstLegacyStoreViolations(
   content,
   inputRelativePath = "source.ts",
-  scanOptions = {},
 ) {
   const relativePath = inputRelativePath.replaceAll("\\", "/");
   const sourceFile = ts.createSourceFile(relativePath, content, ts.ScriptTarget.Latest, true);
@@ -744,8 +638,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
     return boundaryViolations;
   }
 
-  const currentLegacyWriteAllowances =
-    scanOptions.currentLegacyWriteAllowances ?? currentLegacyWriteViolationAllowances(relativePath);
   const createRequireBindings = collectCreateRequireBindings(sourceFile);
   const { fsModuleBindings, fsWriteAliases, fsSafeStoreFactoryAliases } =
     collectFsBindings(sourceFile);
@@ -760,16 +652,21 @@ export function collectDatabaseFirstLegacyStoreViolations(
   const fsSafeStoreScopes = [new Map()];
   const fsSafeJsonStoreScopes = [new Map()];
   const requireAliasScopes = [new Map([["require", true]])];
-  const requireShadowScopes = [new Set()];
   const createRequireShadowScopes = [new Set()];
   const legacyPathScopes = [new Map()];
   const literalTextScopes = [new Map()];
+  const staticExpressionScopes = [new Map()];
   const knownUndefinedScopes = [new Map()];
   const legacyKnownObjectLiteralScopes = [new Map()];
   const legacyObjectPropertyScopes = [new Map()];
   const wrapperFunctionScopes = [new Map()];
   const conditionalExecutionScopes = [false];
   const branchEffectScopes = [];
+  const activeWrapperNodes = new Set();
+  const intrinsicWrapperCalls = new WeakSet();
+  const wrapperCallSites = [];
+  const wrapperExecutionScopeIndexes = [];
+  let definitionScanDepth = 0;
   const lexicalScopeStacks = [
     [fsWriteAliasScopes, Map],
     [fsSafeStoreFactoryAliasScopes, Map],
@@ -778,10 +675,10 @@ export function collectDatabaseFirstLegacyStoreViolations(
     [fsModuleBindingScopes, Map],
     [fsModulePropertyScopes, Map],
     [requireAliasScopes, Map],
-    [requireShadowScopes, Set],
     [createRequireShadowScopes, Set],
     [legacyPathScopes, Map],
     [literalTextScopes, Map],
+    [staticExpressionScopes, Map],
     [knownUndefinedScopes, Map],
     [legacyKnownObjectLiteralScopes, Map],
     [legacyObjectPropertyScopes, Map],
@@ -803,19 +700,10 @@ export function collectDatabaseFirstLegacyStoreViolations(
     }
   }
 
-  function addViolation(node, kind, fingerprintNode = node) {
-    const line = toLine(sourceFile, node);
-    if (
-      consumeAllowedCurrentLegacyViolation(
-        currentLegacyWriteAllowances,
-        relativePath,
-        sourceFile,
-        fingerprintNode,
-        kind,
-      )
-    ) {
-      return;
-    }
+  function addViolation(node, kind) {
+    const callSite = kind === "legacy store filesystem write" ? wrapperCallSites[0] : null;
+    const reportedNode = callSite ?? node;
+    const line = toLine(sourceFile, reportedNode);
     const key = `${line}:${kind}`;
     if (seenViolations.has(key)) {
       return;
@@ -903,22 +791,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
     return scope ? scope.get(name) === true : null;
   }
 
-  function visibleRequireAliasSnapshot(maxScopeIndex = requireAliasScopes.length - 1) {
-    const aliases = new Map();
-    const sourceScopes = new Map();
-    for (let index = 0; index <= maxScopeIndex; index++) {
-      const scope = requireAliasScopes[index];
-      if (!scope) {
-        continue;
-      }
-      for (const [name, value] of scope) {
-        aliases.set(name, value);
-        sourceScopes.set(name, index);
-      }
-    }
-    return { aliases, sourceScopes };
-  }
-
   function lookupKnownLegacyObjectLiteral(name) {
     for (let index = legacyKnownObjectLiteralScopes.length - 1; index >= 0; index--) {
       const scope = legacyKnownObjectLiteralScopes[index];
@@ -1001,6 +873,10 @@ export function collectDatabaseFirstLegacyStoreViolations(
 
   function resolveLiteralTextIdentifier(name) {
     return scopeForRead(literalTextScopes, name)?.get(name) ?? [];
+  }
+
+  function resolveStaticExpression(name) {
+    return scopeForRead(staticExpressionScopes, name)?.get(name) ?? null;
   }
 
   function resolveKnownUndefinedIdentifier(name) {
@@ -1124,6 +1000,9 @@ export function collectDatabaseFirstLegacyStoreViolations(
     if (ts.isStringLiteralLike(unwrapped)) {
       return [unwrapped.text];
     }
+    if (ts.isIdentifier(unwrapped)) {
+      return resolveLiteralTextIdentifier(unwrapped.text);
+    }
     return [];
   }
 
@@ -1191,34 +1070,23 @@ export function collectDatabaseFirstLegacyStoreViolations(
     return { found: false, objectKnown: false, objectValue: false };
   }
 
-  function lookupScopedLegacyObjectPropertyEntry(
-    objectName,
-    propertyPath,
-    propertyScope,
-    knownObjectLiteralScope,
-  ) {
-    const propertyName = propertyPath.join(".");
-    const key = objectPropertyKey(objectName, propertyName);
-    if (propertyScope.has(key)) {
-      return { found: true, value: propertyScope.get(key) };
-    }
-    const parentPath = propertyPath.slice(0, -1).join(".");
-    const parentKey = parentPath ? objectPropertyKey(objectName, parentPath) : objectName;
-    if (knownObjectLiteralScope.get(parentKey) === true) {
-      return { found: false, objectKnown: true, objectValue: false };
-    }
-    return { found: false, objectKnown: false, objectValue: false };
-  }
-
   function legacyObjectPropertyValueFromExpression(expression) {
     return isKnownUndefinedExpression(expression)
       ? explicitUndefinedLegacyObjectPropertyValue
       : expressionContainsLegacyStore(expression);
   }
 
-  function elementAccessName(expression) {
+  function elementAccessNames(expression) {
     const argument = unwrapExpression(expression);
-    return ts.isStringLiteral(argument) || ts.isNumericLiteral(argument) ? argument.text : null;
+    if (ts.isStringLiteral(argument) || ts.isNumericLiteral(argument)) {
+      return [argument.text];
+    }
+    return ts.isIdentifier(argument) ? resolveLiteralTextIdentifier(argument.text) : [];
+  }
+
+  function elementAccessName(expression) {
+    const names = elementAccessNames(expression);
+    return names.length === 1 ? names[0] : null;
   }
 
   function propertyAccessPath(expression) {
@@ -1237,25 +1105,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
       }
       const parentPath = propertyAccessPath(unwrapped.expression);
       return parentPath ? [...parentPath, propertyName] : null;
-    }
-    return null;
-  }
-
-  function namedObjectPropertyAccess(expression) {
-    if (ts.isPropertyAccessExpression(expression) && ts.isIdentifier(expression.expression)) {
-      return {
-        objectName: expression.expression.text,
-        propertyName: expression.name.text,
-      };
-    }
-    if (ts.isElementAccessExpression(expression) && ts.isIdentifier(expression.expression)) {
-      const propertyName = elementAccessName(expression.argumentExpression);
-      return propertyName
-        ? {
-            objectName: expression.expression.text,
-            propertyName,
-          }
-        : null;
     }
     return null;
   }
@@ -1316,16 +1165,17 @@ export function collectDatabaseFirstLegacyStoreViolations(
       if (found) {
         return;
       }
-      if (ts.isIdentifier(current) && resolveLegacyPathIdentifier(current.text)) {
+      if (
+        ts.isIdentifier(current) &&
+        !(ts.isPropertyAccessExpression(current.parent) && current.parent.name === current) &&
+        resolveLegacyPathIdentifier(current.text)
+      ) {
         found = true;
         return;
       }
-      const propertyAccess = rootedPropertyAccessPath(current);
-      if (propertyAccess?.properties.length > 0) {
-        const propertyValue = lookupLegacyObjectProperty(
-          propertyAccess.rootName,
-          propertyAccess.properties.join("."),
-        );
+      const propertyAccess = rootedPropertyAccessCandidates(current);
+      if (propertyAccess?.propertyPaths.some((propertyPath) => propertyPath.length > 0)) {
+        const propertyValue = lookupLegacyObjectPropertyCandidates(propertyAccess);
         if (propertyValue !== null) {
           found = propertyValue;
           return;
@@ -1397,6 +1247,14 @@ export function collectDatabaseFirstLegacyStoreViolations(
 
   function visitFunctionLike(node, fsBindingParameterIndexes = new Set()) {
     withLexicalScope(false, () => {
+      if (node.name && ts.isIdentifier(node.name)) {
+        markFsWriteAliasShadows(node.name);
+        markFsSafeStoreShadows(node.name);
+        markFsModuleBindingShadows(node.name);
+        markFsModulePropertyShadows(node.name);
+        markCreateRequireShadows(node.name);
+        lastScope(wrapperFunctionScopes).set(node.name.text, wrapperRecordForNode(node));
+      }
       node.parameters.forEach((parameter, index) => {
         for (const name of bindingPatternNames(parameter.name)) {
           lastScope(legacyPathScopes).set(name, false);
@@ -1410,14 +1268,18 @@ export function collectDatabaseFirstLegacyStoreViolations(
         markFsSafeStoreShadows(parameter.name);
         markFsModuleBindingShadows(parameter.name);
         markFsModulePropertyShadows(parameter.name);
-        markRequireShadows(parameter.name);
         markCreateRequireShadows(parameter.name);
         registerFsModuleTypeProperties(parameter.name, parameter.type);
         if (fsBindingParameterIndexes.has(index)) {
           registerFsBindingParameter(parameter.name);
         }
       });
-      ts.forEachChild(node, visit);
+      definitionScanDepth += 1;
+      try {
+        ts.forEachChild(node, visit);
+      } finally {
+        definitionScanDepth -= 1;
+      }
     });
   }
 
@@ -1654,12 +1516,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
   function markFsModulePropertyShadows(name) {
     for (const bindingName of bindingPatternNames(name)) {
       clearFsModuleObjectProperties(lastScope(fsModulePropertyScopes), bindingName);
-    }
-  }
-
-  function markRequireShadows(name) {
-    if (bindingPatternNames(name).includes("require")) {
-      lastScope(requireShadowScopes).add("require");
     }
   }
 
@@ -2066,17 +1922,14 @@ export function collectDatabaseFirstLegacyStoreViolations(
   }
 
   function propertyNameText(name) {
-    return ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)
-      ? name.text
-      : null;
+    if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
+      return name.text;
+    }
+    if (ts.isComputedPropertyName(name)) {
+      return elementAccessName(name.expression);
+    }
+    return null;
   }
-
-  const unknownObjectLiteralPropertyInitializer = Symbol(
-    "unknown object literal property initializer",
-  );
-  const explicitUndefinedNestedWrapperValue = Symbol("explicit undefined nested wrapper value");
-  const knownObjectLiteralNestedWrapperValue = Symbol("known object literal nested wrapper value");
-  const unknownNestedWrapperObjectValue = Symbol("unknown nested wrapper object value");
 
   function isVarVariableDeclaration(node) {
     return (
@@ -2130,62 +1983,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
       }
     }
     return result;
-  }
-
-  function objectLiteralPropertyInitializerState(
-    objectLiteral,
-    propertyName,
-    resolveSpreadProperty = null,
-  ) {
-    let result = { kind: "missing" };
-    for (const property of objectLiteral.properties) {
-      if (ts.isSpreadAssignment(property)) {
-        const spreadExpression = unwrapExpression(property.expression);
-        if (ts.isIdentifier(spreadExpression) && resolveSpreadProperty) {
-          const spreadResult = resolveSpreadProperty(spreadExpression.text, propertyName);
-          if (spreadResult.kind !== "missing") {
-            result = spreadResult;
-          }
-          continue;
-        }
-        if (ts.isObjectLiteralExpression(spreadExpression)) {
-          const spreadResult = objectLiteralPropertyInitializerState(
-            spreadExpression,
-            propertyName,
-            resolveSpreadProperty,
-          );
-          if (spreadResult.kind !== "missing") {
-            result = spreadResult;
-          }
-          continue;
-        }
-        result = { kind: "unknown" };
-        continue;
-      }
-      if (ts.isPropertyAssignment(property) && propertyNameText(property.name) === propertyName) {
-        result = isKnownUndefinedExpression(property.initializer)
-          ? { kind: "undefined" }
-          : { kind: "initializer", initializer: property.initializer };
-        continue;
-      }
-      if (ts.isShorthandPropertyAssignment(property) && property.name.text === propertyName) {
-        result = isKnownUndefinedExpression(property.name)
-          ? { kind: "undefined" }
-          : { kind: "initializer", initializer: property.name };
-      }
-    }
-    return result;
-  }
-
-  function objectLiteralPropertyInitializer(objectLiteral, propertyName) {
-    const result = objectLiteralPropertyInitializerState(objectLiteral, propertyName);
-    if (result.kind === "missing" || result.kind === "undefined") {
-      return null;
-    }
-    if (result.kind === "unknown") {
-      return unknownObjectLiteralPropertyInitializer;
-    }
-    return result.initializer;
   }
 
   function objectLiteralPropertyContainsLegacyStore(objectLiteral, propertyName) {
@@ -2308,6 +2105,24 @@ export function collectDatabaseFirstLegacyStoreViolations(
     });
   }
 
+  function recordBranchWrapperObjectRewrite(index, objectName, initializer) {
+    const fact = factFromExpression(initializer);
+    if (!fact.knownObject) {
+      return;
+    }
+    const retained = new Set(
+      [...fact.wrappers.keys()].map((key) => `${objectName}${key.slice(fact.root.length)}`),
+    );
+    const prefix = `${objectName}.`;
+    for (const scope of wrapperFunctionScopes) {
+      for (const name of scope.keys()) {
+        if (name.startsWith(prefix) && !retained.has(name)) {
+          recordBranchWrapperAssignment(index, name, null);
+        }
+      }
+    }
+  }
+
   function recordBranchFsIdentifierAssignment(
     index,
     name,
@@ -2418,7 +2233,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
     const applyToTargetScopes = !lastScope(conditionalExecutionScopes) && !parentEffect;
     for (const [key, thenAssignment] of thenEffects.fsIdentifierAssignments) {
       const elseAssignment = elseEffects.fsIdentifierAssignments.get(key);
-      if (!elseAssignment) {
+      if (!elseAssignment || thenAssignment.index >= legacyPathScopes.length) {
         continue;
       }
       const { index, name } = thenAssignment;
@@ -2448,7 +2263,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
       lastScope(fsSafeStoreScopes).set(name, mergedFsSafeStoreValue);
       lastScope(fsSafeJsonStoreScopes).set(name, mergedFsSafeJsonStoreValue);
       lastScope(requireAliasScopes).set(name, mergedRequireAlias);
-      refreshCurrentWrapperFunctionAliases();
       if (parentEffect) {
         parentEffect.fsIdentifierAssignments.set(branchIdentifierAssignmentKey(index, name), {
           fsSafeFactoryAlias: mergedFsSafeFactoryAlias,
@@ -2464,7 +2278,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
     }
     for (const [key, thenAssignment] of thenEffects.identifierAssignments) {
       const elseAssignment = elseEffects.identifierAssignments.get(key);
-      if (!elseAssignment) {
+      if (!elseAssignment || thenAssignment.index >= legacyPathScopes.length) {
         continue;
       }
       const { index, name } = thenAssignment;
@@ -2512,7 +2326,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
     }
     for (const [key, thenAssignment] of thenEffects.fsSafePropertyAssignments) {
       const elseAssignment = elseEffects.fsSafePropertyAssignments.get(key);
-      if (!elseAssignment) {
+      if (!elseAssignment || thenAssignment.index >= legacyPathScopes.length) {
         continue;
       }
       const mergedStoreValue =
@@ -2538,7 +2352,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
     }
     for (const [key, thenAssignment] of thenEffects.propertyAssignments) {
       const elseAssignment = elseEffects.propertyAssignments.get(key);
-      if (!elseAssignment) {
+      if (!elseAssignment || thenAssignment.index >= legacyPathScopes.length) {
         continue;
       }
       const identifierKey = branchIdentifierAssignmentKey(
@@ -2576,7 +2390,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
     }
     for (const [key, thenAssignment] of thenEffects.wrapperAssignments) {
       const elseAssignment = elseEffects.wrapperAssignments.get(key);
-      if (!elseAssignment) {
+      if (!elseAssignment || thenAssignment.index >= legacyPathScopes.length) {
         continue;
       }
       const { index, name } = thenAssignment;
@@ -2616,16 +2430,25 @@ export function collectDatabaseFirstLegacyStoreViolations(
     knownObjectLiteralScope?.set(objectName, true);
     for (const property of objectLiteral.properties) {
       if (ts.isPropertyAssignment(property)) {
-        const name = propertyNameText(property.name);
-        if (name) {
+        const resolvedNames = ts.isComputedPropertyName(property.name)
+          ? elementAccessNames(property.name.expression)
+          : [propertyNameText(property.name)].filter(Boolean);
+        const names = resolvedNames.length > 0 ? resolvedNames : [unknownComputedPropertyName];
+        for (const name of names) {
           const propertyKey = `${objectName}.${name}`;
-          clearLegacyObjectProperties(targetScope, propertyKey);
-          if (knownObjectLiteralScope) {
-            clearKnownLegacyObjectLiterals(knownObjectLiteralScope, propertyKey);
+          const unknownComputed = name === unknownComputedPropertyName;
+          if (!unknownComputed) {
+            clearLegacyObjectProperties(targetScope, propertyKey);
+            if (knownObjectLiteralScope) {
+              clearKnownLegacyObjectLiterals(knownObjectLiteralScope, propertyKey);
+            }
           }
+          const propertyValue = legacyObjectPropertyValueFromExpression(property.initializer);
           targetScope.set(
             propertyKey,
-            legacyObjectPropertyValueFromExpression(property.initializer),
+            unknownComputed
+              ? targetScope.get(propertyKey) === true || propertyValue
+              : propertyValue,
           );
           const propertyInitializer = unwrapExpression(property.initializer);
           if (ts.isIdentifier(propertyInitializer)) {
@@ -2741,142 +2564,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
     }
   }
 
-  function copyScopedLegacyObjectProperties(targetName, sourceName, sourceScope) {
-    const sourcePrefix = `${sourceName}.`;
-    const copiedEntries = [];
-    for (const [key, value] of sourceScope) {
-      if (key.startsWith(sourcePrefix)) {
-        copiedEntries.push([`${targetName}.${key.slice(sourcePrefix.length)}`, value]);
-      }
-    }
-    copiedEntries.sort((left, right) => left[0].length - right[0].length);
-    for (const [key, value] of copiedEntries) {
-      clearLegacyObjectProperties(lastScope(legacyObjectPropertyScopes), key);
-      lastScope(legacyObjectPropertyScopes).set(key, value);
-    }
-  }
-
-  function copyScopedKnownLegacyObjectLiterals(targetName, sourceName, sourceScope) {
-    lastScope(legacyKnownObjectLiteralScopes).set(targetName, sourceScope.get(sourceName) === true);
-    const sourcePrefix = `${sourceName}.`;
-    const copiedEntries = [];
-    for (const [key, value] of sourceScope) {
-      if (key.startsWith(sourcePrefix)) {
-        copiedEntries.push([`${targetName}.${key.slice(sourcePrefix.length)}`, value]);
-      }
-    }
-    copiedEntries.sort((left, right) => left[0].length - right[0].length);
-    for (const [key, value] of copiedEntries) {
-      clearKnownLegacyObjectLiterals(lastScope(legacyKnownObjectLiteralScopes), key);
-      lastScope(legacyKnownObjectLiteralScopes).set(key, value);
-    }
-  }
-
-  function collectPathPropertyUses(
-    expression,
-    fsWriteName,
-    resolveParameterIndex,
-    resolveDestructuredParameterProperty,
-    resolveParameterPropertyUse = null,
-    resolveDestructuredParameterPropertyUses = null,
-  ) {
-    function appendUses(uses, value) {
-      if (!value) {
-        return;
-      }
-      if (Array.isArray(value)) {
-        uses.push(...value);
-        return;
-      }
-      uses.push(value);
-    }
-
-    function isPathLikeWrapperPropertyName(propertyName) {
-      const normalized = propertyName.toLowerCase();
-      return (
-        normalized === "path" ||
-        normalized === "store" ||
-        normalized === "file" ||
-        normalized.endsWith("path") ||
-        normalized.endsWith("dir")
-      );
-    }
-
-    const uses = [];
-    function visitExpression(current) {
-      if (
-        ts.isIdentifier(current) &&
-        usesFilePathOptionsObject(fsWriteName) &&
-        resolveParameterIndex(current.text) !== null
-      ) {
-        const propertyUse = resolveParameterPropertyUse?.(current.text, "filePath");
-        if (propertyUse !== null) {
-          appendUses(
-            uses,
-            propertyUse ?? { index: resolveParameterIndex(current.text), propertyName: "filePath" },
-          );
-        }
-        return;
-      }
-      const propertyAccess = rootedPropertyAccessPath(current);
-      if (propertyAccess?.properties.length > 0) {
-        const index = resolveParameterIndex(propertyAccess.rootName);
-        if (index !== null) {
-          for (let length = propertyAccess.properties.length; length > 0; length--) {
-            const lastPropertyName = propertyAccess.properties[length - 1];
-            if (
-              length !== propertyAccess.properties.length &&
-              !isPathLikeWrapperPropertyName(lastPropertyName)
-            ) {
-              continue;
-            }
-            const propertyName = propertyAccess.properties.slice(0, length).join(".");
-            const propertyUse = resolveParameterPropertyUse?.(
-              propertyAccess.rootName,
-              propertyName,
-            );
-            if (propertyUse !== null) {
-              appendUses(uses, propertyUse ?? { index, propertyName });
-            }
-          }
-        }
-        return;
-      }
-      if (ts.isIdentifier(current)) {
-        const destructuredUses = resolveDestructuredParameterPropertyUses?.(current.text);
-        if (destructuredUses) {
-          appendUses(uses, destructuredUses);
-        } else if (resolveDestructuredParameterProperty(current.text)) {
-          uses.push(resolveDestructuredParameterProperty(current.text));
-        } else {
-          const index = resolveParameterIndex(current.text);
-          if (index !== null) {
-            uses.push({ index, propertyName: null });
-          }
-        }
-      }
-      ts.forEachChild(current, visitExpression);
-    }
-    visitExpression(expression);
-    return uses;
-  }
-
-  function usesFilePathOptionsObject(name) {
-    return (
-      name === "appendRegularFile" ||
-      name === "appendRegularFileSync" ||
-      name === "replaceFileAtomic" ||
-      name === "replaceFileAtomicSync"
-    );
-  }
-
-  function parameterPropertyBindings(parameter, index) {
-    if (!ts.isObjectBindingPattern(parameter.name)) {
-      return new Map();
-    }
-    return objectBindingParameterProperties(parameter.name, index);
-  }
-
   function bindingPatternNames(name) {
     const names = [];
     function visitName(current) {
@@ -2896,196 +2583,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
     return names;
   }
 
-  function parameterPropertyDestructureIndex(node, resolveParameterIndex) {
-    if (
-      !ts.isObjectBindingPattern(node.name) ||
-      !node.initializer ||
-      !ts.isIdentifier(node.initializer)
-    ) {
-      return null;
-    }
-    return resolveParameterIndex(node.initializer.text);
-  }
-
-  function objectBindingParameterProperties(bindingPattern, index, propertyPath = []) {
-    const bindings = new Map();
-    for (const element of bindingPattern.elements) {
-      const propertyName = element.propertyName
-        ? propertyNameText(element.propertyName)
-        : ts.isIdentifier(element.name)
-          ? element.name.text
-          : null;
-      if (!propertyName) {
-        continue;
-      }
-      const nextPath = [...propertyPath, propertyName];
-      if (ts.isIdentifier(element.name)) {
-        bindings.set(element.name.text, { index, propertyName: nextPath.join(".") });
-        continue;
-      }
-      if (ts.isObjectBindingPattern(element.name)) {
-        for (const [name, binding] of objectBindingParameterProperties(
-          element.name,
-          index,
-          nextPath,
-        )) {
-          bindings.set(name, binding);
-        }
-      }
-    }
-    return bindings;
-  }
-
-  function markLegacyPathsFromObjectBinding(bindingPattern, sourceName, propertyPath = []) {
-    for (const element of bindingPattern.elements) {
-      const propertyName = element.propertyName
-        ? propertyNameText(element.propertyName)
-        : ts.isIdentifier(element.name)
-          ? element.name.text
-          : null;
-      if (!propertyName) {
-        continue;
-      }
-      const nextPath = [...propertyPath, propertyName];
-      if (ts.isIdentifier(element.name)) {
-        const trackedPropertyEntry = lookupLegacyObjectPropertyEntry(
-          sourceName,
-          nextPath.join("."),
-        );
-        const usesDefaultInitializer = trackedPropertyEntry.found
-          ? trackedPropertyEntry.value === explicitUndefinedLegacyObjectPropertyValue
-          : trackedPropertyEntry.objectKnown;
-        const trackedPropertyValue = trackedPropertyEntry.found
-          ? trackedPropertyEntry.value === explicitUndefinedLegacyObjectPropertyValue
-            ? null
-            : trackedPropertyEntry.value === true
-          : null;
-        const propertyValue =
-          trackedPropertyValue === null
-            ? element.initializer
-              ? expressionContainsLegacyStore(element.initializer)
-              : false
-            : trackedPropertyValue;
-        lastScope(legacyPathScopes).set(element.name.text, propertyValue);
-        lastScope(knownUndefinedScopes).set(
-          element.name.text,
-          usesDefaultInitializer
-            ? element.initializer
-              ? isKnownUndefinedExpression(element.initializer)
-              : true
-            : false,
-        );
-        const sourcePropertyName = `${sourceName}.${nextPath.join(".")}`;
-        copyLegacyObjectProperties(element.name.text, sourcePropertyName);
-        copyKnownLegacyObjectLiterals(element.name.text, sourcePropertyName);
-        lastScope(wrapperFunctionScopes).set(
-          element.name.text,
-          cloneWrapperFunctionValue(resolveWrapperFunction(sourcePropertyName)),
-        );
-        continue;
-      }
-      if (ts.isObjectBindingPattern(element.name)) {
-        markLegacyPathsFromObjectBinding(element.name, sourceName, nextPath);
-      }
-    }
-  }
-
-  function markLegacyPathsFromInlineObjectBinding(bindingPattern, initializer, propertyPath = []) {
-    const sourceName = "<inline-object-binding>";
-    const propertyScope = new Map();
-    const knownObjectLiteralScope = new Map();
-    markLegacyObjectProperties(sourceName, initializer, propertyScope, knownObjectLiteralScope);
-    function visitBinding(currentBindingPattern, currentPath) {
-      for (const element of currentBindingPattern.elements) {
-        const propertyName = element.propertyName
-          ? propertyNameText(element.propertyName)
-          : ts.isIdentifier(element.name)
-            ? element.name.text
-            : null;
-        if (!propertyName) {
-          continue;
-        }
-        const nextPath = [...currentPath, propertyName];
-        if (ts.isIdentifier(element.name)) {
-          const trackedPropertyEntry = lookupScopedLegacyObjectPropertyEntry(
-            sourceName,
-            nextPath,
-            propertyScope,
-            knownObjectLiteralScope,
-          );
-          const usesDefaultInitializer = trackedPropertyEntry.found
-            ? trackedPropertyEntry.value === explicitUndefinedLegacyObjectPropertyValue
-            : trackedPropertyEntry.objectKnown;
-          const propertyValue = trackedPropertyEntry.found
-            ? trackedPropertyEntry.value === explicitUndefinedLegacyObjectPropertyValue
-              ? element.initializer
-                ? expressionContainsLegacyStore(element.initializer)
-                : false
-              : trackedPropertyEntry.value === true
-            : trackedPropertyEntry.objectKnown && element.initializer
-              ? expressionContainsLegacyStore(element.initializer)
-              : false;
-          lastScope(legacyPathScopes).set(element.name.text, propertyValue);
-          lastScope(knownUndefinedScopes).set(
-            element.name.text,
-            usesDefaultInitializer
-              ? element.initializer
-                ? isKnownUndefinedExpression(element.initializer)
-                : true
-              : false,
-          );
-          const sourcePropertyName = objectPropertyKey(sourceName, nextPath.join("."));
-          copyScopedLegacyObjectProperties(element.name.text, sourcePropertyName, propertyScope);
-          copyScopedKnownLegacyObjectLiterals(
-            element.name.text,
-            sourcePropertyName,
-            knownObjectLiteralScope,
-          );
-          continue;
-        }
-        if (ts.isObjectBindingPattern(element.name)) {
-          visitBinding(element.name, nextPath);
-        }
-      }
-    }
-    visitBinding(bindingPattern, propertyPath);
-  }
-
-  function markFsSafeStoresFromObjectBinding(bindingPattern, sourceName, propertyPath = []) {
-    for (const element of bindingPattern.elements) {
-      const propertyName = element.propertyName
-        ? propertyNameText(element.propertyName)
-        : ts.isIdentifier(element.name)
-          ? element.name.text
-          : null;
-      if (!propertyName) {
-        continue;
-      }
-      const nextPath = [...propertyPath, propertyName];
-      if (ts.isIdentifier(element.name)) {
-        const key = `${sourceName}.${nextPath.join(".")}`;
-        const trackedStore = lookupFsSafeStore(key);
-        const trackedJsonStore = lookupFsSafeJsonStore(key);
-        lastScope(fsSafeStoreScopes).set(
-          element.name.text,
-          trackedStore ??
-            (element.initializer ? isFsSafeStoreExpression(element.initializer) : false),
-        );
-        lastScope(fsSafeJsonStoreScopes).set(
-          element.name.text,
-          trackedJsonStore ??
-            (element.initializer
-              ? expressionContainsFsSafeJsonStoreLegacyPath(element.initializer)
-              : false),
-        );
-        continue;
-      }
-      if (ts.isObjectBindingPattern(element.name)) {
-        markFsSafeStoresFromObjectBinding(element.name, sourceName, nextPath);
-      }
-    }
-  }
-
   function markFsSafeFactoryAliasesFromObjectBinding(bindingPattern, sourceName) {
     for (const element of bindingPattern.elements) {
       if (!ts.isIdentifier(element.name)) {
@@ -3101,125 +2598,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
         lastScope(fsSafeStoreFactoryAliasScopes).set(element.name.text, factoryAlias);
       }
     }
-  }
-
-  function collectForwardedPropertyUses({
-    argument,
-    propertyName,
-    parameter = null,
-    wrapperNode = null,
-    argumentsList = [],
-    options = {},
-    resolveParameterIndex,
-    resolveDestructuredParameterProperty,
-    resolveParameterPropertyUse,
-    resolveDestructuredParameterPropertyUses,
-    resolveSpreadProperty,
-  }) {
-    const collectUses = (expression) =>
-      collectPathPropertyUses(
-        expression,
-        "writeFile",
-        resolveParameterIndex,
-        resolveDestructuredParameterProperty,
-        resolveParameterPropertyUse,
-        resolveDestructuredParameterPropertyUses,
-      );
-    if (propertyName === null) {
-      return collectUses(argument);
-    }
-
-    const propertyPath = propertyName.split(".");
-    function collectBindingDefaultUses(sourceExpression) {
-      if (!parameter || !ts.isObjectBindingPattern(parameter.name)) {
-        return [];
-      }
-      const initializer = appliedBindingElementDefaultInitializer(
-        parameter.name,
-        propertyPath,
-        sourceExpression,
-        resolveSpreadProperty,
-      );
-      const defaultExpression = initializer
-        ? resolveBindingDefaultInitializerExpression(
-            initializer,
-            wrapperNode,
-            argumentsList,
-            parameter,
-            options,
-          )
-        : null;
-      return defaultExpression ? collectUses(defaultExpression) : [];
-    }
-
-    function collectPropertyUseState(currentArgument, currentPropertyPath) {
-      const currentUnwrapped = unwrapExpression(currentArgument);
-      const currentPropertyName = currentPropertyPath.join(".");
-      if (ts.isIdentifier(currentUnwrapped)) {
-        const index = resolveParameterIndex(currentUnwrapped.text);
-        if (index !== null) {
-          const propertyUse = resolveParameterPropertyUse(
-            currentUnwrapped.text,
-            currentPropertyName,
-          );
-          return propertyUse === null
-            ? []
-            : [propertyUse ?? { index, propertyName: currentPropertyName }];
-        }
-        return null;
-      }
-      if (!ts.isObjectLiteralExpression(currentUnwrapped)) {
-        const uses = collectUses(currentArgument);
-        return uses.length > 0 ? uses : null;
-      }
-
-      let result = null;
-      for (const property of currentUnwrapped.properties) {
-        if (ts.isSpreadAssignment(property)) {
-          const spreadUses = collectPropertyUseState(property.expression, currentPropertyPath);
-          if (spreadUses !== null) {
-            result = spreadUses;
-          }
-          continue;
-        }
-        const [nextPropertyName, ...remainingPropertyPath] = currentPropertyPath;
-        if (
-          ts.isPropertyAssignment(property) &&
-          propertyNameText(property.name) === nextPropertyName
-        ) {
-          if (isKnownUndefinedExpression(property.initializer)) {
-            result = null;
-          } else if (remainingPropertyPath.length > 0) {
-            result = collectPropertyUseState(property.initializer, remainingPropertyPath);
-          } else {
-            result = collectUses(property.initializer);
-          }
-          continue;
-        }
-        if (ts.isShorthandPropertyAssignment(property) && property.name.text === nextPropertyName) {
-          result =
-            remainingPropertyPath.length > 0
-              ? collectPropertyUseState(property.name, remainingPropertyPath)
-              : collectUses(property.name);
-        }
-      }
-      return result;
-    }
-
-    const unwrapped = unwrapExpression(argument);
-    if (ts.isIdentifier(unwrapped)) {
-      const index = resolveParameterIndex(unwrapped.text);
-      if (index !== null) {
-        const propertyUse = resolveParameterPropertyUse(unwrapped.text, propertyName);
-        return propertyUse === null ? [] : [propertyUse ?? { index, propertyName }];
-      }
-    }
-    if (ts.isObjectLiteralExpression(unwrapped)) {
-      return (
-        collectPropertyUseState(unwrapped, propertyPath) ?? collectBindingDefaultUses(unwrapped)
-      );
-    }
-    return collectUses(argument);
   }
 
   function registerTrackedObjectMethods({
@@ -3294,2869 +2672,10 @@ export function collectDatabaseFirstLegacyStoreViolations(
     }
   }
 
-  function collectLegacyPathPropertyParameters(
-    node,
-    baseFsWriteAliases,
-    baseFsModuleBindings,
-    baseFsModuleProperties,
-    baseRequireAliases,
-    baseCreateRequireShadows,
-    activeWrapperNodes = new Set(),
-    baseNestedWrapperFunctions = null,
-    closure = null,
-  ) {
-    if (activeWrapperNodes.has(node)) {
-      return new Map();
-    }
-    activeWrapperNodes.add(node);
-    const parameterIndexes = new Map();
-    const parameterBindingNames = new Set();
-    // Opaque keys keep captured parameters distinct from the nested wrapper's own indexes.
-    // The closure adapter unwraps exactly one level when returning uses to its caller.
-    const closureIndexKeys = new Map();
-    const closureIndex = (index) => {
-      if (!closureIndexKeys.has(index)) {
-        closureIndexKeys.set(index, { closureIndex: index });
-      }
-      return closureIndexKeys.get(index);
-    };
-    const closureBinding = (binding) => {
-      if (Array.isArray(binding)) {
-        return binding.map(closureBinding);
-      }
-      return binding && typeof binding === "object" && "index" in binding
-        ? { ...binding, index: closureIndex(binding.index) }
-        : binding;
-    };
-    const bodyFsWriteAliasScopes = [new Map(baseFsWriteAliases)];
-    const bodyFsModuleBindingScopes = [new Map(baseFsModuleBindings)];
-    const bodyFsModulePropertyScopes = [new Map(baseFsModuleProperties)];
-    const bodyRequireAliasScopes = [new Map(baseRequireAliases)];
-    const wrapperCreateRequireShadowScopes = [new Set(baseCreateRequireShadows)];
-    const destructuredParameterPropertyScopes = [new Map()];
-    const destructuredParameterPropertyMergeScopes = [new Map()];
-    const parameterObjectBindingScopes = [new Map()];
-    const parameterPropertyUseScopes = [new Map()];
-    const conditionalDestructuredParameterPropertyScopes = [new Map()];
-    const conditionalParameterObjectScopes = [new Map()];
-    const conditionalParameterPropertyUseScopes = [new Map()];
-    const conditionalWrapperBodyScopes = [false];
-    const parameterObjectAssignmentShadowScopes = [new Set()];
-    const shadowScopes = [new Set()];
-    const fsAliasShadowScopes = [new Set()];
-    const fsModuleShadowScopes = [new Set()];
-    const wrapperRequireShadowScopes = [new Set()];
-    const parameterObjectShadowScopes = [new Set()];
-    const wrapperBranchEffectScopes = [];
-    const inheritedNestedWrapperFunctionScopes = Array.isArray(baseNestedWrapperFunctions)
-      ? baseNestedWrapperFunctions
-      : baseNestedWrapperFunctions
-        ? [baseNestedWrapperFunctions]
-        : [];
-    // Closed-over assignments update the enclosing scope, while local/self shadows stay isolated.
-    const localNestedWrapperFunctionScope = closure
-      ? new Map()
-      : new Map(inheritedNestedWrapperFunctionScopes.flatMap((scope) => [...scope]));
-    const nestedWrapperFunctionScopes = closure
-      ? [...inheritedNestedWrapperFunctionScopes, localNestedWrapperFunctionScope]
-      : [localNestedWrapperFunctionScope];
-    const nestedWrapperFunctionScopeParents = new Map();
-    for (const [index, scope] of nestedWrapperFunctionScopes.entries()) {
-      nestedWrapperFunctionScopeParents.set(scope, nestedWrapperFunctionScopes[index - 1] ?? null);
-    }
-
-    function visibleBodyRequireAliasSnapshot() {
-      const aliases = new Map();
-      const sourceScopes = new Map();
-      bodyRequireAliasScopes.forEach((scope, index) => {
-        for (const [name, value] of scope) {
-          aliases.set(name, value);
-          sourceScopes.set(name, index);
-        }
-      });
-      return { aliases, sourceScopes };
-    }
-
-    function createWrapperBranchEffects() {
-      return {
-        destructuredAssignments: new Map(),
-        fsIdentifierAssignments: new Map(),
-        nestedWrapperAssignments: new Map(),
-        nestedWrapperAssignmentScopes: new Map(),
-        parameterObjectAssignments: new Map(),
-        parameterPropertyAssignments: new Map(),
-      };
-    }
-
-    function bindingUses(binding) {
-      return binding === null || binding === undefined ? [] : [binding];
-    }
-
-    function recordWrapperBranchParameterObjectAssignment(name, objectIndex) {
-      const effects = lastScope(wrapperBranchEffectScopes);
-      if (effects) {
-        effects.parameterObjectAssignments.set(name, bindingUses(objectIndex));
-      }
-    }
-
-    function recordWrapperBranchParameterPropertyAssignment(key, binding) {
-      const effects = lastScope(wrapperBranchEffectScopes);
-      if (effects) {
-        effects.parameterPropertyAssignments.set(key, bindingUses(binding));
-      }
-    }
-
-    function recordWrapperBranchDestructuredAssignment(name, binding) {
-      const effects = lastScope(wrapperBranchEffectScopes);
-      if (effects) {
-        effects.destructuredAssignments.set(name, bindingUses(binding));
-      }
-    }
-
-    function recordWrapperBranchNestedWrapperAssignment(name, value, targetScope) {
-      const effects = lastScope(wrapperBranchEffectScopes);
-      if (effects) {
-        clearBranchNestedWrapperObjectAssignments(effects, name);
-        effects.nestedWrapperAssignments.set(name, cloneWrapperFunctionValue(value));
-        effects.nestedWrapperAssignmentScopes.set(name, targetScope);
-      }
-    }
-
-    function recordWrapperBranchFsIdentifierAssignment(
-      name,
-      moduleValue,
-      writeAlias,
-      requireAlias,
-      moduleScope,
-      writeAliasScope,
-      requireAliasScope,
-    ) {
-      const effects = lastScope(wrapperBranchEffectScopes);
-      if (effects) {
-        effects.fsIdentifierAssignments.set(name, {
-          moduleScope,
-          moduleValue,
-          name,
-          requireAlias,
-          requireAliasScope,
-          writeAlias,
-          writeAliasScope,
-        });
-      }
-    }
-
-    function clearBranchNestedWrapperObjectAssignments(effects, objectName) {
-      const prefix = `${objectName}.`;
-      for (const name of effects.nestedWrapperAssignments.keys()) {
-        if (name.startsWith(prefix)) {
-          effects.nestedWrapperAssignments.delete(name);
-          effects.nestedWrapperAssignmentScopes.delete(name);
-        }
-      }
-    }
-
-    function wrapperAssignmentMergeOrder(left, right) {
-      return left.split(".").length - right.split(".").length;
-    }
-
-    function mergeBindingUses(left, right) {
-      return [...left, ...right];
-    }
-
-    function applyMergedParameterPropertyAssignment(key, uses) {
-      lastScope(parameterPropertyUseScopes).set(key, null);
-      for (const use of uses) {
-        appendConditionalUse(lastScope(conditionalParameterPropertyUseScopes), key, use);
-      }
-      recordWrapperBranchParameterPropertyAssignment(key, uses[0] ?? null);
-      const parentEffect = lastScope(wrapperBranchEffectScopes);
-      if (parentEffect && uses.length > 1) {
-        parentEffect.parameterPropertyAssignments.set(key, uses);
-      }
-    }
-
-    function applyMergedDestructuredAssignment(name, uses) {
-      lastScope(destructuredParameterPropertyScopes).set(name, null);
-      lastScope(destructuredParameterPropertyMergeScopes).set(name, null);
-      for (const use of uses) {
-        appendConditionalUse(lastScope(conditionalDestructuredParameterPropertyScopes), name, use);
-      }
-      recordWrapperBranchDestructuredAssignment(name, uses[0] ?? null);
-      const parentEffect = lastScope(wrapperBranchEffectScopes);
-      if (parentEffect && uses.length > 1) {
-        parentEffect.destructuredAssignments.set(name, uses);
-      }
-    }
-
-    function applyMergedParameterObjectAssignment(name, uses) {
-      if (uses.length === 0) {
-        lastScope(parameterObjectShadowScopes).add(name);
-        lastScope(parameterObjectAssignmentShadowScopes).add(name);
-      } else {
-        lastScope(parameterObjectBindingScopes).set(name, uses[0]);
-        for (const use of uses.slice(1)) {
-          appendConditionalUse(lastScope(conditionalParameterObjectScopes), name, use);
-        }
-      }
-      const parentEffect = lastScope(wrapperBranchEffectScopes);
-      if (parentEffect) {
-        parentEffect.parameterObjectAssignments.set(name, uses);
-      }
-    }
-
-    function applyMergedNestedWrapperAssignment(name, value, targetScope = null) {
-      const resolvedTargetScope = targetScope ?? scopeForWrite(nestedWrapperFunctionScopes, name);
-      if (!resolvedTargetScope) {
-        return;
-      }
-      clearNestedWrapperObjectMethods(resolvedTargetScope, name);
-      resolvedTargetScope.set(name, cloneWrapperFunctionValue(value));
-      const parentEffect = lastScope(wrapperBranchEffectScopes);
-      if (parentEffect) {
-        parentEffect.nestedWrapperAssignments.set(name, cloneWrapperFunctionValue(value));
-        parentEffect.nestedWrapperAssignmentScopes.set(name, resolvedTargetScope);
-      }
-    }
-
-    function applyMergedFsIdentifierAssignment(thenAssignment, elseAssignment) {
-      const { name } = thenAssignment;
-      const moduleScope =
-        thenAssignment.moduleScope === elseAssignment.moduleScope
-          ? thenAssignment.moduleScope
-          : null;
-      const writeAliasScope =
-        thenAssignment.writeAliasScope === elseAssignment.writeAliasScope
-          ? thenAssignment.writeAliasScope
-          : null;
-      const requireAliasScope =
-        thenAssignment.requireAliasScope === elseAssignment.requireAliasScope
-          ? thenAssignment.requireAliasScope
-          : null;
-      const moduleValue =
-        thenAssignment.moduleValue === true || elseAssignment.moduleValue === true;
-      const writeAlias = thenAssignment.writeAlias ?? elseAssignment.writeAlias;
-      const requireAlias =
-        thenAssignment.requireAlias === true || elseAssignment.requireAlias === true;
-      if (moduleScope && bodyFsModuleBindingScopes.includes(moduleScope)) {
-        moduleScope.set(name, moduleValue);
-      }
-      if (writeAliasScope && bodyFsWriteAliasScopes.includes(writeAliasScope)) {
-        writeAliasScope.set(name, writeAlias);
-      }
-      if (requireAliasScope && bodyRequireAliasScopes.includes(requireAliasScope)) {
-        requireAliasScope.set(name, requireAlias);
-      }
-      refreshCurrentNestedWrapperFunctionAliases();
-      const parentEffect = lastScope(wrapperBranchEffectScopes);
-      if (parentEffect) {
-        parentEffect.fsIdentifierAssignments.set(name, {
-          moduleScope,
-          moduleValue,
-          name,
-          requireAlias,
-          requireAliasScope,
-          writeAlias,
-          writeAliasScope,
-        });
-      }
-    }
-
-    function mergeExhaustiveWrapperBranchEffects(thenEffects, elseEffects) {
-      for (const [name, thenAssignment] of thenEffects.fsIdentifierAssignments) {
-        const elseAssignment = elseEffects.fsIdentifierAssignments.get(name);
-        if (elseAssignment) {
-          applyMergedFsIdentifierAssignment(thenAssignment, elseAssignment);
-        }
-      }
-      for (const [key, thenUses] of thenEffects.parameterPropertyAssignments) {
-        const elseUses = elseEffects.parameterPropertyAssignments.get(key);
-        if (elseUses) {
-          applyMergedParameterPropertyAssignment(key, mergeBindingUses(thenUses, elseUses));
-        }
-      }
-      for (const [name, thenUses] of thenEffects.destructuredAssignments) {
-        const elseUses = elseEffects.destructuredAssignments.get(name);
-        if (elseUses) {
-          applyMergedDestructuredAssignment(name, mergeBindingUses(thenUses, elseUses));
-        }
-      }
-      for (const [name, thenUses] of thenEffects.parameterObjectAssignments) {
-        const elseUses = elseEffects.parameterObjectAssignments.get(name);
-        if (elseUses) {
-          applyMergedParameterObjectAssignment(name, mergeBindingUses(thenUses, elseUses));
-        }
-      }
-      const nestedWrapperAssignmentNames = new Set([
-        ...thenEffects.nestedWrapperAssignments.keys(),
-        ...elseEffects.nestedWrapperAssignments.keys(),
-      ]);
-      for (const name of [...nestedWrapperAssignmentNames].toSorted(wrapperAssignmentMergeOrder)) {
-        const thenScope = thenEffects.nestedWrapperAssignmentScopes.get(name);
-        const elseScope = elseEffects.nestedWrapperAssignmentScopes.get(name);
-        const targetScope = thenScope ?? elseScope;
-        if (
-          targetScope === undefined ||
-          (thenScope !== undefined && elseScope !== undefined && thenScope !== elseScope) ||
-          !nestedWrapperFunctionScopes.includes(targetScope)
-        ) {
-          continue;
-        }
-        const previousValue = targetScope.get(name);
-        applyMergedNestedWrapperAssignment(
-          name,
-          mergeWrapperAssignmentValues(
-            thenEffects.nestedWrapperAssignments.has(name)
-              ? thenEffects.nestedWrapperAssignments.get(name)
-              : previousValue,
-            elseEffects.nestedWrapperAssignments.has(name)
-              ? elseEffects.nestedWrapperAssignments.get(name)
-              : previousValue,
-          ),
-          targetScope,
-        );
-      }
-    }
-
-    function mergeOptionalWrapperBranchEffects(effects) {
-      for (const assignment of effects.fsIdentifierAssignments.values()) {
-        applyMergedFsIdentifierAssignment(assignment, {
-          ...assignment,
-          moduleValue: assignment.moduleScope?.get(assignment.name) === true,
-          requireAlias: assignment.requireAliasScope?.get(assignment.name) === true,
-          writeAlias: assignment.writeAliasScope?.get(assignment.name) ?? null,
-        });
-      }
-      for (const [name, value] of effects.nestedWrapperAssignments) {
-        const targetScope = effects.nestedWrapperAssignmentScopes.get(name);
-        if (targetScope) {
-          applyMergedNestedWrapperAssignment(
-            name,
-            mergeWrapperAssignmentValues(targetScope.get(name), value),
-            targetScope,
-          );
-        }
-      }
-    }
-
-    function resolveParameterIndex(name) {
-      for (let index = parameterObjectShadowScopes.length - 1; index >= 0; index--) {
-        if (parameterObjectShadowScopes[index].has(name)) {
-          return null;
-        }
-        if (parameterObjectBindingScopes[index].has(name)) {
-          return parameterObjectBindingScopes[index].get(name);
-        }
-      }
-      if (parameterIndexes.has(name)) {
-        return parameterIndexes.get(name);
-      }
-      const index = closure?.resolveParameterIndex(name) ?? null;
-      return index === null ? null : closureIndex(index);
-    }
-
-    function resolveDestructuredParameterProperty(name) {
-      for (let index = destructuredParameterPropertyScopes.length - 1; index >= 0; index--) {
-        if (shadowScopes[index].has(name)) {
-          return null;
-        }
-        if (destructuredParameterPropertyScopes[index].has(name)) {
-          return destructuredParameterPropertyScopes[index].get(name);
-        }
-      }
-      return closureBinding(closure?.resolveDestructuredParameterProperty(name) ?? null);
-    }
-
-    function appendConditionalUse(scope, key, value) {
-      const values = scope.get(key) ?? [];
-      values.push(value);
-      scope.set(key, values);
-    }
-
-    function conditionalUsesFor(key, scopes) {
-      const uses = [];
-      for (const scope of scopes) {
-        uses.push(...(scope.get(key) ?? []));
-      }
-      return uses;
-    }
-
-    function conditionalObjectPropertyUses(objectName, propertyName) {
-      const uses = [];
-      for (const scope of conditionalParameterObjectScopes) {
-        for (const index of scope.get(objectName) ?? []) {
-          uses.push({ index, propertyName });
-        }
-      }
-      return uses;
-    }
-
-    function resolveParameterPropertyUse(objectName, propertyName) {
-      const key = `${objectName}.${propertyName}`;
-      let baseUse = undefined;
-      for (let index = parameterPropertyUseScopes.length - 1; index >= 0; index--) {
-        if (parameterObjectShadowScopes[index].has(objectName)) {
-          return null;
-        }
-        if (parameterPropertyUseScopes[index].has(key)) {
-          baseUse = parameterPropertyUseScopes[index].get(key);
-          break;
-        }
-      }
-      const extraUses = [
-        ...conditionalUsesFor(key, conditionalParameterPropertyUseScopes),
-        ...conditionalObjectPropertyUses(objectName, propertyName),
-      ];
-      if (extraUses.length === 0) {
-        return baseUse === undefined
-          ? closureBinding(closure?.resolveParameterPropertyUse(objectName, propertyName))
-          : baseUse;
-      }
-      if (baseUse === null) {
-        return extraUses;
-      }
-      const fallbackIndex = resolveParameterIndex(objectName);
-      const baseUses = baseUse
-        ? [baseUse]
-        : fallbackIndex !== null
-          ? [{ index: fallbackIndex, propertyName }]
-          : [];
-      return [...baseUses, ...extraUses];
-    }
-
-    function resolveDestructuredParameterPropertyUses(name) {
-      const baseUse = resolveDestructuredParameterProperty(name);
-      const extraUses = conditionalUsesFor(name, conditionalDestructuredParameterPropertyScopes);
-      if (extraUses.length === 0) {
-        return (
-          baseUse ?? closureBinding(closure?.resolveDestructuredParameterPropertyUses(name) ?? null)
-        );
-      }
-      return baseUse ? [baseUse, ...extraUses] : extraUses;
-    }
-
-    function resolveParameterPropertyBinding(expression) {
-      const unwrapped = unwrapExpression(expression);
-      const propertyAccess = rootedPropertyAccessPath(unwrapped);
-      if (propertyAccess?.properties.length > 0) {
-        const index = resolveParameterIndex(propertyAccess.rootName);
-        if (index !== null) {
-          return {
-            index,
-            propertyName: propertyAccess.properties.join("."),
-          };
-        }
-      }
-      if (ts.isIdentifier(unwrapped)) {
-        return resolveDestructuredParameterProperty(unwrapped.text);
-      }
-      return null;
-    }
-
-    function resolveParameterObjectBindingExpression(expression) {
-      const unwrapped = unwrapExpression(expression);
-      return ts.isIdentifier(unwrapped) ? resolveParameterIndex(unwrapped.text) : null;
-    }
-
-    function collectForwardedWrapperPropertyUses(
-      argument,
-      propertyName,
-      parameter = null,
-      wrapperNode = null,
-      argumentsList = [],
-      options = {},
-    ) {
-      return collectForwardedPropertyUses({
-        argument,
-        propertyName,
-        parameter,
-        wrapperNode,
-        argumentsList,
-        options,
-        resolveParameterIndex,
-        resolveDestructuredParameterProperty,
-        resolveParameterPropertyUse,
-        resolveDestructuredParameterPropertyUses,
-        resolveSpreadProperty: nestedWrapperObjectLiteralSpreadPropertyState,
-      });
-    }
-    function markParameterAssignment(assignmentNode) {
-      if (
-        !ts.isBinaryExpression(assignmentNode) ||
-        assignmentNode.operatorToken.kind !== ts.SyntaxKind.EqualsToken
-      ) {
-        return;
-      }
-      if (ts.isIdentifier(assignmentNode.left)) {
-        if (resolveParameterIndex(assignmentNode.left.text) !== null) {
-          const objectIndex = resolveParameterObjectBindingExpression(assignmentNode.right);
-          if (lastScope(conditionalWrapperBodyScopes)) {
-            recordWrapperBranchParameterObjectAssignment(assignmentNode.left.text, objectIndex);
-            if (objectIndex !== null) {
-              appendConditionalUse(
-                lastScope(conditionalParameterObjectScopes),
-                assignmentNode.left.text,
-                objectIndex,
-              );
-            }
-          } else if (objectIndex !== null) {
-            lastScope(parameterObjectBindingScopes).set(assignmentNode.left.text, objectIndex);
-          } else {
-            lastScope(parameterObjectShadowScopes).add(assignmentNode.left.text);
-            lastScope(parameterObjectAssignmentShadowScopes).add(assignmentNode.left.text);
-          }
-        }
-        if (resolveDestructuredParameterProperty(assignmentNode.left.text)) {
-          const binding = resolveParameterPropertyBinding(assignmentNode.right);
-          if (lastScope(conditionalWrapperBodyScopes)) {
-            recordWrapperBranchDestructuredAssignment(assignmentNode.left.text, binding);
-            if (binding) {
-              appendConditionalUse(
-                lastScope(conditionalDestructuredParameterPropertyScopes),
-                assignmentNode.left.text,
-                binding,
-              );
-            }
-          } else {
-            const updatesOuterBinding = !lastScope(destructuredParameterPropertyScopes).has(
-              assignmentNode.left.text,
-            );
-            lastScope(destructuredParameterPropertyScopes).set(assignmentNode.left.text, binding);
-            if (updatesOuterBinding) {
-              lastScope(destructuredParameterPropertyMergeScopes).set(
-                assignmentNode.left.text,
-                binding,
-              );
-            }
-          }
-        }
-        return;
-      }
-      const propertyAccess = rootedPropertyAccessPath(assignmentNode.left);
-      if (
-        propertyAccess?.properties.length > 0 &&
-        resolveParameterIndex(propertyAccess.rootName) !== null
-      ) {
-        const binding = resolveParameterPropertyBinding(assignmentNode.right);
-        const key = `${propertyAccess.rootName}.${propertyAccess.properties.join(".")}`;
-        if (lastScope(conditionalWrapperBodyScopes)) {
-          recordWrapperBranchParameterPropertyAssignment(key, binding);
-          if (binding) {
-            appendConditionalUse(lastScope(conditionalParameterPropertyUseScopes), key, binding);
-          }
-        } else {
-          lastScope(parameterPropertyUseScopes).set(key, binding);
-        }
-      }
-    }
-
-    function mergeConditionalUses(source, target) {
-      for (const [key, uses] of source) {
-        for (const use of uses) {
-          appendConditionalUse(target, key, use);
-        }
-      }
-    }
-
-    function mergeMapEntries(source, target) {
-      for (const [key, value] of source) {
-        target.set(key, value);
-      }
-    }
-
-    function mergeParameterObjectBindings(source, target) {
-      for (const [key, value] of source) {
-        if (parameterIndexes.has(key) || (closure && closure.resolveParameterIndex(key) !== null)) {
-          target.set(key, value);
-        }
-      }
-    }
-
-    function pushWrapperBodyScope(
-      conditional = lastScope(conditionalWrapperBodyScopes),
-      branchEffects = null,
-    ) {
-      bodyFsWriteAliasScopes.push(new Map());
-      bodyFsModuleBindingScopes.push(new Map());
-      bodyFsModulePropertyScopes.push(new Map());
-      destructuredParameterPropertyScopes.push(new Map());
-      destructuredParameterPropertyMergeScopes.push(new Map());
-      parameterObjectBindingScopes.push(new Map());
-      parameterPropertyUseScopes.push(new Map());
-      conditionalDestructuredParameterPropertyScopes.push(new Map());
-      conditionalParameterObjectScopes.push(new Map());
-      conditionalParameterPropertyUseScopes.push(new Map());
-      conditionalWrapperBodyScopes.push(conditional);
-      shadowScopes.push(new Set());
-      fsAliasShadowScopes.push(new Set());
-      fsModuleShadowScopes.push(new Set());
-      wrapperRequireShadowScopes.push(new Set());
-      wrapperCreateRequireShadowScopes.push(new Set());
-      bodyRequireAliasScopes.push(new Map());
-      parameterObjectShadowScopes.push(new Set());
-      parameterObjectAssignmentShadowScopes.push(new Set());
-      wrapperBranchEffectScopes.push(branchEffects);
-      const nestedWrapperFunctionScope = new Map();
-      nestedWrapperFunctionScopeParents.set(
-        nestedWrapperFunctionScope,
-        lastScope(nestedWrapperFunctionScopes),
-      );
-      nestedWrapperFunctionScopes.push(nestedWrapperFunctionScope);
-    }
-
-    function popWrapperBodyScope() {
-      nestedWrapperFunctionScopes.pop();
-      wrapperBranchEffectScopes.pop();
-      const parameterObjectAssignmentShadows = parameterObjectAssignmentShadowScopes.pop();
-      parameterObjectShadowScopes.pop();
-      wrapperRequireShadowScopes.pop();
-      wrapperCreateRequireShadowScopes.pop();
-      bodyRequireAliasScopes.pop();
-      fsModuleShadowScopes.pop();
-      fsAliasShadowScopes.pop();
-      shadowScopes.pop();
-      const parameterPropertyUses = conditionalParameterPropertyUseScopes.pop();
-      const parameterObjectUses = conditionalParameterObjectScopes.pop();
-      const destructuredUses = conditionalDestructuredParameterPropertyScopes.pop();
-      const wasConditional = conditionalWrapperBodyScopes.pop();
-      const directParameterPropertyUses = parameterPropertyUseScopes.pop();
-      const directParameterObjectBindings = parameterObjectBindingScopes.pop();
-      destructuredParameterPropertyScopes.pop();
-      const directDestructuredBindings = destructuredParameterPropertyMergeScopes.pop();
-      if (wasConditional) {
-        mergeConditionalUses(
-          parameterPropertyUses,
-          lastScope(conditionalParameterPropertyUseScopes),
-        );
-        mergeConditionalUses(parameterObjectUses, lastScope(conditionalParameterObjectScopes));
-        mergeConditionalUses(
-          destructuredUses,
-          lastScope(conditionalDestructuredParameterPropertyScopes),
-        );
-      } else {
-        mergeMapEntries(directParameterPropertyUses, lastScope(parameterPropertyUseScopes));
-        mergeParameterObjectBindings(
-          directParameterObjectBindings,
-          lastScope(parameterObjectBindingScopes),
-        );
-        for (const name of parameterObjectAssignmentShadows) {
-          lastScope(parameterObjectShadowScopes).add(name);
-          lastScope(parameterObjectAssignmentShadowScopes).add(name);
-        }
-        mergeMapEntries(directDestructuredBindings, lastScope(destructuredParameterPropertyScopes));
-      }
-      bodyFsModuleBindingScopes.pop();
-      bodyFsModulePropertyScopes.pop();
-      bodyFsWriteAliasScopes.pop();
-    }
-
-    function resolveBodyFsWriteAlias(name) {
-      return scopeForRead(bodyFsWriteAliasScopes, name)?.get(name) ?? null;
-    }
-
-    function resolveBodyFsModuleBinding(name) {
-      return scopeForRead(bodyFsModuleBindingScopes, name)?.get(name) === true;
-    }
-
-    function resolveBodyFsModuleProperty(pathParts) {
-      const fullPath = pathParts.join(".");
-      const prefixes = pathParts.map((_, index) => pathParts.slice(0, index + 1).join("."));
-      for (let index = bodyFsModulePropertyScopes.length - 1; index >= 0; index--) {
-        const scope = bodyFsModulePropertyScopes[index];
-        if (scope.has(fullPath)) {
-          return scope.get(fullPath) === true;
-        }
-        for (const prefix of prefixes) {
-          if (scope.get(prefix) === false) {
-            return false;
-          }
-        }
-      }
-      return false;
-    }
-
-    function isFsModuleShadowed(name) {
-      return fsModuleShadowScopes.some((scope) => scope.has(name));
-    }
-
-    function isWrapperRequireName(name) {
-      return resolveBodyRequireAlias(name);
-    }
-
-    function markWrapperRequireShadows(name) {
-      for (const bindingName of bindingPatternNames(name)) {
-        if (
-          bindingName === "require" ||
-          resolveBodyRequireAlias(bindingName) ||
-          resolveRequireAlias(bindingName)
-        ) {
-          wrapperRequireShadowScopes[wrapperRequireShadowScopes.length - 1].add(bindingName);
-        }
-        lastScope(bodyRequireAliasScopes).set(bindingName, false);
-      }
-    }
-
-    function isWrapperCreateRequireShadowed(name) {
-      return wrapperCreateRequireShadowScopes.some((scope) => scope.has(name));
-    }
-
-    function isWrapperCreateRequireExpression(expression) {
-      const call = unwrapExpression(expression);
-      return (
-        ts.isCallExpression(call) &&
-        ts.isIdentifier(unwrapExpression(call.expression)) &&
-        createRequireBindings.has(unwrapExpression(call.expression).text) &&
-        !isWrapperCreateRequireShadowed(unwrapExpression(call.expression).text)
-      );
-    }
-
-    function isWrapperRequireAliasExpression(expression) {
-      const value = unwrapExpression(expression);
-      return (
-        isWrapperCreateRequireExpression(value) ||
-        (ts.isIdentifier(value) && resolveBodyRequireAlias(value.text))
-      );
-    }
-
-    function markWrapperCreateRequireShadows(
-      name,
-      scope = lastScope(wrapperCreateRequireShadowScopes),
-    ) {
-      for (const bindingName of bindingPatternNames(name)) {
-        if (createRequireBindings.has(bindingName)) {
-          scope.add(bindingName);
-        }
-      }
-    }
-
-    function resolveBodyRequireAlias(name) {
-      return scopeForRead(bodyRequireAliasScopes, name)?.get(name) === true;
-    }
-
-    function shadowVisibleBodyFsWriteObjectAliases(objectName) {
-      shadowObjectPropertyScopes(bodyFsWriteAliasScopes, objectName, null);
-    }
-
-    function clearBodyFsWriteObjectAliases(scope, objectName) {
-      shadowObjectPropertyScopes([scope], objectName, null, scope);
-    }
-
-    function setBodyFsWriteObjectAlias(scope, name, writeName) {
-      scope.set(name, writeName ?? null);
-    }
-
-    function registerBodyFsWriteObjectAliases(
-      objectName,
-      initializer,
-      scope = lastScope(bodyFsWriteAliasScopes),
-    ) {
-      visitObjectLiteralProperties(objectName, initializer, (name, value) => {
-        setBodyFsWriteObjectAlias(scope, name, legacyWrapperFsWriteName(value));
-      });
-    }
-
-    function isWrapperFsBindingExpression(expression) {
-      const initializer = unwrapExpression(expression);
-      if (
-        isFsRequireExpression(initializer, isWrapperRequireName) ||
-        isFsDynamicImportExpression(initializer)
-      ) {
-        return true;
-      }
-      if (ts.isIdentifier(initializer)) {
-        return (
-          !isFsModuleShadowed(initializer.text) && resolveBodyFsModuleBinding(initializer.text)
-        );
-      }
-      return (
-        ts.isPropertyAccessExpression(initializer) &&
-        initializer.name.text === "promises" &&
-        (isFsRequireExpression(initializer.expression, isWrapperRequireName) ||
-          isFsDynamicImportExpression(initializer.expression) ||
-          (ts.isIdentifier(initializer.expression) &&
-            !isFsModuleShadowed(initializer.expression.text) &&
-            resolveBodyFsModuleBinding(initializer.expression.text)))
-      );
-    }
-
-    function isFsAliasShadowed(name) {
-      return fsAliasShadowScopes.some((scope) => scope.has(name));
-    }
-
-    function isWrapperFsModuleExpression(expression) {
-      const receiver = unwrapExpression(expression);
-      if (
-        isFsRequireExpression(receiver, isWrapperRequireName) ||
-        isFsDynamicImportExpression(receiver)
-      ) {
-        return true;
-      }
-      if (ts.isIdentifier(receiver)) {
-        return !isFsModuleShadowed(receiver.text) && resolveBodyFsModuleBinding(receiver.text);
-      }
-      const receiverPath = propertyAccessPath(receiver);
-      if (receiverPath && resolveBodyFsModuleProperty(receiverPath)) {
-        return true;
-      }
-      return (
-        ts.isPropertyAccessExpression(receiver) &&
-        receiver.name.text === "promises" &&
-        (isFsRequireExpression(receiver.expression, isWrapperRequireName) ||
-          isFsDynamicImportExpression(receiver.expression) ||
-          (ts.isIdentifier(receiver.expression) &&
-            !isFsModuleShadowed(receiver.expression.text) &&
-            resolveBodyFsModuleBinding(receiver.expression.text)) ||
-          (propertyAccessPath(receiver.expression) &&
-            resolveBodyFsModuleProperty(propertyAccessPath(receiver.expression))))
-      );
-    }
-
-    function legacyWrapperFsWriteName(expression) {
-      const callee = unwrapExpression(expression);
-      if (ts.isPropertyAccessExpression(callee)) {
-        const aliasedName = callExpressionName(callee);
-        const writeAlias =
-          aliasedName && !isFsAliasShadowed(aliasedName)
-            ? resolveBodyFsWriteAlias(aliasedName)
-            : null;
-        if (writeAlias) {
-          return writeAlias;
-        }
-        return legacyWriteCallees.has(callee.name.text) &&
-          isWrapperFsModuleExpression(callee.expression)
-          ? callee.name.text
-          : null;
-      }
-      if (ts.isElementAccessExpression(callee)) {
-        const aliasedName = callExpressionName(callee);
-        const writeAlias =
-          aliasedName && !isFsAliasShadowed(aliasedName)
-            ? resolveBodyFsWriteAlias(aliasedName)
-            : null;
-        if (writeAlias) {
-          return writeAlias;
-        }
-        const writeName = elementAccessName(callee.argumentExpression);
-        return writeName &&
-          legacyWriteCallees.has(writeName) &&
-          isWrapperFsModuleExpression(callee.expression)
-          ? writeName
-          : null;
-      }
-      if (ts.isIdentifier(callee) && isFsAliasShadowed(callee.text)) {
-        return null;
-      }
-      return ts.isIdentifier(callee) ? resolveBodyFsWriteAlias(callee.text) : null;
-    }
-
-    function markFsAliasShadows(name) {
-      for (const bindingName of bindingPatternNames(name)) {
-        if (resolveBodyFsWriteAlias(bindingName)) {
-          lastScope(fsAliasShadowScopes).add(bindingName);
-        }
-      }
-    }
-
-    function markFsModuleShadows(name) {
-      for (const bindingName of bindingPatternNames(name)) {
-        if (resolveBodyFsModuleBinding(bindingName)) {
-          lastScope(fsModuleShadowScopes).add(bindingName);
-          lastScope(bodyFsModuleBindingScopes).set(bindingName, false);
-        }
-        lastScope(bodyFsModulePropertyScopes).set(bindingName, false);
-      }
-    }
-
-    function registerBodyFsModuleTypeProperties(name, type) {
-      if (!ts.isIdentifier(name) || !type) {
-        return;
-      }
-      if (isFsModuleTypeNode(type)) {
-        lastScope(bodyFsModuleBindingScopes).set(name.text, true);
-      }
-      for (const pathParts of fsModulePropertyPathsFromType(type)) {
-        lastScope(bodyFsModulePropertyScopes).set([name.text, ...pathParts].join("."), true);
-      }
-    }
-
-    if (closure && (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node)) && node.name) {
-      const name = node.name.text;
-      lastScope(shadowScopes).add(name);
-      lastScope(parameterObjectShadowScopes).add(name);
-      lastScope(bodyFsWriteAliasScopes).set(name, null);
-      lastScope(bodyFsModuleBindingScopes).set(name, false);
-      lastScope(bodyRequireAliasScopes).set(name, false);
-      lastScope(nestedWrapperFunctionScopes).set(name, null);
-      markWrapperCreateRequireShadows(node.name);
-    }
-
-    node.parameters.forEach((parameter, index) => {
-      if (ts.isIdentifier(parameter.name)) {
-        parameterIndexes.set(parameter.name.text, index);
-      }
-      for (const bindingName of bindingPatternNames(parameter.name)) {
-        parameterBindingNames.add(bindingName);
-        lastScope(nestedWrapperFunctionScopes).set(bindingName, null);
-      }
-      markFsAliasShadows(parameter.name);
-      markFsModuleShadows(parameter.name);
-      markWrapperRequireShadows(parameter.name);
-      markWrapperCreateRequireShadows(parameter.name);
-      registerBodyFsModuleTypeProperties(parameter.name, parameter.type);
-      for (const [name, binding] of parameterPropertyBindings(parameter, index)) {
-        lastScope(destructuredParameterPropertyScopes).set(name, binding);
-      }
-    });
-
-    if (closure?.argumentsList) {
-      node.parameters.forEach((parameter, index) => {
-        if (!ts.isIdentifier(parameter.name) || !parameter.initializer) {
-          return;
-        }
-        const providedArgument = closure.argumentsList[index] ?? null;
-        if (providedArgument && !isKnownUndefinedExpression(providedArgument)) {
-          return;
-        }
-        const initializer = unwrapExpression(parameter.initializer);
-        if (ts.isFunctionExpression(initializer) || ts.isArrowFunction(initializer)) {
-          lastScope(nestedWrapperFunctionScopes).set(
-            parameter.name.text,
-            nestedWrapperRecordForNode(initializer),
-          );
-        }
-      });
-    }
-
-    const propertyUses = new Map();
-
-    function nestedWrapperRecordForNode(nestedNode) {
-      const requireAliasSnapshot = visibleBodyRequireAliasSnapshot();
-      return {
-        aliases: visibleMap(bodyFsWriteAliasScopes),
-        closesOverCurrentWrapper: true,
-        createRequireShadows: visibleSet(wrapperCreateRequireShadowScopes),
-        lexicalScope: lastScope(nestedWrapperFunctionScopes),
-        lexicalScopes: [...nestedWrapperFunctionScopes],
-        moduleBindings: visibleMap(bodyFsModuleBindingScopes),
-        moduleProperties: visibleMap(bodyFsModulePropertyScopes),
-        node: nestedNode,
-        requireAliases: requireAliasSnapshot.aliases,
-        requireAliasSourceScopes: requireAliasSnapshot.sourceScopes,
-      };
-    }
-
-    function resolveNestedWrapperFunction(name) {
-      for (let index = nestedWrapperFunctionScopes.length - 1; index >= 0; index--) {
-        const scope = nestedWrapperFunctionScopes[index];
-        if (scope.has(name)) {
-          return scope.get(name);
-        }
-      }
-      return undefined;
-    }
-
-    function isNestedWrapperScopeDescendant(scope, ancestor) {
-      let current = scope;
-      while (current) {
-        if (current === ancestor) {
-          return true;
-        }
-        current = nestedWrapperFunctionScopeParents.get(current) ?? null;
-      }
-      return false;
-    }
-
-    function refreshCurrentNestedWrapperFunctionAliases() {
-      const aliases = visibleMap(bodyFsWriteAliasScopes);
-      const moduleBindings = visibleMap(bodyFsModuleBindingScopes);
-      const moduleProperties = visibleMap(bodyFsModulePropertyScopes);
-      const requireAliasSnapshot = visibleBodyRequireAliasSnapshot();
-      const createRequireShadows = visibleSet(wrapperCreateRequireShadowScopes);
-      const currentLexicalScope = lastScope(nestedWrapperFunctionScopes);
-      function refreshNestedWrapperRecord(record) {
-        if (!isNestedWrapperScopeDescendant(record.lexicalScope, currentLexicalScope)) {
-          return;
-        }
-        if (record.lexicalScope === currentLexicalScope) {
-          record.aliases = aliases;
-          record.moduleBindings = moduleBindings;
-          record.moduleProperties = moduleProperties;
-          record.requireAliases = requireAliasSnapshot.aliases;
-          record.requireAliasSourceScopes = requireAliasSnapshot.sourceScopes;
-          record.createRequireShadows = createRequireShadows;
-          return;
-        }
-        record.aliases = new Map([...aliases, ...record.aliases]);
-        record.moduleBindings = new Map([...moduleBindings, ...record.moduleBindings]);
-        record.moduleProperties = new Map([...moduleProperties, ...record.moduleProperties]);
-        record.requireAliases = new Map([
-          ...requireAliasSnapshot.aliases,
-          ...record.requireAliases,
-        ]);
-        record.requireAliasSourceScopes = new Map([
-          ...requireAliasSnapshot.sourceScopes,
-          ...record.requireAliasSourceScopes,
-        ]);
-        record.createRequireShadows = new Set([
-          ...createRequireShadows,
-          ...record.createRequireShadows,
-        ]);
-      }
-      function refreshNestedWrapperRecords(values) {
-        for (const value of values) {
-          for (const record of wrapperRecords(value)) {
-            refreshNestedWrapperRecord(record);
-          }
-        }
-      }
-      for (const scope of nestedWrapperFunctionScopes) {
-        refreshNestedWrapperRecords(scope.values());
-      }
-      const branchEffects = lastScope(wrapperBranchEffectScopes);
-      if (branchEffects) {
-        refreshNestedWrapperRecords(branchEffects.nestedWrapperAssignments.values());
-      }
-    }
-
-    function nestedWrapperObjectMethodWriteScope(objectName, propertyName) {
-      const key = objectPropertyKey(objectName, propertyName);
-      for (let index = nestedWrapperFunctionScopes.length - 1; index >= 0; index--) {
-        const scope = nestedWrapperFunctionScopes[index];
-        if (scope.has(key) || scope.has(objectName)) {
-          return scope;
-        }
-      }
-      return lastScope(nestedWrapperFunctionScopes);
-    }
-
-    function markNestedWrapperFunctionShadows(name) {
-      for (const bindingName of bindingPatternNames(name)) {
-        lastScope(nestedWrapperFunctionScopes).set(bindingName, null);
-      }
-    }
-
-    function clearNestedWrapperObjectMethods(scope, objectName) {
-      shadowObjectPropertyScopes([scope], objectName, null, scope);
-    }
-
-    function shadowVisibleNestedWrapperObjectMethods(objectName) {
-      shadowObjectPropertyScopes(nestedWrapperFunctionScopes, objectName, null);
-    }
-
-    function markNestedWrapperObjectUnknown(
-      objectName,
-      scope = lastScope(nestedWrapperFunctionScopes),
-      recordBranchAssignments = false,
-      recordBranchAssignmentScope = scope,
-    ) {
-      clearNestedWrapperObjectMethods(scope, objectName);
-      scope.set(objectName, unknownNestedWrapperObjectValue);
-      if (recordBranchAssignments) {
-        recordWrapperBranchNestedWrapperAssignment(
-          objectName,
-          unknownNestedWrapperObjectValue,
-          recordBranchAssignmentScope,
-        );
-      }
-    }
-
-    function copyNestedWrapperObjectMethods(
-      targetName,
-      sourceName,
-      scope = lastScope(nestedWrapperFunctionScopes),
-      recordBranchAssignments = false,
-      recordBranchAssignmentScope = scope,
-    ) {
-      const copiedMethods = new Map();
-      const sourcePrefix = `${sourceName}.`;
-      for (const sourceScope of nestedWrapperFunctionScopes) {
-        for (const [name, value] of sourceScope) {
-          if (!name.startsWith(sourcePrefix)) {
-            continue;
-          }
-          const key = `${targetName}.${name.slice(sourcePrefix.length)}`;
-          const copiedValue = cloneWrapperFunctionValue(value);
-          scope.set(key, copiedValue);
-          copiedMethods.set(key, copiedValue);
-          if (recordBranchAssignments) {
-            recordWrapperBranchNestedWrapperAssignment(
-              key,
-              copiedValue,
-              recordBranchAssignmentScope,
-            );
-          }
-        }
-      }
-      return copiedMethods;
-    }
-
-    function isKnownNestedWrapperObjectSource(sourceName) {
-      const source = resolveNestedWrapperBindingValue(sourceName);
-      return source.found && source.value === knownObjectLiteralNestedWrapperValue;
-    }
-
-    function resolveNestedWrapperValue(name) {
-      const nestedWrapper = resolveNestedWrapperFunction(name);
-      return nestedWrapper === undefined ? resolveWrapperFunction(name) : nestedWrapper;
-    }
-
-    function resolveNestedWrapperBindingValue(name) {
-      for (let index = nestedWrapperFunctionScopes.length - 1; index >= 0; index--) {
-        const scope = nestedWrapperFunctionScopes[index];
-        if (scope.has(name)) {
-          return { found: true, value: scope.get(name) };
-        }
-      }
-      for (let index = wrapperFunctionScopes.length - 1; index >= 0; index--) {
-        const scope = wrapperFunctionScopes[index];
-        if (scope.has(name)) {
-          return { found: true, value: scope.get(name) };
-        }
-      }
-      return { found: false, value: null };
-    }
-
-    function resolveNestedWrapperExpression(expression) {
-      const unwrapped = unwrapExpression(expression);
-      if (ts.isIdentifier(unwrapped)) {
-        return resolveNestedWrapperValue(unwrapped.text);
-      }
-      const name = callExpressionName(unwrapped);
-      return name ? resolveNestedWrapperValue(name) : null;
-    }
-
-    function registerNestedWrapperObjectMethods(
-      objectName,
-      initializer,
-      scope = lastScope(nestedWrapperFunctionScopes),
-      recordBranchAssignments = false,
-      recordBranchAssignmentScope = scope,
-    ) {
-      const registeredMethods = new Map();
-      const remember = (key, value, clear = true) => {
-        if (clear) {
-          clearNestedWrapperObjectMethods(scope, key);
-        }
-        scope.set(key, value);
-        registeredMethods.set(key, value);
-        if (recordBranchAssignments) {
-          recordWrapperBranchNestedWrapperAssignment(key, value, recordBranchAssignmentScope);
-        }
-      };
-      const copy = (targetName, sourceName) => {
-        const copied = copyNestedWrapperObjectMethods(
-          targetName,
-          sourceName,
-          scope,
-          recordBranchAssignments,
-          recordBranchAssignmentScope,
-        );
-        for (const entry of copied) {
-          registeredMethods.set(...entry);
-        }
-        return copied;
-      };
-      const sourceName = (expression) =>
-        ts.isIdentifier(expression) ? expression.text : callExpressionName(expression);
-
-      registerTrackedObjectMethods({
-        objectName,
-        initializer,
-        directSourceName: sourceName,
-        spreadSourceName: sourceName,
-        onAlias: copy,
-        onUnknownSpread: (targetName) =>
-          markNestedWrapperObjectUnknown(
-            targetName,
-            scope,
-            recordBranchAssignments,
-            recordBranchAssignmentScope,
-          ),
-        onSpread: (targetName, spreadSource) => {
-          if (!isKnownNestedWrapperObjectSource(spreadSource)) {
-            markNestedWrapperObjectUnknown(
-              targetName,
-              scope,
-              recordBranchAssignments,
-              recordBranchAssignmentScope,
-            );
-          }
-          copy(targetName, spreadSource);
-        },
-        onMethod: (key, method) => remember(key, nestedWrapperRecordForNode(method)),
-        onIdentifier: (key, identifier, expression) => {
-          clearNestedWrapperObjectMethods(scope, key);
-          if (isKnownUndefinedExpression(expression)) {
-            remember(key, explicitUndefinedNestedWrapperValue);
-            return;
-          }
-          const wrapper = resolveNestedWrapperValue(identifier);
-          if (closure && isNestedWrapperObjectMarker(wrapper)) {
-            remember(key, wrapper);
-            copy(key, identifier);
-            return;
-          }
-          if (wrapper) {
-            remember(
-              key,
-              wrapperRecords(wrapper).length > 0 ? cloneWrapperFunctionValue(wrapper) : null,
-            );
-            if (wrapperRecords(wrapper).length === 0) {
-              copy(key, identifier);
-            }
-            return;
-          }
-          if (copy(key, identifier).size === 0) {
-            remember(key, null);
-          }
-        },
-        onNested: (key, nested) => {
-          clearNestedWrapperObjectMethods(scope, key);
-          registerNestedWrapperObjectMethods(
-            key,
-            nested,
-            scope,
-            recordBranchAssignments,
-            recordBranchAssignmentScope,
-          );
-        },
-        onOther: (key, expression, hasNestedObject) => {
-          const wrapper = isKnownUndefinedExpression(expression)
-            ? explicitUndefinedNestedWrapperValue
-            : resolveNestedWrapperExpression(expression);
-          remember(key, wrapper ? cloneWrapperFunctionValue(wrapper) : null, !hasNestedObject);
-        },
-      });
-      return registeredMethods;
-    }
-    function registerNestedWrapperObjectBinding(
-      bindingPattern,
-      sourceName,
-      propertyPath = [],
-      scope = lastScope(nestedWrapperFunctionScopes),
-    ) {
-      for (const element of bindingPattern.elements) {
-        const propertyName = element.propertyName
-          ? propertyNameText(element.propertyName)
-          : ts.isIdentifier(element.name)
-            ? element.name.text
-            : null;
-        if (!propertyName) {
-          continue;
-        }
-        const nextPath = [...propertyPath, propertyName];
-        if (ts.isIdentifier(element.name)) {
-          const sourcePath = `${sourceName}.${nextPath.join(".")}`;
-          const source = resolveNestedWrapperBindingValue(sourcePath);
-          const wrapper = source.found
-            ? source.value === explicitUndefinedNestedWrapperValue
-              ? nestedWrapperObjectBindingDefaultValue(element)
-              : source.value
-            : nestedWrapperObjectBindingMissingValue(sourceName, nextPath, element);
-          clearNestedWrapperObjectMethods(scope, element.name.text);
-          scope.set(element.name.text, cloneWrapperFunctionValue(wrapper));
-          copyNestedWrapperObjectMethods(element.name.text, sourcePath, scope);
-          continue;
-        }
-        if (ts.isObjectBindingPattern(element.name)) {
-          registerNestedWrapperObjectBinding(element.name, sourceName, nextPath, scope);
-        }
-      }
-    }
-
-    function nestedWrapperObjectBindingMissingValue(sourceName, propertyPath, element) {
-      for (let index = propertyPath.length - 1; index >= 0; index--) {
-        const parentPath = propertyPath.slice(0, index);
-        const parentName =
-          parentPath.length === 0 ? sourceName : `${sourceName}.${parentPath.join(".")}`;
-        const parent = resolveNestedWrapperBindingValue(parentName);
-        if (parent.found && parent.value === unknownNestedWrapperObjectValue) {
-          return null;
-        }
-      }
-      return nestedWrapperObjectBindingDefaultValue(element);
-    }
-
-    function nestedWrapperObjectBindingDefaultValue(element) {
-      if (!element.initializer) {
-        return null;
-      }
-      const initializer = unwrapExpression(element.initializer);
-      return nestedWrapperValueFromExpression(initializer);
-    }
-
-    function nestedWrapperValueFromExpression(expression) {
-      const initializer = unwrapExpression(expression);
-      if (ts.isFunctionExpression(initializer) || ts.isArrowFunction(initializer)) {
-        return nestedWrapperRecordForNode(initializer);
-      }
-      return resolveNestedWrapperExpression(initializer);
-    }
-
-    function nestedWrapperObjectLiteralSpreadPropertyState(objectName, propertyName) {
-      const source = resolveNestedWrapperBindingValue(`${objectName}.${propertyName}`);
-      if (!source.found) {
-        const objectSource = resolveNestedWrapperBindingValue(objectName);
-        return objectSource.found && objectSource.value === knownObjectLiteralNestedWrapperValue
-          ? { kind: "missing" }
-          : { kind: "unknown" };
-      }
-      if (source.value === explicitUndefinedNestedWrapperValue) {
-        return { kind: "undefined" };
-      }
-      if (source.value === unknownNestedWrapperObjectValue) {
-        return { kind: "unknown" };
-      }
-      return { kind: "value", value: source.value };
-    }
-
-    function nestedWrapperValueFromObjectLiteralPropertyState(propertyState, element) {
-      if (propertyState.kind === "unknown") {
-        return null;
-      }
-      if (propertyState.kind === "value") {
-        return propertyState.value;
-      }
-      if (propertyState.kind === "initializer") {
-        return nestedWrapperValueFromExpression(propertyState.initializer);
-      }
-      return nestedWrapperObjectBindingDefaultValue(element);
-    }
-
-    function registerNestedWrapperObjectLiteralBinding(
-      bindingPattern,
-      objectLiteral,
-      scope = lastScope(nestedWrapperFunctionScopes),
-    ) {
-      for (const element of bindingPattern.elements) {
-        const propertyName = element.propertyName
-          ? propertyNameText(element.propertyName)
-          : ts.isIdentifier(element.name)
-            ? element.name.text
-            : null;
-        if (!propertyName) {
-          continue;
-        }
-        const propertyState = objectLiteralPropertyInitializerState(
-          objectLiteral,
-          propertyName,
-          nestedWrapperObjectLiteralSpreadPropertyState,
-        );
-        if (ts.isIdentifier(element.name)) {
-          const wrapper = nestedWrapperValueFromObjectLiteralPropertyState(propertyState, element);
-          scope.set(element.name.text, cloneWrapperFunctionValue(wrapper));
-          continue;
-        }
-        if (
-          ts.isObjectBindingPattern(element.name) &&
-          propertyState.kind === "initializer" &&
-          ts.isObjectLiteralExpression(unwrapExpression(propertyState.initializer))
-        ) {
-          registerNestedWrapperObjectLiteralBinding(
-            element.name,
-            unwrapExpression(propertyState.initializer),
-            scope,
-          );
-        }
-      }
-    }
-
-    function registerNestedWrapperObjectBindingInitializer(
-      bindingPattern,
-      initializer,
-      scope = lastScope(nestedWrapperFunctionScopes),
-    ) {
-      const unwrapped = unwrapExpression(initializer);
-      if (ts.isIdentifier(unwrapped)) {
-        registerNestedWrapperObjectBinding(bindingPattern, unwrapped.text, [], scope);
-        return;
-      }
-      if (ts.isObjectLiteralExpression(unwrapped)) {
-        registerNestedWrapperObjectLiteralBinding(bindingPattern, unwrapped, scope);
-        return;
-      }
-      const propertyAccess = rootedPropertyAccessPath(unwrapped);
-      if (propertyAccess?.properties.length > 0) {
-        registerNestedWrapperObjectBinding(
-          bindingPattern,
-          objectPropertyKey(propertyAccess.rootName, propertyAccess.properties.join(".")),
-          [],
-          scope,
-        );
-      }
-    }
-
-    function collectClosedOverPathPropertyUses(
-      record,
-      activeClosedOverNodes = new Set(),
-      argumentsList = null,
-    ) {
-      const uses = collectLegacyPathPropertyParameters(
-        record.node,
-        record.aliases,
-        record.moduleBindings,
-        record.moduleProperties,
-        record.requireAliases,
-        record.createRequireShadows,
-        activeClosedOverNodes,
-        record.lexicalScopes ?? record.lexicalScope ?? null,
-        {
-          argumentsList,
-          resolveParameterIndex,
-          resolveDestructuredParameterProperty,
-          resolveParameterPropertyUse,
-          resolveDestructuredParameterPropertyUses,
-        },
-      );
-      const closedOverUses = new Map();
-      for (const [key, propertyNames] of uses) {
-        if (!key || typeof key !== "object" || !("closureIndex" in key)) {
-          continue;
-        }
-        const properties = closedOverUses.get(key.closureIndex) ?? new Set();
-        for (const propertyName of propertyNames) {
-          properties.add(propertyName);
-        }
-        closedOverUses.set(key.closureIndex, properties);
-      }
-      return closedOverUses;
-    }
-    function registerHoistedWrapperFunctionShadows(statements) {
-      for (const statement of statements) {
-        if (closure && ts.isVariableStatement(statement)) {
-          for (const declaration of statement.declarationList.declarations) {
-            const isVar = isVarVariableDeclaration(declaration);
-            const fsWriteScope = isVar
-              ? bodyFsWriteAliasScopes[0]
-              : lastScope(bodyFsWriteAliasScopes);
-            const fsModuleScope = isVar
-              ? bodyFsModuleBindingScopes[0]
-              : lastScope(bodyFsModuleBindingScopes);
-            const requireScope = isVar
-              ? bodyRequireAliasScopes[0]
-              : lastScope(bodyRequireAliasScopes);
-            const nestedScope = isVar
-              ? localNestedWrapperFunctionScope
-              : lastScope(nestedWrapperFunctionScopes);
-            const parameterShadowScope = isVar
-              ? parameterObjectShadowScopes[0]
-              : lastScope(parameterObjectShadowScopes);
-            const destructuredShadowScope = isVar ? shadowScopes[0] : lastScope(shadowScopes);
-            for (const name of bindingPatternNames(declaration.name)) {
-              fsWriteScope.set(name, null);
-              fsModuleScope.set(name, false);
-              requireScope.set(name, false);
-              if (!(isVar && parameterBindingNames.has(name))) {
-                nestedScope.set(name, null);
-              }
-              parameterShadowScope.add(name);
-              destructuredShadowScope.add(name);
-            }
-            markWrapperCreateRequireShadows(
-              declaration.name,
-              isVar
-                ? wrapperCreateRequireShadowScopes[0]
-                : lastScope(wrapperCreateRequireShadowScopes),
-            );
-          }
-        }
-        if (ts.isFunctionDeclaration(statement) && statement.name) {
-          if (closure) {
-            const name = statement.name.text;
-            lastScope(shadowScopes).add(name);
-            lastScope(parameterObjectShadowScopes).add(name);
-            lastScope(bodyFsWriteAliasScopes).set(name, null);
-            lastScope(bodyFsModuleBindingScopes).set(name, false);
-            lastScope(bodyRequireAliasScopes).set(name, false);
-          }
-          markWrapperRequireShadows(statement.name);
-          markWrapperCreateRequireShadows(statement.name);
-          lastScope(nestedWrapperFunctionScopes).set(
-            statement.name.text,
-            nestedWrapperRecordForNode(statement),
-          );
-        }
-      }
-    }
-
-    function wrapperScopeStatements(current) {
-      if ("statements" in current) {
-        return current.statements;
-      }
-      if (ts.isCaseBlock(current)) {
-        return current.clauses.flatMap((clause) => [...clause.statements]);
-      }
-      return [];
-    }
-
-    function visitBody(current) {
-      if (isTypeSyntaxNode(current)) {
-        return;
-      }
-      if (current !== node && ts.isFunctionLike(current)) {
-        return;
-      }
-      if (ts.isIfStatement(current)) {
-        visitBody(current.expression);
-        const thenEffects = current.elseStatement || closure ? createWrapperBranchEffects() : null;
-        const elseEffects = current.elseStatement ? createWrapperBranchEffects() : null;
-        pushWrapperBodyScope(true, thenEffects);
-        visitBody(current.thenStatement);
-        popWrapperBodyScope();
-        if (current.elseStatement) {
-          pushWrapperBodyScope(true, elseEffects);
-          visitBody(current.elseStatement);
-          popWrapperBodyScope();
-          mergeExhaustiveWrapperBranchEffects(thenEffects, elseEffects);
-        } else if (thenEffects) {
-          mergeOptionalWrapperBranchEffects(thenEffects);
-        }
-        return;
-      }
-      if (ts.isWhileStatement(current)) {
-        visitBody(current.expression);
-        pushWrapperBodyScope(true);
-        visitBody(current.statement);
-        popWrapperBodyScope();
-        return;
-      }
-      if (ts.isDoStatement(current)) {
-        pushWrapperBodyScope(true);
-        visitBody(current.statement);
-        popWrapperBodyScope();
-        visitBody(current.expression);
-        return;
-      }
-      if (ts.isForStatement(current)) {
-        pushWrapperBodyScope();
-        if (current.initializer) {
-          visitBody(current.initializer);
-        }
-        if (current.condition) {
-          visitBody(current.condition);
-        }
-        if (current.incrementor) {
-          pushWrapperBodyScope(true);
-          visitBody(current.incrementor);
-          popWrapperBodyScope();
-        }
-        pushWrapperBodyScope(true);
-        visitBody(current.statement);
-        popWrapperBodyScope();
-        popWrapperBodyScope();
-        return;
-      }
-      if (ts.isForInStatement(current) || ts.isForOfStatement(current)) {
-        visitBody(current.expression);
-        pushWrapperBodyScope();
-        visitBody(current.initializer);
-        pushWrapperBodyScope(true);
-        visitBody(current.statement);
-        popWrapperBodyScope();
-        popWrapperBodyScope();
-        return;
-      }
-      if (ts.isTryStatement(current)) {
-        pushWrapperBodyScope(true);
-        visitBody(current.tryBlock);
-        popWrapperBodyScope();
-        if (current.catchClause) {
-          pushWrapperBodyScope(true);
-          visitBody(current.catchClause);
-          popWrapperBodyScope();
-        }
-        if (current.finallyBlock) {
-          pushWrapperBodyScope();
-          visitBody(current.finallyBlock);
-          popWrapperBodyScope();
-        }
-        return;
-      }
-      if (
-        current !== node.body &&
-        (ts.isBlock(current) ||
-          ts.isModuleBlock(current) ||
-          ts.isCaseBlock(current) ||
-          ts.isCatchClause(current))
-      ) {
-        const branchBlockEffects = lastScope(conditionalWrapperBodyScopes)
-          ? lastScope(wrapperBranchEffectScopes)
-          : null;
-        pushWrapperBodyScope(lastScope(conditionalWrapperBodyScopes), branchBlockEffects);
-        registerHoistedWrapperFunctionShadows(wrapperScopeStatements(current));
-        ts.forEachChild(current, visitBody);
-        popWrapperBodyScope();
-        return;
-      }
-      if (ts.isVariableDeclaration(current)) {
-        const isFsAliasBinding =
-          ts.isObjectBindingPattern(current.name) &&
-          current.initializer &&
-          isWrapperFsBindingExpression(current.initializer);
-        const nestedFunctionInitializer = current.initializer
-          ? unwrapExpression(current.initializer)
-          : null;
-        const declarationIsVar = isVarVariableDeclaration(current);
-        const declarationWrapperBranchEffects = lastScope(wrapperBranchEffectScopes);
-        const declarationUsesConditionalScope =
-          declarationIsVar && lastScope(conditionalWrapperBodyScopes);
-        const declarationUsesBranchEffects =
-          declarationIsVar && Boolean(declarationWrapperBranchEffects);
-        const declarationFsWriteAliasOwnerScope = declarationIsVar
-          ? bodyFsWriteAliasScopes[0]
-          : lastScope(bodyFsWriteAliasScopes);
-        const declarationFsModuleBindingOwnerScope = declarationIsVar
-          ? bodyFsModuleBindingScopes[0]
-          : lastScope(bodyFsModuleBindingScopes);
-        const declarationRequireAliasOwnerScope = declarationIsVar
-          ? bodyRequireAliasScopes[0]
-          : lastScope(bodyRequireAliasScopes);
-        const declarationNestedWrapperOwnerScope = declarationIsVar
-          ? closure
-            ? localNestedWrapperFunctionScope
-            : nestedWrapperFunctionScopes[0]
-          : lastScope(nestedWrapperFunctionScopes);
-        const declarationFsWriteAliasScope = declarationUsesConditionalScope
-          ? lastScope(bodyFsWriteAliasScopes)
-          : declarationFsWriteAliasOwnerScope;
-        const declarationFsModuleBindingScope = declarationUsesConditionalScope
-          ? lastScope(bodyFsModuleBindingScopes)
-          : declarationFsModuleBindingOwnerScope;
-        const declarationRequireAliasScope = declarationUsesConditionalScope
-          ? lastScope(bodyRequireAliasScopes)
-          : declarationRequireAliasOwnerScope;
-        const declarationNestedWrapperScope = declarationUsesConditionalScope
-          ? lastScope(nestedWrapperFunctionScopes)
-          : declarationNestedWrapperOwnerScope;
-        collectFsWriteAliasesFromBindingInto(
-          current,
-          declarationFsWriteAliasScope,
-          isWrapperFsBindingExpression,
-        );
-        if (ts.isIdentifier(current.name)) {
-          const nextRequireAlias = current.initializer
-            ? isWrapperRequireAliasExpression(current.initializer)
-            : false;
-          const nextFsModuleBinding = current.initializer
-            ? isWrapperFsBindingExpression(current.initializer)
-            : false;
-          const nextFsWriteAlias = current.initializer
-            ? legacyWrapperFsWriteName(current.initializer)
-            : null;
-          shadowVisibleBodyFsWriteObjectAliases(current.name.text);
-          shadowVisibleNestedWrapperObjectMethods(current.name.text);
-          if (nextRequireAlias) {
-            declarationRequireAliasScope.set(current.name.text, true);
-          } else {
-            markWrapperRequireShadows(current.name);
-            if (declarationIsVar) {
-              declarationRequireAliasScope.set(current.name.text, false);
-            }
-          }
-          if (nextFsModuleBinding) {
-            declarationFsModuleBindingScope.set(current.name.text, true);
-          } else {
-            markFsModuleShadows(current.name);
-            if (declarationIsVar) {
-              declarationFsModuleBindingScope.set(current.name.text, false);
-            }
-          }
-          if (current.initializer) {
-            registerBodyFsWriteObjectAliases(current.name.text, current.initializer);
-          }
-          markWrapperCreateRequireShadows(current.name);
-          if (
-            !nestedFunctionInitializer ||
-            (!ts.isFunctionExpression(nestedFunctionInitializer) &&
-              !ts.isArrowFunction(nestedFunctionInitializer))
-          ) {
-            const preservesParameterValue =
-              declarationIsVar &&
-              !current.initializer &&
-              parameterBindingNames.has(current.name.text);
-            if (!preservesParameterValue) {
-              declarationNestedWrapperScope.set(
-                current.name.text,
-                current.initializer && ts.isObjectLiteralExpression(nestedFunctionInitializer)
-                  ? knownObjectLiteralNestedWrapperValue
-                  : current.initializer
-                    ? cloneWrapperFunctionValue(resolveNestedWrapperExpression(current.initializer))
-                    : null,
-              );
-            }
-            if (current.initializer && declarationUsesBranchEffects) {
-              recordWrapperBranchNestedWrapperAssignment(
-                current.name.text,
-                declarationNestedWrapperScope.get(current.name.text),
-                declarationNestedWrapperOwnerScope,
-              );
-            }
-            if (
-              current.initializer &&
-              declarationUsesConditionalScope &&
-              !declarationUsesBranchEffects &&
-              declarationNestedWrapperOwnerScope !== declarationNestedWrapperScope
-            ) {
-              declarationNestedWrapperOwnerScope.set(
-                current.name.text,
-                mergeWrapperAssignmentValues(
-                  declarationNestedWrapperOwnerScope.get(current.name.text),
-                  declarationNestedWrapperScope.get(current.name.text),
-                ),
-              );
-            }
-          }
-          if (current.initializer && declarationUsesBranchEffects) {
-            recordWrapperBranchFsIdentifierAssignment(
-              current.name.text,
-              nextFsModuleBinding,
-              nextFsWriteAlias,
-              nextRequireAlias,
-              declarationFsModuleBindingOwnerScope,
-              declarationFsWriteAliasOwnerScope,
-              declarationRequireAliasOwnerScope,
-            );
-          }
-        } else if (!isFsAliasBinding) {
-          markFsModuleShadows(current.name);
-          markWrapperRequireShadows(current.name);
-          markWrapperCreateRequireShadows(current.name);
-          markNestedWrapperFunctionShadows(current.name);
-        }
-        const initializerPropertyAccess = current.initializer
-          ? namedObjectPropertyAccess(current.initializer)
-          : null;
-        const initializerParameterIndex = initializerPropertyAccess
-          ? resolveParameterIndex(initializerPropertyAccess.objectName)
-          : null;
-        const initializerObjectIndex =
-          current.initializer && ts.isIdentifier(unwrapExpression(current.initializer))
-            ? resolveParameterIndex(unwrapExpression(current.initializer).text)
-            : null;
-        const destructuredParameterIndex = parameterPropertyDestructureIndex(
-          current,
-          resolveParameterIndex,
-        );
-        if (destructuredParameterIndex !== null) {
-          for (const [name, binding] of objectBindingParameterProperties(
-            current.name,
-            destructuredParameterIndex,
-          )) {
-            lastScope(destructuredParameterPropertyScopes).set(name, binding);
-          }
-        } else if (
-          ts.isIdentifier(current.name) &&
-          initializerPropertyAccess &&
-          initializerParameterIndex !== null
-        ) {
-          lastScope(destructuredParameterPropertyScopes).set(current.name.text, {
-            index: initializerParameterIndex,
-            propertyName: initializerPropertyAccess.propertyName,
-          });
-        } else if (ts.isIdentifier(current.name) && initializerObjectIndex !== null) {
-          lastScope(parameterObjectBindingScopes).set(current.name.text, initializerObjectIndex);
-        } else {
-          for (const name of bindingPatternNames(current.name)) {
-            if (resolveDestructuredParameterProperty(name)) {
-              lastScope(shadowScopes).add(name);
-            }
-            if (
-              parameterIndexes.has(name) ||
-              (closure && closure.resolveParameterIndex(name) !== null)
-            ) {
-              lastScope(parameterObjectShadowScopes).add(name);
-            }
-          }
-        }
-        if (!isFsAliasBinding) {
-          markFsAliasShadows(current.name);
-        }
-        if (ts.isIdentifier(current.name) && current.initializer) {
-          declarationFsWriteAliasScope.set(
-            current.name.text,
-            legacyWrapperFsWriteName(current.initializer),
-          );
-        } else if (ts.isIdentifier(current.name)) {
-          declarationFsWriteAliasScope.set(current.name.text, null);
-        }
-        if (
-          ts.isIdentifier(current.name) &&
-          nestedFunctionInitializer &&
-          (ts.isFunctionExpression(nestedFunctionInitializer) ||
-            ts.isArrowFunction(nestedFunctionInitializer))
-        ) {
-          declarationNestedWrapperScope.set(
-            current.name.text,
-            nestedWrapperRecordForNode(nestedFunctionInitializer),
-          );
-          if (declarationUsesBranchEffects) {
-            recordWrapperBranchNestedWrapperAssignment(
-              current.name.text,
-              declarationNestedWrapperScope.get(current.name.text),
-              declarationNestedWrapperOwnerScope,
-            );
-          }
-          if (
-            declarationUsesConditionalScope &&
-            !declarationUsesBranchEffects &&
-            declarationNestedWrapperOwnerScope !== declarationNestedWrapperScope
-          ) {
-            declarationNestedWrapperOwnerScope.set(
-              current.name.text,
-              mergeWrapperAssignmentValues(
-                declarationNestedWrapperOwnerScope.get(current.name.text),
-                declarationNestedWrapperScope.get(current.name.text),
-              ),
-            );
-          }
-        }
-        if (ts.isIdentifier(current.name) && current.initializer) {
-          const declarationObjectMethods = registerNestedWrapperObjectMethods(
-            current.name.text,
-            current.initializer,
-            declarationNestedWrapperScope,
-            declarationUsesBranchEffects,
-            declarationNestedWrapperOwnerScope,
-          );
-          if (
-            declarationUsesConditionalScope &&
-            !declarationUsesBranchEffects &&
-            declarationNestedWrapperOwnerScope !== declarationNestedWrapperScope
-          ) {
-            for (const [key, value] of declarationObjectMethods) {
-              declarationNestedWrapperOwnerScope.set(
-                key,
-                mergeWrapperAssignmentValues(declarationNestedWrapperOwnerScope.get(key), value),
-              );
-            }
-          }
-        }
-        if (ts.isObjectBindingPattern(current.name) && current.initializer) {
-          registerNestedWrapperObjectBindingInitializer(
-            current.name,
-            current.initializer,
-            declarationNestedWrapperScope,
-          );
-        }
-        refreshCurrentNestedWrapperFunctionAliases();
-      }
-      if (
-        ts.isBinaryExpression(current) &&
-        current.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-        ts.isIdentifier(current.left)
-      ) {
-        const fsModuleBindingScope = scopeForWrite(bodyFsModuleBindingScopes, current.left.text);
-        const fsWriteAliasScope = scopeForWrite(bodyFsWriteAliasScopes, current.left.text);
-        const requireAliasScope = scopeForWrite(bodyRequireAliasScopes, current.left.text);
-        const nextFsModuleBinding = isWrapperFsBindingExpression(current.right);
-        const nextFsWriteAlias = legacyWrapperFsWriteName(current.right);
-        const nextRequireAlias = isWrapperRequireAliasExpression(current.right);
-        const wrapperBranchEffects = lastScope(wrapperBranchEffectScopes);
-        if (wrapperBranchEffects) {
-          lastScope(bodyFsModuleBindingScopes).set(current.left.text, nextFsModuleBinding);
-          lastScope(bodyFsWriteAliasScopes).set(current.left.text, nextFsWriteAlias);
-          lastScope(bodyRequireAliasScopes).set(current.left.text, nextRequireAlias);
-          recordWrapperBranchFsIdentifierAssignment(
-            current.left.text,
-            nextFsModuleBinding,
-            nextFsWriteAlias,
-            nextRequireAlias,
-            fsModuleBindingScope,
-            fsWriteAliasScope,
-            requireAliasScope,
-          );
-        } else {
-          fsModuleBindingScope.set(
-            current.left.text,
-            lastScope(conditionalWrapperBodyScopes)
-              ? fsModuleBindingScope.get(current.left.text) === true || nextFsModuleBinding
-              : nextFsModuleBinding,
-          );
-          fsWriteAliasScope.set(
-            current.left.text,
-            lastScope(conditionalWrapperBodyScopes)
-              ? (fsWriteAliasScope.get(current.left.text) ?? nextFsWriteAlias)
-              : nextFsWriteAlias,
-          );
-          requireAliasScope.set(
-            current.left.text,
-            lastScope(conditionalWrapperBodyScopes)
-              ? requireAliasScope.get(current.left.text) === true || nextRequireAlias
-              : nextRequireAlias,
-          );
-        }
-        shadowVisibleBodyFsWriteObjectAliases(current.left.text);
-        clearBodyFsWriteObjectAliases(lastScope(bodyFsWriteAliasScopes), current.left.text);
-        registerBodyFsWriteObjectAliases(current.left.text, current.right);
-        const exhaustiveNestedWrapperBranch = Boolean(wrapperBranchEffects);
-        const optionalNestedWrapperBranch =
-          lastScope(conditionalWrapperBodyScopes) && !exhaustiveNestedWrapperBranch;
-        const nestedWrapperOwnerScope = scopeForWrite(
-          nestedWrapperFunctionScopes,
-          current.left.text,
-        );
-        const nestedWrapperTargetScope = lastScope(conditionalWrapperBodyScopes)
-          ? lastScope(nestedWrapperFunctionScopes)
-          : nestedWrapperOwnerScope;
-        clearNestedWrapperObjectMethods(nestedWrapperTargetScope, current.left.text);
-        const assignedNestedWrapper =
-          ts.isFunctionExpression(unwrapExpression(current.right)) ||
-          ts.isArrowFunction(unwrapExpression(current.right))
-            ? nestedWrapperRecordForNode(unwrapExpression(current.right))
-            : ts.isObjectLiteralExpression(unwrapExpression(current.right))
-              ? knownObjectLiteralNestedWrapperValue
-              : cloneWrapperFunctionValue(resolveNestedWrapperExpression(current.right));
-        nestedWrapperTargetScope.set(current.left.text, assignedNestedWrapper);
-        if (optionalNestedWrapperBranch && nestedWrapperOwnerScope !== nestedWrapperTargetScope) {
-          nestedWrapperOwnerScope.set(
-            current.left.text,
-            mergeWrapperAssignmentValues(
-              nestedWrapperOwnerScope.get(current.left.text),
-              assignedNestedWrapper,
-            ),
-          );
-        }
-        if (exhaustiveNestedWrapperBranch) {
-          recordWrapperBranchNestedWrapperAssignment(
-            current.left.text,
-            assignedNestedWrapper,
-            nestedWrapperOwnerScope,
-          );
-        }
-        const assignedNestedWrapperObjectMethods = registerNestedWrapperObjectMethods(
-          current.left.text,
-          current.right,
-          nestedWrapperTargetScope,
-          exhaustiveNestedWrapperBranch,
-          nestedWrapperOwnerScope,
-        );
-        if (optionalNestedWrapperBranch && nestedWrapperOwnerScope !== nestedWrapperTargetScope) {
-          for (const [key, value] of assignedNestedWrapperObjectMethods) {
-            nestedWrapperOwnerScope.set(
-              key,
-              mergeWrapperAssignmentValues(nestedWrapperOwnerScope.get(key), value),
-            );
-          }
-        }
-        refreshCurrentNestedWrapperFunctionAliases();
-      }
-      if (
-        ts.isBinaryExpression(current) &&
-        current.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-        rootedPropertyAccessPath(current.left)?.properties.length > 0
-      ) {
-        const propertyAccess = rootedPropertyAccessPath(current.left);
-        const propertyName = propertyAccess.properties.join(".");
-        if (propertyAccess.properties.length === 1) {
-          setBodyFsWriteObjectAlias(
-            lastScope(bodyFsWriteAliasScopes),
-            objectPropertyKey(propertyAccess.rootName, propertyName),
-            legacyWrapperFsWriteName(current.right),
-          );
-        }
-        const nestedWrapperKey = objectPropertyKey(propertyAccess.rootName, propertyName);
-        const assignedNestedWrapper =
-          ts.isFunctionExpression(unwrapExpression(current.right)) ||
-          ts.isArrowFunction(unwrapExpression(current.right))
-            ? nestedWrapperRecordForNode(unwrapExpression(current.right))
-            : ts.isObjectLiteralExpression(unwrapExpression(current.right))
-              ? knownObjectLiteralNestedWrapperValue
-              : cloneWrapperFunctionValue(resolveNestedWrapperExpression(current.right));
-        const exhaustiveNestedWrapperBranch = Boolean(lastScope(wrapperBranchEffectScopes));
-        const optionalNestedWrapperBranch =
-          lastScope(conditionalWrapperBodyScopes) && !exhaustiveNestedWrapperBranch;
-        const nestedWrapperOwnerScope = nestedWrapperObjectMethodWriteScope(
-          propertyAccess.rootName,
-          propertyName,
-        );
-        const nestedWrapperTargetScope = lastScope(conditionalWrapperBodyScopes)
-          ? lastScope(nestedWrapperFunctionScopes)
-          : nestedWrapperOwnerScope;
-        clearNestedWrapperObjectMethods(nestedWrapperTargetScope, nestedWrapperKey);
-        nestedWrapperTargetScope.set(nestedWrapperKey, assignedNestedWrapper);
-        if (optionalNestedWrapperBranch && nestedWrapperOwnerScope !== nestedWrapperTargetScope) {
-          nestedWrapperOwnerScope.set(
-            nestedWrapperKey,
-            mergeWrapperAssignmentValues(
-              nestedWrapperOwnerScope.get(nestedWrapperKey),
-              assignedNestedWrapper,
-            ),
-          );
-        }
-        if (exhaustiveNestedWrapperBranch) {
-          recordWrapperBranchNestedWrapperAssignment(
-            nestedWrapperKey,
-            assignedNestedWrapper,
-            nestedWrapperOwnerScope,
-          );
-        }
-        const assignedNestedWrapperObjectMethods = registerNestedWrapperObjectMethods(
-          nestedWrapperKey,
-          current.right,
-          nestedWrapperTargetScope,
-          exhaustiveNestedWrapperBranch,
-          nestedWrapperOwnerScope,
-        );
-        if (optionalNestedWrapperBranch && nestedWrapperOwnerScope !== nestedWrapperTargetScope) {
-          for (const [key, value] of assignedNestedWrapperObjectMethods) {
-            nestedWrapperOwnerScope.set(
-              key,
-              mergeWrapperAssignmentValues(nestedWrapperOwnerScope.get(key), value),
-            );
-          }
-        }
-        refreshCurrentNestedWrapperFunctionAliases();
-      }
-      markParameterAssignment(current);
-      if (ts.isCallExpression(current)) {
-        const fsWriteName = legacyWrapperFsWriteName(current.expression);
-        if (fsWriteName && fsWriteCallMayWrite(fsWriteName, [...current.arguments])) {
-          for (const argument of pathArgumentsForFsWrite(fsWriteName, [...current.arguments])) {
-            for (const use of collectPathPropertyUses(
-              argument,
-              fsWriteName,
-              resolveParameterIndex,
-              resolveDestructuredParameterProperty,
-              resolveParameterPropertyUse,
-              resolveDestructuredParameterPropertyUses,
-            )) {
-              const properties = propertyUses.get(use.index) ?? new Set();
-              properties.add(use.propertyName);
-              propertyUses.set(use.index, properties);
-            }
-          }
-        }
-        const wrapperName = callExpressionName(current.expression);
-        const nestedWrapperRecord = wrapperName
-          ? resolveNestedWrapperFunction(wrapperName)
-          : undefined;
-        const wrapperRecord = wrapperName
-          ? nestedWrapperRecord === undefined
-            ? resolveWrapperFunction(wrapperName)
-            : nestedWrapperRecord
-          : null;
-        for (const record of wrapperRecords(wrapperRecord)) {
-          if (nestedWrapperRecord !== undefined && record.closesOverCurrentWrapper === true) {
-            for (const [index, propertyNames] of collectClosedOverPathPropertyUses(
-              record,
-              activeWrapperNodes,
-              current.arguments,
-            )) {
-              const properties = propertyUses.get(index) ?? new Set();
-              for (const propertyName of propertyNames) {
-                properties.add(propertyName);
-              }
-              propertyUses.set(index, properties);
-            }
-          }
-          const forwardedPropertyUses = collectLegacyPathPropertyParameters(
-            record.node,
-            record.aliases,
-            record.moduleBindings,
-            record.moduleProperties,
-            record.requireAliases,
-            record.createRequireShadows,
-            activeWrapperNodes,
-            record.lexicalScopes ?? record.lexicalScope ?? null,
-          );
-          for (const [index, propertyNames] of forwardedPropertyUses) {
-            const argument = callArgumentOrParameterDefault(record.node, current.arguments, index, {
-              allowLexicalIdentifierDefault: record.closesOverCurrentWrapper === true,
-            });
-            if (!argument) {
-              continue;
-            }
-            for (const propertyName of propertyNames) {
-              for (const use of collectForwardedWrapperPropertyUses(
-                argument,
-                propertyName,
-                record.node.parameters[index] ?? null,
-                record.node,
-                current.arguments,
-                {
-                  allowLexicalIdentifierDefault: record.closesOverCurrentWrapper === true,
-                },
-              )) {
-                const properties = propertyUses.get(use.index) ?? new Set();
-                properties.add(use.propertyName);
-                propertyUses.set(use.index, properties);
-              }
-            }
-          }
-        }
-      }
-      ts.forEachChild(current, visitBody);
-    }
-    if (closure) {
-      for (const parameter of node.parameters) {
-        if (parameter.initializer) {
-          visitBody(parameter.initializer);
-        }
-      }
-    }
-    if (node.body) {
-      if ("statements" in node.body) {
-        registerHoistedWrapperFunctionShadows(node.body.statements);
-      }
-      visitBody(node.body);
-    }
-    activeWrapperNodes.delete(node);
-    return propertyUses;
-  }
-
-  function callArgumentOrParameterDefault(
-    wrapperNode,
-    argumentsList,
-    index,
-    optionsOrActiveDefaultIndexes = {},
-    maybeActiveDefaultIndexes = new Set(),
-  ) {
-    const options =
-      optionsOrActiveDefaultIndexes instanceof Set ? {} : optionsOrActiveDefaultIndexes;
-    const activeDefaultIndexes =
-      optionsOrActiveDefaultIndexes instanceof Set
-        ? optionsOrActiveDefaultIndexes
-        : maybeActiveDefaultIndexes;
-    const allowLexicalIdentifierDefault = options.allowLexicalIdentifierDefault ?? true;
-    const argument = argumentsList[index];
-    if (argument && !isKnownUndefinedExpression(argument)) {
-      return argument;
-    }
-    const initializer = wrapperNode.parameters[index]?.initializer ?? null;
-    if (!initializer) {
-      return null;
-    }
-    const unwrapped = unwrapExpression(initializer);
-    if (ts.isIdentifier(unwrapped)) {
-      const parameterBinding = earlierParameterBindingForIdentifier(
-        unwrapped.text,
-        wrapperNode,
-        index,
-      );
-      if (parameterBinding && !activeDefaultIndexes.has(parameterBinding.index)) {
-        activeDefaultIndexes.add(parameterBinding.index);
-        const resolved = resolveEarlierParameterBindingExpression(
-          parameterBinding,
-          wrapperNode,
-          argumentsList,
-          options,
-          activeDefaultIndexes,
-        );
-        activeDefaultIndexes.delete(parameterBinding.index);
-        return resolved ?? null;
-      }
-      if (!allowLexicalIdentifierDefault) {
-        return null;
-      }
-    }
-    if (!allowLexicalIdentifierDefault) {
-      const resolved = resolveEarlierParameterDefaultExpression(
-        unwrapped,
-        wrapperNode,
-        argumentsList,
-        index,
-        options,
-        activeDefaultIndexes,
-      );
-      if (resolved) {
-        return resolved;
-      }
-      const spreadOnlyObjectLiteral =
-        ts.isObjectLiteralExpression(unwrapped) &&
-        objectLiteralIdentifiersAreSpreadSourcesOnly(unwrapped);
-      return earlierParameterReferenceIndexes(unwrapped, wrapperNode, index).size === 0 &&
-        (!expressionContainsIdentifier(unwrapped) || spreadOnlyObjectLiteral)
-        ? initializer
-        : null;
-    }
-    return initializer;
-  }
-
-  function earlierParameterBindingForIdentifier(name, wrapperNode, parameterPosition) {
-    for (let index = 0; index < parameterPosition; index++) {
-      const candidate = wrapperNode.parameters[index];
-      if (!candidate) {
-        continue;
-      }
-      if (ts.isIdentifier(candidate.name) && candidate.name.text === name) {
-        return { index, propertyName: null };
-      }
-      if (ts.isObjectBindingPattern(candidate.name)) {
-        const binding = objectBindingParameterProperties(candidate.name, index).get(name);
-        if (binding) {
-          return binding;
-        }
-      }
-    }
-    return null;
-  }
-
-  function earlierParameterReferenceBindings(expression, wrapperNode, parameterPosition) {
-    const bindings = new Map();
-    function addBinding(binding) {
-      bindings.set(`${binding.index}:${binding.propertyName ?? ""}`, binding);
-    }
-    function visitReference(current) {
-      if (ts.isPropertyAccessExpression(current)) {
-        visitReference(current.expression);
-        return;
-      }
-      if (ts.isPropertyAssignment(current)) {
-        visitReference(current.initializer);
-        return;
-      }
-      if (ts.isShorthandPropertyAssignment(current)) {
-        visitReference(current.name);
-        return;
-      }
-      if (ts.isIdentifier(current)) {
-        const binding = earlierParameterBindingForIdentifier(
-          current.text,
-          wrapperNode,
-          parameterPosition,
-        );
-        if (binding) {
-          addBinding(binding);
-        }
-        return;
-      }
-      ts.forEachChild(current, visitReference);
-    }
-    visitReference(expression);
-    return [...bindings.values()];
-  }
-
-  function earlierParameterReferenceIndexes(expression, wrapperNode, parameterPosition) {
-    return new Set(
-      earlierParameterReferenceBindings(expression, wrapperNode, parameterPosition).map(
-        (binding) => binding.index,
-      ),
-    );
-  }
-
-  function expressionContainsIdentifier(expression) {
-    let found = false;
-    function visitIdentifier(current) {
-      if (ts.isPropertyAccessExpression(current)) {
-        visitIdentifier(current.expression);
-        return;
-      }
-      if (ts.isPropertyAssignment(current)) {
-        visitIdentifier(current.initializer);
-        return;
-      }
-      if (ts.isMethodDeclaration(current) || ts.isGetAccessor(current)) {
-        if (current.body) {
-          visitIdentifier(current.body);
-        }
-        return;
-      }
-      if (ts.isSetAccessor(current)) {
-        visitIdentifier(current.parameters[0]);
-        if (current.body) {
-          visitIdentifier(current.body);
-        }
-        return;
-      }
-      if (ts.isIdentifier(current)) {
-        found = true;
-        return;
-      }
-      ts.forEachChild(current, visitIdentifier);
-    }
-    visitIdentifier(expression);
-    return found;
-  }
-
-  function objectLiteralIdentifiersAreSpreadSourcesOnly(objectLiteral) {
-    let valid = true;
-    function visitExpression(current) {
-      if (!valid) {
-        return;
-      }
-      if (ts.isSpreadAssignment(current)) {
-        const spreadExpression = unwrapExpression(current.expression);
-        if (!ts.isIdentifier(spreadExpression)) {
-          visitExpression(spreadExpression);
-        }
-        return;
-      }
-      if (ts.isPropertyAssignment(current)) {
-        visitExpression(current.initializer);
-        return;
-      }
-      if (ts.isShorthandPropertyAssignment(current) || ts.isIdentifier(current)) {
-        valid = false;
-        return;
-      }
-      ts.forEachChild(current, visitExpression);
-    }
-    visitExpression(objectLiteral);
-    return valid;
-  }
-
-  function resolveEarlierParameterDefaultExpression(
-    expression,
-    wrapperNode,
-    argumentsList,
-    parameterPosition,
-    options,
-    activeDefaultIndexes,
-  ) {
-    const resolvedExpressions = [];
-    for (const binding of earlierParameterReferenceBindings(
-      expression,
-      wrapperNode,
-      parameterPosition,
-    )) {
-      const referencedParameterIndex = binding.index;
-      if (activeDefaultIndexes.has(referencedParameterIndex)) {
-        continue;
-      }
-      activeDefaultIndexes.add(referencedParameterIndex);
-      const resolved = resolveEarlierParameterBindingExpression(
-        binding,
-        wrapperNode,
-        argumentsList,
-        options,
-        activeDefaultIndexes,
-      );
-      activeDefaultIndexes.delete(referencedParameterIndex);
-      if (resolved) {
-        resolvedExpressions.push(resolved);
-      }
-    }
-    if (resolvedExpressions.length === 0) {
-      return null;
-    }
-    return resolvedExpressions.length === 1
-      ? resolvedExpressions[0]
-      : ts.factory.createArrayLiteralExpression(resolvedExpressions);
-  }
-
-  function propertyAccessExpressionForName(expression, propertyName) {
-    return /^[A-Za-z_$][\w$]*$/u.test(propertyName)
-      ? ts.factory.createPropertyAccessExpression(expression, propertyName)
-      : ts.factory.createElementAccessExpression(
-          expression,
-          ts.factory.createStringLiteral(propertyName),
-        );
-  }
-
-  function propertyPathExpression(expression, propertyPath) {
-    let current = expression;
-    for (const propertyName of propertyPath) {
-      current = propertyAccessExpressionForName(current, propertyName);
-    }
-    return current;
-  }
-
-  function trackedPropertyPathExpression(expression, propertyPath) {
-    const unwrapped = unwrapExpression(expression);
-    if (!ts.isIdentifier(unwrapped)) {
-      return propertyPathExpression(expression, propertyPath);
-    }
-    const propertyName = propertyPath.join(".");
-    const property = lookupLegacyObjectPropertyEntry(unwrapped.text, propertyName);
-    if (property.found) {
-      if (property.value === true) {
-        return ts.factory.createStringLiteral("sessions.json");
-      }
-      return property.value === explicitUndefinedLegacyObjectPropertyValue
-        ? ts.factory.createIdentifier("undefined")
-        : ts.factory.createStringLiteral("state/openclaw.sqlite");
-    }
-    return lookupKnownLegacyObjectLiteral(unwrapped.text)
-      ? ts.factory.createIdentifier("undefined")
-      : null;
-  }
-
-  function objectLiteralPropertyPathInitializer(objectLiteral, propertyPath) {
-    let current = objectLiteral;
-    for (const [index, propertyName] of propertyPath.entries()) {
-      if (!ts.isObjectLiteralExpression(current)) {
-        return null;
-      }
-      const initializer = objectLiteralPropertyInitializer(current, propertyName);
-      if (!initializer || initializer === unknownObjectLiteralPropertyInitializer) {
-        return null;
-      }
-      if (index === propertyPath.length - 1) {
-        return initializer;
-      }
-      current = unwrapExpression(initializer);
-      if (ts.isIdentifier(current)) {
-        return trackedPropertyPathExpression(current, propertyPath.slice(index + 1));
-      }
-    }
-    return null;
-  }
-
-  function objectLiteralPropertyPathLegacyValue(
-    objectLiteral,
-    propertyPath,
-    maxScopeIndex = legacyObjectPropertyScopes.length - 1,
-  ) {
-    if (propertyPath.length === 0) {
-      return expressionContainsLegacyStore(objectLiteral);
-    }
-    const [propertyName, ...remainingPath] = propertyPath;
-    let result = null;
-    for (const property of objectLiteral.properties) {
-      if (ts.isSpreadAssignment(property)) {
-        const spreadExpression = unwrapExpression(property.expression);
-        let spreadValue = null;
-        if (ts.isIdentifier(spreadExpression)) {
-          spreadValue = lookupLegacyObjectProperty(
-            spreadExpression.text,
-            propertyPath.join("."),
-            maxScopeIndex,
-          );
-        } else if (ts.isObjectLiteralExpression(spreadExpression)) {
-          spreadValue = objectLiteralPropertyPathLegacyValue(
-            spreadExpression,
-            propertyPath,
-            maxScopeIndex,
-          );
-        } else if (expressionContainsLegacyStore(property.expression)) {
-          spreadValue = true;
-        }
-        if (spreadValue !== null) {
-          result = spreadValue;
-        }
-        continue;
-      }
-      if (ts.isPropertyAssignment(property) && propertyNameText(property.name) === propertyName) {
-        if (remainingPath.length === 0) {
-          result = expressionContainsLegacyStore(property.initializer);
-          continue;
-        }
-        const unwrapped = unwrapExpression(property.initializer);
-        result = ts.isObjectLiteralExpression(unwrapped)
-          ? objectLiteralPropertyPathLegacyValue(unwrapped, remainingPath, maxScopeIndex)
-          : ts.isIdentifier(unwrapped)
-            ? lookupLegacyObjectProperty(unwrapped.text, remainingPath.join("."), maxScopeIndex)
-            : null;
-        continue;
-      }
-      if (ts.isShorthandPropertyAssignment(property) && property.name.text === propertyName) {
-        result =
-          remainingPath.length === 0
-            ? expressionContainsLegacyStore(property.name)
-            : lookupLegacyObjectProperty(
-                property.name.text,
-                remainingPath.join("."),
-                maxScopeIndex,
-              );
-      }
-    }
-    return result;
-  }
-
-  function bindingElementForProperty(bindingPattern, propertyName) {
-    for (const element of bindingPattern.elements) {
-      const boundPropertyName = element.propertyName
-        ? propertyNameText(element.propertyName)
-        : ts.isIdentifier(element.name)
-          ? element.name.text
-          : null;
-      if (boundPropertyName === propertyName) {
-        return element;
-      }
-    }
-    return null;
-  }
-
-  function bindingElementDefaultInitializerForPath(bindingPattern, propertyPath) {
-    const [propertyName, ...remainingPath] = propertyPath;
-    const element = propertyName ? bindingElementForProperty(bindingPattern, propertyName) : null;
-    if (!element) {
-      return null;
-    }
-    if (remainingPath.length === 0) {
-      return element.initializer ?? null;
-    }
-    return ts.isObjectBindingPattern(element.name)
-      ? bindingElementDefaultInitializerForPath(element.name, remainingPath)
-      : null;
-  }
-
-  function propertyPathInitializerFromExpression(expression, propertyPath) {
-    if (propertyPath.length === 0) {
-      return expression;
-    }
-    const unwrapped = unwrapExpression(expression);
-    if (ts.isObjectLiteralExpression(unwrapped)) {
-      return objectLiteralPropertyPathInitializer(unwrapped, propertyPath);
-    }
-    if (ts.isIdentifier(unwrapped)) {
-      return trackedPropertyPathExpression(unwrapped, propertyPath);
-    }
-    return null;
-  }
-
-  function bindingElementAncestorDefaultInitializerForObjectLiteral(
-    bindingPattern,
-    propertyPath,
-    objectLiteral,
-    resolveSpreadProperty,
-  ) {
-    const [propertyName, ...remainingPath] = propertyPath;
-    const element = propertyName ? bindingElementForProperty(bindingPattern, propertyName) : null;
-    if (!element || remainingPath.length === 0) {
-      return null;
-    }
-    const propertyState = objectLiteralPropertyInitializerState(
-      objectLiteral,
-      propertyName,
-      resolveSpreadProperty,
-    );
-    if (
-      (propertyState.kind === "missing" || propertyState.kind === "undefined") &&
-      element.initializer
-    ) {
-      return propertyPathInitializerFromExpression(element.initializer, remainingPath);
-    }
-    if (
-      propertyState.kind === "initializer" &&
-      ts.isObjectLiteralExpression(unwrapExpression(propertyState.initializer)) &&
-      ts.isObjectBindingPattern(element.name)
-    ) {
-      return bindingElementAncestorDefaultInitializerForObjectLiteral(
-        element.name,
-        remainingPath,
-        unwrapExpression(propertyState.initializer),
-        resolveSpreadProperty,
-      );
-    }
-    if (
-      propertyState.kind === "initializer" &&
-      ts.isIdentifier(unwrapExpression(propertyState.initializer)) &&
-      ts.isObjectBindingPattern(element.name)
-    ) {
-      return bindingElementAncestorDefaultInitializerForIdentifier(
-        element.name,
-        remainingPath,
-        unwrapExpression(propertyState.initializer).text,
-      );
-    }
-    return null;
-  }
-
-  function bindingElementAncestorDefaultInitializerForIdentifier(
-    bindingPattern,
-    propertyPath,
-    sourceName,
-  ) {
-    const [propertyName, ...remainingPath] = propertyPath;
-    const element = propertyName ? bindingElementForProperty(bindingPattern, propertyName) : null;
-    if (!element || remainingPath.length === 0) {
-      return null;
-    }
-    const parentProperty = lookupLegacyObjectPropertyEntry(sourceName, propertyName);
-    const parentMissingOrUndefined =
-      (!parentProperty.found && lookupKnownLegacyObjectLiteral(sourceName)) ||
-      parentProperty.value === explicitUndefinedLegacyObjectPropertyValue;
-    if (parentMissingOrUndefined && element.initializer) {
-      return propertyPathInitializerFromExpression(element.initializer, remainingPath);
-    }
-    const parentObjectName = `${sourceName}.${propertyName}`;
-    if (
-      parentProperty.found &&
-      lookupKnownLegacyObjectLiteral(parentObjectName) &&
-      ts.isObjectBindingPattern(element.name)
-    ) {
-      return bindingElementAncestorDefaultInitializerForIdentifier(
-        element.name,
-        remainingPath,
-        parentObjectName,
-      );
-    }
-    return null;
-  }
-
-  function bindingElementAncestorDefaultInitializer(
-    bindingPattern,
-    propertyPath,
-    sourceExpression,
-    resolveSpreadProperty = null,
-  ) {
-    const source = unwrapExpression(sourceExpression);
-    if (ts.isObjectLiteralExpression(source)) {
-      return bindingElementAncestorDefaultInitializerForObjectLiteral(
-        bindingPattern,
-        propertyPath,
-        source,
-        resolveSpreadProperty,
-      );
-    }
-    if (ts.isIdentifier(source)) {
-      return bindingElementAncestorDefaultInitializerForIdentifier(
-        bindingPattern,
-        propertyPath,
-        source.text,
-      );
-    }
-    return null;
-  }
-
-  function appliedBindingElementDefaultInitializer(
-    bindingPattern,
-    propertyPath,
-    sourceExpression,
-    resolveSpreadProperty = null,
-  ) {
-    const leafInitializer = bindingElementDefaultInitializerForPath(bindingPattern, propertyPath);
-    if (
-      leafInitializer &&
-      objectBindingPropertyDefaultApplies(
-        bindingPattern,
-        propertyPath,
-        sourceExpression,
-        resolveSpreadProperty,
-      )
-    ) {
-      return leafInitializer;
-    }
-    return bindingElementAncestorDefaultInitializer(
-      bindingPattern,
-      propertyPath,
-      sourceExpression,
-      resolveSpreadProperty,
-    );
-  }
-
-  function objectBindingPropertyDefaultAppliesForObjectLiteral(
-    bindingPattern,
-    propertyPath,
-    objectLiteral,
-    resolveSpreadProperty,
-  ) {
-    const [propertyName, ...remainingPath] = propertyPath;
-    const element = propertyName ? bindingElementForProperty(bindingPattern, propertyName) : null;
-    if (!element) {
-      return false;
-    }
-    const propertyState = objectLiteralPropertyInitializerState(
-      objectLiteral,
-      propertyName,
-      resolveSpreadProperty,
-    );
-    if (remainingPath.length === 0) {
-      return propertyState.kind === "missing" || propertyState.kind === "undefined";
-    }
-    if (!ts.isObjectBindingPattern(element.name)) {
-      return false;
-    }
-    if (
-      propertyState.kind === "initializer" &&
-      ts.isObjectLiteralExpression(unwrapExpression(propertyState.initializer))
-    ) {
-      return objectBindingPropertyDefaultAppliesForObjectLiteral(
-        element.name,
-        remainingPath,
-        unwrapExpression(propertyState.initializer),
-        resolveSpreadProperty,
-      );
-    }
-    if (
-      propertyState.kind === "initializer" &&
-      ts.isIdentifier(unwrapExpression(propertyState.initializer))
-    ) {
-      return objectBindingPropertyDefaultAppliesForIdentifier(
-        element.name,
-        remainingPath,
-        unwrapExpression(propertyState.initializer).text,
-      );
-    }
-    if (
-      (propertyState.kind === "missing" || propertyState.kind === "undefined") &&
-      element.initializer &&
-      ts.isObjectLiteralExpression(unwrapExpression(element.initializer))
-    ) {
-      return objectBindingPropertyDefaultAppliesForObjectLiteral(
-        element.name,
-        remainingPath,
-        unwrapExpression(element.initializer),
-        resolveSpreadProperty,
-      );
-    }
-    return false;
-  }
-
-  function objectBindingPropertyDefaultAppliesForIdentifier(
-    bindingPattern,
-    propertyPath,
-    sourceName,
-  ) {
-    const [propertyName, ...remainingPath] = propertyPath;
-    const element = propertyName ? bindingElementForProperty(bindingPattern, propertyName) : null;
-    if (!element) {
-      return false;
-    }
-    const exactProperty = lookupLegacyObjectPropertyEntry(sourceName, propertyPath.join("."));
-    if (remainingPath.length === 0) {
-      return exactProperty.found
-        ? exactProperty.value === explicitUndefinedLegacyObjectPropertyValue
-        : lookupKnownLegacyObjectLiteral(sourceName);
-    }
-    if (exactProperty.found) {
-      return exactProperty.value === explicitUndefinedLegacyObjectPropertyValue;
-    }
-    if (!ts.isObjectBindingPattern(element.name)) {
-      return false;
-    }
-    const parentProperty = lookupLegacyObjectPropertyEntry(sourceName, propertyName);
-    const parentObjectName = `${sourceName}.${propertyName}`;
-    if (parentProperty.found && lookupKnownLegacyObjectLiteral(parentObjectName)) {
-      return objectBindingPropertyDefaultAppliesForIdentifier(
-        element.name,
-        remainingPath,
-        parentObjectName,
-      );
-    }
-    const parentMissingOrUndefined =
-      (!parentProperty.found && lookupKnownLegacyObjectLiteral(sourceName)) ||
-      parentProperty.value === explicitUndefinedLegacyObjectPropertyValue;
-    if (
-      parentMissingOrUndefined &&
-      element.initializer &&
-      ts.isObjectLiteralExpression(unwrapExpression(element.initializer))
-    ) {
-      return objectBindingPropertyDefaultAppliesForObjectLiteral(
-        element.name,
-        remainingPath,
-        unwrapExpression(element.initializer),
-        null,
-      );
-    }
-    return false;
-  }
-
-  function objectBindingPropertyDefaultApplies(
-    bindingPattern,
-    propertyPath,
-    sourceExpression,
-    resolveSpreadProperty = null,
-  ) {
-    if (propertyPath.length === 0) {
-      return false;
-    }
-    const source = unwrapExpression(sourceExpression);
-    if (ts.isObjectLiteralExpression(source)) {
-      return objectBindingPropertyDefaultAppliesForObjectLiteral(
-        bindingPattern,
-        propertyPath,
-        source,
-        resolveSpreadProperty,
-      );
-    }
-    if (ts.isIdentifier(source)) {
-      return objectBindingPropertyDefaultAppliesForIdentifier(
-        bindingPattern,
-        propertyPath,
-        source.text,
-      );
-    }
-    return false;
-  }
-
-  function resolveEarlierParameterBindingExpression(
-    binding,
-    wrapperNode,
-    argumentsList,
-    options,
-    activeDefaultIndexes,
-  ) {
-    const resolved = callArgumentOrParameterDefault(
-      wrapperNode,
-      argumentsList,
-      binding.index,
-      options,
-      activeDefaultIndexes,
-    );
-    if (!resolved || !binding.propertyName) {
-      return resolved;
-    }
-    const propertyPath = binding.propertyName.split(".");
-    const unwrapped = unwrapExpression(resolved);
-    if (ts.isObjectLiteralExpression(unwrapped)) {
-      return objectLiteralPropertyPathInitializer(unwrapped, propertyPath);
-    }
-    return trackedPropertyPathExpression(resolved, propertyPath);
-  }
-
-  function resolveBindingDefaultInitializerExpression(
-    initializer,
-    wrapperNode,
-    argumentsList,
-    parameter,
-    options = {},
-  ) {
-    if (!wrapperNode || !parameter) {
-      return initializer;
-    }
-    const parameterPosition = wrapperNode.parameters.findIndex(
-      (candidate) => candidate === parameter,
-    );
-    if (parameterPosition <= 0) {
-      return options.allowLexicalIdentifierDefault === false &&
-        expressionContainsIdentifier(unwrapExpression(initializer))
-        ? null
-        : initializer;
-    }
-    const unwrapped = unwrapExpression(initializer);
-    if (!ts.isIdentifier(unwrapped)) {
-      if (options.allowLexicalIdentifierDefault !== false) {
-        return initializer;
-      }
-      const resolved = resolveEarlierParameterDefaultExpression(
-        unwrapped,
-        wrapperNode,
-        argumentsList,
-        parameterPosition,
-        options,
-        new Set(),
-      );
-      if (resolved) {
-        return resolved;
-      }
-      const spreadOnlyObjectLiteral =
-        ts.isObjectLiteralExpression(unwrapped) &&
-        objectLiteralIdentifiersAreSpreadSourcesOnly(unwrapped);
-      return earlierParameterReferenceIndexes(unwrapped, wrapperNode, parameterPosition).size ===
-        0 &&
-        (!expressionContainsIdentifier(unwrapped) || spreadOnlyObjectLiteral)
-        ? initializer
-        : null;
-    }
-    const parameterBinding = earlierParameterBindingForIdentifier(
-      unwrapped.text,
-      wrapperNode,
-      parameterPosition,
-    );
-    if (!parameterBinding) {
-      return options.allowLexicalIdentifierDefault === false ? null : initializer;
-    }
-    return resolveEarlierParameterBindingExpression(
-      parameterBinding,
-      wrapperNode,
-      argumentsList,
-      options,
-      new Set(),
-    );
-  }
-
   function wrapperRecordForNode(node) {
-    const requireAliasSnapshot = visibleRequireAliasSnapshot();
     return {
-      aliases: visibleMap(fsWriteAliasScopes),
-      createRequireShadows: visibleSet(createRequireShadowScopes),
-      lexicalScopeIndex: wrapperFunctionScopes.length - 1,
-      moduleBindings: visibleMap(fsModuleBindingScopes),
-      moduleProperties: visibleMap(fsModulePropertyScopes),
+      environment: lexicalScopeStacks.map(([scopes]) => [...scopes]),
       node,
-      requireAliases: requireAliasSnapshot.aliases,
-      requireAliasSourceScopes: requireAliasSnapshot.sourceScopes,
     };
   }
 
@@ -6238,7 +2757,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
       initializer,
       onUnknownSpread: () => clearWrapperObjectMethods(scope, objectName),
       onSpread: (targetName, sourceName) => {
-        if (copy(targetName, sourceName) === 0) {
+        if (copy(targetName, sourceName) === 0 && !lookupKnownLegacyObjectLiteral(sourceName)) {
           clearWrapperObjectMethods(scope, targetName);
         }
       },
@@ -6259,39 +2778,25 @@ export function collectDatabaseFirstLegacyStoreViolations(
         copy(key, identifier);
       },
       onNested: (key, nested) => registerWrapperObjectMethods(key, nested, scope, conditionalWrite),
+      onOther: (key, value) => {
+        const wrapper = resolveWrapperExpression(value);
+        if (wrapper) {
+          remember(key, cloneWrapperFunctionValue(wrapper));
+        }
+      },
     });
   }
   function wrapperRecords(value) {
-    if (
-      !value ||
-      value === explicitUndefinedNestedWrapperValue ||
-      isNestedWrapperObjectMarker(value)
-    ) {
+    if (!value) {
       return [];
     }
     return Array.isArray(value) ? value : [value];
   }
 
-  function isNestedWrapperObjectMarker(value) {
-    return (
-      value === knownObjectLiteralNestedWrapperValue || value === unknownNestedWrapperObjectValue
-    );
-  }
-
   function cloneWrapperRecord(record) {
     return {
-      aliases: new Map(record.aliases),
-      closesOverCurrentWrapper: record.closesOverCurrentWrapper === true,
-      createRequireShadows: new Set(record.createRequireShadows),
-      lexicalScope: record.lexicalScope,
-      lexicalScopes: record.lexicalScopes ? [...record.lexicalScopes] : undefined,
-      localScope: record.localScope,
-      lexicalScopeIndex: record.lexicalScopeIndex,
-      moduleBindings: new Map(record.moduleBindings),
-      moduleProperties: new Map(record.moduleProperties),
+      environment: record.environment.map((scopes) => [...scopes]),
       node: record.node,
-      requireAliases: new Map(record.requireAliases),
-      requireAliasSourceScopes: new Map(record.requireAliasSourceScopes),
     };
   }
 
@@ -6299,83 +2804,26 @@ export function collectDatabaseFirstLegacyStoreViolations(
     if (!value) {
       return null;
     }
-    if (value === explicitUndefinedNestedWrapperValue) {
-      return explicitUndefinedNestedWrapperValue;
-    }
-    if (value === knownObjectLiteralNestedWrapperValue) {
-      return knownObjectLiteralNestedWrapperValue;
-    }
-    if (value === unknownNestedWrapperObjectValue) {
-      return unknownNestedWrapperObjectValue;
-    }
     const records = wrapperRecords(value).map(cloneWrapperRecord);
     return Array.isArray(value) ? records : records[0];
-  }
-
-  function refreshCurrentWrapperFunctionAliases() {
-    const aliases = visibleMap(fsWriteAliasScopes);
-    const moduleBindings = visibleMap(fsModuleBindingScopes);
-    const moduleProperties = visibleMap(fsModulePropertyScopes);
-    const requireAliasSnapshot = visibleRequireAliasSnapshot();
-    const createRequireShadows = visibleSet(createRequireShadowScopes);
-    const currentLexicalScopeIndex = wrapperFunctionScopes.length - 1;
-    for (const value of lastScope(wrapperFunctionScopes).values()) {
-      for (const record of wrapperRecords(value)) {
-        if (record.lexicalScopeIndex !== currentLexicalScopeIndex) {
-          continue;
-        }
-        record.aliases = aliases;
-        record.moduleBindings = moduleBindings;
-        record.moduleProperties = moduleProperties;
-        record.requireAliases = requireAliasSnapshot.aliases;
-        record.requireAliasSourceScopes = requireAliasSnapshot.sourceScopes;
-        record.createRequireShadows = createRequireShadows;
-      }
-    }
-  }
-
-  function refreshWrapperRequireAliasesAtScope(scopeIndex) {
-    const wrapperScope = wrapperFunctionScopes[scopeIndex];
-    if (!wrapperScope) {
-      return;
-    }
-    const requireAliasSnapshot = visibleRequireAliasSnapshot(scopeIndex);
-    for (const value of wrapperScope.values()) {
-      for (const record of wrapperRecords(value)) {
-        if (record.lexicalScopeIndex === scopeIndex) {
-          record.requireAliases = requireAliasSnapshot.aliases;
-          record.requireAliasSourceScopes = requireAliasSnapshot.sourceScopes;
-          continue;
-        }
-        if (record.lexicalScopeIndex > scopeIndex) {
-          for (const [name, alias] of requireAliasSnapshot.aliases) {
-            const recordSourceScope = record.requireAliasSourceScopes.get(name);
-            if (recordSourceScope === undefined || recordSourceScope <= scopeIndex) {
-              record.requireAliases.set(name, alias);
-              record.requireAliasSourceScopes.set(
-                name,
-                requireAliasSnapshot.sourceScopes.get(name) ?? scopeIndex,
-              );
-            }
-          }
-        }
-      }
-    }
-  }
-
-  function refreshWrapperRequireAliasesFromScope(scopeIndex) {
-    for (let index = scopeIndex; index < wrapperFunctionScopes.length; index++) {
-      refreshWrapperRequireAliasesAtScope(index);
-    }
   }
 
   function registerHoistedWrapperFunctions(statements) {
     for (const statement of statements) {
       if (ts.isFunctionDeclaration(statement) && statement.name) {
-        markRequireShadows(statement.name);
-        markCreateRequireShadows(statement.name);
-        lastScope(requireAliasScopes).set(statement.name.text, false);
+        bindIdentifierFact(statement.name.text, undefinedFact());
         registerWrapperFunction(statement.name.text, statement);
+        continue;
+      }
+      if (
+        ts.isVariableStatement(statement) &&
+        (statement.declarationList.flags & ts.NodeFlags.BlockScoped) !== 0
+      ) {
+        for (const declaration of statement.declarationList.declarations) {
+          for (const name of bindingPatternNames(declaration.name)) {
+            bindIdentifierFact(name, undefinedFact());
+          }
+        }
       }
     }
   }
@@ -6428,439 +2876,660 @@ export function collectDatabaseFirstLegacyStoreViolations(
     return pathParts ? pathParts.join(".") : null;
   }
 
-  function objectArgumentPropertyContainsLegacyStore(argument, propertyName) {
-    const propertyPath = propertyName.split(".");
-    const unwrapped = unwrapExpression(argument);
-    if (ts.isObjectLiteralExpression(unwrapped)) {
-      return objectExpressionPropertyPathContainsLegacyStore(unwrapped, propertyPath);
-    }
-    if (ts.isIdentifier(unwrapped)) {
-      return lookupLegacyObjectProperty(unwrapped.text, propertyPath.join(".")) === true;
-    }
-    return expressionContainsLegacyStore(argument);
-  }
-
-  function objectExpressionPropertyLegacyValue(
-    expression,
-    propertyName,
-    maxScopeIndex = legacyObjectPropertyScopes.length - 1,
-  ) {
-    const propertyPath = propertyName.split(".");
-    const unwrapped = unwrapExpression(expression);
-    if (ts.isObjectLiteralExpression(unwrapped)) {
-      return objectLiteralPropertyPathLegacyValue(unwrapped, propertyPath, maxScopeIndex);
-    }
-    if (ts.isIdentifier(unwrapped)) {
-      return lookupLegacyObjectProperty(unwrapped.text, propertyPath.join("."), maxScopeIndex);
-    }
-    return null;
-  }
-
-  function objectExpressionPropertyPathMayUseBindingDefault(expression, propertyPath) {
-    const unwrapped = unwrapExpression(expression);
-    if (ts.isIdentifier(unwrapped)) {
-      const property = lookupLegacyObjectPropertyEntry(unwrapped.text, propertyPath.join("."));
-      if (property.found) {
-        return property.value === explicitUndefinedLegacyObjectPropertyValue;
-      }
-      return lookupKnownLegacyObjectLiteral(unwrapped.text);
-    }
-    if (!ts.isObjectLiteralExpression(unwrapped) || propertyPath.length === 0) {
-      return false;
-    }
-    const [propertyName, ...remainingPath] = propertyPath;
-    const state = objectLiteralPropertyInitializerState(unwrapped, propertyName);
-    if (remainingPath.length === 0) {
-      return state.kind === "missing" || state.kind === "undefined";
-    }
-    return state.kind === "initializer"
-      ? objectExpressionPropertyPathMayUseBindingDefault(state.initializer, remainingPath)
-      : state.kind === "missing" || state.kind === "undefined";
-  }
-
-  function objectExpressionPropertyPathContainsLegacyStore(
-    expression,
-    propertyPath,
-    maxScopeIndex = legacyObjectPropertyScopes.length - 1,
-  ) {
-    if (propertyPath.length === 0) {
-      return pathArgumentContainsLegacyStore(expression);
-    }
-    const unwrapped = unwrapExpression(expression);
-    if (ts.isIdentifier(unwrapped)) {
-      return (
-        lookupLegacyObjectProperty(unwrapped.text, propertyPath.join("."), maxScopeIndex) === true
-      );
-    }
-    if (!ts.isObjectLiteralExpression(unwrapped)) {
-      return expressionContainsLegacyStore(expression);
-    }
-    const [propertyName, ...remainingPath] = propertyPath;
-    if (remainingPath.length === 0) {
-      return objectLiteralPropertyContainsLegacyStore(unwrapped, propertyName);
-    }
-    let result = false;
-    for (const property of unwrapped.properties) {
-      if (ts.isSpreadAssignment(property)) {
-        const spreadExpression = unwrapExpression(property.expression);
-        let spreadValue = null;
-        if (ts.isIdentifier(spreadExpression)) {
-          const spreadProperty = lookupLegacyObjectPropertyEntry(
-            spreadExpression.text,
-            propertyPath.join("."),
-            maxScopeIndex,
-          );
-          spreadValue = spreadProperty.found ? spreadProperty.value === true : null;
-        } else if (ts.isObjectLiteralExpression(spreadExpression)) {
-          spreadValue = objectLiteralPropertyPathLegacyValue(
-            spreadExpression,
-            propertyPath,
-            maxScopeIndex,
-          );
-        } else if (expressionContainsLegacyStore(property.expression)) {
-          spreadValue = true;
-        }
-        if (spreadValue !== null) {
-          result = spreadValue === true;
-        }
-        continue;
-      }
-      if (ts.isPropertyAssignment(property) && propertyNameText(property.name) === propertyName) {
-        result =
-          !isKnownUndefinedExpression(property.initializer) &&
-          objectExpressionPropertyPathContainsLegacyStore(
-            property.initializer,
-            remainingPath,
-            maxScopeIndex,
-          );
-      }
-      if (ts.isShorthandPropertyAssignment(property) && property.name.text === propertyName) {
-        result = objectExpressionPropertyPathContainsLegacyStore(
-          property.name,
-          remainingPath,
-          maxScopeIndex,
-        );
-      }
-    }
-    return result;
-  }
-
-  function parameterDefaultContainsLegacyStore(
-    initializer,
-    wrapperNode,
-    argumentsList,
-    parameterIndex,
-    maxScopeIndex = legacyObjectPropertyScopes.length - 1,
-  ) {
-    return defaultPathExpressionContainsLegacyStore(
-      initializer,
-      wrapperNode,
-      argumentsList,
-      parameterIndex,
-      new Set(),
-      maxScopeIndex,
-    );
-  }
-
-  function defaultPathExpressionContainsLegacyStore(
-    expression,
-    wrapperNode,
-    argumentsList,
-    parameterIndex,
-    activeDefaultIndexes,
-    maxScopeIndex,
-  ) {
-    if (earlierParameterReferenceIndexes(expression, wrapperNode, parameterIndex).size === 0) {
-      return pathArgumentContainsLegacyStore(expression);
-    }
-    const unwrapped = unwrapExpression(expression);
-    if (ts.isIdentifier(unwrapped)) {
-      const binding = earlierParameterBindingForIdentifier(
-        unwrapped.text,
-        wrapperNode,
-        parameterIndex,
-      );
-      if (!binding || activeDefaultIndexes.has(binding.index)) {
-        return false;
-      }
-      activeDefaultIndexes.add(binding.index);
-      const resolved = resolveEarlierParameterBindingExpression(
-        binding,
-        wrapperNode,
-        argumentsList,
-        { allowLexicalIdentifierDefault: false },
-        activeDefaultIndexes,
-      );
-      activeDefaultIndexes.delete(binding.index);
-      return resolved ? pathArgumentContainsLegacyStore(resolved) : false;
-    }
-    if (ts.isConditionalExpression(unwrapped)) {
-      return (
-        defaultPathExpressionContainsLegacyStore(
-          unwrapped.whenTrue,
-          wrapperNode,
-          argumentsList,
-          parameterIndex,
-          activeDefaultIndexes,
-          maxScopeIndex,
-        ) ||
-        defaultPathExpressionContainsLegacyStore(
-          unwrapped.whenFalse,
-          wrapperNode,
-          argumentsList,
-          parameterIndex,
-          activeDefaultIndexes,
-          maxScopeIndex,
-        )
-      );
-    }
-    if (ts.isPropertyAccessExpression(unwrapped) || ts.isElementAccessExpression(unwrapped)) {
-      const propertyPath = rootedPropertyAccessPath(unwrapped);
-      if (propertyPath) {
-        const binding = earlierParameterBindingForIdentifier(
-          propertyPath.rootName,
-          wrapperNode,
-          parameterIndex,
-        );
-        if (binding && !activeDefaultIndexes.has(binding.index)) {
-          activeDefaultIndexes.add(binding.index);
-          const resolved = resolveEarlierParameterBindingExpression(
-            binding,
-            wrapperNode,
-            argumentsList,
-            { allowLexicalIdentifierDefault: false },
-            activeDefaultIndexes,
-          );
-          activeDefaultIndexes.delete(binding.index);
-          return resolved
-            ? objectExpressionPropertyPathContainsLegacyStore(
-                resolved,
-                propertyPath.properties,
-                maxScopeIndex,
-              )
-            : false;
-        }
-      }
-      return false;
-    }
-    if (ts.isBinaryExpression(unwrapped)) {
-      const operator = unwrapped.operatorToken.kind;
-      if (operator === ts.SyntaxKind.AmpersandAmpersandToken) {
-        return defaultPathExpressionContainsLegacyStore(
-          unwrapped.right,
-          wrapperNode,
-          argumentsList,
-          parameterIndex,
-          activeDefaultIndexes,
-          maxScopeIndex,
-        );
-      }
-      if (
-        operator === ts.SyntaxKind.BarBarToken ||
-        operator === ts.SyntaxKind.QuestionQuestionToken ||
-        operator === ts.SyntaxKind.PlusToken
-      ) {
-        return (
-          defaultPathExpressionContainsLegacyStore(
-            unwrapped.left,
-            wrapperNode,
-            argumentsList,
-            parameterIndex,
-            activeDefaultIndexes,
-            maxScopeIndex,
-          ) ||
-          defaultPathExpressionContainsLegacyStore(
-            unwrapped.right,
-            wrapperNode,
-            argumentsList,
-            parameterIndex,
-            activeDefaultIndexes,
-            maxScopeIndex,
-          )
-        );
-      }
-      if (
-        operator === ts.SyntaxKind.CommaToken ||
-        (operator >= ts.SyntaxKind.FirstAssignment && operator <= ts.SyntaxKind.LastAssignment)
-      ) {
-        return defaultPathExpressionContainsLegacyStore(
-          unwrapped.right,
-          wrapperNode,
-          argumentsList,
-          parameterIndex,
-          activeDefaultIndexes,
-          maxScopeIndex,
-        );
-      }
-      return false;
-    }
-    if (ts.isTemplateExpression(unwrapped)) {
-      return unwrapped.templateSpans.some((span) =>
-        defaultPathExpressionContainsLegacyStore(
-          span.expression,
-          wrapperNode,
-          argumentsList,
-          parameterIndex,
-          activeDefaultIndexes,
-          maxScopeIndex,
-        ),
-      );
-    }
-    if (ts.isCallExpression(unwrapped)) {
-      const receiver = ts.isPropertyAccessExpression(unwrapped.expression)
-        ? unwrapped.expression.expression
-        : unwrapped.expression;
-      return (
-        defaultPathExpressionContainsLegacyStore(
-          receiver,
-          wrapperNode,
-          argumentsList,
-          parameterIndex,
-          activeDefaultIndexes,
-          maxScopeIndex,
-        ) ||
-        [...unwrapped.arguments].some((argument) =>
-          defaultPathExpressionContainsLegacyStore(
-            argument,
-            wrapperNode,
-            argumentsList,
-            parameterIndex,
-            activeDefaultIndexes,
-            maxScopeIndex,
-          ),
-        )
-      );
-    }
-    let containsLegacyStore = false;
-    ts.forEachChild(unwrapped, (child) => {
-      if (
-        defaultPathExpressionContainsLegacyStore(
-          child,
-          wrapperNode,
-          argumentsList,
-          parameterIndex,
-          activeDefaultIndexes,
-          maxScopeIndex,
-        )
-      ) {
-        containsLegacyStore = true;
-      }
-    });
-    return containsLegacyStore;
-  }
-
   function rootedPropertyAccessPath(expression) {
+    const access = rootedPropertyAccessCandidates(expression);
+    if (!access || access.propertyPaths.length !== 1 || access.propertyPaths[0].includes(null)) {
+      return null;
+    }
+    return { rootName: access.rootName, properties: access.propertyPaths[0] };
+  }
+
+  function rootedPropertyAccessCandidates(expression) {
     const properties = [];
     let current = unwrapExpression(expression);
     while (true) {
       if (ts.isPropertyAccessExpression(current)) {
-        properties.unshift(current.name.text);
+        properties.unshift([current.name.text]);
         current = unwrapExpression(current.expression);
         continue;
       }
       if (ts.isElementAccessExpression(current)) {
-        const propertyName = elementAccessName(current.argumentExpression);
-        if (!propertyName) {
-          return null;
-        }
-        properties.unshift(propertyName);
+        const propertyNames = elementAccessNames(current.argumentExpression);
+        properties.unshift(propertyNames.length > 0 ? propertyNames : [null]);
         current = unwrapExpression(current.expression);
         continue;
       }
       break;
     }
-    return ts.isIdentifier(current) ? { rootName: current.text, properties } : null;
+    if (!ts.isIdentifier(current)) {
+      return null;
+    }
+    let propertyPaths = [[]];
+    let truncated = false;
+    for (const names of properties) {
+      const nextPaths = [];
+      outer: for (const propertyPath of propertyPaths) {
+        for (const name of names) {
+          if (nextPaths.length === 31) {
+            truncated = true;
+            break outer;
+          }
+          nextPaths.push([...propertyPath, name]);
+        }
+      }
+      propertyPaths = nextPaths;
+    }
+    if (truncated) {
+      propertyPaths.push(properties.map(() => null));
+    }
+    return { rootName: current.text, propertyPaths };
   }
 
-  function wrapperObjectBindingDefaultContainsLegacyStore(
-    parameter,
-    propertyName,
-    sourceExpression,
-    wrapperNode,
-    argumentsList,
-    parameterIndex,
-    maxScopeIndex = legacyObjectPropertyScopes.length - 1,
-  ) {
-    if (!parameter || !ts.isObjectBindingPattern(parameter.name) || !sourceExpression) {
-      return false;
+  function lookupLegacyObjectPropertyCandidates({ rootName, propertyPaths }) {
+    let unresolved = false;
+    for (const propertyPath of propertyPaths) {
+      if (!propertyPath.includes(null)) {
+        let foundPrefix = false;
+        for (let length = propertyPath.length; length > 0; length--) {
+          const entry = lookupLegacyObjectPropertyEntry(
+            rootName,
+            propertyPath.slice(0, length).join("."),
+          );
+          if (entry.found) {
+            foundPrefix = true;
+            if (entry.value === true) {
+              return true;
+            }
+            break;
+          }
+        }
+        unresolved ||= !foundPrefix && resolveLegacyPathIdentifier(rootName);
+        continue;
+      }
+      const prefix = `${rootName}.`;
+      let rootIsLegacy = false;
+      for (let length = propertyPath.length; length > 0; length--) {
+        const candidate = propertyPath.slice(0, length);
+        const seen = new Set();
+        let matched = false;
+        for (let index = legacyObjectPropertyScopes.length - 1; index >= 0; index--) {
+          for (const [key, value] of legacyObjectPropertyScopes[index]) {
+            if (!key.startsWith(prefix) || seen.has(key)) {
+              continue;
+            }
+            const parts = key.slice(prefix.length).split(".");
+            if (
+              parts.length === candidate.length &&
+              candidate.every((part, partIndex) => part === null || part === parts[partIndex])
+            ) {
+              seen.add(key);
+              matched = true;
+              if (value === true) {
+                return true;
+              }
+            }
+          }
+          if (legacyPathScopes[index].has(rootName)) {
+            rootIsLegacy ||= legacyPathScopes[index].get(rootName) === true;
+            break;
+          }
+        }
+        if (matched) {
+          break;
+        }
+      }
+      unresolved ||= rootIsLegacy;
     }
-    const propertyPath = propertyName.split(".");
-    const initializer = appliedBindingElementDefaultInitializer(
-      parameter.name,
-      propertyPath,
-      sourceExpression,
-    );
-    if (!initializer) {
-      return false;
-    }
-    return parameterDefaultContainsLegacyStore(
-      initializer,
-      wrapperNode,
-      argumentsList,
-      parameterIndex,
-      maxScopeIndex,
-    );
+    return unresolved ? null : false;
   }
 
-  function wrapperPathUseContainsLegacyStore(record, index, propertyName, argumentsList) {
-    const wrapperNode = record.node;
-    const maxScopeIndex = record.lexicalScopeIndex;
-    const parameter = wrapperNode.parameters[index] ?? null;
-    const argument = argumentsList[index];
-    const argumentUsesDefault = !argument || isKnownUndefinedExpression(argument);
-    if (propertyName === null) {
-      if (!argumentUsesDefault) {
-        return pathArgumentContainsLegacyStore(argument);
+  function copyFactEntries(target, source, fromRoot, toRoot) {
+    for (const [key, value] of source) {
+      if (key === fromRoot || key.startsWith(`${fromRoot}.`)) {
+        target.set(`${toRoot}${key.slice(fromRoot.length)}`, value);
       }
-      return parameter?.initializer
-        ? parameterDefaultContainsLegacyStore(
-            parameter.initializer,
-            wrapperNode,
-            argumentsList,
-            index,
-            maxScopeIndex,
-          )
-        : false;
     }
-    if (!argumentUsesDefault) {
-      if (objectArgumentPropertyContainsLegacyStore(argument, propertyName)) {
-        return true;
-      }
-      return wrapperObjectBindingDefaultContainsLegacyStore(
-        parameter,
-        propertyName,
-        argument,
-        wrapperNode,
-        argumentsList,
-        index,
+  }
+
+  function expressionProducesLegacyPath(expression) {
+    const node = unwrapExpression(expression);
+    if (ts.isIdentifier(node)) {
+      return resolveLegacyPathIdentifier(node.text);
+    }
+    if (ts.isObjectLiteralExpression(node) || ts.isArrayLiteralExpression(node)) {
+      return false;
+    }
+    if (ts.isConditionalExpression(node)) {
+      return (
+        expressionProducesLegacyPath(node.whenTrue) || expressionProducesLegacyPath(node.whenFalse)
       );
     }
-    if (parameter?.initializer) {
-      const propertyPath = propertyName.split(".");
-      const defaultPropertyValue = objectExpressionPropertyLegacyValue(
-        parameter.initializer,
-        propertyName,
-        maxScopeIndex,
-      );
-      if (defaultPropertyValue === true) {
-        return true;
+    if (ts.isBinaryExpression(node)) {
+      const operator = node.operatorToken.kind;
+      if (
+        operator === ts.SyntaxKind.AmpersandAmpersandToken ||
+        operator === ts.SyntaxKind.CommaToken ||
+        (operator >= ts.SyntaxKind.FirstAssignment && operator <= ts.SyntaxKind.LastAssignment)
+      ) {
+        return expressionProducesLegacyPath(node.right);
       }
       if (
-        defaultPropertyValue === false &&
-        !objectExpressionPropertyPathMayUseBindingDefault(parameter.initializer, propertyPath)
+        operator !== ts.SyntaxKind.BarBarToken &&
+        operator !== ts.SyntaxKind.QuestionQuestionToken &&
+        operator !== ts.SyntaxKind.PlusToken
       ) {
         return false;
       }
+      return (
+        expressionTextContainsLegacyStore(node) ||
+        expressionProducesLegacyPath(node.left) ||
+        expressionProducesLegacyPath(node.right)
+      );
     }
-    return wrapperObjectBindingDefaultContainsLegacyStore(
-      parameter,
-      propertyName,
-      parameter?.initializer ?? null,
-      wrapperNode,
-      argumentsList,
-      index,
-      maxScopeIndex,
-    );
+    const access = rootedPropertyAccessCandidates(node);
+    if (access?.propertyPaths.some((propertyPath) => propertyPath.length > 0)) {
+      const value = lookupLegacyObjectPropertyCandidates(access);
+      return value ?? resolveLegacyPathIdentifier(access.rootName);
+    }
+    if (ts.isTemplateExpression(node)) {
+      return (
+        expressionTextContainsLegacyStore(node) ||
+        node.templateSpans.some((span) => expressionProducesLegacyPath(span.expression))
+      );
+    }
+    if (ts.isCallExpression(node)) {
+      const receiver =
+        ts.isPropertyAccessExpression(node.expression) ||
+        ts.isElementAccessExpression(node.expression)
+          ? node.expression.expression
+          : null;
+      return (
+        expressionTextContainsLegacyStore(node) ||
+        (receiver ? expressionProducesLegacyPath(receiver) : false) ||
+        [...node.arguments].some(expressionProducesLegacyPath)
+      );
+    }
+    return expressionTextContainsLegacyStore(node);
+  }
+
+  function factExpressionAlternatives(expression) {
+    const unwrapped = unwrapExpression(expression);
+    if (ts.isSatisfiesExpression(unwrapped) || ts.isAwaitExpression(unwrapped)) {
+      return factExpressionAlternatives(unwrapped.expression);
+    }
+    if (ts.isConditionalExpression(unwrapped)) {
+      return [unwrapped.whenTrue, unwrapped.whenFalse].flatMap(factExpressionAlternatives);
+    }
+    if (ts.isBinaryExpression(unwrapped)) {
+      const operator = unwrapped.operatorToken.kind;
+      if (
+        operator === ts.SyntaxKind.CommaToken ||
+        (operator >= ts.SyntaxKind.FirstAssignment && operator <= ts.SyntaxKind.LastAssignment)
+      ) {
+        return factExpressionAlternatives(unwrapped.right);
+      }
+      if (
+        [
+          ts.SyntaxKind.AmpersandAmpersandToken,
+          ts.SyntaxKind.BarBarToken,
+          ts.SyntaxKind.QuestionQuestionToken,
+        ].includes(operator)
+      ) {
+        return [unwrapped.left, unwrapped.right].flatMap(factExpressionAlternatives);
+      }
+    }
+    if (
+      ts.isCallExpression(unwrapped) &&
+      callExpressionName(unwrapped.expression) === "Promise.resolve" &&
+      unwrapped.arguments[0]
+    ) {
+      return factExpressionAlternatives(unwrapped.arguments[0]);
+    }
+    if (ts.isNewExpression(unwrapped) && unwrapped.arguments?.length) {
+      return unwrapped.arguments.flatMap(factExpressionAlternatives);
+    }
+    return [unwrapped];
+  }
+
+  function mergeExpressionFacts(facts, expression) {
+    const mergeMap = (name, merge) => {
+      const result = new Map();
+      for (const fact of facts) {
+        for (const [key, value] of fact[name]) {
+          result.set(key, result.has(key) ? merge(result.get(key), value) : value);
+        }
+      }
+      return result;
+    };
+    const properties = new Map();
+    const propertyKeys = new Set(facts.flatMap((fact) => [...fact.properties.keys()]));
+    for (const key of propertyKeys) {
+      for (const fact of facts) {
+        const value = fact.properties.has(key)
+          ? fact.properties.get(key)
+          : fact.knownObject
+            ? explicitUndefinedLegacyObjectPropertyValue
+            : fact.legacyPath
+              ? true
+              : undefined;
+        if (value !== undefined) {
+          properties.set(
+            key,
+            properties.has(key)
+              ? mergeLegacyObjectPropertyValues(properties.get(key), value)
+              : value,
+          );
+        }
+      }
+    }
+    return {
+      root: "<argument>",
+      expression,
+      fsModule: facts.some((fact) => fact.fsModule),
+      fsModules: mergeMap("fsModules", (left, right) => left === true || right === true),
+      fsSafeFactory: facts.find((fact) => fact.fsSafeFactory)?.fsSafeFactory ?? null,
+      fsWrite: facts.find((fact) => fact.fsWrite)?.fsWrite ?? null,
+      fsWrites: mergeMap("fsWrites", (left, right) => left ?? right),
+      jsonStore: facts.some((fact) => fact.jsonStore),
+      jsonStores: mergeMap("jsonStores", (left, right) => left === true || right === true),
+      knownObject: facts.every((fact) => fact.knownObject),
+      knownObjects: mergeMap("knownObjects", (left, right) => left === true && right === true),
+      knownUndefined: facts.every((fact) => fact.knownUndefined),
+      legacyPath: facts.some((fact) => fact.legacyPath),
+      literalTexts: [...new Set(facts.flatMap((fact) => fact.literalTexts))],
+      properties,
+      requireAlias: facts.some((fact) => fact.requireAlias),
+      store: facts.some((fact) => fact.store),
+      stores: mergeMap("stores", (left, right) => left === true || right === true),
+      wrapper: facts.map((fact) => fact.wrapper).reduce(mergeWrapperAssignmentValues, null),
+      wrappers: mergeMap("wrappers", mergeWrapperAssignmentValues),
+      possiblyUndefined: facts.some((fact) => fact.possiblyUndefined ?? fact.knownUndefined),
+    };
+  }
+
+  function factFromExpression(expression) {
+    const alternatives = factExpressionAlternatives(expression);
+    const bounded = alternatives.length > 32 ? alternatives.slice(0, 31) : alternatives;
+    const facts = bounded.map(atomicFactFromExpression);
+    if (bounded.length !== alternatives.length) {
+      const discarded = alternatives.slice(31);
+      facts.push(mergeExpressionFacts(discarded.map(atomicFactFromExpression), expression));
+    }
+    return facts.length === 1 && alternatives[0] === expression
+      ? facts[0]
+      : mergeExpressionFacts(facts, expression);
+  }
+
+  function atomicFactFromExpression(expression) {
+    const root = "<argument>";
+    const properties = new Map();
+    const knownObjects = new Map();
+    const fsWrites = new Map();
+    const stores = new Map();
+    const jsonStores = new Map();
+    const fsModules = new Map();
+    const wrappers = new Map();
+    markLegacyObjectProperties(root, expression, properties, knownObjects);
+    registerFsWriteObjectAliases(root, expression, fsWrites);
+    registerFsSafeStoreObjectAliases(root, expression, stores, jsonStores);
+    registerFsModuleObjectProperties(root, expression, fsModules);
+    const unwrapped = unwrapExpression(expression);
+    const sourceName = callExpressionName(unwrapped);
+    if (sourceName) {
+      copyLegacyObjectProperties(root, sourceName, properties);
+      copyKnownLegacyObjectLiterals(root, sourceName, knownObjects);
+      copyFsSafeStoreObjectAliases(root, sourceName, stores, jsonStores);
+    }
+    registerWrapperObjectMethods(root, expression, wrappers);
+    if (sourceName) {
+      copyWrapperObjectMethods(root, sourceName, wrappers);
+    }
+    return {
+      root,
+      expression,
+      fsModule: isFsBindingExpression(expression),
+      fsModules,
+      fsSafeFactory: fsSafeStoreFactoryAliasName(expression),
+      fsWrite: legacyFsWriteName(expression),
+      fsWrites,
+      jsonStore: expressionContainsFsSafeJsonStoreLegacyPath(expression),
+      jsonStores,
+      knownObject: knownObjects.get(root) === true,
+      knownObjects,
+      knownUndefined: isKnownUndefinedExpression(expression),
+      legacyPath: expressionProducesLegacyPath(expression),
+      literalTexts: ts.isIdentifier(unwrapped)
+        ? resolveLiteralTextIdentifier(unwrapped.text)
+        : literalTextsFromExpression(expression),
+      properties,
+      requireAlias: isRequireAliasExpression(expression),
+      store: isFsSafeStoreExpression(expression),
+      stores,
+      wrapper:
+        ts.isFunctionExpression(unwrapped) || ts.isArrowFunction(unwrapped)
+          ? wrapperRecordForNode(unwrapped)
+          : cloneWrapperFunctionValue(resolveWrapperExpression(expression)),
+      wrappers,
+    };
+  }
+
+  function undefinedFact() {
+    return {
+      root: "<argument>",
+      expression: null,
+      fsModule: false,
+      fsModules: new Map(),
+      fsSafeFactory: null,
+      fsWrite: null,
+      fsWrites: new Map(),
+      jsonStore: false,
+      jsonStores: new Map(),
+      knownObject: false,
+      knownObjects: new Map(),
+      knownUndefined: true,
+      legacyPath: false,
+      literalTexts: [],
+      properties: new Map(),
+      requireAlias: false,
+      store: false,
+      stores: new Map(),
+      wrapper: null,
+      wrappers: new Map(),
+    };
+  }
+
+  function propertyFact(fact, propertyName) {
+    const root = `${fact.root}.${propertyName}`;
+    const value = fact.properties.get(root);
+    const missing =
+      value === undefined &&
+      !fact.wrappers.has(root) &&
+      !fact.fsWrites.has(root) &&
+      !fact.fsModules.has(root) &&
+      !fact.stores.has(root) &&
+      !fact.jsonStores.has(root) &&
+      !fact.knownObjects.has(root);
+    if (missing && fact.knownObject) {
+      return undefinedFact();
+    }
+    const result = undefinedFact();
+    result.root = root;
+    result.knownUndefined = value === explicitUndefinedLegacyObjectPropertyValue;
+    if (missing) {
+      result.knownUndefined = false;
+    }
+    result.legacyPath = value === true || (missing && !fact.knownObject && fact.legacyPath);
+    result.knownObject = fact.knownObjects.get(root) === true;
+    result.fsModule =
+      fact.fsModules.get(root) === true || (fact.fsModule && propertyName === "promises");
+    result.fsWrite =
+      fact.fsWrites.get(root) ??
+      (fact.fsModule && legacyWriteCallees.has(propertyName) ? propertyName : null);
+    result.store = fact.stores.get(root) === true;
+    result.jsonStore = fact.jsonStores.get(root) === true;
+    result.wrapper = cloneWrapperFunctionValue(fact.wrappers.get(root));
+    for (const name of [
+      "fsModules",
+      "fsWrites",
+      "stores",
+      "jsonStores",
+      "knownObjects",
+      "properties",
+      "wrappers",
+    ]) {
+      result[name] = fact[name];
+    }
+    return result;
+  }
+
+  function bindObjectPatternFact(pattern, sourceFact) {
+    for (const element of pattern.elements) {
+      const propertyName = element.propertyName
+        ? propertyNameText(element.propertyName)
+        : ts.isIdentifier(element.name)
+          ? element.name.text
+          : null;
+      if (!propertyName) {
+        continue;
+      }
+      let nextFact = propertyFact(sourceFact, propertyName);
+      if (nextFact.knownUndefined && element.initializer) {
+        visit(element.initializer);
+        nextFact = factFromExpression(element.initializer);
+      }
+      if (ts.isIdentifier(element.name)) {
+        bindIdentifierFact(element.name.text, nextFact);
+      } else if (ts.isObjectBindingPattern(element.name)) {
+        bindObjectPatternFact(element.name, nextFact);
+      }
+    }
+  }
+
+  function bindIdentifierFact(name, fact, type = null) {
+    shadowObjectPropertyScopes(fsModulePropertyScopes, name, false);
+    shadowObjectPropertyScopes(fsWriteAliasScopes, name, null);
+    shadowObjectPropertyScopes(fsSafeStoreScopes, name, false);
+    shadowObjectPropertyScopes(fsSafeJsonStoreScopes, name, false);
+    shadowObjectPropertyScopes(wrapperFunctionScopes, name, null);
+    if (createRequireBindings.has(name)) {
+      lastScope(createRequireShadowScopes).add(name);
+    }
+    lastScope(fsModuleBindingScopes).set(name, fact.fsModule);
+    lastScope(fsModulePropertyScopes).set(name, false);
+    copyFactEntries(lastScope(fsModulePropertyScopes), fact.fsModules, fact.root, name);
+    registerFsModuleTypeProperties(ts.factory.createIdentifier(name), type);
+    lastScope(fsWriteAliasScopes).set(name, fact.fsWrite);
+    copyFactEntries(lastScope(fsWriteAliasScopes), fact.fsWrites, fact.root, name);
+    lastScope(fsSafeStoreFactoryAliasScopes).set(name, fact.fsSafeFactory);
+    lastScope(fsSafeStoreScopes).set(name, fact.store);
+    lastScope(fsSafeJsonStoreScopes).set(name, fact.jsonStore);
+    copyFactEntries(lastScope(fsSafeStoreScopes), fact.stores, fact.root, name);
+    copyFactEntries(lastScope(fsSafeJsonStoreScopes), fact.jsonStores, fact.root, name);
+    lastScope(requireAliasScopes).set(name, fact.requireAlias);
+    lastScope(legacyPathScopes).set(name, fact.legacyPath);
+    lastScope(literalTextScopes).set(name, fact.literalTexts);
+    lastScope(staticExpressionScopes).set(name, fact.expression);
+    lastScope(knownUndefinedScopes).set(name, fact.knownUndefined);
+    lastScope(legacyKnownObjectLiteralScopes).set(name, fact.knownObject);
+    copyFactEntries(lastScope(legacyKnownObjectLiteralScopes), fact.knownObjects, fact.root, name);
+    copyFactEntries(lastScope(legacyObjectPropertyScopes), fact.properties, fact.root, name);
+    lastScope(wrapperFunctionScopes).set(name, cloneWrapperFunctionValue(fact.wrapper));
+    copyFactEntries(lastScope(wrapperFunctionScopes), fact.wrappers, fact.root, name);
+  }
+
+  function bindParameter(parameter, fact) {
+    if (ts.isIdentifier(parameter.name)) {
+      bindIdentifierFact(parameter.name.text, fact, parameter.type);
+      return;
+    }
+    if (ts.isObjectBindingPattern(parameter.name)) {
+      bindObjectPatternFact(parameter.name, fact);
+      return;
+    }
+    for (const name of bindingPatternNames(parameter.name)) {
+      bindIdentifierFact(name, undefinedFact());
+    }
+    if (ts.isArrayBindingPattern(parameter.name)) {
+      const array = fact.expression ? unwrapExpression(fact.expression) : null;
+      if (array && ts.isArrayLiteralExpression(array)) {
+        parameter.name.elements.forEach((element, elementIndex) => {
+          if (!ts.isBindingElement(element) || !ts.isIdentifier(element.name)) {
+            return;
+          }
+          const value = array.elements[elementIndex];
+          if (value && !ts.isOmittedExpression(value) && !ts.isSpreadElement(value)) {
+            bindIdentifierFact(element.name.text, factFromExpression(value));
+          }
+        });
+      }
+    }
+  }
+
+  function withWrapperEnvironment(record, run) {
+    const savedScopes = lexicalScopeStacks.map(([scopes]) => [...scopes]);
+    for (let index = 0; index < lexicalScopeStacks.length; index++) {
+      const scopes = lexicalScopeStacks[index][0];
+      scopes.splice(0, scopes.length, ...record.environment[index]);
+    }
+    branchEffectScopes.push(null);
+    try {
+      return run();
+    } finally {
+      for (let index = 0; index < lexicalScopeStacks.length; index++) {
+        const scopes = lexicalScopeStacks[index][0];
+        scopes.splice(0, scopes.length, ...savedScopes[index]);
+      }
+      branchEffectScopes.pop();
+    }
+  }
+
+  function spreadArgumentFacts(expression, seen = new Set()) {
+    const unwrapped = unwrapExpression(expression);
+    if (ts.isSatisfiesExpression(unwrapped) || ts.isAwaitExpression(unwrapped)) {
+      return spreadArgumentFacts(unwrapped.expression, seen);
+    }
+    if (ts.isIdentifier(unwrapped)) {
+      const resolved = !seen.has(unwrapped.text) && resolveStaticExpression(unwrapped.text);
+      return resolved ? spreadArgumentFacts(resolved, new Set([...seen, unwrapped.text])) : null;
+    }
+    if (ts.isConditionalExpression(unwrapped)) {
+      const left = spreadArgumentFacts(unwrapped.whenTrue, seen);
+      const right = spreadArgumentFacts(unwrapped.whenFalse, seen);
+      return left && right
+        ? Array.from({ length: Math.max(left.length, right.length) }, (_, index) =>
+            mergeExpressionFacts(
+              [left[index] ?? undefinedFact(), right[index] ?? undefinedFact()],
+              expression,
+            ),
+          )
+        : null;
+    }
+    if (!ts.isArrayLiteralExpression(unwrapped)) {
+      return null;
+    }
+    const facts = [];
+    for (const element of unwrapped.elements) {
+      if (ts.isOmittedExpression(element)) {
+        facts.push(undefinedFact());
+      } else if (ts.isSpreadElement(element)) {
+        const nested = spreadArgumentFacts(element.expression, seen);
+        if (!nested) {
+          return null;
+        }
+        facts.push(...nested);
+      } else {
+        facts.push(factFromExpression(element));
+      }
+    }
+    return facts;
+  }
+
+  function wrapperArgumentFacts(call, parameterCount) {
+    const facts = [];
+    let ambiguous = false;
+    let ambiguousStart = 0;
+    for (const argument of call.arguments) {
+      const expanded = ts.isSpreadElement(argument)
+        ? spreadArgumentFacts(argument.expression)
+        : [factFromExpression(argument)];
+      if (!expanded) {
+        ambiguousStart = ambiguous ? ambiguousStart : facts.length;
+        ambiguous = true;
+      }
+      const next = expanded ?? [factFromExpression(argument.expression)];
+      if (!ambiguous) {
+        facts.push(...next);
+        continue;
+      }
+      for (let index = ambiguousStart; index < parameterCount; index++) {
+        facts[index] = mergeExpressionFacts([facts[index] ?? undefinedFact(), ...next], argument);
+      }
+    }
+    return facts;
+  }
+
+  function executeWrapper(record, call) {
+    if (activeWrapperNodes.has(record.node)) {
+      return;
+    }
+    const argumentFacts = wrapperArgumentFacts(call, record.node.parameters.length);
+    activeWrapperNodes.add(record.node);
+    wrapperCallSites.push(call.expression);
+    try {
+      withWrapperEnvironment(record, () =>
+        withLexicalScope(false, () => {
+          wrapperExecutionScopeIndexes.push(wrapperFunctionScopes.length - 1);
+          try {
+            if (record.node.name && ts.isIdentifier(record.node.name)) {
+              bindIdentifierFact(record.node.name.text, {
+                ...undefinedFact(),
+                knownUndefined: false,
+                wrapper: record,
+              });
+            }
+            record.node.parameters.forEach((parameter, index) => {
+              const supplied = argumentFacts[index] ?? undefinedFact();
+              const possiblyUndefined = supplied.possiblyUndefined ?? supplied.knownUndefined;
+              if (possiblyUndefined && parameter.initializer) {
+                visit(parameter.initializer);
+              }
+              const fact =
+                possiblyUndefined && parameter.initializer
+                  ? supplied.knownUndefined
+                    ? factFromExpression(parameter.initializer)
+                    : mergeExpressionFacts(
+                        [supplied, factFromExpression(parameter.initializer)],
+                        supplied.expression,
+                      )
+                  : supplied;
+              bindParameter(parameter, fact);
+            });
+            if (record.node.body) {
+              visit(record.node.body);
+            }
+          } finally {
+            wrapperExecutionScopeIndexes.pop();
+          }
+        }),
+      );
+    } finally {
+      wrapperCallSites.pop();
+      activeWrapperNodes.delete(record.node);
+    }
+  }
+
+  function promoteVarBinding(name) {
+    const targetIndex = lastScope(wrapperExecutionScopeIndexes);
+    if (targetIndex === undefined || targetIndex === wrapperFunctionScopes.length - 1) {
+      return;
+    }
+    for (const [scopes] of lexicalScopeStacks) {
+      const source = lastScope(scopes);
+      const target = scopes[targetIndex];
+      if (!(source instanceof Map) || !(target instanceof Map)) {
+        continue;
+      }
+      for (const [key, value] of source) {
+        if (key !== name && !key.startsWith(`${name}.`)) {
+          continue;
+        }
+        if (scopes === wrapperFunctionScopes) {
+          target.set(key, mergeWrapperAssignmentValues(target.get(key), value));
+        } else if (scopes === fsWriteAliasScopes || scopes === fsSafeStoreFactoryAliasScopes) {
+          target.set(key, target.get(key) ?? value);
+        } else if (
+          scopes === fsModuleBindingScopes ||
+          scopes === fsSafeStoreScopes ||
+          scopes === fsSafeJsonStoreScopes ||
+          scopes === requireAliasScopes ||
+          scopes === legacyPathScopes
+        ) {
+          target.set(key, target.get(key) === true || value === true);
+        } else {
+          target.set(key, value);
+        }
+      }
+    }
   }
 
   function visitInConditionalExecution(node, branchEffects = null) {
@@ -6938,7 +3607,9 @@ export function collectDatabaseFirstLegacyStoreViolations(
       if (ts.isFunctionDeclaration(node) && node.name) {
         registerWrapperFunction(node.name.text, node);
       }
-      visitFunctionLike(node);
+      if (wrapperCallSites.length === 0) {
+        visitFunctionLike(node);
+      }
       return;
     }
 
@@ -6964,87 +3635,13 @@ export function collectDatabaseFirstLegacyStoreViolations(
     }
 
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
+      const fact = node.initializer ? factFromExpression(node.initializer) : undefinedFact();
       if (node.initializer) {
-        if (isFsBindingExpression(node.initializer)) {
-          lastScope(fsModuleBindingScopes).set(node.name.text, true);
-        } else {
-          markFsModuleBindingShadows(node.name);
-        }
-        markFsModulePropertyShadows(node.name);
-        registerFsModuleTypeProperties(node.name, node.type);
-        if (!(node.name.text === "require" && isCreateRequireExpression(node.initializer))) {
-          markRequireShadows(node.name);
-        }
-        lastScope(requireAliasScopes).set(
-          node.name.text,
-          isRequireAliasExpression(node.initializer),
-        );
-        markCreateRequireShadows(node.name);
-        collectFsWriteAliasesFromBinding(node);
-        markFsWriteAliasShadows(node.name);
-        markFsSafeStoreShadows(node.name);
-        lastScope(fsWriteAliasScopes).set(node.name.text, legacyFsWriteName(node.initializer));
-        lastScope(fsSafeStoreFactoryAliasScopes).set(
-          node.name.text,
-          fsSafeStoreFactoryAliasName(node.initializer),
-        );
-        lastScope(fsSafeStoreScopes).set(node.name.text, isFsSafeStoreExpression(node.initializer));
-        lastScope(fsSafeJsonStoreScopes).set(
-          node.name.text,
-          expressionContainsFsSafeJsonStoreLegacyPath(node.initializer),
-        );
-        refreshCurrentWrapperFunctionAliases();
-        lastScope(literalTextScopes).set(
-          node.name.text,
-          literalTextsFromExpression(node.initializer),
-        );
-        lastScope(knownUndefinedScopes).set(
-          node.name.text,
-          isKnownUndefinedExpression(node.initializer),
-        );
-        lastScope(legacyPathScopes).set(
-          node.name.text,
-          expressionContainsLegacyStore(node.initializer),
-        );
-        markKnownLegacyObjectLiteral(node.name.text, node.initializer);
-        markLegacyObjectProperties(node.name.text, node.initializer);
-        registerFsWriteObjectAliases(node.name.text, node.initializer);
-        registerFsSafeStoreObjectAliases(node.name.text, node.initializer);
-        registerFsModuleObjectProperties(node.name.text, node.initializer);
-        if (ts.isFunctionExpression(node.initializer) || ts.isArrowFunction(node.initializer)) {
-          registerWrapperFunction(node.name.text, node.initializer);
-        } else {
-          lastScope(wrapperFunctionScopes).set(
-            node.name.text,
-            cloneWrapperFunctionValue(resolveWrapperExpression(node.initializer)),
-          );
-          registerWrapperObjectMethods(node.name.text, node.initializer);
-          const wrapperObjectSource = callExpressionName(node.initializer);
-          if (wrapperObjectSource) {
-            copyWrapperObjectMethods(node.name.text, wrapperObjectSource);
-          }
-        }
+        fact.legacyPath = expressionContainsLegacyStore(node.initializer);
       } else {
-        lastScope(fsModuleBindingScopes).set(node.name.text, false);
-        lastScope(fsWriteAliasScopes).set(node.name.text, null);
-        lastScope(fsSafeStoreFactoryAliasScopes).set(node.name.text, null);
-        lastScope(fsSafeStoreScopes).set(node.name.text, false);
-        lastScope(fsSafeJsonStoreScopes).set(node.name.text, false);
-        lastScope(requireAliasScopes).set(node.name.text, false);
-        lastScope(legacyPathScopes).set(node.name.text, false);
-        lastScope(legacyKnownObjectLiteralScopes).set(node.name.text, false);
-        lastScope(knownUndefinedScopes).set(node.name.text, !isAmbientVariableDeclaration(node));
-        lastScope(literalTextScopes).set(node.name.text, null);
-        lastScope(wrapperFunctionScopes).set(node.name.text, null);
-        markFsWriteAliasShadows(node.name);
-        markFsSafeStoreShadows(node.name);
-        markFsModuleBindingShadows(node.name);
-        markFsModulePropertyShadows(node.name);
-        registerFsModuleTypeProperties(node.name, node.type);
-        markRequireShadows(node.name);
-        markCreateRequireShadows(node.name);
-        refreshCurrentWrapperFunctionAliases();
+        fact.knownUndefined = !isAmbientVariableDeclaration(node);
       }
+      bindIdentifierFact(node.name.text, fact, node.type);
     }
     if (ts.isVariableDeclaration(node) && !ts.isIdentifier(node.name)) {
       const isFsAliasBinding =
@@ -7058,10 +3655,8 @@ export function collectDatabaseFirstLegacyStoreViolations(
         markFsWriteAliasShadows(node.name);
         markFsModuleBindingShadows(node.name);
         markFsModulePropertyShadows(node.name);
-        markRequireShadows(node.name);
         markCreateRequireShadows(node.name);
       }
-      refreshCurrentWrapperFunctionAliases();
       for (const name of bindingPatternNames(node.name)) {
         lastScope(fsSafeStoreFactoryAliasScopes).set(name, null);
         lastScope(fsSafeStoreScopes).set(name, false);
@@ -7073,13 +3668,14 @@ export function collectDatabaseFirstLegacyStoreViolations(
         lastScope(literalTextScopes).set(name, null);
         lastScope(wrapperFunctionScopes).set(name, null);
       }
+      if (ts.isObjectBindingPattern(node.name) && node.initializer) {
+        bindObjectPatternFact(node.name, factFromExpression(node.initializer));
+      }
       if (
         ts.isObjectBindingPattern(node.name) &&
         node.initializer &&
         ts.isIdentifier(node.initializer)
       ) {
-        markLegacyPathsFromObjectBinding(node.name, node.initializer.text);
-        markFsSafeStoresFromObjectBinding(node.name, node.initializer.text);
         markFsSafeFactoryAliasesFromObjectBinding(node.name, node.initializer.text);
       } else if (
         ts.isObjectBindingPattern(node.name) &&
@@ -7091,15 +3687,12 @@ export function collectDatabaseFirstLegacyStoreViolations(
           propertyAccess.rootName,
           propertyAccess.properties.join("."),
         );
-        markLegacyPathsFromObjectBinding(node.name, sourceName);
-        markFsSafeStoresFromObjectBinding(node.name, sourceName);
         markFsSafeFactoryAliasesFromObjectBinding(node.name, sourceName);
-      } else if (
-        ts.isObjectBindingPattern(node.name) &&
-        node.initializer &&
-        ts.isObjectLiteralExpression(unwrapExpression(node.initializer))
-      ) {
-        markLegacyPathsFromInlineObjectBinding(node.name, node.initializer);
+      }
+    }
+    if (ts.isVariableDeclaration(node) && isVarVariableDeclaration(node)) {
+      for (const name of bindingPatternNames(node.name)) {
+        promoteVarBinding(name);
       }
     }
     if (
@@ -7131,6 +3724,10 @@ export function collectDatabaseFirstLegacyStoreViolations(
         conditionalWrite
           ? mergeConditionalLiteralTexts(literalScope.get(node.left.text), nextLiteralTexts)
           : nextLiteralTexts,
+      );
+      scopeForWrite(staticExpressionScopes, node.left.text).set(
+        node.left.text,
+        conditionalWrite ? null : node.right,
       );
       const knownUndefinedScope = scopeForWrite(knownUndefinedScopes, node.left.text);
       knownUndefinedScope.set(
@@ -7189,8 +3786,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
         );
         const requireAliasTarget = requireAliasWriteTarget(node.left.text);
         requireAliasTarget.scope.set(node.left.text, nextRequireAlias);
-        refreshCurrentWrapperFunctionAliases();
-        refreshWrapperRequireAliasesFromScope(requireAliasTarget.index);
         markFsModulePropertyShadows(node.left);
         clearLegacyObjectProperties(propertyScope, node.left.text);
         markKnownLegacyObjectLiteral(
@@ -7254,7 +3849,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
         lastScope(fsSafeStoreScopes).set(node.left.text, nextFsSafeStoreValue);
         lastScope(fsSafeJsonStoreScopes).set(node.left.text, nextFsSafeJsonStoreValue);
         lastScope(requireAliasScopes).set(node.left.text, nextRequireAlias);
-        refreshCurrentWrapperFunctionAliases();
         recordBranchFsIdentifierAssignment(
           index,
           node.left.text,
@@ -7284,6 +3878,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
         registerFsSafeStoreObjectAliases(node.left.text, node.right);
         registerFsModuleObjectProperties(node.left.text, node.right);
         registerWrapperObjectMethods(node.left.text, node.right, wrapperScope, true);
+        recordBranchWrapperObjectRewrite(index, node.left.text, node.right);
         shadowVisibleWrapperObjectMethods(node.left.text);
         registerWrapperObjectMethods(node.left.text, node.right);
       }
@@ -7441,6 +4036,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
       if (conditionalWrapperWrite) {
         lastScope(wrapperFunctionScopes).set(key, assignedWrapper);
         recordBranchWrapperAssignment(wrapperTarget.index, key, assignedWrapper);
+        recordBranchWrapperObjectRewrite(wrapperTarget.index, key, node.right);
       } else {
         clearWrapperObjectMethods(wrapperTarget.wrapperScope, key);
       }
@@ -7460,45 +4056,41 @@ export function collectDatabaseFirstLegacyStoreViolations(
 
     if (ts.isCallExpression(node)) {
       const fsWriteName = legacyFsWriteName(node.expression);
+      const filePathOptionsWrite =
+        fsWriteName === "appendRegularFile" ||
+        fsWriteName === "appendRegularFileSync" ||
+        fsWriteName === "replaceFileAtomic" ||
+        fsWriteName === "replaceFileAtomicSync";
       if (
         fsWriteName &&
         fsWriteCallMayWrite(fsWriteName, [...node.arguments]) &&
-        pathArgumentsForFsWrite(fsWriteName, [...node.arguments]).some((argument) =>
-          pathArgumentContainsLegacyStore(argument),
-        )
+        (filePathOptionsWrite
+          ? node.arguments[0] && objectFilePathContainsLegacyStore(node.arguments[0])
+          : pathArgumentsForFsWrite(fsWriteName, [...node.arguments]).some((argument) =>
+              pathArgumentContainsLegacyStore(argument),
+            ))
       ) {
-        addViolation(node.expression, "legacy store filesystem write", node);
+        addViolation(node.expression, "legacy store filesystem write");
       }
       if (
         fsSafeStoreWritePathArguments(node).some((argument) =>
           pathArgumentContainsLegacyStore(argument),
         )
       ) {
-        addViolation(node.expression, "legacy store filesystem write", node);
+        addViolation(node.expression, "legacy store filesystem write");
       }
       if (fsSafeJsonStoreWriteContainsLegacyStore(node)) {
-        addViolation(node.expression, "legacy store filesystem write", node);
+        addViolation(node.expression, "legacy store filesystem write");
       }
       const wrapperName = callExpressionName(node.expression);
       const wrapperRecord = wrapperName ? resolveWrapperFunction(wrapperName) : null;
-      for (const record of wrapperRecords(wrapperRecord)) {
-        const propertyParameters = collectLegacyPathPropertyParameters(
-          record.node,
-          record.aliases,
-          record.moduleBindings,
-          record.moduleProperties,
-          record.requireAliases,
-          record.createRequireShadows,
-        );
-        for (const [index, propertyNames] of propertyParameters) {
-          if (
-            [...propertyNames].some((propertyName) =>
-              wrapperPathUseContainsLegacyStore(record, index, propertyName, node.arguments),
-            )
-          ) {
-            addViolation(node.expression, "legacy store filesystem write", node);
-            break;
-          }
+      if (!intrinsicWrapperCalls.has(node) || wrapperCallSites.length === 0) {
+        const violationCount = violations.length;
+        for (const record of wrapperRecords(wrapperRecord)) {
+          executeWrapper(record, node);
+        }
+        if (definitionScanDepth > 0 && violations.length > violationCount) {
+          intrinsicWrapperCalls.add(node);
         }
       }
     }
@@ -7514,13 +4106,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
   }
 
   visit(sourceFile);
-  if (
-    scanOptions.enforceCurrentLegacyAllowlist &&
-    !scanOptions.currentLegacyWriteAllowances &&
-    currentLegacyWriteAllowances.size > 0
-  ) {
-    violations.push({ kind: "stale current legacy write allowlist", line: 1 });
-  }
   return violations;
 }
 
@@ -7534,20 +4119,12 @@ export async function main() {
   const nativeSourceRoots = databaseFirstNativeSourceRoots.map((root) => path.join(repoRoot, root));
   const nativeFiles = (await Promise.all(nativeSourceRoots.map(collectNativeSourceFiles))).flat();
   const violations = [];
-  const currentLegacyWriteAllowances = currentLegacyWriteViolationAllowances();
-
   for (const filePath of files) {
     const relativePath = path.relative(repoRoot, filePath).replaceAll(path.sep, "/");
     const content = await fs.readFile(filePath, "utf8");
-    for (const violation of collectDatabaseFirstLegacyStoreViolations(content, relativePath, {
-      currentLegacyWriteAllowances,
-    })) {
+    for (const violation of collectDatabaseFirstLegacyStoreViolations(content, relativePath)) {
       violations.push(`${relativePath}:${violation.line} ${violation.kind}`);
     }
-  }
-  for (const fingerprint of currentLegacyWriteAllowances.keys()) {
-    const relativePath = currentLegacyWriteViolationPath(fingerprint) ?? "<unknown>";
-    violations.push(`${relativePath}:1 stale current legacy write allowlist`);
   }
   for (const filePath of nativeFiles) {
     const relativePath = path.relative(repoRoot, filePath).replaceAll(path.sep, "/");

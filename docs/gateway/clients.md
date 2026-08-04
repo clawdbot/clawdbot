@@ -65,9 +65,12 @@ gateway` or the `openclaw onboard --gateway-auth ...` options, then let device
 pairing mint the client token:
 
 1. Persist an Ed25519 device identity in the client.
-2. Wait for `connect.challenge`, sign the challenge-bound device payload, and send
-   `connect` with the requested operator role, scopes, and the shared Gateway token
-   or password for bootstrap authentication.
+2. Wait for `connect.challenge`, use its `ts` as the device proof's `signedAt`,
+   sign the challenge-bound device payload, and send `connect` with the requested
+   operator role, scopes, and the shared Gateway token or password for bootstrap
+   authentication. A received WebSocket challenge without a non-negative integer
+   `ts` is invalid. Clients that explicitly support Gateways from before
+   `connect.challenge` existed may use local time only on their no-challenge path.
 3. If the Gateway returns structured `PAIRING_REQUIRED` details, show the request
    ID and pause or retry according to `error.details.recommendedNextStep`.
 4. On the Gateway host, review the request with `openclaw devices list`, then
@@ -107,6 +110,29 @@ handshake does not report an error.
 Capability-gated agent tools are a separate use of the same declaration. If an
 agent tool requires a client capability, the Gateway omits that tool unless the
 originating client advertised every required capability.
+
+## Validate attachments before sending
+
+Attachment limits are operator-tunable, so do not hardcode them. Read
+`hello-ok.policy.attachments` and validate locally before uploading:
+
+```ts
+const attachments = hello.policy.attachments;
+if (attachments) {
+  const ceiling = isImage ? attachments.maxImageBytes : attachments.maxBytes;
+  if (file.byteLength > ceiling) rejectLocally();
+}
+```
+
+Both values are decoded per-attachment ceilings. Still check the serialized
+request against `policy.maxPayload`: attachments travel as base64, so a file near
+`maxBytes` can exceed the frame limit on its own. Older gateways omit
+`policy.attachments`; when it is absent, send and handle the server outcome.
+Accepted MIME types and per-message handling are not advertised because they
+depend on the entrypoint and the resolved model. The gateway can return a typed
+rejection, while text-only model runs can omit additional images after their
+offload cap and still complete the request. The values are a connection-time
+snapshot, so re-read them on every reconnect.
 
 ## Recover state after reconnect
 

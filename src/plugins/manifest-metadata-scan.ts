@@ -51,7 +51,10 @@ function listChildPluginDirs(
   const dirs: CandidateDir[] = [];
   let order = startOrder;
   try {
-    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    const entries = fs
+      .readdirSync(root, { withFileTypes: true })
+      .toSorted((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
+    for (const entry of entries) {
       if (entry.isDirectory()) {
         dirs.push({ pluginDir: path.join(root, entry.name), rank, order: order++, origin });
       }

@@ -26,6 +26,18 @@ describe("resolveSidebarSessionSubtitle", () => {
     ).toEqual({ subtitle: undefined, narration: undefined });
   });
 
+  it("ignores live narration when a stale running status has no projected active run", () => {
+    expect(
+      resolveSidebarSessionSubtitle({
+        session: { ...workSession(), status: "running" },
+        hasDisplay: false,
+        displaySubtitle: undefined,
+        sidebarLiveActivity: true,
+        narrationLine: "Still running",
+      }),
+    ).toEqual({ subtitle: "~/Projects/openclaw", narration: undefined });
+  });
+
   it("uses attention, agent status, observer, narration, then work subtitle precedence", () => {
     const session: SidebarRecentSession = {
       ...workSession(),

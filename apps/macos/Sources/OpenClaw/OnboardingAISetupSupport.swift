@@ -89,6 +89,7 @@ extension OnboardingAISetupModel {
         let id: String
         let label: String
         let hint: String?
+        let actionLabel: String?
         let brandId: String?
         let icon: String?
         let website: String?
@@ -117,6 +118,7 @@ extension OnboardingAISetupModel {
                 id: "ollama",
                 label: "Ollama",
                 hint: "Download a tools-capable model from your Ollama server",
+                actionLabel: nil,
                 brandId: "ollama",
                 icon: nil,
                 website: nil),
@@ -124,6 +126,7 @@ extension OnboardingAISetupModel {
                 id: "llama-cpp",
                 label: "Local model (llama.cpp)",
                 hint: "Download an approximately 5.0 GB local model; requires 16 GB RAM",
+                actionLabel: nil,
                 brandId: "llama-cpp",
                 icon: nil,
                 website: nil),
@@ -257,5 +260,25 @@ extension OnboardingAISetupModel {
 
     var connectedSetupCopyText: String {
         connectedSetupLines.joined(separator: "\n")
+    }
+
+    static func activationTransitionWasPersisted(
+        expectedModel: String,
+        before: PersistedActivationState?,
+        after: PersistedActivationState?) -> Bool
+    {
+        guard let before, let after else { return false }
+        let wasAlreadyPersisted = before.setupComplete && before.configuredModel == expectedModel
+        return !wasAlreadyPersisted && after.setupComplete && after.configuredModel == expectedModel
+    }
+
+    static func remainingMilliseconds(
+        until deadline: ContinuousClock.Instant,
+        clock: ContinuousClock,
+        cappedAt capMs: Int) -> Int
+    {
+        let components = clock.now.duration(to: deadline).components
+        let milliseconds = components.seconds * 1000 + components.attoseconds / 1_000_000_000_000_000
+        return max(0, min(capMs, Int(milliseconds)))
     }
 }

@@ -289,7 +289,7 @@ public struct OpenClawChatTransportRouteLease: Sendable {
 
 public enum OpenClawChatTransportRouteLeaseResult: Sendable {
     case available(OpenClawChatTransportRouteLease)
-    case unavailable(reason: String?)
+    case unavailable(reason: String?, allowsLiveSend: Bool = false)
 }
 
 /// One physical gateway connection captured before a settings mutation waits

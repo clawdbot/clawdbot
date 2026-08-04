@@ -1,10 +1,7 @@
 /**
  * Resolves memory-search source, sync, and ranking configuration.
  */
-import {
-  findNormalizedProviderValue,
-  normalizeProviderId,
-} from "@openclaw/model-catalog-core/provider-id";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   MAX_TIMER_TIMEOUT_MS,
   resolvePositiveTimerTimeoutMs,
@@ -21,8 +18,7 @@ import {
   normalizeMemoryMultimodalSettings,
   type MemoryMultimodalSettings,
 } from "../memory-host-sdk/multimodal.js";
-import { getEmbeddingProvider } from "../plugins/embedding-provider-runtime.js";
-import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
+import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 import { runtimeMemorySecretOwnerId } from "../secrets/runtime-memory-secret-owner.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -198,25 +194,7 @@ function getConfiguredMemoryEmbeddingProvider(
   if (normalizeProviderId(providerId) === "none") {
     return undefined;
   }
-  const directAdapter = getMemoryEmbeddingProvider(providerId);
-  if (directAdapter) {
-    return directAdapter;
-  }
-  const genericAdapter = getEmbeddingProvider(providerId, cfg);
-  if (genericAdapter) {
-    return genericAdapter;
-  }
-  const providerConfig = findNormalizedProviderValue(cfg.models?.providers, providerId);
-  const ownerApi = providerConfig?.api?.trim();
-  if (!ownerApi) {
-    return undefined;
-  }
-  const normalizedProvider = normalizeProviderId(providerId);
-  const normalizedOwner = normalizeProviderId(ownerApi);
-  if (!normalizedOwner || normalizedOwner === normalizedProvider) {
-    return undefined;
-  }
-  return getMemoryEmbeddingProvider(normalizedOwner);
+  return getMemoryEmbeddingProvider(providerId, cfg);
 }
 
 function mergeConfig(
@@ -462,9 +440,8 @@ export function resolveMemorySearchConfig(
   if (
     !isFtsOnly &&
     multimodalActive &&
-    ((multimodalProvider &&
-      !(multimodalProvider.supportsMultimodalEmbeddings?.({ model: resolved.model }) ?? false)) ||
-      (!multimodalProvider && getEmbeddingProvider(resolved.provider, cfg)))
+    multimodalProvider &&
+    !(multimodalProvider.supportsMultimodalEmbeddings?.({ model: resolved.model }) ?? false)
   ) {
     throw new Error(
       "memory.search.multimodal requires a provider adapter that supports multimodal embeddings for the configured model.",

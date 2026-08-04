@@ -93,6 +93,7 @@ const {
   stopScheduledTask,
   uninstallScheduledTask,
 } = await import("./schtasks.js");
+const { removeStartupEntries } = await import("./schtasks-runtime.js");
 
 function resolveStartupEntryPath(env: Record<string, string>, extension = "cmd") {
   const taskName = env.OPENCLAW_WINDOWS_TASK_NAME ?? "OpenClaw Gateway";
@@ -367,6 +368,38 @@ afterEach(() => {
 });
 
 describe("Windows startup fallback", () => {
+  it("reports login item removal failures without leaking the item path", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      const startupEntryPath = await writeStartupFallbackEntry(env);
+      const removalError = Object.assign(
+        new Error(`EACCES: permission denied, unlink '${startupEntryPath}'`),
+        { code: "EACCES", path: startupEntryPath },
+      );
+      vi.spyOn(fs, "unlink").mockRejectedValueOnce(removalError);
+
+      const removal = removeStartupEntries(env, new PassThrough());
+
+      await expect(removal).rejects.toThrow("Windows login item removal failed (EACCES)");
+      await expect(removal).rejects.not.toThrow(startupEntryPath);
+      const sanitizedError = await removal.catch((error: unknown) => error);
+      expect(sanitizedError).toBeInstanceOf(Error);
+      if (!(sanitizedError instanceof Error)) {
+        throw new Error("expected sanitized Windows login item removal failure");
+      }
+      expect(sanitizedError).not.toBe(removalError);
+      expect(sanitizedError.cause).toEqual({ code: "EACCES" });
+      expect(sanitizedError).not.toHaveProperty("path");
+      expect(sanitizedError.stack).not.toContain(startupEntryPath);
+      await expect(fs.access(startupEntryPath)).resolves.toBeUndefined();
+    });
+  });
+
+  it("keeps missing Startup-folder login item removal idempotent", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      await expect(removeStartupEntries(env, new PassThrough())).resolves.toBeUndefined();
+    });
+  });
+
   it("skips task ownership probes when no Startup fallback exists", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       await expect(readWindowsStartupFallbackRuntimeForUpdate(env)).resolves.toBeNull();

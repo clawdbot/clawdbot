@@ -59,6 +59,7 @@ type SharedCodexAppServerClientStartup = {
 
 type SharedCodexAppServerClientState = {
   clients: Map<string, SharedCodexAppServerClientEntry>;
+  entriesByClient: WeakMap<CodexAppServerClient, SharedCodexAppServerClientEntry>;
   leasedReleases: WeakMap<CodexAppServerClient, Array<() => void>>;
   warmClientsByConfig?: WeakMap<
     object,
@@ -102,10 +103,6 @@ type CodexAppServerSpawnIdentity = Omit<
   "clientId" | "serverVersion" | "userAgent"
 >;
 
-// Clients we already force-closed for suspect retirement; a repeat retire must
-// report closed:false instead of pretending to close the corpse again.
-const suspectClosedClients = new WeakSet<CodexAppServerClient>();
-
 // Symbol.for shares one client table across duplicate module copies (dist +
 // src bundles in one process). Plugin updates restart the gateway, so every
 // copy writing this state runs the same code and the shape never migrates.
@@ -121,6 +118,7 @@ function getSharedCodexAppServerClientState(): SharedCodexAppServerClientState {
   };
   globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE] ??= {
     clients: new Map(),
+    entriesByClient: new WeakMap(),
     leasedReleases: new WeakMap(),
   };
   return globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE];
@@ -267,6 +265,7 @@ export type CodexAppServerClientOptions = {
   expectedRuntimeArtifact?: AgentHarnessRuntimeArtifactBinding;
   preparedAuth?: CodexAppServerPreparedAuth;
   authRequirement?: CodexAppServerAuthRequirement;
+  agentId?: string;
   agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   onStartedClient?: (client: CodexAppServerClient) => void;
@@ -390,9 +389,11 @@ async function resolveCodexAppServerClientStartContext(
   const managedStartOptions = await resolveManagedCodexAppServerStartOptions(agentStartOptions);
   const startOptions = await bridgeCodexAppServerStartOptions({
     startOptions: managedStartOptions,
+    agentId: options?.agentId,
     agentDir,
     authProfileId: usesNativeAuth || preparedAuth?.kind === "api-key" ? null : authProfileId,
     ...(resolvedPreparedAuth ? { preparedAuth: resolvedPreparedAuth } : {}),
+    authRequirement,
     config: options?.config,
     pluginConfig: options?.pluginConfig,
     ...(authProfileStore ? { authProfileStore } : {}),
@@ -843,6 +844,7 @@ function createSharedCodexAppServerClientStartup(params: {
     config: params.config,
     onStartedClient: (startedClient) => {
       params.entry.client = startedClient;
+      getSharedCodexAppServerClientState().entriesByClient.set(startedClient, params.entry);
       for (const callback of params.entry.onStartedClientCallbacks) {
         callback(startedClient);
       }
@@ -1105,6 +1107,7 @@ export function resetSharedCodexAppServerClientForTests(): void {
   const state = getSharedCodexAppServerClientState();
   const clients = collectSharedClients(state);
   state.clients.clear();
+  state.entriesByClient = new WeakMap();
   state.leasedReleases = new WeakMap();
   state.warmClientsByConfig = new WeakMap();
   for (const client of clients) {
@@ -1135,23 +1138,6 @@ export function clearSharedCodexAppServerClientIfCurrent(
     if (entry.client === client) {
       state.clients.delete(key);
       client.close();
-      return true;
-    }
-  }
-  return false;
-}
-
-/** Detaches the shared entry without closing the client when it still matches. */
-export function detachSharedCodexAppServerClientIfCurrent(
-  client: CodexAppServerClient | undefined,
-): boolean {
-  if (!client) {
-    return false;
-  }
-  const state = getSharedCodexAppServerClientState();
-  for (const [key, entry] of state.clients) {
-    if (entry.client === client) {
-      state.clients.delete(key);
       return true;
     }
   }
@@ -1215,27 +1201,27 @@ export function retireSharedCodexAppServerClientIfCurrent(
       entry.closeWhenIdle = true;
       if (opts?.failActiveLeases) {
         entry.closeError = new Error("codex app-server client is closed");
-        const closed = closeRetiredSharedClientEntry(entry);
-        if (closed) {
-          suspectClosedClients.add(client);
-        }
-        return { activeLeases: entry.activeLeases, closed };
+        return {
+          activeLeases: entry.activeLeases,
+          closed: closeRetiredSharedClientEntry(entry),
+        };
       }
       const closed = closeRetiredSharedClientEntryIfIdle(entry);
       return { activeLeases: entry.activeLeases, closed };
     }
   }
-  const activeLeases = state.leasedReleases.get(client)?.length ?? 0;
-  if (activeLeases > 0) {
-    // A gracefully detached client (e.g. one-shot cleanup) can still be leased
-    // when a later terminal-idle kill declares it suspect; the map miss must
-    // not let the poisoned process keep serving those co-leases.
-    if (opts?.failActiveLeases && !suspectClosedClients.has(client)) {
-      suspectClosedClients.add(client);
-      client.close();
-      return { activeLeases, closed: true };
+  const detachedEntry = state.entriesByClient.get(client);
+  if (detachedEntry && (detachedEntry.client === client || detachedEntry.closeError)) {
+    // Explicit native-subagent retains are not listed in leasedReleases; the
+    // detached entry owns every lease and records an already-forced closure.
+    if (opts?.failActiveLeases && !detachedEntry.closeError) {
+      detachedEntry.closeError = new Error("codex app-server client is closed");
+      return {
+        activeLeases: detachedEntry.activeLeases,
+        closed: closeRetiredSharedClientEntry(detachedEntry),
+      };
     }
-    return { activeLeases, closed: false };
+    return { activeLeases: detachedEntry.activeLeases, closed: false };
   }
   return undefined;
 }

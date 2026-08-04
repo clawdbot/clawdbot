@@ -30,7 +30,7 @@ export function resolveDefaultVitestNoOutputTimeoutMs(argv?: string[]): number;
 export function resolveVitestSpawnParams(
   env?: NodeJS.ProcessEnv,
   platform?: NodeJS.Platform,
-): SpawnOptions & { env: NodeJS.ProcessEnv; detached: boolean; stdio: string[] };
+): { env: NodeJS.ProcessEnv; detached: boolean; stdio: string[] };
 export function shouldSuppressVitestStderrLine(line: string): boolean;
 export function resolveDirectNodeVitestArgs(pnpmArgs: string[]): string[] | null;
 export function resolveExplicitTestFileNoPassArgs(argv: string[]): string[];
@@ -61,14 +61,18 @@ export function spawnWatchedVitestProcess(params: {
   onNoOutputTimeout?: () => void;
 }): {
   child: ChildProcess;
-  getForwardedSignal: () => NodeJS.Signals | null;
+  completion: Promise<{
+    code: number | null;
+    signal: ChildProcess["signalCode"];
+  }>;
+  getForwardedSignal: () => ChildProcess["signalCode"];
   teardown: () => void;
 };
 export function resolveTestProjectsRunnerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
 export function resolveTestProjectsRunnerSpawnParams(
   env: NodeJS.ProcessEnv,
   platform?: NodeJS.Platform,
-): SpawnOptions & { env: NodeJS.ProcessEnv; detached: boolean; stdio: "inherit" };
+): { env: NodeJS.ProcessEnv; detached: boolean; stdio: "inherit" };
 export function runTestProjectsDelegation(
   argv: string[],
   env: NodeJS.ProcessEnv,

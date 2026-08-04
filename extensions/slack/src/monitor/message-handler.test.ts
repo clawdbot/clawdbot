@@ -159,6 +159,7 @@ describe("createSlackMessageHandler", () => {
 
     expect(trackEvent).toHaveBeenCalledTimes(1);
     expect(resolveThreadTsMock).toHaveBeenCalledTimes(1);
+    expect(resolveThreadTsMock.mock.calls[0]?.[0]).not.toHaveProperty("turnAdoptionLifecycle");
     expect(enqueueMock).toHaveBeenCalledTimes(1);
   });
 
@@ -358,6 +359,11 @@ describe("createSlackMessageHandler", () => {
     );
 
     await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(1));
+    expect(resolveThreadTsMock).toHaveBeenCalledWith({
+      message: expect.objectContaining({ channel: "C111", ts: "1709000000.000550" }),
+      source: "message",
+      turnAdoptionLifecycle,
+    });
     const entry = enqueueMock.mock.calls[0]?.[0] as Record<string, unknown>;
     await runOnFlush([entry]);
     await handled;

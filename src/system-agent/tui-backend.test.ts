@@ -1,5 +1,5 @@
 // OpenClaw TUI backend tests cover rescue status integration with the TUI backend.
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import * as preparedModelCatalog from "../agents/prepared-model-catalog.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -71,11 +71,22 @@ function configSnapshot(config: OpenClawConfig) {
   };
 }
 
+let sharedVerifiedFixture: Awaited<
+  ReturnType<typeof createSystemAgentVerifiedInferenceTestFixture>
+>;
+
+beforeAll(async () => {
+  sharedVerifiedFixture = await createSystemAgentVerifiedInferenceTestFixture(verifiedConfig);
+});
+
 async function createVerifiedTuiOptions(
   deps: SystemAgentCommandDeps = {},
   config: OpenClawConfig = verifiedConfig,
 ) {
-  const fixture = await createSystemAgentVerifiedInferenceTestFixture(config);
+  const fixture =
+    config === verifiedConfig
+      ? sharedVerifiedFixture
+      : await createSystemAgentVerifiedInferenceTestFixture(config);
   return {
     verifiedInference: fixture.binding,
     deps: {
@@ -102,7 +113,7 @@ describe("runSystemAgentTui", () => {
     const planWithAssistant = vi.fn(async () => ({ reply: "ready" }));
     const runTui = vi.fn(async () => ({ exitReason: "exit" as const }));
     const runChannelsAdd = vi.fn(async () => undefined);
-    const fixture = await createSystemAgentVerifiedInferenceTestFixture(verifiedConfig);
+    const fixture = sharedVerifiedFixture;
     const options: SystemAgentTuiOptions = {
       verifiedInference: fixture.binding,
       deps: { loadOverview },

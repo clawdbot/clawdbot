@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import type { Event } from "nostr-tools";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { BUZZ_MENTION_MAX_COUNT } from "./mentions.js";
 
 export const BUZZ_NORMAL_MESSAGE_KIND = 9;
 export const BUZZ_TYPING_INDICATOR_KIND = 20_002;
@@ -18,11 +19,15 @@ type BuzzInboundMessageKind = (typeof BUZZ_INBOUND_MESSAGE_KINDS)[number];
 // own stricter validator. Keep inbound admission aligned with those limits.
 const BUZZ_MESSAGE_CONTENT_MAX_BYTES = 256 * 1024;
 const BUZZ_DIFF_CONTENT_MAX_BYTES = 60 * 1024;
-const BUZZ_MENTION_MAX_COUNT = 50;
+const HEX_PUBLIC_KEY_PATTERN = /^[0-9a-f]{64}$/u;
 const BUZZ_DIFF_CONTEXT_FIELD_MAX_CHARS = 256;
 const BUZZ_DIFF_AGENT_CONTEXT_MAX_CHARS = 4_000;
 const BUZZ_DIFF_AGENT_CONTEXT_TRUNCATED_SUFFIX = "\n...[Buzz diff truncated for model context]";
 const BUZZ_INBOUND_MESSAGE_KIND_SET = new Set<number>(BUZZ_INBOUND_MESSAGE_KINDS);
+
+export function isBuzzInboundMessageKind(kind: number): boolean {
+  return BUZZ_INBOUND_MESSAGE_KIND_SET.has(kind);
+}
 
 interface BuzzDiffMetadata {
   repoUrl: string;
@@ -210,7 +215,7 @@ export function formatBuzzMessageForAgent(message: BuzzInboundMessage): string {
 
 export function parseBuzzMessageEvent(event: Event): BuzzInboundMessage | null {
   if (
-    !BUZZ_INBOUND_MESSAGE_KIND_SET.has(event.kind) ||
+    !isBuzzInboundMessageKind(event.kind) ||
     !event.content.trim() ||
     Buffer.byteLength(event.content, "utf8") >
       (event.kind === BUZZ_DIFF_MESSAGE_KIND
@@ -256,6 +261,7 @@ export function buildBuzzMessageTags(params: {
   channelId: string;
   threadId?: string;
   replyToId?: string;
+  mentionedPubkeys?: readonly string[];
 }): string[][] {
   const tags: string[][] = [["h", params.channelId]];
   const parentId = params.replyToId ?? params.threadId;
@@ -264,6 +270,18 @@ export function buildBuzzMessageTags(params: {
   }
   if (parentId) {
     tags.push(["e", parentId, "", "reply"]);
+  }
+  const mentionedPubkeys = [
+    ...new Set((params.mentionedPubkeys ?? []).map((publicKey) => publicKey.trim().toLowerCase())),
+  ];
+  if (mentionedPubkeys.length > BUZZ_MENTION_MAX_COUNT) {
+    throw new Error(`Buzz messages support at most ${BUZZ_MENTION_MAX_COUNT} mentions`);
+  }
+  for (const publicKey of mentionedPubkeys) {
+    if (!HEX_PUBLIC_KEY_PATTERN.test(publicKey)) {
+      throw new Error("Buzz mentions require 64-character hex public keys");
+    }
+    tags.push(["p", publicKey]);
   }
   return tags;
 }

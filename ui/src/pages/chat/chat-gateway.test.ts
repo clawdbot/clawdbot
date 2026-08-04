@@ -853,6 +853,107 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatStreamSegments).toEqual([]);
   });
 
+  it.each([
+    {
+      name: "provider timeout",
+      event: {
+        state: "error",
+        errorKind: "timeout",
+        errorMessage: "agent provider timeout",
+      },
+      projectionStatus: "timeout",
+      sessionStatus: "timeout",
+      errorSummary: "Error: agent provider timeout",
+    },
+    {
+      name: "provider failure",
+      event: {
+        state: "error",
+        errorMessage: "agent provider failure",
+      },
+      projectionStatus: "error",
+      sessionStatus: "failed",
+      errorSummary: "Error: agent provider failure",
+    },
+    {
+      name: "operator cancellation",
+      event: { state: "aborted" },
+      projectionStatus: "aborted",
+      sessionStatus: "killed",
+      errorSummary: null,
+    },
+  ] as const)(
+    "projects the canonical $name status onto the selected session",
+    ({ event, projectionStatus, sessionStatus, errorSummary }) => {
+      vi.useFakeTimers();
+      try {
+        const state = createState({
+          sessionKey: "main",
+          chatRunId: "run-1",
+          chatStream: "Partial assistant reply",
+          chatStreamStartedAt: 100,
+        }) as ChatState & {
+          chatRunStatus?: { phase: string; runId: string | null; sessionKey: string } | null;
+          lastLocalTerminalReconcile?: { sessionStatus: string } | null;
+          sessionsResult?: {
+            ts: number;
+            path: string;
+            count: number;
+            defaults: Record<string, unknown>;
+            sessions: Array<Record<string, unknown>>;
+          };
+        };
+        state.sessionsResult = {
+          ts: 0,
+          path: "",
+          count: 1,
+          defaults: {},
+          sessions: [
+            {
+              key: "main",
+              kind: "direct",
+              updatedAt: 1,
+              hasActiveRun: true,
+              activeRunIds: ["run-1"],
+              status: "running",
+              startedAt: 100,
+            },
+          ],
+        };
+
+        expect(
+          handleChatGatewayEvent(state, {
+            runId: "run-1",
+            sessionKey: "main",
+            ...event,
+          }),
+        ).toBe(event.state);
+
+        expect(
+          getChatSessionProjection(state, state.chatMessages, { sessionKey: "main" }).runs["run-1"]
+            ?.status,
+        ).toBe(projectionStatus);
+        expect(state.sessionsResult.sessions[0]).toMatchObject({
+          activeRunIds: [],
+          hasActiveRun: false,
+          status: sessionStatus,
+        });
+        expect(state.lastLocalTerminalReconcile?.sessionStatus).toBe(sessionStatus);
+        expect(state.chatRunStatus).toMatchObject({
+          phase: "interrupted",
+          runId: "run-1",
+          sessionKey: "main",
+        });
+        expect(state.chatRunError?.summary ?? null).toBe(errorSummary);
+        expect(state.chatRunId).toBeNull();
+        expect(state.chatStream).toBeNull();
+        expect(state.chatStreamStartedAt).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("reconciles cached run and indicator state on terminal events", () => {
     vi.useFakeTimers();
     try {
@@ -1950,7 +2051,7 @@ describe("handleChatGatewayEvent", () => {
     },
   );
 
-  it("does not let a completed run's late error interrupt a newer response", () => {
+  it("does not label a newer response with a completed run's late error", () => {
     const state = createState({ sessionKey: "main", chatRunId: "run-completed" });
 
     expect(
@@ -1982,7 +2083,7 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatStream).toBe("Newer response");
     expect(state.chatMessages).toHaveLength(1);
     expectTextChatMessage(state.chatMessages[0], "assistant", "Delivered once.");
-    expect(state.chatRunError).toEqual({ summary: "Error: late provider failure" });
+    expect(state.chatRunError).toBeNull();
   });
 
   it("upgrades an empty final to one authoritative assistant reply", () => {

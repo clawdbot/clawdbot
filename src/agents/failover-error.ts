@@ -5,7 +5,8 @@
  */
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { formatCliCommand } from "../cli/command-format.js";
-import { readErrorName } from "../infra/errors.js";
+import { isAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
+import { collectErrorGraphCandidates, readErrorName } from "../infra/errors.js";
 import {
   classifyFailoverSignal,
   extractFailoverSignalDetails,
@@ -496,6 +497,29 @@ function hasMissingToolResultFailure(err: unknown): boolean {
   return findErrorProperty(err, readMissingToolResultMarker) === true;
 }
 
+function hasStaleAgentRunLifecycleFailure(err: unknown): boolean {
+  return (
+    findErrorProperty(err, (candidate) =>
+      isAgentRunStaleLifecycleError(candidate) ? true : undefined,
+    ) === true
+  );
+}
+
+function hasGatewayDrainingFailure(err: unknown): boolean {
+  return collectErrorGraphCandidates(err, (candidate) => {
+    const errors = candidate.errors;
+    return [candidate.error, candidate.cause, ...(Array.isArray(errors) ? errors : [])];
+  }).some((candidate) => readErrorName(candidate) === "GatewayDrainingError");
+}
+
+function hasDirectProviderFailureIdentity(err: unknown): boolean {
+  if (isFailoverError(err)) {
+    return true;
+  }
+  const signal = normalizeDirectErrorSignal(err);
+  return Boolean(signal.status || signal.code || signal.errorType || signal.provider);
+}
+
 /**
  * True when the error is a local runtime coordination/tool-execution error
  * rather than a provider/model failure. The model fallback chain must abort on
@@ -746,6 +770,9 @@ export function buildFailoverRemediationHint(err: unknown): string | undefined {
   if (!provider) {
     return undefined;
   }
+  if (provider === "google-gemini-cli") {
+    return `Authenticate in Gemini CLI directly, or configure a supported Google API key with: ${formatCliCommand("openclaw configure")}`;
+  }
   const command = buildProviderReauthCommand(provider);
   return command ? `Re-authenticate with: ${command}` : undefined;
 }
@@ -899,6 +926,18 @@ export function resolveModelFallbackError(
   if (err instanceof AgentHarnessSessionSupersededError) {
     return { kind: "coordination", error: err };
   }
+  // Gateway admission can fail before any provider turn starts. Preserve that
+  // identity through wrappers and aggregates so fallback cannot blame a model.
+  if (hasGatewayDrainingFailure(err)) {
+    return { kind: "coordination", error: err };
+  }
+  const staleLifecycleFailure = hasStaleAgentRunLifecycleFailure(err);
+  if (
+    staleLifecycleFailure &&
+    (isAgentRunStaleLifecycleError(err) || !hasDirectProviderFailureIdentity(err))
+  ) {
+    return { kind: "coordination", error: err };
+  }
   // A direct takeover remains a coordination failure unless the dedicated
   // cleanup wrapper owns a preserved prompt error. Its message alone must not
   // reclassify session-state loss as a provider failure.
@@ -912,7 +951,8 @@ export function resolveModelFallbackError(
   if (
     hasSessionWriteLockContention(err) ||
     hasEmbeddedAttemptSessionTakeover(err) ||
-    hasMissingToolResultFailure(err)
+    hasMissingToolResultFailure(err) ||
+    staleLifecycleFailure
   ) {
     return { kind: "coordination", error: err };
   }

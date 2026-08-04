@@ -23,11 +23,7 @@ export function buildVydraImageGenerationProvider(): ImageGenerationProvider {
     label: "Vydra",
     defaultModel: DEFAULT_VYDRA_IMAGE_MODEL,
     models: [DEFAULT_VYDRA_IMAGE_MODEL],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: "vydra",
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "vydra", ...ctx }),
     capabilities: {
       generate: {
         maxCount: 1,
@@ -47,7 +43,7 @@ export function buildVydraImageGenerationProvider(): ImageGenerationProvider {
     async generateImage(req) {
       if ((req.inputImages?.length ?? 0) > 0) {
         throw new Error(
-          "Vydra image generation currently supports text-to-image only in the bundled plugin.",
+          "Vydra image generation currently supports text-to-image only in the Vydra plugin.",
         );
       }
       if ((req.count ?? 1) > 1) {

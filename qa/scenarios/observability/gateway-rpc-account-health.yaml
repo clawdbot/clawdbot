@@ -1,0 +1,30 @@
+title: Gateway RPC account health
+
+scenario:
+  id: gateway-rpc-account-health
+  surface: observability
+  category: observability.health-and-repair
+  coverage:
+    primary:
+      - observability.gateway-rpc-health
+      - observability.per-account-enable-disable-settings
+  objective: Prove authenticated Gateway health and status RPCs reflect real per-account configuration reloads.
+  successCriteria:
+    - Authenticated health and channels.status RPCs report two running QA channel accounts, while status exposes both account summaries.
+    - A real CAS config.patch disables one named account and the Gateway applies the new runtime revision.
+    - Only the selected account configuration leaf changes.
+    - The default sibling remains enabled and running while the disabled account is configured, stopped, and operator-visible.
+  docsRefs:
+    - docs/gateway/health.md
+    - docs/gateway/protocol.md
+  codeRefs:
+    - src/gateway/server-methods/health.ts
+    - src/gateway/server-methods/channels.ts
+    - test/e2e/qa-lab/runtime/gateway-rpc-account-health.ts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/gateway-rpc-account-health.ts
+    summary: Starts a real QA bus and CLI Gateway child, performs authenticated health and status RPCs, and patches one account through config CAS and hot reload.
+    args:
+      - --artifact-base
+      - ${outputDir}

@@ -155,6 +155,12 @@ struct SettingsViewSmokeTests {
         _ = view.body
     }
 
+    @Test func `connection settings builds body`() {
+        let state = AppState(preview: true)
+        let view = GeneralSettings(state: state, page: .connection)
+        _ = view.body
+    }
+
     @Test func `general settings renders the keyboard shortcut recorder`() {
         let state = AppState(preview: true)
         let hosting = NSHostingView(rootView: GeneralSettings(state: state))

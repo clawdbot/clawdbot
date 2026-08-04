@@ -61,6 +61,9 @@ export function registerCronListCommand(cron: Command) {
             includeDisabled: Boolean(opts.all),
           };
           const agentId = normalizeOptionalString(opts.agent);
+          if (typeof opts.agent === "string" && !agentId) {
+            throw new Error("--agent must not be blank");
+          }
           if (agentId) {
             listParams.agentId = sanitizeAgentId(agentId);
           }

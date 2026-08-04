@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectLegacyWhatsAppCrontabHealthWarning,
   noteCronDeliveryTargetAdvisory,
+  noteCronModelOverrides,
 } from "./warnings.js";
 
 const mocks = vi.hoisted(() => ({
@@ -21,8 +22,6 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-const STORE_PATH = "/tmp/openclaw/cron/jobs.sqlite";
-
 function job(overrides: Record<string, unknown>): Record<string, unknown> {
   return { id: "job", schedule: "0 * * * *", ...overrides };
 }
@@ -34,7 +33,6 @@ function availableChannels(...ids: string[]) {
 
 function collectCronDeliveryTargetAdvisory(params: {
   jobs: Array<Record<string, unknown>>;
-  storePath: string;
   resolveAvailableChannelIds: () => string[];
 }): string | null {
   mocks.note.mockClear();
@@ -44,17 +42,38 @@ function collectCronDeliveryTargetAdvisory(params: {
   noteCronDeliveryTargetAdvisory({
     cfg: {},
     jobs: params.jobs,
-    storePath: params.storePath,
   });
   const body = mocks.note.mock.calls.at(-1)?.[0];
   return typeof body === "string" ? body : null;
 }
 
+describe("noteCronModelOverrides", () => {
+  it("describes enabled overrides without claiming a specific backing store", () => {
+    noteCronModelOverrides({
+      cfg: {},
+      jobs: [job({ enabled: true, payload: { kind: "agentTurn", model: "ollama/qwen3" } })],
+    });
+
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringMatching(/^Automation model overrides detected\.\n/u),
+      "Cron",
+    );
+  });
+
+  it("does not warn for disabled model-pinned jobs", () => {
+    noteCronModelOverrides({
+      cfg: {},
+      jobs: [job({ enabled: false, payload: { kind: "agentTurn", model: "ollama/qwen3" } })],
+    });
+
+    expect(mocks.note).not.toHaveBeenCalled();
+  });
+});
+
 describe("collectCronDeliveryTargetAdvisory", () => {
   it("advises when a concrete delivery channel has no active plugin", () => {
     const advisory = collectCronDeliveryTargetAdvisory({
       jobs: [job({ id: "report", delivery: { mode: "announce", channel: "missing-channel" } })],
-      storePath: STORE_PATH,
       resolveAvailableChannelIds: availableChannels("slack", "telegram"),
     });
     expect(advisory).not.toBeNull();
@@ -68,7 +87,6 @@ describe("collectCronDeliveryTargetAdvisory", () => {
     // Omitting `mode` defaults to announce, so a bare channel still counts as a concrete target.
     const advisory = collectCronDeliveryTargetAdvisory({
       jobs: [job({ delivery: { channel: "slack" } })],
-      storePath: STORE_PATH,
       resolveAvailableChannelIds: availableChannels("slack", "telegram"),
     });
     expect(advisory).toBeNull();
@@ -78,7 +96,6 @@ describe("collectCronDeliveryTargetAdvisory", () => {
     // "gchat" canonicalizes to "googlechat"; an alias target must not look unavailable.
     const advisory = collectCronDeliveryTargetAdvisory({
       jobs: [job({ delivery: { mode: "announce", channel: "gchat" } })],
-      storePath: STORE_PATH,
       resolveAvailableChannelIds: availableChannels("googlechat"),
     });
     expect(advisory).toBeNull();
@@ -92,7 +109,6 @@ describe("collectCronDeliveryTargetAdvisory", () => {
     const resolve = availableChannels("slack");
     const advisory = collectCronDeliveryTargetAdvisory({
       jobs: [job({ delivery })],
-      storePath: STORE_PATH,
       resolveAvailableChannelIds: resolve,
     });
     expect(advisory).toBeNull();
@@ -105,7 +121,6 @@ describe("collectCronDeliveryTargetAdvisory", () => {
     });
     const advisory = collectCronDeliveryTargetAdvisory({
       jobs: [job({ id: "implicit" }), job({ id: "weblike", delivery: { mode: "webhook" } })],
-      storePath: STORE_PATH,
       resolveAvailableChannelIds: resolve,
     });
     expect(advisory).toBeNull();
@@ -121,7 +136,6 @@ describe("collectCronDeliveryTargetAdvisory", () => {
           delivery: { mode: "announce", channel: "missing-channel" },
         }),
       ],
-      storePath: STORE_PATH,
       resolveAvailableChannelIds: resolve,
     });
     expect(advisory).toBeNull();
@@ -131,7 +145,6 @@ describe("collectCronDeliveryTargetAdvisory", () => {
   it("flags a concrete target even when no channels are active (only channel removed)", () => {
     const advisory = collectCronDeliveryTargetAdvisory({
       jobs: [job({ id: "report", delivery: { mode: "announce", channel: "slack" } })],
-      storePath: STORE_PATH,
       resolveAvailableChannelIds: availableChannels(),
     });
     expect(advisory).toContain("Channels: slack=1");
@@ -146,7 +159,6 @@ describe("collectCronDeliveryTargetAdvisory", () => {
         job({ id: "g3", delivery: { mode: "announce", channel: "ghost-b" } }),
         job({ id: "g4", delivery: { mode: "announce", channel: "ghost-b" } }),
       ],
-      storePath: STORE_PATH,
       resolveAvailableChannelIds: availableChannels("slack"),
     });
     expect(advisory).toContain("4 jobs announce");
@@ -168,7 +180,6 @@ describe("collectCronDeliveryTargetAdvisory", () => {
         }),
         job({ id: undefined, name: undefined, delivery: { mode: "announce", channel: "ghost" } }),
       ],
-      storePath: STORE_PATH,
       resolveAvailableChannelIds: availableChannels("slack"),
     });
     expect(advisory).toContain("Nightly digest -> ghost");

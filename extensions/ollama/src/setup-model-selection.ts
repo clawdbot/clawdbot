@@ -78,6 +78,7 @@ export function buildOllamaModelsConfig(
       name,
       discovered?.contextWindow ?? defaultModel?.contextWindow,
       capabilities,
+      { showInspectionFailed: discovered?.showInspectionFailed },
     );
   });
 }
@@ -105,9 +106,11 @@ export async function inspectOllamaModelsForSetup(
         } catch (error) {
           signal?.throwIfAborted();
           // A failed inspection must not inherit the optimistic tools default
-          // reserved for models that were never inspected.
+          // reserved for models that were never inspected. Keep the failure
+          // distinct from authoritative empty capabilities so name-based
+          // reasoning detection still applies.
           inspectionFailures.push(`${model.name}: ${formatErrorMessage(error)}`);
-          return Object.assign({}, model, { capabilities: [] as string[] });
+          return Object.assign({}, model, { showInspectionFailed: true as const });
         }
       }),
     );

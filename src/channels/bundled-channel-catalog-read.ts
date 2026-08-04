@@ -11,6 +11,7 @@ import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import type { PluginPackageChannel } from "../plugins/manifest.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 
 type ChannelCatalogEntryLike = {
   openclaw?: {
@@ -28,6 +29,11 @@ type BundledChannelCatalogEntry = {
 const OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH = path.join("dist", "channel-catalog.json");
 const officialCatalogFileCache = new Map<string, ChannelCatalogEntryLike[] | null>();
 const bundledPackageCatalogCache = new Map<string, ChannelCatalogEntryLike[] | null>();
+
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  officialCatalogFileCache.clear();
+  bundledPackageCatalogCache.clear();
+});
 
 function listPackageRoots(): string[] {
   // Source checkouts and packaged installs can resolve OpenClaw from different roots; scan both

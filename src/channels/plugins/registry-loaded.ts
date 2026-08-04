@@ -105,7 +105,7 @@ function resolveChannelPlugins(registry?: ActivePluginChannelRegistry): ChannelP
     entriesById,
   };
   if (currentRegistry) {
-    // Runtime snapshots invalidate the single active, pinned-registry view.
+    // Runtime snapshots invalidate the single process-root registry view.
     cachedChannelPluginView = view;
   }
   return view;

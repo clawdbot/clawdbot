@@ -92,6 +92,8 @@ describe("mcp-grant-store", () => {
       accountId: "account-1",
       inboundEventKind: "room_event" as const,
       sourceReplyDeliveryMode: "message_tool_only" as const,
+      sourceReplyOnly: true,
+      toolsAllow: ["message"],
       taskSuggestionDeliveryMode: "gateway" as const,
       requireExplicitMessageTarget: true,
       senderIsOwner: false,
@@ -109,7 +111,11 @@ describe("mcp-grant-store", () => {
     ).toBe(true);
 
     context.clientCaps.push("caller-mutation");
+    context.sourceReplyOnly = false;
+    context.toolsAllow.push("exec");
     grant.context.clientCaps?.push("return-value-mutation");
+    grant.context.sourceReplyOnly = false;
+    grant.context.toolsAllow?.push("write");
 
     expect(
       resolveMcpLoopbackClientGrant({
@@ -121,6 +127,8 @@ describe("mcp-grant-store", () => {
       ...context,
       sessionKey: "agent:main:telegram:group:1",
       clientCaps: ["tool-events"],
+      sourceReplyOnly: true,
+      toolsAllow: ["message"],
     });
   });
 
