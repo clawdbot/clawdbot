@@ -8,6 +8,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import type { GatewayServer } from "../../../src/gateway/server.js";
+import { waitForActiveGatewayRootWork } from "../../../src/process/gateway-work-admission.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -32,6 +33,12 @@ const artifactDir = path.resolve(
 const viewport = { height: 900, width: 1280 };
 const trustedProxyUser = "qa-operator";
 const controlUiSettleTimeoutMs = 60_000;
+const originProxyHeaderBlocklist = new Set([
+  "connection",
+  "content-encoding",
+  "content-length",
+  "transfer-encoding",
+]);
 
 type ProxyRoute = "trusted" | "untrusted";
 
@@ -310,6 +317,48 @@ async function startRealTransportProxy(gatewayUrl: string): Promise<RealTranspor
   };
 }
 
+async function startControlUiOriginProxy(upstreamBaseUrl: string): Promise<ControlUiE2eServer> {
+  const server = createServer((request, response) => {
+    void (async () => {
+      const upstream = await fetch(new URL(request.url ?? "/", upstreamBaseUrl), {
+        headers: { Accept: request.headers.accept ?? "*/*" },
+        method: request.method,
+        redirect: "manual",
+      });
+      response.statusCode = upstream.status;
+      for (const [name, value] of upstream.headers) {
+        if (!originProxyHeaderBlocklist.has(name)) {
+          response.setHeader(name, value);
+        }
+      }
+      response.end(
+        request.method === "HEAD" ? undefined : Buffer.from(await upstream.arrayBuffer()),
+      );
+    })().catch(() => {
+      if (!response.headersSent) {
+        response.writeHead(502, { "Content-Type": "text/plain; charset=utf-8" });
+      }
+      response.end("Control UI origin proxy failed");
+    });
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Control UI origin proxy did not bind a TCP port");
+  }
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}/`,
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  };
+}
+
 async function getFreePort(): Promise<number> {
   const server = net.createServer();
   await new Promise<void>((resolve, reject) => {
@@ -445,26 +494,16 @@ async function createBrowserPage(
   return { context, errors, evidenceStartIndex, page };
 }
 
-async function warmControlUiSource(baseUrl: string): Promise<void> {
-  const context = await browser.newContext({
-    locale: "en-US",
-    serviceWorkers: "block",
-    viewport,
-  });
-  try {
-    const page = await context.newPage();
-    page.setDefaultTimeout(60_000);
-    const response = await page.goto(withGatewayUrl(baseUrl, proxy.trustedUrl));
-    expect(response?.status()).toBe(200);
-    await page.locator("openclaw-gateway-url-confirmation").waitFor();
-  } finally {
-    await context.close();
-  }
-}
-
 async function closeContext(context: BrowserContext): Promise<void> {
   openContexts.delete(context);
   await context.close();
+}
+
+async function closeConnectedContext(context: BrowserContext): Promise<void> {
+  await closeContext(context);
+  // UI requests intentionally outlive socket teardown. Drain their admitted work
+  // before another browser interaction so lazy handler imports cannot starve it.
+  await expect(waitForActiveGatewayRootWork()).resolves.toEqual({ active: 0, drained: true });
 }
 
 async function captureChromiumScreenshot(page: Page, fileName: string): Promise<void> {
@@ -532,12 +571,12 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     }
     await mkdir(artifactDir, { recursive: true });
     allowedUi = await startControlUiE2eServer();
-    rejectedUi = await startControlUiE2eServer(undefined, { source: true });
+    // A lightweight proxy supplies the distinct rejected Origin without starting
+    // a second Vite compiler in the already resource-intensive browser shard.
+    rejectedUi = await startControlUiOriginProxy(allowedUi.baseUrl);
     gateway = await startRealGateway(new URL(allowedUi.baseUrl).origin);
     proxy = await startRealTransportProxy(gateway.url);
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-    await warmControlUiSource(allowedUi.baseUrl);
-    await warmControlUiSource(rejectedUi.baseUrl);
   }, 120_000);
 
   afterAll(async () => {
@@ -615,7 +654,7 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     expect(trustedEvidence.requiredHeaderInjected).toBe(true);
     await captureChromiumScreenshot(connected.page, "01-trusted-proxy-connected.png");
     expect(connected.errors).toEqual([]);
-    await closeContext(connected.context);
+    await closeConnectedContext(connected.context);
 
     await writeFile(
       path.join(artifactDir, "trusted-proxy-behavior.json"),
@@ -663,7 +702,7 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     );
     await captureChromiumScreenshot(allowed.page, "03-allowed-origin-connected.png");
     expect(allowed.errors).toEqual([]);
-    await closeContext(allowed.context);
+    await closeConnectedContext(allowed.context);
 
     await writeFile(
       path.join(artifactDir, "allowed-origins-behavior.json"),
