@@ -57,12 +57,12 @@ const CANVAS_NODE_COMMANDS = [
 ] as const;
 
 type NodeInvokeFrame = {
-  id?: unknown;
-  nodeId?: unknown;
-  command?: unknown;
-  paramsJSON?: unknown;
-  timeoutMs?: unknown;
-  idempotencyKey?: unknown;
+  id: string;
+  nodeId: string;
+  command: string;
+  paramsJSON: string | null;
+  timeoutMs: number;
+  idempotencyKey: string;
 };
 
 type CapturedInvocation = {
@@ -337,13 +337,13 @@ describe("Canvas agent tool over a paired Linux node", () => {
           expect(invocation.timeoutMs).toBeGreaterThan(0);
           expect(invocation.timeoutMs).toBeLessThanOrEqual(actions[index]?.args.timeoutMs ?? 0);
         }
-        expect(invocations.map((invocation) => invocation.idempotencyKey)).toEqual(
-          invocations.map((invocation) =>
-            expect.stringMatching(
-              /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+        expect(
+          invocations.every((invocation) =>
+            /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(
+              invocation.idempotencyKey,
             ),
           ),
-        );
+        ).toBe(true);
         expect(new Set(invocations.map((invocation) => invocation.idempotencyKey)).size).toBe(
           actions.length,
         );
@@ -400,7 +400,7 @@ async function respondToCanvasInvocation(params: {
   frame: unknown;
   invocations: CapturedInvocation[];
 }): Promise<void> {
-  const frame = params.frame as NodeInvokeFrame;
+  const frame = params.frame as Partial<NodeInvokeFrame>;
   const invalidFields = [
     !params.client ? "client" : "",
     typeof frame.id !== "string" ? "id" : "",
@@ -414,6 +414,18 @@ async function respondToCanvasInvocation(params: {
     throw new Error(
       `Gateway sent invalid Canvas node fields: ${invalidFields.join(", ")}; payload=${JSON.stringify(frame)}`,
     );
+  }
+  const client = params.client;
+  if (
+    !client ||
+    typeof frame.id !== "string" ||
+    frame.nodeId !== params.expectedNodeId ||
+    typeof frame.command !== "string" ||
+    typeof frame.timeoutMs !== "number" ||
+    typeof frame.idempotencyKey !== "string" ||
+    !(frame.paramsJSON === null || typeof frame.paramsJSON === "string")
+  ) {
+    throw new Error(`invalid Canvas node invocation: ${JSON.stringify(frame)}`);
   }
   const invocation: CapturedInvocation = {
     nodeId: frame.nodeId,
@@ -436,7 +448,7 @@ async function respondToCanvasInvocation(params: {
   if (!Object.hasOwn(responseByCommand, frame.command)) {
     throw new Error(`unexpected Canvas node command: ${frame.command}`);
   }
-  await params.client.request("node.invoke.result", {
+  await client.request("node.invoke.result", {
     id: frame.id,
     nodeId: frame.nodeId,
     ok: true,
