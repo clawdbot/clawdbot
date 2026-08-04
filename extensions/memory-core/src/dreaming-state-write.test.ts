@@ -542,4 +542,68 @@ describe("writeMemoryCoreWorkspaceEntries", () => {
       configureCountedDreamingState();
     }
   });
+
+  it("scales to thousands of rows with O(changes) registers on a second pass", async () => {
+    // Maintainer-required representative scale proof: first pass writes N rows;
+    // identical second pass must stay at zero registers; a third pass that
+    // changes K rows must register O(K), not O(N).
+    const rowCount = 2_000;
+    const changeCount = 7;
+    const scaleNamespace = "dreaming-workspace-scale-o-changes";
+    const workspaceDir = await createWorkspace();
+    const baseEntries = Array.from({ length: rowCount }, (_, index) => {
+      const name = `file-${String(index).padStart(5, "0")}.txt`;
+      return { key: name, value: { path: name, mtime: index + 1 } };
+    });
+
+    resetWriteCounts();
+    const firstStarted = performance.now();
+    await writeMemoryCoreWorkspaceEntries({
+      namespace: scaleNamespace,
+      workspaceDir,
+      entries: baseEntries,
+    });
+    const firstMs = performance.now() - firstStarted;
+    expect(writeCounts.register).toBe(rowCount);
+    expect(writeCounts.delete).toBe(0);
+
+    resetWriteCounts();
+    const noopStarted = performance.now();
+    await writeMemoryCoreWorkspaceEntries({
+      namespace: scaleNamespace,
+      workspaceDir,
+      entries: baseEntries,
+    });
+    const noopMs = performance.now() - noopStarted;
+    expect(writeCounts.register).toBe(0);
+    expect(writeCounts.delete).toBe(0);
+
+    const changedEntries = baseEntries.map((entry, index) =>
+      index < changeCount
+        ? { key: entry.key, value: { path: entry.key, mtime: entry.value.mtime + 1_000 } }
+        : entry,
+    );
+    resetWriteCounts();
+    const changeStarted = performance.now();
+    await writeMemoryCoreWorkspaceEntries({
+      namespace: scaleNamespace,
+      workspaceDir,
+      entries: changedEntries,
+    });
+    const changeMs = performance.now() - changeStarted;
+    expect(writeCounts.register).toBe(changeCount);
+    expect(writeCounts.delete).toBe(0);
+
+    const stored = await readMemoryCoreWorkspaceEntries({
+      namespace: scaleNamespace,
+      workspaceDir,
+    });
+    expect(stored).toHaveLength(rowCount);
+    // No-op and small-change passes should stay well below a full rewrite budget.
+    // Absolute ceilings leave headroom for CI load without accepting O(N) work.
+    expect(noopMs).toBeLessThan(firstMs);
+    expect(changeMs).toBeLessThan(firstMs);
+    expect(noopMs).toBeLessThan(15_000);
+    expect(changeMs).toBeLessThan(15_000);
+  }, 120_000);
 });
