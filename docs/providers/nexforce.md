@@ -114,9 +114,11 @@ the router actually serves for that request.
 ## Cost control and transparency
 
 Fallback chains, rate limits, and spend caps are configured per API key on the
-Nexforce side. Every response discloses which model actually served the request
-via the `X-Nexforce-Requested-Model` / `X-Nexforce-Served-Model` headers, so you
-always know which model answered and what it cost.
+Nexforce side. On the Nexforce side, every response discloses which model
+actually served the request via the `X-Nexforce-Requested-Model` /
+`X-Nexforce-Served-Model` response headers. Those headers are provider-side
+metadata; inspect them at your HTTP layer if you want to audit the served model
+and associated cost.
 
 ## Config example
 

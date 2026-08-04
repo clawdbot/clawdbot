@@ -6,12 +6,6 @@
   },
   "enabledByDefault": true,
   "providers": ["nexforce"],
-  "providerEndpoints": [
-    {
-      "endpointClass": "nexforce",
-      "hosts": ["router.nexforce.ai"]
-    }
-  ],
   "modelCatalog": {
     "providers": {
       "nexforce": {
