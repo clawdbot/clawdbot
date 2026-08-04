@@ -12,13 +12,48 @@ const loadModelCatalog = vi.hoisted(() => vi.fn());
 const modelCatalogMocks = vi.hoisted(() => ({
   routeVariants: undefined as unknown[] | undefined,
 }));
+const pluginMetadataSnapshot = vi.hoisted(() => ({
+  registrySource: "provided" as const,
+  registryDiagnostics: [],
+  index: {
+    plugins: [{ enabled: true, pluginId: "opencode", syntheticAuthRefs: ["opencode"] }],
+  },
+  manifestRegistry: { plugins: [] },
+}));
 vi.mock("../agents/prepared-model-runtime.js", () => ({
   publishPreparedModelRuntimeSnapshot: async (...args: unknown[]) => {
     const entries = await loadModelCatalog(...args);
     return {
       modelCatalog: { entries, routeVariants: modelCatalogMocks.routeVariants ?? entries },
+      metadataSnapshot: pluginMetadataSnapshot,
     };
   },
+}));
+
+const loadManifestMetadataSnapshot = vi.hoisted(() => vi.fn(() => pluginMetadataSnapshot));
+vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
+  loadManifestMetadataSnapshot,
+}));
+
+const resolveProviderPolicySurface = vi.hoisted(() =>
+  vi.fn((_provider: string, options?: { manifestRegistry?: unknown }) =>
+    options?.manifestRegistry === pluginMetadataSnapshot.manifestRegistry
+      ? {
+          resolveSyntheticAuth: ({ modelId }: { modelId?: string }) =>
+            modelId === "deepseek-v4-flash-free"
+              ? {
+                  apiKey: "public",
+                  source: "OpenCode Zen public key",
+                  mode: "api-key" as const,
+                  allowPreparedDirect: true as const,
+                }
+              : undefined,
+        }
+      : null,
+  ),
+);
+vi.mock("../plugins/provider-public-artifacts.js", () => ({
+  resolveProviderPolicySurface,
 }));
 
 const openAIRouteMocks = vi.hoisted(() => ({
@@ -95,6 +130,54 @@ describe("warnIfModelConfigLooksOff", () => {
       status: "missing",
       hasAuth: false,
     });
+  });
+
+  it("keeps credentialless public defaults ready while paid and unknown models stay gated", async () => {
+    const publicConfig = {
+      agents: { defaults: { model: "opencode/deepseek-v4-flash-free" } },
+    } as OpenClawConfig;
+    const note = vi.fn(async () => {});
+
+    await warnIfModelConfigLooksOff(publicConfig, makePrompter({ note }), {
+      validateCatalog: false,
+      env: {},
+    });
+
+    expect(note).not.toHaveBeenCalled();
+    expect(loadManifestMetadataSnapshot).toHaveBeenCalledWith({
+      config: publicConfig,
+      workspaceDir: expect.any(String),
+      env: {},
+    });
+    expect(
+      resolveDefaultModelAuthStatus(
+        { agents: { defaults: { model: "opencode/gpt-5.5" } } } as OpenClawConfig,
+        { env: {}, metadataSnapshot: pluginMetadataSnapshot as never },
+      ),
+    ).toMatchObject({ status: "missing", hasAuth: false });
+    resolveProviderPolicySurface.mockClear();
+    expect(
+      resolveDefaultModelAuthStatus(
+        { agents: { defaults: { model: "unknown/free-looking" } } } as OpenClawConfig,
+        { env: {}, metadataSnapshot: pluginMetadataSnapshot as never },
+      ),
+    ).toMatchObject({ status: "missing", hasAuth: false });
+    expect(resolveProviderPolicySurface).not.toHaveBeenCalled();
+  });
+
+  it("keeps explicit empty synthetic refs authoritative over lifecycle metadata", () => {
+    expect(
+      resolveDefaultModelAuthStatus(
+        {
+          agents: { defaults: { model: "opencode/deepseek-v4-flash-free" } },
+        } as OpenClawConfig,
+        {
+          env: {},
+          metadataSnapshot: pluginMetadataSnapshot as never,
+          syntheticAuthProviderRefs: [],
+        },
+      ),
+    ).toMatchObject({ status: "missing", hasAuth: false });
   });
 
   it("accepts Codex OAuth profiles for canonical OpenAI models using the Codex runtime", async () => {

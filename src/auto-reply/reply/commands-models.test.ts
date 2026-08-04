@@ -70,6 +70,13 @@ const modelProviderAuthMocks = vi.hoisted(() => {
 });
 const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() => vi.fn());
 const pluginMetadataMocks = vi.hoisted(() => ({
+  lifecycleSnapshot: {
+    registrySource: "provided" as const,
+    registryDiagnostics: [],
+    index: { plugins: [] },
+    manifestRegistry: { plugins: [] },
+    plugins: [],
+  },
   snapshot: undefined as
     | {
         plugins: unknown[];
@@ -138,6 +145,10 @@ vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
 
 vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: () => pluginMetadataMocks.snapshot,
+}));
+
+vi.mock("../../plugins/manifest-contract-eligibility.js", () => ({
+  loadManifestMetadataSnapshot: () => pluginMetadataMocks.lifecycleSnapshot,
 }));
 
 const telegramModelsTestPlugin: ChannelPlugin = {
@@ -331,6 +342,8 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).not.toContain("Add: /models add");
     const authCheckerParams = preparedAuthCheckerParams();
     expect(authCheckerParams?.workspaceDir).toBe("/tmp");
+    expect(authCheckerParams?.metadataSnapshot).toBe(pluginMetadataMocks.lifecycleSnapshot);
+    expect(authCheckerParams?.syntheticAuthProviderRefs).toEqual([]);
   });
 
   it("uses read-only catalog loading and static auth checks for default browse", async () => {

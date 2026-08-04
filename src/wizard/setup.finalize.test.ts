@@ -65,6 +65,7 @@ const resolveDefaultModelCatalogFacts = vi.hoisted(() =>
 const loadModelCatalog = vi.hoisted(() =>
   vi.fn<(_params?: unknown) => Promise<unknown[]>>(async () => []),
 );
+const preparedMetadataSnapshot = vi.hoisted(() => ({ manifestRegistry: { plugins: [] } }));
 const buildGatewayInstallPlan = vi.hoisted(() =>
   vi.fn(async (_params?: { warn?: (message: string, title?: string) => void }) => ({
     programArguments: [],
@@ -264,9 +265,12 @@ vi.mock("../commands/auth-choice.js", () => ({
 }));
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
-  loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
+  loadPreparedModelCatalogOwnerSnapshot: async (...args: unknown[]) => {
     const entries = await loadModelCatalog(...args);
-    return { entries, routeVariants: entries };
+    return {
+      modelCatalog: { entries, routeVariants: entries },
+      metadataSnapshot: preparedMetadataSnapshot,
+    };
   },
 }));
 
@@ -898,6 +902,7 @@ describe("finalizeSetupWizard", () => {
     });
     expect(resolveDefaultModelAuthStatus).toHaveBeenCalledWith(nextConfig, {
       agentDir: "/tmp/custom-agent",
+      metadataSnapshot: preparedMetadataSnapshot,
       observedRoutes,
     });
   });

@@ -47,6 +47,7 @@ vi.mock("./manifest-registry-installed.js", () => ({
 
 import {
   hasRuntimeSyntheticAuthCandidateRef,
+  resolveValidatedSyntheticAuthProviderRefState,
   resolveRuntimeSyntheticAuthProviderRefState,
   resolveRuntimeSyntheticAuthProviderRefs,
 } from "./synthetic-auth.runtime.js";
@@ -64,6 +65,34 @@ describe("synthetic auth runtime refs", () => {
       diagnostics: [],
     } satisfies ExternalAuthManifestRegistryResult);
   });
+
+  it.each([
+    { source: "persisted", diagnostics: [], expected: ["enabled-provider"], complete: true },
+    { source: "provided", diagnostics: [], expected: ["enabled-provider"], complete: true },
+    { source: "derived", diagnostics: [], expected: [], complete: false },
+    {
+      source: "persisted",
+      diagnostics: [{ code: "persisted-registry-missing" }],
+      expected: [],
+      complete: false,
+    },
+  ] as const)(
+    "validates $source snapshot refs before use",
+    ({ source, diagnostics, expected, complete }) => {
+      expect(
+        resolveValidatedSyntheticAuthProviderRefState({
+          registrySource: source,
+          registryDiagnostics: diagnostics,
+          index: {
+            plugins: [
+              { enabled: true, syntheticAuthRefs: ["enabled-provider"] },
+              { enabled: false, syntheticAuthRefs: ["disabled-provider"] },
+            ],
+          },
+        } as never),
+      ).toEqual({ refs: expected, complete });
+    },
+  );
 
   it("uses persisted registry synthetic auth refs before the runtime registry exists", () => {
     pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValue({

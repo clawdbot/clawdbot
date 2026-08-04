@@ -397,6 +397,51 @@ describe("prepared provider auth state", () => {
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).not.toHaveBeenCalled();
   });
 
+  it("passes lifecycle plugin metadata and explicit synthetic refs to model availability", async () => {
+    const cfg = {} as OpenClawConfig;
+    const metadataSnapshot = { manifestRegistry: { plugins: [] } } as never;
+    const hasAuth = createProviderAuthChecker({
+      cfg,
+      metadataSnapshot,
+      syntheticAuthProviderRefs: ["opencode"],
+    });
+
+    await hasAuth("opencode", { modelId: "deepseek-v4-flash-free" });
+
+    expect(modelAuthAvailabilityMocks.createModelAuthAvailabilityResolver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg,
+        metadataSnapshot,
+        syntheticAuthProviderRefs: ["opencode"],
+      }),
+    );
+    expect(modelAuthMocks.createRuntimeProviderAuthLookup).toHaveBeenCalledWith(
+      expect.objectContaining({ cfg, metadataSnapshot }),
+    );
+  });
+
+  it("keeps explicit empty synthetic refs authoritative over runtime discovery", async () => {
+    modelAuthMocks.createRuntimeProviderAuthLookup.mockReturnValueOnce({
+      envApiKey: {
+        aliasMap: {},
+        candidateMap: {},
+        authEvidenceMap: {},
+      },
+      syntheticAuthProviderRefs: ["opencode"],
+      syntheticAuthProviderRefsComplete: true,
+    });
+    const hasAuth = createProviderAuthChecker({
+      cfg: {} as OpenClawConfig,
+      syntheticAuthProviderRefs: [],
+    });
+
+    await hasAuth("opencode", { modelId: "deepseek-v4-flash-free" });
+
+    expect(modelAuthAvailabilityMocks.createModelAuthAvailabilityResolver).toHaveBeenCalledWith(
+      expect.objectContaining({ syntheticAuthProviderRefs: [] }),
+    );
+  });
+
   it("caches OpenAI auth by the complete route tuple", async () => {
     const hasAuth = createProviderAuthChecker({ cfg: {} as OpenClawConfig });
     const platformRef = {

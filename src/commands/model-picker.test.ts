@@ -19,10 +19,25 @@ const loadModelCatalog = vi.hoisted(() => vi.fn());
 const modelCatalogRouteVariants = vi.hoisted(() => ({
   value: undefined as readonly ModelCatalogEntry[] | undefined,
 }));
+const pickerMetadataSnapshot = vi.hoisted(() => ({
+  registrySource: "provided" as const,
+  registryDiagnostics: [],
+  index: {
+    plugins: [{ enabled: true, pluginId: "opencode", syntheticAuthRefs: ["opencode"] }],
+  },
+  manifestRegistry: { plugins: [] },
+}));
+const loadManifestMetadataSnapshot = vi.hoisted(() => vi.fn(() => pickerMetadataSnapshot));
+vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
+  loadManifestMetadataSnapshot,
+}));
 vi.mock("../agents/prepared-model-catalog.js", () => ({
-  loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
+  loadPreparedModelCatalogOwnerSnapshot: async (...args: unknown[]) => {
     const entries = await loadModelCatalog(...args);
-    return { entries, routeVariants: modelCatalogRouteVariants.value ?? entries };
+    return {
+      modelCatalog: { entries, routeVariants: modelCatalogRouteVariants.value ?? entries },
+      metadataSnapshot: pickerMetadataSnapshot,
+    };
   },
 }));
 
@@ -38,11 +53,12 @@ const loadPreferredProviderPickerCatalog = vi.hoisted(() =>
     (_params: {
       cfg: OpenClawConfig;
       preferredProvider: string;
+      agentId?: string;
       agentDir?: string;
       workspaceDir?: string;
       env?: NodeJS.ProcessEnv;
-    }) => Promise<ModelCatalogEntry[]>
-  >(async () => []),
+    }) => Promise<{ entries: ModelCatalogEntry[]; metadataSnapshot: unknown }>
+  >(async () => ({ entries: [], metadataSnapshot: pickerMetadataSnapshot })),
 );
 vi.mock("../flows/model-picker.provider-catalog.js", () => ({
   loadPreferredProviderPickerCatalog,
@@ -151,43 +167,62 @@ const providerAuthEvaluations = vi.hoisted(
     >(),
 );
 const createProviderAuthChecker = vi.hoisted(() =>
-  vi.fn((params: { cfg?: OpenClawConfig; workspaceDir?: string; env?: NodeJS.ProcessEnv }) => {
-    const checker = vi.fn(
-      async (provider: string, ref?: { api?: string | null; baseUrl?: unknown }) => {
-        const prepared = providerAuthEvaluations.get(provider);
-        if (prepared) {
-          return prepared.availability === true;
-        }
-        return (
-          hasRuntimeAvailableProviderAuth({
-            provider,
-            cfg: params.cfg,
-            workspaceDir: params.workspaceDir,
-            env: params.env,
-          }) &&
-          !(ref?.api === "openai-chatgpt-responses" && ref.baseUrl === "https://api.openai.com/v1")
-        );
-      },
-    );
-    const evaluateModelAuth = vi.fn(
-      async (provider: string, ref?: { api?: string | null; baseUrl?: unknown }) => {
-        const prepared = providerAuthEvaluations.get(provider);
-        if (prepared) {
-          return prepared;
-        }
-        const availability = await checker(provider, ref);
-        const selectedRoute = providerAuthRoute.value;
-        return {
-          availability,
-          routeResolution: selectedRoute
-            ? { kind: "routes" as const, routes: [selectedRoute] as const }
-            : null,
-          ...(selectedRoute ? { selectedRoute } : {}),
-        };
-      },
-    );
-    return Object.assign(checker, { evaluateModelAuth });
-  }),
+  vi.fn(
+    (params: {
+      cfg?: OpenClawConfig;
+      workspaceDir?: string;
+      env?: NodeJS.ProcessEnv;
+      metadataSnapshot?: unknown;
+    }) => {
+      const checker = vi.fn(
+        async (
+          provider: string,
+          ref?: { modelId?: string; api?: string | null; baseUrl?: unknown },
+        ) => {
+          if (provider === "opencode") {
+            return (
+              params.metadataSnapshot === pickerMetadataSnapshot &&
+              ref?.modelId === "deepseek-v4-flash-free"
+            );
+          }
+          const prepared = providerAuthEvaluations.get(provider);
+          if (prepared) {
+            return prepared.availability === true;
+          }
+          return (
+            hasRuntimeAvailableProviderAuth({
+              provider,
+              cfg: params.cfg,
+              workspaceDir: params.workspaceDir,
+              env: params.env,
+            }) &&
+            !(
+              ref?.api === "openai-chatgpt-responses" &&
+              ref.baseUrl === "https://api.openai.com/v1"
+            )
+          );
+        },
+      );
+      const evaluateModelAuth = vi.fn(
+        async (provider: string, ref?: { api?: string | null; baseUrl?: unknown }) => {
+          const prepared = providerAuthEvaluations.get(provider);
+          if (prepared) {
+            return prepared;
+          }
+          const availability = await checker(provider, ref);
+          const selectedRoute = providerAuthRoute.value;
+          return {
+            availability,
+            routeResolution: selectedRoute
+              ? { kind: "routes" as const, routes: [selectedRoute] as const }
+              : null,
+            ...(selectedRoute ? { selectedRoute } : {}),
+          };
+        },
+      );
+      return Object.assign(checker, { evaluateModelAuth });
+    },
+  ),
 );
 vi.mock("../agents/model-provider-auth.js", () => ({
   createProviderAuthChecker,
@@ -259,6 +294,14 @@ function promptDefaultPicker(params: Parameters<typeof promptDefaultModel>[0]) {
 
 function catalogModel(provider: string, id: string, name: string): ModelCatalogEntry {
   return { provider, id, name };
+}
+
+function pickerCatalog(entries: ModelCatalogEntry[]) {
+  return { entries, metadataSnapshot: pickerMetadataSnapshot };
+}
+
+function mockPreferredProviderCatalog(entries: ModelCatalogEntry[]) {
+  loadPreferredProviderPickerCatalog.mockResolvedValue(pickerCatalog(entries));
 }
 
 function configuredTextModel(id: string, name: string) {
@@ -394,7 +437,7 @@ beforeEach(() => {
     }),
   });
   loadStaticManifestCatalogRowsForList.mockReturnValue([]);
-  loadPreferredProviderPickerCatalog.mockResolvedValue([]);
+  mockPreferredProviderCatalog([]);
   listProfilesForProvider.mockReturnValue([]);
   resolveEnvApiKey.mockImplementation((_provider: string) => ({
     apiKey: "test-key",
@@ -614,6 +657,27 @@ describe("promptDefaultModel", () => {
     expect(values).toEqual(["amazon-bedrock/us.anthropic.claude-sonnet-4-5"]);
   });
 
+  it("keeps only lifecycle-approved public OpenCode models visible without credentials", async () => {
+    loadModelCatalog.mockResolvedValue([
+      { provider: "opencode", id: "deepseek-v4-flash-free", name: "DeepSeek Free" },
+      { provider: "opencode", id: "gpt-5.5", name: "GPT-5.5" },
+      { provider: "opencode", id: "unknown-free", name: "Unknown Free" },
+    ]);
+    const select = vi.fn(async (params) => params.initialValue as never);
+
+    await promptDefaultPicker({
+      config: { agents: { defaults: {} } } as OpenClawConfig,
+      prompter: makePrompter({ select }),
+    });
+
+    expect(createProviderAuthChecker).toHaveBeenCalledWith(
+      expect.objectContaining({ metadataSnapshot: pickerMetadataSnapshot }),
+    );
+    expect(optionValues(pickerOptions(select as MockCallSource))).toEqual([
+      "opencode/deepseek-v4-flash-free",
+    ]);
+  });
+
   it("shows AWS SDK models but hides unresolved non-OpenAI SecretRefs", async () => {
     providerAuthEvaluations.set("amazon-bedrock", {
       availability: true,
@@ -742,9 +806,15 @@ describe("promptDefaultModel", () => {
     const result = await promptDefaultPicker({
       config,
       prompter,
+      workspaceDir: "/tmp/minimax-workspace",
     });
 
     expect(loadModelCatalog).not.toHaveBeenCalled();
+    expect(loadManifestMetadataSnapshot).toHaveBeenCalledWith({
+      config,
+      workspaceDir: "/tmp/minimax-workspace",
+      env: process.env,
+    });
     const minimaxOption = requireOption(
       pickerOptions(select as MockCallSource),
       "minimax/MiniMax-M2.7-highspeed",
@@ -998,7 +1068,7 @@ describe("promptDefaultModel", () => {
   });
 
   it("loads the preferred provider catalog when the user chooses to browse", async () => {
-    loadPreferredProviderPickerCatalog.mockResolvedValue([
+    mockPreferredProviderCatalog([
       catalogModel("openai", "gpt-5.5", "GPT-5.5"),
       catalogModel("openai", "gpt-5.5-pro", "GPT-5.5 Pro"),
     ]);
@@ -1034,6 +1104,7 @@ describe("promptDefaultModel", () => {
       cfg: config,
       preferredProvider: "openai",
       agentDir: expect.stringContaining("agents/main/agent"),
+      workspaceDir: expect.any(String),
     });
     expect(loadModelCatalog).not.toHaveBeenCalled();
     expect(select).toHaveBeenCalledTimes(2);
@@ -1041,7 +1112,7 @@ describe("promptDefaultModel", () => {
   });
 
   it("scopes on-demand preferred-provider loads before the first model prompt", async () => {
-    loadPreferredProviderPickerCatalog.mockResolvedValue([
+    mockPreferredProviderCatalog([
       catalogModel("nvidia", "nvidia/nemotron-3-super-120b-a12b", "NVIDIA Nemotron 3 Super 120B"),
       catalogModel("nvidia", "moonshotai/kimi-k2.5", "Kimi K2.5"),
     ]);
@@ -1067,6 +1138,7 @@ describe("promptDefaultModel", () => {
       cfg: config,
       preferredProvider: "nvidia",
       agentDir: expect.stringContaining("agents/main/agent"),
+      workspaceDir: expect.any(String),
     });
     expect(loadModelCatalog).not.toHaveBeenCalled();
     expect(optionValues(pickerOptions(select as MockCallSource))).toEqual([
@@ -1076,7 +1148,7 @@ describe("promptDefaultModel", () => {
   });
 
   it("preselects the first live provider row when keep-current is disabled", async () => {
-    loadPreferredProviderPickerCatalog.mockResolvedValue([
+    mockPreferredProviderCatalog([
       catalogModel("nvidia", "z-ai/glm-5.1", "GLM 5.1"),
       catalogModel("nvidia", "nvidia/nemotron-3-super-120b-a12b", "NVIDIA Nemotron 3 Super 120B"),
     ]);
@@ -1111,7 +1183,7 @@ describe("promptDefaultModel", () => {
   });
 
   it("keeps on-demand NVIDIA vendor labels single-prefixed after browsing", async () => {
-    loadPreferredProviderPickerCatalog.mockResolvedValue([
+    mockPreferredProviderCatalog([
       catalogModel("nvidia", "nvidia/nemotron-3-super-120b-a12b", "NVIDIA Nemotron 3 Super 120B"),
       catalogModel("nvidia", "minimaxai/minimax-m2.7", "MiniMax M2.7"),
       catalogModel("nvidia", "z-ai/glm-5.1", "GLM 5.1"),
@@ -1154,7 +1226,7 @@ describe("promptDefaultModel", () => {
   });
 
   it("omits local NVIDIA static fallback rows when browsing live provider rows", async () => {
-    loadPreferredProviderPickerCatalog.mockResolvedValue([
+    mockPreferredProviderCatalog([
       catalogModel("nvidia", "nvidia/nemotron-3-super-120b-a12b", "NVIDIA Nemotron 3 Super 120B"),
       catalogModel("nvidia", "minimaxai/minimax-m2.7", "MiniMax M2.7"),
       catalogModel("nvidia", "z-ai/glm-5.1", "GLM 5.1"),
@@ -1200,7 +1272,7 @@ describe("promptDefaultModel", () => {
   });
 
   it("uses the configured default agent dir for provider-scoped catalog auth", async () => {
-    loadPreferredProviderPickerCatalog.mockResolvedValue([
+    mockPreferredProviderCatalog([
       catalogModel("nvidia", "z-ai/glm-5.1", "GLM 5.1"),
     ]);
     const select = vi.fn(async (params) => params.options[0]?.value as never);
@@ -1223,13 +1295,16 @@ describe("promptDefaultModel", () => {
       prompter,
       preferredProvider: "nvidia",
       browseCatalogOnDemand: true,
+      agentId: "worker",
       env,
     });
 
     expect(loadPreferredProviderPickerCatalog).toHaveBeenCalledWith({
       cfg: config,
       preferredProvider: "nvidia",
+      agentId: "worker",
       agentDir: "/tmp/openclaw-picker-state/agents/worker/agent",
+      workspaceDir: expect.any(String),
       env,
     });
   });
@@ -1479,6 +1554,7 @@ describe("promptModelAllowlist", () => {
     expect(loadStaticManifestCatalogRowsForList).toHaveBeenCalledWith({
       cfg: config,
       providerFilter: "github-copilot",
+      metadataSnapshot: pickerMetadataSnapshot,
     });
     expect(loadModelCatalog).not.toHaveBeenCalled();
     expect(optionValues(pickerOptions(multiselect as MockCallSource))).toEqual([
@@ -1593,6 +1669,30 @@ describe("promptModelAllowlist", () => {
       "zhipu/glm-4.5-air",
     ]);
     expect(result.models).toEqual(["minimax/MiniMax-M2.7-highspeed", "zhipu/glm-4.5-air"]);
+  });
+
+  it("keeps only lifecycle-approved public OpenCode models in the allowlist picker", async () => {
+    loadModelCatalog.mockResolvedValue([
+      catalogModel("opencode", "deepseek-v4-flash-free", "DeepSeek Free"),
+      catalogModel("opencode", "gpt-5.5", "GPT-5.5"),
+    ]);
+    const multiselect = createSelectAllMultiselect();
+
+    await promptModelAllowlist({
+      config: { agents: { defaults: {} } } as OpenClawConfig,
+      prompter: makePrompter({ multiselect }),
+      workspaceDir: "/tmp/opencode-workspace",
+    });
+
+    expect(createProviderAuthChecker).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/opencode-workspace",
+        metadataSnapshot: pickerMetadataSnapshot,
+      }),
+    );
+    expect(optionValues(pickerOptions(multiselect as MockCallSource))).toEqual([
+      "opencode/deepseek-v4-flash-free",
+    ]);
   });
 
   it("scopes the initial allowlist picker to the preferred provider", async () => {
@@ -1712,7 +1812,7 @@ describe("promptModelAllowlist", () => {
   });
 
   it("keeps live preferred-provider rows before configured fallback supplements", async () => {
-    loadPreferredProviderPickerCatalog.mockResolvedValue([
+    mockPreferredProviderCatalog([
       catalogModel("nvidia", "minimaxai/minimax-m2.7", "MiniMax M2.7"),
       catalogModel("nvidia", "nvidia/nemotron-3-super-120b-a12b", "Nemotron 3 Super"),
     ]);
@@ -1755,7 +1855,7 @@ describe("promptModelAllowlist", () => {
   });
 
   it("keeps provider-scoped live rows authoritative over configured provider supplements", async () => {
-    loadPreferredProviderPickerCatalog.mockResolvedValue([
+    mockPreferredProviderCatalog([
       catalogModel("nvidia", "nvidia/nemotron-3-super-120b-a12b", "Nemotron 3 Super"),
       catalogModel("nvidia", "z-ai/glm-5.1", "GLM 5.1"),
       catalogModel("nvidia", "minimaxai/minimax-m2.7", "MiniMax M2.7"),
@@ -1814,7 +1914,7 @@ describe("promptModelAllowlist", () => {
   });
 
   it("keeps custom configured rows after provider-scoped live rows", async () => {
-    loadPreferredProviderPickerCatalog.mockResolvedValue([
+    mockPreferredProviderCatalog([
       catalogModel("nvidia", "nvidia/nemotron-3-super-120b-a12b", "Nemotron 3 Super"),
       catalogModel("nvidia", "z-ai/glm-5.1", "GLM 5.1"),
     ]);
@@ -1861,7 +1961,7 @@ describe("promptModelAllowlist", () => {
   });
 
   it("does not re-add configured static rows after filtering deprecated live rows", async () => {
-    loadPreferredProviderPickerCatalog.mockResolvedValue([
+    mockPreferredProviderCatalog([
       catalogModel("nvidia", "minimaxai/minimax-m2.5", "MiniMax M2.5"),
       catalogModel("nvidia", "z-ai/glm5", "GLM5"),
     ]);
@@ -2156,9 +2256,15 @@ describe("promptModelAllowlist", () => {
       prompter,
       allowedKeys: ["openai/gpt-5.5", "openai/gpt-5.4"],
       preferredProvider: "openai",
+      workspaceDir: "/tmp/allowed-model-workspace",
     });
 
     expect(loadModelCatalog).not.toHaveBeenCalled();
+    expect(loadManifestMetadataSnapshot).toHaveBeenCalledWith({
+      config,
+      workspaceDir: "/tmp/allowed-model-workspace",
+      env: process.env,
+    });
     expect(optionValues(pickerOptions(multiselect as MockCallSource))).toEqual([
       "openai/gpt-5.5",
       "openai/gpt-5.4",

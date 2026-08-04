@@ -302,6 +302,28 @@ describe("createModelListAuthIndex", () => {
     expect(index.evaluateModelAuth("openai").evidence).toBe("synthetic");
   });
 
+  it("keeps explicit empty synthetic refs authoritative over metadata", () => {
+    const metadataSnapshot = {
+      registrySource: "provided",
+      registryDiagnostics: [],
+      index: {
+        plugins: [{ enabled: true, syntheticAuthRefs: ["codex"] }],
+      },
+      manifestRegistry: { plugins: [] },
+      plugins: [],
+    } as unknown as PluginMetadataSnapshot;
+    const index = createTestModelListAuthIndex({
+      cfg: {},
+      authStore: emptyStore,
+      env: {},
+      metadataSnapshot,
+      syntheticAuthProviderRefs: [],
+      routeResolverFactory: dualRouteResolverFactory,
+    });
+
+    expect(index.evaluateModelAuth("openai").evidence).not.toBe("synthetic");
+  });
+
   it("fails closed before loading refs from a diagnostic-bearing metadata snapshot", () => {
     const metadataSnapshot = {
       index: { plugins: [] },

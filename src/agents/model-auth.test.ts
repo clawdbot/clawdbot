@@ -284,6 +284,27 @@ describe("createRuntimeProviderAuthLookup", () => {
       }).syntheticAuthProviderRefs,
     ).toBeUndefined();
   });
+
+  it("derives authoritative synthetic auth refs from lifecycle metadata", () => {
+    const lookup = createRuntimeProviderAuthLookup({
+      env: {},
+      metadataSnapshot: {
+        registrySource: "provided",
+        registryDiagnostics: [],
+        index: {
+          plugins: [
+            { enabled: true, syntheticAuthRefs: ["opencode"] },
+            { enabled: false, syntheticAuthRefs: ["disabled-provider"] },
+          ],
+        },
+        manifestRegistry: { plugins: [] },
+        plugins: [],
+      } as never,
+    });
+
+    expect(lookup.syntheticAuthProviderRefs).toEqual(["opencode"]);
+    expect(lookup.syntheticAuthProviderRefsComplete).toBe(true);
+  });
 });
 
 async function withoutEnv<T>(key: string, fn: () => Promise<T>): Promise<T> {
