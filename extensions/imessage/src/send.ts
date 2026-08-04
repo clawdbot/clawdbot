@@ -51,7 +51,10 @@ import {
 } from "./client.js";
 import { DEFAULT_IMESSAGE_SEND_TIMEOUT_MS } from "./constants.js";
 import { resolveAuthorizedIMessageReplyReference } from "./message-resource.js";
-import { rememberIMessageReplyCache } from "./monitor-reply-cache.js";
+import {
+  rememberIMessageReplyCache,
+  resolveIMessageThreadReplyToId,
+} from "./monitor-reply-cache.js";
 import {
   forgetPersistedIMessageEchoKey,
   rememberPersistedIMessageEcho,
@@ -1026,6 +1029,12 @@ export async function sendMessageIMessage(
   };
   if (resolvedReplyToId) {
     params.reply_to = resolvedReplyToId;
+    const threadOriginatorGuid = resolveIMessageThreadReplyToId(resolvedReplyToId, {
+      chatContext: chatContextFromIMessageTarget(target, service),
+    });
+    if (threadOriginatorGuid) {
+      params.thread_originator_guid = threadOriginatorGuid;
+    }
   }
   if (formatted.ranges.length > 0) {
     params.formatting = formatted.ranges;
