@@ -221,6 +221,36 @@ describe("Codex supervision compatibility tools", () => {
     });
   });
 
+  it("caps the probe failure detail at the maximum length", async () => {
+    const longText = "x".repeat(600);
+    requestCodexAppServerJsonMock.mockRejectedValue(new Error(longText));
+    const tools = createCodexSupervisionTools({
+      getPluginConfig: () => ({
+        supervision: {
+          enabled: true,
+          allowRawTranscripts: true,
+          endpoints: [{ id: "local", transport: "stdio-proxy" }],
+        },
+      }),
+      senderIsOwner: true,
+      env: {},
+    });
+
+    const result = await toolByName(tools, "codex_endpoint_probe").execute("probe", {});
+
+    expect(result).toMatchObject({
+      details: {
+        health: [{ endpointId: "local", ok: false }],
+      },
+    });
+    const detail = (result as { details: { health: Array<{ detail?: string }> } }).details.health[0]
+      .detail;
+    expect(detail).toBeDefined();
+    // 500 chars + "…"
+    expect(detail!.length).toBe(501);
+    expect(detail!.endsWith("…")).toBe(true);
+  });
+
   it("rejects unauthenticated remote compatibility endpoints before connecting", async () => {
     const tools = createCodexSupervisionTools({
       getPluginConfig: () => ({

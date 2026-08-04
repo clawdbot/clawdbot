@@ -99,6 +99,7 @@ const PAGE_LIMIT = 100;
 const MAX_COMPAT_PAGINATION_PAGES = 100;
 const MAX_COMPAT_CURSOR_LENGTH = 4096;
 const MAX_COMPAT_THREAD_ID_LENGTH = 4096;
+const MAX_PROBE_DETAIL_LENGTH = 500;
 
 type CodexSupervisorTurnMode = "auto" | "start" | "steer";
 type CodexSupervisionRequestPolicy = "enabled" | "raw-transcripts" | "write-controls";
@@ -1073,7 +1074,12 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
             if (!entry.ok) {
               const rawMessage = endpointErrors.get(entry.endpointId);
               if (rawMessage) {
-                entry.detail = redactCodexSupervisionValue(rawMessage) as string;
+                const redacted = redactCodexSupervisionValue(rawMessage) as string;
+                const detail =
+                  redacted.length <= MAX_PROBE_DETAIL_LENGTH
+                    ? redacted
+                    : `${redacted.slice(0, MAX_PROBE_DETAIL_LENGTH)}…`;
+                entry.detail = detail;
               }
             }
           }
