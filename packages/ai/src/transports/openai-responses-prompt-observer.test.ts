@@ -1,5 +1,5 @@
 import { zstdDecompressSync } from "node:zlib";
-import type { Context, Model } from "@openclaw/llm-core";
+import type { Api, Context, Model } from "@openclaw/llm-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { responsesPromptObserver, type ResponsesPromptObservation } from "../internal/openai.js";
@@ -45,7 +45,9 @@ import {
 
 const initialHost = getAiTransportHost();
 
-function createModel(overrides: Partial<Model> = {}): Model {
+function createModel<TApi extends Api = "openai-responses">(
+  overrides: Partial<Model<TApi>> = {},
+): Model<TApi> {
   return {
     id: "gpt-5.4",
     name: "GPT-5.4",
@@ -58,7 +60,7 @@ function createModel(overrides: Partial<Model> = {}): Model {
     contextWindow: 200_000,
     maxTokens: 8192,
     ...overrides,
-  } as Model;
+  } as Model<TApi>;
 }
 
 function createContext(systemPrompt: string, overrides: Partial<Context> = {}): Context {
