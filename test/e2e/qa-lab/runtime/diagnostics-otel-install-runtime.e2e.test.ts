@@ -79,6 +79,7 @@ async function packPlugin(repoRoot: string, scratch: string) {
         ...process.env,
         OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR: outputDir,
       },
+      maxBuffer: 16 * 1024 * 1024,
       timeout: 120_000,
     },
   );

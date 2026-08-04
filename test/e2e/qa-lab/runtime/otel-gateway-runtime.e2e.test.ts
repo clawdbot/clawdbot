@@ -25,7 +25,11 @@ async function settleCleanup(...cleanups: Array<() => Promise<void>>): Promise<v
   }
 }
 
-async function waitFor<T>(read: () => T | undefined, timeoutMs = 30_000): Promise<T> {
+async function waitFor<T>(
+  read: () => T | undefined,
+  timeoutMs = 30_000,
+  timeoutContext?: () => unknown,
+): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const value = read();
@@ -34,7 +38,12 @@ async function waitFor<T>(read: () => T | undefined, timeoutMs = 30_000): Promis
     }
     await sleep(100);
   }
-  throw new Error("timed out waiting for QA runtime evidence");
+  const context = timeoutContext?.();
+  throw new Error(
+    `timed out waiting for QA runtime evidence${
+      context === undefined ? "" : `: ${JSON.stringify(context)}`
+    }`,
+  );
 }
 
 describe("diagnostics-otel gateway runtime", () => {
@@ -179,34 +188,48 @@ describe("diagnostics-otel gateway runtime", () => {
       expect(failedExecOutputs).toHaveLength(1);
       expect(finalizations[0]?.toolOutputCallId).toBe(failedExecCalls[0]?.call_id);
 
-      const failureEvidence = await waitFor(() => {
-        const toolError = receiver.capturedSpans.find(
-          (span) =>
-            span.name === "openclaw.tool.execution" &&
-            span.statusCode === 2 &&
-            span.attributes["openclaw.toolName"] === "exec" &&
-            span.attributes["openclaw.errorCategory"] === "tool_result_error",
-        );
-        if (!toolError?.traceId) {
-          return undefined;
-        }
-        const sameTrace = receiver.capturedSpans.filter(
-          (span) => span.traceId === toolError.traceId,
-        );
-        const run = sameTrace.find((span) => span.name === "openclaw.run");
-        const harness = sameTrace.find((span) => span.name === "openclaw.harness.run");
-        const modelCalls = sameTrace.filter((span) => span.name === "openclaw.model.call");
-        const delivery = sameTrace.find(
-          (span) =>
-            span.name === "openclaw.message.delivery" &&
-            span.attributes["openclaw.channel"] === "qa-channel" &&
-            span.attributes["openclaw.outcome"] === "completed" &&
-            span.statusCode !== 2,
-        );
-        return run && harness && modelCalls.length >= 2 && delivery
-          ? { delivery, harness, modelCalls, run, sameTrace, toolError }
-          : undefined;
-      }, 45_000);
+      const failureEvidence = await waitFor(
+        () => {
+          const toolError = receiver.capturedSpans.find(
+            (span) =>
+              span.name === "openclaw.tool.execution" &&
+              span.statusCode === 2 &&
+              span.attributes["openclaw.toolName"] === "exec" &&
+              span.attributes["openclaw.errorCategory"] === "tool_result_error",
+          );
+          if (!toolError?.traceId) {
+            return undefined;
+          }
+          const sameTrace = receiver.capturedSpans.filter(
+            (span) => span.traceId === toolError.traceId,
+          );
+          const run = sameTrace.find((span) => span.name === "openclaw.run");
+          const harness = sameTrace.find((span) => span.name === "openclaw.harness.run");
+          const modelCalls = sameTrace.filter((span) => span.name === "openclaw.model.call");
+          const delivery = sameTrace.find(
+            (span) =>
+              span.name === "openclaw.message.delivery" &&
+              span.attributes["openclaw.channel"] === "qa-channel" &&
+              span.attributes["openclaw.outcome"] === "completed" &&
+              span.statusCode !== 2,
+          );
+          return run && harness && modelCalls.length >= 2 && delivery
+            ? { delivery, harness, modelCalls, run, sameTrace, toolError }
+            : undefined;
+        },
+        45_000,
+        () => ({
+          requests: receiver.capturedRequests,
+          spans: receiver.capturedSpans.map((span) => ({
+            attributes: span.attributes,
+            name: span.name,
+            parentSpanId: span.parentSpanId,
+            spanId: span.spanId,
+            statusCode: span.statusCode,
+            traceId: span.traceId,
+          })),
+        }),
+      );
 
       expect(failureEvidence.toolError.parentSpanId).toBeTruthy();
       expect(failureEvidence.harness.parentSpanId).toBeTruthy();
