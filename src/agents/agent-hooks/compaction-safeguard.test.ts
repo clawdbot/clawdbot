@@ -594,6 +594,39 @@ describe("compaction-safeguard summary budgets", () => {
     expect(capped).toContain("<workspace-critical-rules>");
   });
 
+  it("keeps the newest preserved turns when the section exceeds its cap", () => {
+    const messages = Array.from({ length: 200 }, (_, i) => ({
+      role: "assistant" as const,
+      content: [{ type: "text" as const, text: `turn-${i} ${"y".repeat(600)}` }],
+      timestamp: 0,
+    }));
+
+    const section = formatPreservedTurnsSection(messages);
+
+    // Preserved turns are the most recent messages, pulled out of the model
+    // input precisely so they survive verbatim; the final one must not be cut.
+    expect(section).toContain("turn-199");
+    expect(section).not.toContain("turn-0 ");
+    expect(section).toContain(SUFFIX_TRUNCATED_MARKER.trim());
+    expect(section).toContain("## Recent turns preserved verbatim");
+  });
+
+  it("keeps the earliest split-turn prefix lines when the section exceeds its cap", () => {
+    const messages = Array.from({ length: 200 }, (_, i) => ({
+      role: "assistant" as const,
+      content: [{ type: "text" as const, text: `turn-${i} ${"y".repeat(600)}` }],
+      timestamp: 0,
+    }));
+
+    const section = formatSplitTurnContextSection(messages);
+
+    // A split-turn prefix is summarized front-to-back, so its head is the part
+    // worth keeping — the opposite end from preserved turns.
+    expect(section).toContain("turn-0 ");
+    expect(section).not.toContain("turn-199");
+    expect(section).toContain(SUFFIX_TRUNCATED_MARKER.trim());
+  });
+
   it("bounds a split-turn context section so it cannot outgrow the summary budget", () => {
     const messages = Array.from({ length: 200 }, (_, i) => ({
       role: "assistant" as const,

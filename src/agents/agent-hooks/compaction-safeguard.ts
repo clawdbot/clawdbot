@@ -577,6 +577,20 @@ function capWithMarker(text: string, maxChars: number, marker: string): string {
   return `${truncateUtf16Safe(text, budget)}${marker}`;
 }
 
+// Mirror of capWithMarker for text whose newest content is at the end: the
+// marker leads so the artifact still says the head was cut.
+function capTailWithMarker(text: string, maxChars: number, marker: string): string {
+  if (maxChars <= 0 || text.length <= maxChars) {
+    return text;
+  }
+  const budget = Math.max(0, maxChars - marker.length);
+  if (budget <= 0) {
+    // Marker cannot fit; keep the tail instead of a partial marker fragment.
+    return sliceUtf16Safe(text, -maxChars);
+  }
+  return `${marker}${sliceUtf16Safe(text, -budget)}`;
+}
+
 function capCompactionSummary(summary: string, maxChars = MAX_COMPACTION_SUMMARY_CHARS): string {
   return capWithMarker(summary, maxChars, SUMMARY_TRUNCATED_MARKER);
 }
@@ -779,7 +793,18 @@ function formatContextMessages(messages: AgentMessage[]): string[] {
     .filter((line): line is string => Boolean(line));
 }
 
-function formatContextSection(messages: AgentMessage[], heading: string): string {
+// Which end of an oversized context section survives its cap. The two callers
+// promise opposite things: preserved turns are the most recent messages, pulled
+// out of the model input so they survive verbatim, so dropping their newest
+// lines defeats the section; a split-turn prefix is summarized front-to-back
+// per TURN_PREFIX_INSTRUCTIONS, so its earliest lines are the ones to keep.
+type ContextSectionKeep = "head" | "tail";
+
+function formatContextSection(
+  messages: AgentMessage[],
+  heading: string,
+  keep: ContextSectionKeep,
+): string {
   const lines = formatContextMessages(messages);
   if (lines.length === 0) {
     return "";
@@ -789,15 +814,20 @@ function formatContextSection(messages: AgentMessage[], heading: string): string
   // that could otherwise outgrow the whole summary budget. Keep every suffix
   // part bounded so capCompactionSummaryPreservingSuffix stays off its
   // budget-splitting path. Marked as context loss, not summary loss.
-  return `${heading}\n${capWithMarker(lines.join("\n"), MAX_CONTEXT_SECTION_CHARS, SUFFIX_TRUNCATED_MARKER)}`;
+  const body = lines.join("\n");
+  const capped =
+    keep === "tail"
+      ? capTailWithMarker(body, MAX_CONTEXT_SECTION_CHARS, SUFFIX_TRUNCATED_MARKER)
+      : capWithMarker(body, MAX_CONTEXT_SECTION_CHARS, SUFFIX_TRUNCATED_MARKER);
+  return `${heading}\n${capped}`;
 }
 
 function formatPreservedTurnsSection(messages: AgentMessage[]): string {
-  return formatContextSection(messages, "\n\n## Recent turns preserved verbatim");
+  return formatContextSection(messages, "\n\n## Recent turns preserved verbatim", "tail");
 }
 
 function formatSplitTurnContextSection(messages: AgentMessage[]): string {
-  return formatContextSection(messages, "**Turn Context (split turn):**\n");
+  return formatContextSection(messages, "**Turn Context (split turn):**\n", "head");
 }
 
 function extractLatestUserAsk(messages: AgentMessage[]): string | null {
