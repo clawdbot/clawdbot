@@ -1,0 +1,220 @@
+title: Search continuity live
+
+scenario:
+  id: search-continuity-live
+  surface: workspace
+  coverage:
+    primary:
+      - agent-runtime.tool-continuity
+      - agent-runtime.tool-followthrough
+      - agent-runtime.tool-fs-list
+      - agent-runtime.tool-grep
+  objective: Verify a live OpenClaw agent preserves search results across turns while using exact workspace commands and artifacts.
+  successCriteria:
+    - A live-frontier run fails fast unless the OpenClaw harness uses openai/gpt-5.6-luna.
+    - Turn one executes `rg --files`, reads `INDEX.md`, executes `rg SEARCH_A=`, and writes the proof artifact in that exact order.
+    - Turn two omits the first seeded value, reads the proof, executes `rg SEARCH_B=`, and updates the same artifact.
+    - Public chat history links each exact tool call to one successful result with the same call ID and one terminal reply after the write.
+    - FS-list and grep capability coverage comes from real exec commands, not native fs.list or grep tool identity.
+  docsRefs:
+    [docs/concepts/agent-workspace.md, docs/help/testing.md, docs/concepts/qa-e2e-automation.md]
+  codeRefs:
+    - src/agents/agent-tools.ts
+    - src/agents/agent-tools.read.ts
+    - extensions/qa-lab/src/suite-runtime-agent-process.ts
+  execution:
+    kind: flow
+    runtime: openclaw
+    suiteIsolation: isolated
+    isolationReason: Seeds randomized workspace search values and requires one persistent live session across two turns.
+    retryCount: 0
+    summary: Run with `pnpm openclaw qa suite --provider-mode live-frontier --model openai/gpt-5.6-luna --alt-model openai/gpt-5.6-luna --fast --thinking medium --scenario search-continuity-live`.
+    config:
+      requiredProviderMode: live-frontier
+      requiredProvider: openai
+      requiredModel: gpt-5.6-luna
+      harnessRuntime: openclaw
+      indexFile: INDEX.md
+      proofFile: search-continuity-proof.txt
+      searchACommand: rg SEARCH_A=
+      searchBCommand: rg SEARCH_B=
+
+flow:
+  steps:
+    - name: preserves exact search evidence across two live turns
+      actions:
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForQaChannelReady
+          args: [{ ref: env }, 60000]
+        - set: selected
+          value:
+            expr: splitModelRef(env.primaryModel)
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode && selected?.provider === config.requiredProvider && selected?.model === config.requiredModel"
+            message:
+              expr: "`expected ${config.requiredProviderMode} ${config.requiredProvider}/${config.requiredModel}, got mode=${env.providerMode} model=${env.primaryModel}`"
+        - assert:
+            expr: "env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME === config.harnessRuntime"
+            message:
+              expr: "`expected suite runtime ${config.harnessRuntime}, got ${env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME}`"
+        - assert:
+            expr: "Boolean(env.gateway.runtimeEnv.OPENAI_API_KEY?.trim() || env.gateway.runtimeEnv.OPENCLAW_LIVE_OPENAI_KEY?.trim())"
+            message: expected live OpenAI credentials
+        - call: reset
+        - set: sessionKey
+          value:
+            expr: "`agent:qa:search-continuity:${randomUUID().slice(0, 8)}`"
+        - set: searchAValue
+          value:
+            expr: "`SEARCH_A=${randomUUID()}`"
+        - set: searchBValue
+          value:
+            expr: "`SEARCH_B=${randomUUID()}`"
+        - set: proofPath
+          value:
+            expr: path.join(env.gateway.workspaceDir, config.proofFile)
+        - call: fs.mkdir
+          args: [{ expr: 'path.join(env.gateway.workspaceDir, "records")' }, { recursive: true }]
+        - call: fs.writeFile
+          args:
+            - expr: path.join(env.gateway.workspaceDir, config.indexFile)
+            - "# Search fixture\n\nSearch the workspace values exactly as requested.\n"
+            - utf8
+        - call: fs.writeFile
+          args:
+            - expr: path.join(env.gateway.workspaceDir, "records", "a.env")
+            - expr: "`${searchAValue}\n`"
+            - utf8
+        - call: fs.writeFile
+          args:
+            - expr: path.join(env.gateway.workspaceDir, "records", "b.env")
+            - expr: "`${searchBValue}\n`"
+            - utf8
+        - set: turnOnePrompt
+          value:
+            expr: |-
+              `Search continuity turn one. Use exactly these tools in this successful order and no others:
+              1. exec with exact command: rg --files
+              2. read with exact path: ${config.indexFile}
+              3. exec with exact command: ${config.searchACommand}
+              4. write with exact path: ${config.proofFile}, containing only the discovered SEARCH_A= line.
+              After the write succeeds, reply once with the artifact name and exact discovered value.`
+        - set: turnTwoPrompt
+          value:
+            expr: |-
+              `Continue the same search continuity task. Use exactly these tools in this successful order and no others:
+              1. read with exact path: ${config.proofFile}
+              2. exec with exact command: ${config.searchBCommand}
+              3. write with exact path: ${config.proofFile}, preserving the prior line and appending only the discovered SEARCH_B= line.
+              After the write succeeds, reply once with the artifact name and both exact discovered values.`
+        - assert:
+            expr: "!turnOnePrompt.includes(searchAValue) && !turnOnePrompt.includes(searchBValue) && !turnTwoPrompt.includes(searchAValue) && !turnTwoPrompt.includes(searchBValue) && !turnTwoPrompt.includes('SEARCH_A=')"
+            message: seeded search values leaked into a prompt or turn two repeated the first search key
+        - set: inspectTurn
+          value:
+            expr: |-
+              (history, prompt, expected) => {
+                const messages = history.messages ?? [];
+                const textOf = (message) => typeof message?.content === "string"
+                  ? message.content
+                  : Array.isArray(message?.content)
+                    ? message.content.filter((item) => ["text", "input_text", "output_text"].includes(item?.type)).map((item) => item.text ?? "").join("\n")
+                    : String(message?.text ?? "");
+                const userIndex = messages.findLastIndex((message) => message?.role === "user" && textOf(message).trim() === prompt.trim());
+                const turn = userIndex < 0 ? [] : messages.slice(userIndex + 1);
+                const calls = [];
+                turn.forEach((message, messageIndex) => {
+                  if (message?.role !== "assistant" || !Array.isArray(message.content)) return;
+                  for (const item of message.content) {
+                    if (!["toolCall", "toolUse", "tool_use"].includes(item?.type)) continue;
+                    calls.push({ id: item.id, name: item.name ?? item.toolName, args: item.arguments ?? item.input, messageIndex });
+                  }
+                });
+                const results = turn.map((message, messageIndex) => ({ message, messageIndex })).filter(({ message }) => message?.role === "toolResult");
+                const exactCalls = calls.length === expected.length && calls.every((call, index) => call.name === expected[index].name && call.args?.[expected[index].arg] === expected[index].value && typeof call.id === "string" && call.id.length > 0);
+                const linkedResults = results.length === expected.length && calls.every((call) => results.some(({ message, messageIndex }) => message.toolCallId === call.id && message.toolName === call.name && message.isError === false && messageIndex > call.messageIndex));
+                const terminalReplies = turn.map((message, messageIndex) => ({ message, messageIndex })).filter(({ message }) => message?.role === "assistant" && message.phase !== "commentary" && !message.openclawMessageToolMirror && !message.openclawDeliveryMirror && !(message.provider === "openclaw" && ["delivery-mirror", "gateway-injected"].includes(message.model)) && (!Array.isArray(message.content) || !message.content.some((item) => ["toolCall", "toolUse", "tool_use", "toolResult", "tool_result"].includes(item?.type))) && textOf(message).trim());
+                const write = calls.findLast((call) => call.name === "write");
+                const writeResult = write ? results.find(({ message }) => message.toolCallId === write.id) : undefined;
+                return { exactCalls, linkedResults, calls, results, terminalReplies, finalText: textOf(terminalReplies[0]?.message).trim(), terminalAfterWrite: terminalReplies.length === 1 && writeResult && terminalReplies[0].messageIndex > writeResult.messageIndex };
+              }
+        - call: runAgentPrompt
+          args:
+            - ref: env
+            - sessionKey:
+                ref: sessionKey
+              message:
+                ref: turnOnePrompt
+              provider:
+                expr: selected?.provider
+              model:
+                expr: selected?.model
+              timeoutMs:
+                expr: resolveQaLiveTurnTimeoutMs(env, 180000, env.primaryModel)
+        - call: waitForAgentHistoryReply
+          args:
+            - ref: env
+            - ref: sessionKey
+            - lambda:
+                params: [text]
+                expr: "text.includes(config.proofFile) && text.includes(searchAValue)"
+            - expr: resolveQaLiveTurnTimeoutMs(env, 30000, env.primaryModel)
+            - 100
+        - set: artifactAfterTurnOne
+          value:
+            expr: await fs.readFile(proofPath, "utf8")
+        - assert:
+            expr: "artifactAfterTurnOne.trim() === searchAValue && !artifactAfterTurnOne.includes(searchBValue)"
+            message:
+              expr: "`turn one artifact was not A-only: ${JSON.stringify(artifactAfterTurnOne)}`"
+        - set: turnOneHistory
+          value:
+            expr: 'await env.gateway.call("chat.history", { sessionKey, limit: 100, maxChars: 131072 }, { timeoutMs: liveTurnTimeoutMs(env, 15000) })'
+        - set: turnOneEvidence
+          value:
+            expr: "inspectTurn(turnOneHistory, turnOnePrompt, [{ name: 'exec', arg: 'command', value: 'rg --files' }, { name: 'read', arg: 'path', value: config.indexFile }, { name: 'exec', arg: 'command', value: config.searchACommand }, { name: 'write', arg: 'path', value: config.proofFile }])"
+        - assert:
+            expr: "turnOneEvidence.exactCalls && turnOneEvidence.linkedResults && turnOneEvidence.terminalAfterWrite && turnOneEvidence.finalText.includes(config.proofFile) && turnOneEvidence.finalText.includes(searchAValue)"
+            message:
+              expr: "`turn one chronology failed: ${JSON.stringify(turnOneEvidence)}`"
+        - call: runAgentPrompt
+          args:
+            - ref: env
+            - sessionKey:
+                ref: sessionKey
+              message:
+                ref: turnTwoPrompt
+              provider:
+                expr: selected?.provider
+              model:
+                expr: selected?.model
+              timeoutMs:
+                expr: resolveQaLiveTurnTimeoutMs(env, 180000, env.primaryModel)
+        - call: waitForAgentHistoryReply
+          args:
+            - ref: env
+            - ref: sessionKey
+            - lambda:
+                params: [text]
+                expr: "text.includes(config.proofFile) && text.includes(searchAValue) && text.includes(searchBValue)"
+            - expr: resolveQaLiveTurnTimeoutMs(env, 30000, env.primaryModel)
+            - 100
+        - set: artifactAfterTurnTwo
+          value:
+            expr: await fs.readFile(proofPath, "utf8")
+        - assert:
+            expr: "artifactAfterTurnTwo.trim() === `${searchAValue}\\n${searchBValue}`"
+            message:
+              expr: "`turn two artifact did not preserve A then append B: ${JSON.stringify(artifactAfterTurnTwo)}`"
+        - set: turnTwoHistory
+          value:
+            expr: 'await env.gateway.call("chat.history", { sessionKey, limit: 100, maxChars: 131072 }, { timeoutMs: liveTurnTimeoutMs(env, 15000) })'
+        - set: turnTwoEvidence
+          value:
+            expr: "inspectTurn(turnTwoHistory, turnTwoPrompt, [{ name: 'read', arg: 'path', value: config.proofFile }, { name: 'exec', arg: 'command', value: config.searchBCommand }, { name: 'write', arg: 'path', value: config.proofFile }])"
+        - assert:
+            expr: "turnTwoEvidence.exactCalls && turnTwoEvidence.linkedResults && turnTwoEvidence.terminalAfterWrite && turnTwoEvidence.finalText.includes(config.proofFile) && turnTwoEvidence.finalText.includes(searchAValue) && turnTwoEvidence.finalText.includes(searchBValue)"
+            message:
+              expr: "`turn two chronology failed: ${JSON.stringify(turnTwoEvidence)}`"
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', scenario: 'search-continuity-live', provider: env.primaryModel, runtime: config.harnessRuntime, sessionKey, artifact: config.proofFile, turnOne: { tools: turnOneEvidence.calls.map(({ id, name, args }) => ({ id, name, args })), value: searchAValue }, turnTwo: { tools: turnTwoEvidence.calls.map(({ id, name, args }) => ({ id, name, args })), values: [searchAValue, searchBValue] } }, null, 2)"
