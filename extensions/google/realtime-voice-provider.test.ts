@@ -93,8 +93,12 @@ function requireFirstError(mock: ReturnType<typeof vi.fn>): { message?: string }
   return error as { message?: string };
 }
 
-function requireFirstAudio(mock: ReturnType<typeof vi.fn>): unknown {
-  return requireFirstMockArg(mock, "Google Live audio");
+function requireFirstAudio(mock: ReturnType<typeof vi.fn>): Buffer {
+  const audio = requireFirstMockArg(mock, "Google Live audio");
+  if (!Buffer.isBuffer(audio)) {
+    throw new Error("expected Google Live audio Buffer");
+  }
+  return audio;
 }
 
 function createRealtimeTool(name: string): RealtimeVoiceTool {
