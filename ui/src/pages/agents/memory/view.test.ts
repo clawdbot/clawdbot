@@ -103,6 +103,14 @@ function setDreamAdvancedWaitingSort(sort: DreamingViewState["advancedWaitingSor
 
 function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
   const props: DreamingProps = {
+    access: {
+      canOpenConfig: true,
+      canBackfillDiary: true,
+      canDedupeDreamDiary: true,
+      canResetDiary: true,
+      canResetGroundedShortTerm: true,
+      canRepairDreamingArtifacts: true,
+    },
     viewState,
     active: true,
     selectedAgentId: "main",

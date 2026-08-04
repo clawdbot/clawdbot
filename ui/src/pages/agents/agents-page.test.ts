@@ -184,6 +184,7 @@ describe("AgentsPage gateway lifecycle", () => {
     setPageGateway(page, client, false);
     page.agentsSelectedId = "main";
     page.context = {
+      gateway: gateway(snapshot(client)),
       agents: {
         state: { agentsLoading: false, agentsError: null, agentsList },
         refreshList,

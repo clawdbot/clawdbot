@@ -1298,6 +1298,19 @@ describe("dreaming controller", () => {
     expect(state.dreamDiaryActionLoading).toBe(false);
   });
 
+  it("does not run a write action with read-only operator access", async () => {
+    const { state, request } = createState();
+    state.hello = {
+      type: "hello-ok",
+      protocol: 4,
+      auth: { role: "operator", scopes: ["operator.read"] },
+      features: { methods: ["doctor.memory.backfillDreamDiary"] },
+    };
+
+    await expect(backfillDreamDiary(state)).resolves.toBe(false);
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("runs dream diary actions and reloads state for the selected agent", async () => {
     const { state, request } = createState();
     state.selectedAgentId = "fishing-bot";

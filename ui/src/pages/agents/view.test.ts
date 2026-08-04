@@ -76,6 +76,37 @@ function expectAgentTab(container: Element, text: string): HTMLElement & { disab
 }
 
 describe("renderAgents", () => {
+  it("keeps agent navigation readable while disabling unavailable mutations", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      renderAgents(
+        createProps({
+          access: {
+            canCreateAgent: false,
+            canUpdateConfig: false,
+            canUpdateIdentity: false,
+            canWriteFiles: false,
+            canRunCron: false,
+          },
+        }),
+      ),
+      container,
+    );
+
+    const select = container.querySelector("openclaw-agent-select") as
+      | (HTMLElement & { onCreateAgent: (() => void) | null; updateComplete: Promise<boolean> })
+      | null;
+    await select?.updateComplete;
+    expect(select?.querySelector(".agent-select__label")?.textContent?.trim()).toBe("Beta");
+    expect(select?.onCreateAgent).toBeNull();
+    const setDefault = container.querySelectorAll<HTMLButtonElement>(
+      ".agents-toolbar-actions button",
+    )[1];
+    expect(setDefault?.disabled).toBe(true);
+    container.remove();
+  });
+
   it("opens global Agent defaults before the per-agent tabs", () => {
     const container = document.createElement("div");
     const onOpenAgentDefaults = vi.fn();
@@ -745,6 +776,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",
@@ -791,6 +823,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",
@@ -859,6 +892,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",
@@ -911,6 +945,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",
@@ -963,6 +998,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",
@@ -1014,6 +1050,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",

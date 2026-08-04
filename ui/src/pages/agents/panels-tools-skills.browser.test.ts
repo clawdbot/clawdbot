@@ -10,6 +10,7 @@ installBrowserHistoryIsolation();
 function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>[0]> = {}) {
   return {
     agentId: "main",
+    canUpdateConfig: true,
     configForm: {
       agents: {
         entries: { main: { default: true, tools: { profile: "full" } } },
@@ -481,6 +482,7 @@ describe("agents skills panel (browser)", () => {
     render(
       renderAgentSkills({
         agentId: "main",
+        canUpdateConfig: true,
         report: {
           workspaceDir: "/tmp/workspace",
           managedSkillsDir: "/tmp/skills",
