@@ -4212,6 +4212,41 @@ describe("memory index", () => {
     ).toBe("mock");
   });
 
+  it("recovers the configured primary when the fallback index identity is valid", async () => {
+    const cfg = createCfg({
+      provider: "openai",
+      fallback: "fallback-provider",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    const fields = manager as unknown as {
+      provider: {
+        id: string;
+        embedQuery: (text: string) => Promise<number[]>;
+      } | null;
+    };
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    fields.provider.embedQuery = async () => {
+      throw new Error("primary provider unavailable");
+    };
+
+    await expect(manager.search("alpha")).resolves.toEqual([]);
+    expect(fields.provider?.id).toBe("fallback-provider");
+    await expect(manager.sync({ reason: "test", force: true })).resolves.toBeUndefined();
+    expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+
+    const callsBeforeRecovery = providerCalls.length;
+    await expect(manager.search("alpha")).resolves.not.toStrictEqual([]);
+    expect(providerCalls.slice(callsBeforeRecovery).map((call) => call.provider)).toContain(
+      "openai",
+    );
+    expect(fields.provider?.id).toBe("mock");
+  });
+
   it("uses the query timeout for recovery from a mismatched fallback search", async () => {
     const cfg = createCfg({
       provider: "openai",

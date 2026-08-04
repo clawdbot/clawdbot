@@ -1423,7 +1423,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         !opts?.lexicalOnly &&
         !enteredDuringFallbackInitialization &&
         this.fallbackFrom &&
-        indexIdentity.status !== "valid" &&
         !opts?.signal?.aborted
       ) {
         const recovered = await this.attemptPrimaryProviderRecovery({
@@ -1433,6 +1432,16 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           indexIdentity = this.refreshIndexIdentityDirty({
             providerKeyKnown: this.providerInitialized,
           });
+          if (indexIdentity.status !== "valid") {
+            try {
+              await this.syncAdmitted({ reason: "search", force: true });
+            } catch (err) {
+              log.warn(`memory sync failed (primary-recovery-reindex): ${formatErrorMessage(err)}`);
+            }
+            indexIdentity = this.refreshIndexIdentityDirty({
+              providerKeyKnown: this.providerInitialized,
+            });
+          }
         }
       }
       if (indexIdentity.status !== "valid") {
