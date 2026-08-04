@@ -125,6 +125,10 @@ export async function runSkillWorkshopHistoryScan(params: {
     }
     client = params.gateway.snapshot.client;
   }
+  const requestClient = client;
+  if (!requestClient) {
+    return false;
+  }
   const direction = params.state.result.hasScanned
     ? params.state.result.hasMore
       ? "older"
@@ -133,7 +137,7 @@ export async function runSkillWorkshopHistoryScan(params: {
   params.state.running = true;
   params.state.error = null;
   try {
-    params.state.result = await client.request<SkillWorkshopHistoryScanResult>(
+    params.state.result = await requestClient.request<SkillWorkshopHistoryScanResult>(
       "skills.proposals.historyScan",
       { agentId: params.agentId, direction },
     );
@@ -142,7 +146,7 @@ export async function runSkillWorkshopHistoryScan(params: {
   } catch (error) {
     const scanError = formatErrorMessage(error, { redact: redactToolDetail });
     try {
-      params.state.result = await client.request<SkillWorkshopHistoryScanResult>(
+      params.state.result = await requestClient.request<SkillWorkshopHistoryScanResult>(
         "skills.proposals.historyStatus",
         { agentId: params.agentId },
       );
