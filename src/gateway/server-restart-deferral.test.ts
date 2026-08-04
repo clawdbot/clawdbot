@@ -5,6 +5,11 @@ import {
 } from "../auto-reply/reply/dispatcher-registry.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
+import {
+  getActiveChatSendRunCount,
+  registerChatAbortControllersForRestartDeferral,
+  type ChatAbortControllerEntry,
+} from "./chat-abort.js";
 
 async function flushMicrotasks(count = 10): Promise<void> {
   for (let i = 0; i < count; i += 1) {
@@ -34,6 +39,7 @@ describe("gateway restart deferral", () => {
     vi.restoreAllMocks();
     await flushMicrotasks();
     clearAllDispatchers();
+    registerChatAbortControllersForRestartDeferral(new Map());
   });
 
   it("defers restart while reply delivery is in flight", async () => {
@@ -159,5 +165,68 @@ describe("gateway restart deferral", () => {
 
     expect(deliverCalled).toBe(false);
     expect(getTotalPendingReplies()).toBe(0);
+  });
+
+  // Regression test for OpenClawBot #1689: a webapp/Control UI chat.send run's
+  // reply-dispatcher reservation (getTotalPendingReplies) is released as soon as
+  // reply delivery finishes -- but server-methods/chat.ts still has to persist the
+  // combined reply to session history and broadcast "chat.final" *after* that point
+  // (see the .then() block following dispatchInboundMessage in chat.ts). Before this
+  // fix, a restart-deferral check sampled in that window would see pendingReplies==0
+  // and let the restart fire immediately, killing the process before the reply was
+  // ever written to disk. getActiveChatSendRunCount() (backed by chat.ts's
+  // chatAbortControllers map, which the run only leaves in its own .finally()) must
+  // stay > 0 for the run's true full lifetime, closing that gap.
+  it("keeps the run active via chatAbortControllers after the reply dispatcher goes idle but before persistence completes", async () => {
+    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+    registerChatAbortControllersForRestartDeferral(chatAbortControllers);
+
+    const deliveredReplies: string[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        deliveredReplies.push(payload.text ?? "");
+      },
+    });
+
+    // Mirrors chat.ts: the run is registered in chatAbortControllers *before* the
+    // agent turn starts, and only removed in the outer .finally() once the combined
+    // reply has been persisted and broadcast.
+    const runId = "run-1";
+    chatAbortControllers.set(runId, {
+      controller: new AbortController(),
+      sessionId: "sess-1",
+      sessionKey: "main",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+    });
+
+    const totalActive = () => getTotalPendingReplies() + getActiveChatSendRunCount();
+    expect(totalActive()).toBeGreaterThan(0);
+
+    // Reply generation completes: dispatcher.enqueue -> markComplete -> waitForIdle,
+    // exactly as withReplyDispatcher() does in dispatch-dispatcher.ts's finally block.
+    dispatcher.sendFinalReply({ text: "Configuration updated!" });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    // The old, buggy signal alone now reads idle -- this is the exact moment a
+    // restart used to fire and drop the reply.
+    expect(getTotalPendingReplies()).toBe(0);
+    expect(deliveredReplies).toEqual(["Configuration updated!"]);
+
+    // But the run is not actually done: chat.ts hasn't appended the combined reply
+    // to session history yet (that only happens in its post-dispatch .then()).
+    // getActiveChatSendRunCount() must still report it active.
+    expect(getActiveChatSendRunCount()).toBe(1);
+    expect(totalActive()).toBeGreaterThan(0);
+
+    // Simulate chat.ts's post-dispatch .then(): persist to session history, then
+    // finally() removes the run from chatAbortControllers.
+    const persisted: string[] = [...deliveredReplies];
+    chatAbortControllers.delete(runId);
+
+    expect(persisted).toEqual(["Configuration updated!"]);
+    expect(getActiveChatSendRunCount()).toBe(0);
+    expect(totalActive()).toBe(0);
   });
 });

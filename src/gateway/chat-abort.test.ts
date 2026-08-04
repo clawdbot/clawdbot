@@ -1,7 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   abortChatRunById,
+  getActiveChatSendRunCount,
   isChatStopCommandText,
+  registerChatAbortControllersForRestartDeferral,
   type ChatAbortOps,
   type ChatAbortControllerEntry,
 } from "./chat-abort.js";
@@ -139,5 +141,36 @@ describe("abortChatRunById", () => {
         content: [{ type: "text", text: "streamed text" }],
       }),
     );
+  });
+});
+
+describe("getActiveChatSendRunCount", () => {
+  afterEach(() => {
+    // Reset the module-level registry so other test files (and later tests in
+    // this file) don't observe a map left over from a previous test.
+    registerChatAbortControllersForRestartDeferral(new Map());
+  });
+
+  it("returns 0 before any map is registered for this run", () => {
+    registerChatAbortControllersForRestartDeferral(new Map());
+    expect(getActiveChatSendRunCount()).toBe(0);
+  });
+
+  it("reflects live additions/removals to the registered map", () => {
+    const map = new Map<string, ChatAbortControllerEntry>();
+    registerChatAbortControllersForRestartDeferral(map);
+    expect(getActiveChatSendRunCount()).toBe(0);
+
+    map.set("run-1", createActiveEntry("main"));
+    expect(getActiveChatSendRunCount()).toBe(1);
+
+    map.set("run-2", createActiveEntry("other"));
+    expect(getActiveChatSendRunCount()).toBe(2);
+
+    map.delete("run-1");
+    expect(getActiveChatSendRunCount()).toBe(1);
+
+    map.delete("run-2");
+    expect(getActiveChatSendRunCount()).toBe(0);
   });
 });

@@ -15,7 +15,10 @@ import {
 import type { RuntimeEnv } from "../runtime.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import {
+  registerChatAbortControllersForRestartDeferral,
+  type ChatAbortControllerEntry,
+} from "./chat-abort.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import { isLoopbackHost, resolveGatewayListenHosts } from "./net.js";
@@ -241,6 +244,10 @@ export async function createGatewayRuntimeState(params: {
     const addChatRun = chatRunRegistry.add;
     const removeChatRun = chatRunRegistry.remove;
     const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+    // Feed this instance's map into the restart-deferral active-count signal (see
+    // getActiveChatSendRunCount in chat-abort.ts) so a config-triggered restart
+    // waits for in-flight webapp chat.send runs, not just auto-reply-channel runs.
+    registerChatAbortControllersForRestartDeferral(chatAbortControllers);
     const toolEventRecipients = createToolEventRecipientRegistry();
 
     return {

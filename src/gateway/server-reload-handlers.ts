@@ -23,6 +23,7 @@ import {
 } from "../secrets/runtime.js";
 import { getInspectableTaskRegistrySummary } from "../tasks/task-registry.maintenance.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
+import { getActiveChatSendRunCount } from "./chat-abort.js";
 import type { ChannelKind } from "./config-reload-plan.js";
 import { startGatewayConfigReloader, type GatewayReloadPlan } from "./config-reload.js";
 import { resolveHooksConfig } from "./hooks.js";
@@ -168,12 +169,18 @@ export function createGatewayReloadHandlers(params: {
       const pendingReplies = getTotalPendingReplies();
       const embeddedRuns = getActiveEmbeddedRunCount();
       const activeTasks = getInspectableTaskRegistrySummary().active;
+      // Webapp/Control UI chat.send runs: not covered by pendingReplies, whose
+      // dispatcher goes idle before the reply is persisted to session history.
+      // See chat-abort.ts's getActiveChatSendRunCount for why this is tracked
+      // separately. OpenClawBot #1689.
+      const chatSendRuns = getActiveChatSendRunCount();
       return {
         queueSize,
         pendingReplies,
         embeddedRuns,
         activeTasks,
-        totalActive: queueSize + pendingReplies + embeddedRuns + activeTasks,
+        chatSendRuns,
+        totalActive: queueSize + pendingReplies + embeddedRuns + activeTasks + chatSendRuns,
       };
     };
     const formatActiveDetails = (counts: ReturnType<typeof getActiveCounts>) => {
@@ -189,6 +196,9 @@ export function createGatewayReloadHandlers(params: {
       }
       if (counts.activeTasks > 0) {
         details.push(`${counts.activeTasks} task run(s)`);
+      }
+      if (counts.chatSendRuns > 0) {
+        details.push(`${counts.chatSendRuns} chat.send run(s)`);
       }
       return details;
     };

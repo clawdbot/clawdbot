@@ -39,6 +39,7 @@ import {
 import { runSetupWizard } from "../wizard/setup.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
+import { getActiveChatSendRunCount } from "./chat-abort.js";
 import { closeMcpLoopbackServer } from "./mcp-http.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
 import { createChannelManager } from "./server-channels.js";
@@ -272,7 +273,11 @@ export async function startGatewayServer(
       getTotalQueueSize() +
       getTotalPendingReplies() +
       getActiveEmbeddedRunCount() +
-      getInspectableTaskRegistrySummary().active,
+      getInspectableTaskRegistrySummary().active +
+      // Webapp/Control UI chat.send runs (see chat-abort.ts): not covered by
+      // getTotalPendingReplies(), whose dispatcher goes idle before the reply is
+      // persisted to session history. OpenClawBot #1689.
+      getActiveChatSendRunCount(),
   );
   // Unconditional startup migration: seed gateway.controlUi.allowedOrigins for existing
   // non-loopback installs that upgraded to v2026.2.26+ without required origins.

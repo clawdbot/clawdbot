@@ -127,3 +127,28 @@ export function abortChatRunsForSessionKey(
   }
   return { aborted: runIds.length > 0, runIds };
 }
+
+// --- Restart-deferral integration -------------------------------------------------
+// The gateway's restart-deferral logic (src/infra/restart.ts, server.impl.ts,
+// server-reload-handlers.ts) sums several "is anything active" signals before a
+// config-triggered SIGUSR1 restart is allowed to fire. Webapp/Control UI chat.send
+// runs were missing from that sum: their entry lives in `chatAbortControllers` for
+// the run's *entire* lifetime (RPC accept -> agent turn -> transcript persistence in
+// server-methods/chat.ts's post-run .then()), which is strictly wider than the reply
+// dispatcher's own "pending" signal (getTotalPendingReplies) -- that dispatcher is
+// marked idle as soon as reply delivery finishes, *before* the combined reply is
+// appended to session history. Counting this map closes the race where a restart
+// could land in that gap and drop an already-generated reply that was never persisted.
+let activeChatAbortControllersRef: Map<string, ChatAbortControllerEntry> | undefined;
+
+/** Registered once per gateway instance from server-runtime-state.ts. */
+export function registerChatAbortControllersForRestartDeferral(
+  map: Map<string, ChatAbortControllerEntry>,
+): void {
+  activeChatAbortControllersRef = map;
+}
+
+/** Number of chat.send (webapp/Control UI) runs currently in flight. */
+export function getActiveChatSendRunCount(): number {
+  return activeChatAbortControllersRef?.size ?? 0;
+}
