@@ -285,7 +285,7 @@ openclaw-custodian-page {
   justify-content: flex-start;
 }
 
-.custodian__wizard-cancel {
+.custodian__wizard-step .btn {
   min-height: 44px;
 }
 
