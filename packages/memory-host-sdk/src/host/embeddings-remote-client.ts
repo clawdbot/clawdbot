@@ -11,6 +11,8 @@ import type { SsrFPolicy } from "./ssrf-policy.js";
 /** Provider id used for remote embedding auth and config lookup. */
 export type RemoteEmbeddingProviderId = string;
 
+export const OPENAI_EMBEDDINGS_API = "openai-embeddings";
+
 /** Attribution headers for native OpenAI embedding calls. */
 function resolveOpenClawAttributionHeaders(): Record<string, string> {
   const version = typeof process !== "undefined" ? process.env.OPENCLAW_VERSION?.trim() : undefined;
@@ -53,6 +55,7 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
           provider: params.provider,
           cfg: params.options.config,
           agentDir: params.options.agentDir,
+          modelApi: OPENAI_EMBEDDINGS_API,
         }),
         params.provider,
       );
