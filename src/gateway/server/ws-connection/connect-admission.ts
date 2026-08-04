@@ -25,6 +25,7 @@ import {
   isBrowserOperatorUiClient,
   isOperatorUiClient,
 } from "../../../utils/message-channel.js";
+import { resolveClientIp } from "../../net.js";
 import { checkBrowserOrigin, normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { parseGatewayRole } from "../../role-policy.js";
 import { formatForLog } from "../../ws-log.js";
@@ -77,6 +78,8 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
     isWebchatConnect,
     frame,
     sendFrame,
+    trustedProxies,
+    allowRealIpFallback,
   } = context;
 
   if (isStartupPending?.()) {
@@ -197,13 +200,23 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
   ) {
     const hostHeaderOriginFallbackEnabled =
       configSnapshot.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
+    // Use the trusted-proxy-aware effective client address, not the raw TCP
+    // peer: behind a reverse proxy, remoteAddr is the proxy's private address,
+    // which would let a public browser satisfy the private-client condition.
+    const effectiveClientIp = resolveClientIp({
+      remoteAddr,
+      forwardedFor: context.handler.forwardedFor,
+      realIp: context.handler.realIp,
+      trustedProxies,
+      allowRealIpFallback,
+    });
     const originCheck = checkBrowserOrigin({
       requestHost,
       origin: requestOrigin,
       allowedOrigins: configSnapshot.gateway?.controlUi?.allowedOrigins,
       allowHostHeaderOriginFallback: hostHeaderOriginFallbackEnabled,
       isLocalClient,
-      clientIp: remoteAddr,
+      clientIp: effectiveClientIp,
     });
     if (!originCheck.ok) {
       const errorMessage =

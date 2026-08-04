@@ -12,6 +12,7 @@ import {
   isLoopbackHost,
   normalizeHostHeader,
   resolveHostName,
+  resolveRequestClientIp,
 } from "./net.js";
 
 type OriginCheckResult =
@@ -141,11 +142,16 @@ export function resolveAcceptedBrowserOrigin(params: {
   if (!origin) {
     return undefined;
   }
+  const trustedProxies = params.cfg?.gateway?.trustedProxies ?? [];
+  const allowRealIpFallback = params.cfg?.gateway?.allowRealIpFallback === true;
   return checkBrowserOrigin({
     ...policy,
     origin,
-    isLocalClient: isLocalDirectRequest(params.req),
-    clientIp: params.req.socket?.remoteAddress,
+    isLocalClient: isLocalDirectRequest(params.req, trustedProxies, allowRealIpFallback),
+    // Use the proxy-aware effective client IP, not the raw TCP peer: behind a
+    // reverse proxy the socket peer is the proxy's address, which would let a
+    // public browser satisfy the private-client same-origin condition.
+    clientIp: resolveRequestClientIp(params.req, trustedProxies, allowRealIpFallback),
   }).ok
     ? origin
     : undefined;
@@ -170,9 +176,10 @@ function isTrustedSameOriginHost(
   // it cannot reach a private host directly and is setting both Host and
   // Origin to a private address it does not control. A client already on a
   // private network (LAN/Tailnet) has legitimate same-origin access.
-  const isPrivateHost = net.isIP(hostname) !== 0
-    ? isPrivateOrLoopbackIpAddress(hostname)
-    : hostname.endsWith(".local") || hostname.endsWith(".ts.net");
+  const isPrivateHost =
+    net.isIP(hostname) !== 0
+      ? isPrivateOrLoopbackIpAddress(hostname)
+      : hostname.endsWith(".local") || hostname.endsWith(".ts.net");
   if (!isPrivateHost) {
     return false;
   }

@@ -19,7 +19,7 @@ import {
   resolveMcpLoopbackClientGrant,
   type McpLoopbackRequestContext,
 } from "./mcp-grant-store.js";
-import { isLoopbackAddress } from "./net.js";
+import { isLocalDirectRequest, resolveRequestClientIp } from "./net.js";
 import { checkBrowserOrigin } from "./origin-check.js";
 
 const MAX_MCP_BODY_BYTES = 1_048_576;
@@ -95,7 +95,11 @@ function normalizeMcpBooleanHeader(value: string | undefined): boolean | undefin
   return trimmed ? isTruthyEnvValue(trimmed) : undefined;
 }
 
-function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
+function rejectsBrowserLoopbackRequest(
+  req: IncomingMessage,
+  trustedProxies: string[],
+  allowRealIpFallback: boolean,
+): boolean {
   const origin = getHeader(req, "origin");
   if (!origin) {
     // No Origin header → not a browser request. Native MCP clients
@@ -111,11 +115,14 @@ function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
   // local. A blanket cross-site early-return here would block that
   // flow even with a valid bearer; the helper's isLocalClient +
   // isLoopbackHost gating is the authoritative check.
+  // Use proxy-aware client IP: behind a reverse proxy the raw socket peer is
+  // the proxy's loopback address, which would let a public browser satisfy
+  // the local-client condition and bypass the origin boundary.
   return !checkBrowserOrigin({
     requestHost: getHeader(req, "host"),
     origin,
-    isLocalClient: isLoopbackAddress(req.socket?.remoteAddress),
-    clientIp: req.socket?.remoteAddress,
+    isLocalClient: isLocalDirectRequest(req, trustedProxies, allowRealIpFallback),
+    clientIp: resolveRequestClientIp(req, trustedProxies, allowRealIpFallback),
   }).ok;
 }
 
@@ -160,6 +167,8 @@ export function validateMcpLoopbackRequest(params: {
   res: ServerResponse;
   ownerToken: string;
   nonOwnerToken: string;
+  trustedProxies: string[];
+  allowRealIpFallback: boolean;
   onSseResponse?: (res: ServerResponse) => void;
 }): McpLoopbackRequestAuth | null {
   let url: URL;
@@ -193,7 +202,9 @@ export function validateMcpLoopbackRequest(params: {
     // Origin validation first (matches the POST path): a browser loopback request is
     // rejected before bearer auth, so the local-loopback Origin boundary holds even for
     // unauthenticated browser requests.
-    if (rejectsBrowserLoopbackRequest(params.req)) {
+    if (
+      rejectsBrowserLoopbackRequest(params.req, params.trustedProxies, params.allowRealIpFallback)
+    ) {
       params.res.writeHead(403, { "Content-Type": "application/json" });
       params.res.end(JSON.stringify({ error: "forbidden" }));
       return null;
@@ -242,7 +253,9 @@ export function validateMcpLoopbackRequest(params: {
     return null;
   }
 
-  if (rejectsBrowserLoopbackRequest(params.req)) {
+  if (
+    rejectsBrowserLoopbackRequest(params.req, params.trustedProxies, params.allowRealIpFallback)
+  ) {
     logMcpLoopbackHttp("reject", {
       reason: "forbidden_origin",
       method: params.req.method ?? "",
