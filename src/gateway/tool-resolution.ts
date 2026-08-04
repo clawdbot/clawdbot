@@ -1,9 +1,5 @@
 // Gateway-scoped tool resolution for HTTP and loopback tool surfaces.
-import {
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { createOpenClawCodingTools } from "../agents/agent-tools.js";
 import { filterToolsByMessageProvider } from "../agents/agent-tools.message-provider-policy.js";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
@@ -218,8 +214,6 @@ export function resolveGatewayScopedTools(params: {
   const workspaceDir =
     params.workspaceDir?.trim() ||
     resolveAgentWorkspaceDir(params.cfg, agentId ?? resolveDefaultAgentId(params.cfg));
-  const agentDir =
-    params.agentDir ?? resolveAgentDir(params.cfg, agentId ?? resolveDefaultAgentId(params.cfg));
   const explicitDenylist = collectExplicitDenylist([
     profilePolicy,
     providerProfilePolicy,
@@ -281,7 +275,7 @@ export function resolveGatewayScopedTools(params: {
     disablePluginTools: params.disablePluginTools,
     wrapBeforeToolCallHook: false,
     config: params.cfg,
-    agentDir,
+    agentDir: params.agentDir,
     authProfileStore: params.authProfileStore,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
