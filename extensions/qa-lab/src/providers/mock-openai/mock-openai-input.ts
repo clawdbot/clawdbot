@@ -404,7 +404,7 @@ export function countImageInputs(value: unknown): number {
   return count;
 }
 
-export function extractLatestImageUserTurn(input: ResponsesInputItem[]) {
+function extractLatestImageUserTurn(input: ResponsesInputItem[]) {
   const latestUserIndex = findLastUserIndex(input);
   if (latestUserIndex < 0) {
     return { text: "", imageInputCount: 0 };
@@ -426,6 +426,28 @@ export function extractLatestImageUserTurn(input: ResponsesInputItem[]) {
       .filter(Boolean)
       .join("\n"),
     imageInputCount,
+  };
+}
+
+export function extractCurrentImageRequest(
+  input: ResponsesInputItem[],
+  body: Record<string, unknown>,
+) {
+  // Match only the current request. Historical image prompts must not override
+  // a later non-image turn just because they remain in transcript context.
+  const imageUserTurn = extractLatestImageUserTurn(input);
+  if (imageUserTurn.imageInputCount === 0) {
+    return imageUserTurn;
+  }
+  const developerInstructions = input
+    .filter((item) => item.role === "developer" && Array.isArray(item.content))
+    .map((item) => extractInputText(item.content as unknown[]))
+    .filter(Boolean);
+  return {
+    text: [extractInstructionsText(body), ...developerInstructions, imageUserTurn.text]
+      .filter(Boolean)
+      .join("\n"),
+    imageInputCount: imageUserTurn.imageInputCount,
   };
 }
 

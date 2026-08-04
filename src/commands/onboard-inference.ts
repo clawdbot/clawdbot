@@ -5,6 +5,11 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import {
+  formatCliBackendVersionAdvisory,
+  resolveCliBackendVersionGuidance,
+} from "../agents/cli-backend-version-support.js";
+import { resolveCliBackendLiveSessionRequirement } from "../agents/cli-backends.js";
+import {
   readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
   readGeminiCliCredentialsCached,
@@ -45,6 +50,7 @@ type DetectInferenceBackendsDeps = {
   readGeminiCliCredentials?: () => { type: string } | null;
   detectCodexLoginState?: typeof detectCodexLoginState;
   randomInt?: (maxExclusive: number) => number;
+  resolveClaudeLiveSessionRequirement?: typeof resolveCliBackendLiveSessionRequirement;
 };
 
 type DetectInferenceBackendsOptions = {
@@ -224,6 +230,13 @@ export async function detectInferenceBackends(
   const cliCandidates: InferenceBackendCandidate[] = [];
   const subscriptionPromotionEligibleCliKinds = new Set<InferenceBackendKind>();
   if (claudeProbe.found && !claudeProbe.timedOut) {
+    const liveSessionRequirement =
+      (
+        options.deps?.resolveClaudeLiveSessionRequirement ?? resolveCliBackendLiveSessionRequirement
+      )("claude-cli") ?? undefined;
+    const versionGuidance = liveSessionRequirement
+      ? resolveCliBackendVersionGuidance(claudeProbe.version, liveSessionRequirement)
+      : { status: "unknown" as const };
     const claudeCredential = readClaude();
     const credentials = detectCliCredentialState({
       probe: claudeProbe,
@@ -233,11 +246,21 @@ export async function detectInferenceBackends(
     if (credentials === true && claudeCredential?.type === "oauth") {
       subscriptionPromotionEligibleCliKinds.add("claude-cli");
     }
+    const detail = describeCliDetail(credentials, "run `claude auth login`");
+    // Only the live init record can prove capability support. Keep backports and
+    // wrappers selectable here even when their version predates the known release.
     cliCandidates.push({
       kind: "claude-cli",
       modelRef: CLAUDE_CLI_DEFAULT_MODEL_REF,
       label: "Claude Code",
-      detail: describeCliDetail(credentials, "run `claude auth login`"),
+      detail:
+        versionGuidance.status === "below-known-floor" && liveSessionRequirement
+          ? `${detail}; ${formatCliBackendVersionAdvisory({
+              label: "Claude Code",
+              requirement: liveSessionRequirement,
+              version: versionGuidance.version,
+            })}`
+          : detail,
       ...(credentials === undefined ? {} : { credentials }),
     });
   }

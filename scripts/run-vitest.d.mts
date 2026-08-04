@@ -41,6 +41,14 @@ export function resolveMissingExplicitTestFiles(
   fsImpl?: VitestFs,
 ): string[];
 export function resolveImplicitVitestArgs(argv: string[], cwd?: string): string[];
+export function resolveBoundedVitestInvocations(
+  argv: string[],
+  options?: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    gatewayServerTargetChunks?: string[][];
+  },
+): string[][];
 export function installVitestNoOutputWatchdog(params: {
   streams?: Array<{ on(event: string, listener: (...args: unknown[]) => void): unknown } | null>;
   timeoutMs: number | null;
