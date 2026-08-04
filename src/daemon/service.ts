@@ -122,10 +122,10 @@ function isMissingProgramPath(value: string | undefined): boolean {
 function collectGatewayServiceStartRepairIssues(
   state: GatewayServiceState,
   expectedPort?: number,
-): Promise<GatewayServiceStartRepairIssue[]> {
+): GatewayServiceStartRepairIssue[] {
   const command = state.command;
   if (!state.loaded || !command) {
-    return Promise.resolve([]);
+    return [];
   }
   const issues: GatewayServiceStartRepairIssue[] = [];
   const serviceVersion = command.environment?.OPENCLAW_SERVICE_VERSION?.trim();
@@ -166,37 +166,34 @@ function collectGatewayServiceStartRepairIssues(
   // edits .env between restarts cannot influence systemd until the env file
   // is regenerated. Detect that drift so the repair flow restages instead of
   // silently restarting with stale secrets.
-  const driftCheck = collectManagedEnvDrift(state);
-  return driftCheck.then((driftedKeys) => {
-    if (driftedKeys.length > 0) {
-      issues.push({
-        code: "managed-env-mismatch",
-        message: `managed env keys changed in ~/.openclaw/.env and need a re-stage before restart: ${driftedKeys.join(", ")}`,
-      });
-    }
-    return issues;
-  });
+  const driftedKeys = collectManagedEnvDrift(state);
+  if (driftedKeys.length > 0) {
+    issues.push({
+      code: "managed-env-mismatch",
+      message: `managed env keys changed in ~/.openclaw/.env and need a re-stage before restart: ${driftedKeys.join(", ")}`,
+    });
+  }
+  return issues;
 }
 
-async function collectManagedEnvDrift(state: GatewayServiceState): Promise<string[]> {
+function collectManagedEnvDrift(state: GatewayServiceState): string[] {
   const command = state.command;
-  if (!command) {
+  if (!command?.environment) {
     return [];
   }
-  const inlineEnvironment: Record<string, string | undefined> = {};
-  if (command.environment) {
-    Object.assign(inlineEnvironment, command.environment);
-  }
   // The unit file is the only systemd-restage path we need to consider for
-  // managed-key drift on Linux. Non-systemd platforms (launchd, schtasks) own
-  // their own environment files; we keep the drift check conservative and
-  // surface it only when an installed service reads a generated env file.
+  // managed-key drift on Linux. Launchd writes env values to a per-label
+  // .env file in the launch-agent env directory (different path/format), and
+  // schtasks handles environment via Windows task scheduler. A follow-up can
+  // add equivalent launchd drift detection if needed; this check matches the
+  // systemd-specific invariant in issue #118503.
   if (!command.sourcePath?.endsWith(".service")) {
     return [];
   }
   const stateDir = resolveStateDir(state.env as NodeJS.ProcessEnv);
   return collectSystemdManagedEnvDotenvDrift({
-    inlineEnvironment,
+    commandEnvironment: command.environment,
+    environmentValueSources: command.environmentValueSources,
     stateDir,
   });
 }
@@ -208,7 +205,7 @@ export async function inspectGatewayServiceStartRepair(
   expectedPort?: number,
 ): Promise<{ state: GatewayServiceState; issues: GatewayServiceStartRepairIssue[] }> {
   const state = await readGatewayServiceState(service, args);
-  const issues = await collectGatewayServiceStartRepairIssues(state, expectedPort);
+  const issues = collectGatewayServiceStartRepairIssues(state, expectedPort);
   return { state, issues };
 }
 

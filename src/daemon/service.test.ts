@@ -510,12 +510,9 @@ describe("startGatewayService", () => {
     const envSnapshot = captureEnv(["HOME", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
     try {
       await fs.mkdir(stateDir, { recursive: true });
-      // .env holds the post-edit value; the env file still has the stale one.
+      // .env holds the post-edit value; the installed unit's file-backed value
+      // (provided via the mock command environment) still has the stale one.
       await fs.writeFile(path.join(stateDir, ".env"), "HASS_TOKEN=new-secret\n", {
-        encoding: "utf8",
-        mode: 0o600,
-      });
-      await fs.writeFile(path.join(stateDir, "gateway.systemd.env"), "HASS_TOKEN=stale-secret\n", {
         encoding: "utf8",
         mode: 0o600,
       });

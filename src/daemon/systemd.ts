@@ -1703,41 +1703,61 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
 }
 
 /**
- * Returns managed keys whose state-directory .env value differs from the value
- * last written to the generated systemd environment file. The drift means a
- * subsequent `openclaw gateway restart` (or any restage path) must regenerate
- * the env file before systemd picks up the change. Keys resolved through
- * literal shell references at staging time (e.g. `${SECRET}`) are skipped:
- * those are intentionally unresolved in both stores.
+ * Returns managed keys whose state-directory .env value differs from the
+ * file-backed value in the installed unit's environment. The installed values
+ * come from the unit's actual EnvironmentFile sources (parsed by
+ * readSystemdServiceExecStart), not a derived canonical filename, so custom,
+ * relative, and multiple EnvironmentFile entries are correctly compared. Keys
+ * resolved through literal shell references in .env (e.g. `${SECRET}`) are
+ * skipped: those are intentionally unresolved in both stores. Both dotenv and
+ * command-environment keys are normalized to uppercase with last-wins
+ * precedence before comparison so case-variant spellings are matched.
  */
-export async function collectSystemdManagedEnvDotenvDrift(params: {
-  inlineEnvironment: Record<string, string | undefined>;
+export function collectSystemdManagedEnvDotenvDrift(params: {
+  commandEnvironment: Record<string, string | undefined>;
+  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
   stateDir: string;
-}): Promise<string[]> {
-  const managedKeys = readManagedServiceEnvKeysFromEnvironment(params.inlineEnvironment);
+}): string[] {
+  const managedKeys = readManagedServiceEnvKeysFromEnvironment(params.commandEnvironment);
   if (managedKeys.size === 0) {
     return [];
   }
   const { entries: dotenvEntries, skippedShellReferenceKeys } = readStateDirDotEnvFromStateDir(
     params.stateDir,
   );
+  // Normalize dotenv entries to uppercase with last-wins precedence so a
+  // case-variant key in .env (e.g. hass_token) matches its managed uppercase
+  // spelling (HASS_TOKEN).
+  const normalizedDotenv: Record<string, string> = {};
+  for (const [rawKey, rawValue] of Object.entries(dotenvEntries)) {
+    const normalized = normalizeSystemdEnvironmentKey(rawKey);
+    if (normalized) {
+      normalizedDotenv[normalized] = rawValue;
+    }
+  }
   const skipped = new Set(
     skippedShellReferenceKeys.flatMap((key) => {
       const normalized = normalizeSystemdEnvironmentKey(key);
       return normalized ? [normalized] : [];
     }),
   );
-  const envFilePath = resolveSystemdEnvironmentFilePath({
-    stateDir: params.stateDir,
-    environment: params.inlineEnvironment,
-  });
-  let envFileEntries: Record<string, string> = {};
-  try {
-    const fromFile = await readSystemdEnvironmentFile(envFilePath);
-    envFileEntries = fromFile.environment;
-  } catch {
-    // Env file missing means no prior staging — treat as full drift if the
-    // state-directory .env has any managed key.
+  // Build a normalized map of file-backed values from the installed unit's
+  // environment. These are the effective values from the unit's actual
+  // EnvironmentFile sources — not a derived canonical filename — so custom,
+  // relative, or multiple EnvironmentFile entries are correctly compared.
+  const fileBackedEnv: Record<string, string> = {};
+  for (const [rawKey, rawValue] of Object.entries(params.commandEnvironment)) {
+    if (typeof rawValue !== "string" || !rawValue.trim()) {
+      continue;
+    }
+    const source = readEnvironmentValueSource(params.environmentValueSources, rawKey);
+    if (!hasEnvironmentFileSource(source)) {
+      continue;
+    }
+    const normalized = normalizeSystemdEnvironmentKey(rawKey);
+    if (normalized) {
+      fileBackedEnv[normalized] = rawValue;
+    }
   }
   const drifted: string[] = [];
   for (const key of managedKeys) {
@@ -1745,8 +1765,16 @@ export async function collectSystemdManagedEnvDotenvDrift(params: {
     if (!normalized || skipped.has(normalized)) {
       continue;
     }
-    const dotenvValue = dotenvEntries[normalized];
-    const envFileValue = envFileEntries[normalized];
+    // Skip managed keys that are inline-only (Environment= directive). Inline
+    // values are regenerated from the install plan, not from .env, so they are
+    // outside the env-file drift invariant. Only file-backed keys (source is
+    // "file" or "inline-and-file") participate in drift detection.
+    const source = readEnvironmentValueSource(params.environmentValueSources, normalized);
+    if (source && !hasEnvironmentFileSource(source)) {
+      continue;
+    }
+    const dotenvValue = normalizedDotenv[normalized];
+    const envFileValue = fileBackedEnv[normalized];
     if (dotenvValue === undefined) {
       // Managed key absent from current .env — leave to existing install path.
       continue;

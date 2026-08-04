@@ -2236,14 +2236,13 @@ describe("stageSystemdService", () => {
 
 describe("collectSystemdManagedEnvDotenvDrift (openclaw#118503)", () => {
   async function withDriftFixture(
-    run: (context: { stateDir: string; envFilePath: string }) => Promise<void>,
+    run: (context: { stateDir: string }) => Promise<void>,
   ): Promise<void> {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-drift-"));
     const stateDir = path.join(tempRoot, "state");
-    const envFilePath = path.join(stateDir, "gateway.systemd.env");
     await fs.mkdir(stateDir, { recursive: true });
     try {
-      await run({ stateDir, envFilePath });
+      await run({ stateDir });
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
@@ -2256,19 +2255,15 @@ describe("collectSystemdManagedEnvDotenvDrift (openclaw#118503)", () => {
     });
   }
 
-  async function writeEnvFile(envFilePath: string, lines: string[]): Promise<void> {
-    await fs.writeFile(envFilePath, lines.join("\n") + "\n", {
-      encoding: "utf8",
-      mode: 0o600,
-    });
-  }
-
-  it("returns no drift when state .env matches the env file", async () => {
-    await withDriftFixture(async ({ stateDir, envFilePath }) => {
+  it("returns no drift when state .env matches the file-backed command value", async () => {
+    await withDriftFixture(async ({ stateDir }) => {
       await writeDotenv(stateDir, ["HASS_TOKEN=stale-or-fresh-token"]);
-      await writeEnvFile(envFilePath, ["HASS_TOKEN=stale-or-fresh-token"]);
-      const drifted = await collectSystemdManagedEnvDotenvDrift({
-        inlineEnvironment: { OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "HASS_TOKEN" },
+      const drifted = collectSystemdManagedEnvDotenvDrift({
+        commandEnvironment: {
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "HASS_TOKEN",
+          HASS_TOKEN: "stale-or-fresh-token",
+        },
+        environmentValueSources: { HASS_TOKEN: "file" },
         stateDir,
       });
       expect(drifted).toEqual([]);
@@ -2276,13 +2271,17 @@ describe("collectSystemdManagedEnvDotenvDrift (openclaw#118503)", () => {
   });
 
   it("returns the drifted managed key when .env has been edited", async () => {
-    await withDriftFixture(async ({ stateDir, envFilePath }) => {
+    await withDriftFixture(async ({ stateDir }) => {
       await writeDotenv(stateDir, ["HASS_TOKEN=edited-token"]);
-      // Env file still holds the pre-edit value, simulating a restart that
-      // happened after install but before the .env change took effect.
-      await writeEnvFile(envFilePath, ["HASS_TOKEN=stale-or-fresh-token"]);
-      const drifted = await collectSystemdManagedEnvDotenvDrift({
-        inlineEnvironment: { OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "HASS_TOKEN" },
+      // The installed unit's file-backed value still holds the pre-edit value,
+      // simulating a restart that happened after install but before the .env
+      // change took effect.
+      const drifted = collectSystemdManagedEnvDotenvDrift({
+        commandEnvironment: {
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "HASS_TOKEN",
+          HASS_TOKEN: "stale-or-fresh-token",
+        },
+        environmentValueSources: { HASS_TOKEN: "file" },
         stateDir,
       });
       expect(drifted).toEqual(["HASS_TOKEN"]);
@@ -2290,11 +2289,14 @@ describe("collectSystemdManagedEnvDotenvDrift (openclaw#118503)", () => {
   });
 
   it("ignores managed keys absent from current .env", async () => {
-    await withDriftFixture(async ({ stateDir, envFilePath }) => {
+    await withDriftFixture(async ({ stateDir }) => {
       await writeDotenv(stateDir, ["# operator comment", "OTHER_KEY=set"]);
-      await writeEnvFile(envFilePath, ["HASS_TOKEN=stale-or-fresh-token"]);
-      const drifted = await collectSystemdManagedEnvDotenvDrift({
-        inlineEnvironment: { OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "HASS_TOKEN" },
+      const drifted = collectSystemdManagedEnvDotenvDrift({
+        commandEnvironment: {
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "HASS_TOKEN",
+          HASS_TOKEN: "stale-or-fresh-token",
+        },
+        environmentValueSources: { HASS_TOKEN: "file" },
         stateDir,
       });
       expect(drifted).toEqual([]);
@@ -2302,39 +2304,99 @@ describe("collectSystemdManagedEnvDotenvDrift (openclaw#118503)", () => {
   });
 
   it("ignores unresolved shell-reference values", async () => {
-    await withDriftFixture(async ({ stateDir, envFilePath }) => {
+    await withDriftFixture(async ({ stateDir }) => {
       // HASS_TOKEN in .env is a literal shell reference (e.g. SecretRef-style),
       // so it is intentionally skipped rather than flagged as drift.
       await writeDotenv(stateDir, ['HASS_TOKEN="${SECRET_REF:hass:token}"']);
-      await writeEnvFile(envFilePath, ["HASS_TOKEN=previous-value"]);
-      const drifted = await collectSystemdManagedEnvDotenvDrift({
-        inlineEnvironment: { OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "HASS_TOKEN" },
+      const drifted = collectSystemdManagedEnvDotenvDrift({
+        commandEnvironment: {
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "HASS_TOKEN",
+          HASS_TOKEN: "previous-value",
+        },
+        environmentValueSources: { HASS_TOKEN: "file" },
         stateDir,
       });
       expect(drifted).toEqual([]);
     });
   });
 
-  it("returns no drift when the inline managed-keys list is empty", async () => {
-    await withDriftFixture(async ({ stateDir, envFilePath }) => {
-      await writeDotenv(stateDir, ["HASS_TOKEN=edited-token"]);
-      await writeEnvFile(envFilePath, ["HASS_TOKEN=stale-or-fresh-token"]);
-      const drifted = await collectSystemdManagedEnvDotenvDrift({
-        inlineEnvironment: {},
-        stateDir,
-      });
-      expect(drifted).toEqual([]);
-    });
-  });
-
-  it("handles a missing env file as full drift if .env has managed keys", async () => {
+  it("returns no drift when the managed-keys list is empty", async () => {
     await withDriftFixture(async ({ stateDir }) => {
       await writeDotenv(stateDir, ["HASS_TOKEN=edited-token"]);
-      const drifted = await collectSystemdManagedEnvDotenvDrift({
-        inlineEnvironment: { OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "HASS_TOKEN" },
+      const drifted = collectSystemdManagedEnvDotenvDrift({
+        commandEnvironment: { HASS_TOKEN: "stale-or-fresh-token" },
+        environmentValueSources: { HASS_TOKEN: "file" },
+        stateDir,
+      });
+      expect(drifted).toEqual([]);
+    });
+  });
+
+  it("detects drift when the file-backed value is absent (no prior staging)", async () => {
+    await withDriftFixture(async ({ stateDir }) => {
+      await writeDotenv(stateDir, ["HASS_TOKEN=edited-token"]);
+      // No file-backed value in the command environment means no prior
+      // staging wrote the env file — treat as full drift.
+      const drifted = collectSystemdManagedEnvDotenvDrift({
+        commandEnvironment: { OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "HASS_TOKEN" },
+        environmentValueSources: {},
         stateDir,
       });
       expect(drifted).toEqual(["HASS_TOKEN"]);
+    });
+  });
+
+  it("normalizes case-variant .env keys before comparison (openclaw#118503 P2)", async () => {
+    await withDriftFixture(async ({ stateDir }) => {
+      // .env uses lowercase spelling; the managed key and command environment
+      // use uppercase. The drift detector must normalize both before comparing.
+      await writeDotenv(stateDir, ["hass_token=edited-token"]);
+      const drifted = collectSystemdManagedEnvDotenvDrift({
+        commandEnvironment: {
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "HASS_TOKEN",
+          HASS_TOKEN: "stale-or-fresh-token",
+        },
+        environmentValueSources: { HASS_TOKEN: "file" },
+        stateDir,
+      });
+      expect(drifted).toEqual(["HASS_TOKEN"]);
+    });
+  });
+
+  it("compares against the installed unit's file-backed value, not a derived file (openclaw#118503 P1)", async () => {
+    await withDriftFixture(async ({ stateDir }) => {
+      await writeDotenv(stateDir, ["HASS_TOKEN=edited-token"]);
+      // The command environment carries the value from the unit's actual
+      // EnvironmentFile source (e.g. a custom path), not the canonical
+      // gateway.systemd.env. The drift detector must compare against this
+      // value, not re-read a derived canonical file.
+      const drifted = collectSystemdManagedEnvDotenvDrift({
+        commandEnvironment: {
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "HASS_TOKEN",
+          HASS_TOKEN: "stale-or-fresh-token",
+        },
+        environmentValueSources: { HASS_TOKEN: "inline-and-file" },
+        stateDir,
+      });
+      expect(drifted).toEqual(["HASS_TOKEN"]);
+    });
+  });
+
+  it("ignores inline-only managed keys that have no file-backed source", async () => {
+    await withDriftFixture(async ({ stateDir }) => {
+      await writeDotenv(stateDir, ["HASS_TOKEN=edited-token"]);
+      // HASS_TOKEN is inline-only (Environment= directive), not file-backed.
+      // Inline values are regenerated from the install plan, not from .env, so
+      // they are outside the drift invariant.
+      const drifted = collectSystemdManagedEnvDotenvDrift({
+        commandEnvironment: {
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "HASS_TOKEN",
+          HASS_TOKEN: "stale-or-fresh-token",
+        },
+        environmentValueSources: { HASS_TOKEN: "inline" },
+        stateDir,
+      });
+      expect(drifted).toEqual([]);
     });
   });
 });
