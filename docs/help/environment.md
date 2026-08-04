@@ -181,9 +181,11 @@ OpenClaw also injects context markers into spawned child processes:
 - `OPENCLAW_SHELL=acp-client`: set for `openclaw acp client` when it spawns the ACP bridge process.
 - `OPENCLAW_SHELL=tui-local`: set for local TUI `!` shell commands.
 - `OPENCLAW_CLI=1`: set for child processes spawned by the CLI entry point.
+- `AI_AGENT=openclaw`: defaulted for OpenClaw-managed child processes when the inherited value is missing or blank. A nonblank caller value is preserved.
 
 These are runtime markers (not required user config). They can be used in shell/profile logic
-to apply context-specific rules.
+to apply context-specific rules. `AI_AGENT` is advisory metadata, not an authorization,
+sandbox, policy, or trust signal.
 
 ## UI env vars
 
