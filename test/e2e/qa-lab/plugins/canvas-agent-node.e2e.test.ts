@@ -208,6 +208,12 @@ describe("Canvas agent tool over a paired Linux node", () => {
             }),
           }),
         ]);
+        setActivePluginRegistry(
+          registry.registry,
+          "canvas-agent-node-e2e",
+          "default",
+          state.workspaceDir,
+        );
         gateway = await startGatewayServer(port, {
           bind: "loopback",
           auth: { mode: "token", token: gatewayToken },
@@ -234,12 +240,6 @@ describe("Canvas agent tool over a paired Linux node", () => {
           requestTimeoutMs: 60_000,
           timeoutMs: 60_000,
         });
-        setActivePluginRegistry(
-          registry.registry,
-          "canvas-agent-node-e2e",
-          "default",
-          state.workspaceDir,
-        );
         const nodeId = nodeIdentity.deviceId;
         nodeClient = await connectGatewayClient({
           url: `ws://127.0.0.1:${port}`,
