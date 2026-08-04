@@ -22,8 +22,6 @@ import {
   resolveInitialTuiAgentId,
   resolveTuiToolsToggleActivityStatus,
   isTuiBusyActivityStatus,
-  resolveLocalAuthCliInvocation,
-  resolveLocalAuthSpawnCwd,
   resolveLocalAuthSpawnInvocation,
   resolveTuiCtrlCAction,
   resolveTuiShutdownHardExitMs,
@@ -935,38 +933,6 @@ describe("resolveCodexCliBin", () => {
   });
 });
 
-describe("resolveLocalAuthCliInvocation", () => {
-  it("uses the source runner when dist is unavailable", () => {
-    expect(
-      resolveLocalAuthCliInvocation({
-        execPath: "/usr/bin/node",
-        wrapperPath: "/repo/openclaw.mjs",
-        runNodePath: "/repo/scripts/run-node.mjs",
-        hasDistEntry: false,
-        hasRunNodeScript: true,
-      }),
-    ).toEqual({
-      command: "/usr/bin/node",
-      args: ["/repo/scripts/run-node.mjs", "models", "auth", "login"],
-    });
-  });
-
-  it("uses the packaged wrapper when dist is available", () => {
-    expect(
-      resolveLocalAuthCliInvocation({
-        execPath: "/usr/bin/node",
-        wrapperPath: "/repo/openclaw.mjs",
-        runNodePath: "/repo/scripts/run-node.mjs",
-        hasDistEntry: true,
-        hasRunNodeScript: true,
-      }),
-    ).toEqual({
-      command: "/usr/bin/node",
-      args: ["/repo/openclaw.mjs", "models", "auth", "login"],
-    });
-  });
-});
-
 describe("resolveLocalAuthSpawnInvocation", () => {
   it("wraps Windows cmd shims through cmd.exe", () => {
     expect(
@@ -1011,34 +977,5 @@ describe("resolveLocalAuthSpawnInvocation", () => {
         platform: "win32",
       }),
     ).toStrictEqual({ command: "C:\\tools\\codex.exe", args: ["login"], options: {} });
-  });
-});
-
-describe("resolveLocalAuthSpawnCwd", () => {
-  it("runs the packaged wrapper from the repo root", () => {
-    expect(
-      resolveLocalAuthSpawnCwd({
-        args: ["/repo/openclaw.mjs", "models", "auth", "login"],
-        defaultCwd: "/worktree/subdir",
-      }),
-    ).toBe("/repo");
-  });
-
-  it("runs the source fallback helper from the repo root", () => {
-    expect(
-      resolveLocalAuthSpawnCwd({
-        args: ["/repo/scripts/run-node.mjs", "models", "auth", "login"],
-        defaultCwd: "/worktree/subdir",
-      }),
-    ).toBe("/repo");
-  });
-
-  it("keeps the caller cwd for direct codex exec", () => {
-    expect(
-      resolveLocalAuthSpawnCwd({
-        args: ["login"],
-        defaultCwd: "/worktree/subdir",
-      }),
-    ).toBe("/worktree/subdir");
   });
 });

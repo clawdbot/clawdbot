@@ -14,6 +14,7 @@ import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { connectGatewayClient } from "../gateway/test-helpers.e2e.js";
+import { runExec } from "../process/exec.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import { GatewayChatClient } from "./gateway-chat.js";
 import { synchronizedFrameRows } from "./tui-pty-harness-assertion-test-support.js";
@@ -539,6 +540,21 @@ async function startLocalModeTui(
   const xdgDataHome = path.join(tempDir, "xdg-data");
   const xdgCacheHome = path.join(tempDir, "xdg-cache");
   const configPath = path.join(tempDir, "openclaw.json");
+  const env: NodeJS.ProcessEnv = {
+    HOME: homeDir,
+    OPENCLAW_HOME: homeDir,
+    OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "500",
+    OPENCLAW_AGENT_DIR: undefined,
+    OPENCLAW_SKIP_PROVIDERS: undefined,
+    XDG_CONFIG_HOME: xdgConfigHome,
+    XDG_DATA_HOME: xdgDataHome,
+    XDG_CACHE_HOME: xdgCacheHome,
+    OPENCLAW_THEME: "dark",
+    OPENCLAW_CODEX_DISCOVERY_LIVE: "0",
+    NO_COLOR: undefined,
+  };
   const mockModel = await startMockModelServer(replyText, {
     invalidEditLoop: opts.invalidEditLoop,
     holdFirstResponse: opts.holdFirstResponse,
@@ -569,21 +585,7 @@ async function startLocalModeTui(
 
     run = startPty(process.execPath, buildTuiProcessArgs(opts.cliArgs ?? ["tui", "--local"]), {
       cwd: process.cwd(),
-      env: {
-        HOME: homeDir,
-        OPENCLAW_HOME: homeDir,
-        OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "500",
-        OPENCLAW_AGENT_DIR: undefined,
-        OPENCLAW_SKIP_PROVIDERS: undefined,
-        XDG_CONFIG_HOME: xdgConfigHome,
-        XDG_DATA_HOME: xdgDataHome,
-        XDG_CACHE_HOME: xdgCacheHome,
-        OPENCLAW_THEME: "dark",
-        OPENCLAW_CODEX_DISCOVERY_LIVE: "0",
-        NO_COLOR: undefined,
-      },
+      env,
       exitTimeoutMs: LOCAL_EXIT_TIMEOUT_MS,
       outputTimeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
     });
@@ -617,6 +619,7 @@ async function startLocalModeTui(
     run,
     mockModel,
     configPath,
+    env,
     stateDir,
     cleanup,
   };
@@ -1230,23 +1233,28 @@ describe("TUI PTY real backends", () => {
       });
       try {
         await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
-        const cli = `${JSON.stringify(process.execPath)} ${JSON.stringify(
-          path.join(process.cwd(), "openclaw.mjs"),
-        )}`;
+        const cliPath = path.join(process.cwd(), "openclaw.mjs");
+        const cli = `${JSON.stringify(process.execPath)} ${JSON.stringify(cliPath)}`;
         await fixture.run.write(`!${cli} config set tools.profile minimal\r`);
         await fixture.run.waitForOutput("Allow local shell commands for this session?");
         await fixture.run.write("\u001b[B\r", { delay: false });
         await fixture.run.waitForOutput("local shell: enabled for this session");
-        await fixture.run.waitForOutput("[local] Updated tools.profile.");
         await fixture.run.waitForOutput("[local] exit 0");
 
         const repaired = JSON.parse(await readFile(fixture.configPath, "utf8")) as OpenClawConfig;
         expect(repaired.tools?.profile).toBe("minimal");
 
-        const validationOffset = fixture.run.visibleOutput().length;
-        await fixture.run.write(`!${cli} config validate --json\r`);
-        await waitForOutputAfter(fixture.run, '"valid": true', validationOffset);
-        await waitForOutputAfter(fixture.run, "[local] exit 0", validationOffset);
+        const { stdout } = await runExec(
+          process.execPath,
+          [cliPath, "config", "validate", "--json"],
+          {
+            cwd: process.cwd(),
+            env: { ...fixture.env, OPENCLAW_TEST_RUNTIME_LOG: "1" },
+            logOutput: false,
+            timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          },
+        );
+        expect(JSON.parse(stdout)).toMatchObject({ valid: true });
 
         await fixture.run.write("prompt after config repair\r");
         await waitFor({
