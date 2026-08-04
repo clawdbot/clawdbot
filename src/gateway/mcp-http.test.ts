@@ -3,6 +3,7 @@
 import { request } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
@@ -1294,6 +1295,59 @@ describe("mcp loopback server", () => {
       turnSourceThreadId: "bound-thread",
     });
     expect(getBeforeToolCallHookInput(0).ctx).toHaveProperty("loopDetection");
+  });
+
+  it("keeps prepared auth stores isolated between CLI grants", async () => {
+    const { runtime } = await startLoopbackServerForTest();
+    const firstStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "xai:first": { type: "token", provider: "xai", token: "first-token" },
+      },
+    };
+    const secondStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "xai:second": { type: "token", provider: "xai", token: "second-token" },
+      },
+    };
+    const mintGrant = (agentDir: string, store: AuthProfileStore) =>
+      mintMcpLoopbackClientGrant({
+        context: { sessionKey: "agent:main:main", senderIsOwner: true },
+        runtimeOwnerToken: runtime.ownerToken,
+        toolAuth: { agentDir, store },
+      });
+    const firstGrant = mintGrant("/agents/first", firstStore);
+    const secondGrant = mintGrant("/agents/second", secondStore);
+    const listForGrant = async (token: string, captureKey: string) => {
+      expect(
+        activateMcpLoopbackClientGrantCapture({
+          token,
+          runtimeOwnerToken: runtime.ownerToken,
+          captureKey,
+        }),
+      ).toBe(true);
+      expect(
+        (
+          await sendLoopbackToolsList({
+            token,
+            headers: { "x-openclaw-cli-capture-key": captureKey },
+          })
+        ).status,
+      ).toBe(200);
+    };
+
+    await listForGrant(firstGrant.token, "capture-first");
+    await listForGrant(secondGrant.token, "capture-second");
+
+    expect(getScopedToolsCall(0)).toMatchObject({
+      agentDir: "/agents/first",
+      authProfileStore: firstStore,
+    });
+    expect(getScopedToolsCall(1)).toMatchObject({
+      agentDir: "/agents/second",
+      authProfileStore: secondStore,
+    });
   });
 
   it("carries the resolved workspace dir into the before-tool-call hook context", async () => {

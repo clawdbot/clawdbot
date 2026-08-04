@@ -16,8 +16,13 @@ vi.mock("../plugins/tools.js", async (importOriginal) => ({
 describe("MCP loopback OAuth tools", () => {
   it("exposes a plugin tool backed by a prepared OAuth profile", () => {
     pluginTools.resolve.mockImplementation(
-      (params: { hasAuthForProvider?: (providerId: string) => boolean }) =>
-        params.hasAuthForProvider?.("xai")
+      (params: {
+        context?: { activeModel?: { provider?: string; modelId?: string } };
+        hasAuthForProvider?: (providerId: string) => boolean;
+      }) =>
+        params.hasAuthForProvider?.("xai") &&
+        params.context?.activeModel?.provider === "anthropic" &&
+        params.context.activeModel.modelId === "claude-haiku-4-5"
           ? [
               {
                 name: "x_search",
@@ -38,6 +43,7 @@ describe("MCP loopback OAuth tools", () => {
       sessionKey: "agent:main:main",
       agentId: "main",
       modelProvider: "anthropic",
+      modelId: "claude-haiku-4-5",
       senderIsOwner: true,
       authProfileStore: {
         version: 1,

@@ -283,6 +283,8 @@ export function resolveGatewayScopedTools(params: {
     config: params.cfg,
     agentDir,
     authProfileStore: params.authProfileStore,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
     clientCaps: params.clientCaps,
     workspaceDir,
     sandboxed: sandboxRuntime.sandboxed,
