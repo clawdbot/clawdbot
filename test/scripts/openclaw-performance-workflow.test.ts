@@ -84,23 +84,51 @@ describe("OpenClaw performance workflow", () => {
 
   it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const canonicalKovaRef = "283070760a16655b28835061774158b8b11b4aff";
-    const legacyKovaRef = "f3d037b5b8aacd6adf8ef1dd2ea4c1d778ec7c6c";
+    const canonicalKovaRef = "07fecb5262be09890312ffff686cb5571223fb5d";
+    const legacyKovaRef = "07fecb5262be09890312ffff686cb5571223fb5d";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
     const resolveTarget = findStep("Resolve OpenClaw target ref", "resolve_target");
 
     expect(workflow).toContain(`KOVA_CANONICAL_CONFIG_REF: ${canonicalKovaRef}`);
     expect(workflow).toContain(`KOVA_LEGACY_LIST_CONFIG_REF: ${legacyKovaRef}`);
+    expect(workflow).toContain("kova_config_contract:");
+    expect(workflow).toContain("Optional fixture-contract override for a custom Kova ref");
     expect(readWorkflow().jobs?.resolve_target?.outputs?.kova_ref).toBe(
       "${{ steps.resolve.outputs.kova_ref }}",
     );
+    expect(readWorkflow().jobs?.resolve_target?.outputs?.kova_config_contract).toBe(
+      "${{ steps.resolve.outputs.kova_config_contract }}",
+    );
     expect(resolveTarget.env?.KOVA_REF_INPUT).toBe("${{ inputs.kova_ref }}");
+    expect(resolveTarget.env?.KOVA_CONFIG_CONTRACT_INPUT).toBe(
+      "${{ inputs.kova_config_contract }}",
+    );
     expect(resolveTarget.run).toContain("zod-schema.agent-defaults.ts?ref=${resolved_sha}");
     expect(resolveTarget.run).toContain("KOVA_CANONICAL_CONFIG_REF");
     expect(resolveTarget.run).toContain("KOVA_LEGACY_LIST_CONFIG_REF");
+    expect(resolveTarget.run).toContain('detected_kova_config_contract="canonical"');
+    expect(resolveTarget.run).toContain('detected_kova_config_contract="legacy-list"');
+    expect(resolveTarget.run).toContain('kova_ref="${KOVA_REF_INPUT:-}"');
+    expect(resolveTarget.run).toContain('kova_ref="${kova_ref:-$default_kova_ref}"');
+    expect(resolveTarget.run).toContain(
+      'if [[ -z "$kova_ref" || -z "$kova_config_contract" ]]; then',
+    );
+    expect(resolveTarget.run).toContain('if schema_content="$({');
+    expect(resolveTarget.run).toContain('elif [[ -z "$kova_ref" ]]; then');
+    expect(resolveTarget.run).toContain('schema_content=""');
+    expect(resolveTarget.run).toContain("Supply kova_ref explicitly");
+    expect(
+      resolveTarget.run?.indexOf('if [[ -z "$kova_ref" || -z "$kova_config_contract" ]]; then'),
+    ).toBeLessThan(resolveTarget.run?.indexOf('schema_content="$({') ?? -1);
+    expect(resolveTarget.run).toContain(
+      'echo "kova_config_contract=$kova_config_contract" >> "$GITHUB_OUTPUT"',
+    );
     expect(readWorkflow().jobs?.kova?.env?.KOVA_REF).toBe(
       "${{ needs.resolve_target.outputs.kova_ref }}",
+    );
+    expect(readWorkflow().jobs?.kova?.env?.KOVA_OPENCLAW_CONFIG_CONTRACT).toBe(
+      "${{ needs.resolve_target.outputs.kova_config_contract }}",
     );
     expect(installRun).toContain(
       'npm --prefix "$KOVA_SRC" ci --ignore-scripts --no-audit --no-fund',

@@ -11,6 +11,7 @@ const SCHEMA = {
 };
 const PROFILED_INTERPRETATION =
   "instrumented run; CPU/RSS can include profiler and diagnostic overhead";
+const INSTRUMENTED_PERFORMANCE_REASON = "instrumented-performance-measurement";
 const RSS_METRICS = ["peakRssMb", "resourcePeakGatewayRssMb"];
 const CPU_METRICS = ["cpuPercentMax"];
 const DIRECT_VIOLATIONS = new Set(["cpuPercentMax", "peakRssMb"]);
@@ -52,6 +53,10 @@ function text(value, label) {
 function finite(value, label) {
   check(typeof value === "number" && Number.isFinite(value), `invalid ${label}`);
   return value;
+}
+
+function finiteOrNull(value) {
+  return value === null || (typeof value === "number" && Number.isFinite(value));
 }
 
 function stateId(record) {
@@ -351,9 +356,124 @@ function validatePerformance(report, records, repeat) {
   return groupsByKey;
 }
 
-function validateGateCards(gate) {
+function instrumentedRecordKey(record, required) {
+  const assessment = object(
+    record.performanceThresholdAssessment,
+    "performance threshold assessment",
+  );
+  const skipped = array(assessment.skipped, "skipped performance thresholds");
+  const skippedCount = count(assessment.skippedCount, "skipped threshold count");
+  const complete = skippedCount === 0;
+  check(
+    record.profiling.enabled === true &&
+      record.profiling.affectsPerformanceMeasurements === true &&
+      record.profiling.baselineEligible === false &&
+      record.measurements.profilingAffectsPerformanceMeasurements === true &&
+      record.measurements.performanceThresholdSkippedCount === skippedCount &&
+      assessment.schemaVersion === "kova.performanceThresholdAssessment.v1" &&
+      assessment.complete === complete &&
+      (complete
+        ? assessment.reason === null && assessment.rerun === null
+        : assessment.reason === INSTRUMENTED_PERFORMANCE_REASON &&
+          typeof assessment.rerun === "string") &&
+      skipped.length === skippedCount,
+    "instrumented performance assessment was invalid",
+  );
+  if (complete) {
+    return null;
+  }
+  check(
+    skipped.every(
+      (entry) =>
+        entry?.status === "SKIPPED" &&
+        entry.reason === INSTRUMENTED_PERFORMANCE_REASON &&
+        entry.affectsRecordStatus === false &&
+        typeof entry.metric === "string" &&
+        entry.metric.trim().length > 0 &&
+        finiteOrNull(entry.actual) &&
+        finiteOrNull(entry.threshold),
+    ),
+    "skipped performance threshold was invalid",
+  );
+  const first = skipped[0];
+  return JSON.stringify([
+    text(record.scenario, "record scenario"),
+    stateId(record),
+    required,
+    skippedCount,
+    first.metric,
+    first.actual,
+    first.threshold,
+  ]);
+}
+
+function recordAffectsPerformanceMeasurements(record) {
+  const profiling = object(record.profiling, "record profiling");
+  const measurements = object(record.measurements, "record measurements");
+  const affects =
+    profiling.nodeProfile === true ||
+    profiling.heapSnapshot === true ||
+    profiling.diagnosticReport === true;
+  check(
+    profiling.affectsPerformanceMeasurements === affects &&
+      measurements.profilingAffectsPerformanceMeasurements === affects,
+    "record profiling performance provenance drift",
+  );
+  return affects;
+}
+
+function expectedInstrumentedEvidence(gate, records) {
+  const warnings = array(gate.warning, "gate warning policy");
+  const evidence = new Map();
+  for (const record of records) {
+    const affectsPerformanceMeasurements = recordAffectsPerformanceMeasurements(record);
+    if (!affectsPerformanceMeasurements || record.status !== "PASS") {
+      continue;
+    }
+    const scenario = text(record.scenario, "record scenario");
+    const state = stateId(record);
+    const required = !warnings.some(
+      (entry) => entry?.scenario === scenario && (!entry.state || entry.state === state),
+    );
+    const key = instrumentedRecordKey(record, required);
+    if (key === null) {
+      continue;
+    }
+    check(
+      gate.verdict === "PARTIAL",
+      "non-PARTIAL report contained incomplete instrumented performance evidence",
+    );
+    evidence.set(key, (evidence.get(key) ?? 0) + 1);
+  }
+  return evidence;
+}
+
+function instrumentedCardKey(card) {
+  check(
+    card.status === "SKIPPED" &&
+      typeof card.required === "boolean" &&
+      array(card.violations, "instrumented performance card violations").length === 0,
+    "instrumented performance card metadata was invalid",
+  );
+  const scenario = text(card.scenario, "instrumented performance card scenario");
+  const state = text(card.state, "instrumented performance card state");
+  const measurements = object(card.measurements, "instrumented performance card measurements");
+  return JSON.stringify([
+    scenario,
+    state,
+    card.required,
+    count(measurements.skippedCount, "card skipped threshold count", { positive: true }),
+    text(measurements.firstMetric, "card first skipped metric"),
+    finiteOrNull(measurements.firstActual) ? measurements.firstActual : "invalid",
+    finiteOrNull(measurements.firstThreshold) ? measurements.firstThreshold : "invalid",
+  ]);
+}
+
+function validateGateCards(gate, records) {
   const cards = array(gate.cards, "gate cards");
   const severities = { blocking: 0, warning: 0, info: 0 };
+  const instrumentedEvidence = expectedInstrumentedEvidence(gate, records);
+  let requiredInstrumented = 0;
   for (const cardValue of cards) {
     const card = object(cardValue, "gate card");
     const severity = card.severity;
@@ -367,13 +487,32 @@ function validateGateCards(gate) {
       );
     }
     if (severity === "warning") {
-      check(
-        card.kind === "missing-required-coverage" && card.status === "MISSING",
-        "unexpected warning gate card",
-      );
+      if (card.kind === "instrumented-performance-thresholds") {
+        const key = instrumentedCardKey(card);
+        const remaining = instrumentedEvidence.get(key) ?? 0;
+        check(remaining > 0, "instrumented performance card lacked matching evidence");
+        remaining === 1
+          ? instrumentedEvidence.delete(key)
+          : instrumentedEvidence.set(key, remaining - 1);
+        requiredInstrumented += Number(card.required);
+      } else {
+        check(
+          card.kind === "missing-required-coverage" && card.status === "MISSING",
+          "unexpected warning gate card",
+        );
+      }
     }
     severities[severity] += 1;
   }
+  check(
+    instrumentedEvidence.size === 0,
+    "instrumented performance evidence lacked matching gate cards",
+  );
+  check(
+    count(gate.instrumentedPerformanceIncompleteCount, "instrumented incomplete count") ===
+      requiredInstrumented,
+    "instrumented incomplete count drift",
+  );
   check(
     count(gate.blockingCount, "blocking count") === severities.blocking,
     "blocking count drift",
@@ -416,11 +555,11 @@ function validateEnvelope(reportValue) {
   );
   const records = array(report.records, "records").map(validateRecord);
   check(records.length > 0, "report had no records");
-  const cards = validateGateCards(gate);
   validateBaselines(report, gate);
   validateSummary(report, records);
   validateTargetCleanup(report);
   const groups = validatePerformance(report, records, repeat);
+  const cards = validateGateCards(gate, records);
   return { report, gate, records, cards, groups };
 }
 

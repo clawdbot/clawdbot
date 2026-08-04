@@ -26,6 +26,8 @@ const STATE = "mock-openai-provider";
 const SURFACE = "agent-cli-local-turn";
 const PROFILED_INTERPRETATION =
   "instrumented run; CPU/RSS can include profiler and diagnostic overhead";
+const INSTRUMENTED_PERFORMANCE_INTERPRETATION =
+  "instrumented diagnostic run; CPU, RSS, and latency can include profiler overhead";
 
 function objectAt(value: unknown): JsonObject {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -113,6 +115,7 @@ function targetCleanup() {
 
 function normalProfiling() {
   return {
+    affectsPerformanceMeasurements: false,
     affectsResourceMeasurements: false,
     baselineEligible: true,
     deepProfile: false,
@@ -128,6 +131,7 @@ function normalProfiling() {
 
 function deepProfiling() {
   return {
+    affectsPerformanceMeasurements: true,
     affectsResourceMeasurements: true,
     baselineEligible: false,
     deepProfile: true,
@@ -167,11 +171,14 @@ function partialReport(): JsonObject {
       complete: false,
       enabled: true,
       infoCount: 1,
+      instrumentedPerformanceIncompleteCount: 0,
       missingRequiredCount: 1,
       ok: false,
       partial: true,
+      required: [],
       schemaVersion: "kova.gate.v1",
       verdict: "PARTIAL",
+      warning: [],
       warningCount: 0,
     },
     mode: "execution",
@@ -205,6 +212,7 @@ function partialReport(): JsonObject {
         measurements: {
           cpuPercentMax: 80,
           peakRssMb: 650,
+          profilingAffectsPerformanceMeasurements: false,
         },
         phases: [
           {
@@ -260,11 +268,14 @@ function profiledResourceReport(): JsonObject {
       complete: false,
       enabled: true,
       infoCount: 1,
+      instrumentedPerformanceIncompleteCount: 0,
       missingRequiredCount: 1,
       ok: false,
       partial: true,
+      required: [],
       schemaVersion: "kova.gate.v1",
       verdict: "DO_NOT_SHIP",
+      warning: [],
       warningCount: 0,
     },
     mode: "execution",
@@ -298,6 +309,7 @@ function profiledResourceReport(): JsonObject {
         measurements: {
           cpuPercentMax: 156.2,
           peakRssMb: 923.7,
+          profilingAffectsPerformanceMeasurements: true,
           profilingAffectsResourceMeasurements: true,
           profilingBaselineEligible: false,
           profilingEnabled: true,
@@ -350,6 +362,8 @@ function attachPassingBaseline(report: JsonObject): void {
       baselineEntryCount: 1,
       generatedAt: "2026-07-09T00:00:00.000Z",
       groups: [],
+      instrumentedPerformanceGroupCount: 0,
+      instrumentedPerformanceGroups: [],
       missing: [],
       missingBaselineCount: 0,
       ok: true,
@@ -363,11 +377,137 @@ function attachPassingBaseline(report: JsonObject): void {
     baselineEntryCount: 1,
     missing: [],
     missingBaselineCount: 0,
+    instrumentedPerformanceGroupCount: 0,
+    instrumentedPerformanceGroups: [],
     ok: true,
     regressedGroups: [],
     regressionCount: 0,
     schemaVersion: "kova.gateBaselineSummary.v1",
   };
+}
+
+function markRecordInstrumented(report: JsonObject, recordIndex = 0): JsonObject {
+  const record = objectAt(valueAt(report, ["records", recordIndex]));
+  const measurements = objectAt(record.measurements);
+  record.profiling = {
+    ...deepProfiling(),
+    affectsPerformanceMeasurements: true,
+    interpretation: INSTRUMENTED_PERFORMANCE_INTERPRETATION,
+  };
+  measurements.profilingAffectsPerformanceMeasurements = true;
+  const performance = objectAt(report.performance);
+  const group = objectAt(arrayAt(performance.groups)[0]);
+  performance.profiledRunCount = Number(performance.profiledRunCount) + 1;
+  group.profiledRunCount = Number(group.profiledRunCount) + 1;
+  setAt(report, ["performance", "groups", 0, "resourceInterpretation"], "instrumented");
+  return record;
+}
+
+function attachCompleteInstrumentedAssessment(report: JsonObject): void {
+  const record = markRecordInstrumented(report);
+  setCompleteInstrumentedAssessment(record);
+}
+
+function setCompleteInstrumentedAssessment(record: JsonObject): void {
+  const measurements = objectAt(record.measurements);
+  measurements.performanceThresholdSkippedCount = 0;
+  record.performanceThresholdAssessment = {
+    complete: true,
+    reason: null,
+    rerun: null,
+    schemaVersion: "kova.performanceThresholdAssessment.v1",
+    skipped: [],
+    skippedCount: 0,
+  };
+}
+
+function attachInstrumentedPerformanceWarning(report: JsonObject, recordIndex = 0): void {
+  const metric = "resourceByRole.status-cli.peakRssMb";
+  const actual = 612.4;
+  const threshold = 900;
+  const record = markRecordInstrumented(report, recordIndex);
+  const measurements = objectAt(record.measurements);
+  measurements.performanceThresholdSkippedCount = 1;
+  record.performanceThresholdAssessment = {
+    complete: false,
+    reason: "instrumented-performance-measurement",
+    rerun: "rerun without profiling for gateable performance evidence",
+    schemaVersion: "kova.performanceThresholdAssessment.v1",
+    skipped: [
+      {
+        actual,
+        affectsRecordStatus: false,
+        measurementMetric: "peakRssMb",
+        message: `${metric} was not adjudicated because the run was instrumented`,
+        metric,
+        observedOverThreshold: false,
+        reason: "instrumented-performance-measurement",
+        role: "status-cli",
+        status: "SKIPPED",
+        threshold,
+      },
+    ],
+    skippedCount: 1,
+  };
+  const gate = objectAt(report.gate);
+  arrayAt(gate.cards).push({
+    actual: `${metric} ${actual}`,
+    expected: `${metric} <= ${threshold}`,
+    failedCommand: null,
+    impact:
+      "This run can reject functional failures, but it cannot approve the release until the scenario is rerun without profiling.",
+    kind: "instrumented-performance-thresholds",
+    likelyOwner: "Kova",
+    measurements: {
+      firstActual: actual,
+      firstMetric: metric,
+      firstThreshold: threshold,
+      skippedCount: 1,
+    },
+    required: true,
+    scenario: SCENARIO,
+    severity: "warning",
+    state: STATE,
+    status: "SKIPPED",
+    summary:
+      "1 performance threshold(s) were not adjudicated because profiling can distort CPU, RSS, and latency.",
+    title: "Instrumented Performance Evidence",
+    violations: [],
+  });
+  gate.warningCount = Number(gate.warningCount) + 1;
+  gate.instrumentedPerformanceIncompleteCount =
+    Number(gate.instrumentedPerformanceIncompleteCount) + 1;
+}
+
+function eraseInstrumentedPerformanceEvidence(report: JsonObject): void {
+  const record = objectAt(arrayAt(report.records)[0]);
+  const measurements = objectAt(record.measurements);
+  delete record.performanceThresholdAssessment;
+  delete measurements.performanceThresholdSkippedCount;
+  const gate = objectAt(report.gate);
+  gate.cards = arrayAt(gate.cards).filter(
+    (card) => objectAt(card).kind !== "instrumented-performance-thresholds",
+  );
+  gate.warningCount = 0;
+  gate.instrumentedPerformanceIncompleteCount = 0;
+}
+
+function duplicatePassingRecord(report: JsonObject): void {
+  const records = arrayAt(report.records);
+  records.push(structuredClone(records[0]));
+  const controls = objectAt(report.controls);
+  controls.repeat = 2;
+  report.summary = { statuses: { PASS: 2 }, total: 2 };
+  const performance = objectAt(report.performance);
+  performance.repeat = 2;
+  const group = objectAt(arrayAt(performance.groups)[0]);
+  group.sampleCount = 2;
+  group.statuses = { PASS: 2 };
+  for (const metricValue of Object.values(objectAt(group.metrics))) {
+    const metricObject = objectAt(metricValue);
+    metricObject.count = 2;
+    metricObject.samples = [arrayAt(metricObject.samples)[0], arrayAt(metricObject.samples)[0]];
+  }
 }
 
 function blockingCard(report: JsonObject): JsonObject {
@@ -427,6 +567,58 @@ describe("scripts/lib/kova-report-gate.mjs", () => {
       classification: "filtered-partial",
       ok: true,
     });
+  });
+
+  it("accepts exact instrumented threshold warnings on a filtered PARTIAL report", () => {
+    const report = partialReport();
+    attachInstrumentedPerformanceWarning(report);
+
+    expect(evaluateToleratedPartialKovaReport(report)).toEqual({ ok: true });
+    expect(evaluateToleratedKovaReport(report)).toEqual({
+      classification: "filtered-partial",
+      ok: true,
+    });
+  });
+
+  it("accepts an explicit complete assessment when no thresholds were skipped", () => {
+    const report = partialReport();
+    attachCompleteInstrumentedAssessment(report);
+
+    expect(evaluateToleratedPartialKovaReport(report)).toEqual({ ok: true });
+  });
+
+  it("reconciles repeated instrumented warnings one-to-one", () => {
+    const report = partialReport();
+    duplicatePassingRecord(report);
+    attachInstrumentedPerformanceWarning(report, 0);
+    attachInstrumentedPerformanceWarning(report, 1);
+
+    expect(evaluateToleratedPartialKovaReport(report)).toEqual({ ok: true });
+  });
+
+  it("accepts nullable instrumented threshold values", () => {
+    const report = partialReport();
+    attachInstrumentedPerformanceWarning(report);
+    setAt(report, ["records", 0, "performanceThresholdAssessment", "skipped", 0, "actual"], null);
+    setAt(
+      report,
+      ["records", 0, "performanceThresholdAssessment", "skipped", 0, "threshold"],
+      null,
+    );
+    setAt(report, ["gate", "cards", 1, "measurements", "firstActual"], null);
+    setAt(report, ["gate", "cards", 1, "measurements", "firstThreshold"], null);
+
+    expect(evaluateToleratedPartialKovaReport(report)).toEqual({ ok: true });
+  });
+
+  it("derives advisory instrumented evidence from the gate warning policy", () => {
+    const report = partialReport();
+    attachInstrumentedPerformanceWarning(report);
+    setAt(report, ["gate", "warning"], [{ scenario: SCENARIO, state: STATE }]);
+    setAt(report, ["gate", "cards", 1, "required"], false);
+    setAt(report, ["gate", "instrumentedPerformanceIncompleteCount"], 0);
+
+    expect(evaluateToleratedPartialKovaReport(report)).toEqual({ ok: true });
   });
 
   it("accepts a declared collector-only phase without commands", () => {
@@ -509,9 +701,16 @@ describe("scripts/lib/kova-report-gate.mjs", () => {
 
   it("accepts omitted violations on a profiled PASS record", () => {
     const report = profiledResourceReport();
-    addProfiledPassRecord(report);
+    setCompleteInstrumentedAssessment(addProfiledPassRecord(report));
 
     expect(evaluateToleratedProfiledKovaReport(report)).toEqual({ ok: true });
+  });
+
+  it("rejects a profiled PASS record without a threshold assessment", () => {
+    const report = profiledResourceReport();
+    addProfiledPassRecord(report);
+
+    expectProfiledRejection(report);
   });
 
   it.each(malformedViolationLists)(
@@ -529,6 +728,7 @@ describe("scripts/lib/kova-report-gate.mjs", () => {
     (_label, violations) => {
       const report = profiledResourceReport();
       const passRecord = addProfiledPassRecord(report);
+      setCompleteInstrumentedAssessment(passRecord);
       passRecord.violations = violations;
 
       expectProfiledRejection(report);
@@ -538,6 +738,7 @@ describe("scripts/lib/kova-report-gate.mjs", () => {
   it("rejects hidden violations on PASS records", () => {
     const report = profiledResourceReport();
     const passRecord = addProfiledPassRecord(report);
+    setCompleteInstrumentedAssessment(passRecord);
     passRecord.violations = [{ message: "hidden violation" }];
 
     expectProfiledRejection(report);
@@ -906,6 +1107,139 @@ describe("scripts/lib/kova-report-gate.mjs", () => {
     [
       "rejects PARTIAL reports without sampled CPU",
       (report) => deleteAt(report, ["performance", "groups", 0, "metrics", "cpuPercentMax"]),
+    ],
+    [
+      "rejects instrumented warning count drift",
+      (report) => {
+        attachInstrumentedPerformanceWarning(report);
+        setAt(report, ["gate", "cards", 1, "measurements", "skippedCount"], 2);
+      },
+    ],
+    [
+      "rejects duplicate repeat cards that mask distinct assessments",
+      (report) => {
+        duplicatePassingRecord(report);
+        attachInstrumentedPerformanceWarning(report, 0);
+        attachInstrumentedPerformanceWarning(report, 1);
+        setAt(
+          report,
+          ["records", 1, "performanceThresholdAssessment", "skipped", 0, "metric"],
+          "cpuPercentMax",
+        );
+      },
+    ],
+    [
+      "rejects instrumented warnings without profiler provenance",
+      (report) => {
+        attachInstrumentedPerformanceWarning(report);
+        setAt(report, ["records", 0, "profiling", "affectsPerformanceMeasurements"], false);
+      },
+    ],
+    [
+      "rejects erased instrumented evidence with false producer mirrors",
+      (report) => {
+        attachInstrumentedPerformanceWarning(report);
+        eraseInstrumentedPerformanceEvidence(report);
+        setAt(report, ["records", 0, "profiling", "affectsPerformanceMeasurements"], false);
+        setAt(
+          report,
+          ["records", 0, "measurements", "profilingAffectsPerformanceMeasurements"],
+          false,
+        );
+      },
+    ],
+    [
+      "rejects erased instrumented evidence with missing producer mirrors",
+      (report) => {
+        attachInstrumentedPerformanceWarning(report);
+        eraseInstrumentedPerformanceEvidence(report);
+        deleteAt(report, ["records", 0, "profiling", "affectsPerformanceMeasurements"]);
+        deleteAt(report, ["records", 0, "measurements", "profilingAffectsPerformanceMeasurements"]);
+      },
+    ],
+    [
+      "rejects required instrumented cards marked advisory",
+      (report) => {
+        attachInstrumentedPerformanceWarning(report);
+        setAt(report, ["gate", "cards", 1, "required"], false);
+        setAt(report, ["gate", "instrumentedPerformanceIncompleteCount"], 0);
+      },
+    ],
+    [
+      "rejects instrumented incomplete count drift",
+      (report) => {
+        attachInstrumentedPerformanceWarning(report);
+        setAt(report, ["gate", "instrumentedPerformanceIncompleteCount"], 0);
+      },
+    ],
+    [
+      "rejects missing instrumented incomplete count",
+      (report) => {
+        attachInstrumentedPerformanceWarning(report);
+        deleteAt(report, ["gate", "instrumentedPerformanceIncompleteCount"]);
+      },
+    ],
+    [
+      "rejects instrumented warnings with status-affecting assessments",
+      (report) => {
+        attachInstrumentedPerformanceWarning(report);
+        setAt(
+          report,
+          ["records", 0, "performanceThresholdAssessment", "skipped", 0, "affectsRecordStatus"],
+          true,
+        );
+      },
+    ],
+    [
+      "rejects unsupported instrumented baseline warning cards",
+      (report) => {
+        const gate = objectAt(report.gate);
+        arrayAt(gate.cards).push({
+          failedCommand: null,
+          kind: "instrumented-performance-thresholds",
+          likelyOwner: "Kova",
+          measurements: { skippedMetrics: ["peakRssMb"] },
+          required: true,
+          scenario: SCENARIO,
+          severity: "warning",
+          state: STATE,
+          status: "SKIPPED",
+          violations: [],
+        });
+        gate.warningCount = 1;
+        gate.instrumentedPerformanceIncompleteCount = 1;
+      },
+    ],
+    [
+      "rejects instrumented assessments without matching warning cards",
+      (report) => {
+        attachInstrumentedPerformanceWarning(report);
+        arrayAt(objectAt(report.gate).cards).pop();
+        setAt(report, ["gate", "warningCount"], 0);
+      },
+    ],
+    [
+      "rejects profiled records with erased threshold assessments",
+      (report) => {
+        attachInstrumentedPerformanceWarning(report);
+        deleteAt(report, ["records", 0, "performanceThresholdAssessment"]);
+        deleteAt(report, ["records", 0, "measurements", "performanceThresholdSkippedCount"]);
+        arrayAt(objectAt(report.gate).cards).pop();
+        setAt(report, ["gate", "warningCount"], 0);
+        setAt(report, ["gate", "instrumentedPerformanceIncompleteCount"], 0);
+      },
+    ],
+    [
+      "rejects zeroed assessments that still claim incomplete evidence",
+      (report) => {
+        attachInstrumentedPerformanceWarning(report);
+        setAt(report, ["records", 0, "performanceThresholdAssessment", "skipped"], []);
+        setAt(report, ["records", 0, "performanceThresholdAssessment", "skippedCount"], 0);
+        setAt(report, ["records", 0, "measurements", "performanceThresholdSkippedCount"], 0);
+        arrayAt(objectAt(report.gate).cards).pop();
+        setAt(report, ["gate", "warningCount"], 0);
+        setAt(report, ["gate", "instrumentedPerformanceIncompleteCount"], 0);
+      },
     ],
     [
       "rejects PARTIAL one-sided baselines",
