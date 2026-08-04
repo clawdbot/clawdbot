@@ -1,0 +1,18 @@
+{"seq":1,"at":0,"dir":"in","kind":"reply-start"}
+{"seq":2,"at":0,"dir":"out","kind":"assistant.threads.setStatus","data":{"payload":{"channel_id":"C0TRACE","status":"is typing...","thread_ts":"ts#1"},"result":{"ok":true},"target":"C0TRACE/ts#1"}}
+{"seq":3,"at":0,"dir":"in","kind":"assistant-start"}
+{"seq":4,"at":0,"dir":"in","kind":"reasoning","data":{"text":"Planning the change"}}
+{"seq":5,"at":0,"dir":"out","kind":"chat.postMessage","data":{"payload":{"channel":"C0TRACE","text":"Working\n\n• Planning the change","thread_ts":"ts#1","unfurl_links":false},"result":{"ts":"ts#2"},"target":"C0TRACE"}}
+{"seq":6,"at":0,"dir":"in","kind":"reasoning-end"}
+{"seq":7,"at":0,"dir":"in","kind":"tool-progress","data":{"name":"exec","phase":"start"}}
+{"seq":8,"at":0,"dir":"in","kind":"assistant-start"}
+{"seq":9,"at":0,"dir":"in","kind":"reasoning","data":{"text":"Checking the result"}}
+{"seq":10,"at":0,"dir":"in","kind":"reasoning-end"}
+{"seq":11,"at":0,"dir":"in","kind":"tool-progress","data":{"name":"read","phase":"start"}}
+{"seq":12,"at":0,"dir":"in","kind":"assistant-start"}
+{"seq":13,"at":0,"dir":"in","kind":"partial","data":{"text":"final answer"}}
+{"seq":14,"at":1000,"dir":"out","kind":"chat.update","data":{"payload":{"channel":"C0TRACE","text":"final answer","ts":"ts#2"},"result":{"ok":true},"target":"ts#2"}}
+{"seq":15,"at":1100,"dir":"in","kind":"final","data":{"text":"final answer"}}
+{"seq":16,"at":1100,"dir":"out","kind":"chat.update","data":{"payload":{"channel":"C0TRACE","text":"final answer","ts":"ts#2"},"result":{"ok":true},"target":"ts#2"}}
+{"seq":17,"at":1100,"dir":"in","kind":"idle"}
+{"seq":18,"at":1100,"dir":"out","kind":"assistant.threads.setStatus","data":{"payload":{"channel_id":"C0TRACE","status":"","thread_ts":"ts#1"},"result":{"ok":true},"target":"C0TRACE/ts#1"}}

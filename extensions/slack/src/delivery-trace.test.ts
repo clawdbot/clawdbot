@@ -44,6 +44,9 @@ type CapturedDispatcherOptions = {
 type CapturedReplyOptions = {
   suppressDefaultToolProgressMessages?: boolean;
   onPartialReply?: (payload: { text: string }) => Promise<void> | void;
+  onAssistantMessageStart?: () => Promise<void> | void;
+  onReasoningStream?: (payload: { text: string }) => Promise<void> | void;
+  onReasoningEnd?: () => Promise<void> | void;
   onToolStart?: (payload: { name: string; phase: "start" | "result" }) => Promise<void> | void;
 };
 
@@ -171,7 +174,8 @@ type SlackTraceScenarioName =
   | "stream-stop-first-network-call"
   | "final-blocks-and-text"
   | "cancel-mid-stream"
-  | "preview-edit-fallback";
+  | "preview-edit-fallback"
+  | "preview-reasoning-cycles";
 
 const NATIVE_SCENARIOS = new Set<SlackTraceScenarioName>([
   "streaming-happy-native",
@@ -259,6 +263,22 @@ const slackTraceScenarios: Record<SlackTraceScenarioName, readonly DeliveryTrace
     { kind: "partial", text: PREVIEW_PARTIAL_TWO },
     { kind: "advance", ms: 1100 },
     { kind: "final", text: PREVIEW_FINAL_TEXT },
+    { kind: "idle" },
+  ],
+  "preview-reasoning-cycles": [
+    { kind: "reply-start" },
+    { kind: "assistant-start" },
+    { kind: "reasoning", text: "Planning the change" },
+    { kind: "reasoning-end" },
+    { kind: "tool-progress", name: "exec", phase: "start" },
+    { kind: "assistant-start" },
+    { kind: "reasoning", text: "Checking the result" },
+    { kind: "reasoning-end" },
+    { kind: "tool-progress", name: "read", phase: "start" },
+    { kind: "assistant-start" },
+    { kind: "partial", text: "final answer" },
+    { kind: "advance", ms: 1100 },
+    { kind: "final", text: "final answer" },
     { kind: "idle" },
   ],
 };
@@ -553,6 +573,15 @@ async function setupSlackTrace(
     switch (step.kind) {
       case "reply-start":
         await turn.options.typingCallbacks?.onReplyStart?.();
+        break;
+      case "assistant-start":
+        await turn.replyOptions.onAssistantMessageStart?.();
+        break;
+      case "reasoning":
+        await turn.replyOptions.onReasoningStream?.({ text: step.text });
+        break;
+      case "reasoning-end":
+        await turn.replyOptions.onReasoningEnd?.();
         break;
       case "partial":
         // Present only on the draft-preview tier; native streaming leaves

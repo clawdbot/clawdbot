@@ -3722,6 +3722,39 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(draftStream.update).toHaveBeenLastCalledWith("Working\n\n• queued turn");
   });
 
+  it("keeps reasoning and tool cycles on one partial draft", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "partial";
+    mockedSlackDraftMode = "replace";
+    mockedReplyOptionEvents = [
+      { kind: "assistant_start" },
+      { kind: "reasoning", text: "Planning the change" },
+      { kind: "reasoning_end" },
+      { kind: "tool_start", name: "exec", phase: "start" },
+      { kind: "assistant_start" },
+      { kind: "reasoning", text: "Checking the result" },
+      { kind: "reasoning_end" },
+      { kind: "tool_start", name: "read", phase: "start" },
+      { kind: "assistant_start" },
+      { kind: "partial", text: "final answer" },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: {
+          streaming: { mode: "partial", progress: { label: false } },
+        },
+      }),
+    );
+
+    const updates = draftStream.update.mock.calls.flat().join("\n");
+    expect(updates).toContain("Planning the change");
+    expect(updates).toContain("Checking the result");
+    expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
+    expect(draftStream.update).toHaveBeenLastCalledWith("final answer");
+  });
+
   it("forces a new draft message on assistant boundaries in partial mode", async () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);

@@ -96,7 +96,9 @@ export function createSlackProgressRuntime(runtimeParams: {
         warn: logVerbose,
       })
     : undefined;
-  let hasStreamedMessage = false;
+  // Reasoning and tool progress keep editing one draft; only answer text owns
+  // the assistant-message boundary that may rotate to a new Slack message.
+  let hasStreamedAnswer = false;
   const streamMode = slackStreaming.draftMode;
   const useNativeProgressStreaming = useStreaming && slackStreaming.mode === "progress";
   const progressDraftActive = Boolean(draftStream) || useNativeProgressStreaming;
@@ -365,7 +367,6 @@ export function createSlackProgressRuntime(runtimeParams: {
           ? { text: previewText, blocks: richProgressBlocks }
           : previewText,
       );
-      hasStreamedMessage = true;
       if (options?.flush) {
         await draftStream.flush();
       }
@@ -453,7 +454,6 @@ export function createSlackProgressRuntime(runtimeParams: {
     });
     if (text) {
       draftStream.update(text);
-      hasStreamedMessage = true;
     }
     return false;
   };
@@ -501,7 +501,7 @@ export function createSlackProgressRuntime(runtimeParams: {
         return false;
       }
       draftStream?.update(next.rendered);
-      hasStreamedMessage = true;
+      hasStreamedAnswer = true;
       return false;
     }
 
@@ -512,7 +512,7 @@ export function createSlackProgressRuntime(runtimeParams: {
     previewToolProgressSuppressed = true;
     progressDraft.suppress();
     draftStream?.update(trimmed);
-    hasStreamedMessage = true;
+    hasStreamedAnswer = true;
     return false;
   };
   const pushReasoningProgress = async (payload?: {
@@ -548,7 +548,7 @@ export function createSlackProgressRuntime(runtimeParams: {
     });
   };
   const resetDraftDeliveryState = () => {
-    hasStreamedMessage = false;
+    hasStreamedAnswer = false;
     appendRenderedText = "";
     appendSourceText = "";
   };
@@ -591,9 +591,11 @@ export function createSlackProgressRuntime(runtimeParams: {
             await beginNewProgressTurn();
             return;
           }
-          if (hasStreamedMessage) {
-            draftStream?.forceNewMessage();
+          if (!hasStreamedAnswer) {
+            progressDraft.resetReasoningProgress();
+            return;
           }
+          draftStream?.forceNewMessage();
           resetDraftDeliveryState();
           resetDraftProgressState();
         };
