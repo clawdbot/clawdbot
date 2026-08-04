@@ -179,6 +179,7 @@ describe("Codex trajectory recorder", () => {
       text: `${"x".repeat(19_999)}😀`,
       apiKey: "secret",
       authorization: "Bearer sk-test-secret-token",
+      sessionKey: "agent:receiver:main",
       sourceSessionKey: "agent:sender:main",
     });
     await recorder.flush();
@@ -186,6 +187,7 @@ describe("Codex trajectory recorder", () => {
     expect(events[0]?.data?.text).toBe(`${"x".repeat(19_999)}…`);
     expect(events[0]?.data?.apiKey).toBe("<redacted>");
     expect(events[0]?.data?.authorization).toBe("<redacted>");
+    expect(events[0]?.data?.sessionKey).toBe("agent:receiver:main");
     expect(events[0]?.data?.sourceSessionKey).toBe("agent:sender:main");
   });
 
