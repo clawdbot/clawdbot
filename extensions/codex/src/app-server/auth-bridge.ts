@@ -1030,7 +1030,19 @@ async function resolveScopedOAuthCredential(params: {
     if (!params.forceRefresh && hasUsableOAuthCredential(credential)) {
       return credential;
     }
-    const refreshed = await refreshOAuthCredentialForRuntime({ credential });
+    let refreshed: Awaited<ReturnType<typeof refreshOAuthCredentialForRuntime>>;
+    try {
+      refreshed = await refreshOAuthCredentialForRuntime({ credential });
+    } catch (error) {
+      // Rotation now happens inside the pre-expiry margin, so a transient token
+      // endpoint failure can reach a request whose token still authenticates.
+      // The margin decides when to rotate; raw expiry decides whether we may
+      // still serve. Forced refreshes want the rotation itself, so they throw.
+      if (!params.forceRefresh && hasUsableOAuthCredential(credential, { refreshMarginMs: 0 })) {
+        return credential;
+      }
+      throw error;
+    }
     if (!refreshed?.access?.trim()) {
       throw new Error(`Codex app-server auth profile "${params.profileId}" could not refresh.`);
     }

@@ -1145,6 +1145,88 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
+  it("keeps a scoped OAuth profile usable when an in-margin refresh fails", async () => {
+    // Rotation now runs inside the pre-expiry margin, so the token endpoint is
+    // contacted while the scoped credential still authenticates. A transient
+    // failure there must not cost the login: the credential is served until raw
+    // expiry and the next attempt retries the rotation.
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
+    oauthMocks.refreshOpenAICodexToken.mockRejectedValueOnce(new Error("503 service_unavailable"));
+    try {
+      const inMarginExpiry = Date.now() + 2 * 60_000;
+      const authProfileStore: AuthProfileStore = {
+        version: 1,
+        profiles: {
+          "openai:work": {
+            type: "oauth",
+            provider: "openai",
+            access: "scoped-in-margin-access",
+            refresh: "scoped-refresh",
+            expires: inMarginExpiry,
+            accountId: "scoped-account",
+          },
+        },
+      };
+
+      await applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir,
+        authProfileId: "openai:work",
+        authProfileStore,
+      });
+
+      // The rotation was attempted, so the margin fix is still in force.
+      expect(oauthMocks.refreshOpenAICodexToken).toHaveBeenCalledWith("scoped-refresh");
+      // ...and the login still went through on the unexpired credential.
+      expect(request).toHaveBeenCalledWith("account/login/start", {
+        type: "chatgptAuthTokens",
+        accessToken: "scoped-in-margin-access",
+        chatgptAccountId: "scoped-account",
+        chatgptPlanType: null,
+      });
+      expect(authProfileStore.profiles["openai:work"]).toMatchObject({
+        access: "scoped-in-margin-access",
+        expires: inMarginExpiry,
+      });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails a scoped OAuth profile whose refresh fails past raw expiry", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
+    oauthMocks.refreshOpenAICodexToken.mockRejectedValueOnce(new Error("503 service_unavailable"));
+    try {
+      const authProfileStore: AuthProfileStore = {
+        version: 1,
+        profiles: {
+          "openai:work": {
+            type: "oauth",
+            provider: "openai",
+            access: "scoped-expired-access",
+            refresh: "scoped-refresh",
+            expires: Date.now() - 60_000,
+            accountId: "scoped-account",
+          },
+        },
+      };
+
+      await expect(
+        applyCodexAppServerAuthProfile({
+          client: { request } as never,
+          agentDir,
+          authProfileId: "openai:work",
+          authProfileStore,
+        }),
+      ).rejects.toThrow(/service_unavailable/);
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("routes a supplied persisted OAuth clone through canonical refresh", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));

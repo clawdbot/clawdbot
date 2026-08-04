@@ -478,7 +478,9 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           adopted = params.refreshed;
           return true;
         }
-        adopted = hasUsableOAuthCredential(existing) ? existing : null;
+        // Same rule as the refresh-failure gates: a concurrent re-login that is
+        // merely due for rotation is still servable, so raw expiry decides here.
+        adopted = hasUnexpiredOAuthCredential(existing) ? existing : null;
         return false;
       },
     });
