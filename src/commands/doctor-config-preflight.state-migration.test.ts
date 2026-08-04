@@ -7,37 +7,13 @@ import {
   setActiveDegradedPlugins,
 } from "../plugins/runtime-degraded-state.js";
 import { ExitError } from "../runtime.js";
-
-type StateMigrationResult = {
-  migrated: boolean;
-  skipped: boolean;
-  changes: string[];
-  warnings: string[];
-  notices?: string[];
-};
-
-type StartupConvergenceWarning = {
-  pluginId?: string;
-  reason: string;
-  message: string;
-  guidance: string[];
-};
-
-type StartupSmokeFailure = {
-  pluginId: string;
-  installPath?: string;
-  reason: "missing-install-path" | "missing-main-entry" | "unreadable-package-json";
-  detail: string;
-};
-
-type StartupConvergenceResult = {
-  changes: string[];
-  notices?: StartupConvergenceWarning[];
-  warnings: StartupConvergenceWarning[];
-  errored: boolean;
-  smokeFailures: StartupSmokeFailure[];
-  installRecords: Record<string, unknown>;
-};
+import {
+  makeStartupConvergenceResult,
+  stateCheckpointOptions,
+  type StartupConvergenceResult,
+  type StartupSmokeFailure,
+  type StateMigrationResult,
+} from "./doctor-config-preflight.state-migration.test-helpers.js";
 
 const autoMigrateLegacyStateDir = vi.hoisted(() =>
   vi.fn(
@@ -131,18 +107,6 @@ const planPristineStartupStateMigrations = vi.hoisted(() =>
     skipAllStateMigrations: false,
     skipCoreStateMigrations: false,
   })),
-);
-const makeStartupConvergenceResult = vi.hoisted(
-  () =>
-    (overrides: Partial<StartupConvergenceResult> = {}): StartupConvergenceResult => ({
-      changes: [],
-      notices: [],
-      warnings: [],
-      errored: false,
-      smokeFailures: [],
-      installRecords: {},
-      ...overrides,
-    }),
 );
 const readConfigFileSnapshot = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -321,67 +285,34 @@ describe("runDoctorConfigPreflight state migration", () => {
     ]);
   });
 
-  it("uses a current state checkpoint without loading migrations or gateway plugins", async () => {
-    needsStateMigrationCheckpoint.mockReturnValue(false);
-
-    await runDoctorConfigPreflight({
-      migrateState: true,
-      migrateLegacyConfig: false,
-      invalidConfigNote: false,
-      requireStateMigrationCheckpoint: true,
-    });
-
-    expect(autoMigrateLegacyStateDir).not.toHaveBeenCalled();
-    expect(autoMigrateLegacyState).not.toHaveBeenCalled();
-    expect(planStartupPluginConvergence).not.toHaveBeenCalled();
-    expect(runPostCorePluginConvergence).not.toHaveBeenCalled();
-    expect(recordSuccessfulStateMigrations).not.toHaveBeenCalled();
-    expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
-  });
-
-  it("records state-only completion without certifying gateway startup", async () => {
-    needsStateMigrationCheckpoint.mockReturnValue(true);
-
-    await runDoctorConfigPreflight({
-      migrateState: true,
-      migrateLegacyConfig: false,
-      invalidConfigNote: false,
-      requireStateMigrationCheckpoint: true,
-    });
-
-    const pinnedEnv = acquireStartupMigrationLease.mock.calls[0]?.[0]?.env;
-    expect(needsStateMigrationCheckpoint).toHaveBeenCalledWith({ env: pinnedEnv });
-    expect(autoMigrateLegacyState).toHaveBeenCalledOnce();
-    expect(planStartupPluginConvergence).not.toHaveBeenCalled();
-    expect(recordSuccessfulStateMigrations).toHaveBeenCalledWith({
-      env: pinnedEnv,
-      lease: startupMigrationLease,
-    });
-    expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
-    expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
-  });
-
-  it("leaves a state checkpoint stale when automatic migrations warn", async () => {
-    needsStateMigrationCheckpoint.mockReturnValue(true);
-    autoMigrateLegacyStateDir.mockResolvedValueOnce({
+  it.each([
+    { name: "uses a current state checkpoint", needed: false, warnings: [] as string[] },
+    { name: "records clean state-only completion", needed: true, warnings: [] as string[] },
+    { name: "leaves the checkpoint stale after a warning", needed: true, warnings: ["warning"] },
+  ])("$name", async ({ needed, warnings }) => {
+    vi.clearAllMocks();
+    needsStateMigrationCheckpoint.mockReturnValue(needed);
+    autoMigrateLegacyStateDir.mockResolvedValue({
       migrated: false,
       skipped: false,
       changes: [],
-      warnings: ["Left legacy state in place."],
+      warnings,
     });
 
-    await expect(
-      runDoctorConfigPreflight({
-        migrateState: true,
-        migrateLegacyConfig: false,
-        invalidConfigNote: false,
-        requireStateMigrationCheckpoint: true,
-      }),
-    ).resolves.toBeDefined();
+    await expect(runDoctorConfigPreflight(stateCheckpointOptions)).resolves.toBeDefined();
 
-    expect(recordSuccessfulStateMigrations).not.toHaveBeenCalled();
+    expect(autoMigrateLegacyState).toHaveBeenCalledTimes(needed ? 1 : 0);
+    expect(planStartupPluginConvergence).not.toHaveBeenCalled();
+    if (needed && warnings.length === 0) {
+      expect(recordSuccessfulStateMigrations).toHaveBeenCalledWith({
+        env: acquireStartupMigrationLease.mock.calls[0]?.[0]?.env,
+        lease: startupMigrationLease,
+      });
+    } else {
+      expect(recordSuccessfulStateMigrations).not.toHaveBeenCalled();
+    }
     expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
-    expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
+    expect(startupMigrationLeaseRelease).toHaveBeenCalledTimes(needed ? 1 : 0);
   });
 
   it("runs the startup guard immediately before the first state mutation", async () => {
