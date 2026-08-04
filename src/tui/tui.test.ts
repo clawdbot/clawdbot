@@ -1,5 +1,6 @@
 // Covers core TUI state transitions and backend event rendering.
 import { EventEmitter } from "node:events";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../infra/parse-finite-number.js";
@@ -24,6 +25,7 @@ import {
   isTuiBusyActivityStatus,
   resolveLocalAuthSpawnInvocation,
   resolveTuiCtrlCAction,
+  resolveTuiLocalAuthCliInvocation,
   resolveTuiShutdownHardExitMs,
   resolveTuiSessionKey,
   scheduleProcessExitAfterTuiReturn,
@@ -62,6 +64,44 @@ describe("resolveFinalAssistantText", () => {
         errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
       }),
     ).toBe("LLM streaming response contained a malformed fragment. Please try again.");
+  });
+});
+
+describe("resolveTuiLocalAuthCliInvocation", () => {
+  it("filters inspector flags while preserving the current CLI runtime context", () => {
+    const originalArgv = [...process.argv];
+    try {
+      const cliEntry = path.resolve("openclaw.mjs");
+      process.argv[1] = cliEntry;
+
+      expect(
+        resolveTuiLocalAuthCliInvocation({
+          provider: "test-provider",
+          execArgv: [
+            "--import",
+            "/repo/node_modules/tsx/dist/loader.mjs",
+            "--inspect-brk=0",
+            "--trace-warnings",
+          ],
+        }),
+      ).toStrictEqual({
+        command: process.execPath,
+        args: [
+          "--import",
+          "/repo/node_modules/tsx/dist/loader.mjs",
+          "--trace-warnings",
+          cliEntry,
+          "models",
+          "auth",
+          "login",
+          "--provider",
+          "test-provider",
+        ],
+        cwd: path.resolve("."),
+      });
+    } finally {
+      process.argv = originalArgv;
+    }
   });
 });
 

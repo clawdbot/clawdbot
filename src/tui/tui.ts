@@ -42,6 +42,7 @@ import { sanitizeAutocompleteProvider } from "./tui-autocomplete.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
+import { filterTuiExecArgv } from "./tui-exec-argv.js";
 import {
   formatTuiErrorMessage,
   formatTuiFooter,
@@ -142,6 +143,19 @@ export function resolveLocalAuthSpawnInvocation(params: {
     args: ["/d", "/s", "/c", buildWindowsCmdExeCommandLine(params.command, params.args)],
     options: { windowsHide: true, windowsVerbatimArguments: true },
   };
+}
+
+export function resolveTuiLocalAuthCliInvocation(params: {
+  provider?: string;
+  execArgv?: readonly string[];
+}) {
+  const provider = params.provider?.trim();
+  return resolveCurrentOpenClawCliInvocation(
+    ["models", "auth", "login", ...(provider ? ["--provider", provider] : [])],
+    {
+      execArgv: filterTuiExecArgv(params.execArgv ?? process.execArgv),
+    },
+  );
 }
 
 export function resolveTuiSessionKey(params: {
@@ -1157,12 +1171,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
                 args = ["login"];
                 cwd = resolveUsableCwd();
               } else {
-                const invocation = resolveCurrentOpenClawCliInvocation([
-                  "models",
-                  "auth",
-                  "login",
-                  ...(provider ? ["--provider", provider] : []),
-                ]);
+                const invocation = resolveTuiLocalAuthCliInvocation({ provider });
                 ({ command, args, cwd } = invocation);
               }
 
