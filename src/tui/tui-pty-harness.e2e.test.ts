@@ -3,10 +3,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { exerciseTuiCommandSurface } from "./tui-pty-command-surfaces-test-support.js";
 import {
   approveWorkspaceSkill,
   COMPACT_TERMINAL_SIZES,
   exerciseFragmentedUnicodePrompt,
+  exerciseNarrowTerminalRendering,
+  exerciseTerminalOutputSafety,
   objectFieldEquals,
   readFixtureLog,
   waitForFixtureLogEntry,
@@ -344,7 +347,34 @@ describe.sequential("TUI PTY harness", () => {
     },
     STARTUP_TEST_TIMEOUT_MS,
   );
-
+  // prettier-ignore
+  const editorInputCases = [
+    ["recalls submitted input history through literal terminal navigation", [["w", "history recall proof\r"], ["s", "history recall proof"], ["o", "PTY_RESPONSE: history recall proof"], ["w", "\u001b[A\u0005 edited\r"], ["s", "history recall proof edited"]]],
+    ["applies literal terminal shortcuts before submitting editor input",
+      [["w", "discard this input"], ["w", "\u0003"], ["o", "cleared input; press ctrl+c again to exit"], ["w", "shortcut kept input\r"], ["s", "shortcut kept input"], ["n", "discard this input"]]],
+    ["handles bracketed paste and rejects the pasted submit while busy",
+      [["w", "\u001b[200~bracketed paste proof\u001b[201~\r"], ["s", "bracketed paste proof"], ["o", "PTY_RESPONSE: bracketed paste proof"], ["w", "slow prompt\r"], ["s", "slow prompt"],
+        ["w", "\u001b[200~busy pasted prompt\u001b[201~\r"], ["o", "agent is busy"], ["o", "PTY_RESPONSE: slow prompt"], ["n", "busy pasted prompt"]]],
+    ["submits fragmented IME text and Kitty AltGr printable bytes", [["w", "日本"], ["w", "語 "], ["w", "\u001b[64::113;7u\u001b[8364::101;7u\r"], ["s", "日本語 @€"], ["o", "PTY_RESPONSE: 日本語 @€"]]],
+  ] as const;
+  it.each(editorInputCases)(
+    "%s",
+    async (_name, steps) => {
+      const tui = await startTuiFixture();
+      try {
+        await tui.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+        for (const [action, value] of steps) {
+          // prettier-ignore
+          const sent = (entry: FixtureLogEntry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", value);
+          // prettier-ignore
+          await { w: () => tui.run.write(value, { delay: false }), o: () => tui.run.waitForOutput(value), s: () => tui.waitForLogEntry(sent), n: async () => expect((await readFixtureLog(tui.logPath)).some(sent)).toBe(false) }[action]();
+        }
+      } finally {
+        await tui.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
   it(
     "preserves consecutive backspaces received in the same terminal input chunk",
     async () => {
@@ -658,6 +688,14 @@ describe.sequential("TUI PTY harness", () => {
     TEST_TIMEOUT_MS,
   );
 
+  // Keep these producer-matched cases data-driven because this harness is at its line budget.
+  // prettier-ignore
+  const terminalSafetyCases = [
+    ["renders long Unicode output and copy-safe URLs in narrow real PTY frames", () => exerciseNarrowTerminalRendering(startTuiFixture, STARTUP_TIMEOUT_MS)],
+    ["sanitizes ANSI OSC and C1 payloads across real PTY display boundaries", () => exerciseTerminalOutputSafety(startTuiFixture, STARTUP_TIMEOUT_MS)],
+  ] as const;
+  it.each(terminalSafetyCases)("%s", async (_name, runCase) => runCase(), STARTUP_TEST_TIMEOUT_MS);
+
   it(
     "preserves xAI account limit errors in terminal output",
     async () => {
@@ -864,22 +902,14 @@ describe.sequential("TUI PTY harness", () => {
     STARTUP_TEST_TIMEOUT_MS,
   );
 
-  it(
-    "renders slash command help",
-    async () => {
-      await fixture.run.write("/help\r", { delay: false });
-      await fixture.run.waitForOutput("Slash commands:");
-      await fixture.run.waitForOutput("/help");
-      await fixture.run.waitForOutput("/verbose <on|off|full>");
-      await fixture.run.waitForOutput("/reasoning <on|off|stream>");
-      await fixture.run.waitForOutput("/goal");
-      await fixture.run.waitForOutput("/goal start <objective>");
-      await fixture.run.waitForOutput("/btw <side question>");
-      await fixture.run.waitForOutput("/queue");
-      await fixture.run.waitForOutput("/stop");
-      await fixture.run.waitForOutput("/exit");
-    },
-    TEST_TIMEOUT_MS,
+  it.each([
+    ["lists and executes slash commands through authenticated real PTY frames", "slash-commands"],
+    ["selects model and session pickers through authenticated real PTY frames", "pickers"],
+    ["updates settings through an authenticated real PTY overlay", "settings"],
+  ] as const)(
+    "%s",
+    (_name, surface) => exerciseTuiCommandSurface(startTuiFixture, surface, STARTUP_TIMEOUT_MS),
+    STARTUP_TEST_TIMEOUT_MS,
   );
 
   it(

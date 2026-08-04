@@ -69,9 +69,16 @@ describe("model setup state", () => {
     expect(
       wizardStateFromResult("oauth", { done: false, step, error: "Pick one" }, "failed"),
     ).toMatchObject({ phase: "step", validationError: "Pick one" });
-    expect(wizardStateFromResult("oauth", { done: true, status: "done" }, "failed")).toEqual({
+    expect(
+      wizardStateFromResult(
+        "oauth",
+        { done: true, status: "done", preparedModelRef: "ollama/qwen3:0.6b" },
+        "failed",
+      ),
+    ).toEqual({
       phase: "done",
       authChoice: "oauth",
+      preparedModelRef: "ollama/qwen3:0.6b",
     });
     expect(
       wizardStateFromResult("oauth", { done: true, status: "cancelled" }, "Cancelled"),

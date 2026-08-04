@@ -9,6 +9,7 @@ import {
   validateSessionsUsageParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -127,6 +128,48 @@ type SessionsUsageCacheEntry = {
 const sessionsUsageCache = new Map<string, SessionsUsageCacheEntry>();
 
 class SessionsUsageInvalidRequestError extends Error {}
+
+type ResolvedSessionUsageTarget = {
+  entry: SessionEntry | undefined;
+  agentId: string;
+  sessionId: string;
+  sessionFile: string;
+};
+
+function resolveSessionUsageTarget(
+  key: string,
+  config: OpenClawConfig,
+  agentIdHint?: string,
+): ResolvedSessionUsageTarget | undefined {
+  const { canonicalKey, entry, storePath } = loadSessionEntryReadOnly(
+    key,
+    agentIdHint ? { agentId: agentIdHint } : undefined,
+  );
+  const parsed = parseAgentSessionKey(key);
+  const agentId = parsed?.agentId ?? agentIdHint ?? resolveDefaultAgentId(config);
+  const sessionId = entry?.sessionId ?? parsed?.rest ?? key;
+  const sessionFile = entry
+    ? resolveExistingUsageSessionFile({
+        agentId,
+        sessionId,
+        sessionTarget: {
+          agentId,
+          sessionId,
+          sessionKey: canonicalKey,
+          storePath,
+        },
+      })
+    : resolveExistingUsageSessionFile({
+        agentId,
+        sessionId,
+        sessionFile: resolveSessionFilePath(
+          sessionId,
+          undefined,
+          resolveSessionFilePathOptions({ storePath, agentId }),
+        ),
+      });
+  return sessionFile ? { entry, agentId, sessionId, sessionFile } : undefined;
+}
 
 function findCostUsageCacheEvictionKey(): string | undefined {
   for (const [key, entry] of costUsageCache) {
@@ -277,25 +320,14 @@ function resolveSessionUsageFileOrRespond(
   key: string,
   respond: RespondFn,
   config: OpenClawConfig,
-): {
-  config: OpenClawConfig;
-  entry: SessionEntry | undefined;
-  agentId: string;
-  sessionId: string;
-  sessionFile: string;
-} | null {
-  const { entry, storePath } = loadSessionEntryReadOnly(key);
-
-  // For discovered sessions (not in store), try using key as sessionId directly
-  const parsed = parseAgentSessionKey(key);
-  const agentId = parsed?.agentId ?? resolveDefaultAgentId(config);
-  const rawSessionId = parsed?.rest ?? key;
-  const sessionId = entry?.sessionId ?? rawSessionId;
-  let sessionFile: string;
+): (ResolvedSessionUsageTarget & { config: OpenClawConfig }) | null {
+  let resolved: ResolvedSessionUsageTarget | undefined;
   try {
-    const pathOpts = resolveSessionFilePathOptions({ storePath, agentId });
-    sessionFile = resolveSessionFilePath(sessionId, entry, pathOpts);
+    resolved = resolveSessionUsageTarget(key, config);
   } catch {
+    resolved = undefined;
+  }
+  if (!resolved) {
     respond(
       false,
       undefined,
@@ -303,8 +335,7 @@ function resolveSessionUsageFileOrRespond(
     );
     return null;
   }
-
-  return { config, entry, agentId, sessionId, sessionFile };
+  return { config, ...resolved };
 }
 
 const parseDateParts = (raw: unknown): DateParts | undefined => {
@@ -1346,7 +1377,7 @@ export const usageHandlers: GatewayRequestHandlers = {
         load: async () => {
           // Load session store for named sessions only on a result-cache miss.
           const sessionStoreOpts = effectiveAgentId ? { agentId: effectiveAgentId } : {};
-          const { storePath, store } = loadCombinedSessionStoreForGateway(config, sessionStoreOpts);
+          const { store } = loadCombinedSessionStoreForGateway(config, sessionStoreOpts);
           const scopedStore = effectiveAgentId
             ? filterSessionStoreByAgent({
                 config,
@@ -1387,46 +1418,52 @@ export const usageHandlers: GatewayRequestHandlers = {
             const storeEntry = storeMatch?.entry ?? storeByIdMatch?.entry;
             const sessionId = storeEntry?.sessionId ?? keyRest;
 
-            // Resolve the session file path
-            let sessionFile: string | undefined;
+            // Stored sessions are canonical SQLite targets. JSONL discovery remains only for
+            // sessions without a store row, so retired locators cannot redirect live state.
+            let resolved: ResolvedSessionUsageTarget | undefined;
             try {
-              const pathOpts = resolveSessionFilePathOptions({
-                storePath: storePath !== "(multiple)" ? storePath : undefined,
-                agentId: agentIdFromKey,
-              });
-              sessionFile = resolveExistingUsageSessionFile({
-                sessionId,
-                sessionEntry: storeEntry,
-                sessionFile: resolveSessionFilePath(sessionId, storeEntry, pathOpts),
-                agentId: agentIdFromKey,
-              });
+              resolved = resolveSessionUsageTarget(resolvedStoreKey, config, agentIdFromKey);
+              if (
+                !resolved ||
+                resolved.agentId !== agentIdFromKey ||
+                resolved.sessionId !== sessionId
+              ) {
+                throw new Error("session target mismatch");
+              }
             } catch {
               throw new SessionsUsageInvalidRequestError(
                 `Invalid session reference: ${specificKey}`,
               );
             }
+            const { sessionFile } = resolved;
 
-            if (sessionFile) {
+            let updatedAt: number | undefined;
+            if (parseSqliteSessionFileMarker(sessionFile)) {
+              updatedAt = storeEntry?.updatedAt ?? now;
+            } else {
               try {
                 const stats = fs.statSync(sessionFile);
                 if (stats.isFile()) {
-                  maybeMergeFamilyEntry({
-                    mergedEntries,
-                    groupingMode,
-                    base: {
-                      key: resolvedStoreKey,
-                      agentId: agentIdFromKey,
-                      sessionId,
-                      sessionFile,
-                      label: storeEntry?.label,
-                      updatedAt: storeEntry?.updatedAt ?? stats.mtimeMs,
-                      storeEntry,
-                    },
-                  });
+                  updatedAt = storeEntry?.updatedAt ?? stats.mtimeMs;
                 }
               } catch {
                 // File doesn't exist - no results for this key
               }
+            }
+            if (updatedAt !== undefined) {
+              maybeMergeFamilyEntry({
+                mergedEntries,
+                groupingMode,
+                base: {
+                  key: resolvedStoreKey,
+                  agentId: agentIdFromKey,
+                  sessionId,
+                  sessionFile,
+                  label: storeEntry?.label,
+                  updatedAt,
+                  storeEntry,
+                },
+              });
             }
           } else {
             // Full discovery for list view

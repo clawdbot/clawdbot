@@ -209,6 +209,7 @@ describe("qa-channel gateway", () => {
     await vi.waitFor(() =>
       expect(setStatus).toHaveBeenCalledWith({
         accountId: "default",
+        running: true,
         connected: true,
         lifecycle: "ready",
         lastConnectedAt: expect.any(Number),

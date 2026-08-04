@@ -398,6 +398,7 @@ export async function finishGatewayStartup(params: {
         log,
       });
       runtimeState.heartbeatRunner = activated.heartbeatRunner;
+      runtimeState.stopOutboundDeliveryRecovery = activated.stopOutboundDeliveryRecovery;
     });
   };
   ({

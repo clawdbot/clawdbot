@@ -63,6 +63,7 @@ const SIGNAL_REST_SUCCESS_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 // Receive envelopes contain metadata only; cap frames, and do not let upgrades block reconnect.
 const WS_MAX_PAYLOAD = 1024 * 1024;
 const WS_HANDSHAKE_MS = 30_000;
+const WS_SHUTDOWN_DRAIN_TIMEOUT_MS = 1_500;
 // Outbound file paths are converted to base64 before posting to the container. Cap
 // reads to the same default the native signal send path uses (8 MiB) so a path to a
 // huge or symlinked file cannot OOM the gateway before encoding.
@@ -445,8 +446,13 @@ export async function streamContainerEvents(params: {
     let settled = false;
     let eventChain = Promise.resolve();
     let abortHandler: (() => void) | undefined;
+    let shutdownDrainTimer: ReturnType<typeof setTimeout> | undefined;
 
     const cleanup = () => {
+      if (shutdownDrainTimer) {
+        clearTimeout(shutdownDrainTimer);
+        shutdownDrainTimer = undefined;
+      }
       if (abortHandler) {
         params.abortSignal?.removeEventListener("abort", abortHandler);
         abortHandler = undefined;
@@ -532,10 +538,22 @@ export async function streamContainerEvents(params: {
     if (params.abortSignal) {
       abortHandler = () => {
         log("[signal-ws] aborted, closing connection");
+        // Arm before close: ws can synchronously flush buffered messages and emit
+        // close, whose final eventChain owns every accepted durable admission.
+        shutdownDrainTimer = setTimeout(() => {
+          logError(
+            "[signal-ws] shutdown timed out draining accepted receive events; messages may be lost",
+          );
+          ws.terminate();
+          resolveOnce();
+        }, WS_SHUTDOWN_DRAIN_TIMEOUT_MS);
+        shutdownDrainTimer.unref?.();
         ws.close();
-        resolveOnce();
       };
       params.abortSignal.addEventListener("abort", abortHandler, { once: true });
+      if (params.abortSignal.aborted) {
+        abortHandler();
+      }
     }
   });
 }

@@ -15,13 +15,8 @@ export const GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS = [4, 6, 8] as const;
 export const GOOGLE_VIDEO_MIN_DURATION_SECONDS = GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS[0];
 export const GOOGLE_VIDEO_MAX_DURATION_SECONDS = GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS[2];
 
-function isGoogleProviderConfigured(
-  ctx: { agentDir?: string } | VideoGenerationProviderConfiguredContext,
-): boolean {
-  return isProviderApiKeyConfigured({
-    provider: "google",
-    agentDir: ctx.agentDir,
-  });
+function isGoogleProviderConfigured(ctx: VideoGenerationProviderConfiguredContext): boolean {
+  return isProviderApiKeyConfigured({ provider: "google", ...ctx });
 }
 
 export function createGoogleMusicGenerationProviderMetadata(): Omit<

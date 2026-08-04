@@ -4701,6 +4701,19 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
   });
 
+  it("runs the Doctor plugin-index persistence proof against the built CLI", () => {
+    const workflow = readCiWorkflow();
+    const proofStep = workflow.jobs["build-artifacts"].steps.find(
+      (step: WorkflowStep) => step.name === "Verify built Doctor plugin index persistence",
+    );
+
+    expect(proofStep.run).toContain(
+      "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
+    );
+    expect(proofStep.run).toContain("--config test/vitest/vitest.e2e.config.ts");
+    expect(proofStep.run).toContain("Selected target predates");
+  });
+
   it("restores the dist build cache before building and saves only cache misses", () => {
     const workflow = readCiWorkflow();
     const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;

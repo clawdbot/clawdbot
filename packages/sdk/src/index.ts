@@ -62,6 +62,7 @@ export type {
   ToolInvokeResult,
   WorkspaceSelection,
   WorkerEnvironmentMetadata,
+  WorkerEnvironmentProfileSummary,
   WorkerEnvironmentState,
   WorkerTunnelStatus,
 } from "./types.js";

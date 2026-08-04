@@ -42,7 +42,14 @@ describe("Nextcloud Talk monitor abort", () => {
     expect(createSpool).toHaveBeenCalledWith(
       expect.objectContaining({ abortSignal: abortController.signal }),
     );
-    expect(statusSink).toHaveBeenCalledExactlyOnceWith({ lifecycle: "ready" });
+    expect(statusSink).toHaveBeenCalledExactlyOnceWith({
+      running: true,
+      connected: true,
+      lifecycle: "ready",
+      lastConnectedAt: expect.any(Number),
+      lastError: null,
+      terminalDisconnect: undefined,
+    });
     abortController.abort();
     await vi.waitFor(() => expect(spoolStop).toHaveBeenCalledOnce());
     await monitor.stop();

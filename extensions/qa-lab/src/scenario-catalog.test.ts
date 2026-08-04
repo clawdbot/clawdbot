@@ -360,6 +360,17 @@ describe("qa scenario catalog", () => {
     expect(hostedScenario.coverage?.primary).toContain(coverageId);
   });
 
+  // oxfmt-ignore
+  it.each([
+    [`${agentRuntime}.progress-visibility-failure-recovery`, "empty-response-retry-budget-exhausted", "empty-response-recovery-replay-safe-read"],
+    [`${agentRuntime}.failure-recovery-retry-policy`, "empty-response-recovery-replay-safe-read", "reasoning-only-no-auto-retry-after-write"],
+  ] as const)("keeps %s on its canonical primary owner", (coverageId, primaryOwnerId, secondaryScenarioId) => {
+    const primaryOwnerIds = readQaScenarioPack().scenarios.filter((scenario) => scenario.coverage?.primary.includes(coverageId)).map((scenario) => scenario.id);
+    const secondaryScenario = readQaScenarioById(secondaryScenarioId);
+    expect(primaryOwnerIds, coverageId).toStrictEqual([primaryOwnerId]); expect(secondaryScenario.coverage?.primary, secondaryScenarioId).not.toContain(coverageId);
+    expect(secondaryScenario.coverage?.secondary, secondaryScenarioId).toContain(coverageId);
+  });
+
   it("loads helper-backed HTTP API scenarios as supporting taxonomy coverage", () => {
     expect(readQaScenarioById("openai-compatible-chat-tools").coverage?.secondary).toStrictEqual([
       "gateway.openai-compatible-apis",
@@ -674,7 +685,10 @@ describe("qa scenario catalog", () => {
   it("loads the opt-in update.run package self-upgrade script proof", () => {
     const scenario = readQaScenarioById("update-run-package-self-upgrade");
 
-    expect(scenario.coverage?.primary).toEqual([`${cli}.update-status-and-rpc`]);
+    expect(scenario.coverage?.primary).toEqual([
+      `${cli}.update-status-and-rpc`,
+      "gateway.update-and-setup-apis",
+    ]);
     expect(scenario.coverage?.secondary).toEqual([`${cli}.managed-gateway-restart`]);
     expect(scenario.execution.kind).toBe("script");
     if (scenario.execution.kind !== "script") {

@@ -135,6 +135,14 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       entrypoint: "command",
       nativeExecutableNames: ["claude", "claude.exe"],
     },
+    // Claude Code 2.1.206 first shipped per-input lifecycle correlation. The
+    // runtime checks the advertised capability so backports and wrappers work.
+    liveSessionRequirement: {
+      capability: "msg_lifecycle_v1",
+      minimumVersion: "2.1.206",
+      versionArgs: ["--version"],
+      updateCommand: "claude update",
+    },
     bundleMcp: true,
     bundleMcpMode: "claude-config-file",
     nativeToolMode: "selectable",

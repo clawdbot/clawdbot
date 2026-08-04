@@ -2733,8 +2733,15 @@ describe("prepareCliRunContext", () => {
     const grantContext = mintMcpLoopbackClientGrant.mock.calls.at(-1)?.[0]?.context;
     expect(projected).toBeDefined();
     expect(grantContext).toBeDefined();
-    const { cfg: projectedConfig, ...projectedContext } = projected ?? {};
+    const {
+      cfg: projectedConfig,
+      authProfileStore,
+      authProfileStoreAgentDir,
+      ...projectedContext
+    } = projected ?? {};
     expect(projectedConfig).toEqual(expect.any(Object));
+    expect(authProfileStore).toMatchObject({ version: 1, profiles: {} });
+    expect(authProfileStoreAgentDir).toEqual(expect.any(String));
     expect(projectedContext).toEqual(grantContext);
     expect(projectedContext).toMatchObject({
       sessionKey: "agent:worker:main",
@@ -2981,6 +2988,10 @@ describe("prepareCliRunContext", () => {
         spawnedBy: "agent:main:telegram:group:parent",
       },
       runtimeOwnerToken: "loopback-owner-token",
+      toolAuth: {
+        agentDir: expect.any(String),
+        store: expect.objectContaining({ version: 1, profiles: {} }),
+      },
     });
     context.preparedBackend.mcpClientGrantCapture?.activate("capture-test");
     context.preparedBackend.mcpClientGrantCapture?.deactivate("capture-test");
@@ -3626,10 +3637,14 @@ describe("prepareCliRunContext", () => {
       const {
         cfg: _projectedConfig,
         toolsAllow: projectedPolicy,
+        authProfileStore,
+        authProfileStoreAgentDir,
         ...projectedTrustedContext
       } = projected ?? {};
       const { toolsAllow: grantedTools, ...grantTrustedContext } = grantContext ?? {};
       expect(projectedPolicy).toEqual(["write"]);
+      expect(authProfileStore).toMatchObject({ version: 1, profiles: {} });
+      expect(authProfileStoreAgentDir).toEqual(expect.any(String));
       expect(grantedTools).toEqual(["write", "apply_patch"]);
       expect(projectedTrustedContext).toEqual(grantTrustedContext);
     } finally {
