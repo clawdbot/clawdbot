@@ -279,7 +279,7 @@ NODE_REPL_HISTORY=/tmp/node-repl-history | NODE_V8_COVERAGE=/tmp/coverage | OK=1
     });
 
     expect(env).toEqual(
-      envRecord(`OPENCLAW_CLI=${OPENCLAW_CLI_ENV_VALUE} | PATH=/usr/bin:/bin
+      envRecord(`AI_AGENT=openclaw | OPENCLAW_CLI=${OPENCLAW_CLI_ENV_VALUE} | PATH=/usr/bin:/bin
 AWS_CONFIG_FILE=/tmp/aws-config | KUBECONFIG=/tmp/kubeconfig
 GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp.json | AWS_SHARED_CREDENTIALS_FILE=/tmp/aws-credentials
 AWS_WEB_IDENTITY_TOKEN_FILE=/tmp/aws-web-token | AZURE_AUTH_LOCATION=/tmp/azure-auth.json
@@ -588,7 +588,7 @@ NODE_TLS_REJECT_UNAUTHORIZED=1 | DOCKER_TLS_VERIFY=0`),
     });
 
     expect(env).toEqual(
-      envRecord(`OPENCLAW_CLI=${OPENCLAW_CLI_ENV_VALUE} | PATH=/usr/bin:/bin
+      envRecord(`AI_AGENT=openclaw | OPENCLAW_CLI=${OPENCLAW_CLI_ENV_VALUE} | PATH=/usr/bin:/bin
 HTTP_PROXY=http://trusted-proxy.example.test:8080 | HTTPS_PROXY=http://trusted-proxy.example.test:8443
 NODE_TLS_REJECT_UNAUTHORIZED=0 | SSL_CERT_DIR=/etc/ssl/certs
 CURL_CA_BUNDLE=/etc/ssl/cert.pem | DOCKER_TLS_VERIFY=1`),
@@ -665,6 +665,7 @@ CURL_CA_BUNDLE=/etc/ssl/cert.pem | DOCKER_TLS_VERIFY=1`),
     });
 
     expect(env).toEqual({
+      AI_AGENT: "openclaw",
       OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
       PATH: "/usr/bin:/bin",
       GOOD: "1",

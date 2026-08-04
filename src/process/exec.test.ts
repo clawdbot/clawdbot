@@ -17,6 +17,7 @@ import {
 } from "./exec.js";
 
 const OPENCLAW_CLI_ENV_VALUE = "1";
+const AI_AGENT_ENV_VALUE = "openclaw";
 
 describe("runCommandWithTimeout", () => {
   it("never enables shell execution (Windows cmd.exe injection hardening)", () => {
@@ -47,6 +48,7 @@ describe("runCommandWithTimeout", () => {
     expect(resolved.OPENCLAW_TEST_ENV).toBe("ok");
     expect(resolved.OPENCLAW_TO_REMOVE).toBeUndefined();
     expect(resolved.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
+    expect(resolved.AI_AGENT).toBe(AI_AGENT_ENV_VALUE);
   });
 
   it("collapses case-insensitive duplicate env keys on Windows", () => {
