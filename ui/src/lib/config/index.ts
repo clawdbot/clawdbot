@@ -44,6 +44,10 @@ type RuntimeConfigExternalMutationOptions = {
   dispatchError?: string;
 };
 
+type RuntimeConfigDispatchOptions = {
+  canDispatch?: () => boolean;
+};
+
 /** Debounce window between the last form edit and its automatic config.set. */
 const CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS = 800;
 
@@ -226,7 +230,7 @@ export type RuntimeConfigCapability = {
   setWritesSuspended: (suspended: boolean) => void;
   /** Resolves once no config write is in flight (used as an updater barrier). */
   waitForPendingWrites: () => Promise<void>;
-  save: () => Promise<boolean>;
+  save: (options?: RuntimeConfigDispatchOptions) => Promise<boolean>;
   apply: () => Promise<boolean>;
   openFile: () => Promise<void>;
   /** Resolves the authored keyed entry; ensure returns a writable target without mutating. */
@@ -256,6 +260,8 @@ type ConfigPatchOptions = {
   note: string;
   /** Array paths the caller intentionally shrinks; required by the gateway's destructive-array guard. */
   replacePaths?: string[];
+  /** Caller-owned lifecycle/access guard, rechecked at the final dispatch boundary. */
+  canDispatch?: () => boolean;
 };
 
 type ConfigPatchBuildResult = { options: ConfigPatchOptions } | { error: string };
@@ -991,6 +997,9 @@ async function patchConfig(
   const baseHash = currentSnapshot.hash;
   if (!baseHash) {
     state.lastError = "Config hash missing; refresh and retry.";
+    return false;
+  }
+  if (options.canDispatch && !options.canDispatch()) {
     return false;
   }
   state.lastError = null;
@@ -2013,8 +2022,10 @@ export function createRuntimeConfigCapability(
       flushScheduledAutoSave();
       return drainPendingWrites(true);
     },
-    save: () =>
-      !canCallConfigMethod("config.set")
+    save: (options = {}) => {
+      const canDispatch = () =>
+        canCallConfigMethod("config.set") && (options.canDispatch?.() ?? true);
+      return !canDispatch()
         ? Promise.resolve(false)
         : afterPendingWritesSettled(
             async () => {
@@ -2025,15 +2036,16 @@ export function createRuntimeConfigCapability(
                   (info) => {
                     manualFlightInfo = info;
                   },
-                  () => canCallConfigMethod("config.set"),
+                  canDispatch,
                 );
               } finally {
                 reconcileAppliedRefresh();
               }
             },
             false,
-            { canDispatch: () => canCallConfigMethod("config.set") },
-          ),
+            { canDispatch },
+          );
+    },
     apply: () =>
       !canCallConfigMethod("config.apply")
         ? Promise.resolve(false)
@@ -2079,7 +2091,7 @@ export function createRuntimeConfigCapability(
     // scheduled autosave into a flight first (the settle below drains it) and
     // re-arm the debounce after so a dirty form is never left timer-less.
     patch: (options) =>
-      canCallConfigMethod("config.patch")
+      canCallConfigMethod("config.patch") && (options.canDispatch?.() ?? true)
         ? queueConfigPatch(() => ({ options }))
         : Promise.resolve(false),
     patchFromSnapshot: (build) =>

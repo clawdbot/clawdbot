@@ -568,8 +568,13 @@ async function writeDreamingPatch(
   state: DreamingState,
   config: DreamingConfigCapability,
   patch: Record<string, unknown>,
+  canDispatch: () => boolean,
 ): Promise<boolean> {
-  if (state.dreamingModeSaving || !canCallDreamingMethod(state, "config.patch", "operator.admin")) {
+  if (
+    state.dreamingModeSaving ||
+    !canDispatch() ||
+    !canCallDreamingMethod(state, "config.patch", "operator.admin")
+  ) {
     return false;
   }
 
@@ -579,6 +584,7 @@ async function writeDreamingPatch(
     const updated = await config.patch({
       raw: patch,
       note: "Dreaming settings updated from the Dreaming tab.",
+      canDispatch,
     });
     if (!updated) {
       state.dreamingStatusError =
@@ -655,8 +661,9 @@ export async function updateDreamingEnabled(
   state: DreamingState,
   config: DreamingConfigCapability,
   enabled: boolean,
+  canDispatch: () => boolean = () => true,
 ): Promise<boolean> {
-  if (state.dreamingModeSaving) {
+  if (state.dreamingModeSaving || !canDispatch()) {
     return false;
   }
   if (!config.state.configSnapshot?.hash) {
@@ -669,19 +676,27 @@ export async function updateDreamingEnabled(
   if (!(await ensureDreamingPathSupported(state, config, pluginId))) {
     return false;
   }
-  const ok = await writeDreamingPatch(state, config, {
-    plugins: {
-      entries: {
-        [pluginId]: {
-          config: {
-            dreaming: {
-              enabled,
+  if (!canDispatch()) {
+    return false;
+  }
+  const ok = await writeDreamingPatch(
+    state,
+    config,
+    {
+      plugins: {
+        entries: {
+          [pluginId]: {
+            config: {
+              dreaming: {
+                enabled,
+              },
             },
           },
         },
       },
     },
-  });
+    canDispatch,
+  );
   if (ok && state.dreamingStatus) {
     state.dreamingStatus = {
       ...state.dreamingStatus,

@@ -57,6 +57,7 @@ type TestAgentsPage = HTMLElement & {
   loadEffectiveToolsForAgent: (agentId: string) => void;
   loadAgentFiles: (agentId: string, force?: boolean) => Promise<void>;
   saveAgentConfig: () => void;
+  setDefaultAgent: (agentId: string) => void;
 };
 
 function setPageGateway(
@@ -176,6 +177,38 @@ function pageContext(
 }
 
 describe("AgentsPage gateway lifecycle", () => {
+  it("does not stage a default-agent change after a same-client reconnect", async () => {
+    const loading = deferred<void>();
+    const client = {} as GatewayBrowserClient;
+    const currentGateway = gateway(snapshot(client));
+    const agents = agentsCapability(async () => files("main", "unused"));
+    const stageDefaultAgent = vi.fn(() => true);
+    const save = vi.fn(async () => true);
+    const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+    const context = pageContext(currentGateway, agents);
+    page.context = {
+      ...context,
+      runtimeConfig: {
+        state: { configFormDirty: false },
+        ensureLoaded: vi.fn(() => loading.promise),
+        stageDefaultAgent,
+        save,
+        subscribe: vi.fn(() => () => undefined),
+      },
+    } as unknown as ApplicationContext;
+    setPageGateway(page, client);
+
+    page.setDefaultAgent("research");
+    setPageGateway(page, client, false);
+    setPageGateway(page, client);
+    loading.resolve();
+    await loading.promise;
+    await Promise.resolve();
+
+    expect(stageDefaultAgent).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+  });
+
   it("does not refresh the agent roster after a rejected config save", async () => {
     const client = {} as GatewayBrowserClient;
     const refreshList = vi.fn(async () => agentsList);

@@ -928,6 +928,7 @@ describe("dreaming controller", () => {
     expect(config.patch).toHaveBeenCalledWith({
       note: "Dreaming settings updated from the Dreaming tab.",
       raw: expect.any(Object),
+      canDispatch: expect.any(Function),
     });
     expect(getConfigPatchRawPayload(config)).toEqual({
       plugins: {
@@ -944,6 +945,25 @@ describe("dreaming controller", () => {
     });
     expect(state.dreamingModeSaving).toBe(false);
     expect(state.dreamingStatusError).toBeNull();
+  });
+
+  it("does not patch after the caller lifecycle expires during schema lookup", async () => {
+    const { state } = createState();
+    const config = createConfig(state);
+    const lookup = createDeferred<unknown>();
+    let canDispatch = true;
+    vi.mocked(config.lookupSchemaPath).mockReturnValue(lookup.promise);
+
+    const update = updateDreamingEnabled(state, config, false, () => canDispatch);
+    await vi.waitFor(() => expect(config.lookupSchemaPath).toHaveBeenCalledOnce());
+    canDispatch = false;
+    lookup.resolve({
+      schema: { type: "object", additionalProperties: true },
+      children: [],
+    });
+
+    await expect(update).resolves.toBe(false);
+    expect(config.patch).not.toHaveBeenCalled();
   });
 
   it("falls back to memory-core when selected memory slot is blank", async () => {

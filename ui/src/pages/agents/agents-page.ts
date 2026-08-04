@@ -796,6 +796,30 @@ class AgentsPage
     })();
   }
 
+  private setDefaultAgent(agentId: string) {
+    if (!this.canCall("config.set", "operator.admin")) {
+      return;
+    }
+    const client = this.client;
+    const generation = this.requestGeneration;
+    const agents = this.context.agents;
+    const runtimeConfig = this.context.runtimeConfig;
+    if (!client) {
+      return;
+    }
+    const canDispatch = () =>
+      this.context.runtimeConfig === runtimeConfig &&
+      this.isCurrentRequest(client, generation, undefined, { agents }) &&
+      this.canCall("config.set", "operator.admin");
+    void (async () => {
+      await runtimeConfig.ensureLoaded();
+      if (!canDispatch()) {
+        return;
+      }
+      await setDefaultAgent(runtimeConfig, agentId, () => agents.refreshList(), canDispatch);
+    })();
+  }
+
   private saveSelectedAgentFile(agentId: string, name: string, content: string) {
     if (!this.canCall("agents.files.set", "operator.admin")) {
       return;
@@ -1074,17 +1098,7 @@ class AgentsPage
               stageAgentModelFallbacks(this.context.runtimeConfig, agentId, fallbacks);
             }
           },
-          onSetDefault: (agentId) => {
-            if (!this.canCall("config.set", "operator.admin")) {
-              return;
-            }
-            void (async () => {
-              await this.context.runtimeConfig.ensureLoaded();
-              await setDefaultAgent(this.context.runtimeConfig, agentId, () =>
-                this.context.agents.refreshList(),
-              );
-            })();
-          },
+          onSetDefault: (agentId) => this.setDefaultAgent(agentId),
         }),
       )}
     `;

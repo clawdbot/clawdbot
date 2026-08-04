@@ -3006,6 +3006,52 @@ describe("config form auto-save", () => {
     runtimeConfig.dispose();
   });
 
+  it.each(["save", "patch"] as const)(
+    "rechecks the caller lifecycle before a queued config %s dispatches",
+    async (action) => {
+      const firstPatch = deferred<unknown>();
+      const methods: string[] = [];
+      let canDispatch = true;
+      const request = vi.fn((method: string) => {
+        methods.push(method);
+        if (method === "config.get") {
+          return Promise.resolve({
+            config: { count: 1 },
+            raw: '{"count":1}',
+            hash: "hash-1",
+            valid: true,
+            issues: [],
+          });
+        }
+        if (method === "config.patch" && methods.filter((entry) => entry === method).length === 1) {
+          return firstPatch.promise;
+        }
+        return Promise.resolve({});
+      });
+      const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+      await runtimeConfig.ensureLoaded();
+      methods.length = 0;
+
+      const activePatch = runtimeConfig.patch({ raw: { count: 2 }, note: "active" });
+      const queued =
+        action === "save"
+          ? runtimeConfig.save({ canDispatch: () => canDispatch })
+          : runtimeConfig.patch({
+              raw: { count: 3 },
+              note: "queued",
+              canDispatch: () => canDispatch,
+            });
+      await vi.waitFor(() => expect(methods).toEqual(["config.patch"]));
+      canDispatch = false;
+      firstPatch.resolve({ config: { count: 2 }, hash: "hash-2" });
+
+      await expect(activePatch).resolves.toBe(true);
+      await expect(queued).resolves.toBe(false);
+      expect(methods).toEqual(["config.patch"]);
+      runtimeConfig.dispose();
+    },
+  );
+
   it.each([
     { action: "save" as const, method: "config.set" },
     { action: "apply" as const, method: "config.apply" },

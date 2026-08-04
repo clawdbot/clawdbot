@@ -353,8 +353,13 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
       return;
     }
     try {
+      const canDispatch = () =>
+        this.isTaskScopeCurrent(scope) &&
+        this.context.runtimeConfig === runtimeConfig &&
+        canCallDreamingMethod(scope.state, "config.patch", "operator.admin");
       const updated = await this.runDreamingTask(
-        (dreamingState) => updateDreamingEnabled(dreamingState, runtimeConfig, enabled),
+        (dreamingState) =>
+          updateDreamingEnabled(dreamingState, runtimeConfig, enabled, canDispatch),
         scope,
       );
       if (!this.isTaskScopeCurrent(scope) || this.context.runtimeConfig !== runtimeConfig) {
@@ -398,6 +403,10 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
           },
         },
         note: "Dreaming settings reset to the plugin default.",
+        canDispatch: () =>
+          this.isTaskScopeCurrent(scope) &&
+          this.context.runtimeConfig === runtimeConfig &&
+          canCallDreamingMethod(scope.state, "config.patch", "operator.admin"),
       });
       return saved;
     } catch (error) {
