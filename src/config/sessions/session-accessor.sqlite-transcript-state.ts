@@ -82,6 +82,9 @@ export function ensureTranscriptSessionRoot(
   updatedAt: number,
   options: { allowStoredAlias?: boolean } = {},
 ): void {
+  const storedUpdatedAt = Number.isFinite(updatedAt)
+    ? Math.max(0, Math.trunc(updatedAt))
+    : Date.now();
   if (!options.allowStoredAlias) {
     assertCanonicalSqliteSessionKeysCurrent(database);
     assertCanonicalSessionKeyWriteMatchesDatabase(database, scope.sessionKey);
@@ -157,7 +160,7 @@ export function ensureTranscriptSessionRoot(
         current_session_id: scope.sessionId,
         entry_json: "{}",
         entry_valid: -1,
-        updated_at: updatedAt,
+        updated_at: storedUpdatedAt,
       })
       .onConflict((conflict) => conflict.column("session_key").doNothing()),
   );
@@ -181,13 +184,13 @@ export function ensureTranscriptSessionRoot(
         previous_session_id: null,
         reason: null,
         session_scope: "conversation",
-        created_at: updatedAt,
-        updated_at: updatedAt,
+        created_at: storedUpdatedAt,
+        updated_at: storedUpdatedAt,
       })
       .onConflict((conflict) =>
         conflict.column("session_id").doUpdateSet({
           session_key: scope.sessionKey,
-          updated_at: updatedAt,
+          updated_at: storedUpdatedAt,
         }),
       ),
   );

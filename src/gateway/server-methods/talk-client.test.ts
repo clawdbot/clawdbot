@@ -101,6 +101,31 @@ describe("talk.client.transcript", () => {
     });
   });
 
+  it("persists fractional client timestamps in the integer-backed session store", async () => {
+    const voiceSessionId = createOrResumeClientVoiceSession({
+      agentId: "main",
+      sessionKey,
+      origin: "client",
+    });
+
+    expect(
+      await invokeTranscript({
+        sessionKey,
+        voiceSessionId,
+        entryId: "fractional-timestamp",
+        role: "user",
+        text: "hello with a fractional timestamp",
+        timestamp: 1_775_256_524_691.75,
+      }),
+    ).toHaveBeenCalledWith(true, { ok: true }, undefined);
+
+    const events = readSessionTranscriptMessageEvents({ agentId: "main", sessionId });
+    expect(events).toHaveLength(1);
+    expect(events[0]?.event).toMatchObject({
+      message: { timestamp: 1_775_256_524_691.75 },
+    });
+  });
+
   it("appends before the session has ever received a chat turn", async () => {
     const talkFirstSessionKey = "agent:main:talk-first";
     await ensureClientVoiceAgentSessionEntry({
