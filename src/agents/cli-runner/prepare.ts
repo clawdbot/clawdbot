@@ -831,6 +831,7 @@ export async function prepareCliRunContext(
         config: params.config,
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
+        chatType: params.chatType,
         agentId: sessionAgentId,
         contextMode: params.bootstrapContextMode,
         runKind: params.bootstrapContextRunKind,

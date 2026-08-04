@@ -103,6 +103,21 @@ function registerDuplicateBootstrapFileHook() {
   });
 }
 
+function registerMemoryBootstrapFileHook(relativePath = "MEMORY.md") {
+  registerInternalHook("agent:bootstrap", (event) => {
+    const context = event.context as AgentBootstrapHookContext;
+    context.bootstrapFiles = [
+      ...context.bootstrapFiles,
+      {
+        name: "MEMORY.md",
+        path: path.join(context.workspaceDir, relativePath),
+        content: "hook memory",
+        missing: false,
+      },
+    ];
+  });
+}
+
 function registerBootstrapFileHook(relativePath = "BOOTSTRAP.md") {
   registerInternalHook("agent:bootstrap", (event) => {
     const context = event.context as AgentBootstrapHookContext;
@@ -328,6 +343,61 @@ describe("resolveBootstrapFilesForRun", () => {
       path.join("packages", "core", "BOOTSTRAP.md"),
     );
     expect(files.map((file) => file.path)).not.toContain(path.join(workspaceDir, "BOOTSTRAP.md"));
+  });
+
+  it("keeps MEMORY.md for direct sessions", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-direct-");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "private memory", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:discord:direct:user-1",
+    });
+
+    expect(files.map((file) => file.name)).toContain("MEMORY.md");
+  });
+
+  it.each(["group", "channel"] as const)(
+    "drops MEMORY.md for an opaque session with authoritative %s chat type",
+    async (chatType) => {
+      const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-shared-");
+      await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "private memory", "utf8");
+
+      const files = await resolveBootstrapFilesForRun({
+        workspaceDir,
+        sessionKey: "agent:main:opaque:binding",
+        chatType,
+      });
+
+      expect(files.map((file) => file.name)).not.toContain("MEMORY.md");
+    },
+  );
+
+  it("does not let hooks re-add MEMORY.md to shared sessions", async () => {
+    registerMemoryBootstrapFileHook();
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-hook-shared-");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "private memory", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:slack:channel:c1",
+    });
+
+    expect(files.map((file) => file.name)).not.toContain("MEMORY.md");
+  });
+
+  it("keeps hook-added nested MEMORY.md in shared sessions", async () => {
+    registerMemoryBootstrapFileHook(path.join("packages", "core", "MEMORY.md"));
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-hook-nested-memory-");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:slack:channel:c1",
+    });
+
+    expect(files.map((file) => path.relative(workspaceDir, file.path))).toContain(
+      path.join("packages", "core", "MEMORY.md"),
+    );
   });
 
   it("keeps subagent sessions to AGENTS.md", async () => {

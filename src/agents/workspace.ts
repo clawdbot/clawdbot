@@ -9,6 +9,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Minimatch } from "minimatch";
 import { extractFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
+import type { ChatType } from "../channels/chat-type.js";
 import { openRootFile } from "../infra/boundary-file-read.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -19,6 +20,7 @@ import {
 } from "../memory/root-memory-files.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
+import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import { resolveUserPath } from "../utils.js";
 import {
   MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
@@ -1011,20 +1013,62 @@ const CRON_BOOTSTRAP_ALLOWLIST = new Set([
   DEFAULT_USER_FILENAME,
 ]);
 
-export function filterBootstrapFilesForSession(
+type BootstrapSessionContext = {
+  sessionKey?: string;
+  chatType?: ChatType;
+  workspaceDir?: string;
+};
+
+function resolveBootstrapSessionContext(
+  session?: string | BootstrapSessionContext,
+): BootstrapSessionContext {
+  return typeof session === "string" ? { sessionKey: session } : (session ?? {});
+}
+
+function filterRootMemoryBootstrapFilesForSession(
   files: WorkspaceBootstrapFile[],
-  sessionKey?: string,
+  session?: string | BootstrapSessionContext,
 ): WorkspaceBootstrapFile[] {
-  if (!sessionKey) {
+  const { sessionKey, chatType } = resolveBootstrapSessionContext(session);
+  const effectiveChatType = chatType ?? deriveSessionChatTypeFromKey(sessionKey);
+  if (effectiveChatType !== "group" && effectiveChatType !== "channel") {
     return files;
   }
+  const workspaceRoot = session && typeof session === "object" ? session.workspaceDir : undefined;
+  if (!workspaceRoot) {
+    return files.filter((file) => file.name !== DEFAULT_MEMORY_FILENAME);
+  }
+  const resolvedWorkspaceRoot = resolveUserPath(workspaceRoot);
+  const rootMemoryPath = path.join(resolvedWorkspaceRoot, DEFAULT_MEMORY_FILENAME);
+  return files.filter((file) => {
+    if (file.name !== DEFAULT_MEMORY_FILENAME || typeof file.path !== "string") {
+      return true;
+    }
+    const filePath = file.path.trim();
+    if (!filePath) {
+      return true;
+    }
+    const resolvedPath = path.isAbsolute(filePath)
+      ? path.resolve(filePath)
+      : filePath.startsWith("~")
+        ? resolveUserPath(filePath)
+        : path.resolve(resolvedWorkspaceRoot, filePath);
+    return resolvedPath !== rootMemoryPath;
+  });
+}
+
+export function filterBootstrapFilesForSession(
+  files: WorkspaceBootstrapFile[],
+  session?: string | BootstrapSessionContext,
+): WorkspaceBootstrapFile[] {
+  const { sessionKey } = resolveBootstrapSessionContext(session);
   if (isSubagentSessionKey(sessionKey)) {
     return files.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));
   }
   if (isCronSessionKey(sessionKey)) {
     return files.filter((file) => CRON_BOOTSTRAP_ALLOWLIST.has(file.name));
   }
-  return files;
+  return filterRootMemoryBootstrapFilesForSession(files, session);
 }
 
 function hasGlobPattern(pattern: string): boolean {
