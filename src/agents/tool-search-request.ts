@@ -20,7 +20,7 @@ export function readToolSearchLimit(value: unknown, config: ToolSearchConfig): n
   return Math.min(value, config.maxSearchLimit);
 }
 
-function readToolSearchQuery(value: unknown, field: string, maxGraphemes?: number): string {
+function readBatchToolSearchQuery(value: unknown, field: string, maxGraphemes?: number): string {
   if (typeof value !== "string" || !value.trim()) {
     throw new ToolInputError(`${field} must be a non-empty string.`);
   }
@@ -36,7 +36,10 @@ function readToolSearchArgs(
   config: ToolSearchConfig,
 ): { query: string; limit: number } {
   const params = asToolParamsRecord(args);
-  const query = readToolSearchQuery(params.query, "query");
+  const query = params.query;
+  if (typeof query !== "string") {
+    throw new ToolInputError("query must be a string.");
+  }
   const options = isRecord(params.options) ? params.options : undefined;
   return {
     query,
@@ -70,7 +73,7 @@ export function readToolSearchRequest(args: unknown, config: ToolSearchConfig): 
     if (!isRecord(value)) {
       throw new ToolInputError(`queries[${index}] must be an object.`);
     }
-    const query = readToolSearchQuery(
+    const query = readBatchToolSearchQuery(
       value.query,
       `queries[${index}].query`,
       MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES,

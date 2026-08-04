@@ -244,17 +244,29 @@ describe("Tool Search", () => {
       error: "queries[0].query must be a non-empty string",
     },
     {
-      label: "empty scalar query",
-      input: { query: "  " },
-      error: "query must be a non-empty string",
-    },
-    {
       label: "top-level batch limit",
       input: { queries: [{ query: "calendar" }], limit: 1 },
       error: "set limit on each batch query",
     },
   ])("rejects $label", async ({ input, error }) => {
     await expect(limitSearchTool.execute("call-invalid-batch", input)).rejects.toThrow(error);
+  });
+
+  it.each(["", "  "])("preserves scalar empty-query compatibility for %j", async (query) => {
+    expect(Value.Check(limitSearchTool.parameters, { query })).toBe(true);
+    const catalogRef = createToolSearchCatalogRef();
+    registerHeadlessToolSearchCatalog({
+      catalogRef,
+      tools: [pluginTool("fake_empty_query", "empty query compatibility surface")],
+    });
+    const searchTool = expectDefined(
+      createToolSearchTools({ catalogRef }).find((tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME),
+      "empty scalar query search tool",
+    );
+
+    await expect(searchTool.execute("call-empty-query", { query })).resolves.toMatchObject({
+      details: [],
+    });
   });
 
   it("rejects batches whose effective result limits exceed the shared budget", async () => {

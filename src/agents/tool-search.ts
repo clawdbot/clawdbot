@@ -316,7 +316,6 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       parameters: Type.Object({
         query: Type.Optional(
           Type.String({
-            minLength: 1,
             description:
               "Single search query, in English. Do not set this when queries is present.",
           }),
