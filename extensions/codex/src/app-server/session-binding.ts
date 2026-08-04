@@ -710,10 +710,10 @@ export async function withReclaimedCodexSessionLease<T>(params: {
 export function createCodexAppServerBindingStore(
   state: BindingStateStore,
 ): CodexAppServerBindingStore {
-  const update = state.update?.bind(state);
-  if (!update) {
+  if (!state.update) {
     throw new Error("Codex app-server bindings require atomic plugin-state updates");
   }
+  const update = state.update.bind(state);
   const leaseContext = new AsyncLocalStorage<Map<string, BindingLeaseOwner>>();
   const archiveContext = new AsyncLocalStorage<boolean>();
   let activeBindingMutations = 0;
@@ -1228,7 +1228,7 @@ export function createCodexAppServerBindingStore(
           next: {
             version: 1,
             state: "cleared",
-            sessionId: identity.sessionId,
+            ...storedSessionGeneration(identity, current),
             lease,
           },
         };
