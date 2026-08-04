@@ -12,6 +12,7 @@ import type {
 import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { FastMode } from "../../auto-reply/thinking.shared.js";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type {
   CliSessionBinding,
@@ -63,6 +64,7 @@ export type RunCliAgentParams = {
   sessionManager?: SessionManager;
   sessionId: string;
   sessionKey?: string;
+  chatType?: ChatType;
   sessionTarget?: SessionTranscriptRuntimeTarget;
   /** Session identity used only for sandbox and tool-policy resolution. */
   runtimePolicySessionKey?: string;

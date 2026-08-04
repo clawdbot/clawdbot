@@ -239,6 +239,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
         1,
         Math.floor(attempt.contextTokenBudget ?? attempt.model.contextWindow),
       ),
+      ...(trajectoryRecorder ? { recordEvent: trajectoryRecorder.recordEvent } : {}),
     },
   });
   promptCacheRetentionRef.current = transport.effectivePromptCacheRetention;
