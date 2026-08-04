@@ -937,6 +937,16 @@ async function defaultRunCommand(command, args, checkout, options = {}) {
       throw new Error(`${phase} command exited with status ${status}`);
     }
   } catch (error) {
+    if (error?.code === "EPROCESS_TREE_VERIFICATION_UNSUPPORTED") {
+      throw new UpdateInvariantError(
+        "unsupported_process_tree_verification",
+        `${phase} requires process-tree verification unavailable on this platform`,
+        {
+          phase,
+          serviceState: options.serviceState ?? "running",
+        },
+      );
+    }
     if (error?.code === "EPROCESSGROUP_CLEANUP_FAILED") {
       throw new UpdateInvariantError(
         "command_cleanup_failed",

@@ -293,6 +293,28 @@ setInterval(() => {}, 1_000);
     expect(Date.now() - startedAt).toBeLessThan(2_000);
   });
 
+  it("refuses strict Windows commands before spawning an unverifiable tree", async () => {
+    const onReady = vi.fn();
+    const runTaskkill = vi.fn();
+    await expect(
+      runManagedCommand({
+        bin: process.execPath,
+        args: ["-e", "process.exit(0)"],
+        onReady,
+        platform: "win32",
+        requireProcessTreeExit: true,
+        runTaskkill,
+        shell: false,
+        stdio: "ignore",
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toMatchObject({
+      code: "EPROCESS_TREE_VERIFICATION_UNSUPPORTED",
+    });
+    expect(onReady).not.toHaveBeenCalled();
+    expect(runTaskkill).not.toHaveBeenCalled();
+  });
+
   it("fails closed when Windows taskkill cannot verify timeout cleanup", async () => {
     const originalSystemRoot = process.env.SystemRoot;
     const originalWindir = process.env.WINDIR;

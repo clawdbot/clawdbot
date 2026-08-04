@@ -253,15 +253,20 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
     owner: {
       pid: number;
       checkout?: string;
+      manualRecoveryRequired?: boolean;
       processGroupId?: number;
+      processTreeState?: string;
       reason?: string;
       serviceState?: string;
       startedAt?: string;
     };
-    retainForProcessGroup?: (
-      processGroupId: number,
-      details?: { phase?: string; serviceState?: string },
-    ) => Record<string, unknown>;
+    retainForCleanupFailure?: (details?: {
+      manualRecoveryRequired?: boolean;
+      phase?: string;
+      processGroupId?: number;
+      processTreeState?: string;
+      serviceState?: string;
+    }) => Record<string, unknown>;
     release?: () => void;
   };
   export function parseGatewayLogAudit(

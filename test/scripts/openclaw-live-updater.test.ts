@@ -1588,6 +1588,44 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     expect(existsSync(lockPath)).toBe(false);
   });
 
+  test("refuses unsupported Windows tree verification before stopping Gateway", async () => {
+    const { root, mirror } = makeFixture();
+    const lockPath = path.join(root, "maintenance.lock");
+    const calls: string[] = [];
+
+    await expect(
+      maintainFixture(
+        { checkout: mirror, remote: "origin", lockPath },
+        {
+          fetchMain: undefined,
+          runManagedCommand: async ({
+            args,
+            requireProcessTreeExit,
+          }: {
+            args: string[];
+            requireProcessTreeExit: boolean;
+          }) => {
+            calls.push(`${args.join(" ")} strict=${requireProcessTreeExit}`);
+            throw Object.assign(new Error("Windows tree verification is unavailable"), {
+              code: "EPROCESS_TREE_VERIFICATION_UNSUPPORTED",
+            });
+          },
+        },
+      ),
+    ).rejects.toMatchObject({
+      code: "unsupported_process_tree_verification",
+      details: {
+        phase: "Git fetch",
+        serviceState: "running",
+      },
+    });
+
+    expect(calls).toEqual([
+      `-C ${mirror} fetch --prune origin refs/heads/main:refs/remotes/origin/main strict=true`,
+    ]);
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
   test("emits one machine-readable timeout result with phase details", async () => {
     const { mirror } = makeFixture();
     const output: string[] = [];

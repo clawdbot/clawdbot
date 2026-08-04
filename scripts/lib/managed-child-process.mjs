@@ -119,6 +119,9 @@ export async function runManagedCommand({
   runTaskkill = spawnSync,
   onReady,
 }) {
+  if (platform === "win32" && requireProcessTreeExit) {
+    throw createManagedCommandUnsupportedTreeVerificationError();
+  }
   const spawnSpec = createManagedCommandSpawnSpec({
     bin,
     args,
@@ -238,6 +241,15 @@ function createManagedCommandTimeoutError(timeoutMs) {
   return Object.assign(new Error(`Managed command timed out after ${timeoutMs}ms`), {
     code: "ETIMEDOUT",
   });
+}
+
+function createManagedCommandUnsupportedTreeVerificationError() {
+  return Object.assign(
+    new Error("Strict managed process-tree verification is not supported on Windows"),
+    {
+      code: "EPROCESS_TREE_VERIFICATION_UNSUPPORTED",
+    },
+  );
 }
 
 function createManagedCommandSetupCleanupError(error, cleanupError) {
