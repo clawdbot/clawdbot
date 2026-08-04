@@ -25,7 +25,7 @@ export type PtyRun = {
 };
 
 export type PtyTerminalDimensions = Pick<PtyRun, "cols" | "rows">;
-export type PtyTestCell = { authenticated: boolean; text: string };
+type PtyTestCell = { authenticated: boolean; text: string };
 
 const MAX_TEST_TERMINAL_DIMENSION = 1_000;
 
