@@ -571,6 +571,28 @@ describe("PluginsPage", () => {
     expect(refreshConfig).toHaveBeenCalledOnce();
   });
 
+  it("does not force a gateway reconnect after enable when restart is not required", async () => {
+    const enabledPlugin = createPlugin({ enabled: true, state: "enabled" });
+    const { client } = createClient(async (method) => {
+      if (method === "plugins.setEnabled") {
+        return { ok: true, plugin: enabledPlugin, restartRequired: false };
+      }
+      if (method === "plugins.list") {
+        return createResult(enabledPlugin);
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+    const harness = createGateway(client);
+    const { page } = await mountPage(
+      createContext(harness.gateway),
+      createPluginsRouteData(harness.gateway),
+    );
+
+    await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
+    await waitForFast(() => expect(page.result?.plugins[0]?.enabled).toBe(true));
+    expect(harness.gateway.connect).not.toHaveBeenCalled();
+  });
+
   it("does not let an old mutation clear replacement-source busy state", async () => {
     const staleMutation = deferred<unknown>();
     const freshMutation = deferred<unknown>();

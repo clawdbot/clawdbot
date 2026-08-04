@@ -122,7 +122,7 @@ export function createGateway(client: GatewayBrowserClient, connected = true): G
     },
     connection: { gatewayUrl: "ws://localhost", token: "", password: "", bootstrapToken: "" },
     eventLog: [],
-    connect: () => undefined,
+    connect: vi.fn(() => undefined),
     setSessionKey: () => undefined,
     start: () => undefined,
     stop: () => undefined,

@@ -812,7 +812,7 @@ class PluginsPage extends OpenClawLightDomElement {
     await this.runPluginMutation(
       key,
       (client) => setPluginEnabled(client, pluginId, enabled),
-      async (result, refreshError, client, isCurrent) => {
+      async (result, refreshError, client) => {
         this.applyMutationResult(result);
         this.setMessage(
           key,
@@ -825,10 +825,9 @@ class PluginsPage extends OpenClawLightDomElement {
           this.pinEnabledPluginRoute(pluginId);
         }
         await this.refreshCatalogAfterMutation(client);
-        if (isCurrent() && !result.restartRequired) {
-          // Plugin tabs come from hello; reconnect after the registry refresh.
-          this.context.gateway.connect();
-        }
+        // Do not force a gateway reconnect here. Hello-owned plugin tabs may stay
+        // stale until a natural reconnect or page refresh; tearing down the live
+        // operator/webchat socket on every enable caused repeated disconnects.
       },
     );
   }

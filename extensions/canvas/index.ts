@@ -55,7 +55,10 @@ export default definePluginEntry({
   description: "Experimental Canvas control and A2UI rendering surfaces for paired nodes.",
   configSchema: canvasConfigSchema,
   reload: {
-    restartPrefixes: ["plugins.enabled", "plugins.allow", "plugins.deny", "plugins.entries.canvas"],
+    // Only canvas entry state needs a process restart (HTTP/WS host registration).
+    // Allow/deny/enabled policy changes stay on the generic plugins hot-reload path;
+    // claiming those prefixes forced a full gateway restart on every plugin enable.
+    restartPrefixes: ["plugins.entries.canvas"],
   },
   register(api) {
     if (isCanvasHostEnabled(api.config)) {

@@ -573,6 +573,17 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.hotReasons).toStrictEqual([]);
   });
 
+  it("keeps plugins.allow on the hot plugin path even when canvas restart rules are loaded", () => {
+    const path = "plugins.allow";
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartReasons).toStrictEqual([]);
+    expect(plan.hotReasons).toEqual([path]);
+    expect(plan.reloadPlugins).toBe(true);
+    expect(plan.disposeMcpRuntimes).toBe(true);
+  });
+
   it("uses default reload settings when config is unset", () => {
     expect(resolveGatewayReloadSettings({})).toMatchObject({ mode: "hybrid", debounceMs: 300 });
   });
