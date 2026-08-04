@@ -936,10 +936,15 @@ describe("installed plugin index persistence", () => {
     const stateDir = makeTempDir();
     const pathPluginDir = path.join(stateDir, "plugins", "path-demo");
     const npmPluginDir = path.join(stateDir, "plugins", "npm-demo");
+    const sourceFallbackPluginDir = path.join(stateDir, "plugins", "source-fallback-demo");
     fs.mkdirSync(pathPluginDir, { recursive: true });
     fs.mkdirSync(npmPluginDir, { recursive: true });
+    fs.mkdirSync(sourceFallbackPluginDir, { recursive: true });
     const pathCandidate = createCandidate(pathPluginDir, { id: "path-demo" });
     const npmCandidate = createCandidate(npmPluginDir, { id: "npm-demo" });
+    const sourceFallbackCandidate = createCandidate(sourceFallbackPluginDir, {
+      id: "source-fallback-demo",
+    });
     const env = {
       OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
       OPENCLAW_VERSION: "2026.4.25",
@@ -964,22 +969,31 @@ describe("installed plugin index persistence", () => {
         resolvedName: "@vendor/npm-demo",
         resolvedVersion: "1.2.3",
       },
+      "source-fallback-demo": {
+        source: "path" as const,
+        spec: sourceFallbackPluginDir,
+        sourcePath: sourceFallbackPluginDir,
+        installPath: "   ",
+      },
     };
     const initial = await refreshPersistedInstalledPluginIndex({
       reason: "manual",
       stateDir,
-      candidates: [pathCandidate, npmCandidate],
+      candidates: [pathCandidate, npmCandidate, sourceFallbackCandidate],
       env,
       installRecords,
       now,
     });
-    await writePersistedInstalledPluginIndex({ ...initial, plugins: [] }, { stateDir });
+    await writePersistedInstalledPluginIndex(
+      { ...initial, installRecords, plugins: [] },
+      { stateDir },
+    );
 
     materializationCount = 0;
     const refreshed = await refreshPersistedInstalledPluginIndex({
       reason: "policy-changed",
       stateDir,
-      candidates: [pathCandidate, npmCandidate],
+      candidates: [pathCandidate, npmCandidate, sourceFallbackCandidate],
       env,
       config: {
         plugins: {
@@ -990,6 +1004,9 @@ describe("installed plugin index persistence", () => {
             "npm-demo": {
               enabled: false,
             },
+            "source-fallback-demo": {
+              enabled: false,
+            },
           },
         },
       },
@@ -998,11 +1015,16 @@ describe("installed plugin index persistence", () => {
     });
 
     expect(materializationCount).toBe(1);
-    expectPluginIds(refreshed, ["path-demo", "npm-demo"]);
+    expectPluginIds(refreshed, ["path-demo", "npm-demo", "source-fallback-demo"]);
     expectPluginFields(refreshed, "path-demo", { enabled: false });
     expectPluginFields(refreshed, "npm-demo", { enabled: false });
+    expectPluginFields(refreshed, "source-fallback-demo", { enabled: false });
     expectInstallRecord(refreshed, "path-demo", { source: "path", installPath: pathPluginDir });
     expectInstallRecord(refreshed, "npm-demo", { source: "npm", installPath: npmPluginDir });
+    expectInstallRecord(refreshed, "source-fallback-demo", {
+      source: "path",
+      sourcePath: sourceFallbackPluginDir,
+    });
   });
 
   it("keeps policy refreshes on the fast path for unavailable install records", async () => {
@@ -1234,7 +1256,7 @@ describe("installed plugin index persistence", () => {
       vi.resetModules();
     });
 
-    it("skips broad discovery when missing install records cannot be recovered", async () => {
+    it("skips broad discovery when retained install records cannot materialize plugins", async () => {
       const stateDir = makeTempDir();
       const env = {
         OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
@@ -1249,11 +1271,23 @@ describe("installed plugin index persistence", () => {
         "./installed-plugin-index-store.js?case=scan-free-policy-refresh",
       );
       const missingPluginDir = path.join(stateDir, "plugins", "missing");
+      const markerOnlyPluginDir = path.join(stateDir, "plugins", "marker-only");
+      fs.mkdirSync(markerOnlyPluginDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(markerOnlyPluginDir, "package.json"),
+        JSON.stringify({ name: "marker-only" }),
+        "utf8",
+      );
       const installRecords = {
         missing: {
           source: "npm" as const,
           spec: "missing-plugin@1.0.0",
           installPath: missingPluginDir,
+        },
+        "marker-only": {
+          source: "npm" as const,
+          spec: "marker-only@1.0.0",
+          installPath: markerOnlyPluginDir,
         },
       };
       await store.refreshPersistedInstalledPluginIndex({
@@ -1284,6 +1318,11 @@ describe("installed plugin index persistence", () => {
         source: "npm",
         spec: "missing-plugin@1.0.0",
         installPath: missingPluginDir,
+      });
+      expectInstallRecord(refreshed, "marker-only", {
+        source: "npm",
+        spec: "marker-only@1.0.0",
+        installPath: markerOnlyPluginDir,
       });
       expect(refreshed.diagnostics).toEqual([
         {
