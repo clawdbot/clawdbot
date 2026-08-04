@@ -58,13 +58,14 @@ export type ApplicationNavigationOptions = Partial<
 type SkillWorkshopRevisionHandoff = {
   sessionKey: string;
   instructions: string;
+  owner: object;
   proposalId: string;
   proposalAgentId: string;
 };
 
 export type ApplicationSkillWorkshopRevisionHandoff = {
   prepare: (handoff: SkillWorkshopRevisionHandoff) => void;
-  consume: (sessionKey: string) => SkillWorkshopRevisionHandoff | null;
+  consume: (sessionKey: string, owner: object | null) => SkillWorkshopRevisionHandoff | null;
   clear: () => void;
 };
 

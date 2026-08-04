@@ -5686,10 +5686,40 @@ describe("handleSendChat", () => {
     sent.resolve({ runId: host.chatQueue[0]?.sendRunId, status: "started" });
     await send;
 
-    expect(host.chatQueue).toEqual([
-      expect.objectContaining({ sendState: "sending", text: "Make the support files 5" }),
-    ]);
-    expect(host.chatMessages).toStrictEqual([]);
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(JSON.stringify(host.chatMessages[0])).toContain("Make the support files 5");
+  });
+
+  it("fails an in-flight Skill Workshop revision after connection replacement", async () => {
+    const sent = createDeferred<unknown>();
+    const host = makeHost({
+      connectionEpoch: 1,
+      requestHandlers: {
+        "skills.proposals.requestRevision": () => sent.promise,
+      },
+    });
+
+    const send = handleSendChat(host, "Keep the source connection", {
+      restoreDraft: true,
+      skillWorkshopRevision: { proposalId: "proposal-1" },
+    });
+    await vi.waitFor(() =>
+      expect(
+        host.request.mock.calls.filter(([method]) => method === "skills.proposals.requestRevision"),
+      ).toHaveLength(1),
+    );
+    const replacementRequest = vi.fn(async () => ({}));
+    host.client = clientWithRequest(replacementRequest);
+    host.connectionEpoch = 2;
+    sent.resolve({ runId: host.chatQueue[0]?.sendRunId, status: "started" });
+    await send;
+
+    expect(replacementRequest).not.toHaveBeenCalled();
+    expect(host.chatQueue[0]).toMatchObject({
+      sendState: "failed",
+      sendError: expect.stringContaining("Gateway connection changed"),
+    });
+    expect(listStoredChatOutboxes(host)).toStrictEqual([]);
   });
 
   it("does not send queued Skill Workshop revisions with read-only operator access", async () => {
@@ -5752,10 +5782,8 @@ describe("handleSendChat", () => {
     sent.resolve({ runId: host.chatQueue[0]?.sendRunId, status: "started" });
     await send;
 
-    expect(host.chatQueue).toEqual([
-      expect.objectContaining({ sendState: "sending", text: "/reset examples" }),
-    ]);
-    expect(host.chatMessages).toStrictEqual([]);
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(JSON.stringify(host.chatMessages[0])).toContain("/reset examples");
   });
 
   it("keeps delayed chat.send ACK effects scoped to the submitted session", async () => {
@@ -6894,13 +6922,8 @@ describe("handleSendChat", () => {
       instructions: "Make the support files 6",
       proposalId: revision.proposalId,
     });
-    expect(host.chatQueue).toEqual([
-      expect.objectContaining({
-        sendState: "sending",
-        skillWorkshopRevision: revision,
-        text: "Make the support files 6",
-      }),
-    ]);
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(JSON.stringify(host.chatMessages[0])).toContain("Make the support files 6");
   });
 
   it("stops delivered-send reconciliation when durable removal fails", async () => {

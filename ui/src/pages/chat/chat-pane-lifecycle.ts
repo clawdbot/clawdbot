@@ -348,7 +348,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
     if (!this.active || !state || !state.connected || state.sessionKey !== expectedSessionKey) {
       return;
     }
-    const revision = this.context.skillWorkshopRevision.consume(expectedSessionKey);
+    const revision = this.context.skillWorkshopRevision.consume(expectedSessionKey, state.client);
     if (!revision) {
       return;
     }

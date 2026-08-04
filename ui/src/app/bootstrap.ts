@@ -210,8 +210,8 @@ function createSkillWorkshopRevisionHandoff(): ApplicationSkillWorkshopRevisionH
     prepare: (handoff) => {
       pending = handoff;
     },
-    consume: (sessionKey) => {
-      if (!pending || pending.sessionKey !== sessionKey) {
+    consume: (sessionKey, owner) => {
+      if (!pending || pending.sessionKey !== sessionKey || pending.owner !== owner) {
         return null;
       }
       const handoff = pending;

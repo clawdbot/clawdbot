@@ -450,10 +450,15 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     if (!sessionKey) {
       throw new Error(scope.sessions.state.error ?? "Could not prepare a Skill Workshop thread.");
     }
+    const owner = scope.gateway.snapshot.client;
+    if (!owner) {
+      return;
+    }
     try {
       scope.revision.prepare({
         sessionKey,
         instructions,
+        owner,
         proposalId: proposal.key,
         proposalAgentId: normalizeAgentId(proposal.origin?.agentId ?? proposalAgentId),
       });

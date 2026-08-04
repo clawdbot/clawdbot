@@ -33,6 +33,7 @@ import {
   captureChatConnectionOwner,
   deliveryStateWriter,
   finishScopedChatSending,
+  isSkillWorkshopRevisionConnectionCurrent,
   reconnectSafeQueuedSendState,
   setChatError,
   updateQueuedSendItem,
@@ -63,6 +64,9 @@ import { resetChatScroll, scheduleChatScroll } from "./scroll.ts";
 import { formatTerminalChatSendAckError, OFFLINE_QUEUE_STORAGE_ERROR } from "./steer-lifecycle.ts";
 import { resetToolStream } from "./tool-stream.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
+
+const SKILL_WORKSHOP_CONNECTION_CHANGED_ERROR =
+  "Skill Workshop revision request cancelled because the Gateway connection changed.";
 
 async function settleDeliverySettings(
   host: ChatHost,
@@ -261,6 +265,13 @@ async function sendQueuedChatMessage(
       return "failed";
     }
   }
+  if (prepared.skillWorkshopRevision && !isSkillWorkshopRevisionConnectionCurrent(host, prepared)) {
+    setState("failed", SKILL_WORKSHOP_CONNECTION_CHANGED_ERROR);
+    if (visibleSessionMatches(host, sessionKey, prepared.agentId)) {
+      setChatError(host, SKILL_WORKSHOP_CONNECTION_CHANGED_ERROR);
+    }
+    return "failed";
+  }
   if (prepared.skillWorkshopRevision && attachments.length) {
     setState("failed", "Skill Workshop revision requests do not support attachments.");
     return "failed";
@@ -342,6 +353,13 @@ async function sendQueuedChatMessage(
           ...(prepared.replyToId ? { replyToId: prepared.replyToId } : {}),
         });
     if (!requestConnectionIsCurrent()) {
+      if (prepared.skillWorkshopRevision) {
+        setState("failed", SKILL_WORKSHOP_CONNECTION_CHANGED_ERROR);
+        if (isVisible()) {
+          setChatError(host, SKILL_WORKSHOP_CONNECTION_CHANGED_ERROR);
+        }
+        return "failed";
+      }
       return "pending";
     }
     updateChatSendAckTiming(host, runId, ack, sendingItem, requestStartedAtMs);

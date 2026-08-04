@@ -53,7 +53,15 @@ export function enqueuePendingSendMessage(
     sessionKey: host.sessionKey,
     agentId: scopedAgentIdForSession(host, host.sessionKey),
     ...(sender ? { sender } : {}),
-    ...(skillWorkshopRevision ? { skillWorkshopRevision } : {}),
+    ...(skillWorkshopRevision
+      ? {
+          skillWorkshopRevision: {
+            ...skillWorkshopRevision,
+            ...(host.client ? { connectionClient: host.client } : {}),
+            connectionEpoch: host.connectionEpoch,
+          },
+        }
+      : {}),
     ...(replyToId ? { replyToId } : {}),
   };
   keepVolatileQueuedMessage(host, host.sessionKey, pending, pending.agentId);
@@ -84,6 +92,19 @@ export function captureChatConnectionOwner(
     (!requireConnected || host.connected) &&
     host.client === client &&
     host.connectionEpoch === connectionEpoch;
+}
+
+export function isSkillWorkshopRevisionConnectionCurrent(
+  host: Pick<ChatHost, "client" | "connectionEpoch">,
+  item: ChatQueueItem,
+): boolean {
+  const revision = item.skillWorkshopRevision;
+  return Boolean(
+    revision &&
+    revision.connectionClient &&
+    host.client === revision.connectionClient &&
+    host.connectionEpoch === revision.connectionEpoch,
+  );
 }
 
 export function updateQueuedSendItem(
