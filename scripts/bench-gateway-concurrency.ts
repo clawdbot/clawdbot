@@ -190,7 +190,7 @@ Options:
   --runs <n>         Measured gateway runs (default: ${DEFAULT_RUNS})
   --warmup <n>       Warmup gateway runs (default: ${DEFAULT_WARMUP})
   --cadence-ms <ms>  Probe cadence (default: ${DEFAULT_CADENCE_MS})
-  --timeout-ms <ms>  Whole benchmark cap, excluding probe warmup (default: ${DEFAULT_TIMEOUT_MS})
+  --timeout-ms <ms>  Per-run cap, excluding probe warmup (default: ${DEFAULT_TIMEOUT_MS})
   --entry <path>     Gateway CLI entry file (default: ${DEFAULT_ENTRY})
   --output <path>    Write machine-readable JSON to a file
   --json             Emit machine-readable JSON
@@ -814,6 +814,35 @@ function summarizeRuns(runs: readonly BenchmarkRun[]) {
   };
 }
 
+async function runBenchmarkSamples(params: {
+  now?: () => number;
+  onProgress?: (message: string) => void;
+  options: CliOptions;
+  runSample?: typeof runGatewaySample;
+}): Promise<BenchmarkRun[]> {
+  const now = params.now ?? performance.now.bind(performance);
+  const runSample = params.runSample ?? runGatewaySample;
+  const runs: BenchmarkRun[] = [];
+  const total = params.options.runs + params.options.warmup;
+  for (let index = 0; index < total; index += 1) {
+    // Each sample gets the same budget so earlier runs cannot shrink later agent waits.
+    // runGatewaySample extends this deadline by its probe warmup before load starts.
+    const deadlineAt = now() + params.options.timeoutMs;
+    const run = await runSample({ ...params.options, deadlineAt });
+    if (index >= params.options.warmup) {
+      runs.push(run);
+      params.onProgress?.(
+        `[bench-gateway-concurrency] run ${runs.length}/${params.options.runs}: turns=${run.turnCount} samples=${run.readyz.length} duration=${run.durationMs.toFixed(1)}ms`,
+      );
+    } else {
+      params.onProgress?.(
+        `[bench-gateway-concurrency] warmup ${index + 1}/${params.options.warmup}: duration=${run.durationMs.toFixed(1)}ms`,
+      );
+    }
+  }
+  return runs;
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   if (hasHelpFlag(argv)) {
@@ -821,24 +850,7 @@ async function main(): Promise<void> {
     return;
   }
   const options = parseOptions(argv);
-  let deadlineAt = performance.now() + options.timeoutMs;
-  const runs: BenchmarkRun[] = [];
-  const total = options.runs + options.warmup;
-  for (let index = 0; index < total; index += 1) {
-    requireRemainingMs(deadlineAt, "starting gateway run");
-    const run = await runGatewaySample({ ...options, deadlineAt });
-    deadlineAt += run.probeWarmup.durationMs;
-    if (index >= options.warmup) {
-      runs.push(run);
-      console.error(
-        `[bench-gateway-concurrency] run ${runs.length}/${options.runs}: turns=${run.turnCount} samples=${run.readyz.length} duration=${run.durationMs.toFixed(1)}ms`,
-      );
-    } else {
-      console.error(
-        `[bench-gateway-concurrency] warmup ${index + 1}/${options.warmup}: duration=${run.durationMs.toFixed(1)}ms`,
-      );
-    }
-  }
+  const runs = await runBenchmarkSamples({ onProgress: console.error, options });
   const payload = {
     cadenceMs: options.cadenceMs,
     concurrency: options.concurrency,
@@ -862,6 +874,7 @@ export const testing = {
   formatProbeFailure,
   formatRunFailure,
   requestHttp,
+  runBenchmarkSamples,
   runTurn,
   sampleGateway,
   summarizeNumbers,

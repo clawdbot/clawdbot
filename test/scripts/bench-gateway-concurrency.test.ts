@@ -76,6 +76,34 @@ describe("gateway concurrency benchmark script", () => {
     expect(wait?.timeoutMs).toBeLessThanOrEqual(2_000);
   });
 
+  it("gives every gateway sample a fresh pre-warmup timeout budget", async () => {
+    const deadlines: number[] = [];
+    const sample = {
+      controlUi: [],
+      durationMs: 10,
+      probeWarmup: { durationMs: 2, samples: [] },
+      readyz: [],
+      sessionsList: [],
+      turnCount: 8,
+      turnsDurationMs: 5,
+    };
+
+    const runs = await testing.runBenchmarkSamples({
+      now: (() => {
+        const values = [1_000, 9_000];
+        return () => values.shift() ?? 9_000;
+      })(),
+      options: testing.parseOptions(["--runs", "1", "--warmup", "1", "--timeout-ms", "5000"]),
+      runSample: async ({ deadlineAt }) => {
+        deadlines.push(deadlineAt);
+        return sample;
+      },
+    });
+
+    expect(deadlines).toEqual([6_000, 14_000]);
+    expect(runs).toEqual([sample]);
+  });
+
   it("preserves HTTP and RPC failures in baseline probe diagnostics", async () => {
     const probeOrder: string[] = [];
     const server = createHttpServer((req, res) => {
