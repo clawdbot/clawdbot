@@ -444,9 +444,11 @@ describe("openclaw live updater", () => {
           }
           return {
             status: 0,
-            stdout: args.at(-1)?.endsWith("openclaw-system.plist")
-              ? "ai.openclaw.gateway\n"
-              : "com.example.other\n",
+            stdout: JSON.stringify({
+              Label: args.at(-1)?.endsWith("openclaw-system.plist")
+                ? "ai.openclaw.gateway"
+                : "com.example.other",
+            }),
             stderr: "",
           };
         },
@@ -466,6 +468,43 @@ describe("openclaw live updater", () => {
       }),
     ).toThrow("system/ai.openclaw.gateway already owns the managed Gateway label");
     expect(calls).toHaveLength(2);
+  });
+
+  test("skips valid system LaunchDaemon plists without a string Label", () => {
+    const missing = { status: 113, stdout: "", stderr: "Could not find service" };
+    const calls: string[] = [];
+
+    expect(() =>
+      assertNoSystemLaunchDaemonOwnership("ai.openclaw.gateway", {
+        readdirSync: () => ["com.google.keystone.daemon.plist", "com.vendor.numeric-label.plist"],
+        spawnSync: (command: string, args: string[]) => {
+          calls.push([command, ...args].join(" "));
+          if (command === "/bin/launchctl") {
+            return missing;
+          }
+          return {
+            status: 0,
+            stdout: JSON.stringify(
+              args.at(-1)?.endsWith("numeric-label.plist") ? { Label: 42 } : { RunAtLoad: true },
+            ),
+            stderr: "",
+          };
+        },
+      }),
+    ).not.toThrow();
+    expect(calls.filter((call) => call.startsWith("/bin/launchctl print"))).toHaveLength(2);
+  });
+
+  test("fails closed when a system LaunchDaemon plist cannot be decoded", () => {
+    const missing = { status: 113, stdout: "", stderr: "Could not find service" };
+
+    expect(() =>
+      assertNoSystemLaunchDaemonOwnership("ai.openclaw.gateway", {
+        readdirSync: () => ["com.vendor.broken.plist"],
+        spawnSync: (command: string) =>
+          command === "/bin/launchctl" ? missing : { status: 0, stdout: "not json", stderr: "" },
+      }),
+    ).toThrow("could not inspect system LaunchDaemon plist");
   });
 
   test("audits raw file logs when RPC log retrieval is unavailable", () => {
@@ -2267,6 +2306,118 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
       },
     });
     expect(JSON.stringify(formatted)).not.toContain("secret rollback");
+  });
+
+  test("restores an absent managed service past bootout exit 3 and an unlabeled vendor plist", () => {
+    const { root, mirror, seed } = makeFixture({ includeSeed: true });
+    mkdirSync(path.join(mirror, "node_modules"));
+    writeBuild(mirror);
+    writeFileSync(path.join(seed, "README.md"), "replacement recovery update\n");
+    git(seed, "add", "README.md");
+    git(seed, "commit", "-m", "replacement recovery update");
+    git(seed, "push");
+    const snapshot = path.join(root, "gateway-ancestor/dist/index.js");
+    const source = path.join(mirror, "dist/index.js");
+    const plistPath = path.join(root, "ai.openclaw.gateway.plist");
+    writeFileSync(plistPath, "plist\n", { mode: 0o600 });
+    const calls: string[] = [];
+    let bootoutCount = 0;
+    let serviceLoaded = true;
+    let deployedEntrypoint = snapshot;
+
+    const inspectGatewayDeployment = () => ({
+      configPath: path.join(root, "openclaw.json"),
+      entrypoint: deployedEntrypoint,
+      entrypointIndex: 1,
+      executable: process.execPath,
+      invocationPrefix: [deployedEntrypoint],
+      label: "ai.openclaw.gateway",
+      plistPath,
+      port: 18789,
+      runtime: process.execPath,
+    });
+    const runCommand = (command: string, args: string[]) => {
+      const call = [command, ...args].join(" ");
+      calls.push(call);
+      if (command === "pnpm" && args[0] === "build") {
+        writeBuild(mirror);
+      }
+      if (command === "/bin/launchctl" && args[0] === "bootout") {
+        bootoutCount += 1;
+        serviceLoaded = false;
+        if (bootoutCount === 2) {
+          throw new Error("Boot-out failed: 3: No such process");
+        }
+      }
+      if (command === "/bin/launchctl" && args[0] === "bootstrap") {
+        serviceLoaded = true;
+      }
+    };
+    const assertSystemOwnership = () =>
+      assertNoSystemLaunchDaemonOwnership("ai.openclaw.gateway", {
+        readdirSync: () => ["com.google.keystone.daemon.plist"],
+        spawnSync: (command: string) =>
+          command === "/bin/launchctl"
+            ? { status: 113, stdout: "", stderr: "Could not find service" }
+            : {
+                status: 0,
+                stdout: JSON.stringify({ RunAtLoad: true }),
+                stderr: "",
+              },
+      });
+
+    expect(() =>
+      maintainFixture(
+        { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+        {
+          runCommand,
+          assertNoSystemLaunchDaemonOwnership: assertSystemOwnership,
+          inspectGatewayDeployment,
+          isGatewayLoaded: () => serviceLoaded,
+          prepareGatewayEntrypointReplacement: () => ({
+            install() {
+              deployedEntrypoint = source;
+            },
+            restore() {
+              deployedEntrypoint = snapshot;
+            },
+            discard() {},
+          }),
+          proveGatewayStopped: () => ({
+            runtimeStatus: "stopped",
+            port: 18789,
+            portStatus: "free",
+            proofSource: "fixture",
+          }),
+          repointGatewayDeployment: (
+            _checkout: string,
+            deployment: { entrypoint: string; invocationPrefix: string[] },
+            replaceEntrypoint: (deployment: unknown, entrypoint: string) => void,
+          ) => {
+            replaceEntrypoint(deployment, source);
+            return {
+              changed: true,
+              ...deployment,
+              entrypoint: source,
+              invocationPrefix: [source],
+              previousEntrypoint: deployment.entrypoint,
+            };
+          },
+          verifyAndAuditGateway: () => {
+            throw new Error("replacement readiness failed");
+          },
+        },
+      ),
+    ).toThrow("replacement readiness failed");
+
+    const uid = process.getuid?.() ?? 501;
+    expect(serviceLoaded).toBe(true);
+    expect(deployedEntrypoint).toBe(snapshot);
+    expect(calls).toContain(`/bin/launchctl bootout gui/${uid}/ai.openclaw.gateway`);
+    expect(calls.filter((call) => call.includes("/bin/launchctl bootstrap"))).toEqual([
+      `/bin/launchctl bootstrap gui/${uid} ${plistPath}`,
+      `/bin/launchctl bootstrap gui/${uid} ${plistPath}`,
+    ]);
   });
 
   test("resumes suspension when system ownership appears before bootout", () => {
