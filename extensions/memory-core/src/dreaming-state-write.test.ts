@@ -13,7 +13,6 @@ import {
   configureMemoryCoreDreamingState,
   DREAMING_DAILY_INGESTION_NAMESPACE,
   DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
-  DREAMING_WORKSPACE_STATE_MAX_ENTRIES,
   readMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
@@ -72,9 +71,8 @@ function configureCountedDreamingState(params?: {
       createPluginStateKeyedStoreForTests<T>(MEMORY_CORE_PLUGIN_ID, {
         ...options,
         // Capacity tests override maxEntries for a dedicated namespace so
-        // eviction can be proven without writing
-        // DREAMING_WORKSPACE_STATE_MAX_ENTRIES rows or reopening production
-        // namespaces with a conflicting limit signature.
+        // eviction can be proven without writing the production 50_000-row
+        // cap or reopening production namespaces with a conflicting limit.
         maxEntries: params?.maxEntriesByNamespace?.[options.namespace] ?? options.maxEntries,
         env: process.env,
       }),
@@ -306,14 +304,12 @@ describe("writeMemoryCoreWorkspaceEntries", () => {
     expect(storedB).toEqual([{ key: "b.txt", value: { path: "b.txt", mtime: 2 } }]);
   });
 
-  it("at namespace capacity, skips unchanged rows and lets oldest created_at rows evict", async () => {
-    // Production opens at DREAMING_WORKSPACE_STATE_MAX_ENTRIES (50_000). This
-    // test uses a small cap on a dedicated namespace so the same skip +
-    // created_at eviction policy is proven without writing tens of thousands
+  it("at namespace capacity, skips unchanged no-op passes without refreshing created_at", async () => {
+    // Production opens at 50_000 rows. This reduced-cap stand-in proves the
+    // same skip + created_at retention policy without writing tens of thousands
     // of rows or reopening a production namespace with a different limit.
-    expect(DREAMING_WORKSPACE_STATE_MAX_ENTRIES).toBe(50_000);
     const capacity = 3;
-    const capacityNamespace = "dreaming-workspace-capacity-retention";
+    const capacityNamespace = "dreaming-workspace-capacity-noop";
     configureCountedDreamingState({
       maxEntriesByNamespace: { [capacityNamespace]: capacity },
     });
@@ -323,7 +319,6 @@ describe("writeMemoryCoreWorkspaceEntries", () => {
       const oldest = { key: "oldest.txt", value: { path: "oldest.txt", mtime: 1 } };
       const mid = { key: "mid.txt", value: { path: "mid.txt", mtime: 2 } };
       const newest = { key: "newest.txt", value: { path: "newest.txt", mtime: 3 } };
-      const incoming = { key: "incoming.txt", value: { path: "incoming.txt", mtime: 4 } };
 
       vi.setSystemTime(1_000);
       await writeMemoryCoreWorkspaceEntries({
@@ -355,26 +350,193 @@ describe("writeMemoryCoreWorkspaceEntries", () => {
       expect(writeCounts.register).toBe(0);
       expect(writeCounts.delete).toBe(0);
 
-      resetWriteCounts();
-      vi.setSystemTime(5_000);
-      // One new row at capacity: only the new key registers; the oldest
-      // unchanged row keeps its earlier created_at and is the eviction victim.
+      const stored = await readMemoryCoreWorkspaceEntries({
+        namespace: capacityNamespace,
+        workspaceDir,
+      });
+      expect(stored).toHaveLength(capacity);
+      expect(stored.map((row) => row.key).toSorted()).toEqual(
+        ["mid.txt", "newest.txt", "oldest.txt"].toSorted(),
+      );
+    } finally {
+      vi.useRealTimers();
+      configureCountedDreamingState();
+    }
+  });
+
+  it("restores a desired row that capacity eviction removed after an equal skip", async () => {
+    // Fill the namespace, keep two equal desired rows, replace the third with a
+    // new key. Registering the new key can evict the oldest equal desired row
+    // that the first pass already skipped; post-write reconcile must restore it
+    // so the final stored set matches the full desired set (size <= capacity).
+    const capacity = 3;
+    const capacityNamespace = "dreaming-workspace-capacity-reconcile";
+    configureCountedDreamingState({
+      maxEntriesByNamespace: { [capacityNamespace]: capacity },
+    });
+    vi.useFakeTimers();
+    try {
+      const workspaceDir = await createWorkspace();
+      const oldest = { key: "oldest.txt", value: { path: "oldest.txt", mtime: 1 } };
+      const mid = { key: "mid.txt", value: { path: "mid.txt", mtime: 2 } };
+      const newest = { key: "newest.txt", value: { path: "newest.txt", mtime: 3 } };
+      const incoming = { key: "incoming.txt", value: { path: "incoming.txt", mtime: 4 } };
+
+      vi.setSystemTime(1_000);
       await writeMemoryCoreWorkspaceEntries({
         namespace: capacityNamespace,
         workspaceDir,
-        entries: [oldest, mid, newest, incoming],
+        entries: [oldest],
       });
-      expect(writeCounts.register).toBe(1);
+      vi.setSystemTime(2_000);
+      await writeMemoryCoreWorkspaceEntries({
+        namespace: capacityNamespace,
+        workspaceDir,
+        entries: [oldest, mid],
+      });
+      vi.setSystemTime(3_000);
+      await writeMemoryCoreWorkspaceEntries({
+        namespace: capacityNamespace,
+        workspaceDir,
+        entries: [oldest, mid, newest],
+      });
+
+      resetWriteCounts();
+      vi.setSystemTime(5_000);
+      // Desired set still fits capacity: drop newest, add incoming, keep equals.
+      // Without reconcile, register(incoming) evicts oldest after it was skipped.
+      await writeMemoryCoreWorkspaceEntries({
+        namespace: capacityNamespace,
+        workspaceDir,
+        entries: [oldest, mid, incoming],
+      });
 
       const stored = await readMemoryCoreWorkspaceEntries({
         namespace: capacityNamespace,
         workspaceDir,
       });
       expect(stored).toHaveLength(capacity);
-      expect(stored.map((row) => row.key).sort()).toEqual(
-        ["incoming.txt", "mid.txt", "newest.txt"].sort(),
+      expect(stored.map((row) => row.key).toSorted()).toEqual(
+        ["incoming.txt", "mid.txt", "oldest.txt"].toSorted(),
       );
-      expect(stored.some((row) => row.key === "oldest.txt")).toBe(false);
+      expect(stored.find((row) => row.key === "oldest.txt")?.value).toEqual(oldest.value);
+      // At least one register for incoming; reconcile may issue one more for oldest.
+      expect(writeCounts.register).toBeGreaterThanOrEqual(1);
+      expect(writeCounts.delete).toBe(1);
+    } finally {
+      vi.useRealTimers();
+      configureCountedDreamingState();
+    }
+  });
+
+  it("restores desired rows when an early new registration would drop a later equal", async () => {
+    const capacity = 3;
+    const capacityNamespace = "dreaming-workspace-capacity-early-write";
+    configureCountedDreamingState({
+      maxEntriesByNamespace: { [capacityNamespace]: capacity },
+    });
+    vi.useFakeTimers();
+    try {
+      const workspaceDir = await createWorkspace();
+      const oldest = { key: "oldest.txt", value: { path: "oldest.txt", mtime: 1 } };
+      const mid = { key: "mid.txt", value: { path: "mid.txt", mtime: 2 } };
+      const newest = { key: "newest.txt", value: { path: "newest.txt", mtime: 3 } };
+      const incoming = { key: "incoming.txt", value: { path: "incoming.txt", mtime: 4 } };
+
+      vi.setSystemTime(1_000);
+      await writeMemoryCoreWorkspaceEntries({
+        namespace: capacityNamespace,
+        workspaceDir,
+        entries: [oldest],
+      });
+      vi.setSystemTime(2_000);
+      await writeMemoryCoreWorkspaceEntries({
+        namespace: capacityNamespace,
+        workspaceDir,
+        entries: [oldest, mid],
+      });
+      vi.setSystemTime(3_000);
+      await writeMemoryCoreWorkspaceEntries({
+        namespace: capacityNamespace,
+        workspaceDir,
+        entries: [oldest, mid, newest],
+      });
+
+      resetWriteCounts();
+      vi.setSystemTime(6_000);
+      // Early new key first: eviction can drop oldest before the loop reaches it.
+      await writeMemoryCoreWorkspaceEntries({
+        namespace: capacityNamespace,
+        workspaceDir,
+        entries: [incoming, oldest, mid],
+      });
+
+      const stored = await readMemoryCoreWorkspaceEntries({
+        namespace: capacityNamespace,
+        workspaceDir,
+      });
+      expect(stored.map((row) => row.key).toSorted()).toEqual(
+        ["incoming.txt", "mid.txt", "oldest.txt"].toSorted(),
+      );
+      expect(stored).toHaveLength(capacity);
+    } finally {
+      vi.useRealTimers();
+      configureCountedDreamingState();
+    }
+  });
+
+  it("keeps this workspace's desired set under cross-workspace capacity pressure", async () => {
+    const capacity = 3;
+    const capacityNamespace = "dreaming-workspace-capacity-cross-ws";
+    configureCountedDreamingState({
+      maxEntriesByNamespace: { [capacityNamespace]: capacity },
+    });
+    vi.useFakeTimers();
+    try {
+      const workspaceA = await createWorkspace();
+      const workspaceB = await createWorkspace();
+      const a1 = { key: "a1.txt", value: { path: "a1.txt", mtime: 1 } };
+      const a2 = { key: "a2.txt", value: { path: "a2.txt", mtime: 2 } };
+      const b1 = { key: "b1.txt", value: { path: "b1.txt", mtime: 3 } };
+      const a3 = { key: "a3.txt", value: { path: "a3.txt", mtime: 4 } };
+
+      vi.setSystemTime(1_000);
+      await writeMemoryCoreWorkspaceEntries({
+        namespace: capacityNamespace,
+        workspaceDir: workspaceA,
+        entries: [a1],
+      });
+      vi.setSystemTime(2_000);
+      await writeMemoryCoreWorkspaceEntries({
+        namespace: capacityNamespace,
+        workspaceDir: workspaceA,
+        entries: [a1, a2],
+      });
+      vi.setSystemTime(3_000);
+      await writeMemoryCoreWorkspaceEntries({
+        namespace: capacityNamespace,
+        workspaceDir: workspaceB,
+        entries: [b1],
+      });
+
+      resetWriteCounts();
+      vi.setSystemTime(4_000);
+      // Namespace is full (a1,a2,b1). Writing a3 for A can evict a skipped equal
+      // a1/a2; reconcile must leave A's full desired set intact.
+      await writeMemoryCoreWorkspaceEntries({
+        namespace: capacityNamespace,
+        workspaceDir: workspaceA,
+        entries: [a1, a2, a3],
+      });
+
+      const storedA = await readMemoryCoreWorkspaceEntries({
+        namespace: capacityNamespace,
+        workspaceDir: workspaceA,
+      });
+      expect(storedA.map((row) => row.key).toSorted()).toEqual(
+        ["a1.txt", "a2.txt", "a3.txt"].toSorted(),
+      );
+      expect(storedA).toHaveLength(3);
     } finally {
       vi.useRealTimers();
       configureCountedDreamingState();
