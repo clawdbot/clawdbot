@@ -2421,7 +2421,8 @@ function remoteGitBootstrapForChangedGate(changedGateBase, changedGateAlias) {
     'openclaw_changed_gate_bundle_tmp="$(mktemp /tmp/openclaw-changed-gate.XXXXXX)" || exit 2;',
     "trap 'rm -f \"$openclaw_changed_gate_bundle_tmp\"' EXIT HUP INT TERM;",
     'cp "$openclaw_changed_gate_bundle" "$openclaw_changed_gate_bundle_tmp" || exit 2;',
-    'rm -rf -- "$openclaw_changed_gate_bundle" || exit 2;',
+    // Interrupted rsync leaves bundle.XXXXXX beside the destination; never expose transport residue to lane classification.
+    'rm -rf -- "$openclaw_changed_gate_bundle" "$openclaw_changed_gate_bundle".* || exit 2;',
     "rm -rf .git || exit 2;",
     "git init -q || exit 2;",
     "git remote add origin https://github.com/openclaw/openclaw.git 2>/dev/null || git remote set-url origin https://github.com/openclaw/openclaw.git || exit 2;",

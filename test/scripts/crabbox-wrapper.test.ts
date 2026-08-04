@@ -663,6 +663,11 @@ function expectChangedGateGitBootstrap(remoteCommand: string): void {
   );
   expect(remoteCommand).toContain("mktemp /tmp/openclaw-changed-gate.XXXXXX");
   expect(remoteCommand).toContain('cp "$openclaw_changed_gate_bundle"');
+  const cleanupIndex = remoteCommand.indexOf(
+    'rm -rf -- "$openclaw_changed_gate_bundle" "$openclaw_changed_gate_bundle".* || exit 2',
+  );
+  expect(cleanupIndex).toBeGreaterThanOrEqual(0);
+  expect(cleanupIndex).toBeLessThan(remoteCommand.indexOf("rm -rf .git || exit 2"));
   expect(remoteCommand).toContain("git init -q || exit 2");
   expect(remoteCommand).toContain(`${remoteChangedGateFetch} || exit 2`);
   expect(remoteCommand).toContain(
