@@ -6,8 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- Models: add smart model tiering to route simple requests to a cheaper model via `agents.defaults.model.tiering` (and per-agent `agents.list[].model.tiering`). Applies to chat channels, the `agent` CLI, gateway RPC, and the OpenAI-compatible HTTP APIs; never overrides an explicit `/model`, a stored session model, or `heartbeat.model`.
-- Docs: add a "Running OpenClaw on a Budget" guide covering local and low-cost providers.
+- Models: add smart model tiering to route simple requests to a cheaper model via `agents.defaults.model.tiering` (and per-agent `agents.list[].model.tiering`). Applies to chat channels, the `agent` CLI, gateway RPC, and the OpenAI-compatible HTTP APIs; never overrides an explicit `/model`, a stored session model, or `heartbeat.model`. (#8258)
+- Docs: add a "Running OpenClaw on a Budget" guide covering local and low-cost providers. (#8258)
 - Web UI: add Agents dashboard for managing agent files, tools, skills, models, channels, and cron jobs.
 - Security: add healthcheck skill and bootstrap audit guidance. (#7641) Thanks @Takhoffman.
 - Docs: seed zh-CN translations. (#6619) Thanks @joshp123.
