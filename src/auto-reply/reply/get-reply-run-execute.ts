@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveConfiguredProviderRetryMaxRetries } from "../../agents/agent-project-settings.js";
 import {
   hasLegacyAutoFallbackWithoutOrigin,
   hasSessionAutoModelFallbackProvenance,
@@ -299,14 +298,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   const replyPolicyChannel =
     (replyRoute.channel as OriginatingChannelType | undefined) ??
     (messageProvider as OriginatingChannelType | undefined);
-  // Resolve the configured provider retry budget once as a prepared run fact. The
-  // embedded prompt-lock window pins SDK retries to 0 (#87180); the outer reply
-  // orchestrator restores this budget as its whole-attempt transient-retry count.
-  const providerRetryMaxRetries = resolveConfiguredProviderRetryMaxRetries({
-    cwd: normalizeOptionalString(state.sessionEntry?.spawnedCwd) ?? workspaceDir,
-    agentDir,
-    cfg,
-  });
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,
@@ -375,7 +366,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       provider,
       model,
       requestedRouteResolution,
-      ...(providerRetryMaxRetries !== undefined ? { providerRetryMaxRetries } : {}),
       modelSelectionLocked: preparedSessionState.sessionEntry?.modelSelectionLocked === true,
       hasSessionModelOverride: runHasSessionModelOverride,
       modelOverrideSource: runModelOverrideSource,

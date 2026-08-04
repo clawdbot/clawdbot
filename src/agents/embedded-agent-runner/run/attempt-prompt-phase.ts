@@ -16,7 +16,6 @@ import { handleEmbeddedAttemptPromptError } from "./attempt-prompt-error.js";
 import { handleEmbeddedAttemptMidTurnPrecheck } from "./attempt-prompt-preflight.js";
 import { applyPromptBuildToolsAllow } from "./attempt-prompt-tool-policy.js";
 import { removeTrailingMidTurnPrecheckAssistantError } from "./attempt-transcript-helpers.js";
-import { installEmbeddedPromptRetryDefault } from "./attempt.session-lock.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 
 type PromptAssemblyInput = Parameters<typeof prepareEmbeddedAttemptPromptAssembly>[0];
@@ -262,12 +261,6 @@ export async function runEmbeddedAttemptPromptPhase(input: {
       if (googlePromptCacheStreamFn) {
         activeSession.agent.streamFn = googlePromptCacheStreamFn;
       }
-      // Pin SDK retries to 0 for any call made while the embedded prompt lock is
-      // released. The outer reply orchestrator owns the single whole-attempt retry
-      // and each retry reacquires the session lock; an in-window SDK retry would run
-      // against a released lock and race session takeover, silently losing the
-      // message (#87180). The configured provider retry must not leak in here.
-      installEmbeddedPromptRetryDefault(activeSession);
     }
 
     const { activeContextEngine, ...preflight } = input.preflight;

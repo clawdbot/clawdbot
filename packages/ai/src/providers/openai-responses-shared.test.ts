@@ -12,8 +12,8 @@ import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import {
   applyCommonResponsesParams,
-  convertResponsesMessages,
   createResponsesAssistantOutput,
+  convertResponsesMessages,
   resolveResponsesReasoningEffort,
   runResponsesStreamLifecycle,
 } from "./openai-responses-shared.js";
@@ -1445,7 +1445,7 @@ describe("processResponsesStream", () => {
     ["omits arguments", undefined],
     ["sends empty arguments", ""],
   ])("preserves streamed tool-call arguments when done %s", async (_label, doneArguments) => {
-    const output = createResponsesAssistantOutput(nativeOpenAIModel);
+    const output = createAssistantOutput();
     const stream = new AssistantMessageEventStream();
     const events: Array<Record<string, unknown>> = [];
     const collect = (async () => {

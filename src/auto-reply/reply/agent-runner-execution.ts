@@ -263,14 +263,6 @@ async function executeAgentTurnInternalWithRetryState(
     onError: (error) =>
       logVerbose(`agent model patch reconciliation failed: ${formatErrorMessage(error)}`),
   });
-  // The embedded prompt-lock window pins SDK maxRetries to 0 (#87180), so the
-  // configured provider retry budget is honored per candidate at the candidate
-  // boundary (agent-runner-fallback-candidate.ts), where each retry reacquires
-  // the session lock without re-ordering the primary→fallback chain. This outer
-  // counter stays the shipped one-shot whole-cycle retry: it only re-runs the
-  // whole cycle for transient errors that surface above a single candidate
-  // (e.g. an exhausted fallback summary). Seeding it from the configured budget
-  // would re-run already-exhausted candidates and change provider load.
   let transientHttpRetriesRemaining = 1;
   const consumeTransientHttpRetry = () => transientHttpRetriesRemaining-- > 0;
   let liveModelSwitchRetries = 0;
@@ -343,10 +335,7 @@ async function executeAgentTurnInternalWithRetryState(
       fallbackAttempts = cycle.fallbackAttempts;
       terminalRunFailed = cycle.terminalRunFailed;
       break;
-    } catch (caughtErr) {
-      // Local alias for the caught error: reassigning the catch parameter
-      // itself trips no-ex-assign, so classification below reads this alias.
-      const err = caughtErr;
+    } catch (err) {
       if (err instanceof LiveSessionModelSwitchError) {
         liveModelSwitchRetries += 1;
       }
@@ -381,13 +370,6 @@ async function executeAgentTurnInternalWithRetryState(
         if (effectiveRun !== runnableRun && effectiveRun !== params.followupRun.run) {
           applyLiveModelSwitchToRun(effectiveRun, switchError);
         }
-        // Abort ownership wins: when a gateway restart or user stop already
-        // aborted the reply operation, a takeover error thrown during cleanup
-        // must not clobber the established lifecycle outcome with resend
-        // guidance. Fall through so the isReplyOperationRestartAbort /
-        // isReplyOperationUserAbort checks below emit the restart text /
-        // silent token. The classification between here and those checks has
-        // no early return and reads replyOperation.result, not err.
       }
       continue;
     }

@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
-import type { Context, ImageContent, Model, SimpleStreamOptions } from "../../llm/types.js";
+import type { ImageContent, Model, SimpleStreamOptions } from "../../llm/types.js";
 import { readRuntimePromptImageOrder } from "../../media/media-facts.js";
 import { finalizeRuntimePromptImages } from "../../media/runtime-prompt-image-provenance.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -17,23 +17,9 @@ import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-d
 const thinkingMocks = vi.hoisted(() => ({
   resolveThinkingDefaultForModel: vi.fn(() => "medium"),
 }));
-const streamMocks = vi.hoisted(() => {
-  // Record the options handed to streamSimple so retry tests can assert on the
-  // request settings the SDK seam forwards, while header tests keep using the
-  // vi.fn call history.
-  const streamSimpleCalls: Array<Record<string, unknown>> = [];
-  return {
-    streamSimpleCalls,
-    streamSimple: vi.fn((_model: Model, _context: Context, options?: SimpleStreamOptions) => {
-      streamSimpleCalls.push((options ?? {}) as Record<string, unknown>);
-      // Upstream tightened the provider signature to require an event stream
-      // return. Hand back a completed empty assistant stream so the contract
-      // holds; the recorded options above stay the only thing retry tests read.
-      return createEmptyAssistantDoneStream();
-    }),
-  };
-});
-const { streamSimpleCalls } = streamMocks;
+const streamMocks = vi.hoisted(() => ({
+  streamSimple: vi.fn(),
+}));
 const sdkSessionTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../../auto-reply/thinking.js", () => ({
@@ -158,26 +144,6 @@ function createAssistantResultStream(message: AssistantMessage) {
     stream.end();
   });
   return stream;
-}
-
-function createEmptyAssistantDoneStream() {
-  return createAssistantResultStream({
-    role: "assistant",
-    content: [],
-    api: testModel.api,
-    provider: testModel.provider,
-    model: testModel.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop",
-    timestamp: 1,
-  });
 }
 
 function createEmptyResourceLoader(): ResourceLoader {
@@ -745,51 +711,6 @@ describe("createAgentSession tool defaults", () => {
     });
 
     expect(events).toEqual(["lock:start", "lock:end"]);
-  });
-
-  it("forwards the configured provider maxRetries through the SDK request options", async () => {
-    streamSimpleCalls.length = 0;
-    const authStorage = AuthStorage.inMemory();
-    authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
-    const { session } = await createAgentSession({
-      model: testModel,
-      resourceLoader: createEmptyResourceLoader(),
-      sessionManager: SessionManager.inMemory(),
-      settingsManager: SettingsManager.inMemory({
-        retry: { provider: { maxRetries: 3 } },
-      }),
-      modelRegistry: createTestModelRegistry(authStorage),
-    });
-
-    // No per-call maxRetries: the SDK seam falls back to the configured provider setting.
-    await session.agent.streamFn(testModel, { systemPrompt: "", messages: [], tools: [] });
-
-    expect(streamSimpleCalls).toHaveLength(1);
-    expect(streamSimpleCalls[0]?.maxRetries).toBe(3);
-  });
-
-  it("lets an explicit per-call maxRetries override the configured provider setting", async () => {
-    streamSimpleCalls.length = 0;
-    const authStorage = AuthStorage.inMemory();
-    authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
-    const { session } = await createAgentSession({
-      model: testModel,
-      resourceLoader: createEmptyResourceLoader(),
-      sessionManager: SessionManager.inMemory(),
-      settingsManager: SettingsManager.inMemory({
-        retry: { provider: { maxRetries: 3 } },
-      }),
-      modelRegistry: createTestModelRegistry(authStorage),
-    });
-
-    await session.agent.streamFn(
-      testModel,
-      { systemPrompt: "", messages: [], tools: [] },
-      { maxRetries: 1 },
-    );
-
-    expect(streamSimpleCalls).toHaveLength(1);
-    expect(streamSimpleCalls[0]?.maxRetries).toBe(1);
   });
 });
 

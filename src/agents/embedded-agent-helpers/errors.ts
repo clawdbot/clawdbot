@@ -637,18 +637,6 @@ export function isTransientHttpError(raw: string): boolean {
   return TRANSIENT_HTTP_ERROR_CODES.has(status.code);
 }
 
-// Bare connection/transport failures (ECONNRESET, "socket hang up",
-// "Connection error.", connection reset/aborted, fetch failed) carry no leading
-// HTTP status, so isTransientHttpError misses them. The provider SDKs retry
-// these by default, but the embedded prompt-lock window pins SDK maxRetries to 0
-// (installEmbeddedPromptRetryDefault) so an in-window retry cannot widen the
-// session-takeover race (#87180). The orchestrator restores that resilience by
-// re-running the full fallback cycle once, where each retry re-acquires the lock.
-// Reuses the shared transport regex so this stays in sync with failover routing.
-export function isConnectionError(raw: string): boolean {
-  return INTERRUPTED_NETWORK_ERROR_RE.test(raw.trim());
-}
-
 function classifyFailoverClassificationFromHttpStatus(
   status: number | undefined,
   message: string | undefined,

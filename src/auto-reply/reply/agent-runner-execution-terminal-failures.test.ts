@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../../agents/failover-error.js";
 import { AgentHarnessSessionSupersededError } from "../../agents/harness/errors.js";
 import { SessionWriteLockStaleError } from "../../agents/session-write-lock-error.js";
-import { SessionWriteLockTimeoutError } from "../../agents/session-write-lock-error.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -516,47 +515,6 @@ describe("executeAgentTurn: terminal failures", () => {
       throw new Error("expected final reply");
     }
     expect(result.payload.text).not.toContain("Please resend your message");
-    const failCall = requireMockCall(failMock, 0, "reply operation fail");
-    expect(failCall[0]).toBe("run_failed");
-  });
-
-  it("does not retry a session write-lock timeout through the transient timeout gate (#87180)", async () => {
-    // A SessionWriteLockTimeoutError formats as "session file locked (timeout
-    // 5000ms): ..." so its message reads like a transport timeout. It is a
-    // local non-provider runtime coordination failure, though: re-running the
-    // model fallback chain would just hit the same lock. The transient gate
-    // must skip it (isNonProviderRuntimeCoordinationError) so it runs exactly
-    // once and surfaces a terminal run_failed instead of looping. Driven via
-    // the takeover preserved-prompt unwrap path that falls through to the gate.
-    const { replyOperation, failMock } = createMockReplyOperation();
-    const lockError = new SessionWriteLockTimeoutError({
-      timeoutMs: 5000,
-      owner: "other-run",
-      lockPath: "/tmp/session.jsonl.lock",
-    });
-    const takeoverError = Object.assign(
-      new Error(
-        "session file changed while embedded prompt lock was released: /tmp/session.jsonl (phase: prompt_reacquire)",
-      ),
-      {
-        name: "EmbeddedAttemptSessionTakeoverError",
-        sessionFile: "/tmp/session.jsonl",
-        phase: "prompt_reacquire",
-        promptError: lockError,
-      },
-    );
-    state.runWithModelFallbackMock.mockRejectedValueOnce(takeoverError);
-
-    const runAgentTurnWithFallback = await getExecuteAgentTurnForTest();
-    const result = await runAgentTurnWithFallback({
-      ...createMinimalRunAgentTurnParams(),
-      replyOperation,
-    });
-
-    expect(result.kind).toBe("final");
-    // The lock-timeout shape must not consume the transient retry budget: a
-    // single cycle, terminating as a terminal run_failed rather than re-running.
-    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(1);
     const failCall = requireMockCall(failMock, 0, "reply operation fail");
     expect(failCall[0]).toBe("run_failed");
   });

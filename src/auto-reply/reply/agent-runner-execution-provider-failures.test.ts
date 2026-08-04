@@ -11,7 +11,6 @@ import {
   setupAgentRunnerExecutionTestState,
   GENERIC_RUN_FAILURE_TEXT,
   getExecuteAgentTurnForTest,
-  createMockTypingSignaler,
   createFollowupRun,
   createMockReplyOperation,
   createMinimalRunAgentTurnParams,

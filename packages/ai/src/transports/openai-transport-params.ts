@@ -316,8 +316,6 @@ export function buildOpenAISdkRequestOptions(
   if (timeout === undefined && options?.maxRetries === undefined && !signal && !headers) {
     return undefined;
   }
-  // Caller threads maxRetries (e.g. 0 in the embedded prompt-lock release window) so the
-  // SDK's own retry loop stays out of it; configured provider retries still win upstream.
   return {
     ...(headers ? { headers } : {}),
     ...(signal ? { signal } : {}),

@@ -8,9 +8,8 @@
 //   - The real OpenAI-completions transport stream fn driving real HTTP I/O.
 //   - The real embedded prompt-lock controller + fence
 //     (createEmbeddedAttemptSessionLockController) wired through the real
-//     installEmbeddedPromptRetryDefault / installPromptSubmissionLockRelease
-//     helpers, exactly as src/agents/embedded-agent-runner/run/attempt.ts wires
-//     them in production.
+//     installPromptSubmissionLockRelease helper, exactly as
+//     src/agents/embedded-agent-runner/run/attempt.ts wires it in production.
 //   - The real failover classification (isEmbeddedAttemptSessionTakeoverError /
 //     isNonProviderRuntimeCoordinationError) and the real
 //     runAgentTurnWithFallback catch branch that produces the user-facing text.
@@ -38,7 +37,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createEmbeddedAttemptSessionLockController,
   EmbeddedAttemptSessionTakeoverError,
-  installEmbeddedPromptRetryDefault,
   installPromptSubmissionLockRelease,
 } from "../../agents/embedded-agent-runner/run/attempt.session-lock.js";
 import { isNonProviderRuntimeCoordinationError } from "../../agents/failover-error.js";
@@ -98,7 +96,6 @@ vi.mock("../../agents/embedded-agent-helpers.js", () => ({
   isOverloadedErrorMessage: () => false,
   isRateLimitErrorMessage: () => false,
   isTransientHttpError: () => false,
-  isConnectionError: () => false,
   isTimeoutErrorMessage: () => false,
   sanitizeUserFacingText: (text?: string) => text ?? "",
 }));
@@ -470,7 +467,6 @@ describe("runAgentTurnWithFallback — real session takeover (#87180)", () => {
       };
       const session = { agent };
 
-      installEmbeddedPromptRetryDefault(session);
       installPromptSubmissionLockRelease({
         session,
         releaseForPrompt: () => controller.releaseForPrompt(),

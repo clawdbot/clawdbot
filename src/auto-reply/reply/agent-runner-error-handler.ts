@@ -7,18 +7,15 @@ import {
   formatRateLimitOrOverloadedErrorCopy,
   isBillingErrorMessage,
   isCompactionFailureError,
-  isConnectionError,
   isLikelyContextOverflowError,
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
-  isTimeoutErrorMessage,
   isTransientHttpError,
 } from "../../agents/embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
   isEmbeddedAttemptSessionTakeoverError,
   isFailoverError,
-  isNonProviderRuntimeCoordinationError,
 } from "../../agents/failover-error.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { isFallbackSummaryError } from "../../agents/model-fallback-attempt.js";
@@ -47,7 +44,6 @@ import {
   buildExternalRunFailureReply,
   buildRateLimitCooldownMessage,
   hasBillingAttemptSummary,
-  hasDedicatedNonTransportTimeoutCopy,
   isNonDirectConversationContext,
   isPureTransientRateLimitSummary,
   isVerboseFailureDetailEnabled,
@@ -218,7 +214,7 @@ export async function handleAgentExecutionError(params: {
   if (isEmbeddedAttemptSessionTakeoverError(err)) {
     // Unwrap a preserved prompt error so a wrapped billing/rate-limit/overflow
     // failure flows through normal classification below. Only a pure takeover
-    // (steering arrived while the prompt lock was released, no underlying
+    // (the session was taken over while the turn was in progress, no underlying
     // provider error) returns resend guidance instead of a silent empty reply
     // (#87180).
     const preservedPromptError =
@@ -300,38 +296,9 @@ export async function handleAgentExecutionError(params: {
     !params.shouldSurfaceToControlUi
       ? classifyProviderRequestError(err)
       : undefined;
-  // CLI subprocess budget kills surface as a top-level FailoverError(reason:
-  // "timeout"), so the failover-reason disjunct must also honor the dedicated
-  // non-transport copy exclusion below — otherwise a killed subprocess replays
-  // through this whole-cycle retry even though isTransientTimeout skips it.
   const isTransientHttp =
     isTransientHttpError(message) ||
-    (isFailoverError(err) &&
-      (err.reason === "timeout" || err.reason === "server_error") &&
-      !hasDedicatedNonTransportTimeoutCopy(message));
-  // Bare connection errors (ECONNRESET, "socket hang up", "Connection error.")
-  // carry no leading HTTP status, so they need their own predicate alongside
-  // the status-based transient check for the retry gate below.
-  const isTransientConnection = isConnectionError(message);
-  // Request-timeout transport errors get rethrown to this single-model outer
-  // gate after the SDK's in-window timeout retries were pinned to 0 (#87180).
-  // isTimeoutErrorMessage matches timeout strings broadly, so the
-  // !isFallbackSummary guard keeps a timeout-only fallback summary (one that
-  // does not also read as a connection error) from re-running through this
-  // timeout disjunct: that summary means multi-model failover already ran, so a
-  // redundant timeout retry is wrong. Also exclude CLI subprocess budget
-  // timeouts (no-output stall / overall CLI turn budget) and Codex app-server
-  // bridge failures with their own surfaced copy and replay handling that this
-  // gate would otherwise swallow. Finally exclude local non-provider runtime
-  // coordination errors (e.g. session write-lock timeouts, whose message reads
-  // as "session file locked (timeout ...)"): retrying any model would hit the
-  // same local condition, so they must abort the fallback chain rather than
-  // re-run it as a transport timeout.
-  const isTransientTimeout =
-    isTimeoutErrorMessage(message) &&
-    !isFallbackSummary &&
-    !hasDedicatedNonTransportTimeoutCopy(message) &&
-    !isNonProviderRuntimeCoordinationError(err);
+    (isFailoverError(err) && (err.reason === "timeout" || err.reason === "server_error"));
 
   const replyOperationAbortAction = resolveReplyOperationAbortAction(err);
   if (replyOperationAbortAction) {
@@ -514,52 +481,15 @@ export async function handleAgentExecutionError(params: {
     turn.replyOperation?.recordActivity();
     return { kind: "retry" };
   }
-  if (isEmbeddedAttemptSessionTakeoverError(err)) {
-    // A steering message arrived while the model was retrying a connection
-    // error and released the prompt lock, so the transcript was taken over and
-    // this attempt can no longer commit. Return explicit resend guidance
-    // instead of a silent empty reply (#87180).
-    turn.replyOperation?.fail("run_failed", err);
-    const text = turn.isHeartbeat
-      ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
-      : "⚠️ Your message was interrupted because new input arrived while the model was retrying a connection error. Please resend your message.";
-    return {
-      kind: "final",
-      payload: markAgentRunFailureReplyPayload({
-        text: resolveExternalRunFailureTextForConversation({
-          text,
-          sessionCtx: turn.sessionCtx,
-          isGenericRunnerFailure: false,
-          cfg: turn.followupRun.run.config,
-        }),
-      }),
-    };
-  }
   if (
-    (isTransientHttp || isTransientConnection || isTransientTimeout) &&
+    isTransientHttp &&
     (!providerRequestError || providerRequestError.allowTransientHttpRetry) &&
     !params.overloadRetryState.unsafeToReplay &&
     params.consumeTransientHttpRetry()
   ) {
     params.state.pendingLifecycleTerminal = undefined;
-    // Transient errors (502/521/etc.) and bare connection drops (ECONNRESET,
-    // socket hang up) typically affect the whole provider, so falling back to
-    // an alternate model first would not help. Retry the complete
-    // primary→fallback chain instead. The provider SDK would have retried
-    // these in-window, but the prompt-lock pins SDK retries to 0 (#87180), so
-    // the orchestrator owns this resilience where each retry re-acquires the lock.
-    // Keep the existing "Transient HTTP provider error" diagnostic for
-    // status-based transients (HTTP retries pre-dated connection retries, and
-    // downstream tooling/tests key on that exact wording); connection drops get
-    // their own label so the cause stays distinguishable in logs.
     defaultRuntime.error(
-      `${
-        isTransientHttp
-          ? "Transient HTTP provider error"
-          : isTransientConnection
-            ? "Transient connection error"
-            : "Transient timeout error"
-      } before reply (${message}). Retrying once in ${TRANSIENT_HTTP_RETRY_DELAY_MS}ms.`,
+      `Transient HTTP provider error before reply (${message}). Retrying once in ${TRANSIENT_HTTP_RETRY_DELAY_MS}ms.`,
     );
     const retryAbortSignal = turn.replyOperation?.abortSignal ?? turn.opts?.abortSignal;
     const abortAction = await waitForRetryBackoff(TRANSIENT_HTTP_RETRY_DELAY_MS, retryAbortSignal);
