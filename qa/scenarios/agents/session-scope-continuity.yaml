@@ -20,7 +20,7 @@ scenario:
     - docs/help/testing.md
   codeRefs:
     - src/gateway/server-methods/agent-session-prepare.ts
-    - src/agents/embedded-agent-runner/run/history.ts
+    - src/agents/embedded-agent-runner/history.ts
     - test/e2e/qa-lab/runtime/agent-session-scope-continuity.e2e.test.ts
   execution:
     kind: vitest
