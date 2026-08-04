@@ -638,6 +638,33 @@ describe("config form auto-save", () => {
     runtimeConfig.dispose();
   });
 
+  it("rechecks operator access after the original-config parser settles", async () => {
+    vi.useFakeTimers();
+    const server = createConfigServerMock();
+    const client = { request: server.request } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+    const originalParse = deferred<void>();
+
+    await runtimeConfig.ensureLoaded();
+    runtimeConfig.state.configRawOriginalParsePending = originalParse.promise;
+    runtimeConfig.patchForm(["count"], 2);
+    const timerAdvance = vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+    await Promise.resolve();
+    publish(true, client, {
+      type: "hello-ok",
+      protocol: 1,
+      auth: { role: "operator", scopes: ["operator.read"] },
+      features: { methods: ["config.get", "config.set"] },
+    } as GatewayHelloOk);
+    originalParse.resolve();
+    await timerAdvance;
+
+    expect(server.submissions).toHaveLength(0);
+    expect(runtimeConfig.state.configFormDirty).toBe(true);
+    runtimeConfig.dispose();
+  });
+
   it("keeps mid-flight edits dirty and queues exactly one trailing save", async () => {
     vi.useFakeTimers();
     const { request, submissions, firstSet } = createDeferredSetServerMock();
@@ -2930,6 +2957,33 @@ describe("config form auto-save", () => {
     await expect(save).resolves.toBe(false);
     expect(setCalls).toBe(0);
     expect(runtimeConfig.canSet).toBe(false);
+    runtimeConfig.dispose();
+  });
+
+  it.each([
+    { action: "save" as const, method: "config.set" },
+    { action: "apply" as const, method: "config.apply" },
+  ])("rechecks operator access after parsing before $method dispatch", async ({ action }) => {
+    const server = createConfigServerMock();
+    const client = { request: server.request } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+    const originalParse = deferred<void>();
+
+    await runtimeConfig.ensureLoaded();
+    runtimeConfig.state.configRawOriginalParsePending = originalParse.promise;
+    const result = runtimeConfig[action]();
+    await Promise.resolve();
+    publish(true, client, {
+      type: "hello-ok",
+      protocol: 1,
+      auth: { role: "operator", scopes: ["operator.read"] },
+      features: { methods: ["config.get", "config.apply", "config.set"] },
+    } as GatewayHelloOk);
+    originalParse.resolve();
+
+    await expect(result).resolves.toBe(false);
+    expect(server.submissions).toHaveLength(0);
     runtimeConfig.dispose();
   });
 

@@ -707,6 +707,7 @@ async function submitConfigChange(
   busyKey: ConfigSubmitBusyKey,
   extraParams: Record<string, unknown> = {},
   onSubmitted?: (info: { raw: string; ackHash: string | null }) => void,
+  canDispatch: () => boolean = () => true,
 ): Promise<boolean> {
   const client = state.client;
   if (!client || !state.connected) {
@@ -735,6 +736,9 @@ async function submitConfigChange(
     const baseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash;
     if (!baseHash) {
       state.lastError = "Config hash missing; reload and retry.";
+      return false;
+    }
+    if (!isCurrent() || !canDispatch()) {
       return false;
     }
     // Dispatch-phase report (ackHash null): if the connection dies before the
@@ -812,12 +816,16 @@ function teardownFlushConfigDraft(
   state: ConfigState,
   client: GatewayBrowserClient,
   baseHash: string,
+  canDispatch: () => boolean,
 ): void {
   // Must stay synchronous: page unload destroys the context before any
   // deferred work runs. If a JSON5 original parse is still pending, sanitize
   // passes placeholders through; the gateway restores restorable sentinels
   // (restoreRedactedValues) and rejects unrestorable ones, so the worst case
   // matches not flushing at all while the common case saves the draft.
+  if (!canDispatch()) {
+    return;
+  }
   const raw = serializeFormForSubmit(state);
   void client.request("config.set", { raw, baseHash }).catch(() => undefined);
 }
@@ -832,6 +840,7 @@ function teardownFlushConfigDraft(
 async function autoSaveConfig(
   state: ConfigState,
   onAck?: (ackHash: string | null) => void,
+  canDispatch: () => boolean = () => true,
 ): Promise<boolean> {
   const client = state.client;
   if (!client || !state.connected || !state.configFormDirty || state.configFormMode !== "form") {
@@ -854,6 +863,9 @@ async function autoSaveConfig(
   if (!baseHash) {
     state.configAutoSaveStatus = "error";
     state.lastError = "Config hash missing; reload and retry.";
+    return false;
+  }
+  if (!isCurrent() || !canDispatch()) {
     return false;
   }
   state.configAutoSaveStatus = "saving";
@@ -941,14 +953,22 @@ function resetStaleAutoSaveStatus(state: ConfigState) {
 async function saveConfig(
   state: ConfigState,
   onSubmitted?: (info: { raw: string; ackHash: string | null }) => void,
+  canDispatch?: () => boolean,
 ): Promise<boolean> {
-  return submitConfigChange(state, "config.set", "configSaving", {}, onSubmitted);
+  return submitConfigChange(state, "config.set", "configSaving", {}, onSubmitted, canDispatch);
 }
 
-async function applyConfig(state: ConfigState): Promise<boolean> {
-  return submitConfigChange(state, "config.apply", "configApplying", {
-    sessionKey: state.applySessionKey,
-  });
+async function applyConfig(state: ConfigState, canDispatch?: () => boolean): Promise<boolean> {
+  return submitConfigChange(
+    state,
+    "config.apply",
+    "configApplying",
+    {
+      sessionKey: state.applySessionKey,
+    },
+    undefined,
+    canDispatch,
+  );
 }
 
 async function patchConfig(
@@ -1514,9 +1534,13 @@ export function createRuntimeConfigCapability(
     lastFlightSubmittedRaw = serializeFormForSubmit(state);
     lastFlightAckHash = null;
     const flight = run(() =>
-      autoSaveConfig(state, (ackHash) => {
-        lastFlightAckHash = ackHash;
-      }),
+      autoSaveConfig(
+        state,
+        (ackHash) => {
+          lastFlightAckHash = ackHash;
+        },
+        () => canCallConfigMethod("config.set"),
+      ),
     )
       .catch(() => false)
       .then((saved) => {
@@ -1990,9 +2014,13 @@ export function createRuntimeConfigCapability(
             async () => {
               cancelAppliedRefresh();
               try {
-                return await saveConfig(state, (info) => {
-                  manualFlightInfo = info;
-                });
+                return await saveConfig(
+                  state,
+                  (info) => {
+                    manualFlightInfo = info;
+                  },
+                  () => canCallConfigMethod("config.set"),
+                );
               } finally {
                 reconcileAppliedRefresh();
               }
@@ -2017,7 +2045,7 @@ export function createRuntimeConfigCapability(
                 return false;
               }
               try {
-                return await applyConfig(state);
+                return await applyConfig(state, () => canCallConfigMethod("config.apply"));
               } finally {
                 reconcileAppliedRefresh();
               }
@@ -2223,11 +2251,13 @@ export function createRuntimeConfigCapability(
           // pre-save value reads configFormDirty=false while the persisted
           // bytes are still the unreverted submission.
           if (ackHash && submittedRaw !== null && serializeFormForSubmit(state) !== submittedRaw) {
-            teardownFlushConfigDraft(state, client, ackHash);
+            teardownFlushConfigDraft(state, client, ackHash, () =>
+              canCallConfigMethod("config.set"),
+            );
           }
         });
       } else if (canFlush && state.configFormDirty) {
-        void autoSaveConfig(state);
+        void autoSaveConfig(state, undefined, () => canCallConfigMethod("config.set"));
       }
       invalidateConfigConnection(state);
       state.connected = false;
