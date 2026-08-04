@@ -32,9 +32,7 @@ function hasConfiguredPluginWebSearchCandidate(config: OpenClawConfig): boolean 
   }
   return Object.values(entries).some((entry) => {
     const pluginConfig = asOptionalObjectRecord(entry)?.config;
-    return hasConfiguredSearchCredentialCandidate(
-      asOptionalObjectRecord(pluginConfig)?.webSearch,
-    );
+    return hasConfiguredSearchCredentialCandidate(asOptionalObjectRecord(pluginConfig)?.webSearch);
   });
 }
 
@@ -66,13 +64,12 @@ function hasManifestWebSearchCredentialCandidate(params: {
     }
     if (
       providerIds.some((providerId) =>
-        plugin.webSearchProviderMetadata?.[providerId]?.configSignals?.some(
-          (signal) =>
-            manifestConfigSignalPasses({
-              config: params.config,
-              env: params.env ?? process.env,
-              signal,
-            }),
+        plugin.webSearchProviderMetadata?.[providerId]?.configSignals?.some((signal) =>
+          manifestConfigSignalPasses({
+            config: params.config,
+            env: params.env ?? process.env,
+            signal,
+          }),
         ),
       )
     ) {

@@ -83,9 +83,8 @@ vi.mock("../../web-search/runtime.js", async () => {
           )
           .find((entry) =>
             Boolean(
-              entry.provider.getConfiguredCredentialValue?.(
-                options?.config as never,
-              ) ?? entry.provider.getCredentialValue(),
+              entry.provider.getConfiguredCredentialValue?.(options?.config as never) ??
+              entry.provider.getCredentialValue(),
             ),
           );
     const definition = registration?.provider.createTool({
