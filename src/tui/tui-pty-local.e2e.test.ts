@@ -14,6 +14,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { connectGatewayClient } from "../gateway/test-helpers.e2e.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import { GatewayChatClient } from "./gateway-chat.js";
+import { synchronizedFrameRows } from "./tui-pty-harness-assertion-test-support.js";
 import {
   cleanupStartedFixture,
   createFreshSession,
@@ -603,8 +604,7 @@ function buildGatewayModeConfig(params: { tempDir: string; providerBaseUrl: stri
   // One minimal agent keeps provider/runtime initialization warm; unique
   // sessions and per-session models retain each scenario's state boundary.
   const agentScenarios = scenarios.filter(
-    (scenario, index) =>
-      scenarios.findIndex(({ agentId }) => agentId === scenario.agentId) === index,
+    ({ agentId }, index) => scenarios.findIndex((item) => item.agentId === agentId) === index,
   );
   const defaultScenario = GATEWAY_SCENARIOS.validation;
   const defaultModelRef = `tui-pty-mock/${defaultScenario.modelId}`;
@@ -850,9 +850,9 @@ async function startIsolatedGatewayPty(params: {
   gateway: OpenClawTestInstance;
   registerCleanup: CleanupRegistrar;
   sessionKey: string;
-  token: string;
+  token?: string;
 }) {
-  const { gateway, registerCleanup, sessionKey, token } = params;
+  const { gateway, registerCleanup, sessionKey, token = gateway.gatewayToken } = params;
   const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-gateway-client-"));
   await writeFile(path.join(tempDir, "openclaw.json"), "{}\n", "utf8");
   const cliArgs = ["tui", "--url", gateway.url, "--token", token, "--session", sessionKey];
@@ -1213,17 +1213,14 @@ describe("TUI PTY real backends", () => {
     "authenticates valid tokens and rejects invalid tokens through a real Gateway PTY",
     async ({ onTestFinished }) => {
       const shared = await requireSharedGatewayFixture();
-      const sessionKey = `agent:${SHARED_GATEWAY_AGENT_ID}:tui-pty-auth`;
+      const agentId = SHARED_GATEWAY_AGENT_ID;
+      const sessionKey = `agent:${agentId}:tui-pty-auth`;
       const invalidToken = "T02_INVALID_TOKEN_MUST_NOT_LEAK";
-      await shared.controlClient.createSession({
-        key: sessionKey,
-        agentId: SHARED_GATEWAY_AGENT_ID,
-      });
+      await shared.controlClient.createSession({ key: sessionKey, agentId });
       const valid = await startIsolatedGatewayPty({
         gateway: shared.gateway,
         registerCleanup: onTestFinished,
         sessionKey,
-        token: shared.gateway.gatewayToken,
       });
       const invalid = await startIsolatedGatewayPty({
         gateway: shared.gateway,
@@ -1248,18 +1245,13 @@ describe("TUI PTY real backends", () => {
     "loads completed Gateway history on a fresh TUI attach before user input",
     async ({ onTestFinished }) => {
       const shared = await requireSharedGatewayFixture();
-      const sessionKey = `agent:${SHARED_GATEWAY_AGENT_ID}:tui-pty-history`;
+      const agentId = SHARED_GATEWAY_AGENT_ID;
+      const sessionKey = `agent:${agentId}:tui-pty-history`;
       const userMarker = "T02_HISTORY_USER";
-      const assistantMarker = GATEWAY_SCENARIOS.reconnect.replyText;
-      await shared.controlClient.createSession({
-        key: sessionKey,
-        agentId: SHARED_GATEWAY_AGENT_ID,
-      });
-      await shared.controlClient.patchSession({
-        key: sessionKey,
-        agentId: SHARED_GATEWAY_AGENT_ID,
-        model: `tui-pty-mock/${GATEWAY_SCENARIOS.reconnect.modelId}`,
-      });
+      const assistantMarker = GATEWAY_SCENARIOS.crossClient.replyText;
+      const model = `tui-pty-mock/${GATEWAY_SCENARIOS.crossClient.modelId}`;
+      await shared.controlClient.createSession({ key: sessionKey, agentId });
+      await shared.controlClient.patchSession({ key: sessionKey, agentId, model });
       await shared.controlClient.sendChat({ sessionKey, message: userMarker });
       await waitForHistoryMessages(shared.controlClient, sessionKey, ({ messages }) =>
         hasOrderedTurn(messages, userMarker, assistantMarker),
@@ -1268,11 +1260,18 @@ describe("TUI PTY real backends", () => {
         gateway: shared.gateway,
         registerCleanup: onTestFinished,
         sessionKey,
-        token: shared.gateway.gatewayToken,
       });
       try {
         await attached.run.waitForOutput(assistantMarker, LOCAL_STARTUP_TIMEOUT_MS);
-        const output = attached.run.visibleOutput();
+        const output = await waitFor({
+          timeoutMs: LOCAL_STARTUP_TIMEOUT_MS,
+          read: () => {
+            const screen =
+              synchronizedFrameRows(attached.run.output(), attached.run)[0]?.join("\n") ?? "";
+            return screen.includes(userMarker) && screen.includes(assistantMarker) ? screen : null;
+          },
+          onTimeout: () => new Error("history did not reach a final synchronized TUI screen"),
+        });
         expect(output.split(userMarker)).toHaveLength(2);
         expect(output.split(assistantMarker)).toHaveLength(2);
         expect(output.indexOf(userMarker)).toBeLessThan(output.indexOf(assistantMarker));
@@ -1295,6 +1294,8 @@ describe("TUI PTY real backends", () => {
         await waitForOutputAfter(fixture.run, "new session: agent:", newOffset);
         const createdOutput = fixture.run.visibleOutput().slice(newOffset);
         const createdKey = createdOutput.match(/new session: (agent:\S+)/)?.[1];
+        expect(createdKey).toBeDefined();
+        expect(createdKey).not.toBe(fixture.sessionKey);
         fixture.trackSessionKey(createdKey!);
         const created = await waitForHistoryMessages(
           controlClient,
@@ -1354,7 +1355,6 @@ describe("TUI PTY real backends", () => {
         await waitForOutputAfter(fixture.run, GATEWAY_SCENARIOS.reconnect.replyText, postOffset);
         await waitForHistoryMessages(controlClient, createdKey!, ({ messages, sessionInfo }) => {
           const serialized = JSON.stringify(messages);
-          const postIndex = serialized.indexOf(postMarker);
           return (
             Boolean(sessionInfo?.activeLeafEntryId) &&
             sessionInfo?.sessionId === selectedInfo.sessionId &&
@@ -1363,7 +1363,7 @@ describe("TUI PTY real backends", () => {
             sessionInfo?.activeLeafEntryId !== reset.sessionInfo?.activeLeafEntryId &&
             [sessionInfo?.modelProvider, sessionInfo?.model].join("/") === alternateModel &&
             hasOrderedTurn(messages, resetMarker, seedReply) &&
-            postIndex > serialized.indexOf(seedReply) &&
+            serialized.indexOf(postMarker) > serialized.indexOf(seedReply) &&
             hasOrderedTurn(messages, postMarker, GATEWAY_SCENARIOS.reconnect.replyText)
           );
         });
