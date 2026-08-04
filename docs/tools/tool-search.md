@@ -397,8 +397,8 @@ pnpm openclaw qa suite --provider-mode mock-openai --scenario tool-search-gatewa
 
 It creates a temporary fake plugin with a large tool catalog, starts the mock
 OpenAI provider, then runs the Gateway in direct, code-mode Tool Search, and
-structured Tool Search modes. It compares provider request payloads and session
-logs across the three lanes.
+structured Tool Search modes. It compares provider request payloads for direct
+and code mode, then verifies session logs and tool flow across all three lanes.
 
 The regression proves:
 
