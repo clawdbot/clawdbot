@@ -66,16 +66,19 @@ async function readPreLaunchGatewayPids(env: GatewayServiceEnv): Promise<Readonl
   if (!shouldManageGatewayListenerPort(env)) {
     return new Set();
   }
-  const command = await readScheduledTaskCommand(env).catch(() => null);
-  const port = resolveScheduledTaskCommandPort(env, command);
-  if (!port) {
+  try {
+    const command = await readScheduledTaskCommand(env).catch(() => null);
+    const port = resolveScheduledTaskCommandPort(env, command);
+    if (!port) {
+      return new Set();
+    }
+    const probeHosts = await resolveGatewayServiceProbeHosts({ env, command });
+    return new Set(await resolveScheduledTaskOwnedGatewayPids(env, { port, probeHosts }, command));
+  } catch {
+    // This runs before `schtasks /Run`; a probe failure must never block the launch.
+    // An empty baseline only means evidence is judged exactly as it was before.
     return new Set();
   }
-  const probeHosts = await resolveGatewayServiceProbeHosts({ env, command });
-  const pids = await resolveScheduledTaskOwnedGatewayPids(env, { port, probeHosts }, command).catch(
-    () => [],
-  );
-  return new Set(pids);
 }
 
 async function shouldFallbackScheduledTaskLaunch(params: {
@@ -153,16 +156,17 @@ async function shouldFallbackScheduledTaskLaunch(params: {
     if (!installedArguments?.length) {
       return false;
     }
-    return (
-      findInstalledProcessPid(
-        entries,
-        taskPort,
-        installedArguments,
-        manageGatewayPort
-          ? (argv) => isGatewayArgv(argv, { allowGatewayBinary: true })
-          : isNodeHostArgv,
-      ) != null
+    const installedPid = findInstalledProcessPid(
+      entries,
+      taskPort,
+      installedArguments,
+      manageGatewayPort
+        ? (argv) => isGatewayArgv(argv, { allowGatewayBinary: true })
+        : isNodeHostArgv,
     );
+    // Same rule as the managed-port check above: a process that already matched the
+    // persisted argv before `/Run` is the caller's own gateway, not this run's product.
+    return installedPid != null && !params.preLaunchGatewayPids.has(installedPid);
   };
 
   let previous = await readLaunchObservation();

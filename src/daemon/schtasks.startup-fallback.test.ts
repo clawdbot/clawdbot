@@ -1827,6 +1827,45 @@ describe("Windows startup fallback", () => {
     });
   });
 
+  it("does not treat a pre-existing Windows gateway process as Scheduled Task launch evidence", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      fastForwardTaskStartWait();
+      const installedGatewayCommandLine =
+        '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js" gateway --port 18789';
+      // A foreground gateway started from the same install already owns the port before
+      // `schtasks /Run`, so it matches the persisted task argv for the whole launch window.
+      spawnSync.mockImplementation((command, args) =>
+        command === getWindowsPowerShellExePath() &&
+        Array.isArray(args) &&
+        args.includes(NODE_PROCESS_QUERY)
+          ? makeSpawnSyncResult({
+              stdout: JSON.stringify([
+                { ProcessId: 4242, CommandLine: installedGatewayCommandLine },
+                { ProcessId: 9999, CommandLine: "powershell.exe" },
+              ]),
+            })
+          : makeSpawnSyncResult(),
+      );
+      addAcceptedRunNeverStartsResponses();
+
+      await installScheduledTask({
+        env,
+        stdout: new PassThrough(),
+        programArguments: [
+          "C:\\Program Files\\nodejs\\node.exe",
+          "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js",
+          "gateway",
+          "--port",
+          "18789",
+        ],
+        environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+      });
+
+      expectStartupFallbackSpawn();
+    });
+  });
+
   it("accepts a newly observed gateway process while a pre-existing listener keeps running", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       fastForwardTaskStartWait();
