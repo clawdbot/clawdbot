@@ -908,7 +908,6 @@ async function waitForHistoryMessages(
   }
   throw new Error(`history ${key} did not reach the expected authoritative state`);
 }
-
 // Gateway cases share one real server and PTY but keep isolated models and sessions.
 // Per-case abort cleanup and serial order prevent active-run or queue state leaks.
 describe("TUI PTY real backends", () => {
@@ -1245,7 +1244,6 @@ describe("TUI PTY real backends", () => {
     },
     LOCAL_TEST_TIMEOUT_MS,
   );
-
   registerGatewayTest(
     "loads completed Gateway history on a fresh TUI attach before user input",
     async ({ onTestFinished }) => {
@@ -1277,13 +1275,13 @@ describe("TUI PTY real backends", () => {
         const output = attached.run.visibleOutput();
         expect(output.split(userMarker)).toHaveLength(2);
         expect(output.split(assistantMarker)).toHaveLength(2);
+        expect(output.indexOf(userMarker)).toBeLessThan(output.indexOf(assistantMarker));
       } finally {
         await attached.cleanup();
       }
     },
     LOCAL_TEST_TIMEOUT_MS,
   );
-
   registerGatewayTest(
     "executes Gateway status model new and reset RPCs through a real TUI PTY",
     async ({ onTestFinished }) => {
@@ -1291,7 +1289,7 @@ describe("TUI PTY real backends", () => {
       const { controlClient } = await requireSharedGatewayFixture();
       try {
         await fixture.run.write("/gateway-status\r", { delay: false });
-        await fixture.waitForOutput("Gateway status");
+        await fixture.waitForOutput("Default model: tui-pty-validation (128k ctx)");
         const newOffset = fixture.run.visibleOutput().length;
         await fixture.run.write("/new\r", { delay: false });
         await waitForOutputAfter(fixture.run, "new session: agent:", newOffset);
@@ -1299,10 +1297,11 @@ describe("TUI PTY real backends", () => {
           .visibleOutput()
           .slice(newOffset)
           .match(/new session: (agent:\S+)/)?.[1];
-        expect(createdKey).toMatch(/^agent:/);
         fixture.trackSessionKey(createdKey!);
-        await waitForHistoryMessages(controlClient, createdKey!, ({ sessionInfo }) =>
-          Boolean(sessionInfo?.sessionId),
+        const created = await waitForHistoryMessages(
+          controlClient,
+          createdKey!,
+          ({ sessionInfo }) => Boolean(sessionInfo?.sessionId),
         );
         const resetMarker = "T02_RESET_HISTORY";
         const seedReply = GATEWAY_SCENARIOS.crossClient.replyText;
@@ -1314,7 +1313,7 @@ describe("TUI PTY real backends", () => {
           ({ messages, sessionInfo }) =>
             Boolean(
               sessionInfo?.activeLeafEntryId &&
-              sessionInfo?.sessionId &&
+              sessionInfo?.sessionId === created.sessionInfo?.sessionId &&
               typeof sessionInfo?.updatedAt === "number" &&
               [sessionInfo?.modelProvider, sessionInfo?.model].join("/") ===
                 `tui-pty-mock/${GATEWAY_SCENARIOS.crossClient.modelId}` &&
@@ -1331,7 +1330,7 @@ describe("TUI PTY real backends", () => {
           createdKey!,
           ({ sessionInfo }) =>
             sessionInfo?.sessionId === seededInfo.sessionId &&
-            typeof sessionInfo?.updatedAt === "number" &&
+            (sessionInfo?.updatedAt as number) >= (seededInfo.updatedAt as number) &&
             Boolean(sessionInfo?.activeLeafEntryId) &&
             [sessionInfo?.modelProvider, sessionInfo?.model].join("/") === alternateModel,
         );
@@ -1360,6 +1359,7 @@ describe("TUI PTY real backends", () => {
           return (
             Boolean(sessionInfo?.activeLeafEntryId) &&
             sessionInfo?.sessionId === selectedInfo.sessionId &&
+            (sessionInfo?.updatedAt as number) >= (reset.sessionInfo?.updatedAt as number) &&
             sessionInfo?.activeLeafEntryId !== reset.sessionInfo?.activeLeafEntryId &&
             [sessionInfo?.modelProvider, sessionInfo?.model].join("/") === alternateModel &&
             hasOrderedTurn(messages, resetMarker, seedReply) &&
