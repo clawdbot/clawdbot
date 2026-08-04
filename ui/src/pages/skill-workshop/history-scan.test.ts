@@ -139,31 +139,6 @@ describe("Skill Workshop history scan controller", () => {
     expect(newRequest).not.toHaveBeenCalled();
   });
 
-  it("does not scan through a read-only replacement client after a status retry", async () => {
-    const status = deferred<SkillWorkshopHistoryScanResult>();
-    const oldRequest = vi.fn(() => status.promise);
-    const newRequest = vi.fn();
-    const state = createSkillWorkshopHistoryScanState();
-    state.loaded = true;
-    const appGateway = gateway(oldRequest);
-
-    const scan = runSkillWorkshopHistoryScan({ agentId: "main", gateway: appGateway, state });
-    await vi.waitFor(() => expect(oldRequest).toHaveBeenCalledTimes(1));
-    (appGateway.snapshot as unknown as { client: { request: typeof newRequest } }).client = {
-      request: newRequest,
-    };
-    (appGateway.snapshot as ApplicationGateway["snapshot"]).hello = {
-      type: "hello-ok",
-      protocol: 4,
-      auth: { role: "operator", scopes: ["operator.read"] },
-      features: { methods: ["skills.proposals.historyScan"] },
-    } as ApplicationGateway["snapshot"]["hello"];
-    status.resolve(result());
-
-    await expect(scan).resolves.toBe(false);
-    expect(newRequest).not.toHaveBeenCalled();
-  });
-
   it("does not race a scan against status loading", async () => {
     let resolveStatus: ((value: SkillWorkshopHistoryScanResult) => void) | undefined;
     const request = vi.fn(

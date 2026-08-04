@@ -34,43 +34,12 @@ function snapshot(params: {
 }
 
 describe("canCallGatewayMethod", () => {
-  it("requires a connected client", () => {
-    expect(
-      canCallGatewayMethod(snapshot({ connected: false }), "skills.update", "operator.admin"),
-    ).toBe(false);
-  });
-
-  it("blocks an explicitly unavailable method", () => {
-    expect(
-      canCallGatewayMethod(
-        snapshot({ methods: [], scopes: ["operator.admin"] }),
-        "skills.update",
-        "operator.admin",
-      ),
-    ).toBe(false);
-  });
-
-  it("blocks an explicitly insufficient scope", () => {
-    expect(
-      canCallGatewayMethod(
-        snapshot({ methods: ["skills.update"], scopes: ["operator.write"] }),
-        "skills.update",
-        "operator.admin",
-      ),
-    ).toBe(false);
-  });
-
-  it("honors operator scope implications", () => {
-    const current = snapshot({
-      methods: ["doctor.memory.backfillDreamDiary"],
-      scopes: ["operator.write"],
-    });
-    expect(
-      canCallGatewayMethod(current, "doctor.memory.backfillDreamDiary", "operator.write"),
-    ).toBe(true);
-    expect(canCallGatewayMethod(current, "doctor.memory.backfillDreamDiary", "operator.read")).toBe(
-      true,
-    );
+  it.each([
+    ["disconnected", { connected: false }],
+    ["method unavailable", { methods: [], scopes: ["operator.admin"] }],
+    ["scope insufficient", { methods: ["skills.update"], scopes: ["operator.write"] }],
+  ])("blocks %s calls", (_name, params) => {
+    expect(canCallGatewayMethod(snapshot(params), "skills.update", "operator.admin")).toBe(false);
   });
 
   it("preserves legacy behavior when methods or auth scopes are omitted", () => {

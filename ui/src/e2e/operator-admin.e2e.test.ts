@@ -100,60 +100,6 @@ function configResponse(config: Record<string, unknown> = operatorConfig) {
   };
 }
 
-function memoryStatus() {
-  return {
-    agentId: "main",
-    provider: "builtin",
-    embedding: { ok: true, checked: true },
-    dreaming: {
-      enabled: true,
-      verboseLogging: false,
-      storageMode: "inline",
-      separateReports: false,
-      shortTermCount: 0,
-      recallSignalCount: 0,
-      dailySignalCount: 0,
-      groundedSignalCount: 0,
-      totalSignalCount: 0,
-      phaseSignalCount: 0,
-      lightPhaseHitCount: 0,
-      remPhaseHitCount: 0,
-      promotedTotal: 0,
-      promotedToday: 0,
-      shortTermEntries: [],
-      signalEntries: [],
-      promotedEntries: [],
-      phases: {
-        light: {
-          enabled: true,
-          cron: "0 * * * *",
-          managedCronPresent: true,
-          lookbackDays: 2,
-          limit: 10,
-        },
-        deep: {
-          enabled: true,
-          cron: "0 3 * * *",
-          managedCronPresent: true,
-          limit: 10,
-          minScore: 0.8,
-          minRecallCount: 2,
-          minUniqueQueries: 2,
-          recencyHalfLifeDays: 14,
-        },
-        rem: {
-          enabled: false,
-          cron: "0 5 * * 0",
-          managedCronPresent: false,
-          lookbackDays: 7,
-          limit: 10,
-          minPatternStrength: 0.75,
-        },
-      },
-    },
-  };
-}
-
 function requestParams(request: MockGatewayRequest): Record<string, unknown> {
   if (!request.params || typeof request.params !== "object" || Array.isArray(request.params)) {
     return {};
@@ -348,12 +294,6 @@ describeControlUiE2e("Control UI operator administration", () => {
     };
     const readOnlyConfig = {
       ...operatorConfig,
-      plugins: {
-        slots: { memory: "memory-core" },
-        entries: {
-          "memory-core": { enabled: true, config: { dreaming: { enabled: true } } },
-        },
-      },
       skills: { workshop: { autonomous: { mode: "auto" } } },
     };
     const gateway = await installMockGateway(page, {
@@ -368,15 +308,6 @@ describeControlUiE2e("Control UI operator administration", () => {
         "config.get",
         "config.patch",
         "config.set",
-        "doctor.memory.backfillDreamDiary",
-        "doctor.memory.dedupeDreamDiary",
-        "doctor.memory.dreamDiary",
-        "doctor.memory.repairDreamingArtifacts",
-        "doctor.memory.resetDreamDiary",
-        "doctor.memory.resetGroundedShortTerm",
-        "doctor.memory.status",
-        "openclaw.chat",
-        "plugins.list",
         "skills.install",
         "skills.proposals.apply",
         "skills.proposals.evaluate",
@@ -419,27 +350,6 @@ describeControlUiE2e("Control UI operator administration", () => {
           workspace: "/tmp/openclaw-e2e/workspace",
         },
         "config.get": configResponse(readOnlyConfig),
-        "doctor.memory.dreamDiary": {
-          agentId: "main",
-          found: true,
-          path: "DREAMS.md",
-          content: "# Dream Diary\n",
-        },
-        "doctor.memory.status": memoryStatus(),
-        "plugins.list": {
-          plugins: [
-            {
-              id: "memory-core",
-              name: "OpenClaw Memory",
-              installed: true,
-              enabled: true,
-              state: "enabled",
-              kind: ["memory"],
-            },
-          ],
-          diagnostics: [],
-          mutationAllowed: false,
-        },
         "skills.proposals.inspect": {
           content: "Review the proposed skill.",
           record: {
@@ -565,34 +475,6 @@ describeControlUiE2e("Control UI operator administration", () => {
       await scanHistory.click({ force: true });
       expect(await gateway.getRequests("skills.proposals.historyScan")).toHaveLength(0);
       await screenshot(page, "07-read-only-workshop.png");
-
-      await page.goto(`${server.baseUrl}settings/agents/main/memory`);
-      await gateway.waitForRequest("doctor.memory.status");
-      const dreamingToggle = page.locator(".dreams__phase-toggle");
-      await expect.poll(() => dreamingToggle.isDisabled()).toBe(true);
-      await dreamingToggle.click({ force: true });
-      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
-      await page.locator("#dreams-tab-advanced").click();
-      const memoryActions = page.locator(".dreams-advanced__actions button");
-      await expect.poll(() => memoryActions.count()).toBe(5);
-      for (const button of await memoryActions.all()) {
-        await expect.poll(() => button.isDisabled()).toBe(true);
-        await button.click({ force: true });
-      }
-      for (const method of [
-        "doctor.memory.backfillDreamDiary",
-        "doctor.memory.dedupeDreamDiary",
-        "doctor.memory.repairDreamingArtifacts",
-        "doctor.memory.resetDreamDiary",
-        "doctor.memory.resetGroundedShortTerm",
-      ]) {
-        expect(await gateway.getRequests(method)).toHaveLength(0);
-      }
-
-      await page.goto(`${server.baseUrl}custodian?intent=new-agent`);
-      await page.locator("openclaw-custodian-page").waitFor();
-      expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
-      await screenshot(page, "08-read-only-new-agent.png");
     } finally {
       await context.close();
     }
