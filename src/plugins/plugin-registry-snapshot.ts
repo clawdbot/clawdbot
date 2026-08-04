@@ -10,6 +10,7 @@ import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
+import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
 import { safeFileSignature, safeHashFile } from "./installed-plugin-index-hash.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
@@ -211,6 +212,14 @@ function isContainedPluginPath(
   return Boolean(root && target && isPathInside(root, target));
 }
 
+function hasStaleDoctorContractFile(plugin: InstalledPluginIndexRecord): boolean {
+  const contractPath = resolvePluginDoctorContractArtifactPath(plugin.rootDir);
+  return contractPath
+    ? !plugin.doctorContractHash ||
+        !fileContentMatches(contractPath, plugin.doctorContractHash, undefined, false)
+    : plugin.doctorContractHash !== undefined;
+}
+
 function hasStalePersistedPluginFiles(index: InstalledPluginIndex): boolean {
   const realpathCache = new Map<string, string>();
   return index.plugins.some((plugin) => {
@@ -242,6 +251,9 @@ function hasStalePersistedPluginFiles(index: InstalledPluginIndex): boolean {
       ) {
         return true;
       }
+    }
+    if (hasStaleDoctorContractFile(plugin)) {
+      return true;
     }
     if (!plugin.packageJson) {
       return false;
