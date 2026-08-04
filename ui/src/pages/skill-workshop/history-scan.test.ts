@@ -120,7 +120,7 @@ describe("Skill Workshop history scan controller", () => {
     });
   });
 
-  it("uses the current gateway client after a status retry", async () => {
+  it("does not transfer a pending scan to a replacement gateway client", async () => {
     const status = deferred<SkillWorkshopHistoryScanResult>();
     const oldRequest = vi.fn(() => status.promise);
     const newRequest = vi.fn().mockResolvedValue(result({ hasScanned: true, hasMore: true }));
@@ -135,11 +135,8 @@ describe("Skill Workshop history scan controller", () => {
     };
     status.resolve(result());
 
-    await expect(scan).resolves.toBe(true);
-    expect(newRequest).toHaveBeenCalledWith("skills.proposals.historyScan", {
-      agentId: "main",
-      direction: "older",
-    });
+    await expect(scan).resolves.toBe(false);
+    expect(newRequest).not.toHaveBeenCalled();
   });
 
   it("does not scan through a read-only replacement client after a status retry", async () => {

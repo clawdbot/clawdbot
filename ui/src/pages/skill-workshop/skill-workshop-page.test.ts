@@ -733,7 +733,12 @@ describe("SkillWorkshopPage lifecycle", () => {
 });
 
 describe("SkillWorkshopPage self-learning toggle", () => {
-  function createLoadedPage(runtimeConfig: ReturnType<typeof createRuntimeConfigStub>) {
+  function createLoadedPage(
+    runtimeConfig: ReturnType<typeof createRuntimeConfigStub>,
+    options?: {
+      gatewaySubscribe?: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => () => void;
+    },
+  ) {
     const loadedState = createSkillWorkshopState();
     loadedState.skillWorkshopAgentId = "research";
     loadedState.skillWorkshopLoaded = true;
@@ -743,7 +748,7 @@ describe("SkillWorkshopPage self-learning toggle", () => {
     page.data = skillWorkshopRouteData(loadedState);
     page.context = createContext(
       vi.fn(async () => ({})),
-      { runtimeConfig },
+      { runtimeConfig, gatewaySubscribe: options?.gatewaySubscribe },
     );
     document.body.append(page);
     return page;
@@ -831,6 +836,37 @@ describe("SkillWorkshopPage self-learning toggle", () => {
         ".sw-header-controls input[aria-label='Toggle autonomous self-learning']",
       )?.checked,
     ).toBe(true);
+  });
+
+  it("does not retry a conflicted self-learning write after gateway replacement", async () => {
+    const refresh = deferred<undefined>();
+    let gatewayListener: ((snapshot: ApplicationGatewaySnapshot) => void) | undefined;
+    const runtimeConfig = createRuntimeConfigStub({
+      sourceConfig: { skills: { workshop: { autonomous: { mode: "off" } } } },
+    });
+    runtimeConfig.patch = vi.fn(async () => {
+      runtimeConfig.state.lastError =
+        "GatewayRequestError: config changed since last load; re-run config.get and retry";
+      return false;
+    });
+    runtimeConfig.refresh = vi.fn(() => refresh.promise);
+    const page = createLoadedPage(runtimeConfig, {
+      gatewaySubscribe: (listener) => {
+        gatewayListener = listener;
+        return () => undefined;
+      },
+    });
+    await page.updateComplete;
+
+    page.querySelector<HTMLButtonElement>(".sw-empty-state__selflearn button")?.click();
+    await waitForSkillWorkshop(() => expect(runtimeConfig.refresh).toHaveBeenCalledTimes(1));
+    gatewayListener?.({
+      ...page.context.gateway.snapshot,
+      client: { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient,
+    });
+    refresh.resolve(undefined);
+
+    await waitForSkillWorkshop(() => expect(runtimeConfig.patch).toHaveBeenCalledTimes(1));
   });
 
   it("surfaces a patch failure and keeps the toggle off", async () => {

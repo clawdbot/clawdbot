@@ -39,6 +39,7 @@ export function resolveSelfLearning(
 export async function setSelfLearningEnabled(
   runtimeConfig: RuntimeConfigCapability,
   enabled: boolean,
+  isCurrent: () => boolean = () => true,
 ): Promise<string | null> {
   const mode = enabled ? "auto" : "off";
   const patch = {
@@ -46,19 +47,31 @@ export async function setSelfLearningEnabled(
     note: enabled ? "Enable Skill Workshop self-learning" : "Disable Skill Workshop self-learning",
   };
   let patched = await runtimeConfig.patch(patch);
+  if (!isCurrent()) {
+    return null;
+  }
   if (!patched && runtimeConfig.state.lastError?.includes(CONFIG_CHANGED_SINCE_LOAD)) {
     // This scalar toggle is safe to replay after refreshing the optimistic-lock hash.
     // Keep arbitrary merge patches fail-closed: arrays and derived objects may need rebuilding.
     await runtimeConfig.refresh();
+    if (!isCurrent()) {
+      return null;
+    }
     if (runtimeConfig.state.lastError) {
       return runtimeConfig.state.lastError;
     }
     patched = await runtimeConfig.patch(patch);
+    if (!isCurrent()) {
+      return null;
+    }
   }
   if (!patched) {
     return runtimeConfig.state.lastError ?? t("skillWorkshop.selfLearning.updateError");
   }
   await runtimeConfig.refresh();
+  if (!isCurrent()) {
+    return null;
+  }
   return null;
 }
 

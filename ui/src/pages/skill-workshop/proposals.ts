@@ -539,6 +539,7 @@ export async function runSkillWorkshopEvaluation(
   state: SkillWorkshopState,
   context: SkillWorkshopContext,
   proposalId: string,
+  isCurrent: () => boolean = () => true,
 ): Promise<boolean> {
   if (
     !canCallGatewayMethod(context.gateway.snapshot, "skills.proposals.evaluate", "operator.admin")
@@ -565,7 +566,12 @@ export async function runSkillWorkshopEvaluation(
     const loaded = await loadSkillWorkshopProposalDetail(state, context, proposalId, {
       force: true,
     });
-    if (!loaded || state.skillWorkshopAgentId !== requestAgentId) {
+    if (
+      !loaded ||
+      !isCurrent() ||
+      state.skillWorkshopAgentId !== requestAgentId ||
+      !canCallGatewayMethod(context.gateway.snapshot, "skills.proposals.evaluate", "operator.admin")
+    ) {
       return false;
     }
     const current = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
@@ -577,7 +583,7 @@ export async function runSkillWorkshopEvaluation(
       proposalId,
       expectedRevisionHash: current.revisionHash,
     });
-    if (state.skillWorkshopAgentId !== requestAgentId) {
+    if (!isCurrent() || state.skillWorkshopAgentId !== requestAgentId) {
       return false;
     }
     if (result.evaluation.revisionHash !== current.revisionHash) {
@@ -615,6 +621,7 @@ export async function requestSkillWorkshopRevision(
     proposal: SkillWorkshopProposal,
     agentId: string,
   ) => Promise<void>,
+  isCurrent: () => boolean = () => true,
 ): Promise<boolean> {
   if (
     !canCallGatewayMethod(
@@ -642,7 +649,15 @@ export async function requestSkillWorkshopRevision(
   state.skillWorkshopError = null;
   try {
     await loadSkillWorkshopProposalDetail(state, context, proposalId);
-    if (state.skillWorkshopAgentId !== proposalAgentId) {
+    if (
+      !isCurrent() ||
+      state.skillWorkshopAgentId !== proposalAgentId ||
+      !canCallGatewayMethod(
+        context.gateway.snapshot,
+        "skills.proposals.requestRevision",
+        "operator.admin",
+      )
+    ) {
       return false;
     }
     const currentProposal =

@@ -49,7 +49,8 @@ function renderSkillWorkshopPage(
   const {
     context,
     workshopAgentName,
-    onRevisionRequest,
+    onEvaluate,
+    onRevisionSubmit,
     selfLearning,
     onSelfLearningToggle,
     onHistoryScan,
@@ -210,7 +211,7 @@ function renderSkillWorkshopPage(
                 ) {
                   return;
                 }
-                void runSkillWorkshopEvaluation(state, context, key).finally(requestUpdate);
+                onEvaluate(key);
                 requestUpdate();
               },
               onRevise: (key) => {
@@ -247,17 +248,11 @@ function renderSkillWorkshopPage(
                 requestUpdate();
               },
               onRevisionSubmit: (key) =>
-                onRevisionRequest &&
                 canCallWorkshopAdminMethod(
                   context.gateway.snapshot,
                   "skills.proposals.requestRevision",
                 )
-                  ? void requestSkillWorkshopRevision(
-                      state,
-                      context,
-                      key,
-                      onRevisionRequest,
-                    ).finally(requestUpdate)
+                  ? onRevisionSubmit(key)
                   : undefined,
               onPreviewFile: (key, path) => {
                 state.skillWorkshopSelectedKey = key;
@@ -477,6 +472,31 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     );
   };
 
+  private readonly handleEvaluation = (proposalId: string) => {
+    const scope = this.captureSourceScope();
+    if (!scope) {
+      return;
+    }
+    void runSkillWorkshopEvaluation(scope.state, scope.context, proposalId, () =>
+      this.isCurrentSourceScope(scope),
+    ).finally(this.requestPageUpdate);
+  };
+
+  private readonly handleRevisionSubmit = (proposalId: string) => {
+    const scope = this.captureSourceScope();
+    const sendRevisionRequest = this.onRevisionRequest ?? this.handleRevisionRequest;
+    if (!scope) {
+      return;
+    }
+    void requestSkillWorkshopRevision(
+      scope.state,
+      scope.context,
+      proposalId,
+      sendRevisionRequest,
+      () => this.isCurrentSourceScope(scope),
+    ).finally(this.requestPageUpdate);
+  };
+
   override willUpdate() {
     if (!this.state && this.context) {
       this.state = createSkillWorkshopState(this.data);
@@ -520,6 +540,8 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
 
   private resetSourceState() {
     this.operationEpoch += 1;
+    this.selfLearningBusy = false;
+    this.selfLearningError = null;
     void this.proposalsTask.run([null, null, null, false]);
     const previous = this.state;
     if (!previous) {
@@ -596,6 +618,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     void runSkillWorkshopPageHistoryScan({
       state: scope.state,
       context: scope.context,
+      isCurrent: () => this.isCurrentSourceScope(scope),
       current: () => {
         const state = this.state;
         const context = this.context;
@@ -613,18 +636,26 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     if (!canCallWorkshopAdminMethod(this.context?.gateway?.snapshot, "config.patch")) {
       return;
     }
-    const runtimeConfig = this.context?.runtimeConfig;
-    if (!runtimeConfig || this.selfLearningBusy) {
+    const scope = this.captureSourceScope();
+    const runtimeConfig = scope?.context.runtimeConfig;
+    if (!scope || !runtimeConfig || this.selfLearningBusy) {
       return;
     }
     this.selfLearningBusy = true;
     this.selfLearningError = null;
     this.requestPageUpdate();
     try {
-      this.selfLearningError = await setSelfLearningEnabled(runtimeConfig, enabled);
+      const error = await setSelfLearningEnabled(runtimeConfig, enabled, () =>
+        this.isCurrentSourceScope(scope),
+      );
+      if (this.isCurrentSourceScope(scope)) {
+        this.selfLearningError = error;
+      }
     } finally {
-      this.selfLearningBusy = false;
-      this.requestPageUpdate();
+      if (this.isCurrentSourceScope(scope)) {
+        this.selfLearningBusy = false;
+        this.requestPageUpdate();
+      }
     }
   }
 
@@ -651,7 +682,8 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
             context: this.context,
             workshopAgentName:
               this.context.agentIdentity.get(this.state.skillWorkshopAgentId)?.name?.trim() ?? "",
-            onRevisionRequest: this.onRevisionRequest ?? this.handleRevisionRequest,
+            onEvaluate: this.handleEvaluation,
+            onRevisionSubmit: this.handleRevisionSubmit,
             selfLearning: resolveSelfLearning(
               this.context.runtimeConfig,
               this.selfLearningBusy,

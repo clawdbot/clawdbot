@@ -93,6 +93,7 @@ export async function loadSkillWorkshopHistoryScanStatus(
 export async function runSkillWorkshopHistoryScan(params: {
   agentId: string;
   gateway: ApplicationGateway;
+  isCurrent?: () => boolean;
   state: SkillWorkshopHistoryScanState;
 }): Promise<boolean> {
   if (
@@ -100,9 +101,11 @@ export async function runSkillWorkshopHistoryScan(params: {
   ) {
     return false;
   }
-  let client = params.gateway.snapshot.client;
+  const client = params.gateway.snapshot.client;
+  const isCurrent = params.isCurrent ?? (() => params.gateway.snapshot.client === client);
   if (
     !client ||
+    !isCurrent() ||
     params.gateway.snapshot.phase !== "connected" ||
     params.state.running ||
     params.state.loading
@@ -115,6 +118,8 @@ export async function runSkillWorkshopHistoryScan(params: {
       return false;
     }
     if (
+      !isCurrent() ||
+      params.gateway.snapshot.client !== client ||
       !canCallGatewayMethod(
         params.gateway.snapshot,
         "skills.proposals.historyScan",
@@ -123,11 +128,6 @@ export async function runSkillWorkshopHistoryScan(params: {
     ) {
       return false;
     }
-    client = params.gateway.snapshot.client;
-  }
-  const requestClient = client;
-  if (!requestClient) {
-    return false;
   }
   const direction = params.state.result.hasScanned
     ? params.state.result.hasMore
@@ -137,7 +137,7 @@ export async function runSkillWorkshopHistoryScan(params: {
   params.state.running = true;
   params.state.error = null;
   try {
-    params.state.result = await requestClient.request<SkillWorkshopHistoryScanResult>(
+    params.state.result = await client.request<SkillWorkshopHistoryScanResult>(
       "skills.proposals.historyScan",
       { agentId: params.agentId, direction },
     );
@@ -146,7 +146,7 @@ export async function runSkillWorkshopHistoryScan(params: {
   } catch (error) {
     const scanError = formatErrorMessage(error, { redact: redactToolDetail });
     try {
-      params.state.result = await requestClient.request<SkillWorkshopHistoryScanResult>(
+      params.state.result = await client.request<SkillWorkshopHistoryScanResult>(
         "skills.proposals.historyStatus",
         { agentId: params.agentId },
       );
