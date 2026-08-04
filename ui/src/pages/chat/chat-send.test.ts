@@ -5722,6 +5722,35 @@ describe("handleSendChat", () => {
     expect(listStoredChatOutboxes(host)).toStrictEqual([]);
   });
 
+  it("fails a rejected in-flight Skill Workshop revision after connection replacement", async () => {
+    const sent = createDeferred<unknown>();
+    const host = makeHost({
+      connectionEpoch: 1,
+      requestHandlers: {
+        "skills.proposals.requestRevision": () => sent.promise,
+      },
+    });
+
+    const send = handleSendChat(host, "Keep the rejected request visible", {
+      restoreDraft: true,
+      skillWorkshopRevision: { proposalId: "proposal-1" },
+    });
+    await vi.waitFor(() =>
+      expect(
+        host.request.mock.calls.filter(([method]) => method === "skills.proposals.requestRevision"),
+      ).toHaveLength(1),
+    );
+    host.connectionEpoch = 2;
+    sent.reject(new Error("socket closed"));
+    await send;
+
+    expect(host.chatQueue[0]).toMatchObject({
+      sendState: "failed",
+      sendError: expect.stringContaining("Gateway connection changed"),
+    });
+    expect(listStoredChatOutboxes(host)).toStrictEqual([]);
+  });
+
   it("does not send queued Skill Workshop revisions with read-only operator access", async () => {
     const host = makeHost({
       requestHandlers: {

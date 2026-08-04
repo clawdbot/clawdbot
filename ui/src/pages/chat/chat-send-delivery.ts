@@ -32,6 +32,8 @@ import type { ChatHost } from "./chat-send-contract.ts";
 import {
   captureChatConnectionOwner,
   deliveryStateWriter,
+  failSkillWorkshopRevisionConnectionChange,
+  finishChatDeliveryAdmission,
   finishScopedChatSending,
   isSkillWorkshopRevisionConnectionCurrent,
   reconnectSafeQueuedSendState,
@@ -64,9 +66,6 @@ import { resetChatScroll, scheduleChatScroll } from "./scroll.ts";
 import { formatTerminalChatSendAckError, OFFLINE_QUEUE_STORAGE_ERROR } from "./steer-lifecycle.ts";
 import { resetToolStream } from "./tool-stream.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
-
-const SKILL_WORKSHOP_CONNECTION_CHANGED_ERROR =
-  "Skill Workshop revision request cancelled because the Gateway connection changed.";
 
 async function settleDeliverySettings(
   host: ChatHost,
@@ -135,40 +134,6 @@ function publishSettledDeliverySettings(
   return current;
 }
 
-function finishDeliveryAdmission(
-  host: ChatHost,
-  item: ChatQueueItem,
-  storageMode: QueuedChatStorageMode,
-  queueSessionKey: string,
-  options?: QueuedChatSendOptions,
-): ChatQueueItem | QueuedChatSendResult {
-  const route = options?.routingSessionKey ?? queueSessionKey;
-  const setState = deliveryStateWriter(host, storageMode, queueSessionKey, item.id);
-  const routeVisible = (agentId = item.agentId) =>
-    host.sessionKey === route && visibleSessionMatches(host, route, agentId);
-  const current = readQueuedMessageById(host, item.id);
-  if (!current) {
-    return "failed";
-  }
-  if (options?.routingSessionKey && !routeVisible(current.agentId)) {
-    const parked = setState(host.connected && host.client ? "waiting-idle" : "waiting-reconnect");
-    if (!parked) {
-      setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
-      return "failed";
-    }
-    return "pending";
-  }
-  if (routeVisible(current.agentId) && (isChatBusy(host) || hasAbortableSessionRun(host))) {
-    const parked = setState(host.connected && host.client ? "waiting-idle" : "waiting-reconnect");
-    if (!parked) {
-      setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
-      return "failed";
-    }
-    return "pending";
-  }
-  return options?.routingSessionKey ? { ...current, sessionKey: route } : current;
-}
-
 async function sendQueuedChatMessage(
   host: ChatHost,
   id: string,
@@ -220,7 +185,7 @@ async function sendQueuedChatMessage(
       return prepared;
     }
   }
-  prepared = finishDeliveryAdmission(host, prepared, storageMode, queueSessionKey, options);
+  prepared = finishChatDeliveryAdmission(host, prepared, storageMode, queueSessionKey, options);
   if (typeof prepared === "string") {
     return prepared;
   }
@@ -266,11 +231,7 @@ async function sendQueuedChatMessage(
     }
   }
   if (prepared.skillWorkshopRevision && !isSkillWorkshopRevisionConnectionCurrent(host, prepared)) {
-    setState("failed", SKILL_WORKSHOP_CONNECTION_CHANGED_ERROR);
-    if (visibleSessionMatches(host, sessionKey, prepared.agentId)) {
-      setChatError(host, SKILL_WORKSHOP_CONNECTION_CHANGED_ERROR);
-    }
-    return "failed";
+    return failSkillWorkshopRevisionConnectionChange(host, storageMode, sessionKey, prepared);
   }
   if (prepared.skillWorkshopRevision && attachments.length) {
     setState("failed", "Skill Workshop revision requests do not support attachments.");
@@ -354,11 +315,7 @@ async function sendQueuedChatMessage(
         });
     if (!requestConnectionIsCurrent()) {
       if (prepared.skillWorkshopRevision) {
-        setState("failed", SKILL_WORKSHOP_CONNECTION_CHANGED_ERROR);
-        if (isVisible()) {
-          setChatError(host, SKILL_WORKSHOP_CONNECTION_CHANGED_ERROR);
-        }
-        return "failed";
+        return failSkillWorkshopRevisionConnectionChange(host, storageMode, sessionKey, prepared);
       }
       return "pending";
     }
@@ -489,6 +446,9 @@ async function sendQueuedChatMessage(
     return retireOnAck ? "sent" : "pending";
   } catch (err) {
     if (!requestConnectionIsCurrent()) {
+      if (prepared.skillWorkshopRevision) {
+        return failSkillWorkshopRevisionConnectionChange(host, storageMode, sessionKey, prepared);
+      }
       return "pending";
     }
     const activeLeafChanged = isActiveLeafChangedError(err);
@@ -669,7 +629,7 @@ export async function deliverChatQueueItem(
       routeVisible &&
       (isChatBusy(host) || hasAbortableSessionRun(host))
     ) {
-      const parked = finishDeliveryAdmission(
+      const parked = finishChatDeliveryAdmission(
         host,
         admittedItem,
         storageMode,
