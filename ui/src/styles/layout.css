@@ -2180,6 +2180,15 @@ html.openclaw-native-macos
   right: 35px;
 }
 
+/* Resting semantic state remains visible, so reserve its overlay slot before
+   the title. Action-only rows still get the full resting width. */
+.sidebar-recent-session:not(.sidebar-recent-session--child):has(
+    > .sidebar-recent-session__aside > .session-row-state
+  )
+  > .sidebar-recent-session__link {
+  padding-right: 62px;
+}
+
 /* While the actions are surfaced, the link content fades out beneath them.
    A mask (not a background scrim) keeps the fade correct over rest, hover,
    active, and selected row backgrounds alike. */
@@ -4024,13 +4033,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   width: 16px;
   height: 16px;
   flex: 0 0 16px;
-}
-
-.sidebar-session-indicator__dot {
-  width: 7px;
-  height: 7px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--muted) 76%, transparent);
 }
 
 .sidebar-session-pr-indicator--open {

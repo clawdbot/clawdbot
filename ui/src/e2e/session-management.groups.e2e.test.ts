@@ -1,4 +1,6 @@
 import { expect, it } from "vitest";
+import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import {
   actionOpacity,
   activateMenuItem,
@@ -172,10 +174,15 @@ suite.define(() => {
                   pinned: true,
                   pinnedAt: baseTime - 30_000,
                 }),
-                sessionRow("agent:main:migration", "Data migration", baseTime - 90_000, {
-                  hasActiveRun: true,
-                  status: "running",
-                }),
+                sessionRow(
+                  "agent:main:migration",
+                  "Data migration with a deliberately long resting sidebar title",
+                  baseTime - 90_000,
+                  {
+                    hasActiveRun: true,
+                    status: "running",
+                  },
+                ),
                 sessionRow("agent:main:research", "Research notes", baseTime - 120_000),
               ]),
             },
@@ -210,11 +217,28 @@ suite.define(() => {
         chatRows.evaluateAll((rows) =>
           rows.map((row) => row.querySelector(".sidebar-recent-session__name")?.textContent ?? ""),
         );
-      await expect.poll(rowNames).toEqual(["Data migration", "Research notes"]);
-      const sidebarMigration = sidebarRows.filter({ hasText: "Data migration" });
       await expect
-        .poll(() => sidebarMigration.locator(".session-run-spinner").isVisible())
+        .poll(rowNames)
+        .toEqual([
+          "Data migration with a deliberately long resting sidebar title",
+          "Research notes",
+        ]);
+      const sidebarMigration = sidebarRows.filter({ hasText: "Data migration" });
+      const migrationState = sidebarMigration.locator(".session-row-state");
+      await expect
+        .poll(() => migrationState.locator(".session-run-spinner").isVisible())
         .toBe(true);
+      await expect.poll(() => actionOpacity(migrationState)).toBe("1");
+      const [migrationNameBounds, migrationStateBounds] = await Promise.all([
+        sidebarMigration.locator(".sidebar-recent-session__name").boundingBox(),
+        migrationState.boundingBox(),
+      ]);
+      if (!migrationNameBounds || !migrationStateBounds) {
+        throw new Error("Expected visible long-title session state geometry");
+      }
+      expect(migrationNameBounds.x + migrationNameBounds.width).toBeLessThanOrEqual(
+        migrationStateBounds.x,
+      );
 
       // Hover-revealed management actions on sidebar rows.
       const sidebarResearch = sidebarRows.filter({ hasText: "Research notes" });
@@ -225,6 +249,10 @@ suite.define(() => {
         .filter({ hasText: "Release planning" })
         .getByRole("button", { name: "Unpin thread" });
       await expect.poll(() => actionOpacity(sidebarReleasePin)).toBe("0");
+      await sidebarMigration.hover();
+      await expect.poll(() => actionOpacity(migrationState)).toBe("1");
+      const sidebarMigrationPin = sidebarMigration.getByRole("button", { name: "Pin thread" });
+      await expect.poll(() => actionOpacity(sidebarMigrationPin)).toBe("1");
       await sidebarResearch.hover();
       await expect.poll(() => actionOpacity(sidebarResearchPin)).toBe("1");
       await captureUiProof(page, "sidebar-sessions.png");
@@ -269,7 +297,13 @@ suite.define(() => {
       await expect
         .poll(() => new URL(page.url()).pathname)
         .toBe(controlUiSessionPath("agent:main:research"));
-      await expect.poll(rowNames).toEqual(["Release planning", "Data migration", "Research notes"]);
+      await expect
+        .poll(rowNames)
+        .toEqual([
+          "Release planning",
+          "Data migration with a deliberately long resting sidebar title",
+          "Research notes",
+        ]);
       await expect
         .poll(() =>
           chatRows
@@ -326,6 +360,138 @@ suite.define(() => {
       await expect
         .poll(() => new URL(page.url()).pathname)
         .toBe(controlUiSessionPath("agent:main:release"));
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps a combined sidebar state clear of a long title", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD],
+      methodResponses: {
+        [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", Date.now()),
+          sessionRow(
+            "agent:main:combined-state",
+            "Combined state with a deliberately long resting sidebar title",
+            Date.now() - 1,
+            {
+              forkedFromParent: true,
+              hasActiveRun: true,
+              status: "running",
+              worktree: {
+                id: "combined-state-worktree",
+                branch: "fix/combined-state",
+                repoRoot: "/tmp/openclaw",
+              },
+            },
+          ),
+        ]),
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const codingToggle = page.locator(
+        '[data-session-section="work"] .sidebar-session-group-toggle',
+      );
+      await codingToggle.waitFor({ state: "visible" });
+      await codingToggle.click();
+      await expect
+        .poll(async () => {
+          const requests = await gateway.getRequests(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD);
+          return requests.some((request) => {
+            const sessionKeys = requireRecord(request.params).sessionKeys;
+            return Array.isArray(sessionKeys) && sessionKeys.includes("agent:main:combined-state");
+          });
+        })
+        .toBe(true);
+      await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+        sessions: {
+          "agent:main:combined-state": {
+            pullRequests: [
+              {
+                branch: "fix/combined-state",
+                number: 1,
+                owner: "openclaw",
+                repo: "openclaw",
+                state: "open",
+                title: "Combined state fix",
+                url: "https://example.test/openclaw/openclaw/pull/1",
+              },
+            ],
+            rateLimited: false,
+            status: "ready",
+          },
+        },
+      });
+      const row = page.locator('[data-session-key="agent:main:combined-state"]');
+      await row.waitFor({ state: "visible", timeout: 10_000 });
+      const state = row.locator(".session-row-state");
+      await expect.poll(() => state.locator(".session-row-fork-indicator").isVisible()).toBe(true);
+      await expect
+        .poll(() => state.locator("[data-session-pr-state='open']").isVisible())
+        .toBe(true);
+      await expect.poll(() => state.locator(".session-run-spinner").isVisible()).toBe(true);
+
+      const [nameBounds, stateBounds] = await Promise.all([
+        row.locator(".sidebar-recent-session__name").boundingBox(),
+        state.boundingBox(),
+      ]);
+      if (!nameBounds || !stateBounds) {
+        throw new Error("Expected visible combined session state geometry");
+      }
+      expect(nameBounds.x + nameBounds.width).toBeLessThanOrEqual(stateBounds.x);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps sidebar semantic state and management actions visible on touch", async () => {
+    const context = await suite.browser.newContext({
+      hasTouch: true,
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", Date.now()),
+          sessionRow("agent:main:touch-active", "Touch active", Date.now() - 1, {
+            hasActiveRun: true,
+            status: "running",
+          }),
+        ]),
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const row = page.locator('[data-session-key="agent:main:touch-active"]');
+      await row.waitFor({ state: "visible", timeout: 10_000 });
+      const state = row.locator(".session-row-state");
+      const pin = row.getByRole("button", { name: "Pin thread" });
+      const menu = row.getByRole("button", { name: "Open thread menu" });
+      await expect.poll(() => state.locator(".session-run-spinner").isVisible()).toBe(true);
+      await expect.poll(() => actionOpacity(state)).toBe("1");
+      await expect.poll(() => pin.isVisible()).toBe(true);
+      await expect.poll(() => menu.isVisible()).toBe(true);
+      const [stateBounds, pinBounds] = await Promise.all([state.boundingBox(), pin.boundingBox()]);
+      if (!stateBounds || !pinBounds) {
+        throw new Error("Expected visible touch state and action geometry");
+      }
+      expect(stateBounds.x + stateBounds.width).toBeLessThanOrEqual(pinBounds.x);
     } finally {
       await context.close();
     }

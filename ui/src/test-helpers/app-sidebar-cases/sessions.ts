@@ -22,22 +22,29 @@ import { waitForFast } from "../wait-for.ts";
 import "./session-pagination.ts";
 
 describe("AppSidebar session indicators", () => {
-  it("keeps one leading slot across neutral, running, open, and merged states", async () => {
-    const keys = [
-      "agent:main:plain",
-      "agent:main:status-running",
-      "agent:main:open-pr",
-      "agent:main:merged-pr",
-    ];
-    const sessions = createSessionsHarness("main", keys);
+  it("trails transient activity while keeping persistent status leading", async () => {
+    const keys = {
+      plain: "agent:main:plain",
+      forked: "agent:main:forked",
+      unread: "agent:main:unread",
+      running: "agent:main:status-running",
+      openPullRequest: "agent:main:open-pr",
+      mergedPullRequest: "agent:main:merged-pr",
+    };
+    const allKeys = Object.values(keys);
+    const sessions = createSessionsHarness("main", allKeys);
     const result = sessions.sessions.state.result;
     if (!result) {
       throw new Error("expected session list");
     }
     for (const row of result.sessions) {
-      if (row.key === keys[1]) {
+      if (row.key === keys.forked) {
+        row.forkedFromParent = true;
+      } else if (row.key === keys.unread) {
+        row.unread = true;
+      } else if (row.key === keys.running) {
         row.status = "running";
-      } else if (row.key === keys[2] || row.key === keys[3]) {
+      } else if (row.key === keys.openPullRequest || row.key === keys.mergedPullRequest) {
         row.worktree = {
           id: `wt-${row.key}`,
           branch: row.key.endsWith("open-pr") ? "feature/open" : "feature/merged",
@@ -58,12 +65,14 @@ describe("AppSidebar session indicators", () => {
     await waitForFast(() => {
       expect(request).toHaveBeenCalledWith(
         SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-        expect.objectContaining({ sessionKeys: expect.arrayContaining(keys.slice(2)) }),
+        expect.objectContaining({
+          sessionKeys: expect.arrayContaining([keys.openPullRequest, keys.mergedPullRequest]),
+        }),
       );
     });
     gatewayHarness.publishEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
       sessions: Object.fromEntries(
-        keys.slice(2).map((key) => [
+        [keys.openPullRequest, keys.mergedPullRequest].map((key) => [
           key,
           {
             pullRequests: [
@@ -88,19 +97,35 @@ describe("AppSidebar session indicators", () => {
       expect(sidebar.querySelector('[data-session-pr-state="open"]')).not.toBeNull();
       expect(sidebar.querySelector('[data-session-pr-state="merged"]')).not.toBeNull();
     });
-    for (const key of keys) {
-      expect(
-        sidebar.querySelector(`[data-session-key="${key}"] .sidebar-session-indicator`),
-      ).not.toBeNull();
-    }
+    const plain = sidebar.querySelector(`[data-session-key="${keys.plain}"]`);
+    expect(plain?.querySelector(".sidebar-session-indicator")).toBeNull();
+    expect(plain?.querySelector(".session-row-state")).toBeNull();
+
+    const forked = sidebar.querySelector(`[data-session-key="${keys.forked}"]`);
+    expect(forked?.querySelector(".sidebar-session-indicator")).toBeNull();
     expect(
-      sidebar.querySelector(`[data-session-key="${keys[0]}"] .sidebar-session-indicator__dot`),
-    ).not.toBeNull();
-    expect(
-      sidebar.querySelector(`[data-session-key="${keys[1]}"] .session-run-spinner`),
+      forked?.querySelector(".session-row-aside > .session-row-state .session-row-fork-indicator"),
     ).not.toBeNull();
 
-    const openPullRequestRow = result.sessions.find((row) => row.key === keys[2]);
+    const unread = sidebar.querySelector(`[data-session-key="${keys.unread}"]`);
+    expect(unread?.querySelector(".sidebar-session-indicator")).toBeNull();
+    expect(
+      unread?.querySelector(".session-row-aside > .session-row-state .session-unread-dot"),
+    ).not.toBeNull();
+
+    const running = sidebar.querySelector(`[data-session-key="${keys.running}"]`);
+    expect(running?.querySelector(".sidebar-session-indicator")).toBeNull();
+    expect(
+      running?.querySelector(".session-row-aside > .session-row-state .session-run-spinner"),
+    ).not.toBeNull();
+
+    for (const key of [keys.openPullRequest, keys.mergedPullRequest]) {
+      const row = sidebar.querySelector(`[data-session-key="${key}"]`);
+      expect(row?.querySelector(".sidebar-session-indicator")).toBeNull();
+      expect(row?.querySelector(".session-row-state [data-session-pr-state]")).not.toBeNull();
+    }
+
+    const openPullRequestRow = result.sessions.find((row) => row.key === keys.openPullRequest);
     if (!openPullRequestRow) {
       throw new Error("expected open PR session");
     }
@@ -109,8 +134,10 @@ describe("AppSidebar session indicators", () => {
     await waitForFast(() => {
       expect(sidebar.querySelector('[data-session-pr-state="open"]')).toBeNull();
       expect(
-        sidebar.querySelector(`[data-session-key="${keys[2]}"] .sidebar-session-indicator__dot`),
-      ).not.toBeNull();
+        sidebar.querySelector(
+          `[data-session-key="${keys.openPullRequest}"] .sidebar-session-indicator`,
+        ),
+      ).toBeNull();
     });
   });
 });
@@ -392,8 +419,9 @@ describe("AppSidebar session accessibility", () => {
     expect(row?.hasAttribute("aria-label")).toBe(false);
     expect(link?.hasAttribute("aria-label")).toBe(false);
     expect(link?.getAttribute("aria-current")).toBe("page");
-    expect(link?.firstElementChild?.classList.contains("sidebar-session-indicator")).toBe(true);
-    expect(link?.children[1]?.classList.contains("sidebar-recent-session__text")).toBe(true);
+    expect(link?.querySelector(".sidebar-session-indicator")).toBeNull();
+    expect(link?.firstElementChild?.classList.contains("sidebar-recent-session__text")).toBe(true);
+    expect(row?.querySelector(".session-row-state .session-unread-dot")).not.toBeNull();
     expect(link?.querySelector(".sidebar-recent-session__name")?.textContent).toBe(
       "Quarterly launch plan",
     );

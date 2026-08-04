@@ -96,6 +96,7 @@ export type SidebarRecentSession = {
     "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
   >;
   spawnedBy?: string;
+  forkedFromParent?: boolean;
   status?: SessionRunStatus;
   startedAt?: number;
   updatedAt?: number | null;
