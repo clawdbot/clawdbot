@@ -265,7 +265,7 @@ describe("vercel ai gateway provider catalog", () => {
         {
           input: 2.5,
           output: 5,
-          cacheRead: expect.closeTo(0.2),
+          cacheRead: expect.closeTo(0.4),
           cacheWrite: 0,
           range: [200_001],
         },

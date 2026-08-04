@@ -136,7 +136,10 @@ function readNonNegativeSafeInteger(value: unknown): number | undefined {
   return Number.isSafeInteger(numeric) && numeric >= 0 ? numeric : undefined;
 }
 
-function parsePricingTierList(value: unknown): ParsedVercelPricingTier[] | undefined {
+function parsePricingTierList(
+  value: unknown,
+  options: { allowSparseStart?: boolean } = {},
+): ParsedVercelPricingTier[] | undefined {
   if (!Array.isArray(value) || value.length === 0) {
     return undefined;
   }
@@ -157,7 +160,7 @@ function parsePricingTierList(value: unknown): ParsedVercelPricingTier[] | undef
     }
     tiers.push({ cost, min, ...(max === undefined ? {} : { max }) });
   }
-  if (tiers[0]?.min !== 0 || tiers.at(-1)?.max !== undefined) {
+  if ((!options.allowSparseStart && tiers[0]?.min !== 0) || tiers.at(-1)?.max !== undefined) {
     return undefined;
   }
   for (let index = 1; index < tiers.length; index += 1) {
@@ -166,6 +169,21 @@ function parsePricingTierList(value: unknown): ParsedVercelPricingTier[] | undef
     }
   }
   return tiers;
+}
+
+function resolveOptionalTierCost(
+  tiers: ParsedVercelPricingTier[] | undefined,
+  range: ParsedVercelPricingTier,
+  fallback: number,
+): number {
+  const matchedTier = tiers?.find(
+    (tier) =>
+      tier.min <= range.min &&
+      (range.max === undefined
+        ? tier.max === undefined
+        : tier.max === undefined || range.max <= tier.max),
+  );
+  return matchedTier?.cost ?? fallback;
 }
 
 function pricingTierRangesMatch(
@@ -190,16 +208,12 @@ function normalizeTieredPricing(
     return undefined;
   }
 
-  const parsedCacheReadTiers = parsePricingTierList(pricing?.input_cache_read_tiers);
-  const parsedCacheWriteTiers = parsePricingTierList(pricing?.input_cache_write_tiers);
-  const cacheReadTiers =
-    parsedCacheReadTiers && pricingTierRangesMatch(inputTiers, parsedCacheReadTiers)
-      ? parsedCacheReadTiers
-      : undefined;
-  const cacheWriteTiers =
-    parsedCacheWriteTiers && pricingTierRangesMatch(inputTiers, parsedCacheWriteTiers)
-      ? parsedCacheWriteTiers
-      : undefined;
+  const cacheReadTiers = parsePricingTierList(pricing?.input_cache_read_tiers, {
+    allowSparseStart: true,
+  });
+  const cacheWriteTiers = parsePricingTierList(pricing?.input_cache_write_tiers, {
+    allowSparseStart: true,
+  });
 
   return inputTiers.map((tier, index) => {
     const range: [number, number] | [number] =
@@ -207,8 +221,8 @@ function normalizeTieredPricing(
     return {
       input: tier.cost,
       output: outputTiers[index]?.cost ?? flatCost.output,
-      cacheRead: cacheReadTiers?.[index]?.cost ?? flatCost.cacheRead,
-      cacheWrite: cacheWriteTiers?.[index]?.cost ?? flatCost.cacheWrite,
+      cacheRead: resolveOptionalTierCost(cacheReadTiers, tier, flatCost.cacheRead),
+      cacheWrite: resolveOptionalTierCost(cacheWriteTiers, tier, flatCost.cacheWrite),
       range,
     };
   });
