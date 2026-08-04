@@ -188,7 +188,7 @@ async function startRegistry(repoRoot: string, scratch: string, tarball: string)
 
 async function runTurn(gateway: Awaited<ReturnType<typeof startQaGatewayChild>>, marker: string) {
   const started = (await gateway.call("chat.send", {
-    sessionKey: `agent:main:${marker.toLowerCase()}`,
+    sessionKey: `agent:qa:${marker.toLowerCase()}`,
     message: `Reply exactly: ${marker}`,
     idempotencyKey: randomUUID(),
   })) as { runId?: string; status?: string };

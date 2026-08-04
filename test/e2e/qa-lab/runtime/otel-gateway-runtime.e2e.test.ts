@@ -64,10 +64,10 @@ describe("diagnostics-otel gateway runtime", () => {
           },
         },
         messages: {
-          visibleReplies: "automatic",
+          visibleReplies: "automatic" as const,
           groupChat: {
             mentionPatterns: ["\\b@?openclaw\\b"],
-            visibleReplies: "automatic",
+            visibleReplies: "automatic" as const,
           },
         },
       }),
@@ -79,7 +79,8 @@ describe("diagnostics-otel gateway runtime", () => {
 
     try {
       bus = await startQaBusServer({ state });
-      receiver = await startOtlpReceiver();
+      const activeReceiver = await startOtlpReceiver();
+      receiver = activeReceiver;
       mock = await startQaMockOpenAiServer();
       gateway = await startQaGatewayChild({
         repoRoot,
@@ -95,7 +96,7 @@ describe("diagnostics-otel gateway runtime", () => {
           tools: {
             ...cfg.tools,
             codeMode: {
-              ...cfg.tools?.codeMode,
+              ...(typeof cfg.tools?.codeMode === "object" ? cfg.tools.codeMode : {}),
               enabled: true,
             },
           },
@@ -103,7 +104,7 @@ describe("diagnostics-otel gateway runtime", () => {
             enabled: true,
             otel: {
               enabled: true,
-              endpoint: receiver.baseUrl,
+              endpoint: activeReceiver.baseUrl,
               protocol: "http/protobuf",
               traces: true,
               metrics: false,
@@ -190,7 +191,7 @@ describe("diagnostics-otel gateway runtime", () => {
 
       const failureEvidence = await waitFor(
         () => {
-          const toolError = receiver.capturedSpans.find(
+          const toolError = activeReceiver.capturedSpans.find(
             (span) =>
               span.name === "openclaw.tool.execution" &&
               span.statusCode === 2 &&
@@ -200,7 +201,7 @@ describe("diagnostics-otel gateway runtime", () => {
           if (!toolError?.traceId) {
             return undefined;
           }
-          const sameTrace = receiver.capturedSpans.filter(
+          const sameTrace = activeReceiver.capturedSpans.filter(
             (span) => span.traceId === toolError.traceId,
           );
           const run = sameTrace.find((span) => span.name === "openclaw.run");
@@ -218,8 +219,8 @@ describe("diagnostics-otel gateway runtime", () => {
         },
         45_000,
         () => ({
-          requests: receiver.capturedRequests,
-          spans: receiver.capturedSpans.map((span) => ({
+          requests: activeReceiver.capturedRequests,
+          spans: activeReceiver.capturedSpans.map((span) => ({
             attributes: span.attributes,
             name: span.name,
             parentSpanId: span.parentSpanId,
@@ -239,7 +240,7 @@ describe("diagnostics-otel gateway runtime", () => {
       expect(failureEvidence.run.spanId).toBeTruthy();
       expect(failureEvidence.terminal.spanId).toBeTruthy();
 
-      const successEvidence = receiver.capturedSpans.find(
+      const successEvidence = activeReceiver.capturedSpans.find(
         (span) =>
           span.name === "openclaw.tool.execution" &&
           span.statusCode !== 2 &&
@@ -247,7 +248,7 @@ describe("diagnostics-otel gateway runtime", () => {
           span.traceId !== failureEvidence.toolError.traceId,
       );
       expect(successEvidence).toBeTruthy();
-      const successTrace = receiver.capturedSpans.filter(
+      const successTrace = activeReceiver.capturedSpans.filter(
         (span) => span.traceId === successEvidence?.traceId,
       );
       expect(successTrace.some((span) => span.name === "openclaw.run")).toBe(true);
