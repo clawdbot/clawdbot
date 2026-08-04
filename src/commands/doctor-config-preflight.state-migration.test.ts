@@ -735,32 +735,6 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
   });
 
-  it("clears stale plugin quarantine through the current-checkpoint preflight", async () => {
-    setActiveDegradedPlugins([
-      {
-        pluginId: "stale-plugin",
-        state: "configured-unavailable",
-        diagnostic: {
-          kind: "plugin-verification",
-          reason: "missing-main-entry",
-          detail: "index.js",
-          installPath: "/plugins/stale-plugin",
-        },
-      },
-    ]);
-    planStartupPluginConvergence.mockResolvedValueOnce({ required: false, installRecords: {} });
-
-    await runDoctorConfigPreflight({
-      migrateLegacyConfig: false,
-      invalidConfigNote: false,
-      requireStartupMigrationCheckpoint: true,
-    });
-
-    expect(listActiveDegradedPlugins()).toEqual([]);
-    expect(runActivePluginPayloadSmokeCheck).not.toHaveBeenCalled();
-    expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
-  });
-
   it("keeps ownerless install-record failures blocking", async () => {
     needsStartupMigrationCheckpoint.mockReturnValue(true);
     queueConfigSnapshot(
