@@ -264,8 +264,12 @@ async function installAndConfigure(params: {
   });
   const spec = `npm:${PACKAGE_NAME}@${PACKAGE_VERSION}`;
   await gateway.runCli(["plugins", "install", spec, "--force"]);
+  const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
+  if (!stateDir) {
+    throw new Error("qa gateway state directory was not configured");
+  }
   const records = readPluginInstallRecords({
-    stateDir: gateway.tempRoot,
+    stateDir,
     configPath: gateway.configPath,
   });
   expect(records["diagnostics-otel"]).toMatchObject({
