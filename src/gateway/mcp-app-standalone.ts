@@ -330,6 +330,7 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
       body: JSON.stringify({ method, params }),
       cache: "no-store",
       credentials: "omit",
+      signal: AbortSignal.timeout(30_000),
     });
     const body = (await response.json().catch(() => undefined)) as
       | { ok?: boolean; result?: unknown; error?: string }
@@ -492,6 +493,7 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
     headers: { Authorization: `MCP-App ${ticket}` },
     cache: "no-store",
     credentials: "omit",
+    signal: AbortSignal.timeout(30_000),
   })
     .then(async (response) => {
       if (!response.ok) {

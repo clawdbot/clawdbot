@@ -203,6 +203,7 @@ describe("MCP App standalone host", () => {
     expect(body).toContain("location.hash");
     expect(body).toContain("event.origin");
     expect(body).toContain("if (!initializeAccepted)");
+    expect(body).toMatch(/AbortSignal\.timeout\([^)]+\)/u);
     expect(body).not.toContain('postMessage(message, "*")');
     expect(body).not.toContain(view.html);
     expect(body).not.toContain("agent:main:main");
