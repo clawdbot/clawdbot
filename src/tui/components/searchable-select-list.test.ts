@@ -332,11 +332,8 @@ describe("SearchableSelectList", () => {
 
   it("discards compiled regexes from previous searches", () => {
     const queryLength = 300;
-    const list = new SearchableSelectList(
-      [{ value: "match", label: "a".repeat(queryLength) }],
-      5,
-      mockTheme,
-    );
+    const label = "a".repeat(queryLength);
+    const list = new SearchableSelectList([{ value: "match", label }], 5, mockTheme);
 
     for (let index = 0; index < queryLength; index += 1) {
       list.handleInput("a");
@@ -345,7 +342,8 @@ describe("SearchableSelectList", () => {
 
     const regexCache = (list as unknown as { regexCache: Map<string, RegExp> }).regexCache;
     expect(regexCache.size).toBe(1);
-    expect(regexCache.has("a".repeat(queryLength))).toBe(true);
+    expect(regexCache.has(label)).toBe(true);
+    expect(list.render(queryLength + 10).join("\n")).toContain(`*${label}*`);
   });
 
   it("shows no match message when filter yields no results", () => {

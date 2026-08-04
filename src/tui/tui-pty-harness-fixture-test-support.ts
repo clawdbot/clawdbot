@@ -41,6 +41,9 @@ export async function writeTuiPtyFixtureScript(dir: string) {
       let modeTargetTraceLevel: string | undefined;
       const launchThinkingLevel = process.env.OPENCLAW_TUI_PTY_LAUNCH_THINKING;
       const initialMessage = process.env.OPENCLAW_TUI_PTY_INITIAL_MESSAGE;
+      const inFlightRunText = process.env.OPENCLAW_TUI_PTY_IN_FLIGHT_TEXT;
+      const dynamicCommandDescription = process.env.OPENCLAW_TUI_PTY_DYNAMIC_COMMAND_DESCRIPTION;
+      const thinkingLabel = process.env.OPENCLAW_TUI_PTY_THINKING_LABEL;
       const disconnectReason = process.env.OPENCLAW_TUI_PTY_DISCONNECT_REASON;
       let disconnectPending = disconnectReason !== undefined;
       const enablePickerFixture = process.env.OPENCLAW_TUI_PTY_PICKER_FIXTURE === "1";
@@ -103,7 +106,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           ...(entryVerboseLevel ? { verboseLevel: entryVerboseLevel } : {}),
           ...(entryTraceLevel ? { traceLevel: entryTraceLevel } : {}),
           ...(entryReasoningLevel ? { reasoningLevel: entryReasoningLevel } : {}),
-          thinkingLevels: [],
+          thinkingLevels: thinkingLabel ? [{ id: "fixture-thinking", label: thinkingLabel }] : [],
         };
       }
 
@@ -432,6 +435,9 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           return {
             messages: [],
             fastMode,
+            ...(inFlightRunText
+              ? { inFlightRun: { runId: "run-restored-in-flight", text: inFlightRunText } }
+              : {}),
             ...(includeSessionInfo
               ? {
                   thinkingLevel: footerThinkingLevel,
@@ -464,7 +470,9 @@ export async function writeTuiPtyFixtureScript(dir: string) {
               model: currentModel,
               modelProvider: "fixture-provider",
               contextTokens: 128,
-              thinkingLevels: [],
+              thinkingLevels: thinkingLabel
+                ? [{ id: "fixture-thinking", label: thinkingLabel }]
+                : [],
             },
           };
         }
@@ -527,6 +535,20 @@ export async function writeTuiPtyFixtureScript(dir: string) {
             { id: "fixture-provider/fixture-model", name: "Fixture", provider: "fixture-provider" },
             { id: pickerModelValue, name: pickerModelName, provider: "fixture-provider" },
           ];
+        }
+
+        async listCommands() {
+          record("listCommands");
+          return dynamicCommandDescription
+            ? [{
+                name: "t08dynamic",
+                textAliases: ["/t08dynamic"],
+                description: dynamicCommandDescription,
+                source: "plugin" as const,
+                scope: "text" as const,
+                acceptsArgs: false,
+              }]
+            : [];
         }
 
         async listPluginApprovals() {

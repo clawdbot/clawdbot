@@ -40,6 +40,7 @@ import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
 import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
 import { editorTheme, theme } from "./theme/theme.js";
+import { sanitizeAutocompleteProvider } from "./tui-autocomplete.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
@@ -791,7 +792,9 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     editor.shouldSubmitAutocomplete = (text) =>
       shouldSubmitExactArgumentCompletion(text, slashCommands);
     editor.setAutocompleteProvider(
-      new CombinedAutocompleteProvider(slashCommands, resolveUsableCwd()),
+      sanitizeAutocompleteProvider(
+        new CombinedAutocompleteProvider(slashCommands, resolveUsableCwd()),
+      ),
     );
   };
 

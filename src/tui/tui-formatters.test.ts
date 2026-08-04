@@ -895,7 +895,19 @@ describe("sanitizeRenderableText", () => {
 describe("sanitizeRenderableLine", () => {
   it("preserves RTL isolation while collapsing carriage returns, newlines, and tabs", () => {
     expect(sanitizeRenderableLine("left\r\nمرحبا\tשלום right")).toBe(
-      "left \u2067مرحبا שלום right\u2069",
+      "\u2067left مرحبا שלום right\u2069",
     );
+  });
+
+  it("preserves long exact labels without prose token splitting", () => {
+    const label = "a".repeat(300);
+
+    expect(sanitizeRenderableLine(label)).toBe(label);
+  });
+
+  it("strips terminal controls and redacts binary-like lines before collapsing whitespace", () => {
+    const input = `safe\x1b]52;c;Y2xpcGJvYXJk\x07\r\n${"�".repeat(20)}\tمرحبا`;
+
+    expect(sanitizeRenderableLine(input)).toBe("safe [binary data omitted]");
   });
 });

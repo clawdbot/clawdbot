@@ -691,7 +691,7 @@ describe.sequential("TUI PTY harness", () => {
   // prettier-ignore
   const terminalSafetyCases = [
     ["renders long Unicode output and copy-safe URLs in narrow real PTY frames", () => exerciseNarrowTerminalRendering(startTuiFixture, STARTUP_TIMEOUT_MS)],
-    ["sanitizes ANSI OSC and C1 payloads in narrow real PTY frames", () => exerciseTerminalOutputSafety(startTuiFixture, STARTUP_TIMEOUT_MS)],
+    ["sanitizes ANSI OSC and C1 payloads across real PTY display boundaries", () => exerciseTerminalOutputSafety(startTuiFixture, STARTUP_TIMEOUT_MS)],
   ] as const;
   it.each(terminalSafetyCases)("%s", async (_name, runCase) => runCase(), STARTUP_TEST_TIMEOUT_MS);
 

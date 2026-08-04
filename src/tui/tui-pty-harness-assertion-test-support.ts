@@ -1,6 +1,7 @@
 // Shared assertions and exercises for the fake-backend TUI PTY harness.
 import { readFile } from "node:fs/promises";
 import { expect } from "vitest";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { formatTuiFooter, sanitizeRenderableLine } from "./tui-formatters.js";
 import { sleep, type PtyRun } from "./tui-pty-test-support.js";
 
@@ -68,6 +69,7 @@ type TerminalAttackPayload = {
   text: string;
   markers: string[];
   attacks: string[];
+  expectedLine: string;
 };
 
 function buildCompactTerminalAttackPayload(tag: string, attack: string): TerminalAttackPayload {
@@ -78,7 +80,50 @@ function buildCompactTerminalAttackPayload(tag: string, attack: string): Termina
     text: `${markers[0]}${attack}${markers[1]} café 東京 👩🏽‍💻${lineBreakAttack} مرحبا${tabAttack} ${markers[3]}`,
     markers,
     attacks: [attack, lineBreakAttack, tabAttack],
+    expectedLine: `${markers[0]}${markers[1]} café 東京 👩🏽‍💻 ${markers[2]} مرحبا שלום ${markers[3]}`,
   };
+}
+
+function buildInlineTerminalAttackPayload(tag: string, attack: string): TerminalAttackPayload {
+  const markers = [`${tag}a`, `${tag}b`, `${tag}c`];
+  return {
+    text: `${markers[0]}${attack}${markers[1]} café 東京 👩🏽‍💻 مرحبا שלום ${markers[2]}`,
+    markers,
+    attacks: [attack],
+    expectedLine: `${markers[0]}${markers[1]} café 東京 👩🏽‍💻 مرحبا שלום ${markers[2]}`,
+  };
+}
+
+export function synchronizedFrameRows(raw: string): string[][] {
+  const start = "\x1b[?2026h";
+  const end = "\x1b[?2026l";
+  const frames: string[][] = [];
+  let cursor = 0;
+  while (cursor < raw.length) {
+    const startIndex = raw.indexOf(start, cursor);
+    if (startIndex === -1) {
+      break;
+    }
+    const contentStart = startIndex + start.length;
+    const endIndex = raw.indexOf(end, contentStart);
+    if (endIndex === -1) {
+      break;
+    }
+    frames.push(stripAnsi(raw.slice(contentStart, endIndex)).split(/\r+\n/u));
+    cursor = endIndex + end.length;
+  }
+  return frames;
+}
+
+export function hasSynchronizedFrameRow(raw: string, markers: string[], expectedText: string) {
+  return synchronizedFrameRows(raw).some((rows) =>
+    rows.some(
+      (row) =>
+        !row.includes("\t") &&
+        markers.every((marker) => row.includes(marker)) &&
+        row.includes(expectedText),
+    ),
+  );
 }
 
 async function assertTerminalAttackSanitized(
@@ -89,12 +134,17 @@ async function assertTerminalAttackSanitized(
   await fixture.run.waitForOutput(payload.markers.at(-1) ?? "", timeoutMs);
   const visible = fixture.run.visibleOutput();
   expect(payload.markers.every((marker) => visible.includes(marker))).toBe(true);
-  expect(visible).toContain("café 東京 👩🏽‍💻");
-  expect(visible).toContain("مرحبا שלום");
   const raw = fixture.run.output();
   for (const attack of payload.attacks) {
     expect(raw).not.toContain(attack);
   }
+  const matchingRows = synchronizedFrameRows(raw)
+    .flat()
+    .filter((row) => payload.markers.some((marker) => row.includes(marker)));
+  expect(
+    hasSynchronizedFrameRow(raw, payload.markers, payload.expectedLine),
+    `expected one synchronized row ${JSON.stringify(payload.expectedLine)}\n${JSON.stringify(matchingRows)}`,
+  ).toBe(true);
   expect(raw).not.toContain("\uFFFD");
 }
 
@@ -110,18 +160,20 @@ async function assertTerminalAttackPrefixSanitized(
   for (const attack of payload.attacks) {
     expect(raw).not.toContain(attack);
   }
+  expect(
+    hasSynchronizedFrameRow(
+      raw,
+      payload.markers.slice(0, 2),
+      `${payload.markers[0]}${payload.markers[1]}`,
+    ),
+  ).toBe(true);
   expect(raw).not.toContain("\uFFFD");
 }
 
 function hasStatusFrame(raw: string, markers: string[], status: RegExp) {
-  return raw
-    .split("\x1b[?2026h")
-    .slice(1)
-    .some((chunk) => {
-      const frame = chunk.split("\x1b[?2026l", 1)[0] ?? "";
-      const visibleFrame = sanitizeRenderableLine(frame);
-      return markers.every((marker) => visibleFrame.includes(marker)) && status.test(visibleFrame);
-    });
+  return synchronizedFrameRows(raw).some((rows) =>
+    rows.some((row) => markers.every((marker) => row.includes(marker)) && status.test(row)),
+  );
 }
 
 async function exerciseSelectorOutputSafety(
@@ -266,7 +318,7 @@ async function exerciseGatewayOutputSafety(
   const idlePayload = buildCompactTerminalAttackPayload("T08I", "\x1b[?7775h");
   const fixture = await startFixture({
     env: {
-      OPENCLAW_TUI_PTY_COLS: "30",
+      OPENCLAW_TUI_PTY_COLS: "120",
       OPENCLAW_TUI_PTY_ROWS: "18",
       OPENCLAW_TUI_PTY_GATEWAY_STATUS: systemAttacks.join(""),
       OPENCLAW_TUI_PTY_DISCONNECT_REASON: idlePayload.text,
@@ -301,16 +353,56 @@ async function exerciseGatewayOutputSafety(
   }
 }
 
+async function exerciseMarkdownAndAutocompleteOutputSafety(
+  startFixture: StartTuiPtyFixture,
+  startupTimeoutMs: number,
+) {
+  const inFlight = buildInlineTerminalAttackPayload("T08F", "\x1b]52;c;t08_inflight\x07");
+  const command = buildCompactTerminalAttackPayload("T08C", "\u009d0;t08_command\u009c");
+  const thinking = buildCompactTerminalAttackPayload("T08L", "\x1b[777;886H");
+  const fixture = await startFixture({
+    env: {
+      OPENCLAW_TUI_PTY_COLS: "140",
+      OPENCLAW_TUI_PTY_DYNAMIC_COMMAND_DESCRIPTION: command.text,
+      OPENCLAW_TUI_PTY_IN_FLIGHT_TEXT: `**${inFlight.text}** [copy-safe](https://example.test/t08-inflight)`,
+      OPENCLAW_TUI_PTY_ROWS: "22",
+      OPENCLAW_TUI_PTY_THINKING_LABEL: thinking.text,
+    },
+  });
+
+  try {
+    await fixture.run.waitForOutput("local ready", startupTimeoutMs);
+    await fixture.waitForLogEntry((entry) => entry.method === "listCommands");
+    await assertTerminalAttackSanitized(fixture, inFlight, 5_000);
+
+    await fixture.run.write("/t08d", { delay: false });
+    await assertTerminalAttackSanitized(fixture, command, 5_000);
+
+    await fixture.run.write("\x1b", { delay: false });
+    await sleep(50);
+    await fixture.run.write("\x15", { delay: false });
+    await sleep(50);
+    await fixture.run.write("/think ", { delay: false });
+    await assertTerminalAttackSanitized(fixture, thinking, 5_000);
+  } finally {
+    await fixture.cleanup();
+  }
+}
+
 async function exerciseInteractiveOutputSafety(
   startFixture: StartTuiPtyFixture,
   startupTimeoutMs: number,
 ) {
   const btwPayload = buildCompactTerminalAttackPayload("T08B", "\u009b776;889H");
-  const toolPayload = buildCompactTerminalAttackPayload("T08T", "\x1b]0;t08_tool_title\x07");
+  const rawToolPayload = buildCompactTerminalAttackPayload("T08T", "\x1b]0;t08_tool_title\x07");
+  const toolPayload = {
+    ...rawToolPayload,
+    expectedLine: rawToolPayload.expectedLine.replace("café", "Café"),
+  };
   const fixture = await startFixture({
     env: {
       OPENCLAW_TUI_PTY_BTW_QUESTION: btwPayload.text,
-      OPENCLAW_TUI_PTY_COLS: "72",
+      OPENCLAW_TUI_PTY_COLS: "120",
       OPENCLAW_TUI_PTY_MODEL: "fixture-provider/fixture-model",
       OPENCLAW_TUI_PTY_ROWS: "20",
       OPENCLAW_TUI_PTY_TOOL_NAME: toolPayload.text,
@@ -342,6 +434,7 @@ export async function exerciseTerminalOutputSafety(
   await Promise.all([
     exerciseGatewayOutputSafety(startFixture, startupTimeoutMs),
     exerciseInteractiveOutputSafety(startFixture, startupTimeoutMs),
+    exerciseMarkdownAndAutocompleteOutputSafety(startFixture, startupTimeoutMs),
     exerciseSelectorOutputSafety(startFixture, startupTimeoutMs),
   ]);
 }

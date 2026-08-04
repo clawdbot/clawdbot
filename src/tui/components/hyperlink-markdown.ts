@@ -7,6 +7,14 @@ import type {
 } from "@earendil-works/pi-tui";
 import { Markdown } from "@earendil-works/pi-tui";
 import { addOsc8Hyperlinks, extractUrls } from "../osc8-hyperlinks.js";
+import { sanitizeRenderableText } from "../tui-formatters.js";
+
+function sanitizeMarkdownDisplayText(text: string): string {
+  if (!text) {
+    return text;
+  }
+  return sanitizeRenderableText(text) || "(no output)";
+}
 
 /**
  * Wrapper around pi-tui's Markdown component that adds OSC 8 terminal
@@ -25,8 +33,9 @@ export class HyperlinkMarkdown implements Component {
     defaultTextStyle?: DefaultTextStyle,
     options?: MarkdownOptions,
   ) {
-    this.inner = new Markdown(text, paddingX, paddingY, theme, defaultTextStyle, options);
-    this.urls = extractUrls(text);
+    const displayText = sanitizeMarkdownDisplayText(text);
+    this.inner = new Markdown(displayText, paddingX, paddingY, theme, defaultTextStyle, options);
+    this.urls = extractUrls(displayText);
   }
 
   render(width: number): string[] {
@@ -34,8 +43,9 @@ export class HyperlinkMarkdown implements Component {
   }
 
   setText(text: string): void {
-    this.inner.setText(text);
-    this.urls = extractUrls(text);
+    const displayText = sanitizeMarkdownDisplayText(text);
+    this.inner.setText(displayText);
+    this.urls = extractUrls(displayText);
   }
 
   invalidate(): void {

@@ -41,6 +41,41 @@ describe("HyperlinkMarkdown", () => {
 
     const rendered = markdown.render(120).join("\n");
 
-    expect(rendered).toContain(`\x1b]8;;${url}\x07${url}\x1b]8;;\x07`);
+    expect(rendered).toContain(`\x1b]8;;${url}`);
+    expect(normalizeTestText(rendered)).toContain("Wikipedia");
+  });
+
+  it("sanitizes constructor and updated markdown before rendering", () => {
+    const attack = "\x1b]52;c;Y2xpcGJvYXJk\x07";
+    const markdown = new HyperlinkMarkdown(`before${attack}after`, 0, 0, markdownTheme);
+
+    expect(markdown.render(80).join("\n")).toContain("beforeafter");
+    expect(markdown.render(80).join("\n")).not.toContain(attack);
+
+    markdown.setText(`next\u009b31munsafe\u009b0m`);
+    const updated = markdown.render(80).join("\n");
+    expect(updated).toContain("nextunsafe");
+    expect(updated).not.toContain("\u009b");
+  });
+
+  it("renders a neutral fallback when nonempty markdown sanitizes to empty", () => {
+    const markdown = new HyperlinkMarkdown("\x1b]0;title\x07", 0, 0, markdownTheme);
+
+    expect(markdown.render(80).map(normalizeTestText).join("\n")).toContain("(no output)");
+
+    markdown.setText("");
+    expect(markdown.render(80).map(normalizeTestText).join("\n")).not.toContain("(no output)");
+  });
+
+  it("extracts copy-safe URLs from the sanitized display copy", () => {
+    const url = "https://example.test/path?mode=copy-safe#proof";
+    const markdown = new HyperlinkMarkdown("", 0, 0, markdownTheme);
+
+    markdown.setText(`visit ${url}\x1b]52;c;Y2xpcGJvYXJk\x07`);
+    const rendered = markdown.render(120).join("\n");
+
+    expect(rendered).toContain(`\x1b]8;;${url}`);
+    expect(normalizeTestText(rendered)).toContain(url);
+    expect(rendered).not.toContain("Y2xpcGJvYXJk");
   });
 });

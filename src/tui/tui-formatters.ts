@@ -107,6 +107,20 @@ function stripControlChars(text: string): string {
   return sanitized;
 }
 
+function sanitizeTerminalControlsAndBinary(text: string): string {
+  const hasAnsi = text.includes("\u001b") || text.includes("\u009b") || text.includes("\u009d");
+  const withoutAnsi = hasAnsi ? stripAnsi(text) : text;
+  const withoutControlChars = hasControlChars(withoutAnsi)
+    ? stripControlChars(withoutAnsi)
+    : withoutAnsi;
+  return withoutControlChars.includes("\uFFFD")
+    ? withoutControlChars
+        .split("\n")
+        .map((line) => redactBinaryLikeLine(line))
+        .join("\n")
+    : withoutControlChars;
+}
+
 function isCopySensitiveToken(token: string): boolean {
   const coreToken = token.replace(EDGE_PUNCTUATION_RE, "");
   const candidate = coreToken || token;
@@ -233,34 +247,25 @@ export function sanitizeRenderableText(text: string): string {
     return text;
   }
 
-  const hasAnsi = text.includes("\u001b") || text.includes("\u009b") || text.includes("\u009d");
-  const hasReplacementChars = text.includes("\uFFFD");
   const hasLongTokens = LONG_TOKEN_TEST_RE.test(text);
-  const hasControls = hasControlChars(text);
-  if (!hasAnsi && !hasReplacementChars && !hasLongTokens && !hasControls) {
+  const controlSafe = sanitizeTerminalControlsAndBinary(text);
+  if (controlSafe === text && !hasLongTokens) {
     return applyRtlIsolation(text);
   }
 
-  const withoutAnsi = hasAnsi ? stripAnsi(text) : text;
-  const withoutControlChars = hasControls ? stripControlChars(withoutAnsi) : withoutAnsi;
-  const redacted = hasReplacementChars
-    ? withoutControlChars
-        .split("\n")
-        .map((line) => redactBinaryLikeLine(line))
-        .join("\n")
-    : withoutControlChars;
-  const tokenSafe = LONG_TOKEN_TEST_RE.test(redacted)
-    ? transformOutsideCode(redacted, (segment) =>
+  const tokenSafe = LONG_TOKEN_TEST_RE.test(controlSafe)
+    ? transformOutsideCode(controlSafe, (segment) =>
         LONG_TOKEN_TEST_RE.test(segment)
           ? segment.replace(LONG_TOKEN_RE, normalizeLongTokenForDisplay)
           : segment,
       )
-    : redacted;
+    : controlSafe;
   return applyRtlIsolation(tokenSafe);
 }
 
 export function sanitizeRenderableLine(text: string): string {
-  return sanitizeRenderableText(text).replace(/\s+/gu, " ").trim();
+  const line = sanitizeTerminalControlsAndBinary(text).replace(/\s+/gu, " ").trim();
+  return applyRtlIsolation(line);
 }
 
 /** Render error causes without exposing secrets or terminal control sequences. */
