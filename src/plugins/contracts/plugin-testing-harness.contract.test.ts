@@ -68,8 +68,8 @@ describe("plugin testing harness contracts", () => {
       expect(registration?.pluginId).toBe("fixture-echo");
       expect(registration?.names).toEqual(["fixture_echo"]);
       const tool = registration?.factory({ workspaceDir: home });
-      if (!tool) {
-        throw new Error("registered fixture tool missing");
+      if (!tool || Array.isArray(tool)) {
+        throw new Error("expected one registered fixture tool");
       }
       expect(tool.name).toBe("fixture_echo");
 
