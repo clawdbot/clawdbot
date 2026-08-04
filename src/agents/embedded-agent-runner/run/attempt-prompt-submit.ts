@@ -7,6 +7,10 @@ import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtim
 import type { AgentMessage } from "../../runtime/index.js";
 import { ackPendingAgentSteeringItems } from "../../subagent-registry.js";
 import { log } from "../logger.js";
+import {
+  getProviderPromptState,
+  installProviderPromptContextAdmission,
+} from "../provider-prompt-state.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
 import { updateActiveEmbeddedRunSnapshot } from "../runs.js";
 import type {
@@ -23,7 +27,6 @@ import {
   installModelPromptTransform,
   installRuntimeContextMessageForPrompt,
 } from "./attempt.llm-boundary.js";
-import { wrapStreamFnWithContextTransform } from "./message-transform-stream-wrapper.js";
 import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import { admitProviderPrompt } from "./provider-prompt-admission.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
@@ -55,7 +58,7 @@ type SteeringLease = {
 type TrajectoryRecorder = ReturnType<typeof createTrajectoryRuntimeRecorder>;
 
 export async function submitEmbeddedAttemptPrompt(input: {
-  attempt: Pick<EmbeddedRunAttemptParams, "sessionId" | "userTurnTranscriptRecorder">;
+  attempt: Pick<EmbeddedRunAttemptParams, "runId" | "sessionId" | "userTurnTranscriptRecorder">;
   activeSession: PromptSubmissionSession;
   appendContext?: string;
   contextTokenBudget: number;
@@ -87,52 +90,48 @@ export async function submitEmbeddedAttemptPrompt(input: {
   let pendingMidTurnPrecheckRequest: MidTurnPrecheckRequest | null = null;
 
   const installProviderPromptHistoryTransform = (): (() => void) => {
-    const baseStreamFn = activeSession.agent.streamFn;
     let providerCalls = 0;
-    const providerPromptStreamFn = wrapStreamFnWithContextTransform(baseStreamFn, (context) => {
-      const admission = admitProviderPrompt({
-        context,
-        contextTokenBudget: input.contextTokenBudget,
-        midTurnPrecheckEnabled: input.midTurnPrecheckEnabled && providerCalls > 0,
-        reserveTokens: input.reserveTokens,
-        toolResultAggregateMaxChars: input.toolResultAggregateMaxChars,
-        toolResultMaxChars: input.toolResultMaxChars,
-        projectionState: input.toolResultPromptProjectionState,
-      });
-      if (admission.status === "recovery_required") {
-        pendingMidTurnPrecheckRequest = admission.request;
-        log.info(
-          `[context-overflow-midturn-precheck] provider context requires recovery ` +
-            `route=${admission.request.route} ` +
-            `estimatedPromptTokens=${admission.request.estimatedPromptTokens} ` +
-            `promptBudgetBeforeReserve=${admission.request.promptBudgetBeforeReserve}`,
+    return installProviderPromptContextAdmission(
+      getProviderPromptState(attempt.runId),
+      (_model, context) => {
+        const admission = admitProviderPrompt({
+          context,
+          contextTokenBudget: input.contextTokenBudget,
+          midTurnPrecheckEnabled: input.midTurnPrecheckEnabled && providerCalls > 0,
+          reserveTokens: input.reserveTokens,
+          toolResultAggregateMaxChars: input.toolResultAggregateMaxChars,
+          toolResultMaxChars: input.toolResultMaxChars,
+          projectionState: input.toolResultPromptProjectionState,
+        });
+        if (admission.status === "recovery_required") {
+          pendingMidTurnPrecheckRequest = admission.request;
+          log.info(
+            `[context-overflow-midturn-precheck] provider context requires recovery ` +
+              `route=${admission.request.route} ` +
+              `estimatedPromptTokens=${admission.request.estimatedPromptTokens} ` +
+              `promptBudgetBeforeReserve=${admission.request.promptBudgetBeforeReserve}`,
+          );
+          throw new MidTurnPrecheckSignal(admission.request);
+        }
+        replaceToolResultPromptProjectionState(
+          input.toolResultPromptProjectionState,
+          admission.projectionState,
         );
-        throw new MidTurnPrecheckSignal(admission.request);
-      }
-      replaceToolResultPromptProjectionState(
-        input.toolResultPromptProjectionState,
-        admission.projectionState,
-      );
-      providerCalls += 1;
-      const providerMessages = admission.context.messages as AgentMessage[];
-      // Mark the current turn sent at provider dispatch so late media appends
-      // instead of rewriting its prompt-cache slot (#99495).
-      markSessionUserTurnsSent(input.sessionPromptState, providerMessages);
-      const recorder = attempt.userTurnTranscriptRecorder;
-      if (
-        recorder &&
-        hasSessionUserTurnBeenSent(input.sessionPromptState, recorder.message) !== false
-      ) {
-        recorder.markSentToProvider?.();
-      }
-      return admission.context;
-    });
-    activeSession.agent.streamFn = providerPromptStreamFn;
-    return () => {
-      if (activeSession.agent.streamFn === providerPromptStreamFn) {
-        activeSession.agent.streamFn = baseStreamFn;
-      }
-    };
+        providerCalls += 1;
+        const providerMessages = admission.context.messages as AgentMessage[];
+        // Mark the current turn sent at provider dispatch so late media appends
+        // instead of rewriting its prompt-cache slot (#99495).
+        markSessionUserTurnsSent(input.sessionPromptState, providerMessages);
+        const recorder = attempt.userTurnTranscriptRecorder;
+        if (
+          recorder &&
+          hasSessionUserTurnBeenSent(input.sessionPromptState, recorder.message) !== false
+        ) {
+          recorder.markSentToProvider?.();
+        }
+        return admission.context;
+      },
+    );
   };
 
   input.onFinalPromptText(input.transcriptPrompt);

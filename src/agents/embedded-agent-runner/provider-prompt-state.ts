@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import crypto from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import type { Model } from "openclaw/plugin-sdk/llm";
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 
 type ProviderPromptSnapshot = {
@@ -14,6 +14,7 @@ type ProviderPromptSnapshot = {
 export type ProviderPromptState = {
   lastAttempt?: ProviderPromptSnapshot;
   lastRejected?: ProviderPromptSnapshot;
+  contextAdmission?: (model: Model, context: Context) => Context;
 };
 
 const PROVIDER_PROMPT_STATES_KEY = Symbol.for("openclaw.providerPromptStates");
@@ -53,6 +54,20 @@ export function getProviderPromptState(runId: string): ProviderPromptState {
 
 export function clearProviderPromptState(runId: string): void {
   providerPromptStates.delete(runId);
+}
+
+/** Installs a run-scoped admission hook at the innermost provider-context boundary. */
+export function installProviderPromptContextAdmission(
+  state: ProviderPromptState,
+  admission: NonNullable<ProviderPromptState["contextAdmission"]>,
+): () => void {
+  const previous = state.contextAdmission;
+  state.contextAdmission = admission;
+  return () => {
+    if (state.contextAdmission === admission) {
+      state.contextAdmission = previous;
+    }
+  };
 }
 
 /** Captures the final provider request identity without retaining payload content. */
@@ -121,8 +136,12 @@ export function wrapStreamFnWithProviderPromptState(params: {
 }): StreamFn {
   return async (model, context, options) => {
     beginProviderPromptAttempt(params.state);
+    const admittedContext =
+      context && typeof context === "object" && params.state.contextAdmission
+        ? params.state.contextAdmission(model, context)
+        : context;
     const originalOnPayload = options?.onPayload;
-    const stream = await params.streamFn(model, context, {
+    const stream = await params.streamFn(model, admittedContext, {
       ...options,
       onPayload: async (payload, payloadModel) => {
         const replacement = await originalOnPayload?.(payload, payloadModel);

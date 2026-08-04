@@ -3,22 +3,37 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ImageContent } from "../../../llm/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import {
+  clearProviderPromptState,
+  getProviderPromptState,
+  wrapStreamFnWithProviderPromptState,
+} from "../provider-prompt-state.js";
+import {
   clearEmbeddedSessionPromptStates,
   getEmbeddedSessionPromptState,
 } from "../session-prompt-state.js";
+import { dropThinkingBlocks } from "../thinking.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
+import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
 import { MidTurnPrecheckSignal } from "./midturn-precheck.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 const sessionId = "attempt-prompt-submit-test";
 
+function wrapProviderBoundary(streamFn: StreamFn): StreamFn {
+  return wrapStreamFnWithProviderPromptState({
+    streamFn,
+    state: getProviderPromptState(sessionId),
+    effectiveContextTokenBudget: 8_000,
+  });
+}
+
 function createSession() {
   const state = {
     messages: [{ role: "user", content: "transcript prompt", timestamp: 1 }] as AgentMessage[],
   };
-  const baseStreamFn: StreamFn = () => {
+  const baseStreamFn = wrapProviderBoundary(() => {
     throw new Error("stream function should not be called directly");
-  };
+  });
   const originalTransformContext = async (messages: AgentMessage[]) => messages;
   const agent = {
     state,
@@ -37,7 +52,7 @@ function createSession() {
 function createBaseInput() {
   const sessionPromptState = getEmbeddedSessionPromptState(sessionId);
   return {
-    attempt: { sessionId },
+    attempt: { runId: sessionId, sessionId },
     appendContext: "append context",
     contextTokenBudget: 8_000,
     images: [] as ImageContent[],
@@ -61,6 +76,7 @@ function createBaseInput() {
 
 afterEach(() => {
   clearEmbeddedSessionPromptStates([sessionId]);
+  clearProviderPromptState(sessionId);
 });
 
 describe("submitEmbeddedAttemptPrompt", () => {
@@ -75,7 +91,8 @@ describe("submitEmbeddedAttemptPrompt", () => {
         expect(prompt).toBe("transcript prompt");
         expect(options).not.toHaveProperty("images");
         expect(input.onFinalPromptText).toHaveBeenCalledWith("transcript prompt");
-        expect(activeSession.agent.streamFn).not.toBe(baseStreamFn);
+        expect(activeSession.agent.streamFn).toBe(baseStreamFn);
+        expect(getProviderPromptState(sessionId).contextAdmission).toBeTypeOf("function");
         expect(activeSession.agent.transformContext).not.toBe(originalTransformContext);
         options?.preflightResult?.(true);
       },
@@ -92,6 +109,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
 
     expect(input.onSteeringAcknowledged).toHaveBeenCalledOnce();
     expect(activeSession.agent.streamFn).toBe(baseStreamFn);
+    expect(getProviderPromptState(sessionId).contextAdmission).toBeUndefined();
     expect(activeSession.agent.transformContext).toBe(originalTransformContext);
   });
 
@@ -114,6 +132,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
       ) => {
         expect(activeSession.messages).toContain(runtimeContextMessage);
         expect(options?.images).toEqual([image]);
+        expect(getProviderPromptState(sessionId).contextAdmission).toBeTypeOf("function");
         options?.preflightResult?.(true);
         throw new Error("provider failed");
       },
@@ -133,6 +152,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
     expect(input.onSteeringAcknowledged).not.toHaveBeenCalled();
     expect(activeSession.messages).not.toContain(runtimeContextMessage);
     expect(activeSession.agent.streamFn).toBe(baseStreamFn);
+    expect(getProviderPromptState(sessionId).contextAdmission).toBeUndefined();
     expect(activeSession.agent.transformContext).toBe(originalTransformContext);
   });
 
@@ -140,7 +160,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
     const { activeSession } = createSession();
     const input = createBaseInput();
     const streamFn = vi.fn(() => undefined as never);
-    activeSession.agent.streamFn = streamFn as unknown as StreamFn;
+    activeSession.agent.streamFn = wrapProviderBoundary(streamFn as unknown as StreamFn);
 
     await submitEmbeddedAttemptPrompt({
       ...input,
@@ -181,10 +201,10 @@ describe("submitEmbeddedAttemptPrompt", () => {
       },
     ] as AgentMessage[];
     let providerMessages: AgentMessage[] = [];
-    activeSession.agent.streamFn = ((_model, context) => {
+    activeSession.agent.streamFn = wrapProviderBoundary(((_model, context) => {
       providerMessages = (context as { messages: AgentMessage[] }).messages;
       return undefined as never;
-    }) as StreamFn;
+    }) as StreamFn);
 
     await submitEmbeddedAttemptPrompt({
       ...input,
@@ -226,7 +246,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
     const { activeSession } = createSession();
     const input = createBaseInput();
     const providerDispatch = vi.fn(() => undefined as never);
-    activeSession.agent.streamFn = providerDispatch as unknown as StreamFn;
+    activeSession.agent.streamFn = wrapProviderBoundary(providerDispatch as unknown as StreamFn);
 
     await expect(
       submitEmbeddedAttemptPrompt({
@@ -268,5 +288,64 @@ describe("submitEmbeddedAttemptPrompt", () => {
     ).rejects.toBeInstanceOf(MidTurnPrecheckSignal);
 
     expect(providerDispatch).toHaveBeenCalledOnce();
+  });
+
+  it("admits the context after outbound thinking transforms", async () => {
+    const { activeSession } = createSession();
+    const input = createBaseInput();
+    const providerMessages: AgentMessage[][] = [];
+    const providerDispatch = ((_model, context) => {
+      providerMessages.push((context as { messages: AgentMessage[] }).messages);
+      return undefined as never;
+    }) as StreamFn;
+    activeSession.agent.streamFn = wrapStreamFnWithMessageTransform(
+      wrapProviderBoundary(providerDispatch),
+      dropThinkingBlocks,
+    );
+
+    await submitEmbeddedAttemptPrompt({
+      ...input,
+      activeSession,
+      contextTokenBudget: 4_000,
+      midTurnPrecheckEnabled: true,
+      reserveTokens: 1_000,
+      promptActiveSession: async () => {
+        await activeSession.agent.streamFn(
+          {} as never,
+          { messages: activeSession.messages } as never,
+          {} as never,
+        );
+        await activeSession.agent.streamFn(
+          {} as never,
+          {
+            messages: [
+              { role: "user", content: "first", timestamp: 1 },
+              {
+                role: "assistant",
+                content: [
+                  { type: "thinking", thinking: "x".repeat(30_000) },
+                  { type: "text", text: "old answer" },
+                ],
+                timestamp: 2,
+              },
+              { role: "user", content: "second", timestamp: 3 },
+              {
+                role: "assistant",
+                content: [{ type: "text", text: "latest answer" }],
+                timestamp: 4,
+              },
+              { role: "user", content: "continue", timestamp: 5 },
+            ],
+          } as never,
+          {} as never,
+        );
+      },
+    });
+
+    expect(providerMessages).toHaveLength(2);
+    expect(providerMessages[1]?.[1]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "old answer" }],
+    });
   });
 });
