@@ -17,7 +17,7 @@
     },
     "nodeId": {
       "label": "Capture Node",
-      "help": "Node id or name that provides screen.snapshot. Defaults to the first connected node that supports it."
+      "help": "Node id or name that provides screen.snapshot or logbook.snapshot. Defaults to the first connected node that supports either command."
     },
     "screenIndex": {
       "label": "Screen Index",
@@ -25,8 +25,8 @@
       "advanced": true
     },
     "maxWidth": {
-      "label": "Snapshot Max Width (px)",
-      "help": "Snapshots are scaled down to this width before storage and analysis.",
+      "label": "Snapshot Max Side (px)",
+      "help": "Snapshots are scaled down so their largest side fits this size before storage and analysis.",
       "advanced": true
     },
     "visionModel": {

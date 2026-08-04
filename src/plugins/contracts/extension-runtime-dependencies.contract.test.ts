@@ -321,6 +321,16 @@ describe("extension runtime dependency manifests", () => {
     expect(manifest.dependencies?.json5).not.toBe("");
   });
 
+  it("keeps Logbook Windows capture dependencies owned and internalized", () => {
+    const root = readPackageManifest("package.json");
+    const logbook = readPackageManifest("extensions/logbook/package.json");
+
+    for (const dependency of ["node-screenshots", "rastermill"]) {
+      expect(logbook.dependencies?.[dependency]).toBeTypeOf("string");
+      expect(root.dependencies?.[dependency]).toBe(logbook.dependencies?.[dependency]);
+    }
+  });
+
   for (const [extensionDir, dependencies] of COMPUTED_RUNTIME_DEPENDENCIES) {
     it(`${extensionDir} declares every computed runtime dependency`, () => {
       const manifest = readPackageManifest(path.join(extensionDir, "package.json"));

@@ -27,9 +27,10 @@ Gateway into screen capture because `captureEnabled` defaults to `true`.
 You need:
 
 - A connected node that exposes `screen.snapshot` or `logbook.snapshot`. The
-  macOS app node needs Screen Recording permission. A headless macOS node host
-  (`openclaw node host run`) gets the plugin-provided `logbook.snapshot`
-  command backed by the system `screencapture` tool.
+  macOS app node needs Screen Recording permission. A headless macOS or
+  Windows node host (`openclaw node host run`) gets the plugin-provided
+  `logbook.snapshot` command. macOS uses the system `screencapture` tool;
+  Windows uses the bundled native capture runtime.
 - The bundled Codex plugin enabled and authenticated. Codex currently provides
   the structured image-extraction contract Logbook requires. Sign in with
   `openclaw models auth login --provider openai`; see
@@ -81,6 +82,10 @@ openclaw dashboard
 The node description must include `screen.snapshot` or `logbook.snapshot`.
 Headless nodes advertise `logbook.snapshot` only after the plugin is active.
 See [Node troubleshooting](/nodes/troubleshooting) if the command is missing.
+
+For headless Windows capture, run the node host in the interactive signed-in
+desktop session you want Logbook to record. A node host running as a Windows
+service or in another user session can see a different or blank desktop.
 
 The Logbook tab appears only for an enabled plugin and an `operator.write`
 Control UI session. The status row should show **Capturing** without an error.
@@ -158,8 +163,8 @@ and clamped to the supported range.
 | `captureIntervalSeconds`  | `30`    | `5`-`600`               | Delay between capture attempts                                                               |
 | `analysisIntervalMinutes` | `15`    | `3`-`120`               | Target observation window; gaps and midnight can close it earlier                            |
 | `nodeId`                  | unset   | node id or display name | Pins capture to one connected node; matching is case-insensitive                             |
-| `screenIndex`             | `0`     | `0`-`16`                | Zero-based display index                                                                     |
-| `maxWidth`                | `1440`  | `480`-`3840`            | Requested capture size cap; headless macOS applies it to the largest dimension               |
+| `screenIndex`             | `0`     | `0`-`16`                | Zero-based display index; headless Windows puts the primary display first                    |
+| `maxWidth`                | `1440`  | `480`-`3840`            | Requested capture size cap; headless macOS and Windows apply it to the largest dimension     |
 | `visionModel`             | unset   | `provider/model`        | Explicit structured route; malformed refs pause analysis, unsupported providers fail batches |
 | `retentionDays`           | `14`    | `1`-`365`               | Deletes old frames; cards, observations, and standups remain                                 |
 
@@ -168,6 +173,12 @@ Without `nodeId`, Logbook prefers a connected app node exposing
 `logbook.snapshot`. In an unpinned setup, a failed node rotates behind other
 eligible nodes. The dashboard pause toggle is session-only and resets when the
 Gateway restarts; use `captureEnabled: false` for a persistent stop.
+
+Headless Windows capture selects one monitor per snapshot; it does not stitch
+multiple displays. `screenIndex: 0` is the primary display, with other displays
+ordered by desktop coordinates and native id. Re-check the index after changing
+the display topology. The native monitor capture does not composite the mouse
+pointer into the image.
 
 ### Vision model selection
 
@@ -257,6 +268,9 @@ openclaw logs --follow
 
 - Confirm the node exposes `screen.snapshot` or `logbook.snapshot`.
 - Grant Screen Recording permission on the capture Mac.
+- On Windows, run the node host in the interactive signed-in desktop session
+  you want captured. If `screenIndex` is out of range, use the valid range in
+  the capture error or reset it to `0` for the primary display.
 - If `nodeId` is configured, confirm it matches the node id or display name.
 - Check that `gateway.nodes.commands.deny` does not contain
   `screen.snapshot`.

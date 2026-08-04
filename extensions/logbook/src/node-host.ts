@@ -1,4 +1,4 @@
-// Logbook node-host command: screen capture for headless node hosts (macOS).
+// Logbook node-host command: screen capture for headless node hosts.
 // Nodes without the OpenClaw app (plain `openclaw node host run`) advertise
 // logbook.snapshot so capture works anywhere the plugin is enabled.
 import { randomUUID } from "node:crypto";
@@ -13,7 +13,9 @@ type LogbookSnapshotParams = {
   quality?: number;
 };
 
-type LogbookSnapshotPayload = { format: "jpeg"; base64: string } | { error: string };
+export type LogbookSnapshotPayload =
+  | { format: "jpeg"; base64: string; width?: number; height?: number }
+  | { error: string };
 
 const LOGBOOK_SNAPSHOT_EXEC_TIMEOUT_MS = 25_000;
 
@@ -30,6 +32,30 @@ function readParams(value: unknown): LogbookSnapshotParams {
 }
 
 export async function handleLogbookSnapshot(rawParams: unknown): Promise<LogbookSnapshotPayload> {
+  if (process.platform === "win32") {
+    let captureWindowsLogbookSnapshot: (params: unknown) => Promise<LogbookSnapshotPayload>;
+    try {
+      // Keep the native capture binding out of macOS/Linux node-host startup.
+      ({ captureWindowsLogbookSnapshot } = await import("./node-host-windows.runtime.js"));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        error:
+          `Windows Logbook capture could not load node-screenshots or Rastermill: ${message}. ` +
+          "Reinstall OpenClaw on this Windows node to restore its native capture dependencies.",
+      };
+    }
+    try {
+      return await captureWindowsLogbookSnapshot(rawParams);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        error:
+          `Windows Logbook capture failed unexpectedly: ${message}. ` +
+          "Retry once, then inspect the node-host logs if the failure continues.",
+      };
+    }
+  }
   if (process.platform !== "darwin") {
     return { error: `logbook.snapshot is not supported on ${process.platform}` };
   }

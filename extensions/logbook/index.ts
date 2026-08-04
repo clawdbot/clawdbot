@@ -105,11 +105,11 @@ export default definePluginEntry({
       requiredScopes: ["operator.write"],
     });
 
-    // Adds logbook.snapshot to the default macOS node allowlist; without a
+    // Adds logbook.snapshot to the default desktop node allowlist; without a
     // policy the gateway strips plugin commands from pairing surfaces.
     api.registerNodeInvokePolicy({
       commands: ["logbook.snapshot"],
-      defaultPlatforms: ["macos"],
+      defaultPlatforms: ["macos", "windows"],
       handle: async (ctx) => {
         // Honor the operator's screen-capture kill switch: a screen.snapshot
         // deny must block this capture command too, not just the app node's.

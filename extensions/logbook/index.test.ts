@@ -23,6 +23,7 @@ describe("logbook snapshot invoke policy", () => {
   it("blocks logbook.snapshot when gateway.nodes.commands.deny lists screen.snapshot", async () => {
     const [policy] = registerLogbookPolicies();
     expect(policy?.commands).toEqual(["logbook.snapshot"]);
+    expect(policy?.defaultPlatforms).toEqual(["macos", "windows"]);
     const invokeNode = vi.fn();
     const result = await policy!.handle({
       nodeId: "node-1",

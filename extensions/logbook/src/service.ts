@@ -183,8 +183,8 @@ export class LogbookService {
     const captureCommand = (node: { commands?: string[] }) =>
       CAPTURE_COMMANDS.find((command) => (node.commands ?? []).includes(command));
     // App nodes (screen.snapshot) come first: plugin node-host commands are
-    // advertised on every platform, but logbook.snapshot only captures on
-    // macOS, so headless hosts are a fallback rather than the default pick.
+    // advertised more broadly than their macOS/Windows capture runtime, so
+    // headless hosts are a fallback rather than the default pick.
     const commandRank = (node: { commands?: string[] }) =>
       CAPTURE_COMMANDS.indexOf(captureCommand(node) as (typeof CAPTURE_COMMANDS)[number]);
     const candidates = nodes

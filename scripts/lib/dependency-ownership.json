@@ -204,6 +204,12 @@
       "class": "plugin-runtime",
       "risk": ["tts", "network"]
     },
+    "node-screenshots": {
+      "owner": "plugin:logbook",
+      "class": "plugin-runtime",
+      "activation": ["plugins.entries.logbook.enabled", "logbook.captureEnabled"],
+      "risk": ["native", "screen-capture", "sensitive-data"]
+    },
     "openai": {
       "owner": "provider:openai",
       "class": "default-runtime-initially",

@@ -219,6 +219,7 @@ const explicitNeverBundleDependencies = [
   "@vitest/expect",
   "jimp",
   "matrix-js-sdk",
+  "node-screenshots",
   "prism-media",
   "qrcode-terminal",
   "sharp",
