@@ -68,7 +68,6 @@ const GATEWAY_SCENARIOS = {
     toolsProfile: "minimal",
     replyText: "FIRST_RUN_ACTIVE",
     holdFirstResponse: false,
-    followupReplyText: "FOLLOWUP_RUN_COMPLETE",
   },
   followup: {
     agentId: SHARED_GATEWAY_AGENT_ID,
