@@ -27,6 +27,7 @@ scenario:
     - extensions/qa-lab/src/tool-search-gateway.fixture.test.ts
   execution:
     kind: flow
+    retryCount: 0
     suiteIsolation: isolated
     isolationReason: Mutates gateway plugin/tool-search config and restarts the QA gateway between direct, compact, and structured lanes.
     summary: Flow-backed gateway E2E for direct, compact, and structured Tool Search with plugin-owned tool invocation.
