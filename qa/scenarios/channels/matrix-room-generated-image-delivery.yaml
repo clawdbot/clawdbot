@@ -2,9 +2,17 @@ title: Matrix generated images deliver as real image attachments while streaming
 scenario:
   id: matrix-room-generated-image-delivery
   surface: channels
+  plugins:
+    - openai
   coverage:
     primary:
       - matrix.media-and-rich-content
+  gatewayConfigPatch:
+    agents:
+      defaults:
+        mediaModels:
+          image:
+            primary: openai/gpt-image-1
   execution:
     kind: flow
     channel: matrix

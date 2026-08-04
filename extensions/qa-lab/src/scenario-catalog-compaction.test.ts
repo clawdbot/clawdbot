@@ -73,7 +73,7 @@ describe("qa compaction scenario catalog", () => {
       "OpenClaw performs exactly one successful write, one causal continuation, and returns the exact file content and final marker.",
     );
     expect(scenario.successCriteria).toContain(
-      "OpenClaw proves session-memory.pruning by retaining tail blocks 11..15 while pruning marker block 10.",
+      "OpenClaw proves session-memory.pruning by retaining a nonempty contiguous suffix ending at block 15 while pruning marker block 10.",
     );
     expect(scenario.successCriteria).toContain(
       "The Codex runtime-pair cell reports a known harness gap before gateway, session, or provider work and makes no compaction coverage claim.",
@@ -158,7 +158,9 @@ describe("qa compaction scenario catalog", () => {
     );
     expect(flow).toContain("!String(writeRequest.allInputText ?? '').includes(config.bulkyMarker)");
     expect(flow).toContain("JSON.stringify(overflowEvidence.tailBlocks)");
-    expect(flow).toContain("JSON.stringify(['11', '12', '13', '14', '15'])");
+    expect(flow).toContain("writeEvidence.tailBlocks.length > 0");
+    expect(flow).toContain("!writeEvidence.tailBlocks.includes('10')");
+    expect(flow).toContain("16 - writeEvidence.tailBlocks.length + index");
     expect(serializedScenario).not.toContain("remote-compaction");
     expect(serializedScenario).not.toContain("remoteCompaction");
     expect(flow).not.toContain("JSON.stringify(overflowRequest)");
