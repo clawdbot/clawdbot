@@ -77,8 +77,8 @@ normal policy, approval, hook, logging, and result handling still apply.
 - `code`: exposes `tool_search_code`, the default compact JavaScript bridge,
   alongside the capability directory and direct-only tools.
 - `tools`: exposes `tool_search`, `tool_describe`, and `tool_call` as plain
-  structured tools for providers that should not receive code, alongside
-  direct-only tools.
+  structured tools for providers that should not receive code, alongside the
+  capability directory and direct-only tools.
 - `directory`: exposes `tool_search`, `tool_describe`, and `tool_call` plus a
   bounded, cache-stable prompt directory. Core coding primitives, direct-only
   tools, and tools required by the run's delivery policy remain visible; other

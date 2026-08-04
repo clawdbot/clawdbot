@@ -445,7 +445,7 @@ describe("tool search gateway e2e lane assertions", () => {
           sessionLogTargetToolResults: 1,
           gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
           providerDeclaredToolCount: 3,
-          providerDirectoryContainsTarget: false,
+          providerDirectoryContainsTarget: true,
           providerPlannedTools: ["tool_search", "tool_call"],
           providerRawBytes: 4_000,
           providerToolOutputSnippet: JSON.stringify({
@@ -486,7 +486,7 @@ describe("tool search gateway e2e lane assertions", () => {
           sessionLogTargetToolResults: 1,
           gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
           providerDeclaredToolCount: 3,
-          providerDirectoryContainsTarget: false,
+          providerDirectoryContainsTarget: true,
           providerPlannedTools: ["tool_search", "tool_search", "tool_call"],
           providerRawBytes: 4_000,
           providerToolOutputSnippet: JSON.stringify({
@@ -600,7 +600,7 @@ describe("tool search gateway e2e lane assertions", () => {
             sessionLogTargetToolResults: 1,
             gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
             providerDeclaredToolCount: 3,
-            providerDirectoryContainsTarget: false,
+            providerDirectoryContainsTarget: true,
             providerPlannedTools: plannedTools,
             providerRawBytes: 4_000,
             providerToolOutputSnippet: JSON.stringify(result),
@@ -616,9 +616,9 @@ describe("tool search gateway e2e lane assertions", () => {
     {
       label: "exposes an extra provider tool",
       declaredToolCount: 4,
-      directoryContainsTarget: false,
+      directoryContainsTarget: true,
     },
-    { label: "injects a target directory", declaredToolCount: 3, directoryContainsTarget: true },
+    { label: "omits the target directory", declaredToolCount: 3, directoryContainsTarget: false },
   ])("rejects structured proof that $label", ({ declaredToolCount, directoryContainsTarget }) => {
     const result = {
       results: [
@@ -645,7 +645,9 @@ describe("tool search gateway e2e lane assertions", () => {
           sessionLogToolMentions: { tool_search: 1, tool_call: 1, [targetTool]: 1 },
         },
       }),
-    ).toThrow("structured lane did not keep the catalog behind its three control tools");
+    ).toThrow(
+      "structured lane did not expose its bounded directory with exactly three control tools",
+    );
   });
 
   it("rejects structured proof without a typed target tool result", () => {
@@ -667,7 +669,7 @@ describe("tool search gateway e2e lane assertions", () => {
           sessionLogTargetToolResults: 0,
           gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
           providerDeclaredToolCount: 3,
-          providerDirectoryContainsTarget: false,
+          providerDirectoryContainsTarget: true,
           providerPlannedTools: ["tool_search", "tool_call"],
           providerRawBytes: 4_000,
           providerToolSearchResult: result,
@@ -696,7 +698,7 @@ describe("tool search gateway e2e lane assertions", () => {
           sessionLogTargetToolResults: 1,
           gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
           providerDeclaredToolCount: 3,
-          providerDirectoryContainsTarget: false,
+          providerDirectoryContainsTarget: true,
           providerPlannedTools: ["tool_search", "tool_call"],
           providerRawBytes: 4_000,
           providerToolSearchResult: result,

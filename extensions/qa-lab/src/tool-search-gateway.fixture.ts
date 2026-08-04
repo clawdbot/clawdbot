@@ -638,8 +638,8 @@ export function assertToolSearchBatchLaneResult(params: {
     );
   assert(tools.status === "completed", `structured lane did not complete successfully: ${debug()}`);
   assert(
-    tools.providerDeclaredToolCount === 3 && !tools.providerDirectoryContainsTarget,
-    `structured lane did not keep the catalog behind its three control tools: ${debug()}`,
+    tools.providerDeclaredToolCount === 3 && tools.providerDirectoryContainsTarget,
+    `structured lane did not expose its bounded directory with exactly three control tools: ${debug()}`,
   );
   assert(
     tools.providerPlannedTools.filter((name) => name === "tool_search").length === 1 &&
