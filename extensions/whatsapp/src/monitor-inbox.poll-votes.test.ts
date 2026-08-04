@@ -1,6 +1,10 @@
 // WhatsApp monitor inbox poll-vote hook behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
+  maybeEmitWhatsAppPollVoteReceivedHook,
+  rememberWhatsAppOwnPollCreation,
+} from "./inbound/poll-votes.js";
+import {
   buildPollCreationMessageForTests,
   buildPollUpdateMessageForTests,
   encryptPollVoteForTests,
@@ -277,5 +281,82 @@ describe("web monitor inbox poll vote hook", () => {
     });
 
     await waitForMessageCalls(runPollVoteReceivedMock, 1);
+  });
+
+  // Exercises maybeEmitWhatsAppPollVoteReceivedHook/rememberWhatsAppOwnPollCreation
+  // directly (rather than through a mock socket) to prove ownership is scoped
+  // per WhatsApp account: with multiple connected accounts possibly observing
+  // the same group, an unscoped cache key would let one account's poll
+  // ownership leak another account's vote data through its opted-in hook.
+  describe("cross-account isolation", () => {
+    const ACCOUNT_A = "account-a";
+    const ACCOUNT_B = "account-b";
+
+    function buildOwnPollAndVote(pollMessageId: string, voteMessageId: string) {
+      const { message: pollCreationMessage, pollEncKey } = buildPollCreationMessageForTests({
+        section: "pollCreationMessage",
+        options: ["Pizza", "Sushi"],
+      });
+      const creationKey = { remoteJid: CHAT_JID, id: pollMessageId, fromMe: true };
+      const vote = encryptPollVoteForTests({
+        selectedOptionNames: ["Sushi"],
+        pollEncKey,
+        pollCreatorJid: SELF_JID,
+        pollMsgId: pollMessageId,
+        voterJid: VOTER_JID,
+      });
+      const voteMessage = buildPollUpdateMessageForTests({
+        creationKey,
+        vote,
+        senderTimestampMs: 1_700_000_100_000,
+      });
+      return {
+        pollCreationMessage,
+        voteKey: { remoteJid: CHAT_JID, id: voteMessageId, fromMe: false, participant: VOTER_JID },
+        voteMessage,
+      };
+    }
+
+    it("does not fire for another account's poll even when that account marked ownership", async () => {
+      const pollMessageId = "POLL-CROSS-ACCOUNT";
+      const { pollCreationMessage, voteKey, voteMessage } = buildOwnPollAndVote(
+        pollMessageId,
+        "VOTE-CROSS-ACCOUNT",
+      );
+      // Only account A observed (and recorded) this poll as its own.
+      rememberWhatsAppOwnPollCreation(ACCOUNT_A, CHAT_JID, pollMessageId);
+
+      const cfg = {
+        channels: {
+          whatsapp: { allowFrom: ["*"], pluginHooks: { pollVoteReceived: true } },
+        },
+      } as never;
+
+      // Account B, opted in, observes a vote on the same chat/poll id — must
+      // not fire, since B never recorded this poll as its own.
+      maybeEmitWhatsAppPollVoteReceivedHook({
+        cfg,
+        accountId: ACCOUNT_B,
+        message: voteMessage,
+        key: voteKey,
+        getCachedMessage: () => pollCreationMessage,
+        selfJid: SELF_JID,
+      });
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
+      expect(runPollVoteReceivedMock).not.toHaveBeenCalled();
+
+      // The same vote, dispatched as account A (the actual owner), does fire.
+      maybeEmitWhatsAppPollVoteReceivedHook({
+        cfg,
+        accountId: ACCOUNT_A,
+        message: voteMessage,
+        key: voteKey,
+        getCachedMessage: () => pollCreationMessage,
+        selfJid: SELF_JID,
+      });
+      await waitForMessageCalls(runPollVoteReceivedMock, 1);
+    });
   });
 });

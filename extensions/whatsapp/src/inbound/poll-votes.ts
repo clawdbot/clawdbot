@@ -151,8 +151,15 @@ export function isWhatsAppPollCreationMessage(message: proto.IMessage | null | u
 const OWN_POLL_CREATION_TTL_MS = 10 * 60 * 1000;
 const recentOwnPollCreationKeys: Map<string, { expiresAt: number; value: true }> = new Map();
 
-/** Record that a poll creation message at `remoteJid:messageId` was sent by this account (`key.fromMe`). */
+/**
+ * Record that a poll creation message at `remoteJid:messageId` was sent by
+ * this specific account (`key.fromMe`). Keyed by `accountId` too — with
+ * multiple connected WhatsApp accounts possibly observing the same group,
+ * an unscoped key would let account A's poll ownership authorize account
+ * B's opted-in hook to receive account A's vote data.
+ */
 export function rememberWhatsAppOwnPollCreation(
+  accountId: string,
   remoteJid: string | null | undefined,
   messageId: string | null | undefined,
 ): void {
@@ -161,15 +168,18 @@ export function rememberWhatsAppOwnPollCreation(
   }
   rememberWhatsAppBaileysCacheEntry(
     recentOwnPollCreationKeys,
-    `${remoteJid}:${messageId}`,
+    `${accountId}:${remoteJid}:${messageId}`,
     true,
     OWN_POLL_CREATION_TTL_MS,
   );
 }
 
-function isOwnPollCreation(remoteJid: string, messageId: string): boolean {
+function isOwnPollCreation(accountId: string, remoteJid: string, messageId: string): boolean {
   return (
-    readWhatsAppBaileysCacheEntry(recentOwnPollCreationKeys, `${remoteJid}:${messageId}`) === true
+    readWhatsAppBaileysCacheEntry(
+      recentOwnPollCreationKeys,
+      `${accountId}:${remoteJid}:${messageId}`,
+    ) === true
   );
 }
 
@@ -257,15 +267,20 @@ export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
   }
   const creationKey = params.message?.pollUpdateMessage?.pollCreationMessageKey;
   const remoteJid = params.key.remoteJid ?? creationKey?.remoteJid;
-  if (!creationKey?.id || !remoteJid || !isOwnPollCreation(remoteJid, creationKey.id)) {
+  if (
+    !creationKey?.id ||
+    !remoteJid ||
+    !isOwnPollCreation(params.accountId, remoteJid, creationKey.id)
+  ) {
     // Not a poll this account created — stays within the documented
     // "polls OpenClaw created" boundary rather than exposing third-party
-    // participants' vote selections to opted-in plugins.
+    // participants' vote selections to opted-in plugins. Account-scoped so
+    // one connected account's poll can't authorize another account's hook.
     return;
   }
   const voteUpdateId = params.key.id;
   if (voteUpdateId) {
-    const dedupKey = `${remoteJid}:${voteUpdateId}`;
+    const dedupKey = `${params.accountId}:${remoteJid}:${voteUpdateId}`;
     if (readWhatsAppBaileysCacheEntry(recentlyDispatchedPollVoteKeys, dedupKey)) {
       return;
     }

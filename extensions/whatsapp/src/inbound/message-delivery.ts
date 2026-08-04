@@ -503,7 +503,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     for (const msg of upsert.messages ?? []) {
       rememberBaileysMessage(msg.key?.remoteJid, msg.key?.id, msg.message);
       if (msg.key?.fromMe && isWhatsAppPollCreationMessage(msg.message)) {
-        rememberWhatsAppOwnPollCreation(msg.key.remoteJid, msg.key.id);
+        rememberWhatsAppOwnPollCreation(options.accountId, msg.key.remoteJid, msg.key.id);
       }
 
       if (msg.message?.pollUpdateMessage) {
