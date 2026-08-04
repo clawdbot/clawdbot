@@ -322,6 +322,13 @@ describe("audit run explanation", () => {
     vi.mocked(runtime.log).mockClear();
   });
 
+  it("rejects --execution without --explain before querying the Gateway", async () => {
+    await expect(auditListCommand({ executionId: "execution-1" }, runtime)).rejects.toThrow(
+      "--execution requires --explain",
+    );
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
   it("requires one exact run and keeps decision queries bounded", async () => {
     await expect(auditListCommand({ explain: true }, runtime)).rejects.toThrow(
       "exactly one of --run <id> or --execution <id>",
