@@ -7,8 +7,10 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -607,7 +609,23 @@ function runSuccessfulMacosScript(script: string, trailingArgs: string[] = []): 
 }
 
 function runDelegatedBlacksmith(args: string[], env: Record<string, string>) {
-  return runDefaultWrapper(args, { ...cleanSparseSyncOptions, env });
+  if (process.platform === "win32") {
+    return runDefaultWrapper(args, { ...cleanSparseSyncOptions, env });
+  }
+  const physicalSyncRoot = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-sync-physical-"));
+  const syncRootAlias = `${physicalSyncRoot}-alias`;
+  symlinkSync(physicalSyncRoot, syncRootAlias, "dir");
+  tempDirs.push(syncRootAlias, physicalSyncRoot);
+  const result = runDefaultWrapper(args, {
+    ...cleanSparseSyncOptions,
+    env: { ...env, OPENCLAW_CRABBOX_SYNC_TMPDIR: syncRootAlias },
+  });
+  if (result.stdout.trim()) {
+    expect(
+      parseFakeCrabboxOutput(result).cwd.startsWith(`${realpathSync(physicalSyncRoot)}${path.sep}`),
+    ).toBe(true);
+  }
+  return result;
 }
 
 const remoteChangedGateEnvPrefix =

@@ -10,6 +10,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statfsSync,
@@ -3783,7 +3784,9 @@ try {
     const checkout = prepareFullCheckoutForSync({ changedGateBase });
     fullCheckout = checkout;
     normalizedArgs = injectFullCheckoutLeaseReclaim(normalizedArgs);
-    childCwd = checkout.dir;
+    // Crabbox claims Git's physical top-level. Match it so macOS /var aliases
+    // restore to the invoking repository instead of the disposable checkout.
+    childCwd = realpathSync(checkout.dir);
     cleanupChildCwd = () => checkout.cleanup();
     remoteChangedGateBase = checkout.changedGateBase;
     remoteChangedGateAlias = changedGate?.remoteAlias ?? "";
