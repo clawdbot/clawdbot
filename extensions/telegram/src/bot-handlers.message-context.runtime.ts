@@ -23,6 +23,7 @@ import {
   buildTelegramReplyChain,
   createTelegramMessageCache,
   isTelegramMessageFromCurrentBot,
+  resolveProviderObservedTelegramThreadId,
   type TelegramCachedMessageNode,
   type TelegramReplyChainEntry,
 } from "./message-cache.js";
@@ -91,6 +92,22 @@ export function createTelegramMessageContextRuntime({
       ...(threadId != null ? { providerObservedThreadId: threadId } : {}),
       ...(threadId != null ? { threadId } : {}),
     });
+
+  // `MessageReactionUpdated` carries no `message_thread_id`, so the reaction handler
+  // recovers the originating topic from the same bounded cache that records inbound
+  // and outbound messages. `undefined` means "thread unknown", never "General": the
+  // caller must not substitute a topic id.
+  const resolveCachedMessageThreadId = async (params: {
+    chatId: number | string;
+    messageId: number | string;
+  }): Promise<number | undefined> => {
+    const node = await messageCache.get({
+      accountId,
+      chatId: params.chatId,
+      messageId: String(params.messageId),
+    });
+    return resolveProviderObservedTelegramThreadId(node);
+  };
 
   const buildReplyChainForMessage = (msg: Message) =>
     buildTelegramReplyChain({ cache: messageCache, accountId, chatId: msg.chat.id, msg });
@@ -255,6 +272,7 @@ export function createTelegramMessageContextRuntime({
 
   return {
     recordMessageForReplyChain,
+    resolveCachedMessageThreadId,
     buildReplyChainForMessage,
     toReplyChainEntry,
     buildPromptContextForMessage,

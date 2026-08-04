@@ -3,7 +3,7 @@ import type { Chat, Message } from "grammy/types";
 import { describe, expect, it } from "vitest";
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
 import { buildTelegramQuestionCallbackData } from "./question-callback-data.js";
-import { getTelegramSequentialKey } from "./sequential-key.js";
+import { getTelegramSequentialConstraints, getTelegramSequentialKey } from "./sequential-key.js";
 
 const mockChat = (chat: Pick<Chat, "id"> & Partial<Pick<Chat, "type" | "is_forum">>): Chat =>
   chat as Chat;
@@ -381,6 +381,40 @@ describe("getTelegramSequentialKey", () => {
       "telegram:123",
     ],
   ])("resolves key %#", (input, expected) => {
-    expect(getTelegramSequentialKey(input)).toBe(expected);
+    expect(getTelegramSequentialKey(input)).toEqual(expected);
+  });
+});
+
+describe("getTelegramSequentialConstraints", () => {
+  it("bridges a forum message update with its reaction update", () => {
+    const message = mockMessage({
+      chat: mockChat({ id: -1001, type: "supergroup", is_forum: true }),
+      message_id: 77,
+      message_thread_id: 9,
+      is_topic_message: true,
+    });
+    const expected = "telegram:-1001:message:77";
+    const reaction = {
+      update: {
+        message_reaction: {
+          chat: { id: -1001, type: "supergroup", is_forum: true },
+          message_id: 77,
+        },
+      },
+    };
+
+    expect(getTelegramSequentialConstraints({ message })).toEqual([
+      "telegram:-1001:topic:9",
+      expected,
+    ]);
+    expect(getTelegramSequentialConstraints(reaction)).toEqual(["telegram:-1001", expected]);
+  });
+
+  it("does not add a bridge lane outside forum chats", () => {
+    expect(
+      getTelegramSequentialConstraints({
+        message: mockMessage({ chat: mockChat({ id: 123, type: "private" }) }),
+      }),
+    ).toBe("telegram:123");
   });
 });
