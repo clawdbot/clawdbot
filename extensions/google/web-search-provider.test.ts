@@ -108,7 +108,8 @@ afterEach(() => {
 
 describe("google web search provider", () => {
   it("does not advertise Gemini filters that the provider cannot execute", () => {
-    const tool = createGeminiWebSearchProvider().createTool({
+    const provider = createGeminiWebSearchProvider();
+    const tool = provider.createTool({
       config: {},
       searchConfig: { provider: "gemini" },
     });
@@ -122,6 +123,7 @@ describe("google web search provider", () => {
     expect(parameters.properties).toBeDefined();
     expect(parameters.properties).not.toHaveProperty("country");
     expect(parameters.properties).not.toHaveProperty("language");
+    expect(provider.modelParameters).toBe(tool.parameters);
   });
 
   it.each([

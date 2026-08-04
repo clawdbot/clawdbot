@@ -183,6 +183,110 @@ describe("web tools defaults", () => {
     });
   });
 
+  it("uses the selected provider model schema without constructing its runtime tool", () => {
+    const registry = createEmptyPluginRegistry();
+    const modelParameters = {
+      type: "object",
+      required: ["query"],
+      properties: { query: { type: "string" } },
+    };
+    const createTool = vi.fn(() => ({
+      description: "custom runtime tool",
+      parameters: modelParameters,
+      execute: async () => ({ query: "openclaw", results: [] }),
+    }));
+    registry.webSearchProviders.push({
+      pluginId: "custom-search",
+      pluginName: "Custom Search",
+      source: "test",
+      provider: {
+        id: "custom",
+        label: "Custom Search",
+        hint: "Custom runtime provider",
+        envVars: [],
+        placeholder: "custom-...",
+        signupUrl: "https://example.com/signup",
+        credentialPath: "tools.web.search.custom.apiKey",
+        getCredentialValue: () => "configured",
+        setCredentialValue: () => {},
+        modelParameters,
+        createTool,
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const tool = createWebSearchTool({
+      runtimeWebSearch: {
+        providerSource: "configured",
+        selectedProvider: "custom",
+        selectedProviderKeySource: "config",
+        diagnostics: [],
+      },
+    });
+
+    expect(tool?.parameters).toBe(modelParameters);
+    expect(createTool).not.toHaveBeenCalled();
+  });
+
+  it("late-binds the model schema to the current selected provider", () => {
+    const registry = createEmptyPluginRegistry();
+    const staleParameters = { type: "object", properties: { stale: { type: "string" } } };
+    const freshParameters = { type: "object", properties: { fresh: { type: "string" } } };
+    for (const [id, modelParameters] of [
+      ["stale", staleParameters],
+      ["fresh", freshParameters],
+    ] as const) {
+      registry.webSearchProviders.push({
+        pluginId: `${id}-search`,
+        pluginName: `${id} Search`,
+        source: "test",
+        provider: {
+          id,
+          label: `${id} Search`,
+          hint: "Runtime provider",
+          envVars: [],
+          placeholder: `${id}-...`,
+          signupUrl: `https://example.com/${id}`,
+          credentialPath: `tools.web.search.${id}.apiKey`,
+          getCredentialValue: () => "configured",
+          setCredentialValue: () => {},
+          modelParameters,
+          createTool: () => ({
+            description: `${id} runtime tool`,
+            parameters: modelParameters,
+            execute: async () => ({ query: "openclaw", results: [] }),
+          }),
+        },
+      });
+    }
+    setActivePluginRegistry(registry);
+    setActiveRuntimeWebToolsMetadata({
+      search: {
+        providerSource: "configured",
+        selectedProvider: "stale",
+        selectedProviderKeySource: "config",
+        diagnostics: [],
+      },
+      fetch: { providerSource: "none", diagnostics: [] },
+      diagnostics: [],
+    });
+    const tool = createWebSearchTool({ lateBindRuntimeConfig: true });
+
+    expect(tool?.parameters).toBe(staleParameters);
+
+    setActiveRuntimeWebToolsMetadata({
+      search: {
+        providerSource: "configured",
+        selectedProvider: "fresh",
+        selectedProviderKeySource: "config",
+        diagnostics: [],
+      },
+      fetch: { providerSource: "none", diagnostics: [] },
+      diagnostics: [],
+    });
+    expect(tool?.parameters).toBe(freshParameters);
+  });
+
   it("keeps runtime provider discovery enabled when runtime web_search metadata is missing", async () => {
     const registry = createEmptyPluginRegistry();
     registry.webSearchProviders.push({

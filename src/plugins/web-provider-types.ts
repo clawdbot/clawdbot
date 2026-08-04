@@ -92,6 +92,8 @@ export type WebSearchProviderPlugin = {
   id: WebSearchProviderId;
   label: string;
   hint: string;
+  /** Provider-specific schema to expose to models when this provider is selected. */
+  modelParameters?: TSchema;
   onboardingScopes?: readonly "text-inference"[];
   requiresCredential?: boolean;
   credentialLabel?: string;

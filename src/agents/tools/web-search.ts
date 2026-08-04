@@ -4,6 +4,7 @@
  * Runs the configured runtime provider and returns normalized cached search results.
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
@@ -76,20 +77,40 @@ const WebSearchSchema = {
   },
 } satisfies Record<string, unknown>;
 
-function isWebSearchDisabled(config?: OpenClawConfig): boolean {
-  const search = config?.tools?.web?.search;
-  return Boolean(search && typeof search === "object" && search.enabled === false);
-}
-
-/** Creates the `web_search` tool, or `null` when web search is disabled by config. */
-export function createWebSearchTool(options?: {
+type WebSearchToolOptions = {
   config?: OpenClawConfig;
   enabled?: boolean;
   agentDir?: string;
   sandboxed?: boolean;
   runtimeWebSearch?: RuntimeWebSearchMetadata;
   lateBindRuntimeConfig?: boolean;
-}): AnyAgentTool | null {
+};
+
+function isWebSearchDisabled(config?: OpenClawConfig): boolean {
+  const search = config?.tools?.web?.search;
+  return Boolean(search && typeof search === "object" && search.enabled === false);
+}
+
+function resolveWebSearchModelParameters(
+  options: WebSearchToolOptions | undefined,
+): AnyAgentTool["parameters"] {
+  const { providerSelectionId } = resolveWebSearchToolRuntimeContext({
+    config: options?.config,
+    lateBindRuntimeConfig: options?.lateBindRuntimeConfig,
+    runtimeWebSearch: options?.runtimeWebSearch,
+  });
+  const providerId = providerSelectionId.trim().toLowerCase();
+  if (!providerId) {
+    return WebSearchSchema;
+  }
+  const selectedProvider = getActivePluginRegistry()?.webSearchProviders.find(
+    (entry) => entry.provider.id.trim().toLowerCase() === providerId,
+  )?.provider;
+  return selectedProvider?.modelParameters ?? WebSearchSchema;
+}
+
+/** Creates the `web_search` tool, or `null` when web search is disabled by config. */
+export function createWebSearchTool(options?: WebSearchToolOptions): AnyAgentTool | null {
   if (options?.enabled === false || isWebSearchDisabled(options?.config)) {
     return null;
   }
@@ -100,7 +121,9 @@ export function createWebSearchTool(options?: {
     resultContentSource: "network",
     description:
       "Search current web; normalized provider results. Supports freshness and date-range filters (freshness, date_after/date_before) and domain filtering (domain_filter).",
-    parameters: WebSearchSchema,
+    get parameters() {
+      return resolveWebSearchModelParameters(options);
+    },
     outputSchema: WebSearchOutputSchema,
     execute: async (_toolCallId, args, signal) => {
       // Late binding lets long-lived agents pick up runtime web-search credentials/config without
