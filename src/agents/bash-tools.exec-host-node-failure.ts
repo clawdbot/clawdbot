@@ -142,6 +142,27 @@ export function formatNodeInvokeFailureToolResult(params: {
   };
 }
 
+export function formatNodeExecApprovalDeniedToolResult(params: {
+  nodeId: string;
+  approvalId: string;
+  deniedReason: string;
+  command: string;
+  cwd: string | undefined;
+}): AgentToolResult<ExecToolDetails> {
+  const text = `Exec denied (node=${params.nodeId} id=${params.approvalId}, ${params.deniedReason}): ${params.command}`;
+  return {
+    content: [{ type: "text", text }],
+    details: {
+      status: "failed",
+      exitCode: null,
+      durationMs: 0,
+      aggregated: text,
+      timedOut: params.deniedReason.includes("timeout"),
+      cwd: params.cwd,
+    },
+  };
+}
+
 /** Invokes node system.run and turns every non-cancellation failure into provenance-aware data. */
 export async function invokeNodeSystemRun(params: {
   invokeWaitMs: number;

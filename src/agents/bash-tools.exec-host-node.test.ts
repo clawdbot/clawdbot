@@ -222,6 +222,7 @@ const enforceStrictInlineEvalApprovalBoundaryMock = vi.hoisted(() =>
 const registerExecApprovalRequestForHostOrThrowMock = vi.hoisted(() =>
   vi.fn(async () => undefined),
 );
+const hasLocalExecApprovalHostMock = vi.hoisted(() => vi.fn(() => false));
 const detectInterpreterInlineEvalArgvMock = vi.hoisted(() =>
   vi.fn(
     (): {
@@ -272,6 +273,7 @@ vi.mock("../infra/system-run-approval-context.js", () => ({
 vi.mock("./bash-tools.exec-approval-request.js", () => ({
   buildExecApprovalRequesterContext: vi.fn(() => ({})),
   buildExecApprovalTurnSourceContext: vi.fn(() => ({})),
+  hasLocalExecApprovalHost: hasLocalExecApprovalHostMock,
   isExecApprovalRunAbortedError: (error: unknown) => error === runAbortedApprovalError,
   registerExecApprovalRequestForHostOrThrow: registerExecApprovalRequestForHostOrThrowMock,
 }));
@@ -669,6 +671,8 @@ describe("executeNodeHostCommand", () => {
     detectInterpreterInlineEvalArgvMock.mockReset();
     detectInterpreterInlineEvalArgvMock.mockReturnValue(null);
     registerExecApprovalRequestForHostOrThrowMock.mockReset();
+    hasLocalExecApprovalHostMock.mockReset();
+    hasLocalExecApprovalHostMock.mockReturnValue(false);
   });
 
   it("returns outcome-unknown for an ambiguous direct node timeout", async () => {
@@ -798,6 +802,131 @@ describe("executeNodeHostCommand", () => {
     });
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
     expect(registerExecApprovalRequestForHostOrThrowMock).not.toHaveBeenCalled();
+  });
+
+  it("waits inline for a process-local node approval host", async () => {
+    hasLocalExecApprovalHostMock.mockReturnValue(true);
+    createAndRegisterDefaultExecApprovalRequestMock.mockResolvedValue({
+      approvalId: "approval-1",
+      approvalSlug: "slug-1",
+      warningText: "",
+      expiresAtMs: Date.now() + 60_000,
+      preResolvedDecision: undefined,
+      initiatingSurface: "origin",
+      sentApproverDms: false,
+      unavailableReason: null,
+    });
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "always",
+      askFallback: "deny",
+    });
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+
+    const result = await executeNodeHostCommand(createNodeHostRequest({ ask: "always" }));
+
+    expect(result.details?.status).not.toBe("approval-pending");
+    expect(resolveApprovalDecisionOrUndefinedMock).toHaveBeenCalledOnce();
+    expect(buildExecApprovalPendingToolResultMock).not.toHaveBeenCalled();
+    expect(
+      callGatewayToolMock.mock.calls.some(
+        ([method, , params]) =>
+          method === "node.invoke" &&
+          (params as MockNodeInvokeParams | undefined)?.command === "system.run",
+      ),
+    ).toBe(true);
+  });
+
+  it("returns a structured failure when a process-local node approval is denied", async () => {
+    hasLocalExecApprovalHostMock.mockReturnValue(true);
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("deny");
+    createAndRegisterDefaultExecApprovalRequestMock.mockResolvedValue({
+      approvalId: "approval-denied",
+      approvalSlug: "slug-denied",
+      warningText: "",
+      expiresAtMs: Date.now() + 60_000,
+      preResolvedDecision: undefined,
+      initiatingSurface: "origin",
+      sentApproverDms: false,
+      unavailableReason: null,
+    });
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "always",
+      askFallback: "deny",
+    });
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: false,
+      deniedReason: "user-denied",
+    });
+
+    const result = await executeNodeHostCommand(createNodeHostRequest({ ask: "always" }));
+
+    expect(result.details).toMatchObject({
+      status: "failed",
+      timedOut: false,
+    });
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: expect.stringContaining("Exec denied (node=node-1 id=approval-denied, user-denied)"),
+      },
+    ]);
+    expect(callGatewayToolMock).not.toHaveBeenCalledWith(
+      "node.invoke",
+      expect.anything(),
+      expect.objectContaining({ command: "system.run" }),
+      expect.anything(),
+    );
+  });
+
+  it("returns a structured failure when process-local node approval resolution fails", async () => {
+    hasLocalExecApprovalHostMock.mockReturnValue(true);
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(undefined);
+    createAndRegisterDefaultExecApprovalRequestMock.mockResolvedValue({
+      approvalId: "approval-failed",
+      approvalSlug: "slug-failed",
+      warningText: "",
+      expiresAtMs: Date.now() + 60_000,
+      preResolvedDecision: undefined,
+      initiatingSurface: "origin",
+      sentApproverDms: false,
+      unavailableReason: null,
+    });
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "always",
+      askFallback: "deny",
+    });
+
+    const result = await executeNodeHostCommand(createNodeHostRequest({ ask: "always" }));
+
+    expect(result.details).toMatchObject({
+      status: "failed",
+      timedOut: false,
+    });
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: expect.stringContaining(
+          "Exec denied (node=node-1 id=approval-failed, approval-request-failed)",
+        ),
+      },
+    ]);
+    expect(callGatewayToolMock).not.toHaveBeenCalledWith(
+      "node.invoke",
+      expect.anything(),
+      expect.objectContaining({ command: "system.run" }),
+      expect.anything(),
+    );
   });
 
   it.each([
@@ -1520,15 +1649,25 @@ describe("executeNodeHostCommand", () => {
       deniedReason: null,
     });
 
-    await expect(
-      executeNodeHostCommand(
-        createNodeHostRequest({
-          ask: "always",
-          trigger: "cron",
-        }),
-      ),
-    ).rejects.toThrow("denied");
+    const result = await executeNodeHostCommand(
+      createNodeHostRequest({
+        ask: "always",
+        trigger: "cron",
+      }),
+    );
 
+    expect(result.details).toMatchObject({
+      status: "failed",
+      timedOut: true,
+    });
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: expect.stringContaining(
+          "Exec denied (node=node-1 id=approval-1, approval-timeout: policy-unavailable)",
+        ),
+      },
+    ]);
     expect(resolveExecHostApprovalContextMock).toHaveBeenCalledTimes(2);
     expect(
       callGatewayToolMock.mock.calls.some(

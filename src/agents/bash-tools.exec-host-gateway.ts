@@ -52,6 +52,7 @@ import { formatExecApprovalContinuationSourceOutput } from "./bash-tools.exec-ap
 import {
   buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
+  hasLocalExecApprovalHost,
   isExecApprovalRunAbortedError,
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
@@ -418,6 +419,9 @@ function shouldAwaitGatewayApprovalInline(params: {
   turnSourceChannel?: string;
   approvalFollowupMode?: "agent" | "direct";
 }): boolean {
+  if (hasLocalExecApprovalHost()) {
+    return true;
+  }
   if (params.approvalFollowupMode !== undefined) {
     return false;
   }

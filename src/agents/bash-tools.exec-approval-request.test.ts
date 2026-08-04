@@ -5,6 +5,7 @@
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./bash-tools.exec-runtime.js";
+import { runWithLocalExecApprovalHandler } from "./local-exec-approval-broker.js";
 
 const commandExplainerMock = vi.hoisted(() => ({
   importCount: 0,
@@ -140,6 +141,53 @@ describe("exec approval requests", () => {
         preResolvedDecision: undefined,
       }),
     ).rejects.toSatisfy(isExecApprovalRunAbortedError);
+  });
+
+  it("does not fall through to the Gateway when a local approval is missing", async () => {
+    await expect(
+      runWithLocalExecApprovalHandler({
+        handler: async () => "allow-once",
+        run: async () =>
+          await resolveRegisteredExecApprovalDecision({
+            approvalId: "missing-local-approval",
+            preResolvedDecision: undefined,
+          }),
+      }),
+    ).resolves.toBeNull();
+    expect(callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("does not turn local cancellation into permissive ask fallback", async () => {
+    const controller = new AbortController();
+    let fallbackAuthorizationReached = false;
+
+    await runWithLocalExecApprovalHandler({
+      handler: async () => await new Promise<never>(() => {}),
+      signal: controller.signal,
+      run: async () => {
+        const registration = await registerExecApprovalRequestForHostOrThrow({
+          approvalId: "cancelled-local-approval",
+          command: "echo hi",
+          workdir: "/tmp",
+          host: "gateway",
+          security: "full",
+          ask: "always",
+        });
+        const decision = resolveRegisteredExecApprovalDecision({
+          approvalId: registration.id,
+          preResolvedDecision: registration.finalDecision,
+        }).then((value) => {
+          fallbackAuthorizationReached = value === null;
+          return value;
+        });
+
+        controller.abort(new Error("turn cancelled"));
+        await expect(decision).rejects.toSatisfy(isExecApprovalRunAbortedError);
+      },
+    });
+
+    expect(fallbackAuthorizationReached).toBe(false);
+    expect(callGatewayTool).not.toHaveBeenCalled();
   });
 
   it("bounds missing registration expiries when the process clock is invalid", async () => {

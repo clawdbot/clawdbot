@@ -20,6 +20,7 @@ import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-app
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { CliSessionBindingFacts } from "../cli-runner/types.js";
+import type { LocalExecApprovalRequest } from "../local-exec-approval-broker.js";
 import type { MainSessionRecoveryOwnerLease } from "../main-session-recovery-store.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagent-announce-handoff.js";
@@ -106,6 +107,11 @@ export type AgentCommandOpts = {
   runContext?: AgentRunContext;
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
   approvalReviewerDeviceId?: string;
+  /** Process-local host callback for exec approvals initiated by this run. */
+  localExecApprovalHandler?: (
+    request: LocalExecApprovalRequest,
+    signal: AbortSignal,
+  ) => Promise<"allow-once" | "allow-always" | "deny" | null>;
   /** Internal trusted exec approval follow-up elevated defaults. */
   bashElevated?: ExecElevatedDefaults;
   /** Trusted span whose final cap is resolved with the selected model. */

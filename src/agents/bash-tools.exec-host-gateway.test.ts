@@ -181,6 +181,7 @@ const sendExecApprovalFollowupResultMock = vi.hoisted(() =>
 const shouldResolveExecApprovalUnavailableInlineMock = vi.hoisted(() =>
   vi.fn<ShouldResolveExecApprovalUnavailableInline>(() => false),
 );
+const hasLocalExecApprovalHostMock = vi.hoisted(() => vi.fn(() => false));
 const enforceStrictInlineEvalApprovalBoundaryMock = vi.hoisted(() =>
   vi.fn<StrictInlineEvalBoundary>((value) => ({
     approvedByAsk: value.approvedByAsk,
@@ -220,6 +221,7 @@ vi.mock("../infra/exec-auto-review.js", async (importOriginal) => ({
 vi.mock("./bash-tools.exec-approval-request.js", () => ({
   buildExecApprovalRequesterContext: vi.fn(() => ({})),
   buildExecApprovalTurnSourceContext: vi.fn(() => ({})),
+  hasLocalExecApprovalHost: hasLocalExecApprovalHostMock,
   registerExecApprovalRequestForHostOrThrow: vi.fn(async () => undefined),
   isExecApprovalRunAbortedError: (error: unknown) => error === runAbortedApprovalError,
 }));
@@ -358,6 +360,8 @@ describe("processGatewayAllowlist", () => {
     resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(undefined);
     shouldResolveExecApprovalUnavailableInlineMock.mockReset();
     shouldResolveExecApprovalUnavailableInlineMock.mockReturnValue(false);
+    hasLocalExecApprovalHostMock.mockReset();
+    hasLocalExecApprovalHostMock.mockReturnValue(false);
     resolveExecHostApprovalContextMock.mockReset();
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: { allowlist: [], file: { version: 1, agents: {} } },
@@ -2292,6 +2296,26 @@ EOF`,
       expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
     },
   );
+
+  it("waits inline for a process-local approval host on non-native channels", async () => {
+    hasLocalExecApprovalHostMock.mockReturnValue(true);
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "find . -maxdepth 1",
+      turnSourceChannel: "feishu",
+    });
+
+    expect(result.pendingResult).toBeUndefined();
+    expect(result.deniedResult).toBeUndefined();
+    expect(result.allowWithoutEnforcedCommand).toBe(true);
+    expect(buildExecApprovalFollowupTargetMock).not.toHaveBeenCalled();
+  });
 
   it.each([
     ["telegram"],

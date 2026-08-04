@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import { interruptSessionWorkAdmissions } from "../sessions/session-lifecycle-admission.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import {
   deliveryContextFromSession,
@@ -30,6 +31,10 @@ import {
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "./internal-runtime-context.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
+import {
+  ExecApprovalRunAbortedError,
+  getLocalExecApprovalBroker,
+} from "./local-exec-approval-broker.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   createAgentRunDirectAbortError,
@@ -1401,6 +1406,49 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       ]),
     );
     expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
+  });
+
+  it("cancels a pending local exec approval when session work is interrupted", async () => {
+    setupStoredSession();
+    setupSingleAttemptFallback();
+    let markApprovalPending: () => void = () => {};
+    const approvalPending = new Promise<void>((resolve) => {
+      markApprovalPending = resolve;
+    });
+    state.runAgentAttemptMock.mockImplementation(async () => {
+      const broker = getLocalExecApprovalBroker();
+      if (!broker) {
+        throw new Error("expected process-local exec approval broker");
+      }
+      broker.register({
+        id: "approval-session-interrupt",
+        command: "buzz messages send",
+        host: "gateway",
+        security: "allowlist",
+        ask: "on-miss",
+        timeoutMs: 60_000,
+      });
+      markApprovalPending();
+      await broker.wait("approval-session-interrupt");
+      return makeSuccessResult("openai", "gpt-5.4");
+    });
+
+    const command = agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      localExecApprovalHandler: async () => await new Promise<never>(() => {}),
+    });
+    const rejected = expect(command).rejects.toBeInstanceOf(ExecApprovalRunAbortedError);
+    await approvalPending;
+
+    await expect(
+      interruptSessionWorkAdmissions({
+        scope: "/tmp/openclaw-sessions.json",
+        identities: ["agent:main:main", "session-1"],
+        timeoutMs: 1_000,
+      }),
+    ).resolves.toBe(true);
+    await rejected;
   });
 
   it("preserves restart ownership when an aborted ACP turn resolves normally", async () => {

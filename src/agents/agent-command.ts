@@ -55,6 +55,7 @@ import {
   resolveInternalSessionEffectsTarget,
 } from "./internal-session-effects.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
+import { runWithLocalExecApprovalHandler } from "./local-exec-approval-broker.js";
 import type { MainSessionRecoveryPendingTarget } from "./main-session-recovery-store.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import { createAgentRunRestartAbortError } from "./run-termination.js";
@@ -62,9 +63,11 @@ import { measureAgentStartup } from "./startup-timing.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 
-async function agentCommandInternal(
+async function agentCommandInternalUnwrapped(
   prepared: Awaited<ReturnType<typeof prepareAgentCommandExecution>>,
   initialOpts: AgentCommandOpts,
+  lifecycleAbortController: AbortController,
+  runAbortSignal: AbortSignal,
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
@@ -73,7 +76,6 @@ async function agentCommandInternal(
   const suppressVisibleSessionEffects = initialOpts.sessionEffects === "internal";
   const preserveUserFacingSessionModelState =
     initialOpts.preserveUserFacingSessionModelState === true;
-  const lifecycleAbortController = new AbortController();
   const storedDeliveryMediaUrls =
     prepared.sessionEntry?.restartRecoveryDeliveryRunId === prepared.runId &&
     Array.isArray(prepared.sessionEntry.restartRecoveryDeliveryMediaUrls)
@@ -105,9 +107,7 @@ async function agentCommandInternal(
   }
   let opts: AgentCommandOpts = {
     ...preparedOpts,
-    abortSignal: preparedOpts.abortSignal
-      ? AbortSignal.any([preparedOpts.abortSignal, lifecycleAbortController.signal])
-      : lifecycleAbortController.signal,
+    abortSignal: runAbortSignal,
   };
   const {
     body,
@@ -575,6 +575,31 @@ async function agentCommandInternal(
     }
     clearAgentRunContext(runId, lifecycleGeneration);
   }
+}
+
+async function agentCommandInternal(
+  prepared: Awaited<ReturnType<typeof prepareAgentCommandExecution>>,
+  initialOpts: AgentCommandOpts,
+  runtime: RuntimeEnv = defaultRuntime,
+  deps?: CliDeps,
+) {
+  const lifecycleAbortController = new AbortController();
+  const runAbortSignal = initialOpts.abortSignal
+    ? AbortSignal.any([initialOpts.abortSignal, lifecycleAbortController.signal])
+    : lifecycleAbortController.signal;
+  return await runWithLocalExecApprovalHandler({
+    handler: initialOpts.localExecApprovalHandler,
+    signal: runAbortSignal,
+    run: async () =>
+      await agentCommandInternalUnwrapped(
+        prepared,
+        initialOpts,
+        lifecycleAbortController,
+        runAbortSignal,
+        runtime,
+        deps,
+      ),
+  });
 }
 
 /** Runs an agent turn from CLI/runtime options against the resolved session and model policy. */
