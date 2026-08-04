@@ -722,6 +722,7 @@ describe("pnpm 11 isolated install preflight", () => {
 
       expect(result.failedStep?.name).toBe("global install verify");
       expect(result.failedStep?.stderrTail).toContain("unique active pnpm replacement");
+      expect(result.packageSwapCompleted).toBe(false);
       expect(runStep).toHaveBeenCalledOnce();
       await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
         '"version":"1.0.0"',

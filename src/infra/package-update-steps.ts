@@ -1023,7 +1023,6 @@ export async function runGlobalPackageUpdateSteps(params: {
       params.installTarget.pnpmIsolated !== undefined &&
       params.installTarget.packageRoot !== null &&
       refreshedPnpmPackageRoot === null;
-    packageSwapCompleted = finalInstallStep.exitCode === 0 && !stagedInstall;
     if (pnpmReplacementMissing) {
       const replacementStep: PackageUpdateStepResult = {
         name: "global install verify",
@@ -1042,6 +1041,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         failedStep: replacementStep,
       };
     }
+    packageSwapCompleted = finalInstallStep.exitCode === 0 && !stagedInstall;
     const livePackageRoot =
       refreshedPnpmPackageRoot ??
       params.installTarget.packageRoot ??
