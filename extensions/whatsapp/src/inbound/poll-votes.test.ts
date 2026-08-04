@@ -114,7 +114,7 @@ describe("decodeWhatsAppPollVote", () => {
       selfJid: POLL_CREATOR_JID,
     });
 
-    expect(decoded?.selectedOptions.sort()).toEqual(["Mon", "Wed"]);
+    expect(decoded?.selectedOptions.toSorted()).toEqual(["Mon", "Wed"]);
   });
 
   it("decodes a retracted vote (empty selectedOptions) rather than dropping it", () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
-import { shouldEmitWhatsAppPollVoteHooks } from "./message-delivery.js";
+import { shouldEmitWhatsAppPollVoteHooks } from "./poll-votes.js";
 
 function cfgWith(whatsapp: NonNullable<OpenClawConfig["channels"]>["whatsapp"]): OpenClawConfig {
   return { channels: { whatsapp } } as OpenClawConfig;

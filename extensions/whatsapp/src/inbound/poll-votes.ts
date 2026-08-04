@@ -3,6 +3,13 @@ import { createHash } from "node:crypto";
 import type { proto } from "baileys";
 import { decryptPollVote, getKeyAuthor, jidNormalizedUser } from "baileys";
 import type Long from "long";
+import { fireAndForgetBoundedHook } from "openclaw/plugin-sdk/hook-runtime";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
+import type { OpenClawConfig } from "../runtime-api.js";
+import {
+  rememberWhatsAppBaileysCacheEntry,
+  readWhatsAppBaileysCacheEntry,
+} from "./baileys-cache.js";
 import { findMessageSection } from "./extract.js";
 
 export type WhatsAppDecodedPollVote = {
@@ -119,4 +126,155 @@ export function decodeWhatsAppPollVote(params: {
     selectedOptions,
     timestamp: toTimestampMs(pollUpdateMessage.senderTimestampMs),
   };
+}
+
+export function isWhatsAppPollCreationMessage(message: proto.IMessage | null | undefined): boolean {
+  if (!message) {
+    return false;
+  }
+  return Boolean(findMessageSection(message, POLL_CREATION_SECTIONS));
+}
+
+// Poll retention (both of the caches below) is intentionally in-memory only,
+// bounded, and does not survive a process restart. Persisting poll state
+// durably is an open design question (tracked in the issue this hook shipped
+// with) that needs a maintainer-set retention/privacy contract before this
+// module invents one unilaterally.
+const OWN_POLL_CREATION_TTL_MS = 10 * 60 * 1000;
+const recentOwnPollCreationKeys: Map<string, { expiresAt: number; value: true }> = new Map();
+
+/** Record that a poll creation message at `remoteJid:messageId` was sent by this account (`key.fromMe`). */
+export function rememberWhatsAppOwnPollCreation(
+  remoteJid: string | null | undefined,
+  messageId: string | null | undefined,
+): void {
+  if (!remoteJid || !messageId) {
+    return;
+  }
+  rememberWhatsAppBaileysCacheEntry(
+    recentOwnPollCreationKeys,
+    `${remoteJid}:${messageId}`,
+    true,
+    OWN_POLL_CREATION_TTL_MS,
+  );
+}
+
+function isOwnPollCreation(remoteJid: string, messageId: string): boolean {
+  return (
+    readWhatsAppBaileysCacheEntry(recentOwnPollCreationKeys, `${remoteJid}:${messageId}`) === true
+  );
+}
+
+const POLL_VOTE_DEDUP_TTL_MS = 10 * 60 * 1000;
+const recentlyDispatchedPollVoteKeys: Map<string, { expiresAt: number; value: true }> = new Map();
+
+/**
+ * Mirrors the `pluginHooks.messageReceived` opt-in gate in
+ * `auto-reply/monitor/process-message.ts` — default off, account-level
+ * overrides channel-level. Kept local rather than shared since it's the only
+ * other privacy-gated inbound hook today.
+ */
+export function shouldEmitWhatsAppPollVoteHooks(params: {
+  cfg: OpenClawConfig;
+  accountId?: string;
+}): boolean {
+  const channelConfig = params.cfg.channels?.whatsapp;
+  const accountConfig = params.accountId ? channelConfig?.accounts?.[params.accountId] : undefined;
+  return (
+    accountConfig?.pluginHooks?.pollVoteReceived ??
+    channelConfig?.pluginHooks?.pollVoteReceived ??
+    false
+  );
+}
+
+const WHATSAPP_POLL_VOTE_RECEIVED_HOOK_LIMITS = {
+  maxConcurrency: 8,
+  maxQueue: 128,
+  timeoutMs: 2_000,
+};
+
+/**
+ * Fires the poll_vote_received plugin hook. Passive observation only (per
+ * #78963) — never triggers an agent run.
+ */
+function emitWhatsAppPollVoteReceivedHook(params: {
+  accountId: string;
+  vote: WhatsAppDecodedPollVote;
+}): void {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("poll_vote_received")) {
+    return;
+  }
+  fireAndForgetBoundedHook(
+    () =>
+      hookRunner.runPollVoteReceived(
+        {
+          pollMessageId: params.vote.pollMessageId,
+          chatJid: params.vote.chatJid,
+          voter: params.vote.voter,
+          selectedOptions: params.vote.selectedOptions,
+          timestamp: params.vote.timestamp,
+        },
+        {
+          channelId: "whatsapp",
+          accountId: params.accountId,
+          conversationId: params.vote.chatJid,
+          senderId: params.vote.voter,
+          messageId: params.vote.pollMessageId,
+        },
+      ),
+    "whatsapp: poll_vote_received plugin hook failed",
+    undefined,
+    WHATSAPP_POLL_VOTE_RECEIVED_HOOK_LIMITS,
+  );
+}
+
+/**
+ * Entry point for the `messages.upsert` handler: gate-checks, restricts to
+ * polls this account created (the hook's documented privacy boundary — see
+ * the security finding this fixes), dedupes a redelivered vote-update
+ * upsert, decodes, and dispatches. Synchronous/fire-and-forget by design —
+ * callers must never await this before continuing the inbound loop.
+ */
+export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  message: proto.IMessage | null | undefined;
+  key: proto.IMessageKey;
+  getCachedMessage: (remoteJid: string, messageId: string) => proto.IMessage | undefined;
+  selfJid?: string | null;
+}): void {
+  if (!shouldEmitWhatsAppPollVoteHooks({ cfg: params.cfg, accountId: params.accountId })) {
+    return;
+  }
+  const creationKey = params.message?.pollUpdateMessage?.pollCreationMessageKey;
+  const remoteJid = params.key.remoteJid ?? creationKey?.remoteJid;
+  if (!creationKey?.id || !remoteJid || !isOwnPollCreation(remoteJid, creationKey.id)) {
+    // Not a poll this account created — stays within the documented
+    // "polls OpenClaw created" boundary rather than exposing third-party
+    // participants' vote selections to opted-in plugins.
+    return;
+  }
+  const voteUpdateId = params.key.id;
+  if (voteUpdateId) {
+    const dedupKey = `${remoteJid}:${voteUpdateId}`;
+    if (readWhatsAppBaileysCacheEntry(recentlyDispatchedPollVoteKeys, dedupKey)) {
+      return;
+    }
+    rememberWhatsAppBaileysCacheEntry(
+      recentlyDispatchedPollVoteKeys,
+      dedupKey,
+      true,
+      POLL_VOTE_DEDUP_TTL_MS,
+    );
+  }
+  const decoded = decodeWhatsAppPollVote({
+    message: params.message,
+    key: params.key,
+    getCachedMessage: params.getCachedMessage,
+    selfJid: params.selfJid,
+  });
+  if (decoded) {
+    emitWhatsAppPollVoteReceivedHook({ accountId: params.accountId, vote: decoded });
+  }
 }

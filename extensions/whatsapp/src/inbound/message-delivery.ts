@@ -8,11 +8,9 @@ import type {
   WASocket,
 } from "baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
-import { fireAndForgetBoundedHook } from "openclaw/plugin-sdk/hook-runtime";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { defaultRuntime, createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { maybeResolveWhatsAppApprovalReaction } from "../approval-reactions.js";
 import { resolveComparableIdentity } from "../identity.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
@@ -44,7 +42,11 @@ import {
   type WhatsAppNormalizedInboundMessage,
 } from "./message-normalization.js";
 import { addWhatsAppOutboundMentionsToContent } from "./outbound-mentions.js";
-import { decodeWhatsAppPollVote, type WhatsAppDecodedPollVote } from "./poll-votes.js";
+import {
+  isWhatsAppPollCreationMessage,
+  maybeEmitWhatsAppPollVoteReceivedHook,
+  rememberWhatsAppOwnPollCreation,
+} from "./poll-votes.js";
 import { normalizeWhatsAppSendResult } from "./send-result.js";
 import type { WhatsAppAttachedSocketSession } from "./socket-session.js";
 import type { WebInboundCallbackMessage } from "./types.js";
@@ -76,67 +78,6 @@ function recordAcceptedInboundActivity(accountId: string): void {
     accountId,
     direction: "inbound",
   });
-}
-
-const WHATSAPP_POLL_VOTE_RECEIVED_HOOK_LIMITS = {
-  maxConcurrency: 8,
-  maxQueue: 128,
-  timeoutMs: 2_000,
-};
-
-/**
- * Mirrors the `pluginHooks.messageReceived` opt-in gate in
- * `auto-reply/monitor/process-message.ts` — default off, account-level
- * overrides channel-level. Kept local rather than shared since it's the only
- * other privacy-gated inbound hook today.
- */
-export function shouldEmitWhatsAppPollVoteHooks(params: {
-  cfg: OpenClawConfig;
-  accountId?: string;
-}): boolean {
-  const channelConfig = params.cfg.channels?.whatsapp;
-  const accountConfig = params.accountId ? channelConfig?.accounts?.[params.accountId] : undefined;
-  return (
-    accountConfig?.pluginHooks?.pollVoteReceived ??
-    channelConfig?.pluginHooks?.pollVoteReceived ??
-    false
-  );
-}
-
-/**
- * Fires the poll_vote_received plugin hook. Passive observation only (per
- * #78963) — never triggers an agent run.
- */
-function emitWhatsAppPollVoteReceivedHook(params: {
-  accountId: string;
-  vote: WhatsAppDecodedPollVote;
-}): void {
-  const hookRunner = getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("poll_vote_received")) {
-    return;
-  }
-  fireAndForgetBoundedHook(
-    () =>
-      hookRunner.runPollVoteReceived(
-        {
-          pollMessageId: params.vote.pollMessageId,
-          chatJid: params.vote.chatJid,
-          voter: params.vote.voter,
-          selectedOptions: params.vote.selectedOptions,
-          timestamp: params.vote.timestamp,
-        },
-        {
-          channelId: "whatsapp",
-          accountId: params.accountId,
-          conversationId: params.vote.chatJid,
-          senderId: params.vote.voter,
-          messageId: params.vote.pollMessageId,
-        },
-      ),
-    "whatsapp: poll_vote_received plugin hook failed",
-    undefined,
-    WHATSAPP_POLL_VOTE_RECEIVED_HOOK_LIMITS,
-  );
 }
 
 export type WhatsAppAppendReplyWindow = {
@@ -561,25 +502,22 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     }
     for (const msg of upsert.messages ?? []) {
       rememberBaileysMessage(msg.key?.remoteJid, msg.key?.id, msg.message);
+      if (msg.key?.fromMe && isWhatsAppPollCreationMessage(msg.message)) {
+        rememberWhatsAppOwnPollCreation(msg.key.remoteJid, msg.key.id);
+      }
 
       if (msg.message?.pollUpdateMessage) {
         // Poll votes are passive data (per #78963): decode and hook-dispatch
         // only, never enter the normal admission/reply pipeline below.
-        if (
-          shouldEmitWhatsAppPollVoteHooks({
+        if (msg.key) {
+          maybeEmitWhatsAppPollVoteReceivedHook({
             cfg: options.loadConfig?.() ?? options.cfg,
             accountId: options.accountId,
-          })
-        ) {
-          const decoded = decodeWhatsAppPollVote({
             message: msg.message,
             key: msg.key,
             getCachedMessage: getCachedBaileysMessage,
             selfJid: self.jid,
           });
-          if (decoded) {
-            emitWhatsAppPollVoteReceivedHook({ accountId: options.accountId, vote: decoded });
-          }
         }
         continue;
       }
