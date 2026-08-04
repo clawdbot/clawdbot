@@ -39,6 +39,10 @@ const hoisted = vi.hoisted(() => {
     skipped: 0,
   }));
   const scheduleRestartAbortedMainSessionRecovery = vi.fn();
+  const recoverSessionsSendDeferredCompletions = vi.fn(async () => ({
+    recovered: 0,
+    failed: 0,
+  }));
   const scheduleRestartSentinelWake =
     vi.fn<typeof import("./server-restart-sentinel.js").scheduleRestartSentinelWake>();
   const refreshLatestUpdateRestartSentinel = vi.fn<
@@ -95,6 +99,7 @@ const hoisted = vi.hoisted(() => {
     scheduleSubagentRegistrySweep,
     markStartupOrphanedMainSessionsForRecovery,
     scheduleRestartAbortedMainSessionRecovery,
+    recoverSessionsSendDeferredCompletions,
     scheduleRestartSentinelWake,
     refreshLatestUpdateRestartSentinel,
     getAcpRuntimeBackend,
@@ -131,6 +136,10 @@ vi.mock("../agents/main-session-restart-recovery-marking.js", () => ({
 
 vi.mock("../agents/main-session-restart-recovery.js", () => ({
   scheduleRestartAbortedMainSessionRecovery: hoisted.scheduleRestartAbortedMainSessionRecovery,
+}));
+
+vi.mock("../agents/sessions-send-deferred.js", () => ({
+  recoverSessionsSendDeferredCompletions: hoisted.recoverSessionsSendDeferredCompletions,
 }));
 
 vi.mock("../config/paths.js", async () => {
@@ -344,6 +353,8 @@ describe("startGatewayPostAttachRuntime", () => {
       skipped: 0,
     });
     hoisted.scheduleRestartAbortedMainSessionRecovery.mockClear();
+    hoisted.recoverSessionsSendDeferredCompletions.mockReset();
+    hoisted.recoverSessionsSendDeferredCompletions.mockResolvedValue({ recovered: 0, failed: 0 });
     hoisted.scheduleRestartSentinelWake.mockClear();
     hoisted.refreshLatestUpdateRestartSentinel.mockReset();
     hoisted.refreshLatestUpdateRestartSentinel.mockResolvedValue(null);
@@ -392,12 +403,17 @@ describe("startGatewayPostAttachRuntime", () => {
     const unavailableGatewayMethods = new Set<string>(["chat.history", "models.list"]);
     const methodsAtRecoveryRegistration: string[][] = [];
     const currentConfig = { agents: { list: [{ id: "main" }, { id: "work" }] } };
+    const methodsAtDeferredRecovery: string[][] = [];
     hoisted.scheduleRestartAbortedMainSessionRecovery.mockImplementationOnce(
       (params: { getConfig: () => unknown }) => {
         methodsAtRecoveryRegistration.push([...unavailableGatewayMethods]);
         expect(params.getConfig()).toBe(currentConfig);
       },
     );
+    hoisted.recoverSessionsSendDeferredCompletions.mockImplementationOnce(async () => {
+      methodsAtDeferredRecovery.push([...unavailableGatewayMethods]);
+      return { recovered: 0, failed: 0 };
+    });
     const onSidecarsReady = vi.fn();
     const log = { info: vi.fn(), warn: vi.fn() };
 
@@ -411,6 +427,7 @@ describe("startGatewayPostAttachRuntime", () => {
 
     await waitForGatewayTestState(() => {
       expect(onSidecarsReady).toHaveBeenCalledTimes(1);
+      expect(hoisted.recoverSessionsSendDeferredCompletions).toHaveBeenCalledTimes(1);
     });
     expect([...unavailableGatewayMethods]).toStrictEqual([]);
     expect(hoisted.startPluginServices).toHaveBeenCalledTimes(1);
@@ -433,6 +450,7 @@ describe("startGatewayPostAttachRuntime", () => {
     });
     expect(hoisted.scheduleSubagentRegistrySweep).toHaveBeenCalledWith();
     expect(methodsAtRecoveryRegistration).toStrictEqual([["chat.history", "models.list"]]);
+    expect(methodsAtDeferredRecovery).toStrictEqual([[]]);
     expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
   });
 

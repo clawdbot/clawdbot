@@ -17,6 +17,10 @@ const inProcessCreationMock = vi.fn(
 // Default false mirrors running outside a gateway process; the trusted-creation
 // regression test flips it on and restores it.
 let inProcessGatewayContextAvailable = false;
+const deferredCompletionMocks = vi.hoisted(() => ({
+  arm: vi.fn(() => ({ expiresAt: 1_800_000_000_000 })),
+  disarm: vi.fn(),
+}));
 const facadeRuntimeMock = vi.hoisted(() => ({
   sessionKeyResolvers: new Map<
     string,
@@ -36,6 +40,10 @@ vi.mock("./in-process-gateway.js", () => ({
   callInProcessGatewayToolWithCreation: (method: unknown, params: unknown, creation: unknown) =>
     inProcessCreationMock(method, params, creation),
   hasInProcessGatewayToolContext: () => inProcessGatewayContextAvailable,
+}));
+vi.mock("../sessions-send-deferred.js", () => ({
+  armSessionsSendDeferredCompletion: deferredCompletionMocks.arm,
+  disarmSessionsSendDeferredCompletion: deferredCompletionMocks.disarm,
 }));
 vi.mock("../../plugin-sdk/facade-runtime.js", async () => {
   const actual = await vi.importActual<typeof import("../../plugin-sdk/facade-runtime.js")>(
@@ -777,6 +785,96 @@ describe("sessions_list channel derivation", () => {
 describe("sessions_send gating", () => {
   beforeEach(() => {
     callGatewayMock.mockReset();
+    deferredCompletionMocks.arm.mockClear();
+    deferredCompletionMocks.disarm.mockClear();
+  });
+
+  it("arms origin-bound completion and skips waiting and legacy announce", async () => {
+    const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
+    const targetSessionKey = "agent:main:research";
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.list") {
+        return { path: "/tmp/sessions.json", sessions: [{ key: targetSessionKey }] };
+      }
+      if (request.method === "agent") {
+        return { runId: request.params?.idempotencyKey };
+      }
+      return {};
+    });
+    const tool = createSessionsSendTool({
+      agentSessionKey: MAIN_AGENT_SESSION_KEY,
+      agentSessionId: "requester-session-id",
+      agentChannel: "telegram",
+      deliveryContext: {
+        channel: "telegram",
+        to: "7504982318",
+        accountId: "primary",
+        threadId: "42",
+      },
+      callGateway: callGatewayMock,
+      config: {
+        session: { scope: "per-sender", mainKey: "main" },
+        tools: {
+          agentToAgent: { enabled: false },
+          sessions: { visibility: "all" },
+        },
+      } as never,
+    });
+
+    const result = await tool.execute("call-deferred", {
+      sessionKey: targetSessionKey,
+      message: "Investigate the failure",
+      wakeOnReply: true,
+    });
+
+    expect(requireDetails(result)).toMatchObject({
+      status: "accepted",
+      sessionKey: targetSessionKey,
+      delivery: {
+        status: "armed",
+        mode: "wake_on_reply",
+        expiresAt: 1_800_000_000_000,
+      },
+    });
+    expect(deferredCompletionMocks.arm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetSessionKey,
+        requesterSessionKey: MAIN_AGENT_SESSION_KEY,
+        requesterSessionId: "requester-session-id",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "7504982318",
+          accountId: "primary",
+          threadId: "42",
+        },
+      }),
+    );
+    expect(callGatewayMock.mock.calls.some(([call]) => call.method === "agent.wait")).toBe(false);
+    expect(callGatewayMock.mock.calls.some(([call]) => call.method === "chat.history")).toBe(false);
+    expect(runSessionsSendA2AFlow).not.toHaveBeenCalled();
+  });
+
+  it("rejects conflicting deferred completion options before dispatch", async () => {
+    const tool = createMainSessionsSendTool();
+
+    const waited = await tool.execute("call-deferred-wait", {
+      sessionKey: "agent:main:research",
+      message: "Investigate",
+      wakeOnReply: true,
+      timeoutSeconds: 5,
+    });
+    const watched = await tool.execute("call-deferred-watch", {
+      sessionKey: "agent:main:research",
+      message: "Investigate",
+      wakeOnReply: true,
+      watch: true,
+    });
+
+    expect(requireDetails(waited).error).toContain("non-zero timeoutSeconds");
+    expect(requireDetails(watched).error).toContain("cannot be combined with watch");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(deferredCompletionMocks.arm).not.toHaveBeenCalled();
   });
 
   it("returns an error when neither sessionKey nor label is provided", async () => {

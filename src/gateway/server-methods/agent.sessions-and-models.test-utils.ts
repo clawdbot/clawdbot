@@ -1207,6 +1207,98 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("prepares terminal state before settlement and dispatches after settlement", async () => {
+    const result = { payloads: [{ text: "target result" }], meta: { durationMs: 10 } };
+    mocks.agentCommand.mockResolvedValueOnce(result);
+    const context = makeContext();
+    const events: string[] = [];
+    const onBeforeTerminalSettlement = vi.fn(async () => {
+      events.push("prepare");
+    });
+    const onSettled = vi.fn(async () => {
+      events.push("settle");
+      return true;
+    });
+    const onTerminal = vi.fn(async () => {
+      events.push("dispatch");
+    });
+    const respond = vi.fn(() => {
+      events.push("respond");
+    });
+
+    dispatchAgentRunFromGateway({
+      ingressOpts: {
+        message: "deferred target task",
+        sessionKey: "agent:research:main",
+        allowModelOverride: false,
+      },
+      runId: "agent-run-terminal-observer",
+      dedupeKeys: ["agent:agent-run-terminal-observer"],
+      abortController: new AbortController(),
+      cleanupAbortController: vi.fn(),
+      respond,
+      context,
+      taskTrackingMode: "none",
+      onBeforeTerminalSettlement,
+      onSettled,
+      onTerminal,
+    });
+
+    await waitForAssertion(() => {
+      expect(onBeforeTerminalSettlement).toHaveBeenCalledWith({
+        terminalOutcome: { reason: "completed", status: "ok" },
+        result,
+      });
+      expect(onTerminal).toHaveBeenCalledWith({
+        terminalOutcome: { reason: "completed", status: "ok" },
+        result,
+      });
+      expect(respond).toHaveBeenCalled();
+      expect(events).toEqual(["prepare", "settle", "dispatch", "respond"]);
+    });
+  });
+
+  it("does not settle when pre-settlement terminal persistence fails", async () => {
+    mocks.agentCommand.mockResolvedValueOnce({ payloads: [{ text: "target result" }] });
+    const context = makeContext();
+    const onSettled = vi.fn();
+    const onTerminal = vi.fn();
+    const respond = vi.fn();
+
+    dispatchAgentRunFromGateway({
+      ingressOpts: {
+        message: "deferred target task",
+        sessionKey: "agent:research:main",
+        allowModelOverride: false,
+      },
+      runId: "agent-run-terminal-prepare-failure",
+      dedupeKeys: ["agent:agent-run-terminal-prepare-failure"],
+      abortController: new AbortController(),
+      cleanupAbortController: vi.fn(),
+      respond,
+      context,
+      taskTrackingMode: "none",
+      onBeforeTerminalSettlement: async () => {
+        throw new Error("state database unavailable");
+      },
+      onSettled,
+      onTerminal,
+    });
+
+    await waitForAssertion(() => {
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        expect.objectContaining({
+          summary: "failed to persist pre-settlement agent terminal state",
+        }),
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+    expect(onSettled).not.toHaveBeenCalled();
+    expect(onTerminal).not.toHaveBeenCalled();
+  });
+
   it("does not overwrite operator-cancelled async gateway agent tasks after late completion", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-cancelled-" }, async (root) => {
       useTestStateDir(root);

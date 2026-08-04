@@ -9,6 +9,7 @@ export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
 // lazy ensures run; fold them into the next natural schema-version bump.
 export const LAZY_ADDITIVE_STATE_TABLES = [
   "model_catalog_remote",
+  "sessions_send_deferred_completions",
   "sidebar_sections",
   "skill_workshop_proposal_events",
   "skill_workshop_proposal_origin_runs",

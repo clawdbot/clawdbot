@@ -20,6 +20,11 @@ import {
   type MainSessionRecoveryOwnerLease,
 } from "../../agents/main-session-recovery-store.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
+import {
+  dispatchPreparedSessionsSendDeferredCompletion,
+  finishSessionsSendDeferredContinuationAfterTranscript,
+  prepareSessionsSendDeferredCompletion,
+} from "../../agents/sessions-send-deferred.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import {
   setChannelSourceTurnId,
@@ -306,6 +311,9 @@ export function startAgentRunExecution(params: {
                   `gateway agent user transcript persistence failed: ${formatForLog(error)}`,
                 );
               },
+              onMessagePersisted: () => {
+                finishSessionsSendDeferredContinuationAfterTranscript(params.runId);
+              },
             })
           : undefined;
 
@@ -352,6 +360,7 @@ export function startAgentRunExecution(params: {
         restartRecoveryChannelContext?.sameChannelThreadRequired,
       );
 
+      const deferredCompletionSessionKey = params.resolvedSessionKey;
       dispatchAgentRunFromGateway({
         ingressOpts: {
           message,
@@ -477,6 +486,24 @@ export function startAgentRunExecution(params: {
                 { terminalOutcome },
                 onRecovered,
               )
+          : undefined,
+        onBeforeTerminalSettlement: deferredCompletionSessionKey
+          ? async ({ terminalOutcome, result }) => {
+              prepareSessionsSendDeferredCompletion({
+                targetRunId: params.runId,
+                targetSessionKey: deferredCompletionSessionKey,
+                terminalOutcome,
+                result,
+              });
+            }
+          : undefined,
+        onTerminal: deferredCompletionSessionKey
+          ? async () => {
+              await dispatchPreparedSessionsSendDeferredCompletion({
+                targetRunId: params.runId,
+                targetSessionKey: deferredCompletionSessionKey,
+              });
+            }
           : undefined,
         respond: params.respond,
         context: params.context,

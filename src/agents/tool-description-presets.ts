@@ -76,6 +76,7 @@ export function describeSessionsSendTool(): string {
     "For an exact external destination, use `conversations_list` plus `conversations_send`/`conversations_turn`, or `message` with an explicit channel and target.",
     "Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available.",
     "watch:true: notice arrives when others later change target session.",
+    "wakeOnReply:true: return after dispatch, then resume this exact requester session and ingress route once that target run succeeds or fails; cannot combine with watch or a non-zero timeoutSeconds.",
   ].join(" ");
 }
 
