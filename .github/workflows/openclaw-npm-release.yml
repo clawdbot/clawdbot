@@ -739,13 +739,14 @@ jobs:
           tideclaw_alpha_publish=false
           extended_stable_publish=false
           sha_pinned_release_publish=false
+          release_candidate_branch="${RELEASE_CANDIDATE_BRANCH:-}"
           if [[ "${RELEASE_TAG}" == *"-alpha."* && "${RELEASE_NPM_DIST_TAG}" == "alpha" && "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
             tideclaw_alpha_publish=true
           fi
           if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" && "${WORKFLOW_REF}" == refs/heads/extended-stable/* ]]; then
             extended_stable_publish=true
           fi
-          if [[ -n "${RELEASE_CANDIDATE_BRANCH}" ]]; then
+          if [[ -n "${release_candidate_branch}" ]]; then
             if [[ "${RELEASE_NPM_DIST_TAG}" != "extended-stable" || "${WORKFLOW_REF}" != "refs/heads/main" ]]; then
               echo "release_candidate_branch is only valid for an extended-stable publish dispatched from main." >&2
               exit 1
@@ -755,7 +756,7 @@ jobs:
               exit 1
             fi
             expected_candidate_branch="extended-stable/${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.33"
-            if [[ "${RELEASE_CANDIDATE_BRANCH}" != "${expected_candidate_branch}" ]]; then
+            if [[ "${release_candidate_branch}" != "${expected_candidate_branch}" ]]; then
               echo "release_candidate_branch must be ${expected_candidate_branch} for ${RELEASE_TAG}." >&2
               exit 1
             fi
@@ -959,6 +960,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ inputs.full_release_validation_run_attempt }}
           EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_candidate_branch || github.ref_name }}
           STRICT_VALIDATOR_FILE: ${{ github.workspace }}/trusted-workflow/scripts/release-ci-summary.mjs
         run: |
@@ -967,7 +969,7 @@ jobs:
           MANIFEST_FILE="full-release-validation/full-release-validation-manifest.json"
           export EXPECTED_SHA MANIFEST_FILE
           timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${{ inputs.full_release_validation_run_attempt }}" | \
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" | \
             node trusted-workflow/scripts/validate-full-release-validation-evidence.mjs
 
       - name: Verify plugin npm release run metadata
@@ -1266,8 +1268,7 @@ jobs:
         env:
           BYPASS_EXTENDED_STABLE_GUARD: ${{ inputs.bypass_extended_stable_guard }}
           RELEASE_TAG: ${{ inputs.tag }}
-          RELEASE_SHA: ${{ github.sha }}
-          EXTENDED_STABLE_BRANCH: ${{ github.ref_name }}
+          EXTENDED_STABLE_BRANCH: ${{ inputs.release_candidate_branch || github.ref_name }}
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
           TARBALL_NAME: ${{ steps.preflight_provenance.outputs.tarball_name }}
@@ -1281,13 +1282,14 @@ jobs:
         run: |
           set -euo pipefail
           release_version="${RELEASE_TAG#v}"
+          release_sha="$(git rev-parse HEAD)"
           {
             echo "## npm extended-stable publication"
             echo "- Package: openclaw@${release_version}"
             echo "- Extended-stable guard bypass: ${BYPASS_EXTENDED_STABLE_GUARD}"
             echo "- Extended-stable branch: ${EXTENDED_STABLE_BRANCH}"
             echo "- Release tag: ${RELEASE_TAG}"
-            echo "- Release SHA: ${RELEASE_SHA}"
+            echo "- Release SHA: ${release_sha}"
             echo "- npm preflight run: ${PREFLIGHT_RUN_ID}"
             echo "- Full Release Validation run: ${FULL_RELEASE_VALIDATION_RUN_ID}"
             echo "- Tarball: ${TARBALL_NAME:-unavailable}"

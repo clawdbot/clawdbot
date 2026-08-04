@@ -131,6 +131,7 @@ describe("minimal npm extended-stable workflow", () => {
 
   it("lets main promote only the canonical immutable extended-stable candidate", () => {
     const parsed = workflow();
+    const releaseDocs = readFileSync("docs/reference/RELEASING.md", "utf8");
     const input = parsed.on?.workflow_dispatch?.inputs?.release_candidate_branch;
     expect(input).toMatchObject({ default: "", required: false, type: "string" });
 
@@ -148,6 +149,7 @@ describe("minimal npm extended-stable workflow", () => {
       "Require trusted workflow ref for publish",
     );
     expect(trustedRef.env?.RELEASE_CANDIDATE_BRANCH).toBe("${{ inputs.release_candidate_branch }}");
+    expect(trustedRef.run).toContain('release_candidate_branch="${RELEASE_CANDIDATE_BRANCH:-}"');
     expect(trustedRef.run).toContain('"${WORKFLOW_REF}" != "refs/heads/main"');
     expect(trustedRef.run).toContain(
       'expected_candidate_branch="extended-stable/${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.33"',
@@ -155,6 +157,8 @@ describe("minimal npm extended-stable workflow", () => {
 
     const recheck = step(parsed.jobs?.publish_openclaw_npm, "Recheck npm release request");
     expect(recheck.env?.NPM_WORKFLOW_REF).toBe(validate.env?.NPM_WORKFLOW_REF);
+    expect(releaseDocs).toContain("--ref main");
+    expect(releaseDocs).toContain("-f release_candidate_branch=extended-stable/YYYY.M.33");
   });
 
   it("accepts arbitrary SHA preflight targets and exercises every publishable plugin package", () => {
@@ -239,8 +243,11 @@ describe("minimal npm extended-stable workflow", () => {
     expect(fullValidation.env?.EXPECTED_WORKFLOW_BRANCH).toBe(
       "${{ inputs.release_candidate_branch || github.ref_name }}",
     );
+    expect(fullValidation.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
+      "${{ inputs.full_release_validation_run_attempt }}",
+    );
     expect(fullValidation.run).toContain(
-      "actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${{ inputs.full_release_validation_run_attempt }}",
+      "actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}",
     );
     expect(fullValidation.run).toContain(
       "trusted-workflow/scripts/validate-full-release-validation-evidence.mjs",
@@ -285,6 +292,11 @@ describe("minimal npm extended-stable workflow", () => {
     expect(summary.if).toContain("always()");
     expect(summary.run).toContain("openclaw-npm-extended-stable-release.mjs repair-command");
     expect(summary.run).toContain('EXPECTED_VERSION="$RELEASE_TAG"');
+    expect(summary.env?.EXTENDED_STABLE_BRANCH).toBe(
+      "${{ inputs.release_candidate_branch || github.ref_name }}",
+    );
+    expect(summary.env?.RELEASE_SHA).toBeUndefined();
+    expect(summary.run).toContain('release_sha="$(git rev-parse HEAD)"');
     expect(publish?.environment).toBe("npm-release");
   });
 
