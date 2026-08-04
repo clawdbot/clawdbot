@@ -705,7 +705,14 @@ export async function agentCommandFromIngress(
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
-  return await agentCommandFromIngressInternal(opts, runtime, deps);
+  // Plugin SDK callers may be plain JavaScript. Enforce the private recovery
+  // boundary at runtime so extra or inherited properties cannot author audit identity.
+  const publicOpts: AgentCommandGatewayIngressOpts = { ...opts };
+  Object.defineProperty(publicOpts, "executionIdentityAdmission", {
+    value: undefined,
+    enumerable: true,
+  });
+  return await agentCommandFromIngressInternal(publicOpts, runtime, deps);
 }
 
 /** Internal Gateway entrypoint that restores a rejected restart-recovery admission. */
