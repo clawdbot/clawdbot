@@ -1,4 +1,6 @@
 /** Builds plugin status reports from persisted metadata without importing full plugin runtimes. */
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
@@ -7,8 +9,12 @@ import {
   type PluginRegistrySnapshotDiagnostic,
   type PluginRegistrySnapshotSource,
 } from "./plugin-registry.js";
-import { createEmptyPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
-import { buildPluginDependencyStatus } from "./status-dependencies-core.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import type { PluginRecord, PluginRegistry } from "./registry-types.js";
+import {
+  buildPluginDependencyStatus,
+  projectPluginDependencyHealth,
+} from "./status-dependencies-core.js";
 import type { PluginLogger } from "./types.js";
 
 /** Control-plane plugin status shape used by `openclaw plugins status` style surfaces. */
@@ -89,7 +95,7 @@ function buildPluginRecordFromInstalledIndex(
     compat: plugin.compat,
     syntheticAuthRefs: [...(plugin.syntheticAuthRefs ?? manifest?.syntheticAuthRefs ?? [])],
     status: plugin.enabled ? "loaded" : "disabled",
-    toolNames: [],
+    toolNames: uniqueStrings(manifest?.contracts?.tools ?? []),
     hookNames: [],
     channelIds: [...(manifest?.channels ?? [])],
     cliBackendIds: [...(manifest?.cliBackends ?? []), ...(manifest?.setup?.cliBackends ?? [])],
@@ -116,13 +122,16 @@ function buildPluginRecordFromInstalledIndex(
     commands: [...(manifest?.commandAliases?.map((alias) => alias.name) ?? [])],
     httpRoutes: 0,
     hookCount: 0,
-    configSchema: false,
+    configSchema: Boolean(manifest?.configSchema),
     contracts: manifest?.contracts,
-    dependencyStatus: buildPluginDependencyStatus({
-      rootDir: plugin.rootDir,
-      dependencies: manifest?.packageDependencies,
-      optionalDependencies: manifest?.packageOptionalDependencies,
-    }),
+    dependencyStatus:
+      plugin.origin === "bundled"
+        ? undefined
+        : buildPluginDependencyStatus({
+            rootDir: plugin.rootDir,
+            dependencies: manifest?.packageDependencies,
+            optionalDependencies: manifest?.packageOptionalDependencies,
+          }),
   };
 }
 
@@ -131,26 +140,28 @@ export function buildPluginRegistrySnapshotReport(
   params?: PluginRegistrySnapshotReportParams,
 ): PluginRegistryStatusReport {
   const config = params?.config ?? getRuntimeConfig();
+  const env = params?.env ?? process.env;
+  const workspaceDir =
+    params?.workspaceDir ?? resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config), env);
   const result = tracePluginLifecyclePhase(
     "plugin registry snapshot",
     () =>
       loadPluginRegistrySnapshotWithMetadata({
         config,
         env: params?.env,
-        workspaceDir: params?.workspaceDir,
+        workspaceDir,
       }),
     { surface: "status" },
   );
-  const env = params?.env ?? process.env;
   const metadataSnapshot = loadPluginMetadataSnapshot({
     index: result.snapshot,
     config,
     env,
-    workspaceDir: params?.workspaceDir,
+    workspaceDir,
   });
   const manifestByPluginId = metadataSnapshot.byPluginId;
-  return {
-    workspaceDir: params?.workspaceDir,
+  return projectPluginDependencyHealth({
+    workspaceDir,
     ...createEmptyPluginRegistry(),
     plugins: result.snapshot.plugins.map((plugin) =>
       buildPluginRecordFromInstalledIndex(plugin, manifestByPluginId.get(plugin.pluginId)),
@@ -158,5 +169,5 @@ export function buildPluginRegistrySnapshotReport(
     diagnostics: [...result.snapshot.diagnostics],
     registrySource: result.source,
     registryDiagnostics: result.diagnostics,
-  };
+  });
 }

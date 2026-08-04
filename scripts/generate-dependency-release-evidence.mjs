@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 
 /**
  * Dependency evidence reports generated for release artifacts.
@@ -379,14 +380,6 @@ async function generateDependencyReleaseEvidence({
   return { manifest, counts, outputDir };
 }
 
-function readOptionValue(argv, index, optionName, { allowEmpty = false } = {}) {
-  const value = argv[index + 1];
-  if (value === undefined || value.startsWith("-") || (!allowEmpty && value === "")) {
-    throw new Error(`Expected ${optionName} <value>.`);
-  }
-  return value;
-}
-
 function usage() {
   return `Usage: node scripts/generate-dependency-release-evidence.mjs --output-dir <dir> --release-ref <ref> --npm-dist-tag <tag> [options]
 
@@ -414,60 +407,34 @@ export function parseArgs(argv) {
     githubOutput: process.env.GITHUB_OUTPUT,
     githubStepSummary: process.env.GITHUB_STEP_SUMMARY,
   };
-  const seen = new Set();
-  const setOnce = (flag, key, value) => {
-    if (seen.has(flag)) {
-      throw new Error(`${flag} was provided more than once.`);
-    }
-    seen.add(flag);
-    options[key] = value;
-  };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--") {
-      continue;
-    }
-    if (arg === "-h" || arg === "--help") {
-      return { ...options, help: true };
-    }
-    if (arg === "--root") {
-      setOnce(arg, "rootDir", readOptionValue(argv, index, arg));
-      index += 1;
-      continue;
-    }
-    if (arg === "--output-dir") {
-      setOnce(arg, "outputDir", readOptionValue(argv, index, arg));
-      index += 1;
-      continue;
-    }
-    if (arg === "--release-ref") {
-      setOnce(arg, "releaseRef", readOptionValue(argv, index, arg));
-      index += 1;
-      continue;
-    }
-    if (arg === "--npm-dist-tag") {
-      setOnce(arg, "npmDistTag", readOptionValue(argv, index, arg));
-      index += 1;
-      continue;
-    }
-    if (arg === "--base-ref") {
-      setOnce(arg, "baseRef", readOptionValue(argv, index, arg));
-      index += 1;
-      continue;
-    }
-    if (arg === "--github-output") {
-      setOnce(arg, "githubOutput", readOptionValue(argv, index, arg, { allowEmpty: true }));
-      index += 1;
-      continue;
-    }
-    if (arg === "--github-step-summary") {
-      setOnce(arg, "githubStepSummary", readOptionValue(argv, index, arg, { allowEmpty: true }));
-      index += 1;
-      continue;
-    }
-    throw new Error(`Unsupported argument: ${arg}`);
-  }
-  return options;
+  const helpIndex = argv.findIndex((arg) => arg === "-h" || arg === "--help");
+  const parsed = parseFlagArgs(
+    helpIndex === -1 ? argv : argv.slice(0, helpIndex),
+    options,
+    [
+      ["--root", "rootDir", false],
+      ["--output-dir", "outputDir", false],
+      ["--release-ref", "releaseRef", false],
+      ["--npm-dist-tag", "npmDistTag", false],
+      ["--base-ref", "baseRef", false],
+      ["--github-output", "githubOutput", true],
+      ["--github-step-summary", "githubStepSummary", true],
+    ].map(([flag, key, allowEmpty]) =>
+      stringFlag(flag, key, {
+        allowEmpty,
+        allowInline: false,
+        missingValueMessage: `Expected ${flag} <value>.`,
+        rejectShortOptions: true,
+      }),
+    ),
+    {
+      duplicateOptionMessage: (flag) => `${flag} was provided more than once.`,
+      onUnhandledArg(arg) {
+        throw new Error(`Unsupported argument: ${arg}`);
+      },
+    },
+  );
+  return helpIndex === -1 ? parsed : { ...parsed, help: true };
 }
 
 /**

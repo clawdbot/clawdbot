@@ -362,9 +362,11 @@ function collectManifestRuntimeDependencyNames(manifest: PackageManifest): strin
 }
 
 async function resolveInstalledPackageScanRoot(params: {
+  allowManagedNpmRootPackagePeerSymlinks?: boolean;
   boundaryRealPath: string;
   dependencyName: string;
   packageDir: string;
+  trustedHostOpenClawRootRealPath: string | null;
 }): Promise<InstalledPackageScanRoot | undefined> {
   const packageDir = path.join(params.packageDir, "node_modules", params.dependencyName);
   let stats: Awaited<ReturnType<typeof fs.stat>>;
@@ -382,6 +384,16 @@ async function resolveInstalledPackageScanRoot(params: {
 
   const realPath = await fs.realpath(packageDir).catch(() => path.resolve(packageDir));
   if (!isSamePathOrInside(params.boundaryRealPath, realPath)) {
+    if (
+      params.allowManagedNpmRootPackagePeerSymlinks === true &&
+      params.dependencyName === "openclaw" &&
+      isTrustedHostOpenClawPath({
+        resolvedTargetPath: realPath,
+        trustedHostOpenClawRootRealPath: params.trustedHostOpenClawRootRealPath,
+      })
+    ) {
+      return undefined;
+    }
     throw new Error(
       `installed dependency scan found package outside install root at ${packageDir}`,
     );
@@ -391,12 +403,14 @@ async function resolveInstalledPackageScanRoot(params: {
 
 async function collectInstalledPackageScanRoots(params: {
   additionalPackageDirs?: string[];
+  allowManagedNpmRootPackagePeerSymlinks?: boolean;
   dependencyScanRootDir?: string;
   packageDir: string;
 }): Promise<string[]> {
   const limits = resolvePackageManifestTraversalLimits();
   const boundaryDir = params.dependencyScanRootDir ?? params.packageDir;
   const boundaryRealPath = await fs.realpath(boundaryDir).catch(() => path.resolve(boundaryDir));
+  const trustedHostOpenClawRootRealPath = await resolveTrustedHostOpenClawRootRealPath();
   const packageRealPath = await fs
     .realpath(params.packageDir)
     .catch(() => path.resolve(params.packageDir));
@@ -444,17 +458,21 @@ async function collectInstalledPackageScanRoots(params: {
     }
     for (const dependencyName of collectManifestRuntimeDependencyNames(manifest)) {
       const nestedCandidate = await resolveInstalledPackageScanRoot({
+        allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
         boundaryRealPath,
         dependencyName,
         packageDir: current.packageDir,
+        trustedHostOpenClawRootRealPath,
       });
       const candidate =
         nestedCandidate ??
         (params.dependencyScanRootDir
           ? await resolveInstalledPackageScanRoot({
+              allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
               boundaryRealPath,
               dependencyName,
               packageDir: params.dependencyScanRootDir,
+              trustedHostOpenClawRootRealPath,
             })
           : undefined);
       if (candidate && !visitedRealPaths.has(candidate.realPath)) {
@@ -1114,6 +1132,7 @@ export async function scanInstalledPackageDependencyTreeRuntime(params: {
       ? { additionalPackageDirs: params.additionalPackageDirs }
       : {}),
     dependencyScanRootDir: params.dependencyScanRootDir,
+    allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
     packageDir: params.packageDir,
   });
   const manifestScanRoots = await collectNonOverlappingPackageScanRoots(scanRoots);

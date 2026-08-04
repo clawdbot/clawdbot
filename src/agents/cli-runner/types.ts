@@ -43,6 +43,7 @@ import type { EmbeddedAgentExecutionPhase } from "../embedded-agent-runner/execu
 import type {
   CurrentInboundPromptContext,
   EmbeddedRunTrigger,
+  ResolvedToolPromptFinalizer,
 } from "../embedded-agent-runner/run/params.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import type { FastModeAutoProgressState } from "../fast-mode.js";
@@ -80,6 +81,8 @@ export type RunCliAgentParams = {
   toolOverrides?: SessionToolOverrides;
   prompt: string;
   transcriptPrompt?: string;
+  /** Finalizes caller-owned guidance after backend tool projection is known. */
+  finalizePromptForResolvedTools?: ResolvedToolPromptFinalizer;
   /** Undecorated current-turn prompt used to merge inline and offloaded images. */
   imagePrompt?: string;
   /**

@@ -1,4 +1,10 @@
-import { createServer, request as httpRequest, type ClientRequest, type Server } from "node:http";
+import {
+  createServer,
+  request as httpRequest,
+  type ClientRequest,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -51,12 +57,13 @@ function makeConnectParams(params: {
   permissions?: ConnectParams["permissions"];
   minProtocol?: number;
   maxProtocol?: number;
+  signedAt?: number;
 }): ConnectParams {
   const publicKey = publicKeyRawBase64UrlFromPem(params.identity.publicKeyPem);
   const auth = params.deviceToken
     ? { deviceToken: params.deviceToken }
     : { bootstrapToken: params.bootstrapToken };
-  const signedAt = Date.now();
+  const signedAt = params.signedAt ?? Date.now();
   const client: ConnectParams["client"] = {
     id: GATEWAY_CLIENT_IDS.WATCHOS_APP,
     displayName: "Test Watch",
@@ -106,6 +113,8 @@ async function startRuntime(
     rateLimiter?: AuthRateLimiter;
     abortConnectResponse?: boolean;
     config?: OpenClawConfig;
+    now?: () => number;
+    onPollReady?: (response: ServerResponse) => void;
   },
 ) {
   const nodeRegistry = new NodeRegistry({
@@ -130,6 +139,7 @@ async function startRuntime(
     onNodeConnected: (session) => connectedNodes.push(session.nodeId),
     onNodeDisconnected: (nodeId, reason) => disconnectedNodes.push({ nodeId, reason }),
     ...(options?.rateLimiter ? { rateLimiter: options.rateLimiter } : {}),
+    ...(options?.now ? { now: options.now } : {}),
   });
   let resolveConnectHandled: () => void = () => undefined;
   const connectHandled = new Promise<void>((resolve) => {
@@ -149,6 +159,9 @@ async function startRuntime(
         if (!handled && !res.writableEnded) {
           res.statusCode = 404;
           res.end();
+        }
+        if (req.url === "/api/nodes/watch/poll" && !res.writableEnded) {
+          options?.onPollReady?.(res);
         }
       })
       .finally(() => {
@@ -210,6 +223,7 @@ async function connectWatchNode(params: {
       makeConnectParams({
         identity: params.identity,
         nonce: String(challenge.nonce),
+        signedAt: Number(challenge.ts),
         bootstrapToken: params.bootstrapToken,
         deviceToken: params.deviceToken,
         permissions: params.permissions,
@@ -257,6 +271,24 @@ async function waitForLastConnectedMetadata(baseDir: string, nodeId: string): Pr
 }
 
 describe("watch node HTTP transport", () => {
+  it("uses Gateway time for skew-independent device proof", async () => {
+    const now = vi.fn(() => 1_700_000_000_123);
+    const { identity, issued, baseUrl, runtime } = await createWatchNodeFixture(
+      "openclaw-watch-node-challenge-time-",
+      { now },
+    );
+
+    const response = await connectWatchNode({
+      baseUrl,
+      identity,
+      bootstrapToken: issued.token,
+    });
+
+    expect(response.status).toBe(200);
+    expect(now).toHaveBeenCalled();
+    runtime.close();
+  });
+
   it("rejects capabilities and identities outside the bounded watch surface", async () => {
     const { identity, issued, baseUrl, runtime } = await createWatchNodeFixture(
       "openclaw-watch-node-surface-",
@@ -405,6 +437,82 @@ describe("watch node HTTP transport", () => {
     expect(disconnectedNodes).toHaveLength(1);
   });
 
+  it.each([
+    { destroyTarget: "socket", delivery: "event" },
+    { destroyTarget: "socket", delivery: "raw" },
+    { destroyTarget: "response", delivery: "event" },
+  ] as const)(
+    "rejects $delivery delivery when the active watch poll $destroyTarget is destroyed",
+    async ({ destroyTarget, delivery }) => {
+      let resolvePollReady: (response: ServerResponse) => void = () => undefined;
+      const pollReady = new Promise<ServerResponse>((resolve) => {
+        resolvePollReady = resolve;
+      });
+      const { identity, issued, nodeRegistry, disconnectedNodes, runtime, baseUrl } =
+        await createWatchNodeFixture("openclaw-watch-node-destroyed-poll-", {
+          onPollReady: resolvePollReady,
+        });
+      const connectResponse = await connectWatchNode({
+        baseUrl,
+        identity,
+        bootstrapToken: issued.token,
+      });
+      expect(connectResponse.status).toBe(200);
+      const { sessionToken } = await readJson(connectResponse);
+      const authorization = `Bearer ${String(sessionToken)}`;
+      const pollFailure = new Promise<string>((resolve, reject) => {
+        const request = httpRequest(
+          `${baseUrl}/poll`,
+          { method: "POST", headers: { authorization } },
+          (response) => {
+            response.resume();
+            reject(new Error(`unexpected poll response: ${response.statusCode}`));
+          },
+        );
+        request.once("error", (error: NodeJS.ErrnoException) => {
+          resolve(error.code ?? error.message);
+        });
+        request.end();
+      });
+      try {
+        const response = await pollReady;
+        const socket = response.socket;
+        expect(socket).not.toBeNull();
+        if (destroyTarget === "socket") {
+          socket!.destroy();
+          expect(response.destroyed).toBe(false);
+        } else {
+          response.destroy();
+          expect(response.destroyed).toBe(true);
+        }
+        expect(socket!.destroyed).toBe(true);
+        expect(response.writableEnded).toBe(false);
+
+        const payload = { id: "lost" };
+        const delivered =
+          delivery === "raw"
+            ? nodeRegistry.sendEventRaw(
+                identity.deviceId,
+                "node.invoke.request",
+                serializeEventPayload(payload),
+              )
+            : nodeRegistry.sendEvent(identity.deviceId, "node.invoke.request", payload);
+        expect(delivered).toBe(false);
+        expect(nodeRegistry.get(identity.deviceId)).toBeUndefined();
+        expect(disconnectedNodes).toEqual([
+          { nodeId: identity.deviceId, reason: "event delivery failed" },
+        ]);
+        await expect(pollFailure).resolves.toBe("ECONNRESET");
+        expect(nodeRegistry.sendEvent(identity.deviceId, "node.invoke.request", payload)).toBe(
+          false,
+        );
+      } finally {
+        runtime.close();
+      }
+      expect(disconnectedNodes).toHaveLength(1);
+    },
+  );
+
   it("rejects an HTTP node session after an external reapproval changes its generation", async () => {
     const { baseDir, identity, issued, nodeRegistry, disconnectedNodes, runtime, baseUrl } =
       await createWatchNodeFixture("openclaw-watch-node-reapproval-");
@@ -454,7 +562,6 @@ describe("watch node HTTP transport", () => {
       command: "device.info",
       timeoutMs: 2_000,
     });
-    const invokeAfterDisconnect = invoke.catch((error: unknown) => error);
     const pollResponse = await fetch(`${baseUrl}/poll`, {
       method: "POST",
       headers: { authorization: `Bearer ${String(connected.sessionToken)}` },
@@ -495,7 +602,13 @@ describe("watch node HTTP transport", () => {
       nodeId: identity.deviceId,
       reason: "node pairing changed",
     });
-    await expect(invokeAfterDisconnect).resolves.toBeInstanceOf(Error);
+    await expect(invoke).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "DISCONNECTED",
+        message: "node disconnected (device.info)",
+      },
+    });
     runtime.close();
   });
 

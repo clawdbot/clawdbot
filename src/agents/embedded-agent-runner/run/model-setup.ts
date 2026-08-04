@@ -1,3 +1,4 @@
+import { requireActivePluginRegistry } from "../../../plugins/runtime.js";
 import { resolveDefaultAgentDir } from "../../agent-scope.js";
 import { FailoverError } from "../../failover-error.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../harness/runtime-plugin.js";
@@ -59,6 +60,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
     agentHarnessRuntimeOverride: runParams.agentHarnessRuntimeOverride,
     requestTransportOverrides: requestStreamTransportOverrides,
     workspaceDir: params.workspaceDir,
+    pluginRegistry: params.preparedModelRuntime?.pluginRegistry ?? requireActivePluginRegistry(),
   });
   const agentHarness = selectAgentHarness({
     provider,

@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { listAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import { isUsageCountedSessionTranscriptFileName } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import type { PluginStateLeaseRunner } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
@@ -55,7 +56,7 @@ async function loadMemoryCommandConfig(
   commandName: string,
   mode?: "enforce_resolved" | "read_only_status",
 ) {
-  const config = getRuntimeConfig();
+  const config = getRuntimeConfig({ skipPluginValidation: true });
   try {
     const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
       config,
@@ -148,11 +149,7 @@ function resolveAgentIds(cfg: OpenClawConfig, agent?: string): string[] {
   if (trimmed) {
     return [trimmed];
   }
-  const list = cfg.agents?.list ?? [];
-  if (list.length > 0) {
-    return list.map((entry) => entry.id).filter(Boolean);
-  }
-  return [resolveDefaultAgentId(cfg)];
+  return listAgentIds(cfg);
 }
 export function formatExtraPaths(workspaceDir: string, extraPaths: string[]): string[] {
   return normalizeExtraMemoryPaths(workspaceDir, extraPaths).map((entry) => shortenHomePath(entry));

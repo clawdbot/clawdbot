@@ -41,6 +41,7 @@ async function withStartedMatrixHarness(
         ({
           baseUrl: targetBaseUrl,
           buildManifest: vi.fn(),
+          installFaultRule: vi.fn(() => ({ hits: () => [], remove: vi.fn() })),
           records: () => [],
           setScenarioId: vi.fn(),
           setTargetBaseUrl: vi.fn(),
@@ -211,6 +212,7 @@ describe("matrix harness runtime", () => {
           baseUrl: targetBaseUrl,
           buildManifest: vi.fn(),
           createExchangeContext: vi.fn(),
+          installFaultRule: vi.fn(() => ({ hits: () => [], remove: vi.fn() })),
           onExchange: vi.fn(),
           records: () => [],
           setScenarioId: vi.fn(),

@@ -13,16 +13,12 @@ import {
 } from "../infra/plugin-approvals.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import {
-  pinActivePluginChannelRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { OpenClawPluginNodeInvokePolicyContext } from "../plugins/types.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { applyPluginNodeInvokePolicy } from "./node-invoke-plugin-policy.js";
-import type { NodeSession } from "./node-registry.js";
+import type { NodeInvokeResult, NodeSession } from "./node-registry.js";
 import { listPendingOperatorApprovals } from "./operator-approval-store.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 
@@ -67,12 +63,19 @@ function createContext(opts?: {
   pluginApprovalIosPushDelivery?: GatewayRequestContext["pluginApprovalIosPushDelivery"];
 }) {
   const nodeSession = opts?.nodeSession ?? createNodeSession();
-  const invoke = vi.fn(async () => ({
-    ok: true,
-    payload: { ok: true, value: 1 },
-    payloadJSON: null,
-    error: null,
-  }));
+  const invoke = vi.fn(
+    async (params?: {
+      onDispatchReady?: (invokeId: string) => void;
+    }): Promise<NodeInvokeResult> => {
+      params?.onDispatchReady?.("invoke-1");
+      return {
+        ok: true,
+        payload: { ok: true, value: 1 },
+        payloadJSON: null,
+        error: null,
+      };
+    },
+  );
   return {
     context: {
       getRuntimeConfig:
@@ -179,11 +182,6 @@ function setDangerousDemoCommandRegistry(policies: NodeInvokePolicyRegistration[
   setActivePluginRegistry(registry);
 }
 
-function createPolicyRegistry(handle: NodeInvokePolicyHandler): PluginRegistry {
-  const registry = createEmptyPluginRegistry();
-  registry.nodeInvokePolicies.push(createDemoPolicy(handle));
-  return registry;
-}
 async function invokeDemoPolicy(
   context: GatewayRequestContext,
   client: GatewayClient | null = null,
@@ -272,6 +270,7 @@ describe("applyPluginNodeInvokePolicy", () => {
       params: DEMO_PARAMS,
       timeoutMs: undefined,
       idempotencyKey: undefined,
+      onDispatchReady: expect.any(Function),
     });
   });
 
@@ -304,14 +303,15 @@ describe("applyPluginNodeInvokePolicy", () => {
     },
   );
 
-  it("marks plugin-owned work dispatched before calling the node transport", async () => {
+  it("marks plugin-owned work dispatched only after the node transport accepts it", async () => {
     setDangerousDemoCommandRegistry([
       createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
     ]);
     const { context, invoke } = createContext();
     const dispatchOrder: string[] = [];
-    invoke.mockImplementationOnce(async () => {
+    invoke.mockImplementationOnce(async (params) => {
       dispatchOrder.push("node transport");
+      params?.onDispatchReady?.("invoke-1");
       return {
         ok: true,
         payload: { ok: true, value: 1 },
@@ -330,7 +330,43 @@ describe("applyPluginNodeInvokePolicy", () => {
     });
 
     expect(result).toMatchObject({ ok: true });
-    expect(dispatchOrder).toStrictEqual(["dispatched", "node transport"]);
+    expect(dispatchOrder).toStrictEqual(["node transport", "dispatched"]);
+  });
+
+  it("keeps plugin-owned work pre-dispatch when the node transport rejects the send", async () => {
+    setDangerousDemoCommandRegistry([
+      createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
+    ]);
+    const { context, invoke } = createContext();
+    const onNodeCommandDispatched = vi.fn();
+    invoke.mockResolvedValueOnce({
+      ok: false,
+      payload: null,
+      payloadJSON: null,
+      error: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
+    });
+
+    const result = await applyPluginNodeInvokePolicy({
+      context,
+      client: null,
+      nodeSession: createNodeSession(),
+      command: DEMO_COMMAND,
+      params: DEMO_PARAMS,
+      onNodeCommandDispatched,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: "UNAVAILABLE",
+      details: {
+        nodeError: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
+        nodeCommandDispatched: false,
+      },
+    });
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({ onDispatchReady: expect.any(Function) }),
+    );
+    expect(onNodeCommandDispatched).not.toHaveBeenCalled();
   });
 
   it("rejects expired plugin-owned work without dispatching it", async () => {
@@ -475,25 +511,6 @@ describe("applyPluginNodeInvokePolicy", () => {
       ok: false,
       details: { nodeCommandDispatched: true },
     });
-    expect(invoke).toHaveBeenCalledOnce();
-  });
-
-  it("uses a matching policy from the pinned Gateway registry after an active swap", async () => {
-    const gatewayRegistry = createPolicyRegistry((ctx) => ctx.invokeNode());
-    setActivePluginRegistry(gatewayRegistry);
-    pinActivePluginChannelRegistry(gatewayRegistry);
-    setActivePluginRegistry(
-      createPolicyRegistry(async () => ({
-        ok: false,
-        code: "TRANSIENT_POLICY",
-        message: "agent-scoped policy must not shadow Gateway policy",
-      })),
-    );
-    const { context, invoke } = createContext();
-
-    const result = await invokeDemoPolicy(context);
-
-    expect(result).toStrictEqual({ ok: true, payload: { ok: true, value: 1 }, payloadJSON: null });
     expect(invoke).toHaveBeenCalledOnce();
   });
 

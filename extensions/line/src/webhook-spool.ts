@@ -8,6 +8,7 @@ import {
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger, type RuntimeEnv, warn } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
@@ -126,10 +127,6 @@ function parseStoredEvent(rawEvent: string): webhook.Event {
   return event as webhook.Event;
 }
 
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function isLineAuthenticationFailure(error: unknown): boolean {
   if (!error || typeof error !== "object") {
     return false;
@@ -226,7 +223,9 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
                 .then(() => boundLifecycle.onAbandoned())
                 .catch((error: unknown) => {
                   options.runtime.error?.(
-                    danger(`line: failed to abandon a late webhook delivery: ${errorText(error)}`),
+                    danger(
+                      `line: failed to abandon a late webhook delivery: ${formatErrorMessage(error)}`,
+                    ),
                   );
                 });
               return;
@@ -285,7 +284,7 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
           return { reason: error.reason, message: error.message };
         }
         if (isLineAuthenticationFailure(error)) {
-          return { reason: "authentication-failed", message: errorText(error) };
+          return { reason: "authentication-failed", message: formatErrorMessage(error) };
         }
         return null;
       },
@@ -293,7 +292,9 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
     },
     createStoppedError: () => new Error("LINE webhook spool is stopped."),
     onError: (error) =>
-      options.runtime.error?.(danger(`line: webhook spool drain failed: ${errorText(error)}`)),
+      options.runtime.error?.(
+        danger(`line: webhook spool drain failed: ${formatErrorMessage(error)}`),
+      ),
   });
   let stopTask: Promise<void> | undefined;
 

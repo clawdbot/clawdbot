@@ -124,12 +124,12 @@ function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0
   return call[argIndex];
 }
 
-function targetAgentDir(fixture: { stateDir: string }): string {
-  return path.join(fixture.stateDir, "agents", "main", "agent");
+function targetAgentDir(fixture: { stateDir: string }, agentId = "main"): string {
+  return path.join(fixture.stateDir, "agents", agentId, "agent");
 }
 
-function loadTargetAuthStore(fixture: { stateDir: string }) {
-  return loadAuthProfileStoreForSecretsRuntime(targetAgentDir(fixture));
+function loadTargetAuthStore(fixture: { stateDir: string }, agentId = "main") {
+  return loadAuthProfileStoreForSecretsRuntime(targetAgentDir(fixture, agentId));
 }
 
 async function createCodexFixture(): Promise<{
@@ -799,7 +799,7 @@ describe("buildCodexMigrationProvider", () => {
     expect(sourceAppServerClientScope).toHaveBeenCalledTimes(1);
   });
 
-  it("imports Codex auth.json OAuth and seeds cached OpenAI Codex models", async () => {
+  it("imports Codex auth.json OAuth into the selected agent and seeds cached models", async () => {
     const fixture = await createCodexFixture();
     const reportDir = path.join(fixture.root, "report");
     const configState: MigrationProviderContext["config"] = {
@@ -808,6 +808,7 @@ describe("buildCodexMigrationProvider", () => {
           model: { fallbacks: [] },
           workspace: fixture.workspaceDir,
         },
+        list: [{ id: "main", default: true }, { id: "research" }],
       },
     } as MigrationProviderContext["config"];
     const accessToken = fakeJwt({
@@ -857,6 +858,7 @@ describe("buildCodexMigrationProvider", () => {
       runtime: createConfigRuntime(configState),
       reportDir,
       includeSecrets: true,
+      targetAgentId: "research",
     });
     const plan = await provider.plan(ctx);
     expectRecordFields(findItem(plan.items, "auth:openai"), {
@@ -868,7 +870,7 @@ describe("buildCodexMigrationProvider", () => {
     const result = await provider.apply(ctx, plan);
 
     expectRecordFields(findItem(result.items, "auth:openai"), { status: "migrated" });
-    const authStore = loadTargetAuthStore(fixture);
+    const authStore = loadTargetAuthStore(fixture, "research");
     expect(authStore.profiles?.["openai:account-acct_test"]).toEqual(
       expect.objectContaining({
         type: "oauth",
@@ -877,6 +879,7 @@ describe("buildCodexMigrationProvider", () => {
         refresh: "refresh-test-token",
       }),
     );
+    expect(loadTargetAuthStore(fixture).profiles?.["openai:account-acct_test"]).toBeUndefined();
     expect(configState.auth?.profiles?.["openai:account-acct_test"]).toEqual(
       expect.objectContaining({
         provider: "openai",

@@ -3,7 +3,7 @@ import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createOutboundTestPlugin,
   createTestRegistry,
-  releasePinnedPluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
   resetGlobalHookRunner,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
@@ -56,18 +56,25 @@ describe("Feishu outbound shared delivery", () => {
 
   afterEach(() => {
     resetGlobalHookRunner();
-    releasePinnedPluginChannelRegistry();
+    resetPluginRuntimeStateForTest();
   });
 
   it("routes oversized presentation media through one media send and chunked fallback text", async () => {
+    const readFile = vi.fn(async () => Buffer.from("approved image"));
+    const mediaAccess = {
+      localRoots: ["/approved/workspace"],
+      workspaceDir: "/approved/workspace",
+      readFile,
+    };
     await sendDurableMessageBatch({
       cfg: {},
       channel: "feishu",
       to: "chat_1",
       skipQueue: true,
+      mediaAccess,
       payloads: [
         {
-          mediaUrl: "https://example.com/pipeline.png",
+          mediaUrl: "pipeline.png",
           presentation: {
             blocks: [
               {
@@ -94,8 +101,19 @@ describe("Feishu outbound shared delivery", () => {
     expect(sendCardFeishuMock).not.toHaveBeenCalled();
     expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
     expect(sendMediaFeishuMock).toHaveBeenCalledWith(
-      expect.objectContaining({ mediaUrl: "https://example.com/pipeline.png", to: "chat_1" }),
+      expect.objectContaining({
+        mediaUrl: "pipeline.png",
+        mediaAccess,
+        mediaLocalRoots: mediaAccess.localRoots,
+        mediaReadFile: readFile,
+        to: "chat_1",
+      }),
     );
+    const sentMedia = sendMediaFeishuMock.mock.calls[0]?.[0] as {
+      mediaAccess?: { localRoots?: readonly string[]; readFile?: typeof readFile };
+    };
+    expect(sentMedia.mediaAccess?.localRoots).toBe(mediaAccess.localRoots);
+    expect(sentMedia.mediaAccess?.readFile).toBe(readFile);
     expect(textChunks.length).toBeGreaterThan(1);
     expect(textChunks.every((chunk) => Array.from(chunk).length <= 4000)).toBe(true);
     expect(deliveredText).toContain("account-0-");

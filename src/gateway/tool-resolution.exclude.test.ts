@@ -17,6 +17,7 @@ type CreateOpenClawToolsArg = {
   pluginToolDenylist?: string[];
   sandboxed?: boolean;
   requesterAgentIdOverride?: string;
+  sourceReplyOnly?: boolean;
 };
 
 type CreateOpenClawCodingToolsArg = {
@@ -132,6 +133,33 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     });
 
     expect(readCreateToolsArgs().clientCaps).toEqual(["tool-events", "inline-widgets"]);
+  });
+
+  it("passes immutable source-reply authority into message-tool construction", () => {
+    resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:telegram:group:chat123",
+      messageProvider: "telegram",
+      currentChannelId: "telegram:chat123",
+      sourceReplyDeliveryMode: "message_tool_only",
+      sourceReplyOnly: true,
+      surface: "loopback",
+    });
+
+    expect(readCreateToolsArgs().sourceReplyOnly).toBe(true);
+  });
+
+  it("does not restrict ordinary message-tool-only turns", () => {
+    resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:telegram:group:chat123",
+      messageProvider: "telegram",
+      currentChannelId: "telegram:chat123",
+      sourceReplyDeliveryMode: "message_tool_only",
+      surface: "loopback",
+    });
+
+    expect(readCreateToolsArgs().sourceReplyOnly).toBeUndefined();
   });
 
   it("filters loopback dedup exclusions without inheriting policy denies", () => {

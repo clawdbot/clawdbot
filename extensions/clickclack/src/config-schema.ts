@@ -12,6 +12,7 @@ const ClickClackAccountConfigSchema = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
+    configWrites: z.boolean().optional(),
     baseUrl: z.string().url().optional(),
     apiBaseUrl: z.string().url().optional(),
     token: buildSecretInputSchema().optional(),

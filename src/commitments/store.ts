@@ -1,6 +1,7 @@
 // Persists commitment records in the canonical shared SQLite database.
 import { randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   executeSqliteQuerySync,
@@ -400,27 +401,33 @@ export async function markCommitmentsAttempted(params: {
 }
 
 export async function markCommitmentsStatus(params: {
-  cfg?: OpenClawConfig;
   ids: string[];
   status: Extract<CommitmentStatus, "sent" | "dismissed" | "expired">;
   nowMs?: number;
-}): Promise<void> {
-  const ids = [...new Set(params.ids.map((id) => id.trim()).filter(Boolean))];
+}): Promise<string[]> {
+  const ids = normalizeUniqueStringEntries(params.ids);
   if (ids.length === 0) {
-    return;
+    return [];
   }
   const nowMs = params.nowMs ?? Date.now();
-  runOpenClawStateWriteTransaction(({ db }) => {
+  return runOpenClawStateWriteTransaction(({ db }) => {
     const commitmentsDb = getNodeSqliteKysely<CommitmentsDatabase>(db);
-    const rows = executeSqliteQuerySync(
-      db,
-      commitmentsDb
-        .selectFrom("commitments")
-        .selectAll()
-        .where("id", "in", ids)
-        .where("status", "in", [...ACTIVE_STATUSES]),
-    ).rows;
-    for (const row of rows) {
+    const rowsById = new Map(
+      executeSqliteQuerySync(
+        db,
+        commitmentsDb
+          .selectFrom("commitments")
+          .selectAll()
+          .where("id", "in", ids)
+          .where("status", "in", [...ACTIVE_STATUSES]),
+      ).rows.map((row) => [row.id, row]),
+    );
+    const updatedIds: string[] = [];
+    for (const id of ids) {
+      const row = rowsById.get(id);
+      if (!row) {
+        continue;
+      }
       const record = commitmentRecordFromRow(row);
       updateCommitmentRow(db, {
         ...record,
@@ -430,12 +437,13 @@ export async function markCommitmentsStatus(params: {
         ...(params.status === "dismissed" ? { dismissedAtMs: nowMs } : {}),
         ...(params.status === "expired" ? { expiredAtMs: nowMs } : {}),
       });
+      updatedIds.push(record.id);
     }
+    return updatedIds;
   });
 }
 
 export async function listCommitments(params?: {
-  cfg?: OpenClawConfig;
   status?: CommitmentStatus;
   agentId?: string;
   nowMs?: number;

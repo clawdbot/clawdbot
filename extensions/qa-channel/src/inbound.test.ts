@@ -1,6 +1,7 @@
 // Qa Channel tests cover inbound plugin behavior.
 import path from "node:path";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setQaChannelRuntime } from "../api.js";
@@ -32,6 +33,15 @@ vi.mock("openclaw/plugin-sdk/outbound-media", async (importOriginal) => {
     })),
   };
 });
+
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
+  saveMediaBuffer: vi.fn(async () => ({
+    id: "stored-audio.ogg",
+    path: "/tmp/openclaw-media/stored-audio.ogg",
+    contentType: "audio/ogg",
+  })),
+}));
 
 type HandleQaInboundParams = Parameters<typeof handleQaInbound>[0];
 
@@ -508,6 +518,37 @@ describe("handleQaInbound", () => {
     expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
     const ctxPayload = firstRunAssembledParams(runtime).ctxPayload;
     expect(ctxPayload.media?.every((fact) => fact.path === undefined)).toBe(true);
+  });
+
+  it("projects saved inline attachments through a media-store URL", async () => {
+    const runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
+
+    await handleQaInbound(
+      createQaInboundParams({
+        message: {
+          attachments: [
+            {
+              id: "audio-1",
+              kind: "audio",
+              mimeType: "audio/ogg",
+              fileName: "voice-note.ogg",
+              contentBase64: Buffer.alloc(2048, 0x52).toString("base64"),
+              mediaFactCarrier: "media-store-url",
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(saveMediaBuffer).toHaveBeenCalledOnce();
+    const media = firstRunAssembledParams(runtime).ctxPayload.media;
+    expect(media).toHaveLength(1);
+    expect(media?.[0]).toMatchObject({
+      path: undefined,
+      url: "media://inbound/stored-audio.ogg",
+      contentType: "audio/ogg",
+    });
   });
 
   it("rejects non-http attachment URLs without dropping the message", async () => {

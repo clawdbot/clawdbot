@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { ADMIN_SCOPE } from "../gateway/method-scopes.js";
@@ -123,6 +124,7 @@ describe("gateway-hosted exec approvals", () => {
         clientDisplayName: "approval operator",
         mode: GATEWAY_CLIENT_MODES.TEST,
         scopes: [ADMIN_SCOPE],
+        caps: [GATEWAY_CLIENT_CAPS.EXEC_APPROVALS],
         requestTimeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
         timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
       });

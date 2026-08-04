@@ -1,7 +1,11 @@
 // Ollama tests cover provider policy api plugin behavior.
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { describe, expect, it } from "vitest";
-import { normalizeConfig, resolveThinkingProfile } from "./provider-policy-api.js";
+import {
+  normalizeConfig,
+  projectConfiguredModelRow,
+  resolveThinkingProfile,
+} from "./provider-policy-api.js";
 import { OLLAMA_DEFAULT_BASE_URL } from "./src/defaults.js";
 
 function createModel(id: string, name: string): ModelDefinitionConfig {
@@ -58,6 +62,48 @@ describe("ollama provider policy public artifact", () => {
         providerConfig: {},
       }),
     ).toStrictEqual({});
+  });
+
+  it.each(["ollama", " OLLAMA-CLOUD "])("skips runtime row normalization for %s", (provider) => {
+    expect(
+      projectConfiguredModelRow({
+        provider,
+        modelId: "qwen3.5:9b",
+        model: {
+          provider: provider.trim().toLowerCase(),
+          id: "qwen3.5:9b",
+          api: "ollama",
+          baseUrl: OLLAMA_DEFAULT_BASE_URL,
+          input: ["text"],
+          name: "Qwen 3.5 9B",
+          reasoning: true,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128_000,
+          maxTokens: 8_192,
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps unrelated providers on the runtime normalization path", () => {
+    expect(
+      projectConfiguredModelRow({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        model: {
+          provider: "openai",
+          id: "gpt-5.5",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          input: ["text"],
+          name: "GPT-5.5",
+          reasoning: true,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128_000,
+          maxTokens: 8_192,
+        },
+      }),
+    ).toBeUndefined();
   });
 
   it("exposes max thinking for reasoning-capable models without full plugin activation", () => {

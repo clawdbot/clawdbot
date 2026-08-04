@@ -7,7 +7,11 @@ export * from "./protocol-client.js";
 export * from "./reconnect-policy.js";
 export * from "./session-projection.js";
 export * from "./session-subscriptions.js";
-export { DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS, resolveSafeTimeoutDelayMs } from "./timeouts.js";
+export {
+  DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+  DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
+  resolveSafeTimeoutDelayMs,
+} from "./timeouts.js";
 export * from "@openclaw/gateway-protocol/client-info";
 export * from "@openclaw/gateway-protocol/connect-error-details";
 export * from "@openclaw/gateway-protocol/gateway-error-details";

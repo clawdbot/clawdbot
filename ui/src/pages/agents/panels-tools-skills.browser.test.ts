@@ -1,6 +1,6 @@
 // Control UI tests cover agents panels tools skills behavior.
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SkillStatusEntry } from "../../api/types.ts";
 import { installBrowserHistoryIsolation } from "../../test-helpers/browser-history.ts";
 import { renderAgentSkills, renderAgentTools } from "./panels-tools-skills.ts";
@@ -12,7 +12,7 @@ function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>
     agentId: "main",
     configForm: {
       agents: {
-        list: [{ id: "main", tools: { profile: "full" } }],
+        entries: { main: { default: true, tools: { profile: "full" } } },
       },
     } as Record<string, unknown>,
     configLoading: false,
@@ -420,7 +420,10 @@ describe("agents tools panel (browser)", () => {
     expect(group.open).toBe(false);
     expect(tool.open).toBe(false);
 
-    const previousUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    const previousUrl = window.location.href;
+    // Shared jsdom workers can observe URL changes before finally/afterEach,
+    // so inspect the intended deep link without mutating browser history.
+    const replaceState = vi.spyOn(window.history, "replaceState").mockImplementation(() => {});
     try {
       chip.click();
       await new Promise((resolve) => {
@@ -429,10 +432,13 @@ describe("agents tools panel (browser)", () => {
 
       expect(group.open).toBe(true);
       expect(tool.open).toBe(true);
+      expect(replaceState).toHaveBeenCalledOnce();
+      const requestedUrl = replaceState.mock.calls[0]?.[2];
+      expect(requestedUrl).toBeInstanceOf(URL);
+      expect((requestedUrl as URL).hash).toBe("#agent-tool-read");
+      expect(window.location.href).toBe(previousUrl);
     } finally {
-      // Hash links mutate shared jsdom history; restore the actual prior URL
-      // so a later Settings route never inherits this tool-card deep link.
-      window.history.replaceState({}, "", previousUrl);
+      replaceState.mockRestore();
       container.remove();
     }
   });
@@ -483,7 +489,7 @@ describe("agents skills panel (browser)", () => {
         loading: false,
         error: null,
         activeAgentId: "main",
-        configForm: { agents: { list: [{ id: "main" }] } },
+        configForm: { agents: { entries: { main: { default: true } } } },
         configLoading: false,
         configSaving: false,
         configDirty: false,

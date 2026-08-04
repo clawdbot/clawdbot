@@ -8,6 +8,7 @@ import {
   type NodePairingSupersededRequest,
   type RequestNodePairingResult,
 } from "../infra/node-pairing.js";
+import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { createDeferred, type Deferred } from "../shared/deferred.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_NODE_REAPPROVAL,
@@ -15,7 +16,8 @@ import {
   createAuthRateLimiter,
   type RateLimitConfig,
 } from "./auth-rate-limit.js";
-import { withSerializedKeyedAttempt } from "./rate-limit-attempt-serialization.js";
+
+const pendingNodeReapprovalAttempts = new KeyedAsyncQueue();
 
 type ReapprovalRequestParams = {
   input: NodePairingRequestInput;
@@ -125,44 +127,38 @@ export function createNodeReapprovalCoordinator(
     state: NodeRequestState,
     request: QueuedRequest,
   ): void => {
-    void withSerializedKeyedAttempt({
-      key: `node-reapproval:${nodeId}`,
-      run: async () => {
-        try {
-          request.deferred.resolve(await executeRequest(request.params));
-        } catch (error) {
-          request.deferred.reject(error);
-        } finally {
-          finishActiveRequest(nodeId, state, request.fingerprint);
-        }
-      },
+    void pendingNodeReapprovalAttempts.enqueue(`node-reapproval:${nodeId}`, async () => {
+      try {
+        request.deferred.resolve(await executeRequest(request.params));
+      } catch (error) {
+        request.deferred.reject(error);
+      } finally {
+        finishActiveRequest(nodeId, state, request.fingerprint);
+      }
     });
   };
 
   const startQueuedRequest = (nodeId: string, state: NodeRequestState): void => {
-    void withSerializedKeyedAttempt({
-      key: `node-reapproval:${nodeId}`,
-      run: async () => {
-        const queued = state.queued;
-        if (!queued) {
-          return;
+    void pendingNodeReapprovalAttempts.enqueue(`node-reapproval:${nodeId}`, async () => {
+      const queued = state.queued;
+      if (!queued) {
+        return;
+      }
+      state.queued = undefined;
+      state.activeFingerprint = queued.fingerprint;
+      try {
+        queued.deferred.resolve(await executeRequest(queued.params));
+        for (const follower of queued.followers) {
+          follower.resolve(null);
         }
-        state.queued = undefined;
-        state.activeFingerprint = queued.fingerprint;
-        try {
-          queued.deferred.resolve(await executeRequest(queued.params));
-          for (const follower of queued.followers) {
-            follower.resolve(null);
-          }
-        } catch (error) {
-          queued.deferred.reject(error);
-          for (const follower of queued.followers) {
-            follower.reject(error);
-          }
-        } finally {
-          finishActiveRequest(nodeId, state, queued.fingerprint);
+      } catch (error) {
+        queued.deferred.reject(error);
+        for (const follower of queued.followers) {
+          follower.reject(error);
         }
-      },
+      } finally {
+        finishActiveRequest(nodeId, state, queued.fingerprint);
+      }
     });
   };
 
@@ -207,10 +203,10 @@ export function createNodeReapprovalCoordinator(
       return deferred.promise;
     },
     async finalizeCleanup(claim) {
-      return await withSerializedKeyedAttempt({
-        key: `node-reapproval:${claim.nodeId}`,
-        run: async () => await finalizeNodePairingCleanupClaim(claim),
-      });
+      return await pendingNodeReapprovalAttempts.enqueue(
+        `node-reapproval:${claim.nodeId}`,
+        async () => await finalizeNodePairingCleanupClaim(claim),
+      );
     },
     dispose() {
       disposed = true;

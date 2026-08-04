@@ -65,8 +65,8 @@ export type ToolSearchTargetTranscriptProjection = {
   toolCallId: string;
   toolName: string;
   input: unknown;
-  result?: unknown;
-  isError?: boolean;
+  result: AgentToolResult<unknown>;
+  isError: boolean;
   timestamp?: number;
 };
 
@@ -110,6 +110,7 @@ export type ToolSearchCatalogEntry = {
 
 export type ToolSearchCatalogSession = {
   entries: ToolSearchCatalogEntry[];
+  counterScope: string;
   searchCount: number;
   describeCount: number;
   callCount: number;

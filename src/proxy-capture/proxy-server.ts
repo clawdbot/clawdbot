@@ -6,13 +6,13 @@ import { request as httpsRequest } from "node:https";
 import net from "node:net";
 import { StringDecoder } from "node:string_decoder";
 import { URL } from "node:url";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { ensureDebugProxyCa } from "./ca.js";
 import type { DebugProxySettings } from "./env.js";
 import { redactedCaptureHeaders } from "./header-redaction.js";
 import { getDebugProxyCaptureStore } from "./store.sqlite.js";
 import type { CaptureEventRecord } from "./types.js";
 
-const TRUTHY_ENV = new Set(["1", "true", "yes", "on"]);
 const DEBUG_PROXY_DIRECT_CONNECT_OVERRIDE =
   "OPENCLAW_DEBUG_PROXY_ALLOW_DIRECT_CONNECT_WITH_MANAGED_PROXY";
 const CAPTURE_BODY_PREVIEW_BYTES = 8192;
@@ -24,10 +24,6 @@ type BodyPreviewCapture = {
   totalBytes: number;
   truncated: boolean;
 };
-
-function isTruthyEnvValue(value: string | undefined): boolean {
-  return TRUTHY_ENV.has((value ?? "").trim().toLowerCase());
-}
 
 function isManagedProxyActive(env: NodeJS.ProcessEnv = process.env): boolean {
   return isTruthyEnvValue(env["OPENCLAW_PROXY_ACTIVE"]);

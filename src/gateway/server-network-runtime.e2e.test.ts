@@ -8,7 +8,6 @@ import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.j
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { PROXY_ENV_KEYS } from "../infra/net/proxy-env.js";
-import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.test-fixtures.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { startGatewayServer } from "./server.js";
 import { getFreeGatewayPort } from "./test-helpers.e2e.js";
@@ -52,7 +51,6 @@ describe("gateway network runtime", () => {
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     clearSessionStoreCacheForTest();
-    clearGatewaySubagentRuntime();
   });
 
   afterEach(() => {
@@ -60,7 +58,6 @@ describe("gateway network runtime", () => {
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     clearSessionStoreCacheForTest();
-    clearGatewaySubagentRuntime();
   });
 
   it("bootstraps env proxy dispatching when the gateway starts directly", async () => {

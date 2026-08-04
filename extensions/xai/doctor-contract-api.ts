@@ -1,5 +1,6 @@
 // Xai doctor contract repairs plugin-owned model configuration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor";
 import { isLegacyXaiBuiltinModel } from "./model-definitions.js";
 
 type LegacyConfigRule = {
@@ -56,16 +57,10 @@ const PLUGIN_MODEL_MIGRATIONS: PluginModelMigration[] = [
 ];
 const XAI_STT_MODEL_LIST_PATHS = [["tools", "media", "models"]] as const;
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function readPath(root: unknown, path: readonly string[]): unknown {
   let current = root;
   for (const segment of path) {
-    current = asRecord(current)?.[segment];
+    current = asObjectRecord(current)?.[segment];
     if (current === undefined) {
       return undefined;
     }
@@ -74,7 +69,7 @@ function readPath(root: unknown, path: readonly string[]): unknown {
 }
 
 function isRetiredToolModel(value: unknown, retiredModels: ReadonlySet<string>): boolean {
-  const model = asRecord(value)?.model;
+  const model = asObjectRecord(value)?.model;
   return typeof model === "string" && retiredModels.has(model.trim().toLowerCase());
 }
 
@@ -83,7 +78,7 @@ function hasLegacyBuiltinCatalogRows(value: unknown): boolean {
 }
 
 function isLegacyXaiSttEntry(value: unknown): boolean {
-  const entry = asRecord(value);
+  const entry = asObjectRecord(value);
   if (!entry || (entry.type !== undefined && entry.type !== "provider")) {
     return false;
   }
@@ -133,7 +128,7 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
     if (next === cfg) {
       next = structuredClone(cfg);
     }
-    const target = asRecord(readPath(next, migration.path));
+    const target = asObjectRecord(readPath(next, migration.path));
     if (!target) {
       continue;
     }
@@ -160,7 +155,7 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
       if (!isLegacyXaiSttEntry(entry)) {
         continue;
       }
-      delete asRecord(entry)?.model;
+      delete asObjectRecord(entry)?.model;
       removed += 1;
     }
     changes.push(
@@ -174,7 +169,7 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
     if (next === cfg) {
       next = structuredClone(cfg);
     }
-    const provider = asRecord(readPath(next, ["models", "providers", "xai"]));
+    const provider = asObjectRecord(readPath(next, ["models", "providers", "xai"]));
     const models = provider?.models;
     if (provider && Array.isArray(models)) {
       const retained = models.filter((model) => !isLegacyXaiBuiltinModel(model));

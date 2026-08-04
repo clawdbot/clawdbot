@@ -6,6 +6,7 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import { matchesMentionWithExplicit } from "./mentions.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
+import { parseReplyDirectives } from "./reply-directives.js";
 import { createReplyReferencePlanner, isSingleUseReplyToMode } from "./reply-reference.js";
 import {
   extractShortModelName,
@@ -1328,15 +1329,53 @@ describe("createStreamingDirectiveAccumulator", () => {
     expect(result?.replyToCurrent).toBe(true);
   });
 
-  it("does not emit padding before a buffered trailing reply tag", () => {
+  it("preserves padding when a buffered trailing reply tag stays incomplete", () => {
     const accumulator = createStreamingDirectiveAccumulator();
 
     const first = accumulator.consume("Hello [[");
     expect(first?.text).toBe("Hello");
 
     const second = accumulator.consume("", { final: true });
-    expect(second?.text).toBe("[[");
+    expect(second?.text).toBe(" [[");
   });
+
+  it.each([
+    ["reply", "Hello [[", "reply_to_current]] Yo", "Yo"],
+    ["audio", "Hello [[", "audio_as_voice]] Yo", "Yo"],
+  ])(
+    "keeps existing %s directive completion whitespace",
+    (_name, firstChunk, secondChunk, text) => {
+      const accumulator = createStreamingDirectiveAccumulator();
+
+      expect(accumulator.consume(firstChunk)?.text).toBe("Hello");
+      expect(accumulator.consume(secondChunk)?.text).toBe(text);
+    },
+  );
+
+  it.each(["answer part A msg [[E1008]timeout] answer part B", "answer ending ["])(
+    "releases malformed directive-looking final text verbatim: %s",
+    (text) => {
+      const accumulator = createStreamingDirectiveAccumulator();
+      const first = accumulator.consume(text);
+      const final = accumulator.consume("", { final: true });
+
+      expect(`${first?.text ?? ""}${final?.text ?? ""}`).toBe(text);
+    },
+  );
+
+  it.each([
+    ["answer [[", "bogus]] tail", "answer [[bogus]] tail"],
+    ["answer [[", "bogus]] [[reply_to_current]] tail", "answer [[bogus]] tail"],
+  ])(
+    "restores padding when a pending tail resolves as literal text",
+    (firstChunk, secondChunk, text) => {
+      const accumulator = createStreamingDirectiveAccumulator();
+      const first = accumulator.consume(firstChunk);
+      const second = accumulator.consume(secondChunk);
+
+      expect(`${first?.text ?? ""}${second?.text ?? ""}`).toBe(text);
+    },
+  );
 
   it("propagates explicit reply ids across current and subsequent chunks", () => {
     const accumulator = createStreamingDirectiveAccumulator();
@@ -1469,10 +1508,14 @@ describe("createStreamingDirectiveAccumulator", () => {
     expect(result?.mediaUrls).toBeUndefined();
   });
 
-  it("does not strip a complete final MEDIA line when parsing final text", () => {
-    expect(splitTrailingDirective("Here.\nMEDIA:/tmp/final.png", { final: true })).toEqual({
-      text: "Here.\nMEDIA:/tmp/final.png",
-      tail: "",
+  it("keeps a complete final MEDIA line available to the final parser", () => {
+    expect(splitTrailingDirective("Here.\nMEDIA:/tmp/final.png")).toEqual({
+      text: "Here.\n",
+      tail: "MEDIA:/tmp/final.png",
+    });
+    expect(parseReplyDirectives("Here.\nMEDIA:/tmp/final.png")).toMatchObject({
+      text: "Here.",
+      mediaUrls: ["/tmp/final.png"],
     });
   });
 });

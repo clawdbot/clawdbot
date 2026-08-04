@@ -12,12 +12,12 @@ import { listSessionStateEventsSince } from "../sessions/session-state-events.js
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
   sessionStoreEntry,
   directSessionReq,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
 type ResetSessionEntry = {
   sessionId?: string;
@@ -130,6 +130,10 @@ const ownedChildMetadata = {
   groupChannel: "dev",
   space: "hq",
   spawnedBy: "agent:main:main",
+  completionOwnerSessionKey: "agent:main:discord:direct:alice",
+  inheritedToolPolicyVersion: 1,
+  inheritedToolAllow: ["read", "message"],
+  inheritedToolDeny: ["exec"],
   spawnedWorkspaceDir: "/tmp/child-workspace",
   spawnedCwd: "/tmp/task-repo",
   parentSessionKey: "agent:main:main",

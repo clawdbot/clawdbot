@@ -118,6 +118,12 @@ export async function generateMusic(
       if (!Array.isArray(result.tracks) || result.tracks.length === 0) {
         throw new Error("Music generation provider returned no tracks.");
       }
+      const emptyTrackIndex = result.tracks.findIndex((track) => track.buffer.byteLength === 0);
+      if (emptyTrackIndex >= 0) {
+        throw new Error(
+          `Music generation provider returned an empty track buffer at index ${emptyTrackIndex}.`,
+        );
+      }
       return {
         tracks: result.tracks,
         provider: candidate.provider,

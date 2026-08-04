@@ -8,6 +8,7 @@ import {
   type ExecApprovalPendingReplyParams,
   type ExecApprovalReplyDecision,
 } from "../infra/exec-approval-reply.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
 /**
  * @deprecated Compatibility subpath for shipped approval reaction helpers.
@@ -20,6 +21,16 @@ import {
 } from "./approval-renderers.js";
 export { shouldSuppressLocalNativeExecApprovalPrompt } from "./approval-native-helpers.js";
 import type { ReplyPayload } from "./reply-payload.js";
+export {
+  approvalReactionDecisionSetsMatch,
+  extractApprovalReactionPromptBinding,
+  normalizeApprovalReactionDecision,
+  readApprovalReactionDecisionList,
+  readApprovalReactionDeliveredBinding,
+  readApprovalReactionDeliveryMetadata,
+  readApprovalReactionPresentationBinding,
+  type ApprovalReactionDeliveryBinding,
+} from "./approval-reaction-binding.js";
 
 type ApprovalKind = "exec" | "plugin";
 type KeyedStore<TValue> = {
@@ -580,13 +591,7 @@ export function createApprovalReactionTargetStore<TTarget>(params: {
         memory.delete(key);
       }
     }
-    while (memory.size > params.maxEntries) {
-      const oldestKey = memory.keys().next().value;
-      if (!oldestKey) {
-        return;
-      }
-      memory.delete(oldestKey);
-    }
+    pruneMapToMaxSize(memory, params.maxEntries);
   };
 
   return {

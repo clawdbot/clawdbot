@@ -207,6 +207,7 @@ export function resolveDeliveryState(params: {
   job: CronJob;
   runStatus: CronRunStatus;
   delivered?: boolean;
+  deliveryAttempted?: boolean;
   error?: string;
   globalFailureDestination?: CronConfig["failureAlert"];
 }): {
@@ -215,7 +216,8 @@ export function resolveDeliveryState(params: {
   error?: string;
   failureNotification: CronFailureNotificationDelivery;
 } {
-  const primaryDeliveryRequested = resolveCronDeliveryPlan(params.job).requested;
+  const primaryDeliveryPlan = resolveCronDeliveryPlan(params.job);
+  const primaryDeliveryRequested = primaryDeliveryPlan.requested;
   // Failure destinations can receive alerts even when the primary delivery
   // path was disabled or failed before direct delivery produced an ack.
   const alternateFailureNotificationRequested =
@@ -223,6 +225,27 @@ export function resolveDeliveryState(params: {
     params.job.delivery?.bestEffort !== true &&
     resolveFailureDestination(params.job, params.globalFailureDestination) !== null;
   if (!primaryDeliveryRequested) {
+    if (primaryDeliveryPlan.mode === "webhook") {
+      if (params.delivered === true) {
+        return {
+          delivered: true,
+          status: "delivered",
+          failureNotification: {
+            status: alternateFailureNotificationRequested ? "unknown" : "not-requested",
+          },
+        };
+      }
+      if (params.deliveryAttempted === true) {
+        return {
+          delivered: false,
+          status: "not-delivered",
+          error: params.error,
+          failureNotification: {
+            status: alternateFailureNotificationRequested ? "unknown" : "not-requested",
+          },
+        };
+      }
+    }
     return {
       status: "not-requested",
       failureNotification: {

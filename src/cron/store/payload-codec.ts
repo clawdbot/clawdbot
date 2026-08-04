@@ -1,11 +1,11 @@
 /** SQLite column codec for cron payload variants. */
+import { safeParseJson } from "@openclaw/normalization-core";
 import type { CronPayload } from "../types.js";
 import {
   booleanToInteger,
   integerToBoolean,
   normalizeNumber,
   parseJsonArray,
-  parseJsonValue,
   serializeJson,
 } from "./scalar-codec.js";
 import type { CronJobInsert, CronJobRow } from "./schema.js";
@@ -40,14 +40,14 @@ function payloadToolAllowFromRow(
 }
 
 function parseExternalContentSource(raw: string | null): "gmail" | "webhook" | undefined {
-  const parsed = raw ? parseJsonValue<unknown>(raw, undefined) : undefined;
+  const parsed = raw ? safeParseJson(raw) : undefined;
   return parsed === "gmail" || parsed === "webhook" ? parsed : undefined;
 }
 
 function parseCommandPayloadMessage(
   raw: string | null,
 ): Omit<Extract<CronPayload, { kind: "command" }>, "kind" | "timeoutSeconds"> | null {
-  const parsed = raw ? parseJsonValue<unknown>(raw, undefined) : undefined;
+  const parsed = raw ? safeParseJson(raw) : undefined;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return null;
   }
@@ -92,7 +92,7 @@ function parseCommandPayloadMessage(
 function parseScriptPayloadMessage(
   raw: string | null,
 ): Omit<Extract<CronPayload, { kind: "script" }>, "kind" | "timeoutSeconds"> | null {
-  const parsed = raw ? parseJsonValue<unknown>(raw, undefined) : undefined;
+  const parsed = raw ? safeParseJson(raw) : undefined;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return null;
   }

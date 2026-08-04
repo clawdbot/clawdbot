@@ -20,6 +20,7 @@ import {
   isAgentHarnessSessionStoreEntryProtected,
 } from "../sessions/agent-harness-session-key.js";
 import {
+  registerMcpLoopbackClientGrantRevocationListener,
   resolveMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrantsForRuntime,
 } from "./mcp-grant-store.js";
@@ -247,9 +248,22 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           });
         });
         markMcpLoopbackRequestClassified(cliRequestCaptureHandle);
+        const { boundGrantToken, boundCaptureKey } = auth;
+        const activeBoundGrant =
+          boundGrantToken && boundCaptureKey
+            ? resolveMcpLoopbackClientGrant({
+                token: boundGrantToken,
+                runtimeOwnerToken: ownerToken,
+                captureKey: boundCaptureKey,
+              })
+            : undefined;
+        if (boundGrantToken && !activeBoundGrant) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "unauthorized" }));
+          return;
+        }
         const cfg = getRuntimeConfig();
         const requestContext = resolveMcpRequestContext(req, cfg, auth);
-        const { boundGrantToken, boundCaptureKey } = auth;
         const authorizeToolCall =
           boundGrantToken && boundCaptureKey
             ? () =>
@@ -300,6 +314,15 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           cwd: requestContext.cwd,
           modelProvider: requestContext.modelProvider,
           modelId: requestContext.modelId,
+          ...(activeBoundGrant?.toolAuth
+            ? {
+                authProfileStore: activeBoundGrant.toolAuth.store,
+                ...(activeBoundGrant.toolAuth.agentDir
+                  ? { authProfileStoreAgentDir: activeBoundGrant.toolAuth.agentDir }
+                  : {}),
+              }
+            : {}),
+          ...(boundGrantToken ? { grantToken: boundGrantToken } : {}),
           yieldContextCacheKey: yieldContext?.cacheKey,
           onYield: yieldContext?.onYield,
           messageProvider: requestContext.messageProvider,
@@ -311,6 +334,7 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           accountId: requestContext.accountId,
           inboundEventKind: requestContext.inboundEventKind,
           sourceReplyDeliveryMode: requestContext.sourceReplyDeliveryMode,
+          sourceReplyOnly: requestContext.sourceReplyOnly,
           taskSuggestionDeliveryMode: requestContext.taskSuggestionDeliveryMode,
           requireExplicitMessageTarget: requestContext.requireExplicitMessageTarget,
           toolsAllow: requestContext.toolsAllow,
@@ -359,6 +383,7 @@ async function startMcpLoopbackServer(port = 0): Promise<{
               hookContext: {
                 agentId: scopedTools.agentId,
                 config: cfg,
+                ...(scopedTools.workspaceDir ? { workspaceDir: scopedTools.workspaceDir } : {}),
                 sessionKey: requestContext.sessionKey,
                 sessionId: requestContext.sessionId,
                 runId: requestContext.runId,
@@ -474,6 +499,11 @@ async function startMcpLoopbackServer(port = 0): Promise<{
   if (!address || typeof address === "string") {
     throw new Error("mcp loopback did not bind to a TCP port");
   }
+  const unregisterGrantRevocation = registerMcpLoopbackClientGrantRevocationListener((event) => {
+    if (event.runtimeOwnerToken === ownerToken) {
+      toolCache.evictGrant(event.token);
+    }
+  });
   // Register tokens only after the TCP listener is live so clients never learn
   // a bearer token for a server that failed to bind.
   setActiveMcpLoopbackRuntime({ port: address.port, ownerToken, nonOwnerToken });
@@ -486,6 +516,8 @@ async function startMcpLoopbackServer(port = 0): Promise<{
       // requests. A delayed old-server close cannot revoke a successor runtime.
       clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken);
       revokeMcpLoopbackClientGrantsForRuntime(ownerToken);
+      unregisterGrantRevocation();
+      toolCache.clear();
       return new Promise<void>((resolve, reject) => {
         httpServer.close((error) => {
           if (!error) {

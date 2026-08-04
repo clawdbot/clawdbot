@@ -1,5 +1,6 @@
 /** Persists, inspects, and refreshes the installed plugin index in the state database. */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
+import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
@@ -49,13 +50,16 @@ export type InstalledPluginIndexStoreInspection = {
   current: InstalledPluginIndex;
 };
 
+export type InstalledPluginIndexWriteLease = {
+  assertOwnedInTransaction(database: DatabaseSync): void;
+};
+
 const StringArraySchema = z.array(z.string());
 const INSTALLED_PLUGIN_INDEX_SQLITE_KEY = "installed-plugin-index";
 
 const InstalledPluginIndexStartupSchema = z.object({
   sidecar: z.boolean(),
   memory: z.boolean(),
-  deferConfiguredChannelFullLoadUntilAfterListen: z.boolean(),
   agentHarnesses: StringArraySchema,
   configPaths: StringArraySchema.optional(),
 });
@@ -93,6 +97,8 @@ const InstalledPluginIndexRecordSchema = z.object({
     .optional(),
   manifestPath: z.string(),
   manifestHash: z.string(),
+  doctorContractHash: z.string().optional(),
+  doctorContractFile: InstalledPluginFileSignatureSchema.optional(),
   manifestFile: InstalledPluginFileSignatureSchema.optional(),
   format: z.string().optional(),
   bundleFormat: z.string().optional(),
@@ -199,54 +205,10 @@ type InstalledPluginIndexSqliteRow = {
   diagnostics_json: string;
 };
 
-function isExplicitLegacyJsonStorePath(options: InstalledPluginIndexStoreOptions): boolean {
-  return Boolean(options.filePath && options.filePath.endsWith(".json"));
-}
-
-function readLegacyRecordContainer(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const legacy = value as { installRecords?: unknown; records?: unknown };
-  return legacy.installRecords ?? legacy.records;
-}
-
-function readPersistedInstalledPluginIndexFromLegacyJson(
-  options: InstalledPluginIndexStoreOptions,
-): InstalledPluginIndex | null {
-  if (!options.filePath || !existsSync(options.filePath)) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(readFileSync(options.filePath, "utf8")) as unknown;
-    const current = parseInstalledPluginIndex(parsed);
-    if (current) {
-      return current;
-    }
-    const installRecords = readLegacyRecordContainer(parsed);
-    if (!installRecords) {
-      return null;
-    }
-    return parseInstalledPluginIndex({
-      version: INSTALLED_PLUGIN_INDEX_VERSION,
-      hostContractVersion: "legacy-file",
-      compatRegistryVersion: "legacy-file",
-      migrationVersion: INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
-      policyHash: "legacy-file",
-      generatedAtMs: 0,
-      installRecords,
-      plugins: [],
-      diagnostics: [],
-    });
-  } catch {
-    return null;
-  }
-}
-
 function assertWritableInstalledPluginIndexStoreOptions(
   options: InstalledPluginIndexStoreOptions,
 ): void {
-  if (isExplicitLegacyJsonStorePath(options)) {
+  if (options.filePath?.endsWith(".json")) {
     throw new Error(
       "Explicit JSON installed plugin index paths are retired. Use the shared SQLite state DB or run openclaw doctor --fix to migrate legacy plugins/installs.json.",
     );
@@ -285,8 +247,8 @@ function parseInstalledPluginIndexSqliteRow(
 function readPersistedInstalledPluginIndexFromSqlite(
   options: InstalledPluginIndexStoreOptions = {},
 ): InstalledPluginIndex | null {
-  if (isExplicitLegacyJsonStorePath(options)) {
-    return readPersistedInstalledPluginIndexFromLegacyJson(options);
+  if (options.filePath?.endsWith(".json")) {
+    return null;
   }
   if (!existsSync(resolveInstalledPluginIndexStorePath(options))) {
     return null;
@@ -314,6 +276,7 @@ function readPersistedInstalledPluginIndexFromSqlite(
 function writePersistedInstalledPluginIndexToSqlite(
   index: InstalledPluginIndex,
   options: InstalledPluginIndexStoreOptions = {},
+  lease?: InstalledPluginIndexWriteLease,
 ): void {
   assertWritableInstalledPluginIndexStoreOptions(options);
   const persisted = {
@@ -323,6 +286,7 @@ function writePersistedInstalledPluginIndexToSqlite(
   };
   const now = Date.now();
   runOpenClawStateWriteTransaction(({ db }) => {
+    lease?.assertOwnedInTransaction(db);
     db.prepare(
       `
         INSERT INTO installed_plugin_index (
@@ -369,7 +333,7 @@ function writePersistedInstalledPluginIndexToSqlite(
 export async function readPersistedInstalledPluginIndex(
   options: InstalledPluginIndexStoreOptions = {},
 ): Promise<InstalledPluginIndex | null> {
-  return readPersistedInstalledPluginIndexFromSqlite(options);
+  return readPersistedInstalledPluginIndexSync(options);
 }
 
 export function readPersistedInstalledPluginIndexSync(
@@ -382,11 +346,7 @@ export async function writePersistedInstalledPluginIndex(
   index: InstalledPluginIndex,
   options: InstalledPluginIndexStoreOptions = {},
 ): Promise<string> {
-  const filePath = resolveInstalledPluginIndexStorePath(options);
-  writePersistedInstalledPluginIndexToSqlite(index, options);
-  clearPluginMetadataLifecycleCaches();
-  clearLoadInstalledPluginIndexInstallRecordsCache();
-  return filePath;
+  return writePersistedInstalledPluginIndexSync(index, options);
 }
 
 export function writePersistedInstalledPluginIndexSync(
@@ -395,6 +355,20 @@ export function writePersistedInstalledPluginIndexSync(
 ): string {
   const filePath = resolveInstalledPluginIndexStorePath(options);
   writePersistedInstalledPluginIndexToSqlite(index, options);
+  clearPluginMetadataLifecycleCaches();
+  clearLoadInstalledPluginIndexInstallRecordsCache();
+  return filePath;
+}
+
+export function writePersistedInstalledPluginIndexWithLeaseSync(
+  index: InstalledPluginIndex,
+  options: InstalledPluginIndexStoreOptions & {
+    lease: InstalledPluginIndexWriteLease;
+  },
+): string {
+  const { lease, ...storeOptions } = options;
+  const filePath = resolveInstalledPluginIndexStorePath(storeOptions);
+  writePersistedInstalledPluginIndexToSqlite(index, storeOptions, lease);
   clearPluginMetadataLifecycleCaches();
   clearLoadInstalledPluginIndexInstallRecordsCache();
   return filePath;
@@ -490,22 +464,7 @@ export async function inspectPersistedInstalledPluginIndex(
 export async function refreshPersistedInstalledPluginIndex(
   params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
 ): Promise<InstalledPluginIndex> {
-  const persisted =
-    params.reason === "policy-changed" || !params.installRecords
-      ? await readPersistedInstalledPluginIndex(params)
-      : null;
-  if (canRefreshPersistedPolicyState(persisted, params)) {
-    const index = refreshPersistedPolicyState(persisted, params);
-    await writePersistedInstalledPluginIndex(index, params);
-    return index;
-  }
-  const index = refreshInstalledPluginIndex({
-    ...params,
-    installRecords:
-      params.installRecords ?? extractPluginInstallRecordsFromInstalledPluginIndex(persisted),
-  });
-  await writePersistedInstalledPluginIndex(index, params);
-  return index;
+  return refreshPersistedInstalledPluginIndexSync(params);
 }
 
 export function refreshPersistedInstalledPluginIndexSync(

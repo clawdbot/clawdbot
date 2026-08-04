@@ -759,6 +759,61 @@ describe("Skill Workshop proposal evaluation", () => {
     });
   });
 
+  it("does not split surrogate pairs when bounding evaluator text", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-surrogate-");
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      agentId: "main",
+      name: "Surrogate Bounds",
+      description: "Bound evaluator text without splitting surrogates",
+      content: "# Surrogate Bounds\n",
+    });
+    hookMocks.evaluate.mockResolvedValue([
+      {
+        evaluatorId: "emoji-bounds",
+        pluginId: "evaluation-tests",
+        status: "completed",
+        result: {
+          summary: `${"s".repeat(7_999)}🙂`,
+          decisionReason: `${"r".repeat(1_999)}🙂`,
+          metrics: { note: `${"m".repeat(3_999)}🙂` },
+        },
+      },
+      {
+        evaluatorId: "emoji-error",
+        pluginId: "evaluation-tests",
+        status: "error",
+        error: `${"e".repeat(1_999)}🙂`,
+      },
+    ]);
+
+    const evaluated = await evaluateSkillProposal({
+      workspaceDir,
+      agentId: "main",
+      proposalId: proposal.record.id,
+      expectedRevisionHash: proposal.revisionHash,
+    });
+
+    expect(evaluated.evaluation.outcomes).toEqual([
+      {
+        evaluatorId: "emoji-bounds",
+        pluginId: "evaluation-tests",
+        status: "completed",
+        result: {
+          summary: "s".repeat(7_999),
+          decisionReason: "r".repeat(1_999),
+          metrics: { note: "m".repeat(3_999) },
+        },
+      },
+      {
+        evaluatorId: "emoji-error",
+        pluginId: "evaluation-tests",
+        status: "error",
+        error: "e".repeat(1_999),
+      },
+    ]);
+  });
+
   it("rejects evaluator results that exceed the aggregate persistence budget", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-size-budget-");
     const proposal = await proposeCreateSkill({

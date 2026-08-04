@@ -9,6 +9,7 @@ import { openFileBackedSessionManagerForTest } from "../../test/helpers/session-
 const note = vi.hoisted(() => vi.fn());
 const repairReservedIncognitoSessionKeys = vi.hoisted(() => vi.fn());
 const repairCanonicalSessionDeliveryStates = vi.hoisted(() => vi.fn());
+const repairCanonicalSessionKeys = vi.hoisted(() => vi.fn());
 const runDoctorSessionSqlite = vi.hoisted(() => vi.fn());
 const withDoctorSqliteMaintenanceLock = vi.hoisted(() => vi.fn());
 
@@ -26,6 +27,10 @@ vi.mock("./doctor-session-incognito-key-repair.js", () => ({
 
 vi.mock("./doctor-session-delivery-state.js", () => ({
   repairCanonicalSessionDeliveryStates,
+}));
+
+vi.mock("./doctor-session-canonical-keys.js", () => ({
+  repairCanonicalSessionKeys,
 }));
 
 vi.mock("./doctor-sqlite-maintenance-lock.js", async (importOriginal) => {
@@ -108,6 +113,14 @@ describe("doctor session transcript repair", () => {
     repairCanonicalSessionDeliveryStates
       .mockReset()
       .mockReturnValue({ found: 0, repaired: 0, scannedStores: 0 });
+    repairCanonicalSessionKeys.mockReset().mockResolvedValue({
+      archivedTranscriptDirectories: [],
+      foundGroups: 0,
+      repairBatches: 0,
+      removedRows: 0,
+      repairedGroups: 0,
+      scannedStores: 0,
+    });
     runDoctorSessionSqlite.mockReset();
     withDoctorSqliteMaintenanceLock
       .mockReset()

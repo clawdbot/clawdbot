@@ -1,4 +1,4 @@
-title: Slack rejects an over-limit native table and stores its complete fallback
+title: Slack invalid_blocks recovery stores its complete fallback
 scenario:
   id: slack-table-invalid-blocks-fallback
   surface: channels

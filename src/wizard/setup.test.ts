@@ -36,7 +36,6 @@ type RunSetupMigrationImport = typeof import("./setup.migration-import.js").runS
 type RunSearchSetupFlow = typeof import("../flows/search-setup.js").runSearchSetupFlow;
 
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ profiles: {} })));
-const keepCurrentAuthChoice = vi.hoisted(() => "__keep-current" as const);
 const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn(async () => "skip"));
 const applyAuthChoice = vi.hoisted(() =>
   vi.fn<ApplyAuthChoice>(async (args) => ({ config: args.config })),
@@ -352,7 +351,7 @@ vi.mock("../agents/auth-profiles.runtime.js", () => ({
 }));
 
 vi.mock("../commands/auth-choice-prompt.js", () => ({
-  KEEP_CURRENT_AUTH_CHOICE: keepCurrentAuthChoice,
+  isKeepCurrentAuthChoice: (value: unknown) => value === "__keep-current",
   promptAuthChoiceGrouped,
 }));
 
@@ -365,6 +364,7 @@ vi.mock("../commands/auth-choice.js", () => ({
 
 vi.mock("../plugins/provider-auth-choices.js", () => ({
   resolveManifestProviderAuthChoice,
+  resolveManifestProviderAuthChoices: () => [],
 }));
 
 vi.mock("../plugins/setup-registry.js", () => ({
@@ -459,7 +459,9 @@ vi.mock("../daemon/systemd.js", () => ({
 }));
 
 vi.mock("../infra/control-ui-assets.js", () => ({
+  CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS: 600_000,
   ensureControlUiAssetsBuilt,
+  isControlUiStartupAssetsReady: vi.fn(() => true),
 }));
 
 vi.mock("../plugins/status.js", () => ({
@@ -1584,7 +1586,7 @@ describe("runSetupWizard", () => {
       warnings: [],
       legacyIssues: [],
     });
-    promptAuthChoiceGrouped.mockResolvedValueOnce(keepCurrentAuthChoice);
+    promptAuthChoiceGrouped.mockResolvedValueOnce("__keep-current");
     const workspaceDir = await makeCaseDir("keep-provider-config-");
     const prompter = buildWizardPrompter();
     const runtime = createRuntime();
@@ -2813,7 +2815,7 @@ describe("runSetupWizard", () => {
       });
     promptAuthChoiceGrouped
       .mockResolvedValueOnce("demo-provider")
-      .mockResolvedValueOnce(keepCurrentAuthChoice);
+      .mockResolvedValueOnce("__keep-current");
     verifySetupInferenceConfig
       .mockResolvedValueOnce({ ok: false, status: "auth", error: "login expired" })
       .mockResolvedValueOnce({

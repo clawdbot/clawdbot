@@ -462,6 +462,25 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     expect(draftStream.update).not.toHaveBeenCalled();
   });
 
+  it("suppresses terminal progress callbacks without their terminal phase", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onApprovalEvent?.({ command: "must stay hidden" });
+      await params?.replyOptions?.onCommandOutput?.({ title: "must stay hidden", exitCode: 0 });
+      await params?.replyOptions?.onPatchSummary?.({ summary: "must stay hidden" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { streaming: { mode: "progress" } },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).not.toHaveBeenCalled();
+  });
+
   it("counts window thinking bursts closed by a tool call when no end event fires", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
     // deepseek streams reasoning then a tool call with no thinking_end between

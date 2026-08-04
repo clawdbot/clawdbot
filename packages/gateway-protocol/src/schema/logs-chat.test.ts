@@ -1,7 +1,12 @@
 // Gateway Protocol tests cover typed chat stream events.
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import { ChatEventSchema, ChatSendParamsSchema, ChatStatusEventSchema } from "./logs-chat.js";
+import {
+  ChatEventSchema,
+  ChatHistoryParamsSchema,
+  ChatSendParamsSchema,
+  ChatStatusEventSchema,
+} from "./logs-chat.js";
 
 const statusEvent = {
   runId: "run-1",
@@ -10,6 +15,15 @@ const statusEvent = {
   state: "status",
   phase: "preparing_context",
 } as const;
+
+describe("ChatHistoryParamsSchema", () => {
+  it("accepts the history boundary and rejects larger requests", () => {
+    const request = { sessionKey: "agent:main:main" };
+
+    expect(Value.Check(ChatHistoryParamsSchema, { ...request, limit: 1000 })).toBe(true);
+    expect(Value.Check(ChatHistoryParamsSchema, { ...request, limit: 1001 })).toBe(false);
+  });
+});
 
 describe("ChatStatusEventSchema", () => {
   it("accepts closed startup phases through the chat event union", () => {

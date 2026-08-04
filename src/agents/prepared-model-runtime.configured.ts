@@ -13,7 +13,7 @@ import {
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveAgentEntry } from "./agent-scope-config.js";
 import { buildInlineProviderModels } from "./embedded-agent-runner/model.inline-provider.js";
-import { staticModelIdMatches } from "./embedded-agent-runner/model.static-id.js";
+import type { StaticModelIdMatcher } from "./embedded-agent-runner/model.static-id.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 
@@ -98,12 +98,13 @@ function hasConfiguredInlineProviderModel(
   config: OpenClawConfig,
   provider: string,
   modelId: string,
+  matchesStaticModelId: StaticModelIdMatcher,
 ): boolean {
   return Object.entries(config.models?.providers ?? {}).some(
     ([providerId, providerConfig]) =>
       normalizeProviderId(providerId) === provider &&
       (providerConfig.models ?? []).some((model) =>
-        staticModelIdMatches({
+        matchesStaticModelId({
           candidateId: model.id,
           rowProvider: providerId,
           provider,
@@ -120,6 +121,7 @@ export function collectConfiguredProviderIdsNeedingStaticCatalog(params: {
     provider: string;
     modelId: string;
   }) => ProviderRuntimeModel | undefined;
+  matchesStaticModelId: StaticModelIdMatcher;
 }): string[] {
   const providerIds = new Set<string>();
   for (const { value } of params.configuredModelRefs ?? collectConfiguredModelRefs(params.config)) {
@@ -132,7 +134,12 @@ export function collectConfiguredProviderIdsNeedingStaticCatalog(params: {
     if (
       !provider ||
       !modelId ||
-      hasConfiguredInlineProviderModel(params.config, provider, modelId) ||
+      hasConfiguredInlineProviderModel(
+        params.config,
+        provider,
+        modelId,
+        params.matchesStaticModelId,
+      ) ||
       params.resolveStaticCatalogModel({ provider, modelId })
     ) {
       continue;
@@ -152,6 +159,7 @@ export function prepareConfiguredRuntimeModels(params: {
     provider: string;
     modelId: string;
   }) => ProviderRuntimeModel | undefined;
+  matchesStaticModelId: StaticModelIdMatcher;
 }): PreparedConfiguredRuntimeModel[] {
   const prepared: PreparedConfiguredRuntimeModel[] = [];
   const seen = new Set<string>();
@@ -179,9 +187,10 @@ export function prepareConfiguredRuntimeModels(params: {
         metadataSnapshot: params.metadataSnapshot,
         provider,
         modelId,
+        matchesStaticModelId: params.matchesStaticModelId,
       }) ??
       params.providerStaticModels.find((candidate) =>
-        staticModelIdMatches({
+        params.matchesStaticModelId({
           candidateId: candidate.id,
           rowProvider: candidate.provider,
           provider,
@@ -200,6 +209,7 @@ function findPreparedProviderStaticCatalogModel(params: {
   metadataSnapshot: PluginMetadataSnapshot;
   provider: string;
   modelId: string;
+  matchesStaticModelId: StaticModelIdMatcher;
 }): ProviderRuntimeModel | undefined {
   if (!params.prepared) {
     return undefined;
@@ -209,7 +219,7 @@ function findPreparedProviderStaticCatalogModel(params: {
       normalizePluginDiscoveryResult({ provider, result }),
     )) {
       const model = (providerConfig.models ?? []).find((candidate) =>
-        staticModelIdMatches({
+        params.matchesStaticModelId({
           candidateId: candidate.id,
           rowProvider: providerId,
           provider: params.provider,

@@ -451,6 +451,7 @@ vi.mock(buildDiscordSourceModuleId("accounts.js"), () => ({
 
 vi.mock(buildDiscordSourceModuleId("probe.js"), () => ({
   fetchDiscordApplicationId: async () => "app-1",
+  probeDiscordApplicationId: async () => ({ kind: "resolved", applicationId: "app-1" }),
   parseApplicationIdFromToken: (token: string) => {
     const segment = token.trim().split(".")[0];
     if (!segment) {
@@ -509,6 +510,7 @@ vi.mock(buildDiscordSourceModuleId("monitor/listeners.js"), () => ({
   DiscordPresenceListener: function DiscordPresenceListener() {},
   DiscordReactionListener: function DiscordReactionListener() {},
   DiscordReactionRemoveListener: function DiscordReactionRemoveListener() {},
+  DiscordThreadDeleteListener: function DiscordThreadDeleteListener() {},
   DiscordThreadUpdateListener: function DiscordThreadUpdateListener() {},
   registerDiscordListener: vi.fn(),
 }));

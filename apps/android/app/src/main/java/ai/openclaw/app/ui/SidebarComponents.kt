@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -49,6 +50,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 @Composable
+internal fun sidebarSearchLabel(): String = nativeString("Search sessions")
+
+@Composable
 internal fun SidebarSearchField(
   query: String,
   onQueryChange: (String) -> Unit,
@@ -60,7 +64,7 @@ internal fun SidebarSearchField(
     onValueChange = onQueryChange,
     modifier = modifier.fillMaxWidth().testTag("sidebar-search"),
     singleLine = true,
-    label = { Text(nativeString("Search sessions")) },
+    label = { Text(sidebarSearchLabel()) },
     leadingIcon = {
       Icon(
         imageVector = Icons.Default.Search,
@@ -259,6 +263,14 @@ internal fun SidebarSessionRow(
         color = palette.muted,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
+      )
+    }
+    if (session.pinned == true) {
+      Icon(
+        imageVector = Icons.Default.PushPin,
+        contentDescription = nativeString("Pinned"),
+        modifier = Modifier.size(13.dp),
+        tint = palette.muted,
       )
     }
   }

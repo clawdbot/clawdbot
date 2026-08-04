@@ -1,0 +1,37 @@
+title: Gateway stability runtime and bundle
+
+scenario:
+  id: gateway-stability-runtime
+  surface: observability
+  category: observability.diagnostic-collection
+  coverage:
+    primary:
+      - observability.bounded-in-process-stability-recorder
+      - observability.openclaw-gateway-stability
+      - observability.openclaw-gateway-stability-bundle
+  objective: Prove the live Gateway stability RPC, bounded recorder, persisted bundle filtering, and export-from-bundle CLI paths as one operator workflow.
+  successCriteria:
+    - A real child CLI reads the live Gateway diagnostics.stability RPC through authenticated WebSocket transport.
+    - The in-process recorder retains only its fixed capacity and reports dropped records after sustained diagnostic load.
+    - The CLI reads and filters the newest persisted stability bundle without retaining private event identifiers.
+    - Export-from-bundle writes a shareable zip containing the sanitized stability snapshot.
+  docsRefs:
+    - docs/gateway/diagnostics.md
+    - docs/cli/gateway.md
+    - docs/gateway/protocol.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - src/cli/gateway-cli/register.ts
+    - src/gateway/server-methods/diagnostics.ts
+    - src/logging/diagnostic-stability.ts
+    - src/logging/diagnostic-stability-bundle.ts
+    - test/e2e/qa-lab/runtime/gateway-stability-runtime.ts
+    - test/e2e/qa-lab/runtime/gateway-stability-runtime.test.ts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/gateway-stability-runtime.ts
+    summary: Exercise live stability RPC, bounded retention, persisted bundle filtering, and support export through the real child CLI.
+    args:
+      - --artifact-base
+      - ${outputDir}
+    timeoutMs: 240000

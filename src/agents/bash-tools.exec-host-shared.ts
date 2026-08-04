@@ -460,6 +460,7 @@ export async function sendExecApprovalFollowupResult(
           approvalId: target.approvalId,
           sessionKey: target.sessionKey,
           bashElevated: target.bashElevated,
+          resultText,
         });
   await send({
     approvalId: target.approvalId,

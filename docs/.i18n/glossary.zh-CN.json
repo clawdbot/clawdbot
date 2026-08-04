@@ -388,6 +388,10 @@
     "target": "微信"
   },
   {
+    "source": "WeCom",
+    "target": "企业微信"
+  },
+  {
     "source": "Weixin",
     "target": "微信"
   },
@@ -1702,5 +1706,17 @@
   {
     "source": "Automations (cron)",
     "target": "自动化 (cron)"
+  },
+  {
+    "source": "Daytona",
+    "target": "Daytona"
+  },
+  {
+    "source": "Gateway remote access",
+    "target": "Gateway 远程访问"
+  },
+  {
+    "source": "Updating OpenClaw",
+    "target": "更新 OpenClaw"
   }
 ]

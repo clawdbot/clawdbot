@@ -27,6 +27,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { channelBlockedPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
@@ -83,7 +84,7 @@ import {
   resolveTelegramSessionConversation,
   resolveTelegramSessionTarget,
 } from "./session-conversation.js";
-import { telegramSetupAdapter, telegramSetupContract } from "./setup-core.js";
+import { telegramSetupContract } from "./setup-core.js";
 import { telegramSetupWizard } from "./setup-surface.js";
 import {
   createTelegramPluginBase,
@@ -184,14 +185,17 @@ function resolveTelegramMonitor() {
   );
 }
 
-function formatTelegramUnauthorizedTokenError(account: ResolvedTelegramAccount): string {
+function formatTelegramUnauthorizedTokenError(
+  account: ResolvedTelegramAccount,
+  status: 401 | 404,
+): string {
   const source =
     account.tokenSource === "none" ? "no configured token" : `${account.tokenSource} token`;
   const credentialPath =
     account.accountId === DEFAULT_ACCOUNT_ID
       ? "channels.telegram.botToken, channels.telegram.tokenFile, or TELEGRAM_BOT_TOKEN"
       : `channels.telegram.accounts.${account.accountId}.botToken/tokenFile`;
-  return `Telegram bot token unauthorized for account "${account.accountId}" (getMe returned 401 from Telegram; source: ${source}). Update ${credentialPath} with the current BotFather token.`;
+  return `Telegram bot token unauthorized for account "${account.accountId}" (getMe returned ${status} from Telegram; source: ${source}). Update ${credentialPath} with the current BotFather token.`;
 }
 
 function getOptionalTelegramRuntime() {
@@ -736,7 +740,6 @@ export const telegramPlugin = createChatChannelPlugin({
   base: {
     ...createTelegramPluginBase({
       setupWizard: telegramSetupWizard,
-      setup: telegramSetupAdapter,
       setupContract: telegramSetupContract,
     }),
     allowlist: buildDmGroupAccountAllowlistAdapter({
@@ -1056,6 +1059,10 @@ export const telegramPlugin = createChatChannelPlugin({
     gateway: {
       startAccount: async (ctx) => {
         const account = ctx.account;
+        const setStatus = createAccountStatusSink({
+          accountId: account.accountId,
+          setStatus: ctx.setStatus,
+        });
         const ownerAccountId = findTelegramTokenOwnerAccountId({
           cfg: ctx.cfg,
           accountId: account.accountId,
@@ -1096,9 +1103,9 @@ export const telegramPlugin = createChatChannelPlugin({
               log: ctx.log,
             });
           }
-          if (!probe.ok && probe.status === 401) {
+          if (!probe.ok && (probe.status === 401 || probe.status === 404)) {
             await deleteStartupBotInfoCache(account.accountId);
-            unauthorizedTokenReason = formatTelegramUnauthorizedTokenError(account);
+            unauthorizedTokenReason = formatTelegramUnauthorizedTokenError(account, probe.status);
           } else if (!probe.ok) {
             botInfo = await readStartupBotInfoCache({
               accountId: account.accountId,
@@ -1127,13 +1134,10 @@ export const telegramPlugin = createChatChannelPlugin({
         }
         if (unauthorizedTokenReason) {
           ctx.log?.error?.(`[${account.accountId}] ${unauthorizedTokenReason}`);
+          setStatus(channelBlockedPatch(unauthorizedTokenReason));
           throw new Error(unauthorizedTokenReason);
         }
         ctx.log?.info(`[${account.accountId}] starting provider${telegramBotLabel}`);
-        const setStatus = createAccountStatusSink({
-          accountId: account.accountId,
-          setStatus: ctx.setStatus,
-        });
         return resolveTelegramMonitor()({
           token,
           accountId: account.accountId,

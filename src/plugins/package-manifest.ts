@@ -79,14 +79,6 @@ export type PluginPackageInstall = {
   requiredPlatformPackages?: string[];
 };
 
-type OpenClawPackageStartup = {
-  /**
-   * Opt-in for channel plugins whose `setupEntry` fully covers the gateway
-   * startup surface needed before the server starts listening.
-   */
-  deferConfiguredChannelFullLoadUntilAfterListen?: boolean;
-};
-
 type OpenClawPackageSetupFeatures = {
   configPromotion?: boolean;
   legacyStateMigrations?: boolean;
@@ -117,7 +109,6 @@ export type OpenClawPackageManifest = {
   channel?: PluginPackageChannel;
   compat?: OpenClawPackageCompat;
   install?: PluginPackageInstall;
-  startup?: OpenClawPackageStartup;
   build?: OpenClawPackageBuild;
 };
 

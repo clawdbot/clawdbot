@@ -49,12 +49,12 @@ export function resolveTranscriptMediaPath(
 export function normalizeStructuredMediaEntryForTranscript(
   media: PersistedUserTurnMediaInput,
 ): MediaFactInput {
+  const workspaceDir = normalizeOptionalText(media.workspaceDir);
   const mediaPath = normalizeOptionalText(media.path);
   const mediaUrl = normalizeOptionalText(media.url);
   const kind = normalizeStructuredMediaKind(media.kind);
   const legacyKind = normalizeOptionalText(media.kind);
   const messageId = normalizeOptionalText(media.messageId);
-  const workspaceDir = normalizeOptionalText(media.workspaceDir);
   const contentType =
     normalizeOptionalText(media.contentType) ??
     (kind || !legacyKind || !MIME_TYPE_PATTERN.test(legacyKind) ? undefined : legacyKind) ??
@@ -65,7 +65,7 @@ export function normalizeStructuredMediaEntryForTranscript(
   const fileName = normalizeOptionalText(media.fileName);
   const sizeBytes = normalizeNonNegativeNumber(media.sizeBytes);
   return {
-    ...(mediaPath ? { path: mediaPath } : {}),
+    ...(mediaPath ? { path: resolveTranscriptMediaPath(mediaPath, workspaceDir) } : {}),
     ...(mediaUrl ? { url: mediaUrl } : {}),
     ...(contentType ? { contentType } : {}),
     ...(kind ? { kind } : {}),

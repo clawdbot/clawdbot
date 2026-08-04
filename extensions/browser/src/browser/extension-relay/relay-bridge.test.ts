@@ -573,4 +573,66 @@ describe("ExtensionRelayBridge", () => {
     expect(socket.closed).toBe(true);
     expect(bridge.extensionConnected).toBe(false);
   });
+
+  it("answers the Puppeteer connect bootstrap without protocol errors", async () => {
+    // The exact browser-scoped sequence puppeteer.connect() issues before any
+    // page work (chrome-devtools-mcp --browserUrl/--wsEndpoint rides this).
+    const bridge = new ExtensionRelayBridge();
+    const { handlers } = wireExtension(bridge);
+    sendHello(handlers);
+
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+    const bootstrap: Array<{ id: number; method: string; params?: Record<string, unknown> }> = [
+      { id: 1, method: "Browser.getVersion" },
+      { id: 2, method: "Target.setDiscoverTargets", params: { discover: true } },
+      {
+        id: 3,
+        method: "Target.setAutoAttach",
+        params: { autoAttach: true, waitForDebuggerOnStart: false, flatten: true },
+      },
+      { id: 4, method: "Target.getBrowserContexts" },
+    ];
+    for (const message of bootstrap) {
+      cdp.onMessage(JSON.stringify(message));
+    }
+    await flush();
+
+    for (const message of bootstrap) {
+      const response = client.frames().find((frame) => frame.id === message.id);
+      expect(response, `response for ${message.method}`).toBeTruthy();
+      expect(response?.error, `error for ${message.method}`).toBeUndefined();
+    }
+    const contexts = client.frames().find((frame) => frame.id === 4);
+    // Only createBrowserContext-made contexts belong here; the relay drives the
+    // real profile's default context, so the list is always empty (as in Chrome).
+    expect(contexts?.result).toEqual({ browserContextIds: [] });
+  });
+
+  it("lists shared tabs as DevTools-style target descriptors", async () => {
+    const bridge = new ExtensionRelayBridge();
+    const { handlers } = wireExtension(bridge);
+    sendHello(handlers);
+
+    expect(bridge.devtoolsTargetDescriptors()).toEqual([
+      {
+        tabId: 1,
+        url: "https://example.com",
+        title: "Example",
+        active: true,
+        id: "tab-1",
+        type: "page",
+      },
+    ]);
+
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+    cdp.onMessage(
+      JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } }),
+    );
+    await flush();
+
+    // Once the debugger attaches, descriptors carry the live targetId.
+    expect(bridge.devtoolsTargetDescriptors()[0]).toMatchObject({ id: "target-1", type: "page" });
+  });
 });

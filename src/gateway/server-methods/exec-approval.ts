@@ -485,21 +485,6 @@ export function createExecApprovalHandlers(
           autoReviewResolution
             ? manager.resolveAutoReview(approvalId, resolvedBy)
             : manager.resolve(approvalId, decisionLocal, resolvedBy),
-        resolvedEventName: "exec.approval.resolved",
-        buildResolvedEvent: ({
-          approvalId,
-          decision: decisionLocal,
-          resolvedBy,
-          snapshot,
-          nowMs,
-        }) =>
-          ({
-            id: approvalId,
-            decision: decisionLocal,
-            resolvedBy,
-            ts: nowMs,
-            request: snapshot.request,
-          }) satisfies ExecApprovalResolved,
         forwardResolved: (resolvedEvent) => opts?.forwarder?.handleResolved(resolvedEvent),
         forwardResolvedErrorLabel: "exec approvals: forward resolve failed",
         extraResolvedHandlers: opts?.iosPushDelivery?.handleResolved

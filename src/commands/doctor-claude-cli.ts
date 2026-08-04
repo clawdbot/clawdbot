@@ -1,4 +1,5 @@
 /** Doctor health note for Claude CLI binary, auth, and workspace/project directories. */
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import {
   normalizeOptionalLowercaseString,
@@ -19,6 +20,10 @@ import type {
   OAuthCredential,
   TokenCredential,
 } from "../agents/auth-profiles/types.js";
+import {
+  formatCliBackendVersionAdvisory,
+  resolveCliBackendVersionGuidance,
+} from "../agents/cli-backend-version-support.js";
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
 import { readClaudeCliCredentialsCached } from "../agents/cli-credentials.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
@@ -48,8 +53,20 @@ function usesClaudeCliModelSelection(cfg: OpenClawConfig): boolean {
   );
 }
 
-function resolveClaudeCliCommand(cfg: OpenClawConfig): string {
-  return resolveCliBackendConfig(CLAUDE_CLI_PROVIDER, cfg)?.config.command ?? "claude";
+function resolveCommandVersion(
+  commandPath: string,
+  args: readonly string[],
+  env: NodeJS.ProcessEnv,
+): string | undefined {
+  const result = spawnSync(commandPath, [...args], {
+    encoding: "utf8",
+    env,
+    maxBuffer: 16 * 1024,
+    timeout: 1_500,
+    windowsHide: true,
+  });
+  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim();
+  return output.split(/\r?\n/u)[0]?.trim() || undefined;
 }
 
 function probeDirectoryHealth(dirPath: string): ClaudeCliDirHealth {
@@ -186,6 +203,11 @@ export function noteClaudeCliHealth(
     store?: AuthProfileStore;
     readClaudeCliCredentials?: () => ClaudeCliReadableCredential | null;
     resolveCommandPath?: (command: string, env?: NodeJS.ProcessEnv) => string | undefined;
+    resolveCommandVersion?: (
+      commandPath: string,
+      args: readonly string[],
+      env: NodeJS.ProcessEnv,
+    ) => string | undefined;
     workspaceDir?: string;
   },
 ) {
@@ -205,7 +227,8 @@ export function noteClaudeCliHealth(
     deps?.readClaudeCliCredentials ??
     (() => readClaudeCliCredentialsCached({ allowKeychainPrompt: false }));
   const credential = readClaudeCliCredentials();
-  const command = resolveClaudeCliCommand(cfg);
+  const backend = resolveCliBackendConfig(CLAUDE_CLI_PROVIDER, cfg);
+  const command = backend?.config.command ?? "claude";
   const resolveCommandPath =
     deps?.resolveCommandPath ??
     ((rawCommand: string, nextEnv?: NodeJS.ProcessEnv) =>
@@ -226,6 +249,25 @@ export function noteClaudeCliHealth(
     fixHints.push(
       "- Fix: install Claude CLI on PATH for the gateway user; custom executable paths belong in a CLI backend plugin registration.",
     );
+  }
+
+  const liveSessionRequirement = backend?.liveSessionRequirement;
+  if (commandPath && liveSessionRequirement) {
+    const versionOutput = (deps?.resolveCommandVersion ?? resolveCommandVersion)(
+      commandPath,
+      liveSessionRequirement.versionArgs,
+      env,
+    );
+    const guidance = resolveCliBackendVersionGuidance(versionOutput, liveSessionRequirement);
+    if (guidance.status === "below-known-floor") {
+      lines.push(
+        `- Binary version advisory: ${formatCliBackendVersionAdvisory({
+          label: "Claude Code",
+          requirement: liveSessionRequirement,
+          version: guidance.version,
+        })}`,
+      );
+    }
   }
 
   if (!credential) {

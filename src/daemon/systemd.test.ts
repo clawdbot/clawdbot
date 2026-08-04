@@ -1265,6 +1265,39 @@ describe("readSystemdServiceExecStart", () => {
     expect(command?.environmentValueSources?.OPENCLAW_GATEWAY_TOKEN).toBe("inline-and-file");
   });
 
+  it("reads all inline assignments in order before EnvironmentFile overrides", async () => {
+    mockReadGatewayServiceFile(
+      [
+        "[Service]",
+        "ExecStart=/usr/bin/openclaw gateway run",
+        'Environment=PLAIN=first "QUOTED=value with spaces" REPEATED=first',
+        "Environment='REPEATED=last value' INLINE_FILE=inline",
+        "EnvironmentFile=%h/.openclaw/.env",
+      ],
+      {
+        [`${TEST_SERVICE_HOME}/.openclaw/.env`]: ["INLINE_FILE=file", "FILE_ONLY=from-file"].join(
+          "\n",
+        ),
+      },
+    );
+
+    const command = await readSystemdServiceExecStart({ HOME: TEST_SERVICE_HOME });
+    expect(command?.environment).toEqual({
+      PLAIN: "first",
+      QUOTED: "value with spaces",
+      REPEATED: "last value",
+      INLINE_FILE: "file",
+      FILE_ONLY: "from-file",
+    });
+    expect(command?.environmentValueSources).toEqual({
+      PLAIN: "inline",
+      QUOTED: "inline",
+      REPEATED: "inline",
+      INLINE_FILE: "inline-and-file",
+      FILE_ONLY: "file",
+    });
+  });
+
   it("ignores missing optional EnvironmentFile entries", async () => {
     await expectExecStartWithoutEnvironment("EnvironmentFile=-%h/.openclaw/missing.env");
   });
@@ -2445,6 +2478,63 @@ describe("systemd service install and uninstall", () => {
       ).rejects.toThrow("systemctl --user unavailable: Failed to connect to bus: No medium found");
 
       expect(execFileMock).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  it.each([
+    "Access denied",
+    "Unit openclaw-node.service is not loaded properly: Invalid argument.",
+    "Failed to disable unit: Access denied.\nUnit openclaw-node.service is not active.",
+    "Unit is not loaded.",
+    "Unit inactive.",
+    "Unit unrelated.service is not active.",
+  ])("refuses to remove the unit when systemctl disable fails: %s", async (detail) => {
+    await withNodeSystemdFixture(async ({ env, unitPath, nodeEnvFilePath }) => {
+      await fs.mkdir(path.dirname(unitPath), { recursive: true });
+      await fs.writeFile(unitPath, "[Unit]\nDescription=OpenClaw Node\n", "utf8");
+      await fs.writeFile(nodeEnvFilePath, "OPENCLAW_GATEWAY_TOKEN=preserved-token\n", "utf8");
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "disable", "--now", NODE_SERVICE);
+          cb(createExecFileError(detail), "", detail);
+        });
+
+      const { stdout } = createWritableStreamMock();
+
+      await expect(uninstallSystemdService({ env, stdout })).rejects.toThrow(
+        `systemctl disable failed: ${detail}`,
+      );
+      await expect(fs.readFile(unitPath, "utf8")).resolves.toContain("OpenClaw Node");
+      await expect(fs.readFile(nodeEnvFilePath, "utf8")).resolves.toContain("preserved-token");
+    });
+  });
+
+  it.each([
+    "Unit file openclaw-node.service does not exist.",
+    "Failed to disable unit: Unit file openclaw-node.service does not exist.",
+    "Unit openclaw-node.service could not be found.",
+    "Failed to stop openclaw-node.service: Unit openclaw-node.service not loaded.",
+    "Failed to stop openclaw-node.service: Unit openclaw-node.service is not active.",
+  ])("keeps missing or inactive systemd unit removal idempotent: %s", async (detail) => {
+    await withNodeSystemdFixture(async ({ env }) => {
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "disable", "--now", NODE_SERVICE);
+          cb(createExecFileError(detail), "", detail);
+        });
+
+      const { write, stdout } = createWritableStreamMock();
+
+      await expect(uninstallSystemdService({ env, stdout })).resolves.toBeUndefined();
+      expect(requireFirstWrite(write)).toContain("Systemd service not found");
     });
   });
 

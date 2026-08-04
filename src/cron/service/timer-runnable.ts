@@ -1,7 +1,6 @@
 import { parseAbsoluteTimeMs } from "../parse.js";
 import type { CronJob } from "../types.js";
 import {
-  computeJobPreviousRunAtMs,
   computeJobPreviousRunAtOrBeforeMs,
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
   hasActiveCronRun,
@@ -26,7 +25,7 @@ export function hasMissedCronSlotSinceLastRun(job: CronJob, nowMs: number): bool
   }
   let previousRunAtMs: number | undefined;
   try {
-    previousRunAtMs = computeJobPreviousRunAtMs(job, nowMs);
+    previousRunAtMs = computeJobPreviousRunAtOrBeforeMs(job, nowMs);
   } catch {
     return false;
   }

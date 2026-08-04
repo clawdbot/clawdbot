@@ -15,10 +15,90 @@ const getUserProfileListItem = vi.hoisted(() =>
 );
 
 vi.mock("../state/user-profiles.js", () => ({ getUserProfileListItem }));
+vi.mock("./session-utils-row.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-utils-row.js")>();
+  return {
+    ...actual,
+    projectSessionActor: (
+      actor: Parameters<typeof actual.projectSessionActor>[0],
+      identities: Parameters<typeof actual.projectSessionActor>[1],
+    ) => {
+      if (actor?.id === "shared-id") {
+        return actor.type === "human"
+          ? { type: actor.type, id: actor.id, label: "Alpha" }
+          : { type: actor.type, id: actor.id, label: "Zulu", avatarUrl: "/avatar" };
+      }
+      if (actor?.id === "unicode-id") {
+        return {
+          type: actor.type,
+          id: actor.id,
+          label: actor.type === "human" ? "é" : "e\u0301",
+        };
+      }
+      return actual.projectSessionActor(actor, identities);
+    },
+  };
+});
 
 import { listSessionsFromStore, listSessionsFromStoreAsync } from "./session-utils.js";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  getUserProfileListItem.mockClear();
+});
+
+it("keeps creator labels and avatars stable across actor order", () => {
+  const actorOrders = [
+    ["human", "agent"],
+    ["agent", "human"],
+  ] as const;
+  for (const actorOrder of actorOrders) {
+    const store = Object.fromEntries(
+      actorOrder.map((type, index) => [
+        `agent:main:${index}`,
+        {
+          createdActor: { type, id: "shared-id" },
+          sessionId: `session-${index}`,
+          updatedAt: 2 - index,
+        } satisfies SessionEntry,
+      ]),
+    );
+    const result = listSessionsFromStore({
+      cfg: {} as OpenClawConfig,
+      storePath: "/tmp/openclaw-session-creator-order",
+      store,
+      opts: { archived: "all" },
+    });
+
+    expect(result.creators).toEqual([{ id: "shared-id", label: "Alpha", avatarUrl: "/avatar" }]);
+  }
+});
+
+it("breaks locale-equivalent creator label ties deterministically", () => {
+  for (const actorOrder of [
+    ["human", "agent"],
+    ["agent", "human"],
+  ] as const) {
+    const store = Object.fromEntries(
+      actorOrder.map((type, index) => [
+        `agent:main:unicode-${index}`,
+        {
+          createdActor: { type, id: "unicode-id" },
+          sessionId: `unicode-session-${index}`,
+          updatedAt: 2 - index,
+        } satisfies SessionEntry,
+      ]),
+    );
+    const result = listSessionsFromStore({
+      cfg: {} as OpenClawConfig,
+      storePath: "/tmp/openclaw-session-creator-unicode-order",
+      store,
+      opts: { archived: "all" },
+    });
+
+    expect(result.creators).toEqual([{ id: "unicode-id", label: "e\u0301" }]);
+  }
+});
 
 it("returns the complete deterministic creator facet independently of pagination", () => {
   const store: Record<string, SessionEntry> = {

@@ -1,4 +1,5 @@
 // Inspects gateway port listeners and connection state.
+import net from "node:net";
 import os from "node:os";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -12,7 +13,11 @@ import {
   type LsofListenerRecord,
 } from "./ports-lsof-listeners.js";
 import { resolveLsofCommand } from "./ports-lsof.js";
-import { parseTcpEndpoint, parseWindowsNetstatListeners } from "./ports-netstat.js";
+import {
+  parseTcpEndpoint,
+  parseTcpListenerEndpoint,
+  parseWindowsNetstatListeners,
+} from "./ports-netstat.js";
 import { probePortUsage } from "./ports-probe.js";
 import type {
   PortConnection,
@@ -620,25 +625,38 @@ async function readWindowsEstablishedConnections(
   return { connections: result.entries, detail: result.detail, errors: result.errors };
 }
 
-export async function inspectPortUsage(port: number): Promise<PortUsage> {
+export async function inspectPortUsage(
+  port: number,
+  options?: { probeHosts?: readonly string[] },
+): Promise<PortUsage> {
   const result =
     process.platform === "win32" ? await readWindowsListeners(port) : await readUnixListeners(port);
-  return buildPortUsage(port, result);
+  return buildPortUsage(port, result, options?.probeHosts);
 }
 
-async function buildPortUsage(port: number, result: ListenerReadResult): Promise<PortUsage> {
+async function buildPortUsage(
+  port: number,
+  result: ListenerReadResult,
+  probeHosts?: readonly string[],
+): Promise<PortUsage> {
   const errors: string[] = [];
   errors.push(...result.errors);
   let listeners = result.listeners;
-  let status: PortUsageStatus = listeners.length > 0 ? "busy" : "unknown";
-  if (listeners.length === 0) {
-    status = await probePortUsage(port);
-  }
+  const status: PortUsageStatus = probeHosts
+    ? await probePortUsage(port, probeHosts)
+    : listeners.length > 0
+      ? "busy"
+      : await probePortUsage(port);
   if (status !== "busy") {
     listeners = [];
+  } else if (probeHosts) {
+    listeners = listeners.filter((listener) =>
+      isListenerRelevantToProbeHosts(listener, port, probeHosts),
+    );
   }
   const hints = buildPortHints(listeners, port);
   if (status === "busy" && listeners.length === 0) {
+    // The bind probe is authoritative; filtered diagnostics must never turn busy into free.
     hints.push(
       "Port is in use but process details are unavailable (install lsof or run as an admin user).",
     );
@@ -653,11 +671,51 @@ async function buildPortUsage(port: number, result: ListenerReadResult): Promise
   };
 }
 
-export async function inspectPortUsages(ports: readonly number[]): Promise<Map<number, PortUsage>> {
+function isWildcardTcpHost(host: string): boolean {
+  return host === "0.0.0.0" || host === "::" || host === "*";
+}
+
+function isSameTcpAddressFamily(leftHost: string, rightHost: string): boolean {
+  const leftFamily = net.isIP(leftHost);
+  const rightFamily = net.isIP(rightHost);
+  return leftFamily === 0 || rightFamily === 0 || leftFamily === rightFamily;
+}
+
+function isListenerRelevantToProbeHosts(
+  listener: PortListener,
+  port: number,
+  probeHosts: readonly string[],
+): boolean {
+  const endpoint = parseTcpListenerEndpoint(listener.address);
+  if (!endpoint || endpoint.port !== port) {
+    return false;
+  }
+  return probeHosts.some((probeHost) => {
+    const normalizedProbeHost = normalizeLowercaseStringOrEmpty(probeHost);
+    if (isWildcardTcpHost(endpoint.host)) {
+      return isSameTcpAddressFamily(endpoint.host, normalizedProbeHost);
+    }
+    if (isWildcardTcpHost(normalizedProbeHost)) {
+      return isSameTcpAddressFamily(normalizedProbeHost, endpoint.host);
+    }
+    return normalizedProbeHost === endpoint.host;
+  });
+}
+
+export async function inspectPortUsages(
+  ports: readonly number[],
+  options?: { probeHostsByPort?: ReadonlyMap<number, readonly string[]> },
+): Promise<Map<number, PortUsage>> {
   const uniquePorts = Array.from(new Set(ports));
   if (process.platform === "win32") {
     const entries = await Promise.all(
-      uniquePorts.map(async (port) => [port, await inspectPortUsage(port)] as const),
+      uniquePorts.map(async (port) => {
+        const probeHosts = options?.probeHostsByPort?.get(port);
+        return [
+          port,
+          await inspectPortUsage(port, probeHosts ? { probeHosts } : undefined),
+        ] as const;
+      }),
     );
     return new Map(entries);
   }
@@ -666,7 +724,14 @@ export async function inspectPortUsages(ports: readonly number[]): Promise<Map<n
   const entries = await Promise.all(
     uniquePorts.map(
       async (port) =>
-        [port, await buildPortUsage(port, await readUnixListeners(port, snapshot))] as const,
+        [
+          port,
+          await buildPortUsage(
+            port,
+            await readUnixListeners(port, snapshot),
+            options?.probeHostsByPort?.get(port),
+          ),
+        ] as const,
     ),
   );
   return new Map(entries);

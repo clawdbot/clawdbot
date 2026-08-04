@@ -24,6 +24,7 @@ import type {
 type ChatComposerDisabledBannerContent = {
   text: string;
   actionLabel: string;
+  disabledReason?: string;
   onAction: () => void;
 };
 

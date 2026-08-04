@@ -57,7 +57,7 @@ import {
 const PROVIDER_ID = "xai";
 
 const XAI_CREDIT_OR_SPENDING_LIMIT_RE =
-  /\b(?:used all available credits|monthly spending limit|purchase more credits|raise your spending limit)\b/i;
+  /\b(?:used all available credits|run out of credits|monthly spending limit|purchase more credits|raise your spending limit|need a Grok subscription)\b/i;
 const XAI_RATE_LIMIT_RE = /\b(?:rate limit exceeded|too many requests)\b/i;
 
 const loadCodeExecutionModule = createLazyRuntimeModule(() => import("./code-execution.js"));
@@ -157,8 +157,10 @@ function createLazyXSearchTool(ctx: OpenClawPluginToolContext) {
     return null;
   }
 
-  return createXSearchToolDefinition(async (toolCallId: string, args: Record<string, unknown>) => {
+  return createXSearchToolDefinition(async (toolCallId, args, signal) => {
+    signal?.throwIfAborted();
     const { createXSearchTool } = await loadXSearchModule();
+    signal?.throwIfAborted();
     const tool = createXSearchTool({
       config: ctx.config as never,
       runtimeConfig: (ctx.runtimeConfig as never) ?? null,
@@ -167,7 +169,7 @@ function createLazyXSearchTool(ctx: OpenClawPluginToolContext) {
     if (!tool) {
       return jsonResult(buildMissingXSearchApiKeyPayload());
     }
-    return await tool.execute(toolCallId, args);
+    return await tool.execute(toolCallId, args, signal);
   });
 }
 

@@ -133,6 +133,7 @@ class ConfigFormStructuredDraft extends OpenClawLightDomElement {
         controlIdentity: draftValue,
         structuredDraftOwner: true,
         onPatch: (path, value) => this.patchDraft(path, value),
+        onRemove: (path) => this.patchDraft(path, undefined),
       })}
       ${this.error
         ? html`

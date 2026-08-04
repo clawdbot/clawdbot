@@ -3,6 +3,7 @@
  */
 import { safeParseJson } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import {
   isMessageToolConversationCreateActionName,
@@ -63,8 +64,29 @@ function isMessageToolSourceReplyActionName(action: unknown): boolean {
   if (typeof action !== "string") {
     return false;
   }
+  // Polls and reply-type actions deliver the visible source answer too; they
+  // qualify only when the runner confirmed the current-source route (or the
+  // caller allows explicit routes), enforced by the caller below.
   const normalized = action.trim().toLowerCase();
-  return normalized === "reply" || normalized === "thread-reply";
+  return normalized === "reply" || normalized === "thread-reply" || normalized === "poll";
+}
+
+/** Read the visible text delivered by a source-reply message action. */
+export function readMessageToolSourceReplyText(args: unknown): string | undefined {
+  const record = asRecord(args);
+  if (!isMessageToolSourceReplyActionName(record.action)) {
+    return undefined;
+  }
+  if (normalizeStatus(record.action) === "poll") {
+    return readStringValue(record.pollQuestion) ?? readStringValue(record.poll_question);
+  }
+  for (const key of ["content", "message", "text", "body"]) {
+    const value = readStringValue(record[key]);
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
 }
 
 function normalizeStatus(value: unknown): string | undefined {
@@ -552,8 +574,8 @@ export function isDeliveredMessagingToolResult(params: {
 }
 
 /**
- * Only implicit-route, non-dry-run, delivered `message.send` calls qualify.
- * Explicit routes and other messaging tools are outbound side effects, not source replies.
+ * Only delivered message actions on the confirmed current route qualify.
+ * Explicit routes require an authoritative current-source marker from the action runner.
  */
 export function isDeliveredMessageToolOnlySourceReplyResult(params: {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;

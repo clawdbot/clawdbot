@@ -247,6 +247,20 @@ describe("finalizeInboundContext text facts", () => {
     });
   });
 
+  it("preserves an explicitly empty raw projection", () => {
+    const ctx = finalizeInboundContext({
+      Body: "fallback body",
+      BodyForCommands: "/new payload",
+      RawBody: "",
+    });
+
+    expect(ctx).toMatchObject({
+      commandText: "/new payload",
+      agentText: "",
+      rawText: "",
+    });
+  });
+
   it("normalizes canonical text once and keeps repeated finalization stable", () => {
     const ctx = finalizeInboundContext({
       Body: "body\r\nline",

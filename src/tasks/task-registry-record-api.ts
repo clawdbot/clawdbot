@@ -40,16 +40,17 @@ import {
   tasks,
   tryPersistTaskUpsert,
 } from "./task-registry-state.js";
-import type {
-  JsonValue,
-  TaskDeliveryState,
-  TaskDeliveryStatus,
-  TaskNotifyPolicy,
-  TaskRecord,
-  TaskRuntime,
-  TaskScopeKind,
-  TaskStatus,
-  TaskTerminalOutcome,
+import {
+  parseTaskNotifyPolicy,
+  type JsonValue,
+  type TaskDeliveryState,
+  type TaskDeliveryStatus,
+  type TaskNotifyPolicy,
+  type TaskRecord,
+  type TaskRuntime,
+  type TaskScopeKind,
+  type TaskStatus,
+  type TaskTerminalOutcome,
 } from "./task-registry.types.js";
 import { resolveTaskCleanupAfter } from "./task-retention.js";
 
@@ -465,6 +466,7 @@ export function recordTaskProgressByRunId(params: {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
+  childSessionKey?: string | null;
   lastEventAt?: number;
   progressSummary?: string | null;
   eventSummary?: string | null;
@@ -473,6 +475,7 @@ export function recordTaskProgressByRunId(params: {
     runId: params.runId,
     runtime: params.runtime,
     sessionKey: params.sessionKey,
+    childSessionKey: params.childSessionKey,
     lastEventAt: params.lastEventAt,
     progressSummary: params.progressSummary,
     eventSummary: params.eventSummary,
@@ -531,9 +534,10 @@ export function updateTaskNotifyPolicyById(params: {
   taskId: string;
   notifyPolicy: TaskNotifyPolicy;
 }): TaskRecord | null {
+  const notifyPolicy = parseTaskNotifyPolicy(params.notifyPolicy);
   ensureTaskRegistryReady();
   return updateTask(params.taskId, {
-    notifyPolicy: params.notifyPolicy,
+    notifyPolicy,
     lastEventAt: Date.now(),
   });
 }

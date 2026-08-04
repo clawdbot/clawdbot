@@ -17,6 +17,8 @@ export type ReplySessionBinding = {
 
 type InternalReplySessionOptions = {
   expectedExistingSessionId?: string;
+  onDeliberateSilentTerminalReply?: () => void;
+  onPendingContinuation?: () => void;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
   /** Prevent implicit rollover after a caller has durably admitted this exact session. */
   pinExpectedExistingSession?: boolean;
