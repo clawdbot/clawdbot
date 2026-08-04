@@ -10,6 +10,8 @@
  * synthesizes a missing result; a result that never settles is still flushed
  * synthetically once the settlement timeout elapses.
  */
+import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+
 type PendingToolCall = { id: string; name?: string };
 
 type PendingEntry = {
@@ -89,7 +91,7 @@ export function createPendingToolCallState(): PendingToolCallState {
         await Promise.race([
           settleAll,
           new Promise<void>((resolve) => {
-            timer = setTimeout(resolve, timeoutMs);
+            timer = setTimeout(resolve, resolveTimerTimeoutMs(timeoutMs, MAX_TIMER_TIMEOUT_MS));
             timer.unref?.();
           }),
         ]);

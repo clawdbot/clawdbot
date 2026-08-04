@@ -256,6 +256,25 @@ describe("flushPendingToolResultsAfterIdle", () => {
     );
   });
 
+  it("clamps oversized settlement timeouts before scheduling", async () => {
+    // JavaScript timers overflow above the platform max; clamp to keep huge
+    // timeouts from firing immediately and synthesizing a result before a slow
+    // real result settles.
+    const sm = guardSessionManager(SessionManager.inMemory());
+    const agent = { waitForIdle: async () => {} };
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      await flushPendingToolResultsAfterIdle({
+        agent,
+        sessionManager: sm,
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      });
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
   it("flushes synthetic when a pending result never settles within the timeout", async () => {
     // Fail-safe: if the real result never lands, the settlement barrier times
     // out and the guard still synthesizes a missing result so the transcript
