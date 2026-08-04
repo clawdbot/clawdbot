@@ -56,16 +56,46 @@ function runtimeSignature(runtime: Awaited<ReturnType<typeof readScheduledTaskRu
     .join("|");
 }
 
+/**
+ * Managed-port gateway processes observed before `schtasks /Run`.
+ *
+ * Anything already in this set was not started by the run we are about to trigger,
+ * so it cannot serve as evidence that Task Scheduler owns a gateway process.
+ */
+async function readPreLaunchGatewayPids(env: GatewayServiceEnv): Promise<ReadonlySet<number>> {
+  if (!shouldManageGatewayListenerPort(env)) {
+    return new Set();
+  }
+  const command = await readScheduledTaskCommand(env).catch(() => null);
+  const port = resolveScheduledTaskCommandPort(env, command);
+  if (!port) {
+    return new Set();
+  }
+  const probeHosts = await resolveGatewayServiceProbeHosts({ env, command });
+  const pids = await resolveScheduledTaskOwnedGatewayPids(env, { port, probeHosts }, command).catch(
+    () => [],
+  );
+  return new Set(pids);
+}
+
 async function shouldFallbackScheduledTaskLaunch(params: {
   env: GatewayServiceEnv;
   scriptPath: string;
+  preLaunchGatewayPids: ReadonlySet<number>;
 }): Promise<boolean> {
   const readLaunchObservation = async (): Promise<{
     state: "running" | "not-yet-run" | "stopped-success" | "other";
     signature: string;
   }> => {
     const runtime = await readScheduledTaskRuntime(params.env).catch(() => null);
-    if (runtime?.status === "running") {
+    // `readScheduledTaskRuntime` reports `running` with the owning pid when raw Task
+    // Scheduler state is not running but a gateway owns the managed port. That pid is
+    // launch progress only when it appeared after `/Run`; a pre-existing foreground
+    // gateway must fall through to the raw last-run-result classification below.
+    if (
+      runtime?.status === "running" &&
+      !(runtime.pid !== undefined && params.preLaunchGatewayPids.has(runtime.pid))
+    ) {
       return { state: "running", signature: runtimeSignature(runtime) };
     }
     if (runtime?.status !== "stopped") {
@@ -92,7 +122,8 @@ async function shouldFallbackScheduledTaskLaunch(params: {
         { port: taskPort, probeHosts },
         command,
       );
-      if (ownedPids.length > 0) {
+      // Only a process that appeared after `/Run` proves Task Scheduler started one.
+      if (ownedPids.some((pid) => !params.preLaunchGatewayPids.has(pid))) {
         return true;
       }
     }
@@ -170,13 +201,18 @@ export async function runScheduledTaskOrThrow(params: {
   scriptPath: string;
   onMutation?: () => void;
 }): Promise<ScheduledTaskActivation> {
+  const preLaunchGatewayPids = await readPreLaunchGatewayPids(params.env);
   const run = await execSchtasks(["/Run", "/TN", params.taskName]);
   if (run.code !== 0) {
     throw new Error(`schtasks run failed: ${run.stderr || run.stdout}`.trim());
   }
   params.onMutation?.();
   if (
-    !(await shouldFallbackScheduledTaskLaunch({ env: params.env, scriptPath: params.scriptPath }))
+    !(await shouldFallbackScheduledTaskLaunch({
+      env: params.env,
+      scriptPath: params.scriptPath,
+      preLaunchGatewayPids,
+    }))
   ) {
     return "scheduled-task";
   }
