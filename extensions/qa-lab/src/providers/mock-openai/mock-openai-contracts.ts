@@ -7,6 +7,10 @@ import { writeJson } from "../shared/http-json.js";
 
 export type ResponsesInputItem = Record<string, unknown>;
 
+export type MockOpenAiRequestKind = "agent-initial" | "compaction-summary" | "tool-continuation";
+
+type MockOpenAiRequestOutcome = "success" | "error";
+
 export type StreamEvent =
   | { type: "response.created"; response: { id: string } }
   | {
@@ -122,6 +126,10 @@ export type MockOpenAiRequestSnapshot = {
   model: string;
   providerVariant: MockOpenAiProviderVariant;
   imageInputCount: number;
+  requestKind: MockOpenAiRequestKind;
+  outcome: MockOpenAiRequestOutcome;
+  errorCode?: string;
+  rawByteLength: number;
   plannedToolCallId?: string;
   plannedToolName?: string;
   plannedWireToolName?: string;
@@ -302,6 +310,8 @@ export const QA_MCP_CODE_MODE_API_FILE_PROMPT_RE = /mcp code mode api file qa ch
 
 export type MockScenarioState = {
   anthropicThinkingErrorScenarioKeys: Set<string>;
+  compactionOverflowInjected: boolean;
+  compactionRetryActive: boolean;
   subagentFanoutCompletedWorkers: Set<"alpha" | "beta">;
   subagentFanoutPhase: number;
   subagentHandoffSpawned: boolean;
