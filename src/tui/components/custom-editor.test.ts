@@ -226,6 +226,18 @@ describe("CustomEditor", () => {
     expect(editor.getText()).toBe("");
   });
 
+  it("does not expand stored paste text for ordinary input", () => {
+    const tui = { requestRender: vi.fn() } as unknown as TUI;
+    const editor = new CustomEditor(tui, editorTheme);
+    editor.setText("draft");
+    const getExpandedText = vi.spyOn(editor, "getExpandedText");
+
+    editor.handleInput("x");
+
+    expect(getExpandedText).not.toHaveBeenCalled();
+    expect(editor.getText()).toBe("draftx");
+  });
+
   it("keeps pi-tui trimming for ordinary submissions", () => {
     const tui = { requestRender: vi.fn() } as unknown as TUI;
     const editor = new CustomEditor(tui, editorTheme);

@@ -130,20 +130,18 @@ export class CustomEditor extends Editor {
       this.setText(this.getText());
     }
 
-    const expandedText = this.getExpandedText();
-    if (
-      keybindings.matches(data, "tui.input.submit") &&
-      /^\s+!/u.test(expandedText) &&
-      this.onSubmit
-    ) {
-      const onSubmit = this.onSubmit;
-      this.onSubmit = () => onSubmit(expandedText);
-      try {
-        super.handleInput(data);
-      } finally {
-        this.onSubmit = onSubmit;
+    if (keybindings.matches(data, "tui.input.submit") && this.onSubmit) {
+      const expandedText = this.getExpandedText();
+      if (/^\s+!/u.test(expandedText)) {
+        const onSubmit = this.onSubmit;
+        this.onSubmit = () => onSubmit(expandedText);
+        try {
+          super.handleInput(data);
+        } finally {
+          this.onSubmit = onSubmit;
+        }
+        return;
       }
-      return;
     }
     super.handleInput(data);
   }
