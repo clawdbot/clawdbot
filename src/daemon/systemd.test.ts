@@ -1644,7 +1644,7 @@ describe("stageSystemdService", () => {
     });
   });
 
-  it("writes dotenv-backed values to a separate env file and keeps inline env minimal", async () => {
+  it("leaves dotenv-backed values to gateway startup so restarts observe edits", async () => {
     await withStageFixture(async ({ env, stateDir, unitPath, envFilePath }) => {
       await fs.writeFile(
         path.join(stateDir, ".env"),
@@ -1666,18 +1666,13 @@ describe("stageSystemdService", () => {
         },
       });
 
-      const [unit, envFile, envFileStat] = await Promise.all([
-        fs.readFile(unitPath, "utf8"),
-        fs.readFile(envFilePath, "utf8"),
-        fs.stat(envFilePath),
-      ]);
+      const unit = await fs.readFile(unitPath, "utf8");
 
-      expect(unit).toContain(`EnvironmentFile=-${envFilePath}`);
+      expect(unit).not.toContain("EnvironmentFile=");
       expect(unit).toContain("Environment=OPENCLAW_GATEWAY_PORT=18789");
       expect(unit).not.toContain("Environment=OPENCLAW_GATEWAY_TOKEN=dotenv-token");
       expect(unit).not.toContain("Environment=LLM_API_KEY=dotenv-key");
-      expect(envFile).toBe("OPENCLAW_GATEWAY_TOKEN=dotenv-token\nLLM_API_KEY=dotenv-key\n");
-      expect(envFileStat.mode & 0o777).toBe(0o600);
+      await expect(fs.access(envFilePath)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 
@@ -1965,7 +1960,7 @@ describe("stageSystemdService", () => {
     });
   });
 
-  it("keeps inline overrides out of the generated env file", async () => {
+  it("keeps explicit inline overrides while leaving dotenv values to gateway startup", async () => {
     await withStageFixture(async ({ env, stateDir, unitPath, envFilePath }) => {
       await fs.writeFile(
         path.join(stateDir, ".env"),
@@ -1986,14 +1981,12 @@ describe("stageSystemdService", () => {
         },
       });
 
-      const [unit, envFile] = await Promise.all([
-        fs.readFile(unitPath, "utf8"),
-        fs.readFile(envFilePath, "utf8"),
-      ]);
+      const unit = await fs.readFile(unitPath, "utf8");
 
-      expect(unit).toContain(`EnvironmentFile=-${envFilePath}`);
+      expect(unit).not.toContain("EnvironmentFile=");
       expect(unit).toContain("Environment=OPENCLAW_GATEWAY_TOKEN=fresh-token");
-      expect(envFile).toBe("LLM_API_KEY=dotenv-key\n");
+      expect(unit).not.toContain("Environment=LLM_API_KEY=dotenv-key");
+      await expect(fs.access(envFilePath)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 
@@ -2043,7 +2036,7 @@ describe("stageSystemdService", () => {
       expect(envFile).not.toContain("OPENCLAW_GATEWAY_TOKEN");
       // Operator-added key not managed inline must survive.
       expect(envFile).toContain("OPENROUTER_API_KEY=or-operator-key");
-      expect(envFile).toContain("LLM_API_KEY=dotenv-key");
+      expect(envFile).not.toContain("LLM_API_KEY");
       expect(unit).toContain("Environment=OPENCLAW_GATEWAY_TOKEN=fresh-gateway-token");
       expect(unit).not.toContain("Environment=OPENROUTER_API_KEY=or-operator-key");
       expect(unit).not.toContain("Environment=LLM_API_KEY=dotenv-key");
@@ -2101,10 +2094,10 @@ describe("stageSystemdService", () => {
       });
 
       const envFile = await fs.readFile(envFilePath, "utf8");
-      // Operator secrets must survive; state-dir key gets updated value.
+      // Operator secrets survive; the state-dir key is loaded directly by Gateway startup.
       expect(envFile).toContain("ANTHROPIC_API_KEY=sk-ant-operator-secret");
       expect(envFile).toContain("OPENROUTER_API_KEY=or-operator-key");
-      expect(envFile).toContain("LLM_API_KEY=new-value");
+      expect(envFile).not.toContain("LLM_API_KEY");
     });
   });
 
