@@ -109,6 +109,7 @@ describe("doctor auth and SecretRef product proof", () => {
         `fs.writeFileSync(${JSON.stringify(execMarker)}, 'executed');`,
         "process.stdout.write(JSON.stringify({ protocolVersion: 1, values: { 'gateway/token': 'qa-exec-token' } }));",
       ].join("");
+      const activeInstance = instance;
       await withSecureTestNodeCommand(async (command) => {
         await writeConfig({
           ...localGatewayConfig({
@@ -127,7 +128,7 @@ describe("doctor auth and SecretRef product proof", () => {
             },
           },
         });
-        const execGated = await instance.cli(
+        const execGated = await activeInstance.cli(
           ["doctor", "--non-interactive", "--no-workspace-suggestions"],
           { timeoutMs: 120_000 },
         );
@@ -137,7 +138,7 @@ describe("doctor auth and SecretRef product proof", () => {
         );
         await expect(fs.access(execMarker)).rejects.toThrow();
 
-        const execAllowed = await instance.cli(
+        const execAllowed = await activeInstance.cli(
           ["doctor", "--non-interactive", "--allow-exec", "--no-workspace-suggestions"],
           { timeoutMs: 120_000 },
         );
