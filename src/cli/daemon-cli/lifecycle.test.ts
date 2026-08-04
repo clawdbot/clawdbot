@@ -77,7 +77,7 @@ const restartSystemdService = vi.hoisted(() =>
 );
 const stopSystemdService = vi.hoisted(() => vi.fn<() => Promise<void>>(async () => {}));
 const isTerminalInteractive = vi.fn(() => true);
-const throwIfPortBusyWithoutOwner = vi.fn<(port: number) => Promise<void>>(async () => {});
+const throwIfPortBusyWithoutOwner = vi.fn<(port: number, errorMessage?: string) => Promise<void>>(async () => {});
 const appendGatewayLifecycleAudit = vi.fn();
 const createGatewayLifecycleMutationAudit = vi.fn(
   (params: { action: string; source?: string }) => (mutation: { mode: string; pid?: number }) =>
@@ -168,7 +168,7 @@ vi.mock("../terminal-interactivity.js", () => ({
 }));
 
 vi.mock("../../infra/ports-probe.js", () => ({
-  throwIfPortBusyWithoutOwner: (port: number) => throwIfPortBusyWithoutOwner(port),
+  throwIfPortBusyWithoutOwner: (port: number, msg?: string) => throwIfPortBusyWithoutOwner(port, msg),
 }));
 
 vi.mock("./lifecycle-audit.js", () => ({
@@ -1134,6 +1134,9 @@ describe("runDaemonRestart health checks", () => {
     );
 
     expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
-    expect(throwIfPortBusyWithoutOwner).toHaveBeenCalledWith(18789);
+    expect(throwIfPortBusyWithoutOwner).toHaveBeenCalledWith(
+      18789,
+      expect.stringContaining("openclaw gateway status --deep"),
+    );
   });
 });
