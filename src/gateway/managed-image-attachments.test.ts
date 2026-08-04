@@ -2181,5 +2181,23 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
     expect(readSessionMessagesMock).not.toHaveBeenCalled();
   });
+
+  it("keeps ticket/HTTP ownership checks fail-closed when the store read throws", async () => {
+    const fixture = await createFixture(stateDir);
+    loadSessionEntryMock.mockImplementation(() => {
+      throw new Error("session store is unreadable");
+    });
+
+    // The non-strict path must not accept a thrown lookup as transcript
+    // ownership: no ticket may be minted, no media served.
+    const download = await resolveManagedOutgoingImageArtifactDownload({
+      sessionKey: fixture.sessionKey,
+      artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${fixture.attachmentId}`,
+      stateDir,
+    });
+
+    expect(download).toBeNull();
+    expect(readSessionMessagesMock).not.toHaveBeenCalled();
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

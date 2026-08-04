@@ -1020,7 +1020,11 @@ async function recordMatchesTranscriptMessage(
     opts,
   );
   if (result.kind === "unavailable") {
-    return "unavailable";
+    // The unavailable sentinel is reserved for the strict cleanup path, which
+    // retains media on unknown retention state. Ticket/HTTP readers never pass
+    // strictStore: an unavailable store must stay non-truthy (false) so their
+    // boolean negation keeps rejecting access, exactly as before this change.
+    return opts?.strictStore === true ? "unavailable" : false;
   }
   return (
     result.index?.has(
