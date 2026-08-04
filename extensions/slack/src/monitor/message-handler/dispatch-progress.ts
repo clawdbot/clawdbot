@@ -32,7 +32,6 @@ import {
   stopSlackStream,
   type SlackStreamSession,
 } from "../../streaming.js";
-import { escapeSlackMrkdwn } from "../mrkdwn.js";
 import {
   resolveExplicitSlackProgressTitle,
   resolveSlackStreamRecipientTeamId,
@@ -323,7 +322,6 @@ export function createSlackProgressRuntime(runtimeParams: {
     mode: slackStreaming.mode,
     active: progressDraftActive && streamMode === "status_final",
     seed: progressSeed,
-    formatLine: escapeSlackMrkdwn,
     reasoningLinePrefix: "🧠 ",
     commentaryLinePrefix: "💬 ",
     reasoningGate: previewToolProgressEnabled,
@@ -439,7 +437,6 @@ export function createSlackProgressRuntime(runtimeParams: {
       entry: account.config,
       lines: legacyPreviewToolProgressLines,
       seed: progressSeed,
-      formatLine: escapeSlackMrkdwn,
       narration: explanation,
       plan: steps,
     });
