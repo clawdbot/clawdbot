@@ -1,13 +1,20 @@
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveUserPath } from "../utils.js";
-import type { PluginCandidate } from "./discovery.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
+
+type InstalledPluginRecordCandidate = {
+  origin: string;
+  rootDir: string;
+  packageDir?: string;
+  source?: string;
+  setupSource?: string;
+};
 
 /** Returns whether a discovered candidate belongs to its persisted install record. */
 export function matchesInstalledPluginRecord(params: {
   pluginId: string;
-  candidate: PluginCandidate;
+  candidate: InstalledPluginRecordCandidate;
   config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   installRecords: Record<string, PluginInstallRecord>;
