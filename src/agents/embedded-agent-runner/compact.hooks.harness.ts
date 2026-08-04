@@ -641,16 +641,8 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
-    captureCurrentPluginMetadataSnapshotState: vi.fn(() => ({
-      snapshot: undefined,
-      configFingerprint: undefined,
-      compatiblePolicyHashes: undefined,
-      compatibleConfigFingerprints: undefined,
-      configIdentities: new WeakSet(),
-    })),
     getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
     resolvePluginMetadataControlPlaneFingerprint: vi.fn(() => "test-plugin-fingerprint"),
-    restoreCurrentPluginMetadataSnapshotState: vi.fn(),
     setCurrentPluginMetadataSnapshot: vi.fn(),
   }));
 

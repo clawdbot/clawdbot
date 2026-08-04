@@ -12,11 +12,7 @@ import {
 import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  captureCurrentPluginMetadataSnapshotState,
-  restoreCurrentPluginMetadataSnapshotState,
-  setCurrentPluginMetadataSnapshot,
-} from "../plugins/current-plugin-metadata-snapshot.js";
+import { installTemporaryCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
@@ -71,15 +67,21 @@ export function installSystemAgentClaudeCliBackendTestFixture(): () => void {
 export function installSystemAgentPluginMetadataTestSnapshot(
   config: OpenClawConfig = {},
 ): SystemAgentPluginMetadataTestSnapshot {
-  const previous = captureCurrentPluginMetadataSnapshotState();
   const snapshot = resolvePluginMetadataSnapshot({ config, env: process.env });
+  let releaseCurrentSnapshot: () => boolean = () => false;
   const rebindForCurrentEnv = () => {
-    setCurrentPluginMetadataSnapshot(snapshot, { config, env: process.env });
+    releaseCurrentSnapshot();
+    releaseCurrentSnapshot = installTemporaryCurrentPluginMetadataSnapshot(snapshot, {
+      config,
+      env: process.env,
+    }).release;
   };
   rebindForCurrentEnv();
   return {
     rebindForCurrentEnv,
-    restore: () => restoreCurrentPluginMetadataSnapshotState(previous),
+    restore: () => {
+      releaseCurrentSnapshot();
+    },
   };
 }
 
