@@ -1673,11 +1673,14 @@ describe("sendMessageIMessage receipts", () => {
       replyToId: "reply-1",
     });
 
-    // First attempt carried reply_to and hard-failed on the AppleScript-only
-    // transport; the retry drops reply_to and delivers rather than losing it.
+    // First attempt carried reply_to and thread_originator_guid and hard-failed
+    // on the AppleScript-only transport; the retry drops both fields and
+    // delivers rather than losing the message.
     expect(sendParams).toHaveLength(2);
     expect(sendParams[0]).toHaveProperty("reply_to", "reply-1");
+    expect(sendParams[0]).toHaveProperty("thread_originator_guid");
     expect(sendParams[1]).not.toHaveProperty("reply_to");
+    expect(sendParams[1]).not.toHaveProperty("thread_originator_guid");
     expect(result.messageId).toBe("p:0/imsg-plain-fallback");
     expect(result.sentText).toBe("hello");
     // The receipt reflects the unthreaded send that was actually delivered.

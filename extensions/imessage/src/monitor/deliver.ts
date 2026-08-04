@@ -33,10 +33,16 @@ export async function deliverIMessageReply(params: {
   maxBytes: number;
   textLimit: number;
   sentMessageCache?: Pick<SentMessageCache, "remember">;
+  /** GUID of the inbound message this reply is responding to, used for
+   *  threading when the payload does not carry an explicit replyToId
+   *  (e.g. new top-level messages where the durable path returned
+   *  "not_applicable"). */
+  inboundMessageGuid?: string;
 }) {
-  const { payload, target, runtime, maxBytes, textLimit, accountId, sentMessageCache } = params;
+  const { payload, target, runtime, maxBytes, textLimit, accountId, sentMessageCache, inboundMessageGuid } = params;
   const scope = `${accountId ?? ""}:${target}`;
   const { cfg } = params;
+  const replyToId = payload.replyToId ?? inboundMessageGuid;
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "imessage",
@@ -54,7 +60,7 @@ export async function deliverIMessageReply(params: {
       ...(mediaUrl ? { mediaUrl, ...(payload.audioAsVoice ? { audioAsVoice: true } : {}) } : {}),
       maxBytes,
       accountId,
-      replyToId: payload.replyToId,
+      replyToId,
     });
     accepted.push(sent);
     const echoText = sent.echoText ?? (sent.sentText || undefined);
