@@ -22,7 +22,6 @@ import {
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
-  DEFAULT_MEMORY_FILENAME,
   filterBootstrapFilesForSession,
   isWorkspaceSetupCompleted,
   loadWorkspaceBootstrapFiles,
@@ -239,14 +238,8 @@ export async function resolveBootstrapFilesForRun(params: {
     sessionId: params.sessionId,
     agentId: params.agentId,
   });
-  const hookMemoryFiles = new Set(
-    filterBootstrapFilesForSession(
-      updated.filter((file) => file.name === DEFAULT_MEMORY_FILENAME),
-      session,
-    ),
-  );
   const filteredUpdated = filterCompletedWorkspaceBootstrapFile(
-    updated.filter((file) => file.name !== DEFAULT_MEMORY_FILENAME || hookMemoryFiles.has(file)),
+    filterBootstrapFilesForSession(updated, session),
     workspaceSetupCompleted,
     params.workspaceDir,
   );

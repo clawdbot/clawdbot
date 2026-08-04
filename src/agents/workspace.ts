@@ -1041,7 +1041,7 @@ function filterRootMemoryBootstrapFilesForSession(
   const resolvedWorkspaceRoot = resolveUserPath(workspaceRoot);
   const rootMemoryPath = path.join(resolvedWorkspaceRoot, DEFAULT_MEMORY_FILENAME);
   return files.filter((file) => {
-    if (file.name !== DEFAULT_MEMORY_FILENAME || typeof file.path !== "string") {
+    if (typeof file.path !== "string") {
       return true;
     }
     const filePath = file.path.trim();

@@ -103,13 +103,13 @@ function registerDuplicateBootstrapFileHook() {
   });
 }
 
-function registerMemoryBootstrapFileHook(relativePath = "MEMORY.md") {
+function registerMemoryBootstrapFileHook(relativePath = "MEMORY.md", name = "MEMORY.md") {
   registerInternalHook("agent:bootstrap", (event) => {
     const context = event.context as AgentBootstrapHookContext;
     context.bootstrapFiles = [
       ...context.bootstrapFiles,
       {
-        name: "MEMORY.md",
+        name,
         path: path.join(context.workspaceDir, relativePath),
         content: "hook memory",
         missing: false,
@@ -384,6 +384,20 @@ describe("resolveBootstrapFilesForRun", () => {
     });
 
     expect(files.map((file) => file.name)).not.toContain("MEMORY.md");
+  });
+
+  it("does not let hooks relabel and re-add root MEMORY.md to shared sessions", async () => {
+    registerMemoryBootstrapFileHook("MEMORY.md", "PRIVATE.md");
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-hook-shared-alias-");
+    const rootMemoryPath = path.join(workspaceDir, "MEMORY.md");
+    await fs.writeFile(rootMemoryPath, "private memory", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:slack:channel:c1",
+    });
+
+    expect(files.map((file) => file.path)).not.toContain(rootMemoryPath);
   });
 
   it("keeps hook-added nested MEMORY.md in shared sessions", async () => {

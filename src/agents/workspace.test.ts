@@ -1178,6 +1178,29 @@ describe("filterBootstrapFilesForSession", () => {
     expect(direct).toStrictEqual(mockFiles);
   });
 
+  it("drops root memory path aliases while preserving nested memory in shared sessions", () => {
+    const rootMemoryAlias = {
+      name: "PRIVATE.md",
+      path: "/w/private/../MEMORY.md",
+      content: "",
+      missing: false,
+    };
+    const nestedMemory = {
+      name: "MEMORY.md",
+      path: "/w/packages/core/MEMORY.md",
+      content: "",
+      missing: false,
+    };
+
+    const result = filterBootstrapFilesForSession([rootMemoryAlias, nestedMemory], {
+      sessionKey: "agent:default:opaque:binding",
+      chatType: "channel",
+      workspaceDir: "/w",
+    });
+
+    expect(result).toStrictEqual([nestedMemory]);
+  });
+
   it("filters to allowlist for subagent sessions", () => {
     const result = filterBootstrapFilesForSession(mockFiles, "agent:default:subagent:task-1");
     expectSubagentAllowedBootstrapNames(result);
