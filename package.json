@@ -293,6 +293,7 @@
     "!dist/extensions/msteams/**",
     "!dist/extensions/mxc/**",
     "!dist/extensions/nextcloud-talk/**",
+    "!dist/extensions/nexforce/**",
     "!dist/extensions/nostr/**",
     "!dist/extensions/novita/**",
     "!dist/extensions/opencode/**",
