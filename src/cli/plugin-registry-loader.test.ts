@@ -1,12 +1,12 @@
 // Plugin registry loader tests cover CLI plugin registry loading and cache reset behavior.
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { measureCliCommandStartup } from "./command-startup-timing.js";
 
 const ensurePluginRegistryLoadedMock = vi.hoisted(() => vi.fn());
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("./plugin-registry.js", () => ({
   ensurePluginRegistryLoaded: ensurePluginRegistryLoadedMock,
@@ -28,10 +28,9 @@ describe("plugin-registry-loader", () => {
     loggingState.forceConsoleToStderr = false;
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     loggingState.forceConsoleToStderr = originalForceStderr;
     vi.unstubAllEnvs();
-    await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
   it("routes plugin load logs to stderr and restores state", async () => {
@@ -94,8 +93,7 @@ describe("plugin-registry-loader", () => {
   });
 
   it("attributes module import separately from runtime loading", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "openclaw-plugin-registry-startup-"));
-    tempDirs.push(dir);
+    const dir = tempDirs.make("openclaw-plugin-registry-startup-");
     const timelinePath = join(dir, "timeline.jsonl");
     vi.stubEnv("OPENCLAW_DIAGNOSTICS", "timeline");
     vi.stubEnv("OPENCLAW_DIAGNOSTICS_TIMELINE_PATH", timelinePath);
