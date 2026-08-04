@@ -146,7 +146,9 @@ describe("managed-child-process", () => {
         runTaskkill,
       });
       expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/PID", "12345", "/T"], {
+        killSignal: "SIGKILL",
         stdio: "ignore",
+        timeout: 10_000,
       });
 
       terminateManagedChild(child, "SIGKILL", {
@@ -154,7 +156,9 @@ describe("managed-child-process", () => {
         runTaskkill,
       });
       expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12345", "/T", "/F"], {
+        killSignal: "SIGKILL",
         stdio: "ignore",
+        timeout: 10_000,
       });
       expect(child.kill).not.toHaveBeenCalled();
     });
@@ -177,10 +181,14 @@ describe("managed-child-process", () => {
       });
 
       expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/PID", "12345", "/T"], {
+        killSignal: "SIGKILL",
         stdio: "ignore",
+        timeout: 10_000,
       });
       expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12345", "/T", "/F"], {
+        killSignal: "SIGKILL",
         stdio: "ignore",
+        timeout: 10_000,
       });
       expect(child.kill).not.toHaveBeenCalled();
     });
@@ -259,12 +267,102 @@ setInterval(() => {}, 1_000);
 
       childPid = Number(fs.readFileSync(childPidPath, "utf8"));
       descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
-      await waitFor(() => !isProcessAlive(childPid), 1_500);
-      await waitFor(() => !isProcessAlive(descendantPid), 1_500);
+      expect(isProcessAlive(childPid)).toBe(false);
+      expect(isProcessAlive(descendantPid)).toBe(false);
     } finally {
       if (childPid && isProcessAlive(childPid)) {
         process.kill(childPid, "SIGKILL");
       }
+      if (descendantPid && isProcessAlive(descendantPid)) {
+        process.kill(descendantPid, "SIGKILL");
+      }
+    }
+  });
+
+  it("uses a wall timeout even while the child emits progress", async () => {
+    const startedAt = Date.now();
+    await expect(
+      runManagedCommand({
+        bin: process.execPath,
+        args: ["-e", "setInterval(() => process.stderr.write('retrying\\n'), 20)"],
+        shell: false,
+        stdio: "ignore",
+        timeoutMs: 200,
+      }),
+    ).rejects.toMatchObject({ code: "ETIMEDOUT" });
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+  });
+
+  it("allows bounded retry output and normal long-running work to complete", async () => {
+    await expect(
+      runManagedCommand({
+        bin: process.execPath,
+        args: [
+          "-e",
+          "process.stderr.write('network retry 1\\n'); setTimeout(() => process.exit(0), 100)",
+        ],
+        shell: false,
+        stdio: "ignore",
+        timeoutMs: 1_000,
+      }),
+    ).resolves.toBe(0);
+    await expect(
+      runManagedCommand({
+        bin: process.execPath,
+        args: ["-e", "setTimeout(() => process.exit(0), 200)"],
+        requireProcessTreeExit: true,
+        shell: false,
+        stdio: "ignore",
+        timeoutMs: 1_000,
+      }),
+    ).resolves.toBe(0);
+  });
+
+  it("cleans up the child when onReady throws", async () => {
+    let childPid = 0;
+    await expect(
+      runManagedCommand({
+        bin: process.execPath,
+        args: ["-e", "setInterval(() => {}, 1_000)"],
+        onReady: (child) => {
+          childPid = expectProcessPid(child.pid);
+          throw new Error("setup failed");
+        },
+        shell: false,
+        stdio: "ignore",
+      }),
+    ).rejects.toThrow("setup failed");
+    expect(isProcessAlive(childPid)).toBe(false);
+  });
+
+  posixIt("rejects and drains descendants left after a successful leader exit", async () => {
+    const dir = createTempDir("openclaw-managed-lingering-");
+    const descendantPidPath = path.join(dir, "descendant.pid");
+    let descendantPid = 0;
+    try {
+      await expect(
+        runManagedCommand({
+          bin: process.execPath,
+          args: [
+            "-e",
+            `
+const { spawn } = require("node:child_process");
+const fs = require("node:fs");
+const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+child.unref();
+fs.writeFileSync(process.argv[1], String(child.pid));
+`,
+            descendantPidPath,
+          ],
+          requireProcessTreeExit: true,
+          shell: false,
+          stdio: "ignore",
+          timeoutMs: 1_000,
+        }),
+      ).rejects.toMatchObject({ code: "EPROCESSGROUP_CLEANUP_FAILED" });
+      descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+      expect(isProcessAlive(descendantPid)).toBe(false);
+    } finally {
       if (descendantPid && isProcessAlive(descendantPid)) {
         process.kill(descendantPid, "SIGKILL");
       }

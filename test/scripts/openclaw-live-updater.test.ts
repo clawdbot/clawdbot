@@ -17,7 +17,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import {
   acquireMaintenanceLock,
   assertNoSystemLaunchDaemonOwnership,
@@ -39,6 +39,7 @@ import {
   resolveManagedGatewayEntrypoint,
   runBuiltGatewayCall,
   runBuiltGatewayCli,
+  runLiveUpdaterMain,
   verifyGatewayReadiness,
 } from "../../.agents/skills/openclaw-live-updater/scripts/update-main.mjs";
 import {
@@ -217,6 +218,10 @@ function passGatewayRestartVerification({ timing }: { timing: Record<string, unk
     },
     timing,
   };
+}
+
+function managedTimeoutError() {
+  return Object.assign(new Error("managed timeout"), { code: "ETIMEDOUT" });
 }
 
 describe("openclaw live updater", () => {
@@ -614,14 +619,14 @@ describe("openclaw live updater", () => {
     ).toBe("/srv/runtime/gateway-abc/dist");
   });
 
-  test("retries bounded Gateway readiness after restart", () => {
+  test("retries bounded Gateway readiness after restart", async () => {
     const { mirror } = makeFixture();
     writeBuild(mirror);
     const calls: string[] = [];
     const delays: number[] = [];
     let statusAttempts = 0;
 
-    verifyGatewayReadiness(
+    await verifyGatewayReadiness(
       (command: string, args: string[]) => {
         const call = [command, ...args].join(" ");
         calls.push(call);
@@ -631,7 +636,9 @@ describe("openclaw live updater", () => {
       },
       mirror,
       git(mirror, "rev-parse", "HEAD"),
-      (ms: number) => delays.push(ms),
+      (ms: number) => {
+        delays.push(ms);
+      },
     );
 
     expect(delays).toEqual([5_000, 5_000, 5_000, 5_000, 5_000, 5_000]);
@@ -647,7 +654,7 @@ describe("openclaw live updater", () => {
     ]);
   });
 
-  test("records listener, probe, RPC, and channel readiness timestamps", () => {
+  test("records listener, probe, RPC, and channel readiness timestamps", async () => {
     const { root, mirror } = makeFixture();
     writeBuild(mirror);
     const entrypoint = path.join(mirror, "dist/index.js");
@@ -665,7 +672,7 @@ console.log(JSON.stringify(command === "health" ? {
     );
     const configPath = path.join(root, "openclaw.json");
     writeFileSync(configPath, "{}\n");
-    const timing = verifyGatewayReadiness(
+    const timing = await verifyGatewayReadiness(
       () => {},
       mirror,
       git(mirror, "rev-parse", "HEAD"),
@@ -707,7 +714,7 @@ console.log(JSON.stringify(command === "health" ? {
     expect(isGatewayProbeResponse("/readyz", { ok: true, status: "ready" })).toBe(false);
   });
 
-  test("bounds milestones first observed during the deep RPC probe", () => {
+  test("bounds milestones first observed during the deep RPC probe", async () => {
     const { root, mirror } = makeFixture();
     writeBuild(mirror);
     const entrypoint = path.join(mirror, "dist/index.js");
@@ -726,7 +733,7 @@ console.log(JSON.stringify(command === "health" ? { ok: true, channels: {} } : {
     ].map(Date.parse);
     let probeCalls = 0;
 
-    const timing = verifyGatewayReadiness(
+    const timing = await verifyGatewayReadiness(
       () => {},
       mirror,
       git(mirror, "rev-parse", "HEAD"),
@@ -767,7 +774,7 @@ console.log(JSON.stringify(command === "health" ? { ok: true, channels: {} } : {
     });
   });
 
-  test("does not fail readiness for a present but disconnected channel record", () => {
+  test("does not fail readiness for a present but disconnected channel record", async () => {
     const { root, mirror } = makeFixture();
     writeBuild(mirror);
     const entrypoint = path.join(mirror, "dist/index.js");
@@ -784,7 +791,7 @@ console.log(JSON.stringify(command === "health" ? {
     writeFileSync(configPath, "{}\n");
 
     expect(
-      verifyGatewayReadiness(
+      await verifyGatewayReadiness(
         () => {},
         mirror,
         git(mirror, "rev-parse", "HEAD"),
@@ -809,7 +816,7 @@ console.log(JSON.stringify(command === "health" ? {
     ).toMatchObject({ discordConnectedAt: null });
   });
 
-  test("routes managed Gateway health through the injected port", () => {
+  test("routes managed Gateway health through the injected port", async () => {
     const { root, mirror } = makeFixture();
     writeBuild(mirror);
     const entrypoint = path.join(mirror, "dist/index.js");
@@ -827,7 +834,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
 `,
     );
 
-    verifyGatewayReadiness(
+    await verifyGatewayReadiness(
       () => {
         throw new Error("managed probes must use the exact built Gateway CLI");
       },
@@ -1290,7 +1297,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     });
   });
 
-  test("fast-forwards, builds exact SHA, restarts Gateway, then proves exact Mac target", () => {
+  test("fast-forwards, builds exact SHA, restarts Gateway, then proves exact Mac target", async () => {
     const { root, mirror, seed } = makeFixture({ includeSeed: true });
     mkdirSync(path.join(seed, "apps/macos/Sources/OpenClaw"), { recursive: true });
     writeFileSync(path.join(seed, "apps/macos/Sources/OpenClaw/App.swift"), "// changed\n");
@@ -1299,7 +1306,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     git(seed, "push");
     const commands = fakeCommands(mirror);
 
-    const output = maintainFixture(
+    const output = await maintainFixture(
       {
         checkout: mirror,
         remote: "origin",
@@ -1350,7 +1357,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     );
   });
 
-  test("rejects a local main that is ahead of origin main", () => {
+  test("rejects a local main that is ahead of origin main", async () => {
     const { root, mirror } = makeFixture();
     git(mirror, "config", "user.name", "Test");
     git(mirror, "config", "user.email", "test@example.com");
@@ -1358,21 +1365,21 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     git(mirror, "add", "local-commit.txt");
     git(mirror, "commit", "-m", "local commit");
 
-    expect(() =>
+    await expect(
       maintainFixture({
         checkout: mirror,
         remote: "origin",
         lockPath: path.join(root, "maintenance.lock"),
       }),
-    ).toThrow(/does not equal origin\/main/u);
+    ).rejects.toThrow(/does not equal origin\/main/u);
   });
 
-  test("builds and restarts when build output is missing without a new commit", () => {
+  test("builds and restarts when build output is missing without a new commit", async () => {
     const { root, mirror } = makeFixture();
     mkdirSync(path.join(mirror, "node_modules"));
     const commands = fakeCommands(mirror);
 
-    const output = maintainFixture(
+    const output = await maintainFixture(
       { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
       { runCommand: commands.runCommand },
     );
@@ -1391,12 +1398,12 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     ]);
   });
 
-  test("defers a stale build without stopping Gateway when atomic suspension reports active work", () => {
+  test("defers a stale build without stopping Gateway when atomic suspension reports active work", async () => {
     const { root, mirror } = makeFixture();
     mkdirSync(path.join(mirror, "node_modules"));
     const commands = fakeCommands(mirror);
 
-    const output = maintainFixture(
+    const output = await maintainFixture(
       { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
       {
         runCommand: commands.runCommand,
@@ -1424,13 +1431,13 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     expect(inspectBuildState(mirror, git(mirror, "rev-parse", "HEAD")).current).toBe(false);
   });
 
-  test("accepts native stopped proof when the stop command reports an error", () => {
+  test("accepts native stopped proof when the stop command reports an error", async () => {
     const { root, mirror } = makeFixture();
     mkdirSync(path.join(mirror, "node_modules"));
     const commands = fakeCommands(mirror);
     const resumed: string[] = [];
 
-    const output = maintainFixture(
+    const output = await maintainFixture(
       { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
       {
         runCommand(command: string, args: string[]) {
@@ -1449,14 +1456,170 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     expect(resumed).toEqual([]);
   });
 
-  test("resumes a prepared suspension when stopped proof never converges", () => {
+  test("reports a pre-stop fetch timeout without stopping Gateway and releases the lock", async () => {
+    const { root, mirror } = makeFixture();
+    const lockPath = path.join(root, "maintenance.lock");
+    const calls: string[] = [];
+
+    await expect(
+      maintainFixture(
+        { checkout: mirror, remote: "origin", lockPath },
+        {
+          fetchMain: undefined,
+          runManagedCommand: async ({
+            args,
+            requireProcessTreeExit,
+            timeoutMs,
+          }: {
+            args: string[];
+            requireProcessTreeExit: boolean;
+            timeoutMs: number;
+          }) => {
+            calls.push(`${args.join(" ")} timeout=${timeoutMs} strict=${requireProcessTreeExit}`);
+            throw managedTimeoutError();
+          },
+        },
+      ),
+    ).rejects.toMatchObject({
+      code: "command_timeout",
+      details: {
+        phase: "Git fetch",
+        serviceState: "running",
+        timeoutMs: 5 * 60_000,
+      },
+    });
+    expect(calls).toEqual([
+      `-C ${mirror} fetch --prune origin refs/heads/main:refs/remotes/origin/main timeout=300000 strict=true`,
+    ]);
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  test("emits one machine-readable timeout result with phase details", async () => {
+    const { mirror } = makeFixture();
+    const output: string[] = [];
+    const log = vi.spyOn(console, "log").mockImplementation((line) => output.push(String(line)));
+    const previousExitCode = process.exitCode;
+    process.exitCode = undefined;
+    try {
+      await runLiveUpdaterMain(["--checkout", mirror], {
+        inspectGatewayDeployment: () => null,
+        runManagedCommand: async () => {
+          throw managedTimeoutError();
+        },
+      });
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.exitCode = previousExitCode;
+      log.mockRestore();
+    }
+
+    expect(output).toHaveLength(1);
+    expect(JSON.parse(output[0]!)).toMatchObject({
+      schemaVersion: 1,
+      ok: false,
+      error: {
+        code: "command_timeout",
+        details: {
+          phase: "Git fetch",
+          serviceState: "running",
+          timeoutMs: 5 * 60_000,
+        },
+      },
+    });
+  });
+
+  test("recovers the previous service after a post-stop install timeout", async () => {
+    const { root, mirror } = makeFixture();
+    writeBuild(mirror);
+    const lockPath = path.join(root, "maintenance.lock");
+    const plistPath = path.join(root, "ai.openclaw.gateway.plist");
+    writeFileSync(plistPath, "plist\n", { mode: 0o600 });
+    const deployment = {
+      configPath: path.join(root, "openclaw.json"),
+      entrypoint: path.join(mirror, "dist/index.js"),
+      entrypointIndex: 1,
+      executable: process.execPath,
+      invocationPrefix: [path.join(mirror, "dist/index.js")],
+      label: "ai.openclaw.gateway",
+      plistPath,
+      port: 18789,
+      runtime: process.execPath,
+    };
+    const events: string[] = [];
+
+    await expect(
+      maintainFixture(
+        { checkout: mirror, remote: "origin", lockPath },
+        {
+          inspectGatewayDeployment: () => deployment,
+          runManagedCommand: async ({
+            args,
+            requireProcessTreeExit,
+            timeoutMs,
+          }: {
+            args: string[];
+            requireProcessTreeExit: boolean;
+            timeoutMs: number;
+          }) => {
+            const command = args.join(" ");
+            events.push(`${command} timeout=${timeoutMs} strict=${requireProcessTreeExit}`);
+            if (command === "install --frozen-lockfile") {
+              await Promise.resolve();
+              events.push("install process tree drained");
+              throw managedTimeoutError();
+            }
+            return 0;
+          },
+          proveGatewayStopped: () => {
+            events.push("prove stopped");
+            return {
+              runtimeStatus: "stopped",
+              port: 18789,
+              portStatus: "free",
+              proofSource: "fixture",
+            };
+          },
+          waitForGatewayProcess: () => {
+            events.push("previous process started");
+          },
+        },
+      ),
+    ).rejects.toMatchObject({
+      code: "command_timeout",
+      details: {
+        phase: "dependency install",
+        serviceState: "stopped",
+        timeoutMs: 15 * 60_000,
+      },
+    });
+
+    const timeoutIndex = events.indexOf("install process tree drained");
+    const recoveryIndex = events.findIndex((event) => event.startsWith("enable gui/"));
+    expect(timeoutIndex).toBeGreaterThan(-1);
+    expect(recoveryIndex).toBeGreaterThan(timeoutIndex);
+    expect(events.filter((event) => event === "prove stopped")).toHaveLength(2);
+    expect(events).toContain(
+      `bootstrap gui/${process.getuid?.() ?? 501} ${plistPath} timeout=60000 strict=true`,
+    );
+    expect(events).toContain("previous process started");
+    expect(existsSync(lockPath)).toBe(false);
+
+    const reacquired = acquireMaintenanceLock(mirror, lockPath);
+    try {
+      expect(reacquired.acquired).toBe(true);
+    } finally {
+      reacquired.release?.();
+    }
+  });
+
+  test("resumes a prepared suspension when stopped proof never converges", async () => {
     const { root, mirror } = makeFixture();
     mkdirSync(path.join(mirror, "node_modules"));
     const resumed: string[] = [];
     let proofAttempts = 0;
     let sleepAttempts = 0;
 
-    expect(() =>
+    await expect(
       maintainFixture(
         { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
         {
@@ -1472,20 +1635,20 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
           },
         },
       ),
-    ).toThrow("native stopped proof did not converge");
+    ).rejects.toThrow("native stopped proof did not converge");
     expect(proofAttempts).toBe(141);
     expect(sleepAttempts).toBe(140);
     expect(resumed).toEqual(["fixture-suspension"]);
   });
 
-  test("allows launchd teardown to converge after the old ten-second proof window", () => {
+  test("allows launchd teardown to converge after the old ten-second proof window", async () => {
     const { root, mirror } = makeFixture();
     mkdirSync(path.join(mirror, "node_modules"));
     const commands = fakeCommands(mirror);
     let elapsedMs = 0;
     let proofAttempts = 0;
 
-    const output = maintainFixture(
+    const output = await maintainFixture(
       { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
       {
         runCommand: commands.runCommand,
@@ -1513,12 +1676,12 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     expect(proofAttempts).toBe(49);
   });
 
-  test("recovers a stale build only after proving an unavailable Gateway is stopped", () => {
+  test("recovers a stale build only after proving an unavailable Gateway is stopped", async () => {
     const { root, mirror } = makeFixture();
     mkdirSync(path.join(mirror, "node_modules"));
     const commands = fakeCommands(mirror);
 
-    const output = maintainFixture(
+    const output = await maintainFixture(
       { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
       {
         runCommand: commands.runCommand,
@@ -1543,7 +1706,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     ]);
   });
 
-  test("preserves the signed Mac bundle while a Gateway build replaces dist", () => {
+  test("preserves the signed Mac bundle while a Gateway build replaces dist", async () => {
     const { root, mirror } = makeFixture();
     mkdirSync(path.join(mirror, "node_modules"));
     const appBundle = path.join(mirror, "dist/OpenClaw.app");
@@ -1552,7 +1715,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     writeFileSync(appMarker, "signed\n");
     const commands = fakeCommands(mirror);
 
-    maintainFixture(
+    await maintainFixture(
       { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
       {
         runCommand(command: string, args: string[]) {
@@ -1572,14 +1735,14 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     ).toEqual([]);
   });
 
-  test("restores the Mac bundle when the Gateway build fails", () => {
+  test("restores the Mac bundle when the Gateway build fails", async () => {
     const { root, mirror } = makeFixture();
     mkdirSync(path.join(mirror, "node_modules"));
     const appMarker = path.join(mirror, "dist/OpenClaw.app/Contents/signature-marker");
     mkdirSync(path.dirname(appMarker), { recursive: true });
     writeFileSync(appMarker, "signed\n");
 
-    expect(() =>
+    await expect(
       maintainFixture(
         { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
         {
@@ -1590,11 +1753,11 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
           },
         },
       ),
-    ).toThrow("build failed");
+    ).rejects.toThrow("build failed");
     expect(readFileSync(appMarker, "utf8")).toBe("signed\n");
   });
 
-  test("accepts a delayed external restore of the exact preserved Mac bundle", () => {
+  test("accepts a delayed external restore of the exact preserved Mac bundle", async () => {
     const { root, mirror } = makeFixture();
     mkdirSync(path.join(mirror, "node_modules"));
     const appBundle = path.join(mirror, "dist/OpenClaw.app");
@@ -1605,7 +1768,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     const delayedBundle = path.join(root, "delayed-openclaw.app");
     let restored = false;
 
-    maintainFixture(
+    await maintainFixture(
       { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
       {
         runCommand(command: string, args: string[]) {
@@ -1640,7 +1803,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     ).toEqual([]);
   });
 
-  test("preserves a build failure after an external Mac bundle restore", () => {
+  test("preserves a build failure after an external Mac bundle restore", async () => {
     const { root, mirror } = makeFixture();
     mkdirSync(path.join(mirror, "node_modules"));
     const appBundle = path.join(mirror, "dist/OpenClaw.app");
@@ -1648,7 +1811,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     mkdirSync(path.dirname(appMarker), { recursive: true });
     writeFileSync(appMarker, "signed\n");
 
-    expect(() =>
+    await expect(
       maintainFixture(
         { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
         {
@@ -1664,17 +1827,17 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
           },
         },
       ),
-    ).toThrow("build failed after external restore");
+    ).rejects.toThrow("build failed after external restore");
     expect(readFileSync(appMarker, "utf8")).toBe("signed\n");
   });
 
-  test("proves a current exact-SHA Gateway on a no-op heartbeat", () => {
+  test("proves a current exact-SHA Gateway on a no-op heartbeat", async () => {
     const { root, mirror } = makeFixture();
     mkdirSync(path.join(mirror, "node_modules"));
     writeBuild(mirror);
     const commands = fakeCommands(mirror);
 
-    const output = maintainFixture(
+    const output = await maintainFixture(
       { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
       { runCommand: commands.runCommand },
     );
@@ -1692,7 +1855,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     ]);
   });
 
-  test("repoints an ancestor snapshot across the next source update", () => {
+  test("repoints an ancestor snapshot across the next source update", async () => {
     const { root, mirror, seed } = makeFixture({ includeSeed: true });
     mkdirSync(path.join(mirror, "node_modules"));
     writeBuild(mirror);
@@ -1723,7 +1886,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
       serviceEnvironment: { PRIVATE_MARKER: "not-serialized" },
     });
 
-    const deferred = maintainFixture(
+    const deferred = await maintainFixture(
       { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
       {
         runCommand: commands.runCommand,
@@ -1741,7 +1904,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     expect(commands.calls).toEqual([]);
 
     const resumedSuspensions: string[] = [];
-    expect(() =>
+    await expect(
       maintainFixture(
         { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
         {
@@ -1759,11 +1922,11 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
           },
         },
       ),
-    ).toThrow("replacement plist lint failed");
+    ).rejects.toThrow("replacement plist lint failed");
     expect(resumedSuspensions).toEqual(["failed-preparation"]);
     expect(commands.calls).toEqual([]);
 
-    const output = maintainFixture(
+    const output = await maintainFixture(
       { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
       {
         runCommand: commands.runCommand,
@@ -1870,7 +2033,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     ]);
   });
 
-  test("restores the previous LaunchAgent after replacement readiness fails", () => {
+  test("restores the previous LaunchAgent after replacement readiness fails", async () => {
     const { root, mirror, seed } = makeFixture({ includeSeed: true });
     mkdirSync(path.join(mirror, "node_modules"));
     writeBuild(mirror);
@@ -1897,7 +2060,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
       runtime: process.execPath,
     });
 
-    expect(() =>
+    await expect(
       maintainFixture(
         { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
         {
@@ -1950,7 +2113,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
           },
         },
       ),
-    ).toThrow("replacement readiness failed");
+    ).rejects.toThrow("replacement readiness failed");
 
     const uid = process.getuid?.() ?? 501;
     expect(deployedEntrypoint).toBe(snapshot);
@@ -1977,7 +2140,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     ]);
   });
 
-  test("resumes suspension when system ownership appears before bootout", () => {
+  test("resumes suspension when system ownership appears before bootout", async () => {
     const { root, mirror, seed } = makeFixture({ includeSeed: true });
     mkdirSync(path.join(mirror, "node_modules"));
     writeBuild(mirror);
@@ -1990,7 +2153,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     writeFileSync(plistPath, "plist\n", { mode: 0o600 });
     const resumed: string[] = [];
 
-    expect(() =>
+    await expect(
       maintainFixture(
         { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
         {
@@ -2016,11 +2179,11 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
           },
         },
       ),
-    ).toThrow("same-label system owner");
+    ).rejects.toThrow("same-label system owner");
     expect(resumed).toEqual(["fixture-suspension"]);
   });
 
-  test("builds a trusted source control client while a snapshot is still running", () => {
+  test("builds a trusted source control client while a snapshot is still running", async () => {
     const { root, mirror } = makeFixture();
     mkdirSync(path.join(mirror, "node_modules"));
     const commands = fakeCommands(mirror);
@@ -2034,7 +2197,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     let controlEntrypoint = "";
     let stoppedProofAttempts = 0;
 
-    const output = maintainFixture(
+    const output = await maintainFixture(
       { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
       {
         runCommand: commands.runCommand,
@@ -2115,7 +2278,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     ]);
   });
 
-  test("recovers a stopped snapshot when the source control build is missing", () => {
+  test("recovers a stopped snapshot when the source control build is missing", async () => {
     const { root, mirror } = makeFixture();
     mkdirSync(path.join(mirror, "node_modules"));
     const commands = fakeCommands(mirror);
@@ -2128,7 +2291,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     let deployedEntrypoint = snapshot;
     let prepareCalled = false;
 
-    const output = maintainFixture(
+    const output = await maintainFixture(
       { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
       {
         runCommand: commands.runCommand,
@@ -2193,12 +2356,12 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     ]);
   });
 
-  test("restores missing dependencies before probing a current build", () => {
+  test("restores missing dependencies before probing a current build", async () => {
     const { root, mirror } = makeFixture();
     writeBuild(mirror);
     const commands = fakeCommands(mirror);
 
-    const output = maintainFixture(
+    const output = await maintainFixture(
       { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
       { runCommand: commands.runCommand },
     );
@@ -2218,14 +2381,14 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     ]);
   });
 
-  test("restarts once when a current exact-SHA Gateway probe fails", () => {
+  test("restarts once when a current exact-SHA Gateway probe fails", async () => {
     const { root, mirror } = makeFixture();
     mkdirSync(path.join(mirror, "node_modules"));
     writeBuild(mirror);
     const calls: string[] = [];
     let failed = false;
 
-    const output = maintainFixture(
+    const output = await maintainFixture(
       { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
       {
         runCommand(command: string, args: string[]) {
@@ -2256,7 +2419,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     ]);
   });
 
-  test("bootstraps an owned LaunchAgent left unloaded by a failed restart", () => {
+  test("bootstraps an owned LaunchAgent left unloaded by a failed restart", async () => {
     const uid = process.getuid?.() ?? 501;
     const { root, mirror } = makeFixture();
     mkdirSync(path.join(mirror, "node_modules"));
@@ -2277,7 +2440,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
       runtime: process.execPath,
     };
 
-    const output = maintainFixture(
+    const output = await maintainFixture(
       { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
       {
         runCommand: commands.runCommand,
@@ -2343,25 +2506,25 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
       env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
     });
 
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim().split("\n")).toHaveLength(1);
     expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, updated: false });
     expect(result.stderr).toContain("child-output");
   });
 
-  test("does not restart Gateway when build provenance misses the exact SHA", () => {
+  test("does not restart Gateway when build provenance misses the exact SHA", async () => {
     const { root, mirror } = makeFixture();
     mkdirSync(path.join(mirror, "node_modules"));
     const calls: string[] = [];
 
-    expect(() =>
+    await expect(
       maintainFixture(
         { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
         {
           runCommand: (command: string, args: string[]) => calls.push([command, ...args].join(" ")),
         },
       ),
-    ).toThrow(/build output does not match/u);
+    ).rejects.toThrow(/build output does not match/u);
     expect(calls).toEqual([
       `${process.execPath} dist/index.js gateway stop`,
       "pnpm install --frozen-lockfile",
@@ -2369,14 +2532,14 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     ]);
   });
 
-  test("audits restart-window logs even when deep Gateway verification fails", () => {
+  test("audits restart-window logs even when deep Gateway verification fails", async () => {
     const { root, mirror } = makeFixture();
     mkdirSync(path.join(mirror, "node_modules"));
     writeBuild(mirror);
     let auditCalls = 0;
     let statusCalls = 0;
 
-    expect(() =>
+    await expect(
       maintainMain(
         { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
         {
@@ -2396,12 +2559,12 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
           verifyGatewayRuntime: () => null,
         },
       ),
-    ).toThrow("RPC unavailable");
+    ).rejects.toThrow("RPC unavailable");
     expect(statusCalls).toBe(8);
     expect(auditCalls).toBe(1);
   });
 
-  test("retains failed exact-bundle Mac proof for the next heartbeat", () => {
+  test("retains failed exact-bundle Mac proof for the next heartbeat", async () => {
     const { root, mirror, seed } = makeFixture({ includeSeed: true });
     mkdirSync(path.join(seed, "apps/macos/Sources/OpenClaw"), { recursive: true });
     writeFileSync(path.join(seed, "apps/macos/Sources/OpenClaw/App.swift"), "// changed\n");
@@ -2412,7 +2575,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     const statePath = path.join(root, "maintenance-state.json");
     const firstCommands = fakeCommands(mirror);
 
-    expect(() =>
+    await expect(
       maintainFixture(
         { checkout: mirror, remote: "origin", lockPath, statePath },
         {
@@ -2422,7 +2585,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
           },
         },
       ),
-    ).toThrow("exact target exited");
+    ).rejects.toThrow("exact target exited");
     expect(JSON.parse(readFileSync(statePath, "utf8"))).toMatchObject({
       macPending: true,
       attempts: 1,
@@ -2430,7 +2593,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     });
 
     const retryCommands = fakeCommands(mirror);
-    const retry = maintainFixture(
+    const retry = await maintainFixture(
       { checkout: mirror, remote: "origin", lockPath, statePath },
       {
         runCommand: retryCommands.runCommand,
@@ -2448,7 +2611,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     expect(existsSync(statePath)).toBe(false);
   });
 
-  test("records pending Mac work before Gateway maintenance can fail", () => {
+  test("records pending Mac work before Gateway maintenance can fail", async () => {
     const { root, mirror, seed } = makeFixture({ includeSeed: true });
     mkdirSync(path.join(seed, "apps/macos/Sources/OpenClaw"), { recursive: true });
     writeFileSync(path.join(seed, "apps/macos/Sources/OpenClaw/App.swift"), "// changed\n");
@@ -2458,7 +2621,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     const statePath = path.join(root, "maintenance-state.json");
     const commands = fakeCommands(mirror);
 
-    expect(() =>
+    await expect(
       maintainFixture(
         {
           checkout: mirror,
@@ -2476,37 +2639,37 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
           },
         },
       ),
-    ).toThrow("Gateway failed");
+    ).rejects.toThrow("Gateway failed");
     expect(JSON.parse(readFileSync(statePath, "utf8"))).toMatchObject({
       macPending: true,
       attempts: 0,
     });
   });
 
-  test("refuses a symlinked maintenance state file without touching its target", () => {
+  test("refuses a symlinked maintenance state file without touching its target", async () => {
     const { root, mirror } = makeFixture();
     const statePath = path.join(root, "maintenance-state.json");
     const victimPath = path.join(root, "victim.txt");
     writeFileSync(victimPath, "untouched\n");
     symlinkSync(victimPath, statePath);
 
-    expect(() =>
+    await expect(
       maintainFixture({
         checkout: mirror,
         remote: "origin",
         lockPath: path.join(root, "maintenance.lock"),
         statePath,
       }),
-    ).toThrow(/maintenance state is unreadable/u);
+    ).rejects.toThrow(/maintenance state is unreadable/u);
     expect(readFileSync(victimPath, "utf8")).toBe("untouched\n");
   });
 
-  test("skips an overlapping heartbeat while the owner process is alive", () => {
+  test("skips an overlapping heartbeat while the owner process is alive", async () => {
     const { root, mirror } = makeFixture();
     const lockPath = path.join(root, "maintenance.lock");
     const held = acquireMaintenanceLock(mirror, lockPath);
     try {
-      const output = maintainFixture({ checkout: mirror, remote: "origin", lockPath });
+      const output = await maintainFixture({ checkout: mirror, remote: "origin", lockPath });
       expect(output).toMatchObject({ ok: true, skipped: true, reason: "overlap" });
     } finally {
       held.release?.();

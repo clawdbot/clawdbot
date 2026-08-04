@@ -6,6 +6,9 @@ import { resolveWindowsTaskkillPath } from "./windows-taskkill.mjs";
 
 const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 const FORCE_KILL_DELAY_MS = 5_000;
+const PROCESS_GROUP_DRAIN_TIMEOUT_MS = 5_000;
+const PROCESS_GROUP_POLL_MS = 25;
+const TASKKILL_TIMEOUT_MS = 10_000;
 const managedChildren = new Set();
 const signalHandlers = new Map();
 
@@ -56,12 +59,17 @@ export function terminateManagedChild(
     if (signal === "SIGKILL") {
       args.push("/F");
     }
-    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
+    const taskkillOptions = {
+      killSignal: "SIGKILL",
+      stdio: "ignore",
+      timeout: TASKKILL_TIMEOUT_MS,
+    };
+    const result = runTaskkill(taskkillPath, args, taskkillOptions);
     if (!result?.error && result?.status === 0) {
       return;
     }
     if (signal !== "SIGKILL") {
-      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
+      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], taskkillOptions);
       if (!forceResult?.error && forceResult?.status === 0) {
         return;
       }
@@ -85,6 +93,7 @@ export function terminateManagedChild(
  *   platform?: NodeJS.Platform;
  *   comSpec?: string;
  *   timeoutMs?: number;
+ *   requireProcessTreeExit?: boolean;
  *   onReady?: (child: import("node:child_process").ChildProcess) => void;
  * }} options
  * @returns {Promise<number>}
@@ -100,6 +109,7 @@ export async function runManagedCommand({
   windowsVerbatimArguments,
   comSpec,
   timeoutMs,
+  requireProcessTreeExit = false,
   onReady,
 }) {
   const spawnSpec = createManagedCommandSpawnSpec({
@@ -120,12 +130,12 @@ export async function runManagedCommand({
     receivedSignal: null,
   };
   addManagedChild(managedChild);
-  onReady?.(child);
   let timeoutTimer = null;
   let timedOut = false;
+  let childResult;
 
   try {
-    return await new Promise((resolve, reject) => {
+    const childCompletion = new Promise((resolve, reject) => {
       child.once("error", reject);
       child.once("close", (status, signal) => {
         if (managedChild.forceKillTimer) {
@@ -150,6 +160,33 @@ export async function runManagedCommand({
         }, timeoutMs);
       }
     });
+    try {
+      onReady?.(child);
+    } catch (error) {
+      terminateManagedChild(child, "SIGKILL", { platform });
+      try {
+        await childCompletion;
+        await ensureManagedProcessTreeExit(child, platform);
+      } catch (cleanupError) {
+        throw createManagedCommandSetupCleanupError(error, cleanupError);
+      }
+      throw error;
+    }
+    try {
+      childResult = await childCompletion;
+    } catch (error) {
+      if (timedOut) {
+        await ensureManagedProcessTreeExit(child, platform);
+      }
+      throw error;
+    }
+    if (requireProcessTreeExit) {
+      await ensureManagedProcessTreeExit(child, platform, {
+        rejectIfLive: true,
+        terminateIfLive: true,
+      });
+    }
+    return childResult;
   } finally {
     if (timeoutTimer) {
       clearTimeout(timeoutTimer);
@@ -161,6 +198,73 @@ export async function runManagedCommand({
 function createManagedCommandTimeoutError(timeoutMs) {
   return Object.assign(new Error(`Managed command timed out after ${timeoutMs}ms`), {
     code: "ETIMEDOUT",
+  });
+}
+
+function createManagedCommandSetupCleanupError(error, cleanupError) {
+  return new AggregateError(
+    [error, cleanupError],
+    "Managed command setup failed and its process tree could not be cleaned up",
+    { cause: cleanupError },
+  );
+}
+
+function processGroupStatus(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 1 || pid > 0x7fffffff) {
+    return "indeterminate";
+  }
+  try {
+    process.kill(-pid, 0);
+    return "live";
+  } catch (error) {
+    return error?.code === "ESRCH" ? "dead" : "indeterminate";
+  }
+}
+
+async function ensureManagedProcessTreeExit(
+  child,
+  platform,
+  { rejectIfLive = false, terminateIfLive = false } = {},
+) {
+  if (platform === "win32") {
+    return;
+  }
+  const initialStatus = processGroupStatus(child.pid);
+  if (initialStatus === "dead") {
+    return;
+  }
+  if (initialStatus === "indeterminate") {
+    throw createManagedCommandCleanupError("Managed process-group state is indeterminate");
+  }
+  if (terminateIfLive) {
+    terminateManagedChild(child, "SIGKILL", { platform });
+  }
+  const deadline = Date.now() + PROCESS_GROUP_DRAIN_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => {
+      setTimeout(resolve, PROCESS_GROUP_POLL_MS);
+    });
+    const status = processGroupStatus(child.pid);
+    if (status === "dead") {
+      if (rejectIfLive) {
+        throw createManagedCommandCleanupError(
+          "Managed command exited while its process group remained active",
+        );
+      }
+      return;
+    }
+    if (status === "indeterminate") {
+      throw createManagedCommandCleanupError("Managed process-group state is indeterminate");
+    }
+  }
+  throw createManagedCommandCleanupError(
+    `Managed process group did not exit within ${PROCESS_GROUP_DRAIN_TIMEOUT_MS}ms`,
+  );
+}
+
+function createManagedCommandCleanupError(message) {
+  return Object.assign(new Error(message), {
+    code: "EPROCESSGROUP_CLEANUP_FAILED",
   });
 }
 

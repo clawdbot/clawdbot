@@ -18,7 +18,15 @@ export function terminateManagedChild(
     runTaskkill,
   }?: {
     platform?: NodeJS.Platform;
-    runTaskkill?: (command: string, args?: string[]) => { error?: Error; status: number | null };
+    runTaskkill?: (
+      command: string,
+      args?: string[],
+      options?: {
+        killSignal?: NodeJS.Signals;
+        stdio?: import("node:child_process").StdioOptions;
+        timeout?: number;
+      },
+    ) => { error?: Error; status: number | null };
   },
 ): void;
 /**
@@ -35,6 +43,7 @@ export function terminateManagedChild(
  *   platform?: NodeJS.Platform;
  *   comSpec?: string;
  *   timeoutMs?: number;
+ *   requireProcessTreeExit?: boolean;
  *   onReady?: (child: import("node:child_process").ChildProcess) => void;
  * }} options
  * @returns {Promise<number>}
@@ -50,6 +59,7 @@ export function runManagedCommand({
   windowsVerbatimArguments,
   comSpec,
   timeoutMs,
+  requireProcessTreeExit,
   onReady,
 }: {
   bin: string;
@@ -62,6 +72,7 @@ export function runManagedCommand({
   platform?: NodeJS.Platform;
   comSpec?: string;
   timeoutMs?: number;
+  requireProcessTreeExit?: boolean;
   onReady?: (child: import("node:child_process").ChildProcess) => void;
 }): Promise<number>;
 /**
