@@ -111,7 +111,7 @@ export type PromotionCandidate = {
   promotedAt?: string;
   firstRecalledAt: string;
   lastRecalledAt: string;
-  ageDays: number;
+  ageDays: number | null;
   score: number;
   recallDays: string[];
   conceptTags: string[];

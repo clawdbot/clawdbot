@@ -3778,6 +3778,14 @@ describe("short-term promotion", () => {
         expect(valid?.components.recency).toBeGreaterThan(0);
         expect(malformed?.components.recency).toBe(0);
         expect(valid?.score).toBeGreaterThan(malformed?.score ?? 0);
+        // ageDays must be JSON-safe: null for invalid timestamps, not Infinity
+        // (which JSON.stringify serializes as null anyway, but null is explicit
+        // and doesn't surprise consumers expecting a number or null).
+        expect(valid?.ageDays).toBe(1);
+        expect(malformed?.ageDays).toBeNull();
+        // Verify the candidate is JSON-serializable without Infinity→null loss.
+        const serialized = JSON.parse(JSON.stringify(malformed));
+        expect(serialized.ageDays).toBeNull();
       });
     });
   });

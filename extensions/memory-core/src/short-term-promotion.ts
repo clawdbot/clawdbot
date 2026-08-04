@@ -155,22 +155,22 @@ export async function rankShortTermPromotionCandidates(
       continue;
     }
     const diversity = clampScore(contextDiversity / 5);
-    // Treat an unparseable `lastRecalledAt` as infinitely old instead of
+    // Treat an unparseable `lastRecalledAt` as invalid (null age) instead of
     // falling back to `ageDays = 0`, which would silently give the entry a
-    // maximum recency boost. The dreaming-phase comparators rely on the same
-    // -Infinity coercion in `parseStoreTimestampMs` so the two paths stay
-    // consistent.
+    // maximum recency boost. Null is JSON-safe (Infinity serializes as null
+    // via JSON.stringify anyway, but null is explicit). The dreaming-phase
+    // dedupe relies on the same -Infinity coercion in `parseDreamingTimestampMs`
+    // so the two paths stay consistent.
     const lastRecalledAtMs = Date.parse(entry.lastRecalledAt);
     const hasValidLastRecalledAt = Number.isFinite(lastRecalledAtMs);
-    const ageDays = hasValidLastRecalledAt
+    const ageDays: number | null = hasValidLastRecalledAt
       ? Math.max(0, (nowMs - lastRecalledAtMs) / DAY_MS)
-      : Number.POSITIVE_INFINITY;
-    if (maxAgeDays >= 0 && ageDays > maxAgeDays) {
+      : null;
+    if (maxAgeDays >= 0 && (ageDays === null || ageDays > maxAgeDays)) {
       continue;
     }
-    const recency = hasValidLastRecalledAt
-      ? clampScore(calculateRecencyComponent(ageDays, halfLifeDays))
-      : 0;
+    const recency =
+      ageDays !== null ? clampScore(calculateRecencyComponent(ageDays, halfLifeDays)) : 0;
     const recallDays = entry.recallDays ?? [];
     const conceptTags = entry.conceptTags ?? [];
     const consolidation = Math.max(

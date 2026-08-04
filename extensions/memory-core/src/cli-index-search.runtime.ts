@@ -432,7 +432,7 @@ export async function runMemoryPromote(
         );
         lines.push(
           muted(
-            `signals=${candidate.signalCount} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} queries=${candidate.uniqueQueries} age=${candidate.ageDays.toFixed(1)}d consolidate=${candidate.components.consolidation.toFixed(2)} conceptual=${candidate.components.conceptual.toFixed(2)}`,
+            `signals=${candidate.signalCount} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} queries=${candidate.uniqueQueries} age=${candidate.ageDays === null ? "N/A" : `${candidate.ageDays.toFixed(1)}d`} consolidate=${candidate.components.consolidation.toFixed(2)} conceptual=${candidate.components.conceptual.toFixed(2)}`,
           ),
         );
         if (candidate.conceptTags.length > 0) {
@@ -538,7 +538,9 @@ export async function runMemoryPromoteExplain(
             recallCount: candidate.signalCount >= thresholds.minRecallCount,
             uniqueQueries: candidate.uniqueQueries >= thresholds.minUniqueQueries,
             maxAge:
-              thresholds.maxAgeDays === null ? true : candidate.ageDays <= thresholds.maxAgeDays,
+              thresholds.maxAgeDays === null
+                ? true
+                : candidate.ageDays !== null && candidate.ageDays <= thresholds.maxAgeDays,
           },
         });
         return;
@@ -551,7 +553,7 @@ export async function runMemoryPromoteExplain(
         ),
         candidate.snippet,
         muted(
-          `score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount} uniqueQueries=${candidate.uniqueQueries} ageDays=${candidate.ageDays.toFixed(1)}`,
+          `score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount} uniqueQueries=${candidate.uniqueQueries} ageDays=${candidate.ageDays === null ? "N/A" : candidate.ageDays.toFixed(1)}`,
         ),
         muted(
           `components: frequency=${candidate.components.frequency.toFixed(2)} relevance=${candidate.components.relevance.toFixed(2)} diversity=${candidate.components.diversity.toFixed(2)} recency=${candidate.components.recency.toFixed(2)} consolidation=${candidate.components.consolidation.toFixed(2)} conceptual=${candidate.components.conceptual.toFixed(2)}`,
