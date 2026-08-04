@@ -69,7 +69,9 @@ const loadInstalledPluginIndexInstallRecords = vi.fn(
 );
 const readPersistedInstalledPluginIndex = vi.fn(async () => null);
 const restorePersistedInstalledPluginIndex = vi.fn(async () => undefined);
-const restorePersistedInstalledPluginIndexIfCurrent = vi.fn(async () => true);
+const restorePersistedInstalledPluginIndexIfCurrent = vi.fn<
+  typeof import("../plugins/installed-plugin-index-store.js").restorePersistedInstalledPluginIndexIfCurrent
+>(async () => true);
 const writePersistedInstalledPluginIndexInstallRecords = vi.fn(async () => undefined);
 const writePersistedInstalledPluginIndexInstallRecordsWithLease = vi.fn(async () => ({
   previous: null,
@@ -1885,7 +1887,7 @@ describe("update-cli", () => {
           spec: "@openclaw/msteams",
           resolvedVersion: "1.0.0",
         },
-      },
+      } satisfies Record<string, PluginInstallRecord>,
     };
     writePersistedInstalledPluginIndexInstallRecordsWithLease.mockResolvedValue({
       previous: previousPersistedIndex as never,
@@ -1923,7 +1925,7 @@ describe("update-cli", () => {
           spec: "@openclaw/msteams",
           resolvedVersion: "1.0.0",
         },
-      },
+      } satisfies Record<string, PluginInstallRecord>,
     };
     let currentRevision = 17;
     writePersistedInstalledPluginIndexInstallRecordsWithLease.mockResolvedValue({
