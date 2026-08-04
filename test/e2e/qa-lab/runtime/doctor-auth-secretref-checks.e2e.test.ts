@@ -143,8 +143,16 @@ describe("doctor auth and SecretRef product proof", () => {
           { timeoutMs: 120_000 },
         );
         expect(execAllowed.code).toBe(0);
-        await expect(fs.readFile(execMarker, "utf8")).resolves.toBe("executed");
-        expect(outputOf(execAllowed)).not.toContain("qa-exec-token");
+        const execAllowedOutput = normalizedOutputOf(execAllowed);
+        if (process.platform === "win32") {
+          expect(execAllowedOutput).toMatch(
+            /Gateway token SecretRef could not be resolved: .*ACL verification unavailable on Windows/,
+          );
+          await expect(fs.access(execMarker)).rejects.toThrow();
+        } else {
+          await expect(fs.readFile(execMarker, "utf8")).resolves.toBe("executed");
+        }
+        expect(execAllowedOutput).not.toContain("qa-exec-token");
       });
 
       delete instance.env.OPENCLAW_GATEWAY_TOKEN;
@@ -173,7 +181,8 @@ describe("doctor auth and SecretRef product proof", () => {
           unresolvedRefPreserved: true,
           ambientFallbackRejected: true,
           execRefGated: true,
-          execRefAllowed: true,
+          execRefAllowed: process.platform !== "win32",
+          execRefWindowsAclBlocked: process.platform === "win32",
           generatedTokenPersisted: true,
         })}`,
       );
