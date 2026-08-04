@@ -4672,6 +4672,60 @@ openclaw-chat-video-player {
   color: var(--muted);
 }
 
+.chat-controls__model-catalog-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 36px;
+  padding: 6px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chat-controls__model-catalog-state--empty {
+  min-height: 72px;
+  border-bottom: 0;
+}
+
+.chat-controls__model-catalog-state-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.chat-controls__model-catalog-state-label svg,
+.chat-controls__model-catalog-retry svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+}
+
+.chat-controls__model-catalog-retry {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chat-controls__model-catalog-retry:hover,
+.chat-controls__model-catalog-retry:focus-visible {
+  border-color: color-mix(in srgb, var(--text) 28%, var(--border));
+  background: var(--bg-hover);
+  outline: none;
+}
+
 .chat-controls__model-reset {
   display: inline-flex;
   align-items: center;
