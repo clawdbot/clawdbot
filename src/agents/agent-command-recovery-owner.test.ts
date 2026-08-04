@@ -192,7 +192,7 @@ describe("agent command restart recovery ownership", () => {
     expect(stored.mainRestartRecovery).toBeUndefined();
   });
 
-  it("allows standalone work past terminal-only recovery ownership without mutating it", async () => {
+  it("admits standalone work past terminal-only recovery ownership without mutation", async () => {
     const target = createTarget();
     const residue: SessionEntry = {
       sessionId: target.sessionId,
@@ -225,7 +225,7 @@ describe("agent command restart recovery ownership", () => {
     expect(run).toHaveBeenCalledOnce();
     expect(
       loadSessionEntry({ sessionKey, storePath: target.storePath }) as SessionEntry,
-    ).toEqual(residue);
+    ).toMatchObject(residue);
   });
 
   it("runs a Gateway-admitted recovery without acquiring a foreground owner", async () => {

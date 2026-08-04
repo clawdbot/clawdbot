@@ -264,10 +264,7 @@ function inspectMainSessionRecoveryForAdmission(params: {
     params.entry.abortedLastRun !== true &&
     params.entry.mainRestartRecovery &&
     params.entry.restartRecoveryRuns?.length &&
-    !hasTerminalOnlyMainRestartRecoveryAggregate(
-      params.entry,
-      params.lifecycleGeneration,
-    )
+    !hasTerminalOnlyMainRestartRecoveryAggregate(params.entry, params.lifecycleGeneration)
   ) {
     // Standalone callers may use another process generation. Any admitted
     // recovery fence remains authoritative until Gateway lifecycle settlement.
