@@ -110,10 +110,36 @@ function ownsLegacyStoreDirectory(
 ): boolean {
   // Resolve from the path alone: the agentId-aware form echoes the requesting agent back
   // for a custom store, which would make every agent look like the owner.
-  const owner = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath).agentId;
-  return owner
-    ? normalizeAgentId(owner) === normalizeAgentId(agentId)
-    : listAgentIds(config).length <= 1;
+  const owner = resolveCanonicalStoreDirectoryOwner(storePath);
+  const requested = normalizeAgentId(agentId);
+  if (owner) {
+    return normalizeAgentId(owner) === requested;
+  }
+  // The sole-agent case has to check *which* agent is asking. Discovery fans out over
+  // the gateway roster, which admits agents this list does not (disk-resident ones), and
+  // a per-agent request may name any id at all; answering "yes" on roster size alone
+  // hands the same directory to every caller and double counts it.
+  const roster = listAgentIds(config).map((id) => normalizeAgentId(id));
+  return roster.length === 1 && roster[0] === requested;
+}
+
+/**
+ * The agent named by a canonical `agents/<id>/sessions/` directory, if any.
+ *
+ * The store's own basename is not part of that question: `my-store.json` sitting in
+ * `agents/main/sessions/` is still main's directory, and its legacy transcripts are still
+ * main's. `resolveUnsuffixedSqliteTargetFromSessionStorePath` only derives an owner for the
+ * exact `sessions.json` basename, so ask it a second time about the canonical name in the
+ * same directory rather than restating its path rule here.
+ */
+function resolveCanonicalStoreDirectoryOwner(storePath: string): string | undefined {
+  const direct = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath).agentId;
+  if (direct) {
+    return direct;
+  }
+  return resolveUnsuffixedSqliteTargetFromSessionStorePath(
+    path.join(path.dirname(storePath), "sessions.json"),
+  ).agentId;
 }
 
 async function listUsageCountedTranscriptFileStats(

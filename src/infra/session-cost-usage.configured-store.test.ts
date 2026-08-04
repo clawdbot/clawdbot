@@ -399,6 +399,101 @@ describe("usage cost discovery with a configured session store", () => {
     });
   });
 
+  it("counts legacy transcripts for the owner even when the store filename is custom", async () => {
+    const root = await suiteRootTracker.make("canonical-dir-custom-filename");
+    const stateDir = path.join(root, "state");
+    // The basename is not what names the owner: `my-store.json` in `agents/main/sessions/`
+    // is still main's directory. Deriving ownership from `sessions.json` alone dropped
+    // these files for every agent, main included.
+    const store = path.join(stateDir, "agents", "main", "sessions", "my-store.json");
+    const config = {
+      agents: { entries: { main: { default: true }, beta: {} } },
+      session: { store },
+    } as unknown as OpenClawConfig;
+    const now = Date.now();
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      await fs.mkdir(path.dirname(store), { recursive: true });
+      await fs.writeFile(
+        path.join(path.dirname(store), "custom-named-session.jsonl"),
+        [
+          JSON.stringify({ type: "session", version: 1, id: "custom-named-session" }),
+          JSON.stringify({
+            type: "message",
+            timestamp: new Date(now).toISOString(),
+            message: {
+              role: "assistant",
+              model: "gpt-5.4",
+              provider: "openai",
+              usage: { input: 50, output: 50, totalTokens: 100, cost: { total: 0.1 } },
+            },
+          }),
+          "",
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const totals: number[] = [];
+      for (const agentId of ["main", "beta"]) {
+        const summary = await loadCostUsageSummaryFromCache({
+          agentId,
+          config,
+          startMs: now - 3_600_000,
+          endMs: now + 3_600_000,
+          refreshMode: "sync-when-empty",
+        });
+        totals.push(summary.totals.totalTokens);
+      }
+      expect(totals).toEqual([100, 0]);
+    });
+  });
+
+  it("gives a shared directory to the sole configured agent, not to whoever asks", async () => {
+    const root = await suiteRootTracker.make("sole-agent-other-caller");
+    const store = path.join(root, "shared", "team-store.json");
+    // Discovery fans out over the gateway roster, which admits agents this config does
+    // not, and a per-agent request may name any id. Answering on roster size alone let
+    // every caller claim the same directory and counted it once per caller.
+    const config = { session: { store } } as unknown as OpenClawConfig;
+    const now = Date.now();
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(root, "state") }, async () => {
+      await fs.mkdir(path.dirname(store), { recursive: true });
+      await fs.writeFile(
+        path.join(path.dirname(store), "unclaimed-session.jsonl"),
+        [
+          JSON.stringify({ type: "session", version: 1, id: "unclaimed-session" }),
+          JSON.stringify({
+            type: "message",
+            timestamp: new Date(now).toISOString(),
+            message: {
+              role: "assistant",
+              model: "gpt-5.4",
+              provider: "openai",
+              usage: { input: 50, output: 50, totalTokens: 100, cost: { total: 0.1 } },
+            },
+          }),
+          "",
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const totals: number[] = [];
+      for (const agentId of ["main", "beta"]) {
+        const summary = await loadCostUsageSummaryFromCache({
+          agentId,
+          config,
+          startMs: now - 3_600_000,
+          endMs: now + 3_600_000,
+          refreshMode: "sync-when-empty",
+        });
+        totals.push(summary.totals.totalTokens);
+      }
+      // 100 once, not once per caller.
+      expect(totals).toEqual([100, 0]);
+    });
+  });
+
   it("charges no agent when only the store filename is templated, so the directory is shared", async () => {
     const root = await suiteRootTracker.make("filename-template");
     // `<dir>/{agentId}.json` gives each agent its own database but one shared
