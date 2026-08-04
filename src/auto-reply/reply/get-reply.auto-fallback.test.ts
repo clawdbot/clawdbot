@@ -184,6 +184,8 @@ function mockFallbackDirectiveResult(params: {
   sessionKey: string;
   resolvedThinkLevel?: ThinkLevel;
   resolvedReasoningLevel?: "off" | "on";
+  provider?: string;
+  model?: string;
 }) {
   mocks.resolveReplyDirectives.mockImplementation(async () =>
     createGetReplyContinueDirectivesResult({
@@ -195,8 +197,8 @@ function mockFallbackDirectiveResult(params: {
       commandSource: "text",
       senderIsOwner: true,
       resetHookTriggered: false,
-      provider: "anthropic",
-      model: "claude-fallback",
+      provider: params.provider ?? "anthropic",
+      model: params.model ?? "claude-fallback",
       resolvedThinkLevel: params.resolvedThinkLevel,
       resolvedReasoningLevel: params.resolvedReasoningLevel,
     }),
@@ -397,12 +399,19 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     expect(runParams?.resolvedReasoningLevel).toBe("off");
   });
 
-  it("repairs a polluted fallback origin so the snap-back probe can fire", async () => {
+  it("clears a self-referential fallback origin so the snap-back probe can fire", async () => {
     const { sessionKey, sessionStore } = mockAutoFallbackSession({
       originProvider: "anthropic",
       originModel: "claude-fallback",
     });
-    mockFallbackDirectiveResult({ sessionKey, resolvedThinkLevel: "off" });
+    // Align the directive result with the primary so the repaired session selection
+    // reaches it without a competing fallback directive.
+    mockFallbackDirectiveResult({
+      sessionKey,
+      resolvedThinkLevel: "off",
+      provider: "openai",
+      model: "gpt-5.5",
+    });
 
     await expect(
       getReplyFromConfig(buildGetReplyCtx(), undefined, makeReasoningModelConfig()),
@@ -410,14 +419,15 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
 
     expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
     const runParams = vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0];
+    // The self-referential override is cleared and the primary is retried.
     expect(runParams?.provider).toBe("openai");
     expect(runParams?.model).toBe("gpt-5.5");
     const storedEntry = sessionStore[sessionKey];
-    expect(storedEntry?.providerOverride).toBe("anthropic");
-    expect(storedEntry?.modelOverride).toBe("claude-fallback");
-    expect(storedEntry?.modelOverrideSource).toBe("auto");
-    expect(storedEntry?.modelOverrideFallbackOriginProvider).toBe("openai");
-    expect(storedEntry?.modelOverrideFallbackOriginModel).toBe("gpt-5.5");
+    expect(storedEntry?.providerOverride).toBeUndefined();
+    expect(storedEntry?.modelOverride).toBeUndefined();
+    expect(storedEntry?.modelOverrideSource).toBeUndefined();
+    expect(storedEntry?.modelOverrideFallbackOriginProvider).toBeUndefined();
+    expect(storedEntry?.modelOverrideFallbackOriginModel).toBeUndefined();
   });
 
   it("does not repair origin when the persisted entry changed concurrently", async () => {
@@ -455,12 +465,17 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     expect(storedEntry?.modelOverrideFallbackOriginModel).toBe("claude-fallback");
   });
 
-  it("repairs the three-distinct origin state by updating origin to the primary", async () => {
+  it("does not repair the three-distinct origin state without provenance", async () => {
     const { sessionKey, sessionStore } = mockAutoFallbackSession({
       originProvider: "google",
       originModel: "gemini-pro",
     });
-    mockFallbackDirectiveResult({ sessionKey, resolvedThinkLevel: "off" });
+    mockFallbackDirectiveResult({
+      sessionKey,
+      resolvedThinkLevel: "off",
+      provider: "anthropic",
+      model: "claude-fallback",
+    });
 
     await expect(
       getReplyFromConfig(buildGetReplyCtx(), undefined, makeReasoningModelConfig()),
@@ -468,16 +483,16 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
 
     expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
     const runParams = vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0];
-    // The origin now matches the primary, so the snap-back probe fires this turn.
-    expect(runParams?.provider).toBe("openai");
-    expect(runParams?.model).toBe("gpt-5.5");
-    // The fallback override is preserved; if the primary fails again the session
-    // can fall back to it using a clean origin.
+    // Without a provenance/migration contract, three-distinct origins are indistinguishable
+    // from a legitimate primary-model change, so the changed-primary guard keeps the fallback
+    // override and the snap-back probe does not fire.
+    expect(runParams?.provider).toBe("anthropic");
+    expect(runParams?.model).toBe("claude-fallback");
     const storedEntry = sessionStore[sessionKey];
     expect(storedEntry?.providerOverride).toBe("anthropic");
     expect(storedEntry?.modelOverride).toBe("claude-fallback");
     expect(storedEntry?.modelOverrideSource).toBe("auto");
-    expect(storedEntry?.modelOverrideFallbackOriginProvider).toBe("openai");
-    expect(storedEntry?.modelOverrideFallbackOriginModel).toBe("gpt-5.5");
+    expect(storedEntry?.modelOverrideFallbackOriginProvider).toBe("google");
+    expect(storedEntry?.modelOverrideFallbackOriginModel).toBe("gemini-pro");
   });
 });

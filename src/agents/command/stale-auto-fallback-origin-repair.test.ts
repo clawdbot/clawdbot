@@ -57,18 +57,16 @@ describe("repairStaleAutoFallbackOriginOverride", () => {
     expect(result.hasStoredOverride).toBe(false);
   });
 
-  it("repairs the canonical three-distinct state by updating the origin only", async () => {
+  it("does not repair the canonical three-distinct state without provenance", async () => {
     const sessionKey = "agent:main:telegram:123";
     const sessionStore: Record<string, SessionEntry> = {};
     const storePath = path.join(tempDirs.make("repair-store"), "sessions.json");
-    replaceSessionEntrySync(
-      { storePath, sessionKey },
-      makeSessionEntry({
-        modelOverride: "claude-opus-4-7",
-        modelOverrideFallbackOriginProvider: "anthropic",
-        modelOverrideFallbackOriginModel: "claude-haiku-4-5",
-      }),
-    );
+    const originEntry = makeSessionEntry({
+      modelOverride: "claude-opus-4-7",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-haiku-4-5",
+    });
+    replaceSessionEntrySync({ storePath, sessionKey }, originEntry);
     const sessionEntry = loadSessionEntryReadOnly({ storePath, sessionKey });
     if (!sessionEntry) {
       throw new Error("session entry not loaded");
@@ -84,13 +82,13 @@ describe("repairStaleAutoFallbackOriginOverride", () => {
       primaryModel: "claude-opus-4-8",
     });
 
-    // Override is preserved; origin is rewritten to the current primary so the
-    // snap-back probe can fire on the next interval.
+    // Without a provenance/migration contract, three-distinct origins are indistinguishable
+    // from a legitimate primary-model change, so the override and origin are left untouched.
     expect(result.entry.providerOverride).toBe("anthropic");
     expect(result.entry.modelOverride).toBe("claude-opus-4-7");
     expect(result.entry.modelOverrideSource).toBe("auto");
     expect(result.entry.modelOverrideFallbackOriginProvider).toBe("anthropic");
-    expect(result.entry.modelOverrideFallbackOriginModel).toBe("claude-opus-4-8");
+    expect(result.entry.modelOverrideFallbackOriginModel).toBe("claude-haiku-4-5");
     expect(result.hasStoredOverride).toBe(true);
   });
 

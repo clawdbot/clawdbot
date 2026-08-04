@@ -1,10 +1,10 @@
 import { resolveSessionModelOverrideRouteResolution } from "../../config/sessions/model-override-provenance.js";
-/** Atomic repair for automatic-fallback overrides whose recorded origin is stale.
- *  - `clear-override`: the origin equals the fallback override itself (provably polluted), so the
- *    override is cleared and the turn retries the configured primary.
- *  - `repair-origin`: the origin differs from both the primary and the override (the canonical
- *    #92776 three-distinct state), so the origin is updated to the current primary to let the
- *    snap-back probe fire while preserving the fallback override.
+/** Atomic repair for automatic-fallback overrides whose recorded origin is provably polluted.
+ *  Only self-referential origins are repaired: when the recorded origin equals the fallback
+ *  override itself, the override is cleared and the turn retries the configured primary. The
+ *  canonical #92776 three-distinct state is intentionally not repaired here because it is
+ *  indistinguishable from a legitimate primary-model change without a provenance/migration
+ *  contract; rewriting it would defeat the deliberate changed-primary guard.
  *  The write is guarded by the exact observed snapshot so a concurrent reset, user selection,
  *  or newer automatic fallback does not receive stale repair metadata. Commit-edge conflicts
  *  caused by an interleaved write adopt the newer persisted row instead of failing the turn. */
@@ -100,7 +100,7 @@ export async function repairStaleAutoFallbackOriginOverride(params: {
     // An interleaved write changed the row between preparation and commit. Adopt the
     // newer persisted state rather than failing the turn; it is authoritative.
     if (isSqliteSessionMutationConflictError(error)) {
-      const reloaded = await loadSessionEntryReadOnly({ storePath, sessionKey });
+      const reloaded = loadSessionEntryReadOnly({ storePath, sessionKey });
       return deriveRepairResult(reloaded ?? observedSnapshot);
     }
     throw error;
@@ -113,17 +113,12 @@ function prepareRepairedEntry(params: {
   primaryProvider: string;
   primaryModel: string;
 }): SessionEntry {
-  const { observedSnapshot, repairKind, primaryProvider, primaryModel } = params;
+  const { observedSnapshot, primaryProvider, primaryModel } = params;
   const entry = { ...observedSnapshot };
-  if (repairKind === "clear-override") {
-    applyModelOverrideToSessionEntry({
-      entry,
-      selection: { provider: primaryProvider, model: primaryModel, isDefault: true },
-    });
-  } else {
-    entry.modelOverrideFallbackOriginProvider = primaryProvider;
-    entry.modelOverrideFallbackOriginModel = primaryModel;
-  }
+  applyModelOverrideToSessionEntry({
+    entry,
+    selection: { provider: primaryProvider, model: primaryModel, isDefault: true },
+  });
   return entry;
 }
 

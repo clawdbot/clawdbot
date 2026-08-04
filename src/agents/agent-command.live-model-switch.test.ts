@@ -483,6 +483,7 @@ vi.mock("../utils/message-channel.js", () => ({
 }));
 
 vi.mock("./agent-scope.js", () => ({
+  classifyStaleAutoFallbackOriginOverride: () => null,
   clearAutoFallbackPrimaryProbeSelection: vi.fn(),
   entryMatchesAutoFallbackPrimaryProbe: () => true,
   hasLegacyAutoFallbackWithoutOrigin: (entry: unknown) =>

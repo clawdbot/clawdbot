@@ -562,7 +562,7 @@ describe("resolveAgentConfig", () => {
     ).toBeNull();
   });
 
-  it("detects the canonical three-distinct origin state for origin-only repair", () => {
+  it("does not repair the canonical three-distinct origin state without provenance", () => {
     const entry: SessionEntry = {
       sessionId: "session",
       updatedAt: 1,
@@ -573,11 +573,13 @@ describe("resolveAgentConfig", () => {
       modelOverrideFallbackOriginModel: "claude-haiku-4-5",
     };
 
-    // Canonical #92776 state: origin, override, and primary are all different.
-    expect(isStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-opus-4-8")).toBe(true);
-    expect(classifyStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-opus-4-8")).toBe(
-      "repair-origin",
-    );
+    // Canonical #92776 state: origin, override, and primary are all different. Without a
+    // provenance/migration contract this is indistinguishable from a legitimate primary-model
+    // change, so the changed-primary guard must be preserved.
+    expect(isStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-opus-4-8")).toBe(false);
+    expect(
+      classifyStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-opus-4-8"),
+    ).toBeNull();
     // Origin matches the primary → nothing to repair.
     expect(isStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-haiku-4-5")).toBe(false);
     expect(

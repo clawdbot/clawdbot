@@ -573,7 +573,7 @@ export async function getReplyFromConfig(
     bodyStripped,
   } = sessionState;
   let sessionEntry = sessionState.sessionEntry;
-  const sessionModelSelectionLocked = isModelSelectionLocked(sessionEntry);
+  let sessionModelSelectionLocked = isModelSelectionLocked(sessionEntry);
   if (sessionModelSelectionLocked && hasResolvedHeartbeatModelOverride) {
     // Heartbeat routing is turn-local. A native harness lock owns the durable
     // model selection, so heartbeat.model must not retarget its AppServer turn.
@@ -703,9 +703,11 @@ export async function getReplyFromConfig(
       : null;
   const primaryProvider = resolvedChannelModelOverride?.ref.provider ?? defaultProvider;
   const primaryModel = resolvedChannelModelOverride?.ref.model ?? defaultModel;
-  // A stale fallback origin (provably polluted when it equals the override, or the
-  // canonical #92776 three-distinct state) prevents the snap-back probe from firing.
-  // Repair it in place before the probe check so this turn can retry the primary.
+  // A provably polluted self-referential fallback origin (origin equals the override itself)
+  // prevents the snap-back probe from firing. Repair it in place before the probe check so this
+  // turn can retry the primary. The canonical #92776 three-distinct state is not repaired here
+  // because it is indistinguishable from a legitimate primary-model change without a migration or
+  // provenance contract.
   const staleAutoFallbackOriginRepairKind = classifyStaleAutoFallbackOriginOverride(
     sessionEntry,
     primaryProvider,
@@ -721,10 +723,7 @@ export async function getReplyFromConfig(
   ) {
     const { loadSessionEntryReadOnly, updateSessionEntry } =
       await import("../../config/sessions/session-accessor.js");
-    const originPatch = prepareRepairedReplySessionEntry({
-      primaryProvider,
-      primaryModel,
-    });
+    const originPatch = prepareRepairedReplySessionEntry();
     const nextEntry = { ...sessionEntry, ...originPatch };
     if (storePath) {
       const observedSnapshot = sessionEntry;
@@ -748,7 +747,7 @@ export async function getReplyFromConfig(
         // An interleaved write changed the row between preparation and commit. Adopt
         // the newer persisted state rather than failing the turn; it is authoritative.
         if (isSqliteSessionMutationConflictError(error)) {
-          const reloaded = await loadSessionEntryReadOnly({ storePath, sessionKey });
+          const reloaded = loadSessionEntryReadOnly({ storePath, sessionKey });
           sessionEntry = reloaded ?? nextEntry;
         } else {
           throw error;
@@ -756,6 +755,11 @@ export async function getReplyFromConfig(
       }
     } else {
       sessionEntry = nextEntry;
+    }
+    // A concurrent update may have locked the session after we captured the initial lock flag.
+    // Re-evaluate the durable lock on the adopted entry before allowing the primary probe below.
+    if (isModelSelectionLocked(sessionEntry)) {
+      sessionModelSelectionLocked = true;
     }
     sessionEntryHandle.replaceCurrent(sessionEntry);
     sessionStore[sessionKey] = sessionEntry;
@@ -1217,16 +1221,18 @@ export async function getReplyFromConfig(
   return replyResult;
 }
 
-function prepareRepairedReplySessionEntry(params: {
-  primaryProvider: string;
-  primaryModel: string;
-}): Partial<SessionEntry> {
-  // The reply path conservatively repairs only the origin metadata. Clearing the
-  // override here would fight the existing primary-probe scheduling; updating the
-  // origin lets the probe fire on this turn while preserving the fallback pin.
+function prepareRepairedReplySessionEntry(): Partial<SessionEntry> {
+  // The only repair shape we apply in the reply path is a self-referential (provably
+  // polluted) origin, which is fixed by clearing the override and retrying the primary.
+  // Fields must be explicitly set to undefined (not deleted) because the reply path uses
+  // a non-replacing merge that would otherwise keep the existing override values.
   return {
-    modelOverrideFallbackOriginProvider: params.primaryProvider,
-    modelOverrideFallbackOriginModel: params.primaryModel,
+    providerOverride: undefined,
+    modelOverride: undefined,
+    modelOverrideSource: undefined,
+    modelOverrideRouteResolution: undefined,
+    modelOverrideFallbackOriginProvider: undefined,
+    modelOverrideFallbackOriginModel: undefined,
   };
 }
 

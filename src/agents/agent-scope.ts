@@ -123,18 +123,20 @@ export function hasLegacyAutoFallbackWithoutOrigin(
   );
 }
 
-/** Kinds of stale auto-fallback origin repair. */
-export type StaleAutoFallbackOriginRepairKind = "clear-override" | "repair-origin";
+/** Kinds of stale auto-fallback origin repair.
+ *  Only self-referential origins are repaired now; the canonical #92776 three-distinct state is
+ *  indistinguishable from a legitimate primary-model change without a provenance/migration
+ *  contract, so it is left untouched to preserve the changed-primary guard. */
+export type StaleAutoFallbackOriginRepairKind = "clear-override";
 
 /** Classifies an auto-fallback override origin for repair.
  *  - `"clear-override"`: the recorded origin equals the current fallback override itself, which
- *    is provably polluted (a fallback can never originate from the model it fell back to).
- *  - `"repair-origin"`: the recorded origin differs from both the current primary and the current
- *    fallback override. This covers the canonical #92776 three-distinct state where the writer
- *    recorded a failed chain model as the origin; we conservatively update the origin to the
- *    current primary so the snap-back probe can fire, while preserving the fallback override.
+ *    is provably polluted (a fallback can never originate from the model it fell back to). The
+ *    override is cleared so this turn retries the configured primary.
  *  - `null`: no repair needed (user override, missing origin, origin already matches primary,
- *    or origin differs from primary only because the primary legitimately changed). */
+ *    or the origin differs from primary because the primary legitimately changed). The latter
+ *    case deliberately preserves the existing changed-primary mismatch guard; a migration or
+ *    provenance contract is required before rewriting three-distinct origins. */
 export function classifyStaleAutoFallbackOriginOverride(
   entry:
     | Pick<
@@ -181,12 +183,13 @@ export function classifyStaleAutoFallbackOriginOverride(
   if (originProvider === overrideProvider && originModel === overrideModel) {
     return "clear-override";
   }
-  return "repair-origin";
+  return null;
 }
 
 /** Detects auto-fallback overrides whose recorded origin needs repair.
- *  Returns true for both provably polluted origins (origin equals the fallback override) and the
- *  canonical #92776 three-distinct state (origin differs from both primary and override). */
+ *  Returns true only for provably polluted self-referential origins (origin equals the fallback
+ *  override itself). The canonical #92776 three-distinct state is intentionally not treated as
+ *  stale until a provenance/migration contract can distinguish it from a legitimate primary change. */
 export function isStaleAutoFallbackOriginOverride(
   entry:
     | Pick<
