@@ -5,7 +5,7 @@ import path from "node:path";
 import process from "node:process";
 import { expectDefined } from "@openclaw/normalization-core";
 import { CommanderError } from "commander";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -14,8 +14,12 @@ import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { getGatewayRunRuntimeHooks } from "./gateway-cli/runtime-hooks.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
-import { runCli, shouldStartProxyForCli } from "./run-main.js";
 import { registerSignalExitBarrier } from "./signal-exit-barrier.js";
+
+type RunMainModule = typeof import("./run-main.js");
+
+let runCli: RunMainModule["runCli"];
+let shouldStartProxyForCli: RunMainModule["shouldStartProxyForCli"];
 
 type ConfigSnapshotStub = {
   exists: boolean;
@@ -493,6 +497,14 @@ async function expectNonInteractiveBareCliError(
 }
 
 describe("runCli exit behavior", () => {
+  beforeAll(async () => {
+    expect(dotenvModuleImportState.count).toBe(0);
+    const runMainModule = await import("./run-main.js");
+    expect(dotenvModuleImportState.count).toBe(0);
+    runCli = runMainModule.runCli;
+    shouldStartProxyForCli = runMainModule.shouldStartProxyForCli;
+  });
+
   afterAll(() => {
     serviceEnvSnapshot.restore();
   });
@@ -553,7 +565,7 @@ describe("runCli exit behavior", () => {
 
   it("does not import dotenv for gateway forms without a workspace file", async () => {
     existsSyncOverride.value = () => false;
-    const importsBefore = dotenvModuleImportState.count;
+    expect(dotenvModuleImportState.count).toBe(0);
 
     await runCli(["node", "openclaw", "gateway"]);
     await runCli(["node", "openclaw", "gateway", "run"]);
@@ -564,7 +576,7 @@ describe("runCli exit behavior", () => {
     });
     await runCli(["node", "openclaw", "--log-level", "debug", "gateway", "run"]);
 
-    expect(dotenvModuleImportState.count).toBe(importsBefore);
+    expect(dotenvModuleImportState.count).toBe(0);
     expect(loadDotEnvMock).not.toHaveBeenCalled();
     expect(buildProgramMock).toHaveBeenCalledTimes(1);
     expect(commanderParseAsyncMock).toHaveBeenLastCalledWith([
