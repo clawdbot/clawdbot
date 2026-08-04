@@ -6,9 +6,9 @@ scenario:
   coverage:
     primary:
       - session-memory.group-memory
+      - session-memory.memory-tools
       - session-memory.qa-channel-memory
     secondary:
-      - session-memory.memory-tools
       - channels.room-session-group-messages
   objective: Verify a shared QA-channel message causally recalls a fact from a nested memory file before the agent replies in the same room.
   successCriteria:
