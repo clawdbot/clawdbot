@@ -55,6 +55,8 @@ export type SkillsStatusFilter = "all" | "ready" | "needs-setup" | "disabled";
 export type SkillDetailTab = "overview" | "card";
 
 type SkillsProps = {
+  canUpdate: boolean;
+  canInstall: boolean;
   connected: boolean;
   loading: boolean;
   report: SkillStatusReport | null;
@@ -208,6 +210,14 @@ function verdictStatusKind(
 
 function skillControlsLocked(props: SkillsProps): boolean {
   return props.loading || props.operation !== null;
+}
+
+function skillUpdateLocked(props: SkillsProps): boolean {
+  return skillControlsLocked(props) || !props.canUpdate;
+}
+
+function skillInstallLocked(props: SkillsProps): boolean {
+  return skillControlsLocked(props) || !props.canInstall;
 }
 
 function activeSkillMutation(props: SkillsProps, skillKey: string): boolean {
@@ -415,7 +425,7 @@ function renderClawHubSection(props: SkillsProps) {
                   type="button"
                   class="btn btn--sm"
                   style="margin-top: 10px; white-space: normal;"
-                  ?disabled=${skillControlsLocked(props)}
+                  ?disabled=${skillInstallLocked(props)}
                   @click=${() =>
                     props.onClawHubInstall(
                       props.clawhubInstallMessage?.acknowledgeSlug ?? "",
@@ -466,7 +476,7 @@ function renderClawHubResults(props: SkillsProps) {
             ${r.version ? renderSettingsValue(`v${r.version}`) : nothing}
             <button
               class="btn btn--sm"
-              ?disabled=${skillControlsLocked(props)}
+              ?disabled=${skillInstallLocked(props)}
               @click=${() => props.onClawHubInstall(r.slug)}
             >
               ${activeClawHubMutation(props, r.slug)
@@ -549,7 +559,7 @@ function renderClawHubDetailDialog(props: SkillsProps) {
                       : nothing}
                     <button
                       class="btn primary"
-                      ?disabled=${skillControlsLocked(props)}
+                      ?disabled=${skillInstallLocked(props)}
                       @click=${() => {
                         if (props.clawhubDetailSlug) {
                           props.onClawHubInstall(props.clawhubDetailSlug);
@@ -569,7 +579,7 @@ function renderClawHubDetailDialog(props: SkillsProps) {
 }
 
 function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
-  const locked = skillControlsLocked(props);
+  const locked = skillUpdateLocked(props);
   const verdict = verdictForSkill(skill, props.clawhubVerdicts);
 
   return html`
@@ -604,7 +614,8 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
 }
 
 function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
-  const locked = skillControlsLocked(props);
+  const updateLocked = skillUpdateLocked(props);
+  const installLocked = skillInstallLocked(props);
   const active = activeSkillMutation(props, skill.skillKey);
   const editValue = props.edits[skill.skillKey] ?? "";
   const message = props.messages[skill.skillKey] ?? null;
@@ -701,7 +712,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
           <div style="display: flex; align-items: center; gap: 12px;">
             ${renderSettingsToggle({
               checked: !skill.disabled,
-              disabled: locked,
+              disabled: updateLocked,
               ariaLabel: skill.name,
               onChange: () => props.onToggle(skill.skillKey, skill.disabled),
             })}
@@ -711,7 +722,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
             ${installOption
               ? html`<button
                   class="btn"
-                  ?disabled=${locked}
+                  ?disabled=${installLocked}
                   @click=${() =>
                     installOption && props.onInstall(skill.skillKey, skill.name, installOption.id)}
                 >
@@ -738,7 +749,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
                     <input
                       type="password"
                       required
-                      ?disabled=${locked}
+                      ?disabled=${updateLocked}
                       .value=${editValue}
                       @input=${(e: Event) =>
                         props.onEdit(skill.skillKey, (e.target as HTMLInputElement).value)}
@@ -757,7 +768,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
                   })()}
                   <button
                     class="btn primary"
-                    ?disabled=${locked || !editValue.trim()}
+                    ?disabled=${updateLocked || !editValue.trim()}
                     @click=${() => props.onSaveKey(skill.skillKey)}
                   >
                     ${t("skillsPage.saveKey")}
