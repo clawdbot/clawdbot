@@ -14,13 +14,13 @@ import {
 import { testing as updateCommandPluginsTesting } from "./update-command-plugins.test-support.js";
 import { resolvePostCoreUpdateChildStdio } from "./update-command-post-core.js";
 import { applyPostPluginConfigValidation } from "./update-command-post-plugin-validation.js";
+import { resolveUpdatedInstallCommandEnv } from "./update-command-service-env.js";
 import {
   resolvePostInstallDoctorEnv,
   resolvePostUpdateServiceStateReadEnv,
   resolveUpdatedGatewayRestartPort,
   maybeRestartService,
   shouldPrepareUpdatedInstallRestart,
-  testing as updateCommandServiceModuleTesting,
 } from "./update-command-service.js";
 import { testing as updateCommandServiceTesting } from "./update-command-service.test-support.js";
 
@@ -295,7 +295,7 @@ describe("resolvePostInstallDoctorEnv", () => {
 
 describe("resolveUpdatedInstallCommandEnv", () => {
   it("keeps runtime SecretRef inputs while applying managed service overrides", () => {
-    const env = updateCommandServiceModuleTesting.resolveUpdatedInstallCommandEnv({
+    const env = resolveUpdatedInstallCommandEnv({
       invocationCwd: "/srv/openclaw",
       processEnv: {
         GATEWAY_AUTH_TOKEN_REF: "runtime-token",
