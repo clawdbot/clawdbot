@@ -178,7 +178,8 @@ describe("agent identity actions", () => {
   });
 
   it("does not send a queued identity update after access changes", async () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const request = vi.fn();
+    const client = { request } as unknown as GatewayBrowserClient;
     const state = host();
     state.identityDraft.name = "Agent Smith";
     const runExternalMutation = vi.fn(async (_task, options) => {
@@ -206,7 +207,7 @@ describe("agent identity actions", () => {
       onSaved: vi.fn(),
     });
 
-    expect(client.request).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
     expect(state.identityError).toContain(
       "Access changed before the agent identity update started.",
     );
