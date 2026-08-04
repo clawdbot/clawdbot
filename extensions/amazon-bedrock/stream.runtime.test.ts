@@ -461,7 +461,7 @@ describe("Bedrock stop reasons", () => {
 describe("Bedrock thinking effort mapping", () => {
   it.each([
     { reasoning: undefined, expected: "high", maxTokens: 128_000, fields: true },
-    { reasoning: "off" as const, expected: "off", maxTokens: undefined, fields: false },
+    { reasoning: "off" as const, expected: "off", maxTokens: 128_000, fields: false },
   ])(
     "uses the Opus 5 default for reasoning=$reasoning",
     ({ reasoning, expected, maxTokens, fields }) => {
@@ -521,6 +521,23 @@ describe("Bedrock thinking effort mapping", () => {
     const options = testing.resolveSimpleBedrockOptions(model, {});
 
     expect(options.reasoning).toBeUndefined();
+    expect(testing.buildAdditionalModelRequestFields(model, options)).toBeUndefined();
+  });
+
+  it("keeps synthetic fallback caps omitted for explicit reasoning-off requests", () => {
+    // OpenClaw synthesizes 4096/8192/16384 when the real provider cap is
+    // unknown; those must stay out of the request so Bedrock uses its native
+    // default, while real catalog caps are forwarded (see Opus 5 case above).
+    const model = bedrockModel({
+      id: "us.anthropic.claude-sonnet-4-6",
+      name: "Claude Sonnet 4.6",
+      reasoning: true,
+      maxTokens: 8192,
+    });
+    const options = testing.resolveSimpleBedrockOptions(model, { reasoning: "off" });
+
+    expect(options.maxTokens).toBeUndefined();
+    expect(options.reasoning).toBe("off");
     expect(testing.buildAdditionalModelRequestFields(model, options)).toBeUndefined();
   });
 

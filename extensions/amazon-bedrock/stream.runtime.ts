@@ -465,7 +465,13 @@ function resolveSimpleBedrockOptions(
   }
 
   if (options.reasoning === "off") {
-    return { ...base, reasoning: "off" } satisfies BedrockOptions;
+    // Reasoning-off requests still forward the resolved model output cap;
+    // synthetic fallback caps stay omitted so Bedrock uses its native default.
+    return {
+      ...base,
+      maxTokens: resolveAdaptiveBedrockMaxTokens(model, base.maxTokens),
+      reasoning: "off",
+    } satisfies BedrockOptions;
   }
 
   if (isAnthropicClaudeModel(model)) {
