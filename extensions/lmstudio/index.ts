@@ -168,6 +168,10 @@ export default definePluginEntry({
           hint: "Connect to a running LM Studio server and use an already loaded model",
           kind: "custom",
           appGuidedSetup: {
+            detectAvailability: async (ctx) => {
+              const { detectAppGuidedLmstudioAvailability } = await import("./src/setup.js");
+              return await detectAppGuidedLmstudioAvailability(ctx);
+            },
             detect: async (ctx) => {
               const providerSetup = await loadProviderSetup();
               const result = await providerSetup.prepareAppGuidedLmstudioSetup(ctx);

@@ -504,6 +504,41 @@ export async function prepareAppGuidedLmstudioSetup(
   };
 }
 
+/** Read-only reachability probe for app-guided setup when no loaded model qualifies. */
+export async function detectAppGuidedLmstudioAvailability(
+  ctx: ProviderAppGuidedSetupContext,
+): Promise<boolean> {
+  const existingProvider = ctx.config.models?.providers?.[PROVIDER_ID];
+  const baseUrl = resolveLmstudioInferenceBase(
+    existingProvider?.baseUrl ?? resolveLmstudioSetupDefaultInferenceBaseUrl(ctx.env),
+  );
+  let headers: Record<string, string> | undefined;
+  let configuredValue: string | undefined;
+  try {
+    headers = await resolveLmstudioProviderHeaders({
+      config: ctx.config,
+      env: ctx.env,
+      headers: existingProvider?.headers,
+    });
+    configuredValue = await resolveLmstudioConfiguredApiKey({
+      config: ctx.config,
+      env: ctx.env,
+      allowUnresolved: true,
+    });
+  } catch {
+    return false;
+  }
+  const environmentValue = ctx.env[LMSTUDIO_DEFAULT_API_KEY_ENV_VAR]?.trim();
+  const accessValue = configuredValue ?? environmentValue;
+  const discovery = await fetchLmstudioModels({
+    baseUrl,
+    apiKey: accessValue ?? LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
+    ...(headers ? { headers } : {}),
+    timeoutMs: 5000,
+  });
+  return discovery.reachable;
+}
+
 /** Interactive LM Studio setup with connectivity and model-availability checks. */
 export async function promptAndConfigureLmstudioInteractive(params: {
   config: OpenClawConfig;
