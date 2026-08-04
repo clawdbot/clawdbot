@@ -243,22 +243,18 @@ async function installAndConfigure(params: {
     providerMode: "mock-openai",
     transportBaseUrl: "http://127.0.0.1:9",
     controlUiEnabled: false,
-    mutateConfig: (cfg) => {
-      const entries = { ...cfg.plugins?.entries };
-      delete entries["memory-core"];
-      return {
-        ...cfg,
-        plugins: {
-          ...cfg.plugins,
-          allow: cfg.plugins?.allow?.filter((pluginId) => pluginId !== "memory-core"),
-          slots: {
-            ...cfg.plugins?.slots,
-            memory: "none",
-          },
-          entries,
+    mutateConfig: (cfg) => ({
+      ...cfg,
+      plugins: {
+        ...cfg.plugins,
+        allow: [],
+        slots: {
+          ...cfg.plugins?.slots,
+          memory: "none",
         },
-      };
-    },
+        entries: {},
+      },
+    }),
     runtimeEnvPatch: {
       NPM_CONFIG_REGISTRY: params.registryBaseUrl,
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
