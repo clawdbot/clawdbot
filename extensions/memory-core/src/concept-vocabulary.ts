@@ -2,7 +2,7 @@
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export const MAX_CONCEPT_TAGS = 8;
+const MAX_CONCEPT_TAGS = 8;
 
 type ConceptTagScriptFamily = "latin" | "cjk" | "mixed" | "other";
 

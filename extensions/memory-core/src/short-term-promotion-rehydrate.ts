@@ -305,12 +305,12 @@ function lineRangeOverlapsDreamingFence(
   return false;
 }
 
-export type ShortTermRecallEntryLocation = {
+type ShortTermRecallEntryLocation = {
   entry: ShortTermRecallEntry;
   insideManagedDreamingFence: boolean;
 };
 
-export async function resolveShortTermRecallEntryLocation(
+async function resolveShortTermRecallEntryLocation(
   workspaceDir: string,
   entry: ShortTermRecallEntry,
 ): Promise<ShortTermRecallEntryLocation | null> {
@@ -364,14 +364,6 @@ export async function resolveShortTermRecallEntryLocations(
       })),
     ),
   );
-}
-
-export async function isShortTermRecallEntryInsideManagedDreamingFence(
-  workspaceDir: string,
-  entry: ShortTermRecallEntry,
-): Promise<boolean> {
-  const location = await resolveShortTermRecallEntryLocation(workspaceDir, entry);
-  return location?.insideManagedDreamingFence ?? false;
 }
 
 export async function rehydratePromotionCandidate(
