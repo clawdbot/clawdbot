@@ -669,6 +669,7 @@
             "type": "local-file-with-env",
             "fileEnvVar": "GOOGLE_APPLICATION_CREDENTIALS",
             "fallbackPaths": [
+              "${CLOUDSDK_CONFIG}/application_default_credentials.json",
               "${HOME}/.config/gcloud/application_default_credentials.json",
               "${APPDATA}/gcloud/application_default_credentials.json"
             ],

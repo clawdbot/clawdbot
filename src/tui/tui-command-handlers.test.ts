@@ -571,7 +571,7 @@ describe("tui command handlers", () => {
     const emptySide = createHarness({ opts: { local: true } });
     await emptySide.handleCommand("/side");
     expect(emptySide.sendChat).not.toHaveBeenCalled();
-    expect(emptySide.addSystem).toHaveBeenCalledWith("Usage: /btw [side question]");
+    expect(emptySide.addSystem).toHaveBeenCalledWith("Usage: /btw <side question>");
 
     const side = createHarness({ opts: { local: true } });
     await side.handleCommand("/side check this");

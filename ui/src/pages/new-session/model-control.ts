@@ -1,4 +1,8 @@
 import { initialState, Task, TaskStatus } from "@lit/task";
+import {
+  DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+  resolveGatewayStartupRetryAfterMs,
+} from "@openclaw/gateway-client/browser";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { GatewayAgentRow, GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -11,6 +15,94 @@ import { resolveChatThinkingSelectState } from "../../lib/chat/thinking.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { renderChatModelControls } from "../chat/components/chat-model-controls.ts";
 import type { NewSessionPreference } from "./preferences.ts";
+
+const NEW_SESSION_METADATA_RETRY_WINDOW_MS = 60_000;
+
+type NewSessionMetadataClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
+
+function abortError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException("New-session metadata retry aborted", "AbortError");
+}
+
+function waitForMetadataRetry(delayMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    return Promise.reject(abortError(signal));
+  }
+
+  return new Promise((resolve, reject) => {
+    let timer: ReturnType<typeof globalThis.setTimeout> | null = null;
+    const cleanup = () => {
+      if (timer !== null) {
+        globalThis.clearTimeout(timer);
+        timer = null;
+      }
+      signal.removeEventListener("abort", onAbort);
+    };
+    const onAbort = () => {
+      cleanup();
+      reject(abortError(signal));
+    };
+
+    signal.addEventListener("abort", onAbort, { once: true });
+    timer = globalThis.setTimeout(() => {
+      cleanup();
+      resolve();
+    }, delayMs);
+  });
+}
+
+async function requestNewSessionMetadata(
+  client: NewSessionMetadataClient,
+  agentId: string,
+  signal: AbortSignal,
+): Promise<{ models?: ModelCatalogEntry[] }> {
+  const deadlineAt = Date.now() + NEW_SESSION_METADATA_RETRY_WINDOW_MS;
+  let latestStartupError: Error | undefined;
+
+  while (true) {
+    if (signal.aborted) {
+      throw abortError(signal);
+    }
+
+    const remainingMs = deadlineAt - Date.now();
+    if (remainingMs <= 0) {
+      if (latestStartupError !== undefined) {
+        throw latestStartupError;
+      }
+      throw new Error("New-session metadata retry deadline elapsed");
+    }
+
+    try {
+      return await client.request<{ models?: ModelCatalogEntry[] }>(
+        "chat.metadata",
+        { agentId },
+        {
+          signal,
+          timeoutMs: Math.min(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS, remainingMs),
+        },
+      );
+    } catch (error) {
+      const requestError =
+        error instanceof Error
+          ? error
+          : new Error("New-session metadata request failed", { cause: error });
+      const retryAfterMs = resolveGatewayStartupRetryAfterMs(requestError);
+      if (retryAfterMs === null) {
+        throw requestError;
+      }
+
+      const retryRemainingMs = deadlineAt - Date.now();
+      if (retryRemainingMs <= 0) {
+        throw requestError;
+      }
+
+      latestStartupError = requestError;
+      await waitForMetadataRetry(Math.min(retryAfterMs, retryRemainingMs), signal);
+    }
+  }
+}
 
 type DraftModelTarget = {
   entry?: ModelCatalogEntry;
@@ -66,9 +158,7 @@ export class NewSessionModelControl implements ReactiveControllerHost {
     args: () =>
       [null as ApplicationContext["gateway"]["snapshot"]["client"], "" as string] as const,
     task: ([client, agentId], { signal }) =>
-      client
-        ? client.request<{ models?: ModelCatalogEntry[] }>("chat.metadata", { agentId }, { signal })
-        : initialState,
+      client ? requestNewSessionMetadata(client, agentId, signal) : initialState,
     onComplete: (result) => {
       this.catalog = Array.isArray(result.models) ? result.models : [];
       if (this.pendingSelectionGeneration === this.selectionGeneration) {

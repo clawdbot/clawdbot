@@ -26,6 +26,7 @@ import {
   type XaiRealtimeEvent,
 } from "./realtime-voice-config.js";
 import { XaiRealtimeMalformedAudioError, XaiRealtimeVoiceEvents } from "./realtime-voice-events.js";
+import { XaiRealtimePlaybackMarkOverflowError } from "./realtime-voice-protocol.js";
 import { xaiUserAgentHeaderFor } from "./src/xai-user-agent.js";
 
 export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements RealtimeVoiceBridge {
@@ -159,6 +160,9 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
         attempt.resolve();
         return;
       }
+      // Credential refresh has its own bounded lifecycle. Arm the socket timeout
+      // only once valid connection parameters are ready.
+      attempt.startTimeout();
       const { url, headers } = resolvedConnection;
       this.connectionUrl = url;
       const proxyAgent = createDebugProxyWebSocketAgent(resolveDebugProxySettings());
@@ -230,7 +234,10 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
             attempt.resolve(true);
           }
         } catch (error) {
-          if (error instanceof XaiRealtimeMalformedAudioError) {
+          if (
+            error instanceof XaiRealtimeMalformedAudioError ||
+            error instanceof XaiRealtimePlaybackMarkOverflowError
+          ) {
             attempt.reject(error);
             this.failConnection(error, ws, connection);
             return;
@@ -468,21 +475,25 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
   }
 
   private failConnection(
-    error: XaiRealtimeMalformedAudioError,
+    error: XaiRealtimeMalformedAudioError | XaiRealtimePlaybackMarkOverflowError,
     ws: WebSocket,
     connection: RealtimeVoiceSessionConnection,
   ): void {
-    if (this.terminalError) {
+    if (!this.lifecycle.failure(connection)) {
       return;
     }
     this.terminalError = error;
-    this.lifecycle.failure(connection);
     this.resetTerminalState();
     try {
       this.config.onError?.(error);
     } finally {
       if (ws.readyState !== WebSocket.CLOSED) {
-        ws.close(1002, "Malformed audio payload");
+        ws.close(
+          1002,
+          error instanceof XaiRealtimePlaybackMarkOverflowError
+            ? "Playback mark overflow"
+            : "Malformed audio payload",
+        );
       } else {
         this.notifyClose(connection, "error");
       }

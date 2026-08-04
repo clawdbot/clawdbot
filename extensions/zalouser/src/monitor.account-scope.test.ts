@@ -179,7 +179,14 @@ describe("zalouser monitor lifecycle", () => {
       });
       try {
         await vi.waitFor(() => {
-          expect(statusSink).toHaveBeenCalledWith({ lifecycle: "ready" });
+          expect(statusSink).toHaveBeenCalledWith({
+            running: true,
+            connected: true,
+            lifecycle: "ready",
+            lastConnectedAt: expect.any(Number),
+            lastError: null,
+            terminalDisconnect: undefined,
+          });
         });
       } finally {
         abortController.abort();

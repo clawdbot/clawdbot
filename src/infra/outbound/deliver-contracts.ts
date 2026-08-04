@@ -212,6 +212,8 @@ export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & 
   skipQueue?: boolean;
   /** @internal Fence recovery ownership at the same provider boundary as live sends. */
   deliveryProducerClaimId?: string;
+  /** @internal Keep an explicitly reusable producer claim alive during platform preparation. */
+  deliveryProducerLeaseRequired?: boolean;
   /** @internal Recovery already ran provider admission after its pending-row re-read. */
   deferredDeliveryAdmissionPassed?: true;
   /** @internal State directory that owns the existing recovery queue entry. */

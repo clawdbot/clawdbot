@@ -75,10 +75,8 @@ import {
 import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
 import type { ProviderModelRouteCandidate } from "../../plugin-sdk/provider-model-types.js";
 import {
-  captureCurrentPluginMetadataSnapshotState,
   getCurrentPluginMetadataSnapshot,
-  restoreCurrentPluginMetadataSnapshotState,
-  setCurrentPluginMetadataSnapshot,
+  installTemporaryCurrentPluginMetadataSnapshot,
 } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -290,15 +288,12 @@ function installCommandPluginMetadataSnapshot(params: {
   if (current) {
     return () => {};
   }
-  const previousState = captureCurrentPluginMetadataSnapshotState();
-  setCurrentPluginMetadataSnapshot(params.snapshot, {
+  const lease = installTemporaryCurrentPluginMetadataSnapshot(params.snapshot, {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
-  return () => {
-    restoreCurrentPluginMetadataSnapshotState(previousState);
-  };
+  return lease.release;
 }
 
 function syntheticAuthCredential(

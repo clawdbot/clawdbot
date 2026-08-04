@@ -468,6 +468,34 @@ describe("buildQaRuntimeEnv", () => {
     expect(env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2026.4.8");
   });
 
+  it("isolates gateway children from Vitest without removing QA controls or non-test NODE_ENV", () => {
+    const testEnv = buildQaRuntimeEnv({
+      ...createParams({
+        NODE_ENV: "test",
+        VITEST: "true",
+        VITEST_POOL_ID: "base-pool",
+        VITEST_WORKER_ID: "base-worker",
+      }),
+      runtimeEnvPatch: {
+        VITEST: "patched",
+        VITEST_POOL_ID: "patched-pool",
+        VITEST_WORKER_ID: "patched-worker",
+      },
+    });
+
+    expect(testEnv.NODE_ENV).toBeUndefined();
+    expect(testEnv.VITEST).toBeUndefined();
+    expect(testEnv.VITEST_POOL_ID).toBeUndefined();
+    expect(testEnv.VITEST_WORKER_ID).toBeUndefined();
+    expect(testEnv.OPENCLAW_TEST_FAST).toBe("1");
+    expect(testEnv.OPENCLAW_ALLOW_SLOW_REPLY_TESTS).toBe("1");
+
+    const developmentEnv = buildQaRuntimeEnv({
+      ...createParams({ NODE_ENV: "development" }),
+    });
+    expect(developmentEnv.NODE_ENV).toBe("development");
+  });
+
   it("maps live frontier key aliases into provider env vars", () => {
     const env = buildQaRuntimeEnv({
       ...createParams({

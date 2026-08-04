@@ -1036,6 +1036,126 @@ describe("agentLoop tool termination", () => {
     },
   );
 
+  it.each([
+    ["sequential", "invalid arguments"],
+    ["sequential", "policy blocked"],
+    ["parallel", "invalid arguments"],
+    ["parallel", "policy blocked"],
+  ] as const)(
+    "never stamps external provenance on %s %s calls that did not execute",
+    async (toolExecution, failure) => {
+      let turn = 0;
+      const executed: string[] = [];
+      const tool: AgentTool = {
+        ...makeTool("network_probe", executed),
+        resultContentSource: "network",
+        ...(failure === "invalid arguments"
+          ? { parameters: Type.Object({ query: Type.String() }) }
+          : {}),
+      };
+      const streamFn: StreamFn = () => {
+        const stream = createAssistantMessageEventStream();
+        queueMicrotask(() => {
+          turn += 1;
+          const message =
+            turn === 1
+              ? makeAssistantMessage([
+                  { type: "toolCall", id: "network-preflight", name: tool.name, arguments: {} },
+                ])
+              : makeAssistantMessage([{ type: "text", text: "local outcome" }]);
+          stream.push({
+            type: "done",
+            reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+            message,
+          });
+          stream.end();
+        });
+        return stream;
+      };
+      const stream = agentLoop(
+        [{ role: "user", content: "network preflight", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [tool] },
+        {
+          ...config,
+          toolExecution,
+          ...(failure === "policy blocked"
+            ? { beforeToolCall: async () => ({ block: true, reason: "local policy" }) }
+            : {}),
+        },
+        undefined,
+        streamFn,
+      );
+
+      const events = await collectEvents(stream);
+      const messages = await stream.result();
+      const toolResult = messages.find((message) => message.role === "toolResult");
+      const assistant = messages.findLast((message) => message.role === "assistant");
+
+      expect(executed).toEqual([]);
+      expect(events).toContainEqual(
+        expect.objectContaining({ type: "tool_execution_end", executionStarted: false }),
+      );
+      expect((toolResult as unknown as { __openclaw?: unknown })?.["__openclaw"]).toBeUndefined();
+      expect((assistant as unknown as { __openclaw?: unknown })?.["__openclaw"]).toBeUndefined();
+    },
+  );
+
+  it.each([
+    ["sequential", "caller cancellation", false],
+    ["sequential", "remote failure after cancellation", true],
+    ["parallel", "caller cancellation", false],
+    ["parallel", "remote failure after cancellation", true],
+  ] as const)(
+    "preserves %s provenance for %s after execution begins",
+    async (toolExecution, failure, tainted) => {
+      const controller = new AbortController();
+      const cancelReason = new Error("operator cancelled");
+      const afterToolCall = vi.fn(async () => undefined);
+      const tool: AgentTool = {
+        ...makeTool("network_cancel", []),
+        resultContentSource: "network",
+        execute: async () => {
+          controller.abort(cancelReason);
+          throw tainted ? new Error("remote failure after cancellation") : cancelReason;
+        },
+      };
+      const streamFn: StreamFn = () => {
+        const stream = createAssistantMessageEventStream();
+        queueMicrotask(() => {
+          const message = makeAssistantMessage([
+            { type: "toolCall", id: "network-cancel", name: tool.name, arguments: {} },
+          ]);
+          stream.push({
+            type: "done",
+            reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+            message,
+          });
+          stream.end();
+        });
+        return stream;
+      };
+      const stream = agentLoop(
+        [{ role: "user", content: failure, timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [tool] },
+        { ...config, toolExecution, afterToolCall },
+        controller.signal,
+        streamFn,
+      );
+
+      const events = await collectEvents(stream);
+      const messages = await stream.result();
+      const toolResult = messages.find((message) => message.role === "toolResult");
+
+      expect(afterToolCall).toHaveBeenCalledOnce();
+      expect(events).toContainEqual(
+        expect.objectContaining({ type: "tool_execution_end", executionStarted: true }),
+      );
+      expect((toolResult as unknown as { __openclaw?: unknown })?.["__openclaw"]).toEqual(
+        tainted ? { resultContentSource: "network" } : undefined,
+      );
+    },
+  );
+
   it("persists and passes a local turn id when the provider omits one", async () => {
     let turn = 0;
     const toolCall = { type: "toolCall" as const, id: "call_0", name: "exec", arguments: {} };
@@ -1991,12 +2111,15 @@ describe("agentLoop tool termination", () => {
     };
     const events: AgentEvent[] = [];
 
-    await runAgentLoop(
+    const abortedMessages = await runAgentLoop(
       [{ role: "user", content: "abort during parallel tool preparation", timestamp: 1 }],
       {
         systemPrompt: "",
         messages: [],
-        tools: [makeTool("paid", executed), makeTool("gated", executed)],
+        tools: [
+          { ...makeTool("paid", executed), resultContentSource: "network" },
+          { ...makeTool("gated", executed), resultContentSource: "network" },
+        ],
       },
       {
         ...config,
@@ -2024,6 +2147,11 @@ describe("agentLoop tool termination", () => {
 
     expect(executed).toEqual([]);
     expect(afterToolCall).not.toHaveBeenCalled();
+    expect(
+      abortedMessages
+        .filter((message) => message.role === "toolResult")
+        .every((message) => !(message as unknown as { __openclaw?: unknown })["__openclaw"]),
+    ).toBe(true);
     expect(endEvents).toHaveLength(2);
     expect(endEvents).toEqual(
       expect.arrayContaining([

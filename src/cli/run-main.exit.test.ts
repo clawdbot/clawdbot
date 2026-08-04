@@ -2287,6 +2287,33 @@ describe("runCli exit behavior", () => {
   });
 
   it.each([
+    ["root command", ["node", "openclaw", "update", "--dry-run", "--json"]],
+    ["root shorthand", ["node", "openclaw", "--update", "--dry-run", "--json"]],
+  ])("reads proxy config without observation for the update dry-run %s", async (_name, argv) => {
+    tryRouteCliMock.mockResolvedValueOnce(true);
+    loadConfigMock.mockReturnValueOnce({ proxy: { selected: "dry-run" } });
+
+    await runCli(argv);
+
+    expect(loadConfigMock).toHaveBeenCalledWith({
+      observe: false,
+      skipPluginValidation: true,
+    });
+    expect(startProxyMock).toHaveBeenCalledWith({ selected: "dry-run" });
+  });
+
+  it("keeps observed proxy config reads for mutable updates", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(true);
+
+    await runCli(["node", "openclaw", "update"]);
+
+    expect(loadConfigMock).toHaveBeenCalledWith({
+      skipPluginValidation: true,
+    });
+    expect(startProxyMock).toHaveBeenCalledWith(undefined);
+  });
+
+  it.each([
     {
       name: "version-pinned skill install",
       argv: ["node", "openclaw", "skills", "install", "@owner/weather", "--version", "1.2.3"],

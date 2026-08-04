@@ -75,6 +75,69 @@ describe("command-startup-policy", () => {
     }
   });
 
+  it("skips the config guard for exact root update dry-runs", () => {
+    for (const argv of [
+      ["node", "openclaw", "update", "--dry-run"],
+      ["node", "openclaw", "--profile", "work", "update", "--dry-run"],
+      ["node", "openclaw", "--update", "--dry-run"],
+    ]) {
+      expect(
+        resolvePolicy({
+          argv,
+          commandPath: ["update"],
+        }).skipConfigGuard,
+        argv.join(" "),
+      ).toBe(true);
+    }
+  });
+
+  it("keeps the config guard for non-dry-run and descendant update invocations", () => {
+    for (const testCase of [
+      {
+        argv: ["node", "openclaw", "update"],
+        commandPath: ["update"],
+      },
+      {
+        argv: ["node", "openclaw", "update", "--tag", "--dry-run"],
+        commandPath: ["update"],
+      },
+      {
+        argv: ["node", "openclaw", "update", "--channel", "--dry-run"],
+        commandPath: ["update"],
+      },
+      {
+        argv: ["node", "openclaw", "update", "--timeout", "--dry-run"],
+        commandPath: ["update"],
+      },
+      {
+        argv: ["node", "openclaw", "update", "--tag=--dry-run"],
+        commandPath: ["update"],
+      },
+      {
+        argv: ["node", "openclaw", "update", "--", "--dry-run"],
+        commandPath: ["update"],
+      },
+      {
+        argv: ["node", "openclaw", "update", "status", "--dry-run"],
+        commandPath: ["update", "status"],
+      },
+      {
+        argv: ["node", "openclaw", "update", "repair", "--dry-run"],
+        commandPath: ["update", "repair"],
+      },
+      {
+        argv: ["node", "openclaw", "update", "finalize", "--dry-run"],
+        commandPath: ["update", "finalize"],
+      },
+      {
+        argv: ["node", "openclaw", "update", "wizard", "--dry-run"],
+        commandPath: ["update", "wizard"],
+      },
+    ]) {
+      expect(resolvePolicy(testCase).skipConfigGuard, testCase.argv.join(" ")).toBe(false);
+    }
+  });
+
   it("keeps every route-first command on the same config guard declaration as Commander", () => {
     for (const entry of cliCommandCatalog.filter((candidate) => candidate.route)) {
       expect(entry.policy?.configGuard, entry.commandPath.join(" ")).toBeDefined();

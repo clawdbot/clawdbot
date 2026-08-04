@@ -12,12 +12,12 @@ import { listSessionStateEventsSince } from "../sessions/session-state-events.js
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
   sessionStoreEntry,
   directSessionReq,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
 type ResetSessionEntry = {
   sessionId?: string;

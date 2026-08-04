@@ -101,7 +101,6 @@ export async function checkInboundAccessControl(params: {
     isGroup: params.group,
     conversationId,
     senderId: accessSenderId,
-    dmSenderId: params.from,
   });
   const { senderAccess } = access;
   if (params.group && senderAccess.decision !== "allow") {
@@ -123,7 +122,10 @@ export async function checkInboundAccessControl(params: {
 
   // DM access control (secure defaults): "pairing" (default) / "allowlist" / "open" / "disabled".
   if (!params.group) {
-    if (params.isFromMe && !policy.isSamePhone(params.from)) {
+    if (
+      params.isFromMe &&
+      (policy.account.selfChatMode === false || !policy.isSamePhone(params.from))
+    ) {
       logWhatsAppVerbose(params.verbose, "Skipping outbound DM (fromMe); no pairing reply needed.");
       return blockedInboundAccess(policy);
     }

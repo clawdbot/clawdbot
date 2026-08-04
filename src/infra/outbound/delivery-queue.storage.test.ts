@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
+import { renewDeliveryPlatformSendLease } from "./delivery-queue-platform-lease.js";
 import {
   ackDelivery,
   claimDeliveryPlatformSendAttempt,
@@ -473,6 +474,52 @@ describe("delivery-queue storage", () => {
       expect((entry.platformSendStartedAt as number) > 0).toBe(true);
       expect(entry.recoveryState).toBe("unknown_after_send");
       expect(entry.retryCount).toBe(0);
+    });
+
+    it("preserves and renews the exact explicit owner after an ambiguous platform outcome", async () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date("2026-08-02T10:00:00.000Z"));
+        const stateDir = tmpDir();
+        const id = "cron-direct-delivery:v1:unknown-owner-lease";
+        await enqueueDeliveryOnce(
+          {
+            channel: "forum",
+            to: "123",
+            payloads: [{ text: "test" }],
+            completionRetention: {
+              idPrefix: "cron-direct-delivery:v1:",
+              maxAgeMs: 24 * 60 * 60_000,
+              maxEntries: 2_000,
+            },
+            requiresProducerClaim: true,
+          },
+          id,
+          stateDir,
+        );
+        const claimId = await claimDeliveryPlatformSendAttempt(id, stateDir);
+        if (!claimId) {
+          throw new Error("test invariant: explicit producer must own the stable row");
+        }
+        await markDeliveryPlatformSendAttemptStarted(id, stateDir, undefined, claimId);
+        const started = readQueuedEntry(stateDir, id);
+        const originalExpiry = started.availableAt;
+        vi.setSystemTime(Date.now() + 1_000);
+
+        await markDeliveryPlatformOutcomeUnknown(id, stateDir, claimId);
+
+        expect(readQueuedEntry(stateDir, id)).toMatchObject({
+          recoveryState: "unknown_after_send",
+          platformSendAttemptId: claimId,
+          availableAt: originalExpiry,
+        });
+        await expect(renewDeliveryPlatformSendLease(id, stateDir, claimId)).resolves.toBe(
+          Date.now() + 30_000,
+        );
+        expect(readQueuedEntry(stateDir, id).availableAt).toBe(Date.now() + 30_000);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("refreshes the attempt timestamp immediately before provider I/O", async () => {

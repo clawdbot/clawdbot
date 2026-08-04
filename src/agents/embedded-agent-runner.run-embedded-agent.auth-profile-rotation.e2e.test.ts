@@ -6,7 +6,10 @@ import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
-import type { AuthProfileFailureReason } from "./auth-profiles.js";
+import {
+  resolveInlineProviderApiKeyUsageId,
+  type AuthProfileFailureReason,
+} from "./auth-profiles.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store.js";
 import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
 import {
@@ -932,6 +935,48 @@ describe("runEmbeddedAgent auth profile rotation", () => {
     expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
     expect(computeBackoffMock).not.toHaveBeenCalled();
     expect(sleepWithAbortMock).not.toHaveBeenCalled();
+  });
+
+  it("marks inline provider api key billing prompt failures without an auth profile", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await fs.writeFile(
+        path.join(agentDir, "auth-profiles.json"),
+        JSON.stringify({ version: 1, profiles: {} }),
+      );
+      await fs.writeFile(
+        path.join(agentDir, "auth-state.json"),
+        JSON.stringify({ version: 1, usageStats: {} }),
+      );
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeAttempt({
+          terminal: { kind: "failed", source: "prompt", error: new Error("insufficient credits") },
+        }),
+      );
+
+      await expect(
+        runEmbeddedAgentInline({
+          sessionId: "session:test",
+          sessionKey: "agent:test:inline-api-key-prompt-billing",
+          sessionFile: path.join(workspaceDir, "session.jsonl"),
+          workspaceDir,
+          agentDir,
+          config: makeConfig(),
+          prompt: "hello",
+          provider: "openai",
+          model: "mock-1",
+          authProfileIdSource: "auto",
+          timeoutMs: 5_000,
+          runId: "run:inline-api-key-prompt-billing",
+        }),
+      ).rejects.toThrow(/insufficient credits/);
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+      const usageStats = await readUsageStats(agentDir);
+      const usageId = resolveInlineProviderApiKeyUsageId("openai");
+      expect(usageStats[usageId]?.disabledReason).toBe("billing");
+      expect(typeof usageStats[usageId]?.disabledUntil).toBe("number");
+      expect(usageStats["openai:p1"]).toBeUndefined();
+    });
   });
 
   it("rotates on timeout without cooling down the timed-out profile", async () => {

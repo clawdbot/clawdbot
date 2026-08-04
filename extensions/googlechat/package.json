@@ -55,7 +55,7 @@
       "systemImage": "message.badge",
       "markdownCapable": true,
       "doctorCapabilities": {
-        "dmAllowFromMode": "nestedOnly",
+        "dmAllowFromMode": "topOnly",
         "groupModel": "route",
         "groupAllowFromFallbackToAllowFrom": false,
         "warnOnEmptyGroupSenderAllowlist": false

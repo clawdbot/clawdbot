@@ -30,10 +30,13 @@ function createMessageEntry(message: AgentMessage, index: number): SessionTreeEn
   };
 }
 
-function createResponse(model: Model): AssistantMessage {
+function createResponse(
+  model: Model,
+  content: AssistantMessage["content"] = [{ type: "text", text: "Branch summary" }],
+): AssistantMessage {
   return {
     role: "assistant",
-    content: [{ type: "text", text: "Branch summary" }],
+    content,
     api: model.api,
     provider: model.provider,
     model: model.id,
@@ -48,6 +51,13 @@ function createResponse(model: Model): AssistantMessage {
     stopReason: "stop",
     timestamp: 1,
   };
+}
+
+function createResponseStream(model: Model, content?: AssistantMessage["content"]) {
+  const stream = createAssistantMessageEventStream();
+  stream.push({ type: "done", reason: "stop", message: createResponse(model, content) });
+  stream.end();
+  return stream;
 }
 
 function createCapturingStream(model: Model) {
@@ -65,10 +75,7 @@ function createCapturingStream(model: Model) {
         : userMessage.content.map((block) => (block.type === "text" ? block.text : "")).join("");
     systemPrompt = context.systemPrompt ?? "";
     maxOutputTokens = options?.maxTokens;
-    const stream = createAssistantMessageEventStream();
-    stream.push({ type: "done", reason: "stop", message: createResponse(model) });
-    stream.end();
-    return stream;
+    return createResponseStream(model);
   });
   return {
     streamFn,
@@ -86,6 +93,89 @@ function createLongBranchEntries(count: number): SessionTreeEntry[] {
 }
 
 describe("branch summarization", () => {
+  it.each([
+    ["empty", []],
+    ["whitespace-only", [{ type: "text" as const, text: " \n\t " }]],
+    ["reasoning-only", [{ type: "thinking" as const, thinking: "internal reasoning" }]],
+  ])("rejects %s model output before creating a summary", async (_name, content) => {
+    const model = createModel(128_000);
+    const streamFn = vi.fn<StreamFn>(() => createResponseStream(model, content));
+    const entries = [
+      createMessageEntry({ role: "user", content: "summarize this branch", timestamp: 1 }, 0),
+    ];
+
+    const result = await generateBranchSummary(entries, {
+      model,
+      apiKey: "test-key",
+      signal: new AbortController().signal,
+      streamFn,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected invalid branch summary output to fail");
+    }
+    expect(result.error).toMatchObject({
+      name: "BranchSummaryError",
+      code: "summarization_failed",
+      message: "Branch summary failed: model returned no summary text",
+    });
+  });
+
+  it("preserves valid summary whitespace, preamble, and file metadata", async () => {
+    const model = createModel(128_000);
+    const summaryText = "  Branch summary body  \ncontinues ";
+    const streamFn = vi.fn<StreamFn>(() =>
+      createResponseStream(model, [
+        { type: "text", text: "  Branch summary body  " },
+        { type: "text", text: "continues " },
+      ]),
+    );
+    const entries: SessionTreeEntry[] = [
+      createMessageEntry({ role: "user", content: "inspect files", timestamp: 1 }, 0),
+      createMessageEntry(
+        createResponse(model, [
+          { type: "toolCall", id: "read-1", name: "read", arguments: { path: "src/read.ts" } },
+          {
+            type: "toolCall",
+            id: "write-1",
+            name: "write",
+            arguments: { path: "src/write.ts" },
+          },
+        ]),
+        1,
+      ),
+    ];
+
+    const result = await generateBranchSummary(entries, {
+      model,
+      apiKey: "test-key",
+      signal: new AbortController().signal,
+      streamFn,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw result.error;
+    }
+    expect(result.value).toEqual({
+      summary: `The user explored a different conversation branch before returning here.
+Summary of that exploration:
+
+${summaryText}
+
+<read-files>
+src/read.ts
+</read-files>
+
+<modified-files>
+src/write.ts
+</modified-files>`,
+      readFiles: ["src/read.ts"],
+      modifiedFiles: ["src/write.ts"],
+    });
+  });
+
   it("retains failed tool results when preparing a branch", () => {
     const entries: SessionTreeEntry[] = [
       createMessageEntry({ role: "user", content: "run deployment", timestamp: 1 }, 0),

@@ -49,6 +49,7 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/plugin-lifecycle-matrix/measure.mjs!",
   "scripts/e2e/lib/plugin-update/registry-server.mjs!",
   "scripts/e2e/lib/plugins/npm-registry-server.mjs!",
+  "scripts/e2e/lib/release-plugin-marketplace/lifecycle-assertions.mjs!",
   "scripts/e2e/lib/release-scenarios/write-cli-plugin.mjs!",
   "scripts/e2e/lib/release-scenarios/write-marketplace.mjs!",
   "scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs!",
@@ -619,11 +620,6 @@ const config = {
     "packages/memory-host-sdk": {
       entry: ["src/*.ts!", "src/host/embeddings-worker-child.ts!"],
       project: ["src/**/*.ts!"],
-    },
-    "packages/speech-core": {
-      entry: ["runtime-api.ts!", "speaker.ts!", "voice-models.ts!"],
-      project: ["**/*.ts!"],
-      ignoreDependencies: ["openclaw"],
     },
     "packages/*": {
       entry: ["index.js!", "scripts/postinstall.js!"],

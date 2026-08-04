@@ -3,6 +3,7 @@ summary: "CLI reference for `openclaw skills` (search/install/update/verify/list
 read_when:
   - You want to see which skills are available and ready to run
   - You want to search ClawHub or install skills from ClawHub, Git, or local directories
+  - You need to remove an installed ClawHub skill
   - You want to verify a ClawHub skill with ClawHub
   - You want to debug missing binaries/env/config for skills
 title: "Skills"
@@ -133,6 +134,39 @@ community releases require review and `--acknowledge-clawhub-risk` when a
 non-interactive command should continue after that review. Official ClawHub
 skill publishers and bundled OpenClaw skill sources bypass this release-trust
 prompt.
+
+## Remove a ClawHub skill
+
+Use the standalone ClawHub CLI to remove a ClawHub-tracked skill. If the CLI
+is not installed, install it explicitly first:
+
+```bash
+npm i -g clawhub
+clawhub uninstall @owner/my-skill
+```
+
+The CLI asks for confirmation before deleting the skill directory and its
+`.clawhub/lock.json` entry. Use the installed skill's owner-qualified name or
+bare slug, not its original `skills-sh:` reference.
+
+Select the same root where the skill was installed: the agent workspace for an
+agent-specific skill, or the OpenClaw state directory for a shared skill
+installed with `--global`:
+
+```bash
+clawhub --workdir /path/to/agent-workspace uninstall @owner/my-skill
+clawhub --workdir ~/.openclaw uninstall @owner/my-skill
+```
+
+If `OPENCLAW_STATE_DIR` is set, use that configured state directory for shared
+skills instead:
+
+```bash
+clawhub --workdir "$OPENCLAW_STATE_DIR" uninstall @owner/my-skill
+```
+
+The default [skills watcher](/tools/skills#snapshots-and-refresh) picks up the
+removal on the next agent turn. If watching is disabled, start a new session.
 
 ## Skill Workshop
 

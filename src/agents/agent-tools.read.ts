@@ -1090,6 +1090,9 @@ async function assertSandboxFileExists(params: SandboxToolParams, absolutePath: 
   if (!stat) {
     throw createFsAccessError("ENOENT", absolutePath);
   }
+  if (stat.type === "directory") {
+    throw createFsAccessError("EISDIR", absolutePath);
+  }
 }
 
 function expandTildeToOsHome(filePath: string): string {

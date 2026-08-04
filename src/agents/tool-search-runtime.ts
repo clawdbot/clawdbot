@@ -4,8 +4,13 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { getPluginToolMeta } from "../plugins/tools.js";
+import {
+  truncateSanitizedExternalContent,
+  wrapExternalContent,
+} from "../security/external-content.js";
 import { levenshteinDistance } from "../shared/levenshtein-distance.js";
 import {
+  getBeforeToolCallFailureDisposition,
   isPreExecutionBlockedToolResult,
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
@@ -14,6 +19,10 @@ import { runWithToolExecutionValidation } from "./agent-tools.execution-validati
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
+import {
+  isTrustedToolExecutionPreflightError,
+  protectNetworkToolExecutionError,
+} from "./tool-result-error.js";
 import {
   compactToolSearchCatalogEntry,
   resolveCatalog,
@@ -38,7 +47,7 @@ import type {
   UnknownToolErrorOptions,
   UnknownToolRecoverySurface,
 } from "./tool-search-types.js";
-import { asToolParamsRecord, ToolInputError } from "./tools/common.js";
+import { asToolParamsRecord, jsonResult, ToolInputError } from "./tools/common.js";
 
 function describeEntry(entry: ToolSearchCatalogEntry) {
   return {
@@ -459,6 +468,7 @@ function sanitizeToolCallIdPart(value: string): string {
 
 export class ToolSearchRuntime {
   private callSequence = 0;
+  private readonly networkInvocations = new Map<string, { active: number; observed: boolean }>();
   private readonly searchIndexes = new WeakMap<
     ToolSearchCatalogSession,
     Map<boolean, CachedToolSearchIndex>
@@ -574,6 +584,12 @@ export class ToolSearchRuntime {
   callValue = async (id: string, input?: unknown, options?: ToolSearchCallOptions) =>
     unwrapToolResultValue((await this.call(id, input, options)).result);
 
+  hasNetworkContent(parentToolCallId?: string): boolean {
+    return parentToolCallId
+      ? this.networkInvocations.has(parentToolCallId)
+      : this.networkInvocations.size > 0;
+  }
+
   isReplaySafeExactId = (id: string): boolean => {
     let entry: ToolSearchCatalogEntry;
     try {
@@ -621,8 +637,11 @@ export class ToolSearchRuntime {
         );
         return await params.acceptResultBeforeProjection(result);
       });
+    let preExecutionBlocked = false;
     const acceptResultBeforeProjection = async (candidate: AgentToolResult<unknown>) => {
       if (isPreExecutionBlockedToolResult(candidate)) {
+        // The JSON-safe snapshot drops the private blocked-result marker.
+        preExecutionBlocked = true;
         await assertCatalogOutputMatchesSchema(entry, candidate);
       }
       const snapshot = snapshotToolSearchTargetTranscriptResult(candidate);
@@ -634,19 +653,52 @@ export class ToolSearchRuntime {
       validateInput && !isToolWrappedWithBeforeToolCallHook(entry.tool as never)
         ? wrapToolWithBeforeToolCallHook(entry.tool as never)
         : entry.tool;
-    const runExecution = async () =>
-      await executeTool({
-        tool: executionTool,
-        toolName: entry.name,
-        source: entry.source,
-        sourceName: entry.sourceName,
-        toolCallId,
-        parentToolCallId: options?.parentToolCallId,
-        input: normalizedInput,
-        signal: options?.signal ?? this.ctx.abortSignal,
-        onUpdate: options?.onUpdate,
-        acceptResultBeforeProjection,
-      });
+    const runExecution = async () => {
+      const parentToolCallId = options?.parentToolCallId ?? toolCallId;
+      const signal = options?.signal ?? this.ctx.abortSignal;
+      const networkInvocation =
+        entry.tool.resultContentSource === "network"
+          ? (this.networkInvocations.get(parentToolCallId) ?? { active: 0, observed: false })
+          : undefined;
+      if (networkInvocation) {
+        networkInvocation.active += 1;
+        this.networkInvocations.set(parentToolCallId, networkInvocation);
+      }
+      try {
+        const result = await executeTool({
+          tool: executionTool,
+          toolName: entry.name,
+          source: entry.source,
+          sourceName: entry.sourceName,
+          toolCallId,
+          parentToolCallId: options?.parentToolCallId,
+          input: normalizedInput,
+          signal,
+          onUpdate: options?.onUpdate,
+          acceptResultBeforeProjection,
+        });
+        if (networkInvocation && !preExecutionBlocked) {
+          networkInvocation.observed = true;
+        }
+        return result;
+      } catch (error) {
+        if (
+          networkInvocation &&
+          !preExecutionBlocked &&
+          getBeforeToolCallFailureDisposition(error) === undefined &&
+          !isTrustedToolExecutionPreflightError(error) &&
+          !(signal?.aborted && error === signal.reason)
+        ) {
+          // Guest code can catch page-controlled errors and return their text.
+          networkInvocation.observed = true;
+        }
+        throw error;
+      } finally {
+        if (networkInvocation && --networkInvocation.active === 0 && !networkInvocation.observed) {
+          this.networkInvocations.delete(parentToolCallId);
+        }
+      }
+    };
     const result = validateInput
       ? await runWithToolExecutionValidation(
           toolCallId,
@@ -661,6 +713,43 @@ export class ToolSearchRuntime {
   telemetry() {
     return getTelemetry(resolveCatalog(this.ctx));
   }
+}
+
+/** Preserve programmatic values while protecting the model-facing control output. */
+export function formatToolSearchControlResult<T>(
+  payload: T,
+  runtime: ToolSearchRuntime | undefined,
+  parentToolCallId?: string,
+): AgentToolResult<T> {
+  const result = jsonResult(payload);
+  const content = result.content[0];
+  if (!runtime?.hasNetworkContent(parentToolCallId) || content?.type !== "text") {
+    return result;
+  }
+  const bounded = truncateSanitizedExternalContent(content.text, 20_000);
+  const modelText = bounded.truncated
+    ? `${truncateSanitizedExternalContent(content.text, 19_988).text}\n[truncated]`
+    : bounded.text;
+  const text = wrapExternalContent(modelText, { source: "api" });
+  return { ...result, content: [{ ...content, text }] };
+}
+
+/** Keep dynamic failures rejected without exposing network-controlled error text. */
+export function formatToolSearchControlError(
+  error: unknown,
+  runtime: ToolSearchRuntime | undefined,
+  parentToolCallId?: string,
+  signal?: AbortSignal,
+): unknown {
+  if (
+    !runtime?.hasNetworkContent(parentToolCallId) ||
+    getBeforeToolCallFailureDisposition(error) !== undefined ||
+    isTrustedToolExecutionPreflightError(error) ||
+    (signal?.aborted && error === signal.reason)
+  ) {
+    return error;
+  }
+  return protectNetworkToolExecutionError(error, "Tool Search call failed.", signal);
 }
 
 function unwrapToolResultValue(result: AgentToolResult<unknown>): unknown {

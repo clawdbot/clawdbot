@@ -3,12 +3,18 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
+import { SystemAgentWizardAnswerError } from "../../system-agent/chat-engine.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 const setupInferenceMocks = vi.hoisted(() => ({ verifySetupInference: vi.fn() }));
 const delegatedInferenceMocks = vi.hoisted(() => ({
   verifySystemAgentInferenceWithFallback: vi.fn(),
+}));
+const transcriptStoreMocks = vi.hoisted(() => ({
+  appendTranscriptReset: vi.fn(),
+  appendTranscriptTurn: vi.fn(),
+  readTranscriptTail: vi.fn(() => []),
 }));
 
 vi.mock("../../system-agent/setup-inference.js", () => ({
@@ -18,11 +24,7 @@ vi.mock("../../system-agent/inference-fallback.js", () => ({
   verifySystemAgentInferenceWithFallback:
     delegatedInferenceMocks.verifySystemAgentInferenceWithFallback,
 }));
-vi.mock("../../system-agent/transcript-store.js", () => ({
-  appendTranscriptReset: vi.fn(),
-  appendTranscriptTurn: vi.fn(),
-  readTranscriptTail: vi.fn(() => []),
-}));
+vi.mock("../../system-agent/transcript-store.js", () => transcriptStoreMocks);
 // Ownership tests exercise fresh-session creation; keep the caretaker greeting
 // deterministic so identity behavior is the only variable under test.
 vi.mock("../../system-agent/greeting.js", () => ({
@@ -38,6 +40,7 @@ vi.mock("../../system-agent/greeting.js", () => ({
 }));
 
 type FakeEngine = {
+  answerWizard: ReturnType<typeof vi.fn>;
   handle: ReturnType<typeof vi.fn>;
   seedHistory: ReturnType<typeof vi.fn>;
   historyLength: ReturnType<typeof vi.fn>;
@@ -51,6 +54,9 @@ type FakeEngine = {
 
 function makeEngine(): FakeEngine {
   return {
+    answerWizard: vi.fn(async () => {
+      throw new SystemAgentWizardAnswerError("No hosted wizard is awaiting an answer.");
+    }),
     handle: vi.fn(async () => ({ text: "did the thing", action: "none" })),
     seedHistory: vi.fn(),
     historyLength: vi.fn(() => 0),
@@ -65,13 +71,17 @@ function makeEngine(): FakeEngine {
 
 const createdEngines = vi.hoisted(() => [] as FakeEngine[]);
 
-vi.mock("../../system-agent/chat-engine.js", () => ({
-  SystemAgentChatEngine: function FakeSystemAgentChatEngine(this: FakeEngine) {
-    const engine = makeEngine();
-    createdEngines.push(engine);
-    Object.assign(this, engine);
-  },
-}));
+vi.mock("../../system-agent/chat-engine.js", () => {
+  class FakeSystemAgentWizardAnswerError extends Error {}
+  return {
+    SystemAgentWizardAnswerError: FakeSystemAgentWizardAnswerError,
+    SystemAgentChatEngine: function FakeSystemAgentChatEngine(this: FakeEngine) {
+      const engine = makeEngine();
+      createdEngines.push(engine);
+      Object.assign(this, engine);
+    },
+  };
+});
 vi.mock("../../system-agent/overview.js", () => ({
   formatSystemAgentStartupMessage: vi.fn(() => "welcome text"),
 }));
@@ -313,6 +323,35 @@ describe("openclaw.chat session responses", () => {
 
     expect(engine.handle).toHaveBeenCalledWith("status");
     expect(call.payload).toMatchObject({ reply: "did the thing", action: "none" });
+  });
+
+  it("rejects a structured answer without an active chat session", async () => {
+    const call = await callChat(makeContext(new Map()), {
+      sessionId: "missing",
+      wizardAnswer: { stepId: "channel", value: "twitch" },
+    });
+
+    expect(call).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        details: { code: "system_agent_session_invalidated" },
+      },
+    });
+    expect(setupInferenceMocks.verifySetupInference).not.toHaveBeenCalled();
+  });
+
+  it("rejects a structured answer when the active session has no hosted wizard", async () => {
+    const engine = makeEngine();
+    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
+
+    const call = await callChat(makeContext(sessions), {
+      sessionId: "s1",
+      wizardAnswer: { stepId: "stale", value: "twitch" },
+    });
+
+    expect(call).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+    expect(transcriptStoreMocks.appendTranscriptTurn).not.toHaveBeenCalled();
   });
 
   it("forwards sensitive-input metadata", async () => {

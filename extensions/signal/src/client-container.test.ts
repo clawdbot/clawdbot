@@ -216,9 +216,17 @@ function delayedBodyStream(
   };
 }
 const wsMockState = vi.hoisted(() => ({
-  behavior: "close" as "close" | "open" | "error" | "message" | "unexpected-response",
+  behavior: "close" as
+    | "close"
+    | "open"
+    | "error"
+    | "message"
+    | "buffered-message"
+    | "pending"
+    | "unexpected-response",
   urls: [] as string[],
   options: [] as Array<{ maxPayload?: number; handshakeTimeout?: number } | undefined>,
+  terminations: 0,
 }));
 
 beforeEach(() => {
@@ -226,6 +234,7 @@ beforeEach(() => {
   wsMockState.behavior = "close";
   wsMockState.urls = [];
   wsMockState.options = [];
+  wsMockState.terminations = 0;
 });
 
 function requireFetchCall(index = 0): [RequestInfo | URL, RequestInit] {
@@ -266,6 +275,7 @@ function expectMockLogNotContains(mock: ReturnType<typeof vi.fn>, expected: stri
 vi.mock("ws", () => ({
   default: class MockWebSocket {
     private handlers = new Map<string, Array<(...args: unknown[]) => void>>();
+    private bufferedMessageFlushed = false;
 
     constructor(url: string | URL, options?: { maxPayload?: number; handshakeTimeout?: number }) {
       wsMockState.urls.push(String(url));
@@ -281,6 +291,11 @@ vi.mock("ws", () => ({
         } else if (wsMockState.behavior === "message") {
           this.emit("message", Buffer.from('{"envelope":{"timestamp":1}}'));
           this.emit("close", 1000, Buffer.from("done"));
+        } else if (wsMockState.behavior === "buffered-message") {
+          this.emit("open");
+          this.emit("message", Buffer.from('{"envelope":{"timestamp":1}}'));
+        } else if (wsMockState.behavior === "pending") {
+          // Keep the opening handshake unresolved until shutdown closes it.
         } else {
           this.emit("close", 1000, Buffer.from("done"));
         }
@@ -306,10 +321,17 @@ vi.mock("ws", () => ({
     }
 
     close() {
+      if (wsMockState.behavior === "buffered-message" && !this.bufferedMessageFlushed) {
+        this.bufferedMessageFlushed = true;
+        // ws flushes already-buffered receiver frames before its final close event.
+        this.emit("message", Buffer.from('{"envelope":{"timestamp":2}}'));
+      }
       this.emit("close", 1000, Buffer.from("done"));
     }
 
-    terminate() {}
+    terminate() {
+      wsMockState.terminations += 1;
+    }
 
     private emit(event: string, ...args: unknown[]) {
       for (const handler of this.handlers.get(event) ?? []) {
@@ -1623,6 +1645,150 @@ describe("streamContainerEvents", () => {
     const abortHandler = addEventListener.mock.calls.find((call) => call[0] === "abort")?.[1];
     expect(abortHandler).toBeTypeOf("function");
     expect(removeEventListener).toHaveBeenCalledWith("abort", abortHandler);
+  });
+
+  it("drains accepted and socket-buffered receive events before resolving shutdown", async () => {
+    wsMockState.behavior = "buffered-message";
+    const abort = new AbortController();
+    const removeEventListener = vi.spyOn(abort.signal, "removeEventListener");
+    let releaseFirst!: () => void;
+    const firstDelivery = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let markFirstStarted!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
+    const timestamps: number[] = [];
+    const stream = streamContainerEvents({
+      baseUrl: "http://localhost:8080",
+      abortSignal: abort.signal,
+      timeoutMs: 0,
+      onEvent: async (event) => {
+        timestamps.push(event.envelope?.timestamp ?? 0);
+        if (timestamps.length === 1) {
+          markFirstStarted();
+          await firstDelivery;
+        }
+      },
+    });
+    let settled = false;
+    void stream.then(() => {
+      settled = true;
+    });
+
+    await firstStarted;
+    abort.abort();
+    const settledBeforeDrain = await Promise.race([
+      stream.then(() => true),
+      new Promise<boolean>((resolve) => {
+        setTimeout(() => resolve(false), 10);
+      }),
+    ]);
+    expect(settledBeforeDrain).toBe(false);
+    expect(settled).toBe(false);
+
+    releaseFirst();
+    await expect(stream).resolves.toBeUndefined();
+    expect(timestamps).toEqual([1, 2]);
+    expect(removeEventListener).toHaveBeenCalledWith("abort", expect.any(Function));
+    expect(wsMockState.terminations).toBe(0);
+  });
+
+  it("propagates a receive-handler failure that settles during shutdown", async () => {
+    wsMockState.behavior = "buffered-message";
+    const abort = new AbortController();
+    const appendError = new Error("durable append failed during shutdown");
+    let rejectDelivery!: (error: Error) => void;
+    const delivery = new Promise<void>((_resolve, reject) => {
+      rejectDelivery = reject;
+    });
+    let markFirstStarted!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
+    const stream = streamContainerEvents({
+      baseUrl: "http://localhost:8080",
+      abortSignal: abort.signal,
+      onEvent: async () => {
+        markFirstStarted();
+        await delivery;
+      },
+    });
+
+    await firstStarted;
+    abort.abort();
+    rejectDelivery(appendError);
+    await expect(stream).rejects.toBe(appendError);
+    expect(wsMockState.terminations).toBe(0);
+  });
+
+  it("bounds a stalled shutdown drain and records the accepted-message loss risk", async () => {
+    vi.useFakeTimers();
+    try {
+      wsMockState.behavior = "buffered-message";
+      const abort = new AbortController();
+      const error = vi.fn();
+      let settled = false;
+      const stream = streamContainerEvents({
+        baseUrl: "http://localhost:8080",
+        abortSignal: abort.signal,
+        timeoutMs: 0,
+        onEvent: async () => await new Promise<void>(() => {}),
+        logger: { error },
+      }).then(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      abort.abort();
+      await vi.advanceTimersByTimeAsync(1_499);
+      expect(settled).toBe(false);
+      expect(error).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(stream).resolves.toBeUndefined();
+      expect(error).toHaveBeenCalledWith(expect.stringMatching(/receive events.*may be lost/i));
+      expect(wsMockState.terminations).toBe(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("closes immediately when aborted before the opening handshake completes", async () => {
+    wsMockState.behavior = "pending";
+    const abort = new AbortController();
+    const removeEventListener = vi.spyOn(abort.signal, "removeEventListener");
+    const stream = streamContainerEvents({
+      baseUrl: "http://localhost:8080",
+      abortSignal: abort.signal,
+      onEvent: vi.fn(),
+    });
+
+    abort.abort();
+    await expect(stream).resolves.toBeUndefined();
+    expect(removeEventListener).toHaveBeenCalledWith("abort", expect.any(Function));
+    expect(wsMockState.terminations).toBe(0);
+  });
+
+  it("handles an already-aborted signal without leaving its connection pending", async () => {
+    wsMockState.behavior = "pending";
+    const abort = new AbortController();
+    abort.abort();
+    const result = await Promise.race([
+      streamContainerEvents({
+        baseUrl: "http://localhost:8080",
+        abortSignal: abort.signal,
+        onEvent: vi.fn(),
+      }).then(() => "closed"),
+      new Promise<string>((resolve) => {
+        setTimeout(() => resolve("still pending"), 25);
+      }),
+    ]);
+
+    expect(result).toBe("closed");
+    expect(wsMockState.terminations).toBe(0);
   });
 
   it("propagates receive-handler failures to the stream", async () => {

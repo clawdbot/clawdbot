@@ -1,6 +1,5 @@
 // Configured OpenClaw assistant tests cover route-owned, tool-free planning.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import type { RunCliAgentParams } from "../agents/cli-runner/types.js";
 import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -8,7 +7,10 @@ import { planSystemAgentCommandWithConfiguredModel } from "./assistant.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import type { SystemAgentOverview } from "./overview.js";
-import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
+import {
+  createSystemAgentVerifiedInferenceTestFixture,
+  installSystemAgentClaudeCliBackendTestFixture,
+} from "./system-agent.test-helpers.js";
 import {
   createSystemAgentVerifiedInferenceBinding,
   type SystemAgentVerifiedInferenceBinding,
@@ -55,26 +57,14 @@ function useFastVerifiedInference(
   return binding;
 }
 
+let restoreCliBackendFixture: (() => void) | undefined;
+
 beforeAll(() => {
-  cliBackendsTesting.setDepsForTest({
-    resolvePluginSetupCliBackend: () => undefined,
-    resolvePluginSetupRegistry: () => ({ cliBackends: [] }) as never,
-    resolveRuntimeCliBackends: () => [
-      {
-        id: "claude-cli",
-        pluginId: "anthropic",
-        modelProvider: "anthropic",
-        bundleMcp: true,
-        bundleMcpMode: "claude-config-file",
-        config: { command: "claude" },
-        sideQuestionToolMode: "disabled",
-      },
-    ],
-  });
+  restoreCliBackendFixture = installSystemAgentClaudeCliBackendTestFixture();
 });
 
 afterAll(() => {
-  cliBackendsTesting.resetDepsForTest();
+  restoreCliBackendFixture?.();
 });
 
 function overview(defaultModel?: string): SystemAgentOverview {

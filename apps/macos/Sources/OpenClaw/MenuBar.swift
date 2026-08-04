@@ -44,6 +44,8 @@ struct OpenClawApp: App {
                 blinkTick: self.state.blinkTick,
                 sendCelebrationTick: self.state.sendCelebrationTick,
                 gatewayStatus: self.gatewayManager.status,
+                connectionMode: self.state.connectionMode,
+                controlChannelState: self.controlChannel.state,
                 animationsEnabled: self.state.iconAnimationsEnabled && !self.isGatewaySleeping,
                 iconState: self.effectiveIconState,
                 voiceWakeMeterActive: self.state.voiceWakeMeterActive)

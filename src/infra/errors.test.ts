@@ -1,5 +1,6 @@
 // Tests shared infra error formatting helpers.
 import { describe, expect, it } from "vitest";
+import { collectNestedErrorCandidates, extractErrorCodeOrErrno } from "./error-graph-internal.js";
 import {
   collectErrorGraphCandidates,
   extractErrorCode,
@@ -51,6 +52,44 @@ describe("error helpers", () => {
       ]),
     ).toEqual([root, child, leaf]);
     expect(collectErrorGraphCandidates(null)).toStrictEqual([]);
+  });
+
+  it("walks every canonical wrapper edge once despite duplicates and cycles", () => {
+    const cause = { name: "cause" } as { name: string; cause?: unknown };
+    const reason = { name: "reason" };
+    const original = { name: "original" };
+    const error = { name: "error" };
+    const data = { name: "data" };
+    const aggregate = { name: "aggregate" };
+    const root = {
+      name: "root",
+      cause,
+      reason,
+      original,
+      error,
+      data,
+      errors: [aggregate, cause],
+    };
+    cause.cause = root;
+
+    expect(collectNestedErrorCandidates(root)).toEqual([
+      root,
+      cause,
+      reason,
+      original,
+      error,
+      data,
+      aggregate,
+    ]);
+  });
+
+  it.each([
+    { value: { code: " econnreset " }, expected: "ECONNRESET" },
+    { value: { errno: " eai_again " }, expected: "EAI_AGAIN" },
+    { value: { errno: -3001 }, expected: "-3001" },
+    { value: { errno: false }, expected: undefined },
+  ])("normalizes error code or errno from %#", ({ value, expected }) => {
+    expect(extractErrorCodeOrErrno(value)).toBe(expected);
   });
 
   it("matches errno-shaped errors by code", () => {

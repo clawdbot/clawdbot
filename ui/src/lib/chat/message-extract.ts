@@ -134,13 +134,16 @@ function hasTranscriptMediaFacts(message: unknown): boolean {
 export function readTranscriptMediaEntries(message: unknown): Array<{
   path: string;
   mediaType: string | undefined;
+  fileName: string | undefined;
 }> {
   if (!message || typeof message !== "object") {
     return [];
   }
   return (readPersistedMediaFacts(message) ?? []).flatMap((fact) => {
     const path = fact.path ?? fact.url;
-    return path ? [{ path, mediaType: fact.contentType ?? fact.kind }] : [];
+    return path
+      ? [{ path, mediaType: fact.contentType ?? fact.kind, fileName: fact.fileName }]
+      : [];
   });
 }
 

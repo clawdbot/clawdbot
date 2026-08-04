@@ -143,7 +143,7 @@ function playwrightSteps(
   return [
     {
       command: process.execPath,
-      args: ["scripts/ensure-playwright-chromium.mjs", "--skip-ffmpeg"],
+      args: ["scripts/ensure-playwright-chromium.mjs"],
     },
     {
       command: process.execPath,

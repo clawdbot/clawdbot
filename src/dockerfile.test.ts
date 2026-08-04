@@ -10,6 +10,7 @@ const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
 const dockerComposePath = join(repoRoot, "docker-compose.yml");
 const dockerInstallDocsPath = join(repoRoot, "docs/install/docker.md");
+const composeSetupScriptPath = join(repoRoot, "scripts/e2e/compose-setup.sh");
 const dockerReleaseWorkflowPath = join(repoRoot, ".github/workflows/docker-release.yml");
 const fullReleaseValidationWorkflowPath = join(
   repoRoot,
@@ -44,6 +45,28 @@ describe("Dockerfile", () => {
     expect(dockerfile).not.toContain("127.0.0.1:18789/healthz");
     expect(compose).toContain('"dist/docker-healthcheck.js"');
     expect(compose).not.toContain("127.0.0.1:18789/healthz");
+  });
+
+  it("executes the documented Compose health command and validates JSON envelopes", async () => {
+    const docs = await readFile(dockerInstallDocsPath, "utf8");
+    const composeSetup = await readFile(composeSetupScriptPath, "utf8");
+    const gatewayHealthCommand =
+      'node dist/index.js gateway health --token "$OPENCLAW_GATEWAY_TOKEN"';
+
+    expect(docs).toContain(`docker compose exec openclaw-gateway sh -lc '${gatewayHealthCommand}'`);
+    expect(docs).not.toContain('node dist/index.js health --token "$OPENCLAW_GATEWAY_TOKEN"');
+    expect(composeSetup).toContain(
+      `"\${COMPOSE[@]}" exec -T openclaw-gateway sh -lc '${gatewayHealthCommand}'`,
+    );
+    expect(composeSetup.match(/gateway health --token "\$TOKEN" --json/g)).toHaveLength(2);
+    expect(composeSetup).toContain('assert_gateway_health_json "gateway service"');
+    expect(composeSetup).toContain('assert_gateway_health_json "CLI sidecar"');
+    expect(composeSetup).toContain('--detail "gateway:documentedHealthCommand=passed"');
+    expect(composeSetup).toContain('--detail "gateway:healthJsonEnvelope=passed"');
+    expect(composeSetup).toContain('--detail "cli:healthJsonEnvelope=passed"');
+    expect(composeSetup).not.toContain('dist/index.js health --token "$TOKEN"');
+    expect(composeSetup).toContain('-v "$PROJECT_DIR:/target"');
+    expect(composeSetup).toContain("rm -rf /target/* /target/.[!.]* /target/..?*");
   });
 
   it("does not force an external Dockerfile frontend pull", async () => {
