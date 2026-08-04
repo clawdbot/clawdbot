@@ -88,6 +88,7 @@ export async function setAuthProfileOrder(params: {
 
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
+    ...(deduped.length > 0 ? { saveOptions: { preserveOrderProfileIds: deduped } } : {}),
     updater: (store) => {
       store.order = store.order ?? {};
       if (deduped.length === 0) {

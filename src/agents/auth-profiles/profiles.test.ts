@@ -22,6 +22,7 @@ import {
   promoteAuthProfileInOrder,
   removeAuthProfilesAcrossOwnerStores,
   removeAuthProfilesWithLock,
+  setAuthProfileOrder,
   upsertAuthProfileWithLock,
 } from "./profiles.js";
 import {
@@ -1398,4 +1399,50 @@ describe("promoteAuthProfileInOrder", () => {
     });
   });
 });
+
+describe("setAuthProfileOrder", () => {
+  it("preserves inherited main OAuth profile IDs in a custom agent order", async () => {
+    await withAuthProfileTestState(
+      "openclaw-auth-order-set-inherited-",
+      async ({ agentDirFor }) => {
+        const mainAgentDir = agentDirFor("main");
+        const customAgentDir = agentDirFor("custom");
+        fs.mkdirSync(mainAgentDir, { recursive: true });
+        fs.mkdirSync(customAgentDir, { recursive: true });
+        const inheritedProfileId = "openai:shared";
+        saveAuthProfileStore(
+          {
+            version: AUTH_STORE_VERSION,
+            profiles: {
+              [inheritedProfileId]: {
+                type: "oauth",
+                provider: "openai",
+                access: "inherited-access",
+                refresh: "inherited-refresh",
+                expires: Date.now() + 60_000,
+              },
+            },
+          },
+          mainAgentDir,
+        );
+
+        const updated = await setAuthProfileOrder({
+          agentDir: customAgentDir,
+          provider: "openai",
+          order: [inheritedProfileId],
+        });
+
+        expect(updated?.order?.["openai"]).toEqual([inheritedProfileId]);
+        expect(loadAuthProfileStoreForRuntime(customAgentDir).order?.["openai"]).toEqual([
+          inheritedProfileId,
+        ]);
+        expect(loadPersistedAuthProfileStore(customAgentDir)?.order?.["openai"]).toEqual([
+          inheritedProfileId,
+        ]);
+      },
+      { clearOAuthDir: true },
+    );
+  });
+});
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
