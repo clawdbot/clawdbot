@@ -24,7 +24,7 @@ import {
   installRuntimeContextMessageForPrompt,
 } from "./attempt.llm-boundary.js";
 import { wrapStreamFnWithContextTransform } from "./message-transform-stream-wrapper.js";
-import { MidTurnPrecheckSignal } from "./midturn-precheck.js";
+import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import { admitProviderPrompt } from "./provider-prompt-admission.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -84,6 +84,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
   if (normalizedReplayMessages !== activeSession.messages) {
     activeSession.agent.state.messages = normalizedReplayMessages;
   }
+  let pendingMidTurnPrecheckRequest: MidTurnPrecheckRequest | null = null;
 
   const installProviderPromptHistoryTransform = (): (() => void) => {
     const baseStreamFn = activeSession.agent.streamFn;
@@ -99,6 +100,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
         projectionState: input.toolResultPromptProjectionState,
       });
       if (admission.status === "recovery_required") {
+        pendingMidTurnPrecheckRequest = admission.request;
         log.info(
           `[context-overflow-midturn-precheck] provider context requires recovery ` +
             `route=${admission.request.route} ` +
@@ -179,6 +181,13 @@ export async function submitEmbeddedAttemptPrompt(input: {
       } finally {
         cleanupRuntimeContextMessage();
       }
+    }
+    if (pendingMidTurnPrecheckRequest) {
+      const request = pendingMidTurnPrecheckRequest;
+      pendingMidTurnPrecheckRequest = null;
+      // AgentCore converts stream failures into assistant error messages. Re-raise the attempt-local
+      // admission signal after its lifecycle settles so the embedded runner can route recovery.
+      throw new MidTurnPrecheckSignal(request);
     }
     if (input.leasedSteering) {
       ackPendingAgentSteeringItems(input.leasedSteering);

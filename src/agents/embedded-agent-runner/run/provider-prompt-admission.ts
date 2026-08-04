@@ -14,7 +14,7 @@ import {
 
 type ProviderContext = Parameters<StreamFn>[1];
 
-export type ProviderPromptAdmission =
+type ProviderPromptAdmission =
   | {
       status: "ready";
       context: ProviderContext;

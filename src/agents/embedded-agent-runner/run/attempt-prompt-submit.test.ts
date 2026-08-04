@@ -223,20 +223,24 @@ describe("submitEmbeddedAttemptPrompt", () => {
             { messages: activeSession.messages } as never,
             {} as never,
           );
-          await activeSession.agent.streamFn(
-            {} as never,
-            {
-              messages: activeSession.messages,
-              tools: [
-                {
-                  name: "large_tool",
-                  description: "x".repeat(30_000),
-                  parameters: { type: "object", properties: {} },
-                },
-              ],
-            } as never,
-            {} as never,
-          );
+          try {
+            await activeSession.agent.streamFn(
+              {} as never,
+              {
+                messages: activeSession.messages,
+                tools: [
+                  {
+                    name: "large_tool",
+                    description: "x".repeat(30_000),
+                    parameters: { type: "object", properties: {} },
+                  },
+                ],
+              } as never,
+              {} as never,
+            );
+          } catch {
+            // AgentCore owns stream failures and resolves prompt() after appending an assistant error.
+          }
         },
       }),
     ).rejects.toBeInstanceOf(MidTurnPrecheckSignal);

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../../runtime/index.js";
+import { SessionManager } from "../../sessions/index.js";
 import {
   handleEmbeddedAttemptMidTurnPrecheck,
   prepareEmbeddedAttemptPromptPreflight,
@@ -36,6 +37,12 @@ function makeToolResultMessage(text: string): AgentMessage {
     isError: false,
     timestamp: 1,
   } as AgentMessage;
+}
+
+function createSessionManagerWithMessage(message: AgentMessage): SessionManager {
+  const sessionManager = SessionManager.inMemory();
+  sessionManager.appendMessage(message as Parameters<typeof sessionManager.appendMessage>[0]);
+  return sessionManager;
 }
 
 describe("attempt prompt preflight", () => {

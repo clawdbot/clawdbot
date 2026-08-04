@@ -31,7 +31,7 @@ const CONTENT_BLOCK_OVERHEAD_TOKENS = 6;
 const IMAGE_BLOCK_TOKENS = 2_000;
 const TRUNCATION_ROUTE_BUFFER_TOKENS = 512;
 
-export function resolveOverflowToolResultAggregateBudget(params: {
+function resolveOverflowToolResultAggregateBudget(params: {
   overflowTokens: number;
   totalToolResultChars: number;
 }): { aggregateBudgetChars: number; requiredReductionChars: number } {
@@ -253,7 +253,7 @@ export function estimateLlmBoundaryTokenPressure(params: {
     (sum, message) => sum + estimateMessageTokenPressure(message),
     0,
   );
-  const toolTokens = (params.tools ?? []).reduce(
+  const toolTokens = (params.tools ?? []).reduce<number>(
     (sum, tool) => sum + MESSAGE_BOUNDARY_OVERHEAD_TOKENS + estimateJsonPayloadTokenPressure(tool),
     0,
   );
