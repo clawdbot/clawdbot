@@ -329,6 +329,24 @@ function runCompletionPolicyFlow(
   };
 }
 
+describe("live transport scenario timeouts", () => {
+  it("uses the model-aware timeout for the Telegram compact tools reply", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("telegram-tools-compact-command"));
+    const waitForReply = scenario.execution.flow?.steps
+      .flatMap((step) => step.actions)
+      .find(
+        (action) => typeof action === "object" && action !== null && "waitForOutbound" in action,
+      );
+
+    expect(waitForReply).toMatchObject({
+      waitForOutbound: {
+        textIncludes: "exec",
+        timeoutMs: { expr: "liveTurnTimeoutMs(env, 60000)" },
+      },
+    });
+  });
+});
+
 describe("live subagent scenario timeouts", () => {
   it.each([
     {
