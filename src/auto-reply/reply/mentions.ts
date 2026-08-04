@@ -107,12 +107,20 @@ export function matchesMentionWithExplicit(params: {
   return explicit || params.mentionRegexes.some((re) => re.test(cleaned));
 }
 
+/**
+ * Isolate the current inbound message from a body that may also carry batched
+ * history/context ahead of CURRENT_MESSAGE_MARKER. Returns the text unchanged
+ * when no marker is present.
+ */
+export function extractCurrentMessageBody(text: string): string {
+  const index = text.indexOf(CURRENT_MESSAGE_MARKER);
+  return index < 0 ? text : text.slice(index + CURRENT_MESSAGE_MARKER.length).trimStart();
+}
+
 export function stripStructuralPrefixes(text: string): string {
   // Ignore wrapper labels, timestamps, and sender prefixes so directive-only
   // detection still works in group batches that include history/context.
-  const afterMarker = text.includes(CURRENT_MESSAGE_MARKER)
-    ? text.slice(text.indexOf(CURRENT_MESSAGE_MARKER) + CURRENT_MESSAGE_MARKER.length).trimStart()
-    : text;
+  const afterMarker = extractCurrentMessageBody(text);
 
   return afterMarker
     .replace(/\[[^\]]+\]\s*/g, "")

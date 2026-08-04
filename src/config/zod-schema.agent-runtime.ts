@@ -4,6 +4,7 @@ import {
   GroupChatSchema,
   HumanDelaySchema,
   IdentitySchema,
+  ModelTieringSchema,
   ToolsLinksSchema,
   ToolsMediaSchema,
 } from "./zod-schema.core.js";
@@ -416,6 +417,7 @@ export const AgentModelSchema = z.union([
     .object({
       primary: z.string().optional(),
       fallbacks: z.array(z.string()).optional(),
+      tiering: ModelTieringSchema.optional(),
     })
     .strict(),
 ]);

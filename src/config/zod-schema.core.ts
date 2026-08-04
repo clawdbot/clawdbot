@@ -59,6 +59,30 @@ export const ModelProviderSchema = z
   })
   .strict();
 
+export const ModelTieringSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    simple: z.string().optional(),
+    complexPatterns: z.array(z.string()).optional(),
+    complexLengthThreshold: z.number().int().positive().optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    // Reject unusable regexes at config load; the classifier would otherwise
+    // skip them silently on every message with no way for the user to notice.
+    value.complexPatterns?.forEach((pattern, index) => {
+      try {
+        new RegExp(pattern, "i");
+      } catch (err) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["complexPatterns", index],
+          message: `Invalid regular expression: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+    });
+  });
+
 export const BedrockDiscoverySchema = z
   .object({
     enabled: z.boolean().optional(),

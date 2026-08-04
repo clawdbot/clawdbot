@@ -71,7 +71,7 @@ OpenClaw auto-discovers tool-capable Ollama models. Run `openclaw models list` t
 | 32B params | 32GB | 24GB |
 | 70B params | 64GB+ | 48GB+ |
 
-**Tip:** Start with `llama3.3` (8B) to test your setup, then try larger models if your hardware supports them.
+**Tip:** `llama3.3` is a 70B model. If your hardware is closer to the top of the table, start with a smaller model such as `mistral` (7B) to test your setup, then move up.
 
 ### Recommended local models
 
@@ -91,16 +91,15 @@ OpenClaw auto-discovers tool-capable Ollama models. Run `openclaw models list` t
   models: {
     providers: {
       deepseek: {
-        id: "deepseek",
         baseUrl: "https://api.deepseek.com",
         apiKey: "$DEEPSEEK_API_KEY",  // or set env var
-        apiType: "openai-chat-completions",
+        api: "openai-completions",
         models: [
           {
             id: "deepseek-chat",
             name: "DeepSeek Chat",
             contextWindow: 200000,
-            maxOutputTokens: 8192,
+            maxTokens: 8192,
             reasoning: false,
             cost: { input: 0.14, output: 0.28, cacheRead: 0.014, cacheWrite: 0.14 }
           },
@@ -108,7 +107,7 @@ OpenClaw auto-discovers tool-capable Ollama models. Run `openclaw models list` t
             id: "deepseek-reasoner",
             name: "DeepSeek Reasoner",
             contextWindow: 200000,
-            maxOutputTokens: 8192,
+            maxTokens: 8192,
             reasoning: true,
             cost: { input: 0.55, output: 2.19, cacheRead: 0.055, cacheWrite: 0.55 }
           }
@@ -146,7 +145,7 @@ openclaw onboard --auth-choice apiKey --token-provider openrouter --token "$OPEN
         // Use a cheap model by default
         primary: "openrouter/meta-llama/llama-3.3-70b-instruct",
         // Fall back to Claude for complex tasks
-        fallback: ["openrouter/anthropic/claude-sonnet-4-5"],
+        fallbacks: ["openrouter/anthropic/claude-sonnet-4-5"],
       },
     },
   },
@@ -217,7 +216,7 @@ Use expensive models only when needed:
     defaults: {
       model: {
         primary: "ollama/llama3.3",  // Free for most tasks
-        fallback: ["anthropic/claude-sonnet-4-5"],  // Paid backup
+        fallbacks: ["anthropic/claude-sonnet-4-5"],  // Paid backup
       },
     },
   },
@@ -262,7 +261,9 @@ Consider Claude or GPT-4 for:
 
 ## Automatic: Smart Model Tiering
 
-OpenClaw can automatically route simple queries (greetings, acknowledgments, simple questions) to cheaper models while using your primary model for complex tasks.
+OpenClaw can automatically route simple queries to a cheaper model, keeping your primary model for work that needs it.
+
+Note the direction of the default: tiering routes a message to the **cheap** model unless it matches a complexity signal. It is an opt-out list, not an opt-in one, so more than just pleasantries will go to the cheap model.
 
 ### Enable tiering
 
@@ -284,19 +285,38 @@ OpenClaw can automatically route simple queries (greetings, acknowledgments, sim
 
 ### How it works
 
-Queries are automatically classified:
+A message goes to the **primary** model when it matches any complexity signal:
 
-**Simple** (uses cheap model):
-- Greetings: "hi", "hello", "good morning"
-- Acknowledgments: "thanks", "ok", "got it"
-- Yes/no: "yes", "no", "sure"
-- Short questions: "what time is it", "who are you"
-
-**Complex** (uses primary model):
 - Code requests: "write a function that..."
 - Multi-step reasoning: "step by step", "compare and contrast"
 - System operations: "git commit", "npm install"
-- Long messages (500+ characters)
+- Two or more question words ("what", "why", "how", "explain", ...)
+- Requests for an enumerated list: "show me all ..."
+- Messages longer than 500 characters (see `complexLengthThreshold`)
+
+Everything else goes to the **cheap** model, including short greetings
+("hi", "thanks", "yes") and single-word messages. Because the classifier only
+looks at the wording of the message, it is a cost heuristic and not a capability
+check: if the cheap model is much weaker than your primary, expect some
+misroutes.
+
+Only the current message is classified. In group batches and queued turns that
+carry earlier context, the accumulated history is ignored.
+
+### What tiering never overrides
+
+Tiering only replaces the model you would otherwise have got by default. It
+leaves a deliberate choice alone:
+
+- An inline `/model` directive on the message
+- A sticky session model set earlier with `/model`
+- `agents.defaults.heartbeat.model` on heartbeat runs
+
+It also respects the `agents.defaults.models` allowlist: if you keep one, the
+tiered model must be in it, exactly as with `/model`.
+
+Tiering applies on every surface — chat channels, the `openclaw agent` CLI, the
+gateway RPC, and the OpenAI-compatible HTTP APIs.
 
 ### Customize detection
 
@@ -313,6 +333,40 @@ Queries are automatically classified:
 }
 ```
 
+Patterns are validated when the config loads, so an uncompilable regex is
+reported instead of being silently ignored. Only the first 4000 characters of a
+message are scanned for patterns, regardless of `complexLengthThreshold`.
+
+### Per-agent tiering
+
+Set `tiering` on an individual agent to override the global config. Fields merge
+over `agents.defaults.model.tiering`, so you can change just one:
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: {
+        primary: "anthropic/claude-sonnet-4-5",
+        tiering: { enabled: true, simple: "ollama/llama3.3" },
+      },
+    },
+    list: [
+      {
+        id: "researcher",
+        // Inherits enabled: true, but routes simple work elsewhere.
+        model: { tiering: { simple: "deepseek/deepseek-chat" } },
+      },
+      {
+        id: "oncall",
+        // Always uses the primary model.
+        model: { tiering: { enabled: false } },
+      },
+    ],
+  },
+}
+```
+
 ## Hybrid approach
 
 The most cost-effective setup often combines approaches:
@@ -325,7 +379,7 @@ The most cost-effective setup often combines approaches:
         // Free local model for routine work
         primary: "ollama/llama3.3",
         // Cheap API for when local isn't enough
-        fallback: ["deepseek/deepseek-chat", "anthropic/claude-sonnet-4-5"],
+        fallbacks: ["deepseek/deepseek-chat", "anthropic/claude-sonnet-4-5"],
       },
     },
   },

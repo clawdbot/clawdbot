@@ -11,16 +11,8 @@ import {
   BlockStreamingCoalesceSchema,
   CliBackendSchema,
   HumanDelaySchema,
+  ModelTieringSchema,
 } from "./zod-schema.core.js";
-
-export const ModelTieringSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    simple: z.string().optional(),
-    complexPatterns: z.array(z.string()).optional(),
-    complexLengthThreshold: z.number().int().positive().optional(),
-  })
-  .strict();
 
 export const AgentDefaultsSchema = z
   .object({

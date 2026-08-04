@@ -1,4 +1,4 @@
-import type { AgentDefaultsConfig } from "./types.agent-defaults.js";
+import type { AgentDefaultsConfig, ModelTieringConfig } from "./types.agent-defaults.js";
 import type { HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { GroupChatConfig } from "./types.messages.js";
 import type {
@@ -15,6 +15,8 @@ export type AgentModelConfig =
       primary?: string;
       /** Per-agent model fallbacks (provider/model). */
       fallbacks?: string[];
+      /** Per-agent model tiering; merged over agents.defaults.model.tiering. */
+      tiering?: ModelTieringConfig;
     };
 
 export type AgentConfig = {

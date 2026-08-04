@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   classifyQueryComplexity,
   describeComplexityReason,
@@ -6,7 +7,6 @@ import {
   resolveTieringConfig,
   type TieringConfig,
 } from "./model-tiering.js";
-import type { OpenClawConfig } from "../config/config.js";
 
 describe("classifyQueryComplexity", () => {
   describe("simple queries", () => {
@@ -88,7 +88,8 @@ describe("classifyQueryComplexity", () => {
     });
 
     it("classifies queries with code blocks as complex", () => {
-      const queryWithCode = "explain this code:\n\`\`\`javascript\nfunction fibonacci(n) {\n  if (n <= 1) return n;\n  return fibonacci(n - 1) + fibonacci(n - 2);\n}\n\`\`\`";
+      const queryWithCode =
+        "explain this code:\n```javascript\nfunction fibonacci(n) {\n  if (n <= 1) return n;\n  return fibonacci(n - 1) + fibonacci(n - 2);\n}\n```";
       expect(classifyQueryComplexity(queryWithCode)).toBe("complex");
     });
 
@@ -135,6 +136,15 @@ describe("classifyQueryComplexity", () => {
       };
       // Should not throw, just skip the invalid pattern
       expect(classifyQueryComplexity("test query", config)).toBe("simple");
+    });
+
+    it("only scans the head of very long input for complex patterns", () => {
+      // A high threshold keeps long input in the classifier; the pattern sweep
+      // is still bounded, so a keyword past the scan limit is not detected.
+      const config: TieringConfig = { enabled: true, complexLengthThreshold: 100_000 };
+      const padding = "z ".repeat(3_000);
+      expect(classifyQueryComplexity(`npm install ${padding}`, config)).toBe("complex");
+      expect(classifyQueryComplexity(`${padding} npm install`, config)).toBe("simple");
     });
   });
 });
@@ -197,6 +207,16 @@ describe("resolveTieringConfig", () => {
   });
 });
 
+function tieringCfg(tiering: unknown): OpenClawConfig {
+  return {
+    agents: {
+      defaults: {
+        model: { primary: "anthropic/claude-3", tiering },
+      },
+    },
+  } as unknown as OpenClawConfig;
+}
+
 describe("resolveTieredModel", () => {
   it("returns null when tiering is disabled", () => {
     const cfg = {
@@ -235,10 +255,7 @@ describe("resolveTieredModel", () => {
       query: "hello",
       defaultProvider: "anthropic",
     });
-    expect(result).not.toBeNull();
-    expect(result?.ref.provider).toBe("ollama");
-    expect(result?.ref.model).toBe("llama3.3");
-    expect(result?.tier).toBe("simple");
+    expect(result).toEqual({ provider: "ollama", model: "llama3.3" });
   });
 
   it("returns null for complex queries (use default)", () => {
@@ -283,6 +300,101 @@ describe("resolveTieredModel", () => {
       defaultProvider: "anthropic",
     });
     expect(result).toBeNull();
+  });
+
+  it("does not override a deliberately chosen model", () => {
+    const result = resolveTieredModel({
+      cfg: tieringCfg({ enabled: true, simple: "ollama/llama3.3" }),
+      query: "hello",
+      defaultProvider: "anthropic",
+      explicitModel: true,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("resolves the simple model through model aliases", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: { "ollama/llama3.3": { alias: "cheap" } },
+          model: {
+            primary: "anthropic/claude-3",
+            tiering: { enabled: true, simple: "cheap" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const result = resolveTieredModel({
+      cfg,
+      query: "hello",
+      defaultProvider: "anthropic",
+    });
+    expect(result).toEqual({ provider: "ollama", model: "llama3.3" });
+  });
+
+  it("refuses a simple model outside the allowlist", () => {
+    const result = resolveTieredModel({
+      cfg: tieringCfg({ enabled: true, simple: "ollama/llama3.3" }),
+      query: "hello",
+      defaultProvider: "anthropic",
+      allowedModelKeys: new Set(["anthropic/claude-3"]),
+    });
+    expect(result).toBeNull();
+  });
+
+  it("accepts a simple model inside the allowlist", () => {
+    const result = resolveTieredModel({
+      cfg: tieringCfg({ enabled: true, simple: "ollama/llama3.3" }),
+      query: "hello",
+      defaultProvider: "anthropic",
+      allowedModelKeys: new Set(["anthropic/claude-3", "ollama/llama3.3"]),
+    });
+    expect(result).toEqual({ provider: "ollama", model: "llama3.3" });
+  });
+});
+
+describe("per-agent tiering", () => {
+  function cfgWithAgent(agentTiering: unknown, globalTiering?: unknown): OpenClawConfig {
+    return {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-3",
+            ...(globalTiering ? { tiering: globalTiering } : undefined),
+          },
+        },
+        list: [{ id: "scribe", model: { tiering: agentTiering } }],
+      },
+    } as unknown as OpenClawConfig;
+  }
+
+  it("enables tiering for one agent without any global config", () => {
+    const cfg = cfgWithAgent({ enabled: true, simple: "ollama/llama3.3" });
+    expect(
+      resolveTieredModel({ cfg, agentId: "scribe", query: "hi", defaultProvider: "anthropic" }),
+    ).toEqual({ provider: "ollama", model: "llama3.3" });
+    // Other agents are unaffected.
+    expect(
+      resolveTieredModel({ cfg, agentId: "other", query: "hi", defaultProvider: "anthropic" }),
+    ).toBeNull();
+  });
+
+  it("merges per-agent fields over the global tiering config", () => {
+    const cfg = cfgWithAgent(
+      { simple: "ollama/mistral" },
+      { enabled: true, simple: "ollama/llama3.3", complexLengthThreshold: 42 },
+    );
+    expect(resolveTieringConfig(cfg, "scribe")).toEqual({
+      enabled: true,
+      simple: "ollama/mistral",
+      complexLengthThreshold: 42,
+    });
+  });
+
+  it("lets an agent opt out of global tiering", () => {
+    const cfg = cfgWithAgent({ enabled: false }, { enabled: true, simple: "ollama/llama3.3" });
+    expect(resolveTieringConfig(cfg, "scribe")).toBeNull();
+    expect(resolveTieringConfig(cfg)).not.toBeNull();
   });
 });
 

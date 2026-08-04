@@ -1,5 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { matchesMentionWithExplicit } from "./mentions.js";
+import {
+  CURRENT_MESSAGE_MARKER,
+  extractCurrentMessageBody,
+  matchesMentionWithExplicit,
+} from "./mentions.js";
+
+describe("extractCurrentMessageBody", () => {
+  it("returns the text unchanged when there is no marker", () => {
+    expect(extractCurrentMessageBody("just a message")).toBe("just a message");
+  });
+
+  it("drops batched context ahead of the marker", () => {
+    const body = `[10:00] alice: an earlier long message about deployments\n${CURRENT_MESSAGE_MARKER}\nthanks`;
+    expect(extractCurrentMessageBody(body)).toBe("thanks");
+  });
+
+  it("keeps the current message intact when it spans lines", () => {
+    const body = `context here\n${CURRENT_MESSAGE_MARKER}\nline one\nline two`;
+    expect(extractCurrentMessageBody(body)).toBe("line one\nline two");
+  });
+});
 
 describe("matchesMentionWithExplicit", () => {
   const mentionRegexes = [/\bopenclaw\b/i];

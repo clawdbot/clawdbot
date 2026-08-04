@@ -12,6 +12,7 @@ import {
   resolveModelRefFromString,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
+import { resolveTieredModel } from "../../agents/model-tiering.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { resolveThreadParentSessionKey } from "../../sessions/session-key-utils.js";
@@ -271,6 +272,15 @@ export async function createModelSelectionState(params: {
   provider: string;
   model: string;
   hasModelDirective: boolean;
+  agentId?: string;
+  aliasIndex?: ModelAliasIndex;
+  /**
+   * Text of the current inbound message only (no transcript/context), used to
+   * classify complexity for model tiering. Omit to disable tiering.
+   */
+  tieringQuery?: string;
+  /** True when the caller already picked the model deliberately (e.g. heartbeat.model). */
+  modelPreselected?: boolean;
 }): Promise<ModelSelectionState> {
   const {
     cfg,
@@ -343,12 +353,35 @@ export async function createModelSelectionState(params: {
     sessionKey,
     parentSessionKey,
   });
+  let appliedStoredOverride = false;
   if (storedOverride?.model) {
     const candidateProvider = storedOverride.provider || defaultProvider;
     const key = modelKey(candidateProvider, storedOverride.model);
     if (allowedModelKeys.size === 0 || allowedModelKeys.has(key)) {
       provider = candidateProvider;
       model = storedOverride.model;
+      appliedStoredOverride = true;
+    }
+  }
+
+  // Model tiering: route simple requests to a cheaper model. Applied here, so
+  // the tiered model is the one every downstream consumer sees — including the
+  // thinking-level default resolved below, which must match the model actually
+  // used. Never overrides a deliberate choice.
+  if (params.tieringQuery !== undefined) {
+    const tiered = resolveTieredModel({
+      cfg,
+      agentId: params.agentId,
+      query: params.tieringQuery,
+      defaultProvider,
+      explicitModel:
+        params.hasModelDirective || appliedStoredOverride || params.modelPreselected === true,
+      aliasIndex: params.aliasIndex,
+      allowedModelKeys,
+    });
+    if (tiered) {
+      provider = tiered.provider;
+      model = tiered.model;
     }
   }
 

@@ -78,6 +78,9 @@ export async function getReplyFromConfig(
   });
   let provider = defaultProvider;
   let model = defaultModel;
+  // Tracks whether provider/model below is a deliberate choice rather than the
+  // configured default, so model tiering does not override it.
+  let modelPreselected = false;
   if (opts?.isHeartbeat) {
     const heartbeatRaw = agentCfg?.heartbeat?.model?.trim() ?? "";
     const heartbeatRef = heartbeatRaw
@@ -90,6 +93,7 @@ export async function getReplyFromConfig(
     if (heartbeatRef) {
       provider = heartbeatRef.ref.provider;
       model = heartbeatRef.ref.model;
+      modelPreselected = true;
     }
   }
 
@@ -195,6 +199,7 @@ export async function getReplyFromConfig(
     aliasIndex,
     provider,
     model,
+    modelPreselected,
     typing,
     opts: resolvedOpts,
     skillFilter: mergedSkillFilter,

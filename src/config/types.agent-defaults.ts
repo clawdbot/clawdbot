@@ -32,6 +32,14 @@ export type ModelTieringConfig = {
 export type AgentModelListConfig = {
   primary?: string;
   fallbacks?: string[];
+};
+
+/**
+ * Primary model config. Kept separate from `AgentModelListConfig` because
+ * tiering applies only to `model`, not to `imageModel` (which shares the
+ * narrower shape in both the type and the zod schema).
+ */
+export type AgentPrimaryModelConfig = AgentModelListConfig & {
   /** Smart model tiering: use cheaper models for simple queries. */
   tiering?: ModelTieringConfig;
 };
@@ -106,7 +114,7 @@ export type CliBackendConfig = {
 
 export type AgentDefaultsConfig = {
   /** Primary model and fallbacks (provider/model). */
-  model?: AgentModelListConfig;
+  model?: AgentPrimaryModelConfig;
   /** Optional image-capable model and fallbacks (provider/model). */
   imageModel?: AgentModelListConfig;
   /** Model catalog with optional aliases (full provider/model keys). */

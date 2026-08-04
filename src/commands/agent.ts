@@ -21,6 +21,7 @@ import {
   resolveConfiguredModelRef,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
+import { resolveTieredModel } from "../agents/model-tiering.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../agents/skills/refresh.js";
@@ -309,6 +310,7 @@ export async function agentCommand(
 
     const storedProviderOverride = sessionEntry?.providerOverride?.trim();
     const storedModelOverride = sessionEntry?.modelOverride?.trim();
+    let appliedStoredOverride = false;
     if (storedModelOverride) {
       const candidateProvider = storedProviderOverride || defaultProvider;
       const key = modelKey(candidateProvider, storedModelOverride);
@@ -319,7 +321,23 @@ export async function agentCommand(
       ) {
         provider = candidateProvider;
         model = storedModelOverride;
+        appliedStoredOverride = true;
       }
+    }
+
+    // Model tiering for every non-chat entry point: the CLI, gateway RPC, and
+    // the OpenAI-compatible HTTP APIs all run through agentCommand.
+    const tieredModel = resolveTieredModel({
+      cfg,
+      agentId: sessionAgentId,
+      query: body,
+      defaultProvider,
+      explicitModel: appliedStoredOverride,
+      allowedModelKeys,
+    });
+    if (tieredModel) {
+      provider = tieredModel.provider;
+      model = tieredModel.model;
     }
     if (sessionEntry) {
       const authProfileId = sessionEntry.authProfileOverride;

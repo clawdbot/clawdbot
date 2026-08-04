@@ -1,11 +1,18 @@
 /**
  * Smart Model Tiering
  *
- * Routes simple queries to cheaper models automatically, escalating to expensive
- * models only when complexity warrants it. This can significantly reduce costs
- * for users who primarily use OpenClaw for casual conversations.
+ * Routes simple requests to a cheaper model, keeping the primary model for work
+ * that warrants it. This can significantly reduce costs for users who primarily
+ * use OpenClaw for casual conversations.
  *
- * Configuration:
+ * This module only decides *which* model a request should use; callers own model
+ * resolution. It is wired into the two places that resolve a model for a
+ * user-initiated run — `createModelSelectionState` (chat channels) and
+ * `agentCommand` (CLI, gateway RPC, OpenAI-compatible HTTP APIs) — so every
+ * surface behaves the same. Internal sub-runs (memory extraction, follow-ups)
+ * deliberately do not tier: they have their own prompts, not the user's.
+ *
+ * Configuration (per-agent `agents.list[].model.tiering` merges over this):
  * ```json5
  * {
  *   agents: {
@@ -24,19 +31,30 @@
  */
 
 import type { OpenClawConfig } from "../config/config.js";
-import { parseModelRef, type ModelRef } from "./model-selection.js";
+import type { ModelTieringConfig } from "../config/types.agent-defaults.js";
+import { resolveAgentModelTiering } from "./agent-scope.js";
+import {
+  buildModelAliasIndex,
+  modelKey,
+  resolveModelRefFromString,
+  type ModelAliasIndex,
+  type ModelRef,
+} from "./model-selection.js";
 
 export type QueryComplexity = "simple" | "complex";
 
-export type TieringConfig = {
-  enabled?: boolean;
-  /** Model to use for simple queries (e.g., "ollama/llama3.3") */
-  simple?: string;
-  /** Custom patterns that indicate complex queries (regex strings) */
-  complexPatterns?: string[];
-  /** Minimum message length to consider for simple tier (default: 500 chars) */
-  complexLengthThreshold?: number;
-};
+export type TieringConfig = ModelTieringConfig;
+
+const DEFAULT_COMPLEX_LENGTH_THRESHOLD = 500;
+
+/**
+ * Upper bound on the text handed to the complex-pattern sweep. Several patterns
+ * contain `.*`, which is O(n^2) on non-matching input, so a large
+ * `complexLengthThreshold` would otherwise let a big paste block the event loop.
+ * The patterns are keyword-shaped, so the head of a message is enough to
+ * classify it.
+ */
+const PATTERN_SCAN_LIMIT = 4000;
 
 /**
  * Patterns that indicate a query is complex and needs a powerful model.
@@ -95,138 +113,191 @@ const SIMPLE_PATTERNS = [
 ];
 
 /**
- * Classify a query as simple or complex to determine model tier.
+ * Question/explanation words; two or more of them signal a compound question.
+ * Carries the `g` flag, so it must only be used with `String.match` (which
+ * resets `lastIndex`), never with `RegExp.test` on this shared instance.
  */
-export function classifyQueryComplexity(
+const QUESTION_WORDS_PATTERN = /\b(what|why|how|when|where|which|who|explain|describe)\b/gi;
+
+/** List requests ("show me all ...") often need structured thinking. */
+const LIST_REQUEST_PATTERN =
+  /\b(list|enumerate|give me|show me|tell me)\b.*\b(all|every|each|different|various)\b/i;
+
+/**
+ * Cache of compiled user-supplied patterns, keyed by the raw pattern string.
+ * Classification runs once per inbound message, so compiling here keeps the
+ * per-message cost at a map lookup. Invalid patterns cache as `null` so a
+ * broken config costs one failed compile rather than a throw every message.
+ */
+const customPatternCache = new Map<string, RegExp | null>();
+
+function compileCustomPattern(patternStr: string): RegExp | null {
+  const cached = customPatternCache.get(patternStr);
+  if (cached !== undefined) {
+    return cached;
+  }
+  let compiled: RegExp | null = null;
+  try {
+    compiled = new RegExp(patternStr, "i");
+  } catch {
+    // Invalid regex; remember the failure so we don't retry per message.
+    compiled = null;
+  }
+  customPatternCache.set(patternStr, compiled);
+  return compiled;
+}
+
+function complexPatternMatch(pattern: RegExp): { tier: QueryComplexity; reason: string } {
+  return { tier: "complex", reason: `Matches complex pattern: ${pattern.source.slice(0, 50)}...` };
+}
+
+/**
+ * Single source of truth for the tier decision and the reason behind it, so
+ * the classification and its explanation can never drift apart.
+ */
+function classify(
   query: string,
   config?: TieringConfig,
-): QueryComplexity {
+): { tier: QueryComplexity; reason: string | null } {
+  const simple = { tier: "simple", reason: null } as const;
   const trimmed = query.trim();
 
   // Empty or very short queries are simple
   if (!trimmed || trimmed.length < 3) {
-    return "simple";
+    return simple;
   }
 
   // Check explicit simple patterns first
   for (const pattern of SIMPLE_PATTERNS) {
     if (pattern.test(trimmed)) {
-      return "simple";
+      return simple;
     }
   }
 
-  // Check length threshold (default: 500 chars indicates complexity)
-  const lengthThreshold = config?.complexLengthThreshold ?? 500;
+  const lengthThreshold = config?.complexLengthThreshold ?? DEFAULT_COMPLEX_LENGTH_THRESHOLD;
   if (trimmed.length > lengthThreshold) {
-    return "complex";
+    return { tier: "complex", reason: `Query length exceeds ${lengthThreshold} characters` };
   }
 
-  // Check default complex patterns
+  // Bound the input to the `.*`-bearing patterns; see PATTERN_SCAN_LIMIT.
+  const scanned =
+    trimmed.length > PATTERN_SCAN_LIMIT ? trimmed.slice(0, PATTERN_SCAN_LIMIT) : trimmed;
+
   for (const pattern of DEFAULT_COMPLEX_PATTERNS) {
-    if (pattern.test(trimmed)) {
-      return "complex";
+    if (pattern.test(scanned)) {
+      return complexPatternMatch(pattern);
     }
   }
 
-  // Check custom complex patterns from config
-  if (config?.complexPatterns) {
-    for (const patternStr of config.complexPatterns) {
-      try {
-        const pattern = new RegExp(patternStr, "i");
-        if (pattern.test(trimmed)) {
-          return "complex";
-        }
-      } catch {
-        // Invalid regex, skip
-      }
+  for (const patternStr of config?.complexPatterns ?? []) {
+    const pattern = compileCustomPattern(patternStr);
+    if (pattern?.test(scanned)) {
+      return complexPatternMatch(pattern);
     }
   }
 
-  // Check for question complexity by counting question words
-  const questionWords = (trimmed.match(/\b(what|why|how|when|where|which|who|explain|describe)\b/gi) || []).length;
+  const questionWords = (scanned.match(QUESTION_WORDS_PATTERN) || []).length;
   if (questionWords >= 2) {
-    return "complex";
+    return { tier: "complex", reason: `Contains ${questionWords} question/explanation words` };
   }
 
-  // Check for list requests (often need structured thinking)
-  if (/\b(list|enumerate|give me|show me|tell me)\b.*\b(all|every|each|different|various)\b/i.test(trimmed)) {
-    return "complex";
+  if (LIST_REQUEST_PATTERN.test(scanned)) {
+    return { tier: "complex", reason: "Requests an enumerated list" };
   }
 
-  // Default to simple for short, non-matching queries
-  if (trimmed.length < 100) {
-    return "simple";
-  }
-
-  // Medium-length queries without complex indicators are also simple
-  return "simple";
+  // No complex signal: route to the cheap tier.
+  return simple;
 }
 
 /**
- * Resolve the tiering configuration from OpenClawConfig.
+ * Classify a query as simple or complex to determine model tier.
  */
-export function resolveTieringConfig(cfg: OpenClawConfig): TieringConfig | null {
-  const modelConfig = cfg.agents?.defaults?.model;
-  if (!modelConfig || typeof modelConfig === "string") {
-    return null;
-  }
-
-  const tiering = (modelConfig as { tiering?: TieringConfig }).tiering;
-  if (!tiering?.enabled) {
-    return null;
-  }
-
-  return tiering;
+export function classifyQueryComplexity(query: string, config?: TieringConfig): QueryComplexity {
+  return classify(query, config).tier;
 }
 
 /**
- * Resolve the model to use based on query complexity and tiering config.
- * Returns the tiered model ref if applicable, or null to use the default.
+ * Resolve the effective tiering configuration for an agent.
+ *
+ * Per-agent `agents.list[].model.tiering` is merged over the global
+ * `agents.defaults.model.tiering`, field by field, so an agent can override
+ * just `simple` (or switch tiering off) while inheriting the rest.
+ */
+export function resolveTieringConfig(cfg: OpenClawConfig, agentId?: string): TieringConfig | null {
+  const globalTiering = cfg.agents?.defaults?.model?.tiering;
+  const agentTiering = agentId ? resolveAgentModelTiering(cfg, agentId) : undefined;
+  if (!globalTiering && !agentTiering) {
+    return null;
+  }
+  const merged: TieringConfig = { ...globalTiering, ...agentTiering };
+  return merged.enabled ? merged : null;
+}
+
+/**
+ * Resolve the cheaper model to route this request to, or null to keep the
+ * model the caller already resolved.
+ *
+ * Callers must pass the text of the *current* request only (no transcript or
+ * structural context), otherwise length and greeting checks measure the wrong
+ * thing. `explicitModel` must be set whenever the model was deliberately
+ * chosen — an inline `/model` directive, a stored session override, or a
+ * configured heartbeat model — so tiering never overrides a deliberate choice.
  */
 export function resolveTieredModel(params: {
   cfg: OpenClawConfig;
   query: string;
   defaultProvider: string;
-}): { ref: ModelRef; tier: QueryComplexity } | null {
-  const tiering = resolveTieringConfig(params.cfg);
-  if (!tiering) {
+  agentId?: string;
+  explicitModel?: boolean;
+  aliasIndex?: ModelAliasIndex;
+  /** When non-empty, the tiered model must appear in this allowlist. */
+  allowedModelKeys?: Set<string>;
+}): ModelRef | null {
+  if (params.explicitModel) {
     return null;
   }
 
-  const complexity = classifyQueryComplexity(params.query, tiering);
-
-  // Only override for simple queries when a simple model is configured
-  if (complexity === "simple" && tiering.simple) {
-    const ref = parseModelRef(tiering.simple, params.defaultProvider);
-    if (ref) {
-      return { ref, tier: "simple" };
-    }
+  const tiering = resolveTieringConfig(params.cfg, params.agentId);
+  // Skip classification entirely when there is no cheaper model to route to.
+  if (!tiering?.simple) {
+    return null;
   }
 
-  // Complex queries or no simple model configured - use default
-  return null;
+  if (classifyQueryComplexity(params.query, tiering) !== "simple") {
+    return null;
+  }
+
+  const aliasIndex =
+    params.aliasIndex ??
+    buildModelAliasIndex({ cfg: params.cfg, defaultProvider: params.defaultProvider });
+  const resolved = resolveModelRefFromString({
+    raw: tiering.simple,
+    defaultProvider: params.defaultProvider,
+    aliasIndex,
+  });
+  if (!resolved) {
+    return null;
+  }
+
+  // Honour the same allowlist as `/model`; a tiered model must not be a way
+  // around `agents.defaults.models`.
+  const allowed = params.allowedModelKeys;
+  if (
+    allowed &&
+    allowed.size > 0 &&
+    !allowed.has(modelKey(resolved.ref.provider, resolved.ref.model))
+  ) {
+    return null;
+  }
+
+  return resolved.ref;
 }
 
 /**
- * Get a human-readable description of why a query was classified as complex.
+ * Get a human-readable description of why a query was classified as complex,
+ * or null when the query is simple. Shares `classify` with
+ * `classifyQueryComplexity`, so the reason always matches the decision.
  */
-export function describeComplexityReason(query: string): string | null {
-  const trimmed = query.trim();
-
-  if (trimmed.length > 500) {
-    return "Query length exceeds 500 characters";
-  }
-
-  for (const pattern of DEFAULT_COMPLEX_PATTERNS) {
-    if (pattern.test(trimmed)) {
-      return `Matches complex pattern: ${pattern.source.slice(0, 50)}...`;
-    }
-  }
-
-  const questionWords = (trimmed.match(/\b(what|why|how|when|where|which|who|explain|describe)\b/gi) || []).length;
-  if (questionWords >= 2) {
-    return `Contains ${questionWords} question/explanation words`;
-  }
-
-  return null;
+export function describeComplexityReason(query: string, config?: TieringConfig): string | null {
+  return classify(query, config).reason;
 }

@@ -289,10 +289,6 @@ const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.model.tiering.simple": "Simple Query Model",
   "agents.defaults.model.tiering.complexPatterns": "Complex Query Patterns",
   "agents.defaults.model.tiering.complexLengthThreshold": "Complex Length Threshold",
-  "agents.defaults.rateLimitStrategy": "Rate Limit Strategy",
-  "agents.defaults.rateLimitStrategy.strategy": "Strategy",
-  "agents.defaults.rateLimitStrategy.maxWaitSeconds": "Max Wait Seconds",
-  "agents.defaults.rateLimitStrategy.backupModel": "Backup Model",
   "agents.defaults.imageModel.primary": "Image Model",
   "agents.defaults.imageModel.fallbacks": "Image Model Fallbacks",
   "agents.defaults.humanDelay.mode": "Human Delay Mode",
@@ -644,21 +640,14 @@ const FIELD_HELP: Record<string, string> = {
     "Ordered fallback models (provider/model). Used when the primary model fails.",
   "agents.defaults.model.tiering":
     "Smart model tiering: automatically route simple queries to cheaper models.",
-  "agents.defaults.model.tiering.enabled": "Enable automatic model tiering based on query complexity.",
+  "agents.defaults.model.tiering.enabled":
+    "Enable automatic model tiering based on query complexity.",
   "agents.defaults.model.tiering.simple":
     'Cheaper model for simple queries (e.g., "ollama/llama3.3"). Falls back to primary if not set.',
   "agents.defaults.model.tiering.complexPatterns":
     "Custom regex patterns that indicate complex queries requiring the primary model.",
   "agents.defaults.model.tiering.complexLengthThreshold":
     "Character length threshold above which queries are considered complex (default: 500).",
-  "agents.defaults.rateLimitStrategy":
-    "Configure how rate limits (HTTP 429) are handled.",
-  "agents.defaults.rateLimitStrategy.strategy":
-    'Strategy when rate limited: "switch" (use fallback), "wait" (respect Retry-After), or "ask" (prompt user).',
-  "agents.defaults.rateLimitStrategy.maxWaitSeconds":
-    "Maximum seconds to wait before switching to fallback (default: 60).",
-  "agents.defaults.rateLimitStrategy.backupModel":
-    "Specific backup model to use when switching (uses configured fallbacks if not set).",
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",

@@ -7,7 +7,6 @@ import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { TypingController } from "./typing.js";
-import { resolveTieredModel } from "../../agents/model-tiering.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { listChatCommands, shouldHandleTextCommands } from "../commands-registry.js";
 import { listSkillCommandsForWorkspace } from "../skill-commands.js";
@@ -17,7 +16,12 @@ import { type InlineDirectives, parseInlineDirectives } from "./directive-handli
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { defaultGroupActivation, resolveGroupRequireMention } from "./groups.js";
-import { CURRENT_MESSAGE_MARKER, stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import {
+  CURRENT_MESSAGE_MARKER,
+  extractCurrentMessageBody,
+  stripMentions,
+  stripStructuralPrefixes,
+} from "./mentions.js";
 import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./reply-elevated.js";
 import { stripInlineStatus } from "./reply-inline.js";
@@ -107,6 +111,8 @@ export async function resolveReplyDirectives(params: {
   aliasIndex: ModelAliasIndex;
   provider: string;
   model: string;
+  /** True when the caller already picked provider/model deliberately (e.g. heartbeat.model). */
+  modelPreselected?: boolean;
   typing: TypingController;
   opts?: GetReplyOptions;
   skillFilter?: string[];
@@ -392,6 +398,10 @@ export async function resolveReplyDirectives(params: {
     provider,
     model,
     hasModelDirective: directives.hasModelDirective,
+    agentId,
+    aliasIndex: params.aliasIndex,
+    tieringQuery: extractCurrentMessageBody(cleanedBody),
+    modelPreselected: params.modelPreselected,
   });
   provider = modelState.provider;
   model = modelState.model;
@@ -453,21 +463,6 @@ export async function resolveReplyDirectives(params: {
   contextTokens = applyResult.contextTokens;
   const { directiveAck, perMessageQueueMode, perMessageQueueOptions } = applyResult;
   const execOverrides = resolveExecOverrides({ directives, sessionEntry });
-
-  // Apply smart model tiering: use cheaper models for simple queries
-  // Only apply if no explicit model directive was given
-  if (!directives.hasModelDirective) {
-    const tiered = resolveTieredModel({
-      cfg,
-      query: cleanedBody,
-      defaultProvider,
-    });
-    if (tiered) {
-      provider = tiered.ref.provider;
-      model = tiered.ref.model;
-      contextTokens = resolveContextTokens({ agentCfg, model });
-    }
-  }
 
   return {
     kind: "continue",
