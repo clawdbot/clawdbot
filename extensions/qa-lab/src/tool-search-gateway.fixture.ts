@@ -7,7 +7,6 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   countSessionLogMentions,
-  countSessionLogToolResults,
   countSystemPromptChars,
   fetchQaFixtureJson,
   outputText,
@@ -36,6 +35,7 @@ type LaneResult = {
   providerInputSnippet: string;
   providerToolOutputSnippet: string;
   providerToolSearchResult?: unknown;
+  providerToolCallResult?: unknown;
   providerDeclaredToolCount: number;
   providerDeclaredToolNames: string[];
   providerDirectoryContainsTarget: boolean;
@@ -43,7 +43,6 @@ type LaneResult = {
   gatewayOutputToolNames: string[];
   gatewayOutputText: string;
   sessionLogToolMentions: Record<string, number>;
-  sessionLogTargetToolResults: number;
   targetToolIdentity: {
     source: string;
     pluginId: string;
@@ -56,6 +55,7 @@ type LaneResultSummary = Pick<
   | "providerDirectoryContainsTarget"
   | "providerPlannedTools"
   | "providerRawBytes"
+  | "providerToolCallResult"
   | "providerToolSearchResult"
   | "gatewayOutputText"
   | "sessionLogToolMentions"
@@ -157,13 +157,6 @@ async function countToolSearchSessionLogMentions(params: { stateDir: string; tar
       tool_call: "tool_call",
       [params.targetTool]: params.targetTool,
     },
-  });
-}
-
-async function countTargetToolResults(params: { stateDir: string; targetTool: string }) {
-  return countSessionLogToolResults({
-    sessionsDir: path.join(params.stateDir, "agents", "qa", "sessions"),
-    toolName: params.targetTool,
   });
 }
 
@@ -427,10 +420,6 @@ export async function runToolSearchGatewayLane(params: {
     stateDir,
     targetTool: params.fixture.targetTool,
   });
-  const targetToolResultsBefore = await countTargetToolResults({
-    stateDir,
-    targetTool: params.fixture.targetTool,
-  });
   const requestCursorBefore = readQaMockRequestCursor(
     await fetchJson(qaMockRequestCursorUrl(providerBaseUrl)),
   );
@@ -484,8 +473,17 @@ export async function runToolSearchGatewayLane(params: {
     .map((request) => request.toolOutput)
     .filter((value): value is string => typeof value === "string" && value.length > 0)
     .join("\n");
+  const toolCallRequestIndex = laneRequests.findIndex(
+    (request) => request.plannedToolName === "tool_call",
+  );
   const providerToolSearchResult = parseJson(
-    laneRequests.find((request) => request.plannedToolName === "tool_call")?.toolOutput,
+    toolCallRequestIndex >= 0 ? laneRequests[toolCallRequestIndex]?.toolOutput : undefined,
+  );
+  const providerToolCallResult = parseJson(
+    toolCallRequestIndex >= 0
+      ? laneRequests.slice(toolCallRequestIndex + 1).find((request) => request.toolOutput)
+          ?.toolOutput
+      : undefined,
   );
   // Responses providers may carry system text in instructions or input items;
   // inspect the full recorded prompt so late directory entries are not lost.
@@ -502,10 +500,6 @@ export async function runToolSearchGatewayLane(params: {
     stateDir,
     targetTool: params.fixture.targetTool,
   });
-  const targetToolResultsAfter = await countTargetToolResults({
-    stateDir,
-    targetTool: params.fixture.targetTool,
-  });
   return {
     lane: params.lane,
     status: typeof responseStatus === "string" ? responseStatus : "",
@@ -518,6 +512,7 @@ export async function runToolSearchGatewayLane(params: {
     ),
     providerToolOutputSnippet: truncateUtf16Safe(providerToolOutputs, 4_000),
     providerToolSearchResult,
+    providerToolCallResult,
     providerDeclaredToolCount: Array.isArray(lastRequest.body?.tools)
       ? lastRequest.body.tools.length
       : 0,
@@ -535,7 +530,6 @@ export async function runToolSearchGatewayLane(params: {
     gatewayOutputToolNames: outputToolNames(response),
     gatewayOutputText: outputText(response),
     sessionLogToolMentions: subtractMentionCounts(mentionCountsAfter, mentionCountsBefore),
-    sessionLogTargetToolResults: targetToolResultsAfter - targetToolResultsBefore,
     targetToolIdentity,
   };
 }
@@ -624,8 +618,7 @@ export function assertToolSearchLaneResults(params: {
 }
 
 export function assertToolSearchBatchLaneResult(params: {
-  tools: LaneResultSummary &
-    Pick<LaneResult, "status" | "sessionLogTargetToolResults" | "providerDeclaredToolNames">;
+  tools: LaneResultSummary & Pick<LaneResult, "status" | "providerDeclaredToolNames">;
   targetTool: string;
 }) {
   const { targetTool, tools } = params;
@@ -636,7 +629,7 @@ export function assertToolSearchBatchLaneResult(params: {
         toolOutput: tools.providerToolOutputSnippet,
         output: truncateUtf16Safe(tools.gatewayOutputText, 300),
         mentions: tools.sessionLogToolMentions,
-        targetToolResults: tools.sessionLogTargetToolResults,
+        toolCallResult: tools.providerToolCallResult,
         declaredToolCount: tools.providerDeclaredToolCount,
         declaredToolNames: tools.providerDeclaredToolNames,
         directoryContainsTarget: tools.providerDirectoryContainsTarget,
@@ -685,10 +678,18 @@ export function assertToolSearchBatchLaneResult(params: {
       ),
     `structured lane did not return both grouped search results: ${debug()}`,
   );
+  const toolCallResult = tools.providerToolCallResult;
+  const calledTool = isRecord(toolCallResult) ? toolCallResult.tool : undefined;
+  const callResult = isRecord(toolCallResult) ? toolCallResult.result : undefined;
+  const callDetails = isRecord(callResult) ? callResult.details : undefined;
   assert(
     tools.gatewayOutputText.includes("FAKE_PLUGIN_OK") &&
       tools.gatewayOutputText.includes(targetTool) &&
-      tools.sessionLogTargetToolResults > 0,
+      isRecord(calledTool) &&
+      calledTool.name === targetTool &&
+      isRecord(callDetails) &&
+      callDetails.status === "ok" &&
+      callDetails.tool === targetTool,
     `structured lane did not call ${targetTool}: ${debug()}`,
   );
   assert(

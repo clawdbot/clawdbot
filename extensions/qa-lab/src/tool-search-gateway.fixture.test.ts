@@ -402,6 +402,10 @@ describe("tool search gateway e2e lane assertions", () => {
     source: "plugin",
     pluginId: "tool-search-e2e-fixture",
   };
+  const providerToolCallResult = {
+    tool: { name: targetTool },
+    result: { details: { status: "ok", tool: targetTool } },
+  };
   const normal = {
     gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
     providerDeclaredToolCount: 36,
@@ -442,7 +446,7 @@ describe("tool search gateway e2e lane assertions", () => {
         tools: {
           status: "completed",
           targetToolIdentity,
-          sessionLogTargetToolResults: 1,
+          providerToolCallResult,
           gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
           providerDeclaredToolCount: 3,
           providerDeclaredToolNames: ["tool_search", "tool_describe", "tool_call"],
@@ -484,7 +488,7 @@ describe("tool search gateway e2e lane assertions", () => {
         tools: {
           status: "completed",
           targetToolIdentity,
-          sessionLogTargetToolResults: 1,
+          providerToolCallResult,
           gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
           providerDeclaredToolCount: 3,
           providerDeclaredToolNames: ["tool_search", "tool_describe", "tool_call"],
@@ -599,7 +603,7 @@ describe("tool search gateway e2e lane assertions", () => {
           tools: {
             status,
             targetToolIdentity,
-            sessionLogTargetToolResults: 1,
+            providerToolCallResult,
             gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
             providerDeclaredToolCount: 3,
             providerDeclaredToolNames: ["tool_search", "tool_describe", "tool_call"],
@@ -642,7 +646,7 @@ describe("tool search gateway e2e lane assertions", () => {
         tools: {
           status: "completed",
           targetToolIdentity,
-          sessionLogTargetToolResults: 1,
+          providerToolCallResult,
           gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
           providerDeclaredToolCount: declaredToolNames.length,
           providerDeclaredToolNames: declaredToolNames,
@@ -672,7 +676,6 @@ describe("tool search gateway e2e lane assertions", () => {
         tools: {
           status: "completed",
           targetToolIdentity,
-          sessionLogTargetToolResults: 0,
           gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
           providerDeclaredToolCount: 3,
           providerDeclaredToolNames: ["tool_search", "tool_describe", "tool_call"],
@@ -702,7 +705,7 @@ describe("tool search gateway e2e lane assertions", () => {
         tools: {
           status: "completed",
           targetToolIdentity: { source: "core", pluginId: "" },
-          sessionLogTargetToolResults: 1,
+          providerToolCallResult,
           gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
           providerDeclaredToolCount: 3,
           providerDeclaredToolNames: ["tool_search", "tool_describe", "tool_call"],
