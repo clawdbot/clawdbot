@@ -1,16 +1,20 @@
 // Runtime LLM helpers adapt plugin provider hooks into the core model runtime.
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import {
+  normalizeBuiltInProviderModelId,
+  stripSelfProviderModelPrefix,
+} from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
-import { modelKey } from "../../agents/model-ref-shared.js";
-import { normalizeModelRef } from "../../agents/model-selection.js";
+import { normalizeModelRef } from "../../agents/model-ref-shared.js";
 import type { NormalizedUsage, UsageLike } from "../../agents/usage.js";
 import { normalizeUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Api, Message } from "../../llm/types.js";
 import { getChildLogger } from "../../logging.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { modelKey } from "../../shared/model-key.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { normalizePluginsConfig } from "../config-state.js";
 import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
@@ -271,8 +275,13 @@ function normalizeAllowedModelRef(raw: string): string | null {
   if (!parsed) {
     return null;
   }
-  const normalized = normalizeModelRef(parsed.provider, parsed.modelId);
-  return modelKey(normalized.provider, normalized.model);
+  // Operator allowlists already name canonical targets; keep policy checks independent
+  // of plugin metadata and provider-runtime discovery.
+  const modelId = normalizeBuiltInProviderModelId(
+    parsed.provider,
+    stripSelfProviderModelPrefix(parsed.provider, parsed.modelId),
+  );
+  return modelKey(parsed.provider, modelId);
 }
 
 function normalizeModelAllowlist(params: {

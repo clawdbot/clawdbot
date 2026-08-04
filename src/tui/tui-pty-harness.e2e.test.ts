@@ -344,7 +344,34 @@ describe.sequential("TUI PTY harness", () => {
     },
     STARTUP_TEST_TIMEOUT_MS,
   );
-
+  // prettier-ignore
+  const editorInputCases = [
+    ["recalls submitted input history through literal terminal navigation", [["w", "history recall proof\r"], ["s", "history recall proof"], ["o", "PTY_RESPONSE: history recall proof"], ["w", "\u001b[A\u0005 edited\r"], ["s", "history recall proof edited"]]],
+    ["applies literal terminal shortcuts before submitting editor input",
+      [["w", "discard this input"], ["w", "\u0003"], ["o", "cleared input; press ctrl+c again to exit"], ["w", "shortcut kept input\r"], ["s", "shortcut kept input"], ["n", "discard this input"]]],
+    ["handles bracketed paste and rejects the pasted submit while busy",
+      [["w", "\u001b[200~bracketed paste proof\u001b[201~\r"], ["s", "bracketed paste proof"], ["o", "PTY_RESPONSE: bracketed paste proof"], ["w", "slow prompt\r"], ["s", "slow prompt"],
+        ["w", "\u001b[200~busy pasted prompt\u001b[201~\r"], ["o", "agent is busy"], ["o", "PTY_RESPONSE: slow prompt"], ["n", "busy pasted prompt"]]],
+    ["submits fragmented IME text and Kitty AltGr printable bytes", [["w", "日本"], ["w", "語 "], ["w", "\u001b[64::113;7u\u001b[8364::101;7u\r"], ["s", "日本語 @€"], ["o", "PTY_RESPONSE: 日本語 @€"]]],
+  ] as const;
+  it.each(editorInputCases)(
+    "%s",
+    async (_name, steps) => {
+      const tui = await startTuiFixture();
+      try {
+        await tui.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+        for (const [action, value] of steps) {
+          // prettier-ignore
+          const sent = (entry: FixtureLogEntry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", value);
+          // prettier-ignore
+          await { w: () => tui.run.write(value, { delay: false }), o: () => tui.run.waitForOutput(value), s: () => tui.waitForLogEntry(sent), n: async () => expect((await readFixtureLog(tui.logPath)).some(sent)).toBe(false) }[action]();
+        }
+      } finally {
+        await tui.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
   it(
     "preserves consecutive backspaces received in the same terminal input chunk",
     async () => {

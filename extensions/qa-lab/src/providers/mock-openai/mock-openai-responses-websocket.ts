@@ -8,6 +8,7 @@ export type QaMockResponsesDispatchResult = {
   failure?: {
     status: number;
     type: string;
+    code?: string;
     message: string;
   };
   onResponseSent?: () => void;
@@ -200,6 +201,7 @@ export function attachQaMockResponsesWebSocketServer(params: {
               status: dispatched.failure.status,
               error: {
                 type: dispatched.failure.type,
+                ...(dispatched.failure.code ? { code: dispatched.failure.code } : {}),
                 message: dispatched.failure.message,
               },
             });

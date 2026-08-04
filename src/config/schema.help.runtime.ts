@@ -329,9 +329,9 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "diagnostics.otel.logsEndpoint":
     "Signal-specific OTLP/HTTP logs endpoint. When set, this overrides diagnostics.otel.endpoint and OTEL_EXPORTER_OTLP_ENDPOINT for log export only.",
   "diagnostics.otel.protocol":
-    'OTel transport protocol for telemetry export: "http/protobuf" or "grpc" depending on collector support. Use the protocol your observability backend expects to avoid dropped telemetry payloads.',
+    'OTel transport protocol for telemetry export. Only "http/protobuf" is accepted; run "openclaw doctor --fix" to repair a persisted legacy "grpc" value or get source-specific manual-edit guidance.',
   "diagnostics.otel.headers":
-    "Additional HTTP/gRPC metadata headers sent with OpenTelemetry export requests, often used for tenant auth or routing. Keep secrets in env-backed values and avoid unnecessary header sprawl.",
+    "Additional HTTP request headers sent with OpenTelemetry export requests, often used for tenant auth or routing. Keep secrets in env-backed values and avoid unnecessary header sprawl.",
   "diagnostics.otel.serviceName":
     "Service name reported in telemetry resource attributes to identify this gateway instance in observability backends. Use stable names so dashboards and alerts remain consistent over deployments.",
   "diagnostics.otel.metricNamePrefix":

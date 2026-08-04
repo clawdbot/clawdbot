@@ -6,6 +6,7 @@ import path from "node:path";
 export {
   assertNoSymlinkParents,
   assertNoSymlinkParentsSync,
+  readFileHandleBounded,
   type FileIdentityStat,
   sameFileIdentity,
 } from "@openclaw/fs-safe/advanced";

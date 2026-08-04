@@ -164,7 +164,7 @@ different Gateway. After a browser crash, the next launch archives sessions
 left by the previous browser instance. Archived sessions reject new work, while
 their transcripts remain available in session history. Browser-copilot keys are
 thread sessions, so normal age and entry-count maintenance preserves them. The
-per-agent session disk budget still applies (default `2gb`) and may evict the
+per-agent session disk budget still applies (default `10gb`) and may evict the
 oldest sessions under pressure; see [session maintenance](/reference/session-management-compaction#store-maintenance-and-disk-controls).
 
 The side panel currently requires either a Gateway-hosted extension relay or a

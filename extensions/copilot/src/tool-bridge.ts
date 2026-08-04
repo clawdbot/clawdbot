@@ -604,11 +604,13 @@ function convertOpenClawToolToSdkTool(
       );
     }
 
-    // OpenClaw tools throw for execution failures. Error-shaped details remain
-    // lifecycle metadata; successful content uses the SDK's MCP converter.
-    const sdkResult = convertMcpCallToolResult({ content: result.content });
     const sanitizedResult = sanitizeToolResult(result);
-    const resultIsError = sdkResult.resultType === "failure" || isToolResultError(sanitizedResult);
+    const resultIsError = isToolResultError(sanitizedResult);
+    // The SDK only marks fulfilled tool results as failures when isError is forwarded.
+    const sdkResult = convertMcpCallToolResult({
+      content: result.content,
+      isError: resultIsError,
+    });
     const resultError = resultIsError ? extractToolErrorMessage(sanitizedResult) : undefined;
     ctx.observeToolTerminal?.({
       toolCallId: invocation.toolCallId,

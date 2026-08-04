@@ -103,6 +103,10 @@ final class ControlChannel {
         didSet {
             CanvasManager.shared.refreshDebugStatus()
             guard oldValue != self.state else { return }
+            if self.state != .connected {
+                self.lastPingMs = nil
+                self.authSourceLabel = nil
+            }
             NotificationCenter.default.post(name: .controlChannelStateDidChange, object: nil)
             switch self.state {
             case .connected:

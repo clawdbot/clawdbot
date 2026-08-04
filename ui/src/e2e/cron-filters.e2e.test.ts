@@ -298,6 +298,52 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
     }
   });
 
+  it("creates a cron-scheduled task and renders the refreshed row", async () => {
+    const schedule = { kind: "cron", expr: "0 9 * * 1-5", tz: "UTC" };
+    const createdJob = {
+      ...cronJob("weekday-report", "Weekday report", schedule),
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "Prepare the weekday report" },
+    };
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1_280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "cron.add": { id: createdJob.id },
+        "cron.list": cronListResponse([]),
+        "cron.runs": cronRunsResponse([]),
+        "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}cron`);
+      await page.locator('[data-test-id="cron-new-task"]').click();
+      await page.locator("#cron-name").fill(createdJob.name);
+      await page.locator("#cron-payload-text").fill(createdJob.payload.message);
+      await page.locator('[data-test-id="cron-schedule-kind-cron"]').click();
+      await page.locator("#cron-cron-expr").fill(schedule.expr);
+      await page.locator("#cron-cron-tz").fill(schedule.tz);
+      await gateway.setMethodResponse("cron.list", cronListResponse([createdJob]));
+      await page.locator('[data-test-id="cron-submit"]').click();
+
+      const addRequest = await gateway.waitForRequest("cron.add");
+      expect(requestParams(addRequest)).toMatchObject({
+        name: createdJob.name,
+        payload: createdJob.payload,
+        schedule,
+      });
+      await jobTitle(page, createdJob.name).waitFor({ state: "visible", timeout: 10_000 });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps read-only operators on Cron browse and history surfaces", async () => {
     const readOnlyJob = {
       ...cronJob(

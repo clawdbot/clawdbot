@@ -270,11 +270,7 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
     label: "MiniMax",
     defaultModel: DEFAULT_MINIMAX_MUSIC_MODEL,
     models: [DEFAULT_MINIMAX_MUSIC_MODEL, "music-2.6-free", "music-cover", "music-cover-free"],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: providerId,
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: providerId, ...ctx }),
     capabilities: {
       generate: {
         maxTracks: 1,

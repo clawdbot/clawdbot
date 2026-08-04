@@ -1,7 +1,7 @@
 // Telegram plugin module implements polling status behavior.
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import {
-  createConnectedChannelStatusPatch,
+  channelReadyPatch,
   createTransportActivityStatusPatch,
 } from "openclaw/plugin-sdk/gateway-runtime";
 
@@ -19,17 +19,16 @@ export function createTelegramPollingStatusPublisher(setStatus?: TelegramPolling
       });
     },
     notePollSuccess(at = Date.now()) {
-      setStatus?.({
-        ...createConnectedChannelStatusPatch(at),
-        // A successful getUpdates call proves the Telegram HTTP long-poll is alive
-        // even when the response has no user-visible updates.
-        ...createTransportActivityStatusPatch(at),
-        mode: "polling",
-        lifecycle: "ready",
-        // Runtime patches merge, so a repaired token must clear the prior terminal auth fact.
-        terminalDisconnect: undefined,
-        lastError: null,
-      });
+      setStatus?.(
+        channelReadyPatch({
+          lastConnectedAt: at,
+          lastEventAt: at,
+          // A successful getUpdates call proves the Telegram HTTP long-poll is alive
+          // even when the response has no user-visible updates.
+          ...createTransportActivityStatusPatch(at),
+          mode: "polling",
+        }),
+      );
     },
     notePollingRecovery() {
       setStatus?.({ lifecycle: "recovering" });

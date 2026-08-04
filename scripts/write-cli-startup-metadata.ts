@@ -1,13 +1,12 @@
 // Write Cli Startup Metadata script supports OpenClaw repository automation.
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
+import fs, {
   existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { availableParallelism, tmpdir } from "node:os";
@@ -329,7 +328,7 @@ function createRootHelpRenderStateDir(): string {
 }
 
 function cleanupRootHelpRenderStateDir(stateDir: string): void {
-  rmSync(stateDir, { force: true, recursive: true });
+  fs.rmSync(stateDir, { force: true, recursive: true, maxRetries: 6, retryDelay: 25 });
 }
 
 function withIsolatedRootHelpRenderContext<T>(
