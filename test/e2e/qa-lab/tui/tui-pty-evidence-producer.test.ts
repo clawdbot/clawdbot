@@ -17,6 +17,7 @@ import {
 } from "./tui-pty-evidence-producer.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/tui/tui-pty-evidence-producer.ts";
+const ASSERTION_SUPPORT_FILE = "src/tui/tui-pty-harness-assertion-test-support.test.ts";
 const HARNESS_FILE = "src/tui/tui-pty-harness.e2e.test.ts";
 const LOCAL_FILE = "src/tui/tui-pty-local.e2e.test.ts";
 const RESET_FILE = "src/tui/tui-reset-transition-pty.e2e.test.ts";
@@ -78,7 +79,7 @@ function makeCase(overrides: Partial<TuiPtyCase> = {}): TuiPtyCase {
 
 async function makeTempRepo() {
   const repoRoot = tempDirs.make("openclaw-tui-pty-producer-");
-  for (const testFile of [HARNESS_FILE, LOCAL_FILE, RESET_FILE]) {
+  for (const testFile of [ASSERTION_SUPPORT_FILE, HARNESS_FILE, LOCAL_FILE, RESET_FILE]) {
     const absolutePath = path.join(repoRoot, testFile);
     await fs.mkdir(path.dirname(absolutePath), { recursive: true });
     await fs.writeFile(absolutePath, "// fixture\n", "utf8");
@@ -251,6 +252,14 @@ describe("TUI PTY evidence producer", () => {
     expect(fake.env.OPENCLAW_BEHAVIOR_EVIDENCE).toBe("1");
     expect(fake.env.OPENCLAW_TUI_PTY_INCLUDE_LOCAL).toBeUndefined();
     expect(fake.env.OPENCLAW_TUI_PTY_USE_BUILT_CLI).toBeUndefined();
+
+    const oracle = buildTuiPtyVitestCommand({
+      cases: [makeCase({ testFile: ASSERTION_SUPPORT_FILE })],
+      cliMode: "source",
+      repoRoot: "/repo",
+      reportPath: "/artifacts/report.json",
+    });
+    expect(oracle.args).toContain(ASSERTION_SUPPORT_FILE);
 
     const local = buildTuiPtyVitestCommand({
       cases: [makeCase({ testFile: LOCAL_FILE })],

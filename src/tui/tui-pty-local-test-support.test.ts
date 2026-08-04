@@ -28,7 +28,9 @@ describe("local TUI PTY fixture support", () => {
     let output = "";
     let acceptanceTimer: ReturnType<typeof setTimeout> | undefined;
     const run = {
+      cols: 100,
       output: () => output,
+      rows: 30,
       visibleOutput: () => output.replace(/\s+/gu, " "),
       write: async (data: string) => {
         writes.push(data);

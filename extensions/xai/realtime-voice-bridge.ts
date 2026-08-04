@@ -160,6 +160,9 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
         attempt.resolve();
         return;
       }
+      // Credential refresh has its own bounded lifecycle. Arm the socket timeout
+      // only once valid connection parameters are ready.
+      attempt.startTimeout();
       const { url, headers } = resolvedConnection;
       this.connectionUrl = url;
       const proxyAgent = createDebugProxyWebSocketAgent(resolveDebugProxySettings());

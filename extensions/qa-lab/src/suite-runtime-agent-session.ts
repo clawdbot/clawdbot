@@ -43,11 +43,13 @@ type QaSessionTranscriptSeedParams = {
 
 const SESSION_STORE_LOCK_RETRY_DELAYS_MS = [1_000, 3_000, 5_000] as const;
 const SESSION_STORE_FTS_SETTLE_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000] as const;
+const MAX_COMPACTION_SUMMARIES = 16;
 const MAX_SUCCESSFUL_TOOL_CALL_EVENTS = 64;
 
 type QaSessionTranscriptSummary = {
   assistantMirrors?: Array<{ identity: string; text: string }>;
   assistantToolCallCounts: Record<string, number>;
+  compactionSummaries: string[];
   completedToolCallCounts: Record<string, number>;
   eventCursor: number;
   userMessageCount: number;
@@ -121,6 +123,7 @@ function summarizeSessionTranscriptEvents(
   const assistantMirrors: Array<{ identity: string; text: string }> = [];
   const assistantToolCallCounts: Record<string, number> = {};
   const completedToolCallCounts: Record<string, number> = {};
+  const compactionSummaries: string[] = [];
   const successfulToolCallCounts: Record<string, number> = {};
   const successfulToolCallEvents: NonNullable<
     QaSessionTranscriptSummary["successfulToolCallEvents"]
@@ -137,6 +140,16 @@ function summarizeSessionTranscriptEvents(
   let userMessageCount = 0;
 
   for (const event of events) {
+    if (isRecord(event) && event.type === "compaction") {
+      const summary = readNonEmptyString(event.summary);
+      if (summary) {
+        if (compactionSummaries.length === MAX_COMPACTION_SUMMARIES) {
+          compactionSummaries.shift();
+        }
+        compactionSummaries.push(summary);
+      }
+      continue;
+    }
     const message = readSessionTranscriptEventMessage(event);
     if (!message) {
       continue;
@@ -219,6 +232,7 @@ function summarizeSessionTranscriptEvents(
   return {
     ...(assistantMirrors.length > 0 ? { assistantMirrors } : {}),
     assistantToolCallCounts,
+    compactionSummaries,
     completedToolCallCounts,
     eventCursor,
     userMessageCount,
@@ -237,6 +251,7 @@ function summarizeSessionTranscriptEvents(
 function emptySessionTranscriptSummary(eventCursor: number): QaSessionTranscriptSummary {
   return {
     assistantToolCallCounts: {},
+    compactionSummaries: [],
     completedToolCallCounts: {},
     eventCursor,
     userMessageCount: 0,

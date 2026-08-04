@@ -1,5 +1,6 @@
 // Telegram tests cover delivery plugin behavior.
 import type { Bot } from "grammy";
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramPromptContextProjectionSequence } from "../prompt-context-projection.js";
@@ -219,6 +220,10 @@ function createThreadNotFoundError(operation = "sendMessage") {
   return new Error(
     `GrammyError: Call to '${operation}' failed! (400: Bad Request: message thread not found)`,
   );
+}
+
+function createChunkRejection(message = "chunk content rejected"): Error {
+  return Object.assign(new Error(`400: Bad Request: ${message}`), { error_code: 400 });
 }
 
 function createQuoteNotFoundError(operation = "sendMessage") {
@@ -524,6 +529,32 @@ describe("deliverReplies", () => {
           ],
         ],
       },
+    });
+  });
+
+  it("keeps first-chunk buttons on a later reply payload", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 2, chat: { id: "123" } })
+      .mockResolvedValueOnce({ message_id: 3, chat: { id: "123" } });
+
+    await deliverWith({
+      replies: [
+        { text: "Earlier reply" },
+        {
+          text: "Approve?",
+          channelData: {
+            telegram: { buttons: [[{ text: "Allow", callback_data: "allow" }]] },
+          },
+        },
+      ],
+      runtime,
+      bot: createBot({ sendMessage }),
+    });
+
+    expectRecordFields(mockCallArg(sendMessage, 1, 2), {
+      reply_markup: { inline_keyboard: [[{ text: "Allow", callback_data: "allow" }]] },
     });
   });
 
@@ -2293,32 +2324,61 @@ describe("deliverReplies", () => {
     expect(observer).toHaveBeenCalledWith({ messageId: 304, text: "rewritten" });
   });
 
-  it("records only concrete text chunks that Telegram accepted", async () => {
+  it("continues streamed replies after a rejected middle chunk", async () => {
     const runtime = createRuntime();
     const sendMessage = vi
       .fn()
       .mockResolvedValueOnce({ message_id: 301, chat: { id: "123" } })
-      .mockRejectedValueOnce(new Error("second chunk failed"));
+      .mockRejectedValueOnce(createChunkRejection())
+      .mockResolvedValueOnce({ message_id: 303, chat: { id: "123" } });
     const observer = vi.fn();
     const promptContextSequence = createObservedPromptContextSequence(observer);
     const cfg = { session: { store: "/tmp/telegram-partial-store.json" } } as const;
 
-    await expect(
-      deliverWith({
-        replies: [{ text: "chunk-one\n\nchunk-two" }],
+    let observed: unknown;
+    try {
+      await deliverWith({
+        replies: [{ text: "chunk-one\n\nchunk-two\n\nchunk-three" }],
         cfg,
         runtime,
         bot: createBot({ sendMessage }),
         textLimit: 12,
         promptContextSequence,
-      }),
-    ).rejects.toThrow("second chunk failed");
+      });
+    } catch (error) {
+      observed = error;
+    }
     await promptContextSequence.fail();
 
-    expect(observer).toHaveBeenCalledTimes(1);
-    expect(observer).toHaveBeenCalledWith({ messageId: 301, text: "chunk-one\n\n" });
-    expect(recordSentMessage).toHaveBeenCalledTimes(1);
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(observed.deliveryResult.messageIds).toEqual(["301", "303"]);
+    expect(sendMessage).toHaveBeenCalledTimes(3);
+    expect(observer).toHaveBeenCalledTimes(2);
+    expect(observer).toHaveBeenNthCalledWith(1, { messageId: 301, text: "chunk-one\n\n" });
+    expect(observer).toHaveBeenNthCalledWith(2, { messageId: 303, text: "chunk-three" });
+    expect(recordSentMessage).toHaveBeenCalledTimes(2);
     expect(recordSentMessage).toHaveBeenCalledWith("123", 301, cfg);
+    expect(recordSentMessage).toHaveBeenCalledWith("123", 303, cfg);
+  });
+
+  it("fails streamed replies when every chunk is rejected", async () => {
+    const rejection = createChunkRejection();
+    const sendMessage = vi.fn().mockRejectedValue(rejection);
+
+    await expect(
+      deliverWith({
+        replies: [{ text: "chunk-one\n\nchunk-two\n\nchunk-three" }],
+        runtime: createRuntime(),
+        bot: createBot({ sendMessage }),
+        textLimit: 12,
+      }),
+    ).rejects.toBe(rejection);
+
+    expect(sendMessage).toHaveBeenCalledTimes(3);
+    expect(recordSentMessage).not.toHaveBeenCalled();
   });
 
   it("records the concrete Telegram media message", async () => {
