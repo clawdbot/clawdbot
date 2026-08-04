@@ -1,8 +1,4 @@
 /**
- * Resolves the repository root by walking upward from the caller module.
- */
-export function resolveRepoRoot(importMetaUrl: string): string;
-/**
  * Converts repo-relative source roots into absolute paths.
  */
 export function resolveSourceRoots(repoRoot: string, relativeRoots: string[]): string[];

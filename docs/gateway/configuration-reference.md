@@ -1299,7 +1299,7 @@ writer is best-effort, not a lossless compliance archive.
       tracesEndpoint: "https://traces.example.com/v1/traces",
       metricsEndpoint: "https://metrics.example.com/v1/metrics",
       logsEndpoint: "https://logs.example.com/v1/logs",
-      protocol: "http/protobuf", // http/protobuf | grpc
+      protocol: "http/protobuf",
       headers: { "x-tenant-id": "my-org" },
       serviceName: "openclaw-gateway",
       traces: true,
@@ -1323,8 +1323,8 @@ writer is best-effort, not a lossless compliance archive.
 - `otel.enabled`: enables the OpenTelemetry export pipeline (default: `false`). For the full configuration, signal catalog, and privacy model, see [OpenTelemetry export](/gateway/opentelemetry).
 - `otel.endpoint`: collector URL for OTel export.
 - `otel.tracesEndpoint` / `otel.metricsEndpoint` / `otel.logsEndpoint`: optional signal-specific OTLP endpoints. When set, they override `otel.endpoint` for that signal only.
-- `otel.protocol`: `"http/protobuf"` (default) or `"grpc"`.
-- `otel.headers`: extra HTTP/gRPC metadata headers sent with OTel export requests.
+- `otel.protocol`: `"http/protobuf"` (default). gRPC export is retired; run [`openclaw doctor --fix`](/cli/doctor) to repair a persisted legacy value or get source-specific manual-edit guidance.
+- `otel.headers`: extra HTTP request headers sent with OTel export requests.
 - `otel.serviceName`: service name for resource attributes.
 - `otel.traces` / `otel.metrics` / `otel.logs`: enable trace, metrics, or log export.
 - `otel.logsExporter`: log export sink: `"otlp"` (default), `"stdout"` for one JSON object per stdout line, or `"both"`.
@@ -1334,6 +1334,7 @@ writer is best-effort, not a lossless compliance archive.
 - `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`: environment toggle for latest experimental GenAI inference span shape, including `{gen_ai.operation.name} {gen_ai.request.model}` span names, `CLIENT` span kind, and `gen_ai.provider.name` instead of legacy `gen_ai.system`. By default spans keep `openclaw.model.call` and `gen_ai.system` for compatibility; GenAI metrics use bounded semantic attributes.
 - `OPENCLAW_OTEL_PRELOADED=1`: environment toggle for hosts that already registered a global OpenTelemetry SDK. OpenClaw then skips plugin-owned SDK startup/shutdown while keeping diagnostic listeners active.
 - `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`, and `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`: signal-specific endpoint env vars used when the matching config key is unset.
+- `OTEL_EXPORTER_OTLP_PROTOCOL`: protocol fallback used only when `otel.protocol` is unset. Set it to `http/protobuf` or leave it unset; unsupported values are rejected when an OTLP signal is enabled and are not rewritten by Doctor.
 - `cacheTrace.enabled`: log cache trace snapshots for embedded runs (default: `false`).
 
 ---

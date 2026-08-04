@@ -14,7 +14,11 @@ import {
 import type { OnboardOptions } from "../../commands/onboard-types.js";
 import { createNonExitingRuntime, ExitError, type RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
-import { WizardSession } from "../../wizard/session.js";
+import {
+  sanitizeWizardStepForClient,
+  WizardSession,
+  type WizardStep,
+} from "../../wizard/session.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -63,6 +67,10 @@ function readWizardStatus(session: WizardSession) {
     status: session.getStatus(),
     error: session.getError(),
   };
+}
+
+function sanitizeWizardResultForClient<T extends { step?: WizardStep }>(result: T): T {
+  return result.step ? { ...result, step: sanitizeWizardStepForClient(result.step) } : result;
 }
 
 /** Resolves a live wizard session or sends the public not-found error. */
@@ -135,7 +143,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
       // clients get a clean not-found response for stale session ids.
       context.purgeWizardSession(sessionId);
     }
-    respond(true, { sessionId, ...result }, undefined);
+    respond(true, { sessionId, ...sanitizeWizardResultForClient(result) }, undefined);
   },
   "wizard.next": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateWizardNextParams, "wizard.next", respond)) {
@@ -155,7 +163,14 @@ export const wizardHandlers: GatewayRequestHandlers = {
       try {
         const validationError = await session.answer(answer.stepId ?? "", answer.value);
         if (validationError) {
-          respond(true, { ...(await session.next()), error: validationError }, undefined);
+          respond(
+            true,
+            {
+              ...sanitizeWizardResultForClient(await session.next()),
+              error: validationError,
+            },
+            undefined,
+          );
           return;
         }
       } catch (err) {
@@ -169,7 +184,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
       // wizard.start's immediate-completion path.
       context.purgeWizardSession(sessionId);
     }
-    respond(true, result, undefined);
+    respond(true, sanitizeWizardResultForClient(result), undefined);
   },
   "wizard.cancel": ({ params, respond, context }) => {
     if (!assertValidParams(params, validateWizardCancelParams, "wizard.cancel", respond)) {

@@ -1,7 +1,7 @@
 // OpenClaw operation tests cover rescue operation planning and execution.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -13,6 +13,7 @@ import {
   createSystemAgentTestRuntime,
   expectSystemAgentAuditRecord as expectAuditRecord,
   expectTestRecordFields as expectRecordFields,
+  installSystemAgentClaudeCliBackendTestFixture,
   readLastSystemAgentAuditEntry as readLastAuditEntry,
   requireTestRecord as requireRecord,
 } from "./system-agent.test-helpers.js";
@@ -146,6 +147,15 @@ vi.mock("../state/local-onboarding-state.js", () => ({
 }));
 
 const opTempDirs = useAutoCleanupTempDirTracker(afterEach);
+let restoreCliBackendFixture: (() => void) | undefined;
+
+beforeAll(() => {
+  restoreCliBackendFixture = installSystemAgentClaudeCliBackendTestFixture();
+});
+
+afterAll(() => {
+  restoreCliBackendFixture?.();
+});
 
 describe("parseSystemAgentOperation", () => {
   let stateDirSnapshot: ReturnType<typeof captureEnv> | undefined;

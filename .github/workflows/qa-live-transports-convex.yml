@@ -588,7 +588,7 @@ jobs:
           if-no-files-found: error
 
       - name: Require requested Buzz QA runner
-        if: always() && steps.resolve_buzz.outcome == 'success' && steps.resolve_buzz.outputs.available != 'true'
+        if: always() && inputs.expected_sha == '' && steps.resolve_buzz.outcome == 'success' && steps.resolve_buzz.outputs.available != 'true'
         shell: bash
         run: |
           echo "::error::The selected ref does not declare the requested Buzz QA runner."

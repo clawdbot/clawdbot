@@ -4,6 +4,7 @@ import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedTelegramAccount } from "./accounts.js";
+import { createTelegramChunkDeliveryTracker } from "./chunk-delivery.js";
 import {
   markdownToTelegramChunks,
   splitTelegramHtmlChunks,
@@ -233,6 +234,14 @@ export function createTelegramTextSender(config: {
       hasInlineKeyboard: boolean;
     }) => {
       const messageId = resolveTelegramMessageIdOrThrow(params.result, context);
+      // Preserve Telegram's accepted identity before fallible observers run so
+      // partial errors retain every provider-visible delivery fact.
+      lastMessageId = String(messageId);
+      lastChatId = String(params.result?.chat?.id ?? chatId);
+      lastAcceptedParams = params.acceptedParams;
+      acceptedReplyToMessageId ??= resolveAcceptedReplyToMessageId(params.acceptedParams);
+      messageIds.push(lastMessageId);
+      sentChunkCount += 1;
       recordSentMessage(chatId, messageId, cfg);
       await reportDelivery(messageId, params.result?.chat?.id ?? chatId, {
         telegramDeliveredText: params.plainText,
@@ -249,12 +258,6 @@ export function createTelegramTextSender(config: {
         },
         params.finalPart,
       );
-      lastMessageId = String(messageId);
-      lastChatId = String(params.result?.chat?.id ?? chatId);
-      lastAcceptedParams = params.acceptedParams;
-      acceptedReplyToMessageId ??= resolveAcceptedReplyToMessageId(params.acceptedParams);
-      messageIds.push(lastMessageId);
-      sentChunkCount += 1;
     };
 
     const finish = (operation: string): TelegramSendResult => {
@@ -284,7 +287,21 @@ export function createTelegramTextSender(config: {
       };
     };
 
-    return { record, finish };
+    const partialDeliveryResult = () => {
+      const receipt = buildTelegramTextSendReceipt({
+        messageIds,
+        chatId: lastChatId,
+        messageThreadId: lastAcceptedParams?.message_thread_id,
+        replyToMessageId: acceptedReplyToMessageId,
+      });
+      return {
+        messageIds: [...messageIds],
+        ...(receipt ? { receipt } : {}),
+        visibleReplySent: true as const,
+      };
+    };
+
+    return { record, finish, partialDeliveryResult };
   };
 
   const sendTelegramTextChunks = async (
@@ -293,29 +310,37 @@ export function createTelegramTextSender(config: {
     options: { replyToAlreadyUsed?: boolean } = {},
   ): Promise<TelegramSendResult> => {
     const delivery = createTextDelivery(context);
+    const tracker = createTelegramChunkDeliveryTracker({
+      invalidate: () => opts.promptContextProjectionPlan?.cursor.invalidate(),
+      onRejected: (error) =>
+        logVerbose(
+          `telegram ${context} text chunk rejected; continuing: ${formatErrorMessage(error)}`,
+        ),
+      partialDeliveryResult: delivery.partialDeliveryResult,
+    });
     for (let index = 0; index < chunks.length; index += 1) {
       const chunk = chunks[index];
       if (!chunk) {
         continue;
       }
-      const { result: res, acceptedParams } = await sendTelegramTextChunk(
-        chunk,
-        buildTextParams(
-          index,
-          chunks.length,
-          index === chunks.length - 1,
-          options.replyToAlreadyUsed === true,
-        ),
-      );
       const finalPart = index === chunks.length - 1;
-      await delivery.record({
-        result: res,
-        acceptedParams,
-        plainText: chunk.plainText,
-        finalPart,
-        hasInlineKeyboard: finalPart && Boolean(replyMarkup),
-      });
+      await tracker.attempt(
+        () =>
+          sendTelegramTextChunk(
+            chunk,
+            buildTextParams(index, chunks.length, finalPart, options.replyToAlreadyUsed === true),
+          ),
+        ({ result, acceptedParams }) =>
+          delivery.record({
+            result,
+            acceptedParams,
+            plainText: chunk.plainText,
+            finalPart,
+            hasInlineKeyboard: finalPart && Boolean(replyMarkup),
+          }),
+      );
     }
+    tracker.finish();
     return delivery.finish("sendMessage");
   };
 
@@ -391,6 +416,14 @@ export function createTelegramTextSender(config: {
   ): Promise<TelegramSendResult> => {
     const richRawApi = getTelegramRichRawApi(api);
     const delivery = createTextDelivery(context);
+    const tracker = createTelegramChunkDeliveryTracker({
+      invalidate: () => opts.promptContextProjectionPlan?.cursor.invalidate(),
+      onRejected: (error) =>
+        logVerbose(
+          `telegram ${context} rich chunk rejected; continuing: ${formatErrorMessage(error)}`,
+        ),
+      partialDeliveryResult: delivery.partialDeliveryResult,
+    });
     for (let index = 0; index < chunks.length; index += 1) {
       const chunk = chunks[index];
       if (!chunk) {
@@ -442,7 +475,8 @@ export function createTelegramTextSender(config: {
           warn: (message) => sendLogger.warn(message),
         });
         if (!fallbackPlan) {
-          throw err;
+          tracker.reject(err);
+          continue;
         }
         const fallbackChunks = fallbackPlan.chunks;
         const fallbackReplyChunkCount = Math.max(chunks.length, fallbackChunks.length);
@@ -455,31 +489,34 @@ export function createTelegramTextSender(config: {
             index === chunks.length - 1 && fallbackIndex === fallbackChunks.length - 1,
             options.replyToAlreadyUsed === true,
           );
-          const plainResult = await sendTelegramTextChunk(
-            { plainText: fallbackText },
-            fallbackParams,
-          );
           const finalPart =
             index === chunks.length - 1 && fallbackIndex === fallbackChunks.length - 1;
-          await delivery.record({
-            result: plainResult.result,
-            acceptedParams: plainResult.acceptedParams,
-            plainText: fallbackText,
-            finalPart,
-            hasInlineKeyboard: finalPart && Boolean(replyMarkup),
-          });
+          await tracker.attempt(
+            () => sendTelegramTextChunk({ plainText: fallbackText }, fallbackParams),
+            ({ result: fallbackResult, acceptedParams: fallbackAcceptedParams }) =>
+              delivery.record({
+                result: fallbackResult,
+                acceptedParams: fallbackAcceptedParams,
+                plainText: fallbackText,
+                finalPart,
+                hasInlineKeyboard: finalPart && Boolean(replyMarkup),
+              }),
+          );
         }
         continue;
       }
       const finalPart = index === chunks.length - 1;
-      await delivery.record({
-        result,
-        acceptedParams: recordedParams,
-        plainText: chunk.plainText,
-        finalPart,
-        hasInlineKeyboard: finalPart && Boolean(replyMarkup),
-      });
+      await tracker.recordAccepted(result, (acceptedResult) =>
+        delivery.record({
+          result: acceptedResult,
+          acceptedParams: recordedParams,
+          plainText: chunk.plainText,
+          finalPart,
+          hasInlineKeyboard: finalPart && Boolean(replyMarkup),
+        }),
+      );
     }
+    tracker.finish();
     return delivery.finish("sendRichMessage");
   };
 

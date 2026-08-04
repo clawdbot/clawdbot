@@ -19,7 +19,7 @@ export function registerMattermostInteractions(params: {
   interactionPath: string;
   allowedSourceIps: string[];
   handleModelPickerInteraction: MattermostModelPickerInteractionHandler;
-}): (() => void) | undefined {
+}): () => void {
   const { monitor } = params;
   const { account, botUserId, cfg, client, core, pairing, resources, runtime } = monitor;
   const { resolveChannelInfo } = resources;
@@ -167,5 +167,7 @@ export function registerMattermostInteractions(params: {
     source: "mattermost-interactions",
     accountId: account.accountId,
     log: (message: string) => runtime.log?.(message),
+    replaceExisting: true,
+    throwOnFailure: true,
   });
 }

@@ -35,6 +35,7 @@ import type {
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
   formatGeneratedAttachmentLines,
+  sanitizeGeneratedMediaDisplayText,
   type AgentGeneratedAttachment,
 } from "../generated-attachments.js";
 import {
@@ -536,7 +537,7 @@ function validateVideoGenerationCapabilities(params: {
 }
 
 function formatIgnoredVideoGenerationOverride(override: VideoGenerationIgnoredOverride): string {
-  return `${override.key}=${String(override.value)}`;
+  return `${sanitizeGeneratedMediaDisplayText(override.key)}=${sanitizeGeneratedMediaDisplayText(String(override.value))}`;
 }
 
 type VideoGenerateSandboxConfig = {
@@ -788,9 +789,11 @@ async function executeVideoGenerationJob(params: {
       : params.durationSeconds);
   const ignoredOverrides = result.ignoredOverrides ?? [];
   const ignoredOverrideKeys = new Set(ignoredOverrides.map((entry) => entry.key));
+  const displayProvider = sanitizeGeneratedMediaDisplayText(result.provider);
+  const displayModel = sanitizeGeneratedMediaDisplayText(result.model);
   const warning =
     ignoredOverrides.length > 0
-      ? `Ignored unsupported overrides for ${result.provider}/${result.model}: ${ignoredOverrides.map(formatIgnoredVideoGenerationOverride).join(", ")}.`
+      ? `Ignored unsupported overrides for ${displayProvider}/${displayModel}: ${ignoredOverrides.map(formatIgnoredVideoGenerationOverride).join(", ")}.`
       : undefined;
   const normalizedDurationSeconds =
     result.normalization?.durationSeconds?.applied ??
@@ -863,7 +866,7 @@ async function executeVideoGenerationJob(params: {
     })),
   ];
   const lines = [
-    `Generated ${totalCount} video${totalCount === 1 ? "" : "s"} with ${result.provider}/${result.model}.`,
+    `Generated ${totalCount} video${totalCount === 1 ? "" : "s"} with ${displayProvider}/${displayModel}.`,
     ...(warning ? [`Warning: ${warning}`] : []),
     typeof requestedDurationSeconds === "number" &&
     typeof normalizedDurationSeconds === "number" &&

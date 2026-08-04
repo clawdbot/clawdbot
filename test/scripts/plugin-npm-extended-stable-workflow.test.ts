@@ -107,6 +107,11 @@ describe("plugin npm extended-stable workflow", () => {
 
   it("overlays the complete trusted packaging helper dependency set", () => {
     const parsed = workflow();
+    const lockGenerator = readFileSync("scripts/generate-npm-package-lock.mjs", "utf8");
+    expect(lockGenerator).toContain(
+      'path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")',
+    );
+    expect(lockGenerator).not.toContain("./lib/repo-root.mjs");
     const preflightCheckout = step(
       parsed.jobs?.preview_plugin_pack,
       "Checkout trusted packaging helper",

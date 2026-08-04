@@ -49,4 +49,52 @@ describe("convertMessages assistant text replay", () => {
     const replayed = converted.find((message) => message.role === "assistant");
     expect(replayed?.content).toBe("Let me check the file.\nThe file contains X.");
   });
+
+  it("keeps paired OpenAI tool call ids UTF-16 safe when truncating", () => {
+    const prefix = "a".repeat(39);
+    const oversizedId = `${prefix}🐱`;
+    const targetModel: Model<"openai-completions"> = {
+      ...model,
+      id: "target-model",
+      provider: "openai",
+    };
+    const assistant: AssistantMessage = {
+      role: "assistant",
+      api: targetModel.api,
+      provider: targetModel.provider,
+      model: "source-model",
+      content: [{ type: "toolCall", id: oversizedId, name: "lookup", arguments: {} }],
+      usage: emptyUsage,
+      stopReason: "toolUse",
+      timestamp: 1,
+    };
+    const context: Context = {
+      messages: [
+        assistant,
+        {
+          role: "toolResult",
+          toolCallId: oversizedId,
+          toolName: "lookup",
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+          timestamp: 2,
+        },
+      ],
+    };
+
+    const converted = convertMessages(
+      targetModel,
+      context,
+      resolveOpenAICompletionsCompat(targetModel),
+    );
+    const assistantParam = converted.find((message) => message.role === "assistant");
+    const toolParam = converted.find((message) => message.role === "tool");
+    const normalizedAssistantId =
+      assistantParam?.role === "assistant" ? assistantParam.tool_calls?.[0]?.id : undefined;
+    const normalizedToolResultId = toolParam?.role === "tool" ? toolParam.tool_call_id : undefined;
+
+    expect(oversizedId.slice(0, 40).charCodeAt(39)).toBe(0xd83d);
+    expect(normalizedAssistantId).toBe(prefix);
+    expect(normalizedToolResultId).toBe(prefix);
+  });
 });

@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import type { Locator, Page } from "playwright";
-import type { ViteDevServer } from "vite";
+import type { InlineConfig, Plugin, PreviewServer, ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import type { ControlUiBuildInfo } from "../build-info.ts";
@@ -29,6 +29,16 @@ export function controlUiSessionUrl(baseUrl: string, sessionKey: string): string
   url.search = "";
   url.hash = "";
   return url.toString();
+}
+
+export function controlUiBundledGatewayUrl(baseUrl: string): string {
+  const url = new URL(baseUrl);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.origin;
+}
+
+export function controlUiBundledSettingsStorageKey(baseUrl: string): string {
+  return `openclaw.control.settings.v1:${controlUiBundledGatewayUrl(baseUrl)}`;
 }
 
 type ControlUiRouteTarget = {
@@ -248,6 +258,27 @@ export type ControlUiE2eServer = {
   close: () => Promise<void>;
 };
 
+type ControlUiE2eServerOptions = {
+  source?: boolean;
+};
+
+const DEFAULT_CONTROL_UI_E2E_BUILD_INFO: ControlUiBuildInfo = {
+  version: "2026.7.10",
+  commit: "0123456789abcdef0123456789abcdef01234567",
+  commitAt: "2026-07-10T11:22:33.000Z",
+  builtAt: "2026-07-10T12:34:56.000Z",
+  branch: null,
+  dirty: false,
+  release: false,
+  buildId: "e2e",
+};
+
+let sharedControlUiE2eServerBaseUrl: string | null = null;
+
+export function setSharedControlUiE2eServerBaseUrl(baseUrl: string | null): void {
+  sharedControlUiE2eServerBaseUrl = baseUrl;
+}
+
 export type MockGatewayControls = {
   closeLatest: (code?: number, reason?: string) => Promise<void>;
   deliverLatest: (frame: unknown) => Promise<void>;
@@ -322,17 +353,22 @@ export async function pauseVirtualClock(page: Page): Promise<void> {
 }
 
 export async function startControlUiE2eServer(
-  buildInfo: ControlUiBuildInfo = {
-    version: "2026.7.10",
-    commit: "0123456789abcdef0123456789abcdef01234567",
-    commitAt: "2026-07-10T11:22:33.000Z",
-    builtAt: "2026-07-10T12:34:56.000Z",
-    branch: null,
-    dirty: false,
-    release: false,
-    buildId: "e2e",
-  },
+  buildInfo?: ControlUiBuildInfo,
+  options: ControlUiE2eServerOptions = {},
 ): Promise<ControlUiE2eServer> {
+  // Ordinary E2E files exercise the shipped bundle. Source-module and custom
+  // build-info tests retain a private Vite server through the same lease API.
+  if (
+    sharedControlUiE2eServerBaseUrl !== null &&
+    buildInfo === undefined &&
+    options.source !== true
+  ) {
+    return {
+      baseUrl: sharedControlUiE2eServerBaseUrl,
+      close: async () => {},
+    };
+  }
+  const resolvedBuildInfo = buildInfo ?? DEFAULT_CONTROL_UI_E2E_BUILD_INFO;
   // Shared browser fixtures import this helper; load filesystem-bound Vite
   // configuration only when its Node-owned development server actually starts.
   const [
@@ -358,7 +394,7 @@ export async function startControlUiE2eServer(
     clearScreen: false,
     configFile: false,
     define: {
-      "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify(buildInfo),
+      "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify(resolvedBuildInfo),
     },
     logLevel: "error",
     optimizeDeps: {
@@ -393,6 +429,134 @@ export async function startControlUiE2eServer(
   };
 }
 
+function controlUiE2ePreviewConfigPlugin(): Plugin {
+  return {
+    name: "control-ui-e2e-preview-config",
+    configurePreviewServer(server) {
+      server.middlewares.use(CONTROL_UI_BOOTSTRAP_CONFIG_PATH, (_req, res) => {
+        res.setHeader("Content-Type", "application/json");
+        res.end(
+          JSON.stringify({
+            basePath: "/",
+            assistantName: "",
+            assistantAvatar: "",
+          }),
+        );
+      });
+    },
+  };
+}
+
+function createBundledControlUiE2eConfig(
+  controlUiViteConfig: (options: { outDir?: string }) => InlineConfig,
+  outDir: string,
+): InlineConfig {
+  const config = controlUiViteConfig({ outDir });
+  const uiRoot = path.join(resolveRepoRoot(), "ui");
+  return {
+    ...config,
+    base: "/",
+    configFile: false,
+    define: {
+      ...config.define,
+      "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify(
+        DEFAULT_CONTROL_UI_E2E_BUILD_INFO,
+      ),
+    },
+    logLevel: "error" as const,
+    root: uiRoot,
+  };
+}
+
+export async function buildProductionControlUiE2e(outDir: string, buildId: string): Promise<void> {
+  // Keep the production config outside Vitest, but write directly to the
+  // caller-owned output so concurrent E2E builds cannot replace its worker.
+  const repoRoot = resolveRepoRoot();
+  const uiRoot = path.join(repoRoot, "ui");
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    NODE_ENV: "production",
+    OPENCLAW_CONTROL_UI_BUILD_ID: buildId,
+  };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("VITEST")) {
+      delete env[key];
+    }
+  }
+  const result = spawnSync(
+    process.execPath,
+    ["--import", "tsx", fileURLToPath(import.meta.url), "--production-build", outDir],
+    {
+      cwd: uiRoot,
+      encoding: "utf8",
+      env,
+      maxBuffer: 10 * 1024 * 1024,
+    },
+  );
+  if (result.status !== 0) {
+    throw new Error(
+      `Production Control UI build failed (exit ${result.status ?? "unknown"}):\n${result.stderr || result.stdout}`,
+    );
+  }
+}
+
+async function runProductionControlUiBuild(outDir: string): Promise<void> {
+  const [{ build }, { default: controlUiViteConfig }] = await Promise.all([
+    import("vite"),
+    import("../../vite.config.ts"),
+  ]);
+  await build({
+    ...controlUiViteConfig({ outDir }),
+    configFile: false,
+    logLevel: "error",
+    root: path.join(resolveRepoRoot(), "ui"),
+  });
+}
+
+async function startBuiltControlUiE2eServer(outDir: string): Promise<ControlUiE2eServer> {
+  const [{ preview }, { default: controlUiViteConfig }] = await Promise.all([
+    import("vite"),
+    import("../../vite.config.ts"),
+  ]);
+  const port = await resolveAvailableLoopbackPort();
+  const sharedConfig = createBundledControlUiE2eConfig(controlUiViteConfig, outDir);
+  const server = await preview({
+    ...sharedConfig,
+    plugins: [...(sharedConfig.plugins ?? []), controlUiE2ePreviewConfigPlugin()],
+    preview: {
+      host: "127.0.0.1",
+      port,
+      strictPort: true,
+    },
+  });
+  try {
+    return {
+      baseUrl: resolveServerBaseUrl(server),
+      close: () => server.close(),
+    };
+  } catch (error) {
+    await server.close().catch(() => {});
+    throw error;
+  }
+}
+
+export async function startBundledControlUiE2eServer(outDir: string): Promise<ControlUiE2eServer> {
+  const [{ build }, { default: controlUiViteConfig }] = await Promise.all([
+    import("vite"),
+    import("../../vite.config.ts"),
+  ]);
+  await build(createBundledControlUiE2eConfig(controlUiViteConfig, outDir));
+  return startBuiltControlUiE2eServer(outDir);
+}
+
+export async function startProductionControlUiE2eServer(
+  outDir: string,
+  buildId: string,
+): Promise<ControlUiE2eServer> {
+  await buildProductionControlUiE2e(outDir, buildId);
+  return startBuiltControlUiE2eServer(outDir);
+}
+
 async function resolveAvailableLoopbackPort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const probe = createNetServer();
@@ -414,7 +578,7 @@ async function resolveAvailableLoopbackPort(): Promise<number> {
   });
 }
 
-function resolveServerBaseUrl(server: ViteDevServer): string {
+function resolveServerBaseUrl(server: ViteDevServer | PreviewServer): string {
   const address = server.httpServer?.address();
   if (!address || typeof address === "string") {
     throw new Error("Control UI E2E server did not expose a TCP port");
@@ -1956,5 +2120,13 @@ function createMockGatewayControls(page: Page, defaultSessionKey: string): MockG
       return request;
     },
   };
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const [command, outDir] = process.argv.slice(2);
+  if (command !== "--production-build" || !outDir) {
+    throw new Error("Usage: control-ui-e2e.ts --production-build <out-dir>");
+  }
+  await runProductionControlUiBuild(outDir);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

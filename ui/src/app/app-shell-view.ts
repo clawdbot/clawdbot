@@ -10,7 +10,6 @@ import { icons } from "../components/icons.ts";
 import { renderSettingsSidebar } from "../components/settings-sidebar.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
-import { copyToClipboard } from "../lib/clipboard.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
@@ -489,7 +488,6 @@ export function renderApplicationShell(host: ShellViewHost) {
         onRefresh: () => void context.overlays.refreshDevicePairSetup(),
         onAccessChange: (access) => void context.overlays.setDevicePairSetupAccess(access),
         onClose: () => context.overlays.closeDevicePairSetup(),
-        onCopy: (setupCode) => void copyToClipboard(setupCode),
         onManageDevices: () => {
           context.overlays.closeDevicePairSetup();
           host.navigate("nodes");

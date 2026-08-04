@@ -15,13 +15,18 @@ import {
 } from "./deliver-queue-admission.js";
 import { deliverOutboundPayloadsWithQueueCleanup } from "./deliver-queue-execute.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
+import { startDeliveryProducerLease } from "./delivery-queue-lease.js";
 import {
   StableDeliveryPreparationLostError,
   withStableDeliveryPreparation,
   type StableDeliveryPreparationOwner,
 } from "./delivery-queue-preparation.js";
 import { findDeliveryIntentOwner, loadPendingDelivery } from "./delivery-queue-storage.js";
-import { claimDeliveryPlatformSendAttempt, withActiveDeliveryClaim } from "./delivery-queue.js";
+import {
+  claimReusableDeliveryPlatformSendAttempt,
+  renewDeliveryPlatformSendLease,
+  withActiveDeliveryClaim,
+} from "./delivery-queue.js";
 import { createMessageSentEmitter } from "./message-sent-hook.js";
 import { emitOutboundAuditTerminals, uniformOutboundAuditTerminals } from "./outbound-audit.js";
 import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
@@ -58,6 +63,46 @@ export async function runOutboundDeliveryInternal(
     throw new Error(`Stable delivery intent is already queued: ${stableIntentId}`);
   }
   return await runOutboundDeliveryWithQueue(params, false);
+}
+
+async function deliverWithProducerLease(
+  params: DeliverOutboundPayloadsParams,
+  queueId: string | null,
+  auditStartedAt: number,
+  producerClaimId?: string,
+): Promise<OutboundDeliveryResult[]> {
+  if (params.deliveryProducerLeaseRequired !== true) {
+    return await deliverOutboundPayloadsWithQueueCleanup(
+      params,
+      queueId,
+      auditStartedAt,
+      producerClaimId,
+    );
+  }
+  const platformQueueId = queueId ?? params.deliveryQueueId;
+  if (!platformQueueId || !producerClaimId) {
+    throw new Error("Stable delivery producer lease requires an exact queue owner");
+  }
+  const stateDir = queueId ? undefined : params.deliveryQueueStateDir;
+  const lease = await startDeliveryProducerLease({
+    id: platformQueueId,
+    renew: async () =>
+      await renewDeliveryPlatformSendLease(platformQueueId, stateDir, producerClaimId),
+  });
+  const abortSignal = params.abortSignal
+    ? AbortSignal.any([params.abortSignal, lease.signal])
+    : lease.signal;
+  try {
+    return await deliverOutboundPayloadsWithQueueCleanup(
+      { ...params, abortSignal },
+      queueId,
+      auditStartedAt,
+      producerClaimId,
+      lease.signal,
+    );
+  } finally {
+    lease.stop();
+  }
 }
 
 async function runOutboundDeliveryWithQueue(
@@ -239,7 +284,7 @@ async function runOutboundDeliveryWithQueue(
   }
 
   if (!queueId) {
-    return await deliverOutboundPayloadsWithQueueCleanup(
+    return await deliverWithProducerLease(
       deliveryParams,
       null,
       auditStartedAt,
@@ -252,20 +297,27 @@ async function runOutboundDeliveryWithQueue(
   }
   const deliverClaimedIntent = async (): Promise<OutboundDeliveryResult[]> => {
     const producerClaimId = params.reusePendingDeliveryIntent
-      ? await claimDeliveryPlatformSendAttempt(queueId)
+      ? await claimReusableDeliveryPlatformSendAttempt(queueId)
       : undefined;
     if (params.reusePendingDeliveryIntent && !producerClaimId) {
       throw new Error(`Stable delivery intent is already queued: ${queueId}`);
     }
-    let claimedDeliveryParams = deliveryParams;
+    let claimedDeliveryParams: DeliverOutboundPayloadsParams =
+      params.reusePendingDeliveryIntent && queued?.created === true
+        ? { ...deliveryParams, deliveryProducerLeaseRequired: true }
+        : deliveryParams;
     if (queued?.created !== true) {
       const queuedEntry = await loadPendingDelivery(queueId);
       if (!queuedEntry || queuedEntry.producerClaimId !== producerClaimId) {
         throw new Error(`Stable delivery platform claim was lost: ${queueId}`);
       }
-      claimedDeliveryParams = restoreQueuedDeliveryCustody(deliveryParams, queuedEntry);
+      const restoredDeliveryParams = restoreQueuedDeliveryCustody(deliveryParams, queuedEntry);
+      claimedDeliveryParams =
+        queuedEntry.requiresProducerClaim === true
+          ? { ...restoredDeliveryParams, deliveryProducerLeaseRequired: true }
+          : restoredDeliveryParams;
     }
-    return deliverOutboundPayloadsWithQueueCleanup(
+    return deliverWithProducerLease(
       claimedDeliveryParams,
       queueId,
       auditStartedAt,

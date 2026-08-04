@@ -16,6 +16,8 @@ import {
   embeddedAgentVitestProjectOwners,
 } from "../vitest/vitest.agents-paths.mjs";
 import { commandsLightTestFiles } from "../vitest/vitest.commands-light-paths.mjs";
+import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.mjs";
+import { createGatewayServerVitestConfig } from "../vitest/vitest.gateway-server.config.ts";
 import { createPluginsVitestConfig } from "../vitest/vitest.plugins.config.ts";
 import { createToolingVitestConfig } from "../vitest/vitest.tooling.config.ts";
 
@@ -33,20 +35,6 @@ const PLUGIN_PRERELEASE_NPM_SPEC_TEST = "src/plugins/install.npm-spec.test.ts";
 const PLUGIN_NPM_INSTALL_SECURITY_SCAN_TEST =
   "src/plugins/npm-install-security-scan.release.test.ts";
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
-const GATEWAY_SERVER_BACKED_HTTP_TESTS = new Set([
-  "src/gateway/embeddings-http.test.ts",
-  "src/gateway/models-http.test.ts",
-  "src/gateway/openai-http.test.ts",
-  "src/gateway/openresponses-http.test.ts",
-  "src/gateway/probe.auth.integration.test.ts",
-]);
-
-const GATEWAY_SERVER_EXCLUDED_TESTS = new Set([
-  "src/gateway/gateway.test.ts",
-  "src/gateway/server.startup-matrix-migration.integration.test.ts",
-  "src/gateway/sessions-history-http.test.ts",
-]);
-
 function listTestFiles(rootDir: string): string[] {
   const gitFiles = listGitTrackedFiles({ pathspecs: rootDir });
   expect(gitFiles).not.toBeNull();
@@ -101,15 +89,6 @@ function listAllToolingTestFiles(): string[] {
   } finally {
     process.argv = originalArgv;
   }
-}
-
-function isGatewayServerTestFile(file: string): boolean {
-  return (
-    file.startsWith("src/gateway/") &&
-    !file.startsWith("src/gateway/server-methods/") &&
-    !GATEWAY_SERVER_EXCLUDED_TESTS.has(file) &&
-    (file.includes("server") || GATEWAY_SERVER_BACKED_HTTP_TESTS.has(file))
-  );
 }
 
 describe("scripts/lib/ci-node-test-plan.mjs", () => {
@@ -850,7 +829,6 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       "agentic-control-plane-runtime",
       "agentic-control-plane-runtime-config",
       "agentic-control-plane-runtime-cron",
-      "agentic-control-plane-runtime-events",
       "agentic-control-plane-runtime-network",
       "agentic-control-plane-runtime-server",
       "agentic-control-plane-runtime-shared-token",
@@ -880,9 +858,17 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     const controlPlaneShardFiles = controlPlaneShards
       .flatMap((shard) => shard.includePatterns ?? [])
       .toSorted((a, b) => a.localeCompare(b));
-    const expectedControlPlaneFiles = listTestFiles("src/gateway")
-      .filter(isGatewayServerTestFile)
-      .toSorted((a, b) => a.localeCompare(b));
+    const expectedControlPlaneFiles = listMatchedTestFiles(
+      createGatewayServerVitestConfig({
+        ...process.env,
+        OPENCLAW_VITEST_INCLUDE_FILE: undefined,
+      }),
+    );
+    expect(
+      listTestFiles("src/gateway")
+        .filter(isGatewayServerTestFile)
+        .toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual(expectedControlPlaneFiles);
     expect(controlPlaneShardFiles).toEqual(expectedControlPlaneFiles);
     expect(new Set(controlPlaneShardFiles).size).toBe(controlPlaneShardFiles.length);
     expect(cliShard).toEqual({

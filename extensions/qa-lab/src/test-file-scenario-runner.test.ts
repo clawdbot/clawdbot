@@ -262,7 +262,7 @@ describe("qa test file scenario runner", () => {
 
     expect(result.executionKind).toBe("playwright");
     expect(commands.map((command) => command.args)).toEqual([
-      ["scripts/ensure-playwright-chromium.mjs", "--skip-ffmpeg"],
+      ["scripts/ensure-playwright-chromium.mjs"],
       [
         "scripts/run-vitest.mjs",
         "run",

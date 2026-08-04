@@ -197,6 +197,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   });
   state = legacyStep.state;
   const legacyMigrationPartiallyValid = legacyStep.partiallyValid === true;
+  const legacyMigrationBlocksWrite = legacyStep.blocksWrite === true;
   const rosterMigrationNeeded = [snapshot.sourceConfigBeforeMigrations, snapshot.parsed].some(
     (source) => source !== undefined && migratePersistedImplicitMainRoster(source).changed,
   );
@@ -474,8 +475,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note,
   });
   const cfg = finalized.cfg;
+  const shouldWriteConfig = finalized.shouldWriteConfig && !legacyMigrationBlocksWrite;
   const singleTopLevelIncludeWrite =
-    finalized.shouldWriteConfig &&
+    shouldWriteConfig &&
     isSingleTopLevelIncludeMigration({
       parsed: snapshot.parsed,
       sourceConfig: snapshot.sourceConfig,
@@ -505,11 +507,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   return {
     cfg,
     path: snapshot.path ?? CONFIG_PATH,
-    shouldWriteConfig: finalized.shouldWriteConfig,
+    shouldWriteConfig,
     sourceConfigValid: snapshot.valid,
     ...(sourceLastTouchedVersion ? { sourceLastTouchedVersion } : {}),
     ...(legacyMigrationPartiallyValid ? { skipPluginValidationOnWrite: true } : {}),
-    ...(finalized.shouldWriteConfig && explicitSetPaths.length > 0 ? { explicitSetPaths } : {}),
+    ...(shouldWriteConfig && explicitSetPaths.length > 0 ? { explicitSetPaths } : {}),
     ...(singleTopLevelIncludeWrite ? { skipWizardMetadataForIncludeWrite: true } : {}),
     ...(shouldRepairCronCodexModelRefsAfterConfigWrite
       ? { shouldRepairCronCodexModelRefsAfterConfigWrite: true }

@@ -846,6 +846,90 @@ describe("delivery-queue recovery", () => {
       platformSendAttemptId: producerClaimId,
       availableAt: expect.any(Number),
     });
+
+    await markDeliveryPlatformOutcomeUnknown(id, tmpDir(), producerClaimId);
+    const unknownResult = await runRecovery({ deliver });
+
+    expect(unknownResult.result).toMatchObject({ recovered: 0, failed: 0 });
+    expect(reconcileUnknownSend).not.toHaveBeenCalled();
+    expect(deliver).not.toHaveBeenCalled();
+    expect((await loadPendingDeliveries(tmpDir()))[0]).toMatchObject({
+      id,
+      recoveryState: "unknown_after_send",
+      platformSendAttemptId: producerClaimId,
+      availableAt: expect.any(Number),
+    });
+  });
+
+  it("reconciles an unknown stable send after restart recovery waits for its lease expiry", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-02T10:00:00.000Z"));
+    try {
+      const id = "cron-direct-delivery:v1:restart-before-producer-lease-expiry";
+      await enqueueDeliveryOnce(
+        {
+          channel: "demo-channel-a",
+          to: "+1",
+          payloads: [{ text: "reconcile after the crashed producer lease expires" }],
+          queuePolicy: "required",
+          completionRetention: {
+            idPrefix: "cron-direct-delivery:v1:",
+            maxAgeMs: 24 * 60 * 60_000,
+            maxEntries: 2_000,
+          },
+          requiresProducerClaim: true,
+        },
+        id,
+        tmpDir(),
+      );
+      const originalClaimId = await claimDeliveryPlatformSendAttempt(id, tmpDir());
+      if (!originalClaimId) {
+        throw new Error("test invariant: the crashed producer must own a stable claim");
+      }
+      await markDeliveryPlatformSendAttemptStarted(id, tmpDir(), undefined, originalClaimId);
+      await markDeliveryPlatformOutcomeUnknown(id, tmpDir(), originalClaimId);
+      const leaseExpiry = (await loadPendingDeliveries(tmpDir()))[0]?.availableAt;
+      if (leaseExpiry === undefined) {
+        throw new Error("test invariant: the stable producer claim must have an expiry");
+      }
+
+      const reconcileUnknownSend = vi.fn().mockResolvedValue({
+        status: "sent",
+        messageId: "reconciled-after-expiry",
+        receipt: {
+          primaryPlatformMessageId: "reconciled-after-expiry",
+          platformMessageIds: ["reconciled-after-expiry"],
+          parts: [{ platformMessageId: "reconciled-after-expiry", kind: "text", index: 0 }],
+          sentAt: leaseExpiry,
+        },
+      });
+      resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+        durableFinal: {
+          capabilities: { reconcileUnknownSend: true },
+          reconcileUnknownSend,
+        },
+      });
+      const deliver = vi.fn();
+
+      const firstRun = await runRecovery({ deliver });
+      expect(firstRun.result).toMatchObject({
+        recovered: 0,
+        failed: 0,
+      });
+      expect(reconcileUnknownSend).not.toHaveBeenCalled();
+      expect(deliver).not.toHaveBeenCalled();
+
+      vi.setSystemTime(leaseExpiry + 1);
+      const secondRun = await runRecovery({ deliver });
+
+      expect(secondRun.result).toMatchObject({ recovered: 1, failed: 0 });
+      expect(reconcileUnknownSend).toHaveBeenCalledOnce();
+      expect(deliver).not.toHaveBeenCalled();
+      expect(readOutboundQueueStatus(tmpDir(), id)).toBe("completed");
+      expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
   it("atomically fences stable recovery after an adapter proves an ambiguous send was not sent", async () => {
     const id = "cron-direct-delivery:v1:reconciled-stable-recovery";
@@ -887,6 +971,10 @@ describe("delivery-queue recovery", () => {
       requiresProducerClaim: true,
     });
     await markDeliveryPlatformOutcomeUnknown(id, tmpDir(), platformSendAttemptId);
+    setQueuedEntryState(tmpDir(), id, {
+      retryCount: 0,
+      availableAt: Date.now() - 1,
+    });
     const reconcileUnknownSend = vi
       .fn()
       .mockResolvedValue(reconciledSent("reconciled-permanent-message"));

@@ -45,7 +45,11 @@ import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runti
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { ImageContent, TextContent } from "openclaw/plugin-sdk/llm";
 import { normalizeOpenAIToolSchemas } from "openclaw/plugin-sdk/provider-tools";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
   estimateToolResultTextChars,
@@ -381,9 +385,23 @@ export type CodexDynamicToolBridge = {
     toolMediaUrls: string[];
     toolAudioAsVoice: boolean;
     successfulCronAdds?: number;
+    acceptedSessionSpawns: Array<{ runId: string; childSessionKey: string }>;
     quarantinedTools: CodexDynamicToolSchemaQuarantine[];
   };
 };
+
+function normalizeAcceptedSessionSpawn(result: unknown): {
+  runId: string;
+  childSessionKey: string;
+} | null {
+  const details = asOptionalRecord(asOptionalRecord(result)?.details);
+  if (!details || details.status !== "accepted") {
+    return null;
+  }
+  const runId = normalizeOptionalString(details.runId);
+  const childSessionKey = normalizeOptionalString(details.childSessionKey);
+  return runId && childSessionKey ? { runId, childSessionKey } : null;
+}
 
 /** Namespace attached to OpenClaw-owned dynamic tools exposed to Codex. */
 const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
@@ -490,6 +508,7 @@ export function createCodexDynamicToolBridge(params: {
     messagingToolSourceReplyPayloads: [],
     toolMediaUrls: [],
     toolAudioAsVoice: false,
+    acceptedSessionSpawns: [],
     quarantinedTools,
   };
   const middlewareRunner = createAgentToolResultMiddlewareRunner({
@@ -654,6 +673,14 @@ export function createCodexDynamicToolBridge(params: {
           result: middlewareResult,
         });
         const resultIsError = rawIsError || isToolResultError(result);
+        // A successful spawn is durable before presentation middleware can rewrite details.
+        const acceptedSessionSpawn =
+          toolName === "sessions_spawn" && !rawIsError
+            ? normalizeAcceptedSessionSpawn(telemetryRawResult)
+            : null;
+        if (acceptedSessionSpawn) {
+          telemetry.acceptedSessionSpawns.push(acceptedSessionSpawn);
+        }
         const finalResultFailureKind = resolveToolResultFailureKind(result);
         const resultFailureKind = rawResultFailureKind ?? finalResultFailureKind;
         const observerResult =

@@ -42,6 +42,7 @@ import {
   hasMessagingToolDeliveryEvidence,
   hasPayloadOutcomeSendEvidence,
   hasUnaccountedMessagingToolAggregateEvidence,
+  resolveExplicitFinalSourceReplyDeliveryEvidence,
 } from "./embedded-agent-runner/delivery-evidence.js";
 import {
   hasIntentionalSilentAgentPayload,
@@ -796,7 +797,43 @@ function hasMessagingToolDeliveryToSource(
     messagingToolSourceReplyPayloads?: unknown;
   },
   deliveryTarget: Parameters<typeof sourceDeliveryTargetsMatch>[1],
+  options?: { requireFinalReply?: boolean },
 ): boolean {
+  const targets = Array.isArray(result.messagingToolSentTargets)
+    ? result.messagingToolSentTargets
+    : [];
+  const sourceTargets = targets.filter((target) => {
+    if (
+      !target ||
+      typeof target !== "object" ||
+      Array.isArray(target) ||
+      !deliveryTarget.channel ||
+      !deliveryTarget.to
+    ) {
+      return false;
+    }
+    const record = target as Parameters<typeof sourceDeliveryTargetsMatch>[0];
+    // Older source receipts omit `to`; explicit off-target sends must never satisfy it.
+    const sourceTarget =
+      typeof record.to === "string" && record.to.trim()
+        ? record
+        : { ...record, to: deliveryTarget.to };
+    return sourceDeliveryTargetsMatch(sourceTarget, deliveryTarget);
+  });
+  if (options?.requireFinalReply) {
+    const hasCommittedSourceDelivery =
+      hasCommittedSourceReplyDeliveryEvidence(result) ||
+      (hasMessagingToolDeliveryEvidence(result) && sourceTargets.length > 0);
+    // Only current-source final markers count; another target's final cannot
+    // turn a source progress update into the owed requester reply.
+    return (
+      hasCommittedSourceDelivery &&
+      resolveExplicitFinalSourceReplyDeliveryEvidence({
+        messagingToolSentTargets: sourceTargets,
+        messagingToolSourceReplyPayloads: result.messagingToolSourceReplyPayloads,
+      }) !== false
+    );
+  }
   if (
     hasCommittedSourceReplyDeliveryEvidence(result) ||
     hasUnaccountedMessagingToolAggregateEvidence({ ...result, didSendViaMessagingTool: false })
@@ -804,28 +841,11 @@ function hasMessagingToolDeliveryToSource(
     return true;
   }
 
-  const targets = Array.isArray(result.messagingToolSentTargets)
-    ? result.messagingToolSentTargets
-    : [];
   if (targets.length === 0 || !deliveryTarget.channel || !deliveryTarget.to) {
     return hasMessagingToolDeliveryEvidence(result);
   }
 
-  return (
-    hasMessagingToolDeliveryEvidence(result) &&
-    targets.some((target) => {
-      if (!target || typeof target !== "object" || Array.isArray(target)) {
-        return false;
-      }
-      const record = target as Parameters<typeof sourceDeliveryTargetsMatch>[0];
-      // Older current-source receipts omit `to`; explicit off-target sends must never satisfy it.
-      const sourceTarget =
-        typeof record.to === "string" && record.to.trim()
-          ? record
-          : { ...record, to: deliveryTarget.to };
-      return sourceDeliveryTargetsMatch(sourceTarget, deliveryTarget);
-    })
-  );
+  return hasMessagingToolDeliveryEvidence(result) && sourceTargets.length > 0;
 }
 
 async function sendSubagentAnnounceDirectly(params: {
@@ -834,6 +854,7 @@ async function sendSubagentAnnounceDirectly(params: {
   triggerMessage: string;
   internalEvents?: AgentInternalEvent[];
   expectsCompletionMessage: boolean;
+  requireVisibleReply?: boolean;
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
   completionDirectOrigin?: DeliveryContext;
@@ -843,6 +864,7 @@ async function sendSubagentAnnounceDirectly(params: {
   sourceChannel?: string;
   sourceTool?: string;
   isSourceSessionEffectsAllowed?: () => boolean;
+  isCompletionOwnedByRequesterYield?: () => boolean;
   requesterIsSubagent: boolean;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
   signal?: AbortSignal;
@@ -934,6 +956,17 @@ async function sendSubagentAnnounceDirectly(params: {
         path: "none",
         reason: "requester_abandoned",
         error: "requester session abandoned after timeout",
+      };
+    }
+    if (params.expectsCompletionMessage && params.isCompletionOwnedByRequesterYield?.()) {
+      // sessions_yield owns the post-turn synthesis. Starting or steering a
+      // requester turn here would replay the original fanout during handoff.
+      return {
+        delivered: false,
+        path: "none",
+        reason: "completion_handoff_pending",
+        terminal: true,
+        disposition: "intentional_non_delivery",
       };
     }
     const tryTextCompletionDirectDelivery = () =>
@@ -1199,11 +1232,32 @@ async function sendSubagentAnnounceDirectly(params: {
     }
     const hasVisibleCompletionReply = Boolean(
       directAnnounceResult &&
-      (hasMessagingToolDelivery ||
-        hasVisibleAgentPayload(directAnnounceResult, {
-          ...completionPayloadVisibility,
-          includeSilentReplyPayloads: false,
-        })),
+      ((params.requireVisibleReply
+        ? hasMessagingToolDeliveryToSource(directAnnounceResult, deliveryTarget, {
+            requireFinalReply: true,
+          })
+        : hasMessagingToolDelivery) ||
+        (hasVisibleAgentPayload(
+          params.requireVisibleReply
+            ? {
+                payloads: Array.isArray(directAnnounceResult.payloads)
+                  ? directAnnounceResult.payloads.filter((payload) => {
+                      const flags = payload as Record<string, unknown>;
+                      return (
+                        flags?.isCommentary !== true &&
+                        flags?.isCompactionNotice !== true &&
+                        flags?.isFallbackNotice !== true &&
+                        flags?.isStatusNotice !== true &&
+                        flags?.visible !== false
+                      );
+                    })
+                  : [],
+              }
+            : directAnnounceResult,
+          { ...completionPayloadVisibility, includeSilentReplyPayloads: false },
+        ) &&
+          (!params.requireVisibleReply ||
+            directAnnounceResult.deliveryStatus?.status !== "suppressed"))),
     );
     const hasCompletionSideEffect = Boolean(
       directAnnounceResult && hasCommittedOutboundDeliveryEvidence(directAnnounceResult),
@@ -1211,12 +1265,13 @@ async function sendSubagentAnnounceDirectly(params: {
     const acceptsIntentionalSilentCompletion =
       hasIntentionalSilentCompletionReply && !isSubagentCompletion;
     if (
-      params.expectsCompletionMessage &&
-      !shouldDeliverAgentFinal &&
-      !requiresMessageToolDelivery &&
       !hasVisibleCompletionReply &&
-      !hasCompletionSideEffect &&
-      !acceptsIntentionalSilentCompletion
+      (params.requireVisibleReply ||
+        (params.expectsCompletionMessage &&
+          !shouldDeliverAgentFinal &&
+          !requiresMessageToolDelivery &&
+          !hasCompletionSideEffect &&
+          !acceptsIntentionalSilentCompletion))
     ) {
       return {
         delivered: false,
@@ -1275,10 +1330,12 @@ export async function deliverSubagentAnnouncement(params: {
   sourceChannel?: string;
   sourceTool?: string;
   isSourceSessionEffectsAllowed?: () => boolean;
+  isCompletionOwnedByRequesterYield?: () => boolean;
   targetRequesterSessionKey: string;
   requesterIsSubagent: boolean;
   expectsCompletionMessage: boolean;
   requireDirectDelivery?: boolean;
+  requireVisibleReply?: boolean;
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
@@ -1430,8 +1487,10 @@ export async function deliverSubagentAnnouncement(params: {
         sourceChannel: params.sourceChannel,
         sourceTool: params.sourceTool,
         isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
+        isCompletionOwnedByRequesterYield: params.isCompletionOwnedByRequesterYield,
         requesterIsSubagent: params.requesterIsSubagent,
         expectsCompletionMessage: params.expectsCompletionMessage,
+        requireVisibleReply: params.requireVisibleReply,
         onDeliveryResult: params.onDeliveryResult,
         signal: params.signal,
         bestEffortDeliver: params.bestEffortDeliver,

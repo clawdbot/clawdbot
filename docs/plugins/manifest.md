@@ -415,7 +415,10 @@ When `appGuidedDiscovery` is true, the matching provider auth method must expose
 `appGuidedSetup.detect` and `appGuidedSetup.prepare`. Detection must be
 read-only: no login, model pull, download, or config write. Preparation rechecks
 the exact selected model and returns a config proposal; OpenClaw live-tests that
-proposal in isolation and commits it only after success.
+proposal in isolation and commits it only after success. A provider can also
+expose `appGuidedSetup.detectAvailability` to mark its setup choice as detected
+when the local service is reachable but no model qualifies for automatic setup.
+The availability probe is also read-only.
 
 ## commandAliases reference
 
