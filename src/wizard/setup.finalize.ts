@@ -684,20 +684,22 @@ export async function finalizeSetupWizard(
     // route facts must not turn the onboarding greeting into a guaranteed failure.
     const [
       { resolveDefaultModelAuthStatus, resolveDefaultModelCatalogFacts },
-      { loadPreparedModelCatalogSnapshot },
+      { loadPreparedModelCatalogOwnerSnapshot },
     ] = await Promise.all([
       import("../commands/auth-choice.js"),
       import("../agents/prepared-model-catalog.js"),
     ]);
-    const modelCatalog = await loadPreparedModelCatalogSnapshot({
+    const preparedModelCatalogOwner = await loadPreparedModelCatalogOwnerSnapshot({
       config: nextConfig,
       readOnly: true,
     });
+    const modelCatalog = preparedModelCatalogOwner.modelCatalog;
     const modelCatalogFacts = resolveDefaultModelCatalogFacts(nextConfig, modelCatalog.entries, {
       routeVariants: modelCatalog.routeVariants,
     });
     const modelAuthStatus = resolveDefaultModelAuthStatus(nextConfig, {
       agentDir,
+      metadataSnapshot: preparedModelCatalogOwner.metadataSnapshot,
       ...(modelCatalogFacts.observedRoutes
         ? { observedRoutes: modelCatalogFacts.observedRoutes }
         : {}),

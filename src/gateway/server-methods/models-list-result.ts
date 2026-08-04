@@ -32,8 +32,7 @@ import {
   resolveLogicalModelCatalogEntryState,
   resolveLogicalVisibleModelCatalog,
 } from "../../agents/model-catalog-visibility.js";
-import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import {
   createModelVisibilityPolicy,
@@ -52,6 +51,7 @@ import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-m
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "../../plugins/plugin-registry.js";
 import { resolveManifestProviderAuthChoices } from "../../plugins/provider-auth-choices.js";
+import { resolveValidatedSyntheticAuthProviderRefState } from "../../plugins/synthetic-auth.runtime.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayAgentRuntime } from "../../shared/session-types.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -130,9 +130,7 @@ function listEnabledSyntheticAuthProviderRefs(params: {
   workspaceDir: string;
 }): readonly string[] {
   if (params.metadataSnapshot) {
-    return params.metadataSnapshot.index.plugins
-      .filter((plugin) => plugin.enabled)
-      .flatMap((plugin) => plugin.syntheticAuthRefs ?? []);
+    return resolveValidatedSyntheticAuthProviderRefState(params.metadataSnapshot).refs;
   }
   const result = loadPluginRegistrySnapshotWithMetadata({
     config: params.cfg,

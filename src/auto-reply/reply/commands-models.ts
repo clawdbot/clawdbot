@@ -39,6 +39,8 @@ import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
+import { resolveValidatedSyntheticAuthProviderRefState } from "../../plugins/synthetic-auth.runtime.js";
 import { resolveAgentRuntimeLabel } from "../../status/agent-runtime-label.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
@@ -167,6 +169,11 @@ export async function buildModelsProviderData(
   const cliRuntimeProviders = new Set(
     listCliRuntimeModelBackendBindings().map((binding) => normalizeProviderId(binding.runtime)),
   );
+  const metadataSnapshot = loadManifestMetadataSnapshot({
+    config: cfg,
+    workspaceDir,
+    env: process.env,
+  });
 
   const snapshot = await loadPreparedModelCatalogSnapshotForBrowse({
     cfg,
@@ -196,6 +203,8 @@ export async function buildModelsProviderData(
     allowPluginSyntheticAuth: false,
     discoverExternalCliAuth: false,
     allowPreparedRuntimeAuth: true,
+    metadataSnapshot,
+    syntheticAuthProviderRefs: resolveValidatedSyntheticAuthProviderRefState(metadataSnapshot).refs,
   });
   const logicalModelKey = (entry: { provider: string; id: string }) =>
     openAIModelCatalogRoutePolicy.resolveIdentity(entry)?.key ?? modelCatalogLogicalKey(entry);

@@ -82,7 +82,7 @@ import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-el
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderSyntheticAuthResult } from "../../plugins/provider-external-auth.types.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../../plugins/provider-runtime.js";
-import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic-auth.runtime.js";
+import { resolveValidatedSyntheticAuthProviderRefState } from "../../plugins/synthetic-auth.runtime.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
@@ -611,10 +611,9 @@ export async function modelsStatusCommand(
       }
     }
     const syntheticAuthProviderRefs = new Set(
-      resolveRuntimeSyntheticAuthProviderRefs({
-        index: metadataSnapshot.index,
-        registryDiagnostics: metadataSnapshot.registryDiagnostics,
-      }).map((provider) => normalizeProviderId(provider)),
+      resolveValidatedSyntheticAuthProviderRefState(metadataSnapshot).refs.map((provider) =>
+        normalizeProviderId(provider),
+      ),
     );
     const createStatusAuthResolver = (
       authStore: Parameters<typeof createModelAuthAvailabilityResolver>[0]["authStore"],

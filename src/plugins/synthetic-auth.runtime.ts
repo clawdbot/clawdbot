@@ -1,5 +1,6 @@
 /** Resolves synthetic and external auth provider refs from active runtime state or persisted manifests. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry.js";
 import type { LoadPluginRegistryParams, PluginRegistrySnapshot } from "./plugin-registry.js";
 import { getPluginRegistryState } from "./runtime-state.js";
@@ -17,6 +18,26 @@ function uniqueProviderRefs(values: readonly string[]): string[] {
     next.push(trimmed);
   }
   return next;
+}
+
+/** Returns synthetic-auth refs only when the metadata registry is authoritative. */
+export function resolveValidatedSyntheticAuthProviderRefState(
+  snapshot: Pick<PluginMetadataSnapshot, "index" | "registryDiagnostics" | "registrySource">,
+): { refs: string[]; complete: boolean } {
+  const complete =
+    snapshot.registryDiagnostics.length === 0 &&
+    (snapshot.registrySource === "persisted" || snapshot.registrySource === "provided");
+  if (!complete) {
+    return { refs: [], complete: false };
+  }
+  return {
+    refs: uniqueProviderRefs(
+      snapshot.index.plugins
+        .filter((plugin) => plugin.enabled)
+        .flatMap((plugin) => plugin.syntheticAuthRefs ?? []),
+    ),
+    complete: true,
+  };
 }
 
 function resolveManifestSyntheticAuthProviderRefState(

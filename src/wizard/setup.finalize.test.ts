@@ -937,7 +937,10 @@ describe("finalizeSetupWizard", () => {
           list: [{ id: "main", agentDir: "/tmp/custom-agent" }],
         },
       }),
-      { agentDir: "/tmp/custom-agent" },
+      {
+        agentDir: "/tmp/custom-agent",
+        metadataSnapshot: preparedMetadataSnapshot,
+      },
     );
     expectNoteContains(
       prompter,

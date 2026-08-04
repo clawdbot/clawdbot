@@ -9,6 +9,7 @@ import { Worker } from "node:worker_threads";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toErrorObject } from "../infra/errors.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -245,6 +246,8 @@ export function createProviderAuthChecker(params: {
   allowPluginSyntheticAuth?: boolean;
   discoverExternalCliAuth?: boolean;
   allowPreparedRuntimeAuth?: boolean;
+  metadataSnapshot?: PluginMetadataSnapshot;
+  syntheticAuthProviderRefs?: readonly string[];
 }): ProviderModelAuthChecker {
   const authCache = new Map<string, Promise<ModelAuthAvailabilityEvaluation>>();
   let runtimeAuthLookup: RuntimeProviderAuthLookup | undefined;
@@ -266,6 +269,7 @@ export function createProviderAuthChecker(params: {
       workspaceDir: params.workspaceDir,
       env: params.env,
       includePluginSyntheticAuth: params.allowPluginSyntheticAuth !== false,
+      ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
     });
     modelAuthResolver = createModelAuthAvailabilityResolver({
       cfg: params.cfg ?? {},
@@ -277,7 +281,9 @@ export function createProviderAuthChecker(params: {
       allowPreparedRuntimeAuth:
         params.allowPreparedRuntimeAuth === true ||
         (params.discoverExternalCliAuth !== false && params.allowPluginSyntheticAuth !== false),
-      syntheticAuthProviderRefs: runtimeAuthLookup.syntheticAuthProviderRefs,
+      ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
+      syntheticAuthProviderRefs:
+        params.syntheticAuthProviderRefs ?? runtimeAuthLookup.syntheticAuthProviderRefs,
       ...(params.discoverExternalCliAuth === false ? {} : { externalCliProviderIds: ["openai"] }),
     });
     return modelAuthResolver;
@@ -317,6 +323,7 @@ export function createProviderAuthChecker(params: {
             workspaceDir: params.workspaceDir,
             env: params.env,
             includePluginSyntheticAuth: params.allowPluginSyntheticAuth !== false,
+            ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
           })),
       });
     const evaluation = Promise.resolve().then(

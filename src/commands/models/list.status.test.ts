@@ -288,6 +288,10 @@ vi.mock("../../infra/provider-usage.js", () => ({
 }));
 vi.mock("../../plugins/synthetic-auth.runtime.js", () => ({
   resolveRuntimeSyntheticAuthProviderRefs: mocks.resolveRuntimeSyntheticAuthProviderRefs,
+  resolveValidatedSyntheticAuthProviderRefState: () => ({
+    refs: mocks.resolveRuntimeSyntheticAuthProviderRefs(),
+    complete: true,
+  }),
 }));
 vi.mock("../../plugins/provider-runtime.js", () => ({
   resolveProviderSyntheticAuthWithPlugin: mocks.resolveProviderSyntheticAuthWithPlugin,

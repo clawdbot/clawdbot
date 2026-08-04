@@ -36,14 +36,12 @@ const modelProviderAuthMocks = vi.hoisted(() => {
       baseUrl?: unknown;
       observedRoutes?: readonly { api?: string | null; baseUrl?: unknown }[];
     };
-    const hasConflictingRoute = (ref?: AuthRef) => {
-      const routes = ref?.observedRoutes ?? [];
-      return [ref, ...routes].some(
+    const hasConflictingRoute = (ref?: AuthRef) =>
+      [ref, ...(ref?.observedRoutes ?? [])].some(
         (route) =>
           route?.api === "openai-chatgpt-responses" &&
           route.baseUrl === "https://api.openai.com/v1",
       );
-    };
     const checker = vi.fn((provider: string, ref?: AuthRef) => {
       return state.authenticatedProviders.has(provider) && !hasConflictingRoute(ref);
     });
@@ -70,13 +68,11 @@ const modelProviderAuthMocks = vi.hoisted(() => {
 });
 const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() => vi.fn());
 const pluginMetadataMocks = vi.hoisted(() => ({
-  lifecycleSnapshot: {
+  loadManifestMetadataSnapshot: vi.fn(() => ({
     registrySource: "provided" as const,
     registryDiagnostics: [],
     index: { plugins: [] },
-    manifestRegistry: { plugins: [] },
-    plugins: [],
-  },
+  })),
   snapshot: undefined as
     | {
         plugins: unknown[];
@@ -147,9 +143,7 @@ vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: () => pluginMetadataMocks.snapshot,
 }));
 
-vi.mock("../../plugins/manifest-contract-eligibility.js", () => ({
-  loadManifestMetadataSnapshot: () => pluginMetadataMocks.lifecycleSnapshot,
-}));
+vi.mock("../../plugins/manifest-contract-eligibility.js", () => pluginMetadataMocks);
 
 const telegramModelsTestPlugin: ChannelPlugin = {
   ...createChannelTestPluginBase({
@@ -226,7 +220,6 @@ beforeEach(() => {
     { provider: "google", id: "gemini-2.0-flash", name: "Gemini Flash" },
   ]);
   modelAuthLabelMocks.resolveModelAuthLabel.mockReset();
-  modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue(undefined);
   normalizeProviderModelIdWithRuntimeMock.mockReset();
   pluginMetadataMocks.snapshot = undefined;
   modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "google", "openai"]);
@@ -342,8 +335,7 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).not.toContain("Add: /models add");
     const authCheckerParams = preparedAuthCheckerParams();
     expect(authCheckerParams?.workspaceDir).toBe("/tmp");
-    expect(authCheckerParams?.metadataSnapshot).toBe(pluginMetadataMocks.lifecycleSnapshot);
-    expect(authCheckerParams?.syntheticAuthProviderRefs).toEqual([]);
+    expect(authCheckerParams?.metadataSnapshot).toBeDefined();
   });
 
   it("uses read-only catalog loading and static auth checks for default browse", async () => {

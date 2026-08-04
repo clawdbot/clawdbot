@@ -197,8 +197,7 @@ const createProviderAuthChecker = vi.hoisted(() =>
               env: params.env,
             }) &&
             !(
-              ref?.api === "openai-chatgpt-responses" &&
-              ref.baseUrl === "https://api.openai.com/v1"
+              ref?.api === "openai-chatgpt-responses" && ref.baseUrl === "https://api.openai.com/v1"
             )
           );
         },
@@ -1272,9 +1271,7 @@ describe("promptDefaultModel", () => {
   });
 
   it("uses the configured default agent dir for provider-scoped catalog auth", async () => {
-    mockPreferredProviderCatalog([
-      catalogModel("nvidia", "z-ai/glm-5.1", "GLM 5.1"),
-    ]);
+    mockPreferredProviderCatalog([catalogModel("nvidia", "z-ai/glm-5.1", "GLM 5.1")]);
     const select = vi.fn(async (params) => params.options[0]?.value as never);
     const prompter = makePrompter({ select });
     const env = {
@@ -1679,7 +1676,9 @@ describe("promptModelAllowlist", () => {
     const multiselect = createSelectAllMultiselect();
 
     await promptModelAllowlist({
-      config: { agents: { defaults: {} } } as OpenClawConfig,
+      config: {
+        agents: { defaults: { model: "opencode/deepseek-v4-flash-free" } },
+      } as OpenClawConfig,
       prompter: makePrompter({ multiselect }),
       workspaceDir: "/tmp/opencode-workspace",
     });

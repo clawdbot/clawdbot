@@ -8,6 +8,7 @@ import {
 import type { createOpenAIModelRoutesResolver } from "../../agents/openai-model-routes.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { resolveValidatedSyntheticAuthProviderRefState } from "../../plugins/synthetic-auth.runtime.js";
 
 export type ModelListAuthRef = ModelAuthAvailabilityRef;
 export type ModelListAuthEvaluation = ModelAuthAvailabilityEvaluation;
@@ -29,21 +30,6 @@ type CreateModelListAuthIndexParams = {
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
 };
 
-function listValidatedSyntheticAuthProviderRefs(params: {
-  metadataSnapshot: PluginMetadataSnapshot;
-}): readonly string[] {
-  if (
-    params.metadataSnapshot.registryDiagnostics.length > 0 ||
-    (params.metadataSnapshot.registrySource !== "persisted" &&
-      params.metadataSnapshot.registrySource !== "provided")
-  ) {
-    return [];
-  }
-  return params.metadataSnapshot.index.plugins
-    .filter((plugin) => plugin.enabled)
-    .flatMap((plugin) => plugin.syntheticAuthRefs ?? []);
-}
-
 /** Builds one snapshot-scoped command adapter around the shared evaluator. */
 export function createModelListAuthIndex(
   params: CreateModelListAuthIndexParams,
@@ -60,9 +46,7 @@ export function createModelListAuthIndex(
     routeResolverFactory: params.routeResolverFactory,
     syntheticAuthProviderRefs:
       params.syntheticAuthProviderRefs ??
-      listValidatedSyntheticAuthProviderRefs({
-        metadataSnapshot: params.metadataSnapshot,
-      }),
+      resolveValidatedSyntheticAuthProviderRefState(params.metadataSnapshot).refs,
   });
   return {
     providerDiscoveryProviderIds: resolver.providerDiscoveryProviderIds,

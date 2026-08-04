@@ -28,6 +28,8 @@ function catalogEntry(id: string): ModelCatalogEntry {
 
 function preparedMetadataSnapshot() {
   return {
+    registrySource: "provided",
+    registryDiagnostics: [],
     index: {
       plugins: [
         {

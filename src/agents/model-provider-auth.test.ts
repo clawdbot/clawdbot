@@ -25,7 +25,7 @@ const modelAuthMocks = vi.hoisted(() => ({
       candidateMap: {},
       authEvidenceMap: {},
     },
-    syntheticAuthProviderRefs: [],
+    syntheticAuthProviderRefs: [] as string[],
     syntheticAuthProviderRefsComplete: true,
   })),
   hasAvailableAuthForProvider: vi.fn(() => true),

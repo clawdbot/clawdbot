@@ -16,6 +16,9 @@ import { canonicalizeProviderModelId } from "../agents/provider-model-route.js";
 import type { ModelApi } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderModelRouteAuthRequirement } from "../plugin-sdk/provider-model-types.js";
+import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { resolveValidatedSyntheticAuthProviderRefState } from "../plugins/synthetic-auth.runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
 type ModelRouteObservation = {
@@ -49,7 +52,9 @@ export function resolveDefaultModelAuthStatus(
     agentId?: string;
     agentDir?: string;
     env?: NodeJS.ProcessEnv;
+    metadataSnapshot?: PluginMetadataSnapshot;
     observedRoutes?: readonly ModelRouteObservation[];
+    syntheticAuthProviderRefs?: readonly string[];
   },
 ): DefaultModelAuthStatus {
   const ref = resolveDefaultModelForAgent({
@@ -67,6 +72,16 @@ export function resolveDefaultModelAuthStatus(
     authStore: store,
     ...(options?.agentDir ? { agentDir: options.agentDir } : {}),
     ...(options?.env ? { env: options.env } : {}),
+    ...(options?.metadataSnapshot ? { metadataSnapshot: options.metadataSnapshot } : {}),
+    ...(options?.syntheticAuthProviderRefs !== undefined
+      ? { syntheticAuthProviderRefs: options.syntheticAuthProviderRefs }
+      : options?.metadataSnapshot
+        ? {
+            syntheticAuthProviderRefs: resolveValidatedSyntheticAuthProviderRefState(
+              options.metadataSnapshot,
+            ).refs,
+          }
+        : {}),
   }).evaluateModelAuth(ref.provider, {
     modelId: ref.model,
     ...(options?.observedRoutes?.length ? { observedRoutes: options.observedRoutes } : {}),
@@ -165,25 +180,32 @@ export async function warnIfModelConfigLooksOff(
   });
   const warnings: string[] = [];
   const validationAgentId = options?.agentId ?? resolveDefaultAgentId(config);
-  const snapshot =
+  const validationWorkspaceDir = resolveAgentWorkspaceDir(config, validationAgentId);
+  const preparedSnapshot =
     options?.validateCatalog === false
-      ? { entries: [], routeVariants: [] }
-      : (
-          await publishPreparedModelRuntimeSnapshot(
-            {
-              config,
-              agentId: validationAgentId,
-              agentDir:
-                options?.agentDir ??
-                (options?.agentId
-                  ? resolveAgentDir(config, options.agentId)
-                  : resolveDefaultAgentDir(config)),
-              inheritedAuthDir: resolveDefaultAgentDir(config),
-              workspaceDir: resolveAgentWorkspaceDir(config, validationAgentId),
-            },
-            { force: true, provenance: "explicit" },
-          )
-        ).modelCatalog;
+      ? undefined
+      : await publishPreparedModelRuntimeSnapshot(
+          {
+            config,
+            agentId: validationAgentId,
+            agentDir:
+              options?.agentDir ??
+              (options?.agentId
+                ? resolveAgentDir(config, options.agentId)
+                : resolveDefaultAgentDir(config)),
+            inheritedAuthDir: resolveDefaultAgentDir(config),
+            workspaceDir: validationWorkspaceDir,
+          },
+          { force: true, provenance: "explicit" },
+        );
+  const snapshot = preparedSnapshot?.modelCatalog ?? { entries: [], routeVariants: [] };
+  const metadataSnapshot =
+    preparedSnapshot?.metadataSnapshot ??
+    loadManifestMetadataSnapshot({
+      config,
+      workspaceDir: validationWorkspaceDir,
+      env: options?.env ?? process.env,
+    });
   const catalog = snapshot.entries;
   const catalogFacts = resolveDefaultModelCatalogFacts(config, catalog, {
     ...(options?.agentId ? { agentId: options.agentId } : {}),
@@ -204,6 +226,7 @@ export async function warnIfModelConfigLooksOff(
     ...(options?.agentId ? { agentId: options.agentId } : {}),
     ...(options?.agentDir ? { agentDir: options.agentDir } : {}),
     ...(options?.env ? { env: options.env } : {}),
+    metadataSnapshot,
     ...(observedRoutes ? { observedRoutes } : {}),
   });
   if (authStatus.status === "missing") {

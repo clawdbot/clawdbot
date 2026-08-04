@@ -18,7 +18,23 @@ const pluginMetadataSnapshot = vi.hoisted(() => ({
   index: {
     plugins: [{ enabled: true, pluginId: "opencode", syntheticAuthRefs: ["opencode"] }],
   },
-  manifestRegistry: { plugins: [] },
+  manifestRegistry: {
+    plugins: [
+      {
+        id: "openai",
+        origin: "bundled" as const,
+        providerAuthChoices: [
+          {
+            provider: "openai",
+            method: "oauth",
+            choiceId: "openai",
+            choiceLabel: "OpenAI",
+          },
+        ],
+      },
+    ],
+  },
+  plugins: [],
 }));
 vi.mock("../agents/prepared-model-runtime.js", () => ({
   publishPreparedModelRuntimeSnapshot: async (...args: unknown[]) => {

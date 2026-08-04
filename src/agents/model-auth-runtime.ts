@@ -5,11 +5,13 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderSyntheticAuthResult } from "../plugins/provider-external-auth.types.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
 import {
   hasRuntimeSyntheticAuthCandidateRef,
   resolveRuntimeSyntheticAuthProviderRefState,
+  resolveValidatedSyntheticAuthProviderRefState,
 } from "../plugins/synthetic-auth.runtime.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
@@ -38,17 +40,21 @@ export function createRuntimeProviderAuthLookup(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   includePluginSyntheticAuth?: boolean;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): RuntimeProviderAuthLookup {
   const env = params.env ?? process.env;
   const lookupParams = {
     config: params.cfg,
     workspaceDir: params.workspaceDir,
     env,
+    ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
   };
   const syntheticAuthProviderRefs =
     params.includePluginSyntheticAuth === false
       ? undefined
-      : resolveRuntimeSyntheticAuthProviderRefState(lookupParams);
+      : params.metadataSnapshot
+        ? resolveValidatedSyntheticAuthProviderRefState(params.metadataSnapshot)
+        : resolveRuntimeSyntheticAuthProviderRefState(lookupParams);
   const authLookupMaps = resolveProviderEnvAuthLookupMaps(lookupParams);
   return {
     envApiKey: {
