@@ -9,6 +9,21 @@ const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 let hasConfiguredWebSearchCredential: typeof import("./web-search-credential-presence.js").hasConfiguredWebSearchCredential;
 
+function googleModelCredentialConfig(plugins?: OpenClawConfig["plugins"]): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        google: {
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+          apiKey: "google-model-key",
+          models: [],
+        },
+      },
+    },
+    ...(plugins ? { plugins } : {}),
+  };
+}
+
 beforeAll(async () => {
   ({ hasConfiguredWebSearchCredential } = await import("./web-search-credential-presence.js"));
 });
@@ -49,20 +64,33 @@ describe("hasConfiguredWebSearchCredential", () => {
   it("detects manifest-declared model credential fallbacks without provider-specific core logic", () => {
     expect(
       hasConfiguredWebSearchCredential({
-        config: {
-          models: {
-            providers: {
-              google: {
-                baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-                apiKey: "google-model-key",
-                models: [],
-              },
-            },
-          },
-        } as OpenClawConfig,
+        config: googleModelCredentialConfig(),
         env: {},
         origin: "bundled",
       }),
     ).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "an explicitly disabled plugin",
+      plugins: { entries: { google: { enabled: false } } },
+    },
+    {
+      name: "a denylisted plugin",
+      plugins: { deny: ["google"] },
+    },
+    {
+      name: "a plugin outside a restrictive allowlist",
+      plugins: { allow: ["another-plugin"] },
+    },
+  ])("does not accept manifest credentials from $name", ({ plugins }) => {
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: googleModelCredentialConfig(plugins),
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(false);
   });
 });
