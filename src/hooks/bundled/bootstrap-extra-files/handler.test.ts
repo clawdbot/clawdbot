@@ -76,6 +76,28 @@ describe("bootstrap-extra-files hook", () => {
     );
   });
 
+  it("keeps configured nested memory while filtering root memory in shared sessions", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-memory-");
+    const extraDir = path.join(tempDir, "packages", "core");
+    await fs.mkdir(extraDir, { recursive: true });
+    await fs.writeFile(path.join(extraDir, "MEMORY.md"), "nested memory", "utf-8");
+
+    const cfg = createBootstrapExtraConfig(["packages/*/MEMORY.md"]);
+    const context = await createBootstrapContext({
+      workspaceDir: tempDir,
+      cfg,
+      sessionKey: "agent:main:slack:channel:c1",
+      rootFiles: [{ name: "MEMORY.md", content: "private root memory" }],
+    });
+
+    const event = createHookEvent("agent", "bootstrap", context.sessionKey, context);
+    await handler(event);
+
+    const relativePaths = context.bootstrapFiles.map((file) => path.relative(tempDir, file.path));
+    expect(relativePaths).not.toContain("MEMORY.md");
+    expect(relativePaths).toContain(path.join("packages", "core", "MEMORY.md"));
+  });
+
   it("re-applies subagent bootstrap allowlist after extras are added", async () => {
     const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-subagent-");
     const extraDir = path.join(tempDir, "packages", "persona");
