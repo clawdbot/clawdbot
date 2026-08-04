@@ -1,7 +1,10 @@
 // Covers exec approval config normalization and safe-bin policy.
 import { describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { tryParsePersistedExecApprovals } from "./exec-approvals-config.js";
+import {
+  tryParseLegacyPersistedExecApprovals,
+  tryParsePersistedExecApprovals,
+} from "./exec-approvals-config.js";
 import { makeTempDir } from "./exec-approvals-test-helpers.js";
 import {
   isSafeBinUsage,
@@ -450,7 +453,7 @@ describe("normalizeExecApprovals strips invalid security/ask enum values (#59006
   });
 });
 
-describe("tryParsePersistedExecApprovals normalizes legacy null optional fields (#118242)", () => {
+describe("legacy vs canonical exec-approvals parsing (#118242, #118524)", () => {
   it("parses a legacy file with null lastUsedAt/lastUsedCommand", () => {
     // Older OpenClaw versions wrote null for unused optional fields. The
     // validator accepts undefined but rejects null, which blocked migration.
@@ -471,13 +474,29 @@ describe("tryParsePersistedExecApprovals normalizes legacy null optional fields 
       },
     });
 
-    const parsed = tryParsePersistedExecApprovals(raw);
+    const parsed = tryParseLegacyPersistedExecApprovals(raw);
     expect(parsed).not.toBeNull();
     const entry = parsed?.agents?.main?.allowlist?.[0];
     expect(entry?.pattern).toBe("npm test");
     expect(entry?.lastUsedAt).toBeUndefined();
     expect(entry?.lastUsedCommand).toBeUndefined();
     expect(entry?.lastResolvedPath).toBeUndefined();
+  });
+
+  it("keeps canonical SQLite rows fail-closed for null usage metadata (#118524)", () => {
+    // The shared strict parser must NOT normalize null usage metadata: a
+    // canonical SQLite row carrying it stays malformed (deny-and-warn) rather
+    // than being accepted and retaining its stored policy.
+    const raw = JSON.stringify({
+      version: 1,
+      agents: {
+        main: {
+          allowlist: [{ pattern: "npm test", lastUsedAt: null }],
+        },
+      },
+    });
+    expect(tryParseLegacyPersistedExecApprovals(raw)).not.toBeNull();
+    expect(tryParsePersistedExecApprovals(raw)).toBeNull();
   });
 
   it("still rejects genuinely malformed entries after null normalization", () => {

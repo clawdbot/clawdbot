@@ -4,6 +4,7 @@ import { root, type Root } from "@openclaw/fs-safe";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
   resolveExecApprovalsPath,
+  tryParseLegacyPersistedExecApprovals,
   tryParsePersistedExecApprovals,
 } from "./exec-approvals-config.js";
 import { resetLegacyExecApprovalsPresenceCache } from "./exec-approvals-migration-gate.js";
@@ -87,8 +88,11 @@ function decideAndRecordMigration(params: {
   const sourceKey = resolveLegacyMigrationSourceKey("exec-approvals-json", params.sourcePath);
   const runId = `${sourceKey}:${params.snapshot.sha256.slice(0, 16)}`;
   const now = Date.now();
+  // Legacy JSON import boundary: normalize historical null usage metadata here
+  // (doctor-only). Canonical SQLite rows below use the strict parser so null
+  // metadata still fails closed at runtime (#118524 P1).
   const legacyFile =
-    params.snapshot.raw === null ? null : tryParsePersistedExecApprovals(params.snapshot.raw);
+    params.snapshot.raw === null ? null : tryParseLegacyPersistedExecApprovals(params.snapshot.raw);
 
   return runOpenClawStateWriteTransaction(
     ({ db }) => {

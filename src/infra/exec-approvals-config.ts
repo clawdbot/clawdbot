@@ -157,11 +157,25 @@ function isValidPersistedExecApprovals(value: unknown): value is ExecApprovalsFi
 export function tryParsePersistedExecApprovals(raw: string): ExecApprovalsFile | null {
   try {
     const parsed = JSON.parse(raw) as unknown;
-    // Older OpenClaw versions wrote null for unused allowlist usage metadata
-    // (lastUsedAt, lastUsedCommand, lastResolvedPath). The validator accepts
-    // absent (undefined) but rejects null, which blocked migration on upgrade.
-    // Normalize null → undefined for those metadata fields before validation so
-    // legacy files migrate cleanly (#118242).
+    if (isValidPersistedExecApprovals(parsed)) {
+      return normalizeExecApprovalsInternal(parsed);
+    }
+  } catch {
+    // A partial Windows fallback write is existing state, not a missing policy.
+  }
+  return null;
+}
+
+/**
+ * Parse a legacy exec-approvals JSON source for migration, normalizing the
+ * null usage-metadata fields older versions emitted. Doctor-only: this is the
+ * legacy JSON import boundary. The shared strict parser (above) stays strict so
+ * canonical SQLite rows with null metadata still trigger the deny-and-warn
+ * malformed path at runtime (fail-closed), rather than being silently accepted.
+ */
+export function tryParseLegacyPersistedExecApprovals(raw: string): ExecApprovalsFile | null {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
     const normalized = normalizeLegacyAllowlistUsageMetadata(parsed);
     if (isValidPersistedExecApprovals(normalized)) {
       return normalizeExecApprovalsInternal(normalized);
