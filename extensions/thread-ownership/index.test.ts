@@ -473,6 +473,30 @@ describe("thread-ownership plugin", () => {
       expect(globalThis.fetch).not.toHaveBeenCalled();
     });
 
+    // Regression: a SLACK_BOT_USER_ID with surrounding whitespace was stored verbatim,
+    // so the <@id> substring check never matched a real mention and the ownership
+    // forwarder was consulted even in threads where the bot was explicitly addressed.
+    it("tracks bot user ID mentions when SLACK_BOT_USER_ID has surrounding whitespace", async () => {
+      process.env.SLACK_BOT_USER_ID = " U999 ";
+
+      await requireHook("message_received")(
+        {
+          content: "Hey <@U999> help",
+          threadId: "8888.0002",
+          metadata: { channelId: "C789" },
+        },
+        { channelId: "slack", conversationId: "C789" },
+      );
+
+      const result = await requireHook("message_sending")(
+        { content: "On it!", replyToId: "8888.0002", metadata: { channelId: "C789" }, to: "C789" },
+        { channelId: "slack", conversationId: "C789" },
+      );
+
+      expect(result).toBeUndefined();
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    });
+
     it("tracks agent-name mentions case-insensitively", async () => {
       await requireHook("message_received")(
         {

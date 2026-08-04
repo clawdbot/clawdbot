@@ -111,7 +111,7 @@ export default definePluginEntry({
             .map((entry) => resolveSlackConversationId(entry))
             .filter(Boolean),
         ),
-        botUserId: process.env.SLACK_BOT_USER_ID ?? "",
+        botUserId: normalizeOptionalString(process.env.SLACK_BOT_USER_ID) ?? "",
         agent: resolveOwnershipAgent(currentConfig),
       };
     };
