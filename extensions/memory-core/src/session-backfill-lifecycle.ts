@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { readSessionIngestionState, writeSessionIngestionState } from "./dreaming-phases.js";
 import {
   deleteMemoryCoreWorkspaceEntry,
   readMemoryCoreWorkspaceEntries,
@@ -10,6 +9,7 @@ import type {
   SessionBackfillExecution,
   SessionBackfillResult,
 } from "./session-backfill-contract.js";
+import { readSessionIngestionState, writeSessionIngestionState } from "./session-ingestion.js";
 
 const DEFAULT_SESSION_BACKFILL_LIMIT_DAYS = 92;
 const MEMORY_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;

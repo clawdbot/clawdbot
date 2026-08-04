@@ -87,7 +87,9 @@ export async function runChannelIngressDeadLettersHealth(): Promise<void> {
 
 export async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteStateIntegrity } = await loadDoctorStateIntegrityModule();
-  await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath);
+  await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath, {
+    stateDirExistedAtStart: ctx.stateDirExistedAtStart,
+  });
 }
 
 export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -100,6 +102,9 @@ export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): 
     shouldRepair: ctx.prompter.shouldRepair,
     ...(ctx.configResult.blockedCodexModelIdentities?.length
       ? { blockedModelIdentities: new Set(ctx.configResult.blockedCodexModelIdentities) }
+      : {}),
+    ...(ctx.configResult.openAICodexAuthProfileIdMap?.size
+      ? { authProfileIdMap: ctx.configResult.openAICodexAuthProfileIdMap }
       : {}),
   });
   if (result.changes.length > 0) {

@@ -171,8 +171,8 @@ function formatUnavailableReason(params: {
   error: unknown;
 }): string {
   return [
-    `Agent cron job uses ${params.provider}/${params.model} but the local provider preflight failed at ${params.baseUrl}.`,
-    `The candidate is unavailable for this cron run; OpenClaw will retry its provider preflight on a later scheduled run.`,
+    `This automation uses ${params.provider}/${params.model} but the local provider preflight failed at ${params.baseUrl}.`,
+    `The candidate is unavailable for this run; OpenClaw will retry its provider preflight on a later scheduled run.`,
     `Last error: ${formatPreflightError(params.error)}`,
   ].join(" ");
 }

@@ -105,7 +105,9 @@ const mocks = vi.hoisted(() => ({
   prepareOutboundMirrorRoute: vi.fn(),
   beginTerminalSourceReplyDelivery: vi.fn(),
   cancelTerminalSourceReplyDelivery: vi.fn(),
+  isCurrentSourceReplyActionName: vi.fn(() => false),
   isDeliveredCurrentSourceReply: vi.fn(() => false),
+  isDeliveredCurrentSourceReplyAction: vi.fn(() => false),
   reconcileTerminalSourceReplyDelivery: vi.fn(),
 }));
 
@@ -131,7 +133,9 @@ vi.mock("./message.gateway.runtime.js", () => ({
 vi.mock("./source-reply-mirror.js", () => ({
   beginTerminalSourceReplyDelivery: mocks.beginTerminalSourceReplyDelivery,
   cancelTerminalSourceReplyDelivery: mocks.cancelTerminalSourceReplyDelivery,
+  isCurrentSourceReplyActionName: mocks.isCurrentSourceReplyActionName,
   isDeliveredCurrentSourceReply: mocks.isDeliveredCurrentSourceReply,
+  isDeliveredCurrentSourceReplyAction: mocks.isDeliveredCurrentSourceReplyAction,
   reconcileTerminalSourceReplyDelivery: mocks.reconcileTerminalSourceReplyDelivery,
 }));
 

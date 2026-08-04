@@ -42,6 +42,7 @@ export function registerModelsCli(program: Command) {
   const models = program
     .command("models")
     .description("Model discovery, scanning, and configuration")
+    .option("--json", "Output JSON (alias for `models status --json`)", false)
     .option("--status-json", "Output JSON (alias for `models status --json`)", false)
     .option("--status-plain", "Plain output (alias for `models status --plain`)", false)
     .option("--agent <id>", "Agent id to inspect (overrides OPENCLAW_AGENT_DIR)")
@@ -50,6 +51,8 @@ export function registerModelsCli(program: Command) {
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/models", "docs.openclaw.ai/cli/models")}\n`,
     );
+  const hasJsonOutput = (opts?: { json?: boolean }): boolean =>
+    Boolean(opts?.json || models.opts<{ json?: boolean }>().json);
   setCommandJsonMode(models, "output", ({ argv }) => isModelsStatusJsonOutput(argv));
 
   models
@@ -63,7 +66,7 @@ export function registerModelsCli(program: Command) {
     .action(async (opts) => {
       await withModelsRuntime(async ({ defaultRuntime }) => {
         const { modelsListCommand } = await import("../commands/models/list.list-command.js");
-        await modelsListCommand(opts, defaultRuntime);
+        await modelsListCommand({ ...opts, json: hasJsonOutput(opts) }, defaultRuntime);
       });
     });
 
@@ -98,7 +101,7 @@ export function registerModelsCli(program: Command) {
         const { modelsStatusCommand } = await loadModelsStatusCommands();
         await modelsStatusCommand(
           {
-            json: Boolean(opts.json),
+            json: hasJsonOutput(opts),
             plain: Boolean(opts.plain),
             check: Boolean(opts.check),
             probe: Boolean(opts.probe),
@@ -121,7 +124,7 @@ export function registerModelsCli(program: Command) {
     .action(async (opts) => {
       await withModelsRuntime(async ({ defaultRuntime }) => {
         const { modelsRefreshCommand } = await import("../commands/models/refresh.js");
-        await modelsRefreshCommand({ json: Boolean(opts.json) }, defaultRuntime);
+        await modelsRefreshCommand({ json: hasJsonOutput(opts) }, defaultRuntime);
       });
     });
 
@@ -161,7 +164,7 @@ export function registerModelsCli(program: Command) {
     .action(async (opts) => {
       await withModelsRuntime(async ({ defaultRuntime }) => {
         const { modelsAliasesListCommand } = await loadModelsAliasesCommands();
-        await modelsAliasesListCommand(opts, defaultRuntime);
+        await modelsAliasesListCommand({ ...opts, json: hasJsonOutput(opts) }, defaultRuntime);
       });
     });
 
@@ -198,7 +201,7 @@ export function registerModelsCli(program: Command) {
     .action(async (opts) => {
       await withModelsRuntime(async ({ defaultRuntime }) => {
         const { modelsFallbacksListCommand } = await loadModelsFallbacksCommands();
-        await modelsFallbacksListCommand(opts, defaultRuntime);
+        await modelsFallbacksListCommand({ ...opts, json: hasJsonOutput(opts) }, defaultRuntime);
       });
     });
 
@@ -246,7 +249,10 @@ export function registerModelsCli(program: Command) {
     .action(async (opts) => {
       await withModelsRuntime(async ({ defaultRuntime }) => {
         const { modelsImageFallbacksListCommand } = await loadModelsImageFallbacksCommands();
-        await modelsImageFallbacksListCommand(opts, defaultRuntime);
+        await modelsImageFallbacksListCommand(
+          { ...opts, json: hasJsonOutput(opts) },
+          defaultRuntime,
+        );
       });
     });
 
@@ -300,7 +306,7 @@ export function registerModelsCli(program: Command) {
     .action(async (opts) => {
       await withModelsRuntime(async ({ defaultRuntime }) => {
         const { modelsScanCommand } = await import("../commands/models/scan.js");
-        await modelsScanCommand(opts, defaultRuntime);
+        await modelsScanCommand({ ...opts, json: hasJsonOutput(opts) }, defaultRuntime);
       });
     });
 
@@ -309,7 +315,7 @@ export function registerModelsCli(program: Command) {
       const { modelsStatusCommand } = await loadModelsStatusCommands();
       await modelsStatusCommand(
         {
-          json: Boolean(opts?.statusJson),
+          json: Boolean(opts?.json || opts?.statusJson),
           plain: Boolean(opts?.statusPlain),
           agent: opts?.agent as string | undefined,
         },
@@ -338,7 +344,7 @@ export function registerModelsCli(program: Command) {
           {
             provider: opts.provider as string | undefined,
             agent,
-            json: Boolean(opts.json),
+            json: hasJsonOutput(opts),
           },
           defaultRuntime,
         );
@@ -514,7 +520,7 @@ export function registerModelsCli(program: Command) {
           {
             provider: opts.provider as string,
             agent,
-            json: Boolean(opts.json),
+            json: hasJsonOutput(opts),
           },
           defaultRuntime,
         );

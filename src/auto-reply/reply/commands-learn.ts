@@ -16,12 +16,8 @@ import { resolveConfiguredModelCompat } from "../../agents/tools-effective-inven
 import { buildLearnPrompt, DEFAULT_LEARN_REQUEST } from "../../skills/workshop/learn-prompt.js";
 import { resolveSkillWorkshopToolPolicyAvailability } from "../../skills/workshop/tool-policy-diagnostic.js";
 import { applyCommandTextToParams } from "./command-context-rewrite.js";
-import { rejectUnauthorizedCommand } from "./command-gates.js";
-import type {
-  CommandHandler,
-  CommandHandlerResult,
-  HandleCommandsParams,
-} from "./commands-types.js";
+import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
+import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 
 const LEARN_COMMAND_PREFIX = "/learn";
@@ -140,30 +136,15 @@ function workshopIsAvailable(params: HandleCommandsParams): boolean {
   }
 }
 
-function unavailableReply(): CommandHandlerResult {
-  return {
-    shouldContinue: false,
-    reply: { text: SKILL_WORKSHOP_UNAVAILABLE_REPLY },
-  };
-}
-
 /** Command handler for /learn skill-draft requests. */
-export const handleLearnCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) {
-    return null;
-  }
-  const request = parseLearnRequest(params.command.commandBodyNormalized);
-  if (!request) {
-    return null;
-  }
-  const unauthorized = rejectUnauthorizedCommand(params, LEARN_COMMAND_PREFIX);
-  if (unauthorized) {
-    return unauthorized;
-  }
-  if (!workshopIsAvailable(params)) {
-    return unavailableReply();
-  }
+export const handleLearnCommand: CommandHandler = defineAuthorizedTextCommand(
+  { label: LEARN_COMMAND_PREFIX, match: parseLearnRequest },
+  (params, request) => {
+    if (!workshopIsAvailable(params)) {
+      return commandReply(SKILL_WORKSHOP_UNAVAILABLE_REPLY);
+    }
 
-  applyCommandTextToParams(params, buildLearnPrompt(request));
-  return { shouldContinue: true };
-};
+    applyCommandTextToParams(params, buildLearnPrompt(request));
+    return { shouldContinue: true };
+  },
+);

@@ -66,6 +66,9 @@ export type CronSystemEventEnqueueResult =
       remove?: () => boolean | void;
     };
 
+/** Notifications queued by cron mutations until their state is durable. */
+export type DeferredCronNotifications = Array<() => void>;
+
 /** Dependency injection surface for the cron service runtime. */
 export type CronServiceDeps = {
   nowMs?: () => number;
@@ -74,6 +77,8 @@ export type CronServiceDeps = {
   cronEnabled: boolean;
   /** CronConfig for session retention settings. */
   cronConfig?: CronConfig;
+  /** List enabled, configured channel ids without exposing channel machinery to cron core. */
+  listConfiguredChannels?: () => readonly string[] | Promise<readonly string[]>;
   evaluateCronTrigger?: (params: {
     job: CronJob;
     script: string;
@@ -206,6 +211,14 @@ export type CronServiceDeps = {
       nextCheck?: CronNextCheckProposal;
     } & CronRunOutcome
   >;
+  /** Deliver a primary cron webhook before the run outcome is finalized. */
+  sendCronWebhook?: (params: {
+    job: CronJob;
+    event: CronEvent;
+    abortSignal: AbortSignal;
+    deadlineAtMs?: number;
+    onDeliveryAccepted: () => void;
+  }) => Promise<void>;
   cleanupTimedOutAgentRun?: (params: {
     job: CronJob;
     timeoutMs: number;
@@ -224,6 +237,7 @@ export type CronServiceDeps = {
     to?: string;
     mode?: "announce" | "webhook";
     accountId?: string;
+    threadId?: string | number;
   }) => Promise<void>;
   onEvent?: (evt: CronEvent) => void;
 };

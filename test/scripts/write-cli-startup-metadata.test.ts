@@ -1,7 +1,7 @@
 // Write Cli Startup Metadata tests cover write cli startup metadata script behavior.
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import fs, { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { pathToFileURL } from "node:url";
@@ -561,6 +561,7 @@ describe("write-cli-startup-metadata", () => {
     { title: "after successful rendering", failRender: false },
     { title: "when rendering fails", failRender: true },
   ])("removes isolated root-help state $title", async ({ failRender }) => {
+    const removeState = vi.spyOn(fs, "rmSync");
     const tempRoot = createTempDir("openclaw-startup-metadata-cleanup-");
     const distDir = path.join(tempRoot, "dist");
     const extensionsDir = path.join(tempRoot, "extensions");
@@ -590,7 +591,9 @@ describe("write-cli-startup-metadata", () => {
         return "Usage: openclaw browser\n";
       },
       renderSourceSecretsHelpText: async () => {
-        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => {
+          setImmediate(resolve);
+        });
         statePresentDuringSiblingRender = existsSync(stateDir);
         return "Usage: openclaw secrets\n";
       },
@@ -613,6 +616,13 @@ describe("write-cli-startup-metadata", () => {
     expect(stateDir).not.toBe("");
     expect(statePresentDuringSiblingRender).toBe(true);
     expect(existsSync(stateDir)).toBe(false);
+    expect(removeState).toHaveBeenCalledWith(stateDir, {
+      force: true,
+      recursive: true,
+      maxRetries: 6,
+      retryDelay: 25,
+    });
+    removeState.mockRestore();
   });
 
   it("regenerates nodes help when bundled canvas CLI help sources change", async () => {

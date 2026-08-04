@@ -13,6 +13,10 @@ import { memoryTabFromPath, pathForMemoryTab, type MemoryRouteTab } from "../../
 export type MemoryTab = MemoryRouteTab;
 
 export type MemoryBackend = "builtin" | "qmd";
+export type MemoryBackendSelection =
+  | { kind: "default"; backend: "builtin" }
+  | { kind: "pinned"; backend: MemoryBackend }
+  | { kind: "invalid"; backend: null; value: unknown };
 
 /**
  * How `plugins.slots.memory` reads today, mirroring resolveSlotSelection in
@@ -138,11 +142,24 @@ export function resolveMemoryEngineSelection(
  * retrieval and `memory.backend` would save a value nothing consumes. Settings
  * search resolves it from the same config so both agree on what is visible.
  */
-export function resolveMemoryBackend(configObject: Record<string, unknown>): MemoryBackend | null {
+export function resolveMemoryBackendSelection(
+  configObject: Record<string, unknown>,
+): MemoryBackendSelection | null {
   if (selectedEngineId(resolveMemoryEngineSelection(configObject)) !== MEMORY_CORE_PLUGIN_ID) {
     return null;
   }
-  return asConfigRecord(configObject.memory)?.backend === "qmd" ? "qmd" : "builtin";
+  const memory = asConfigRecord(configObject.memory);
+  if (!memory || !Object.hasOwn(memory, "backend")) {
+    return { kind: "default", backend: "builtin" };
+  }
+  const backend = memory.backend;
+  return backend === "builtin" || backend === "qmd"
+    ? { kind: "pinned", backend }
+    : { kind: "invalid", backend: null, value: backend };
+}
+
+export function resolveMemoryBackend(configObject: Record<string, unknown>): MemoryBackend | null {
+  return resolveMemoryBackendSelection(configObject)?.backend ?? null;
 }
 
 type JsonRecord = Record<string, unknown>;

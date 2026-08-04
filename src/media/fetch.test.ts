@@ -413,6 +413,7 @@ describe("readRemoteMediaBuffer", () => {
       expectedError: {
         code: "fetch_failed",
         name: "MediaFetchError",
+        cause: expect.objectContaining({ name: "TimeoutError" }),
       },
     },
   ] as const)("$name", async ({ lookupFn, fetchImpl, readIdleTimeoutMs, expectedError }) => {
@@ -669,6 +670,41 @@ describe("readRemoteMediaBuffer", () => {
 
     expect(result.buffer.toString()).toBe("ok");
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a default response-body idle timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new Uint8Array([1, 2]));
+              },
+            }),
+            { status: 200 },
+          ),
+        )
+        .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+
+      const result = readRemoteMediaBuffer({
+        url: "https://example.com/file.bin",
+        fetchImpl,
+        lookupFn: makeLookupFn(),
+        maxBytes: 1024,
+        readIdleTimeoutMs: 20,
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      });
+
+      await vi.advanceTimersByTimeAsync(25);
+
+      await expect(result).resolves.toMatchObject({ buffer: Buffer.from("ok") });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not retry 4xx responses", async () => {
@@ -1193,6 +1229,143 @@ describe("readRemoteMediaBuffer", () => {
       expect(saved.fileName).toBe(fileName);
     },
   );
+
+  it.each([
+    {
+      name: "quoted filename containing a semicolon",
+      header: 'attachment; filename="quarter;final.csv"',
+      fileName: "quarter;final.csv",
+    },
+    {
+      name: "quoted filename containing an escaped quotation mark",
+      header: String.raw`attachment; filename="quarter\"final.csv"`,
+      fileName: 'quarter"final.csv',
+    },
+    {
+      name: "quoted filename containing an escaped semicolon",
+      header: String.raw`attachment; filename="quarter\;final.csv"`,
+      fileName: "quarter;final.csv",
+    },
+    {
+      name: "quoted filename containing an escaped comma",
+      header: String.raw`attachment; filename="quarter\,final.csv"`,
+      fileName: "quarter,final.csv",
+    },
+    {
+      name: "quoted filename containing an escaped space",
+      header: String.raw`attachment; filename="quarter\ final.csv"`,
+      fileName: "quarter final.csv",
+    },
+    {
+      name: "quoted filename containing an escaped hyphen",
+      header: String.raw`attachment; filename="quarter\-final.csv"`,
+      fileName: "quarter-final.csv",
+    },
+    {
+      name: "quoted filename containing multiple escaped punctuation characters",
+      header: String.raw`attachment; filename="quarter\ final\,v2.csv"`,
+      fileName: "quarter final,v2.csv",
+    },
+    {
+      name: "filename text inside an unrelated quoted parameter is ignored",
+      header: 'attachment; note="x; filename=spoof.csv; y"; filename=safe.csv',
+      fileName: "safe.csv",
+    },
+    {
+      name: "Windows drive paths still decode escaped punctuation",
+      header: String.raw`attachment; filename="C:/tmp/quarter\;final.csv"`,
+      fileName: "quarter;final.csv",
+    },
+    {
+      name: "mixed Windows path separators preserve the final basename",
+      header: String.raw`attachment; filename="C:/tmp/reports\Q1.csv"`,
+      fileName: "Q1.csv",
+    },
+    {
+      name: "mixed relative Windows path separators preserve the final basename",
+      header: String.raw`attachment; filename="reports/2026\Q1.csv"`,
+      fileName: "Q1.csv",
+    },
+    {
+      name: "legacy UNC Windows path is reduced to its basename",
+      header: String.raw`attachment; filename="\\server\share\photo.csv"`,
+      fileName: "photo.csv",
+    },
+    {
+      name: "legacy UNC Windows path preserves a Unicode-leading basename",
+      header: String.raw`attachment; filename="\\server\share\é.csv"`,
+      fileName: "é.csv",
+    },
+    {
+      name: "legacy UNC Windows path preserves a punctuation-leading basename",
+      header: String.raw`attachment; filename="\\server\share\;photo.csv"`,
+      fileName: ";photo.csv",
+    },
+    {
+      name: "legacy UNC Windows path preserves a space-leading basename",
+      header: String.raw`attachment; filename="\\server\share\ photo.csv"`,
+      fileName: " photo.csv",
+    },
+    {
+      name: "legacy relative Windows path is reduced to its basename",
+      header: String.raw`attachment; filename="reports\Q1.csv"`,
+      fileName: "Q1.csv",
+    },
+    {
+      name: "nested legacy relative Windows path is reduced to its basename",
+      header: String.raw`attachment; filename="reports\2026\Q1.csv"`,
+      fileName: "Q1.csv",
+    },
+    {
+      name: "UTF-8 filename with a language tag",
+      header: "attachment; filename*=UTF-8'en'%E2%82%ACrates.csv",
+      fileName: "€rates.csv",
+    },
+    {
+      name: "ISO-8859-1 extended filename",
+      header: "attachment; filename*=ISO-8859-1''caf%E9.csv",
+      fileName: "café.csv",
+    },
+    {
+      name: "valid extended filename preferred over plain fallback",
+      header: "attachment; filename=legacy.csv; filename*=UTF-8'en'%E2%82%ACrates.csv",
+      fileName: "€rates.csv",
+    },
+    {
+      name: "malformed extended filename falls back to plain filename",
+      header: "attachment; filename=fallback.csv; filename*=UTF-8''%ZZbad.csv",
+      fileName: "fallback.csv",
+    },
+    {
+      name: "unsupported extended charset falls back to plain filename",
+      header: "attachment; filename*=UTF-16''bad.csv; filename=fallback.csv",
+      fileName: "fallback.csv",
+    },
+  ] as const)("parses $name for buffered and stored remote media", async (testCase) => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(makeStream([new Uint8Array([1, 2, 3])]), {
+          status: 200,
+          headers: {
+            "content-disposition": testCase.header,
+            "content-type": "text/csv",
+          },
+        }),
+    );
+    const request = {
+      url: "https://example.com/download",
+      fetchImpl,
+      lookupFn: makeLookupFn(),
+      maxBytes: 8,
+    };
+
+    const buffered = await readRemoteMediaBuffer(request);
+    const stored = await saveRemoteMedia(request);
+
+    expect(buffered.fileName).toBe(testCase.fileName);
+    expect(stored.fileName).toBe(testCase.fileName);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
 
   it.each([
     [`attachment; filename*=UTF-8''reports%2FQ1.pdf`, "reports_Q1.pdf"],

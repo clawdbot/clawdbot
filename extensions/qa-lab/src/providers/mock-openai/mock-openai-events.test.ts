@@ -139,6 +139,7 @@ describe("mock OpenAI Responses output item slots", () => {
     const events = buildAssistantThenToolCallEvents(
       {
         id: "assistant-before-tool",
+        phase: "commentary",
         streamDeltas: ["looking up"],
         text: "looking up",
       },
@@ -175,6 +176,23 @@ describe("mock OpenAI Responses output item slots", () => {
         output_index: 1,
         delta: JSON.stringify({ path: "README.md" }),
       },
+    );
+    expect(
+      events
+        .filter(
+          (event) =>
+            event.type === "response.output_item.added" ||
+            event.type === "response.output_item.done",
+        )
+        .map((event) => event.item)
+        .filter((item) => item.type === "message"),
+    ).toEqual([
+      expect.objectContaining({ id: "assistant-before-tool", phase: "commentary" }),
+      expect.objectContaining({ id: "assistant-before-tool", phase: "commentary" }),
+    ]);
+    const completed = events.find((event) => event.type === "response.completed");
+    expect(completed?.response.output[0]).toEqual(
+      expect.objectContaining({ id: "assistant-before-tool", phase: "commentary" }),
     );
   });
 

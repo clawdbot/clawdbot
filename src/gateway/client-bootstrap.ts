@@ -1,8 +1,8 @@
 // Gateway client bootstrap resolver.
 // Collects URL, auth, and handshake settings before constructing a GatewayClient.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveGatewayConnectionAuth } from "./connection-auth.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "./connection-details.js";
+import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
 import type { ExplicitGatewayAuth } from "./credentials.js";
 
 /**
@@ -42,7 +42,7 @@ export async function resolveGatewayClientBootstrap(params: {
   const urlOverrideSource = resolveGatewayUrlOverrideSource(connection.urlSource);
   // Only direct CLI/env URL overrides should constrain token/password fallback. Config-derived
   // remote URLs are canonical config, not a caller override.
-  const auth = await resolveGatewayConnectionAuth({
+  const auth = await resolveGatewayCredentialsWithSecretInputs({
     config: params.config,
     explicitAuth: params.explicitAuth,
     env: params.env ?? process.env,

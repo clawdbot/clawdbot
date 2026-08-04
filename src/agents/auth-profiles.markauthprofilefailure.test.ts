@@ -27,6 +27,8 @@ import {
 import {
   calculateAuthProfileCooldownMs,
   markAuthProfileFailure,
+  markInlineProviderApiKeyFailure,
+  resolveInlineProviderApiKeyUsageId,
   setAuthProfileFailureHook,
 } from "./auth-profiles/usage.js";
 
@@ -168,6 +170,26 @@ describe("markAuthProfileFailure", () => {
       expectCooldownInRange(remainingMs, 4.5 * 60 * 60 * 1000, 5.5 * 60 * 60 * 1000);
     });
   });
+  it("records billing backoff for inline provider api keys without creating an auth profile", async () => {
+    await withAuthProfileStore(async ({ agentDir, store }) => {
+      const startedAt = Date.now();
+      await markInlineProviderApiKeyFailure({
+        store,
+        provider: "anthropic",
+        reason: "billing",
+        agentDir,
+      });
+
+      const usageId = resolveInlineProviderApiKeyUsageId("anthropic");
+      const stats = store.usageStats?.[usageId];
+      expect(store.profiles[usageId]).toBeUndefined();
+      expect(stats?.disabledReason).toBe("billing");
+      expect(typeof stats?.disabledUntil).toBe("number");
+      const remainingMs = (stats?.disabledUntil as number) - startedAt;
+      expectCooldownInRange(remainingMs, 4.5 * 60 * 60 * 1000, 5.5 * 60 * 60 * 1000);
+    });
+  });
+
   it("keeps persisted cooldownUntil unchanged across mid-window retries", async () => {
     await withAuthProfileStore(async ({ agentDir, store }) => {
       await markAuthProfileFailure({
@@ -367,6 +389,24 @@ describe("markAuthProfileFailure", () => {
           store,
           profileId: "anthropic:default",
           reason: "auth",
+          agentDir,
+        });
+        expect(hook).toHaveBeenCalledTimes(1);
+      } finally {
+        setAuthProfileFailureHook(undefined);
+      }
+    });
+  });
+
+  it("fires the auth profile failure hook for inline provider api key failures", async () => {
+    await withAuthProfileStore(async ({ agentDir, store }) => {
+      const hook = vi.fn();
+      setAuthProfileFailureHook(hook);
+      try {
+        await markInlineProviderApiKeyFailure({
+          store,
+          provider: "anthropic",
+          reason: "billing",
           agentDir,
         });
         expect(hook).toHaveBeenCalledTimes(1);

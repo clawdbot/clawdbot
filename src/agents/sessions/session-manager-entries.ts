@@ -39,10 +39,23 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       !this.pendingDeliberateAppend &&
       this.appendMode !== "side" &&
       !isSessionTranscriptSideAppendEntry(canonicalEntry);
-    const effectiveParentId = this.persist(canonicalEntry, {
+    const persistenceResult = this.persist(canonicalEntry, {
       ...options,
       ...(activeBranchAppend ? { appendIntent: "active-branch" } : {}),
     });
+    if (persistenceResult && typeof persistenceResult === "object") {
+      this.reloadPersistedTranscript();
+      const adoptedMessageId =
+        canonicalEntry.type === "message"
+          ? this.resolveCurrentKeyedUserId(canonicalEntry.message)
+          : undefined;
+      if (adoptedMessageId !== persistenceResult.adoptedMessageId) {
+        throw new Error(`Session transcript parent entry was not persisted: ${canonicalEntry.id}`);
+      }
+      this.pendingDeliberateAppend = false;
+      return;
+    }
+    const effectiveParentId = persistenceResult;
     if (effectiveParentId !== undefined && effectiveParentId !== canonicalEntry.parentId) {
       this.reloadPersistedTranscript();
       this.pendingDeliberateAppend = false;
@@ -69,31 +82,41 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     }
   }
 
+  private resolveCurrentKeyedUserId(message: SessionMessageEntry["message"]): string | undefined {
+    if (
+      message.role !== "user" ||
+      !("idempotencyKey" in message) ||
+      typeof message.idempotencyKey !== "string" ||
+      message.idempotencyKey.length === 0
+    ) {
+      return undefined;
+    }
+    let parent = this.appendParentId ? this.byId.get(this.appendParentId) : undefined;
+    let remainingAncestors = this.byId.size;
+    while (parent && remainingAncestors-- > 0 && isSessionContextMetadataEntry(parent)) {
+      parent = parent.parentId ? this.byId.get(parent.parentId) : undefined;
+    }
+    if (
+      parent?.type === "message" &&
+      parent.message.role === "user" &&
+      "idempotencyKey" in parent.message &&
+      parent.message.idempotencyKey === message.idempotencyKey
+    ) {
+      return parent.id;
+    }
+    return undefined;
+  }
+
   appendMessage(
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
   ): string {
-    if (
-      options?.idempotencyLookup !== "caller-checked" &&
-      message.role === "user" &&
-      "idempotencyKey" in message &&
-      typeof message.idempotencyKey === "string" &&
-      message.idempotencyKey.length > 0
-    ) {
-      let parent = this.appendParentId ? this.byId.get(this.appendParentId) : undefined;
-      let remainingAncestors = this.byId.size;
-      while (parent && remainingAncestors-- > 0 && isSessionContextMetadataEntry(parent)) {
-        parent = parent.parentId ? this.byId.get(parent.parentId) : undefined;
-      }
-      if (
-        parent?.type === "message" &&
-        parent.message.role === "user" &&
-        "idempotencyKey" in parent.message &&
-        parent.message.idempotencyKey === message.idempotencyKey
-      ) {
+    if (options?.idempotencyLookup !== "caller-checked") {
+      const currentUserId = this.resolveCurrentKeyedUserId(message);
+      if (currentUserId) {
         // Session setup may insert context-free metadata after the ingress-persisted user.
         // Keep that metadata as the append parent while adopting the canonical user once.
-        return parent.id;
+        return currentUserId;
       }
     }
     const entry: SessionMessageEntry = {
@@ -104,7 +127,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       message,
     };
     this.appendEntry(entry, options);
-    return entry.id;
+    return this.resolveCurrentKeyedUserId(message) ?? entry.id;
   }
 
   appendThinkingLevelChange(thinkingLevel: string): string {

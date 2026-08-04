@@ -541,14 +541,16 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     if (!taskLine && !params.skipDefaultTaskLookup) {
       taskLine = formatAgentTaskCountsLine(statusAgentId);
     }
-    const { buildSubagentsStatusLine, countPendingDescendantRuns, listControlledSubagentRuns } =
+    const { buildControlledSubagentRunsReadContext, buildSubagentsStatusLine } =
       await loadStatusSubagentsRuntime();
-    const runs = listControlledSubagentRuns(requesterKey);
+    const subagentReadContext = buildControlledSubagentRunsReadContext(requesterKey);
+    const runs = subagentReadContext.runs;
     const verboseEnabled = resolvedVerboseLevel && resolvedVerboseLevel !== "off";
     subagentsLine = buildSubagentsStatusLine({
       runs,
       verboseEnabled,
-      pendingDescendantsForRun: (entry) => countPendingDescendantRuns(entry.childSessionKey),
+      pendingDescendantsForRun: (entry) =>
+        subagentReadContext.countPendingDescendantRuns(entry.childSessionKey),
     });
   }
   const groupActivation = isGroup

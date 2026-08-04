@@ -15,10 +15,7 @@ import {
 } from "openclaw/plugin-sdk/webhook-request-guards";
 import WebSocket, { type RawData } from "ws";
 import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
-import {
-  buildOpenAIQuicksilverDelegationPrompt,
-  type OpenAIQuicksilverTranscriptEntry,
-} from "./realtime-quicksilver-instructions.js";
+import { OpenAIQuicksilverDelegationController } from "./realtime-quicksilver-delegation-controller.js";
 import {
   releaseOpenAIQuicksilverSession,
   reserveOpenAIQuicksilverSession,
@@ -29,14 +26,10 @@ import {
   type OpenAIQuicksilverSocketFactory,
 } from "./realtime-quicksilver-sideband.js";
 import {
-  boundOpenAIQuicksilverContextItems,
   buildOpenAIQuicksilverSession,
-  chunkOpenAIQuicksilverAppendText,
   createOpenAIQuicksilverCall,
-  parseOpenAIQuicksilverEvent,
   resolveOpenAIQuicksilverVoice,
   type OpenAIQuicksilverAuth,
-  type OpenAIQuicksilverInboundEvent,
   type OpenAIQuicksilverInitialItem,
   type OpenAIQuicksilverRequestIds,
 } from "./realtime-quicksilver-wire.js";
@@ -71,85 +64,18 @@ type PendingOffer = {
   request: PreparedOpenAIQuicksilverSessionRequest;
 };
 
-type PendingDelegation = {
-  id: string;
-  prompt: string;
-};
-
 type ActiveSession = {
   abortController: AbortController;
-  consultController?: AbortController;
-  pendingDelegation?: PendingDelegation;
+  delegations: OpenAIQuicksilverDelegationController;
   socket: OpenAIQuicksilverSocket;
   timer: NodeJS.Timeout;
   token: string;
-  transcript: OpenAIQuicksilverTranscriptEntry[];
-  partialTranscriptRole: "user" | "assistant" | undefined;
 };
 
 type ResponseDeliveryWaiter = {
   result: Promise<boolean>;
   cancel: () => void;
 };
-
-function sendOpenAIQuicksilverAppend(params: {
-  socket: OpenAIQuicksilverSocket;
-  delegationItemId: string;
-  text: string;
-  channel: "speakable" | "commentary";
-}): void {
-  for (const chunk of chunkOpenAIQuicksilverAppendText(params.text)) {
-    params.socket.send(
-      JSON.stringify({
-        type: "delegation.context.append",
-        delegation_item_id: params.delegationItemId,
-        channel: params.channel,
-        content: [{ type: "input_text", text: chunk }],
-      }),
-    );
-  }
-}
-
-const OPENAI_QUICKSILVER_CONSULT_FAILURE_TEXT =
-  "The agent task failed. Tell the user it did not complete and offer to try again.";
-
-function shortConsultFailureReason(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.replaceAll(/\s+/g, " ").trim().slice(0, 180) || "unknown error";
-}
-
-function decodeQuicksilverTextFrame(data: RawData): string {
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(data).toString("utf8");
-  }
-  return data.toString("utf8");
-}
-
-function appendOpenAIQuicksilverTranscript(
-  session: ActiveSession,
-  event: Extract<OpenAIQuicksilverInboundEvent, { kind: "transcript-delta" | "transcript-done" }>,
-): void {
-  const last = session.transcript.at(-1);
-  if (event.kind === "transcript-delta") {
-    if (last?.role === event.role && session.partialTranscriptRole === event.role) {
-      last.text += event.text;
-    } else {
-      session.transcript.push({ role: event.role, text: event.text });
-    }
-    session.partialTranscriptRole = event.role;
-  } else {
-    if (last?.role === event.role && session.partialTranscriptRole === event.role) {
-      last.text = event.text;
-    } else {
-      session.transcript.push({ role: event.role, text: event.text });
-    }
-    session.partialTranscriptRole = undefined;
-  }
-  session.transcript = boundOpenAIQuicksilverContextItems(session.transcript);
-}
 
 function createResponseDeliveryWaiter(
   res: ServerResponse,
@@ -258,8 +184,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
     reservations.delete(session.token);
     releaseOpenAIQuicksilverSession(session.token);
     clearTimeout(session.timer);
-    session.pendingDelegation = undefined;
-    session.consultController?.abort(new Error("GPT-Live delegation stopped"));
+    session.delegations.stop(new Error("GPT-Live delegation stopped"));
     session.abortController.abort(new Error("GPT-Live session closed"));
     return true;
   };
@@ -282,161 +207,19 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
     }
   };
 
-  const handleDelegation = async (
-    session: ActiveSession,
-    delegationItemId: string,
-    prompt: string,
-    signal: AbortSignal,
-    runAgentConsult: NonNullable<OpenAIQuicksilverSessionRequest["runAgentConsult"]>,
-  ) => {
-    let finalText: string;
-    try {
-      const result = await runAgentConsult({ prompt, signal });
-      if (signal.aborted) {
-        return;
-      }
-      finalText = result.text;
-    } catch (error) {
-      if (signal.aborted) {
-        return;
-      }
-      // Agent failures can embed local paths, commands, or request data. The sideband is
-      // an external provider surface the model may speak aloud, so only a fixed message
-      // crosses it; the detail stays in Gateway logs.
-      params.logger.warn(
-        `OpenAI GPT-Live delegation consult failed: ${shortConsultFailureReason(error)}`,
-      );
-      finalText = OPENAI_QUICKSILVER_CONSULT_FAILURE_TEXT;
-    }
-    if (session.socket.readyState !== WEBSOCKET_OPEN) {
-      return;
-    }
-    sendOpenAIQuicksilverAppend({
-      socket: session.socket,
-      delegationItemId,
-      text: finalText,
-      channel: "speakable",
-    });
-  };
-
-  const startDelegation = (
-    session: ActiveSession,
-    delegation: PendingDelegation,
-    runAgentConsult: NonNullable<OpenAIQuicksilverSessionRequest["runAgentConsult"]>,
-  ) => {
-    if (activeSessions.get(session.token) !== session || session.abortController.signal.aborted) {
-      return;
-    }
-    if (session.consultController) {
-      session.pendingDelegation = delegation;
-      session.consultController.abort(new Error("GPT-Live delegation superseded"));
-      return;
-    }
-    const consultController = new AbortController();
-    session.consultController = consultController;
-    const signal = AbortSignal.any([session.abortController.signal, consultController.signal]);
-    void handleDelegation(session, delegation.id, delegation.prompt, signal, runAgentConsult)
-      .catch((error: unknown) => {
-        params.logger.warn(
-          `OpenAI GPT-Live delegation failed: ${shortConsultFailureReason(error)}`,
-        );
-        closeSession(session);
-      })
-      .finally(() => {
-        if (session.consultController !== consultController) {
-          return;
-        }
-        session.consultController = undefined;
-        const pending = session.pendingDelegation;
-        session.pendingDelegation = undefined;
-        if (pending && activeSessions.get(session.token) === session) {
-          startDelegation(session, pending, runAgentConsult);
-        }
-      });
-  };
-
   const scheduleSessionExpiry = (session: ActiveSession, ttlMs: number) => {
     clearTimeout(session.timer);
     session.timer = setTimeout(() => closeSession(session), Math.max(0, ttlMs));
     session.timer.unref?.();
   };
 
-  const handleSidebandEvent = (
-    session: ActiveSession,
-    event: OpenAIQuicksilverInboundEvent,
-    runAgentConsult: NonNullable<OpenAIQuicksilverSessionRequest["runAgentConsult"]>,
-  ) => {
-    if (event.kind === "ignored") {
-      return;
-    }
-    if (event.kind === "unknown") {
-      params.logger.debug?.(`OpenAI GPT-Live ignored unknown sideband event: ${event.eventType}`);
-      return;
-    }
-    if (event.kind === "session-started") {
-      if (event.expiresAt !== undefined) {
-        const upstreamTtlMs = event.expiresAt * 1000 - Date.now();
-        scheduleSessionExpiry(session, Math.min(OPENAI_QUICKSILVER_SESSION_TTL_MS, upstreamTtlMs));
-      }
-      return;
-    }
-    if (event.kind === "transcript-delta" || event.kind === "transcript-done") {
-      appendOpenAIQuicksilverTranscript(session, event);
-      return;
-    }
-    if (event.kind === "error") {
-      params.logger.warn(`OpenAI GPT-Live sideband error: ${event.message}`);
-      if (event.fatalAuth) {
-        closeSession(session);
-      }
-      return;
-    }
-    // WebRTC carries media separately; only the direct backend bridge consumes
-    // Frameless output_audio.delta events received on the provider WebSocket.
-    if (event.kind === "audio") {
-      return;
-    }
-    const delegationInput = event.prompt;
-    if (!delegationInput.trim()) {
-      params.logger.debug?.("OpenAI GPT-Live ignored an empty client delegation");
-      return;
-    }
-    // Drain only for a delegation we actually consult: the transcript is a
-    // once-delivered delta, so clearing it for an ignored event would strand
-    // that context and consult the next real delegation without it.
-    const transcript = session.transcript;
-    session.transcript = [];
-    session.partialTranscriptRole = undefined;
-    const prompt = buildOpenAIQuicksilverDelegationPrompt({
-      input: delegationInput,
-      transcript,
-    });
-    startDelegation(session, { id: event.id, prompt }, runAgentConsult);
+  const handleSidebandFrame = (session: ActiveSession, data: RawData, isBinary: boolean) => {
+    session.delegations.handleFrame(data, isBinary);
   };
 
-  const handleSidebandFrame = (
-    session: ActiveSession,
-    data: RawData,
-    isBinary: boolean,
-    runAgentConsult: NonNullable<OpenAIQuicksilverSessionRequest["runAgentConsult"]>,
-  ) => {
-    if (isBinary) {
-      params.logger.warn("OpenAI GPT-Live sideband returned an unexpected binary frame");
-      closeSession(session);
-      return;
-    }
-    const event = parseOpenAIQuicksilverEvent(decodeQuicksilverTextFrame(data));
-    if (event) {
-      handleSidebandEvent(session, event, runAgentConsult);
-    }
-  };
-
-  const attachSidebandHandlers = (
-    session: ActiveSession,
-    runAgentConsult: NonNullable<OpenAIQuicksilverSessionRequest["runAgentConsult"]>,
-  ) => {
+  const attachSidebandHandlers = (session: ActiveSession) => {
     session.socket.on("message", (data: RawData, isBinary: boolean) => {
-      handleSidebandFrame(session, data, isBinary, runAgentConsult);
+      handleSidebandFrame(session, data, isBinary);
     });
     session.socket.on("error", (error: Error) => {
       params.logger.warn(`OpenAI GPT-Live sideband socket failed: ${error.message}`);
@@ -633,21 +416,40 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
         }
       }, OPENAI_QUICKSILVER_SESSION_TTL_MS);
       timer.unref?.();
+      const delegations = new OpenAIQuicksilverDelegationController({
+        getSocket: () => connected.socket,
+        logger: params.logger,
+        onFatalError: () => {
+          if (session) {
+            closeSession(session);
+          }
+        },
+        onSessionStarted: (expiresAt) => {
+          if (session && expiresAt !== undefined) {
+            const upstreamTtlMs = expiresAt * 1000 - Date.now();
+            scheduleSessionExpiry(
+              session,
+              Math.min(OPENAI_QUICKSILVER_SESSION_TTL_MS, upstreamTtlMs),
+            );
+          }
+        },
+        runAgentConsult,
+        signal: abortController.signal,
+      });
       session = {
         abortController,
+        delegations,
         socket: connected.socket,
         timer,
         token,
-        transcript: [],
-        partialTranscriptRole: undefined,
       };
       activeSessions.set(token, session);
       reserveOpenAIQuicksilverSession(token);
       reservationTransferred = true;
-      attachSidebandHandlers(session, runAgentConsult);
+      attachSidebandHandlers(session);
       const terminalEvent = connected.detachBuffer();
       for (const frame of connected.bufferedFrames) {
-        handleSidebandFrame(session, frame.data, frame.isBinary, runAgentConsult);
+        handleSidebandFrame(session, frame.data, frame.isBinary);
       }
       if (terminalEvent && activeSessions.get(token) === session) {
         if (terminalEvent.kind === "error") {

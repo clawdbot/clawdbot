@@ -353,11 +353,6 @@ export function writeConfig({ homeDir, workspaceDir, port, token }) {
         store: {
           vector: { enabled: false },
         },
-        sync: {
-          watch: true,
-          onSessionStart: false,
-          onSearch: false,
-        },
       },
     },
     plugins: { allow: ["memory-core"] },

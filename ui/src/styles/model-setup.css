@@ -69,6 +69,10 @@
   min-width: 0;
 }
 
+.model-setup__current-copy {
+  min-width: 0;
+}
+
 .model-setup__row-actions {
   display: flex;
   flex: 0 0 auto;
@@ -137,8 +141,29 @@
   font-weight: 600;
 }
 
-.model-setup__row .callout {
-  margin-top: 10px;
+.model-setup__failure {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin-top: 8px;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.model-setup__failure-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--danger);
+}
+
+.model-setup__failure-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.model-setup__failure span:last-child {
+  overflow-wrap: anywhere;
 }
 
 .model-setup__more {
@@ -311,6 +336,7 @@
 }
 
 .model-setup-success__icon {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -321,7 +347,37 @@
   color: var(--ok);
 }
 
-.model-setup-success__icon svg {
+.model-setup-success__icon--provider {
+  background: color-mix(in srgb, var(--text-strong) 8%, var(--panel));
+}
+
+.model-setup-success__provider-icon {
+  width: 30px;
+  height: 30px;
+}
+
+.model-setup-success__status-badge {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: 3px solid var(--panel);
+  border-radius: 50%;
+  background: var(--ok);
+  color: var(--panel);
+}
+
+.model-setup-success__status-badge svg {
+  width: 11px;
+  height: 11px;
+  stroke-width: 3;
+}
+
+.model-setup-success__icon > svg {
   width: 28px;
   height: 28px;
 }

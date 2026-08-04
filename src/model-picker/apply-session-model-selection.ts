@@ -95,11 +95,8 @@ type ApplySessionModelSelectionToEntryResult = {
   runtimeChange?: { kind: "clear" } | { kind: "set"; runtime: string };
 };
 
-/**
- * Applies the model transaction field family to one caller-owned snapshot.
- * Mixed directives reuse this mutator and retain their single broad persistence transaction.
- */
-export function applySessionModelSelectionToEntry(params: {
+/** Applies the model transaction field family to one caller-owned snapshot. */
+function applySessionModelSelectionToEntry(params: {
   entry: SessionEntry;
   request: SessionModelSelectionRequest;
   runtime: AppliedRuntimeDirective;

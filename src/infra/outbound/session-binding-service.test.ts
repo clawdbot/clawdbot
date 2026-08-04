@@ -1,12 +1,7 @@
 // Covers session binding adapter registration, generic current-conversation
 // fallback, capability errors, deduping, and duplicate graph teardown.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import {
-  pinActivePluginChannelRegistry,
-  releasePinnedPluginChannelRegistry,
-  setActivePluginRegistry,
-} from "../../plugins/runtime.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
@@ -442,49 +437,6 @@ describe("session binding service", () => {
       accountId: "default",
       conversationId: "19:chatid@thread.v2",
     });
-  });
-
-  it("does not advertise generic plugin bindings from a stale global registry when the active channel registry is empty", async () => {
-    const activeRegistry = createEmptyPluginRegistry();
-    activeRegistry.channels.push({
-      plugin: {
-        id: "external-chat",
-        meta: { aliases: ["external-chat-alias"] },
-      } as never,
-    } as never);
-    setActivePluginRegistry(activeRegistry);
-    const pinnedEmptyChannelRegistry = createEmptyPluginRegistry();
-    pinActivePluginChannelRegistry(pinnedEmptyChannelRegistry);
-
-    try {
-      const service = getSessionBindingService();
-      expect(
-        service.getCapabilities({
-          channel: "external-chat-alias",
-          accountId: "default",
-        }),
-      ).toEqual({
-        adapterAvailable: false,
-        bindSupported: false,
-        unbindSupported: false,
-        placements: [],
-      });
-
-      await expectSessionBindingError(
-        service.bind({
-          targetSessionKey: "agent:codex:acp:external-chat",
-          targetKind: "session",
-          conversation: {
-            channel: "external-chat-alias",
-            accountId: "default",
-            conversationId: "room-1",
-          },
-        }),
-        "BINDING_ADAPTER_UNAVAILABLE",
-      );
-    } finally {
-      releasePinnedPluginChannelRegistry(pinnedEmptyChannelRegistry);
-    }
   });
 
   it("keeps the newest live adapter authoritative until it unregisters", () => {

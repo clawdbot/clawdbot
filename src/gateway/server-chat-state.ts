@@ -2,6 +2,12 @@ import type { AgentPlanStep } from "../channels/streaming.js";
 // Gateway chat run state registries.
 // Tracks active runs, delta buffers, tool recipients, and session subscribers.
 import type { AgentEventPayload } from "../infra/agent-events.js";
+import {
+  normalizeLiveAssistantBufferedText,
+  projectLiveAssistantBufferedText,
+} from "./live-chat-projector.js";
+import type { ChatRunProgressSnapshot } from "./server-chat-progress-snapshot.js";
+import { updateChatRunProgressSnapshot } from "./server-chat-progress-snapshot.js";
 
 export type ChatRunTiming = {
   ackedAtMs: number;
@@ -102,7 +108,10 @@ type ChatRunRecord = {
   registrations?: ChatRunEntry[];
   rawBuffer?: string;
   buffer?: string;
+  /** Projection stays valid only while source matches rawBuffer; readers refresh it lazily. */
+  bufferProjection?: { source: string; suppress: boolean };
   planSnapshot?: ChatRunPlanSnapshot;
+  progressSnapshot?: ChatRunProgressSnapshot;
   /** Last time any buffered assistant text changed, including suppressed raw buffers. */
   bufferUpdatedAt?: number;
   deltaSentAt?: number;
@@ -227,8 +236,10 @@ export type ChatRunState = {
   registry: ChatRunRegistry;
   toolEventRecipients: ToolEventRecipientRegistry;
   getOrCreate: (runId: string) => ChatRunRecord;
+  resolveBuffer: (runId: string) => { text: string; suppress: boolean };
   hasAbortMarker: (runId: string) => boolean;
   deleteAbortMarker: (runId: string) => void;
+  recordProgressEvent: (runId: string, event: AgentEventPayload) => void;
   clearRun: (runId: string) => void;
   clear: () => void;
 };
@@ -239,6 +250,16 @@ export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistryForStore(store);
   const toolEventRecipients = createToolEventRecipientRegistryForStore(store);
 
+  const recordProgressEvent = (runId: string, event: AgentEventPayload) => {
+    const progressSnapshot = updateChatRunProgressSnapshot(
+      store.runs.get(runId)?.progressSnapshot,
+      event,
+    );
+    if (progressSnapshot) {
+      store.getOrCreate(runId).progressSnapshot = progressSnapshot;
+    }
+  };
+
   const clearRun = (runId: string) => {
     const record = store.runs.get(runId);
     if (!record) {
@@ -246,7 +267,9 @@ export function createChatRunState(): ChatRunState {
     }
     delete record.rawBuffer;
     delete record.buffer;
+    delete record.bufferProjection;
     delete record.planSnapshot;
+    delete record.progressSnapshot;
     delete record.bufferUpdatedAt;
     delete record.deltaSentAt;
     delete record.deltaLastBroadcastLen;
@@ -259,11 +282,36 @@ export function createChatRunState(): ChatRunState {
     store.runs.clear();
   };
 
+  const resolveBuffer = (runId: string) => {
+    const record = store.runs.get(runId);
+    if (!record) {
+      return projectLiveAssistantBufferedText("");
+    }
+    const rawText = record.rawBuffer;
+    if (rawText === undefined) {
+      return projectLiveAssistantBufferedText(record.buffer ?? "");
+    }
+    if (record.bufferProjection?.source === rawText && record.buffer !== undefined) {
+      return {
+        text: record.buffer,
+        suppress: record.bufferProjection.suppress,
+      };
+    }
+    // Protected blocks and directive tags can span delta frames, so the
+    // projection cache belongs to the complete merged raw buffer.
+    const normalizedText = normalizeLiveAssistantBufferedText(rawText);
+    const projected = projectLiveAssistantBufferedText(normalizedText);
+    record.buffer = projected.text;
+    record.bufferProjection = { source: rawText, suppress: projected.suppress };
+    return projected;
+  };
+
   return {
     runs: store.runs,
     registry,
     toolEventRecipients,
     getOrCreate: store.getOrCreate,
+    resolveBuffer,
     hasAbortMarker: (runId) => store.runs.get(runId)?.abortMarker !== undefined,
     deleteAbortMarker: (runId) => {
       const record = store.runs.get(runId);
@@ -273,6 +321,7 @@ export function createChatRunState(): ChatRunState {
       delete record.abortMarker;
       store.releaseIfEmpty(runId);
     },
+    recordProgressEvent,
     clearRun,
     clear,
   };

@@ -148,12 +148,28 @@ private struct OnboardingRecommendedInstallCard: View {
     }
 }
 
+struct GatewayAuthCard: Equatable {
+    let title: String
+    let message: String
+    let primaryTitle: String
+    let secondaryTitle: String
+}
+
 struct OnboardingAISetupView: View {
     @Bindable var model: OnboardingAISetupModel
     var systemAgentChat: SystemAgentOnboardingChatModel
     @Binding var showSystemAgentChat: Bool
+    var returnToGatewayAuthentication: () -> Void
     var retryConfiguredGatewayProbe: () -> Void
     @State private var openedProviderAuthURL: URL?
+
+    static func gatewayAuthCard(for issue: RemoteGatewayAuthIssue) -> GatewayAuthCard {
+        GatewayAuthCard(
+            title: "Gateway authentication required",
+            message: issue.statusMessage,
+            primaryTitle: "Back to Gateway",
+            secondaryTitle: "Try again")
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -212,7 +228,10 @@ struct OnboardingAISetupView: View {
                     self.candidateRow(candidate)
                 }
             }
-        } else if self.model.phase != .connected, self.model.detectError == nil {
+        } else if self.model.phase != .connected,
+                  self.model.detectError == nil,
+                  self.model.configuredGatewayAuthIssue == nil
+        {
             // A failed detect must not claim "nothing found" — the error card
             // below owns that state and the claim would be unproven.
             self.noCandidatesIntro
@@ -222,7 +241,17 @@ struct OnboardingAISetupView: View {
             self.unavailableCandidatesSection
         }
 
-        if let detectError = model.detectError {
+        if let authIssue = model.configuredGatewayAuthIssue {
+            let card = Self.gatewayAuthCard(for: authIssue)
+            OnboardingErrorCard(
+                title: card.title,
+                message: card.message,
+                docsSlug: "start/onboarding",
+                retryTitle: card.primaryTitle,
+                secondaryTitle: card.secondaryTitle,
+                secondary: self.retryConfiguredGatewayProbe,
+                retry: self.returnToGatewayAuthentication)
+        } else if let detectError = model.detectError {
             OnboardingErrorCard(
                 title: self.model.configuredGatewayProbeUnavailable
                     ? "Couldn’t check this Gateway for AI accounts"
@@ -322,6 +351,14 @@ struct OnboardingAISetupView: View {
                 .buttonStyle(.link)
                 .font(.caption)
             }
+
+            Button {
+                self.model.chooseDifferentAI()
+            } label: {
+                Label("Choose a different AI…", systemImage: "arrow.triangle.2.circlepath")
+            }
+            .buttonStyle(.link)
+            .font(.caption)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -510,7 +547,7 @@ struct OnboardingAISetupView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Set up a local model")
                     .font(.headline)
-                Text("Download or prepare a local model on this Gateway.")
+                Text("Connect a local model service, or prepare a model on this Gateway.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 ForEach(self.model.prepareOptions) { option in
@@ -534,7 +571,7 @@ struct OnboardingAISetupView: View {
                                 }
                             }
                             Spacer(minLength: 0)
-                            Text("Set up / Download model")
+                            Text(option.actionLabel ?? String(localized: "Connect / Set up"))
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(Color.accentColor)
                         }
@@ -660,7 +697,7 @@ struct OnboardingAISetupView: View {
                     Text(self.model.activeAuthOption?.label ?? "Provider setup")
                         .font(.title3.weight(.semibold))
                     Text(self.model.isPreparingModel
-                        ? "The model is downloaded and prepared on this Gateway."
+                        ? "OpenClaw will detect and verify the prepared model before using it."
                         : "Credentials stay on this Gateway and are saved only after the live test succeeds.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -858,7 +895,10 @@ struct OnboardingAISetupView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(self.model.manualTesting ||
+                // isBusy, not just manualTesting: submitManualKey drops the tap
+                // while another test runs, so an enabled button would be a
+                // silent no-op.
+                .disabled(self.model.isBusy ||
                     self.model.manualKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             Text(self.manualProviderHelp)
@@ -917,6 +957,8 @@ struct OnboardingErrorCard: View {
     let docsSlug: String
     var retryTitle: String?
     var retry: (() -> Void)?
+    var secondaryTitle: String?
+    var secondary: (() -> Void)?
 
     init(
         title: String,
@@ -924,6 +966,8 @@ struct OnboardingErrorCard: View {
         details: String? = nil,
         docsSlug: String,
         retryTitle: String? = nil,
+        secondaryTitle: String? = nil,
+        secondary: (() -> Void)? = nil,
         retry: (() -> Void)? = nil)
     {
         self.title = title
@@ -932,6 +976,8 @@ struct OnboardingErrorCard: View {
         self.docsSlug = docsSlug
         self.retryTitle = retryTitle
         self.retry = retry
+        self.secondaryTitle = secondaryTitle
+        self.secondary = secondary
     }
 
     var body: some View {
@@ -954,6 +1000,11 @@ struct OnboardingErrorCard: View {
                     if let retryTitle, let retry {
                         Button(retryTitle, action: retry)
                             .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                    }
+                    if let secondaryTitle, let secondary {
+                        Button(secondaryTitle, action: secondary)
+                            .buttonStyle(.bordered)
                             .controlSize(.small)
                     }
                     Button("Open help…") {

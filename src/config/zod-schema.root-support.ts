@@ -192,6 +192,8 @@ export const PluginEntrySchema = z.strictObject({
     .strictObject({
       allowModelOverride: z.boolean().optional(),
       allowedModels: z.array(z.string()).optional(),
+      allowedCompletionModels: z.array(z.string()).optional(),
+      allowAuthProfileOverride: z.boolean().optional(),
       allowAgentIdOverride: z.boolean().optional(),
     })
     .optional(),

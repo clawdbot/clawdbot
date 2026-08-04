@@ -11,10 +11,6 @@ import { extractSlackToolSend } from "./message-actions.js";
 import { describeSlackMessageTool } from "./message-tool-api.js";
 import { resolveSlackChannelId } from "./targets.js";
 
-type ConversationReadInvocationOrigin = NonNullable<
-  ChannelMessageActionContext["conversationReadOrigin"]
->;
-
 type SlackActionInvoke = (
   action: Record<string, unknown>,
   cfg: unknown,
@@ -33,33 +29,31 @@ const SLACK_TOOL_DELIVERY_ACTIONS = new Set([
 
 const loadSlackActionRuntime = createLazyRuntimeModule(() => import("./action-runtime.runtime.js"));
 
-function resolveSlackActionContext(params: {
-  toolContext: unknown;
-  mediaLocalRoots: readonly string[] | undefined;
-  mediaReadFile: ((filePath: string) => Promise<Buffer>) | undefined;
-  conversationReadOrigin?: ConversationReadInvocationOrigin;
-  requesterAccountId?: string | null;
-  requesterSenderId?: string | null;
-}): SlackActionContext | undefined {
+function resolveSlackActionContext(
+  ctx: ChannelMessageActionContext,
+  toolContext: unknown,
+): SlackActionContext | undefined {
   if (
-    !params.toolContext &&
-    !params.mediaLocalRoots &&
-    !params.mediaReadFile &&
-    !params.conversationReadOrigin &&
-    !params.requesterAccountId &&
-    !params.requesterSenderId
+    !toolContext &&
+    !ctx.mediaAccess &&
+    !ctx.mediaLocalRoots &&
+    !ctx.mediaReadFile &&
+    !ctx.conversationReadOrigin &&
+    !ctx.requesterAccountId &&
+    !ctx.requesterSenderId
   ) {
     return undefined;
   }
   return {
-    ...(params.toolContext as SlackActionContext | undefined),
-    ...(params.mediaLocalRoots ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
-    ...(params.mediaReadFile ? { mediaReadFile: params.mediaReadFile } : {}),
+    ...(toolContext as SlackActionContext | undefined),
     // Authority comes only from the host-owned action context. Overwrite any
     // structurally compatible fields carried by generic tool context.
-    conversationReadOrigin: params.conversationReadOrigin,
-    requesterAccountId: params.requesterAccountId ?? undefined,
-    requesterSenderId: params.requesterSenderId ?? undefined,
+    mediaAccess: ctx.mediaAccess,
+    mediaLocalRoots: ctx.mediaLocalRoots,
+    mediaReadFile: ctx.mediaReadFile,
+    conversationReadOrigin: ctx.conversationReadOrigin,
+    requesterAccountId: ctx.requesterAccountId ?? undefined,
+    requesterSenderId: ctx.requesterSenderId ?? undefined,
   };
 }
 
@@ -80,14 +74,7 @@ export function createSlackActions(
         normalizeChannelId: resolveSlackChannelId,
         includeReadThreadId: true,
         invoke: async (action, cfg, toolContext) => {
-          const actionContext = resolveSlackActionContext({
-            toolContext,
-            mediaLocalRoots: ctx.mediaLocalRoots,
-            mediaReadFile: ctx.mediaReadFile,
-            conversationReadOrigin: ctx.conversationReadOrigin,
-            requesterAccountId: ctx.requesterAccountId,
-            requesterSenderId: ctx.requesterSenderId,
-          });
+          const actionContext = resolveSlackActionContext(ctx, toolContext);
           return await (options?.invoke
             ? options.invoke(action, cfg, actionContext)
             : (await loadSlackActionRuntime()).handleSlackAction(action, cfg, actionContext));

@@ -8,6 +8,7 @@ import {
   resolveAgentHarnessSessionStoreEntryError,
 } from "../../sessions/agent-harness-session-key.js";
 import { emitSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
@@ -109,6 +110,7 @@ export async function cleanupSqliteSessionLifecycleArtifacts(
 ): Promise<SessionLifecycleArtifactCleanupResult> {
   const sessionKeySegmentPrefix = params.sessionKeySegmentPrefix.trim();
   const transcriptContentMarker = params.transcriptContentMarker;
+  const pluginOwnerId = params.pluginOwnerId?.trim();
   if (!sessionKeySegmentPrefix || !transcriptContentMarker) {
     return { removedEntries: 0, archivedTranscriptArtifacts: 0 };
   }
@@ -117,11 +119,18 @@ export async function cleanupSqliteSessionLifecycleArtifacts(
     ...(params.agentId ? { agentId: params.agentId } : {}),
     storePath: params.storePath,
   });
+  const databaseOptions = toDatabaseOptions(resolved);
+  // Maintenance must not turn a read-only startup probe into a newly materialized agent store.
+  if (!withOpenClawAgentDatabaseReadOnly(() => true, databaseOptions).found) {
+    return { removedEntries: 0, archivedTranscriptArtifacts: 0 };
+  }
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
-    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+    const database = openOpenClawAgentDatabase(databaseOptions);
     const cleanupPlan = planSqliteSessionLifecycleArtifactCleanup(database, {
+      ...(params.agentId !== undefined ? { agentId: resolved.agentId } : {}),
       archiveRemovedEntryTranscripts: params.archiveRemovedEntryTranscripts !== false,
       archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
+      ...(pluginOwnerId ? { pluginOwnerId } : {}),
       sessionKeySegmentPrefix,
       transcriptContentMarker,
       orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
@@ -142,7 +151,7 @@ export async function cleanupSqliteSessionLifecycleArtifacts(
         transactionDb,
         cleanupPlan.entries,
       );
-    }, toDatabaseOptions(resolved));
+    }, databaseOptions);
     emitCommittedSessionEntryRemovals(cleanupPlan.entries);
     return {
       removedEntries,

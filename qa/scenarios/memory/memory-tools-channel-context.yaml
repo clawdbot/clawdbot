@@ -20,6 +20,7 @@ scenario:
     - extensions/qa-lab/src/suite.ts
   execution:
     kind: flow
+    channel: qa-channel
     summary: Verify the agent uses memory tools in a shared channel when the answer lives only in memory files, not the live transcript.
     config:
       channelId: qa-memory-room

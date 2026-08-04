@@ -539,7 +539,9 @@ function pruneAuthProfileStoreReferences(
     : undefined;
   store.usageStats = store.usageStats
     ? Object.fromEntries(
-        Object.entries(store.usageStats).filter(([profileId]) => keptProfileIds.has(profileId)),
+        Object.entries(store.usageStats).filter(
+          ([profileId]) => keptProfileIds.has(profileId) || profileId.startsWith("inline-api-key:"),
+        ),
       )
     : undefined;
   store.runtimePersistedProfileIds = store.runtimePersistedProfileIds

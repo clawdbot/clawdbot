@@ -16,12 +16,120 @@ import {
   sanitizeGoogleGeminiReplayHistory,
 } from "../plugins/provider-replay-helpers.js";
 import type { ProviderPlugin } from "../plugins/types.js";
+import { definePluginEntry } from "./plugin-entry.js";
 import type {
   ProviderReasoningOutputModeContext,
   ProviderReplayPolicyContext,
   ProviderRuntimeModel,
   ProviderSanitizeReplayHistoryContext,
 } from "./plugin-entry.js";
+
+type SelfHostedOpenAICompatibleProviderOverrides = Partial<
+  Omit<ProviderPlugin, "id" | "label" | "docsPath" | "envVars" | "auth" | "catalog" | "wizard">
+>;
+
+export type SelfHostedOpenAICompatibleProviderOptions = {
+  id: string;
+  label: string;
+  hint: string;
+  groupHint: string;
+  defaultBaseUrl: string;
+  apiKeyEnvVar: string;
+  modelPlaceholder: string;
+  overrides?: SelfHostedOpenAICompatibleProviderOverrides;
+};
+
+/** Defines the canonical setup, discovery, and wizard flow for one self-hosted OpenAI endpoint. */
+export function defineSelfHostedOpenAICompatibleProvider(
+  options: SelfHostedOpenAICompatibleProviderOptions,
+): ReturnType<typeof definePluginEntry> {
+  // Provider entries load during plugin discovery; setup/wizard code stays lazy until used.
+  const loadProviderSetup = async () => await import("./provider-setup.js");
+  return definePluginEntry({
+    id: options.id,
+    name: `${options.label} Provider`,
+    description: `Bundled ${options.label} provider plugin`,
+    register(api) {
+      api.registerProvider({
+        ...options.overrides,
+        id: options.id,
+        label: options.label,
+        docsPath: `/providers/${options.id}`,
+        envVars: [options.apiKeyEnvVar],
+        auth: [
+          {
+            id: "custom",
+            label: options.label,
+            hint: options.hint,
+            kind: "custom",
+            run: async (ctx) => {
+              const setup = await loadProviderSetup();
+              return await setup.promptAndConfigureOpenAICompatibleSelfHostedProviderAuth({
+                cfg: ctx.config,
+                prompter: ctx.prompter,
+                providerId: options.id,
+                providerLabel: options.label,
+                defaultBaseUrl: options.defaultBaseUrl,
+                defaultApiKeyEnvVar: options.apiKeyEnvVar,
+                modelPlaceholder: options.modelPlaceholder,
+              });
+            },
+            runNonInteractive: async (ctx) => {
+              const setup = await loadProviderSetup();
+              return await setup.configureOpenAICompatibleSelfHostedProviderNonInteractive({
+                ctx,
+                providerId: options.id,
+                providerLabel: options.label,
+                defaultBaseUrl: options.defaultBaseUrl,
+                defaultApiKeyEnvVar: options.apiKeyEnvVar,
+                modelPlaceholder: options.modelPlaceholder,
+              });
+            },
+          },
+        ],
+        catalog: {
+          order: "late",
+          run: async (ctx) => {
+            const setup = await loadProviderSetup();
+            return await setup.discoverOpenAICompatibleSelfHostedProvider({
+              ctx,
+              providerId: options.id,
+              buildProvider: async (params) => {
+                const baseUrl = (params?.baseUrl?.trim() || options.defaultBaseUrl).replace(
+                  /\/+$/,
+                  "",
+                );
+                const models = await setup.discoverOpenAICompatibleLocalModels({
+                  baseUrl,
+                  apiKey: params?.apiKey,
+                  label: options.label,
+                  discoverRuntimeContext: false,
+                });
+                return { baseUrl, api: "openai-completions", models };
+              },
+            });
+          },
+        },
+        wizard: {
+          setup: {
+            choiceId: options.id,
+            choiceLabel: options.label,
+            choiceHint: options.hint,
+            groupId: options.id,
+            groupLabel: options.label,
+            groupHint: options.groupHint,
+            methodId: "custom",
+          },
+          modelPicker: {
+            label: `${options.label} (custom)`,
+            hint: `Enter ${options.label} URL + API key + model`,
+            methodId: "custom",
+          },
+        },
+      });
+    },
+  });
+}
 
 export type {
   ModelApi,

@@ -80,6 +80,8 @@ type RuntimeNodeListResult = {
     connected?: boolean;
     caps?: string[];
     commands?: string[];
+    /** True only for the node host installed alongside this Gateway. */
+    gatewayLocal?: boolean;
     /** Advertised commands currently permitted by Gateway node-command policy. */
     invocableCommands?: string[];
     nodePluginTools?: NodePluginToolDescriptor[];

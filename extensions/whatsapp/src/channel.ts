@@ -39,7 +39,7 @@ import {
 import { getWhatsAppRuntime } from "./runtime.js";
 import { sendTypingWhatsApp } from "./send.js";
 import { resolveWhatsAppOutboundSessionRoute } from "./session-route.js";
-import { whatsappSetupAdapter, whatsappSetupContract } from "./setup-core.js";
+import { whatsappSetupContract } from "./setup-core.js";
 import { createWhatsAppPluginBase, whatsappSetupWizardProxy } from "./shared.js";
 import { detectWhatsAppLegacyStateMigrations } from "./state-migrations.js";
 import { collectWhatsAppStatusIssues } from "./status-issues.js";
@@ -89,7 +89,6 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           resolveToolPolicy: resolveWhatsAppGroupToolPolicy,
         },
         setupWizard: whatsappSetupWizardProxy,
-        setup: whatsappSetupAdapter,
         setupContract: whatsappSetupContract,
         isConfigured: (account) => Boolean(account.authDir),
         isLinked: async (account) => await readWhatsAppAccountLinkState(account.authDir),
@@ -239,6 +238,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           busy: false,
           lastRunActivityAt: null,
           healthState: "stopped",
+          lifecycle: "stopped" as const,
         }),
         collectStatusIssues: collectWhatsAppStatusIssues,
         buildChannelSummary: async ({ account, snapshot }) => {
@@ -291,6 +291,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             lastRunActivityAt: snapshot.lastRunActivityAt ?? null,
             lastError: snapshot.lastError ?? null,
             healthState: snapshot.healthState ?? undefined,
+            lifecycle: snapshot.lifecycle ?? undefined,
             ...(snapshot.terminalDisconnect
               ? { terminalDisconnect: snapshot.terminalDisconnect }
               : {}),

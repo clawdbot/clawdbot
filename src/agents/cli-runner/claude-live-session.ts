@@ -2,6 +2,10 @@
  * Manages reusable Claude CLI stdio sessions for CLI-backed agent turns.
  */
 import crypto from "node:crypto";
+import {
+  splitSystemPromptCacheBoundary,
+  stripSystemPromptCacheBoundary,
+} from "@openclaw/ai/internal/shared";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.js";
 import { createAbortError as createNamedAbortError } from "../../infra/abort-signal.js";
@@ -23,6 +27,7 @@ import {
   type ExecSecurity,
 } from "../../infra/exec-approvals.js";
 import { BLOCKED_TOOL_CALL_ABORT_FLOOR_MS } from "../../logging/diagnostic-run-activity.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import {
   LEGACY_IMPLICIT_AGENT_ID,
@@ -109,6 +114,8 @@ type ClaudeLiveSession = {
   key: string;
   generation: string;
   fingerprint: string;
+  systemPromptHash: string;
+  systemPromptSwitchCapability: "unknown" | "supported" | "unsupported";
   managedRun: ManagedRun;
   providerId: string;
   modelId: string;
@@ -121,6 +128,7 @@ type ClaudeLiveSession = {
   cleanup: () => Promise<void>;
   cleanupPromise: Promise<void> | null;
   closing: boolean;
+  pendingControlRequest: ClaudeLivePendingControlRequest | null;
   mcpCaptureKey?: string;
   /**
    * Native-tool allow-always grants are process-session scoped and in-memory only.
@@ -137,6 +145,15 @@ type ClaudeLiveSession = {
 type ClaudeLiveSessionCreate = {
   generation: string;
   promise: Promise<ClaudeLiveSession>;
+};
+type ClaudeLivePendingControlRequest = {
+  requestId: string;
+  timer: NodeJS.Timeout;
+  resolve: (response: ClaudeLiveControlResponse | null) => void;
+};
+type ClaudeLiveControlResponse = {
+  subtype: string;
+  error?: string;
 };
 type ClaudeLiveRunResult = {
   output: CliOutput;
@@ -163,6 +180,9 @@ type ClaudeLiveToolTerminalOutcome =
   | { outcome: "blocked"; deniedReason: string; reason?: string }
   | { outcome: "cancelled" | "failed" | "timed_out" | "unknown" };
 const CLAUDE_LIVE_IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
+const CLAUDE_LIVE_CONTROL_TIMEOUT_MS = 3_000;
+const CLAUDE_LIVE_SYSTEM_PROMPT_PROBE_ERROR =
+  "set_model: system_prompt must be a non-empty string when present";
 const CLAUDE_LIVE_CLOSE_WAIT_TIMEOUT_MS = 5_000;
 // The observed queued-notification resume emits new process activity within
 // seconds. Cap this below the normal resumed no-output watchdog so terminal
@@ -177,6 +197,7 @@ const CLAUDE_LIVE_PROVISIONAL_SYNTHETIC_PLACEHOLDERS = new Set([
 ]);
 const liveSessions = new Map<string, ClaudeLiveSession>();
 const liveSessionCreates = new Map<string, ClaudeLiveSessionCreate>();
+const liveSessionTurns = new KeyedAsyncQueue();
 
 function sha256(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex");
@@ -375,6 +396,10 @@ function buildClaudeLiveFingerprint(params: {
   argv: string[];
   env: Record<string, string>;
 }): string {
+  const stableSystemPrompt =
+    (params.context.preparedBackend.backend.systemPromptWhen === "always"
+      ? splitSystemPromptCacheBoundary(params.context.systemPrompt)?.stablePrefix
+      : undefined) ?? params.context.systemPrompt;
   const normalizeMcpConfigPath = Boolean(params.context.preparedBackend.mcpConfigHash);
   const skillSnapshot = params.context.params.skillsSnapshot;
   const skillsFingerprint = skillSnapshot
@@ -436,7 +461,7 @@ function buildClaudeLiveFingerprint(params: {
     cwdHash: params.context.cwdHash ?? sha256(params.context.cwd ?? params.context.workspaceDir),
     provider: params.context.params.provider,
     model: params.context.normalizedModel,
-    systemPromptHash: sha256(params.context.systemPrompt),
+    systemPromptHash: sha256(stableSystemPrompt),
     authProfileIdHash: params.context.effectiveAuthProfileId
       ? sha256(params.context.effectiveAuthProfileId)
       : undefined,
@@ -492,6 +517,19 @@ function clearTurnTimers(turn: ClaudeLiveTurn): void {
 
 function clearOutstandingBackgroundTasks(session: ClaudeLiveSession): void {
   session.outstandingBackgroundTaskIds.clear();
+}
+
+function settleClaudeLivePendingControlRequest(
+  session: ClaudeLiveSession,
+  response: ClaudeLiveControlResponse | null,
+): void {
+  const pending = session.pendingControlRequest;
+  if (!pending) {
+    return;
+  }
+  clearTimeout(pending.timer);
+  session.pendingControlRequest = null;
+  pending.resolve(response);
 }
 
 function finishTurn(session: ClaudeLiveSession, output: CliOutput): void {
@@ -564,6 +602,7 @@ function closeLiveSession(
   if (liveSessions.get(session.key) === session) {
     liveSessions.delete(session.key);
   }
+  settleClaudeLivePendingControlRequest(session, null);
   if (error) {
     failTurn(session, error);
   } else {
@@ -1070,6 +1109,129 @@ function writeClaudeLiveControlResponse(session: ClaudeLiveSession, response: un
   stdin.write(`${JSON.stringify(response)}\n`);
 }
 
+function handleClaudeLiveControlResponse(
+  session: ClaudeLiveSession,
+  parsed: Record<string, unknown>,
+): boolean {
+  const pending = session.pendingControlRequest;
+  if (!pending || parsed.type !== "control_response" || !isRecord(parsed.response)) {
+    return false;
+  }
+  const response = parsed.response;
+  if (response.request_id !== pending.requestId) {
+    return false;
+  }
+  settleClaudeLivePendingControlRequest(session, {
+    subtype: typeof response.subtype === "string" ? response.subtype : "",
+    ...(typeof response.error === "string" ? { error: response.error } : {}),
+  });
+  return true;
+}
+
+async function requestClaudeLiveModelUpdate(params: {
+  session: ClaudeLiveSession;
+  model: string;
+  systemPrompt: string;
+}): Promise<ClaudeLiveControlResponse | null> {
+  if (params.session.pendingControlRequest) {
+    return null;
+  }
+  const requestId = crypto.randomUUID();
+  const response = new Promise<ClaudeLiveControlResponse | null>((resolve) => {
+    params.session.pendingControlRequest = {
+      requestId,
+      timer: setTimeout(() => {
+        settleClaudeLivePendingControlRequest(params.session, null);
+      }, CLAUDE_LIVE_CONTROL_TIMEOUT_MS),
+      resolve,
+    };
+  });
+  try {
+    await writeTurnInput(
+      params.session,
+      `${JSON.stringify({
+        type: "control_request",
+        request_id: requestId,
+        request: {
+          subtype: "set_model",
+          model: params.model,
+          system_prompt: params.systemPrompt,
+        },
+      })}\n`,
+    );
+  } catch {
+    settleClaudeLivePendingControlRequest(params.session, null);
+  }
+  return response;
+}
+
+async function supportsClaudeLiveSystemPromptSwitch(params: {
+  session: ClaudeLiveSession;
+  model: string;
+}): Promise<boolean> {
+  if (params.session.systemPromptSwitchCapability !== "unknown") {
+    return params.session.systemPromptSwitchCapability === "supported";
+  }
+  // Older CLIs may accept set_model while ignoring unknown fields. The current
+  // prompt-switch contract rejects an empty field with this exact validation
+  // error, so only that response is strong enough to weaken process identity.
+  const response = await requestClaudeLiveModelUpdate({
+    session: params.session,
+    model: params.model,
+    systemPrompt: "",
+  });
+  const supported =
+    response?.subtype === "error" && response.error === CLAUDE_LIVE_SYSTEM_PROMPT_PROBE_ERROR;
+  params.session.systemPromptSwitchCapability = supported ? "supported" : "unsupported";
+  return supported;
+}
+
+async function updateClaudeLiveSystemPrompt(params: {
+  session: ClaudeLiveSession;
+  model: string;
+  systemPrompt: string;
+}): Promise<boolean> {
+  const systemPrompt = stripSystemPromptCacheBoundary(params.systemPrompt);
+  if (
+    !systemPrompt.trim() ||
+    !(await supportsClaudeLiveSystemPromptSwitch({
+      session: params.session,
+      model: params.model,
+    }))
+  ) {
+    return false;
+  }
+  const response = await requestClaudeLiveModelUpdate({
+    session: params.session,
+    model: params.model,
+    systemPrompt,
+  });
+  return response?.subtype === "success";
+}
+
+async function refreshClaudeLiveSystemPromptForReuse(params: {
+  session: ClaudeLiveSession;
+  context: PreparedCliRunContext;
+  systemPromptHash: string;
+}): Promise<boolean> {
+  if (params.session.systemPromptHash === params.systemPromptHash) {
+    return true;
+  }
+  const updated = await updateClaudeLiveSystemPrompt({
+    session: params.session,
+    model: params.context.normalizedModel,
+    systemPrompt: params.context.systemPrompt,
+  });
+  if (updated) {
+    params.session.systemPromptHash = params.systemPromptHash;
+    return true;
+  }
+  // Older or unhealthy Claude CLIs may reject the control frame. Restart so
+  // the next process still receives the current prompt through argv.
+  closeLiveSession(params.session, "restart");
+  return false;
+}
+
 function writeClaudeLiveToolControlResponse(params: {
   session: ClaudeLiveSession;
   requestId: string;
@@ -1230,6 +1392,9 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   if (parsedSessionId) {
     session.sessionId = parsedSessionId;
   }
+  if (handleClaudeLiveControlResponse(session, parsed)) {
+    return;
+  }
   if (!turn) {
     return;
   }
@@ -1350,6 +1515,7 @@ function handleClaudeExit(session: ClaudeLiveSession, exitCode: number | null): 
   if (liveSessions.get(session.key) === session) {
     liveSessions.delete(session.key);
   }
+  settleClaudeLivePendingControlRequest(session, null);
   void cleanupLiveSession(session);
   if (!session.currentTurn) {
     return;
@@ -1437,6 +1603,7 @@ async function createClaudeLiveSession(params: {
   env: Record<string, string>;
   generation: string;
   fingerprint: string;
+  systemPromptHash: string;
   key: string;
   mcpCaptureKey?: string;
   noOutputTimeoutMs: number;
@@ -1496,6 +1663,8 @@ async function createClaudeLiveSession(params: {
     key: params.key,
     generation: params.generation,
     fingerprint: params.fingerprint,
+    systemPromptHash: params.systemPromptHash,
+    systemPromptSwitchCapability: "unknown",
     managedRun,
     providerId: params.context.params.provider,
     modelId: params.context.modelId,
@@ -1510,6 +1679,7 @@ async function createClaudeLiveSession(params: {
     },
     cleanupPromise: null,
     closing: false,
+    pendingControlRequest: null,
     mcpCaptureKey: params.mcpCaptureKey,
     nativeToolApprovalGrants: new Set(),
     outstandingBackgroundTaskIds: new Set(),
@@ -1671,8 +1841,7 @@ function createRequiredLiveSessionError(params: {
   });
 }
 
-/** Runs one prompt through a reusable Claude CLI live session. */
-export async function runClaudeLiveSessionTurn(params: {
+type RunClaudeLiveSessionTurnParams = {
   context: PreparedCliRunContext;
   args: string[];
   executableCommand?: string;
@@ -1701,8 +1870,90 @@ export async function runClaudeLiveSessionTurn(params: {
   onRequestPayload?: (payload: string) => void;
   onPhase?: (phase: "send" | "resolve") => void;
   cleanup: () => Promise<void>;
-}): Promise<ClaudeLiveRunResult> {
+};
+
+async function abortClaudeLiveTurnBeforeStart(
+  cleanup: () => Promise<void>,
+  abortError: Error,
+): Promise<never> {
+  try {
+    await cleanup();
+  } catch (cleanupError) {
+    throw new Error("Claude live turn aborted before start and cleanup failed", {
+      cause: cleanupError,
+    });
+  }
+  throw abortError;
+}
+
+/** Runs one prompt through a reusable Claude CLI live session. */
+export function runClaudeLiveSessionTurn(
+  params: RunClaudeLiveSessionTurnParams,
+): Promise<ClaudeLiveRunResult> {
   const key = buildClaudeLiveKey(params.context);
+  // Keep prompt refresh, turn assignment, and stdin writes under one owner lock.
+  // Callers normally arrive through the outer CLI queue, but this owner enforces
+  // the invariant itself so alternate callers cannot mutate an active process.
+  let cleanupPromise: Promise<void> | undefined;
+  const cleanup = () => (cleanupPromise ??= Promise.resolve().then(params.cleanup));
+  const abortSignal = params.context.params.abortSignal;
+  if (!abortSignal) {
+    return liveSessionTurns.enqueue(key, () =>
+      runSerializedClaudeLiveSessionTurn(params, key, cleanup),
+    );
+  }
+  if (abortSignal.aborted) {
+    return abortClaudeLiveTurnBeforeStart(cleanup, createAbortError(abortSignal.reason));
+  }
+  return new Promise<ClaudeLiveRunResult>((resolve, reject) => {
+    let started = false;
+    let settled = false;
+    const settle = (
+      outcome: { kind: "resolve"; value: ClaudeLiveRunResult } | { kind: "reject"; error: unknown },
+    ) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      abortSignal.removeEventListener("abort", onAbort);
+      if (outcome.kind === "resolve") {
+        resolve(outcome.value);
+      } else {
+        reject(
+          outcome.error instanceof Error
+            ? outcome.error
+            : new Error(formatErrorMessage(outcome.error)),
+        );
+      }
+    };
+    const onAbort = () => {
+      if (!started) {
+        void abortClaudeLiveTurnBeforeStart(cleanup, createAbortError(abortSignal.reason)).catch(
+          (error: unknown) => settle({ kind: "reject", error }),
+        );
+      }
+    };
+    abortSignal.addEventListener("abort", onAbort, { once: true });
+    const queued = liveSessionTurns.enqueue(key, async () => {
+      started = true;
+      abortSignal.removeEventListener("abort", onAbort);
+      if (abortSignal.aborted) {
+        return await abortClaudeLiveTurnBeforeStart(cleanup, createAbortError(abortSignal.reason));
+      }
+      return await runSerializedClaudeLiveSessionTurn(params, key, cleanup);
+    });
+    void queued.then(
+      (value) => settle({ kind: "resolve", value }),
+      (error: unknown) => settle({ kind: "reject", error }),
+    );
+  });
+}
+
+async function runSerializedClaudeLiveSessionTurn(
+  params: RunClaudeLiveSessionTurnParams,
+  key: string,
+  cleanup: () => Promise<void>,
+): Promise<ClaudeLiveRunResult> {
   const resumeCapable = Boolean(params.context.preparedBackend.backend.resumeArgs?.length);
   const execPermission = resolveClaudeLiveExecPermission(params.context);
   const argv = [
@@ -1721,15 +1972,8 @@ export async function runClaudeLiveSessionTurn(params: {
     argv,
     env: params.env,
   });
-  let cleanupDone = false;
+  const systemPromptHash = sha256(stripSystemPromptCacheBoundary(params.context.systemPrompt));
   let createdSessionForTurn = false;
-  const cleanup = async () => {
-    if (cleanupDone) {
-      return;
-    }
-    cleanupDone = true;
-    await params.cleanup();
-  };
   let session = liveSessions.get(key) ?? null;
   if (
     session &&
@@ -1761,6 +2005,23 @@ export async function runClaudeLiveSessionTurn(params: {
       });
     }
     closeLiveSession(session, "restart");
+    session = null;
+  }
+  if (
+    session &&
+    !(await refreshClaudeLiveSystemPromptForReuse({
+      session,
+      context: params.context,
+      systemPromptHash,
+    }))
+  ) {
+    if (params.requiredSessionGeneration) {
+      await cleanup();
+      throw createRequiredLiveSessionError({
+        context: params.context,
+        code: "cli_live_session_changed",
+      });
+    }
     session = null;
   }
   if (!session && params.requiredSessionGeneration) {
@@ -1831,6 +2092,22 @@ export async function runClaudeLiveSessionTurn(params: {
         closeLiveSession(session, "restart");
         session = null;
       } else {
+        if (
+          !(await refreshClaudeLiveSystemPromptForReuse({
+            session,
+            context: params.context,
+            systemPromptHash,
+          }))
+        ) {
+          if (params.requiredSessionGeneration) {
+            await cleanup();
+            throw createRequiredLiveSessionError({
+              context: params.context,
+              code: "cli_live_session_changed",
+            });
+          }
+          session = null;
+        }
         cleanupTurnArtifacts = true;
       }
     }
@@ -1860,6 +2137,7 @@ export async function runClaudeLiveSessionTurn(params: {
         env: params.env,
         generation,
         fingerprint,
+        systemPromptHash,
         key,
         mcpCaptureKey,
         noOutputTimeoutMs: params.noOutputTimeoutMs,

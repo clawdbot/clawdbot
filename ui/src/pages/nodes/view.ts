@@ -27,7 +27,6 @@ export function renderNodes(props: NodesProps) {
 type BindingAgent = {
   id: string;
   name: string | undefined;
-  index: number;
   isDefault: boolean;
   binding: string | null;
 };
@@ -44,7 +43,7 @@ type BindingState = {
   agents: BindingAgent[];
   nodes: BindingNode[];
   onBindDefault: (nodeId: string | null) => void;
-  onBindAgent: (agentIndex: number, nodeId: string | null) => void;
+  onBindAgent: (agentId: string, nodeId: string | null) => void;
   onSave: () => void;
   onLoadConfig: () => void;
   formMode: "form" | "raw";
@@ -160,7 +159,7 @@ function renderAgentBinding(agent: BindingAgent, state: BindingState) {
         @change=${(event: Event) => {
           const target = event.target as HTMLSelectElement;
           const value = target.value.trim();
-          state.onBindAgent(agent.index, value === "__default__" ? null : value);
+          state.onBindAgent(agent.id, value === "__default__" ? null : value);
         }}
       >
         <option value="__default__" ?selected=${bindingValue === "__default__"}>
@@ -188,7 +187,6 @@ function resolveAgentBindings(config: Record<string, unknown> | null): {
   const fallbackAgent: BindingAgent = {
     id: "main",
     name: undefined,
-    index: 0,
     isDefault: true,
     binding: null,
   };
@@ -200,11 +198,6 @@ function resolveAgentBindings(config: Record<string, unknown> | null): {
   const defaultBinding =
     typeof exec.node === "string" && exec.node.trim() ? exec.node.trim() : null;
 
-  const agentsNode = (config.agents ?? {}) as Record<string, unknown>;
-  if (!Array.isArray(agentsNode.list) || agentsNode.list.length === 0) {
-    return { defaultBinding, agents: [fallbackAgent] };
-  }
-
   const agents = resolveConfigAgents(config).map((entry) => {
     const toolsEntry = (entry.record.tools ?? {}) as Record<string, unknown>;
     const execEntry = (toolsEntry.exec ?? {}) as Record<string, unknown>;
@@ -213,14 +206,13 @@ function resolveAgentBindings(config: Record<string, unknown> | null): {
     return {
       id: entry.id,
       name: entry.name,
-      index: entry.index,
       isDefault: entry.isDefault,
       binding,
     };
   });
 
   if (agents.length === 0) {
-    agents.push(fallbackAgent);
+    return { defaultBinding, agents: [fallbackAgent] };
   }
 
   return { defaultBinding, agents };

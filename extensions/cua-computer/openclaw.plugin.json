@@ -5,14 +5,10 @@
   },
   "enabledByDefault": false,
   "name": "CUA Computer",
-  "description": "Experimental cua-driver computer control for Windows and Linux node hosts.",
+  "description": "Experimental CUA Driver SDK computer control for Windows and Linux node hosts.",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {
-      "driverPath": {
-        "type": "string"
-      }
-    }
+    "properties": {}
   }
 }

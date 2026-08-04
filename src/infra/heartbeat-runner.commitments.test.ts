@@ -77,6 +77,7 @@ describe("runHeartbeatOnce commitments", () => {
     id: string;
     sessionKey: string;
     to: string;
+    accountId?: string | null;
     dueWindow?: CommitmentRecord["dueWindow"];
   }): CommitmentRecord {
     return {
@@ -84,7 +85,7 @@ describe("runHeartbeatOnce commitments", () => {
       agentId: "main",
       sessionKey: params.sessionKey,
       channel: "telegram",
-      accountId: "primary",
+      ...(params.accountId === null ? {} : { accountId: params.accountId ?? "primary" }),
       to: params.to,
       kind: "event_check_in",
       sensitivity: "routine",
@@ -120,6 +121,8 @@ describe("runHeartbeatOnce commitments", () => {
   async function setupCommitmentCase(params?: {
     replyText?: string;
     target?: "last" | "none";
+    heartbeatAccountId?: string;
+    commitmentAccountId?: string | null;
     dueWindow?: CommitmentRecord["dueWindow"];
     visibleReplies?: "automatic" | "message_tool";
     isolatedSession?: boolean;
@@ -135,12 +138,25 @@ describe("runHeartbeatOnce commitments", () => {
             heartbeat: {
               every: "5m",
               target: params?.target ?? "last",
+              ...(params?.heartbeatAccountId ? { accountId: params.heartbeatAccountId } : {}),
               ...(params?.isolatedSession ? { isolatedSession: true } : {}),
             },
           },
         },
         ...(params?.visibleReplies ? { messages: { visibleReplies: params.visibleReplies } } : {}),
-        channels: { telegram: { allowFrom: ["*"] } },
+        channels: {
+          telegram: {
+            allowFrom: ["*"],
+            ...(params?.heartbeatAccountId
+              ? {
+                  accounts: {
+                    primary: { botToken: "primary-token" },
+                    [params.heartbeatAccountId]: { botToken: "heartbeat-token" },
+                  },
+                }
+              : {}),
+          },
+        },
         session: { store: storePath },
       };
       await seedSessionStore(storePath, sessionKey, {
@@ -155,6 +171,7 @@ describe("runHeartbeatOnce commitments", () => {
             id: "cm_interview",
             sessionKey,
             to: "155462274",
+            accountId: params?.commitmentAccountId,
             dueWindow: params?.dueWindow,
           }),
         ],
@@ -640,10 +657,37 @@ describe("runHeartbeatOnce commitments", () => {
   });
 
   it("delivers due commitments to the original scope when heartbeat target is last", async () => {
-    const { result, sendTelegram, store } = await setupCommitmentCase();
+    const { result, sendTelegram, store } = await setupCommitmentCase({
+      heartbeatAccountId: "configured",
+      commitmentAccountId: "primary",
+    });
 
     expect(result.status).toBe("ran");
-    expect(sendTelegram).toHaveBeenCalled();
+    expect(sendTelegram).toHaveBeenCalledWith(
+      "155462274",
+      "How did the interview go?",
+      expect.objectContaining({ accountId: "primary" }),
+    );
+    expectCommitmentFields(store.commitments[0], {
+      id: "cm_interview",
+      status: "sent",
+      attempts: 1,
+      sentAtMs: nowMs,
+    });
+  });
+
+  it("uses the configured heartbeat account when a due commitment has no account", async () => {
+    const { result, sendTelegram, store } = await setupCommitmentCase({
+      heartbeatAccountId: "configured",
+      commitmentAccountId: null,
+    });
+
+    expect(result.status).toBe("ran");
+    expect(sendTelegram).toHaveBeenCalledWith(
+      "155462274",
+      "How did the interview go?",
+      expect.objectContaining({ accountId: "configured" }),
+    );
     expectCommitmentFields(store.commitments[0], {
       id: "cm_interview",
       status: "sent",

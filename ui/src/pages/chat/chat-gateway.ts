@@ -271,16 +271,24 @@ function handleChatEvent(
     if (payload.state === "delta") {
       return null;
     }
-    if (payload.state === "error") {
+    if (payload.state === "error" || payload.state === "aborted") {
+      const pendingRunId = state.chatQueue.find(
+        (item) => item.sendState === "sending" && item.sendRunId,
+      )?.sendRunId;
+      const diagnosticOwnerRunId =
+        state.chatRunId ?? pendingRunId ?? state.lastLocalTerminalReconcile?.runId;
       if (
+        diagnosticOwnerRunId === payload.runId &&
         payload.errorMessage?.trim() &&
         projectedRun.currentRun?.errorMessage !== previousTerminalRun.errorMessage
       ) {
-        // A completed transcript is immutable; retain provider guidance without
-        // adopting its old run or interrupting a newer in-flight response.
+        // Late diagnostics belong to the active, pending, or latest locally terminal run;
+        // publishing them over a newer response falsely marks the new run failed.
         setChatRunError(state, resolveGatewayErrorText(payload, null));
       }
-      return "error";
+      if (payload.state === "error") {
+        return "error";
+      }
     }
     const incomingFinal = normalizedFinalMessage;
     if (
@@ -329,7 +337,7 @@ function handleChatEvent(
     });
   const reconcileTerminalRun = (
     outcome: "done" | "interrupted",
-    sessionStatus: "done" | "failed" | "killed",
+    sessionStatus: "done" | "failed" | "killed" | "timeout",
   ) =>
     reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
       outcome,
@@ -418,6 +426,9 @@ function handleChatEvent(
     } else {
       state.chatMessages = materializeVisibleStream();
     }
+    if (payload.errorMessage?.trim()) {
+      setChatRunError(state, resolveGatewayErrorText(payload, null));
+    }
     reconcileTerminalRun("interrupted", "killed");
   } else if (payload.state === "error") {
     const payloadMessage = normalizeFinalAssistantMessage(payload.message);
@@ -459,7 +470,12 @@ function handleChatEvent(
         state.chatMessages = materializeVisibleStream({ includeCurrent: true });
       }
     }
-    reconcileTerminalRun("interrupted", "failed");
+    // The shared Gateway projection owns timeout classification; preserve it
+    // when publishing selected-session and sidebar terminal status.
+    reconcileTerminalRun(
+      "interrupted",
+      projectedRun?.currentRun?.status === "timeout" ? "timeout" : "failed",
+    );
     setChatRunError(
       state,
       resolveGatewayErrorText(payload, projectedErrorMessage ? visiblePayloadMessage : null),

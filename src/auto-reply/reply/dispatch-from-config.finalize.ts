@@ -24,44 +24,25 @@ import type { ReplyDispatchDeliveryOutcome } from "./reply-dispatcher.js";
 
 export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState) {
   const {
-    acpDispatchSessionKey,
-    attachSourceReplyDeliveryMode,
     cfg,
     chatType,
-    commentaryPayloadsEnabled,
-    commitInboundDedupeIfClaimed,
-    completeDispatchReplyOperation,
     ctx,
     deliveryChannel,
-    deliverySuppressionReason,
+    deliberateSilentTerminalReply,
     dispatcher,
     emptyFinalAllowedAsSilent,
-    explicitCommandTurnCtx,
-    flushPendingCommentaryProgress,
     getDispatchAbortSignal,
     getObservedReplyDelivery,
     isRoutedReplyDelivered,
-    markIdle,
     markInboundDedupeReplayUnsafe,
-    maybeApplyTtsWithFinalizationLease,
-    normalizeReplyMediaPayload,
     noVisibleReplyFallbackDirected,
-    preserveProgressCallbackStartOrder,
-    reasoningPayloadsEnabled,
-    recordAgentDispatchCompleted,
-    recordProcessed,
     replyResult,
-    replyOperationRunState,
     replyRoute,
     routeReplyToOriginating,
-    sendFinalPayload,
     sendPolicyDenied,
     sessionAgentId,
     sessionKey,
     sessionStoreEntry,
-    sessionTtsAuto,
-    sourceReplyDeliveryMode,
-    suppressAutomaticSourceDelivery,
     suppressDelivery,
     throwIfDispatchOperationAborted,
     turnLedger,
@@ -83,12 +64,12 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   });
   // Final delivery is outside the progress wrappers. Wait until every source-ordered callback
   // has at least started so a delayed tool/reasoning transition cannot appear after the final.
-  if (preserveProgressCallbackStartOrder) {
-    await state.progressCallbackStartTail;
+  if (state.preserveProgressCallbackStartOrder) {
+    await state.progressState.progressCallbackStartTail;
   }
   // Backstop: silent/streaming-delivered turns end without a visible final
   // reply; trailing commentary must still land.
-  await flushPendingCommentaryProgress();
+  await state.flushPendingCommentaryProgress();
   const beforeAgentRunBlocked = replies.some(
     (reply) => getReplyPayloadMetadata(reply)?.beforeAgentRunBlocked === true,
   );
@@ -109,27 +90,27 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   // Uses the same helper as the source-reply visibility policy so the bypass
   // and the policy stay aligned.
   const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) =>
-    suppressAutomaticSourceDelivery &&
+    state.suppressAutomaticSourceDelivery &&
     !sendPolicyDenied &&
     getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true &&
-    (ctx.InboundEventKind !== "room_event" || explicitCommandTurnCtx);
+    (ctx.InboundEventKind !== "room_event" || state.explicitCommandTurnCtx);
   const sentFinalPayloadDedupeKeys = new Set<string>();
   for (const [replyIndex, reply] of replies.entries()) {
     throwIfDispatchOperationAborted();
     // Durable reasoning is a channel-owned lane; generic channels keep the
     // historical suppression unless they explicitly opt in.
-    if (reply.isReasoning === true && !reasoningPayloadsEnabled) {
+    if (reply.isReasoning === true && !state.reasoningPayloadsEnabled) {
       continue;
     }
-    if (reply.isCommentary === true && !commentaryPayloadsEnabled) {
+    if (reply.isCommentary === true && !state.commentaryPayloadsEnabled) {
       continue;
     }
     if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply)) {
       if (hasOutboundReplyContent(reply, { trimText: true })) {
         logVerbose(
           [
-            `dispatch-from-config: final reply suppressed by ${deliverySuppressionReason || "source delivery policy"}`,
-            `(session=${acpDispatchSessionKey ?? sessionKey ?? "unknown"}`,
+            `dispatch-from-config: final reply suppressed by ${state.deliverySuppressionReason || "source delivery policy"}`,
+            `(session=${state.acpDispatchSessionKey ?? sessionKey ?? "unknown"}`,
             `provider=${ctx.Provider ?? "unknown"}`,
             `surface=${ctx.Surface ?? "unknown"}`,
             `chatType=${chatType ?? "unknown"}`,
@@ -146,7 +127,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       continue;
     }
     sentFinalPayloadDedupeKeys.add(finalPayloadDedupeKey);
-    const finalReply = await sendFinalPayload(reply, { deliveryId: String(replyIndex) });
+    const finalReply = await state.sendFinalPayload(reply, { deliveryId: String(replyIndex) });
     if (finalReply.dedupedAgainstBlock) {
       // The delivering block already settled into the turn ledger.
       continue;
@@ -215,18 +196,18 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     if (
       ttsMode === "final" &&
       replies.length === 0 &&
-      state.blockCount > 0 &&
-      state.accumulatedBlockTtsText.trim()
+      state.progressState.blockCount > 0 &&
+      state.progressState.accumulatedBlockTtsText.trim()
     ) {
       try {
         await waitForPendingDirectBlockReplyDelivery(getDispatchAbortSignal());
         throwIfDispatchOperationAborted();
-        const ttsSyntheticReply = await maybeApplyTtsWithFinalizationLease({
-          payload: { text: state.accumulatedBlockTtsText },
+        const ttsSyntheticReply = await state.maybeApplyTtsWithFinalizationLease({
+          payload: { text: state.progressState.accumulatedBlockTtsText },
           cfg,
           channel: deliveryChannel,
           kind: "final",
-          ttsAuto: sessionTtsAuto,
+          ttsAuto: state.sessionTtsAuto,
           agentId: sessionAgentId,
           accountId: replyRoute.accountId,
         });
@@ -239,13 +220,13 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
             {
               mediaUrl: ttsSyntheticReply.mediaUrl,
               audioAsVoice: ttsSyntheticReply.audioAsVoice,
-              spokenText: state.accumulatedBlockTtsText,
+              spokenText: state.progressState.accumulatedBlockTtsText,
               trustedLocalMedia: true,
             },
-            state.accumulatedBlockTtsText,
+            state.progressState.accumulatedBlockTtsText,
             { visibleTextAlreadyDelivered: true },
           );
-          const normalizedTtsOnlyPayload = await normalizeReplyMediaPayload(ttsOnlyPayload);
+          const normalizedTtsOnlyPayload = await state.normalizeReplyMediaPayload(ttsOnlyPayload);
           throwIfDispatchOperationAborted();
           const result = await routeReplyToOriginating(normalizedTtsOnlyPayload, {
             abortSignal: getDispatchAbortSignal(),
@@ -284,13 +265,14 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   // ledger intentionally does not own. Directedness gates both the fallback and
   // eligibility: only a turn that positively addressed the bot may surface a
   // visible failure notice.
-  const replyAcceptedByActiveRun = replyOperationRunState.admission?.status === "accepted";
+  const replyAcceptedByActiveRun = state.replyOperationRunState.admission?.status === "accepted";
   const noVisibleReplyFallbackAllowed = () =>
     noVisibleReplyFallbackDirected &&
     !suppressDelivery &&
     !sendPolicyDenied &&
-    sourceReplyDeliveryMode !== "message_tool_only" &&
+    state.sourceReplyDeliveryMode !== "message_tool_only" &&
     !emptyFinalAllowedAsSilent &&
+    !deliberateSilentTerminalReply &&
     !getObservedReplyDelivery() &&
     !replyAcceptedByActiveRun &&
     !turnLedger.hasVisibleDelivery() &&
@@ -306,8 +288,8 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   }
   let counts = dispatcher.getQueuedCounts();
   let noVisibleReplyFallbackDelivered = false;
-  // Visible agent turns must never end silently: empty model completions get a
-  // core fallback final. emptyFinalAllowedAsSilent is the only sanctioned silence.
+  // The agent-result classifier owns terminal silence; carry that fact here
+  // because reply payloads are filtered projections and cannot safely rederive it.
   // An aborted or timed-out settle leaves delivery state unknown; admission
   // then keeps its legacy trust and the turn ends without a fallback.
   if (queuedSettleResult === "settled" && noVisibleReplyFallbackAllowed()) {
@@ -362,21 +344,23 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     }
   }
   counts.final += routedFinalCount;
-  commitInboundDedupeIfClaimed();
-  recordAgentDispatchCompleted("completed");
-  recordProcessed(
+  state.commitInboundDedupeIfClaimed();
+  state.recordAgentDispatchCompleted("completed");
+  state.recordProcessed(
     "completed",
-    state.pluginFallbackReason ? { reason: state.pluginFallbackReason } : undefined,
+    state.bindingState.pluginFallbackReason
+      ? { reason: state.bindingState.pluginFallbackReason }
+      : undefined,
   );
-  markIdle("message_completed");
-  completeDispatchReplyOperation();
+  state.markIdle("message_completed");
+  state.completeDispatchReplyOperation();
   return {
     status: "complete" as const,
-    result: attachSourceReplyDeliveryMode({
+    result: state.attachSourceReplyDeliveryMode({
       queuedFinal,
       counts,
-      ...(state.sessionMetadataChangesForResult
-        ? { sessionMetadataChanges: state.sessionMetadataChangesForResult }
+      ...(state.routeState.sessionMetadataChangesForResult
+        ? { sessionMetadataChanges: state.routeState.sessionMetadataChangesForResult }
         : {}),
       ...(getObservedReplyDelivery() ? { observedReplyDelivery: true } : {}),
       // Eligibility keys off settled visible delivery: a suppressed or cancelled
@@ -390,7 +374,8 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       !noVisibleReplyFallbackDelivered &&
       !getObservedReplyDelivery() &&
       !replyAcceptedByActiveRun &&
-      !emptyFinalAllowedAsSilent
+      !emptyFinalAllowedAsSilent &&
+      !deliberateSilentTerminalReply
         ? { noVisibleReplyFallbackEligible: true }
         : {}),
       ...(noVisibleReplyFallbackDelivered ? { noVisibleReplyFallbackDelivered: true } : {}),

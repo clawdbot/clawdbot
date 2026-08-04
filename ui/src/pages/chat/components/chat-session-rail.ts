@@ -49,6 +49,7 @@ function unreadFinalDigest(digest: SessionObserverDigest, lastReadAt?: number): 
 export class ChatSessionRailState {
   private autoExpandedRunIds = new Set<string>();
   private autoExpandedRunId: string | null = null;
+  private transientExpanded = false;
   // Explicit open from the restore icon while idle: the companion must stay
   // reachable at any point, even with no digest and an empty thread.
   private manualOpen = false;
@@ -57,8 +58,18 @@ export class ChatSessionRailState {
     private displayPreference: ChatObserverDisplayPreference = loadChatObserverDisplayPreference(),
   ) {}
 
-  resetManualOpen(): void {
+  resetTransientState(): void {
+    this.transientExpanded = false;
+    this.autoExpandedRunId = null;
     this.manualOpen = false;
+  }
+
+  tryAutoOpen(): boolean {
+    if (this.displayPreference === "off") {
+      return false;
+    }
+    this.transientExpanded = true;
+    return true;
   }
 
   mode(input: SessionRailInput): SessionRailMode {
@@ -82,32 +93,36 @@ export class ChatSessionRailState {
       this.autoExpandedRunIds.add(runId);
       this.autoExpandedRunId = runId;
     }
-    return this.displayPreference === "card" || (runId !== null && this.autoExpandedRunId === runId)
+    return this.displayPreference === "card" ||
+      this.transientExpanded ||
+      (runId !== null && this.autoExpandedRunId === runId)
       ? "expanded"
       : "pill";
   }
 
   expand(): void {
     this.displayPreference = "card";
+    this.transientExpanded = false;
     this.autoExpandedRunId = null;
     storeChatObserverDisplayPreference("card");
   }
 
   collapse(): void {
     this.displayPreference = "pill";
+    this.transientExpanded = false;
     this.autoExpandedRunId = null;
     storeChatObserverDisplayPreference("pill");
   }
 
   hide(): void {
     this.displayPreference = "off";
-    this.autoExpandedRunId = null;
-    this.manualOpen = false;
+    this.resetTransientState();
     storeChatObserverDisplayPreference("off");
   }
 
   show(): void {
     this.displayPreference = "pill";
+    this.transientExpanded = false;
     this.autoExpandedRunId = null;
     this.manualOpen = true;
     storeChatObserverDisplayPreference("pill");
@@ -177,6 +192,8 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   };
   @property({ attribute: false }) connected = false;
   @property({ attribute: false }) openRequest = 0;
+  @property({ attribute: false }) consumedOpenRequest = 0;
+  @property({ attribute: false }) onOpenRequestConsumed?: (openRequest: number) => void;
   @property({ attribute: false }) onSubmit?: (question: string) => void;
   @property({ attribute: false }) onDraftChange?: (draft: string) => void;
   @property({ attribute: false }) onClear?: () => void;
@@ -198,18 +215,20 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   protected override willUpdate(changedProperties: PropertyValues<this>) {
     if (changedProperties.has("sessionKey")) {
       this.terminalAgeReference = Date.now();
-      // A manual idle-open is a per-session gesture; it must not leak the
-      // rail open into the next selected session.
-      this.railState.resetManualOpen();
+      // Automatic and manual opens are per-session gestures; neither may leak
+      // the rail open into the next selected session.
+      this.railState.resetTransientState();
     }
     if (changedProperties.has("digest") && this.digest) {
       if (this.digest.health === "done" || this.digest.health === "failed") {
         this.terminalAgeReference = Date.now();
       }
     }
-    if (changedProperties.has("openRequest") && this.openRequest > 0) {
-      this.railState.expand();
-      this.onVisibilityChange?.(true);
+    if (changedProperties.has("openRequest") && this.openRequest > this.consumedOpenRequest) {
+      this.onOpenRequestConsumed?.(this.openRequest);
+      if (this.railState.tryAutoOpen()) {
+        this.onVisibilityChange?.(true);
+      }
     }
   }
 

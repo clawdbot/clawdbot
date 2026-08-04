@@ -5,27 +5,18 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import type { AssistantMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { afterAll, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
-import {
-  loadTranscriptEvents,
-  persistSessionTranscriptTurn,
-} from "../../config/sessions/session-accessor.js";
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
-import { startGatewayServerHarness, type GatewayServerHarness } from "../server.e2e-ws-harness.js";
-import {
-  connectOk,
-  embeddedRunMock,
-  installGatewayTestHooks,
-  agentDiscoveryMock,
-  rpcReq,
-  testState,
-  writeSessionStore,
-} from "../test-helpers.js";
+import type { GatewayRequestContext } from "../server-methods/types.js";
+import type { GatewayServerHarness } from "../server.e2e-ws-harness.js";
+import { embeddedRunMock, agentDiscoveryMock, testState } from "../test-helpers.runtime-state.js";
+import type { connectOk } from "../test-helpers.server.js";
+import { installGatewayTestHooks, writeSessionStore } from "../test-helpers.server.js";
+import { sessionHandlerTestSurface } from "./server-sessions-handlers.test-support.js";
 
 export const getSessionManagerModule = createLazyRuntimeModule(
   () => import("../../agents/sessions/index.js"),
@@ -35,8 +26,16 @@ export const getGatewayConfigModule = createLazyRuntimeModule(
   () => import("../../config/config.js"),
 );
 
+const getSessionAccessorModule = createLazyRuntimeModule(
+  () => import("../../config/sessions/session-accessor.js"),
+);
+
+const getGatewayServerHarnessModule = createLazyRuntimeModule(
+  () => import("../server.e2e-ws-harness.js"),
+);
+
 export async function getSessionsHandlers() {
-  return (await import("../server-methods/sessions.js")).sessionsHandlers;
+  return sessionHandlerTestSurface;
 }
 
 type TestTranscriptMessage = Record<string, unknown> & {
@@ -53,6 +52,7 @@ export async function seedSessionTranscript(params: {
   sessionKey: string;
   storePath: string;
 }): Promise<void> {
+  const { persistSessionTranscriptTurn } = await getSessionAccessorModule();
   await persistSessionTranscriptTurn(
     {
       agentId: params.agentId,
@@ -100,6 +100,7 @@ export async function loadSeededTranscriptEvents(params: {
   sessionKey: string;
   storePath: string;
 }): Promise<unknown[]> {
+  const { loadTranscriptEvents } = await getSessionAccessorModule();
   return await loadTranscriptEvents({
     agentId: params.agentId,
     sessionId: params.sessionId,
@@ -129,7 +130,7 @@ const sessionCleanupMocks = vi.hoisted(() => ({
     );
     return { followupCleared: 0, laneCleared: 0, keys: clearedKeys };
   }),
-  stopSubagentsForRequester: vi.fn(() => ({ stopped: 0 })),
+  stopSubagentsForRequester: vi.fn(async () => ({ stopped: 0 })),
 }));
 
 const bootstrapCacheMocks = vi.hoisted(() => ({
@@ -309,7 +310,18 @@ vi.mock("../../agents/agent-bundle-mcp-tools.js", () => ({
   retireSessionMcpRuntime: bundleMcpRuntimeMocks.retireSessionMcpRuntime,
 }));
 
+export function setupGatewaySessionsHandlerTestHarness() {
+  const { getHarness, openClient, ...handlerFixture } = createGatewaySessionsTestHarness(false);
+  void getHarness;
+  void openClient;
+  return handlerFixture;
+}
+
 export function setupGatewaySessionsTestHarness() {
+  return createGatewaySessionsTestHarness(true);
+}
+
+function createGatewaySessionsTestHarness(startServer: boolean) {
   installGatewayTestHooks({ scope: "suite" });
 
   let harness: GatewayServerHarness | undefined;
@@ -317,7 +329,10 @@ export function setupGatewaySessionsTestHarness() {
   let sessionStoreCaseSeq = 0;
 
   beforeAll(async () => {
-    harness = await startGatewayServerHarness();
+    if (startServer) {
+      const { startGatewayServerHarness } = await getGatewayServerHarnessModule();
+      harness = await startGatewayServerHarness();
+    }
     sharedSessionStoreDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
   });
 
@@ -659,21 +674,6 @@ export function expectNoSessionQueueCleanup() {
   expect(sessionCleanupMocks.clearSessionQueues).not.toHaveBeenCalled();
 }
 
-export async function getMainPreviewEntry(ws: import("ws").WebSocket) {
-  const preview = await rpcReq<{
-    previews: Array<{
-      key: string;
-      status: string;
-      items: Array<{ role: string; text: string }>;
-    }>;
-  }>(ws, "sessions.preview", { keys: ["main"], limit: 3, maxChars: 120 });
-  expect(preview.ok).toBe(true);
-  const entry = preview.payload?.previews[0];
-  expect(entry?.key).toBe("main");
-  expect(entry?.status).toBe("ok");
-  return entry;
-}
-
 type SessionsHandlers = Awaited<ReturnType<typeof getSessionsHandlers>>;
 
 export async function directSessionReq<TPayload = unknown>(
@@ -688,13 +688,17 @@ export async function directSessionReq<TPayload = unknown>(
 ): Promise<{ ok: boolean; payload?: TPayload; error?: { code?: string; message?: string } }> {
   const sessionsHandlers = await getSessionsHandlers();
   const { getRuntimeConfig } = await getGatewayConfigModule();
+  const loadGatewayModelCatalog =
+    (opts?.context?.loadGatewayModelCatalog as GatewayRequestContext["loadGatewayModelCatalog"]) ??
+    (async () => agentDiscoveryMock.models);
   let result:
     | { ok: boolean; payload?: TPayload; error?: { code?: string; message?: string } }
     | undefined;
-  await expectDefined(
-    sessionsHandlers[method],
-    "sessions handlers entry at method",
-  )({
+  const handler = sessionsHandlers[method];
+  if (!handler) {
+    throw new Error(`missing sessions handler for ${method}`);
+  }
+  await handler({
     req: {} as never,
     params,
     respond: (ok, payload, error) => {
@@ -715,7 +719,8 @@ export async function directSessionReq<TPayload = unknown>(
       chatQueuedTurns: new Map(),
       dedupe: new Map(),
       getSessionEventSubscriberConnIds: () => new Set<string>(),
-      loadGatewayModelCatalog: async () => agentDiscoveryMock.models,
+      loadGatewayModelCatalog,
+      readPreparedGatewayModelCatalog: loadGatewayModelCatalog,
       getRuntimeConfig,
       ...opts?.context,
     } as never,

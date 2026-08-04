@@ -1,10 +1,11 @@
-// Tests the Canvas A2UI native resource sync guard.
+// Tests Canvas A2UI native resource generation.
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   checkLinuxCanvasA2uiReferences,
+  checkNativeA2uiBuildReferences,
   checkNativeA2uiResources,
   getNativeA2uiResourcePaths,
   syncNativeA2uiResources,
@@ -31,23 +32,55 @@ describe("scripts/sync-native-a2ui.mjs", () => {
     );
   });
 
-  it("resolves the plugin-owned source and native resource directories", () => {
+  it("resolves the plugin-owned source and native build owners", () => {
     const paths = getNativeA2uiResourcePaths("/repo");
 
     expect(paths).toEqual({
       sourceDir: path.join("/repo", "extensions", "canvas", "src", "host", "a2ui"),
-      nativeDir: path.join(
-        "/repo",
-        "apps",
-        "shared",
-        "OpenClawKit",
-        "Sources",
-        "OpenClawKit",
-        "Resources",
-        "CanvasA2UI",
-      ),
       linuxConsumerFile: path.join("/repo", "apps", "linux", "src-tauri", "src", "canvas.rs"),
+      linuxBuildFile: path.join("/repo", "apps", "linux", "src-tauri", "build.rs"),
+      androidBuildFile: path.join("/repo", "apps", "android", "app", "build.gradle.kts"),
+      iosProjectFile: path.join("/repo", "apps", "ios", "project.yml"),
     });
+  });
+
+  it("requires every native build owner to generate isolated resources", async () => {
+    const root = await makeTempDir();
+    const paths = {
+      linuxBuildFile: path.join(root, "build.rs"),
+      androidBuildFile: path.join(root, "build.gradle.kts"),
+      iosProjectFile: path.join(root, "project.yml"),
+    };
+    await Promise.all([
+      fs.writeFile(
+        paths.linuxBuildFile,
+        '.args(["scripts/sync-native-a2ui.mjs", "--write", "--output"])',
+      ),
+      fs.writeFile(
+        paths.androidBuildFile,
+        [
+          'commandLine("node", "scripts/sync-native-a2ui.mjs", "--write", "--output")',
+          "addGeneratedSourceDirectory(stageCanvasA2ui, StageCanvasA2uiTask::outputDirectory)",
+        ].join("\n"),
+      ),
+      fs.writeFile(
+        paths.iosProjectFile,
+        [
+          "Stage Canvas A2UI resources",
+          "scripts/sync-native-a2ui.mjs --write --output",
+          "pwd -P",
+          "$BUILT_PRODUCTS_DIR/OpenClawKit_OpenClawKit.bundle",
+          "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH",
+          'cp -R "$resource_product/CanvasA2UI"',
+        ].join("\n"),
+      ),
+    ]);
+
+    await expect(checkNativeA2uiBuildReferences(paths)).resolves.toBeUndefined();
+    await fs.writeFile(paths.iosProjectFile, "xcodebuild\n");
+    await expect(checkNativeA2uiBuildReferences(paths)).rejects.toThrow(
+      "Missing owners:\n- iOS app post-build resource stage",
+    );
   });
 
   it("requires Linux Canvas to embed the plugin-owned resources", async () => {
@@ -56,15 +89,15 @@ describe("scripts/sync-native-a2ui.mjs", () => {
     await fs.writeFile(
       linuxConsumerFile,
       [
-        'include_bytes!("../../../../apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/CanvasA2UI/index.html");',
-        'include_bytes!("../../../../apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/CanvasA2UI/a2ui.bundle.js");',
+        'include_bytes!(env!("OPENCLAW_CANVAS_A2UI_INDEX_HTML"));',
+        'include_bytes!(env!("OPENCLAW_CANVAS_A2UI_BUNDLE_JS"));',
       ].join("\n"),
     );
 
     await expect(checkLinuxCanvasA2uiReferences({ linuxConsumerFile })).resolves.toBeUndefined();
     await fs.writeFile(linuxConsumerFile, 'const OTHER: &[u8] = b"stale";\n');
     await expect(checkLinuxCanvasA2uiReferences({ linuxConsumerFile })).rejects.toThrow(
-      "Linux Canvas must embed the synced native A2UI resources",
+      "Linux Canvas must embed the staged native A2UI resources",
     );
   });
 
@@ -85,6 +118,7 @@ describe("scripts/sync-native-a2ui.mjs", () => {
     await expect(
       fs.stat(path.join(nativeDir, "assets", "providers", "granola.png")),
     ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.readdir(root)).resolves.toEqual(["native", "source"]);
   });
 
   it("fails check mode when native resources contain stale files or stale bytes", async () => {

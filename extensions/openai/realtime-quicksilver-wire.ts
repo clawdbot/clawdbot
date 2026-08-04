@@ -5,10 +5,12 @@ import {
   readResponseTextLimited,
   resolveProviderRequestHeaders,
 } from "openclaw/plugin-sdk/provider-http";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { z } from "zod";
 import { isOpenAIGptLiveModel } from "./realtime-quicksilver.js";
 
 const OPENAI_QUICKSILVER_APPEND_MAX_BYTES = 500;
+const OPENAI_QUICKSILVER_DELEGATION_RESULT_MAX_CHARS = 1_800;
 const OPENAI_QUICKSILVER_CONTEXT_MAX_ENTRIES = 16;
 const OPENAI_QUICKSILVER_CONTEXT_MAX_ITEM_CHARS = 800;
 const OPENAI_QUICKSILVER_CONTEXT_MAX_UTF8_BYTES = 8_000;
@@ -608,4 +610,15 @@ export function chunkOpenAIQuicksilverAppendText(text: string): string[] {
     chunks.push(current);
   }
   return chunks;
+}
+
+/** Bound completed delegation output while preserving under-limit text byte-for-byte. */
+export function boundOpenAIQuicksilverDelegationResult(text: string): string {
+  if (text.length <= OPENAI_QUICKSILVER_DELEGATION_RESULT_MAX_CHARS) {
+    return text;
+  }
+  return `${truncateUtf16Safe(
+    text,
+    OPENAI_QUICKSILVER_DELEGATION_RESULT_MAX_CHARS - 16,
+  ).trimEnd()} [truncated]`;
 }

@@ -568,6 +568,58 @@ describe("sendGoogleChatMessage", () => {
     expect(String(url)).not.toContain("messageReplyOption=");
   });
 
+  it.each([
+    ["a bare id", "113887189178345237288721356"],
+    ["a thread key without prefix", "pytxeqyhqck"],
+    ["a message resource name", "spaces/AAA/messages/1720896000000.000000"],
+    ["a space resource name", "spaces/AAA"],
+    ["a thread from a different space", "spaces/BBB/threads/xyz"],
+  ])(
+    "drops an invalid thread resource name (%s) and posts to the space",
+    async (_label, badThread) => {
+      const fetchMock = stubSuccessfulSend("spaces/AAA/messages/126");
+
+      const result = await sendGoogleChatMessage({
+        account,
+        space: "spaces/AAA",
+        text: "hello",
+        thread: badThread,
+      });
+
+      const url = mockCallArg(fetchMock);
+      const init = mockCallArg(fetchMock, 0, 1) as RequestInit | undefined;
+      // Invalid thread must not be forwarded, and the reply option must be omitted
+      // so the Chat API accepts the send instead of returning 400 INVALID_ARGUMENT.
+      expect(String(url)).not.toContain("messageReplyOption=");
+      if (typeof init?.body !== "string") {
+        throw new Error("Expected Google Chat request body");
+      }
+      const body = JSON.parse(init.body) as { thread?: unknown };
+      expect(body.thread).toBeUndefined();
+      expect(result).toEqual({ messageName: "spaces/AAA/messages/126" });
+    },
+  );
+
+  it("keeps a valid same-space thread resource name", async () => {
+    const fetchMock = stubSuccessfulSend("spaces/AAA/messages/127", "spaces/AAA/threads/xyz");
+
+    await sendGoogleChatMessage({
+      account,
+      space: "spaces/AAA",
+      text: "hello",
+      thread: "spaces/AAA/threads/xyz",
+    });
+
+    const url = mockCallArg(fetchMock);
+    const init = mockCallArg(fetchMock, 0, 1) as RequestInit | undefined;
+    expect(String(url)).toContain("messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
+    if (typeof init?.body !== "string") {
+      throw new Error("Expected Google Chat request body");
+    }
+    const body = JSON.parse(init.body) as { thread?: { name?: unknown } };
+    expect(body.thread?.name).toBe("spaces/AAA/threads/xyz");
+  });
+
   it("sends cardsV2 with the text fallback", async () => {
     const fetchMock = stubSuccessfulSend("spaces/AAA/messages/125");
     const cardsV2 = [

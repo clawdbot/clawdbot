@@ -268,7 +268,7 @@ describe("trajectory runtime", () => {
     );
   });
 
-  it("bounds large runtime event fields before serialization", () => {
+  it("bounds oversized prompts before compact preservation", () => {
     const writes: string[] = [];
     const recorder = createTrajectoryRuntimeRecorder({
       sessionId: "session-1",
@@ -289,11 +289,42 @@ describe("trajectory runtime", () => {
 
     expect(writes).toHaveLength(1);
     const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
+    expect(parsed.data.truncated).toBeUndefined();
     expect(parsed.data.prompt.truncated).toBe(true);
     expect(parsed.data.prompt.reason).toBe("trajectory-field-size-limit");
     expect(
       Buffer.byteLength(expectDefined(writes[0], "writes[0] test invariant"), "utf8"),
     ).toBeLessThanOrEqual(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1);
+  });
+
+  it("keeps normal schema-v1 event payloads unchanged", () => {
+    const writes: string[] = [];
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      writer: {
+        filePath: "/tmp/session.trajectory.jsonl",
+        write: (line) => {
+          writes.push(line);
+        },
+        flush: async () => undefined,
+      },
+    });
+    const data = {
+      prompt: "inspect",
+      systemPrompt: "system prompt",
+      messages: [{ role: "user", content: "inspect" }],
+      messagesSnapshot: [{ role: "assistant", content: "done" }],
+      imagesCount: 0,
+    };
+
+    expectTrajectoryRuntimeRecorder(recorder).recordEvent("prompt.submitted", data);
+
+    const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
+    expect(parsed.schemaVersion).toBe(1);
+    expect(parsed.data).toEqual(data);
+    expect(JSON.stringify(parsed.data)).toBe(JSON.stringify(data));
+    expect(parsed.data.truncated).toBeUndefined();
   });
 
   it("preserves usage when truncating oversized runtime events", () => {
@@ -322,6 +353,8 @@ describe("trajectory runtime", () => {
     runtimeRecorder.recordEvent("model.completed", {
       usage,
       promptCache,
+      assistantTexts: ["done"],
+      finalPromptText: "inspect",
       messagesSnapshot: Array.from({ length: 12 }, (_value, index) => ({
         role: index % 2 === 0 ? "user" : "assistant",
         content: `message-${index} ${"x".repeat(32_000)}`,
@@ -336,9 +369,11 @@ describe("trajectory runtime", () => {
       reason: "trajectory-event-size-limit",
       usage,
       promptCache,
+      assistantTexts: ["done"],
+      finalPromptText: "inspect",
     });
     expect(parsed.data.messagesSnapshot).toBeUndefined();
-    expect(parsed.data.droppedFields).toContain("messagesSnapshot");
+    expect(parsed.data.droppedFields).toEqual(["messagesSnapshot"]);
     expect(
       Buffer.byteLength(expectDefined(writes[0], "writes[0] test invariant"), "utf8"),
     ).toBeLessThanOrEqual(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1);
@@ -380,6 +415,124 @@ describe("trajectory runtime", () => {
     expect(parsed.data.droppedFields).toEqual(
       expect.arrayContaining(["usage", "messagesSnapshot"]),
     );
+    expect(
+      Buffer.byteLength(expectDefined(writes[0], "writes[0] test invariant"), "utf8"),
+    ).toBeLessThanOrEqual(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1);
+  });
+
+  it("preserves the prompt when an oversized event drops inlined conversation state", () => {
+    const writes: string[] = [];
+    const prompt = "summarize the incident timeline for the deploy that failed";
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      writer: {
+        filePath: "/tmp/session.trajectory.jsonl",
+        write: (line) => {
+          writes.push(line);
+        },
+        flush: async () => undefined,
+      },
+    });
+
+    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    runtimeRecorder.recordEvent("context.compiled", {
+      prompt,
+      systemPrompt: "x".repeat(32_000),
+      messages: Array.from({ length: 12 }, (_value, index) => ({
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `message-${index} ${"x".repeat(32_000)}`,
+      })),
+    });
+
+    expect(writes).toHaveLength(1);
+    const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
+    expect(parsed.data).toMatchObject({
+      truncated: true,
+      reason: "trajectory-event-size-limit",
+      prompt,
+      systemPrompt: "x".repeat(32_000),
+    });
+    expect(parsed.data.messages).toBeUndefined();
+    expect(parsed.data.droppedFields).toEqual(["messages"]);
+    expect(
+      Buffer.byteLength(expectDefined(writes[0], "writes[0] test invariant"), "utf8"),
+    ).toBeLessThanOrEqual(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1);
+  });
+
+  it("drops repeated conversation fields in priority order", () => {
+    const writes: string[] = [];
+    const prompt = "summarize the incident timeline";
+    const messageBlocks = Array.from({ length: 12 }, (_value, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `message-${index} ${"x".repeat(32_000)}`,
+    }));
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      writer: {
+        filePath: "/tmp/session.trajectory.jsonl",
+        write: (line) => {
+          writes.push(line);
+        },
+        flush: async () => undefined,
+      },
+    });
+
+    expectTrajectoryRuntimeRecorder(recorder).recordEvent("context.compiled", {
+      prompt,
+      messagesSnapshot: messageBlocks,
+      messages: messageBlocks,
+      systemPrompt: "x".repeat(32_760),
+      tools: Array.from({ length: 7 }, (_value, index) => ({
+        name: `tool-${index}`,
+        description: "x".repeat(32_760),
+      })),
+    });
+
+    const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
+    expect(parsed.data.prompt).toBe(prompt);
+    expect(parsed.data.tools).toHaveLength(7);
+    expect(parsed.data.messagesSnapshot).toBeUndefined();
+    expect(parsed.data.messages).toBeUndefined();
+    expect(parsed.data.systemPrompt).toBeUndefined();
+    expect(parsed.data.droppedFields).toEqual(["messagesSnapshot", "messages", "systemPrompt"]);
+    expect(
+      Buffer.byteLength(expectDefined(writes[0], "writes[0] test invariant"), "utf8"),
+    ).toBeLessThanOrEqual(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1);
+  });
+
+  it("preserves the prompt in the compact fallback for oversized events", () => {
+    const writes: string[] = [];
+    const prompt = "summarize the incident timeline for the deploy that failed";
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      writer: {
+        filePath: "/tmp/session.trajectory.jsonl",
+        write: (line) => {
+          writes.push(line);
+        },
+        flush: async () => undefined,
+      },
+    });
+
+    expectTrajectoryRuntimeRecorder(recorder).recordEvent("context.compiled", {
+      prompt,
+      tools: Array.from({ length: 12 }, (_value, index) => ({
+        name: `tool-${index}`,
+        description: "x".repeat(32_000),
+      })),
+    });
+
+    const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
+    expect(parsed.data).toMatchObject({
+      truncated: true,
+      reason: "trajectory-event-size-limit",
+      prompt,
+    });
+    expect(parsed.data.tools).toBeUndefined();
+    expect(parsed.data.droppedFields).toEqual(["tools"]);
     expect(
       Buffer.byteLength(expectDefined(writes[0], "writes[0] test invariant"), "utf8"),
     ).toBeLessThanOrEqual(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1);

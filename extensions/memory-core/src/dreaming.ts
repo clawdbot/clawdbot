@@ -827,8 +827,10 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
   let lastRuntimeConfigKey: string | null = null;
   let lastRuntimeCronRef: CronServiceLike | null = null;
   let startupCronRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  let startupDreamingCleanupTimer: ReturnType<typeof setTimeout> | null = null;
   let runtimeCronReconcileTimer: ReturnType<typeof setInterval> | null = null;
   let startupCronRetryAttempts = 0;
+  let gatewayLifecycleGeneration = 0;
   let disposed = false;
 
   const resolveCurrentConfig = (): OpenClawConfig =>
@@ -855,7 +857,12 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
 
   const disposeStartupCronRetry = (): void => {
     disposed = true;
+    gatewayLifecycleGeneration += 1;
     clearStartupCronRetry();
+    if (startupDreamingCleanupTimer) {
+      clearTimeout(startupDreamingCleanupTimer);
+      startupDreamingCleanupTimer = null;
+    }
     if (runtimeCronReconcileTimer) {
       clearInterval(runtimeCronReconcileTimer);
       runtimeCronReconcileTimer = null;
@@ -1014,8 +1021,83 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     runtimeCronReconcileTimer.unref?.();
   };
 
+  const startDreamingSessionCleanup = async (
+    config: OpenClawConfig,
+    generation: number,
+    startupStartedAtMs: number,
+  ): Promise<void> => {
+    const { DREAMING_ORPHAN_MIN_AGE_MS, scrubDreamingNarrativeArtifacts } =
+      await import("./dreaming-session-cleanup.js");
+    if (disposed || generation !== gatewayLifecycleGeneration) {
+      return;
+    }
+    const scrubConfiguredAgents = async (
+      currentConfig: OpenClawConfig,
+      nowMs?: number,
+    ): Promise<void> => {
+      const agentIds = uniqueStrings(
+        resolveMemoryDreamingWorkspaces(currentConfig).flatMap(
+          ({ agentIds: workspaceAgentIds }) => workspaceAgentIds,
+        ),
+      );
+      for (const agentId of agentIds) {
+        if (disposed || generation !== gatewayLifecycleGeneration) {
+          return;
+        }
+        try {
+          await scrubDreamingNarrativeArtifacts({
+            agentId,
+            config: currentConfig,
+            logger: api.logger,
+            ...(nowMs === undefined ? {} : { nowMs }),
+          });
+        } catch (error) {
+          api.logger.warn(
+            `memory-core: dreaming startup cleanup failed for agent ${agentId}: ${formatErrorMessage(error)}`,
+          );
+        }
+      }
+    };
+
+    // Cron reconciliation can itself stall; never classify sessions admitted after startup.
+    await scrubConfiguredAgents(config, startupStartedAtMs);
+    if (disposed || generation !== gatewayLifecycleGeneration) {
+      return;
+    }
+    // Interrupted runs are initially indistinguishable from live runs; revisit once their
+    // persisted activity ages past the same guard used by normal narrative cleanup.
+    const cleanupTimer = setTimeout(() => {
+      if (
+        disposed ||
+        generation !== gatewayLifecycleGeneration ||
+        startupDreamingCleanupTimer !== cleanupTimer
+      ) {
+        return;
+      }
+      startupDreamingCleanupTimer = null;
+      // Keep the cutoff strictly before startup: equal-millisecond sessions may have
+      // started after the hook and must survive even when this timer runs late.
+      void scrubConfiguredAgents(
+        resolveCurrentConfig(),
+        startupStartedAtMs + DREAMING_ORPHAN_MIN_AGE_MS - 1,
+      ).catch((error: unknown) => {
+        api.logger.warn(
+          `memory-core: deferred dreaming startup cleanup failed: ${formatErrorMessage(error)}`,
+        );
+      });
+    }, DREAMING_ORPHAN_MIN_AGE_MS);
+    startupDreamingCleanupTimer = cleanupTimer;
+    startupDreamingCleanupTimer.unref?.();
+  };
+
   api.on("gateway_start", async (_event, ctx) => {
+    const startupStartedAtMs = Date.now();
     disposed = false;
+    if (startupDreamingCleanupTimer) {
+      clearTimeout(startupDreamingCleanupTimer);
+      startupDreamingCleanupTimer = null;
+    }
+    const generation = ++gatewayLifecycleGeneration;
     // Store the gateway context for runtime cron resolution retries.
     gatewayContext = ctx as unknown as { getCron?: () => CronServiceLike | null };
     try {
@@ -1031,6 +1113,15 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     } finally {
       startRuntimeCronReconcileTimer();
       scheduleStartupCronRetry();
+      await startDreamingSessionCleanup(
+        ctx.config ?? api.config,
+        generation,
+        startupStartedAtMs,
+      ).catch((error: unknown) => {
+        api.logger.warn(
+          `memory-core: dreaming startup cleanup failed: ${formatErrorMessage(error)}`,
+        );
+      });
     }
   });
 

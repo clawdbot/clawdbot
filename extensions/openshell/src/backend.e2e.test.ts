@@ -520,6 +520,7 @@ describe("openshell sandbox backend e2e", () => {
         scope: "session" as const,
         workspaceAccess: "rw" as const,
         workspaceRoot: path.join(rootDir, "sandboxes"),
+        dockerTmpfsSource: "configured" as const,
         docker: {
           image: "openclaw-sandbox:bookworm-slim",
           containerPrefix: "openclaw-sbx-",

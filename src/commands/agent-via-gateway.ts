@@ -8,6 +8,7 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import { measureAgentStartup } from "../agents/startup-timing.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { withProgress } from "../cli/progress.js";
@@ -30,6 +31,10 @@ import { createAbortError } from "../infra/abort-signal.js";
 import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { routeLogsToStderr } from "../logging/console.js";
+import {
+  startOneShotDiagnosticsExporters,
+  type OneShotDiagnosticsHandle,
+} from "../plugins/one-shot-diagnostics.js";
 import {
   classifySessionKeyShape,
   isUnscopedSessionKeySentinel,
@@ -102,7 +107,7 @@ type AgentGatewayCallIdentity = Pick<
   Parameters<typeof callGateway>[0],
   "clientName" | "mode" | "scopes"
 >;
-type AgentSessionModule = typeof import("./agent/session.js");
+type AgentSessionModule = typeof import("./agent/session.runtime.js");
 type AgentSessionModuleLoader = () => Promise<AgentSessionModule>;
 
 const AGENT_CLI_SIGNALS: readonly AgentCliSignal[] = ["SIGINT", "SIGTERM"];
@@ -115,7 +120,7 @@ const AGENT_CLI_SIGNAL_EXIT_CODES: Record<AgentCliSignal, number> = {
 const MESSAGE_FILE_DECODER = new TextDecoder("utf-8", { fatal: true });
 
 const defaultAgentSessionModuleLoader: AgentSessionModuleLoader = () =>
-  import("./agent/session.js");
+  import("./agent/session.runtime.js");
 let agentSessionModuleLoader: AgentSessionModuleLoader = defaultAgentSessionModuleLoader;
 const embeddedAgentCommandLoader = createLazyPromiseLoader(
   () => import("./agent.js").then((module) => module.agentCommand),
@@ -138,6 +143,52 @@ function resolveGatewayAbortRetryDelaysMs(): readonly number[] {
 }
 
 const loadAgentSessionModule = agentSessionModuleCache.load;
+
+type EmbeddedAgentCommandOpts = Parameters<
+  Awaited<ReturnType<typeof embeddedAgentCommandLoader.load>>
+>[0];
+type EmbeddedRunDiagnosticsOptions = {
+  suppressStdoutDiagnosticLogs: boolean;
+};
+
+async function startEmbeddedRunDiagnosticsExporters(
+  runtime: RuntimeEnv,
+  options: EmbeddedRunDiagnosticsOptions,
+): Promise<OneShotDiagnosticsHandle | null> {
+  try {
+    return await startOneShotDiagnosticsExporters({
+      config: await loadRuntimeConfig(),
+      suppressStdoutDiagnosticLogs: options.suppressStdoutDiagnosticLogs,
+    });
+  } catch (err) {
+    // Exporter startup must never break the agent run itself.
+    runtime.error?.(`diagnostics exporter startup failed for embedded run: ${String(err)}`);
+    return null;
+  }
+}
+
+/**
+ * Run the embedded agent command with OTel diagnostics export for this
+ * one-shot process: the Gateway only starts diagnostics exporters in its own
+ * process, so embedded runs start one here and flush it before the CLI exits
+ * (including signal exits, which happen after this returns).
+ */
+async function runEmbeddedAgentCommand(
+  opts: EmbeddedAgentCommandOpts,
+  runtime: RuntimeEnv,
+  deps: AgentCliDeps | undefined,
+  diagnosticsOptions: EmbeddedRunDiagnosticsOptions,
+) {
+  const agentCommand = await measureAgentStartup("command-import", () =>
+    embeddedAgentCommandLoader.load(),
+  );
+  const diagnostics = await startEmbeddedRunDiagnosticsExporters(runtime, diagnosticsOptions);
+  try {
+    return await agentCommand(opts, runtime, deps);
+  } finally {
+    await diagnostics?.stop();
+  }
+}
 
 async function loadRuntimeConfig(): Promise<OpenClawConfig> {
   const { getRuntimeConfig } = await runtimeConfigModuleLoader.load();
@@ -702,13 +753,15 @@ async function agentViaGatewayCommand(
     ? undefined
     : classifySessionKeyShape(explicitSessionKey) === "agent"
       ? explicitSessionKey
-      : (await loadAgentSessionModule()).resolveSessionKeyForRequest({
-          cfg,
-          agentId,
-          to: opts.to,
-          sessionId: opts.sessionId,
-          sessionKey: explicitSessionKey,
-        }).sessionKey;
+      : explicitSessionKey || opts.to || opts.sessionId
+        ? (await loadAgentSessionModule()).resolveSessionKeyForRequest({
+            cfg,
+            agentId,
+            to: opts.to,
+            sessionId: opts.sessionId,
+            sessionKey: explicitSessionKey,
+          }).sessionKey
+        : undefined;
   const abortSessionKey = deferExplicitRecipientSession
     ? (await loadAgentSessionModule()).resolveSessionKeyForRequest({ cfg, agentId }).sessionKey
     : sessionKey;
@@ -917,8 +970,7 @@ export async function agentCliCommand(
   const signalBridge = createAgentCliSignalBridge(resolveAgentCliProcessLike(deps));
   try {
     if (dispatchOpts.local === true) {
-      const agentCommand = await embeddedAgentCommandLoader.load();
-      const result = await agentCommand(
+      const result = await runEmbeddedAgentCommand(
         {
           ...gatewayDispatchOpts,
           agentId: gatewayDispatchOpts.agent,
@@ -930,6 +982,7 @@ export async function agentCliCommand(
         },
         runtime,
         deps,
+        { suppressStdoutDiagnosticLogs: dispatchOpts.json === true },
       );
       return returnAfterSignalExit(result, signalBridge.getReceivedSignal(), runtime);
     }

@@ -271,7 +271,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
 
       expect(result.status).toBe("error");
       expect(result.error).toBe(
-        "cron payload.model 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.modelPolicy.allow: anthropic/claude-sonnet-4-6 is not in [openai/gpt-5.4]",
+        "automation model override 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.modelPolicy.allow: anthropic/claude-sonnet-4-6 is not in [openai/gpt-5.4]",
       );
       expect(logWarnMock).not.toHaveBeenCalled();
       expect(runWithModelFallbackMock).not.toHaveBeenCalled();
@@ -291,7 +291,9 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       );
 
       expect(result.status).toBe("error");
-      expect(result.error).toBe("cron payload.model 'openai/' rejected: invalid model: openai/");
+      expect(result.error).toBe(
+        "automation model override 'openai/' rejected: invalid model: openai/",
+      );
       expect(logWarnMock).not.toHaveBeenCalled();
       expect(runWithModelFallbackMock).not.toHaveBeenCalled();
     });

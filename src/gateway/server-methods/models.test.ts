@@ -3,7 +3,6 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -14,7 +13,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferred } from "../../test-utils/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { expectGatewayErrorResponse } from "./gateway-response.test-helpers.js";
 import { modelsHandlers } from "./models.js";
 import type { RespondFn } from "./types.js";
 
@@ -418,6 +416,59 @@ describe("models.list", () => {
         vi.useRealTimers();
       }
     });
+  });
+
+  it("does not block wildcard provider inventory on slow full discovery", async () => {
+    const catalog = createDeferred<never>();
+    const loadGatewayModelCatalog = vi.fn(() => catalog.promise);
+    const runtimeConfig = {
+      agents: {
+        defaults: {
+          modelPolicy: { allow: ["vllm/*"] },
+        },
+      },
+      models: {
+        providers: {
+          vllm: {
+            baseUrl: "https://vllm.example/v1",
+            models: [{ id: "llama-local", name: "Llama Local" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { request, respond } = requestModelsList({
+        view: "provider-config",
+        runtimeConfig,
+        loadGatewayModelCatalog,
+        reqId: "req-models-list-wildcard-provider-timeout",
+      });
+
+      await vi.advanceTimersByTimeAsync(800);
+      await vi.runOnlyPendingTimersAsync();
+      await request;
+
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        {
+          models: [
+            {
+              id: "llama-local",
+              name: "Llama Local",
+              provider: "vllm",
+            },
+          ],
+        },
+        undefined,
+      );
+      expect(loadGatewayModelCatalog).toHaveBeenCalledWith(
+        expect.objectContaining({ readOnly: false }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps SecretRef configured fallback rows unknown when catalog discovery times out", async () => {
@@ -1223,6 +1274,83 @@ describe("models.list", () => {
     );
   });
 
+  it("hides inline provider keys during billing cooldown from model browsing", async () => {
+    // Regression: the models.list availability checker loaded the auth store
+    // for profile checks but did not pass it to the runtime availability check,
+    // so inline provider keys in billing cooldown stayed browseable.
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-models-list-inline-cooldown-",
+        agentEnv: "main",
+      },
+      async (state) => {
+        const runtimeConfig = {
+          models: {
+            providers: {
+              cliproxyapi: {
+                api: "openai-responses",
+                baseUrl: "https://cliproxy.example/v1",
+                apiKey: "sk-inline-cooldown", // pragma: allowlist secret
+                models: [],
+              },
+            },
+          },
+        } as unknown as OpenClawConfig;
+        const catalog = [{ id: "qwen-remote", name: "Qwen Remote", provider: "cliproxyapi" }];
+        const writeCooldown = (disabledUntil: number) =>
+          state.writeAuthProfiles({
+            version: 1,
+            profiles: {},
+            usageStats: {
+              "inline-api-key:cliproxyapi": {
+                disabledUntil,
+                disabledReason: "billing",
+              },
+            },
+          });
+
+        await writeCooldown(Date.now() + 60_000);
+        const cooled = requestModelsList({
+          view: "all",
+          runtimeConfig,
+          loadGatewayModelCatalog: vi.fn(() => Promise.resolve(catalog)),
+          reqId: "req-models-list-inline-cooldown-active",
+        });
+        await cooled.request;
+        expect(cooled.respond).toHaveBeenCalledWith(
+          true,
+          {
+            models: [
+              { id: "qwen-remote", name: "Qwen Remote", provider: "cliproxyapi", available: false },
+            ],
+          },
+          undefined,
+        );
+
+        // Expired cooldown proves the store reaches the runtime check instead
+        // of the row being unavailable for an unrelated reason.
+        await writeCooldown(Date.now() - 60_000);
+        const recovered = requestModelsList({
+          view: "all",
+          runtimeConfig,
+          loadGatewayModelCatalog: vi.fn(() => Promise.resolve(catalog)),
+          reqId: "req-models-list-inline-cooldown-expired",
+        });
+        await recovered.request;
+        expect(recovered.respond).toHaveBeenCalledWith(
+          true,
+          {
+            models: [
+              { id: "qwen-remote", name: "Qwen Remote", provider: "cliproxyapi", available: true },
+            ],
+          },
+          undefined,
+        );
+      },
+    );
+  });
+
   it("uses an exact hydrated runtime profile SecretRef as read-only proof", async () => {
     await withOpenClawTestState(
       {
@@ -1465,18 +1593,14 @@ describe("models.list", () => {
     );
   });
 
-  it("preserves catalog load errors before the timeout fallback wins", async () => {
+  it("propagates catalog load errors to the dispatch backstop", async () => {
     const { request, respond } = requestModelsList({
       view: "configured",
       loadGatewayModelCatalog: vi.fn(() => Promise.reject(new Error("catalog failed"))),
       reqId: "req-models-list-catalog-error",
     });
-    await request;
-
-    expectGatewayErrorResponse(respond, {
-      code: ErrorCodes.UNAVAILABLE,
-      message: "Error: catalog failed",
-    });
+    await expect(request).rejects.toThrow("catalog failed");
+    expect(respond).not.toHaveBeenCalled();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -81,7 +81,7 @@ import type { DiscordProbe } from "./probe.js";
 import { getDiscordRuntime } from "./runtime.js";
 import { discordSecurityAdapter } from "./security.js";
 import { normalizeExplicitDiscordSessionKey } from "./session-key-normalization.js";
-import { discordSetupAdapter, discordSetupContract } from "./setup-adapter.js";
+import { discordSetupContract } from "./setup-adapter.js";
 import { createDiscordPluginBase, discordConfigAdapter } from "./shared.js";
 import { collectDiscordStatusIssues } from "./status-issues.js";
 import { parseDiscordTarget } from "./target-parsing.js";
@@ -307,7 +307,6 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
   createChatChannelPlugin<ResolvedDiscordAccount, DiscordProbe>({
     base: {
       ...createDiscordPluginBase({
-        setup: discordSetupAdapter,
         setupContract: discordSetupContract,
       }),
       allowlist: {

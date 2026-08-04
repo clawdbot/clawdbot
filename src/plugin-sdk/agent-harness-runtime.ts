@@ -422,7 +422,7 @@ export {
   resolveSessionWriteLockAcquireTimeoutMs,
   resolveSessionWriteLockOptions,
   type SessionWriteLockAcquireTimeoutConfig,
-} from "../agents/session-write-lock.js";
+} from "./session-write-lock-runtime.js";
 export {
   consumeAdjustedParamsForToolCall,
   consumePreExecutionBlockedToolCall,

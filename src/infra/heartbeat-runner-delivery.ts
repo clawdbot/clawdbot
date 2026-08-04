@@ -169,7 +169,7 @@ export async function finalizeHeartbeatOutcome(params: {
   const { delivery, dueCommitmentIds, entry, previousUpdatedAt } = params.prepared;
   const { runSessionKey, sessionKey, storePath, visibility } = params.prepared;
   const markDueCommitments = (status: "dismissed" | "sent") =>
-    markCommitmentsStatus({ cfg, ids: dueCommitmentIds, status, nowMs: startedAt });
+    markCommitmentsStatus({ ids: dueCommitmentIds, status, nowMs: startedAt });
   const outcome = params.outcome;
   if (outcome.kind === "terminal-failure") {
     const failureChannel = delivery.channel;

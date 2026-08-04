@@ -2,6 +2,8 @@
 import { describe, expect, it } from "vitest";
 import {
   buildAgentRunTerminalOutcome,
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
+  classifyAgentRunTerminalOutcome,
   mergeAgentRunAttemptTerminal,
   mergeAgentRunTerminalOutcome,
   normalizeAgentRunAttemptTerminal,
@@ -11,6 +13,46 @@ import {
 } from "./agent-run-terminal-outcome.js";
 
 describe("agent run terminal outcome", () => {
+  it.each([
+    ["completed", "success"],
+    ["hard_timeout", "timeout"],
+    ["timed_out", "timeout"],
+    ["cancelled", "cancellation"],
+    ["aborted", "cancellation"],
+    ["blocked", "failure"],
+    ["abandoned", "failure"],
+    ["failed", "failure"],
+  ] as const)("classifies %s as %s", (reason, classification) => {
+    expect(classifyAgentRunTerminalOutcome({ reason })).toBe(classification);
+  });
+
+  it("normalizes lifecycle signals with timeout, cancellation, failure precedence", () => {
+    expect(
+      buildAgentRunTerminalOutcomeFromLifecycleEvent({
+        phase: "end",
+        data: { aborted: true },
+      }),
+    ).toMatchObject({ reason: "aborted", status: "error", stopReason: "aborted" });
+    expect(
+      buildAgentRunTerminalOutcomeFromLifecycleEvent({
+        phase: "end",
+        data: { aborted: true, stopReason: "timeout", timeoutPhase: "provider" },
+      }),
+    ).toMatchObject({ reason: "hard_timeout", status: "timeout" });
+    expect(
+      buildAgentRunTerminalOutcomeFromLifecycleEvent({
+        phase: "error",
+        data: { error: "provider failed" },
+      }),
+    ).toMatchObject({ reason: "failed", status: "error", error: "provider failed" });
+    expect(
+      buildAgentRunTerminalOutcomeFromLifecycleEvent({
+        phase: "end",
+        data: { status: "cancelled", stopReason: "relay-closed" },
+      }),
+    ).toMatchObject({ reason: "cancelled", status: "error", stopReason: "relay-closed" });
+  });
+
   it("treats provider/preflight/post-turn timeout phases as hard run timeouts", () => {
     expect(
       ["preflight", "provider", "post_turn", "queue", "gateway_draining"].map(

@@ -16,12 +16,20 @@ const blockingWorkerUrl = new URL(
   `)}`,
 );
 
+const silentBlockingWorkerUrl = new URL(
+  `data:text/javascript,${encodeURIComponent(`
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {}
+  `)}`,
+);
+
 function emptyDetection(): SetupInferenceDetection {
   return {
     candidates: [],
     unavailableCandidates: [],
     manualProviders: [],
     authOptions: [],
+    prepareOptions: [],
     recommendedInstalls: listRecommendedToolInstalls(),
     workspace: DEFAULT_AGENT_WORKSPACE_DIR,
     setupComplete: false,
@@ -97,7 +105,17 @@ describe("isolated setup inference detection", () => {
     expect(response.statusCode).toBe(200);
     expect(JSON.parse(response.body)).toEqual({ ok: true, status: "live" });
     expect(elapsedMs).toBeLessThan(500);
-    await expect(pending).resolves.toEqual(fallback);
+    const detection = await pending;
+    expect(detection).toMatchObject({
+      candidates: fallback.candidates,
+      unavailableCandidates: fallback.unavailableCandidates,
+      manualProviders: fallback.manualProviders,
+      authOptions: fallback.authOptions,
+      recommendedInstalls: fallback.recommendedInstalls,
+      workspace: fallback.workspace,
+      setupComplete: fallback.setupComplete,
+    });
+    expect(detection.prepareOptions ?? []).toEqual([]);
     expect(performance.now() - pendingStartedAt).toBeLessThan(1_000);
   });
 
@@ -138,6 +156,18 @@ describe("isolated setup inference detection", () => {
         recommended: false,
       },
     ]);
+  });
+
+  it("omits prepare choices when detection times out without a partial result", async () => {
+    const { detectSetupInferenceIsolated } = await loadDetectionModule();
+
+    const detection = await detectSetupInferenceIsolated({
+      workerUrl: silentBlockingWorkerUrl,
+      timeoutMs: 50,
+      fallbackEnv: {},
+    });
+
+    expect(detection.prepareOptions).toBeUndefined();
   });
 
   it("coalesces concurrent detections behind one bounded worker", async () => {

@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import { createSlackEditTestClient, createSlackSendTestClient } from "./blocks.test-helpers.js";
 import { countSlackTextUtf8Bytes } from "./truncate.js";
 
-const { editSlackMessage, sendSlackMessage } = await import("./actions.js");
+const { editSlackMessage, editSlackRenderedMessage, sendSlackMessage } =
+  await import("./actions.js");
 const SLACK_TEXT_LIMIT = 8000;
 const SLACK_EDIT_TEXT_MAX_BYTES = 4000;
 
@@ -68,6 +69,36 @@ describe("sendSlackMessage blocks", () => {
 });
 
 describe("editSlackMessage blocks", () => {
+  it("renders authored Markdown using the same mrkdwn dialect as sends", async () => {
+    const client = createSlackEditTestClient();
+
+    await editSlackMessage("C123", "171234.567", "**bold** and [OpenClaw](https://example.com)", {
+      token: "xoxb-test",
+      client,
+    });
+
+    expect(client.chat.update).toHaveBeenCalledWith({
+      channel: "C123",
+      ts: "171234.567",
+      text: "*bold* and <https://example.com|OpenClaw>",
+    });
+  });
+
+  it("preserves already-rendered Slack mrkdwn when finalizing a preview", async () => {
+    const client = createSlackEditTestClient();
+
+    await editSlackRenderedMessage("C123", "171234.567", "*bold*", {
+      token: "xoxb-test",
+      client,
+    });
+
+    expect(client.chat.update).toHaveBeenCalledWith({
+      channel: "C123",
+      ts: "171234.567",
+      text: "*bold*",
+    });
+  });
+
   it("caps long plain-text edits at the live UTF-8 byte limit", async () => {
     const client = createSlackEditTestClient();
     const text = `${"x".repeat(3_999)}…${"a".repeat(SLACK_TEXT_LIMIT)}`;

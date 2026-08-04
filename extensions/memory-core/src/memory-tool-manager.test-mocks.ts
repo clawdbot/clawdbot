@@ -38,6 +38,7 @@ type MemoryManagerParams = {
 let backend: MemoryBackend = "builtin";
 let resolvedBackend: MemoryBackend | undefined;
 let workspaceDir = "/workspace";
+let statusDirty = false;
 let customStatus: Record<string, unknown> | undefined;
 let searchImpl: SearchImpl = async () => [];
 let closeImpl: () => Promise<void> = async () => {};
@@ -62,7 +63,7 @@ const stubManager = {
     backend,
     files: 1,
     chunks: 1,
-    dirty: false,
+    dirty: statusDirty,
     workspaceDir,
     dbPath: "/workspace/.memory/index.sqlite",
     provider: "builtin",
@@ -113,6 +114,10 @@ export function setMemoryCustomStatus(next: Record<string, unknown> | undefined)
   customStatus = next;
 }
 
+export function setMemoryStatusDirty(next: boolean): void {
+  statusDirty = next;
+}
+
 export function setMemorySearchImpl(next: SearchImpl): void {
   searchImpl = next;
 }
@@ -145,6 +150,7 @@ export function resetMemoryToolMockState(overrides?: {
   backend = overrides?.backend ?? "builtin";
   resolvedBackend = undefined;
   workspaceDir = "/workspace";
+  statusDirty = false;
   customStatus = undefined;
   getManagerImpl = undefined;
   searchImpl = overrides?.searchImpl ?? (async () => []);

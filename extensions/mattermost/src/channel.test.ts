@@ -1604,6 +1604,46 @@ describe("mattermostPlugin", () => {
       expect(options.buttons).toBeUndefined();
     });
 
+    it("keeps unsupported select commands actionable without exposing callback values", async () => {
+      const cfg = createMattermostTestConfig();
+
+      await mattermostPlugin.actions?.handleAction?.(
+        createMattermostActionContext({
+          action: "send",
+          params: {
+            to: "channel:CHAN1",
+            message: "Pick",
+            presentation: {
+              blocks: [
+                {
+                  type: "select",
+                  placeholder: "Environment",
+                  options: [
+                    {
+                      label: "Production",
+                      action: { type: "command", command: "/deploy production" },
+                    },
+                    {
+                      label: "Opaque",
+                      action: { type: "callback", value: "private-callback-token" },
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+          cfg,
+          accountId: "default",
+        }),
+      );
+
+      const options = expectSingleMattermostSend(
+        "channel:CHAN1",
+        "Pick\n\nEnvironment:\n- Production: `/deploy production`\n- Opaque",
+      );
+      expect(options.buttons).toBeUndefined();
+    });
+
     it("falls back to trimmed replyTo when replyToId is blank", async () => {
       const cfg = createMattermostTestConfig();
 

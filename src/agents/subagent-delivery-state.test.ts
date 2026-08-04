@@ -14,7 +14,6 @@ function baseRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord 
     cleanup: "keep",
     spawnMode: "run",
     createdAt: 100,
-    startedAt: 100,
     expectsCompletionMessage: true,
     execution: { status: "running", startedAt: 100 },
     completion: { required: true },
@@ -82,15 +81,22 @@ describe("normalizeSubagentRunState", () => {
 
   it("keeps only complete interrupted-recovery terminal ownership", () => {
     const terminal = {
-      endedAt: 200,
       endedReason: "subagent-error" as const,
-      outcome: { status: "error" as const, error: "restart interrupted run" },
+      execution: {
+        status: "terminal" as const,
+        startedAt: 100,
+        endedAt: 200,
+        outcome: { status: "error" as const, error: "restart interrupted run" },
+      },
       terminalOwner: "interrupted-recovery" as const,
     };
     const valid = normalizeSubagentRunState(baseRun(terminal));
     const malformed = [
-      baseRun({ ...terminal, endedAt: undefined }),
-      baseRun({ ...terminal, outcome: { status: "ok" } }),
+      baseRun({ ...terminal, execution: { ...terminal.execution, endedAt: undefined } }),
+      baseRun({
+        ...terminal,
+        execution: { ...terminal.execution, outcome: { status: "ok" } },
+      }),
       baseRun({ ...terminal, endedReason: "subagent-complete" }),
       baseRun({ ...terminal, pauseReason: "sessions_yield" }),
     ].map((entry) => normalizeSubagentRunState(entry));

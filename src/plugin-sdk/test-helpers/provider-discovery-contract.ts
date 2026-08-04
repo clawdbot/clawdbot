@@ -184,6 +184,30 @@ function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContract
         validateApiKeyInput: () => undefined,
       };
     });
+    vi.doMock("openclaw/plugin-sdk/provider-setup", async () => {
+      const actual = await vi.importActual<typeof import("../provider-setup.js")>(
+        "openclaw/plugin-sdk/provider-setup",
+      );
+      return {
+        ...actual,
+        discoverOpenAICompatibleLocalModels: async (params: {
+          apiKey?: string;
+          baseUrl: string;
+          label: string;
+        }) => {
+          const isVllm = params.label === "vLLM";
+          const defaultBaseUrl = isVllm ? "http://127.0.0.1:8000/v1" : "http://127.0.0.1:30000/v1";
+          const provider = requireRecord(
+            await (isVllm ? buildVllmProviderMock : buildSglangProviderMock)({
+              apiKey: params.apiKey,
+              ...(params.baseUrl === defaultBaseUrl ? {} : { baseUrl: params.baseUrl }),
+            }),
+            `${params.label} provider`,
+          );
+          return Array.isArray(provider.models) ? provider.models : [];
+        },
+      };
+    });
     if (options.githubCopilotRegisterRuntimeModuleId) {
       vi.doMock(options.githubCopilotRegisterRuntimeModuleId, async () => {
         const actual = await vi.importActual<object>(options.githubCopilotRegisterRuntimeModuleId!);
@@ -200,7 +224,6 @@ function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContract
           VLLM_DEFAULT_BASE_URL: "http://127.0.0.1:8000/v1",
           VLLM_MODEL_PLACEHOLDER: "meta-llama/Meta-Llama-3-8B-Instruct",
           VLLM_PROVIDER_LABEL: "vLLM",
-          buildVllmProvider: (...args: unknown[]) => buildVllmProviderMock(...args),
         };
       });
     }
@@ -211,7 +234,6 @@ function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContract
           SGLANG_DEFAULT_BASE_URL: "http://127.0.0.1:30000/v1",
           SGLANG_MODEL_PLACEHOLDER: "Qwen/Qwen3-8B",
           SGLANG_PROVIDER_LABEL: "SGLang",
-          buildSglangProvider: (...args: unknown[]) => buildSglangProviderMock(...args),
         };
       });
     }

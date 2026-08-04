@@ -2,8 +2,12 @@ import { expectDefined } from "@openclaw/normalization-core";
 // Channel streaming config normalization and progress-draft formatting helpers.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import { formatToolDetail, resolveToolDisplay } from "../agents/tool-display.js";
-import { formatToolAggregate } from "../auto-reply/tool-meta.js";
+import {
+  formatToolDetail,
+  isShellToolDisplayName,
+  resolveToolDisplay,
+} from "../agents/tool-display.js";
+import { formatToolAggregate, formatToolAggregateParts } from "../auto-reply/tool-meta.js";
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
@@ -325,22 +329,14 @@ function buildNamedProgressLine(
 ): ChannelProgressDraftLine | undefined {
   const normalizedName = name?.trim() || "tool_call";
   const compactMetas = compactStrings(metas ?? []);
-  const text = formatToolAggregate(normalizedName, compactMetas.length ? compactMetas : undefined, {
-    markdown: options?.markdown,
-  });
+  // The formatter owns both halves: taking the detail from it keeps the line's
+  // structured fields and its rendered text describing the same thing.
+  const { text, detail } = formatToolAggregateParts(
+    normalizedName,
+    compactMetas.length ? compactMetas : undefined,
+    { markdown: options?.markdown },
+  );
   const display = resolveToolDisplay({ name: normalizedName });
-  const prefix = `${display.emoji} ${display.label}`;
-  const compactCommandDetail =
-    (display.name === "exec" || display.name === "bash") && text.startsWith(`${display.emoji} `)
-      ? text.slice(display.emoji.length + 1).trim()
-      : undefined;
-  const compactCommandPrefix =
-    compactCommandDetail && compactCommandDetail !== display.label
-      ? compactCommandDetail
-      : undefined;
-  const detail = text.startsWith(`${prefix}: `)
-    ? text.slice(prefix.length + 2).trim()
-    : compactCommandPrefix;
   const line = {
     ...(fields?.id ? { id: fields.id } : {}),
     kind,
@@ -1135,8 +1131,7 @@ function getProgressDraftLineText(line: string | ChannelProgressDraftLine): stri
   const status = line.status?.trim();
   const displayStatus = status === "completed" ? undefined : status;
   if (detail) {
-    const compactCommandLine =
-      line.toolName === "exec" || line.toolName === "bash" || line.toolName === "shell";
+    const compactCommandLine = isShellToolDisplayName(line.toolName);
     if (line.kind === "command-output" && displayStatus && detail !== displayStatus) {
       const outputDetail = detail.startsWith(`${displayStatus};`)
         ? detail

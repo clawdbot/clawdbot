@@ -90,6 +90,10 @@ export type GatewayService = {
   ) => Promise<GatewayServiceRuntime>;
 };
 
+type ReadGatewayServiceStateArgs = GatewayServiceEnvArgs & {
+  validateEnvBeforeStatusRead?: (env: GatewayServiceEnv) => void;
+};
+
 const TEMP_PROGRAM_ROOTS = [os.tmpdir(), "/tmp", "/private/tmp", "/var/tmp"].map((entry) =>
   path.resolve(entry),
 );
@@ -179,17 +183,26 @@ export function formatGatewayServiceStartRepairIssues(
 
 export async function readGatewayServiceState(
   service: GatewayService,
-  args: GatewayServiceEnvArgs = {},
+  args: ReadGatewayServiceStateArgs = {},
 ): Promise<GatewayServiceState> {
   const baseEnv = args.env ?? (process.env as GatewayServiceEnv);
   const command = await service.readCommand(baseEnv).catch(() => null);
   const env = mergeGatewayServiceEnv(baseEnv, command);
+  // Callers that may mutate the selected service can reject persisted selector
+  // drift before isLoaded/readRuntime invoke the native service manager.
+  args.validateEnvBeforeStatusRead?.(env);
   // Propagate the status read deadline so a wedged service manager fails soft
   // instead of hanging both probes. readCommand parses local files and needs no
   // bound; isLoaded/readRuntime can spawn service-manager subprocesses.
   const [loaded, runtime] = await Promise.all([
     service.isLoaded({ env, timeoutMs: args.timeoutMs }).catch(() => false),
-    service.readRuntime(env, { timeoutMs: args.timeoutMs }).catch(() => undefined),
+    service.readRuntime(env, { timeoutMs: args.timeoutMs }).catch(
+      (error: unknown) =>
+        ({
+          status: "unknown",
+          detail: String(error),
+        }) satisfies GatewayServiceRuntime,
+    ),
   ]);
   return {
     installed: command !== null,
@@ -234,23 +247,37 @@ export async function startGatewayService(
     };
   }
 
+  let nextState: GatewayServiceState;
   try {
     await service.start({ ...args, env: state.env });
-    const nextState = await readGatewayServiceState(service, { env: state.env });
-    return {
-      outcome: "started",
-      state: nextState,
-    };
+    nextState = await readGatewayServiceState(service, { env: state.env });
   } catch (err) {
-    const nextState = await readGatewayServiceState(service, { env: state.env });
-    if (!nextState.installed) {
+    const recoveryState = await readGatewayServiceState(service, { env: state.env });
+    if (!recoveryState.installed) {
       return {
         outcome: "missing-install",
-        state: nextState,
+        state: recoveryState,
       };
     }
     throw err;
   }
+
+  const runtime = nextState.runtime;
+  const failedState = normalizeLowercaseStringOrEmpty(runtime?.state) === "failed";
+  const newFailedExit =
+    runtime?.status === "stopped" &&
+    typeof runtime.lastExitStatus === "number" &&
+    runtime.lastExitStatus !== 0 &&
+    runtime.lastExitStatus !== state.runtime?.lastExitStatus;
+  if (failedState || newFailedExit) {
+    const failure = failedState ? "state failed" : `exit ${runtime?.lastExitStatus}`;
+    throw new Error(`Service failed to start (${failure}). Check the service logs and retry.`);
+  }
+
+  return {
+    outcome: "started",
+    state: nextState,
+  };
 }
 
 export function describeGatewayServiceRestart(

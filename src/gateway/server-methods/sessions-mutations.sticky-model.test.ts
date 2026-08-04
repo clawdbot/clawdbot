@@ -30,6 +30,20 @@ vi.mock("../../logging/subsystem.js", async () => {
   };
 });
 
+// Sticky-model tests own persistence policy; session-utils.test.ts owns the thinking
+// projection that otherwise materializes provider policy for every mutation here.
+vi.mock("../session-utils.js", async () => {
+  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
+  return {
+    ...actual,
+    resolveGatewaySessionThinkingProjection: vi.fn(() => ({
+      agentRuntime: { id: "openclaw", source: "implicit" },
+      effectiveThinkingLevel: "off",
+      thinkingLevels: [],
+    })),
+  };
+});
+
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 
 const cfg = {

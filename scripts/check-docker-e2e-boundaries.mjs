@@ -4,11 +4,15 @@
 // the source checkout copied or mounted as the app under test.
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { laneResources, laneWeight } from "./lib/docker-e2e-plan.mjs";
-import { allReleasePathLanes, mainLanes, tailLanes } from "./lib/docker-e2e-scenarios.mjs";
-
-const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+import {
+  allReleasePathLanes,
+  mainLanes,
+  publicInstallerLanes,
+  tailLanes,
+} from "./lib/docker-e2e-scenarios.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
+const ROOT_DIR = resolveRepoRoot(import.meta.url);
 const errors = [];
 const packageJson = JSON.parse(readText("package.json"));
 const packageScripts = new Set(Object.keys(packageJson.scripts ?? {}));
@@ -151,6 +155,7 @@ function validateLane(label, lane) {
 const releasePathLanes = allReleasePathLanes({ includeOpenWebUI: true });
 for (const [label, lanes] of [
   ["release-path", releasePathLanes],
+  ["public-installer", publicInstallerLanes],
   ["main", mainLanes],
   ["tail", tailLanes],
 ]) {

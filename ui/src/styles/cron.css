@@ -346,6 +346,17 @@
   white-space: nowrap;
 }
 
+.cron-table__description {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .cron-table__paused-note {
   flex: 0 0 auto;
   font-size: var(--control-ui-text-xs);
@@ -425,16 +436,6 @@
   height: 12px;
 }
 
-.cron-table__footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-4);
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-  font-size: var(--control-ui-text-sm);
-}
-
 .cron-empty-state {
   padding: var(--space-6) var(--space-4);
   display: grid;
@@ -453,10 +454,6 @@
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
   line-height: 1.45;
-}
-
-.cron-load-more {
-  align-self: flex-start;
 }
 
 /* ── Detail view ── */
@@ -513,6 +510,19 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.cron-detail-description {
+  max-width: 72ch;
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.cron-detail-description__label {
+  color: var(--muted);
+  font-weight: 600;
 }
 
 .cron-detail-meta {

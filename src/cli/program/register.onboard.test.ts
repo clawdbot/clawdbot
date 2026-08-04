@@ -210,6 +210,12 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardOptions().tui).toBe(true);
   });
 
+  it("forwards --skip-ui to guided onboarding", async () => {
+    await runCli(["onboard", "--skip-ui"]);
+
+    expect(setupWizardOptions().skipUi).toBe(true);
+  });
+
   it("rejects conflicting custom model input capabilities", async () => {
     await runCli(["onboard", "--custom-image-input", "--custom-text-input"]);
 

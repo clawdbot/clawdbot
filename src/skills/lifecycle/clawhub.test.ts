@@ -1,4 +1,5 @@
 // ClawHub lifecycle tests cover registry metadata lookup and error handling.
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -1935,58 +1936,135 @@ describe("skills-clawhub", () => {
     });
   });
 
-  it("explains that a malicious skill update will not be downloaded", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-skill-malicious-update-");
-    const warnings: string[] = [];
-    await writeClawHubOriginFixture({
-      workspaceDir,
-      slug: "agentreceipt",
-      installedVersion: "0.9.0",
-    });
-    fetchClawHubSkillSecurityVerdictsMock.mockResolvedValueOnce({
-      schema: "clawhub.skill.security-verdicts.v1",
-      items: [
-        {
-          ok: false,
-          decision: "fail",
-          reasons: ["scan:malicious"],
-          requestedSlug: "agentreceipt",
-          requestedVersion: "1.0.0",
-          slug: "agentreceipt",
-          version: "1.0.0",
-          security: {
-            status: "malicious",
-            passed: false,
+  it.each([
+    {
+      ownerHandle: undefined,
+      skillRef: "agentreceipt",
+      shellArg: "agentreceipt",
+      workspaceName: "agent-workspace",
+    },
+    {
+      ownerHandle: "acme",
+      skillRef: "@acme/agentreceipt",
+      shellArg: "@acme/agentreceipt",
+      workspaceName: "different agent workspace",
+    },
+    {
+      ownerHandle: undefined,
+      skillRef: "agentreceipt",
+      shellArg: "agentreceipt",
+      workspaceName: ".openclaw",
+    },
+    {
+      ownerHandle: undefined,
+      skillRef: "a;printf X",
+      shellArg: "'a;printf X'",
+      workspaceName: "shared state;printf PWN",
+    },
+    {
+      ownerHandle: undefined,
+      skillRef: "b$(printf X)",
+      shellArg: "'b$(printf X)'",
+      workspaceName: "agent$(printf PWN)",
+    },
+    {
+      ownerHandle: undefined,
+      skillRef: "c`printf X`",
+      shellArg: "'c`printf X`'",
+      workspaceName: "agent`printf PWN`",
+    },
+    {
+      ownerHandle: undefined,
+      skillRef: "white space",
+      shellArg: "'white space'",
+      workspaceName: "custom state directory",
+    },
+    {
+      ownerHandle: undefined,
+      skillRef: "d'$(printf X)",
+      shellArg: "'d'\\''$(printf X)'",
+      workspaceName: "agent's $(printf PWN) state",
+    },
+  ])(
+    "explains that a malicious skill update will not be downloaded ($skillRef)",
+    async ({ ownerHandle, skillRef, shellArg, workspaceName }) => {
+      const tempRoot = await tempDirs.make("openclaw-skill-malicious-update-");
+      const workspaceDir = path.join(tempRoot, workspaceName);
+      const warnings: string[] = [];
+      const slug = ownerHandle ? skillRef.slice(skillRef.indexOf("/") + 1) : skillRef;
+      await writeClawHubOriginFixture({
+        workspaceDir,
+        slug,
+        ownerHandle,
+        installedVersion: "0.9.0",
+      });
+      fetchClawHubSkillSecurityVerdictsMock.mockResolvedValueOnce({
+        schema: "clawhub.skill.security-verdicts.v1",
+        items: [
+          {
+            ok: false,
+            decision: "fail",
+            reasons: ["scan:malicious"],
+            requestedSlug: slug,
+            requestedVersion: "1.0.0",
+            slug,
+            version: "1.0.0",
+            ...(ownerHandle ? { publisherHandle: ownerHandle } : {}),
+            security: {
+              status: "malicious",
+              passed: false,
+            },
           },
+        ],
+      });
+
+      const results = await updateSkillsFromClawHub({
+        workspaceDir,
+        slug: skillRef,
+        logger: {
+          warn: (message) => warnings.push(message),
         },
-      ],
-    });
+      });
 
-    const results = await updateSkillsFromClawHub({
-      workspaceDir,
-      slug: "agentreceipt",
-      logger: {
-        warn: (message) => warnings.push(message),
-      },
-    });
+      expect(results).toEqual([
+        expect.objectContaining({
+          ok: false,
+          code: "clawhub_download_blocked",
+          error: "ClawHub blocked this release; update was not started.",
+        }),
+      ]);
+      expect(warnings.join("\n")).toContain(
+        "Latest skill version is marked malicious; OpenClaw will not download it.",
+      );
+      const workspaceArg = /^[A-Za-z0-9_/:=.,@%+-]+$/.test(workspaceDir)
+        ? workspaceDir
+        : `'${workspaceDir.replaceAll("'", "'\\''")}'`;
+      const uninstallCommand = `clawhub --workdir ${workspaceArg} uninstall ${shellArg}`;
+      const actionLine = expectDefined(
+        warnings
+          .join("\n")
+          .split("\n")
+          .find((line) => line.startsWith("Remove installed skill: ")),
+        "malicious skill warning remediation",
+      );
+      expect(actionLine).toBe(`Remove installed skill: ${uninstallCommand}`);
+      expect(warnings.join("\n")).toContain("independently reviewed it.");
+      expect(warnings.join("\n")).not.toContain("Choose a different version");
+      expect(downloadClawHubSkillArchiveUrlMock).not.toHaveBeenCalled();
+      expect(downloadClawHubSkillArchiveMock).not.toHaveBeenCalled();
 
-    expect(results).toEqual([
-      expect.objectContaining({
-        ok: false,
-        code: "clawhub_download_blocked",
-        error: "ClawHub blocked this release; update was not started.",
-      }),
-    ]);
-    expect(warnings.join("\n")).toContain(
-      "Latest skill version is marked malicious; OpenClaw will not download it.",
-    );
-    expect(warnings.join("\n")).toContain(
-      "Uninstall the installed skill unless you have independently reviewed it.",
-    );
-    expect(warnings.join("\n")).not.toContain("Choose a different version");
-    expect(downloadClawHubSkillArchiveUrlMock).not.toHaveBeenCalled();
-    expect(downloadClawHubSkillArchiveMock).not.toHaveBeenCalled();
-  });
+      const shellResult = spawnSync(
+        "sh",
+        [
+          "-c",
+          `clawhub() { printf '%s\\n' "$@"; }\n${actionLine.slice("Remove installed skill: ".length)}`,
+        ],
+        { encoding: "utf8" },
+      );
+      expect(shellResult.status).toBe(0);
+      expect(shellResult.stdout).toBe(`--workdir\n${workspaceDir}\nuninstall\n${skillRef}\n`);
+    },
+  );
 
   it("updates owner-qualified ClawHub skills when the requested owner matches tracking", async () => {
     const workspaceDir = await tempDirs.make("openclaw-owner-update-request-");

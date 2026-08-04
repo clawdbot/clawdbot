@@ -1077,7 +1077,9 @@ describe("verify-pr-hosted-gates", () => {
     ["queued artifact run", 5],
   ])("does not cover queued artifacts with a stale %s", (_kind, staleRunIndex) => {
     const workflowRuns = queuedBuildArtifactFallbackRuns().map((run, index) =>
-      index === staleRunIndex ? { ...run, updated_at: "2026-06-16T10:54:59Z" } : run,
+      index === staleRunIndex
+        ? Object.assign({}, run, { updated_at: "2026-06-16T10:54:59Z" })
+        : run,
     );
     expect(() => collectHostedGateEvidence({ sha, workflowRuns })).toThrow(
       "Missing successful recent Blacksmith Build Artifacts Testbox workflow",

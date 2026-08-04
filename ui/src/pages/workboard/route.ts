@@ -3,17 +3,13 @@ import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { resolveWorkboardRouteLocation, type WorkboardRouteData } from "./route-location.ts";
+import {
+  resolveWorkboardRouteLocation,
+  workboardRouteLocation,
+  type WorkboardRouteData,
+} from "./route-location.ts";
 
 export type { WorkboardRouteData } from "./route-location.ts";
-
-function workboardLoaderDeps(context: ApplicationContext, location: RouteLocation): string {
-  const route = resolveWorkboardRouteLocation(location, context.basePath);
-  const canonicalLocation = route.canonicalLocation;
-  return `${canonicalLocation?.pathname ?? location.pathname}\u0000${
-    canonicalLocation?.search ?? route.search
-  }`;
-}
 
 async function loadWorkboardRoute(
   context: ApplicationContext,
@@ -32,7 +28,14 @@ async function loadWorkboardRoute(
 
 export const page = definePage({
   ...routePageSpec("workboard"),
-  loaderDeps: workboardLoaderDeps,
+  loaderDeps: (context: ApplicationContext, location: RouteLocation) => {
+    const routeLocation = workboardRouteLocation(location);
+    const route = resolveWorkboardRouteLocation(routeLocation, context.basePath);
+    const canonicalLocation = route.canonicalLocation;
+    return `${canonicalLocation?.pathname ?? routeLocation.pathname}\u0000${
+      canonicalLocation?.search ?? route.search
+    }`;
+  },
   loader: (context: ApplicationContext, { location }) => loadWorkboardRoute(context, location),
   component: () =>
     import("./workboard-page.ts").then(() => ({

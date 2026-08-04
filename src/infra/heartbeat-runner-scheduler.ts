@@ -585,10 +585,15 @@ export function startHeartbeatRunner(opts: {
       return;
     }
     state.stopped = true;
+    opts.abortSignal?.removeEventListener("abort", cleanup);
     disposeWakeHandler();
   };
 
-  opts.abortSignal?.addEventListener("abort", cleanup, { once: true });
+  if (opts.abortSignal?.aborted) {
+    cleanup();
+  } else {
+    opts.abortSignal?.addEventListener("abort", cleanup, { once: true });
+  }
 
   return { stop: cleanup, updateConfig };
 }

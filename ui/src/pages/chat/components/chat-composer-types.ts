@@ -24,6 +24,7 @@ import type {
 type ChatComposerDisabledBannerContent = {
   text: string;
   actionLabel: string;
+  disabledReason?: string;
   onAction: () => void;
 };
 
@@ -133,6 +134,12 @@ type ComposingDraft = {
   value: string;
 };
 
+type SkillMenuTarget = {
+  start: number;
+  end: number;
+  query: string;
+};
+
 export type ChatComposerState = {
   slashMenuOpen: boolean;
   slashMenuItems: SlashCommandDef[];
@@ -142,6 +149,13 @@ export type ChatComposerState = {
   slashMenuArgItems: string[];
   slashMenuExpanded: boolean;
   slashCommandRefreshPending: boolean;
+  skillMenuOpen: boolean;
+  skillMenuItems: SlashCommandDef[];
+  skillMenuIndex: number;
+  skillMenuTarget: SkillMenuTarget | null;
+  skillCommandRefreshPending: boolean;
+  skillCommandRefreshGeneration: number;
+  skillCommandRefreshTargetStart: number | null;
   composerComposing: boolean;
   composingDraft: ComposingDraft | null;
   composerInputIntentKey: string | null;
