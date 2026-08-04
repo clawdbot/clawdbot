@@ -29,6 +29,7 @@ import {
   type PackageExtensionResolution,
   type PackageManifest,
 } from "./manifest.js";
+import { checkMinHostVersion } from "./min-host-version.js";
 import { resolvePackagePluginApiRange } from "./package-compat.js";
 import {
   resolvePackageRuntimeExtensionSources,
@@ -625,6 +626,7 @@ function discoverInstalledPluginRecordsInto(
 function isMaterializableInstalledPluginCandidate(params: {
   candidate: PluginCandidate;
   env: NodeJS.ProcessEnv;
+  installRecords?: Record<string, PluginInstallRecord>;
   realpathCache: Map<string, string>;
 }): boolean {
   const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
@@ -643,7 +645,35 @@ function isMaterializableInstalledPluginCandidate(params: {
       }).ok,
     );
   }
-  return Boolean(resolveCandidateManifest(params.candidate.rootDir, rejectHardlinks)?.manifest);
+  const resolvedManifest = resolveCandidateManifest(params.candidate.rootDir, rejectHardlinks);
+  if (!resolvedManifest) {
+    return false;
+  }
+  if (params.candidate.origin === "bundled") {
+    return true;
+  }
+  const allowLegacyBareMinHostVersion =
+    params.candidate.origin === "global" &&
+    Boolean(params.installRecords?.[resolvedManifest.manifest.id]);
+  const minHostVersionCheck = checkMinHostVersion({
+    currentVersion: resolveCompatibilityHostVersion(params.env),
+    minHostVersion: params.candidate.packageManifest?.install?.minHostVersion,
+    allowLegacyBareSemver: allowLegacyBareMinHostVersion,
+  });
+  if (!minHostVersionCheck.ok) {
+    return false;
+  }
+  const packagePluginApiRangeCheck = resolvePackagePluginApiRange(params.candidate.packageManifest);
+  if (!packagePluginApiRangeCheck.ok) {
+    return false;
+  }
+  return (
+    !packagePluginApiRangeCheck.range ||
+    satisfiesPluginApiRange(
+      resolveCompatibilityHostVersion(params.env),
+      packagePluginApiRangeCheck.range,
+    )
+  );
 }
 
 /** Returns whether any installed record can cross the manifest registry materialization boundary. */
@@ -668,7 +698,12 @@ export function hasMaterializableInstalledPluginRecords(params: {
     packageManifestCache: new Map<string, PackageManifest | null>(),
   });
   return result.candidates.some((candidate) =>
-    isMaterializableInstalledPluginCandidate({ candidate, env, realpathCache }),
+    isMaterializableInstalledPluginCandidate({
+      candidate,
+      env,
+      installRecords: params.installRecords,
+      realpathCache,
+    }),
   );
 }
 

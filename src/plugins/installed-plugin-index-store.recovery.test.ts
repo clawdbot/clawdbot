@@ -381,5 +381,75 @@ describe("installed plugin index policy recovery", () => {
         { level: "warn", message: "policy fast-path sentinel" },
       ]);
     });
+
+    it("skips broad discovery for an ordinary record rejected by minHostVersion", async () => {
+      const stateDir = makeTempDir();
+      const env = {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      };
+      const discoverSpy = vi.fn(() => ({ candidates: [], diagnostics: [] }));
+      vi.resetModules();
+      vi.doMock("./discovery.js", async (importOriginal) => {
+        const actual = await importOriginal<typeof import("./discovery.js")>();
+        return { ...actual, discoverOpenClawPlugins: discoverSpy };
+      });
+      const store = await importFreshModule<typeof import("./installed-plugin-index-store.js")>(
+        import.meta.url,
+        "./installed-plugin-index-store.js?case=incompatible-min-host-version",
+      );
+      const pluginDir = path.join(stateDir, "plugins", "incompatible-min-host-version");
+      fs.mkdirSync(pluginDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(pluginDir, "package.json"),
+        JSON.stringify({
+          name: "@vendor/incompatible-min-host-version",
+          openclaw: {
+            extensions: ["./index.ts"],
+            install: { minHostVersion: ">=2026.5.1" },
+          },
+        }),
+        "utf8",
+      );
+      fs.writeFileSync(path.join(pluginDir, "index.ts"), "export default {};", "utf8");
+      fs.writeFileSync(
+        path.join(pluginDir, "openclaw.plugin.json"),
+        JSON.stringify({ id: "incompatible-min-host-version", configSchema: { type: "object" } }),
+        "utf8",
+      );
+      const installRecords = {
+        "incompatible-min-host-version": {
+          source: "npm" as const,
+          spec: "@vendor/incompatible-min-host-version@1.0.0",
+          installPath: pluginDir,
+        },
+      };
+      await store.refreshPersistedInstalledPluginIndex({
+        reason: "manual",
+        stateDir,
+        candidates: [],
+        diagnostics: [{ level: "warn", message: "policy fast-path sentinel" }],
+        env,
+        installRecords,
+      });
+      discoverSpy.mockClear();
+      const refreshed = await store.refreshPersistedInstalledPluginIndex({
+        reason: "policy-changed",
+        stateDir,
+        env,
+        policyPluginIds: [],
+      });
+      expect(discoverSpy).not.toHaveBeenCalled();
+      expectPluginIds(refreshed, []);
+      expectInstallRecord(refreshed, "incompatible-min-host-version", {
+        source: "npm",
+        spec: "@vendor/incompatible-min-host-version@1.0.0",
+        installPath: pluginDir,
+      });
+      expect(refreshed.diagnostics).toEqual([
+        { level: "warn", message: "policy fast-path sentinel" },
+      ]);
+    });
   });
 });
