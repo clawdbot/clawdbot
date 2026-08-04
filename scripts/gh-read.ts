@@ -20,6 +20,7 @@ const INSTALLATION_ID_ENV = "OPENCLAW_GH_READ_INSTALLATION_ID";
 const PERMISSIONS_ENV = "OPENCLAW_GH_READ_PERMISSIONS";
 const API_VERSION = "2022-11-28";
 const DEFAULT_GITHUB_FETCH_TIMEOUT_MS = 30_000;
+const DEFAULT_GH_CHILD_TIMEOUT_MS = 300_000;
 const GITHUB_ERROR_BODY_MAX_CHARS = 4096;
 const GITHUB_JSON_BODY_MAX_BYTES = 1024 * 1024;
 const GITHUB_APP_PRIVATE_KEY_MAX_BYTES = 64 * 1024;
@@ -103,6 +104,15 @@ export function resolveGitHubFetchTimeoutMs(raw = process.env.OPENCLAW_GH_READ_F
   return parseStrictIntegerOption({
     fallback: DEFAULT_GITHUB_FETCH_TIMEOUT_MS,
     label: "OPENCLAW_GH_READ_FETCH_TIMEOUT_MS",
+    min: 1,
+    raw,
+  });
+}
+
+export function resolveGhChildTimeoutMs(raw = process.env.OPENCLAW_GH_READ_TIMEOUT_MS) {
+  return parseStrictIntegerOption({
+    fallback: DEFAULT_GH_CHILD_TIMEOUT_MS,
+    label: "OPENCLAW_GH_READ_TIMEOUT_MS",
     min: 1,
     raw,
   });
@@ -376,8 +386,11 @@ async function main() {
   const appJwt = createAppJwt(appId, privateKeyPem);
   const installation = await resolveInstallation(appJwt, repo);
   const token = await createInstallationToken(appJwt, installation, repo);
+  const ghChildTimeoutMs = resolveGhChildTimeoutMs();
   const child = spawnSync("gh", ghArgs, {
     stdio: "inherit",
+    timeout: ghChildTimeoutMs,
+    killSignal: "SIGKILL",
     env: {
       ...process.env,
       GH_TOKEN: token,
@@ -386,7 +399,12 @@ async function main() {
   });
 
   if (child.error) {
-    fail(child.error.message);
+    const errorCode = (child.error as NodeJS.ErrnoException).code;
+    fail(
+      errorCode === "ETIMEDOUT"
+        ? `gh child process exceeded timeout of ${ghChildTimeoutMs}ms`
+        : child.error.message,
+    );
   }
 
   process.exit(child.status ?? 1);

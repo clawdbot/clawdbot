@@ -13,6 +13,7 @@ import {
   readGitHubAppPrivateKey,
   readBoundedGitHubErrorText,
   readBoundedGitHubJson,
+  resolveGhChildTimeoutMs,
   resolveGitHubFetchTimeoutMs,
 } from "../../scripts/gh-read.js";
 
@@ -244,6 +245,14 @@ describe("gh-read helpers", () => {
     expect(resolveGitHubFetchTimeoutMs("1000")).toBe(1000);
     expect(() => resolveGitHubFetchTimeoutMs("1s")).toThrow(
       /OPENCLAW_GH_READ_FETCH_TIMEOUT_MS must be an integer/u,
+    );
+  });
+
+  it("bounds the gh child process with a configurable timeout", () => {
+    expect(resolveGhChildTimeoutMs(undefined)).toBe(300_000);
+    expect(resolveGhChildTimeoutMs("1000")).toBe(1000);
+    expect(() => resolveGhChildTimeoutMs("1s")).toThrow(
+      /OPENCLAW_GH_READ_TIMEOUT_MS must be an integer/u,
     );
   });
 });
