@@ -375,15 +375,16 @@ async function repairMissingPluginInstalls(params: {
     }
   }
 
+  const persistedIndexOptions = { config: params.cfg, env };
   if (nextRecords !== records) {
-    await writePersistedInstalledPluginIndexInstallRecords(nextRecords, { env });
+    await writePersistedInstalledPluginIndexInstallRecords(nextRecords, persistedIndexOptions);
   } else if (params.baselineRecords) {
     // The caller seeded us from in-memory state that may not yet have been
     // persisted (e.g. earlier sync/npm record mutations). Even if repair
     // itself made no further changes, persist the baseline so the disk
     // matches what we are about to return — otherwise the next reader gets
     // a stale snapshot.
-    await writePersistedInstalledPluginIndexInstallRecords(nextRecords, { env });
+    await writePersistedInstalledPluginIndexInstallRecords(nextRecords, persistedIndexOptions);
   }
   return {
     changes,

@@ -79,7 +79,7 @@ type BuildModelsProviderDataMock = ReturnType<
 const { resolveTelegramFetch } = await import("./fetch.js");
 const messageDispatchDedupe = await import("./message-dispatch-dedupe.js");
 const { createTelegramBotCore: createTelegramBotBase } = await import("./bot-core.js");
-const { getTelegramSequentialKey } = await import("./sequential-key.js");
+const { getTelegramSequentialConstraints } = await import("./sequential-key.js");
 const {
   createTelegramSpooledReplayDeferredParticipant,
   recordTelegramMessageProcessingResult,
@@ -309,21 +309,24 @@ function installPerKeySequentializer(): void {
   sequentializeSpy.mockImplementationOnce(() => {
     const lanes = new Map<string, Promise<void>>();
     return async (ctx: TelegramMiddlewareTestContext, next: () => Promise<void>) => {
-      const key = harness.sequentializeKey?.(ctx) ?? "default";
-      const previous = lanes.get(key) ?? Promise.resolve();
+      const constraint = harness.sequentializeKey?.(ctx) ?? "default";
+      const keys = Array.isArray(constraint) ? constraint : [constraint];
+      const previous = Promise.all(keys.map((key) => lanes.get(key) ?? Promise.resolve()));
       const current = previous.then(async () => {
         await next();
       });
-      lanes.set(
-        key,
-        current.catch(() => undefined),
-      );
+      const tracked = current.catch(() => undefined);
+      for (const key of keys) {
+        lanes.set(key, tracked);
+      }
 
       try {
         await current;
       } finally {
-        if (lanes.get(key) === current) {
-          lanes.delete(key);
+        for (const key of keys) {
+          if (lanes.get(key) === tracked) {
+            lanes.delete(key);
+          }
         }
       }
     };
@@ -590,7 +593,7 @@ describe("createTelegramBot", () => {
     createTelegramBot({ token: "tok" });
     expect(sequentializeSpy).toHaveBeenCalledTimes(1);
     expect(middlewareUseSpy).toHaveBeenCalledWith(sequentializeSpy.mock.results[0]?.value);
-    expect(harness.sequentializeKey).toBe(getTelegramSequentialKey);
+    expect(harness.sequentializeKey).toBe(getTelegramSequentialConstraints);
   });
 
   it("answers callback queries before same-chat sequentialize delays handlers", async () => {

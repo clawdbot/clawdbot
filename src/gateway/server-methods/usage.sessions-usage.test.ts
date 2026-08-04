@@ -839,9 +839,10 @@ describe("sessions.usage", () => {
   it("preserves JSONL detail lookup for storeless sessions", async () => {
     await withUsageState(async (writeSessionFile) => {
       const sessionFile = writeSessionFile("storeless.jsonl");
+      const canonicalSessionFile = fs.realpathSync(sessionFile);
       await runSessionsUsageTimeseries({ key: "agent:opus:storeless" });
       expect(vi.mocked(loadSessionUsageTimeSeries)).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionFile, sessionEntry: undefined }),
+        expect.objectContaining({ sessionFile: canonicalSessionFile, sessionEntry: undefined }),
       );
     });
   });

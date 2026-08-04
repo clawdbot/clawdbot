@@ -27,11 +27,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { onDiagnosticEvent, type DiagnosticPayloadLargeEvent } from "../infra/diagnostic-events.js";
 import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
-import {
-  captureCurrentPluginMetadataSnapshotState,
-  restoreCurrentPluginMetadataSnapshotState,
-  setCurrentPluginMetadataSnapshot,
-} from "../plugins/current-plugin-metadata-snapshot.js";
+import { installTemporaryCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -1239,7 +1235,7 @@ describe("gateway server chat", () => {
         },
       },
       async (state) => {
-        const previousPluginMetadata = captureCurrentPluginMetadataSnapshotState();
+        let releasePluginMetadata: () => boolean = () => false;
         openDirectChatSession();
         try {
           const config = {
@@ -1372,11 +1368,11 @@ describe("gateway server chat", () => {
           // Direct handlers bypass Gateway startup, so publish its process-lifecycle handoff once.
           // Otherwise every route projector rediscovers the full plugin metadata graph.
           const pluginMetadata = resolvePluginMetadataSnapshot({ config, env: process.env });
-          setCurrentPluginMetadataSnapshot(pluginMetadata, {
+          releasePluginMetadata = installTemporaryCurrentPluginMetadataSnapshot(pluginMetadata, {
             config,
             compatibleConfigs: [persistedConfig],
             env: process.env,
-          });
+          }).release;
           expect(persistedConfig.auth?.order?.openai).toEqual([
             "openai:api",
             "openai:chatgpt",
@@ -1481,7 +1477,7 @@ describe("gateway server chat", () => {
           }
         } finally {
           testState.sessionStorePath = undefined;
-          restoreCurrentPluginMetadataSnapshotState(previousPluginMetadata);
+          releasePluginMetadata();
         }
       },
     );

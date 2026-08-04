@@ -1,6 +1,7 @@
 // Telegram tests cover send plugin behavior.
 import fs from "node:fs";
 import type { Bot } from "grammy";
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
@@ -382,6 +383,10 @@ function createHtmlParseError(operation = "sendMessage"): Error {
   return new Error(
     `GrammyError: Call to '${operation}' failed! (400: Bad Request: can't parse entities: Can't find end of the entity)`,
   );
+}
+
+function createChunkRejection(message = "chunk content rejected"): Error {
+  return Object.assign(new Error(`400: Bad Request: ${message}`), { error_code: 400 });
 }
 
 function createQuoteNotFoundError(operation = "sendMessage"): Error {
@@ -1317,8 +1322,8 @@ describe("sendMessageTelegram", () => {
     );
   });
 
-  it("chunks long plain text when durable rich sends reject an invalid entity", async () => {
-    const text = `Status includes openai:owner@example.com ${"A".repeat(5000)}`;
+  it("continues rich plain-fallback chunks after a middle rejection", async () => {
+    const text = `Status includes openai:owner@example.com ${"A".repeat(8500)}`;
     const storePath = `/tmp/openclaw-telegram-projection-rich-fallback-${process.pid}-${Date.now()}.json`;
     const cursor = createTelegramPromptContextProjectionCursor({
       transcriptMessageId: "assistant-rich",
@@ -1326,41 +1331,52 @@ describe("sendMessageTelegram", () => {
     botRawApi.sendRichMessage.mockRejectedValueOnce(createRichEntityInvalidError("EMAIL"));
     botApi.sendMessage
       .mockResolvedValueOnce({ message_id: 47, chat: { id: "123" } })
-      .mockResolvedValueOnce({ message_id: 48, chat: { id: "123" } });
+      .mockRejectedValueOnce(createChunkRejection())
+      .mockResolvedValueOnce({ message_id: 49, chat: { id: "123" } });
 
-    const result = await sendMessageTelegram("123", text, {
-      cfg: {
-        channels: { telegram: { richMessages: true } },
-        session: { store: storePath },
-      },
-      token: "tok",
-      replyToMessageId: 100,
-      replyToIdSource: "implicit",
-      replyToMode: "first",
-      promptContextProjectionPlan: { cursor, finalPart: true },
-    });
+    let observed: unknown;
+    try {
+      await sendMessageTelegram("123", text, {
+        cfg: {
+          channels: { telegram: { richMessages: true } },
+          session: { store: storePath },
+        },
+        token: "tok",
+        replyToMessageId: 100,
+        replyToIdSource: "implicit",
+        replyToMode: "first",
+        promptContextProjectionPlan: { cursor, finalPart: true },
+      });
+    } catch (error) {
+      observed = error;
+    }
 
     expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
-    expect(botApi.sendMessage).toHaveBeenCalledTimes(2);
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(3);
     expect(sendMessageTexts(botApi.sendMessage).every((chunk) => chunk.length <= 4000)).toBe(true);
     for (const call of botApi.sendMessage.mock.calls) {
       expect(call[2]).toBeUndefined();
     }
-    expect(result.messageId).toBe("48");
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(observed.deliveryResult.messageIds).toEqual(["47", "49"]);
     const cache = createTelegramMessageCache({
       scope: resolveTelegramMessageCacheScope(storePath),
     });
     const first = await cache.get({ accountId: "default", chatId: "123", messageId: "47" });
-    const second = await cache.get({ accountId: "default", chatId: "123", messageId: "48" });
-    expect([first?.promptContextProjectionMarker, second?.promptContextProjectionMarker]).toEqual([
+    const third = await cache.get({ accountId: "default", chatId: "123", messageId: "49" });
+    expect([first?.promptContextProjectionMarker, third?.promptContextProjectionMarker]).toEqual([
       {
         kind: "valid",
         projection: { ...cursor.source, partIndex: 0, finalPart: false },
       },
-      { kind: "valid", projection: { ...cursor.source, partIndex: 1, finalPart: true } },
+      { kind: "valid", projection: { ...cursor.source, partIndex: 1, finalPart: false } },
     ]);
     expect(cursor.nextPartIndex).toBe(2);
-    expect(result.receipt?.platformMessageIds).toEqual(["47", "48"]);
+    expect(cursor.complete).toBe(false);
+    expect(observed.deliveryResult.receipt?.platformMessageIds).toEqual(["47", "49"]);
   });
 
   it("chunks rich paragraph output at Telegram's block limit", async () => {
@@ -1761,40 +1777,104 @@ describe("sendMessageTelegram", () => {
     );
   });
 
-  it("reports the first Telegram chunk before a later chunk fails", async () => {
+  it("continues after a rejected middle chunk and reports incomplete delivery", async () => {
     const storePath = `/tmp/openclaw-telegram-projection-partial-${process.pid}-${Date.now()}.json`;
     const cursor = createTelegramPromptContextProjectionCursor({
       transcriptMessageId: "assistant-partial",
     });
     botApi.sendMessage
       .mockResolvedValueOnce({ message_id: 54, chat: { id: "123" } })
-      .mockRejectedValueOnce(new Error("second chunk failed"));
+      .mockRejectedValueOnce(createChunkRejection())
+      .mockResolvedValueOnce({ message_id: 56, chat: { id: "123" } });
     const onDeliveryResult = vi.fn();
-    const markdown = `# Long\n\n${"**section** with _style_ and `code`\n".repeat(3000)}`;
+    const html = "A".repeat(9000);
 
-    await expect(
-      sendMessageTelegram("123", markdown, {
+    let observed: unknown;
+    try {
+      await sendMessageTelegram("123", html, {
         cfg: { session: { store: storePath } },
         token: "tok",
+        textMode: "html",
         onDeliveryResult,
         promptContextProjectionPlan: { cursor, finalPart: true },
-      }),
-    ).rejects.toThrow("second chunk failed");
+      });
+    } catch (error) {
+      observed = error;
+    }
 
-    expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual(["54"]);
-    const cached = await createTelegramMessageCache({
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(3);
+    expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual(["54", "56"]);
+    expect(observed.deliveryResult.messageIds).toEqual(["54", "56"]);
+    const cache = createTelegramMessageCache({
       scope: resolveTelegramMessageCacheScope(storePath),
-    }).get({ accountId: "default", chatId: "123", messageId: "54" });
-    expect(cached?.promptContextProjectionMarker).toEqual({
-      kind: "valid",
-      projection: {
-        transcriptMessageId: "assistant-partial",
-        partIndex: 0,
-        finalPart: false,
-      },
     });
-    expect(cursor.nextPartIndex).toBe(1);
+    const cached = await Promise.all(
+      [54, 56].map((messageId) =>
+        cache.get({ accountId: "default", chatId: "123", messageId: String(messageId) }),
+      ),
+    );
+    expect(cached.map((node) => node?.promptContextProjectionMarker)).toEqual([
+      {
+        kind: "valid",
+        projection: { transcriptMessageId: "assistant-partial", partIndex: 0, finalPart: false },
+      },
+      {
+        kind: "valid",
+        projection: { transcriptMessageId: "assistant-partial", partIndex: 1, finalPart: false },
+      },
+    ]);
+    expect(cursor.nextPartIndex).toBe(2);
     expect(cursor.complete).toBe(false);
+  });
+
+  it("fails when every Telegram chunk is rejected", async () => {
+    const rejection = createChunkRejection();
+    botApi.sendMessage.mockRejectedValue(rejection);
+
+    await expect(
+      sendMessageTelegram("123", "A".repeat(9000), {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        textMode: "html",
+      }),
+    ).rejects.toBe(rejection);
+
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not continue after accepted-send bookkeeping fails", async () => {
+    botApi.sendMessage
+      .mockResolvedValueOnce({ message_id: 54, chat: { id: "123" } })
+      .mockResolvedValueOnce({ message_id: 55, chat: { id: "123" } });
+    const onDeliveryResult = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("delivery observer failed"));
+
+    let observed: unknown;
+    try {
+      await sendMessageTelegram("123", "A".repeat(9000), {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        textMode: "html",
+        onDeliveryResult,
+      });
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(observed.deliveryResult.messageIds).toEqual(["54", "55"]);
+    expect(observed.deliveryResult.receipt?.platformMessageIds).toEqual(["54", "55"]);
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(2);
+    expect(onDeliveryResult).toHaveBeenCalledTimes(2);
   });
 
   it("chunks long inline markdown through the HTML text path", async () => {

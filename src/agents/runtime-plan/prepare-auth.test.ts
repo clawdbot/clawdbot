@@ -1377,6 +1377,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
   });
 
   it("resolves an env SecretRef on its prepared Platform route", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "");
     vi.stubEnv("OPENAI_PLATFORM_KEY", "secret-ref-platform-key");
     try {
       const config = {

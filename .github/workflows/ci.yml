@@ -1168,6 +1168,16 @@ jobs:
       - name: Smoke test CLI launcher status json
         run: node openclaw.mjs status --json --timeout 1
 
+      - name: Verify built Doctor plugin index persistence
+        run: |
+          if [[ -f test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts ]]; then
+            node scripts/run-vitest.mjs run \
+              --config test/vitest/vitest.e2e.config.ts \
+              test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts
+          else
+            echo "Selected target predates the built Doctor plugin index persistence proof."
+          fi
+
       - name: Smoke test built bundled plugin singleton
         run: pnpm test:build:singleton
 

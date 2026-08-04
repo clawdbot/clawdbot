@@ -2,7 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import {
   looksLikeSecretSentinel,
@@ -571,6 +571,10 @@ function mockOpenAIPlatformProfile(): void {
 }
 
 describe("runBtwSideQuestion", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   beforeEach(() => {
     streamSimpleMock.mockReset();
     readFileMock.mockReset();
@@ -1001,6 +1005,7 @@ describe("runBtwSideQuestion", () => {
   });
 
   it("lets native Codex bootstrap auth without a host profile", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "");
     const supports = vi.fn((ctx: Parameters<AgentHarness["supports"]>[0]) => {
       if (ctx.modelProvider?.preparedAuth?.source !== "harness") {
         return supportsPreparedOpenAIAuth(ctx);
