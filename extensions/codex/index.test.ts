@@ -123,7 +123,7 @@ describe("codex plugin", () => {
     }
   });
 
-  it("registers the agent harness, native thread tool, and hosted web search", () => {
+  it("registers the full profile surfaces when explicitly requested", () => {
     const registerAgentHarness = vi.fn();
     const registerCommand = vi.fn();
     const registerMediaUnderstandingProvider = vi.fn();
@@ -141,7 +141,7 @@ describe("codex plugin", () => {
         name: "Codex",
         source: "test",
         config: {},
-        pluginConfig: {},
+        pluginConfig: { runtimeProfile: "full" },
         runtime: createCodexTestRuntime(),
         registerAgentHarness,
         registerCommand,
@@ -208,6 +208,40 @@ describe("codex plugin", () => {
     expect(typeof bindingResolvedRegistration?.[0]).toBe("function");
   });
 
+  it("keeps the default profile lean", () => {
+    const registerMigrationProvider = vi.fn();
+    const registerNodeHostCommand = vi.fn();
+    const registerTool = vi.fn();
+    const registerToolMetadata = vi.fn();
+    const registerAgentHarness = vi.fn();
+
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: createCodexTestRuntime(),
+        registerAgentHarness,
+        registerCommand: vi.fn(),
+        registerMediaUnderstandingProvider: vi.fn(),
+        registerMigrationProvider,
+        registerNodeHostCommand,
+        registerTool,
+        registerToolMetadata,
+        registerWebSearchProvider: vi.fn(),
+        on: vi.fn(),
+      }),
+    );
+
+    expect(registerAgentHarness).toHaveBeenCalledOnce();
+    expect(registerMigrationProvider).not.toHaveBeenCalled();
+    expect(registerTool).not.toHaveBeenCalledWith(expect.any(Function), { name: "codex_threads" });
+    expect(registerToolMetadata).not.toHaveBeenCalled();
+    expect(registerNodeHostCommand).not.toHaveBeenCalled();
+  });
+
   it("lets native session discovery be disabled without disabling the Codex plugin", () => {
     const registerAgentHarness = vi.fn();
     const registerNodeHostCommand = vi.fn();
@@ -219,7 +253,7 @@ describe("codex plugin", () => {
         name: "Codex",
         source: "test",
         config: {},
-        pluginConfig: { sessionCatalog: { enabled: false } },
+        pluginConfig: { runtimeProfile: "full", sessionCatalog: { enabled: false } },
         runtime: createCodexTestRuntime(),
         registerAgentHarness,
         registerCommand: vi.fn(),
@@ -280,7 +314,7 @@ describe("codex plugin", () => {
         name: "Codex",
         source: "test",
         config: {},
-        pluginConfig: { supervision: { enabled: true } },
+        pluginConfig: { runtimeProfile: "full", supervision: { enabled: true } },
         runtime: createCodexTestRuntime(),
         registerAgentHarness: vi.fn(),
         registerCommand: vi.fn(),
@@ -389,7 +423,7 @@ describe("codex plugin", () => {
     ) as
       | [(context: { senderIsOwner?: boolean }) => { name: string } | null, { name: string }]
       | undefined;
-    expect(registration?.[0]({ senderIsOwner: true })).toBeNull();
+    expect(registration).toBeUndefined();
   });
 
   it("activates from live supervision config through a normalized Codex entry id", () => {

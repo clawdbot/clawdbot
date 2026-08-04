@@ -39,6 +39,7 @@ const codexAppServerApprovalPolicySchema = z.preprocess(
 const codexAppServerSandboxSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
 const codexAppServerApprovalsReviewerSchema = z.enum(["user", "auto_review", "guardian_subagent"]);
 const codexDynamicToolsLoadingSchema = z.enum(["searchable", "direct"]);
+const codexRuntimeProfileSchema = z.enum(["lean", "full"]);
 const codexComputerUseHealthIntervalSchema = z.union([
   z.literal(30),
   z.literal(60),
@@ -139,6 +140,7 @@ const codexSupervisionConfigSchema = z
 
 const codexPluginConfigSchema = z
   .object({
+    runtimeProfile: codexRuntimeProfileSchema.optional(),
     codexDynamicToolsLoading: codexDynamicToolsLoadingSchema.optional(),
     codexDynamicToolsExclude: z.array(z.string()).optional(),
     sessionCatalog: codexSessionCatalogConfigSchema.optional(),

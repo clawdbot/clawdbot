@@ -34,6 +34,7 @@ import {
   resumeCodexCliSessionOnNode,
   resolveCodexCliSessionForBindingOnNode,
 } from "./src/node-cli-sessions.js";
+import { isCodexFullRuntime } from "./src/runtime-profile.js";
 import {
   createCodexSessionCatalogControl,
   createCodexSessionCatalogNodeHostCommands,
@@ -92,6 +93,8 @@ export default definePluginEntry({
     };
     const resolveCurrentPluginConfig = () => resolvePluginConfig(resolveCurrentConfig);
     const appServerConfig = readCodexPluginConfig(resolveCurrentPluginConfig()).appServer;
+    const isFullRuntime = () =>
+      isCodexFullRuntime(readCodexPluginConfig(resolveCurrentPluginConfig()));
     if (appServerConfig?.transport === "websocket") {
       api.registerService(
         createCodexAppServerConnectionHealthService({
@@ -127,6 +130,7 @@ export default definePluginEntry({
       getRuntimeConfig: resolveCurrentConfig,
     });
     const sessionCatalogEnabled =
+      isFullRuntime() &&
       readCodexPluginConfig(resolveCurrentPluginConfig()).sessionCatalog?.enabled !== false;
     if (sessionCatalogEnabled) {
       codexSessionCatalogRuntime.register({
@@ -139,10 +143,15 @@ export default definePluginEntry({
         api.registerNodeHostCommand(command);
       }
     }
-    for (const policy of createCodexSessionCatalogNodeInvokePolicies()) {
-      api.registerNodeInvokePolicy(policy);
+    if (isFullRuntime()) {
+      for (const policy of createCodexSessionCatalogNodeInvokePolicies()) {
+        api.registerNodeInvokePolicy(policy);
+      }
     }
-    if (readCodexPluginConfig(resolveCurrentPluginConfig()).supervision?.enabled === true) {
+    if (
+      isFullRuntime() &&
+      readCodexPluginConfig(resolveCurrentPluginConfig()).supervision?.enabled === true
+    ) {
       api.registerTool(
         (context) => {
           if (context.senderIsOwner !== true) {
@@ -177,29 +186,31 @@ export default definePluginEntry({
     api.registerWebSearchProvider(
       createCodexWebSearchProvider({ resolvePluginConfig: resolveCurrentPluginConfig }),
     );
-    api.registerMigrationProvider(buildCodexMigrationProvider({ runtime: api.runtime }));
-    api.registerTool(
-      (context) =>
-        createCodexThreadsTool({
-          bindingStore,
-          context,
-          runtime: api.runtime,
-          getPluginConfig: resolveCurrentPluginConfig,
-        }),
-      { name: "codex_threads" },
-    );
-    api.registerToolMetadata({
-      toolName: "codex_threads",
-      displayName: "Codex Threads",
-      description: "Manage native Codex threads in the shared user Codex home.",
-      risk: "high",
-      tags: ["codex", "sessions"],
-    });
-    for (const command of createCodexCliSessionNodeHostCommands()) {
-      api.registerNodeHostCommand(command);
-    }
-    for (const policy of createCodexCliSessionNodeInvokePolicies()) {
-      api.registerNodeInvokePolicy(policy);
+    if (isFullRuntime()) {
+      api.registerMigrationProvider(buildCodexMigrationProvider({ runtime: api.runtime }));
+      api.registerTool(
+        (context) =>
+          createCodexThreadsTool({
+            bindingStore,
+            context,
+            runtime: api.runtime,
+            getPluginConfig: resolveCurrentPluginConfig,
+          }),
+        { name: "codex_threads" },
+      );
+      api.registerToolMetadata({
+        toolName: "codex_threads",
+        displayName: "Codex Threads",
+        description: "Manage native Codex threads in the shared user Codex home.",
+        risk: "high",
+        tags: ["codex", "sessions"],
+      });
+      for (const command of createCodexCliSessionNodeHostCommands()) {
+        api.registerNodeHostCommand(command);
+      }
+      for (const policy of createCodexCliSessionNodeInvokePolicies()) {
+        api.registerNodeInvokePolicy(policy);
+      }
     }
     api.registerCommand(
       createCodexCommand({

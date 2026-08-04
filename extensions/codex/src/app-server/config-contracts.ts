@@ -42,6 +42,7 @@ export type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian
 export type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
 export type CodexManagedCommandOrder = "package-first" | "desktop-first";
 export type CodexDynamicToolsLoading = "searchable" | "direct";
+export type CodexRuntimeProfile = "lean" | "full";
 export type CodexPluginDestructivePolicy = boolean | "auto" | "ask";
 export type CodexPluginDestructiveApprovalMode = "allow" | "deny" | "auto" | "ask";
 
@@ -225,6 +226,8 @@ export type CodexModelBackedReviewerContext = {
 };
 
 export type CodexPluginConfig = {
+  /** Lean keeps advanced operator surfaces opt-in; full restores them. */
+  runtimeProfile?: CodexRuntimeProfile;
   codexDynamicToolsLoading?: CodexDynamicToolsLoading;
   codexDynamicToolsExclude?: string[];
   sessionCatalog?: z.infer<typeof codexSessionCatalogConfigSchema>;

@@ -28,6 +28,7 @@
     "onAgentHarnesses": ["codex"],
     "onCommands": ["codex"],
     "onConfigPaths": [
+      "plugins.entries.codex.config.runtimeProfile",
       "plugins.entries.codex.config.appServer.transport",
       "plugins.entries.codex.config.sessionCatalog.enabled",
       "plugins.entries.codex.config.supervision.enabled"
@@ -44,6 +45,12 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "runtimeProfile": {
+        "type": "string",
+        "enum": ["lean", "full"],
+        "default": "lean",
+        "description": "Lean keeps advanced session/operator surfaces opt-in. Full enables native session catalog, supervision, migration, thread controls, and node session controls."
+      },
       "codexDynamicToolsLoading": {
         "type": "string",
         "enum": ["searchable", "direct"],

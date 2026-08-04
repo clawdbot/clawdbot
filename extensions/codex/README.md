@@ -2,6 +2,22 @@
 
 Official OpenClaw plugin for OpenAI Codex app-server integration. It exposes the Codex-managed GPT model catalog, the Codex runtime surfaces used by OpenClaw agents, and opt-in supervision of native Codex sessions.
 
+## Runtime profiles
+
+Codex defaults to the `lean` profile. It registers the app-server harness, the
+`/codex` command, hosted web search, image understanding, and binding lifecycle
+hooks. Advanced operator surfaces remain opt-in.
+
+Set `plugins.entries.codex.config.runtimeProfile` to `"full"` when you need the
+native session catalog, supervision tools, migration provider, `codex_threads`,
+or node-hosted Codex session controls. The profile is a registration boundary;
+it does not install Codex or change app-server approval or sandbox policy.
+
+This follows Hermes' narrow-core approach: keep the core loop small and make
+specialized tools and workflows explicit. A future bundle-splitting change can
+reduce physical import size further; this first step limits runtime surface area
+without hiding a build-time tradeoff.
+
 Install from OpenClaw:
 
 ```bash
