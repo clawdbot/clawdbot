@@ -38,6 +38,12 @@ type ConfigSnapshotReadOptionsStub = {
 
 const tryRouteCliMock = vi.hoisted(() => vi.fn());
 const loadDotEnvMock = vi.hoisted(() => vi.fn());
+const existsSyncOverride = vi.hoisted(
+  () =>
+    ({ value: undefined }) as {
+      value: ((target: string) => boolean) | undefined;
+    },
+);
 const normalizeEnvMock = vi.hoisted(() => vi.fn());
 const pinConfigDirMock = vi.hoisted(() => vi.fn());
 const pinRuntimePathsMock = vi.hoisted(() => vi.fn());
@@ -229,6 +235,17 @@ vi.mock("./container-target.js", () => ({
   maybeRunCliInContainer: maybeRunCliInContainerMock,
   parseCliContainerArgs: (argv: string[]) => ({ ok: true, container: null, argv }),
 }));
+
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  return {
+    ...actual,
+    existsSync: (target: Parameters<typeof actual.existsSync>[0]) =>
+      typeof target === "string" && existsSyncOverride.value
+        ? existsSyncOverride.value(target)
+        : actual.existsSync(target),
+  };
+});
 
 vi.mock("./dotenv.js", () => ({
   loadCliDotEnv: loadDotEnvMock,
@@ -485,6 +502,7 @@ describe("runCli exit behavior", () => {
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
+    existsSyncOverride.value = undefined;
     vi.clearAllMocks();
     readConfigFileSnapshotMock.mockResolvedValue({
       exists: true,
@@ -2454,6 +2472,7 @@ describe("runCli exit behavior", () => {
       ["node", "openclaw", "--log-level", "debug", "gateway", "run"],
     ],
   ])("loads trusted dotenv and isolates %s gateway proxy config reads", async (_name, argv) => {
+    existsSyncOverride.value = (target) => target === path.join(process.cwd(), ".env");
     if (_name === "full Commander path with root options") {
       tryRouteCliMock.mockResolvedValueOnce(true);
     }
@@ -2466,6 +2485,26 @@ describe("runCli exit behavior", () => {
       skipPluginValidation: true,
     });
     expect(startProxyMock).toHaveBeenCalledWith(undefined);
+  });
+
+  it("skips gateway dotenv loading when the workspace file is absent", async () => {
+    existsSyncOverride.value = () => false;
+
+    await runCli(["node", "openclaw", "gateway", "run"]);
+
+    expect(loadDotEnvMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps state dotenv loading for non-gateway commands", async () => {
+    const stateDir = path.join(os.tmpdir(), "openclaw-run-main-state");
+    existsSyncOverride.value = (target) => target === path.join(stateDir, ".env");
+    tryRouteCliMock.mockResolvedValueOnce(true);
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      runCli(["node", "openclaw", "status"]),
+    );
+
+    expect(loadDotEnvMock).toHaveBeenCalledWith({ loadGlobalEnv: true, quiet: true });
   });
 
   it("keeps agent exec outside the CLI dotenv loader", async () => {
