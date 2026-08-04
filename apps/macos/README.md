@@ -34,7 +34,14 @@ Auto-selects identity (first match):
 1) Developer ID Application
 2) Apple Distribution
 3) Apple Development
-4) first available identity
+
+Matched by exact `<class>:` name prefix, so other codesigning certificates
+(self-signed, internal CA) are not auto-selected; set `SIGN_IDENTITY` to sign
+with one. `scripts/restart-mac.sh` applies the same rule when it chooses
+between signing and ad-hoc signing, and passes `SIGN_IDENTITY` through.
+
+This is a name check, not issuer verification: a certificate deliberately named
+into one of those classes is still selected.
 
 If none found:
 - errors by default

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+CODESIGN_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${CODESIGN_SCRIPT_DIR}/lib/mac-signing-identity.sh"
+
 APP_BUNDLE="dist/OpenClaw.app"
 IDENTITY="${SIGN_IDENTITY:-}"
 TIMESTAMP_MODE="${CODESIGN_TIMESTAMP:-auto}"
@@ -47,49 +50,8 @@ if [ ! -d "$APP_BUNDLE" ]; then
   exit 1
 fi
 
-select_identity() {
-  local preferred available first
-
-  # Prefer a Developer ID Application cert.
-  preferred="$(security find-identity -p codesigning -v 2>/dev/null \
-    | awk -F'\"' '/Developer ID Application/ { print $2; exit }')"
-
-  if [ -n "$preferred" ]; then
-    echo "$preferred"
-    return
-  fi
-
-  # Next, try Apple Distribution.
-  preferred="$(security find-identity -p codesigning -v 2>/dev/null \
-    | awk -F'\"' '/Apple Distribution/ { print $2; exit }')"
-  if [ -n "$preferred" ]; then
-    echo "$preferred"
-    return
-  fi
-
-  # Then, try Apple Development.
-  preferred="$(security find-identity -p codesigning -v 2>/dev/null \
-    | awk -F'\"' '/Apple Development/ { print $2; exit }')"
-  if [ -n "$preferred" ]; then
-    echo "$preferred"
-    return
-  fi
-
-  # Fallback to the first valid signing identity.
-  available="$(security find-identity -p codesigning -v 2>/dev/null \
-    | sed -n 's/.*\"\\(.*\\)\"/\\1/p')"
-
-  if [ -n "$available" ]; then
-    first="$(printf '%s\n' "$available" | head -n1)"
-    echo "$first"
-    return
-  fi
-
-  return 1
-}
-
 if [ -z "$IDENTITY" ]; then
-  if ! IDENTITY="$(select_identity)"; then
+  if ! IDENTITY="$(select_mac_signing_identity)"; then
     if [[ "${ALLOW_ADHOC_SIGNING:-}" == "1" ]]; then
       echo "WARN: No signing identity found. Falling back to ad-hoc signing (-)." >&2
       echo "      !!! WARNING: Ad-hoc signed apps do NOT persist TCC permissions (Accessibility, etc) !!!" >&2
@@ -134,7 +96,12 @@ case "$TIMESTAMP_MODE" in
     timestamp_arg="--timestamp=none"
     ;;
   auto)
-    if [[ "$IDENTITY" == *"Developer ID Application"* ]]; then
+    # Exact class prefix, matching auto-selection: a substring test also
+    # timestamps a cert merely named like one ("Acme Developer ID Application
+    # Proxy"), and the timestamp service can reject non-Developer-ID certs.
+    # Name-based like the selector, so a cert named into this class still opts
+    # in; SIGN_IDENTITY given as a cert hash is out of scope here.
+    if [[ "$IDENTITY" == "Developer ID Application:"* ]]; then
       timestamp_arg="--timestamp"
     fi
     ;;

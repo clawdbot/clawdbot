@@ -49,7 +49,7 @@ Agent -> Gateway -> Node Service (WS)
 
 ## Operational flows
 
-- Restart/rebuild: `scripts/restart-mac.sh` kills existing instances, rebuilds via Swift, repackages, and relaunches. It auto-detects an available signing identity and falls back to `--no-sign` if none is found; pass `--sign` to require signing (fails if no key is available) or `--no-sign` to force the unsigned path. `SIGN_IDENTITY` set in the environment is unset on the signed path, so `scripts/codesign-mac-app.sh`'s own identity auto-detection picks the cert.
+- Restart/rebuild: `scripts/restart-mac.sh` kills existing instances, rebuilds via Swift, repackages, and relaunches. It auto-detects an available Apple signing identity and falls back to `--no-sign` if none is found; pass `--sign` to require signing (fails if no key is available) or `--no-sign` to force the unsigned path. `SIGN_IDENTITY` set in the environment is honored and passed through to `scripts/codesign-mac-app.sh`; leave it unset to let auto-detection pick the cert. `SIGN_IDENTITY="-"` selects ad-hoc signing by default, but is ignored under `--sign` so a stale ad-hoc export cannot downgrade an explicit signing request.
 - Single instance: the app checks `NSWorkspace.runningApplications` for a duplicate bundle ID and exits if more than one instance is found (`isDuplicateInstance()` in `MenuBar.swift`).
 
 ## Hardening notes

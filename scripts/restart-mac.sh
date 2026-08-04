@@ -5,6 +5,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${ROOT_DIR}/scripts/lib/restart-mac-gateway.sh"
+source "${ROOT_DIR}/scripts/lib/mac-signing-identity.sh"
 APP_BUNDLE="${OPENCLAW_APP_BUNDLE:-}"
 APP_EXECUTABLE_RELATIVE_PATH="Contents/MacOS/OpenClaw"
 DEBUG_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/debug/OpenClaw"
@@ -90,11 +91,6 @@ acquire_lock() {
   done
 }
 
-check_signing_keys() {
-  security find-identity -p codesigning -v 2>/dev/null \
-    | grep -Eq '(Developer ID Application|Apple Distribution|Apple Development)'
-}
-
 canonicalize_app_bundle() {
   if [[ -z "${APP_BUNDLE}" ]]; then
     return 0
@@ -128,6 +124,7 @@ for arg in "$@"; do
       log ""
       log "Env:"
       log "  OPENCLAW_GATEWAY_WAIT_SECONDS=0  Wait time before gateway port check (unsigned only)"
+      log "  SIGN_IDENTITY=\"<cert>\"           Sign with this certificate instead of auto-detecting"
       log ""
       log "Unsigned recovery:"
       log "  node openclaw.mjs daemon install --force --runtime node"
@@ -136,7 +133,7 @@ for arg in "$@"; do
       log "Reset unsigned overrides:"
       log "  rm ~/.openclaw/disable-launchagent"
       log ""
-      log "Default behavior: Auto-detect signing keys, fallback to --no-sign if none found"
+      log "Default behavior: Auto-detect an Apple signing identity, fallback to --no-sign if none found"
       exit 0
       ;;
     --) ;;
@@ -379,12 +376,49 @@ fi
 # Bundle Gateway-hosted plugin assets.
 run_step "bundle plugin assets" bash -c "cd '${ROOT_DIR}' && pnpm plugins:assets:build"
 
+# An operator-supplied SIGN_IDENTITY is explicit intent and outranks detection:
+# it is the supported way to sign with a certificate outside the auto-selected
+# Apple classes. "-" is the packager's ad-hoc selector, so it means "ad-hoc" by
+# default, but --sign ignores it so a stale ad-hoc export from an earlier
+# --no-sign shell cannot silently downgrade an explicit signing request.
+EXPLICIT_SIGN_IDENTITY=0
+EXPLICIT_ADHOC_REQUEST=0
+if [[ "${SIGN_IDENTITY:-}" == "-" ]]; then
+  EXPLICIT_ADHOC_REQUEST=1
+elif [[ -n "${SIGN_IDENTITY:-}" ]]; then
+  EXPLICIT_SIGN_IDENTITY=1
+fi
+
+# Resolve the keychain at most once and carry the identity into packaging. An
+# empty answer routes the restart to ad-hoc signing, which drops TCC grants, so
+# this must resolve exactly what codesign-mac-app.sh would pick rather than
+# re-match certificate names here; re-asking later also lets the answer change
+# between the decision and the signing handoff. Excluding non-Apple codesigning
+# certs from auto-selection is intentional - scripts/lib/mac-signing-identity.sh
+# owns that decision, and SIGN_IDENTITY stays the way to sign with one.
+NEEDS_AUTO_SELECTION=1
+if [ "$EXPLICIT_SIGN_IDENTITY" -eq 1 ] || [ "$NO_SIGN" -eq 1 ]; then
+  NEEDS_AUTO_SELECTION=0
+elif [ "$AUTO_DETECT_SIGNING" -eq 1 ] && [ "$EXPLICIT_ADHOC_REQUEST" -eq 1 ]; then
+  NEEDS_AUTO_SELECTION=0
+fi
+AUTO_SELECTED_SIGN_IDENTITY=""
+if [ "$NEEDS_AUTO_SELECTION" -eq 1 ]; then
+  AUTO_SELECTED_SIGN_IDENTITY="$(select_mac_signing_identity || true)"
+fi
+
 if [ "$AUTO_DETECT_SIGNING" -eq 1 ]; then
-  if check_signing_keys; then
-    log "==> Signing keys detected, will code sign"
+  if [ "$EXPLICIT_SIGN_IDENTITY" -eq 1 ]; then
+    log "==> Using SIGN_IDENTITY from the environment, will code sign"
+    SIGN=1
+  elif [ "$EXPLICIT_ADHOC_REQUEST" -eq 1 ]; then
+    log "==> SIGN_IDENTITY=- requests ad-hoc signing (--no-sign)"
+    NO_SIGN=1
+  elif [ -n "${AUTO_SELECTED_SIGN_IDENTITY}" ]; then
+    log "==> Signing identity detected (${AUTO_SELECTED_SIGN_IDENTITY}), will code sign"
     SIGN=1
   else
-    log "==> No signing keys found, will skip code signing (--no-sign)"
+    log "==> No auto-selectable Apple signing identity found, will skip code signing (--no-sign)"
     NO_SIGN=1
   fi
 fi
@@ -395,11 +429,13 @@ if [ "$NO_SIGN" -eq 1 ]; then
   mkdir -p "${HOME}/.openclaw"
   run_step "disable launchagent writes" /usr/bin/touch "${LAUNCHAGENT_DISABLE_MARKER}"
 elif [ "$SIGN" -eq 1 ]; then
-  if ! check_signing_keys; then
-    fail "No signing identity found. Use --no-sign or install a signing key."
-  fi
   unset ALLOW_ADHOC_SIGNING
-  unset SIGN_IDENTITY
+  if [ "$EXPLICIT_SIGN_IDENTITY" -ne 1 ]; then
+    if [ -z "${AUTO_SELECTED_SIGN_IDENTITY}" ]; then
+      fail "No auto-selectable Apple signing identity found. Use --no-sign, install an Apple signing key, or set SIGN_IDENTITY to a codesigning certificate."
+    fi
+    export SIGN_IDENTITY="${AUTO_SELECTED_SIGN_IDENTITY}"
+  fi
 fi
 
 # 3) Package and sign outside the live bundle. A failed package/sign operation

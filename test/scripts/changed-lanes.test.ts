@@ -2020,6 +2020,7 @@ describe("scripts/changed-lanes", () => {
     for (const changedPath of [
       "scripts/codesign-mac-app.sh",
       "scripts/create-dmg.sh",
+      "scripts/lib/mac-signing-identity.sh",
       "scripts/lib/plistbuddy.sh",
       "scripts/lib/swift-toolchain.sh",
       "scripts/notarize-mac-artifact.sh",
@@ -2030,6 +2031,7 @@ describe("scripts/changed-lanes", () => {
       "test/scripts/notarize-mac-artifact.test.ts",
       "test/scripts/package-mac-app.test.ts",
       "test/scripts/package-mac-dist.test.ts",
+      "test/scripts/mac-signing-identity.test-support.ts",
     ]) {
       const result = detectChangedLanes([changedPath]);
       const plan = createChangedCheckPlan(result, {

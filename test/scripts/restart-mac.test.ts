@@ -13,13 +13,96 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  APPLE_CLASS_LOOKALIKE_LISTING,
+  APPLE_DEVELOPMENT_LISTING,
+  APPLE_DISTRIBUTION_LISTING,
+  DEVELOPER_ID_LISTING,
+  EMPTY_LISTING,
+  NON_APPLE_ONLY_LISTING,
+  installFakeSecurity,
+} from "./mac-signing-identity.test-support.ts";
 
 const helperPath = "scripts/lib/restart-mac-gateway.sh";
+const signingIdentityHelperPath = "scripts/lib/mac-signing-identity.sh";
 const restartScriptPath = "scripts/restart-mac.sh";
 const tempRoots: string[] = [];
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function makeSecurityShimRoot(listing: string): { binDir: string; root: string } {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-restart-mac-signing-test-"));
+  tempRoots.push(root);
+  const binDir = join(root, "bin");
+  mkdirSync(binDir);
+  installFakeSecurity(binDir, listing);
+  return { binDir, root };
+}
+
+function runSigningIdentitySelector(listing: string) {
+  const { binDir } = makeSecurityShimRoot(listing);
+
+  return spawnSync(
+    "bash",
+    ["-c", `source ${shellQuote(signingIdentityHelperPath)}; select_mac_signing_identity`],
+    {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+    },
+  );
+}
+
+function runSigningDecision(options: {
+  listing: string;
+  noSign?: boolean;
+  sign?: boolean;
+  signIdentity?: string;
+}) {
+  const { binDir, root } = makeSecurityShimRoot(options.listing);
+  const script = readFileSync(restartScriptPath, "utf8");
+  const decisionBlock = script.slice(
+    script.indexOf("# An operator-supplied SIGN_IDENTITY"),
+    script.indexOf("# 3) Package and sign"),
+  );
+  const explicit = options.sign === true || options.noSign === true;
+  const harnessPath = join(root, "signing-decision-harness.sh");
+  writeFileSync(
+    harnessPath,
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      `source ${shellQuote(signingIdentityHelperPath)}`,
+      `AUTO_DETECT_SIGNING=${explicit ? 0 : 1}`,
+      `NO_SIGN=${options.noSign === true ? 1 : 0}`,
+      `SIGN=${options.sign === true ? 1 : 0}`,
+      'LAUNCHAGENT_DISABLE_MARKER="${HOME}/disable-launchagent"',
+      'log() { printf "%s\\n" "$*"; }',
+      'fail() { printf "ERROR: %s\\n" "$*" >&2; exit 1; }',
+      "run_step() { :; }",
+      decisionBlock,
+      // Read the identity from a child process, not this shell: packaging runs
+      // as a subprocess, so a lost `export` must fail this rather than pass.
+      'child_identity="$(bash -c \'printf "%s" "${SIGN_IDENTITY:-unset}"\')"',
+      'printf "no_sign=%s sign=%s adhoc=%s identity=%s\\n" "$NO_SIGN" "$SIGN" "${ALLOW_ADHOC_SIGNING:-unset}" "$child_identity"',
+    ].join("\n"),
+  );
+  chmodSync(harnessPath, 0o755);
+
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: root,
+    PATH: `${binDir}:${process.env.PATH ?? ""}`,
+  };
+  if (options.signIdentity === undefined) {
+    delete env.SIGN_IDENTITY;
+  } else {
+    env.SIGN_IDENTITY = options.signIdentity;
+  }
+  delete env.ALLOW_ADHOC_SIGNING;
+
+  return spawnSync("bash", [harnessPath], { encoding: "utf8", env });
 }
 
 function runGatewayPortCheck(fakeLsof: string) {
@@ -268,7 +351,7 @@ function runRestartLockHarness(lockDir: string) {
   const script = readFileSync(restartScriptPath, "utf8");
   const lockBlock = script.slice(
     script.indexOf("cleanup()"),
-    script.indexOf("check_signing_keys()"),
+    script.indexOf("canonicalize_app_bundle()"),
   );
   const harnessPath = join(root, "lock-harness.sh");
   writeFileSync(
@@ -727,6 +810,124 @@ describe("scripts/restart-mac.sh", () => {
     expect(killCalls).toBe("");
     expect(result.stdout).toBe("");
     expect(result.stderr).toBe("");
+  });
+
+  it("selects Apple signing identities in the documented tier order", () => {
+    for (const [listing, expected] of [
+      [DEVELOPER_ID_LISTING, "Developer ID Application: Jane Doe (TEAM000001)"],
+      [APPLE_DISTRIBUTION_LISTING, "Apple Distribution: Jane Doe (TEAM000001)"],
+      [APPLE_DEVELOPMENT_LISTING, "Apple Development: Jane Doe (TEAM000001)"],
+    ] as const) {
+      const result = runSigningIdentitySelector(listing);
+
+      expect(result.status).toBe(0);
+      expect(result.stdout.trim()).toBe(expected);
+    }
+  });
+
+  it("selects nothing when no Apple class is present", () => {
+    // The lookalike only contains the class text; a substring match accepts it.
+    for (const listing of [NON_APPLE_ONLY_LISTING, APPLE_CLASS_LOOKALIKE_LISTING, EMPTY_LISTING]) {
+      const result = runSigningIdentitySelector(listing);
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+    }
+  });
+
+  it("reads the signing policy from the shared owner instead of matching names", () => {
+    // The restart/packager divergence this guards against came from a second
+    // certificate-name matcher living here. Keep the policy in one place.
+    const script = readFileSync(restartScriptPath, "utf8");
+
+    expect(script).toContain('source "${ROOT_DIR}/scripts/lib/mac-signing-identity.sh"');
+    expect(script).toContain("select_mac_signing_identity");
+    expect(script).not.toContain("security find-identity");
+    expect(script).not.toContain("Developer ID Application");
+  });
+
+  it("carries the auto-selected identity into packaging", () => {
+    const result = runSigningDecision({ listing: DEVELOPER_ID_LISTING });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim().split("\n").at(-1)).toBe(
+      "no_sign=0 sign=1 adhoc=unset identity=Developer ID Application: Jane Doe (TEAM000001)",
+    );
+  });
+
+  it("falls back to ad-hoc signing when only a non-Apple certificate is present", () => {
+    const result = runSigningDecision({ listing: NON_APPLE_ONLY_LISTING });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("No auto-selectable Apple signing identity found");
+    expect(result.stdout.trim().split("\n").at(-1)).toBe("no_sign=1 sign=0 adhoc=1 identity=-");
+  });
+
+  it("signs with an explicit SIGN_IDENTITY that auto-detection would not pick", () => {
+    const result = runSigningDecision({
+      listing: NON_APPLE_ONLY_LISTING,
+      signIdentity: "Acme Internal Self-Signed Dev",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Using SIGN_IDENTITY from the environment");
+    expect(result.stdout.trim().split("\n").at(-1)).toBe(
+      "no_sign=0 sign=1 adhoc=unset identity=Acme Internal Self-Signed Dev",
+    );
+  });
+
+  it("keeps an explicit SIGN_IDENTITY through a forced --sign restart", () => {
+    const result = runSigningDecision({
+      listing: NON_APPLE_ONLY_LISTING,
+      sign: true,
+      signIdentity: "Acme Internal Self-Signed Dev",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim().split("\n").at(-1)).toBe(
+      "no_sign=0 sign=1 adhoc=unset identity=Acme Internal Self-Signed Dev",
+    );
+  });
+
+  it("treats SIGN_IDENTITY=- as an ad-hoc request in auto-detect mode", () => {
+    // "-" is the packager's ad-hoc selector, so it must win over a usable
+    // Apple certificate rather than being silently replaced by one.
+    const result = runSigningDecision({ listing: DEVELOPER_ID_LISTING, signIdentity: "-" });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("SIGN_IDENTITY=- requests ad-hoc signing");
+    expect(result.stdout.trim().split("\n").at(-1)).toBe("no_sign=1 sign=0 adhoc=1 identity=-");
+  });
+
+  it("does not let a stale ad-hoc SIGN_IDENTITY downgrade a forced --sign restart", () => {
+    const signable = runSigningDecision({
+      listing: DEVELOPER_ID_LISTING,
+      sign: true,
+      signIdentity: "-",
+    });
+    const unsignable = runSigningDecision({
+      listing: NON_APPLE_ONLY_LISTING,
+      sign: true,
+      signIdentity: "-",
+    });
+
+    expect(signable.status).toBe(0);
+    expect(signable.stdout.trim().split("\n").at(-1)).toBe(
+      "no_sign=0 sign=1 adhoc=unset identity=Developer ID Application: Jane Doe (TEAM000001)",
+    );
+    expect(unsignable.status).toBe(1);
+    expect(unsignable.stderr).toContain("No auto-selectable Apple signing identity found");
+  });
+
+  it("forces ad-hoc signing when --no-sign overrides an explicit SIGN_IDENTITY", () => {
+    const result = runSigningDecision({
+      listing: DEVELOPER_ID_LISTING,
+      noSign: true,
+      signIdentity: "Developer ID Application: Jane Doe (TEAM000001)",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim().split("\n").at(-1)).toBe("no_sign=1 sign=0 adhoc=1 identity=-");
   });
 
   it("does not kill unrelated OpenClaw app bundles", () => {

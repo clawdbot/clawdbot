@@ -14,6 +14,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  APPLE_CLASS_LOOKALIKE_LISTING,
+  DEVELOPER_ID_LISTING,
+  NON_APPLE_ONLY_LISTING,
+  installFakeSecurity,
+} from "./mac-signing-identity.test-support.ts";
 
 const tempDirs: string[] = [];
 const scriptPath = "scripts/codesign-mac-app.sh";
@@ -45,6 +51,13 @@ function installFakeCodesign(binDir: string) {
     fakeCodesign,
     `#!/usr/bin/env bash
 set -euo pipefail
+
+# Opt-in argv capture: only cases asserting on signing flags set CODESIGN_ARGS_LOG,
+# so the entitlement-focused cases keep their existing CODESIGN_LOG shape.
+if [ -n "\${CODESIGN_ARGS_LOG:-}" ]; then
+  printf '%s\\t' "$@" >>"$CODESIGN_ARGS_LOG"
+  printf '\\n' >>"$CODESIGN_ARGS_LOG"
+fi
 
 entitlements=""
 target=""
@@ -83,10 +96,98 @@ fi
   chmodSync(fakeCodesign, 0o755);
 }
 
+function runCodesignWithKeychain(listing: string, extraEnv: NodeJS.ProcessEnv = {}) {
+  const tempRoot = makeTempDir("openclaw-codesign-identity-");
+  const app = path.join(tempRoot, "Fake.app");
+  const binDir = path.join(tempRoot, "bin");
+  const captureDir = path.join(tempRoot, "capture");
+  const argsLogPath = path.join(captureDir, "codesign-args.log");
+  mkdirSync(path.join(app, "Contents", "MacOS"), { recursive: true });
+  mkdirSync(binDir);
+  mkdirSync(captureDir);
+  writeFileSync(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
+  installFakeCodesign(binDir);
+  installFakeSecurity(binDir, listing);
+
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    CODESIGN_ARGS_LOG: argsLogPath,
+    CODESIGN_CAPTURE_DIR: captureDir,
+    CODESIGN_LOG: path.join(captureDir, "codesign.log"),
+    PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+    SKIP_TEAM_ID_CHECK: "1",
+    TMPDIR: tempRoot,
+  };
+  delete env.SIGN_IDENTITY;
+  delete env.ALLOW_ADHOC_SIGNING;
+  Object.assign(env, extraEnv);
+
+  const result = spawnSync("bash", [scriptPath, app], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env,
+  });
+  const signArgs = existsSync(argsLogPath) ? readFileSync(argsLogPath, "utf8") : "";
+  return { result, signArgs };
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+describe("codesign-mac-app identity selection", () => {
+  it("prefers Developer ID Application over the other Apple classes", () => {
+    const { result } = runCodesignWithKeychain(DEVELOPER_ID_LISTING);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      "Using signing identity: Developer ID Application: Jane Doe (TEAM000001)",
+    );
+  });
+
+  it("refuses to auto-select codesigning certificates outside the Apple classes", () => {
+    // The lookalike only contains the class text; a substring match would sign it.
+    for (const [listing, name] of [
+      [NON_APPLE_ONLY_LISTING, "Acme Internal Self-Signed Dev"],
+      [APPLE_CLASS_LOOKALIKE_LISTING, "Acme Developer ID Application Proxy"],
+    ] as const) {
+      const { result } = runCodesignWithKeychain(listing);
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("No signing identity found");
+      expect(result.stdout).not.toContain(name);
+    }
+  });
+
+  it("signs with a non-Apple certificate when SIGN_IDENTITY names it", () => {
+    const { result } = runCodesignWithKeychain(NON_APPLE_ONLY_LISTING, {
+      SIGN_IDENTITY: "Acme Internal Self-Signed Dev",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Using signing identity: Acme Internal Self-Signed Dev");
+  });
+
+  it("timestamps only the Developer ID Application class under auto", () => {
+    // The timestamp service can reject non-Developer-ID certs, and a lookalike
+    // name must not opt into one just by containing the class text.
+    const developerId = runCodesignWithKeychain(DEVELOPER_ID_LISTING, {
+      CODESIGN_TIMESTAMP: "auto",
+    });
+    const lookalike = runCodesignWithKeychain(APPLE_CLASS_LOOKALIKE_LISTING, {
+      CODESIGN_TIMESTAMP: "auto",
+      SIGN_IDENTITY: "Acme Developer ID Application Proxy",
+    });
+
+    expect(developerId.result.status).toBe(0);
+    expect(developerId.signArgs).toContain("--timestamp\t");
+    expect(developerId.signArgs).not.toContain("--timestamp=none");
+    expect(lookalike.result.status).toBe(0);
+    expect(lookalike.signArgs).toContain("--timestamp=none");
+    expect(lookalike.signArgs).not.toContain("--timestamp\t");
+  });
 });
 
 describe("codesign-mac-app temp file hygiene", () => {
