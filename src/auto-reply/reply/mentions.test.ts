@@ -299,6 +299,54 @@ describe("derived mention matching with decorated identity names", () => {
     );
   });
 
+  it("takes interior decoration once, leaving a member's repeat untouched", () => {
+    const cfg = configForName("Papillon🦋Bot");
+    const regexes = buildMentionRegexes(cfg, "decorated-agent");
+
+    expect(matchesMentionPatterns("Papillon🦋Bot /status", regexes)).toBe(true);
+    expect(matchesMentionPatterns("Papillon🦋🦋Bot /status", regexes)).toBe(false);
+    expect(stripMentions("Papillon🦋🦋Bot /status", {} as MsgContext, cfg, "decorated-agent")).toBe(
+      "Papillon🦋🦋Bot /status",
+    );
+  });
+
+  it("reads interior decoration spaced apart or tightened up", () => {
+    const regexes = buildMentionRegexes(configForName("Clawd 🦋 ★ Bot"), "decorated-agent");
+
+    expect(matchesMentionPatterns("clawd 🦋 ★ bot status", regexes)).toBe(true);
+    expect(matchesMentionPatterns("clawd🦋★bot status", regexes)).toBe(true);
+    expect(matchesMentionPatterns("clawd bot status", regexes)).toBe(true);
+    expect(matchesMentionPatterns("clawd 🦋 🦋 ★ bot status", regexes)).toBe(false);
+  });
+
+  // A mention consumes the decoration the name spells and no more, and the
+  // matching and stripping paths have to read the same message the same way.
+  // Both rules are position-independent, so they are checked in each position
+  // rather than at the one where a repeat was first seen.
+  it.each([
+    ["trailing", (name: string) => `小蝶${name}`, (typed: string) => `小蝶${typed}`],
+    ["leading", (name: string) => `${name}小蝶`, (typed: string) => `${typed}小蝶`],
+    ["interior", (name: string) => `Papillon${name}Bot`, (typed: string) => `Papillon${typed}Bot`],
+    [
+      "interior spaced",
+      (name: string) => `Clawd ${name} Bot`,
+      (typed: string) => `Clawd${typed}Bot`,
+    ],
+  ])("leaves decoration beyond the name's own in place (%s)", (_label, toName, toTyped) => {
+    for (const decoration of ["🦋", "❤️", "👩‍👧", "🇹🇼", "・★"]) {
+      const cfg = configForName(toName(decoration));
+      const regexes = buildMentionRegexes(cfg, "decorated-agent");
+      const message = `${toTyped(decoration.repeat(2))} /status`;
+      const stripped = stripMentions(message, {} as MsgContext, cfg, "decorated-agent");
+      const occurrences = (text: string) => text.split(decoration).length - 1;
+
+      expect(occurrences(stripped)).toBeGreaterThanOrEqual(occurrences(message) - 1);
+      expect(stripped !== message.replace(/\s+/g, " ").trim()).toBe(
+        matchesMentionPatterns(message, regexes),
+      );
+    }
+  });
+
   it("binds a mark to the character before it, not the token after it", () => {
     // The selector in "❤️" modifies the heart, so it is part of the decoration
     // and stays omissible; absorbed into the following token it would be

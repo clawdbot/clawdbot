@@ -32,6 +32,11 @@ type ResolvedMentionPatterns = {
 const NAME_IDENTITY_CHARS = String.raw`\p{L}\p{N}\p{Pc}`;
 const NAME_TOKEN_CHARS = String.raw`${NAME_IDENTITY_CHARS}\p{M}`;
 const JOINER_CHARS = String.raw`\u200C\u200D`;
+// Decoration is written with the joiners normalization strips, and between two
+// word runs also with the spacing members put around it, so both stay optional
+// where they can appear.
+const JOINER_SPACING = String.raw`[${JOINER_CHARS}]*`;
+const DECORATION_SPACING = String.raw`[${JOINER_CHARS}\s]*`;
 const UNICODE_WORD_CHAR = String.raw`[${NAME_TOKEN_CHARS}${JOINER_CHARS}]`;
 const JOINER_RUN = new RegExp(`[${JOINER_CHARS}]+`, "u");
 // A token starts at an identity character: marks attach to the character
@@ -72,58 +77,90 @@ function escapeJoinerTolerantLiteral(literal: string): string {
     // would match the empty string, i.e. every message.
     return "";
   }
-  return parts.map(escapeRegExp).join(`[${JOINER_CHARS}]*`);
+  return parts.map(escapeRegExp).join(JOINER_SPACING);
 }
 
-// Decoration at an edge is matched as the sequence the name spells, exactly
-// once, so a member's own repeated decoration stays out of the mention. The
-// caller offers it as an alternation with an empty branch rather than an
-// optional group: the safe-regex guard rejects a repetition nested inside a
-// quantified group and would drop the whole pattern.
-function decorationSequence(gap: string): string {
-  return escapeJoinerTolerantLiteral(gap.replace(/\s+/gu, ""));
-}
+// A name reads as word runs with decoration around and between them. It is
+// parsed into those units once and each unit is then encoded for the position
+// it sits in, so what decoration means is stated once: it is optional, and it
+// is taken at most one time, in the order the name spells it. Encoding the
+// positions independently is what let a member's repeated decoration count as
+// part of the mention -- and be stripped away with it -- at one position while
+// another already refused it.
+type NameUnit =
+  | { kind: "token"; literal: string }
+  | { kind: "decoration"; marks: string[]; spaced: boolean };
+type DecorationUnit = Extract<NameUnit, { kind: "decoration" }>;
 
-// Decoration between word runs (emoji, flags, symbols, punctuation) may be
-// typed as shown, replaced by whitespace, or omitted. Only code points the
-// name itself carries are accepted, so matching and stripping never consume
-// unrelated punctuation adjacent to a mention.
-function decorationClassBody(gap: string): string {
-  const bodies = new Set<string>();
-  for (const char of gap) {
-    const codePoint = char.codePointAt(0);
-    if (codePoint === undefined || /\s/u.test(char)) {
+function parseNameUnits(name: string): NameUnit[] {
+  const units: NameUnit[] = [];
+  // Odd indices are captured word tokens; even indices are the gaps around them.
+  for (const [index, segment] of name.split(NAME_TOKEN_SPLIT).entries()) {
+    if (index % 2 === 1) {
+      units.push({ kind: "token", literal: segment });
       continue;
     }
-    bodies.add(`\\u{${codePoint.toString(16)}}`);
+    if (!segment) {
+      continue;
+    }
+    const marks: string[] = [];
+    for (const char of segment) {
+      // Whitespace is spacing, and joiners do not survive normalization: what a
+      // typed mention has to carry is the decoration left between them.
+      if (/\s/u.test(char) || JOINER_RUN.test(char)) {
+        continue;
+      }
+      marks.push(escapeRegExp(char));
+    }
+    units.push({ kind: "decoration", marks, spaced: /\s/u.test(segment) });
   }
-  return [...bodies].join("");
+  return units;
+}
+
+// Decoration at the name's edge. It is offered to the boundary assertions and
+// to the match as the sequence the name spells, once, and it never reaches for
+// the whitespace beside it: with no word run on the far side, that whitespace
+// is the member's own text rather than part of the name.
+function encodeEdgeDecoration(unit: NameUnit | undefined): string {
+  return unit?.kind === "decoration" ? unit.marks.join(JOINER_SPACING) : "";
+}
+
+// Decoration between two word runs (emoji, flags, symbols, punctuation) may be
+// typed as shown, spaced apart, replaced by whitespace, or omitted -- and, like
+// an edge, is taken at most once. A class repeating over it swallowed whatever
+// extra decoration a member typed inside the name and stripping removed that
+// too. Only code points the name itself carries are accepted, so neither path
+// ever consumes unrelated punctuation beside a mention.
+function encodeInteriorDecoration(unit: DecorationUnit): string {
+  const spelled = unit.marks.join(DECORATION_SPACING);
+  if (!spelled) {
+    // A gap spelled with joiners alone is gone from normalized text, so it may
+    // be omitted; plain spacing between word runs stays required.
+    return unit.spaced ? String.raw`\s+` : DECORATION_SPACING;
+  }
+  // A gap carrying whitespace keeps a one-separator floor so the bare
+  // concatenation of the surrounding words never matches.
+  return `(?:${DECORATION_SPACING}${spelled}${DECORATION_SPACING}|\\s${unit.spaced ? "+" : "*"})`;
 }
 
 function deriveNameParts(name: string): DerivedNameParts {
-  // Odd indices are captured word tokens; even indices are the gaps around them.
-  const segments = name.split(NAME_TOKEN_SPLIT);
-  const tokens = segments.filter((_, index) => index % 2 === 1);
-  if (tokens.length === 0) {
+  const units = parseNameUnits(name);
+  const firstToken = units.findIndex((unit) => unit.kind === "token");
+  if (firstToken < 0) {
     // Decoration-only name (e.g. a bare emoji): match it literally.
     return { leading: "", core: escapeJoinerTolerantLiteral(name), trailing: "" };
   }
+  const lastToken = units.findLastIndex((unit) => unit.kind === "token");
   let core = "";
-  for (const [index, token] of tokens.entries()) {
-    if (index > 0) {
-      const gap = segments[index * 2] ?? "";
-      const decorations = decorationClassBody(gap);
-      // Plain spacing stays required; decoration-only gaps are optional
-      // separators. A gap carrying whitespace keeps a one-separator floor so
-      // the bare concatenation of the surrounding words never matches.
-      core += decorations ? `[\\s${decorations}]${/\s/u.test(gap) ? "+" : "*"}` : String.raw`\s+`;
-    }
-    core += escapeRegExp(token);
+  for (const unit of units.slice(firstToken, lastToken + 1)) {
+    core += unit.kind === "token" ? escapeRegExp(unit.literal) : encodeInteriorDecoration(unit);
   }
+  // Only a unit outside the word runs is an edge; on a name that starts or ends
+  // with one, the encoder reads a token as no decoration at all.
   return {
-    leading: decorationSequence(segments[0] ?? ""),
+    leading: encodeEdgeDecoration(units[0]),
     core,
-    trailing: decorationSequence(segments[segments.length - 1] ?? ""),
+    trailing: encodeEdgeDecoration(units.at(-1)),
   };
 }
 
