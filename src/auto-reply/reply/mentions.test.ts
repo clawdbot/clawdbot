@@ -283,6 +283,22 @@ describe("derived mention matching with decorated identity names", () => {
     ).toBe("查天氣");
   });
 
+  it("takes the identity's decoration once, leaving a member's repeat in place", () => {
+    const trailing = configForName("小蝶🦋");
+    const leading = configForName("🦋小蝶");
+    const trailingRegexes = buildMentionRegexes(trailing, "decorated-agent");
+    const leadingRegexes = buildMentionRegexes(leading, "decorated-agent");
+
+    expect(matchesMentionPatterns("小蝶🦋🦋 /status", trailingRegexes)).toBe(true);
+    expect(matchesMentionPatterns("🦋🦋小蝶 查天氣", leadingRegexes)).toBe(true);
+    expect(stripMentions("小蝶🦋🦋 /status", {} as MsgContext, trailing, "decorated-agent")).toBe(
+      "🦋 /status",
+    );
+    expect(stripMentions("🦋🦋小蝶 查天氣", {} as MsgContext, leading, "decorated-agent")).toBe(
+      "🦋 查天氣",
+    );
+  });
+
   it("binds a mark to the character before it, not the token after it", () => {
     // The selector in "❤️" modifies the heart, so it is part of the decoration
     // and stays omissible; absorbed into the following token it would be

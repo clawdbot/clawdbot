@@ -51,22 +51,14 @@ type DerivedNameParts = {
 function wrapDerivedMentionPattern(parts: DerivedNameParts): string {
   // JavaScript \b is ASCII-oriented. Derived identity names need Unicode word
   // boundaries so a name is neither missed nor matched inside another word.
-  // Edge decoration is optional, so each assertion has to reach across it:
-  // checked next to the tokens instead, the class matches nothing and the
-  // decoration itself satisfies the boundary, letting the name match while
-  // glued to another word. What the assertion looks for on the far side is a
-  // word character the name does not carry -- a decoration that is itself a
-  // word character, such as the variation selector in an emoji or a joiner,
-  // would otherwise report the name as glued to its own decoration.
-  const leading = parts.leading ? `[${parts.leading}]*` : "";
-  const trailing = parts.trailing ? `[${parts.trailing}]*` : "";
-  const wordBefore = parts.leading
-    ? `(?![${parts.leading}])${UNICODE_WORD_CHAR}`
-    : UNICODE_WORD_CHAR;
-  const wordAfter = parts.trailing
-    ? `(?![${parts.trailing}])${UNICODE_WORD_CHAR}`
-    : UNICODE_WORD_CHAR;
-  return `(?:@|(?<!${wordBefore}${leading}))${leading}${parts.core}(?!${trailing}${wordAfter})${trailing}`;
+  // Edge decoration is optional, so each assertion has to reach across it, or
+  // the decoration satisfies the boundary itself and the name matches while
+  // glued to another word. The decoration is one optional occurrence of what
+  // the name carries: repeating it would consume decoration a member typed
+  // beyond the identity, and stripping would take that away with the mention.
+  const leading = parts.leading ? `(?:${parts.leading}|)` : "";
+  const trailing = parts.trailing ? `(?:${parts.trailing}|)` : "";
+  return `(?:@|(?<!${UNICODE_WORD_CHAR}${leading}))${leading}${parts.core}(?!${trailing}${UNICODE_WORD_CHAR})${trailing}`;
 }
 
 function escapeJoinerTolerantLiteral(literal: string): string {
@@ -81,6 +73,15 @@ function escapeJoinerTolerantLiteral(literal: string): string {
     return "";
   }
   return parts.map(escapeRegExp).join(`[${JOINER_CHARS}]*`);
+}
+
+// Decoration at an edge is matched as the sequence the name spells, exactly
+// once, so a member's own repeated decoration stays out of the mention. The
+// caller offers it as an alternation with an empty branch rather than an
+// optional group: the safe-regex guard rejects a repetition nested inside a
+// quantified group and would drop the whole pattern.
+function decorationSequence(gap: string): string {
+  return escapeJoinerTolerantLiteral(gap.replace(/\s+/gu, ""));
 }
 
 // Decoration between word runs (emoji, flags, symbols, punctuation) may be
@@ -120,9 +121,9 @@ function deriveNameParts(name: string): DerivedNameParts {
     core += escapeRegExp(token);
   }
   return {
-    leading: decorationClassBody(segments[0] ?? ""),
+    leading: decorationSequence(segments[0] ?? ""),
     core,
-    trailing: decorationClassBody(segments[segments.length - 1] ?? ""),
+    trailing: decorationSequence(segments[segments.length - 1] ?? ""),
   };
 }
 
