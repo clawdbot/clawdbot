@@ -59,7 +59,7 @@ async function requestNewSessionMetadata(
   signal: AbortSignal,
 ): Promise<{ models?: ModelCatalogEntry[] }> {
   const deadlineAt = Date.now() + NEW_SESSION_METADATA_RETRY_WINDOW_MS;
-  let latestStartupError: unknown;
+  let latestStartupError: Error | undefined;
 
   while (true) {
     if (signal.aborted) {
@@ -84,17 +84,21 @@ async function requestNewSessionMetadata(
         },
       );
     } catch (error) {
-      const retryAfterMs = resolveGatewayStartupRetryAfterMs(error);
+      const requestError =
+        error instanceof Error
+          ? error
+          : new Error("New-session metadata request failed", { cause: error });
+      const retryAfterMs = resolveGatewayStartupRetryAfterMs(requestError);
       if (retryAfterMs === null) {
-        throw error;
+        throw requestError;
       }
 
       const retryRemainingMs = deadlineAt - Date.now();
       if (retryRemainingMs <= 0) {
-        throw error;
+        throw requestError;
       }
 
-      latestStartupError = error;
+      latestStartupError = requestError;
       await waitForMetadataRetry(Math.min(retryAfterMs, retryRemainingMs), signal);
     }
   }
