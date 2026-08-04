@@ -22,8 +22,13 @@ scenario:
     - src/commands/doctor-gateway-daemon-flow.ts
     - src/commands/doctor-format.ts
     - src/daemon/service-runtime.ts
-    - test/e2e/qa-lab/runtime/doctor-gateway-startup-recovery.e2e.test.ts
+    - test/e2e/qa-lab/runtime/doctor-gateway-startup-recovery.ts
   execution:
-    kind: vitest
-    path: test/e2e/qa-lab/runtime/doctor-gateway-startup-recovery.e2e.test.ts
-    summary: Exercise real TCP port ownership, a named-profile systemd start limit, doctor guidance, repair, and independent health verification on Linux.
+    kind: script
+    path: test/e2e/qa-lab/runtime/doctor-gateway-startup-recovery.ts
+    summary: On an explicitly enabled systemd host, exercise real TCP port ownership, a named-profile start limit, doctor guidance, repair, independent health verification, and exact-unit cleanup.
+    allowBlockedEvidence: true
+    timeoutMs: 480000
+    args:
+      - --artifact-base
+      - ${outputDir}
