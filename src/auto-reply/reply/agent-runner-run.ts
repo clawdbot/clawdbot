@@ -356,13 +356,11 @@ export async function runReplyAgent(
       typing.cleanup();
       return undefined;
     }
-    // Admission is not delivery. A vanished/non-streaming owner can safely
-    // fall through now; every rejection from a still-owning runtime must retain
-    // this exact turn as a follow-up.
-    shouldQueueAfterSteerRejection =
-      steerOutcome.reason !== "no_active_run" &&
-      steerOutcome.reason !== "not_streaming" &&
-      steerOutcome.reason !== "stale_run";
+    // A vanished/non-streaming owner can fall through; every rejection from a
+    // still-owning runtime must retain this exact turn as a follow-up.
+    shouldQueueAfterSteerRejection = !["no_active_run", "not_streaming", "stale_run"].includes(
+      steerOutcome.reason,
+    );
     const summary = formatEmbeddedAgentQueueFailureSummary(steerOutcome);
     logVerbose(`queue: active session ${steerSessionId} rejected steering injection: ${summary}`);
   }

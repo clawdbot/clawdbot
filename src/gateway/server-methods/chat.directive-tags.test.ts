@@ -1322,6 +1322,33 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(context.addChatRun).toHaveBeenCalledTimes(1);
   });
 
+  it("allows an explicit steer after the active run advances its transcript leaf", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-moving-leaf-");
+    await appendTranscriptMessage(transcriptScope(), {
+      eventId: "current-leaf",
+      message: { role: "assistant", content: "working" },
+      now: 1,
+      parentId: null,
+    });
+    const { context, respond, send } = createChatRequestFixture();
+
+    await send({
+      idempotencyKey: "idem-steer-moving-leaf",
+      requestParams: {
+        expectedLeafEntryId: "leaf-before-active-run-output",
+        queueMode: "steer",
+      },
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "started" }),
+      undefined,
+      expect.any(Object),
+    );
+    expect(context.addChatRun).toHaveBeenCalledTimes(1);
+  });
+
   it("broadcasts session metadata changes reported by chat command dispatch", async () => {
     await createTranscriptFixture("openclaw-chat-send-session-metadata-");
     mockState.sessionEntry = {
