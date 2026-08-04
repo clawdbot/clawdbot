@@ -69,7 +69,12 @@ const loadInstalledPluginIndexInstallRecords = vi.fn(
 );
 const readPersistedInstalledPluginIndex = vi.fn(async () => null);
 const restorePersistedInstalledPluginIndex = vi.fn(async () => undefined);
+const restorePersistedInstalledPluginIndexIfCurrent = vi.fn(async () => true);
 const writePersistedInstalledPluginIndexInstallRecords = vi.fn(async () => undefined);
+const writePersistedInstalledPluginIndexInstallRecordsWithLease = vi.fn(async () => ({
+  previous: null,
+  revision: 1,
+}));
 const checkShellCompletionStatus = vi.fn();
 const ensureCompletionCacheExists = vi.fn();
 const installCompletion = vi.fn();
@@ -296,6 +301,7 @@ vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) =
     ...actual,
     loadInstalledPluginIndexInstallRecords,
     writePersistedInstalledPluginIndexInstallRecords,
+    writePersistedInstalledPluginIndexInstallRecordsWithLease,
   };
 });
 
@@ -306,6 +312,7 @@ vi.mock("../plugins/installed-plugin-index-store.js", async (importOriginal) => 
     ...actual,
     readPersistedInstalledPluginIndex,
     restorePersistedInstalledPluginIndex,
+    restorePersistedInstalledPluginIndexIfCurrent,
   };
 });
 
@@ -1325,7 +1332,12 @@ describe("update-cli", () => {
     vi.clearAllMocks();
     readPersistedInstalledPluginIndex.mockResolvedValue(null);
     restorePersistedInstalledPluginIndex.mockResolvedValue(undefined);
+    restorePersistedInstalledPluginIndexIfCurrent.mockResolvedValue(true);
     writePersistedInstalledPluginIndexInstallRecords.mockResolvedValue(undefined);
+    writePersistedInstalledPluginIndexInstallRecordsWithLease.mockResolvedValue({
+      previous: null,
+      revision: 1,
+    });
     resetRuntimeCapture();
     spawn.mockImplementation(() => {
       const child = new EventEmitter() as EventEmitter & {
@@ -1850,13 +1862,17 @@ describe("update-cli", () => {
         integrity: "sha512-newer",
       },
     });
-    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(capturedRecords, {
-      config: preUpdateConfig,
-    });
-    expect(restorePersistedInstalledPluginIndex).not.toHaveBeenCalled();
+    expect(writePersistedInstalledPluginIndexInstallRecordsWithLease).toHaveBeenCalledWith(
+      capturedRecords,
+      {
+        config: preUpdateConfig,
+        lease: expect.anything(),
+      },
+    );
+    expect(restorePersistedInstalledPluginIndexIfCurrent).not.toHaveBeenCalled();
   });
 
-  it("restores the exact plugin index when post-core handoff fails", async () => {
+  it("restores the exact plugin index revision when post-core handoff fails", async () => {
     const { root } = setupUpdatedRootRefresh();
     readPackageVersion.mockImplementation(async (pkgRoot: string) =>
       pkgRoot === root ? "0.0.1" : "2026.5.28",
@@ -1871,7 +1887,10 @@ describe("update-cli", () => {
         },
       },
     };
-    readPersistedInstalledPluginIndex.mockResolvedValue(previousPersistedIndex as never);
+    writePersistedInstalledPluginIndexInstallRecordsWithLease.mockResolvedValue({
+      previous: previousPersistedIndex as never,
+      revision: 17,
+    });
     loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce(
       previousPersistedIndex.installRecords,
     );
@@ -1883,8 +1902,67 @@ describe("update-cli", () => {
       "post-core spawn failed",
     );
 
-    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledTimes(1);
-    expect(restorePersistedInstalledPluginIndex).toHaveBeenCalledWith(previousPersistedIndex);
+    expect(writePersistedInstalledPluginIndexInstallRecordsWithLease).toHaveBeenCalledTimes(1);
+    expect(restorePersistedInstalledPluginIndexIfCurrent).toHaveBeenCalledWith(
+      previousPersistedIndex,
+      17,
+      { lease: expect.anything() },
+    );
+  });
+
+  it("keeps a child-committed plugin index when the post-core handoff is signaled", async () => {
+    const { root } = setupUpdatedRootRefresh();
+    readPackageVersion.mockImplementation(async (pkgRoot: string) =>
+      pkgRoot === root ? "0.0.1" : "2026.5.28",
+    );
+    const previousPersistedIndex = {
+      policyHash: "previous-policy",
+      installRecords: {
+        msteams: {
+          source: "npm",
+          spec: "@openclaw/msteams",
+          resolvedVersion: "1.0.0",
+        },
+      },
+    };
+    let currentRevision = 17;
+    writePersistedInstalledPluginIndexInstallRecordsWithLease.mockResolvedValue({
+      previous: previousPersistedIndex as never,
+      revision: currentRevision,
+    });
+    restorePersistedInstalledPluginIndexIfCurrent.mockImplementation(
+      async (_index, expectedRevision) => {
+        if (currentRevision !== expectedRevision) {
+          return false;
+        }
+        currentRevision += 1;
+        return true;
+      },
+    );
+    loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce(
+      previousPersistedIndex.installRecords,
+    );
+    spawn.mockImplementationOnce(() => {
+      const child = new EventEmitter() as EventEmitter & {
+        once: EventEmitter["once"];
+      };
+      currentRevision = 18;
+      queueMicrotask(() => {
+        child.emit("exit", null, "SIGTERM");
+      });
+      return child;
+    });
+
+    await expect(updateCommand({ yes: true, restart: false })).rejects.toThrow(
+      "post-update process terminated by signal SIGTERM",
+    );
+
+    expect(restorePersistedInstalledPluginIndexIfCurrent).toHaveBeenCalledWith(
+      previousPersistedIndex,
+      17,
+      { lease: expect.anything() },
+    );
+    expect(currentRevision).toBe(18);
   });
 
   it("respawns into the updated git root before requested channel persistence", async () => {

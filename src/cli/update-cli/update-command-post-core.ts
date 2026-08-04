@@ -43,12 +43,9 @@ import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { getWindowsSystem32ExePath } from "../../infra/windows-install-roots.js";
 import {
   loadInstalledPluginIndexInstallRecords,
-  writePersistedInstalledPluginIndexInstallRecords,
+  writePersistedInstalledPluginIndexInstallRecordsWithLease,
 } from "../../plugins/installed-plugin-index-records.js";
-import {
-  readPersistedInstalledPluginIndex,
-  restorePersistedInstalledPluginIndex,
-} from "../../plugins/installed-plugin-index-store.js";
+import { restorePersistedInstalledPluginIndexIfCurrent } from "../../plugins/installed-plugin-index-store.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { runExec } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -517,26 +514,33 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
     records: params.pluginInstallRecords,
     targetVersion: postCoreHostVersion,
   });
-  let previousPersistedPluginIndex:
-    | Awaited<ReturnType<typeof readPersistedInstalledPluginIndex>>
+  let tentativePluginIndex:
+    | Awaited<ReturnType<typeof writePersistedInstalledPluginIndexInstallRecordsWithLease>>
     | undefined;
-  let rewrotePersistedPluginIndex = false;
   const restoreTentativePluginIndex = async () => {
-    if (!rewrotePersistedPluginIndex) {
+    const tentative = tentativePluginIndex;
+    if (!tentative) {
       return;
     }
-    await restorePersistedInstalledPluginIndex(previousPersistedPluginIndex ?? null);
-    rewrotePersistedPluginIndex = false;
+    await withPluginLifecycleLease({}, async (lease) => {
+      await restorePersistedInstalledPluginIndexIfCurrent(tentative.previous, tentative.revision, {
+        lease,
+      });
+    });
+    tentativePluginIndex = undefined;
   };
 
   try {
     if (pluginInstallRecords && pluginInstallRecords !== params.pluginInstallRecords) {
-      previousPersistedPluginIndex = await readPersistedInstalledPluginIndex();
-      await writePersistedInstalledPluginIndexInstallRecords(
-        pluginInstallRecords,
-        params.preUpdateConfig ? { config: params.preUpdateConfig.sourceConfig } : {},
-      );
-      rewrotePersistedPluginIndex = true;
+      await withPluginLifecycleLease({}, async (lease) => {
+        tentativePluginIndex = await writePersistedInstalledPluginIndexInstallRecordsWithLease(
+          pluginInstallRecords,
+          {
+            ...(params.preUpdateConfig ? { config: params.preUpdateConfig.sourceConfig } : {}),
+            lease,
+          },
+        );
+      });
     }
     await writePostCorePluginInstallRecordsFile(installRecordsPath, pluginInstallRecords);
     await writePostCoreSourceConfigFile(sourceConfigPath, params.preUpdateConfig);
