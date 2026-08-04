@@ -21,14 +21,16 @@ afterEach(async () => {
 });
 
 describe("doctor gateway startup recovery producer", () => {
-  it("isolates doctor commands from host lifecycle and credential policy", () => {
+  it("isolates doctor commands from host lifecycle, credentials, and target overrides", () => {
     const accountHome = path.join("/home", "qa-account");
     const env = testing.commandEnv(
       "qa-doctor-policy",
       {
         HOME: "/tmp/sandbox-home",
         OPENCLAW_CONFIG_PATH: "/tmp/host-config.json",
+        OPENCLAW_GATEWAY_PORT: "28789",
         OPENCLAW_GATEWAY_TOKEN: "host-token",
+        OPENCLAW_GATEWAY_URL: "wss://ambient.example.invalid",
         OPENCLAW_SERVICE_REPAIR_POLICY: "external",
         OPENCLAW_STATE_DIR: "/tmp/host-state",
         PATH: "/usr/bin",
@@ -45,6 +47,8 @@ describe("doctor gateway startup recovery producer", () => {
       PATH: "/usr/bin",
     });
     expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
+    expect(env.OPENCLAW_GATEWAY_PORT).toBeUndefined();
+    expect(env.OPENCLAW_GATEWAY_URL).toBeUndefined();
     expect(env.OPENCLAW_SERVICE_REPAIR_POLICY).toBeUndefined();
   });
 
