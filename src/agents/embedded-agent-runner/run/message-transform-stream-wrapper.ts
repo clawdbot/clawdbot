@@ -16,7 +16,14 @@ export function wrapStreamFnWithContextTransform(
   streamFn: StreamFn,
   transform: ContextTransform,
 ): StreamFn {
-  return (model, context, options) => streamFn(model, transform(context, model), options);
+  return (model, context, options) => {
+    // Some AgentSession adapters use a context-free stream invocation to advance their own
+    // prompt lifecycle. That is not a provider dispatch, so preserve it without transforming.
+    if (!context || typeof context !== "object") {
+      return streamFn(model, context, options);
+    }
+    return streamFn(model, transform(context, model), options);
+  };
 }
 
 /** Wraps a stream function with a conditional message-list transform. */

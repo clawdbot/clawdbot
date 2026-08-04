@@ -136,6 +136,24 @@ describe("submitEmbeddedAttemptPrompt", () => {
     expect(activeSession.agent.transformContext).toBe(originalTransformContext);
   });
 
+  it("passes through context-free session stream invocations", async () => {
+    const { activeSession } = createSession();
+    const input = createBaseInput();
+    const streamFn = vi.fn(() => undefined as never);
+    activeSession.agent.streamFn = streamFn as unknown as StreamFn;
+
+    await submitEmbeddedAttemptPrompt({
+      ...input,
+      activeSession,
+      promptActiveSession: async () => {
+        await (activeSession.agent.streamFn as unknown as () => Promise<void>)();
+      },
+    });
+
+    expect(streamFn).toHaveBeenCalledOnce();
+    expect(streamFn).toHaveBeenCalledWith(undefined, undefined, undefined);
+  });
+
   it("caps oversized MCP tool results at the provider boundary", async () => {
     const { activeSession } = createSession();
     const input = createBaseInput();
