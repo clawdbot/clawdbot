@@ -7,11 +7,11 @@ import { createHash } from "node:crypto";
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { Minimatch } from "minimatch";
 import { extractFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { openRootFile } from "../infra/boundary-file-read.js";
+import { sameFileIdentity, type FileIdentityStat } from "../infra/fs-safe-advanced.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { retryAsync } from "../infra/retry.js";
@@ -85,12 +85,8 @@ type WorkspaceFileSourceIdentity = readonly [
   stat: FileIdentityStat,
   exactIdentity: string,
 ];
-const WORKSPACE_FILE_SOURCE_IDENTITY = Symbol("openclaw.workspaceFileSourceIdentity");
-type WorkspaceFileSourceIdentityCarrier = {
-  [WORKSPACE_FILE_SOURCE_IDENTITY]?: WorkspaceFileSourceIdentity;
-};
-// Private enumerable metadata keeps public types and JSON unchanged while
-// ordinary object spreads preserve the source returned by the pinned open.
+// Loader-owned records retain the pinned-open identity through final session filtering.
+const workspaceFileSourceIdentities = new WeakMap<object, WorkspaceFileSourceIdentity>();
 
 /**
  * Read workspace files via boundary-safe open and cache by inode/dev/size/mtime identity.
@@ -107,11 +103,11 @@ function setWorkspaceFileSourceIdentity(
   file: object,
   sourceIdentity: WorkspaceFileSourceIdentity,
 ): void {
-  (file as WorkspaceFileSourceIdentityCarrier)[WORKSPACE_FILE_SOURCE_IDENTITY] = sourceIdentity;
+  workspaceFileSourceIdentities.set(file, sourceIdentity);
 }
 
 function getWorkspaceFileSourceIdentity(file: object): WorkspaceFileSourceIdentity | undefined {
-  return (file as WorkspaceFileSourceIdentityCarrier)[WORKSPACE_FILE_SOURCE_IDENTITY];
+  return workspaceFileSourceIdentities.get(file);
 }
 
 export function workspaceFileSourceIdentitiesMatch(left: object, right: object): boolean {

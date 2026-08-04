@@ -135,8 +135,12 @@ function registerLoadedBootstrapFilesHook(
       context.workspaceDir,
       relativePaths,
     );
-    const additions = files.map((file) => ({ ...file, name: name ?? file.name }));
-    context.bootstrapFiles = [...context.bootstrapFiles, ...additions];
+    if (name) {
+      for (const file of files) {
+        file.name = name;
+      }
+    }
+    context.bootstrapFiles = [...context.bootstrapFiles, ...files];
   });
 }
 

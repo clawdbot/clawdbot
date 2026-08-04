@@ -79,6 +79,7 @@ describe("bootstrap-extra-files hook", () => {
   it("appends configured nested memory without applying session policy", async () => {
     const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-memory-");
     const extraDir = path.join(tempDir, "packages", "core");
+    const sessionKey = "agent:main:slack:channel:c1";
     await fs.mkdir(extraDir, { recursive: true });
     await fs.writeFile(path.join(extraDir, "MEMORY.md"), "nested memory", "utf-8");
 
@@ -86,11 +87,11 @@ describe("bootstrap-extra-files hook", () => {
     const context = await createBootstrapContext({
       workspaceDir: tempDir,
       cfg,
-      sessionKey: "agent:main:slack:channel:c1",
+      sessionKey,
       rootFiles: [{ name: "MEMORY.md", content: "private root memory" }],
     });
 
-    const event = createHookEvent("agent", "bootstrap", context.sessionKey, context);
+    const event = createHookEvent("agent", "bootstrap", sessionKey, context);
     await handler(event);
 
     const relativePaths = context.bootstrapFiles.map((file) => path.relative(tempDir, file.path));
