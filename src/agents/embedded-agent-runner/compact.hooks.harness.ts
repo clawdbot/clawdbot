@@ -8,6 +8,7 @@ import { clearAgentHarnesses } from "../harness/registry.js";
 import type { AgentHarness } from "../harness/types.js";
 import type { ModelAuthMode } from "../model-auth.js";
 import type { AgentRuntimePlan, BuildAgentRuntimePlanParams } from "../runtime-plan/types.js";
+import { agentSessionAutomaticCompaction } from "../sessions/agent-session-compaction.js";
 
 type MockResolvedModel = {
   model: {
@@ -77,6 +78,8 @@ export const sessionCompactImpl = vi.fn(async () => ({
   tokensBefore: 120,
   details: { ok: true },
 }));
+export const sessionManualCompactionMock = vi.fn();
+export const sessionAutomaticCompactionMock = vi.fn();
 export const triggerInternalHook: Mock<(event?: unknown) => void> = vi.fn();
 const sanitizeSessionHistoryMock = vi.fn(
   async (params: { messages: unknown[] }) => params.messages,
@@ -158,6 +161,12 @@ function createMockCompactionSession() {
       },
     },
     compact: vi.fn(async () => {
+      sessionManualCompactionMock();
+      session.messages.splice(1);
+      return await sessionCompactImpl();
+    }),
+    [agentSessionAutomaticCompaction]: vi.fn(async () => {
+      sessionAutomaticCompactionMock();
       session.messages.splice(1);
       return await sessionCompactImpl();
     }),
@@ -187,7 +196,8 @@ function createMockToolDefinitions(tools: unknown[] = []) {
   });
 }
 export const createOpenClawCodingToolsMock = vi.fn(() => []);
-const buildEmbeddedExtensionFactoriesMock = vi.fn(() => []);
+export const buildEmbeddedExtensionFactoriesMock = vi.fn(() => []);
+export const resolveEffectiveCompactionModeMock = vi.fn(() => "default");
 export const guardSessionManagerMock = vi.fn(() => ({
   flushPendingToolResults: vi.fn(),
 }));
@@ -474,6 +484,10 @@ export function resetCompactSessionStateMocks(): void {
   estimateTokensMock.mockReturnValue(10);
   sessionMessages.splice(0, sessionMessages.length, ...createDefaultSessionMessages());
   sessionAbortCompactionMock.mockReset();
+  sessionManualCompactionMock.mockReset();
+  sessionAutomaticCompactionMock.mockReset();
+  resolveEffectiveCompactionModeMock.mockReset();
+  resolveEffectiveCompactionModeMock.mockReturnValue("default");
   createAgentSessionMock.mockReset();
   createAgentSessionMock.mockImplementation(async () => ({
     session: createMockCompactionSession(),
@@ -741,6 +755,7 @@ export async function loadCompactHooksHarness(): Promise<{
     applyAgentAutoCompactionGuard: vi.fn(() => ({ supported: true, disabled: false })),
     applyAgentCompactionSettingsFromConfig: applyAgentCompactionSettingsFromConfigMock,
     isSilentOverflowProneModel: vi.fn(() => false),
+    resolveEffectiveCompactionMode: resolveEffectiveCompactionModeMock,
   }));
 
   vi.doMock("../models-config.js", () => ({
