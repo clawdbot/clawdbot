@@ -3149,7 +3149,7 @@ describe("package artifact reuse", () => {
       "inputs.expected_sha == '' || inputs.run_mock_parity",
     );
     expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_matrix").if).toBe(
-      "github.event_name != 'workflow_call' || inputs.run_matrix",
+      "inputs.expected_sha == '' || inputs.run_matrix",
     );
     for (const channel of ["telegram", "discord", "whatsapp", "slack"]) {
       expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, `run_live_${channel}`).if).toBe(
@@ -3174,6 +3174,7 @@ describe("package artifact reuse", () => {
     expect(qaWorkflow).not.toContain('"${{ inputs.expected_sha }}" !== ""');
     expect(qaWorkflow).toContain('if [[ -n "${EXPECTED_SHA}" ]]; then');
     const matrixJob = workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_matrix");
+    expect(matrixJob["timeout-minutes"]).toBe(90);
     expect(workflowStep(matrixJob, "Run Matrix live lane").run).toContain(
       "--provider-mode mock-openai",
     );
@@ -4214,7 +4215,7 @@ describe("package artifact reuse", () => {
       "Download full release validation manifest",
     );
     const npmPublishJob = workflowJob(OPENCLAW_NPM_RELEASE_WORKFLOW, "publish_openclaw_npm");
-    const npmRun = workflowStep(npmPublishJob, "Verify full release validation run metadata");
+    const npmRun = workflowStep(npmPublishJob, "Verify full release validation evidence");
     const npmManifest = workflowStep(npmPublishJob, "Download full release validation manifest");
 
     expect(releaseRun).toMatchObject({
@@ -4235,18 +4236,15 @@ describe("package artifact reuse", () => {
       "run-id": "${{ inputs.full_release_validation_run_id }}",
     });
 
-    expect(npmRun).toMatchObject({
-      id: "full_run",
-      env: {
-        FULL_RELEASE_VALIDATION_RUN_ID: "${{ inputs.full_release_validation_run_id }}",
-        FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "${{ inputs.full_release_validation_run_attempt }}",
-      },
+    expect(npmRun.env).toMatchObject({
+      FULL_RELEASE_VALIDATION_RUN_ID: "${{ inputs.full_release_validation_run_id }}",
+      FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "${{ inputs.full_release_validation_run_attempt }}",
     });
     expect(npmRun.run).toContain(
       "actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}",
     );
     expect(npmManifest.with).toMatchObject({
-      name: "full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ steps.full_run.outputs.attempt }}",
+      name: "full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ inputs.full_release_validation_run_attempt }}",
       "run-id": "${{ inputs.full_release_validation_run_id }}",
     });
   });
@@ -4262,7 +4260,7 @@ describe("package artifact reuse", () => {
     const publishOrchestration = workflowStep(publishJob, "Dispatch publish workflows");
     const npmPublishJob = workflowJob(OPENCLAW_NPM_RELEASE_WORKFLOW, "publish_openclaw_npm");
     const npmCheckout = workflowStep(npmPublishJob, "Checkout");
-    const npmFullRun = workflowStep(npmPublishJob, "Verify full release validation run metadata");
+    const npmFullRun = workflowStep(npmPublishJob, "Verify full release validation evidence");
     const npmDownload = workflowStep(npmPublishJob, "Download full release validation manifest");
     const npmTarget = workflowStep(npmPublishJob, "Verify full release validation target");
 
@@ -4294,18 +4292,14 @@ describe("package artifact reuse", () => {
       "${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}",
     );
     expect(publishOrchestration.run).toContain('"${validation_target_sha}" != "${TARGET_SHA}"');
-    expect(npmFullRun.id).toBe("full_run");
     expect(npmFullRun.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
       "${{ inputs.full_release_validation_run_attempt }}",
     );
     expect(npmDownload.with?.name).toBe(
-      "full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ steps.full_run.outputs.attempt }}",
+      "full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ inputs.full_release_validation_run_attempt }}",
     );
-    expect(npmTarget.env).toMatchObject({
-      FULL_RELEASE_VALIDATION_RUN_ID: "${{ inputs.full_release_validation_run_id }}",
-      FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "${{ steps.full_run.outputs.attempt }}",
-    });
-    expect(npmTarget.run).toContain(
+    expect(npmTarget.env?.FULL_RELEASE_VALIDATION_RUN_ID).toBeUndefined();
+    expect(npmTarget.run).not.toContain(
       "node scripts/openclaw-npm-extended-stable-release.mjs verify-manifest",
     );
     expect(npmCheckout.with?.["fetch-depth"]).toBe(

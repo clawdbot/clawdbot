@@ -413,6 +413,7 @@ export async function prepareCliRunContext(
   const started = Date.now();
   const executionMode = params.executionMode ?? "agent";
   const isSideQuestion = executionMode === "side-question";
+  const runtimeChatType = params.chatType ?? params.sessionEntry?.chatType;
   const workspaceResolution = resolveRunWorkspaceDir({
     workspaceDir: params.workspaceDir,
     sessionKey: params.sessionKey,
@@ -831,6 +832,7 @@ export async function prepareCliRunContext(
         config: params.config,
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
+        chatType: runtimeChatType,
         agentId: sessionAgentId,
         contextMode: params.bootstrapContextMode,
         runKind: params.bootstrapContextRunKind,
@@ -1420,7 +1422,7 @@ export async function prepareCliRunContext(
           requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
           silentReplyPromptMode: params.silentReplyPromptMode,
           runtimeChannel,
-          runtimeChatType: params.sessionEntry?.chatType,
+          runtimeChatType,
           runtimeCapabilities,
           ownerNumbers: params.ownerNumbers,
           heartbeatPrompt,

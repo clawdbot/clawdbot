@@ -9,7 +9,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Minimatch } from "minimatch";
 import { extractFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
+import type { ChatType } from "../channels/chat-type.js";
 import { openRootFile } from "../infra/boundary-file-read.js";
+import { sameFileIdentity, type FileIdentityStat } from "../infra/fs-safe-advanced.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { retryAsync } from "../infra/retry.js";
@@ -19,6 +21,7 @@ import {
 } from "../memory/root-memory-files.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
+import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import { resolveUserPath } from "../utils.js";
 import {
   MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
@@ -77,16 +80,51 @@ let gitAvailabilityPromise: Promise<boolean> | null = null;
 
 // File content cache keyed by stable file identity to avoid stale reads.
 const workspaceFileCache = new Map<string, { content: string; identity: string }>();
+type WorkspaceFileSourceIdentity = readonly [
+  canonicalPath: string,
+  stat: FileIdentityStat,
+  exactIdentity: string,
+];
+// Loader-owned records retain the pinned-open identity through final session filtering.
+const workspaceFileSourceIdentities = new WeakMap<object, WorkspaceFileSourceIdentity>();
 
 /**
  * Read workspace files via boundary-safe open and cache by inode/dev/size/mtime identity.
  */
 type WorkspaceGuardedReadResult =
-  | { ok: true; content: string }
+  | { ok: true; content: string; sourceIdentity: WorkspaceFileSourceIdentity }
   | { ok: false; reason: "path" | "validation" | "io"; error?: unknown };
 
 function workspaceFileIdentity(stat: syncFs.Stats, canonicalPath: string): string {
   return `${canonicalPath}|${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+}
+
+function setWorkspaceFileSourceIdentity(
+  file: object,
+  sourceIdentity: WorkspaceFileSourceIdentity,
+): void {
+  workspaceFileSourceIdentities.set(file, sourceIdentity);
+}
+
+function getWorkspaceFileSourceIdentity(file: object): WorkspaceFileSourceIdentity | undefined {
+  return workspaceFileSourceIdentities.get(file);
+}
+
+export function workspaceFileSourceIdentitiesMatch(left: object, right: object): boolean {
+  const leftIdentity = getWorkspaceFileSourceIdentity(left);
+  const rightIdentity = getWorkspaceFileSourceIdentity(right);
+  return leftIdentity?.[2] === rightIdentity?.[2];
+}
+
+export function workspaceFilesShareSourceIdentity(left: object, right: object): boolean {
+  const leftIdentity = getWorkspaceFileSourceIdentity(left);
+  const rightIdentity = getWorkspaceFileSourceIdentity(right);
+  if (!leftIdentity || !rightIdentity) {
+    return false;
+  }
+  return (
+    leftIdentity[0] === rightIdentity[0] || sameFileIdentity(leftIdentity[1], rightIdentity[1])
+  );
 }
 
 async function readWorkspaceFileWithGuards(params: {
@@ -120,16 +158,17 @@ async function readWorkspaceFileWithGuards(params: {
         }
 
         const identity = workspaceFileIdentity(opened.stat, opened.path);
+        const sourceIdentity = [opened.path, opened.stat, identity] as const;
         const cached = workspaceFileCache.get(params.filePath);
         if (cached && cached.identity === identity) {
           syncFs.closeSync(opened.fd);
-          return { ok: true, content: cached.content };
+          return { ok: true, content: cached.content, sourceIdentity };
         }
 
         try {
           const content = await readWorkspaceBootstrapFile(opened.fd);
           workspaceFileCache.set(params.filePath, { content, identity });
-          return { ok: true, content };
+          return { ok: true, content, sourceIdentity };
         } finally {
           syncFs.closeSync(opened.fd);
         }
@@ -989,12 +1028,14 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
       workspaceDir: resolvedDir,
     });
     if (loaded.ok) {
-      result.push({
+      const file: WorkspaceBootstrapFile = {
         name: entry.name,
         path: entry.filePath,
         content: loaded.content,
         missing: false,
-      });
+      };
+      setWorkspaceFileSourceIdentity(file, loaded.sourceIdentity);
+      result.push(file);
     } else {
       result.push({ name: entry.name, path: entry.filePath, missing: true });
     }
@@ -1011,20 +1052,64 @@ const CRON_BOOTSTRAP_ALLOWLIST = new Set([
   DEFAULT_USER_FILENAME,
 ]);
 
+type BootstrapSessionContext = {
+  sessionKey?: string;
+  chatType?: ChatType;
+  workspaceDir?: string;
+};
+
+function resolveBootstrapSessionContext(
+  session?: string | BootstrapSessionContext,
+): BootstrapSessionContext {
+  return typeof session === "string" ? { sessionKey: session } : (session ?? {});
+}
+
+function filterRootMemoryBootstrapFiles(
+  files: WorkspaceBootstrapFile[],
+  workspaceRoot?: string,
+): WorkspaceBootstrapFile[] {
+  if (!workspaceRoot) {
+    return files.filter((file) => file.name !== DEFAULT_MEMORY_FILENAME);
+  }
+  const resolvedWorkspaceRoot = resolveUserPath(workspaceRoot);
+  const rootMemoryPath = path.join(resolvedWorkspaceRoot, DEFAULT_MEMORY_FILENAME);
+  return files.filter((file) => {
+    if (typeof file.path !== "string") {
+      return true;
+    }
+    const filePath = file.path.trim();
+    if (!filePath) {
+      return true;
+    }
+    const resolvedPath = path.isAbsolute(filePath)
+      ? path.resolve(filePath)
+      : filePath.startsWith("~")
+        ? resolveUserPath(filePath)
+        : path.resolve(resolvedWorkspaceRoot, filePath);
+    return resolvedPath !== rootMemoryPath;
+  });
+}
+
 export function filterBootstrapFilesForSession(
   files: WorkspaceBootstrapFile[],
-  sessionKey?: string,
+  session?: string | BootstrapSessionContext,
 ): WorkspaceBootstrapFile[] {
-  if (!sessionKey) {
-    return files;
+  const { sessionKey, chatType, workspaceDir } = resolveBootstrapSessionContext(session);
+  const isSubagent = isSubagentSessionKey(sessionKey);
+  const isCron = isCronSessionKey(sessionKey);
+  const effectiveChatType = chatType ?? deriveSessionChatTypeFromKey(sessionKey);
+  const isNonPrivate =
+    isSubagent || isCron || effectiveChatType === "group" || effectiveChatType === "channel";
+  const privacyFilteredFiles = isNonPrivate
+    ? filterRootMemoryBootstrapFiles(files, workspaceDir)
+    : files;
+  if (isSubagent) {
+    return privacyFilteredFiles.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));
   }
-  if (isSubagentSessionKey(sessionKey)) {
-    return files.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));
+  if (isCron) {
+    return privacyFilteredFiles.filter((file) => CRON_BOOTSTRAP_ALLOWLIST.has(file.name));
   }
-  if (isCronSessionKey(sessionKey)) {
-    return files.filter((file) => CRON_BOOTSTRAP_ALLOWLIST.has(file.name));
-  }
-  return files;
+  return privacyFilteredFiles;
 }
 
 function hasGlobPattern(pattern: string): boolean {
@@ -1207,7 +1292,13 @@ export async function loadWorkspacePatternFilesWithDiagnostics(
       workspaceDir: resolvedDir,
     });
     if (loaded.ok) {
-      files.push({ name: baseName, path: filePath, content: loaded.content });
+      const file: WorkspacePatternFile = {
+        name: baseName,
+        path: filePath,
+        content: loaded.content,
+      };
+      setWorkspaceFileSourceIdentity(file, loaded.sourceIdentity);
+      files.push(file);
       continue;
     }
 
@@ -1244,12 +1335,19 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
     acceptedBasenames: VALID_BOOTSTRAP_NAMES,
   });
   return {
-    files: loaded.files.map((file) => ({
-      name: file.name as WorkspaceBootstrapFileName,
-      path: file.path,
-      content: file.content,
-      missing: false,
-    })),
+    files: loaded.files.map((file) => {
+      const bootstrapFile: WorkspaceBootstrapFile = {
+        name: file.name as WorkspaceBootstrapFileName,
+        path: file.path,
+        content: file.content,
+        missing: false,
+      };
+      const sourceIdentity = getWorkspaceFileSourceIdentity(file);
+      if (sourceIdentity) {
+        setWorkspaceFileSourceIdentity(bootstrapFile, sourceIdentity);
+      }
+      return bootstrapFile;
+    }),
     diagnostics: loaded.diagnostics,
   };
 }

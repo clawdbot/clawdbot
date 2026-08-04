@@ -151,6 +151,9 @@ const defaultControlUiFeatureMethods = [
   "chat.abort",
   "chat.metadata",
   "chat.startup",
+  "config.apply",
+  "config.patch",
+  "config.set",
   "session.members.add",
   "session.members.list",
   "session.members.remove",
@@ -208,6 +211,8 @@ export type ControlUiMockGatewayScenario = {
   deviceAuthMigrationPending?: boolean;
   deviceToken?: string;
   featureMethods?: string[];
+  /** Simulate a legacy Gateway that predates the advertised method catalog. */
+  omitFeatureMethods?: boolean;
   historyMessages?: unknown[];
   /** Static payloads, parameter-matched cases, or call-ordered sequences. */
   methodResponses?: Record<string, unknown>;
@@ -625,6 +630,7 @@ function normalizeScenario(
     // Baseline scenarios represent a current Gateway. Tests for unsupported or
     // mixed-version methods provide an explicit narrower catalog.
     featureMethods: scenario.featureMethods ?? [...defaultControlUiFeatureMethods],
+    omitFeatureMethods: scenario.omitFeatureMethods ?? false,
     historyMessages: scenario.historyMessages ?? [],
     methodResponses: scenario.methodResponses ?? {},
     inFlightRun: scenario.inFlightRun ?? null,
@@ -1357,7 +1363,7 @@ function installControlUiMockGateway(
           features: {
             capabilities: scenario.featureCapabilities,
             events: [],
-            methods: scenario.featureMethods,
+            ...(scenario.omitFeatureMethods ? {} : { methods: scenario.featureMethods }),
           },
           controlUiTabs: scenario.controlUiTabs,
           controlUiWidgetKinds: scenario.controlUiWidgetKinds,

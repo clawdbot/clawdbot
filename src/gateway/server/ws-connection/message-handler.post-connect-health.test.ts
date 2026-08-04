@@ -22,6 +22,7 @@ import type { HealthSummary } from "../../health/types.js";
 import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import { handleGatewayRequest } from "../../server-methods.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
+import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
 const {
   buildGatewaySnapshotMock,
@@ -257,6 +258,7 @@ function attachGatewayHarness(options: {
     events: [],
     extraHandlers: {},
     buildRequestContext: () => ({}) as GatewayRequestContext,
+    nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
     refreshHealthSnapshot:
       options.refreshHealthSnapshot ?? vi.fn(async () => createHealthSummary()),
     send,

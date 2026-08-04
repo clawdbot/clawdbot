@@ -69,6 +69,66 @@ async function runWebchatTranscriptWait(
   });
 }
 
+function readCurrentRunProviderPromptEvidenceFlow(trajectoryEvents: unknown[]): QaScenarioFlow {
+  const scenario = readQaScenarioById("instruction-profile-artifact-followthrough-live");
+  const actions = scenario.execution.flow?.steps[0]?.actions;
+  if (!actions) {
+    throw new Error("instruction profile scenario has no actions");
+  }
+  const evidenceIndex = actions.findIndex(
+    (action) =>
+      typeof action === "object" &&
+      action !== null &&
+      "set" in action &&
+      action.set === "providerPromptEvidence",
+  );
+  const assertionIndex = actions.findIndex(
+    (action, index) =>
+      index > evidenceIndex &&
+      typeof action === "object" &&
+      action !== null &&
+      "assert" in action &&
+      JSON.stringify(action).includes("current-run provider prompt evidence mismatch"),
+  );
+  if (evidenceIndex < 0 || assertionIndex < 0) {
+    throw new Error("instruction profile scenario has no provider prompt evidence assertion");
+  }
+  const instructionContents = scenario.execution.config?.instructionContents;
+  const instructionChars =
+    typeof instructionContents === "string" ? instructionContents.trimEnd().length : 0;
+  return {
+    steps: [
+      {
+        name: "proves current-run provider prompt evidence",
+        actions: [
+          { set: "turn", value: { started: { runId: "current-run" } } },
+          {
+            set: "instructionProfileReport",
+            value: {
+              missing: false,
+              truncated: false,
+              rawChars: instructionChars,
+              injectedChars: instructionChars,
+            },
+          },
+          { set: "trajectoryEvents", value: trajectoryEvents },
+          ...actions
+            .slice(evidenceIndex, assertionIndex + 1)
+            .filter(
+              (action) =>
+                !(
+                  typeof action === "object" &&
+                  action !== null &&
+                  "call" in action &&
+                  action.call === "fs.rm"
+                ),
+            ),
+        ],
+      },
+    ],
+  };
+}
+
 const planningEvidenceCoverageIds = new Set(["runtime.no-meta-leak", "workspace.planning"]);
 
 type PlanningEvidenceScenario = QaSeedScenarioWithSource & {
@@ -237,6 +297,64 @@ const planningEvidenceFixtures = readQaScenarioPack()
   .map(createPlanningEvidenceFixture);
 
 describe("scenario-flow-runner", () => {
+  it("ignores stale provider prompt mismatches when the current run matches", async () => {
+    const currentObservation = {
+      egress: "responses-sdk",
+      payloadVariant: "initial",
+      promptSource: "input.developer",
+      expectedChars: 4096,
+      observedChars: 4096,
+      matchesAssembledPrompt: true,
+    };
+    const result = await runLoadedScenarioFlow("instruction-profile-artifact-followthrough-live", {
+      flow: readCurrentRunProviderPromptEvidenceFlow([
+        {
+          type: "provider.prompt.observed",
+          runId: "stale-run",
+          data: {
+            ...currentObservation,
+            promptSource: "missing",
+            observedChars: 0,
+            matchesAssembledPrompt: false,
+          },
+        },
+        { type: "provider.prompt.observed", runId: "current-run", data: currentObservation },
+      ]),
+    });
+
+    expect(result.status).toBe("pass");
+  });
+
+  it("excludes marker-bearing diagnostic trajectory context from bounded no-leak evidence", async () => {
+    const marker = "INSTRUCTION-PROFILE-CONTEXT-MARKER-A6E29D4B";
+    const trajectoryEvents = [
+      {
+        type: "context.compiled",
+        runId: "current-run",
+        data: { systemPrompt: `diagnostic support context ${marker}` },
+      },
+      {
+        type: "provider.prompt.observed",
+        runId: "current-run",
+        data: {
+          egress: "native-codex-websocket",
+          payloadVariant: "initial",
+          promptSource: "instructions",
+          expectedChars: 4096,
+          observedChars: 4096,
+          matchesAssembledPrompt: true,
+        },
+      },
+    ];
+
+    expect(JSON.stringify(trajectoryEvents)).toContain(marker);
+    const result = await runLoadedScenarioFlow("instruction-profile-artifact-followthrough-live", {
+      flow: readCurrentRunProviderPromptEvidenceFlow(trajectoryEvents),
+    });
+
+    expect(result.status).toBe("pass");
+  });
+
   it("keeps live goal followthrough inside the active-goal context limit", async () => {
     const state = createQaBusState();
     const artifactFile = "goal-continuance-live-00000000.txt";
