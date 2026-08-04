@@ -1151,7 +1151,7 @@ describe("Windows startup fallback", () => {
           processQueries += 1;
           // Two activations run here, and each one baselines the managed-port owners
           // before `schtasks /Run`, so this flow inspects twice more than the launch path alone.
-          if (processQueries > 7) {
+          if (processQueries > 9) {
             return makeSpawnSyncResult({ status: 1 });
           }
           return makeSpawnSyncResult({
@@ -1187,7 +1187,7 @@ describe("Windows startup fallback", () => {
 
       await installGatewayScheduledTask(env, new PassThrough(), "19433");
 
-      expect(processQueries).toBe(7);
+      expect(processQueries).toBe(9);
       await expect(fs.access(startupEntryPath)).rejects.toThrow();
     });
   });
@@ -1827,6 +1827,33 @@ describe("Windows startup fallback", () => {
     });
   });
 
+  it("does not treat a pre-existing task-script wrapper as Scheduled Task launch evidence", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      const taskScriptPath = resolveTaskScriptPath(env);
+      fastForwardTaskStartWait();
+      // A wrapper left over from an earlier run already holds the task script before
+      // `/Run`, so it cannot be evidence that this run started anything.
+      spawnSync.mockImplementation((command, args) =>
+        command === getWindowsPowerShellExePath() &&
+        Array.isArray(args) &&
+        args.includes(NODE_PROCESS_QUERY)
+          ? makeSpawnSyncResult({
+              stdout: JSON.stringify([
+                { ProcessId: 4242, CommandLine: `cmd.exe /d /s /c "${taskScriptPath}"` },
+                { ProcessId: 9999, CommandLine: "powershell.exe" },
+              ]),
+            })
+          : makeSpawnSyncResult(),
+      );
+      addAcceptedRunNeverStartsResponses();
+
+      await installGatewayScheduledTask(env);
+
+      expectStartupFallbackSpawn();
+    });
+  });
+
   it("does not treat a pre-existing Windows gateway process as Scheduled Task launch evidence", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
@@ -1999,12 +2026,15 @@ describe("Windows startup fallback", () => {
           return {
             pid: 0,
             output: [null, "", ""],
-            stdout: JSON.stringify([
-              {
-                ProcessId: 4242,
-                CommandLine: `cmd.exe /d /s /c "${taskScriptPath}"`,
-              },
-            ]),
+            // The wrapper is this run's product, so it only exists once `/Run` was issued.
+            stdout: schtasksCalls.some((call) => call[0] === "/Run")
+              ? JSON.stringify([
+                  {
+                    ProcessId: 4242,
+                    CommandLine: `cmd.exe /d /s /c "${taskScriptPath}"`,
+                  },
+                ])
+              : JSON.stringify([{ ProcessId: 9999, CommandLine: "powershell.exe" }]),
             stderr: "",
             status: 0,
             signal: null,

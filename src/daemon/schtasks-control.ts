@@ -57,28 +57,53 @@ function runtimeSignature(runtime: Awaited<ReturnType<typeof readScheduledTaskRu
 }
 
 /**
- * Managed-port gateway processes observed before `schtasks /Run`.
+ * Processes observed before `schtasks /Run` that any launch-evidence path could match:
+ * managed-port gateway owners, plus wrappers already running the task script.
  *
  * Anything already in this set was not started by the run we are about to trigger,
  * so it cannot serve as evidence that Task Scheduler owns a gateway process.
  */
-async function readPreLaunchGatewayPids(env: GatewayServiceEnv): Promise<ReadonlySet<number>> {
-  if (!shouldManageGatewayListenerPort(env)) {
-    return new Set();
-  }
+async function readPreLaunchTaskPids(
+  env: GatewayServiceEnv,
+  scriptPath: string,
+): Promise<ReadonlySet<number>> {
+  const pids = new Set<number>();
   try {
-    const command = await readScheduledTaskCommand(env).catch(() => null);
-    const port = resolveScheduledTaskCommandPort(env, command);
-    if (!port) {
-      return new Set();
+    const scriptPathNeedle = normalizeLowercaseStringOrEmpty(scriptPath.replaceAll("/", "\\"));
+    if (scriptPathNeedle) {
+      for (const entry of readWindowsProcessSnapshot() ?? []) {
+        const pid = entry.ProcessId;
+        if (typeof pid !== "number" || !Number.isFinite(pid) || pid <= 0) {
+          continue;
+        }
+        if (
+          normalizeLowercaseStringOrEmpty(entry.CommandLine ?? "")
+            .replaceAll("/", "\\")
+            .includes(scriptPathNeedle)
+        ) {
+          pids.add(pid);
+        }
+      }
     }
-    const probeHosts = await resolveGatewayServiceProbeHosts({ env, command });
-    return new Set(await resolveScheduledTaskOwnedGatewayPids(env, { port, probeHosts }, command));
+    if (shouldManageGatewayListenerPort(env)) {
+      const command = await readScheduledTaskCommand(env).catch(() => null);
+      const port = resolveScheduledTaskCommandPort(env, command);
+      if (port) {
+        const probeHosts = await resolveGatewayServiceProbeHosts({ env, command });
+        for (const pid of await resolveScheduledTaskOwnedGatewayPids(
+          env,
+          { port, probeHosts },
+          command,
+        )) {
+          pids.add(pid);
+        }
+      }
+    }
   } catch {
     // This runs before `schtasks /Run`; a probe failure must never block the launch.
-    // An empty baseline only means evidence is judged exactly as it was before.
-    return new Set();
+    // A partial baseline only means evidence is judged as it was before.
   }
+  return pids;
 }
 
 async function shouldFallbackScheduledTaskLaunch(params: {
@@ -142,11 +167,16 @@ async function shouldFallbackScheduledTaskLaunch(params: {
       return false;
     }
     if (
-      entries.some((entry) =>
-        normalizeLowercaseStringOrEmpty(entry.CommandLine ?? "")
+      entries.some((entry) => {
+        const pid = entry.ProcessId;
+        // A wrapper already running the task script before `/Run` is not this run's product.
+        if (typeof pid === "number" && params.preLaunchGatewayPids.has(pid)) {
+          return false;
+        }
+        return normalizeLowercaseStringOrEmpty(entry.CommandLine ?? "")
           .replaceAll("/", "\\")
-          .includes(scriptPathNeedle),
-      )
+          .includes(scriptPathNeedle);
+      })
     ) {
       return true;
     }
@@ -205,7 +235,7 @@ export async function runScheduledTaskOrThrow(params: {
   scriptPath: string;
   onMutation?: () => void;
 }): Promise<ScheduledTaskActivation> {
-  const preLaunchGatewayPids = await readPreLaunchGatewayPids(params.env);
+  const preLaunchGatewayPids = await readPreLaunchTaskPids(params.env, params.scriptPath);
   const run = await execSchtasks(["/Run", "/TN", params.taskName]);
   if (run.code !== 0) {
     throw new Error(`schtasks run failed: ${run.stderr || run.stdout}`.trim());
