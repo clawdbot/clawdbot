@@ -38,7 +38,8 @@ export async function persistRefreshedPluginIndex(params: {
   if (!derivedPluginMetadataSnapshot || !params.snapshotRead.pluginMigrationFingerprint) {
     throwPluginRegistryPersistenceFailed("derived metadata was incomplete");
   }
-  if (!params.lease) {
+  const lease = params.lease;
+  if (!lease) {
     throwPluginRegistryPersistenceFailed("startup migration lease was not acquired");
   }
   const { writePersistedInstalledPluginIndexWithLeaseSync } = await params.measure(
@@ -50,7 +51,7 @@ export async function persistRefreshedPluginIndex(params: {
   await params.measure("plugin-index-persistence", () =>
     writePersistedInstalledPluginIndexWithLeaseSync(derivedPluginMetadataSnapshot.index, {
       env: params.env,
-      lease: params.lease,
+      lease,
     }),
   );
   const persistedSnapshotRead = await params.readPersistedSnapshot();
