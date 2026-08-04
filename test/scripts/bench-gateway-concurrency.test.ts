@@ -1,6 +1,7 @@
 // Gateway concurrency benchmark tests cover CLI parsing and bounded percentile summaries.
 import { spawnSync } from "node:child_process";
-import { createServer } from "node:http";
+import { createServer as createHttpServer } from "node:http";
+import { createServer as createRawServer, type Socket } from "node:net";
 import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-concurrency.ts";
@@ -77,12 +78,14 @@ describe("gateway concurrency benchmark script", () => {
 
   it("preserves HTTP and RPC failures in baseline probe diagnostics", async () => {
     const probeOrder: string[] = [];
-    const server = createServer((req, res) => {
+    const server = createHttpServer((req, res) => {
       probeOrder.push(req.url ?? "missing-url");
       res.statusCode = req.url === "/readyz" ? 503 : 200;
       res.end(req.url === "/readyz" ? '{"status":"starting"}' : "not html");
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     const address = server.address();
     if (!address || typeof address === "string") {
       server.close();
@@ -145,6 +148,65 @@ describe("gateway concurrency benchmark script", () => {
       expect(warmed.samples).toHaveLength(3);
     } finally {
       server.close();
+    }
+  });
+
+  it("bounds trickled response bodies by the benchmark deadline", async () => {
+    const sockets = new Set<Socket>();
+    let bodyChunksSent = 0;
+    let serverEndedResponse = false;
+    const server = createRawServer((socket) => {
+      sockets.add(socket);
+      socket.setNoDelay(true);
+      socket.on("error", () => {});
+      socket.once("close", () => sockets.delete(socket));
+      socket.once("data", () => {
+        socket.write(
+          "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n ",
+        );
+        bodyChunksSent += 1;
+        const interval = setInterval(() => {
+          socket.write(" ");
+          bodyChunksSent += 1;
+        }, 10);
+        const endTimer = setTimeout(() => {
+          serverEndedResponse = true;
+          socket.end();
+        }, 500);
+        socket.once("close", () => {
+          clearInterval(interval);
+          clearTimeout(endTimer);
+        });
+      });
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      server.close();
+      throw new Error("expected raw HTTP test server address");
+    }
+
+    const startedAt = performance.now();
+    try {
+      await expect(
+        testing.requestHttp({
+          accept: "application/json",
+          deadlineAt: startedAt + 150,
+          path: "/readyz",
+          port: address.port,
+        }),
+      ).rejects.toThrow("/readyz request timed out");
+      expect(bodyChunksSent).toBeGreaterThan(1);
+      expect(serverEndedResponse).toBe(false);
+    } finally {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 
