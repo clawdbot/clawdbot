@@ -1,5 +1,12 @@
 // Model list status tests cover status column construction and auth/probe summaries.
 import { describe, expect, it, type Mock, vi } from "vitest";
+import {
+  getCurrentPluginMetadataSnapshot,
+  setCurrentPluginMetadataSnapshot,
+} from "../../plugins/current-plugin-metadata-snapshot.js";
+import { clearCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
+import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import { createDeferred } from "../../test-utils/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 
 const mocks = vi.hoisted(() => {
@@ -547,6 +554,57 @@ async function withOpenAIStatusFixture<T>(
 }
 
 describe("modelsStatusCommand auth overview", () => {
+  it("does not restore over plugin metadata published while status is running", async () => {
+    const originalLoadModelCatalog = mocks.loadModelCatalog.getMockImplementation();
+    const config = mocks.loadConfig();
+    const workspaceDir = "/tmp/openclaw-agent/workspace";
+    const catalogStarted = createDeferred();
+    const releaseCatalog = createDeferred();
+    let replacement: ReturnType<typeof getCurrentPluginMetadataSnapshot> = undefined;
+    clearCurrentPluginMetadataSnapshot();
+    mocks.loadModelCatalog.mockImplementationOnce(async () => {
+      replacement = getCurrentPluginMetadataSnapshot({
+        config,
+        workspaceDir,
+        env: process.env,
+      });
+      catalogStarted.resolve();
+      await releaseCatalog.promise;
+      return [];
+    });
+    const commandPromise = modelsStatusCommand({ json: true }, createRuntime() as never);
+
+    try {
+      await catalogStarted.promise;
+      expect(replacement).toBeDefined();
+      clearPluginMetadataLifecycleCaches();
+      setCurrentPluginMetadataSnapshot(replacement!, {
+        config,
+        workspaceDir,
+        env: process.env,
+      });
+      releaseCatalog.resolve();
+      await commandPromise;
+
+      expect(
+        getCurrentPluginMetadataSnapshot({
+          config,
+          workspaceDir,
+          env: process.env,
+        }),
+      ).toBe(replacement);
+    } finally {
+      releaseCatalog.resolve();
+      await commandPromise.catch(() => {});
+      clearCurrentPluginMetadataSnapshot();
+      if (originalLoadModelCatalog) {
+        mocks.loadModelCatalog.mockImplementation(originalLoadModelCatalog);
+      } else {
+        mocks.loadModelCatalog.mockResolvedValue([]);
+      }
+    }
+  });
+
   it.each([
     [{ probeTimeout: "5000ms" }, "--probe-timeout"],
     [{ probeConcurrency: "2.5" }, "--probe-concurrency"],
