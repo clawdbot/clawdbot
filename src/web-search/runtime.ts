@@ -407,27 +407,128 @@ function resolveWebSearchCandidates(
   return orderedProviders;
 }
 
-/** Resolves the selected provider's public tool definition through the execution load path. */
+function asParameterSchemaRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function resolveSharedWebSearchParameters(
+  definitions: readonly WebSearchProviderToolDefinition[],
+): WebSearchProviderToolDefinition["parameters"] {
+  const selectedDefinition = definitions[0];
+  if (!selectedDefinition) {
+    throw new Error("Automatic web_search fallback has no provider definition.");
+  }
+  const selectedParameters = selectedDefinition.parameters;
+  if (definitions.length === 1) {
+    return selectedParameters;
+  }
+
+  const schemas = definitions.map((definition) => asParameterSchemaRecord(definition.parameters));
+  const propertyMaps = schemas.map((schema) => asParameterSchemaRecord(schema?.properties));
+  if (schemas.some((schema) => schema?.type !== "object") || propertyMaps.some((map) => !map)) {
+    throw new Error("Automatic web_search fallback requires object parameter schemas.");
+  }
+
+  const concretePropertyMaps = propertyMaps as Record<string, unknown>[];
+  const sharedPropertyNames = Object.keys(concretePropertyMaps[0]).filter((name) =>
+    concretePropertyMaps.every((properties) =>
+      Object.prototype.hasOwnProperty.call(properties, name),
+    ),
+  );
+  const sharedPropertyNameSet = new Set(sharedPropertyNames);
+  const requiredPropertyNames = uniqueStrings(
+    schemas.flatMap((schema) =>
+      Array.isArray(schema?.required)
+        ? schema.required.filter((name): name is string => typeof name === "string")
+        : [],
+    ),
+  );
+  const unsharedRequiredPropertyNames = requiredPropertyNames.filter(
+    (name) => !sharedPropertyNameSet.has(name),
+  );
+  if (unsharedRequiredPropertyNames.length > 0) {
+    throw new Error(
+      `Automatic web_search fallback has incompatible required parameters: ${unsharedRequiredPropertyNames.join(", ")}.`,
+    );
+  }
+
+  const properties = Object.fromEntries(
+    sharedPropertyNames.map((name) => {
+      const variants = concretePropertyMaps.map((propertyMap) => propertyMap[name]);
+      const firstVariantJson = JSON.stringify(variants[0]);
+      const parameterSchema = variants.every(
+        (variant) => JSON.stringify(variant) === firstVariantJson,
+      )
+        ? variants[0]
+        : { allOf: variants };
+      return [name, parameterSchema];
+    }),
+  );
+
+  return {
+    type: "object",
+    properties,
+    ...(requiredPropertyNames.length > 0 ? { required: requiredPropertyNames } : {}),
+    additionalProperties: false,
+  };
+}
+
+/** Resolves model parameters through the same provider candidates used by execution. */
 export function resolveWebSearchDefinition(options?: ResolveWebSearchDefinitionParams): {
   provider: PluginWebSearchProviderEntry;
   definition: WebSearchProviderToolDefinition;
 } | null {
   const { config, search, runtimeWebSearch } = resolveWebSearchRequestContext(options);
-  const provider = resolveWebSearchCandidates({
+  const providers = resolveWebSearchCandidates({
     ...options,
     config,
     runtimeWebSearch,
-  })[0];
+  });
+  const provider = providers[0];
   if (!provider) {
     return null;
   }
-  const definition = provider.createTool({
+  const providerContext = {
     config,
     agentDir: options?.agentDir,
     searchConfig: search as Record<string, unknown> | undefined,
     runtimeMetadata: runtimeWebSearch,
+  };
+  const definition = provider.createTool(providerContext);
+  if (!definition) {
+    return null;
+  }
+  if (
+    hasExplicitWebSearchSelection({
+      search,
+      runtimeWebSearch,
+      providerId: options?.providerId,
+      providers,
+    })
+  ) {
+    return { provider, definition };
+  }
+
+  const fallbackDefinitions = providers.slice(1).flatMap((candidate) => {
+    try {
+      const candidateDefinition = candidate.createTool(providerContext);
+      return candidateDefinition ? [candidateDefinition] : [];
+    } catch (error) {
+      logVerbose(
+        `web_search provider "${candidate.id}" schema resolution failed during fallback projection: ${String(error)}`,
+      );
+      return [];
+    }
   });
-  return definition ? { provider, definition } : null;
+  return {
+    provider,
+    definition: {
+      ...definition,
+      parameters: resolveSharedWebSearchParameters([definition, ...fallbackDefinitions]),
+    },
+  };
 }
 
 /** Reports whether web_search can use the prepared selection or resolve an agent-scoped provider. */
