@@ -271,7 +271,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   attachments:
     "Top-level attachment retention behavior shared across providers and tools that handle inbound files. Use ttlHours when persisted inbound media needs bounded cleanup.",
   "attachments.ttlHours":
-    "Optional retention window in hours for persisted media cleanup across the full media tree. Leave unset to disable automatic cleanup (media writes never prune), or set values like 24 (1 day) or 168 (7 days) to periodically remove media older than the window.",
+    "Optional retention window in hours for persisted inbound media cleanup. Leave unset to disable automatic cleanup (media writes never prune), or set values like 24 (1 day) or 168 (7 days) to periodically remove inbound media older than the window. Managed outgoing media (chat-generated attachments) follows its own SQLite-aware retention instead.",
   bindings:
     "Top-level binding rules for routing and persistent ACP conversation ownership. Use type=route for normal routing and type=acp for persistent ACP harness bindings.",
   "bindings[].type":

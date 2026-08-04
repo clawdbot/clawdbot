@@ -329,6 +329,16 @@ export function startGatewayMaintenanceTimers(params: {
       recursive: true,
       pruneEmptyDirs: true,
     })
+      .then(async () => {
+        // The mtime sweep skips the SQLite-managed outgoing tree; the
+        // database-aware reaper owns it, so run it on the same cadence or
+        // transient records and unindexed originals would have no cleanup
+        // path in sessions that never read chat history.
+        const { cleanupManagedOutgoingMediaRecords } = await import(
+          "./managed-image-attachments.js"
+        );
+        await cleanupManagedOutgoingMediaRecords();
+      })
       .catch((err: unknown) => {
         params.logHealth.error(`media cleanup failed: ${formatError(err)}`);
       })

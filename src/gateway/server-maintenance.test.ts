@@ -12,6 +12,11 @@ import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance
 
 const cleanOldMediaMock = vi.fn(async () => {});
 const prunePlaybackTranscodeCacheMock = vi.fn(async () => {});
+const cleanupManagedOutgoingMediaRecordsMock = vi.fn(async () => ({
+  deletedRecordCount: 0,
+  deletedFileCount: 0,
+  retainedCount: 0,
+}));
 
 vi.mock("../media/store.js", async () => {
   const actual = await vi.importActual<typeof import("../media/store.js")>("../media/store.js");
@@ -19,6 +24,16 @@ vi.mock("../media/store.js", async () => {
     ...actual,
     cleanOldMedia: cleanOldMediaMock,
     prunePlaybackTranscodeCache: prunePlaybackTranscodeCacheMock,
+  };
+});
+
+vi.mock("./managed-image-attachments.js", async () => {
+  const actual = await vi.importActual<typeof import("./managed-image-attachments.js")>(
+    "./managed-image-attachments.js",
+  );
+  return {
+    ...actual,
+    cleanupManagedOutgoingMediaRecords: cleanupManagedOutgoingMediaRecordsMock,
   };
 });
 
@@ -259,6 +274,10 @@ describe("startGatewayMaintenanceTimers", () => {
       pruneEmptyDirs: true,
     });
 
+    cleanOldMediaMock.mockClear();
+    await vi.waitFor(() => {
+      expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalled();
+    });
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(prunePlaybackTranscodeCacheMock).toHaveBeenCalledTimes(2);
     expect(cleanOldMediaMock).toHaveBeenCalledTimes(2);
@@ -294,6 +313,27 @@ describe("startGatewayMaintenanceTimers", () => {
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(prunePlaybackTranscodeCacheMock).toHaveBeenCalledTimes(2);
     expect(cleanOldMediaMock).toHaveBeenCalledTimes(2);
+
+    stopMaintenanceTimers(timers);
+  });
+
+  it("runs the managed outgoing reaper after each media sweep", async () => {
+    vi.useFakeTimers();
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+
+    const timers = startGatewayMaintenanceTimers({
+      ...createMaintenanceTimerDeps(),
+      mediaCleanupTtlMs: MEDIA_CLEANUP_TTL_MS,
+    });
+
+    await vi.waitFor(() => {
+      expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalledTimes(1);
+    });
+
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    await vi.waitFor(() => {
+      expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalledTimes(2);
+    });
 
     stopMaintenanceTimers(timers);
   });
