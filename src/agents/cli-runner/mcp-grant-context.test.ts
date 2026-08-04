@@ -43,6 +43,13 @@ describe("buildCliMcpGrantContext source-reply authority", () => {
     ).toMatchObject({
       trustedSessionHandoff: true,
       sessionHandoffRequester: { messageProvider: "discord", senderId: "alice" },
+      cliToolAvailability: { native: [], openClaw: ["message"] },
+    });
+  });
+
+  it("marks an unrestricted CLI capability universe explicitly", () => {
+    expect(buildGrant({ cliToolAvailability: undefined })).toMatchObject({
+      cliToolAvailabilityUnrestricted: true,
     });
   });
 

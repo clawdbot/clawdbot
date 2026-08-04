@@ -47,6 +47,9 @@ export type McpLoopbackRequestContext = {
   /** Host-stamped sessions_send authority; never accepted from MCP headers. */
   trustedSessionHandoff?: boolean;
   sessionHandoffRequester?: AgentRuntimeSessionHandoffRequester;
+  /** Exact source CLI capability universe, or an explicit unrestricted marker. */
+  cliToolAvailability?: { native: string[]; openClaw: string[] };
+  cliToolAvailabilityUnrestricted?: boolean;
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   senderIsOwner: boolean;
   /** Capability minted only for Gateway-launched CLI backends. */

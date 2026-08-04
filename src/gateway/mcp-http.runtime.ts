@@ -91,6 +91,8 @@ function resolveMcpLoopbackTools(
   }
   const {
     toolsAllow: _toolsAllow,
+    cliToolAvailability,
+    cliToolAvailabilityUnrestricted,
     authProfileStoreAgentDir,
     grantToken: _grantToken,
     ...scopeParams
@@ -114,12 +116,17 @@ function resolveMcpLoopbackTools(
     mode === "exact"
       ? applyGrantToolsAllow(scoped.tools, params.toolsAllow)
       : applyPolicyToolsAllow(scoped.tools, params.toolsAllow);
+  const handoffToolNames = cliToolAvailabilityUnrestricted
+    ? ["*"]
+    : cliToolAvailability
+      ? [...new Set([...cliToolAvailability.native, ...cliToolAvailability.openClaw])]
+      : tools.flatMap((tool) => {
+          const name = readMcpLoopbackToolName(tool);
+          return name ? [name] : [];
+        });
   replaceWithEffectiveToolAllowlist(
     sessionsSendToolPolicy.allow,
-    tools.flatMap((tool) => {
-      const name = readMcpLoopbackToolName(tool);
-      return name ? [{ name }] : [];
-    }),
+    handoffToolNames.map((name) => ({ name })),
   );
   return {
     agentId: scoped.agentId,
@@ -219,6 +226,13 @@ export class McpLoopbackToolCache {
       // Unset (full scope) must never share a cache row with an empty
       // allowlist (deny-all), so the marker distinguishes presence.
       params.toolsAllow ? `allow:${[...new Set(params.toolsAllow)].toSorted().join(",")}` : "",
+      params.cliToolAvailabilityUnrestricted ? "cli-tools:unrestricted" : "",
+      params.cliToolAvailability
+        ? `cli-native:${[...new Set(params.cliToolAvailability.native)].toSorted().join(",")}`
+        : "",
+      params.cliToolAvailability
+        ? `cli-openclaw:${[...new Set(params.cliToolAvailability.openClaw)].toSorted().join(",")}`
+        : "",
       JSON.stringify(params.scheduledToolPolicy ?? null),
       params.nodeExecAllowed === true ? "node-exec" : "",
       params.execSession?.execHost ?? "",

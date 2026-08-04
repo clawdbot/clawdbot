@@ -16,6 +16,8 @@ type CreateOpenClawToolsArg = {
   nativeChannelId?: string;
   pluginToolDenylist?: string[];
   senderIsOwner?: boolean;
+  sessionsSendToolPolicy?: { version: 1; allow: string[]; deny: string[] };
+  sessionsSendRequester?: { messageProvider?: string; senderId?: string };
 };
 
 const hoisted = vi.hoisted(() => {
@@ -65,6 +67,15 @@ describe("resolveSkillDispatchTools", () => {
     const args = hoisted.createOpenClawToolsMock.mock.calls[0]?.[0];
     expect(tools.map((tool) => tool.name)).toEqual(["read", "cron"]);
     expect(args?.cronCreatorToolAllowlist).toEqual([{ name: "read" }, { name: "automations" }]);
+    expect(args?.sessionsSendToolPolicy).toEqual({
+      version: 1,
+      allow: ["read", "automations"],
+      deny: [],
+    });
+    expect(args?.sessionsSendRequester).toEqual({
+      messageProvider: "telegram",
+      senderId: "user-1",
+    });
     expect(args?.nativeChannelId).toBe("native-room-1");
   });
 

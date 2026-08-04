@@ -24,6 +24,7 @@ import {
 } from "../../agents/tools/cron-tool.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { AgentRuntimeSessionHandoffContext } from "../../gateway/agent-runtime-identity-token.js";
 import { logVerbose } from "../../globals.js";
 import { getPluginToolMeta } from "../../plugins/tools.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
@@ -139,6 +140,12 @@ export function resolveSkillDispatchTools(params: {
   const explicitDenylist = collectExplicitDenylist(explicitPolicyList);
   const inheritedToolAllowlist: string[] = [];
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
+  const requesterSenderId = params.message.senderId ?? params.senderId;
+  const sessionsSendToolPolicy: AgentRuntimeSessionHandoffContext["inheritedToolPolicy"] = {
+    version: 1,
+    allow: [],
+    deny: [],
+  };
   const beforeToolCallHookContext = params.skillCommand
     ? {
         cwd: params.workspaceDir,
@@ -182,6 +189,14 @@ export function resolveSkillDispatchTools(params: {
     pluginToolAllowlist: collectExplicitAllowlist(explicitPolicyList),
     pluginToolDenylist: explicitDenylist,
     cronCreatorToolAllowlist,
+    sessionsSendToolPolicy,
+    sessionsSendRequester: {
+      ...(channel ? { messageProvider: channel } : {}),
+      ...(requesterSenderId ? { senderId: requesterSenderId } : {}),
+      ...(params.message.senderName ? { senderName: params.message.senderName } : {}),
+      ...(params.message.senderUsername ? { senderUsername: params.message.senderUsername } : {}),
+      ...(params.message.senderE164 ? { senderE164: params.message.senderE164 } : {}),
+    },
     inheritedToolAllowlist,
     inheritedToolDenylist: explicitDenylist,
   });
@@ -219,6 +234,7 @@ export function resolveSkillDispatchTools(params: {
   if (explicitPolicyList.some(hasRestrictiveAllowPolicy)) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, policyFiltered);
   }
+  replaceWithEffectiveToolAllowlist(sessionsSendToolPolicy.allow, policyFiltered);
   replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, policyFiltered, (tool) =>
     getPluginToolMeta(tool),
   );

@@ -140,6 +140,14 @@ export function buildCliMcpGrantContext(params: {
     ...(params.run.trustedSessionHandoff && params.run.sessionHandoffRequester
       ? { sessionHandoffRequester: { ...params.run.sessionHandoffRequester } }
       : {}),
+    ...(params.run.cliToolAvailability
+      ? {
+          cliToolAvailability: {
+            native: [...params.run.cliToolAvailability.native],
+            openClaw: [...params.run.cliToolAvailability.openClaw],
+          },
+        }
+      : { cliToolAvailabilityUnrestricted: true }),
     ...(params.run.scheduledToolPolicy
       ? { scheduledToolPolicy: { ...params.run.scheduledToolPolicy } }
       : {}),
