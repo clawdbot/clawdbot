@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createRuntimeConfigCapability } from "../config/index.ts";
+import { searchClawHub } from "./clawhub-search.ts";
 import {
   installFromClawHub,
   installSkill,
@@ -13,7 +14,6 @@ import {
   refreshSkills,
   reconcileSkillsAgentId,
   saveSkillApiKey,
-  searchClawHub,
   setSkillsAgentId,
   updateSkillEdit,
   updateSkillEnabled,

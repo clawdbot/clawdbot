@@ -14,6 +14,7 @@ import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { searchClawHub, type ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
 import {
   closeClawHubDetail,
   installFromClawHub,
@@ -24,11 +25,9 @@ import {
   refreshSkills,
   reconcileSkillsAgentId,
   saveSkillApiKey,
-  searchClawHub,
   setSkillsAgentId,
   updateSkillEdit,
   updateSkillEnabled,
-  type ClawHubSearchResult,
   type ClawHubSkillDetail,
   type ClawHubSkillSecurityVerdict,
   type SkillOperation,

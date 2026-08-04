@@ -34,10 +34,10 @@ import {
   isSkillAvailable,
   renderSkillStatusChips,
 } from "../../lib/skills-shared.ts";
+import type { ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
 import {
   clawhubVerdictKey,
   type ClawHubSkillSecurityVerdict,
-  type ClawHubSearchResult,
   type ClawHubSkillDetail,
   type SkillOperation,
   type SkillMessageMap,

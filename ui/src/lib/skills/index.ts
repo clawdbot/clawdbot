@@ -11,22 +11,13 @@ import type {
   SkillStatusReport,
 } from "../../api/types.ts";
 import { redactToolDetail } from "../browser-redact.ts";
+import type { ClawHubSearchResult } from "./clawhub-search.ts";
 import {
   normalizeSkillApiKeyReplacement,
   runSkillConfigMutation,
   skillConfigMutationSuccess,
   type SkillConfigMutationOwner,
 } from "./config-mutations.ts";
-
-export type ClawHubSearchResult = {
-  score: number;
-  slug: string;
-  displayName: string;
-  summary?: string;
-  icon?: string | null;
-  version?: string;
-  updatedAt?: number;
-};
 
 export type ClawHubSkillDetail = {
   skill: {
@@ -575,18 +566,33 @@ export async function updateSkillEnabled(
   enabled: boolean,
   canDispatch: () => boolean = () => true,
 ) {
-  await runSkillMutation(state, skillKey, async (client) => {
-    const refreshError = await runSkillConfigMutation(
-      state.runtimeConfig,
-      client,
-      {
-        skillKey,
-        enabled,
-      },
-      canDispatch,
-    );
-    return skillConfigMutationSuccess(enabled ? "Skill enabled" : "Skill disabled", refreshError);
-  });
+  await runSkillConfigUpdate(
+    state,
+    skillKey,
+    { enabled },
+    enabled ? "Skill enabled" : "Skill disabled",
+    canDispatch,
+  );
+}
+
+async function runSkillConfigUpdate(
+  state: SkillsState,
+  skillKey: string,
+  patch: { enabled: boolean } | { apiKey: string },
+  message: string,
+  canDispatch: () => boolean,
+) {
+  await runSkillMutation(state, skillKey, async (client) =>
+    skillConfigMutationSuccess(
+      message,
+      await runSkillConfigMutation(
+        state.runtimeConfig,
+        client,
+        { skillKey, ...patch },
+        canDispatch,
+      ),
+    ),
+  );
 }
 
 export async function saveSkillApiKey(
@@ -598,21 +604,13 @@ export async function saveSkillApiKey(
   if (!apiKey) {
     return;
   }
-  await runSkillMutation(state, skillKey, async (client) => {
-    const refreshError = await runSkillConfigMutation(
-      state.runtimeConfig,
-      client,
-      {
-        skillKey,
-        apiKey,
-      },
-      canDispatch,
-    );
-    return skillConfigMutationSuccess(
-      `API key saved — stored in openclaw.json (skills.entries.${skillKey})`,
-      refreshError,
-    );
-  });
+  await runSkillConfigUpdate(
+    state,
+    skillKey,
+    { apiKey },
+    `API key saved — stored in openclaw.json (skills.entries.${skillKey})`,
+    canDispatch,
+  );
 }
 
 export async function installSkill(
@@ -635,22 +633,6 @@ export async function installSkill(
       message: result?.message ?? "Installed",
     };
   });
-}
-
-export async function searchClawHub(
-  client: GatewayBrowserClient,
-  query: string,
-  signal?: AbortSignal,
-): Promise<ClawHubSearchResult[]> {
-  if (!query.trim()) {
-    return [];
-  }
-  const response = await client.request<{ results: ClawHubSearchResult[] }>(
-    "skills.search",
-    { query, limit: 20 },
-    { signal },
-  );
-  return response?.results ?? [];
 }
 
 export async function loadClawHubDetail(state: SkillsState, slug: string) {
