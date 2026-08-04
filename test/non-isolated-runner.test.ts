@@ -195,3 +195,88 @@ it("clears named plugin runtime slots between files", async () => {
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+it("clears session suspension state between files", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-suspension-runner-"));
+  try {
+    const write = (name: string, content: string) =>
+      fs.writeFile(path.join(root, name), content, "utf-8");
+    const sessionSuspensionPath = JSON.stringify(
+      path.join(repoRoot, "src", "agents", "session-suspension.ts"),
+    );
+    const sessionSuspensionTestSupportPath = JSON.stringify(
+      path.join(repoRoot, "src", "agents", "session-suspension.test-support.ts"),
+    );
+    const sharedVitestConfigPath = JSON.stringify(
+      path.join(repoRoot, "test", "vitest", "vitest.shared.config.ts"),
+    );
+    await fs.symlink(
+      path.join(repoRoot, "node_modules"),
+      path.join(root, "node_modules"),
+      "junction",
+    );
+    await write(
+      "a-seed.test.ts",
+      [
+        `import { getSuspendedLaneIdsForGatewayPublication } from ${sessionSuspensionPath};`,
+        `import { seedClearedLaneResumeForTest } from ${sessionSuspensionTestSupportPath};`,
+        'import { expect, it } from "vitest";',
+        'const laneId = "plugin:test:session-suspension";',
+        'it("seeds real process-global suspension state", () => {',
+        "  seedClearedLaneResumeForTest(laneId, {",
+        "    resumeConcurrency: 1,",
+        "    resumeAtMs: Date.now() + 10_000,",
+        "  });",
+        "  expect(getSuspendedLaneIdsForGatewayPublication()).toContain(laneId);",
+        "});",
+        "",
+      ].join("\n"),
+    );
+    await write(
+      "b-observe.test.ts",
+      [
+        `import { getSuspendedLaneIdsForGatewayPublication } from ${sessionSuspensionPath};`,
+        'import { expect, it } from "vitest";',
+        'it("starts without real suspension state from the previous file", () => {',
+        "  expect(getSuspendedLaneIdsForGatewayPublication()).toEqual(new Set());",
+        "});",
+        "",
+      ].join("\n"),
+    );
+    await write(
+      "vitest.config.ts",
+      [
+        `import { sharedVitestConfig } from ${sharedVitestConfigPath};`,
+        'import { defineConfig } from "vitest/config";',
+        'import { BaseSequencer } from "vitest/node";',
+        "class AlphabeticalSequencer extends BaseSequencer {",
+        '  override async sort(files: Parameters<BaseSequencer["sort"]>[0]) {',
+        "    return [...files].sort((a, b) => a.moduleId.localeCompare(b.moduleId));",
+        "  }",
+        "}",
+        "export default defineConfig({",
+        `  cacheDir: ${JSON.stringify(path.join(root, ".vite"))},`,
+        "  resolve: sharedVitestConfig.resolve,",
+        "  test: {",
+        "    isolate: false,",
+        "    fileParallelism: false,",
+        "    maxWorkers: 1,",
+        "    sequence: { sequencer: AlphabeticalSequencer },",
+        `    runner: ${JSON.stringify(path.join(repoRoot, "test", "non-isolated-runner.ts"))},`,
+        "  },",
+        "});",
+        "",
+      ].join("\n"),
+    );
+
+    const vitestEntry = path.join(repoRoot, "node_modules", "vitest", "vitest.mjs");
+    const result = await execFileAsync(
+      process.execPath,
+      [vitestEntry, "run", "--root", root, "--config", path.join(root, "vitest.config.ts")],
+      { cwd: repoRoot, env: childEnv(), maxBuffer: 16 * 1024 * 1024 },
+    );
+    expect(`${result.stdout}\n${result.stderr}`).toContain("2 passed");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

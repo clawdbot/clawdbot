@@ -5470,6 +5470,39 @@ Update and merge these partial structured summaries.`,
     expect(requireRecord(requestLog[0], "debug request 0").imageInputCount).toBe(1);
   });
 
+  it("uses current request instructions for image descriptions", async () => {
+    const server = await startMockServer();
+
+    const payload = (await expectNonStreamingResponsesJson(server, {
+      model: "mock-openai/gpt-5.6-luna",
+      input: [
+        makeDeveloperInput("Image understanding check: describe the top and bottom colors."),
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_image",
+              source: {
+                type: "base64",
+                mime_type: "image/png",
+                data: QA_IMAGE_PNG_BASE64,
+              },
+            },
+            {
+              type: "input_text",
+              text: "[media attached: media://inbound/red-top-blue-bottom.png (image/png)]",
+            },
+          ],
+        },
+      ],
+    })) as {
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    };
+    const text = payload.output?.[0]?.content?.[0]?.text ?? "";
+    expect(text.toLowerCase()).toContain("red");
+    expect(text.toLowerCase()).toContain("blue");
+  });
+
   it("recognizes OpenAI-compatible image_url parts as image inputs", async () => {
     const server = await startMockServer();
 

@@ -263,6 +263,11 @@ async function deliverTextReply(params: {
     replyMarkup: params.replyMarkup,
     replyQuoteText: params.replyQuoteText,
     quoteOnlyOnFirstChunk: params.quoteOnlyOnFirstChunk,
+    invalidate: () => params.progress.promptContext?.invalidate(),
+    onRejected: (error) =>
+      params.runtime.error?.(
+        danger(`telegram reply chunk rejected; continuing: ${formatErrorMessage(error)}`),
+      ),
     markDelivered,
     sendChunk: async ({ chunk, isFirstChunk, replyToMessageId, replyMarkup, replyQuoteText }) => {
       const includeQuoteMetadata = params.quoteOnlyOnFirstChunk !== true || isFirstChunk;
@@ -289,6 +294,10 @@ async function deliverTextReply(params: {
           replyMarkup,
         },
       );
+      return messageId;
+    },
+    recordChunk: async (result, chunk) => {
+      const messageId = result;
       if (firstDeliveredMessageId == null) {
         firstDeliveredMessageId = messageId;
       }
