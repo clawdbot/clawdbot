@@ -179,12 +179,14 @@ describe("Codex trajectory recorder", () => {
       text: `${"x".repeat(19_999)}😀`,
       apiKey: "secret",
       authorization: "Bearer sk-test-secret-token",
+      sourceSessionKey: "agent:sender:main",
     });
     await recorder.flush();
 
     expect(events[0]?.data?.text).toBe(`${"x".repeat(19_999)}…`);
     expect(events[0]?.data?.apiKey).toBe("<redacted>");
     expect(events[0]?.data?.authorization).toBe("<redacted>");
+    expect(events[0]?.data?.sourceSessionKey).toBe("agent:sender:main");
   });
 
   it("records namespace dynamic tools as callable trajectory definitions", async () => {

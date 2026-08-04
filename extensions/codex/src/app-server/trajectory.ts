@@ -27,6 +27,7 @@ type CodexTrajectoryInit = {
 
 const SENSITIVE_FIELD_RE = /(?:authorization|cookie|credential|key|password|passwd|secret|token)/iu;
 const PRIVATE_PAYLOAD_FIELD_RE = /(?:image|screenshot|attachment|fileData|dataUri)/iu;
+const NON_SECRET_IDENTIFIER_FIELDS = new Set(["sourceSessionKey"]);
 const AUTHORIZATION_VALUE_RE = /\b(Bearer|Basic)\s+[A-Za-z0-9+/._~=-]{8,}/giu;
 const JWT_VALUE_RE = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/gu;
 const COOKIE_PAIR_RE = /\b([A-Za-z][A-Za-z0-9_.-]{1,64})=([A-Za-z0-9+/._~%=-]{16,})(?=;|\s|$)/gu;
@@ -260,7 +261,7 @@ function sanitizeValue(value: unknown, depth = 0, key = ""): unknown {
     return value;
   }
   if (typeof value === "string") {
-    if (SENSITIVE_FIELD_RE.test(key)) {
+    if (SENSITIVE_FIELD_RE.test(key) && !NON_SECRET_IDENTIFIER_FIELDS.has(key)) {
       return "<redacted>";
     }
     if (value.startsWith("data:") && value.length > 256) {

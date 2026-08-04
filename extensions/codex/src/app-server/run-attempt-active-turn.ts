@@ -80,6 +80,7 @@ export async function activateCodexAttemptTurn(
     turnId: activeTurnId,
     prompt: turnState.codexTurnPromptText,
     imagesCount: params.images?.length ?? 0,
+    ...(params.inputProvenance ? { origin: params.inputProvenance } : {}),
   });
   projectorRef.current = new CodexAppServerEventProjector(
     {
