@@ -429,10 +429,12 @@ describe("managed diagnostics-otel install runtime", () => {
       });
       expect(gateway.logs()).toContain("diagnostics-otel: using preloaded OpenTelemetry SDK");
       await runTurn(gateway, "OTEL-PRELOADED-INSTALL-OK");
-      await waitFor(
-        () => receiver.capturedRequests.find((request) => request.path === "/v1/traces"),
+      const runSpan = await waitFor(
+        () => receiver.capturedSpans.find((span) => span.name === "openclaw.run"),
         20_000,
       );
+      expect(runSpan.traceId).toBeTruthy();
+      expect(runSpan.spanId).toBeTruthy();
       expect(ignoredConfig.capturedRequests).toHaveLength(0);
     } finally {
       await settleCleanup(
