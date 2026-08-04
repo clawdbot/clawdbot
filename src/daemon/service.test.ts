@@ -530,7 +530,7 @@ describe("startGatewayService", () => {
           },
           environmentValueSources: {
             HASS_TOKEN: "file",
-          },
+          } as const,
           sourcePath: path.join(tempHome, ".config", "systemd", "user", "openclaw-gateway.service"),
         })),
         isLoaded: vi.fn(async () => true),
