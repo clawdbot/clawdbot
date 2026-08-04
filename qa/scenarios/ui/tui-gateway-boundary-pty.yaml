@@ -13,19 +13,11 @@ scenario:
   risk: medium
   objective: Prove TUI Gateway connection, authentication, attach history, reconnect visibility, and command RPC behavior through a real WebSocket and PTY.
   successCriteria:
-    - A built TUI connects to a real ephemeral Gateway.
-    - Isolated clients accept the valid token, reject an invalid token, and never render or log it.
-    - A fresh TUI attach renders a completed authoritative history turn exactly once before input.
-    - A disconnected draft remains visible and sends after the real Gateway restarts.
-    - Gateway status, model selection, session creation, and reset produce visible and authoritative RPC outcomes.
-  codeRefs:
-    - src/tui/tui-pty-local.e2e.test.ts
-    - src/tui/gateway-chat.ts
-    - src/tui/tui-command-handlers.ts
+    - A built TUI proves Gateway connection, isolated authentication without token leakage, authoritative attach history, disconnected-draft recovery, and visible authoritative status, model, session creation, and reset RPC outcomes.
+  codeRefs: [src/tui/tui-pty-local.e2e.test.ts]
   execution:
     kind: script
     path: test/e2e/qa-lab/tui/tui-pty-evidence-producer.ts
-    summary: Runs exact built-CLI real-Gateway PTY assertions and authenticates their fresh Vitest results as QA evidence.
     timeoutMs: 600000
     args: [--artifact-base, "${outputDir}", --scenario-id, "${scenarioId}"]
     config:
