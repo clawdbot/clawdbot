@@ -241,7 +241,18 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
     requestedPath?: string,
   ): {
     acquired: boolean;
-    owner: { pid: number; checkout?: string; startedAt?: string };
+    owner: {
+      pid: number;
+      checkout?: string;
+      processGroupId?: number;
+      reason?: string;
+      serviceState?: string;
+      startedAt?: string;
+    };
+    retainForProcessGroup?: (
+      processGroupId: number,
+      details?: { phase?: string; serviceState?: string },
+    ) => Record<string, unknown>;
     release?: () => void;
   };
   export function parseGatewayLogAudit(

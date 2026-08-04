@@ -131,13 +131,21 @@ export async function runManagedCommand({
   };
   addManagedChild(managedChild);
   let timeoutTimer = null;
+  let signalTimeout;
   let timedOut = false;
   let childResult;
+  const timeoutTriggered = new Promise((resolve) => {
+    signalTimeout = resolve;
+  });
 
   try {
     const childCompletion = new Promise((resolve, reject) => {
       child.once("error", reject);
       child.once("close", (status, signal) => {
+        if (timeoutTimer) {
+          clearTimeout(timeoutTimer);
+          timeoutTimer = null;
+        }
         if (managedChild.forceKillTimer) {
           clearTimeout(managedChild.forceKillTimer);
         }
@@ -157,29 +165,40 @@ export async function runManagedCommand({
           timedOut = true;
           // Shell commands may spawn grandchildren, so timeout cleanup owns the whole tree.
           terminateManagedChild(child, "SIGKILL", { platform });
+          signalTimeout();
         }, timeoutMs);
       }
     });
+    const childOutcome = childCompletion.then(
+      (status) => ({ status, type: "completed" }),
+      (/** @type {unknown} */ error) => ({ error, type: "failed" }),
+    );
     try {
       onReady?.(child);
     } catch (error) {
       terminateManagedChild(child, "SIGKILL", { platform });
       try {
-        await childCompletion;
         await ensureManagedProcessTreeExit(child, platform);
       } catch (cleanupError) {
         throw createManagedCommandSetupCleanupError(error, cleanupError);
       }
       throw error;
     }
-    try {
-      childResult = await childCompletion;
-    } catch (error) {
+    const outcome =
+      timeoutMs === undefined
+        ? await childOutcome
+        : await Promise.race([childOutcome, timeoutTriggered.then(() => ({ type: "timeout" }))]);
+    if (outcome.type === "timeout") {
+      await ensureManagedProcessTreeExit(child, platform);
+      throw createManagedCommandTimeoutError(timeoutMs);
+    }
+    if (outcome.type === "failed") {
       if (timedOut) {
         await ensureManagedProcessTreeExit(child, platform);
       }
-      throw error;
+      throw outcome.error;
     }
+    childResult = outcome.status;
     if (requireProcessTreeExit) {
       await ensureManagedProcessTreeExit(child, platform, {
         rejectIfLive: true,
@@ -233,9 +252,8 @@ async function ensureManagedProcessTreeExit(
   if (initialStatus === "dead") {
     return;
   }
-  if (initialStatus === "indeterminate") {
-    throw createManagedCommandCleanupError("Managed process-group state is indeterminate");
-  }
+  let status = initialStatus;
+  let sawLive = initialStatus === "live";
   if (terminateIfLive) {
     terminateManagedChild(child, "SIGKILL", { platform });
   }
@@ -244,27 +262,42 @@ async function ensureManagedProcessTreeExit(
     await new Promise((resolve) => {
       setTimeout(resolve, PROCESS_GROUP_POLL_MS);
     });
-    const status = processGroupStatus(child.pid);
+    status = processGroupStatus(child.pid);
     if (status === "dead") {
-      if (rejectIfLive) {
+      if (rejectIfLive && sawLive) {
         throw createManagedCommandCleanupError(
           "Managed command exited while its process group remained active",
+          child,
+          platform,
+          "terminated",
         );
       }
       return;
     }
-    if (status === "indeterminate") {
-      throw createManagedCommandCleanupError("Managed process-group state is indeterminate");
+    if (status === "live") {
+      sawLive = true;
     }
   }
+  const processTreeState = status === "indeterminate" ? "indeterminate" : "live";
   throw createManagedCommandCleanupError(
-    `Managed process group did not exit within ${PROCESS_GROUP_DRAIN_TIMEOUT_MS}ms`,
+    processTreeState === "indeterminate"
+      ? `Managed process-group state remained indeterminate for ${PROCESS_GROUP_DRAIN_TIMEOUT_MS}ms`
+      : `Managed process group did not exit within ${PROCESS_GROUP_DRAIN_TIMEOUT_MS}ms`,
+    child,
+    platform,
+    processTreeState,
   );
 }
 
-function createManagedCommandCleanupError(message) {
+function createManagedCommandCleanupError(message, child, platform, processTreeState) {
+  const processGroupId =
+    platform !== "win32" && Number.isSafeInteger(child.pid) && child.pid > 1
+      ? child.pid
+      : undefined;
   return Object.assign(new Error(message), {
     code: "EPROCESSGROUP_CLEANUP_FAILED",
+    ...(processGroupId === undefined ? {} : { processGroupId }),
+    processTreeState,
   });
 }
 

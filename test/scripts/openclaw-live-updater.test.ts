@@ -52,6 +52,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../
 const script = path.join(repoRoot, ".agents/skills/openclaw-live-updater/scripts/update-main.mjs");
 const fixtureOrigins = new Map<string, string>();
 let fixtureTemplate: ReturnType<typeof initializeFixture> | undefined;
+const posixTest = process.platform === "win32" ? test.skip : test;
 
 function git(cwd: string, ...args: string[]) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -1611,6 +1612,109 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
       reacquired.release?.();
     }
   });
+
+  posixTest(
+    "retains the maintenance lock and skips recovery when a timed-out process group stays live",
+    async () => {
+      const { root, mirror } = makeFixture();
+      writeBuild(mirror);
+      const lockPath = path.join(root, "maintenance.lock");
+      const plistPath = path.join(root, "ai.openclaw.gateway.plist");
+      writeFileSync(plistPath, "plist\n", { mode: 0o600 });
+      const deployment = {
+        configPath: path.join(root, "openclaw.json"),
+        entrypoint: path.join(mirror, "dist/index.js"),
+        entrypointIndex: 1,
+        executable: process.execPath,
+        invocationPrefix: [path.join(mirror, "dist/index.js")],
+        label: "ai.openclaw.gateway",
+        plistPath,
+        port: 18789,
+        runtime: process.execPath,
+      };
+      const blocker = spawn(process.execPath, ["-e", "setInterval(() => {}, 1_000)"], {
+        detached: true,
+        stdio: "ignore",
+      });
+      if (!blocker.pid) {
+        throw new Error("cleanup blocker did not expose a process group id");
+      }
+      const processGroupId = blocker.pid;
+      const blockerClosed = new Promise<void>((resolve) => blocker.once("close", () => resolve()));
+      const events: string[] = [];
+
+      try {
+        await expect(
+          maintainFixture(
+            { checkout: mirror, remote: "origin", lockPath },
+            {
+              inspectGatewayDeployment: () => deployment,
+              runManagedCommand: async ({ args }: { args: string[] }) => {
+                const command = args.join(" ");
+                events.push(command);
+                if (command === "install --frozen-lockfile") {
+                  throw Object.assign(new Error("process group remained live"), {
+                    code: "EPROCESSGROUP_CLEANUP_FAILED",
+                    processGroupId,
+                    processTreeState: "live",
+                  });
+                }
+                return 0;
+              },
+              proveGatewayStopped: () => ({
+                runtimeStatus: "stopped",
+                port: 18789,
+                portStatus: "free",
+                proofSource: "fixture",
+              }),
+              waitForGatewayProcess: () => {
+                events.push("previous process started");
+              },
+            },
+          ),
+        ).rejects.toMatchObject({
+          code: "command_cleanup_failed",
+          details: {
+            lockPath,
+            lockRetained: true,
+            phase: "dependency install",
+            processGroupId,
+            processTreeState: "live",
+            serviceState: "stopped",
+          },
+        });
+
+        expect(events.some((event) => event.startsWith("enable gui/"))).toBe(false);
+        expect(events).not.toContain("previous process started");
+        expect(existsSync(lockPath)).toBe(true);
+        expect(acquireMaintenanceLock(mirror, lockPath)).toMatchObject({
+          acquired: false,
+          owner: {
+            processGroupId,
+            reason: "command_cleanup_failed",
+            serviceState: "stopped",
+          },
+        });
+      } finally {
+        try {
+          process.kill(-processGroupId, "SIGKILL");
+        } catch {}
+        await blockerClosed;
+      }
+
+      const ownerPath = path.join(lockPath, "owner.json");
+      const retainedOwner = JSON.parse(readFileSync(ownerPath, "utf8"));
+      writeFileSync(ownerPath, `${JSON.stringify({ ...retainedOwner, pid: processGroupId })}\n`, {
+        mode: 0o600,
+      });
+      const reacquired = acquireMaintenanceLock(mirror, lockPath);
+      try {
+        expect(reacquired.acquired).toBe(true);
+      } finally {
+        reacquired.release?.();
+      }
+    },
+  );
 
   test("resumes a prepared suspension when stopped proof never converges", async () => {
     const { root, mirror } = makeFixture();

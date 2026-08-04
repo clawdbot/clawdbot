@@ -293,6 +293,60 @@ setInterval(() => {}, 1_000);
     expect(Date.now() - startedAt).toBeLessThan(2_000);
   });
 
+  posixIt("does not wait indefinitely when a timed-out child omits close", async () => {
+    const startedAt = Date.now();
+    let childPid = 0;
+    await expect(
+      runManagedCommand({
+        bin: process.execPath,
+        args: ["-e", "setInterval(() => {}, 1_000)"],
+        onReady: (child) => {
+          childPid = expectProcessPid(child.pid);
+          child.removeAllListeners("close");
+        },
+        shell: false,
+        stdio: "ignore",
+        timeoutMs: 200,
+      }),
+    ).rejects.toMatchObject({ code: "ETIMEDOUT" });
+
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+    expect(isProcessAlive(childPid)).toBe(false);
+  });
+
+  posixIt("waits through transient indeterminate process-group state", async () => {
+    const originalKill = process.kill;
+    let childPid = 0;
+    let injectedIndeterminate = false;
+    process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
+      if (pid === -childPid && signal === 0 && !injectedIndeterminate) {
+        injectedIndeterminate = true;
+        throw Object.assign(new Error("transient process-group state"), { code: "EPERM" });
+      }
+      return originalKill(pid, signal);
+    }) as typeof process.kill;
+
+    try {
+      await expect(
+        runManagedCommand({
+          bin: process.execPath,
+          args: ["-e", "setInterval(() => {}, 1_000)"],
+          onReady: (child) => {
+            childPid = expectProcessPid(child.pid);
+          },
+          shell: false,
+          stdio: "ignore",
+          timeoutMs: 200,
+        }),
+      ).rejects.toMatchObject({ code: "ETIMEDOUT" });
+    } finally {
+      process.kill = originalKill;
+    }
+
+    expect(injectedIndeterminate).toBe(true);
+    expect(isProcessAlive(childPid)).toBe(false);
+  });
+
   it("allows bounded retry output and normal long-running work to complete", async () => {
     await expect(
       runManagedCommand({

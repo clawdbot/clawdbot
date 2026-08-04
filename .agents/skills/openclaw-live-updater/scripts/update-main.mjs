@@ -90,6 +90,40 @@ function aggregateErrorWithCause(errors, message, cause) {
   return new AggregateError(errors, message, { cause });
 }
 
+function findUpdateInvariantError(value, code) {
+  const pending = [value];
+  const seen = new Set();
+  while (pending.length > 0) {
+    const current = pending.shift();
+    if (!current || (typeof current !== "object" && typeof current !== "function")) {
+      continue;
+    }
+    if (seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+    if (current instanceof UpdateInvariantError && current.code === code) {
+      return current;
+    }
+    if (current instanceof AggregateError) {
+      pending.push(...current.errors);
+    }
+    if ("cause" in current) {
+      pending.push(current.cause);
+    }
+  }
+  return null;
+}
+
+function findUnsafeCommandCleanupFailure(value) {
+  const failure = findUpdateInvariantError(value, "command_cleanup_failed");
+  return failure &&
+    Number.isSafeInteger(failure.details?.processGroupId) &&
+    ["indeterminate", "live"].includes(failure.details?.processTreeState)
+    ? failure
+    : null;
+}
+
 function boundedSyncOptions(options = {}, timeoutMs = LEAF_COMMAND_TIMEOUT_MS) {
   return {
     ...options,
@@ -521,6 +555,22 @@ function processAlive(pid) {
   }
 }
 
+function processGroupAlive(processGroupId) {
+  if (
+    process.platform === "win32" ||
+    !Number.isSafeInteger(processGroupId) ||
+    processGroupId <= 1
+  ) {
+    return false;
+  }
+  try {
+    process.kill(-processGroupId, 0);
+    return true;
+  } catch (error) {
+    return error?.code !== "ESRCH";
+  }
+}
+
 export function acquireMaintenanceLock(checkout, requestedPath) {
   const lockPath = requestedPath ?? defaultLockPath(checkout);
   let incompleteLockRetries = 0;
@@ -561,7 +611,10 @@ export function acquireMaintenanceLock(checkout, requestedPath) {
         throw new UpdateInvariantError("invalid_lock", `lock owner is unreadable: ${lockPath}`);
       }
       incompleteLockRetries = 0;
-      if (Number.isInteger(owner.pid) && processAlive(owner.pid)) {
+      const ownerProcessAlive = Number.isInteger(owner.pid) && processAlive(owner.pid);
+      const blockedProcessGroupAlive =
+        Number.isInteger(owner.processGroupId) && processGroupAlive(owner.processGroupId);
+      if (ownerProcessAlive || blockedProcessGroupAlive) {
         return { acquired: false, lockPath, owner };
       }
       const staleClaim = `${lockPath}.stale-${process.pid}-${randomUUID()}`;
@@ -587,6 +640,29 @@ export function acquireMaintenanceLock(checkout, requestedPath) {
     acquired: true,
     lockPath,
     owner,
+    retainForProcessGroup(processGroupId, details = {}) {
+      if (!Number.isSafeInteger(processGroupId) || processGroupId <= 1) {
+        throw new UpdateInvariantError(
+          "invalid_process_group",
+          `refusing to retain maintenance lock for invalid process group: ${processGroupId}`,
+        );
+      }
+      const ownerPath = path.join(lockPath, "owner.json");
+      const current = JSON.parse(readFileSync(ownerPath, "utf8"));
+      if (current.pid !== process.pid) {
+        throw new UpdateInvariantError("lock_owner_changed", "maintenance lock ownership changed");
+      }
+      const retainedOwner = {
+        ...current,
+        blockedAt: new Date().toISOString(),
+        processGroupId,
+        reason: "command_cleanup_failed",
+        ...(typeof details.phase === "string" ? { phase: details.phase } : {}),
+        ...(typeof details.serviceState === "string" ? { serviceState: details.serviceState } : {}),
+      };
+      writeFileSync(ownerPath, `${JSON.stringify(retainedOwner)}\n`, { mode: 0o600 });
+      return retainedOwner;
+    },
     release() {
       const current = JSON.parse(readFileSync(path.join(lockPath, "owner.json"), "utf8"));
       if (current.pid !== process.pid) {
@@ -622,6 +698,12 @@ async function defaultRunCommand(command, args, checkout, options = {}) {
         {
           elapsedMs: Date.now() - startedAt,
           phase,
+          ...(Number.isSafeInteger(error.processGroupId)
+            ? { processGroupId: error.processGroupId }
+            : {}),
+          ...(typeof error.processTreeState === "string"
+            ? { processTreeState: error.processTreeState }
+            : {}),
           serviceState: options.serviceState ?? "running",
           timeoutMs,
         },
@@ -2020,7 +2102,7 @@ async function waitForManagedGatewayReadiness(
   sleep = defaultSleep,
 ) {
   for (let attempt = 1; attempt <= GATEWAY_READINESS_ATTEMPTS; attempt += 1) {
-    if ((await probeMilestones(deployment))?.readyzReady) {
+    if ((await Promise.resolve(probeMilestones(deployment)))?.readyzReady) {
       return;
     }
     if (attempt < GATEWAY_READINESS_ATTEMPTS) {
@@ -2604,11 +2686,20 @@ export async function maintainMain(options, dependencies = {}) {
       ok: true,
       skipped: true,
       reason: "overlap",
-      lock: { path: lock.lockPath, ownerPid: lock.owner.pid, startedAt: lock.owner.startedAt },
+      lock: {
+        path: lock.lockPath,
+        ownerPid: lock.owner.pid,
+        startedAt: lock.owner.startedAt,
+        ...(Number.isInteger(lock.owner.processGroupId)
+          ? { processGroupId: lock.owner.processGroupId }
+          : {}),
+        ...(typeof lock.owner.reason === "string" ? { reason: lock.owner.reason } : {}),
+      },
     };
   }
 
   let preparedGatewayReplacement = null;
+  let retainMaintenanceLock = false;
   try {
     const verifiedBefore = verifyCheckout(options.checkout, { remote: options.remote });
     const managedCommand = (command, args, checkout, commandOptions = {}) =>
@@ -2937,6 +3028,9 @@ export async function maintainMain(options, dependencies = {}) {
         gatewayTiming = finalizeGatewayTiming(verification?.timing ?? gatewayTiming);
         gatewayRuntime = await verifyGatewayRuntime(update.checkout, update.afterSha);
       } catch (error) {
+        if (findUnsafeCommandCleanupFailure(error)) {
+          throwPreservingValue(error);
+        }
         if (!gatewayStoppedForMaintenance || !gatewayDeploymentBefore) {
           throw error;
         }
@@ -3105,9 +3199,24 @@ export async function maintainMain(options, dependencies = {}) {
       ...(gatewayRuntime ? { gatewayRuntime } : {}),
       ...(maintenanceState.macTarget ? { macTarget: maintenanceState.macTarget } : {}),
     };
+  } catch (error) {
+    const cleanupFailure = findUnsafeCommandCleanupFailure(error);
+    if (cleanupFailure) {
+      const processGroupId = cleanupFailure.details.processGroupId;
+      retainMaintenanceLock = true;
+      lock.retainForProcessGroup(processGroupId, cleanupFailure.details);
+      cleanupFailure.details = {
+        ...cleanupFailure.details,
+        lockPath: lock.lockPath,
+        lockRetained: true,
+      };
+    }
+    return throwPreservingValue(error);
   } finally {
     preparedGatewayReplacement?.discard();
-    lock.release();
+    if (!retainMaintenanceLock) {
+      lock.release();
+    }
   }
 }
 
