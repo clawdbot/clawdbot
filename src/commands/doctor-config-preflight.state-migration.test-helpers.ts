@@ -6,7 +6,7 @@ export type StateMigrationResult = {
   notices?: string[];
 };
 
-export type StartupConvergenceWarning = {
+type StartupConvergenceWarning = {
   pluginId?: string;
   reason: string;
   message: string;

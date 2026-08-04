@@ -120,8 +120,36 @@ const readConfigFileSnapshot = vi.hoisted(() =>
     issues: [] as Array<{ path: string; message: string }>,
   })),
 );
+const pluginMigrationFingerprint = vi.hoisted(() => vi.fn(() => "plugin-migrations"));
+const readConfigFileSnapshotWithPluginMetadata = vi.hoisted(() =>
+  vi.fn(async () => ({
+    snapshot: await readConfigFileSnapshot(),
+    pluginMetadataSnapshot: { configFingerprint: pluginMigrationFingerprint() },
+  })),
+);
 const findDoctorLegacyConfigIssues = vi.hoisted(() => vi.fn((): LegacyConfigIssue[] => []));
 const note = vi.hoisted(() => vi.fn());
+
+function queueConfigSnapshot(
+  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
+  count = 1,
+): void {
+  for (let index = 0; index < count; index += 1) {
+    readConfigFileSnapshot.mockResolvedValueOnce(snapshot);
+  }
+}
+
+function expectMigrationIdentity(): {
+  effectiveConfigFingerprint: unknown;
+  pluginDoctorConfigFingerprint: unknown;
+  pluginMigrationFingerprint: string;
+} {
+  return {
+    effectiveConfigFingerprint: expect.any(String),
+    pluginDoctorConfigFingerprint: expect.any(String),
+    pluginMigrationFingerprint: "plugin-migrations",
+  };
+}
 
 vi.mock("./doctor-state-migrations.js", () => ({
   autoMigrateLegacyState,
@@ -162,6 +190,7 @@ vi.mock("./doctor/shared/pristine-startup-state.js", () => ({
 
 vi.mock("../config/io.js", () => ({
   readConfigFileSnapshot,
+  readConfigFileSnapshotWithPluginMetadata,
   recoverConfigFromJsonRootSuffix: vi.fn(),
   recoverConfigFromLastKnownGood: vi.fn(),
 }));
@@ -177,6 +206,8 @@ const { runDoctorConfigPreflight } = await import("./doctor-config-preflight.js"
 describe("runDoctorConfigPreflight state migration", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    pluginMigrationFingerprint.mockReset();
+    pluginMigrationFingerprint.mockReturnValue("plugin-migrations");
     findDoctorLegacyConfigIssues.mockReset();
     findDoctorLegacyConfigIssues.mockReturnValue([]);
     setActiveDegradedPlugins([]);
@@ -306,6 +337,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     if (needed && warnings.length === 0) {
       expect(recordSuccessfulStateMigrations).toHaveBeenCalledWith({
         env: acquireStartupMigrationLease.mock.calls[0]?.[0]?.env,
+        identity: expectMigrationIdentity(),
         lease: startupMigrationLease,
       });
     } else {
@@ -512,7 +544,10 @@ describe("runDoctorConfigPreflight state migration", () => {
     const pinnedEnv = acquireStartupMigrationLease.mock.calls[0]?.[0]?.env;
     expect(pinnedEnv).toBeDefined();
     expect(pinnedEnv).not.toBe(process.env);
-    expect(needsStartupMigrationCheckpoint).toHaveBeenCalledWith({ env: pinnedEnv });
+    expect(needsStartupMigrationCheckpoint).toHaveBeenCalledWith({
+      env: pinnedEnv,
+      identity: expectMigrationIdentity(),
+    });
     expect(runPostCorePluginConvergence).toHaveBeenCalledWith({
       cfg: { gateway: { mode: "local", port: 19091 } },
       env: process.env,
@@ -520,8 +555,35 @@ describe("runDoctorConfigPreflight state migration", () => {
     });
     expect(recordSuccessfulStartupMigrations).toHaveBeenCalledWith({
       env: pinnedEnv,
+      identity: expectMigrationIdentity(),
       lease: startupMigrationLease,
     });
+    expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
+  });
+
+  it("refuses startup when plugin migration inputs change during convergence", async () => {
+    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    pluginMigrationFingerprint
+      .mockReturnValueOnce("plugin-migrations-before")
+      .mockReturnValueOnce("plugin-migrations-before")
+      .mockReturnValueOnce("plugin-migrations-after");
+
+    await expect(
+      runDoctorConfigPreflight({
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
+        requireStartupMigrationCheckpoint: true,
+      }),
+    ).rejects.toThrow("plugin migration inputs changed during startup convergence");
+
+    expect(recordSuccessfulStateMigrations).toHaveBeenCalledWith({
+      env: acquireStartupMigrationLease.mock.calls[0]?.[0]?.env,
+      identity: expect.objectContaining({
+        pluginMigrationFingerprint: "plugin-migrations-before",
+      }),
+      lease: startupMigrationLease,
+    });
+    expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
   });
 
@@ -544,6 +606,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     const pinnedEnv = acquireStartupMigrationLease.mock.calls[0]?.[0]?.env;
     expect(recordSuccessfulStartupMigrations).toHaveBeenCalledWith({
       env: pinnedEnv,
+      identity: expectMigrationIdentity(),
       lease: startupMigrationLease,
     });
     expect(note).toHaveBeenCalledWith("- Left reviewed residue in place.", "Doctor notices");
@@ -612,25 +675,28 @@ describe("runDoctorConfigPreflight state migration", () => {
 
   it("keeps ownerless install-record failures blocking", async () => {
     needsStartupMigrationCheckpoint.mockReturnValue(true);
-    readConfigFileSnapshot.mockResolvedValueOnce({
-      exists: true,
-      valid: true,
-      config: {
-        gateway: { mode: "local", port: 19091 },
-        plugins: { entries: { discord: { enabled: true } } },
+    queueConfigSnapshot(
+      {
+        exists: true,
+        valid: true,
+        config: {
+          gateway: { mode: "local", port: 19091 },
+          plugins: { entries: { discord: { enabled: true } } },
+        },
+        sourceConfig: {
+          gateway: { mode: "local", port: 19091 },
+          plugins: { entries: { discord: { enabled: true } } },
+        },
+        parsed: {
+          gateway: { mode: "local", port: 19091 },
+          plugins: { entries: { discord: { enabled: true } } },
+        },
+        legacyIssues: [],
+        warnings: [],
+        issues: [],
       },
-      sourceConfig: {
-        gateway: { mode: "local", port: 19091 },
-        plugins: { entries: { discord: { enabled: true } } },
-      },
-      parsed: {
-        gateway: { mode: "local", port: 19091 },
-        plugins: { entries: { discord: { enabled: true } } },
-      },
-      legacyIssues: [],
-      warnings: [],
-      issues: [],
-    });
+      2,
+    );
     runPostCorePluginConvergence.mockResolvedValueOnce(
       makeStartupConvergenceResult({
         errored: true,
@@ -796,6 +862,7 @@ describe("runDoctorConfigPreflight state migration", () => {
 
     expect(recordSuccessfulStateMigrations).toHaveBeenCalledWith({
       env: acquireStartupMigrationLease.mock.calls[0]?.[0]?.env,
+      identity: expectMigrationIdentity(),
       lease: startupMigrationLease,
     });
     expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
@@ -808,25 +875,28 @@ describe("runDoctorConfigPreflight state migration", () => {
 
   it("quarantines a plugin payload verification failure and checkpoints readiness", async () => {
     needsStartupMigrationCheckpoint.mockReturnValue(true);
-    readConfigFileSnapshot.mockResolvedValueOnce({
-      exists: true,
-      valid: true,
-      config: {
-        gateway: { mode: "local", port: 19091 },
-        plugins: { entries: { discord: { enabled: true } } },
+    queueConfigSnapshot(
+      {
+        exists: true,
+        valid: true,
+        config: {
+          gateway: { mode: "local", port: 19091 },
+          plugins: { entries: { discord: { enabled: true } } },
+        },
+        sourceConfig: {
+          gateway: { mode: "local", port: 19091 },
+          plugins: { entries: { discord: { enabled: true } } },
+        },
+        parsed: {
+          gateway: { mode: "local", port: 19091 },
+          plugins: { entries: { discord: { enabled: true } } },
+        },
+        legacyIssues: [],
+        warnings: [],
+        issues: [],
       },
-      sourceConfig: {
-        gateway: { mode: "local", port: 19091 },
-        plugins: { entries: { discord: { enabled: true } } },
-      },
-      parsed: {
-        gateway: { mode: "local", port: 19091 },
-        plugins: { entries: { discord: { enabled: true } } },
-      },
-      legacyIssues: [],
-      warnings: [],
-      issues: [],
-    });
+      3,
+    );
     runPostCorePluginConvergence.mockResolvedValueOnce(
       makeStartupConvergenceResult({
         errored: true,
@@ -883,16 +953,19 @@ describe("runDoctorConfigPreflight state migration", () => {
 
   it("does not checkpoint startup migrations when the config snapshot is invalid", async () => {
     needsStartupMigrationCheckpoint.mockReturnValue(true);
-    readConfigFileSnapshot.mockResolvedValueOnce({
-      exists: true,
-      valid: false,
-      config: { gateway: { mode: "local", port: "bad" } },
-      sourceConfig: { gateway: { mode: "local", port: "bad" } },
-      parsed: { gateway: { mode: "local", port: "bad" } },
-      legacyIssues: [],
-      warnings: [],
-      issues: [{ path: "gateway.port", message: "invalid" }],
-    });
+    queueConfigSnapshot(
+      {
+        exists: true,
+        valid: false,
+        config: { gateway: { mode: "local", port: "bad" } },
+        sourceConfig: { gateway: { mode: "local", port: "bad" } },
+        parsed: { gateway: { mode: "local", port: "bad" } },
+        legacyIssues: [],
+        warnings: [],
+        issues: [{ path: "gateway.port", message: "invalid" }],
+      },
+      2,
+    );
 
     await expect(
       runDoctorConfigPreflight({

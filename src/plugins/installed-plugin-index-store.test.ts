@@ -227,6 +227,52 @@ describe("installed plugin index persistence", () => {
     expectPluginFields(persisted, "demo", { packageBuild: { bundledDist: false } });
   });
 
+  it("hashes and persists resolved doctor contract artifacts", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "plugins", "demo");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    const candidate = createCandidate(pluginDir);
+    const contractPath = path.join(pluginDir, "doctor-contract-api.ts");
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    fs.writeFileSync(contractPath, "export const legacyConfigRules = [];\n", "utf8");
+
+    const first = await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [candidate],
+      env,
+    });
+    const firstHash = first.plugins[0]?.doctorContractHash;
+    expect(firstHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(
+      requirePersisted(await readPersistedInstalledPluginIndex({ stateDir })).plugins[0]
+        ?.doctorContractHash,
+    ).toBe(firstHash);
+
+    fs.writeFileSync(
+      contractPath,
+      "export const legacyConfigRules = [{ path: ['demo'], message: 'changed' }];\n",
+      "utf8",
+    );
+    const second = await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [candidate],
+      env,
+    });
+    const secondHash = second.plugins[0]?.doctorContractHash;
+    expect(secondHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(secondHash).not.toBe(firstHash);
+    expect(
+      requirePersisted(await readPersistedInstalledPluginIndex({ stateDir })).plugins[0]
+        ?.doctorContractHash,
+    ).toBe(secondHash);
+  });
+
   it("strips retired startup fields from persisted indexes", async () => {
     const stateDir = makeTempDir();
     const index = createIndex();

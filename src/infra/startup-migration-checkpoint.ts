@@ -26,6 +26,7 @@ type StartupMigrationCheckpointDatabase = Pick<
 const STARTUP_MIGRATION_META_KEY = "startup-migrations";
 const STATE_MIGRATION_META_KEY = "state-migrations";
 const STARTUP_MIGRATION_BUILD_SEPARATOR = "\n";
+const STARTUP_MIGRATION_CHECKPOINT_FORMAT = "3";
 const STARTUP_MIGRATION_LEASE_SCOPE = "startup-migrations";
 const STARTUP_MIGRATION_LEASE_KEY = "global";
 export const STARTUP_MIGRATION_LEASE_TTL_MS = 5 * 60_000;
@@ -90,10 +91,6 @@ function isStartupMigrationLeaseOwnerDefinitelyGone(
   );
 }
 
-function formatStartupMigrationCheckpoint(version: string, buildIdentity: string): string {
-  return `${version}${STARTUP_MIGRATION_BUILD_SEPARATOR}${buildIdentity}`;
-}
-
 // Built-at provenance changes when mutable source is rebuilt even if package version and commit do
 // not. Missing provenance deliberately keeps migrations enabled instead of trusting stale code.
 function resolveStartupMigrationBuildIdentity(moduleUrl: string = import.meta.url): string | null {
@@ -140,9 +137,16 @@ type MigrationCheckpointMetaKey =
   | typeof STARTUP_MIGRATION_META_KEY
   | typeof STATE_MIGRATION_META_KEY;
 
+export type MigrationCheckpointIdentity = {
+  effectiveConfigFingerprint: string;
+  pluginDoctorConfigFingerprint: string;
+  pluginMigrationFingerprint: string;
+};
+
 type MigrationCheckpointParams = {
   buildIdentity?: string | null;
   env?: NodeJS.ProcessEnv;
+  identity?: MigrationCheckpointIdentity | null;
   version?: string;
 };
 
@@ -150,6 +154,31 @@ type RecordMigrationCheckpointParams = MigrationCheckpointParams & {
   lease?: StartupMigrationLease;
   nowMs?: number;
 };
+
+function formatStartupMigrationCheckpoint(params: {
+  buildIdentity: string | null;
+  identity: MigrationCheckpointIdentity | null | undefined;
+  version: string;
+}): string | null {
+  const identity = params.identity;
+  if (
+    params.buildIdentity === null ||
+    !identity ||
+    !identity.effectiveConfigFingerprint.trim() ||
+    !identity.pluginDoctorConfigFingerprint.trim() ||
+    !identity.pluginMigrationFingerprint.trim()
+  ) {
+    return null;
+  }
+  return [
+    params.version,
+    STARTUP_MIGRATION_CHECKPOINT_FORMAT,
+    params.buildIdentity,
+    identity.effectiveConfigFingerprint,
+    identity.pluginDoctorConfigFingerprint,
+    identity.pluginMigrationFingerprint,
+  ].join(STARTUP_MIGRATION_BUILD_SEPARATOR);
+}
 
 function readMigrationCheckpoint(
   env: NodeJS.ProcessEnv,
@@ -219,13 +248,15 @@ function needsMigrationCheckpoint(
     params.buildIdentity === undefined
       ? resolveStartupMigrationBuildIdentity()
       : params.buildIdentity;
-  if (buildIdentity === null) {
+  const checkpoint = formatStartupMigrationCheckpoint({
+    buildIdentity,
+    identity: params.identity,
+    version: params.version ?? VERSION,
+  });
+  if (checkpoint === null) {
     return true;
   }
-  return (
-    readMigrationCheckpoint(env, metaKey) !==
-    formatStartupMigrationCheckpoint(params.version ?? VERSION, buildIdentity)
-  );
+  return readMigrationCheckpoint(env, metaKey) !== checkpoint;
 }
 
 export function needsStartupMigrationCheckpoint(params: MigrationCheckpointParams = {}): boolean {
@@ -365,8 +396,14 @@ function recordSuccessfulMigrationCheckpoints(
       ? resolveStartupMigrationBuildIdentity()
       : params.buildIdentity;
   const nowMs = params.nowMs ?? Date.now();
-  const checkpoint =
-    buildIdentity === null ? version : formatStartupMigrationCheckpoint(version, buildIdentity);
+  const checkpoint = formatStartupMigrationCheckpoint({
+    buildIdentity,
+    identity: params.identity,
+    version,
+  });
+  if (checkpoint === null) {
+    return;
+  }
   writeStartupMigrationCheckpointDatabase(env, (db) => {
     const stateDb = getNodeSqliteKysely<StartupMigrationCheckpointDatabase>(db);
     if (params.lease) {
@@ -394,7 +431,7 @@ function recordSuccessfulMigrationCheckpoints(
           .values({
             meta_key: metaKey,
             role: "global",
-            schema_version: buildIdentity === null ? 1 : 2,
+            schema_version: 3,
             agent_id: null,
             app_version: checkpoint,
             created_at: nowMs,
@@ -403,7 +440,7 @@ function recordSuccessfulMigrationCheckpoints(
           .onConflict((conflict) =>
             conflict.column("meta_key").doUpdateSet({
               role: "global",
-              schema_version: buildIdentity === null ? 1 : 2,
+              schema_version: 3,
               agent_id: null,
               app_version: checkpoint,
               updated_at: nowMs,
