@@ -284,6 +284,10 @@ export async function handleTelegramModelCallback(params: {
               model: selection.model,
               isDefault: isDefaultSelection,
             },
+            // A non-default picker selection must not silently destroy an
+            // auth-profile override set by a non-picker source (#92244). Only
+            // an explicit reset to the default model clears it.
+            preserveAuthProfileOverride: !isDefaultSelection,
           });
           return entry;
         },
