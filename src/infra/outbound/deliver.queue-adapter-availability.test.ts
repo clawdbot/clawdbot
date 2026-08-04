@@ -71,7 +71,7 @@ describe("queued lazy outbound adapter availability", () => {
     ]);
     setActivePluginRegistry(outerRegistry);
     const defaultDeps = createDefaultDeps() as Record<string, RuntimeSender>;
-    const lazyRuntimeSender = defaultDeps.matrix;
+    const lazyRuntimeSender = expectDefined(defaultDeps.matrix, "matrix runtime sender");
     let scopedRuntimeRegistry: PluginRegistry = emptyRegistry;
     const deps = {
       matrix: (...args: Parameters<RuntimeSender>) =>
