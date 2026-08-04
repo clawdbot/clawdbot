@@ -999,33 +999,6 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         return sourceIsLinkBrowser ? .openTab(url) : .openExternal(url)
     }
 
-    private func showLoadFailure(_ error: Error) {
-        let nsError = error as NSError
-        // A cancelled provisional navigation never commits, so the prior
-        // document survives and stays command-capable; clearing live state
-        // here would queue native commands forever with no reload to flush.
-        if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled {
-            return
-        }
-        self.hasLiveContent = false
-        self.isShowingFailurePage = true
-        self.advanceNavigationGeneration()
-        // Same moment-bound rule as showFailure: a terminal load failure
-        // invalidates commands queued for the document that never arrived.
-        self.pendingNativeCommands = []
-        self.pendingNativeNavigation = nil
-        dashboardWindowLogger.error(
-            """
-            dashboard load failed url=\(dashboardLogString(for: self.currentURL), privacy: .public) \
-            error=\(error.localizedDescription, privacy: .public)
-            """)
-        let html = DashboardFailurePage.html(
-            title: "Dashboard unavailable",
-            message: error.localizedDescription,
-            detail: "The dashboard window is open, but the web UI could not load from this endpoint.",
-            url: self.currentURL)
-        self.webView.loadHTMLString(html, baseURL: nil)
-    }
 }
 
 extension DashboardWindowController {
@@ -1511,6 +1484,34 @@ extension DashboardWindowController {
         }
         guard webView === self.webView else { return }
         self.showLoadFailure(error)
+    }
+
+    private func showLoadFailure(_ error: Error) {
+        let nsError = error as NSError
+        // A cancelled provisional navigation never commits, so the prior
+        // document survives and stays command-capable; clearing live state
+        // here would queue native commands forever with no reload to flush.
+        if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled {
+            return
+        }
+        self.hasLiveContent = false
+        self.isShowingFailurePage = true
+        self.advanceNavigationGeneration()
+        // Same moment-bound rule as showFailure: a terminal load failure
+        // invalidates commands queued for the document that never arrived.
+        self.pendingNativeCommands = []
+        self.pendingNativeNavigation = nil
+        dashboardWindowLogger.error(
+            """
+            dashboard load failed url=\(dashboardLogString(for: self.currentURL), privacy: .public) \
+            error=\(error.localizedDescription, privacy: .public)
+            """)
+        let html = DashboardFailurePage.html(
+            title: "Dashboard unavailable",
+            message: error.localizedDescription,
+            detail: "The dashboard window is open, but the web UI could not load from this endpoint.",
+            url: self.currentURL)
+        self.webView.loadHTMLString(html, baseURL: nil)
     }
 
     private func decideTargetlessNavigation(
