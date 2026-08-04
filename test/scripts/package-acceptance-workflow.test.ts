@@ -3149,7 +3149,7 @@ describe("package artifact reuse", () => {
       "inputs.expected_sha == '' || inputs.run_mock_parity",
     );
     expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_matrix").if).toBe(
-      "github.event_name != 'workflow_call' || inputs.run_matrix",
+      "inputs.expected_sha == '' || inputs.run_matrix",
     );
     for (const channel of ["telegram", "discord", "whatsapp", "slack"]) {
       expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, `run_live_${channel}`).if).toBe(
@@ -3174,6 +3174,7 @@ describe("package artifact reuse", () => {
     expect(qaWorkflow).not.toContain('"${{ inputs.expected_sha }}" !== ""');
     expect(qaWorkflow).toContain('if [[ -n "${EXPECTED_SHA}" ]]; then');
     const matrixJob = workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_matrix");
+    expect(matrixJob["timeout-minutes"]).toBe(90);
     expect(workflowStep(matrixJob, "Run Matrix live lane").run).toContain(
       "--provider-mode mock-openai",
     );
