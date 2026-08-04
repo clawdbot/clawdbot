@@ -22,6 +22,10 @@ import {
   writePersistedInstalledPluginIndexInstallRecords,
 } from "./installed-plugin-index-records.js";
 import {
+  readPersistedInstalledPluginIndex,
+  restorePersistedInstalledPluginIndex,
+} from "./installed-plugin-index-store.js";
+import {
   clearRetainedManagedNpmInstallMarker,
   markRetainedManagedNpmInstall,
   resolveRetainedManagedNpmInstallPackageInfo,
@@ -280,6 +284,7 @@ async function commitPluginInstallRecordsWithWriter(params: {
 }): Promise<ConfigReplaceResult | void> {
   const previousInstallRecords =
     params.previousInstallRecords ?? (await loadInstalledPluginIndexInstallRecords());
+  const previousPersistedIndex = await readPersistedInstalledPluginIndex();
   const retainedMarkerPaths: string[] = [];
   const clearedMarkerSnapshots: Array<{ markerPath: string; contents: string }> = [];
   try {
@@ -311,8 +316,8 @@ async function commitPluginInstallRecordsWithWriter(params: {
       });
     } catch (error) {
       try {
-        // Keep config and install index atomic from the caller's perspective.
-        await writePersistedInstalledPluginIndexInstallRecords(previousInstallRecords);
+        // Keep config and the complete persisted index atomic from the caller's perspective.
+        await restorePersistedInstalledPluginIndex(previousPersistedIndex);
       } catch (rollbackError) {
         throw new Error(
           "Failed to commit plugin install records and could not restore the previous plugin index",

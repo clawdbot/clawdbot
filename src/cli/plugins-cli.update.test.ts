@@ -11,10 +11,12 @@ import {
   loadConfig,
   notifyGatewayPluginMetadataChanged,
   readConfigFileSnapshotForWrite,
+  readPersistedInstalledPluginIndex,
   refreshPluginRegistry,
   registerPluginsCli,
   replaceConfigFile,
   resetPluginsCliTestState,
+  restorePersistedInstalledPluginIndex,
   runPluginsCommand,
   runtimeErrors,
   runtimeLogs,
@@ -794,20 +796,20 @@ describe("plugins cli update", () => {
       .mockResolvedValueOnce(initialSnapshot)
       .mockResolvedValueOnce(changedSnapshot);
     const { previousRecords, nextRecords } = primeBravePluginRecordUpdate(cfg);
+    const previousPersistedIndex = {
+      policyHash: "previous-policy",
+      installRecords: previousRecords,
+    };
+    readPersistedInstalledPluginIndex.mockResolvedValue(previousPersistedIndex);
 
     await expect(runPluginsCommand(["plugins", "update", "brave"])).rejects.toThrow(
       "config changed since last load",
     );
 
-    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(
-      1,
-      nextRecords,
-      { config: cfg },
-    );
-    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(
-      2,
-      previousRecords,
-    );
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(nextRecords, {
+      config: cfg,
+    });
+    expect(restorePersistedInstalledPluginIndex).toHaveBeenCalledWith(previousPersistedIndex);
     expect(writeConfigFile).not.toHaveBeenCalled();
     expect(replaceConfigFile).not.toHaveBeenCalled();
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
@@ -851,20 +853,20 @@ describe("plugins cli update", () => {
       .mockResolvedValueOnce(initialSnapshot)
       .mockResolvedValueOnce(changedSnapshot);
     const { previousRecords, nextRecords } = primeBravePluginRecordUpdate(cfg);
+    const previousPersistedIndex = {
+      policyHash: "previous-policy",
+      installRecords: previousRecords,
+    };
+    readPersistedInstalledPluginIndex.mockResolvedValue(previousPersistedIndex);
 
     await expect(runPluginsCommand(["plugins", "update", "brave"])).rejects.toThrow(
       "included config changed since last load",
     );
 
-    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(
-      1,
-      nextRecords,
-      { config: cfg },
-    );
-    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(
-      2,
-      previousRecords,
-    );
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(nextRecords, {
+      config: cfg,
+    });
+    expect(restorePersistedInstalledPluginIndex).toHaveBeenCalledWith(previousPersistedIndex);
     expect(writeConfigFile).not.toHaveBeenCalled();
     expect(replaceConfigFile).not.toHaveBeenCalled();
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
@@ -901,20 +903,20 @@ describe("plugins cli update", () => {
       .mockResolvedValueOnce(initialSnapshot)
       .mockResolvedValueOnce(invalidSnapshot);
     const { previousRecords, nextRecords } = primeBravePluginRecordUpdate(cfg);
+    const previousPersistedIndex = {
+      policyHash: "previous-policy",
+      installRecords: previousRecords,
+    };
+    readPersistedInstalledPluginIndex.mockResolvedValue(previousPersistedIndex);
 
     await expect(runPluginsCommand(["plugins", "update", "brave"])).rejects.toThrow(
       "invalid config for plugin brave",
     );
 
-    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(
-      1,
-      nextRecords,
-      { config: cfg },
-    );
-    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(
-      2,
-      previousRecords,
-    );
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(nextRecords, {
+      config: cfg,
+    });
+    expect(restorePersistedInstalledPluginIndex).toHaveBeenCalledWith(previousPersistedIndex);
     expect(writeConfigFile).not.toHaveBeenCalled();
     expect(replaceConfigFile).not.toHaveBeenCalled();
     expect(refreshPluginRegistry).not.toHaveBeenCalled();

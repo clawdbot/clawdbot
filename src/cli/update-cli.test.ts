@@ -67,6 +67,9 @@ const updateNpmInstalledPlugins = vi.fn();
 const loadInstalledPluginIndexInstallRecords = vi.fn(
   async (params: { config?: OpenClawConfig } = {}) => params.config?.plugins?.installs ?? {},
 );
+const readPersistedInstalledPluginIndex = vi.fn(async () => null);
+const restorePersistedInstalledPluginIndex = vi.fn(async () => undefined);
+const writePersistedInstalledPluginIndexInstallRecords = vi.fn(async () => undefined);
 const checkShellCompletionStatus = vi.fn();
 const ensureCompletionCacheExists = vi.fn();
 const installCompletion = vi.fn();
@@ -292,7 +295,17 @@ vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) =
   return {
     ...actual,
     loadInstalledPluginIndexInstallRecords,
-    writePersistedInstalledPluginIndexInstallRecords: vi.fn(async () => undefined),
+    writePersistedInstalledPluginIndexInstallRecords,
+  };
+});
+
+vi.mock("../plugins/installed-plugin-index-store.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../plugins/installed-plugin-index-store.js")>();
+  return {
+    ...actual,
+    readPersistedInstalledPluginIndex,
+    restorePersistedInstalledPluginIndex,
   };
 });
 
@@ -1310,6 +1323,9 @@ describe("update-cli", () => {
     delete process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
     restartHealthTestControl.snapshot = undefined;
     vi.clearAllMocks();
+    readPersistedInstalledPluginIndex.mockResolvedValue(null);
+    restorePersistedInstalledPluginIndex.mockResolvedValue(undefined);
+    writePersistedInstalledPluginIndexInstallRecords.mockResolvedValue(undefined);
     resetRuntimeCapture();
     spawn.mockImplementation(() => {
       const child = new EventEmitter() as EventEmitter & {
@@ -1777,6 +1793,21 @@ describe("update-cli", () => {
     readPackageVersion.mockImplementation(async (pkgRoot: string) =>
       pkgRoot === root ? "0.0.1" : "2026.5.28",
     );
+    const preUpdateConfig = {
+      plugins: {
+        entries: {
+          msteams: { enabled: false },
+        },
+      },
+    } as OpenClawConfig;
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      parsed: preUpdateConfig,
+      sourceConfig: preUpdateConfig,
+      resolved: preUpdateConfig,
+      config: preUpdateConfig,
+      runtimeConfig: preUpdateConfig,
+    });
     const pluginInstallRecords = {
       msteams: {
         source: "npm",
@@ -1819,6 +1850,41 @@ describe("update-cli", () => {
         integrity: "sha512-newer",
       },
     });
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(capturedRecords, {
+      config: preUpdateConfig,
+    });
+    expect(restorePersistedInstalledPluginIndex).not.toHaveBeenCalled();
+  });
+
+  it("restores the exact plugin index when post-core handoff fails", async () => {
+    const { root } = setupUpdatedRootRefresh();
+    readPackageVersion.mockImplementation(async (pkgRoot: string) =>
+      pkgRoot === root ? "0.0.1" : "2026.5.28",
+    );
+    const previousPersistedIndex = {
+      policyHash: "previous-policy",
+      installRecords: {
+        msteams: {
+          source: "npm",
+          spec: "@openclaw/msteams",
+          resolvedVersion: "1.0.0",
+        },
+      },
+    };
+    readPersistedInstalledPluginIndex.mockResolvedValue(previousPersistedIndex as never);
+    loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce(
+      previousPersistedIndex.installRecords,
+    );
+    spawn.mockImplementationOnce(() => {
+      throw new Error("post-core spawn failed");
+    });
+
+    await expect(updateCommand({ yes: true, restart: false })).rejects.toThrow(
+      "post-core spawn failed",
+    );
+
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledTimes(1);
+    expect(restorePersistedInstalledPluginIndex).toHaveBeenCalledWith(previousPersistedIndex);
   });
 
   it("respawns into the updated git root before requested channel persistence", async () => {

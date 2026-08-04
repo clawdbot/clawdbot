@@ -45,6 +45,10 @@ import {
   loadInstalledPluginIndexInstallRecords,
   writePersistedInstalledPluginIndexInstallRecords,
 } from "../../plugins/installed-plugin-index-records.js";
+import {
+  readPersistedInstalledPluginIndex,
+  restorePersistedInstalledPluginIndex,
+} from "../../plugins/installed-plugin-index-store.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { runExec } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -513,10 +517,26 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
     records: params.pluginInstallRecords,
     targetVersion: postCoreHostVersion,
   });
+  let previousPersistedPluginIndex:
+    | Awaited<ReturnType<typeof readPersistedInstalledPluginIndex>>
+    | undefined;
+  let rewrotePersistedPluginIndex = false;
+  const restoreTentativePluginIndex = async () => {
+    if (!rewrotePersistedPluginIndex) {
+      return;
+    }
+    await restorePersistedInstalledPluginIndex(previousPersistedPluginIndex ?? null);
+    rewrotePersistedPluginIndex = false;
+  };
 
   try {
     if (pluginInstallRecords && pluginInstallRecords !== params.pluginInstallRecords) {
-      await writePersistedInstalledPluginIndexInstallRecords(pluginInstallRecords);
+      previousPersistedPluginIndex = await readPersistedInstalledPluginIndex();
+      await writePersistedInstalledPluginIndexInstallRecords(
+        pluginInstallRecords,
+        params.preUpdateConfig ? { config: params.preUpdateConfig.sourceConfig } : {},
+      );
+      rewrotePersistedPluginIndex = true;
     }
     await writePostCorePluginInstallRecordsFile(installRecordsPath, pluginInstallRecords);
     await writePostCoreSourceConfigFile(sourceConfigPath, params.preUpdateConfig);
@@ -608,9 +628,19 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       if (pluginUpdate) {
         return { resumed: true, pluginUpdate };
       }
+      await restoreTentativePluginIndex();
       return { resumed: false, exitCode };
     }
     return { resumed: true, ...(pluginUpdate ? { pluginUpdate } : {}) };
+  } catch (error) {
+    try {
+      await restoreTentativePluginIndex();
+    } catch (rollbackError) {
+      throw new Error("Post-core update failed and could not restore the previous plugin index", {
+        cause: rollbackError,
+      });
+    }
+    throw error;
   } finally {
     await fs.rm(resultDir, { recursive: true, force: true }).catch(() => undefined);
   }

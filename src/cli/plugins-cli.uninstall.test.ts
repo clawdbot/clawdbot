@@ -14,9 +14,11 @@ import {
   planPluginUninstall,
   PromptInputClosedError,
   promptYesNo,
+  readPersistedInstalledPluginIndex,
   refreshPluginRegistry,
   replaceConfigFile,
   resetPluginsCliTestState,
+  restorePersistedInstalledPluginIndex,
   runPluginsCommand,
   runtimeErrors,
   runtimeLogs,
@@ -186,7 +188,10 @@ describe("plugins cli uninstall", () => {
 
     expect(promptYesNo).not.toHaveBeenCalled();
     expectLatestUninstallPlanParams({ pluginId: "alpha", deleteFiles: false });
-    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({});
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
+      {},
+      { config: { plugins: { entries: {} } } },
+    );
     expect(writeConfigFile).toHaveBeenCalledWith({
       plugins: {
         entries: {},
@@ -267,9 +272,18 @@ describe("plugins cli uninstall", () => {
     await runPluginsCommand(["plugins", "uninstall", "calendar", "--force", "--keep-files"]);
 
     expectLatestUninstallPlanParams({ pluginId: "calendar", deleteFiles: false });
-    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
-      "unrelated-plugin": { source: "npm", spec: "unrelated-plugin@1.0.0" },
-    });
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
+      {
+        "unrelated-plugin": { source: "npm", spec: "unrelated-plugin@1.0.0" },
+      },
+      {
+        config: {
+          plugins: {
+            entries: { "unrelated-plugin": { enabled: true } },
+          },
+        },
+      },
+    );
   });
 
   it("rejects an ambiguous display name before planning or mutating installed plugins", async () => {
@@ -368,7 +382,10 @@ describe("plugins cli uninstall", () => {
 
       expectRuntimeLogIncludes('Warning: plugin "alpha" is referenced by Claw: @owner/audit-claw.');
       expectRuntimeLogIncludes("Uninstalling it may break those Claws");
-      expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({});
+      expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
+        {},
+        { config: { plugins: { entries: {} } } },
+      );
     } finally {
       if (previousStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;
@@ -452,9 +469,14 @@ describe("plugins cli uninstall", () => {
         installs: {},
       },
     } as OpenClawConfig;
+    const previousPersistedIndex = {
+      policyHash: "previous-policy",
+      installRecords,
+    };
 
     loadConfig.mockReturnValue(baseConfig);
     setInstalledPluginIndexInstallRecords(installRecords);
+    readPersistedInstalledPluginIndex.mockResolvedValue(previousPersistedIndex);
     buildPluginSnapshotReport.mockReturnValue({
       plugins: [{ id: "alpha", name: "alpha" }],
       diagnostics: [],
@@ -480,11 +502,11 @@ describe("plugins cli uninstall", () => {
       runPluginsCommand(["plugins", "uninstall", "alpha", "--force", "--keep-files"]),
     ).rejects.toThrow("config changed");
 
-    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(1, {});
-    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(
-      2,
-      installRecords,
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
+      {},
+      { config: { plugins: { entries: {} } } },
     );
+    expect(restorePersistedInstalledPluginIndex).toHaveBeenCalledWith(previousPersistedIndex);
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
     expect(applyPluginUninstallDirectoryRemoval).not.toHaveBeenCalled();
   });
@@ -762,7 +784,16 @@ describe("plugins cli uninstall", () => {
     await runPluginsCommand(["plugins", "uninstall", pluginId, "--force", "--keep-files"]);
 
     expectLatestUninstallPlanParams({ pluginId, channelIds, deleteFiles: false });
-    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({});
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
+      {},
+      {
+        config: expect.objectContaining({
+          channels: Object.fromEntries(
+            Object.entries(channels).filter(([channelId]) => !channelIds.includes(channelId)),
+          ),
+        }),
+      },
+    );
     expect(writeConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({
         channels: Object.fromEntries(
@@ -837,7 +868,10 @@ describe("plugins cli uninstall", () => {
       channelIds: undefined,
       deleteFiles: false,
     });
-    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({});
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
+      {},
+      { config: nextConfig },
+    );
     expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
     expectRuntimeLogIncludes("channel config (channels.alpha)");
     expect(runtimeLogs.at(-2)).toContain('Uninstalled plugin "alpha"');

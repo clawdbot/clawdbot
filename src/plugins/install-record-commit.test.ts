@@ -13,7 +13,9 @@ import {
 
 const mocks = vi.hoisted(() => ({
   loadInstalledPluginIndexInstallRecords: vi.fn(),
+  readPersistedInstalledPluginIndex: vi.fn(),
   replaceConfigFile: vi.fn(),
+  restorePersistedInstalledPluginIndex: vi.fn(),
   transformConfigFileWithRetry: vi.fn(),
   writePersistedInstalledPluginIndexInstallRecords: vi.fn(),
 }));
@@ -34,6 +36,15 @@ vi.mock("./installed-plugin-index-records.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./installed-plugin-index-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./installed-plugin-index-store.js")>();
+  return {
+    ...actual,
+    readPersistedInstalledPluginIndex: mocks.readPersistedInstalledPluginIndex,
+    restorePersistedInstalledPluginIndex: mocks.restorePersistedInstalledPluginIndex,
+  };
+});
+
 import {
   commitConfigWithPendingPluginInstalls,
   commitConfigWriteWithPendingPluginInstalls,
@@ -48,6 +59,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
+    mocks.readPersistedInstalledPluginIndex.mockResolvedValue(null);
     mocks.replaceConfigFile.mockImplementation(async (params: { nextConfig: OpenClawConfig }) => ({
       path: "/tmp/openclaw.json",
       previousHash: null,
@@ -57,6 +69,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       afterWrite: { mode: "auto" },
       followUp: { mode: "auto", requiresRestart: false },
     }));
+    mocks.restorePersistedInstalledPluginIndex.mockResolvedValue(undefined);
     mocks.writePersistedInstalledPluginIndexInstallRecords.mockResolvedValue(undefined);
   });
 
@@ -708,7 +721,12 @@ describe("commitConfigWithPendingPluginInstalls", () => {
         spec: "existing@1.0.0",
       },
     };
+    const previousPersistedIndex = {
+      policyHash: "previous-policy",
+      installRecords: existingRecords,
+    };
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(existingRecords);
+    mocks.readPersistedInstalledPluginIndex.mockResolvedValue(previousPersistedIndex);
     mocks.replaceConfigFile.mockRejectedValue(new Error("config changed"));
 
     await expect(
@@ -726,8 +744,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       }),
     ).rejects.toThrow("config changed");
 
-    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(
-      1,
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
       {
         existing: {
           source: "npm",
@@ -740,10 +757,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       },
       { config: {} },
     );
-    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(
-      2,
-      existingRecords,
-    );
+    expect(mocks.restorePersistedInstalledPluginIndex).toHaveBeenCalledWith(previousPersistedIndex);
   });
 
   it("uses a plain config write when no pending plugin install records exist", async () => {

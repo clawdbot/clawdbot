@@ -85,6 +85,8 @@ export const writePersistedInstalledPluginIndexInstallRecords: AsyncUnknownMock 
     );
   },
 );
+export const readPersistedInstalledPluginIndex: AsyncUnknownMock = vi.fn(async () => null);
+export const restorePersistedInstalledPluginIndex: AsyncUnknownMock = vi.fn(async () => undefined);
 export const loadPluginManifestRegistry: UnknownMock = vi.fn();
 export const buildPluginSnapshotReport: UnknownMock = vi.fn();
 export const buildPluginRegistrySnapshotReport: UnknownMock = vi.fn();
@@ -333,6 +335,22 @@ vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) =
         },
       };
     },
+  };
+});
+
+vi.mock("../plugins/installed-plugin-index-store.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../plugins/installed-plugin-index-store.js")>();
+  return {
+    ...actual,
+    readPersistedInstalledPluginIndex: ((...args: unknown[]) =>
+      invokeMock<unknown[], unknown>(readPersistedInstalledPluginIndex, ...args)) as (
+      ...args: unknown[]
+    ) => unknown,
+    restorePersistedInstalledPluginIndex: ((...args: unknown[]) =>
+      invokeMock<unknown[], unknown>(restorePersistedInstalledPluginIndex, ...args)) as (
+      ...args: unknown[]
+    ) => unknown,
   };
 });
 
@@ -753,6 +771,8 @@ export function resetPluginsCliTestState() {
   mockInstalledPluginIndexInstallRecords = {};
   loadInstalledPluginIndexInstallRecords.mockReset();
   writePersistedInstalledPluginIndexInstallRecords.mockReset();
+  readPersistedInstalledPluginIndex.mockReset();
+  restorePersistedInstalledPluginIndex.mockReset();
   loadPluginManifestRegistry.mockReset();
   buildPluginSnapshotReport.mockReset();
   buildPluginRegistrySnapshotReport.mockReset();
@@ -842,6 +862,8 @@ export function resetPluginsCliTestState() {
       (records ?? {}) as PluginInstallRecordMap,
     );
   });
+  readPersistedInstalledPluginIndex.mockResolvedValue(null);
+  restorePersistedInstalledPluginIndex.mockResolvedValue(undefined);
   loadPluginManifestRegistry.mockReturnValue({
     plugins: [],
     diagnostics: [],
