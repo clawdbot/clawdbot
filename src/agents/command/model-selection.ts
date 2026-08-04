@@ -282,13 +282,14 @@ export async function resolveEmbeddedModelSelection(params: {
     : null;
   const primaryProvider = normalizedChannelOverride?.provider ?? defaultProvider;
   const primaryModel = normalizedChannelOverride?.model ?? defaultModel;
-  // A provably polluted fallback origin (recorded as the fallback override itself
-  // instead of the configured primary) prevents the snap-back probe from firing.
-  // Clear it so this attempt can retry the primary and, if needed, recreate a clean
+  // A stale fallback origin (provably polluted when it equals the override, or the
+  // canonical #92776 three-distinct state) prevents the snap-back probe from firing.
+  // Repair it so this attempt can retry the primary and, if needed, recreate a clean
   // auto-fallback pin.
   // The write is guarded by the exact observed automatic-fallback snapshot so a
   // concurrent reset, user selection, or newer automatic fallback does not receive
-  // stale origin-clear metadata.
+  // stale repair metadata. Locked sessions and commit-edge conflicts are handled
+  // inside the repair helper.
   if (
     sessionEntry &&
     params.sessionStore &&

@@ -1,13 +1,11 @@
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  replaceSessionEntrySync,
-  loadSessionEntryReadOnly,
-} from "../../config/sessions/session-accessor.js";
+import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { repairStaleAutoFallbackOriginOverride } from "./stale-auto-fallback-origin-repair.js";
 
+const { replaceSessionEntrySync, loadSessionEntryReadOnly } = sessionAccessor;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function makeSessionEntry(params: Partial<SessionEntry> = {}): SessionEntry {
@@ -22,6 +20,13 @@ function makeSessionEntry(params: Partial<SessionEntry> = {}): SessionEntry {
     modelOverrideFallbackOriginModel: "claude-fallback",
     ...params,
   };
+}
+
+function createConflictError(): Error {
+  return Object.assign(
+    new Error("SQLite session state changed while preparing session-entry.patch"),
+    { name: "SqliteSessionMutationConflictError" },
+  );
 }
 
 describe("repairStaleAutoFallbackOriginOverride", () => {
@@ -50,6 +55,43 @@ describe("repairStaleAutoFallbackOriginOverride", () => {
     expect(result.entry.modelOverride).toBeUndefined();
     expect(result.entry.modelOverrideSource).toBeUndefined();
     expect(result.hasStoredOverride).toBe(false);
+  });
+
+  it("repairs the canonical three-distinct state by updating the origin only", async () => {
+    const sessionKey = "agent:main:telegram:123";
+    const sessionStore: Record<string, SessionEntry> = {};
+    const storePath = path.join(tempDirs.make("repair-store"), "sessions.json");
+    replaceSessionEntrySync(
+      { storePath, sessionKey },
+      makeSessionEntry({
+        modelOverride: "claude-opus-4-7",
+        modelOverrideFallbackOriginProvider: "anthropic",
+        modelOverrideFallbackOriginModel: "claude-haiku-4-5",
+      }),
+    );
+    const sessionEntry = loadSessionEntryReadOnly({ storePath, sessionKey });
+    if (!sessionEntry) {
+      throw new Error("session entry not loaded");
+    }
+    sessionStore[sessionKey] = sessionEntry;
+
+    const result = await repairStaleAutoFallbackOriginOverride({
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      primaryProvider: "anthropic",
+      primaryModel: "claude-opus-4-8",
+    });
+
+    // Override is preserved; origin is rewritten to the current primary so the
+    // snap-back probe can fire on the next interval.
+    expect(result.entry.providerOverride).toBe("anthropic");
+    expect(result.entry.modelOverride).toBe("claude-opus-4-7");
+    expect(result.entry.modelOverrideSource).toBe("auto");
+    expect(result.entry.modelOverrideFallbackOriginProvider).toBe("anthropic");
+    expect(result.entry.modelOverrideFallbackOriginModel).toBe("claude-opus-4-8");
+    expect(result.hasStoredOverride).toBe(true);
   });
 
   it("does not repair when the persisted entry has changed concurrently", async () => {
@@ -87,6 +129,60 @@ describe("repairStaleAutoFallbackOriginOverride", () => {
     expect(result.hasStoredOverride).toBe(true);
   });
 
+  it("does not repair a locked session selection", async () => {
+    const sessionKey = "agent:main:telegram:123";
+    const sessionStore: Record<string, SessionEntry> = {};
+    const sessionEntry = makeSessionEntry({ modelSelectionLocked: true });
+    sessionStore[sessionKey] = sessionEntry;
+
+    const result = await repairStaleAutoFallbackOriginOverride({
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath: undefined,
+      primaryProvider: "openai",
+      primaryModel: "gpt-5.5",
+    });
+
+    expect(result.entry).toBe(sessionEntry);
+    expect(result.entry.providerOverride).toBe("anthropic");
+    expect(result.entry.modelOverride).toBe("claude-fallback");
+  });
+
+  it("adopts the persisted row when a commit-edge conflict occurs", async () => {
+    const sessionKey = "agent:main:telegram:123";
+    const sessionStore: Record<string, SessionEntry> = {};
+    const storePath = path.join(tempDirs.make("repair-store"), "sessions.json");
+    replaceSessionEntrySync({ storePath, sessionKey }, makeSessionEntry());
+    const sessionEntry = loadSessionEntryReadOnly({ storePath, sessionKey });
+    if (!sessionEntry) {
+      throw new Error("session entry not loaded");
+    }
+    sessionStore[sessionKey] = sessionEntry;
+
+    // A concurrent write lands before our patch commits.
+    const newerEntry: SessionEntry = {
+      ...sessionEntry,
+      model: "newer-model",
+      updatedAt: sessionEntry.updatedAt + 1,
+    };
+    replaceSessionEntrySync({ storePath, sessionKey }, newerEntry);
+
+    vi.spyOn(sessionAccessor, "patchSessionEntry").mockRejectedValueOnce(createConflictError());
+
+    const result = await repairStaleAutoFallbackOriginOverride({
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      primaryProvider: "openai",
+      primaryModel: "gpt-5.5",
+    });
+
+    expect(result.entry.model).toBe("newer-model");
+    expect(result.entry.updatedAt).toBe(sessionEntry.updatedAt + 1);
+  });
+
   it("leaves non-stale origins untouched", async () => {
     const sessionKey = "agent:main:telegram:123";
     const sessionStore: Record<string, SessionEntry> = {};
@@ -106,30 +202,5 @@ describe("repairStaleAutoFallbackOriginOverride", () => {
     });
 
     expect(result.entry).toBe(sessionEntry);
-  });
-
-  it("does not repair a legitimate origin that differs from a changed primary", async () => {
-    const sessionKey = "agent:main:telegram:123";
-    const sessionStore: Record<string, SessionEntry> = {};
-    // Origin differs from both the override and the current primary — this is the
-    // intended mismatch guard for a legitimate primary change, not pollution.
-    const sessionEntry = makeSessionEntry({
-      modelOverrideFallbackOriginProvider: "openai",
-      modelOverrideFallbackOriginModel: "gpt-5.4",
-    });
-    sessionStore[sessionKey] = sessionEntry;
-
-    const result = await repairStaleAutoFallbackOriginOverride({
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      storePath: undefined,
-      primaryProvider: "anthropic",
-      primaryModel: "claude-opus-4-8",
-    });
-
-    expect(result.entry).toBe(sessionEntry);
-    expect(result.entry.modelOverrideFallbackOriginProvider).toBe("openai");
-    expect(result.entry.modelOverrideFallbackOriginModel).toBe("gpt-5.4");
   });
 });
