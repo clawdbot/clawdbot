@@ -1745,10 +1745,6 @@ extension DashboardWindowController {
         self.javaScriptPromptResult(for: response, text: text)
     }
 
-    func _testOwnsJavaScriptConfirmDialog(_ webView: WKWebView) -> Bool {
-        self.ownsJavaScriptConfirmDialog(webView)
-    }
-
     var _testLinkBrowserOwnsJavaScriptControlUIDialog: Bool {
         guard let webView = self.linkBrowser.activeWebView else { return false }
         return self.ownsJavaScriptControlUIDialog(webView)
