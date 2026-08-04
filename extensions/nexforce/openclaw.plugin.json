@@ -46,7 +46,10 @@
             "name": "DeepSeek V4 Flash",
             "input": ["text"],
             "contextWindow": 1000000,
-            "maxTokens": 384000
+            "maxTokens": 384000,
+            "compat": {
+              "codeMode": "preferred"
+            }
           },
           {
             "id": "google/gemini-3.6-flash",
