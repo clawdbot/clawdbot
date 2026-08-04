@@ -1,6 +1,9 @@
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
-import { openRootFile, type RootFileOpenResult } from "../infra/boundary-file-read.js";
+import {
+  openRootFileFollowingParents,
+  type RootFileOpenResult,
+} from "../infra/boundary-file-read.js";
 import { FsSafeError, root as fsRoot } from "../infra/fs-safe.js";
 import {
   type MemoryWriteProvenanceObserver,
@@ -104,7 +107,7 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
     observer: options.memoryWriteProvenance,
     operations: {
       readFile: async (filePath) => {
-        const opened = await openRootFile({
+        const opened = await openRootFileFollowingParents({
           absolutePath: filePath,
           rootPath: options.cwd,
           boundaryLabel: "workspace root",
