@@ -142,87 +142,105 @@ function writeScreenText(screen: TestScreen, text: string) {
   }
 }
 
-function csiParams(value: string) {
-  const body = value.startsWith("\u009b") ? value.slice(1, -1) : value.slice(2, -1);
-  return body.replace(/^[?>!]/u, "").split(";");
+const lifecycleCsi = new Set(
+  "\x1b[?25h|\x1b[?25l|\x1b[?2004h|\x1b[?2004l|\x1b[>7u|\x1b[?u|\x1b[c|\x1b[<u|\x1b[>4;2m|\x1b[>4;0m".split(
+    "|",
+  ),
+);
+
+function assertAllowedCsi(value: string, controls: string[] = []) {
+  const body = value.startsWith("\x1b[") ? value.slice(2) : "";
+  const move = body.match(/^([1-9]\d*)?([ABG])$/u);
+  const moveCount = Number(move?.[1] ?? "1");
+  const allowed =
+    controls.length === 0 &&
+    ((move !== null && Number.isSafeInteger(moveCount) && moveCount <= 10_000) ||
+      value === "\x1b[H" ||
+      /^(?:0|2|3)?J$/u.test(body) ||
+      /^(?:0|2)?K$/u.test(body) ||
+      lifecycleCsi.has(value) ||
+      value === "\x1b[?2026h" ||
+      value === "\x1b[?2026l" ||
+      /^(?:\d+(?:;\d+)*)?m$/u.test(body));
+  if (!allowed) {
+    throw new Error(`unsupported CSI in TUI PTY evidence: ${JSON.stringify(value)}`);
+  }
 }
 
-function csiCount(params: string[], index = 0) {
-  const value = Number(params[index] || "1");
-  return Number.isSafeInteger(value) && value > 0 ? value : 1;
-}
-
-function applyScreenCsi(screen: TestScreen, value: string) {
+function applyScreenCsi(screen: TestScreen, value: string, synchronized: boolean) {
+  if (synchronized && lifecycleCsi.has(value)) {
+    throw new Error(`lifecycle CSI inside synchronized frame: ${JSON.stringify(value)}`);
+  }
   const final = value.at(-1) ?? "";
-  const privatePrefix = value.startsWith("\u009b") ? value[1] : value[2];
-  const params = csiParams(value);
-  const harmlessPrivateMode =
-    (final === "h" || final === "l") &&
-    privatePrefix === "?" &&
-    params.every((param) => param === "25" || param === "2004" || param === "2031");
+  const param = value.slice(2, -1);
+  const count = Number(param || "1");
   if (final === "A") {
-    screen.row = Math.max(0, screen.row - csiCount(params));
+    screen.row = Math.max(0, screen.row - count);
   } else if (final === "B") {
-    screen.row += csiCount(params);
-  } else if (final === "C") {
-    screen.col += csiCount(params);
-  } else if (final === "D") {
-    screen.col = Math.max(0, screen.col - csiCount(params));
+    screen.row += count;
   } else if (final === "G") {
-    screen.col = csiCount(params) - 1;
-  } else if (final === "H" || final === "f") {
-    screen.row = csiCount(params) - 1;
-    screen.col = csiCount(params, 1) - 1;
+    screen.col = count - 1;
+  } else if (value === "\x1b[H") {
+    screen.row = 0;
+    screen.col = 0;
   } else if (final === "J") {
-    const mode = Number(params[0] || "0");
+    const mode = Number(param || "0");
     if (mode === 0) {
       clearScreenCell(screenRow(screen), screen.col).splice(screen.col);
       screen.rows.splice(screen.row + 1);
-    } else if (mode === 1) {
-      screen.rows.splice(0, screen.row, ...Array.from({ length: screen.row }, () => []));
-      clearScreenCell(screenRow(screen), screen.col).fill(" ", 0, screen.col + 1);
-    } else if (mode === 2 || mode === 3) {
+    } else if (mode === 2) {
       screen.rows = [];
-    } else {
-      throw new Error(`unsupported erase-display mode in TUI PTY evidence: ${mode}`);
     }
   } else if (final === "K") {
     const row = screenRow(screen);
-    const mode = Number(params[0] || "0");
+    const mode = Number(param || "0");
     if (mode === 0) {
       clearScreenCell(row, screen.col).splice(screen.col);
-    } else if (mode === 1) {
-      clearScreenCell(row, screen.col).fill(" ", 0, screen.col + 1);
     } else if (mode === 2) {
       screen.rows[screen.row] = [];
-    } else {
-      throw new Error(`unsupported erase-line mode in TUI PTY evidence: ${mode}`);
     }
-  } else if (
-    !(final === "u" && privatePrefix && "?<>".includes(privatePrefix)) &&
-    !harmlessPrivateMode &&
-    !["c", "m", "n", "q"].includes(final)
-  ) {
-    throw new Error(
-      `unsupported cursor-mutating CSI in TUI PTY evidence: ${JSON.stringify(value)}`,
-    );
   }
 }
 
-function trimIncompleteTrailingAnsi(raw: string) {
-  const lastFrameEnd = raw.lastIndexOf("\x1b[?2026l");
+function scanOsc(raw: string, bodyStart: number) {
+  const terminators = [
+    [raw.indexOf("\x07", bodyStart), 1],
+    [raw.indexOf("\x1b\\", bodyStart), 2],
+    [raw.indexOf("\u009c", bodyStart), 1],
+  ].filter(([index]) => index >= 0);
+  if (terminators.length === 0) {
+    return undefined;
+  }
+  const [index, length] = terminators.toSorted(([left], [right]) => left - right)[0];
+  const body = raw.slice(bodyStart, index);
+  if (raw[index] === "\u009c" || ansi.sanitizeForLog(body) !== body) {
+    throw new Error("unsupported terminal control in TUI PTY OSC evidence");
+  }
+  return { body, end: index + length };
+}
+
+function assertAllowedOsc(body: string) {
+  const target = body.startsWith("8;;") ? body.slice(3) : undefined;
+  if (
+    target === undefined ||
+    (target !== "" &&
+      (!/^https?:\/\/\S+$/u.test(target) ||
+        ansi.sanitizeForLog(target) !== target ||
+        !URL.canParse(target)))
+  ) {
+    throw new Error(`unsupported OSC in TUI PTY evidence: ${JSON.stringify(body)}`);
+  }
+  return target;
+}
+
+function terminalOutputIsComplete(raw: string) {
   const oscStart = Math.max(raw.lastIndexOf("\x1b]"), raw.lastIndexOf("\u009d"));
-  const oscRemainder = raw.slice(oscStart + (raw[oscStart] === "\x1b" ? 2 : 1));
-  const oscTail = oscRemainder.endsWith("\x1b") ? oscRemainder.slice(0, -1) : oscRemainder;
-  if (oscStart > lastFrameEnd && ansi.sanitizeForLog(oscTail) === oscTail) {
-    return raw.slice(0, oscStart);
+  if (oscStart >= 0 && !scanOsc(raw, oscStart + (raw[oscStart] === "\x1b" ? 2 : 1))) {
+    return false;
   }
   const csiStart = Math.max(raw.lastIndexOf("\x1b["), raw.lastIndexOf("\u009b"));
-  const csi = csiStart > lastFrameEnd ? ansiSequences.scanAnsiCsiAt(raw, csiStart) : undefined;
-  if (csi && !csi.ended && csiStart + csi.value.length === raw.length) {
-    return raw.slice(0, csiStart);
-  }
-  return raw.endsWith("\x1b") && raw.length - 1 > lastFrameEnd ? raw.slice(0, -1) : raw;
+  const csi = csiStart >= 0 ? ansiSequences.scanAnsiCsiAt(raw, csiStart) : undefined;
+  return csi?.ended !== false && !raw.endsWith("\x1b");
 }
 
 export function synchronizedFrameRows(raw: string): string[][] {
@@ -231,28 +249,51 @@ export function synchronizedFrameRows(raw: string): string[][] {
   const frames: string[][] = [];
   const screen: TestScreen = { col: 0, row: 0, rows: [] };
   let synchronized = false;
-  for (const segment of ansiSequences.splitAnsiSegments(trimIncompleteTrailingAnsi(raw))) {
+  let osc8Open = false;
+  if (!terminalOutputIsComplete(raw)) {
+    return frames;
+  }
+  for (const segment of ansiSequences.splitAnsiSegments(raw)) {
     if (segment.kind === "text") {
       writeScreenText(screen, segment.value);
+    } else if (segment.controls.length > 0 || !segment.value.startsWith("\x1b")) {
+      throw new Error("unsupported terminal sequence in TUI PTY evidence");
     } else if (segment.value === start) {
+      if (synchronized) {
+        throw new Error("nested synchronized frame");
+      }
       synchronized = true;
     } else if (segment.value === end) {
-      if (synchronized) {
-        frames.push(
-          [...Array(screen.rows.length)].map(
-            (_, index) => screen.rows[index]?.join("").trimEnd() ?? "",
-          ),
-        );
+      if (!synchronized) {
+        throw new Error("unmatched synchronized frame end");
       }
+      if (osc8Open) {
+        throw new Error("unclosed OSC 8 hyperlink in synchronized frame");
+      }
+      frames.push(Array.from(screen.rows, (row) => row?.join("").trimEnd() ?? ""));
       synchronized = false;
-    } else {
-      writeScreenText(screen, segment.controls.join(""));
-      if (segment.value.startsWith("\x1b[") || segment.value.startsWith("\u009b")) {
-        applyScreenCsi(screen, segment.value);
+    } else if (segment.value.startsWith("\x1b]")) {
+      const target = assertAllowedOsc(
+        segment.value.slice(2, segment.value.endsWith("\x1b\\") ? -2 : -1),
+      );
+      if (!synchronized && target !== "") {
+        throw new Error("OSC 8 open outside synchronized frame");
       }
+      if (!synchronized) {
+        continue;
+      }
+      if (target !== "" && osc8Open) {
+        throw new Error("unbalanced OSC 8 hyperlink in synchronized frame");
+      }
+      osc8Open = target !== "";
+    } else if (segment.value.startsWith("\x1b[")) {
+      assertAllowedCsi(segment.value, segment.controls);
+      applyScreenCsi(screen, segment.value, synchronized);
+    } else {
+      throw new Error(`unsupported ESC sequence in TUI PTY evidence: ${segment.value}`);
     }
   }
-  return frames;
+  return synchronized || osc8Open ? [] : frames;
 }
 
 export function hasSynchronizedFrameRow(raw: string, markers: string[], expectedText: string) {

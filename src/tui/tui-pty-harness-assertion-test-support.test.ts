@@ -15,7 +15,6 @@ describe("hasSynchronizedFrameRow", () => {
     expect(hasExpected(frame("T08A safe\r\nT08B"))).toBe(false);
     expect(hasExpected(frame("T08A\tsafe T08B"))).toBe(false);
     expect(hasExpected(frame("T08A  safe T08B"))).toBe(false);
-    expect(hasExpected(`${FRAME_START}${EXPECTED}`)).toBe(false);
     expect(parse(frame("界X\r\x1b[2G?"))[0]).toEqual([" ?X"]);
     expect(parse(frame("界X\r\x1b[2G\x1b[K"))[0]).toEqual([""]);
     expect(parse(frame("\u2067RTL\u2069"))[0]).toEqual(["RTL"]);
@@ -23,35 +22,44 @@ describe("hasSynchronizedFrameRow", () => {
   it("rejects terminal row reconstruction false positives", () => {
     for (const raw of [
       frame("T08A safe\x1b[BT08B"),
-      frame("T08A safe\r\nT08B\x1b[A"),
-      frame("T08A safe\x1b[2;1HT08B"),
       frame(`${EXPECTED}\r\x1b[KT08A bad T08B`),
+      frame("T08AxsafexT08B\x1b[3J\x1b[HT08A\x1b[6Gsafe\x1b[11GT08B"),
       `T08A safe\r\n\x1b[B${frame("T08B")}`,
-      frame("T08A safe\b T08B"),
-      `${FRAME_START}${EXPECTED}`,
     ]) {
       expect(hasExpected(raw)).toBe(false);
     }
+    for (const control of "\x1b[A|\x1b[2B|\x1b[3G|\x1b[H|\x1b[J|\x1b[0J|\x1b[2J|\x1b[3J|\x1b[K|\x1b[0K|\x1b[2K|\x1b[m|\x1b[1;38;2;255;0;0m".split(
+      "|",
+    )) {
+      expect(hasExpected(frame(`${control}${EXPECTED}`))).toBe(true);
+    }
+    const lifecycle =
+      "\x1b[?25h\x1b[?25l\x1b[?2004h\x1b[?2004l\x1b[>7u\x1b[?u\x1b[c\x1b[<u\x1b[>4;2m\x1b[>4;0m\x1b]8;;\x07\x1b]8;;\x1b\\";
+    expect(hasExpected(lifecycle + frame(EXPECTED))).toBe(true);
+    const osc8Bel = "\x1b]8;;https://example.test/path\x07";
+    const osc8St = "\x1b]8;;https://example.test/path\x1b\\";
     expect(
-      hasExpected(frame(`\x1b[?25l\x1b[?2004h\x1b[?2031h\x1b[>7u\x1b[?u${EXPECTED}\x1b[<u`)),
+      hasExpected(frame(`${osc8Bel}${EXPECTED}\x1b]8;;\x07${osc8St}x\x1b]8;;\x1b\\\x1b]8;;\x07`)),
     ).toBe(true);
-    for (const [raw, error] of [
-      [frame("safe") + "\x1b[1E", "unsupported cursor-mutating CSI"],
-      [frame("safe\x1b[utext"), "unsupported cursor-mutating CSI"],
-      [frame("safe\x1b[4Jtext"), "unsupported erase-display mode"],
-      [frame("T08A safe\vT08B"), "unsupported terminal control"],
-      [frame("T08A xxxx T08B\r\x1b[6G\x1b[4hsafe"), "unsupported cursor-mutating CSI"],
-      [`${FRAME_START}safe\x1b[39${FRAME_END}`, "unsupported cursor-mutating CSI"],
-      [`${FRAME_START}safe\x1b]title${FRAME_END}`, "unsupported terminal control"],
-    ] as const) {
-      expect(() => parse(raw)).toThrow(error);
+    for (const control of "\u009b31m|\x1b[3\t1m|\x1b[C|\x1b[D|\x1b[2;1H|\x1b[f|\x1b[n|\x1b[q|\x1b[c|\x1b[0c|\x1b[?2031h|\x1b[?2026h|\x1b[?2026l|\x1b[4h|\x1b[1J|\x1b[1K|\x1b[1 q|\x1b[1:2m|\x1b[9007199254740991B|\x1b]0;title\x07|\x1b]9;4;3\x07|\x1b]11;?\x07|\x1b]52;c;secret\x07|\x1b]1337;File=name=x\x07|\x1b]8;id=x;https://example.test\x07|\x1b]8;;ftp://example.test\x07|\u009d8;;https://example.test\x07|\x1b]8;;https://a.test\x07|\x1b]8;;https://a.test\x07\x1b]8;;https://b.test\x07|\x1bc|\x1b[?20\t26h|\x1b[?20\t26l|\v".split(
+      "|",
+    )) {
+      expect(() => parse(frame(`safe${control}`))).toThrow();
     }
-
-    const suffixes = "\x1b[39|\u009b39|\x1b[?2026|\x1b|\x1b]0;title\x1b|\u009d".split("|");
-    for (const suffix of suffixes) {
-      expect(parse(frame("safe") + suffix)).toEqual([["safe"]]);
-      expect(parse(`${FRAME_START}safe${suffix}`)).toEqual([]);
+    expect(() =>
+      parse(`\x1b]8;;https://example.test\x07outside\x1b]8;;\x07${frame("safe")}`),
+    ).toThrow();
+    for (const suffix of "\x1b[39|\u009b39|\x1b[?2026|\x1b|\x1b]0;title\x1b|\u009d|\x1b]8;;https://example.test|\x1b]8;;\x1b".split(
+      "|",
+    )) {
+      expect(parse(frame("safe") + suffix)).toEqual([]);
     }
-    expect(parse(`${FRAME_START}safe\x1b[39m${FRAME_END}`)).toEqual([["safe"]]);
+    expect(parse(frame("safe") + ["\x1b[39", "m"].join(""))).toEqual([["safe"]]);
+    const openFrame = `${FRAME_START}safe\x1b]8;;https://example.test\x07`;
+    expect(parse(openFrame)).toEqual([]);
+    const splitClose = `${openFrame}\x1b]8;;\x1b`;
+    expect(parse(splitClose)).toEqual([]);
+    expect(parse(`${splitClose}\\${FRAME_END}`)).toEqual([["safe"]]);
+    expect(() => parse(`${frame("safe")}\x1b]0;title\x1b\\`)).toThrow();
   });
 });
