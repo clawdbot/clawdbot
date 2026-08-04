@@ -15,10 +15,10 @@ scenario:
     - ANSI, OSC, clipboard, and C1 payloads cannot reach raw terminal frames.
     - Printable text surrounding hostile terminal controls remains visible.
     - A row-aware synchronized-frame oracle proves selector labels, descriptions, footer fields, connection status, BTW questions, and complete headers collapse CR, LF, and tab payloads to exact single-space one-line copies while preserving printable Unicode and RTL isolation.
-    - The authenticated row oracle uses only the latest completed synchronized frame and matches markers, text, and status only through visible cells authored by that frame, while preserving same-frame clears and positioned reconstruction.
-    - The oracle has negative controls for split rows, literal tabs, tab-expanded multiple spaces, cursor movement, erase/overwrite, and incomplete synchronized frames or trailing controls, which invalidate prior frames until controls and OSC 8 state are complete.
+    - The authenticated row oracle uses the final bounded viewport at the fixture's exact PTY dimensions, including autowrap and bottom scrolling, and matches only visible cells authenticated by balanced synchronized frames; later frames preserve untouched authenticated cells, while unsynchronized writes and erases revoke touched cells.
+    - The oracle has negative controls for split rows, literal tabs, stale spaces, post-frame text and erases, right-margin wrapping, scrolling, and incomplete synchronized frames or trailing controls, which invalidate prior frames until controls and OSC 8 state are complete.
     - Hostile selected session and agent identity fields cannot inject controls through the header while their stored identity remains raw.
-    - Live tool titles sanitize their final display string before trusted styling, and control-only system output renders a neutral visible fallback.
+    - Live tool titles sanitize before trusted styling, tool-result Markdown sanitizes source before parsing and isolates rendered RTL content outside OSC 8 and padding, and control-only system or BTW error output renders a neutral visible fallback.
     - Restored in-flight Markdown and dynamic command descriptions sanitize display copies, while unsafe thinking-level completion values are omitted before editor rendering.
     - Model and session selections pass exact unmodified backend values to patchSession and loadHistory.
   codeRefs:

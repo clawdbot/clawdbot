@@ -5,6 +5,17 @@ import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { markdownTheme } from "../theme/theme.js";
 import { HyperlinkMarkdown } from "./hyperlink-markdown.js";
 
+function osc8Targets(raw: string) {
+  return splitAnsiSegments(raw).flatMap((segment) => {
+    if (segment.kind !== "ansi" || !segment.value.startsWith("\x1b]8;;")) {
+      return [];
+    }
+    const terminatorLength = segment.value.endsWith("\x1b\\") ? 2 : 1;
+    const target = segment.value.slice("\x1b]8;;".length, -terminatorLength);
+    return target ? [target] : [];
+  });
+}
+
 describe("HyperlinkMarkdown", () => {
   it("moves dunder identifiers intact across fenced code wrap boundaries", () => {
     const markdown = new HyperlinkMarkdown(
@@ -104,18 +115,28 @@ describe("HyperlinkMarkdown", () => {
     const rendered = new HyperlinkMarkdown(`مرحبا ${url}`, 0, 0, markdownTheme).render(120)[0];
 
     expect(rendered).toBeDefined();
-    const targets = splitAnsiSegments(rendered ?? "").flatMap((segment) => {
-      if (segment.kind !== "ansi" || !segment.value.startsWith("\x1b]8;;")) {
-        return [];
-      }
-      const terminatorLength = segment.value.endsWith("\x1b\\") ? 2 : 1;
-      const target = segment.value.slice("\x1b]8;;".length, -terminatorLength);
-      return target ? [target] : [];
-    });
+    const targets = osc8Targets(rendered ?? "");
     expect(targets.length).toBeGreaterThan(0);
     expect(targets.every((target) => target === url)).toBe(true);
     expect(rendered?.startsWith("\u2067")).toBe(true);
-    expect(rendered?.endsWith("\u2069")).toBe(true);
+    expect(rendered?.trimEnd().endsWith("\u2069")).toBe(true);
+    expect(rendered?.indexOf("\u2067")).toBeLessThan(rendered?.indexOf("\x1b]8;;") ?? -1);
+    expect(rendered?.indexOf("\u2069")).toBeGreaterThan(rendered?.lastIndexOf("\x1b]8;;") ?? -1);
     expect(visibleWidth(rendered ?? "")).toBe(120);
+  });
+
+  it("keeps horizontal padding outside isolates while OSC8 targets wrap intact", () => {
+    const url = "https://example.test/rtl-proof/with/a/long/path";
+    const lines = new HyperlinkMarkdown(`مرحبا ${url}`, 2, 0, markdownTheme).render(24);
+    const rtlLine = lines.find((line) => line.includes("مرحبا"));
+    const targets = osc8Targets(lines.join("\n"));
+
+    expect(lines.length).toBeGreaterThan(1);
+    expect(lines.every((line) => visibleWidth(line) === 24)).toBe(true);
+    expect(rtlLine?.startsWith("  \u2067")).toBe(true);
+    expect(rtlLine?.trimEnd().endsWith("\u2069")).toBe(true);
+    expect(rtlLine?.endsWith("  ")).toBe(true);
+    expect(targets.length).toBeGreaterThan(1);
+    expect(targets.every((target) => target === url)).toBe(true);
   });
 });

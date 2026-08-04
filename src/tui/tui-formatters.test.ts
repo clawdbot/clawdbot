@@ -916,6 +916,14 @@ describe("Markdown display safety", () => {
     expect(isolated).toBe(`\u2067${rendered}\u2069`);
     expect(visibleWidth(isolated)).toBe(visibleWidth(rendered));
   });
+
+  it("keeps rendered padding outside RTL isolates", () => {
+    const rendered = "  \x1b[1mمرحبا\x1b[0m   ";
+    const isolated = isolateRtlRenderedLine(rendered);
+
+    expect(isolated).toBe(`  \u2067\x1b[1mمرحبا\x1b[0m\u2069   `);
+    expect(visibleWidth(isolated)).toBe(visibleWidth(rendered));
+  });
 });
 
 describe("isTerminalSafeAutocompleteValue", () => {

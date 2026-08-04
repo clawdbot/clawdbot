@@ -247,7 +247,14 @@ function isolateRtlLine(line: string): string {
 }
 
 export function isolateRtlRenderedLine(line: string): string {
-  return isolateRtlLine(line);
+  if (!RTL_SCRIPT_RE.test(stripAnsi(line))) {
+    return line;
+  }
+  const padding = line.match(/^(\s*)(.*\S)(\s*)$/u);
+  if (!padding) {
+    return line;
+  }
+  return `${padding[1]}${RTL_ISOLATE_START}${padding[2]}${RTL_ISOLATE_END}${padding[3]}`;
 }
 
 function applyRtlIsolation(text: string): string {
