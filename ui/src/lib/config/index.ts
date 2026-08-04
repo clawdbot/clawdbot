@@ -1,7 +1,11 @@
 // Control UI runtime config capability and shared config-domain mutations.
 import { ErrorCodes } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import {
+  GatewayRequestError,
+  type GatewayBrowserClient,
+  type GatewayHelloOk,
+} from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../../api/types.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { coerceConfigFormNumberString } from "../../components/config-form.numeric.ts";
@@ -15,6 +19,7 @@ import {
   serializeConfigForm,
   setPathValue,
 } from "../config-form-utils.ts";
+import { canCallGatewayMethod } from "../gateway-methods.ts";
 import { parseJson5Text, warmJson5 } from "../json5-runtime.ts";
 import { normalizeAgentId } from "../sessions/session-key.ts";
 import { createAppliedConfigRefreshController } from "./applied-refresh.ts";
@@ -187,6 +192,7 @@ type RuntimeConfigGatewaySnapshot = {
   client: GatewayBrowserClient | null;
   phase: ApplicationGatewayPhase;
   sessionKey: string;
+  hello?: GatewayHelloOk | null;
 };
 
 type RuntimeConfigGateway = {
@@ -1410,6 +1416,20 @@ export function createRuntimeConfigCapability(
   // a post-apply write is meaningless while the gateway restarts, so the
   // teardown flush fail-closes on them).
   let manualFlightInfo: { raw: string; ackHash: string | null } | null = null;
+  const canCallConfigMethod = (
+    method: "config.set" | "config.apply" | "config.patch" | "config.openFile",
+    options?: { requireAdvertisement?: boolean },
+  ) =>
+    canCallGatewayMethod(
+      {
+        client: gateway.snapshot.client,
+        hello: gateway.snapshot.hello ?? null,
+        phase: gateway.snapshot.phase,
+      },
+      method,
+      "operator.admin",
+      options,
+    );
 
   const publish = () => {
     if (disposed) {
@@ -1473,7 +1493,7 @@ export function createRuntimeConfigCapability(
   const cancelAppliedRefresh = appliedRefresh.cancel;
   const reconcileAppliedRefresh = appliedRefresh.reconcile;
   const runAutoSave = () => {
-    if (disposed || suppressAutoSave || writesSuspended) {
+    if (disposed || suppressAutoSave || writesSuspended || !canCallConfigMethod("config.set")) {
       return;
     }
     if (autoSaveInFlight ?? manualSubmitInFlight) {
@@ -1532,7 +1552,13 @@ export function createRuntimeConfigCapability(
     // Only form-draft edits auto-save; raw-text drafts stay manual so a
     // half-typed JSON5 buffer never gets written to disk. Suspended writes
     // (app updater running) stay dirty and reschedule when suspension lifts.
-    if (disposed || writesSuspended || !state.configFormDirty || state.configFormMode !== "form") {
+    if (
+      disposed ||
+      writesSuspended ||
+      !canCallConfigMethod("config.set") ||
+      !state.configFormDirty ||
+      state.configFormMode !== "form"
+    ) {
       return;
     }
     // A conflict proves the snapshot is stale; retrying against the same base
@@ -1934,36 +1960,43 @@ export function createRuntimeConfigCapability(
       return drainPendingWrites(true);
     },
     save: () =>
-      afterPendingWritesSettled(async () => {
-        cancelAppliedRefresh();
-        try {
-          return await saveConfig(state, (info) => {
-            manualFlightInfo = info;
-          });
-        } finally {
-          reconcileAppliedRefresh();
-        }
-      }, false),
+      !canCallConfigMethod("config.set")
+        ? Promise.resolve(false)
+        : afterPendingWritesSettled(async () => {
+            cancelAppliedRefresh();
+            try {
+              return await saveConfig(state, (info) => {
+                manualFlightInfo = info;
+              });
+            } finally {
+              reconcileAppliedRefresh();
+            }
+          }, false),
     apply: () =>
-      afterPendingWritesSettled(async () => {
-        cancelAppliedRefresh();
-        // Checked after the drain: a raw draft whose explicit Save is in
-        // flight resolves clean and may apply. A raw draft that is STILL
-        // dirty here was never reviewed-saved — applying would implicitly
-        // write unreviewed raw text, so refuse and point at the Raw editor.
-        if (state.configFormDirty && state.configFormMode === "raw") {
-          state.configAutoSaveStatus = "error";
-          state.lastError = t("configView.rawDraftBlocksApply");
-          reconcileAppliedRefresh();
-          return false;
-        }
-        try {
-          return await applyConfig(state);
-        } finally {
-          reconcileAppliedRefresh();
-        }
-      }, false),
-    openFile: () => run(() => openConfigFile(state)),
+      !canCallConfigMethod("config.apply")
+        ? Promise.resolve(false)
+        : afterPendingWritesSettled(async () => {
+            cancelAppliedRefresh();
+            // Checked after the drain: a raw draft whose explicit Save is in
+            // flight resolves clean and may apply. A raw draft that is STILL
+            // dirty here was never reviewed-saved — applying would implicitly
+            // write unreviewed raw text, so refuse and point at the Raw editor.
+            if (state.configFormDirty && state.configFormMode === "raw") {
+              state.configAutoSaveStatus = "error";
+              state.lastError = t("configView.rawDraftBlocksApply");
+              reconcileAppliedRefresh();
+              return false;
+            }
+            try {
+              return await applyConfig(state);
+            } finally {
+              reconcileAppliedRefresh();
+            }
+          }, false),
+    openFile: () =>
+      canCallConfigMethod("config.openFile", { requireAdvertisement: false })
+        ? run(() => openConfigFile(state))
+        : Promise.resolve(),
     agentEntry: (agentId, options) => agentConfigEntry(state, agentId, options),
     stageDefaultAgent: (agentId) => {
       const changed = stageDefaultAgentConfigEntry(state, agentId);
@@ -1976,14 +2009,19 @@ export function createRuntimeConfigCapability(
     // Unlike save/apply, a patch does not submit the form draft — flush a
     // scheduled autosave into a flight first (the settle below drains it) and
     // re-arm the debounce after so a dirty form is never left timer-less.
-    patch: (options) => queueConfigPatch(() => ({ options })),
+    patch: (options) =>
+      canCallConfigMethod("config.patch")
+        ? queueConfigPatch(() => ({ options }))
+        : Promise.resolve(false),
     patchFromSnapshot: (build) =>
-      queueConfigPatch(() => {
-        const config = resolveEditableSnapshotConfig(state.configSnapshot);
-        return config
-          ? build(config)
-          : { error: "Configuration is unavailable; refresh and try again." };
-      }),
+      canCallConfigMethod("config.patch")
+        ? queueConfigPatch(() => {
+            const config = resolveEditableSnapshotConfig(state.configSnapshot);
+            return config
+              ? build(config)
+              : { error: "Configuration is unavailable; refresh and try again." };
+          })
+        : Promise.resolve(false),
     runExternalMutation: async <T>(
       task: (client: GatewayBrowserClient) => Promise<T>,
       options: { waitForWritesResumed?: boolean } = {},
@@ -2121,7 +2159,11 @@ export function createRuntimeConfigCapability(
       // invalidated below.
       const client = state.client;
       const canFlush =
-        state.connected && client !== null && state.configFormMode === "form" && !writesSuspended;
+        state.connected &&
+        client !== null &&
+        state.configFormMode === "form" &&
+        !writesSuspended &&
+        canCallConfigMethod("config.set");
       const autoFlight = autoSaveInFlight;
       const pendingFlight = autoFlight ?? manualSubmitInFlight;
       cancelScheduledAutoSave();

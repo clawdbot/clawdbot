@@ -1,7 +1,11 @@
 // @vitest-environment node
 // Control UI tests cover config behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import {
+  GatewayRequestError,
+  type GatewayBrowserClient,
+  type GatewayHelloOk,
+} from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot } from "../../api/types.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { createRuntimeConfigCapability, resolveAgentConfigEntryTarget } from "./index.ts";
@@ -23,6 +27,7 @@ function createGatewayHarness(client: GatewayBrowserClient) {
     client: GatewayBrowserClient;
     phase: ApplicationGatewayPhase;
     sessionKey: string;
+    hello?: GatewayHelloOk | null;
   } = { client, phase: "connected", sessionKey: "main" };
   const listeners = new Set<(next: typeof snapshot) => void>();
   return {
@@ -35,11 +40,16 @@ function createGatewayHarness(client: GatewayBrowserClient) {
         return () => listeners.delete(listener);
       },
     },
-    publish: (connected: boolean, nextClient: GatewayBrowserClient = client) => {
+    publish: (
+      connected: boolean,
+      nextClient: GatewayBrowserClient = client,
+      hello?: GatewayHelloOk | null,
+    ) => {
       snapshot = {
         client: nextClient,
         phase: connected ? "connected" : "reconnecting",
         sessionKey: "main",
+        hello,
       };
       for (const listener of listeners) {
         listener(snapshot);
@@ -564,6 +574,28 @@ describe("config form auto-save", () => {
     expect(runtimeConfig.state.configNeedsApply).toBe(true);
     // The post-save reload rebased the clean draft onto the new hash.
     expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
+    runtimeConfig.dispose();
+  });
+
+  it("does not auto-save a dirty draft after reconnecting with read-only access", async () => {
+    vi.useFakeTimers();
+    const server = createConfigServerMock();
+    const client = { request: server.request } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+
+    await runtimeConfig.ensureLoaded();
+    runtimeConfig.patchForm(["count"], 2);
+    publish(true, client, {
+      type: "hello-ok",
+      protocol: 1,
+      auth: { role: "operator", scopes: ["operator.read"] },
+      features: { methods: ["config.get", "config.set"] },
+    } as GatewayHelloOk);
+    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+
+    expect(server.submissions).toHaveLength(0);
+    expect(runtimeConfig.state.configFormDirty).toBe(true);
     runtimeConfig.dispose();
   });
 
