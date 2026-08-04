@@ -1,33 +1,24 @@
 import { consume } from "@lit/context";
 import { initialState, Task } from "@lit/task";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { applicationContext, type ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { loadSettings } from "../../app/settings.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
-import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
-import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { filterSkillWorkshopProposals } from "../../lib/skill-workshop/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { PLUGINS_HUB_PANEL_ID, pluginsHubTabs } from "../plugins/plugins-hub.ts";
+import { canCallWorkshopAdminMethod, resolveWorkshopAccess } from "./access.ts";
 import { renderSkillWorkshopHeaderControls, setSkillWorkshopMode } from "./header-controls.ts";
 import {
   loadSkillWorkshopPageData,
   runSkillWorkshopPageHistoryScan,
 } from "./history-scan-page-controller.ts";
-import type {
-  SkillWorkshopProposal,
-  SkillWorkshopRenderContext,
-  SkillWorkshopRevisionRequest,
-} from "./page-types.ts";
+import type { SkillWorkshopRenderContext, SkillWorkshopRevisionRequest } from "./page-types.ts";
 import { selectPluginsHubTab } from "./plugins-hub-navigation.ts";
 import {
   countSkillWorkshopProposals,
@@ -39,6 +30,7 @@ import {
   type SkillWorkshopRouteData,
   type SkillWorkshopState,
 } from "./proposals.ts";
+import { resolveSkillWorkshopRevisionSessionKey } from "./revision-session.ts";
 import { resolveSelfLearning, setSelfLearningEnabled } from "./self-learning.ts";
 import {
   captureSkillWorkshopSourceScope,
@@ -48,76 +40,6 @@ import {
 } from "./source-scope.ts";
 import { loadSkillWorkshopMode, loadSkillWorkshopUseCurrentChatForRevisions } from "./storage.ts";
 import { renderSkillWorkshop } from "./view.ts";
-
-function findRevisionSessionRow(
-  result: SessionsListResult | null,
-  sessionKey: string | undefined,
-): GatewaySessionRow | null {
-  const key = sessionKey?.trim();
-  return key ? (result?.sessions.find((row) => row.key === key) ?? null) : null;
-}
-
-function isUsableRevisionSession(row: GatewaySessionRow | null): row is GatewaySessionRow {
-  return Boolean(row && !row.archived && !row.hasActiveRun);
-}
-
-async function loadRevisionSessionsForAgent(
-  context: SkillWorkshopPageContext,
-  agentId: string,
-): Promise<SessionsListResult | null> {
-  const current = context.sessions.state;
-  if (current.agentId === agentId && current.result?.sessions.length) {
-    return current.result;
-  }
-  return context.sessions.list({ agentId });
-}
-
-async function resolveRevisionSessionKey(
-  state: SkillWorkshopState,
-  context: SkillWorkshopPageContext,
-  proposal: SkillWorkshopProposal,
-  proposalAgentId: string,
-  isCurrent: () => boolean,
-): Promise<string | null> {
-  if (!isCurrent()) {
-    return null;
-  }
-  const gatewayHello = context.gateway.snapshot.hello;
-  if (state.skillWorkshopUseCurrentChatForRevisions) {
-    return resolveSessionKey(loadSettings().sessionKey, gatewayHello).trim() || null;
-  }
-
-  const agentId = normalizeAgentId(proposal.origin?.agentId ?? proposalAgentId);
-  const sessions = await loadRevisionSessionsForAgent(context, agentId);
-  if (!isCurrent()) {
-    return null;
-  }
-  const originRow = findRevisionSessionRow(sessions, proposal.origin?.sessionKey);
-  if (isUsableRevisionSession(originRow)) {
-    return originRow.key;
-  }
-
-  const createParams = {
-    agentId,
-    label: truncateUtf16Safe(`Skill Workshop: ${proposal.slug || proposal.key}`, 80),
-  };
-  const createAccess = readSessionMethodAccess(context.gateway.snapshot, {
-    method: "sessions.create",
-    params: createParams,
-  });
-  if (!createAccess.allowed) {
-    throw new Error(createAccess.reason);
-  }
-  if (!isCurrent()) {
-    return null;
-  }
-  const createdKey = await context.sessions.create(createParams);
-  const sessionKey = resolveSessionKey(createdKey, gatewayHello).trim();
-  if (!sessionKey) {
-    throw new Error(context.sessions.state.error ?? "Could not prepare a Skill Workshop thread.");
-  }
-  return sessionKey;
-}
 
 function renderSkillWorkshopPage(
   state: SkillWorkshopState,
@@ -137,15 +59,7 @@ function renderSkillWorkshopPage(
     state.skillWorkshopMode === "today"
       ? "content--skill-workshop content--skill-workshop-today"
       : "content--skill-workshop";
-  const canCall = (method: string) =>
-    canCallGatewayMethod(context.gateway.snapshot, method, "operator.admin");
-  const access = {
-    canEvaluate: canCall("skills.proposals.evaluate"),
-    canApply: canCall("skills.proposals.apply"),
-    canRevise: canCall("skills.proposals.requestRevision"),
-    canReject: canCall("skills.proposals.reject"),
-    canScanHistory: canCall("skills.proposals.historyScan"),
-  };
+  const access = resolveWorkshopAccess(context.gateway.snapshot);
 
   return html`
     <section class=${pageClass}>
@@ -280,7 +194,9 @@ function renderSkillWorkshopPage(
               onPrev: () => selectRelativeProposal(-1),
               onNext: () => selectRelativeProposal(1),
               onApply: (key) => {
-                if (!canCall("skills.proposals.apply")) {
+                if (
+                  !canCallWorkshopAdminMethod(context.gateway.snapshot, "skills.proposals.apply")
+                ) {
                   return;
                 }
                 void runSkillWorkshopLifecycleAction(state, context, "apply", key).finally(
@@ -289,14 +205,21 @@ function renderSkillWorkshopPage(
                 requestUpdate();
               },
               onEvaluate: (key) => {
-                if (!canCall("skills.proposals.evaluate")) {
+                if (
+                  !canCallWorkshopAdminMethod(context.gateway.snapshot, "skills.proposals.evaluate")
+                ) {
                   return;
                 }
                 void runSkillWorkshopEvaluation(state, context, key).finally(requestUpdate);
                 requestUpdate();
               },
               onRevise: (key) => {
-                if (!canCall("skills.proposals.requestRevision")) {
+                if (
+                  !canCallWorkshopAdminMethod(
+                    context.gateway.snapshot,
+                    "skills.proposals.requestRevision",
+                  )
+                ) {
                   return;
                 }
                 state.skillWorkshopRevisionKey = key;
@@ -304,7 +227,9 @@ function renderSkillWorkshopPage(
                 requestUpdate();
               },
               onReject: (key) => {
-                if (!canCall("skills.proposals.reject")) {
+                if (
+                  !canCallWorkshopAdminMethod(context.gateway.snapshot, "skills.proposals.reject")
+                ) {
                   return;
                 }
                 void runSkillWorkshopLifecycleAction(state, context, "reject", key).finally(
@@ -322,7 +247,11 @@ function renderSkillWorkshopPage(
                 requestUpdate();
               },
               onRevisionSubmit: (key) =>
-                onRevisionRequest && canCall("skills.proposals.requestRevision")
+                onRevisionRequest &&
+                canCallWorkshopAdminMethod(
+                  context.gateway.snapshot,
+                  "skills.proposals.requestRevision",
+                )
                   ? void requestSkillWorkshopRevision(
                       state,
                       context,
@@ -507,7 +436,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     }
     let sessionKey: string | null;
     try {
-      sessionKey = await resolveRevisionSessionKey(
+      sessionKey = await resolveSkillWorkshopRevisionSessionKey(
         scope.state,
         scope.context,
         proposal,
@@ -656,11 +585,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
 
   private readonly handleHistoryScan = () => {
     if (
-      !canCallGatewayMethod(
-        this.context?.gateway?.snapshot,
-        "skills.proposals.historyScan",
-        "operator.admin",
-      )
+      !canCallWorkshopAdminMethod(this.context?.gateway?.snapshot, "skills.proposals.historyScan")
     ) {
       return;
     }
@@ -685,7 +610,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
   };
 
   private async applySelfLearningToggle(enabled: boolean): Promise<void> {
-    if (!canCallGatewayMethod(this.context?.gateway?.snapshot, "config.patch", "operator.admin")) {
+    if (!canCallWorkshopAdminMethod(this.context?.gateway?.snapshot, "config.patch")) {
       return;
     }
     const runtimeConfig = this.context?.runtimeConfig;
@@ -731,7 +656,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
               this.context.runtimeConfig,
               this.selfLearningBusy,
               this.selfLearningError,
-              canCallGatewayMethod(this.context.gateway.snapshot, "config.patch", "operator.admin"),
+              canCallWorkshopAdminMethod(this.context.gateway.snapshot, "config.patch"),
             ),
             onSelfLearningToggle: this.handleSelfLearningToggle,
             onHistoryScan: this.handleHistoryScan,
