@@ -16,6 +16,7 @@ import {
   updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { redactIdentifier } from "../../logging/redact-identifier.js";
 import {
   buildSessionContext,
   CURRENT_SESSION_VERSION,
@@ -756,7 +757,9 @@ describe("SessionManager.open", () => {
     const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "sqlite-prompt-release-rebound";
-    const sessionKey = "agent:main:dashboard:sqlite-prompt-release-rebound";
+    // Canonical session keys can embed a channel peer id; this fixture proves
+    // that value never reaches the refusal exception raw.
+    const sessionKey = "agent:main:whatsapp:direct:+15551234567";
     const marker = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
     const scope = { agentId: "main", sessionId, sessionKey, storePath };
     await upsertSessionEntryCore(scope, { sessionFile: marker, sessionId, updatedAt: 10 });
@@ -800,24 +803,86 @@ describe("SessionManager.open", () => {
     expect(() => sessionManager.appendModelChange("openai", "gpt-5.5")).toThrow(
       "entry was not persisted",
     );
-    // The refused append must name the identity it was scoped to. Without it the
-    // caller can only report that a write failed, and a mismatched session key
-    // reaches the operator as an unexplained failure.
+    // The refused append must name the identity it was scoped to, but only as a
+    // stable hash: this message surfaces to operators verbatim through /compact
+    // and sessions.compact as result.reason, and the raw sessionKey can embed a
+    // channel peer id such as a phone number.
     expect(() => sessionManager.appendModelChange("openai", "gpt-5.5")).toThrow(
-      `sessionKey=${sessionKey}`,
+      `sessionKeyHash=${redactIdentifier(sessionKey)}`,
     );
     expect(() => sessionManager.appendModelChange("openai", "gpt-5.5")).toThrow(
-      `sessionId=${sessionId}`,
+      `sessionIdHash=${redactIdentifier(sessionId)}`,
     );
+    expect(() => sessionManager.appendModelChange("openai", "gpt-5.5")).not.toThrow(sessionKey);
+    expect(() => sessionManager.appendModelChange("openai", "gpt-5.5")).not.toThrow(sessionId);
     expect(() =>
       sessionManager.appendMessage({ role: "user", content: "late message", timestamp: 1 }),
     ).toThrow("message was not persisted");
     expect(() =>
       sessionManager.appendMessage({ role: "user", content: "late message", timestamp: 1 }),
-    ).toThrow(`sessionKey=${sessionKey}`);
+    ).toThrow(`sessionKeyHash=${redactIdentifier(sessionKey)}`);
+    expect(() =>
+      sessionManager.appendMessage({ role: "user", content: "late message", timestamp: 1 }),
+    ).not.toThrow(sessionKey);
     expect(sessionManager.getEntries()).toEqual(entriesBeforeRejectedAppends);
     expect(sessionManager.getLeafId()).toBe(leafBeforeRejectedAppends);
     expect(sessionManager.getAppendParentId()).toBe(appendParentBeforeRejectedAppends);
+  });
+
+  it("renders equal hashes when a sessionId lands in the sessionKey field", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    // Simulates the bug this redaction is meant to stay diagnosable for: a
+    // sessionId value substituted into the sessionKey field.
+    const collidingIdentity = "agent:main:whatsapp:direct:+15559990000";
+    const sessionId = collidingIdentity;
+    const sessionKey = collidingIdentity;
+    const marker = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await upsertSessionEntry(scope, { sessionFile: marker, sessionId, updatedAt: 10 });
+    // The legacy sqlite marker format can't carry a colon-bearing sessionId
+    // (its codec splits on `:`), so open directly with the intended scope
+    // instead of round-tripping it through parseSqliteSessionFileMarker.
+    const sessionManager = SessionManager.open(
+      { agentId: "main", sessionId, storePath, sessionKey },
+      dir,
+    );
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      { sessionId: "replacement-session", updatedAt: 20 },
+    );
+
+    let thrown: unknown;
+    try {
+      sessionManager.appendModelChange("openai", "gpt-5.5");
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    const message = (thrown as Error).message;
+
+    expect(message).not.toContain(collidingIdentity);
+
+    // sessionKey and sessionId were the same raw value here, which is the exact
+    // case this redaction must keep diagnosable: the two rendered hashes match.
+    const keyHash = message.match(/sessionKeyHash=(\S+)/)?.[1];
+    const idHash = message.match(/sessionIdHash=(\S+)/)?.[1];
+    expect(keyHash).toBe(redactIdentifier(sessionKey));
+    expect(idHash).toBe(redactIdentifier(sessionId));
+    expect(keyHash).toBe(idHash);
+  });
+
+  it("redacts newlines, ANSI escapes and oversized identifiers to a fixed-width single-line hash", () => {
+    const withNewlineAndAnsi = "agent:main:whatsapp:direct:+1555\n\x1b[31mHIJACK\x1b[0m9990000";
+    const oversized = `agent:main:whatsapp:direct:+1555${"9".repeat(10_000)}`;
+
+    for (const raw of [withNewlineAndAnsi, oversized]) {
+      const redacted = redactIdentifier(raw);
+      expect(redacted).not.toContain(raw);
+      expect(redacted).not.toContain("\n");
+      expect(redacted).not.toContain("\x1b");
+      expect(redacted).toMatch(/^sha256:[0-9a-f]{12}$/);
+    }
   });
 
   it("reloads SQLite markers through setSessionFile without switching to file paths", async () => {

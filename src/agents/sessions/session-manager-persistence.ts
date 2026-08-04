@@ -5,6 +5,7 @@ import {
   ensureSessionEntrySync,
   type TranscriptEntryAnchor,
 } from "../../config/sessions/session-accessor.js";
+import { redactIdentifier } from "../../logging/redact-identifier.js";
 import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
 import { SessionManagerCore } from "./session-manager-core.js";
 import type { AppendPersistenceOptions, SessionEntry } from "./session-manager-types.js";
@@ -37,6 +38,14 @@ function requireTranscriptEventAppend(
  * session row cannot be matched, so without this the caller can only report
  * *that* a write was refused, never *which* identity missed. A sessionId
  * arriving in `sessionKey` is the common cause and is invisible otherwise.
+ *
+ * This message reaches operators through `/compact` and `sessions.compact`
+ * as `result.reason`, and a canonical sessionKey can embed a channel peer id
+ * (a phone number, for example), so identities are rendered through the
+ * shared stable-hash redaction rather than interpolated verbatim. Hashing
+ * with the same function preserves the one diagnostic signal that matters
+ * here: a sessionId substituted into the sessionKey field produces two
+ * equal hashes.
  */
 function describeTranscriptWriteScope(scope: {
   agentId?: string;
@@ -44,11 +53,11 @@ function describeTranscriptWriteScope(scope: {
   sessionKey?: string;
 }): string {
   const parts = [
-    `sessionKey=${scope.sessionKey ?? "<none>"}`,
-    `sessionId=${scope.sessionId ?? "<none>"}`,
+    `sessionKeyHash=${redactIdentifier(scope.sessionKey)}`,
+    `sessionIdHash=${redactIdentifier(scope.sessionId)}`,
   ];
   if (scope.agentId) {
-    parts.push(`agentId=${scope.agentId}`);
+    parts.push(`agentIdHash=${redactIdentifier(scope.agentId)}`);
   }
   return parts.join(" ");
 }
