@@ -16,7 +16,9 @@ import {
   updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { redactIdentifier } from "../../logging/redact-identifier.js";
+import { resolveCompactionFailureReason } from "../embedded-agent-runner/compact-reasons.js";
 import {
   buildSessionContext,
   CURRENT_SESSION_VERSION,
@@ -883,6 +885,51 @@ describe("SessionManager.open", () => {
       expect(redacted).not.toContain("\x1b");
       expect(redacted).toMatch(/^sha256:[0-9a-f]{12}$/);
     }
+  });
+
+  it("keeps the operator-facing compaction failure reason single-line and hash-only for a hostile sessionKey", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "hostile-sessionkey-target";
+    // A canonical sessionKey can carry a channel peer id, and nothing upstream
+    // guarantees it is a single clean line before it reaches this refusal path.
+    const sessionKey = "agent:main:whatsapp:direct:+1555\n\x1b[31mHIJACK\x1b[0m9990000";
+    const marker = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await upsertSessionEntry(scope, { sessionFile: marker, sessionId, updatedAt: 10 });
+    const sessionManager = SessionManager.open(
+      { agentId: "main", sessionId, storePath, sessionKey },
+      dir,
+    );
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      { sessionId: "replacement-session", updatedAt: 20 },
+    );
+
+    let thrown: unknown;
+    try {
+      sessionManager.appendModelChange("openai", "gpt-5.5");
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+
+    // `result.reason` is exactly `formatErrorMessage(thrown)` run through
+    // `resolveCompactionFailureReason` (src/agents/embedded-agent-runner/
+    // direct-compaction.ts): both the sessions.compact RPC payload
+    // (src/gateway/server-methods/sessions-compact.ts, `reason: result.reason`)
+    // and the /compact chat reply's `formatCompactionReason` default branch
+    // (src/auto-reply/reply/commands-compact.ts) forward that exact string to
+    // the operator unmodified for an unclassified reason such as this one.
+    const operatorFacingReason = resolveCompactionFailureReason({
+      reason: formatErrorMessage(thrown),
+    });
+
+    expect(operatorFacingReason).not.toContain(sessionKey);
+    expect(operatorFacingReason).not.toContain(sessionId);
+    expect(operatorFacingReason).not.toContain("\n");
+    expect(operatorFacingReason).not.toContain("\x1b");
+    expect(operatorFacingReason).toContain(`sessionKeyHash=${redactIdentifier(sessionKey)}`);
   });
 
   it("reloads SQLite markers through setSessionFile without switching to file paths", async () => {
