@@ -1242,7 +1242,7 @@ export function assertNoSystemLaunchDaemonOwnership(label, dependencies = {}) {
     const plistPath = path.join(SYSTEM_LAUNCH_DAEMON_DIR, entry);
     const result = run(
       "/usr/bin/plutil",
-      ["-extract", "Label", "raw", "-o", "-", "--", plistPath],
+      ["-convert", "json", "-o", "-", "--", plistPath],
       boundedSyncOptions({ encoding: "utf8" }),
     );
     if (result.status !== 0) {
@@ -1251,7 +1251,16 @@ export function assertNoSystemLaunchDaemonOwnership(label, dependencies = {}) {
         `could not inspect system LaunchDaemon plist ${plistPath}`,
       );
     }
-    if (String(result.stdout).trim() === label) {
+    let plist;
+    try {
+      plist = JSON.parse(String(result.stdout));
+    } catch {
+      throw new UpdateInvariantError(
+        "gateway_system_launchdaemon_unverifiable",
+        `could not inspect system LaunchDaemon plist ${plistPath}`,
+      );
+    }
+    if (plist?.Label === label) {
       throw new UpdateInvariantError(
         "gateway_system_launchdaemon_conflict",
         `System LaunchDaemon plist ${plistPath} already owns the managed Gateway label`,
