@@ -437,7 +437,7 @@ describe("SkillWorkshopPage lifecycle", () => {
     expect(context.skillWorkshopRevision.prepare).toHaveBeenCalledWith({
       sessionKey: "agent:research:revision",
       instructions: "revise it",
-      owner: context.gateway.snapshot.client,
+      owner: context.gateway.snapshot,
       proposalId: "proposal-owner",
       proposalAgentId: "research",
     });

@@ -11,7 +11,7 @@ import {
   normalizeInitialApplicationLocation,
   resolveInitialApplicationLocation,
 } from "./bootstrap-location.ts";
-import { bootstrapApplication } from "./bootstrap.ts";
+import { bootstrapApplication, createSkillWorkshopRevisionHandoff } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
 import { loadSettings, saveSettings } from "./settings.ts";
 
@@ -27,6 +27,59 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
+
+describe("createSkillWorkshopRevisionHandoff", () => {
+  it("does not consume a handoff through a replacement snapshot with the same client", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const owner = {
+      phase: "connected",
+      client,
+      hello: null,
+    } as ApplicationContext["gateway"]["snapshot"];
+    const replacement = { ...owner };
+    const handoff = {
+      sessionKey: "agent:main:revision",
+      instructions: "Revise the skill.",
+      owner,
+      proposalId: "proposal-1",
+      proposalAgentId: "main",
+    };
+    const revisions = createSkillWorkshopRevisionHandoff();
+
+    revisions.prepare(handoff);
+
+    expect(revisions.consume(handoff.sessionKey, replacement)).toBeNull();
+    expect(revisions.consume(handoff.sessionKey, owner)).toEqual(handoff);
+  });
+
+  it("clears only the handoff that became stale", () => {
+    const owner = {
+      phase: "connected",
+      client: { request: vi.fn() } as unknown as GatewayBrowserClient,
+      hello: null,
+    } as ApplicationContext["gateway"]["snapshot"];
+    const stale = {
+      sessionKey: "agent:main:stale",
+      instructions: "Stale revision.",
+      owner,
+      proposalId: "proposal-stale",
+      proposalAgentId: "main",
+    };
+    const current = {
+      ...stale,
+      sessionKey: "agent:main:current",
+      instructions: "Current revision.",
+      proposalId: "proposal-current",
+    };
+    const revisions = createSkillWorkshopRevisionHandoff();
+
+    revisions.prepare(stale);
+    revisions.prepare(current);
+    revisions.clear(stale);
+
+    expect(revisions.consume(current.sessionKey, owner)).toEqual(current);
+  });
+});
 
 describe("normalizeInitialApplicationLocation", () => {
   it("routes an opaque persisted key without aborting bootstrap", () => {

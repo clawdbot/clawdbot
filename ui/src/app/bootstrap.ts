@@ -204,7 +204,7 @@ function createApplicationNavigationPreferences(
   };
 }
 
-function createSkillWorkshopRevisionHandoff(): ApplicationSkillWorkshopRevisionHandoff {
+export function createSkillWorkshopRevisionHandoff(): ApplicationSkillWorkshopRevisionHandoff {
   let pending: Parameters<ApplicationSkillWorkshopRevisionHandoff["prepare"]>[0] | null = null;
   return {
     prepare: (handoff) => {
@@ -218,8 +218,10 @@ function createSkillWorkshopRevisionHandoff(): ApplicationSkillWorkshopRevisionH
       pending = null;
       return handoff;
     },
-    clear: () => {
-      pending = null;
+    clear: (handoff) => {
+      if (!handoff || pending === handoff) {
+        pending = null;
+      }
     },
   };
 }

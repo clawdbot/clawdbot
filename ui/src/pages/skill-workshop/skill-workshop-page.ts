@@ -450,18 +450,19 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     if (!sessionKey) {
       throw new Error(scope.sessions.state.error ?? "Could not prepare a Skill Workshop thread.");
     }
-    const owner = scope.gateway.snapshot.client;
-    if (!owner) {
+    const owner = scope.gateway.snapshot;
+    if (!owner.client) {
       return;
     }
+    const handoff = {
+      sessionKey,
+      instructions,
+      owner,
+      proposalId: proposal.key,
+      proposalAgentId: normalizeAgentId(proposal.origin?.agentId ?? proposalAgentId),
+    };
     try {
-      scope.revision.prepare({
-        sessionKey,
-        instructions,
-        owner,
-        proposalId: proposal.key,
-        proposalAgentId: normalizeAgentId(proposal.origin?.agentId ?? proposalAgentId),
-      });
+      scope.revision.prepare(handoff);
     } catch (error) {
       if (!this.isCurrentSourceScope(scope)) {
         return;
@@ -469,6 +470,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       throw error;
     }
     if (!this.isCurrentSourceScope(scope)) {
+      scope.revision.clear(handoff);
       return;
     }
     scope.navigate(
