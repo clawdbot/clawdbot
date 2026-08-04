@@ -34,6 +34,16 @@ describe("markOpenClawExecEnv", () => {
   ])("$name", ({ value, expected }) => {
     expect(markOpenClawExecEnv({ AI_AGENT: value }).AI_AGENT).toBe(expected);
   });
+
+  it.each([
+    { value: " wrapper ", expected: " wrapper " },
+    { value: "   ", expected: AI_AGENT_ENV_VALUE },
+  ])("canonicalizes a Windows marker with value %j", ({ value, expected }) => {
+    expect(markOpenClawExecEnv({ ai_agent: value }, "win32")).toEqual({
+      AI_AGENT: expected,
+      OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
+    });
+  });
 });
 
 describe("ensureOpenClawExecMarkerOnProcess", () => {
@@ -56,6 +66,17 @@ describe("ensureOpenClawExecMarkerOnProcess", () => {
     expect(ensureOpenClawExecMarkerOnProcess(env)).toBe(env);
     expect(env[OPENCLAW_CLI_ENV_VAR]).toBe(OPENCLAW_CLI_ENV_VALUE);
     expect(env.AI_AGENT).toBe(expectedAgent);
+  });
+
+  it("canonicalizes a mixed-case Windows marker", () => {
+    const env = { ai_agent: " wrapper " } as NodeJS.ProcessEnv;
+
+    ensureOpenClawExecMarkerOnProcess(env, "win32");
+
+    expect(env).toEqual({
+      AI_AGENT: " wrapper ",
+      OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
+    });
   });
 
   it("defaults to mutating process.env when no env object is provided", () => {
