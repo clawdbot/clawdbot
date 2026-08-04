@@ -1,6 +1,7 @@
 // Qa Lab tests cover scenario flow runner plugin behavior.
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
+import { QaSuiteScenarioSkipError } from "./errors.js";
 import {
   readQaScenarioById,
   readQaScenarioPack,
@@ -744,6 +745,71 @@ describe("scenario-flow-runner", () => {
 
     expect(result.status).toBe("pass");
     expect(result.steps[0]?.details).toBe("loaded");
+  });
+
+  it("passes an imported QA skip error through to runScenario", async () => {
+    const message = "known-harness-gap flow import skip";
+    let receivedError: unknown;
+
+    const result = await runScenarioFlow({
+      api: {
+        state: createQaBusState(),
+        scenario: {
+          id: "qa-skip-import",
+          title: "qa-skip-import",
+          sourcePath: "qa/scenarios/qa-skip-import.yaml",
+          surface: "test",
+          objective: "test",
+          successCriteria: ["test"],
+          execution: { kind: "flow" },
+        },
+        config: {},
+        runScenario: async (
+          _name: string,
+          steps: Array<{ name: string; run: () => Promise<string | void> }>,
+        ) => {
+          try {
+            await steps[0]?.run();
+          } catch (error) {
+            receivedError = error;
+          }
+          return {
+            name: "qa-skip-import",
+            status: "skip" as const,
+            steps: [{ name: "throws imported skip", status: "skip" as const, details: message }],
+            details: message,
+          };
+        },
+      },
+      scenarioTitle: "qa-skip-import",
+      flow: {
+        steps: [
+          {
+            name: "throws imported skip",
+            actions: [
+              {
+                call: "qaImport",
+                args: ["./errors.js"],
+                saveAs: "qaErrors",
+              },
+              {
+                throw: {
+                  expr: `new qaErrors.QaSuiteScenarioSkipError(${JSON.stringify(message)})`,
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(receivedError).toBeInstanceOf(QaSuiteScenarioSkipError);
+    expect(receivedError).toMatchObject({
+      name: "QaSuiteScenarioSkipError",
+      message,
+    });
+    expect(result.status).toBe("skip");
+    expect(result.details).toBe(message);
   });
 
   it.each([
