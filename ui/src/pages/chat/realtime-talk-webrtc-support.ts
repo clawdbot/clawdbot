@@ -4,6 +4,7 @@ import type { RealtimeTalkWebRtcSdpSessionResult } from "./realtime-talk-shared.
 import type { RealtimeTalkVideoFrame } from "./realtime-talk-video.ts";
 
 const REALTIME_WEBRTC_OFFER_TIMEOUT_MS = 30_000;
+export const REALTIME_WEBRTC_SDP_ANSWER_MAX_BYTES = 256 * 1024;
 const REALTIME_TALK_DEFAULT_MAX_MESSAGE_SIZE = 64 * 1024;
 const OPENAI_REALTIME_CALLS_URL = "https://api.openai.com/v1/realtime/calls";
 
@@ -110,6 +111,56 @@ function resolveRealtimeTalkOfferUrl(offerUrl: string | undefined, gatewayUrl: s
   return new URL(target, gateway).toString();
 }
 
+async function readResponseTextWithLimit(
+  response: Response,
+  label: string,
+  maxBytes: number,
+): Promise<string> {
+  const responseBodyTooLargeError = () =>
+    new Error(`${label}: text response exceeds ${maxBytes} bytes`);
+  const rawContentLength = response.headers.get("content-length");
+  if (rawContentLength && /^\d+$/u.test(rawContentLength)) {
+    const contentLength = Number(rawContentLength);
+    if (!Number.isSafeInteger(contentLength) || contentLength > maxBytes) {
+      void response.body?.cancel().catch(() => undefined);
+      throw responseBodyTooLargeError();
+    }
+  }
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+  let totalBytes = 0;
+  let canceled = false;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        const tail = decoder.decode();
+        if (tail) {
+          chunks.push(tail);
+        }
+        break;
+      }
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        canceled = true;
+        void reader.cancel().catch(() => undefined);
+        throw responseBodyTooLargeError();
+      }
+      chunks.push(decoder.decode(value, { stream: true }));
+    }
+  } finally {
+    if (!canceled) {
+      reader.releaseLock();
+    }
+  }
+  return chunks.join("");
+}
+
 export class RealtimeTalkWebRtcOfferExchange {
   private pendingRequest: PendingOfferRequest | null = null;
 
@@ -143,14 +194,20 @@ export class RealtimeTalkWebRtcOfferExchange {
         throw error;
       }
       if (!params.isCurrent()) {
+        void response.body?.cancel().catch(() => undefined);
         return undefined;
       }
       if (!response.ok) {
+        void response.body?.cancel().catch(() => undefined);
         throw new Error(`Realtime WebRTC setup failed (${response.status})`);
       }
       let answer: string;
       try {
-        answer = await response.text();
+        answer = await readResponseTextWithLimit(
+          response,
+          "Realtime WebRTC SDP answer",
+          REALTIME_WEBRTC_SDP_ANSWER_MAX_BYTES,
+        );
       } catch (error) {
         if (!params.isCurrent()) {
           return undefined;

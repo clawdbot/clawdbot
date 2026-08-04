@@ -11,6 +11,13 @@ import {
 } from "./browser-talk-start-stop.fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
+type WebRtcSdpE2eProof = {
+  bodyCancelCount: number;
+  bodyCancelResolvedCount: number;
+  fetchCount: number;
+  statuses: number[];
+};
+
 const suite = createControlUiE2eSuite({
   name: "Control UI browser Talk",
   browserLaunchOptions: {
@@ -542,6 +549,120 @@ suite.define(() => {
       expect(trackStates?.every((state) => state === "ended")).toBe(true);
       await captureVideoTalkProof(page, "04-after-video-talk-stop.png");
       console.info("[video-talk-e2e] stop=preview-removed,tracks:ended+ended");
+    });
+  });
+
+  it("cancels a failed OpenAI WebRTC SDP response body in the live Control UI", async () => {
+    await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "talk.catalog": videoTalkCatalog("openai"),
+          "talk.client.create": {
+            provider: "openai",
+            voiceSessionId: "voice-openai-sdp-error-e2e",
+            transport: "webrtc",
+            clientSecret: "test-client-secret",
+            offerUrl: "https://api.openai.com/v1/realtime/calls",
+          },
+        },
+      });
+      await page.addInitScript(() => {
+        const proofWindow = window as Window & { openclawWebRtcSdpE2e?: WebRtcSdpE2eProof };
+        proofWindow.openclawWebRtcSdpE2e = {
+          bodyCancelCount: 0,
+          bodyCancelResolvedCount: 0,
+          fetchCount: 0,
+          statuses: [],
+        };
+        const originalFetch = window.fetch.bind(window);
+        window.fetch = async (input, init) => {
+          const response = await originalFetch(input, init);
+          const url =
+            typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+          if (!url.includes("api.openai.com/v1/realtime/calls")) {
+            return response;
+          }
+          const proof = proofWindow.openclawWebRtcSdpE2e;
+          if (!proof || !response.body) {
+            return response;
+          }
+          proof.fetchCount += 1;
+          proof.statuses.push(response.status);
+          const originalCancel = response.body.cancel.bind(response.body);
+          response.body.cancel = async (reason) => {
+            proof.bodyCancelCount += 1;
+            try {
+              return await originalCancel(reason);
+            } finally {
+              proof.bodyCancelResolvedCount += 1;
+            }
+          };
+          return response;
+        };
+
+        class FakeDataChannel extends EventTarget {
+          readyState = "open";
+          send() {}
+          close() {
+            this.readyState = "closed";
+          }
+        }
+
+        class FakePeerConnection extends EventTarget {
+          connectionState = "new";
+          sctp = { maxMessageSize: 256 * 1024 };
+          channel = new FakeDataChannel();
+          addTrack() {}
+          createDataChannel() {
+            return this.channel;
+          }
+          async createOffer() {
+            return { type: "offer" as const, sdp: "offer-sdp" };
+          }
+          async setLocalDescription() {}
+          async setRemoteDescription() {}
+          close() {
+            this.connectionState = "closed";
+          }
+        }
+
+        Object.defineProperty(window, "RTCPeerConnection", {
+          configurable: true,
+          value: FakePeerConnection,
+        });
+      });
+      await page.route("https://api.openai.com/v1/realtime/calls", async (route) => {
+        await route.fulfill({
+          status: 502,
+          contentType: "application/sdp",
+          body: "provider failure",
+        });
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.getByRole("button", { name: "Start voice input" }).click();
+      await gateway.waitForRequest("talk.client.create");
+
+      const alert = page.locator('.agent-chat__talk-status[role="alert"]');
+      await expect.poll(() => alert.textContent()).toContain("Realtime WebRTC setup failed (502)");
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (window as Window & { openclawWebRtcSdpE2e?: WebRtcSdpE2eProof })
+                .openclawWebRtcSdpE2e,
+          ),
+        )
+        .toEqual({
+          bodyCancelCount: 1,
+          bodyCancelResolvedCount: 1,
+          fetchCount: 1,
+          statuses: [502],
+        });
+      console.info(
+        `[webrtc-sdp-e2e] trigger=OpenAI WebRTC offer; transition=status:error+502; ` +
+          `body.cancel=1/resolved; outcome=visible setup failure`,
+      );
     });
   });
 

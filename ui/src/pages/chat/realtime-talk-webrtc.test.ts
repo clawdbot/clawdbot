@@ -373,17 +373,21 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       return {
         ok: true,
         status: 200,
-        text: () =>
-          new Promise<string>((_, reject) => {
+        headers: new Headers(),
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
             offerSignal?.addEventListener(
               "abort",
               () => {
                 const reason = offerSignal?.reason;
-                reject(reason instanceof Error ? reason : new Error("offer request aborted"));
+                controller.error(
+                  reason instanceof Error ? reason : new Error("offer request aborted"),
+                );
               },
               { once: true },
             );
-          }),
+          },
+        }),
       } as Response;
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
@@ -412,17 +416,21 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       return {
         ok: true,
         status: 200,
-        text: () =>
-          new Promise<string>((_, reject) => {
+        headers: new Headers(),
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
             offerSignal?.addEventListener(
               "abort",
               () => {
                 const reason = offerSignal?.reason;
-                reject(reason instanceof Error ? reason : new Error("offer request aborted"));
+                controller.error(
+                  reason instanceof Error ? reason : new Error("offer request aborted"),
+                );
               },
               { once: true },
             );
-          }),
+          },
+        }),
       } as Response;
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
