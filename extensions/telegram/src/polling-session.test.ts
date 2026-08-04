@@ -883,7 +883,7 @@ describe("TelegramPollingSession", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
-  it("uses backoff helpers for recoverable polling retries", async () => {
+  it("keeps account work alive across recoverable classic polling retries", async () => {
     const abort = new AbortController();
     const recoverableError = new Error("recoverable polling error");
     const setStatus = vi.fn();
@@ -913,6 +913,20 @@ describe("TelegramPollingSession", () => {
       }
       return {
         task: async () => {
+          const firstBotOptions = mockObjectArg(
+            createTelegramBotMock,
+            "first createTelegramBot",
+            0,
+          );
+          const secondBotOptions = mockObjectArg(
+            createTelegramBotMock,
+            "second createTelegramBot",
+            1,
+          );
+          expect((firstBotOptions.fetchAbortSignal as AbortSignal).aborted).toBe(true);
+          expect(firstBotOptions.accountAbortSignal).toBe(abort.signal);
+          expect(secondBotOptions.accountAbortSignal).toBe(abort.signal);
+          expect(abort.signal.aborted).toBe(false);
           abort.abort();
         },
         stop: runnerStop,

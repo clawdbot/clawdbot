@@ -347,6 +347,9 @@ export async function startTelegramWebhook(opts: {
     return closeTransportPromise;
   };
   const botAbortController = new AbortController();
+  const accountAbortSignal = opts.abortSignal
+    ? AbortSignal.any([opts.abortSignal, shutdownAbortController.signal])
+    : shutdownAbortController.signal;
   const botFetchAbortSignal = opts.abortSignal
     ? AbortSignal.any([opts.abortSignal, botAbortController.signal])
     : botAbortController.signal;
@@ -355,6 +358,7 @@ export async function startTelegramWebhook(opts: {
     runtime,
     proxyFetch: opts.fetch,
     fetchAbortSignal: botFetchAbortSignal,
+    accountAbortSignal,
     config: opts.config,
     accountId: opts.accountId,
     telegramTransport,
