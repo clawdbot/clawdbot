@@ -80,7 +80,7 @@ interface McpLoopbackClientGrant {
   readonly context: McpLoopbackRequestContext;
 }
 
-export type McpLoopbackToolAuth = {
+type McpLoopbackToolAuth = {
   agentDir?: string;
   store: AuthProfileStore;
 };
@@ -90,6 +90,13 @@ type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
   activeCaptureKey?: string;
   toolAuth?: McpLoopbackToolAuth;
 };
+
+type McpLoopbackClientGrantRevocation = {
+  token: string;
+  runtimeOwnerToken: string;
+};
+
+const clientGrantRevocationListeners = new Set<(event: McpLoopbackClientGrantRevocation) => void>();
 
 const DEFAULT_TTL_MS = 60 * 60 * 1000; // 1h
 const MAX_TTL_MS = 12 * 60 * 60 * 1000;
@@ -267,16 +274,32 @@ export function resolveMcpLoopbackClientGrant(params: {
   };
 }
 
+/** Registers cleanup tied to the exact lifetime of loopback client grants. */
+export function registerMcpLoopbackClientGrantRevocationListener(
+  listener: (event: McpLoopbackClientGrantRevocation) => void,
+): () => void {
+  clientGrantRevocationListeners.add(listener);
+  return () => clientGrantRevocationListeners.delete(listener);
+}
+
 export function revokeMcpLoopbackClientGrant(token: string): boolean {
-  return clientGrantsByToken.delete(token);
+  const grant = clientGrantsByToken.get(token);
+  if (!grant || !clientGrantsByToken.delete(token)) {
+    return false;
+  }
+  // Revocation must also release server-owned projections whose closures retain
+  // this grant's prepared credentials.
+  for (const listener of clientGrantRevocationListeners) {
+    listener({ token, runtimeOwnerToken: grant.runtimeOwnerToken });
+  }
+  return true;
 }
 
 export function revokeMcpLoopbackClientGrantsForRuntime(runtimeOwnerToken: string): number {
   let removed = 0;
   for (const [token, grant] of clientGrantsByToken) {
     if (grant.runtimeOwnerToken === runtimeOwnerToken) {
-      clientGrantsByToken.delete(token);
-      removed += 1;
+      removed += revokeMcpLoopbackClientGrant(token) ? 1 : 0;
     }
   }
   return removed;

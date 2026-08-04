@@ -1481,6 +1481,68 @@ describe("mcp loopback server", () => {
     ).toBe(401);
   });
 
+  it("rejects a slow tools request revoked after header admission", async () => {
+    const captureKey = "slow-revoked-grant";
+    let resolveRequestStarted: (() => void) | undefined;
+    const requestStarted = new Promise<void>((resolve) => {
+      resolveRequestStarted = resolve;
+    });
+    beginMcpLoopbackToolCallCapture({
+      captureKey,
+      onRequestStart: () => resolveRequestStarted?.(),
+      onRequestClassified: vi.fn(),
+      onToolCallResult: vi.fn(),
+    });
+    const { runtime, port } = await startLoopbackServerForTest();
+    const grant = mintMcpLoopbackClientGrant({
+      context: { sessionKey: "agent:main:slow-revoked", senderIsOwner: true },
+      runtimeOwnerToken: runtime.ownerToken,
+      toolAuth: { store: { version: 1, profiles: {} } },
+    });
+    expect(
+      activateMcpLoopbackClientGrantCapture({
+        token: grant.token,
+        runtimeOwnerToken: runtime.ownerToken,
+        captureKey,
+      }),
+    ).toBe(true);
+
+    let revoked = false;
+    const responsePromise = new Promise<{ status: number | undefined }>((resolve, reject) => {
+      const req = request(
+        {
+          hostname: "127.0.0.1",
+          port,
+          path: "/mcp",
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${grant.token}`,
+            "content-type": "application/json",
+            "transfer-encoding": "chunked",
+            "x-openclaw-cli-capture-key": captureKey,
+          },
+        },
+        (res) => {
+          res.resume();
+          res.on("end", () => resolve({ status: res.statusCode }));
+        },
+      );
+      req.on("error", reject);
+      req.flushHeaders();
+      void requestStarted.then(() => {
+        revoked = revokeMcpLoopbackClientGrant(grant.token);
+        req.end(mcpToolsListBody());
+      });
+    });
+
+    await requestStarted;
+    const resolverCallsBeforeBody = resolveGatewayScopedToolsMock.mock.calls.length;
+    await expect(responsePromise).resolves.toEqual({ status: 401 });
+    expect(revoked).toBe(true);
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(resolverCallsBeforeBody);
+    clearMcpLoopbackToolCallCapture(captureKey);
+  });
+
   it("routes sessions_yield to the current CLI capture", async () => {
     resolveGatewayScopedToolsMock.mockImplementation((input): MockGatewayScopedTools => {
       const call = input as ScopedToolsCall;

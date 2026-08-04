@@ -18,7 +18,6 @@ import {
   resolveAttachGrant,
   resolveMcpLoopbackClientGrant,
   type McpLoopbackRequestContext,
-  type McpLoopbackToolAuth,
 } from "./mcp-grant-store.js";
 import { isLoopbackAddress } from "./net.js";
 import { checkBrowserOrigin } from "./origin-check.js";
@@ -66,7 +65,6 @@ type McpLoopbackRequestAuth = {
   boundContext?: McpLoopbackRequestContext;
   boundCaptureKey?: string;
   boundGrantToken?: string;
-  boundToolAuth?: McpLoopbackToolAuth;
 };
 
 function resolveScopedSessionKey(cfg: OpenClawConfig, rawSessionKey: string | undefined): string {
@@ -147,7 +145,6 @@ function resolveMcpSender(params: {
       boundContext: clientGrant.context,
       boundCaptureKey: clientGrant.captureKey,
       boundGrantToken: grantToken,
-      boundToolAuth: clientGrant.toolAuth,
     };
   }
   const grant = grantToken ? resolveAttachGrant(grantToken) : undefined;
@@ -285,7 +282,6 @@ export function validateMcpLoopbackRequest(params: {
     boundContext: sender.boundContext,
     boundCaptureKey: sender.boundCaptureKey,
     boundGrantToken: sender.boundGrantToken,
-    boundToolAuth: sender.boundToolAuth,
   };
 }
 

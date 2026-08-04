@@ -36,7 +36,7 @@ type McpLoopbackScopeParams = Omit<McpLoopbackRequestContext, "senderIsOwner"> &
   cfg: OpenClawConfig;
   authProfileStore?: AuthProfileStore;
   authProfileStoreAgentDir?: string;
-  authProfileStoreCacheKey?: string;
+  grantToken?: string;
   senderIsOwner: boolean | undefined;
   yieldContextCacheKey?: string;
   onYield?: (message: string) => Promise<void> | void;
@@ -91,7 +91,7 @@ function resolveMcpLoopbackTools(
   const {
     toolsAllow: _toolsAllow,
     authProfileStoreAgentDir,
-    authProfileStoreCacheKey: _authProfileStoreCacheKey,
+    grantToken: _grantToken,
     ...scopeParams
   } = params;
   const scoped = resolveGatewayScopedTools({
@@ -171,11 +171,14 @@ function applyPolicyToolsAllow(
 /** Short-lived cache for loopback tool lists keyed by session/channel context. */
 export class McpLoopbackToolCache {
   #entries = new DirectoryCache<CachedScopedTools>(TOOL_CACHE_TTL_MS, TOOL_CACHE_MAX_ENTRIES);
+  // Revocation needs the config scopes where one grant may have cached tools.
+  #grantConfigScopes = new Map<string, Set<OpenClawConfig>>();
 
   resolve(params: McpLoopbackScopeParams): CachedScopedTools {
     // Callers differing only in capabilities must not share cached tool lists.
     const clientCapsCacheKey = [...new Set(params.clientCaps ?? [])].toSorted().join(",");
     const cacheKey = [
+      params.grantToken ?? "",
       params.sessionKey,
       params.runtimePolicySessionKey ?? "",
       params.agentId ?? "",
@@ -185,7 +188,6 @@ export class McpLoopbackToolCache {
       params.cwd ?? "",
       params.modelProvider ?? "",
       params.modelId ?? "",
-      params.authProfileStoreCacheKey ?? "",
       params.yieldContextCacheKey ?? "",
       params.messageProvider ?? "",
       clientCapsCacheKey,
@@ -252,6 +254,29 @@ export class McpLoopbackToolCache {
       toolSchema: buildMcpToolSchema(next.tools),
     };
     this.#entries.set(cacheKey, nextEntry, params.cfg);
+    if (params.grantToken) {
+      const scopes = this.#grantConfigScopes.get(params.grantToken) ?? new Set<OpenClawConfig>();
+      scopes.add(params.cfg);
+      this.#grantConfigScopes.set(params.grantToken, scopes);
+    }
     return nextEntry;
+  }
+
+  evictGrant(token: string): boolean {
+    const scopes = this.#grantConfigScopes.get(token);
+    if (!scopes) {
+      return false;
+    }
+    const cacheKeyPrefix = `${token}\u0000`;
+    for (const cfg of scopes) {
+      this.#entries.clearMatching((cacheKey) => cacheKey.startsWith(cacheKeyPrefix), cfg);
+    }
+    this.#grantConfigScopes.delete(token);
+    return true;
+  }
+
+  clear(): void {
+    this.#entries.clear();
+    this.#grantConfigScopes.clear();
   }
 }
