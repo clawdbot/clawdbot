@@ -62,6 +62,30 @@ let refreshRequestEpoch = 0;
 let pendingModelRuntimeReplacement: PreparedModelRuntimeReplacement | undefined;
 type AuthMutationEvent = { agentDir?: string; affectsInheritedStores: boolean };
 const pendingAuthMutations: AuthMutationEvent[] = [];
+export type PreparedModelRuntimePublicationEvent = {
+  phase: "invalidated" | "published";
+};
+const publicationListeners = new Set<(event: PreparedModelRuntimePublicationEvent) => void>();
+
+/** Observes committed prepared model/auth generations without starting discovery. */
+export function registerPreparedModelRuntimePublicationListener(
+  listener: (event: PreparedModelRuntimePublicationEvent) => void,
+): () => void {
+  publicationListeners.add(listener);
+  return () => publicationListeners.delete(listener);
+}
+
+function notifyPreparedModelRuntimePublication(
+  phase: PreparedModelRuntimePublicationEvent["phase"],
+): void {
+  for (const listener of publicationListeners) {
+    try {
+      listener({ phase });
+    } catch (error) {
+      log.warn(`prepared model runtime publication listener failed: ${String(error)}`);
+    }
+  }
+}
 
 /** Resolves a published owner or activates a standalone lifecycle owner. */
 export async function loadPreparedModelRuntimeSnapshot(
@@ -570,6 +594,7 @@ export function refreshPreparedModelRuntimeSnapshots(
 ): Promise<void> {
   // Stale synchronously. Queued publication must never leave the prior generation request-visible.
   markPreparedModelRuntimeSnapshotsStale(undefined, { waitForReplacement: true });
+  notifyPreparedModelRuntimePublication("invalidated");
   const requestEpoch = refreshRequestEpoch;
   const replacement = pendingModelRuntimeReplacement;
   return enqueuePreparedModelRuntimePublication(async () => {
@@ -581,6 +606,7 @@ export function refreshPreparedModelRuntimeSnapshots(
       return;
     }
     await drainPendingAuthMutations();
+    notifyPreparedModelRuntimePublication("published");
   }).then(
     () => {
       if (
@@ -681,8 +707,12 @@ function invalidateForAuthMutation(event: AuthMutationEvent): void {
     // mutation would immediately stale that initial generation even though no prior owner existed.
     return;
   }
+  notifyPreparedModelRuntimePublication("invalidated");
   pendingAuthMutations.push(normalizedEvent);
-  void enqueuePreparedModelRuntimePublication(drainPendingAuthMutations).catch((error: unknown) => {
+  void enqueuePreparedModelRuntimePublication(async () => {
+    await drainPendingAuthMutations();
+    notifyPreparedModelRuntimePublication("published");
+  }).catch((error: unknown) => {
     if (error instanceof PreparedModelRuntimePublicationSupersededError) {
       return;
     }
@@ -703,6 +733,7 @@ function resetPreparedModelRuntimeSnapshotsForTest(): void {
   refreshTail = Promise.resolve();
   refreshRequestEpoch = 0;
   pendingAuthMutations.length = 0;
+  publicationListeners.clear();
   modelRuntimeBuildTimeoutMs = DEFAULT_MODEL_RUNTIME_BUILD_TIMEOUT_MS;
 }
 

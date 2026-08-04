@@ -7,6 +7,7 @@ import {
   markPreparedModelRuntimeSnapshotsStale,
   prepareModelRuntimeSnapshot,
   publishPreparedModelRuntimeSnapshot,
+  registerPreparedModelRuntimePublicationListener,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 import {
@@ -31,6 +32,20 @@ describe("prepared model runtime snapshots", () => {
       "prepared model runtime owner was not published",
     );
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
+  });
+
+  it("publishes invalidation before the replacement generation", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const events: string[] = [];
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      events.push(event.phase);
+    });
+
+    await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
+    unregister();
+    await refreshPreparedModelRuntimeSnapshots({});
+
+    expect(events).toEqual(["invalidated", "published"]);
   });
 
   it("does not let a read-only draft replace a configured gateway owner", async () => {

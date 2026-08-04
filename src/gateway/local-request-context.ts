@@ -21,6 +21,7 @@ import { NodeRegistry } from "./node-registry.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
 import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
+import { createGatewayChatMetadataRuntime } from "./server-methods/chat-metadata-runtime.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 // Embedded/local agent calls need enough GatewayRequestContext to reuse server
@@ -98,6 +99,17 @@ function createLocalGatewayRequestContext(
   };
   const sessionEvents = new Set<string>();
   const chatRunState = createChatRunState();
+  const contextRef: { current?: GatewayRequestContext } = {};
+  const chatMetadataRuntime = createGatewayChatMetadataRuntime({
+    getConfig: params.getRuntimeConfig,
+    getContext: () => {
+      if (!contextRef.current) {
+        throw new Error("local gateway request context is unavailable");
+      }
+      return contextRef.current;
+    },
+    log: logGateway,
+  });
   const loadModelCatalogOwner = async ({
     agentId,
     agentDir,
@@ -111,7 +123,7 @@ function createLocalGatewayRequestContext(
       readOnly: readOnly !== false,
       ...(workspaceDir ? { workspaceDir } : {}),
     });
-  return {
+  const context: GatewayRequestContext = {
     deps: params.deps,
     cron,
     cronStorePath: "",
@@ -137,6 +149,7 @@ function createLocalGatewayRequestContext(
         config: params.getRuntimeConfig(),
         readOnly: true,
       })?.entries,
+    readChatMetadata: chatMetadataRuntime.read,
     getHealthCache: () => null,
     refreshHealthSnapshot: async () =>
       ({}) as Awaited<ReturnType<GatewayRequestContext["refreshHealthSnapshot"]>>,
@@ -197,6 +210,11 @@ function createLocalGatewayRequestContext(
     broadcastVoiceWakeRoutingChanged: () => {},
     unavailableGatewayMethods: new Set(),
   };
+  contextRef.current = context;
+  void chatMetadataRuntime.refresh().catch((error: unknown) => {
+    logGateway.warn(`local chat metadata refresh failed: ${String(error)}`);
+  });
+  return context;
 }
 
 /** Runs code inside a local gateway request scope unless an outer scope already exists. */

@@ -1757,7 +1757,7 @@ describe("gateway server chat", () => {
     await withGatewayChatHarness(async ({ ws }) => {
       await connectOk(ws);
       const modelsListResult = await import("./server-methods/models-list-result.js");
-      vi.spyOn(modelsListResult, "buildModelsListResult").mockRejectedValueOnce(
+      vi.spyOn(modelsListResult, "buildModelsListResult").mockRejectedValue(
         new Error("configured model catalog unavailable"),
       );
 

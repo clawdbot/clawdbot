@@ -14,6 +14,7 @@ import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
 import { collectGatewayProcessMemoryUsageMb, finishGatewayRestartTrace } from "./restart-trace.js";
+import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
 import { setFallbackGatewayContextResolver } from "./server-plugins.js";
@@ -192,6 +193,11 @@ export async function finishGatewayStartup(params: {
   const unavailableGatewayMethods = new Set<string>(
     minimalTestGateway ? [] : STARTUP_UNAVAILABLE_GATEWAY_METHODS,
   );
+  const chatMetadataLifecycle = await createGatewayChatMetadataLifecycle({
+    getConfig: getRuntimeConfig,
+    minimalTestGateway,
+    log,
+  });
   const gatewayRequestContext = await startupTrace.measure("gateway.request-context", async () => {
     const { createGatewayRequestContext } = await import("./server-request-context.js");
     return createGatewayRequestContext({
@@ -214,6 +220,7 @@ export async function finishGatewayStartup(params: {
       loadGatewayModelCatalog,
       loadGatewayModelCatalogSnapshot,
       readPreparedGatewayModelCatalog,
+      readChatMetadata: chatMetadataLifecycle.read,
       getHealthCache,
       refreshHealthSnapshot: refreshGatewayHealthSnapshotWithRuntime,
       logHealth,
@@ -288,6 +295,10 @@ export async function finishGatewayStartup(params: {
       broadcastVoiceWakeRoutingChanged,
     });
   });
+  await chatMetadataLifecycle.attachContext(
+    gatewayRequestContext,
+    runtimeState.gatewayLifetimeSidecars,
+  );
   const sessionChangeSidecar = {
     stop: async () => {
       const { flushPendingSessionsChangedEvents } =
@@ -440,6 +451,7 @@ export async function finishGatewayStartup(params: {
           logHooks,
           logChannels,
           unavailableGatewayMethods,
+          refreshChatMetadata: chatMetadataLifecycle.refresh,
           loadStartupPlugins: async () => {
             const { loadGatewayStartupPluginRuntime } = await loadStartupPluginsModule();
             return loadGatewayStartupPluginRuntime({
