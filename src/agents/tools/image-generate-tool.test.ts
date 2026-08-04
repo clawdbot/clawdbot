@@ -768,6 +768,69 @@ describe("createImageGenerateTool", () => {
     expect(text).not.toMatch(/^MEDIA:/m);
   });
 
+  it("rolls back late image saves after a concurrent persistence failure", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "test");
+    stubImageGenerationProviders();
+    vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        { buffer: Buffer.from("failed"), mimeType: "image/png", fileName: "failed.png" },
+        { buffer: Buffer.from("late"), mimeType: "image/png", fileName: "late.png" },
+        { buffer: Buffer.from("saved"), mimeType: "image/png", fileName: "saved.png" },
+      ],
+    });
+    const terminalError = new Error("image persistence failed");
+    const lateSavedMedia = {
+      path: "/tmp/late.png",
+      id: "late.png",
+      size: 4,
+      contentType: "image/png",
+    };
+    let resolveLateSave!: (saved: typeof lateSavedMedia) => void;
+    const lateSave = new Promise<typeof lateSavedMedia>((resolve) => {
+      resolveLateSave = resolve;
+    });
+    const immediatelySavedMedia = {
+      path: "/tmp/saved.png",
+      id: "saved.png",
+      size: 5,
+      contentType: "image/png",
+    };
+    const saveMediaBuffer = vi
+      .spyOn(mediaStore, "saveMediaBuffer")
+      .mockRejectedValueOnce(terminalError)
+      .mockImplementationOnce(() => lateSave)
+      .mockResolvedValueOnce(immediatelySavedMedia);
+    const deleteMediaBuffer = vi
+      .spyOn(mediaStore, "deleteMediaBuffer")
+      .mockRejectedValueOnce(new Error("image cleanup failed"))
+      .mockResolvedValueOnce(undefined);
+    const tool = createToolWithPrimaryImageModel("openai/gpt-image-1");
+
+    const execution = tool.execute("call-partial-save", { prompt: "three images", count: 3 });
+    let executionSettled = false;
+    void execution.then(
+      () => {
+        executionSettled = true;
+      },
+      () => {
+        executionSettled = true;
+      },
+    );
+    await vi.waitFor(() => expect(saveMediaBuffer).toHaveBeenCalledTimes(3));
+    await Promise.resolve();
+    expect(executionSettled).toBe(false);
+
+    resolveLateSave(lateSavedMedia);
+    await expect(execution).rejects.toBe(terminalError);
+    expect(deleteMediaBuffer).toHaveBeenCalledTimes(2);
+    expect(deleteMediaBuffer).toHaveBeenNthCalledWith(1, "late.png", "tool-image-generation");
+    expect(deleteMediaBuffer).toHaveBeenNthCalledWith(2, "saved.png", "tool-image-generation");
+  });
+
   it("runs explicit deployment refs and preserves timeout-only image defaults", async () => {
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
       {
