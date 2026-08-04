@@ -35,6 +35,7 @@ import type { ConfigFileSnapshot, LegacyConfigIssue, OpenClawConfig } from "./ty
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
 type InternalReadOptions = {
+  allowCurrentPluginMetadata?: boolean;
   recoverSuspicious?: boolean;
   skipSuspiciousRecovery?: boolean;
   allowSuspiciousRecovery?: (
@@ -181,6 +182,7 @@ export async function readConfigFileSnapshotInternal(
     const pluginMetadata = context.createValidationPluginMetadataSnapshotLoader({
       effectiveConfigRaw,
       env: deps.env,
+      allowCurrentPluginMetadata: options.allowCurrentPluginMetadata,
     });
     const validated = await deps.measure("config.snapshot.read.validate", () =>
       validateConfigObjectWithPlugins(validationConfigRaw, {
@@ -266,6 +268,7 @@ export async function readConfigFileSnapshotInternal(
           after: snapshotEnv(deps.env),
         });
         return await readConfigFileSnapshotInternal(context, {
+          allowCurrentPluginMetadata: options.allowCurrentPluginMetadata,
           recoverSuspicious: options.recoverSuspicious,
           skipSuspiciousRecovery: true,
         });
@@ -363,6 +366,7 @@ export async function readConfigFileSnapshotWithPluginMetadataFromContext(
   options: ConfigSnapshotReadOptions = {},
 ): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> {
   const result = await readConfigFileSnapshotInternal(context, {
+    allowCurrentPluginMetadata: options.allowCurrentPluginMetadata,
     recoverSuspicious: options.recoverSuspicious === true,
     allowSuspiciousRecovery: options.allowSuspiciousRecovery,
   });
