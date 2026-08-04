@@ -870,7 +870,7 @@ esac
     const runKova = findStep("Run Kova");
 
     expect(runKova.run).toContain(
-      'node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mjs" "$report_json"',
+      'node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mjs" "${gate_args[@]}"',
     );
     expect(runKova.run).not.toContain("report.summary?.statuses ?? {}");
     expect(runKova.run).toContain(
@@ -998,6 +998,22 @@ esac
     expect(run).toContain('--include "$INCLUDE_FILTERS"');
     expect(run).toContain('--auth "$AUTH_MODE"');
     expect(run).toContain('--model "$PERFORMANCE_MODEL_ID"');
+    expect(run).toContain('gate_args=("$report_json")');
+    expect(run).toContain(
+      'if [[ "$KOVA_REF" == "$KOVA_CANONICAL_CONFIG_REF" || "$KOVA_REF" == "$KOVA_LEGACY_LIST_CONFIG_REF" ]]; then',
+    );
+    expect(run).toContain("gate_args+=(--require-instrumented-performance-contract)");
+    expect(run).toContain(
+      'node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mjs" "${gate_args[@]}"',
+    );
+    expect(run.indexOf('gate_args=("$report_json")')).toBeLessThan(
+      run.indexOf("gate_args+=(--require-instrumented-performance-contract)"),
+    );
+    expect(run.indexOf("gate_args+=(--require-instrumented-performance-contract)")).toBeLessThan(
+      run.indexOf(
+        'node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mjs" "${gate_args[@]}"',
+      ),
+    );
   });
 
   it("selects exactly one full Kova report across producer and publisher paths", () => {

@@ -28,6 +28,9 @@ const PROFILED_INTERPRETATION =
   "instrumented run; CPU/RSS can include profiler and diagnostic overhead";
 const INSTRUMENTED_PERFORMANCE_INTERPRETATION =
   "instrumented diagnostic run; CPU, RSS, and latency can include profiler overhead";
+const STRICT_INSTRUMENTED_PERFORMANCE_OPTIONS = {
+  requireInstrumentedPerformanceContract: true,
+};
 
 function objectAt(value: unknown): JsonObject {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -422,7 +425,7 @@ function setCompleteInstrumentedAssessment(record: JsonObject): void {
 }
 
 function attachInstrumentedPerformanceWarning(report: JsonObject, recordIndex = 0): void {
-  const metric = "resourceByRole.status-cli.peakRssMb";
+  const metricId = "resourceByRole.status-cli.peakRssMb";
   const actual = 612.4;
   const threshold = 900;
   const record = markRecordInstrumented(report, recordIndex);
@@ -438,8 +441,8 @@ function attachInstrumentedPerformanceWarning(report: JsonObject, recordIndex = 
         actual,
         affectsRecordStatus: false,
         measurementMetric: "peakRssMb",
-        message: `${metric} was not adjudicated because the run was instrumented`,
-        metric,
+        message: `${metricId} was not adjudicated because the run was instrumented`,
+        metric: metricId,
         observedOverThreshold: false,
         reason: "instrumented-performance-measurement",
         role: "status-cli",
@@ -451,8 +454,8 @@ function attachInstrumentedPerformanceWarning(report: JsonObject, recordIndex = 
   };
   const gate = objectAt(report.gate);
   arrayAt(gate.cards).push({
-    actual: `${metric} ${actual}`,
-    expected: `${metric} <= ${threshold}`,
+    actual: `${metricId} ${actual}`,
+    expected: `${metricId} <= ${threshold}`,
     failedCommand: null,
     impact:
       "This run can reject functional failures, but it cannot approve the release until the scenario is rerun without profiling.",
@@ -460,7 +463,7 @@ function attachInstrumentedPerformanceWarning(report: JsonObject, recordIndex = 
     likelyOwner: "Kova",
     measurements: {
       firstActual: actual,
-      firstMetric: metric,
+      firstMetric: metricId,
       firstThreshold: threshold,
       skippedCount: 1,
     },
@@ -490,6 +493,24 @@ function eraseInstrumentedPerformanceEvidence(report: JsonObject): void {
   );
   gate.warningCount = 0;
   gate.instrumentedPerformanceIncompleteCount = 0;
+}
+
+function stripInstrumentedPerformanceContract(report: JsonObject): JsonObject {
+  const gate = objectAt(report.gate);
+  delete gate.instrumentedPerformanceIncompleteCount;
+  gate.cards = arrayAt(gate.cards).filter(
+    (card) => objectAt(card).kind !== "instrumented-performance-thresholds",
+  );
+  for (const recordValue of arrayAt(report.records)) {
+    const record = objectAt(recordValue);
+    const measurements = objectAt(record.measurements);
+    const profiling = objectAt(record.profiling);
+    delete profiling.affectsPerformanceMeasurements;
+    delete measurements.profilingAffectsPerformanceMeasurements;
+    delete measurements.performanceThresholdSkippedCount;
+    delete record.performanceThresholdAssessment;
+  }
+  return report;
 }
 
 function duplicatePassingRecord(report: JsonObject): void {
@@ -567,6 +588,37 @@ describe("scripts/lib/kova-report-gate.mjs", () => {
       classification: "filtered-partial",
       ok: true,
     });
+  });
+
+  it("accepts a historical filtered PARTIAL v1 report only in automatic mode", () => {
+    const report = stripInstrumentedPerformanceContract(partialReport());
+
+    expect(evaluateToleratedKovaReport(report)).toEqual({
+      classification: "filtered-partial",
+      ok: true,
+    });
+    expect(evaluateToleratedKovaReport(report, STRICT_INSTRUMENTED_PERFORMANCE_OPTIONS).ok).toBe(
+      false,
+    );
+  });
+
+  it("accepts a historical profiled resource-only v1 report only in automatic mode", () => {
+    const report = stripInstrumentedPerformanceContract(profiledResourceReport());
+
+    expect(evaluateToleratedKovaReport(report)).toEqual({
+      classification: "profiled-resource-only",
+      ok: true,
+    });
+    expect(evaluateToleratedKovaReport(report, STRICT_INSTRUMENTED_PERFORMANCE_OPTIONS).ok).toBe(
+      false,
+    );
+  });
+
+  it("rejects partially present instrumented performance contract markers", () => {
+    const report = stripInstrumentedPerformanceContract(partialReport());
+    setAt(report, ["gate", "instrumentedPerformanceIncompleteCount"], 0);
+
+    expectPartialRejection(report);
   });
 
   it("accepts exact instrumented threshold warnings on a filtered PARTIAL report", () => {
@@ -1267,6 +1319,18 @@ describe("scripts/lib/kova-report-gate.mjs", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("profiled-resource-only");
+  });
+
+  it("requires the current producer contract when the CLI flag is present", () => {
+    const reportPath = writeReport(stripInstrumentedPerformanceContract(partialReport()));
+    const result = spawnSync(
+      process.execPath,
+      [SCRIPT_PATH, reportPath, "--require-instrumented-performance-contract"],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("record profiling performance provenance drift");
   });
 
   it("exits non-zero for malformed tolerated-report candidates", () => {

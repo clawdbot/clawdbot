@@ -12,6 +12,8 @@ const SCHEMA = {
 const PROFILED_INTERPRETATION =
   "instrumented run; CPU/RSS can include profiler and diagnostic overhead";
 const INSTRUMENTED_PERFORMANCE_REASON = "instrumented-performance-measurement";
+const REQUIRE_INSTRUMENTED_PERFORMANCE_CONTRACT_FLAG =
+  "--require-instrumented-performance-contract";
 const RSS_METRICS = ["peakRssMb", "resourcePeakGatewayRssMb"];
 const CPU_METRICS = ["cpuPercentMax"];
 const DIRECT_VIOLATIONS = new Set(["cpuPercentMax", "peakRssMb"]);
@@ -26,6 +28,15 @@ function check(condition, reason) {
 function object(value, label) {
   check(value !== null && typeof value === "object" && !Array.isArray(value), `invalid ${label}`);
   return value;
+}
+
+function hasOwn(value, key) {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.hasOwn(value, key)
+  );
 }
 
 function array(value, label) {
@@ -469,10 +480,35 @@ function instrumentedCardKey(card) {
   ]);
 }
 
-function validateGateCards(gate, records) {
+function hasInstrumentedPerformanceContractMarker(gate, records) {
+  if (
+    hasOwn(gate, "instrumentedPerformanceIncompleteCount") ||
+    (Array.isArray(gate.cards) &&
+      gate.cards.some(
+        (card) => hasOwn(card, "kind") && card.kind === "instrumented-performance-thresholds",
+      ))
+  ) {
+    return true;
+  }
+  return records.some((record) => {
+    if (record === null || typeof record !== "object" || Array.isArray(record)) {
+      return false;
+    }
+    return (
+      hasOwn(record, "performanceThresholdAssessment") ||
+      hasOwn(record.profiling, "affectsPerformanceMeasurements") ||
+      hasOwn(record.measurements, "profilingAffectsPerformanceMeasurements") ||
+      hasOwn(record.measurements, "performanceThresholdSkippedCount")
+    );
+  });
+}
+
+function validateGateCards(gate, records, validateInstrumentedPerformance) {
   const cards = array(gate.cards, "gate cards");
   const severities = { blocking: 0, warning: 0, info: 0 };
-  const instrumentedEvidence = expectedInstrumentedEvidence(gate, records);
+  const instrumentedEvidence = validateInstrumentedPerformance
+    ? expectedInstrumentedEvidence(gate, records)
+    : new Map();
   let requiredInstrumented = 0;
   for (const cardValue of cards) {
     const card = object(cardValue, "gate card");
@@ -491,9 +527,11 @@ function validateGateCards(gate, records) {
         const key = instrumentedCardKey(card);
         const remaining = instrumentedEvidence.get(key) ?? 0;
         check(remaining > 0, "instrumented performance card lacked matching evidence");
-        remaining === 1
-          ? instrumentedEvidence.delete(key)
-          : instrumentedEvidence.set(key, remaining - 1);
+        if (remaining === 1) {
+          instrumentedEvidence.delete(key);
+        } else {
+          instrumentedEvidence.set(key, remaining - 1);
+        }
         requiredInstrumented += Number(card.required);
       } else {
         check(
@@ -508,11 +546,13 @@ function validateGateCards(gate, records) {
     instrumentedEvidence.size === 0,
     "instrumented performance evidence lacked matching gate cards",
   );
-  check(
-    count(gate.instrumentedPerformanceIncompleteCount, "instrumented incomplete count") ===
-      requiredInstrumented,
-    "instrumented incomplete count drift",
-  );
+  if (validateInstrumentedPerformance) {
+    check(
+      count(gate.instrumentedPerformanceIncompleteCount, "instrumented incomplete count") ===
+        requiredInstrumented,
+      "instrumented incomplete count drift",
+    );
+  }
   check(
     count(gate.blockingCount, "blocking count") === severities.blocking,
     "blocking count drift",
@@ -526,7 +566,7 @@ function validateGateCards(gate, records) {
   return cards;
 }
 
-function validateEnvelope(reportValue) {
+function validateEnvelope(reportValue, options = {}) {
   const report = object(reportValue, "report");
   const gate = object(report.gate, "gate");
   const controls = object(report.controls, "controls");
@@ -553,13 +593,17 @@ function validateEnvelope(reportValue) {
     gate.partial === true && gate.complete === false && gate.ok === false,
     "gate metadata was not partial",
   );
-  const records = array(report.records, "records").map(validateRecord);
+  const recordValues = array(report.records, "records");
+  const validateInstrumentedPerformance =
+    options.requireInstrumentedPerformanceContract === true ||
+    hasInstrumentedPerformanceContractMarker(gate, recordValues);
+  const records = recordValues.map(validateRecord);
   check(records.length > 0, "report had no records");
   validateBaselines(report, gate);
   validateSummary(report, records);
   validateTargetCleanup(report);
   const groups = validatePerformance(report, records, repeat);
-  const cards = validateGateCards(gate, records);
+  const cards = validateGateCards(gate, records, validateInstrumentedPerformance);
   return { report, gate, records, cards, groups };
 }
 
@@ -652,9 +696,9 @@ function evaluate(evaluator) {
   }
 }
 
-export function evaluateToleratedPartialKovaReport(report) {
+export function evaluateToleratedPartialKovaReport(report, options = {}) {
   return evaluate(() => {
-    const { gate, records, cards } = validateEnvelope(report);
+    const { gate, records, cards } = validateEnvelope(report, options);
     check(gate.verdict === "PARTIAL", "gate verdict was not PARTIAL");
     check(gate.blockingCount === 0, "PARTIAL gate had blocking cards");
     check(
@@ -672,9 +716,9 @@ export function evaluateToleratedPartialKovaReport(report) {
   });
 }
 
-export function evaluateToleratedProfiledKovaReport(report) {
+export function evaluateToleratedProfiledKovaReport(report, options = {}) {
   return evaluate(() => {
-    const { gate, records, cards, groups } = validateEnvelope(report);
+    const { gate, records, cards, groups } = validateEnvelope(report, options);
     check(gate.verdict === "DO_NOT_SHIP", "gate verdict was not DO_NOT_SHIP");
     check(
       records.every((record) => record.status === "PASS" || record.status === "FAIL"),
@@ -705,24 +749,42 @@ export function evaluateToleratedProfiledKovaReport(report) {
   });
 }
 
-export function evaluateToleratedKovaReport(report) {
-  const partial = evaluateToleratedPartialKovaReport(report);
+export function evaluateToleratedKovaReport(report, options = {}) {
+  const partial = evaluateToleratedPartialKovaReport(report, options);
   if (partial.ok) {
     return { ok: true, classification: "filtered-partial" };
   }
-  const profiled = evaluateToleratedProfiledKovaReport(report);
+  const profiled = evaluateToleratedProfiledKovaReport(report, options);
   if (profiled.ok) {
     return { ok: true, classification: "profiled-resource-only" };
   }
   return { ok: false, reason: `partial: ${partial.reason}; profiled: ${profiled.reason}` };
 }
 
-function readCliReportPath() {
-  const reportPath = process.argv[2] || process.env.REPORT_JSON;
-  if (!reportPath) {
-    throw new Error("usage: node scripts/lib/kova-report-gate.mjs <report.json>");
+function readCliInvocation() {
+  let reportPath;
+  let requireInstrumentedPerformanceContract = false;
+  for (const arg of process.argv.slice(2)) {
+    if (arg === REQUIRE_INSTRUMENTED_PERFORMANCE_CONTRACT_FLAG) {
+      requireInstrumentedPerformanceContract = true;
+    } else if (arg.startsWith("-")) {
+      throw new Error(`unknown option: ${arg}`);
+    } else if (reportPath === undefined) {
+      reportPath = arg;
+    } else {
+      throw new Error(`unexpected argument: ${arg}`);
+    }
   }
-  return reportPath;
+  reportPath ??= process.env.REPORT_JSON;
+  if (!reportPath) {
+    throw new Error(
+      `usage: node scripts/lib/kova-report-gate.mjs [${REQUIRE_INSTRUMENTED_PERFORMANCE_CONTRACT_FLAG}] <report.json>`,
+    );
+  }
+  return {
+    options: { requireInstrumentedPerformanceContract },
+    reportPath,
+  };
 }
 
 const modulePath = fs.realpathSync.native(fileURLToPath(import.meta.url));
@@ -730,8 +792,9 @@ const invokedPath = process.argv[1] ? fs.realpathSync.native(path.resolve(proces
 
 if (modulePath === invokedPath) {
   try {
-    const report = JSON.parse(fs.readFileSync(readCliReportPath(), "utf8"));
-    const result = evaluateToleratedKovaReport(report);
+    const invocation = readCliInvocation();
+    const report = JSON.parse(fs.readFileSync(invocation.reportPath, "utf8"));
+    const result = evaluateToleratedKovaReport(report, invocation.options);
     if (!result.ok) {
       console.error(`Kova verdict is not tolerable: ${result.reason}`);
       process.exit(1);

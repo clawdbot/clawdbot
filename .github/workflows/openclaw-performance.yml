@@ -543,7 +543,11 @@ jobs:
 
           effective_status="$status"
           if [[ "$evidence_status" == "0" && "$FAIL_ON_REGRESSION" == "true" && "$status" != "0" ]]; then
-            if node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mjs" "$report_json"
+            gate_args=("$report_json")
+            if [[ "$KOVA_REF" == "$KOVA_CANONICAL_CONFIG_REF" || "$KOVA_REF" == "$KOVA_LEGACY_LIST_CONFIG_REF" ]]; then
+              gate_args+=(--require-instrumented-performance-contract)
+            fi
+            if node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mjs" "${gate_args[@]}"
             then
               effective_status=0
               {
