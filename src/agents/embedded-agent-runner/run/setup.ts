@@ -20,6 +20,7 @@ import {
   normalizeOptionalAgentRuntimeId,
   OPENCLAW_AGENT_RUNTIME_ID,
 } from "../../agent-runtime-id.js";
+import { resolveAgentConfig } from "../../agent-scope.js";
 import {
   evaluateContextWindowGuard,
   formatContextWindowBlockMessage,
@@ -206,6 +207,7 @@ export function createNativeModelOwnedRuntimeModel(params: {
  */
 function resolveEffectiveRuntimeModel(params: {
   cfg: OpenClawConfig | undefined;
+  agentContextTokens?: number;
   provider: string;
   contextConfigProvider?: string;
   modelId: string;
@@ -220,6 +222,7 @@ function resolveEffectiveRuntimeModel(params: {
     modelId: params.modelId,
     modelContextTokens: readAgentModelContextTokens(params.runtimeModel),
     modelContextWindow: params.runtimeModel.contextWindow,
+    agentContextTokens: params.agentContextTokens,
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
   });
 
@@ -267,6 +270,7 @@ function resolveEffectiveRuntimeModel(params: {
 
 /** Resolves only OpenClaw-owned context policy; native model owners keep that policy private. */
 export function resolveEmbeddedRuntimeModelPolicy(params: {
+  agentId?: string;
   cfg: OpenClawConfig | undefined;
   provider: string;
   contextConfigProvider?: string;
@@ -281,7 +285,11 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
   if (params.nativeModelOwned) {
     return { effectiveModel: params.runtimeModel };
   }
-  const resolved = resolveEffectiveRuntimeModel(params);
+  const agentContextTokens =
+    params.cfg && params.agentId
+      ? resolveAgentConfig(params.cfg, params.agentId)?.contextTokens
+      : undefined;
+  const resolved = resolveEffectiveRuntimeModel({ ...params, agentContextTokens });
   return {
     contextWindowInfo: resolved.ctxInfo,
     contextTokenBudget: resolved.ctxInfo.tokens,

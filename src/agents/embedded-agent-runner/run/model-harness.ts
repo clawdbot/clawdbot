@@ -32,6 +32,7 @@ export function resolveEmbeddedRunEffectiveModel(
   },
 ) {
   return resolveEmbeddedRuntimeModelPolicy({
+    agentId: params.runParams.agentId,
     cfg: params.runParams.config,
     provider: params.provider,
     contextConfigProvider: resolveContextConfigProviderForRuntime({

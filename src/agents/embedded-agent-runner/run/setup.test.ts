@@ -242,6 +242,45 @@ function createConfiguredModel(
 }
 
 describe("resolveEmbeddedRuntimeModelPolicy", () => {
+  it.each([
+    {
+      agentContextTokens: 64_000,
+      expected: { source: "agentContextTokens", tokens: 64_000, referenceTokens: 1_000_000 },
+    },
+    {
+      agentContextTokens: 2_000_000,
+      expected: { source: "modelsConfig", tokens: 1_000_000 },
+    },
+  ])(
+    "applies the selected agent context cap without overriding model ownership",
+    ({ agentContextTokens, expected }) => {
+      const result = resolveEmbeddedRuntimeModelPolicy({
+        agentId: "specialist",
+        cfg: {
+          agents: {
+            defaults: { contextTokens: 128_000 },
+            list: [{ id: "specialist", contextTokens: agentContextTokens }],
+          },
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                models: [createConfiguredModel()],
+              },
+            },
+          },
+        } satisfies OpenClawConfig,
+        provider: "openai",
+        modelId: "gpt-5.5",
+        runtimeModel: createRuntimeModel(),
+        nativeModelOwned: false,
+      });
+
+      expect(result.contextWindowInfo).toEqual(expected);
+      expect(result.effectiveModel.contextWindow).toBe(expected.tokens);
+    },
+  );
+
   it("can read Codex OAuth context overrides for native Codex harness runs", () => {
     const cfg = {
       models: {
