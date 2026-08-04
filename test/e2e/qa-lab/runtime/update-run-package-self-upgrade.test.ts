@@ -91,11 +91,20 @@ describe("update.run package self-upgrade producer", () => {
       'gateway_call wizard.next "$wizard_next_params" "$WIZARD_NEXT_JSON" "$WIZARD_NEXT_ERR"',
     );
     expect(script).toContain("runningStatusRetained: true");
-    expect(script).toContain('grep -Fq "wizard already running" "$WIZARD_DUPLICATE_ERR"');
+    expect(script).toContain("assert_gateway_call_error_message()");
+    expect(script).toContain(
+      '"$WIZARD_DUPLICATE_JSON" \\\n  "$WIZARD_DUPLICATE_ERR" \\\n  "wizard already running"',
+    );
+    expect(script).toContain('local allow_stderr_fallback="${5:-0}"');
+    expect(script).toContain(
+      '[ "$allow_stderr_fallback" = "1" ] && grep -Fq "$expected" "$error_output"',
+    );
     expect(script).toContain(
       'gateway_call wizard.cancel "$wizard_session_params" "$WIZARD_CANCEL_JSON" "$WIZARD_CANCEL_ERR"',
     );
-    expect(script).toContain('grep -Fq "wizard not found" "$WIZARD_CANCELLED_STATUS_ERR"');
+    expect(script).toContain(
+      '"$WIZARD_CANCELLED_STATUS_JSON" \\\n  "$WIZARD_CANCELLED_STATUS_ERR" \\\n  "wizard not found"',
+    );
     expect(script).toContain('step.sensitive === true && Object.hasOwn(step, "initialValue")');
     expect(script.indexOf("Exercising authenticated Gateway wizard RPC lifecycle")).toBeLessThan(
       script.indexOf("Invoking authenticated Gateway RPC update.run"),
@@ -124,7 +133,9 @@ describe("update.run package self-upgrade producer", () => {
     expect(script).toContain(
       'gateway_call wizard.next "$target_active_next_params" \\\n  "$TARGET_WIZARD_NEXT_JSON" "$TARGET_WIZARD_NEXT_ERR"',
     );
-    expect(script).toContain('grep -Fq "wizard already running" "$TARGET_WIZARD_DUPLICATE_ERR"');
+    expect(script).toContain(
+      '"$TARGET_WIZARD_DUPLICATE_JSON" \\\n  "$TARGET_WIZARD_DUPLICATE_ERR" \\\n  "wizard already running"',
+    );
     expect(script).toContain(
       'gateway_call wizard.cancel "$target_active_session_params" \\\n  "$TARGET_WIZARD_CANCEL_JSON" "$TARGET_WIZARD_CANCEL_ERR"',
     );
@@ -139,7 +150,9 @@ describe("update.run package self-upgrade producer", () => {
         'gateway_call wizard.status "$target_status_session_params" \\\n  "$TARGET_WIZARD_STATUS_PURGED_JSON"',
       ),
     );
-    expect(script).toContain('grep -Fq "wizard not found" "$TARGET_WIZARD_PURGED_STATUS_ERR"');
+    expect(script).toContain(
+      '"$TARGET_WIZARD_PURGED_STATUS_JSON" \\\n  "$TARGET_WIZARD_PURGED_STATUS_ERR" \\\n  "wizard not found"',
+    );
     expect(script.indexOf("target_replacement_start_result=")).toBeLessThan(
       script.indexOf(
         'gateway_call wizard.status "$target_active_session_params" \\\n  "$TARGET_WIZARD_PURGED_STATUS_JSON"',

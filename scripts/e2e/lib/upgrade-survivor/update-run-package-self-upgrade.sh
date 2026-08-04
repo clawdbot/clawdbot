@@ -376,6 +376,43 @@ gateway_call() {
     >"$output" 2>"$error_output"
 }
 
+assert_gateway_call_error_message() {
+  local output="$1"
+  local error_output="$2"
+  local expected="$3"
+  local label="$4"
+  local allow_stderr_fallback="${5:-0}"
+  if EXPECTED_GATEWAY_ERROR="$expected" node -e '
+    const fs = require("node:fs");
+    const file = process.argv[1];
+    const raw = fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim() : "";
+    if (!raw) {
+      process.exit(1);
+    }
+    try {
+      const payload = JSON.parse(raw);
+      process.exit(
+        payload?.ok === false &&
+          payload?.error?.type === "gateway_request_error" &&
+          payload.error.message === process.env.EXPECTED_GATEWAY_ERROR
+          ? 0
+          : 1,
+      );
+    } catch {
+      process.exit(1);
+    }
+  ' "$output"; then
+    return 0
+  fi
+  if [ "$allow_stderr_fallback" = "1" ] && grep -Fq "$expected" "$error_output"; then
+    return 0
+  fi
+  echo "$label failed without the expected '$expected' result" >&2
+  openclaw_e2e_print_log "$output" >&2
+  openclaw_e2e_print_log "$error_output" >&2
+  exit 1
+}
+
 gateway_call channels.status '{"probe":false,"timeoutMs":2000}' \
   "$ARTIFACT_DIR/channels-status-before.json" \
   "$ARTIFACT_DIR/channels-status-before.err"
@@ -428,11 +465,12 @@ if gateway_call wizard.start '{"mode":"local"}' \
   echo "wizard.start unexpectedly allowed an overlapping setup session" >&2
   exit 1
 fi
-if ! grep -Fq "wizard already running" "$WIZARD_DUPLICATE_ERR"; then
-  echo "overlapping wizard.start failed without the expected rejection" >&2
-  openclaw_e2e_print_log "$WIZARD_DUPLICATE_ERR" >&2
-  exit 1
-fi
+assert_gateway_call_error_message \
+  "$WIZARD_DUPLICATE_JSON" \
+  "$WIZARD_DUPLICATE_ERR" \
+  "wizard already running" \
+  "overlapping wizard.start" \
+  1
 
 gateway_call wizard.cancel "$wizard_session_params" "$WIZARD_CANCEL_JSON" "$WIZARD_CANCEL_ERR"
 if gateway_call wizard.status "$wizard_session_params" \
@@ -440,11 +478,12 @@ if gateway_call wizard.status "$wizard_session_params" \
   echo "cancelled wizard session remained reachable" >&2
   exit 1
 fi
-if ! grep -Fq "wizard not found" "$WIZARD_CANCELLED_STATUS_ERR"; then
-  echo "cancelled wizard cleanup failed without the expected not-found result" >&2
-  openclaw_e2e_print_log "$WIZARD_CANCELLED_STATUS_ERR" >&2
-  exit 1
-fi
+assert_gateway_call_error_message \
+  "$WIZARD_CANCELLED_STATUS_JSON" \
+  "$WIZARD_CANCELLED_STATUS_ERR" \
+  "wizard not found" \
+  "cancelled wizard cleanup" \
+  1
 
 gateway_call wizard.start '{"mode":"local"}' \
   "$WIZARD_REPLACEMENT_START_JSON" "$WIZARD_REPLACEMENT_START_ERR"
@@ -475,11 +514,12 @@ if gateway_call wizard.status "$replacement_session_params" \
   echo "replacement wizard session remained reachable after cancellation" >&2
   exit 1
 fi
-if ! grep -Fq "wizard not found" "$WIZARD_REPLACEMENT_STATUS_ERR"; then
-  echo "replacement wizard cleanup failed without the expected not-found result" >&2
-  openclaw_e2e_print_log "$WIZARD_REPLACEMENT_STATUS_ERR" >&2
-  exit 1
-fi
+assert_gateway_call_error_message \
+  "$WIZARD_REPLACEMENT_STATUS_JSON" \
+  "$WIZARD_REPLACEMENT_STATUS_ERR" \
+  "wizard not found" \
+  "replacement wizard cleanup" \
+  1
 
 WIZARD_START_JSON="$WIZARD_START_JSON" \
   WIZARD_STATUS_JSON="$WIZARD_STATUS_JSON" \
@@ -696,11 +736,8 @@ wait_for_target_wizard_start() {
       printf '%s\t%s\n' "$session_id" "$polls"
       return 0
     fi
-    if ! grep -Fq "wizard already running" "$error_output"; then
-      echo "$label failed without the expected settlement result" >&2
-      openclaw_e2e_print_log "$error_output" >&2
-      return 1
-    fi
+    assert_gateway_call_error_message \
+      "$output" "$error_output" "wizard already running" "$label"
     sleep 0.2
   done
   echo "timed out waiting for $label" >&2
@@ -752,11 +789,11 @@ if gateway_call wizard.status "$target_status_session_params" \
   echo "target cancelled status-session wizard remained reachable after settlement" >&2
   exit 1
 fi
-if ! grep -Fq "wizard not found" "$TARGET_WIZARD_STATUS_PURGED_ERR"; then
-  echo "target cancelled status-session cleanup lacked the expected not-found result" >&2
-  openclaw_e2e_print_log "$TARGET_WIZARD_STATUS_PURGED_ERR" >&2
-  exit 1
-fi
+assert_gateway_call_error_message \
+  "$TARGET_WIZARD_STATUS_PURGED_JSON" \
+  "$TARGET_WIZARD_STATUS_PURGED_ERR" \
+  "wizard not found" \
+  "target cancelled status-session cleanup"
 
 target_active_step_id="$(
   node -e '
@@ -787,11 +824,11 @@ if gateway_call wizard.start '{"mode":"local"}' \
   echo "target wizard.start unexpectedly allowed an overlapping setup session" >&2
   exit 1
 fi
-if ! grep -Fq "wizard already running" "$TARGET_WIZARD_DUPLICATE_ERR"; then
-  echo "target overlapping wizard.start failed without the expected rejection" >&2
-  openclaw_e2e_print_log "$TARGET_WIZARD_DUPLICATE_ERR" >&2
-  exit 1
-fi
+assert_gateway_call_error_message \
+  "$TARGET_WIZARD_DUPLICATE_JSON" \
+  "$TARGET_WIZARD_DUPLICATE_ERR" \
+  "wizard already running" \
+  "target overlapping wizard.start"
 
 gateway_call wizard.cancel "$target_active_session_params" \
   "$TARGET_WIZARD_CANCEL_JSON" "$TARGET_WIZARD_CANCEL_ERR"
@@ -809,11 +846,11 @@ if gateway_call wizard.status "$target_active_session_params" \
   echo "target cancelled wizard session remained reachable" >&2
   exit 1
 fi
-if ! grep -Fq "wizard not found" "$TARGET_WIZARD_PURGED_STATUS_ERR"; then
-  echo "target cancelled wizard cleanup failed without the expected not-found result" >&2
-  openclaw_e2e_print_log "$TARGET_WIZARD_PURGED_STATUS_ERR" >&2
-  exit 1
-fi
+assert_gateway_call_error_message \
+  "$TARGET_WIZARD_PURGED_STATUS_JSON" \
+  "$TARGET_WIZARD_PURGED_STATUS_ERR" \
+  "wizard not found" \
+  "target cancelled wizard cleanup"
 
 target_replacement_session_params="$(
   WIZARD_SESSION_ID="$target_replacement_session_id" node -e '
