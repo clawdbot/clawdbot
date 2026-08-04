@@ -375,7 +375,7 @@ async function visitSessionLogEvents(
       }
     }
   } catch {
-    return;
+    // Missing or unreadable stores contribute no events.
   } finally {
     db?.close();
   }

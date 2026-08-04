@@ -28,12 +28,12 @@ import {
 } from "./tool-search-config.js";
 import { applyToolSchemaDirectoryCatalog } from "./tool-search-directory.js";
 import { MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS } from "./tool-search-directory.js";
+import { readToolSearchRequest } from "./tool-search-request.js";
 import {
   formatToolSearchControlError,
   formatToolSearchControlResult,
   readToolSearchCallArgs,
   readToolSearchId,
-  readToolSearchRequest,
   ToolSearchRuntime,
 } from "./tool-search-runtime.js";
 import {
