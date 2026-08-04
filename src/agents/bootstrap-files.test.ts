@@ -436,6 +436,22 @@ describe("resolveBootstrapContextForRun", () => {
     expect(files).toStrictEqual([]);
   });
 
+  it("skips workspace bootstrap injection when agents.defaults.skipBootstrap is set (#75184)", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "rules", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "persona", "utf8");
+
+    const result = await resolveBootstrapContextForRun({
+      workspaceDir,
+      config: {
+        agents: { defaults: { skipBootstrap: true } },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(result.bootstrapFiles).toStrictEqual([]);
+    expect(result.contextFiles).toStrictEqual([]);
+  });
+
   it("keeps bootstrap context empty in lightweight cron mode", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
     await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "check inbox", "utf8");

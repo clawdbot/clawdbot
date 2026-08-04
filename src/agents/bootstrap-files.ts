@@ -253,6 +253,11 @@ export async function resolveBootstrapContextForRun(params: {
   bootstrapFiles: WorkspaceBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
 }> {
+  // agents.defaults.skipBootstrap opts out of workspace bootstrap file
+  // injection for agent runs, not just file creation at onboarding (#75184).
+  if (params.config?.agents?.defaults?.skipBootstrap) {
+    return { bootstrapFiles: [], contextFiles: [] };
+  }
   const bootstrapFiles = await resolveBootstrapFilesForRun(params);
   const contextFiles = buildBootstrapContextForFiles(bootstrapFiles, params);
   return { bootstrapFiles, contextFiles };
