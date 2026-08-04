@@ -5283,6 +5283,12 @@ describe("runCliAgent spawn path", () => {
       backend: { env: { SAFE_OVERRIDE: "from-override" }, clearEnv: ["SAFE_OVERRIDE"] },
       expected: { SAFE_OVERRIDE: "from-override" },
     },
+    {
+      name: "preserves an inherited AI agent marker when backend env adds another override",
+      baseEnv: { AI_AGENT: "wrapper" },
+      backend: { env: { SAFE_KEEP: "keep-me" } },
+      expected: { AI_AGENT: "wrapper", SAFE_KEEP: "keep-me" },
+    },
   ])("$name", async (testCase) => {
     Object.assign(process.env, testCase.baseEnv);
     if (testCase.preserve) {

@@ -415,7 +415,7 @@ export async function executePreparedCliRun(
             ...resolveNodeClaudeAuthEnv(context),
           }
         : undefined;
-      const env = sanitizeHostExecEnv({ baseEnv: process.env, blockPathOverrides: true });
+      let env = sanitizeHostExecEnv({ baseEnv: process.env, blockPathOverrides: true });
       const preservedEnv = parseCliBackendPreserveEnv(process.env[CLI_BACKEND_PRESERVE_ENV]);
       for (const key of backend.clearEnv ?? []) {
         if (!preservedEnv.has(key) || selectedClaudeClearEnv?.has(key)) {
@@ -423,14 +423,11 @@ export async function executePreparedCliRun(
         }
       }
       if (Object.keys(backendEnv).length > 0) {
-        Object.assign(
-          env,
-          sanitizeHostExecEnv({
-            baseEnv: {},
-            overrides: backendEnv,
-            blockPathOverrides: true,
-          }),
-        );
+        env = sanitizeHostExecEnv({
+          baseEnv: env,
+          overrides: backendEnv,
+          blockPathOverrides: true,
+        });
       }
       Object.assign(env, mcpCaptureAttempt.env);
       // Never mark Claude CLI as host-managed. That marker routes runs into
