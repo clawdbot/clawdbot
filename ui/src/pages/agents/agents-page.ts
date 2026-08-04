@@ -694,6 +694,7 @@ class AgentsPage
       agents,
       agentIdentity,
       runtimeConfig: this.context.runtimeConfig,
+      canDispatch: () => this.canCall("agents.update", "operator.admin"),
       isCurrent: () =>
         this.isCurrentRequest(client, generation, agentId, { agents, agentIdentity }),
       onSaved: () => this.syncAgentState(agents),

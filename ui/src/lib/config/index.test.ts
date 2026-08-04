@@ -2357,6 +2357,52 @@ describe("config form auto-save", () => {
     runtimeConfig.dispose();
   });
 
+  it("rechecks external mutation access after pending config writes settle", async () => {
+    vi.useFakeTimers();
+    const firstSet = deferred<unknown>();
+    const methods: string[] = [];
+    let canDispatch = true;
+    const request = vi.fn((method: string) => {
+      methods.push(method);
+      if (method === "config.get") {
+        return Promise.resolve({
+          config: { count: 1 },
+          raw: '{"count":1}',
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        });
+      }
+      if (method === "config.set") {
+        return firstSet.promise;
+      }
+      return Promise.resolve({ ok: true });
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+    methods.length = 0;
+
+    runtimeConfig.patchForm(["count"], 2);
+    const result = runtimeConfig.runExternalMutation(
+      (client) => client.request("agents.update", { agentId: "main", name: "Agent Smith" }),
+      {
+        canDispatch: () => canDispatch,
+        dispatchError: "Access changed before the agent identity update started.",
+      },
+    );
+    await vi.waitFor(() => expect(methods).toEqual(["config.set"]));
+    canDispatch = false;
+    firstSet.resolve({ hash: "hash-2" });
+
+    await expect(result).resolves.toEqual({
+      ok: false,
+      reason: "unavailable",
+      error: "Access changed before the agent identity update started.",
+    });
+    expect(methods).toEqual(["config.set"]);
+    runtimeConfig.dispose();
+  });
+
   it("forces a post-mutation refresh instead of joining a pre-existing config load", async () => {
     const staleLoad = deferred<ConfigSnapshot>();
     let getCalls = 0;

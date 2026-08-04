@@ -569,26 +569,45 @@ async function runSkillMutation(
   }
 }
 
-export async function updateSkillEnabled(state: SkillsState, skillKey: string, enabled: boolean) {
+export async function updateSkillEnabled(
+  state: SkillsState,
+  skillKey: string,
+  enabled: boolean,
+  canDispatch: () => boolean = () => true,
+) {
   await runSkillMutation(state, skillKey, async (client) => {
-    const refreshError = await runSkillConfigMutation(state.runtimeConfig, client, {
-      skillKey,
-      enabled,
-    });
+    const refreshError = await runSkillConfigMutation(
+      state.runtimeConfig,
+      client,
+      {
+        skillKey,
+        enabled,
+      },
+      canDispatch,
+    );
     return skillConfigMutationSuccess(enabled ? "Skill enabled" : "Skill disabled", refreshError);
   });
 }
 
-export async function saveSkillApiKey(state: SkillsState, skillKey: string) {
+export async function saveSkillApiKey(
+  state: SkillsState,
+  skillKey: string,
+  canDispatch: () => boolean = () => true,
+) {
   const apiKey = normalizeSkillApiKeyReplacement(state.skillEdits[skillKey]);
   if (!apiKey) {
     return;
   }
   await runSkillMutation(state, skillKey, async (client) => {
-    const refreshError = await runSkillConfigMutation(state.runtimeConfig, client, {
-      skillKey,
-      apiKey,
-    });
+    const refreshError = await runSkillConfigMutation(
+      state.runtimeConfig,
+      client,
+      {
+        skillKey,
+        apiKey,
+      },
+      canDispatch,
+    );
     return skillConfigMutationSuccess(
       `API key saved — stored in openclaw.json (skills.entries.${skillKey})`,
       refreshError,

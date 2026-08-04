@@ -417,7 +417,7 @@ class SkillsPage extends OpenClawLightDomElement {
             onRefresh: () => void this.refreshPage(),
             onToggle: (key, enabled) => {
               if (this.canUpdateSkills()) {
-                void updateSkillEnabled(this, key, enabled);
+                void updateSkillEnabled(this, key, enabled, () => this.canUpdateSkills());
               }
             },
             onEdit: (key, value) => {
@@ -427,7 +427,7 @@ class SkillsPage extends OpenClawLightDomElement {
             },
             onSaveKey: (key) => {
               if (this.canUpdateSkills()) {
-                void saveSkillApiKey(this, key);
+                void saveSkillApiKey(this, key, () => this.canUpdateSkills());
               }
             },
             onInstall: (skillKey, name, installId) => {

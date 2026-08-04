@@ -38,6 +38,12 @@ type RuntimeConfigExternalMutationResult<T> =
       error: string;
     };
 
+type RuntimeConfigExternalMutationOptions = {
+  waitForWritesResumed?: boolean;
+  canDispatch?: () => boolean;
+  dispatchError?: string;
+};
+
 /** Debounce window between the last form edit and its automatic config.set. */
 const CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS = 800;
 
@@ -234,7 +240,7 @@ export type RuntimeConfigCapability = {
    */
   runExternalMutation: <T>(
     task: (client: GatewayBrowserClient) => Promise<T>,
-    options?: { waitForWritesResumed?: boolean },
+    options?: RuntimeConfigExternalMutationOptions,
   ) => Promise<RuntimeConfigExternalMutationResult<T>>;
   lookupSchemaPath: (path: string) => Promise<unknown>;
   subscribe: (listener: (state: ConfigState) => void) => () => void;
@@ -2087,7 +2093,7 @@ export function createRuntimeConfigCapability(
         : Promise.resolve(false),
     runExternalMutation: async <T>(
       task: (client: GatewayBrowserClient) => Promise<T>,
-      options: { waitForWritesResumed?: boolean } = {},
+      options: RuntimeConfigExternalMutationOptions = {},
     ): Promise<RuntimeConfigExternalMutationResult<T>> => {
       const mutationClient = state.client;
       const mutationConnectionEpoch = currentConfigConnectionEpoch(state);
@@ -2116,6 +2122,15 @@ export function createRuntimeConfigCapability(
           async (): Promise<RuntimeConfigExternalMutationResult<T>> => {
             if (!isCurrentConfigConnection(state, mutationClient, mutationConnectionEpoch)) {
               return unavailable;
+            }
+            if (options.canDispatch && !options.canDispatch()) {
+              return {
+                ok: false,
+                reason: "unavailable",
+                error:
+                  options.dispatchError ??
+                  "Access changed before the configuration update started.",
+              };
             }
             let value: T;
             try {
