@@ -77,6 +77,7 @@ const restartSystemdService = vi.hoisted(() =>
 );
 const stopSystemdService = vi.hoisted(() => vi.fn<() => Promise<void>>(async () => {}));
 const isTerminalInteractive = vi.fn(() => true);
+const throwIfPortBusyWithoutOwner = vi.fn<(port: number) => Promise<void>>(async () => {});
 const appendGatewayLifecycleAudit = vi.fn();
 const createGatewayLifecycleMutationAudit = vi.fn(
   (params: { action: string; source?: string }) => (mutation: { mode: string; pid?: number }) =>
@@ -164,6 +165,10 @@ vi.mock("../terminal-interactivity.js", () => ({
   isTerminalInteractive: () => isTerminalInteractive(),
   NON_INTERACTIVE_GATEWAY_STOP_MESSAGE:
     "This stops the operator's running gateway service. Use an isolated dev gateway (openclaw gateway run --dev, or --profile <name> with a free port) for testing, or re-run with --force if you really mean it.",
+}));
+
+vi.mock("../../infra/ports-probe.js", () => ({
+  throwIfPortBusyWithoutOwner: (port: number) => throwIfPortBusyWithoutOwner(port),
 }));
 
 vi.mock("./lifecycle-audit.js", () => ({
@@ -270,6 +275,7 @@ describe("runDaemonRestart health checks", () => {
     recoverInstalledLaunchAgent.mockReset().mockResolvedValue(null);
     repairLoadedGatewayServiceForStart.mockReset();
     isTerminalInteractive.mockReset().mockReturnValue(true);
+    throwIfPortBusyWithoutOwner.mockReset().mockResolvedValue(undefined);
     appendGatewayLifecycleAudit.mockClear();
     createGatewayLifecycleMutationAudit.mockClear();
     isDefaultInstallIdentity.mockReset().mockReturnValue(true);
@@ -1114,5 +1120,20 @@ describe("runDaemonRestart health checks", () => {
     expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
     expect(appendGatewayLifecycleAudit).not.toHaveBeenCalled();
     expect(outcome).toBeNull();
+  });
+
+  it("throws when port is busy but no gateway process can be identified", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
+    readActiveGatewayLockIdentity.mockResolvedValue(undefined);
+    throwIfPortBusyWithoutOwner.mockRejectedValue(
+      new Error("Port 18789 is in use but the gateway process could not be identified"),
+    );
+
+    await expect(runUnmanagedStop()).rejects.toThrow(
+      /Port 18789 is in use but the gateway process could not be identified/,
+    );
+
+    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
+    expect(throwIfPortBusyWithoutOwner).toHaveBeenCalledWith(18789);
   });
 });

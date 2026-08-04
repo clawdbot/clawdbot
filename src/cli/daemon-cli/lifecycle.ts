@@ -30,6 +30,7 @@ import {
   isGatewayExternallySupervised,
   resolveGatewayServiceMutationError,
 } from "../../infra/gateway-supervision.js";
+import { throwIfPortBusyWithoutOwner } from "../../infra/ports-probe.js";
 import {
   clearGatewayRestartIntentSync,
   type GatewayRestartIntent,
@@ -218,6 +219,7 @@ async function stopGatewayWithoutServiceManager(port: number, lockOwnerPid: numb
   // reporting the gateway as not running while it keeps serving.
   const pids = listenerPids.length > 0 ? listenerPids : lockOwnerPid ? [lockOwnerPid] : [];
   if (pids.length === 0) {
+    await throwIfPortBusyWithoutOwner(port);
     return null;
   }
   for (const pid of pids) {

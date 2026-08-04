@@ -66,3 +66,15 @@ export async function probePortUsage(
   }
   return sawUnknown ? "unknown" : "free";
 }
+
+/**
+ * Throws when the port is provably busy but no owning PID was found.
+ * Returns silently when the port is free or the probe is inconclusive.
+ */
+export async function throwIfPortBusyWithoutOwner(port: number): Promise<void> {
+  if ((await probePortUsage(port)) === "busy") {
+    throw new Error(
+      `Port ${port} is in use but the gateway process could not be identified (lsof unavailable or PID exited). Use \`openclaw gateway status --deep\` to investigate.`,
+    );
+  }
+}
