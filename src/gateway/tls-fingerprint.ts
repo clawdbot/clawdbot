@@ -3,9 +3,7 @@ import type { GatewayTlsConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayTlsRuntime } from "../infra/tls/gateway.js";
 
-export type GatewayTlsRuntimeLoader = (
-  config: GatewayTlsConfig | undefined,
-) => Promise<GatewayTlsRuntime>;
+type GatewayTlsRuntimeLoader = (config: GatewayTlsConfig | undefined) => Promise<GatewayTlsRuntime>;
 
 /** Resolve the certificate pin for one already-selected Gateway target. */
 export async function resolveGatewayConnectionTlsFingerprint(params: {
