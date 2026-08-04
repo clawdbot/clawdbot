@@ -409,6 +409,7 @@ async function createBrowserPage(
 ): Promise<{
   context: BrowserContext;
   evidenceStartIndex: number;
+  errors: string[];
   page: Page;
 }> {
   await mkdir(artifactDir, { recursive: true });
@@ -420,6 +421,8 @@ async function createBrowserPage(
   });
   openContexts.add(context);
   const page = await context.newPage();
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(String(error)));
   page.setDefaultTimeout(15_000);
   const evidenceStartIndex = proxy.evidence.length;
   const response = await page.goto(withGatewayUrl(baseUrl, gatewayUrl), {
@@ -439,7 +442,7 @@ async function createBrowserPage(
   await expect
     .poll(() => proxy.evidence.length, { timeout: 15_000 })
     .toBeGreaterThan(evidenceStartIndex);
-  return { context, evidenceStartIndex, page };
+  return { context, errors, evidenceStartIndex, page };
 }
 
 async function warmBundledControlUiOrigin(baseUrl: string): Promise<void> {
@@ -574,9 +577,24 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
   });
 
   it("connects through the trusted path and rejects the untrusted proxy path", async () => {
+    // A connected shell starts bootstrap RPCs that can outlive context teardown.
+    // Keep it last so those requests cannot starve the next browser interaction.
+    const rejected = await createBrowserPage(allowedUi.baseUrl, proxy.untrustedUrl);
+    const expectedReason = "trusted_proxy_missing_header_x-forwarded-proto";
+    await waitForVisibleFailure(rejected.page, "unauthorized");
+    const untrustedEvidence = await waitForConnectionEvidence(
+      (entry) => entry.route === "untrusted" && entry.gatewayResult?.ok === false,
+      rejected.evidenceStartIndex,
+    );
+    expect(untrustedEvidence.gatewayResult?.message).toContain("unauthorized");
+    expect(untrustedEvidence.gatewayResult?.errorReason).toBe(expectedReason);
+    expect(untrustedEvidence.identityInjected).toBe(false);
+    expect(untrustedEvidence.requiredHeaderInjected).toBe(false);
+    await captureChromiumScreenshot(rejected.page, "02-untrusted-proxy-rejected.png");
+    expect(rejected.errors).toEqual([]);
+    await closeContext(rejected.context);
+
     const connected = await createBrowserPage(allowedUi.baseUrl, proxy.trustedUrl);
-    const connectedErrors: string[] = [];
-    connected.page.on("pageerror", (error) => connectedErrors.push(String(error)));
     await connected.page
       .locator("openclaw-app-shell")
       .waitFor({ timeout: controlUiSettleTimeoutMs });
@@ -596,24 +614,8 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     expect(trustedEvidence.identityInjected).toBe(true);
     expect(trustedEvidence.requiredHeaderInjected).toBe(true);
     await captureChromiumScreenshot(connected.page, "01-trusted-proxy-connected.png");
-    expect(connectedErrors).toEqual([]);
+    expect(connected.errors).toEqual([]);
     await closeContext(connected.context);
-
-    const rejected = await createBrowserPage(allowedUi.baseUrl, proxy.untrustedUrl);
-    const rejectedErrors: string[] = [];
-    rejected.page.on("pageerror", (error) => rejectedErrors.push(String(error)));
-    const expectedReason = "trusted_proxy_missing_header_x-forwarded-proto";
-    await waitForVisibleFailure(rejected.page, "unauthorized");
-    const untrustedEvidence = await waitForConnectionEvidence(
-      (entry) => entry.route === "untrusted" && entry.gatewayResult?.ok === false,
-      rejected.evidenceStartIndex,
-    );
-    expect(untrustedEvidence.gatewayResult?.message).toContain("unauthorized");
-    expect(untrustedEvidence.gatewayResult?.errorReason).toBe(expectedReason);
-    expect(untrustedEvidence.identityInjected).toBe(false);
-    expect(untrustedEvidence.requiredHeaderInjected).toBe(false);
-    await captureChromiumScreenshot(rejected.page, "02-untrusted-proxy-rejected.png");
-    expect(rejectedErrors).toEqual([]);
 
     await writeFile(
       path.join(artifactDir, "trusted-proxy-behavior.json"),
@@ -634,25 +636,7 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
   });
 
   it("confirms gatewayUrl, accepts the allowed origin, and rejects an unlisted origin", async () => {
-    const allowed = await createBrowserPage(allowedUi.baseUrl, proxy.trustedUrl);
-    const allowedErrors: string[] = [];
-    allowed.page.on("pageerror", (error) => allowedErrors.push(String(error)));
-    await allowed.page.locator("openclaw-app-shell").waitFor({ timeout: controlUiSettleTimeoutMs });
-    const allowedOrigin = new URL(allowedUi.baseUrl).origin;
-    const allowedEvidence = await waitForConnectionEvidence(
-      (entry) =>
-        entry.route === "trusted" &&
-        entry.browserOrigin === allowedOrigin &&
-        entry.gatewayResult?.ok === true,
-      allowed.evidenceStartIndex,
-    );
-    await captureChromiumScreenshot(allowed.page, "03-allowed-origin-connected.png");
-    expect(allowedErrors).toEqual([]);
-    await closeContext(allowed.context);
-
     const rejected = await createBrowserPage(rejectedUi.baseUrl, proxy.trustedUrl);
-    const rejectedErrors: string[] = [];
-    rejected.page.on("pageerror", (error) => rejectedErrors.push(String(error)));
     await waitForVisibleFailure(rejected.page, "origin not allowed");
     const rejectedOrigin = new URL(rejectedUi.baseUrl).origin;
     const rejectedEvidence = await waitForConnectionEvidence(
@@ -664,7 +648,22 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
       rejected.evidenceStartIndex,
     );
     await captureChromiumScreenshot(rejected.page, "04-rejected-origin-recovery.png");
-    expect(rejectedErrors).toEqual([]);
+    expect(rejected.errors).toEqual([]);
+    await closeContext(rejected.context);
+
+    const allowed = await createBrowserPage(allowedUi.baseUrl, proxy.trustedUrl);
+    await allowed.page.locator("openclaw-app-shell").waitFor({ timeout: controlUiSettleTimeoutMs });
+    const allowedOrigin = new URL(allowedUi.baseUrl).origin;
+    const allowedEvidence = await waitForConnectionEvidence(
+      (entry) =>
+        entry.route === "trusted" &&
+        entry.browserOrigin === allowedOrigin &&
+        entry.gatewayResult?.ok === true,
+      allowed.evidenceStartIndex,
+    );
+    await captureChromiumScreenshot(allowed.page, "03-allowed-origin-connected.png");
+    expect(allowed.errors).toEqual([]);
+    await closeContext(allowed.context);
 
     await writeFile(
       path.join(artifactDir, "allowed-origins-behavior.json"),
