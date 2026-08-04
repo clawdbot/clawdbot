@@ -203,15 +203,18 @@ function applyScreenCsi(screen: TestScreen, value: string, synchronized: boolean
 }
 
 function scanOsc(raw: string, bodyStart: number) {
-  const terminators = [
+  const candidates: Array<[index: number, length: number]> = [
     [raw.indexOf("\x07", bodyStart), 1],
     [raw.indexOf("\x1b\\", bodyStart), 2],
     [raw.indexOf("\u009c", bodyStart), 1],
-  ].filter(([index]) => index >= 0);
-  if (terminators.length === 0) {
+  ];
+  const terminator = candidates
+    .filter(([index]) => index >= 0)
+    .toSorted(([left], [right]) => left - right)[0];
+  if (!terminator) {
     return undefined;
   }
-  const [index, length] = terminators.toSorted(([left], [right]) => left - right)[0];
+  const [index, length] = terminator;
   const body = raw.slice(bodyStart, index);
   if (raw[index] === "\u009c" || ansi.sanitizeForLog(body) !== body) {
     throw new Error("unsupported terminal control in TUI PTY OSC evidence");
