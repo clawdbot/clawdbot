@@ -32,6 +32,7 @@ import {
   stopSlackStream,
   type SlackStreamSession,
 } from "../../streaming.js";
+import { escapeSlackMrkdwn } from "../mrkdwn.js";
 import {
   resolveExplicitSlackProgressTitle,
   resolveSlackStreamRecipientTeamId,
