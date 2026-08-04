@@ -26,6 +26,7 @@ import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { onDiagnosticEvent, type DiagnosticPayloadLargeEvent } from "../infra/diagnostic-events.js";
+import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
 import {
   captureCurrentPluginMetadataSnapshotState,
   restoreCurrentPluginMetadataSnapshotState,
@@ -1697,6 +1698,80 @@ describe("gateway server chat", () => {
           }),
         ]),
       );
+    });
+  });
+
+  test("chat.metadata preserves configured models when text commands require exec approvals migration", async () => {
+    await withGatewayChatHarness(async ({ ws }) => {
+      await writeGatewayConfig({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5.6-luna",
+            },
+            models: {
+              "openai/gpt-5.6-luna": {},
+              "openai/gpt-5.6-terra": {},
+            },
+          },
+          entries: {
+            main: { default: true },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://openai.example.com/v1",
+              models: [
+                { id: "gpt-5.6-luna", name: "GPT-5.6 Luna" },
+                { id: "gpt-5.6-terra", name: "GPT-5.6 Terra" },
+              ],
+            },
+          },
+        },
+      });
+      await connectOk(ws);
+
+      const legacyExecApprovalsPath = path.join(
+        autoCleanupTempDirs.make("openclaw-chat-metadata-exec-approvals-"),
+        "exec-approvals.json",
+      );
+      const commandsListResult = await import("./server-methods/commands-list-result.js");
+      vi.spyOn(commandsListResult, "buildCommandsListResult").mockImplementationOnce(() => {
+        throw new ExecApprovalsMigrationRequiredError(legacyExecApprovalsPath);
+      });
+
+      const metadata = await rpcReq<{
+        commands?: Array<{ name?: string }>;
+        models?: Array<{ id?: string; provider?: string }>;
+      }>(ws, "chat.metadata", { agentId: "main" });
+
+      expect(metadata.ok).toBe(true);
+      expect(metadata.payload?.commands).toBeUndefined();
+      expect(metadata.payload?.models).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: "gpt-5.6-luna", provider: "openai" }),
+          expect.objectContaining({ id: "gpt-5.6-terra", provider: "openai" }),
+        ]),
+      );
+    });
+  });
+
+  test("chat.metadata remains unavailable when configured models fail", async () => {
+    await withGatewayChatHarness(async ({ ws }) => {
+      await connectOk(ws);
+      const modelsListResult = await import("./server-methods/models-list-result.js");
+      vi.spyOn(modelsListResult, "buildModelsListResult").mockRejectedValueOnce(
+        new Error("configured model catalog unavailable"),
+      );
+
+      const metadata = await rpcReq(ws, "chat.metadata", { agentId: "main" });
+
+      expect(metadata.ok).toBe(false);
+      expect(metadata.error).toMatchObject({
+        code: "UNAVAILABLE",
+        message: expect.stringContaining("configured model catalog unavailable"),
+      });
     });
   });
 

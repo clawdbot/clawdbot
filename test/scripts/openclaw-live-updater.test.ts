@@ -23,6 +23,7 @@ import {
   assertNoSystemLaunchDaemonOwnership,
   classifyActions,
   findExactMacTarget,
+  formatUpdateFailure,
   inspectBuildState,
   isOwnedGatewayEntrypoint,
   isGatewayProbeResponse,
@@ -338,6 +339,98 @@ describe("openclaw live updater", () => {
     expect(() => resolveLaunchAgentExitTimeoutSeconds(301)).toThrow(
       "ExitTimeOut=301 prevents bounded stopped proof",
     );
+  });
+
+  test("formats simple invariant diagnostics with allowlisted details", () => {
+    let failure: unknown;
+    try {
+      resolveLaunchAgentExitTimeoutSeconds(0);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(formatUpdateFailure(failure)).toEqual({
+      schemaVersion: 1,
+      ok: false,
+      error: {
+        code: "gateway_launchagent_failed",
+        message: "managed Gateway LaunchAgent ExitTimeOut=0 prevents bounded stopped proof",
+        diagnostics: {
+          kind: "invariant",
+          code: "gateway_launchagent_failed",
+          details: { exitTimeoutSeconds: 0 },
+        },
+      },
+    });
+  });
+
+  test("bounds recursive diagnostics and omits arbitrary error data", () => {
+    const commandError = Object.assign(new Error("nested-secret-message"), {
+      command: "/bin/private --token secret-command-token",
+      env: { SECRET: "secret-env-value" },
+      output: ["secret-output-value"],
+      status: 23,
+      stderr: "secret-stderr-value",
+      stdout: "secret-stdout-value",
+    });
+    const cyclic = new AggregateError([], "bounded aggregate");
+    cyclic.errors.push(
+      commandError,
+      cyclic,
+      ...Array.from({ length: 8 }, () => new Error("extra")),
+    );
+
+    const formatted = formatUpdateFailure(cyclic);
+    expect(formatted.error.message).toBe("bounded aggregate");
+    const diagnostics = formatted.error.diagnostics as {
+      kind: string;
+      members: Array<Record<string, unknown>>;
+      omittedMembers: number;
+    };
+    expect(diagnostics).toMatchObject({
+      kind: "aggregate",
+      omittedMembers: 2,
+    });
+    expect(diagnostics.members).toHaveLength(8);
+    expect(diagnostics.members.slice(0, 2)).toEqual([
+      {
+        role: "primary",
+        error: { kind: "command", operation: "external_command", status: 23 },
+      },
+      {
+        role: "secondary",
+        error: { kind: "truncated", reason: "cycle" },
+      },
+    ]);
+    const serialized = JSON.stringify(formatted);
+    expect(serialized).not.toContain("secret-");
+    expect(serialized).not.toContain("/bin/private");
+
+    let nested: unknown = new Error("leaf");
+    for (let depth = 0; depth < 5; depth += 1) {
+      nested = new AggregateError([nested], `level-${depth}`);
+    }
+    expect(JSON.stringify(formatUpdateFailure(nested))).toContain('"reason":"depth_limit"');
+  });
+
+  test("formats hostile non-Error thrown values without reading arbitrary fields", () => {
+    const failure = {
+      secret: "secret-object-value",
+      toString() {
+        throw new Error("secret-to-string-value");
+      },
+    };
+
+    const formatted = formatUpdateFailure(failure);
+    expect(formatted).toMatchObject({
+      ok: false,
+      error: {
+        code: "update_failed",
+        message: "unknown updater failure",
+        diagnostics: { kind: "thrown_value" },
+      },
+    });
+    expect(JSON.stringify(formatted)).not.toContain("secret-");
   });
 
   test("fails closed on same-label system LaunchDaemon ownership", () => {
@@ -1543,6 +1636,93 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     ]);
   });
 
+  test("preserves typed suspension command diagnostics when stopped proof also fails", () => {
+    const { root, mirror } = makeFixture();
+    mkdirSync(path.join(mirror, "node_modules"));
+    const configPath = path.join(root, "openclaw.json");
+    const entrypoint = path.join(mirror, "dist/index.js");
+    mkdirSync(path.dirname(entrypoint), { recursive: true });
+    writeFileSync(configPath, "{}\n");
+    writeFileSync(
+      entrypoint,
+      'if (process.argv.includes("status")) process.exit(29); process.stderr.write("secret suspension stderr\\n"); process.exit(23);\n',
+    );
+    const deployment = {
+      configPath,
+      entrypoint,
+      executable: process.execPath,
+      invocationPrefix: [entrypoint],
+      port: 18789,
+      runtime: process.execPath,
+      serviceEnvironment: {},
+      wrapperPath: null,
+    };
+    let failure: unknown;
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+
+    try {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      maintainFixture(
+        { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+        {
+          prepareGatewaySuspension: (checkout: string) =>
+            prepareGatewaySuspension(
+              checkout,
+              () =>
+                runBuiltGatewayCli(
+                  checkout,
+                  ["gateway", "call", "gateway.suspend.prepare"],
+                  deployment,
+                  { stderr: "pipe" },
+                ),
+              deployment,
+            ),
+          proveGatewayStopped: undefined,
+        },
+      );
+    } catch (error) {
+      failure = error;
+    } finally {
+      if (platformDescriptor) {
+        Object.defineProperty(process, "platform", platformDescriptor);
+      }
+    }
+
+    const formatted = formatUpdateFailure(failure);
+    expect(formatted.error.diagnostics).toEqual({
+      kind: "aggregate",
+      members: [
+        {
+          role: "primary",
+          error: {
+            kind: "invariant",
+            code: "gateway_suspend_prepare_failed",
+            cause: {
+              kind: "command",
+              operation: "gateway.suspend.prepare",
+              status: 23,
+            },
+          },
+        },
+        {
+          role: "proof",
+          error: {
+            kind: "invariant",
+            code: "gateway_stopped_proof_failed",
+            cause: {
+              kind: "command",
+              operation: "gateway.status",
+              status: 29,
+            },
+          },
+        },
+      ],
+      causeMember: 1,
+    });
+    expect(JSON.stringify(formatted)).not.toContain("secret suspension stderr");
+    expect(JSON.stringify(formatted)).not.toContain(entrypoint);
+  });
+
   test("preserves the signed Mac bundle while a Gateway build replaces dist", () => {
     const { root, mirror } = makeFixture();
     mkdirSync(path.join(mirror, "node_modules"));
@@ -1592,6 +1772,42 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
       ),
     ).toThrow("build failed");
     expect(readFileSync(appMarker, "utf8")).toBe("signed\n");
+  });
+
+  test("reports a standalone command operation without command output", () => {
+    const { root, mirror } = makeFixture();
+    mkdirSync(path.join(mirror, "node_modules"));
+    let failure: unknown;
+
+    try {
+      maintainFixture(
+        { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+        {
+          runCommand(command: string, args: string[]) {
+            if (command === "pnpm" && args[0] === "build") {
+              throw Object.assign(new Error("secret build message"), {
+                status: 17,
+                stderr: "secret build stderr",
+                stdout: "secret build stdout",
+              });
+            }
+          },
+        },
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    const formatted = formatUpdateFailure(failure);
+    expect(formatted.error.message).toBe("build failed");
+    expect(formatted.error.diagnostics).toEqual({
+      kind: "command",
+      operation: "build",
+      status: 17,
+    });
+    expect(JSON.stringify(formatted)).not.toContain("secret build stderr");
+    expect(JSON.stringify(formatted)).not.toContain("secret build stdout");
+    expect(JSON.stringify(formatted)).not.toContain("secret build message");
   });
 
   test("accepts a delayed external restore of the exact preserved Mac bundle", () => {
@@ -1977,6 +2193,82 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     ]);
   });
 
+  test("reports primary invariant and rollback command diagnostics", () => {
+    const { root, mirror } = makeFixture();
+    mkdirSync(path.join(mirror, "node_modules"));
+    const source = path.join(mirror, "dist/index.js");
+    const plistPath = path.join(root, "ai.openclaw.gateway.plist");
+    writeFileSync(plistPath, "plist\n", { mode: 0o600 });
+    let failure: unknown;
+
+    try {
+      maintainFixture(
+        { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+        {
+          inspectGatewayDeployment: () => ({
+            configPath: path.join(root, "openclaw.json"),
+            entrypoint: source,
+            entrypointIndex: 1,
+            executable: process.execPath,
+            invocationPrefix: [source],
+            label: "ai.openclaw.gateway",
+            plistPath,
+            port: 18789,
+            runtime: process.execPath,
+          }),
+          runCommand(command: string, args: string[]) {
+            if (command === "pnpm" && args[0] === "build") {
+              resolveLaunchAgentExitTimeoutSeconds(0);
+            }
+            if (command === "/bin/launchctl" && args[0] === "bootstrap") {
+              throw Object.assign(new Error("secret rollback command message"), {
+                status: 23,
+                stderr: "secret rollback stderr",
+                stdout: "secret rollback stdout",
+              });
+            }
+          },
+        },
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    const formatted = formatUpdateFailure(failure);
+    expect(formatted).toMatchObject({
+      schemaVersion: 1,
+      ok: false,
+      error: {
+        code: "update_failed",
+        message:
+          "Gateway replacement failed and the previous managed service could not be restored",
+        diagnostics: {
+          kind: "aggregate",
+          causeMember: 1,
+          members: [
+            {
+              role: "primary",
+              error: {
+                kind: "invariant",
+                code: "gateway_launchagent_failed",
+                details: { exitTimeoutSeconds: 0 },
+              },
+            },
+            {
+              role: "rollback",
+              error: {
+                kind: "command",
+                operation: "launchd.bootstrap",
+                status: 23,
+              },
+            },
+          ],
+        },
+      },
+    });
+    expect(JSON.stringify(formatted)).not.toContain("secret rollback");
+  });
+
   test("resumes suspension when system ownership appears before bootout", () => {
     const { root, mirror, seed } = makeFixture({ includeSeed: true });
     mkdirSync(path.join(mirror, "node_modules"));
@@ -2347,6 +2639,28 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     expect(result.stdout.trim().split("\n")).toHaveLength(1);
     expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, updated: false });
     expect(result.stderr).toContain("child-output");
+  });
+
+  test("keeps failed CLI stdout as one additive machine-readable JSON object", () => {
+    const result = spawnSync(process.execPath, [script, "--definitely-invalid"], {
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout.trim().split("\n")).toHaveLength(1);
+    expect(JSON.parse(result.stdout)).toEqual({
+      schemaVersion: 1,
+      ok: false,
+      error: {
+        code: "invalid_argument",
+        message: "unknown argument: --definitely-invalid",
+        diagnostics: {
+          kind: "invariant",
+          code: "invalid_argument",
+        },
+      },
+    });
+    expect(result.stderr).toBe("");
   });
 
   test("does not restart Gateway when build provenance misses the exact SHA", () => {

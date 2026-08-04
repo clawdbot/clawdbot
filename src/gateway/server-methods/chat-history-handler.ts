@@ -26,6 +26,7 @@ import {
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
 } from "../../infra/diagnostics-timeline.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { normalizeAgentId, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
 import { listGatewayAgentsBasic } from "../agent-list.js";
@@ -124,13 +125,13 @@ async function buildChatMetadataResult(params: {
     import("./models-list-result.js"),
     import("./commands-list-result.js"),
   ]);
-  const [models, commands] = await Promise.all([
+  const [modelsResult, commandsResult] = await Promise.allSettled([
     buildModelsListResult({
       context: params.context,
       agentId: params.agentId,
       params: { view: "configured" },
     }),
-    Promise.resolve(
+    Promise.resolve().then(() =>
       buildCommandsListResult({
         cfg: params.cfg,
         agentId: params.agentId,
@@ -139,9 +140,21 @@ async function buildChatMetadataResult(params: {
       }),
     ),
   ]);
+
+  if (modelsResult.status === "rejected") {
+    throw modelsResult.reason;
+  }
+
+  if (commandsResult.status === "rejected") {
+    params.context.logGateway.warn(
+      "chat.metadata continuing without text commands: " +
+        formatErrorMessage(commandsResult.reason),
+    );
+  }
+
   return {
-    ...models,
-    ...commands,
+    ...modelsResult.value,
+    ...(commandsResult.status === "fulfilled" ? commandsResult.value : {}),
     swarmEnabled: resolveSwarmConfig(params.cfg, params.agentId).enabled,
   };
 }

@@ -8,6 +8,7 @@ scenario:
     primary:
       - security.redaction-dreaming
       - security.redaction-promotion
+      - session-memory.memory-files-artifact-safety
   objective: Prove memory-core redacts sensitive interactive transcript content before dreaming ingestion and structurally rejects contaminated or untrusted promotion candidates.
   successCriteria:
     - A real interactive session transcript keeps safe control text while replacing a raw shared secret before the real dreaming phase ingests it.
