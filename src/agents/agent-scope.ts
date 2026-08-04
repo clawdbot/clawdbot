@@ -123,11 +123,70 @@ export function hasLegacyAutoFallbackWithoutOrigin(
   );
 }
 
-/** Detects auto-fallback overrides whose recorded origin is provably polluted.
- *  A legitimate origin records the primary model that was active when the fallback pin was
- *  created; it is allowed to differ from the current primary when the primary has since changed.
- *  The only safe proof of pollution is when the recorded origin equals the current fallback
- *  override itself — a fallback can never originate from the model it fell back to. */
+/** Kinds of stale auto-fallback origin repair. */
+export type StaleAutoFallbackOriginRepairKind = "clear-override" | "repair-origin";
+
+/** Classifies an auto-fallback override origin for repair.
+ *  - `"clear-override"`: the recorded origin equals the current fallback override itself, which
+ *    is provably polluted (a fallback can never originate from the model it fell back to).
+ *  - `"repair-origin"`: the recorded origin differs from both the current primary and the current
+ *    fallback override. This covers the canonical #92776 three-distinct state where the writer
+ *    recorded a failed chain model as the origin; we conservatively update the origin to the
+ *    current primary so the snap-back probe can fire, while preserving the fallback override.
+ *  - `null`: no repair needed (user override, missing origin, origin already matches primary,
+ *    or origin differs from primary only because the primary legitimately changed). */
+export function classifyStaleAutoFallbackOriginOverride(
+  entry:
+    | Pick<
+        SessionEntry,
+        | "modelOverrideSource"
+        | "modelOverrideFallbackOriginProvider"
+        | "modelOverrideFallbackOriginModel"
+        | "providerOverride"
+        | "modelOverride"
+      >
+    | null
+    | undefined,
+  primaryProvider: string,
+  primaryModel: string,
+): StaleAutoFallbackOriginRepairKind | null {
+  if (!entry) {
+    return null;
+  }
+  const recoveredAutoFallbackOverride =
+    entry.modelOverrideSource === undefined && hasSessionAutoModelFallbackProvenance(entry);
+  if (entry.modelOverrideSource !== "auto" && !recoveredAutoFallbackOverride) {
+    return null;
+  }
+  const originProvider = normalizeOptionalString(entry.modelOverrideFallbackOriginProvider);
+  const originModel = normalizeOptionalString(entry.modelOverrideFallbackOriginModel);
+  if (!originProvider || !originModel) {
+    return null;
+  }
+  const overrideProvider = normalizeOptionalString(entry.providerOverride);
+  const overrideModel = normalizeOptionalString(entry.modelOverride);
+  if (!overrideProvider || !overrideModel) {
+    return null;
+  }
+  const normalizedPrimaryProvider = normalizeOptionalString(primaryProvider);
+  const normalizedPrimaryModel = normalizeOptionalString(primaryModel);
+  if (!normalizedPrimaryProvider || !normalizedPrimaryModel) {
+    return null;
+  }
+  const originMatchesPrimary =
+    originProvider === normalizedPrimaryProvider && originModel === normalizedPrimaryModel;
+  if (originMatchesPrimary) {
+    return null;
+  }
+  if (originProvider === overrideProvider && originModel === overrideModel) {
+    return "clear-override";
+  }
+  return "repair-origin";
+}
+
+/** Detects auto-fallback overrides whose recorded origin needs repair.
+ *  Returns true for both provably polluted origins (origin equals the fallback override) and the
+ *  canonical #92776 three-distinct state (origin differs from both primary and override). */
 export function isStaleAutoFallbackOriginOverride(
   entry:
     | Pick<
@@ -143,35 +202,7 @@ export function isStaleAutoFallbackOriginOverride(
   primaryProvider: string,
   primaryModel: string,
 ): boolean {
-  if (!entry) {
-    return false;
-  }
-  const recoveredAutoFallbackOverride =
-    entry.modelOverrideSource === undefined && hasSessionAutoModelFallbackProvenance(entry);
-  if (entry.modelOverrideSource !== "auto" && !recoveredAutoFallbackOverride) {
-    return false;
-  }
-  const originProvider = normalizeOptionalString(entry.modelOverrideFallbackOriginProvider);
-  const originModel = normalizeOptionalString(entry.modelOverrideFallbackOriginModel);
-  if (!originProvider || !originModel) {
-    return false;
-  }
-  const overrideProvider = normalizeOptionalString(entry.providerOverride);
-  const overrideModel = normalizeOptionalString(entry.modelOverride);
-  if (!overrideProvider || !overrideModel) {
-    return false;
-  }
-  const normalizedPrimaryProvider = normalizeOptionalString(primaryProvider);
-  const normalizedPrimaryModel = normalizeOptionalString(primaryModel);
-  if (!normalizedPrimaryProvider || !normalizedPrimaryModel) {
-    return false;
-  }
-  const originMatchesPrimary =
-    originProvider === normalizedPrimaryProvider && originModel === normalizedPrimaryModel;
-  if (originMatchesPrimary) {
-    return false;
-  }
-  return originProvider === overrideProvider && originModel === overrideModel;
+  return classifyStaleAutoFallbackOriginOverride(entry, primaryProvider, primaryModel) !== null;
 }
 
 /** Verifies a persisted session entry still matches the automatic-fallback snapshot this turn

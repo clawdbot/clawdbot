@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { withEnv } from "../test-utils/env.js";
 import {
+  classifyStaleAutoFallbackOriginOverride,
   clearAutoFallbackPrimaryProbeSelection,
   hasLegacyAutoFallbackWithoutOrigin,
   isStaleAutoFallbackOriginOverride,
@@ -548,14 +549,43 @@ describe("resolveAgentConfig", () => {
       modelOverrideFallbackOriginModel: "claude-opus-4-7",
     };
 
-    // Origin equals the override and differs from the current primary → polluted.
+    // Origin equals the override and differs from the current primary → clear override.
     expect(isStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-opus-4-8")).toBe(true);
     expect(isStaleAutoFallbackOriginOverride(entry, "openai", "gpt-5.5")).toBe(true);
+    expect(classifyStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-opus-4-8")).toBe(
+      "clear-override",
+    );
     // Origin already matches the primary → nothing to repair.
     expect(isStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-opus-4-7")).toBe(false);
+    expect(
+      classifyStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-opus-4-7"),
+    ).toBeNull();
   });
 
-  it("does not treat user overrides, missing origins, or legitimate primary changes as stale", () => {
+  it("detects the canonical three-distinct origin state for origin-only repair", () => {
+    const entry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-7",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-haiku-4-5",
+    };
+
+    // Canonical #92776 state: origin, override, and primary are all different.
+    expect(isStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-opus-4-8")).toBe(true);
+    expect(classifyStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-opus-4-8")).toBe(
+      "repair-origin",
+    );
+    // Origin matches the primary → nothing to repair.
+    expect(isStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-haiku-4-5")).toBe(false);
+    expect(
+      classifyStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-haiku-4-5"),
+    ).toBeNull();
+  });
+
+  it("does not treat user overrides, missing origins, or origin-matching primaries as stale", () => {
     const pollutedEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: 1,
@@ -576,24 +606,15 @@ describe("resolveAgentConfig", () => {
       modelOverride: "claude-opus-4-7",
       modelOverrideSource: "auto",
     };
-    const changedPrimaryEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: 1,
-      providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-7",
-      modelOverrideSource: "auto",
-      modelOverrideFallbackOriginProvider: "openai",
-      modelOverrideFallbackOriginModel: "gpt-5.4",
-    };
 
     expect(isStaleAutoFallbackOriginOverride(userEntry, "anthropic", "gpt-5.5")).toBe(false);
+    expect(classifyStaleAutoFallbackOriginOverride(userEntry, "anthropic", "gpt-5.5")).toBeNull();
     expect(isStaleAutoFallbackOriginOverride(missingOriginEntry, "anthropic", "gpt-5.5")).toBe(
       false,
     );
-    // Origin differs from both the override and the current primary → legitimate mismatch guard.
     expect(
-      isStaleAutoFallbackOriginOverride(changedPrimaryEntry, "anthropic", "claude-opus-4-8"),
-    ).toBe(false);
+      classifyStaleAutoFallbackOriginOverride(missingOriginEntry, "anthropic", "gpt-5.5"),
+    ).toBeNull();
   });
 
   it("prunes stale and excess primary probe throttle entries", () => {
