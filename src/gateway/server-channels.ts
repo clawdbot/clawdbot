@@ -389,12 +389,18 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   ): ChannelAccountSnapshot => {
     const store = getStore(channelId);
     const current = getRuntime(channelId, accountId);
-    // Terminal channel diagnosis survives task cleanup and late status patches.
-    // Only the gateway-owned start transition proves a new lifecycle began.
+    const hasExplicitReadyRecovery =
+      Object.hasOwn(patch, "lifecycle") &&
+      patch.lifecycle === "ready" &&
+      Object.hasOwn(patch, "terminalDisconnect") &&
+      patch.terminalDisconnect === undefined;
+    // Weaker/derived signals never clear a terminal diagnosis. Gateway-owned starting still
+    // begins a new lifecycle; a channel-authored explicit ready + terminal clear proves recovery.
     const lifecycle =
       current.lifecycle === "blocked" &&
       current.terminalDisconnect === true &&
-      patch.lifecycle !== "starting"
+      patch.lifecycle !== "starting" &&
+      !hasExplicitReadyRecovery
         ? "blocked"
         : (patch.lifecycle ??
           (patch.restartPending === true
@@ -728,10 +734,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             restartPending: false,
             lastStartAt: Date.now(),
             lastError: null,
-            // Runtime rows are patch-merged, so a dead-ingress verdict from the
-            // previous lifecycle would outlive the condition it described. Every
-            // start re-proves ingress, so every start must clear it first.
+            // Runtime rows are patch-merged; prior ingress or terminal verdicts
+            // must not poison a new lifecycle before its plugin reports status.
             ingressUnavailable: undefined,
+            terminalDisconnect: undefined,
             reconnectAttempts: preserveRestartAttempts ? (restarts.get(rKey)?.attempts ?? 0) : 0,
           });
           const task = Promise.resolve().then(async () => {

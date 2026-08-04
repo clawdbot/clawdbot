@@ -9,6 +9,7 @@ export const COLD_READ_COMMAND_PATHS: string[][] = [
   ["hooks", "check"],
   ["memory", "status"],
   ["memory", "search"],
+  ["update", "--dry-run"],
 ];
 
 export function registerColdReadCommandFixtures(program: Command, skills: Command): void {

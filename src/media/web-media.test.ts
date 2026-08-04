@@ -602,6 +602,47 @@ describe("loadWebMedia", () => {
     expect(unboundedReadCalled).toBe(false);
   });
 
+  it.runIf(process.platform !== "win32")(
+    "rejects local media when an allowed ancestor symlink retargets before open",
+    async () => {
+      const base = await fs.mkdtemp(path.join(fixtureRoot, "ancestor-race-"));
+      const allowedRoot = path.join(base, "allowed");
+      const insideDir = path.join(allowedRoot, "inside");
+      const outsideDir = path.join(base, "outside");
+      const aliasDir = path.join(allowedRoot, "slot");
+      const mediaPath = path.join(aliasDir, "image.png");
+      await fs.mkdir(insideDir, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.writeFile(path.join(insideDir, "image.png"), TINY_PNG_BUFFER);
+      await fs.writeFile(
+        path.join(outsideDir, "image.png"),
+        createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 0 }),
+      );
+      await fs.symlink(insideDir, aliasDir);
+      __setFsSafeTestHooksForTest({
+        afterPreOpenLstat: async (filePath) => {
+          if (filePath !== mediaPath) {
+            return;
+          }
+          await fs.rm(aliasDir);
+          await fs.symlink(outsideDir, aliasDir);
+        },
+      });
+
+      try {
+        await expect(
+          loadWebMediaRaw(mediaPath, {
+            maxBytes: 1024 * 1024,
+            localRoots: [allowedRoot],
+            optimizeImages: false,
+          }),
+        ).rejects.toMatchObject({ code: "path-not-allowed" });
+      } finally {
+        await fs.rm(base, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("keeps the one-argument contract for custom local readers", async () => {
     const maxBytes = 1024 * 1024;
     const readFile = vi.fn(async (_filePath: string) => Buffer.from(TINY_PNG_BASE64, "base64"));
@@ -1383,6 +1424,43 @@ describe("loadWebMedia", () => {
       await fs.rm(filePath, { force: true });
     }
   });
+
+  it.runIf(process.platform !== "win32").each([2, 3] as const)(
+    "rejects an inbound media store URI swapped to a hardlink on guarded open %s",
+    async (swapOpen) => {
+      const id = `signal-hardlink-race-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`;
+      const filePath = path.join(stateDir, "media", "inbound", id);
+      const outsidePath = path.join(fixtureRoot, `${id}.outside`);
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, "inside");
+      await fs.writeFile(outsidePath, "outside-secret");
+      let matchingOpens = 0;
+      __setFsSafeTestHooksForTest({
+        afterPreOpenLstat: async (openedPath) => {
+          if (path.basename(openedPath) !== id) {
+            return;
+          }
+          matchingOpens += 1;
+          if (matchingOpens !== swapOpen) {
+            return;
+          }
+          await fs.rm(filePath);
+          await fs.link(outsidePath, filePath);
+        },
+      });
+
+      try {
+        await expectLoadWebMediaErrorCode(
+          loadWebMediaRaw(`media://inbound/${id}`, { maxBytes: 1024 }),
+          "invalid-path",
+        );
+        expect(matchingOpens).toBe(swapOpen);
+      } finally {
+        await fs.rm(filePath, { force: true });
+        await fs.rm(outsidePath, { force: true });
+      }
+    },
+  );
 
   it("accepts legacy MEDIA prefixes around inbound media store URIs", async () => {
     const id = `signal-legacy-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;

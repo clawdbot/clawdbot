@@ -7,13 +7,18 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
+  runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { repairCanonicalSessionDeliveryStates } from "./doctor-session-delivery-state.js";
+import { writeValidatedDoctorSessionEntryJson } from "./doctor-session-entry-rewrite.js";
+import { repairReservedIncognitoSessionKeys } from "./doctor-session-incognito-key-repair.js";
 
 const tempDirs = createTempDirTracker();
 
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
   tempDirs.cleanup();
 });
 
@@ -21,13 +26,21 @@ function insertSessionRow(
   env: NodeJS.ProcessEnv,
   sessionKey: string,
   entry: Record<string, unknown>,
+  agentId = "main",
 ): void {
-  const database = openOpenClawAgentDatabase({ agentId: "main", env });
+  const database = openOpenClawAgentDatabase({ agentId, env });
   database.db
     .prepare(
-      "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+      "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, parent_session_key, spawned_by) VALUES (?, ?, ?, ?, ?, ?)",
     )
-    .run(sessionKey, String(entry.sessionId), JSON.stringify(entry), Number(entry.updatedAt));
+    .run(
+      sessionKey,
+      String(entry.sessionId),
+      JSON.stringify(entry),
+      Number(entry.updatedAt),
+      typeof entry.parentSessionKey === "string" ? entry.parentSessionKey : null,
+      typeof entry.spawnedBy === "string" ? entry.spawnedBy : null,
+    );
   database.db
     .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
     .run(sessionKey);
@@ -167,6 +180,114 @@ describe("doctor canonical session delivery state", () => {
       found: 0,
       repaired: 0,
       scannedStores: 1,
+    });
+  });
+
+  it("publishes repaired delivery accounts to the existing SQLite connection without aging sessions", () => {
+    const stateDir = fs.realpathSync(tempDirs.make("openclaw-delivery-warm-cache-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const sessionKey = "agent:main:delivery-warm-cache";
+    insertSessionRow(env, sessionKey, {
+      sessionId: "delivery-warm-cache-session",
+      updatedAt: 10,
+      channel: "slack",
+      deliveryContext: { channel: "telegram", to: "recipient", accountId: "current-bot" },
+      lastAccountId: "stale-slack-bot",
+    });
+
+    expect(listSessionEntries({ agentId: "main", env })[0]?.entry).toMatchObject({
+      updatedAt: 10,
+      lastAccountId: "stale-slack-bot",
+    });
+    expect(repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env })).toEqual({
+      found: 1,
+      repaired: 1,
+      scannedStores: 1,
+    });
+    expect(JSON.parse(readEntryJson(env, sessionKey))).toMatchObject({
+      updatedAt: 10,
+      delivery: { context: { accountId: "current-bot" } },
+    });
+
+    const repaired = listSessionEntries({ agentId: "main", env })[0]?.entry;
+    expect(repaired).toMatchObject({
+      updatedAt: 10,
+      delivery: { context: { accountId: "current-bot" } },
+    });
+    expect(repaired).not.toHaveProperty("lastAccountId");
+  });
+
+  it("discards a Doctor session cache publication when its owner transaction rolls back", () => {
+    const stateDir = fs.realpathSync(tempDirs.make("openclaw-delivery-cache-rollback-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const sessionKey = "agent:main:delivery-cache-rollback";
+    insertSessionRow(env, sessionKey, {
+      sessionId: "delivery-cache-rollback-session",
+      updatedAt: 10,
+      label: "committed",
+    });
+    const originalJson = readEntryJson(env, sessionKey);
+    const cached = listSessionEntries({ agentId: "main", env, clone: false })[0]?.entry;
+    expect(cached?.label).toBe("committed");
+
+    expect(() =>
+      runOpenClawAgentWriteTransaction(
+        (database) => {
+          writeValidatedDoctorSessionEntryJson(
+            database,
+            {
+              current_session_id: "delivery-cache-rollback-session",
+              entry_json: originalJson,
+              session_key: sessionKey,
+              updated_at: 10,
+            },
+            JSON.stringify({ ...cached, label: "uncommitted" }),
+          );
+          throw new Error("roll back Doctor session rewrite");
+        },
+        { agentId: "main", env },
+      ),
+    ).toThrow("roll back Doctor session rewrite");
+
+    expect(readEntryJson(env, sessionKey)).toBe(originalJson);
+    expect(listSessionEntries({ agentId: "main", env, clone: false })[0]?.entry).toBe(cached);
+  });
+
+  it("publishes cross-agent incognito parent rewrites to each existing SQLite connection", () => {
+    const stateDir = fs.realpathSync(tempDirs.make("openclaw-incognito-warm-cache-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const oldParentKey = "agent:main:dashboard:incognito-warm-cache";
+    const newParentKey = "agent:main:dashboard:legacy-incognito-warm-cache";
+    const childKey = "agent:work:dashboard:child";
+    insertSessionRow(env, oldParentKey, {
+      sessionId: "incognito-parent-session",
+      updatedAt: 10,
+    });
+    insertSessionRow(
+      env,
+      childKey,
+      {
+        sessionId: "incognito-child-session",
+        updatedAt: 20,
+        parentSessionKey: oldParentKey,
+        spawnedBy: oldParentKey,
+      },
+      "work",
+    );
+
+    expect(listSessionEntries({ agentId: "work", env })[0]?.entry).toMatchObject({
+      updatedAt: 20,
+      parentSessionKey: oldParentKey,
+    });
+    expect(repairReservedIncognitoSessionKeys({ apply: true, cfg: {}, env })).toEqual({
+      found: 1,
+      repaired: 1,
+    });
+
+    expect(listSessionEntries({ agentId: "work", env })[0]?.entry).toMatchObject({
+      updatedAt: 20,
+      parentSessionKey: newParentKey,
+      spawnedBy: newParentKey,
     });
   });
 

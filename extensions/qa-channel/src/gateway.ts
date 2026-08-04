@@ -1,4 +1,5 @@
 // Qa Channel plugin module implements gateway behavior.
+import { channelReadyPatch, channelStoppedPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { pollQaBus } from "./bus-client.js";
 import { handleQaInbound } from "./inbound.js";
 import type { ChannelGatewayContext } from "./runtime-api.js";
@@ -62,14 +63,7 @@ export async function startQaGatewayAccount(
       });
       if (!ready) {
         ready = true;
-        ctx.setStatus({
-          accountId: account.accountId,
-          connected: true,
-          lifecycle: "ready",
-          lastConnectedAt: Date.now(),
-          lastError: null,
-          terminalDisconnect: undefined,
-        });
+        ctx.setStatus(channelReadyPatch({ accountId: account.accountId }));
       }
       cursor = result.cursor;
       for (const event of result.events) {
@@ -98,12 +92,7 @@ export async function startQaGatewayAccount(
     }
   } finally {
     await Promise.all([queuedInbound, ...controlTasks]);
-    ctx.setStatus({
-      accountId: account.accountId,
-      running: false,
-      connected: false,
-      lifecycle: "stopped",
-    });
+    ctx.setStatus(channelStoppedPatch({ accountId: account.accountId }));
   }
   if (inboundError) {
     throw inboundError;

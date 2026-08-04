@@ -10,6 +10,7 @@ import {
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/core";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { runReefChannelLifecycle } from "./channel-lifecycle.js";
 import {
   ReefChannelConfigSchema,
@@ -438,14 +439,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
             }
             ctx.setStatus(
               state === "connected"
-                ? {
-                    accountId: "default",
-                    running: true,
-                    connected: true,
-                    lifecycle: "ready",
-                    lastConnectedAt: Date.now(),
-                    lastError: null,
-                  }
+                ? channelReadyPatch({ accountId: "default" })
                 : {
                     accountId: "default",
                     running: true,

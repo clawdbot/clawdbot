@@ -249,6 +249,7 @@ describe("mattermost websocket monitor", () => {
 
     socket.emitMessage(Buffer.from(JSON.stringify({ status: "OK", seq_reply: 7 })));
     expect(patches).toContainEqual({
+      running: true,
       connected: true,
       lifecycle: "ready",
       lastConnectedAt: expect.any(Number),

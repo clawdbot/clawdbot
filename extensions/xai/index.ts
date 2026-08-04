@@ -157,8 +157,10 @@ function createLazyXSearchTool(ctx: OpenClawPluginToolContext) {
     return null;
   }
 
-  return createXSearchToolDefinition(async (toolCallId: string, args: Record<string, unknown>) => {
+  return createXSearchToolDefinition(async (toolCallId, args, signal) => {
+    signal?.throwIfAborted();
     const { createXSearchTool } = await loadXSearchModule();
+    signal?.throwIfAborted();
     const tool = createXSearchTool({
       config: ctx.config as never,
       runtimeConfig: (ctx.runtimeConfig as never) ?? null,
@@ -167,7 +169,7 @@ function createLazyXSearchTool(ctx: OpenClawPluginToolContext) {
     if (!tool) {
       return jsonResult(buildMissingXSearchApiKeyPayload());
     }
-    return await tool.execute(toolCallId, args);
+    return await tool.execute(toolCallId, args, signal);
   });
 }
 

@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { channelBlockedPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
@@ -52,11 +53,9 @@ export async function startGoogleChatGatewayAccount(ctx: {
     lastStartAt: Date.now(),
     ...(webhookPath
       ? { webhookPath, lifecycle: "starting" as const }
-      : {
+      : channelBlockedPatch(UNRESOLVED_WEBHOOK_URL_ERROR, {
           webhookPath: undefined,
-          lifecycle: "blocked" as const,
-          lastError: UNRESOLVED_WEBHOOK_URL_ERROR,
-        }),
+        })),
     audienceType: account.config.audienceType,
     audience: account.config.audience,
   });

@@ -1,7 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { WizardStep } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
-import { copyToClipboard } from "../lib/clipboard.ts";
+import { handleCopyButton } from "./copy-button.ts";
 import { renderSensitiveInput } from "./sensitive-input.ts";
 import "../styles/wizard-step-controls.css";
 
@@ -59,6 +59,7 @@ function renderDeviceCode(step: WizardStep) {
   if (!deviceCode) {
     return nothing;
   }
+  const copyLabel = t("modelSetup.wizard.copy");
   return html`
     <div class="wizard-step__device-code">
       ${deviceCode.message ? html`<div class="muted">${deviceCode.message}</div>` : nothing}
@@ -66,9 +67,9 @@ function renderDeviceCode(step: WizardStep) {
       <button
         type="button"
         class="btn btn--sm"
-        @click=${() => void copyToClipboard(deviceCode.code)}
+        @click=${(event: Event) => void handleCopyButton(event, deviceCode.code, copyLabel)}
       >
-        ${t("modelSetup.wizard.copy")}
+        <span data-copy-label>${copyLabel}</span>
       </button>
       ${deviceCode.expiresInMinutes
         ? html`<div class="muted">

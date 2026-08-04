@@ -8,7 +8,7 @@ import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { findJobOrThrow } from "./jobs.js";
 import { createCronServiceState } from "./state.js";
-import { ensureLoaded, persist } from "./store.js";
+import { ensureLoaded, persist, persistOrRestore, snapshotStoreForRollback } from "./store.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-store-seam",
@@ -62,6 +62,16 @@ function createReloadCronJob(params?: Partial<CronJob>): CronJob {
 describe("cron service store seam coverage", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("does not drain post-persist notifications when there is no store to write", async () => {
+    const { storePath } = await makeStorePath();
+    const state = createStoreTestState(storePath);
+    const notify = vi.fn();
+
+    await expect(persist(state, { postPersistNotifications: [notify] })).resolves.toBe(false);
+
+    expect(notify).not.toHaveBeenCalled();
   });
 
   it("loads stored jobs, recomputes next runs, and does not rewrite the store on load", async () => {
@@ -192,6 +202,59 @@ describe("cron service store seam coverage", () => {
     );
     expect(state.durableNextRunAtMsByJobId.has(job.id)).toBe(true);
     expect(state.durableNextRunAtMsByJobId.get(job.id)).toBeUndefined();
+  });
+
+  it("drains post-persist notifications only after a successful state-only write", async () => {
+    const { storePath } = await makeStorePath();
+    await writeSingleJobStore(storePath, createReloadCronJob());
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+    const notify = vi.fn();
+    const order: string[] = [];
+    const saveCronJobsStore = cronStoreModule.saveCronJobsStore;
+    vi.spyOn(cronStoreModule, "saveCronJobsStore")
+      .mockRejectedValueOnce(new Error("disk full"))
+      .mockImplementationOnce(async (...args) => {
+        expect(notify).not.toHaveBeenCalled();
+        await saveCronJobsStore(...args);
+        order.push("persist");
+      });
+    notify.mockImplementation(() => order.push("notify"));
+    const postPersistNotifications = [notify];
+
+    await expect(persist(state, { stateOnly: true, postPersistNotifications })).rejects.toThrow(
+      "disk full",
+    );
+    expect(notify).not.toHaveBeenCalled();
+
+    await persist(state, { stateOnly: true, postPersistNotifications });
+
+    expect(order).toEqual(["persist", "notify"]);
+    expect(notify).toHaveBeenCalledOnce();
+  });
+
+  it("does not restore speculative state after a post-persist notification throws", async () => {
+    const { storePath } = await makeStorePath();
+    const nextRunAtMs = STORE_TEST_NOW + 120_000;
+    await writeSingleJobStore(storePath, createReloadCronJob());
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+    const snapshot = snapshotStoreForRollback(state);
+    const job = findJobOrThrow(state, "reload-cron-expr-job");
+    job.state.nextRunAtMs = nextRunAtMs;
+
+    await expect(
+      persistOrRestore(state, snapshot, {
+        postPersistNotifications: [
+          () => {
+            throw new Error("notification failed");
+          },
+        ],
+      }),
+    ).rejects.toThrow("notification failed");
+
+    expect(job.state.nextRunAtMs).toBe(nextRunAtMs);
+    expect((await loadCronStore(storePath)).jobs[0]?.state.nextRunAtMs).toBe(nextRunAtMs);
   });
 
   it("advances durable wake state while suppressing duplicate scheduled delivery", async () => {
@@ -355,16 +418,19 @@ describe("cron service store seam coverage", () => {
     const saveStore = vi
       .spyOn(cronStoreModule, "saveCronJobsStore")
       .mockRejectedValueOnce(new Error("quarantine unavailable"));
+    const notify = vi.fn();
+    const postPersistNotifications = [notify];
 
-    await persist(state, { stateOnly: true });
+    await persist(state, { stateOnly: true, postPersistNotifications });
 
     expect(saveStore).toHaveBeenCalledTimes(1);
     expect(onEvent).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
     expect(state.pendingQuarantineConfigJobs).toHaveLength(1);
     expect(state.durableNextRunAtMsByJobId.get(job.id)).toBe(initialNextRunAtMs);
     expect((await loadCronStore(storePath)).jobs[0]?.state.nextRunAtMs).toBe(initialNextRunAtMs);
 
-    await persist(state, { stateOnly: true });
+    await persist(state, { stateOnly: true, postPersistNotifications });
 
     expect(saveStore).toHaveBeenLastCalledWith(
       storePath,
@@ -376,6 +442,7 @@ describe("cron service store seam coverage", () => {
       }),
     );
     expect(state.pendingQuarantineConfigJobs).toEqual([]);
+    expect(notify).toHaveBeenCalledOnce();
     expect(cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
       expect.objectContaining({ reason: "invalid-schedule" }),
     ]);
