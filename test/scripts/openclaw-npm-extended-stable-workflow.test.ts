@@ -252,6 +252,7 @@ describe("minimal npm extended-stable workflow", () => {
     expect(fullValidation.run).toContain(
       "actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}",
     );
+    expect(fullValidation.run).toContain("--filter=blob:none");
     expect(fullValidation.run).toContain(
       "trusted-workflow/scripts/validate-full-release-validation-evidence.mjs",
     );
