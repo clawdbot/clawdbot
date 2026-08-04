@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { once } from "node:events";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -25,15 +24,40 @@ type MutableConfig = {
   [key: string]: unknown;
 };
 
-async function stopChild(child: ChildProcess | undefined) {
+async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  if (child.exitCode !== null) {
+    return true;
+  }
+  return await new Promise<boolean>((resolve) => {
+    const onExit = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    const timer = setTimeout(() => {
+      child.off("exit", onExit);
+      resolve(false);
+    }, timeoutMs);
+    timer.unref();
+    child.once("exit", onExit);
+    if (child.exitCode !== null) {
+      child.off("exit", onExit);
+      clearTimeout(timer);
+      resolve(true);
+    }
+  });
+}
+
+async function stopChild(child: ChildProcess | undefined): Promise<void> {
   if (!child || child.exitCode !== null) {
     return;
   }
   child.kill("SIGTERM");
-  await Promise.race([once(child, "exit"), sleep(5_000)]);
-  if (child.exitCode === null) {
-    child.kill("SIGKILL");
-    await once(child, "exit");
+  if (await waitForChildExit(child, 5_000)) {
+    return;
+  }
+  child.kill("SIGKILL");
+  if (!(await waitForChildExit(child, 5_000))) {
+    throw new Error("fixture registry did not exit after SIGKILL");
   }
 }
 
