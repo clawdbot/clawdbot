@@ -1740,24 +1740,36 @@ describe("maybeCompactCodexAppServerSession", () => {
       });
     }
 
-    for (let index = 0; index < 4_097; index += 1) {
+    // Fill exactly the advertised 4,096-entry cap: every distinct key warns once.
+    for (let index = 0; index < 4_096; index += 1) {
       await runWithIgnoredOverrides(index);
     }
+    expect(warn).toHaveBeenCalledTimes(4_096);
 
-    expect(warn).toHaveBeenCalledTimes(4_097);
+    // At exactly 4,096 entries the oldest key is still retained, so a duplicate stays suppressed.
+    await runWithIgnoredOverrides(0);
+    expect(warn).toHaveBeenCalledTimes(4_096);
+
+    // The 4,097th distinct key pushes past the cap and evicts the LRU entry. The duplicate
+    // check on key 0 refreshed its recency, so the evicted key is 1.
     await runWithIgnoredOverrides(4_096);
     expect(warn).toHaveBeenCalledTimes(4_097);
 
-    await runWithIgnoredOverrides(0);
+    // The evicted key warns again on reappearance.
+    await runWithIgnoredOverrides(1);
+    expect(warn).toHaveBeenCalledTimes(4_098);
+
+    // A recent duplicate stays suppressed.
+    await runWithIgnoredOverrides(4_096);
     expect(warn).toHaveBeenCalledTimes(4_098);
     expect(warn.mock.calls.at(-1)).toEqual([
       "ignoring OpenClaw compaction overrides for Codex app-server compaction; Codex uses native server-side compaction",
       {
-        sessionId: "session-0",
-        sessionKey: "agent:cap-0:session-0",
+        sessionId: "session-1",
+        sessionKey: "agent:cap-1:session-1",
         ignoredConfig: [
-          "agents.list.cap-0.compaction.model",
-          "agents.list.cap-0.compaction.provider",
+          "agents.list.cap-1.compaction.model",
+          "agents.list.cap-1.compaction.provider",
         ],
       },
     ]);
