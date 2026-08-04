@@ -184,6 +184,7 @@ describe("server-runtime-services", () => {
   );
 
   it("warns when cron is disabled but scheduled heartbeats remain enabled", () => {
+    vi.useFakeTimers();
     const warn = vi.fn();
     const log = {
       child: vi.fn(() => ({ info: vi.fn(), warn, error: vi.fn() })),
@@ -205,6 +206,7 @@ describe("server-runtime-services", () => {
   });
 
   it("does not warn about disabled cron when heartbeat cadence is disabled", () => {
+    vi.useFakeTimers();
     const warn = vi.fn();
     const log = {
       child: vi.fn(() => ({ info: vi.fn(), warn, error: vi.fn() })),
