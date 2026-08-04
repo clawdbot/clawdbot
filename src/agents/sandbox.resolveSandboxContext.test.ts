@@ -121,6 +121,32 @@ describe("resolveSandboxContext", () => {
     expect(result).toBeNull();
   }, 15_000);
 
+  it("resolves the configured agent workspace when workspaceDir is omitted (#89743)", async () => {
+    const configuredWorkspaceDir = await createSandboxFixtureDir("configured-default-workspace");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: configuredWorkspaceDir,
+          sandbox: { mode: "all", scope: "session", workspaceAccess: "ro" },
+        },
+        list: [{ id: "main" }],
+      },
+    };
+
+    syncSkillsToWorkspaceMock.mockClear();
+    const result = await ensureSandboxWorkspaceForSession({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      // workspaceDir deliberately omitted: the configured agents.defaults.workspace
+      // must be used, not the hardcoded DEFAULT_AGENT_WORKSPACE_DIR fallback.
+    });
+
+    expect(syncSkillsToWorkspaceMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceWorkspaceDir: configuredWorkspaceDir }),
+    );
+    expect(result).not.toBeNull();
+  }, 15_000);
+
   it("does not touch sandbox backends for cron or sub-agent sessions when sandbox mode is off", async () => {
     // Mode=off should short-circuit before resolving any backend implementation.
     const backendFactory = vi.fn(async () => ({
