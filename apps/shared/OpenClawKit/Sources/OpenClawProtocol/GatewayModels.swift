@@ -9662,6 +9662,7 @@ public struct SystemAgentSetupAuthStartResult: Codable, Sendable {
     public let error: String?
     public let channels: [String]?
     public let accounts: [[String: AnyCodable]]?
+    public let preparedmodelref: String?
 
     public init(
         sessionid: String,
@@ -9670,7 +9671,8 @@ public struct SystemAgentSetupAuthStartResult: Codable, Sendable {
         status: AnyCodable? = nil,
         error: String? = nil,
         channels: [String]? = nil,
-        accounts: [[String: AnyCodable]]? = nil)
+        accounts: [[String: AnyCodable]]? = nil,
+        preparedmodelref: String? = nil)
     {
         self.sessionid = sessionid
         self.done = done
@@ -9679,6 +9681,7 @@ public struct SystemAgentSetupAuthStartResult: Codable, Sendable {
         self.error = error
         self.channels = channels
         self.accounts = accounts
+        self.preparedmodelref = preparedmodelref
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -9689,6 +9692,7 @@ public struct SystemAgentSetupAuthStartResult: Codable, Sendable {
         case error
         case channels
         case accounts
+        case preparedmodelref = "preparedModelRef"
     }
 }
 
@@ -9833,6 +9837,7 @@ public struct WizardNextResult: Codable, Sendable {
     public let error: String?
     public let channels: [String]?
     public let accounts: [[String: AnyCodable]]?
+    public let preparedmodelref: String?
 
     public init(
         done: Bool,
@@ -9840,7 +9845,8 @@ public struct WizardNextResult: Codable, Sendable {
         status: AnyCodable? = nil,
         error: String? = nil,
         channels: [String]? = nil,
-        accounts: [[String: AnyCodable]]? = nil)
+        accounts: [[String: AnyCodable]]? = nil,
+        preparedmodelref: String? = nil)
     {
         self.done = done
         self.step = step
@@ -9848,6 +9854,7 @@ public struct WizardNextResult: Codable, Sendable {
         self.error = error
         self.channels = channels
         self.accounts = accounts
+        self.preparedmodelref = preparedmodelref
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -9857,6 +9864,7 @@ public struct WizardNextResult: Codable, Sendable {
         case error
         case channels
         case accounts
+        case preparedmodelref = "preparedModelRef"
     }
 }
 
@@ -9868,6 +9876,7 @@ public struct WizardStartResult: Codable, Sendable {
     public let error: String?
     public let channels: [String]?
     public let accounts: [[String: AnyCodable]]?
+    public let preparedmodelref: String?
 
     public init(
         sessionid: String,
@@ -9876,7 +9885,8 @@ public struct WizardStartResult: Codable, Sendable {
         status: AnyCodable? = nil,
         error: String? = nil,
         channels: [String]? = nil,
-        accounts: [[String: AnyCodable]]? = nil)
+        accounts: [[String: AnyCodable]]? = nil,
+        preparedmodelref: String? = nil)
     {
         self.sessionid = sessionid
         self.done = done
@@ -9885,6 +9895,7 @@ public struct WizardStartResult: Codable, Sendable {
         self.error = error
         self.channels = channels
         self.accounts = accounts
+        self.preparedmodelref = preparedmodelref
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -9895,6 +9906,7 @@ public struct WizardStartResult: Codable, Sendable {
         case error
         case channels
         case accounts
+        case preparedmodelref = "preparedModelRef"
     }
 }
 

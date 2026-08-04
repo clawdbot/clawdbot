@@ -10,6 +10,7 @@ const { probeVideoDimensions } = vi.hoisted(() => ({
   probeVideoDimensions: vi.fn(),
 }));
 const triggerInternalHook = vi.hoisted(() => vi.fn(async () => {}));
+const recordSentMessage = vi.hoisted(() => vi.fn());
 const messageHookRunner = vi.hoisted(() => ({
   hasHooks: vi.fn<(name: string) => boolean>(() => false),
   runMessageSending: vi.fn(),
@@ -55,6 +56,11 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
     ...actual,
     getGlobalHookRunner: () => messageHookRunner,
   };
+});
+
+vi.mock("../sent-message-cache.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../sent-message-cache.js")>();
+  return { ...actual, recordSentMessage };
 });
 
 vi.resetModules();
@@ -289,6 +295,7 @@ describe("deliverReplies", () => {
     probeVideoDimensions.mockReset();
     probeVideoDimensions.mockResolvedValue(undefined);
     triggerInternalHook.mockReset();
+    recordSentMessage.mockReset();
     messageHookRunner.hasHooks.mockReset();
     messageHookRunner.hasHooks.mockReturnValue(false);
     messageHookRunner.runMessageSending.mockReset();
@@ -2076,15 +2083,17 @@ describe("deliverReplies", () => {
 
   it("replyToMode 'first' avoids native reply-to for chunked text", async () => {
     const runtime = createRuntime();
-    const sendMessage = vi.fn().mockResolvedValue({
-      message_id: 20,
-      chat: { id: "123" },
-    });
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 20, chat: { id: "123" } })
+      .mockResolvedValueOnce({ message_id: 21, chat: { id: "123" } });
     const bot = createBot({ sendMessage });
+    const cfg = { session: { store: "/tmp/telegram-custom-store.json" } } as const;
 
     // Use a small textLimit to force multiple chunks
     await deliverReplies({
       replies: [{ text: "chunk-one\n\nchunk-two", replyToId: "700" }],
+      cfg,
       chatId: "123",
       token: "tok",
       runtime,
@@ -2098,6 +2107,10 @@ describe("deliverReplies", () => {
       expect(call[2]).not.toHaveProperty("reply_to_message_id");
       expect(call[2]).not.toHaveProperty("reply_parameters");
     }
+    expect(recordSentMessage.mock.calls).toEqual([
+      ["123", 20, cfg],
+      ["123", 21, cfg],
+    ]);
   });
 
   it("clamps reply chunks to Telegram rich message limit", async () => {
@@ -2288,10 +2301,12 @@ describe("deliverReplies", () => {
       .mockRejectedValueOnce(new Error("second chunk failed"));
     const observer = vi.fn();
     const promptContextSequence = createObservedPromptContextSequence(observer);
+    const cfg = { session: { store: "/tmp/telegram-partial-store.json" } } as const;
 
     await expect(
       deliverWith({
         replies: [{ text: "chunk-one\n\nchunk-two" }],
+        cfg,
         runtime,
         bot: createBot({ sendMessage }),
         textLimit: 12,
@@ -2302,6 +2317,8 @@ describe("deliverReplies", () => {
 
     expect(observer).toHaveBeenCalledTimes(1);
     expect(observer).toHaveBeenCalledWith({ messageId: 301, text: "chunk-one\n\n" });
+    expect(recordSentMessage).toHaveBeenCalledTimes(1);
+    expect(recordSentMessage).toHaveBeenCalledWith("123", 301, cfg);
   });
 
   it("records the concrete Telegram media message", async () => {
@@ -2315,10 +2332,12 @@ describe("deliverReplies", () => {
     const sendPhoto = vi.fn().mockResolvedValue(message);
     const observer = vi.fn();
     const promptContextSequence = createObservedPromptContextSequence(observer);
+    const cfg = { session: { store: "/tmp/telegram-media-store.json" } } as const;
     mockMediaLoad("photo.jpg", "image/jpeg", "photo");
 
     await deliverWith({
       replies: [{ text: "caption", mediaUrl: "https://example.com/photo.jpg" }],
+      cfg,
       runtime,
       bot: createBot({ sendPhoto }),
       promptContextSequence,
@@ -2326,6 +2345,7 @@ describe("deliverReplies", () => {
     await promptContextSequence.finish();
 
     expect(observer).toHaveBeenCalledWith({ messageId: 302, message, text: "caption" });
+    expect(recordSentMessage).toHaveBeenCalledWith("123", 302, cfg);
   });
 
   it("records voice fallback text after the fallback send succeeds", async () => {
@@ -2335,6 +2355,7 @@ describe("deliverReplies", () => {
     });
     const observer = vi.fn();
     const promptContextSequence = createObservedPromptContextSequence(observer);
+    const cfg = { session: { store: "/tmp/telegram-voice-fallback-store.json" } } as const;
     mockMediaLoad("note.ogg", "audio/ogg", "voice");
 
     await deliverWith({
@@ -2345,6 +2366,7 @@ describe("deliverReplies", () => {
           spokenText: "Voice fallback",
         },
       ],
+      cfg,
       runtime,
       bot,
       promptContextSequence,
@@ -2352,6 +2374,7 @@ describe("deliverReplies", () => {
     await promptContextSequence.finish();
 
     expect(observer).toHaveBeenCalledWith({ messageId: 303, text: "Voice fallback" });
+    expect(recordSentMessage).toHaveBeenCalledWith("123", 303, cfg);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

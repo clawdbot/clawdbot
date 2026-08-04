@@ -12,6 +12,61 @@ import {
 const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
+  it("restores the model picker after startup-sidecars metadata becomes available", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const recoveredModel = {
+      available: true,
+      id: "gpt-5.6-luna",
+      name: "Recovered GPT-5.6 Luna",
+      provider: "openai",
+      reasoning: true,
+    };
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "chat.metadata": {
+          sequence: [
+            {
+              __mockError: {
+                code: "UNAVAILABLE",
+                details: { reason: "startup-sidecars" },
+                message: "gateway startup sidecars are still initializing",
+                retryable: true,
+                retryAfterMs: 100,
+              },
+            },
+            { commands: [], models: [recoveredModel] },
+          ],
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(2);
+
+      const modelSelect = page.locator(
+        '.new-session-page__composer [data-chat-model-select="true"]',
+      );
+      await modelSelect.click();
+      await page.locator('[data-chat-model-provider="openai"]').click();
+      await expect
+        .poll(() => page.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').textContent())
+        .toContain(recoveredModel.name);
+
+      expect(await gateway.getRequests("chat.metadata")).toEqual([
+        expect.objectContaining({ params: { agentId: "main" } }),
+        expect.objectContaining({ params: { agentId: "main" } }),
+      ]);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("creates a catalog-targeted draft with its advertised model", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
