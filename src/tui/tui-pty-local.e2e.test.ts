@@ -878,11 +878,16 @@ async function startIsolatedGatewayPty(params: {
     outputTimeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
   });
   const removeTempDir = () => rm(tempDir, { recursive: true, force: true });
-  const cleanup = createIdempotentCleanup(() => run.dispose().finally(removeTempDir));
+  const cleanup = createIdempotentCleanup(async () => {
+    try {
+      await run.dispose();
+    } finally {
+      await removeTempDir();
+    }
+  });
   registerCleanup(cleanup);
   return { run, cleanup };
 }
-
 async function waitForSessionRow(
   client: GatewayChatClient,
   key: string,
@@ -895,7 +900,9 @@ async function waitForSessionRow(
     const row = (await client.listSessions({ limit: 100 })).sessions.find(
       (candidate) => candidate.key === key,
     );
-    if (row && accept(row)) return row;
+    if (row && accept(row)) {
+      return row;
+    }
     await sleep(25);
   }
   throw new Error(`session ${key} did not reach the expected authoritative state`);
@@ -1278,7 +1285,9 @@ describe("TUI PTY real backends", () => {
               (message as { role?: unknown }).role === role &&
               JSON.stringify((message as { content?: unknown }).content).includes(marker),
           );
-        if (hasRoleMarker("user", userMarker) && hasRoleMarker("assistant", assistantMarker)) break;
+        if (hasRoleMarker("user", userMarker) && hasRoleMarker("assistant", assistantMarker)) {
+          break;
+        }
         await sleep(25);
       }
 

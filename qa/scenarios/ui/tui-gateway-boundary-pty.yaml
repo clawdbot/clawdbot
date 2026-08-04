@@ -27,11 +27,7 @@ scenario:
     path: test/e2e/qa-lab/tui/tui-pty-evidence-producer.ts
     summary: Runs exact built-CLI real-Gateway PTY assertions and authenticates their fresh Vitest results as QA evidence.
     timeoutMs: 600000
-    args:
-      - --artifact-base
-      - ${outputDir}
-      - --scenario-id
-      - ${scenarioId}
+    args: [--artifact-base, "${outputDir}", --scenario-id, "${scenarioId}"]
     config:
       requireBuiltCli: true
       tuiPtyCases:
