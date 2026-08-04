@@ -321,11 +321,12 @@ export async function runDoctorConfigPreflight(
       note(legacyConfigChanges.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
     }
   };
-  const readConfigSnapshotForPreflight = async () =>
+  const readConfigSnapshotForPreflight = async (allowCurrentPluginMetadata = true) =>
     await measurePreflightStep("config-snapshot", async () => {
       const sharedOptions = {
         ...(options.observe === false ? { observe: false } : {}),
         ...(options.measure ? { measure: options.measure } : {}),
+        ...(allowCurrentPluginMetadata ? {} : { allowCurrentPluginMetadata: false }),
       };
       if (migrationCheckpoint && !shouldSkipPluginValidationForDoctorConfigPreflight()) {
         const result = await readConfigFileSnapshotWithPluginMetadata(sharedOptions);
@@ -621,7 +622,7 @@ export async function runDoctorConfigPreflight(
       const persistedSnapshotRead = await persistRefreshedPluginIndex({
         env: startupMigrationEnv,
         measure: measurePreflightStep,
-        readSnapshot: readConfigSnapshotForPreflight,
+        readPersistedSnapshot: () => readConfigSnapshotForPreflight(false),
         snapshotRead: configSnapshotRead,
       });
       const persistedBaseConfig =

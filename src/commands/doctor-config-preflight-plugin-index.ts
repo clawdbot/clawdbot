@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -30,7 +29,7 @@ export function needsRefreshedPluginIndexPersistence(
 export async function persistRefreshedPluginIndex(params: {
   env: NodeJS.ProcessEnv;
   measure: MeasurePreflightStep;
-  readSnapshot: () => Promise<DoctorConfigPreflightPluginSnapshotRead>;
+  readPersistedSnapshot: () => Promise<DoctorConfigPreflightPluginSnapshotRead>;
   snapshotRead: DoctorConfigPreflightPluginSnapshotRead;
 }): Promise<DoctorConfigPreflightPluginSnapshotRead> {
   const derivedPluginMetadataSnapshot = params.snapshotRead.pluginMetadataSnapshot;
@@ -48,14 +47,13 @@ export async function persistRefreshedPluginIndex(params: {
       env: params.env,
     }),
   );
-  const persistedSnapshotRead = await params.readSnapshot();
+  const persistedSnapshotRead = await params.readPersistedSnapshot();
   const persistedPluginMetadataSnapshot = persistedSnapshotRead.pluginMetadataSnapshot;
-  if (
-    persistedPluginMetadataSnapshot?.registrySource !== "persisted" ||
-    !isDeepStrictEqual(persistedPluginMetadataSnapshot.index, derivedPluginMetadataSnapshot.index)
-  ) {
+  // The registry selector owns freshness and returns "persisted" only after accepting the
+  // durable index. Persisted parsing intentionally canonicalizes non-runtime package metadata.
+  if (persistedPluginMetadataSnapshot?.registrySource !== "persisted") {
     throwPluginRegistryPersistenceFailed(
-      `reread source was ${persistedPluginMetadataSnapshot?.registrySource ?? "missing"} or the persisted plugin inventory changed`,
+      `reread source was ${persistedPluginMetadataSnapshot?.registrySource ?? "missing"}`,
     );
   }
   return persistedSnapshotRead;

@@ -6,6 +6,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { writePersistedInstalledPluginIndexSync } from "../plugins/installed-plugin-index-store.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
@@ -141,7 +142,9 @@ describe("gateway startup-migration refusal", () => {
     const root = await fs.promises.realpath(tempDirs.make("openclaw-plugin-index-checkpoint-"));
     const stateDir = path.join(root, "state");
     const configPath = path.join(root, "openclaw.json");
-    const config = { gateway: { mode: "local", auth: { mode: "none" } } };
+    const config = {
+      gateway: { mode: "local", auth: { mode: "none" } },
+    } satisfies OpenClawConfig;
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       HOME: root,
@@ -169,6 +172,25 @@ describe("gateway startup-migration refusal", () => {
         pluginId,
         version: "1.0.0",
       });
+      const packageJsonPath = path.join(pluginDir, "package.json");
+      const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+        openclaw: Record<string, unknown>;
+      };
+      fs.writeFileSync(
+        packageJsonPath,
+        JSON.stringify({
+          ...packageJson,
+          openclaw: {
+            ...packageJson.openclaw,
+            build: {
+              bundledDist: false,
+              openclawVersion: "2026.7.2",
+              pluginSdkVersion: "2026.7.2",
+            },
+          },
+        }),
+        "utf8",
+      );
       fs.writeFileSync(
         path.join(pluginDir, "doctor-contract-api.cjs"),
         "module.exports = { stateMigrations: [] };\n",
@@ -223,6 +245,7 @@ describe("gateway startup-migration refusal", () => {
             discovery: metadata?.discovery !== undefined,
             doctorContractFile: plugin?.doctorContractFile,
             doctorContractHash: plugin?.doctorContractHash,
+            packageBuild: plugin?.packageBuild,
             registryDiagnostics: metadata?.registryDiagnostics,
             registrySource: metadata?.registrySource,
           }));
@@ -237,6 +260,7 @@ describe("gateway startup-migration refusal", () => {
         discovery: boolean;
         doctorContractFile?: { ctimeMs?: number; mtimeMs: number; size: number };
         doctorContractHash?: string;
+        packageBuild?: Record<string, unknown>;
         registryDiagnostics?: unknown[];
         registrySource?: string;
       };
@@ -248,6 +272,7 @@ describe("gateway startup-migration refusal", () => {
           size: expect.any(Number),
         },
         doctorContractHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        packageBuild: { bundledDist: false },
         registryDiagnostics: [],
         registrySource: "persisted",
       });

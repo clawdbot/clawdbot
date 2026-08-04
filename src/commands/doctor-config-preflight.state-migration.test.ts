@@ -122,8 +122,20 @@ const readConfigFileSnapshot = vi.hoisted(() =>
   })),
 );
 const pluginMigrationFingerprint = vi.hoisted(() => vi.fn(() => "plugin-migrations"));
+type ConfigSnapshotWithPluginMetadataFixture = {
+  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
+  pluginMetadataSnapshot?: {
+    configFingerprint?: string;
+    index?: unknown;
+    registrySource?: "derived" | "persisted";
+  };
+};
 const readConfigFileSnapshotWithPluginMetadata = vi.hoisted(() =>
-  vi.fn(async () => ({
+  vi.fn<
+    (options?: {
+      allowCurrentPluginMetadata?: boolean;
+    }) => Promise<ConfigSnapshotWithPluginMetadataFixture>
+  >(async () => ({
     snapshot: await readConfigFileSnapshot(),
     pluginMetadataSnapshot: { configFingerprint: pluginMigrationFingerprint() },
   })),
@@ -393,6 +405,9 @@ describe("runDoctorConfigPreflight state migration", () => {
     const verificationReadOrder =
       readConfigFileSnapshotWithPluginMetadata.mock.invocationCallOrder[2] ?? 0;
     expect(verificationReadOrder).toBeGreaterThan(writeOrder);
+    expect(readConfigFileSnapshotWithPluginMetadata.mock.calls[2]?.[0]).toEqual({
+      allowCurrentPluginMetadata: false,
+    });
     const checkpointOrder = recordSuccessfulStateMigrations.mock.invocationCallOrder[0] ?? 0;
     expect(checkpointOrder).toBeGreaterThan(verificationReadOrder);
     expect(recordSuccessfulStateMigrations).toHaveBeenCalledWith({
