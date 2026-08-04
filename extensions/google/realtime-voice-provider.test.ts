@@ -1788,6 +1788,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
   it.each([
     ["invalid alphabet", "not-base64!"],
     ["non-canonical pad bits", "ZE=="],
+    ["mixed alphabet", "aGVsbG8+_"],
   ])("terminates the session for %s in output audio", async (_scenario, data) => {
     const provider = buildGoogleRealtimeVoiceProvider();
     const onAudio = vi.fn();
