@@ -1739,6 +1739,35 @@ describe("prepareCliRunContext", () => {
     }
   });
 
+  it("does not inject workspace context when contextInjection is never", async () => {
+    const { dir } = fixture.session;
+    const resolveBootstrapContextForRun = vi.fn(async () => ({
+      bootstrapFiles: [
+        { name: "AGENTS.md" as const, path: path.join(dir, "AGENTS.md"), content: "bootstrap" },
+      ],
+      contextFiles: [{ path: path.join(dir, "AGENTS.md"), content: "bootstrap" }],
+    }));
+    setCliRunnerPrepareTestDeps({
+      resolveBootstrapContextForRun,
+    });
+
+    const context = await fixture.prepare({
+      agentId: "main",
+      config: {
+        agents: {
+          defaults: {
+            contextInjection: "never",
+            workspace: dir,
+          },
+        },
+      },
+    });
+
+    expect(resolveBootstrapContextForRun).not.toHaveBeenCalled();
+    expect(context.systemPrompt).not.toContain("bootstrap");
+    expect(context.systemPromptReport.injectedWorkspaceFiles).toEqual([]);
+  });
+
   it("applies prompt-build hook context to Claude-style CLI preparation", async () => {
     const { dir } = fixture.session;
     fixture.appendTranscript({
