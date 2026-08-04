@@ -427,7 +427,7 @@ async function createBrowserPage(
     waitUntil: "domcontentloaded",
   });
   expect(response?.status()).toBe(200);
-  // Source-served UI startup shares CI shard CPU. Bound navigation and the
+  // Bundled UI startup shares CI shard CPU. Bound navigation and the
   // first rendered interaction separately; transport assertions stay narrow.
   const confirmation = page.locator("openclaw-gateway-url-confirmation");
   await confirmation.waitFor({ timeout: controlUiSettleTimeoutMs });
@@ -442,7 +442,7 @@ async function createBrowserPage(
   return { context, evidenceStartIndex, page };
 }
 
-async function warmControlUiSource(baseUrl: string): Promise<void> {
+async function warmBundledControlUiOrigin(baseUrl: string): Promise<void> {
   const context = await browser.newContext({
     locale: "en-US",
     serviceWorkers: "block",
@@ -533,8 +533,8 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     gateway = await startRealGateway(new URL(allowedUi.baseUrl).origin);
     proxy = await startRealTransportProxy(gateway.url);
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-    await warmControlUiSource(allowedUi.baseUrl);
-    await warmControlUiSource(rejectedUi.baseUrl);
+    await warmBundledControlUiOrigin(allowedUi.baseUrl);
+    await warmBundledControlUiOrigin(rejectedUi.baseUrl);
   }, 120_000);
 
   afterAll(async () => {
