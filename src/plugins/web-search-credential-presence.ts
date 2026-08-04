@@ -15,9 +15,7 @@ function hasConfiguredCredentialValue(value: unknown): boolean {
   return value !== undefined && value !== null;
 }
 
-function hasConfiguredSearchCredentialCandidate(
-  searchConfig: unknown,
-): boolean {
+function hasConfiguredSearchCredentialCandidate(searchConfig: unknown): boolean {
   const record = asOptionalObjectRecord(searchConfig);
   if (!record) {
     return false;
@@ -27,9 +25,7 @@ function hasConfiguredSearchCredentialCandidate(
   );
 }
 
-function hasConfiguredPluginWebSearchCandidate(
-  config: OpenClawConfig,
-): boolean {
+function hasConfiguredPluginWebSearchCandidate(config: OpenClawConfig): boolean {
   const entries = asOptionalObjectRecord(config.plugins?.entries);
   if (!entries) {
     return false;
@@ -85,12 +81,8 @@ function hasManifestWebSearchCredentialCandidate(params: {
     if (!params.env) {
       return false;
     }
-    const envVars = (plugin.setup?.providers ?? []).flatMap(
-      (provider) => provider.envVars ?? [],
-    );
-    return envVars.some((envVar) =>
-      hasConfiguredCredentialValue(params.env?.[envVar]),
-    );
+    const envVars = (plugin.setup?.providers ?? []).flatMap((provider) => provider.envVars ?? []);
+    return envVars.some((envVar) => hasConfiguredCredentialValue(params.env?.[envVar]));
   });
 }
 
