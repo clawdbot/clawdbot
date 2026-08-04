@@ -2934,6 +2934,11 @@ describe("ci workflow guards", () => {
     expect(warmerSource).toContain('"agentic-agents-embedded"');
     expect(warmerSource).toContain('"agentic-gateway-methods"');
     expect(warmerSource).toContain('"auto-reply-reply-commands-3"');
+    expect(warmerSource).toContain("const groups = configs.map((config) => ({");
+    expect(warmerSource).toContain("configs: [config]");
+    expect(warmerSource).toContain("`OPENCLAW_NODE_TEST_GROUPS_JSON=${JSON.stringify(groups)}`");
+    expect(warmerSource).not.toContain("OPENCLAW_NODE_TEST_CONFIGS_JSON");
+    expect(warmerSource).toContain('"OPENCLAW_NODE_TEST_PLAN_CONCURRENCY=1"');
     expect(warmerSetup.with).toMatchObject({
       "node-compile-cache-scope": "test",
       "save-actions-cache": "true",
@@ -2949,6 +2954,45 @@ describe("ci workflow guards", () => {
     expect(warmStep.if).toBeUndefined();
     expect(maintainStoreStep).toBeUndefined();
     expect(maintainStickyStoreStep.env.OPENCLAW_PNPM_STORE_MAX_KIB).toBe("8388608");
+
+    const seedRoot = mkdtempSync(path.join(tmpdir(), "openclaw-cache-seed-"));
+    try {
+      const envPath = path.join(seedRoot, "github-env");
+      const result = runWorkflowShellScript(seedStep.run, {
+        env: {
+          ...process.env,
+          GITHUB_ENV: envPath,
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const seedEnv = Object.fromEntries(
+        readFileSync(envPath, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => {
+            const separator = line.indexOf("=");
+            return [line.slice(0, separator), line.slice(separator + 1)];
+          }),
+      );
+      const serializedGroups = seedEnv.OPENCLAW_NODE_TEST_GROUPS_JSON;
+      if (!serializedGroups) {
+        throw new Error("cache warmer did not export OPENCLAW_NODE_TEST_GROUPS_JSON");
+      }
+      const groups = JSON.parse(serializedGroups) as Array<{
+        configs: string[];
+        shard_name: string;
+      }>;
+      expect(groups.length).toBeGreaterThan(1);
+      expect(groups.every((group) => group.configs.length === 1)).toBe(true);
+      expect(new Set(groups.flatMap((group) => group.configs)).size).toBe(groups.length);
+      expect(groups.every((group) => group.shard_name === `cache-warm:${group.configs[0]}`)).toBe(
+        true,
+      );
+      expect(seedEnv.OPENCLAW_NODE_TEST_PLAN_CONCURRENCY).toBe("1");
+      expect(seedEnv).not.toHaveProperty("OPENCLAW_NODE_TEST_CONFIGS_JSON");
+    } finally {
+      rmSync(seedRoot, { force: true, recursive: true });
+    }
 
     const maintenanceRoot = mkdtempSync(path.join(tmpdir(), "openclaw-pnpm-maintenance-"));
     try {
