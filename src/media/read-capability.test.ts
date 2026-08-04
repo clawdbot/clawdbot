@@ -245,15 +245,14 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
       mediaSources: ["/tmp/outside/file.png"],
     });
 
-    // When mediaAccess.localRoots is explicitly provided (the fix),
-    // resolveAgentScopedOutboundMediaAccess MUST use those roots directly
-    // instead of falling through to getAgentScopedMediaLocalRootsForSources
-    // which would auto-expand roots to include source parent directories.
+    // Explicit mediaAccess.localRoots are treated as authoritative: they
+    // suppress source-parent expansion so callers can forward a pre-computed
+    // capability without widening it.
     expect(result.localRoots).toContain("/app/media");
     expect(result.localRoots).not.toContain("/tmp/outside");
   });
 
-  it("allows source-parent expansion when mediaAccess.localRoots is absent (pre-fix fallback)", () => {
+  it("expands localRoots to source parents when host reads are allowed and no explicit roots are given", () => {
     const result = resolveAgentScopedOutboundMediaAccess({
       cfg: {
         tools: { allow: ["read"] },
@@ -261,10 +260,8 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
       mediaSources: ["/Users/claw/ObsidianClaw/social/report.html"],
     });
 
-    // Without mediaAccess.localRoots and with host reads enabled,
-    // the function falls through to getAgentScopedMediaLocalRootsForSources
-    // which expands roots to include source parent directories.
-    // This is the permissive path that the gateway-mode fix closes.
+    // With host reads enabled and no explicit mediaAccess.localRoots,
+    // source-parent expansion permits otherwise-authorized host-local files.
     expect(result.localRoots).toContain("/Users/claw/ObsidianClaw/social");
   });
 });

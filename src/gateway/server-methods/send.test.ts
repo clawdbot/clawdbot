@@ -263,6 +263,26 @@ async function runSendWithClient(
   return { respond };
 }
 
+async function runSendWithConfig(
+  params: Record<string, unknown>,
+  cfg: Record<string, unknown>,
+  client?: { connect?: { scopes?: string[] } } | null,
+) {
+  const respond = vi.fn();
+  await expectDefined(sendHandlers.send, "sendHandlers.send test invariant").call(sendHandlers, {
+    params: params as never,
+    respond,
+    context: {
+      dedupe: new Map(),
+      getRuntimeConfig: () => cfg,
+    } as unknown as GatewayRequestContext,
+    req: { type: "req", id: "1", method: "send" },
+    client: (client ?? null) as never,
+    isWebchatConnect: () => false,
+  });
+  return { respond };
+}
+
 async function runPoll(params: Record<string, unknown>) {
   return await runPollWithClient(params);
 }
@@ -1823,26 +1843,51 @@ describe("gateway send mirroring", () => {
     expect(deliveryCall()?.session?.key).toBe("agent:work:whatsapp:resolved");
   });
 
-  it("passes mediaAccess.localRoots to deliverOutboundPayloads for gateway sends", async () => {
-    mockDeliverySuccess("m-media-access");
+  it.each([
+    {
+      name: "when host reads are allowed",
+      cfg: {},
+      expectSourceParent: true,
+      expectReadFile: true,
+    },
+    {
+      name: "when workspace-only mode is enabled",
+      cfg: { tools: { fs: { workspaceOnly: true } } },
+      expectSourceParent: false,
+      expectReadFile: false,
+    },
+  ])(
+    "forwards policy-derived mediaAccess for gateway sends ($name)",
+    async ({ cfg, expectSourceParent, expectReadFile }) => {
+      mockDeliverySuccess("m-media-access");
 
-    await runSend({
-      to: "+15551234567",
-      message: "caption",
-      mediaUrl: "file:///tmp/workspace/photo.png",
-      channel: "whatsapp",
-      agentId: "work",
-      idempotencyKey: "idem-media-access",
-    });
+      await runSendWithConfig(
+        {
+          to: "+15551234567",
+          message: "caption",
+          mediaUrl: "file:///tmp/workspace/photo.png",
+          channel: "whatsapp",
+          agentId: "work",
+          idempotencyKey: "idem-media-access",
+        },
+        cfg,
+      );
 
-    // Gateway send handler must pass mediaAccess so downstream
-    // resolveAgentScopedOutboundMediaAccess uses the provided roots
-    // instead of falling through to source-parent root expansion.
-    const mediaAccess = deliveryCall()?.mediaAccess;
-    expect(mediaAccess).toBeDefined();
-    expect(Array.isArray(mediaAccess.localRoots)).toBe(true);
-    expect(mediaAccess.localRoots.length).toBeGreaterThan(0);
-  });
+      const mediaAccess = deliveryCall()?.mediaAccess;
+      expect(mediaAccess).toBeDefined();
+      expect(Array.isArray(mediaAccess.localRoots)).toBe(true);
+      if (expectSourceParent) {
+        expect(mediaAccess.localRoots).toContain("/tmp/workspace");
+      } else {
+        expect(mediaAccess.localRoots).not.toContain("/tmp/workspace");
+      }
+      if (expectReadFile) {
+        expect(typeof mediaAccess.readFile).toBe("function");
+      } else {
+        expect(mediaAccess.readFile).toBeUndefined();
+      }
+    },
+  );
 
   it("materializes buffer-only gateway sends before outbound delivery", async () => {
     mockDeliverySuccess("m-buffer-media");

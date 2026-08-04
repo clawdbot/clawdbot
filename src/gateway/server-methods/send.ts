@@ -34,6 +34,7 @@ import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resol
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { validateExplicitMessageAccountSelection } from "../../infra/outbound/message-account-selection.js";
 import {
+  collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
   resolveAttachmentMediaPolicy,
 } from "../../infra/outbound/message-action-params.js";
@@ -1287,7 +1288,16 @@ export const sendHandlers: GatewayRequestHandlers = {
             sessionKey: outboundSessionKey,
             conversationType: outboundRoute?.chatType,
           });
-          const senderLocalRoots = getAgentScopedMediaLocalRoots(cfg, effectiveAgentId);
+          const mediaAccess = resolveAgentScopedOutboundMediaAccess({
+            cfg,
+            agentId: effectiveAgentId,
+            mediaSources: collectActionMediaSourceHints(sendArgs, undefined, {
+              structuredAttachments: "all",
+            }),
+            sessionKey: outboundSessionKey,
+            messageProvider: outboundSessionKey ? undefined : channel,
+            accountId,
+          });
           const send = await sendDurableMessageBatch({
             cfg,
             channel,
@@ -1303,9 +1313,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             gatewayClientScopes: client?.connect?.scopes ?? [],
             silent: request.silent,
             formatting: request.parseMode ? { parseMode: request.parseMode } : undefined,
-            mediaAccess: {
-              localRoots: senderLocalRoots,
-            },
+            mediaAccess,
             mirror: outboundSessionKey
               ? {
                   sessionKey: outboundSessionKey,
