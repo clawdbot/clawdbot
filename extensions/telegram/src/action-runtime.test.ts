@@ -1872,6 +1872,95 @@ describe("handleTelegramAction", () => {
     ]);
   });
 
+  it("reports dropped controls and delivers their readable fallback", async () => {
+    const result = await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "123456",
+        content: "Choose",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                { label: "Retry", value: "retry" },
+                { label: "Copy manually", value: "x".repeat(65) },
+              ],
+            },
+          ],
+        },
+      },
+      telegramConfig({ capabilities: { inlineButtons: "all" } }),
+    );
+
+    const call = mockCall(sendMessageTelegram, 0, "degraded controls");
+    expect(call[1]).toBe("Choose\n\n- Copy manually");
+    expect(requireRecord(call[2], "degraded controls options").buttons).toEqual([
+      [{ text: "Retry", callback_data: "retry" }],
+    ]);
+    expect(resultDetails(result)).toMatchObject({
+      ok: true,
+      warning: "Telegram delivered 1 unencodable control as readable text.",
+      degradedDelivery: {
+        droppedControls: 1,
+        fallback: "text",
+        reasons: ["callback_data_too_long"],
+        callbackDataLimitBytes: 64,
+      },
+    });
+  });
+
+  it("keeps a 64-byte Unicode callback native without a degradation warning", async () => {
+    const callbackData = "😀".repeat(16);
+    const result = await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "123456",
+        content: "Choose",
+        presentation: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Exact", value: callbackData }] }],
+        },
+      },
+      telegramConfig({ capabilities: { inlineButtons: "all" } }),
+    );
+
+    const call = mockCall(sendMessageTelegram, 0, "64-byte callback");
+    expect(requireRecord(call[2], "64-byte callback options").buttons).toEqual([
+      [{ text: "Exact", callback_data: callbackData }],
+    ]);
+    expect(resultDetails(result)).not.toHaveProperty("degradedDelivery");
+  });
+
+  it("delivers control fallback text before a standalone location", async () => {
+    const result = await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "123456",
+        location: { latitude: 48.858844, longitude: 2.294351 },
+        presentation: {
+          blocks: [
+            { type: "buttons", buttons: [{ label: "Copy manually", value: "x".repeat(65) }] },
+          ],
+        },
+      },
+      telegramConfig({ capabilities: { inlineButtons: "all" } }),
+    );
+
+    const durableCall = mockCall(sendDurableMessageBatch, 0, "degraded location");
+    expect(requireRecord(durableCall[0], "degraded location params")).toMatchObject({
+      payloads: [
+        {
+          text: "- Copy manually",
+          location: { latitude: 48.858844, longitude: 2.294351 },
+        },
+      ],
+    });
+    expect(resultDetails(result)).toMatchObject({
+      ok: true,
+      degradedDelivery: { droppedControls: 1, fallback: "text" },
+    });
+  });
+
   it("edits reply markup when editMessage only changes buttons", async () => {
     await handleTelegramAction(
       {
@@ -1896,6 +1985,60 @@ describe("handleTelegramAction", () => {
     expect(call[1]).toBe(321);
     expect(call[2]).toEqual([[{ text: "Open", url: "https://example.com" }]]);
     expect(requireRecord(call[3], "reply markup edit options").token).toBe("tok");
+  });
+
+  it("reports controls dropped from a reply-markup edit", async () => {
+    const result = await handleTelegramAction(
+      {
+        action: "editMessage",
+        chatId: "123456",
+        messageId: 321,
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                { label: "Open", value: "open" },
+                { label: "Copy manually", value: "x".repeat(65) },
+              ],
+            },
+          ],
+        },
+      },
+      telegramConfig({ capabilities: { inlineButtons: "all" } }),
+    );
+
+    const call = mockCall(editMessageReplyMarkupTelegram, 0, "degraded reply markup edit");
+    expect(call[2]).toEqual([[{ text: "Open", callback_data: "open" }]]);
+    expect(resultDetails(result)).toMatchObject({
+      ok: true,
+      warning: "Telegram could not deliver 1 control.",
+      degradedDelivery: { droppedControls: 1, fallback: "not_delivered" },
+    });
+  });
+
+  it("returns a recoverable result when every edited control is unencodable", async () => {
+    const result = await handleTelegramAction(
+      {
+        action: "editMessage",
+        chatId: "123456",
+        messageId: 321,
+        presentation: {
+          blocks: [
+            { type: "buttons", buttons: [{ label: "Copy manually", value: "x".repeat(65) }] },
+          ],
+        },
+      },
+      telegramConfig({ capabilities: { inlineButtons: "all" } }),
+    );
+
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(editMessageReplyMarkupTelegram).not.toHaveBeenCalled();
+    expect(resultDetails(result)).toMatchObject({
+      ok: false,
+      warning: "Telegram could not deliver 1 control.",
+      degradedDelivery: { droppedControls: 1, fallback: "not_delivered" },
+    });
   });
 
   it.each([
