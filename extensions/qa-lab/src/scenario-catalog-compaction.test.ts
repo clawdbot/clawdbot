@@ -102,9 +102,7 @@ describe("qa compaction scenario catalog", () => {
       | Record<string, unknown>
       | undefined;
     expect(runtimeGuard?.assert).toMatchObject({
-      expr: expect.stringContaining(
-        "(env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME ?? 'openclaw') === 'openclaw'",
-      ),
+      expr: expect.stringContaining("env.runtimeId === 'openclaw'"),
     });
 
     const knownGapIndex = flow.indexOf(knownGap);
