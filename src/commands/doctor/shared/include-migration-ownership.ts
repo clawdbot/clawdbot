@@ -1,8 +1,6 @@
-import path from "node:path";
 import { resolveIncludeWriteBoundary } from "../../../config/include-write-boundary.js";
-import { INCLUDE_KEY } from "../../../config/includes.js";
+import { INCLUDE_KEY, isInternalIncludeWriteTarget } from "../../../config/includes.js";
 import type { ConfigFileSnapshot } from "../../../config/types.openclaw.js";
-import { isPathInside } from "../../../infra/path-safety.js";
 
 export function containsAuthoredInclude(value: unknown): boolean {
   if (!value || typeof value !== "object") {
@@ -43,8 +41,15 @@ export function classifyConfigPathMigrationOwnership(params: {
     provenance: params.snapshot.includeProvenance,
     changed: { paths: [params.configPath], rootChanged: false },
   });
-  const configDir = path.dirname(path.resolve(params.snapshot.path));
-  if (boundary && isPathInside(configDir, path.resolve(boundary.includePath))) {
+  // Canonical containment, not lexical: a symlink beneath the config directory
+  // can target an external file the guarded writer rejects; that is manual.
+  if (
+    boundary &&
+    isInternalIncludeWriteTarget({
+      configPath: params.snapshot.path,
+      includePath: boundary.includePath,
+    })
+  ) {
     return { kind: "single-include", targetPath: boundary.includePath };
   }
 

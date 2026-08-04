@@ -1221,6 +1221,55 @@ describe("config mutate helpers", () => {
     );
   });
 
+  it("declines eligibility for a symlinked external include target", async () => {
+    const home = await suiteRootTracker.make("boundary-symlink");
+    const configDir = path.join(home, ".openclaw");
+    const externalDir = path.join(home, "external");
+    await fs.mkdir(configDir, { recursive: true });
+    await fs.mkdir(externalDir, { recursive: true });
+    const externalTarget = path.join(externalDir, "agent-alpha.json5");
+    await fs.writeFile(
+      externalTarget,
+      `${JSON.stringify({ model: "old-model" }, null, 2)}\n`,
+      "utf-8",
+    );
+    const linkPath = path.join(configDir, "agent-alpha.json5");
+    await fs.symlink(externalTarget, linkPath);
+    const configPath = path.join(configDir, "openclaw.json");
+    const authoredRoot = {
+      agents: { entries: { alpha: { $include: "./agent-alpha.json5" } } },
+    };
+    await fs.writeFile(configPath, `${JSON.stringify(authoredRoot, null, 2)}\n`, "utf-8");
+    const snapshot: ConfigFileSnapshot = {
+      ...createSnapshot({
+        hash: "hash-boundary-symlink",
+        path: configPath,
+        parsed: authoredRoot,
+        sourceConfig: {
+          agents: { entries: { alpha: { model: "old-model" } } },
+        } as OpenClawConfig,
+      }),
+      includeProvenance: [
+        {
+          path: ["agents", "entries", "alpha"],
+          kind: "single" as const,
+          hasSiblingOverrides: false,
+          hasArrayAncestor: false,
+          targetPath: linkPath,
+        },
+      ],
+    };
+
+    expect(
+      configWriteTargetsIncludeBoundary({
+        snapshot,
+        nextConfig: {
+          agents: { entries: { alpha: { model: "new-model" } } },
+        } as OpenClawConfig,
+      }),
+    ).toBe(false);
+  });
+
   it("does not write through when a change falls outside the nested include", async () => {
     const authoredRoot = {
       agents: {

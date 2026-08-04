@@ -67,6 +67,26 @@ export function resolveConfigIncludeWritePath(params: {
   return canonicalPath;
 }
 
+/**
+ * Whether an include target canonically resolves inside the config directory.
+ * Write eligibility must use the canonical form: a symlink beneath the config
+ * directory can point at an external OPENCLAW_INCLUDE_ROOTS file that reads
+ * accept but the guarded include writer rejects.
+ */
+export function isInternalIncludeWriteTarget(params: {
+  configPath: string;
+  includePath: string;
+}): boolean {
+  const resolvedPath = path.normalize(path.resolve(params.includePath));
+  const configDir = path.normalize(path.dirname(path.resolve(params.configPath)));
+  if (!isPathInside(configDir, resolvedPath)) {
+    return false;
+  }
+  const canonicalPath = path.normalize(resolvePathViaExistingAncestorSync(resolvedPath));
+  const canonicalDir = path.normalize(resolvePathViaExistingAncestorSync(configDir));
+  return isPathInside(canonicalDir, canonicalPath);
+}
+
 // ============================================================================
 // Types
 // ============================================================================

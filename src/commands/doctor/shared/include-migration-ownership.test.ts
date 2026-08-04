@@ -1,5 +1,7 @@
+import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createSuiteTempRootTracker } from "../../../test-helpers/temp-dir.js";
 import { classifyConfigPathMigrationOwnership } from "./include-migration-ownership.js";
 
 describe("include migration ownership", () => {
@@ -141,6 +143,74 @@ describe("include migration ownership", () => {
         configPath: ["diagnostics", "otel", "protocol"],
       }),
     ).toEqual({ kind: "manual", targetPaths });
+  });
+
+  describe("symlinked include targets", () => {
+    const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-include-ownership-" });
+
+    beforeAll(async () => {
+      await suiteRootTracker.setup();
+    });
+
+    afterAll(async () => {
+      await suiteRootTracker.cleanup();
+    });
+
+    it("requires manual repair when a config-dir symlink targets an external file", async () => {
+      const home = await suiteRootTracker.make("symlink-external");
+      const realConfigDir = path.join(home, ".openclaw");
+      const externalDir = path.join(home, "external");
+      await fs.mkdir(realConfigDir, { recursive: true });
+      await fs.mkdir(externalDir, { recursive: true });
+      const externalTarget = path.join(externalDir, "diagnostics.json5");
+      await fs.writeFile(externalTarget, "{}\n", "utf-8");
+      const linkPath = path.join(realConfigDir, "diagnostics.json5");
+      await fs.symlink(externalTarget, linkPath);
+
+      expect(
+        classifyConfigPathMigrationOwnership({
+          snapshot: {
+            path: path.join(realConfigDir, "openclaw.json"),
+            includeProvenance: [
+              {
+                path: ["diagnostics"],
+                kind: "single",
+                hasSiblingOverrides: false,
+                hasArrayAncestor: false,
+                targetPath: linkPath,
+              },
+            ],
+          },
+          configPath: ["diagnostics", "otel", "protocol"],
+        }),
+      ).toEqual({ kind: "manual", targetPaths: [linkPath] });
+    });
+
+    it("keeps a real file beneath the config directory eligible", async () => {
+      const home = await suiteRootTracker.make("internal-file");
+      const realConfigDir = path.join(home, ".openclaw");
+      await fs.mkdir(realConfigDir, { recursive: true });
+      const targetPath = path.join(realConfigDir, "diagnostics.json5");
+      await fs.writeFile(targetPath, "{}\n", "utf-8");
+
+      expect(
+        classifyConfigPathMigrationOwnership({
+          snapshot: {
+            path: path.join(realConfigDir, "openclaw.json"),
+            includeProvenance: [
+              {
+                path: ["diagnostics"],
+                kind: "single",
+                hasSiblingOverrides: false,
+                hasArrayAncestor: false,
+                targetPath,
+              },
+            ],
+          },
+          configPath: ["diagnostics", "otel", "protocol"],
+        }),
+      ).toEqual({ kind: "single-include", targetPath });
+    });
   });
 
   it("requires manual repair below an actual array entry", () => {

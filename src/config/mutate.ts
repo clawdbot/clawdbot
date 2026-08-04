@@ -39,6 +39,7 @@ import {
   ConfigIncludeError,
   hashConfigIncludeRaw,
   INCLUDE_KEY,
+  isInternalIncludeWriteTarget,
   resolveConfigIncludeWritePath,
 } from "./includes.js";
 import { createInvalidConfigError, formatInvalidConfigDetails } from "./io.invalid-config.js";
@@ -404,7 +405,16 @@ export function configWriteTargetsIncludeBoundary(params: {
   if (changed.rootChanged || changed.paths.length === 0) {
     return false;
   }
-  return getIncludeMutationBoundary({ snapshot: params.snapshot, changed }) !== null;
+  const boundary = getIncludeMutationBoundary({ snapshot: params.snapshot, changed });
+  if (!boundary) {
+    return false;
+  }
+  // Eligibility must match the guarded writer: a canonical external target is
+  // rejected there, so it must classify as manual repair rather than eligible.
+  return isInternalIncludeWriteTarget({
+    configPath: params.snapshot.path,
+    includePath: boundary.includePath,
+  });
 }
 
 function containsConfigIncludeDirective(value: unknown): boolean {
