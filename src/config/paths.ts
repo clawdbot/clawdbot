@@ -403,10 +403,18 @@ export const DEFAULT_GATEWAY_PORT = 18789;
 
 /**
  * Gateway lock directory (ephemeral).
- * Default: os.tmpdir()/openclaw-<uid> (uid suffix when available).
+ * Derived from the resolved state dir so a sandboxed instance
+ * (OPENCLAW_STATE_DIR / OPENCLAW_CONFIG_PATH overrides) never writes lock
+ * files into the live instance's home tmp (#118371).
+ * Layout: <stateDir>/tmp/openclaw-<uid> (uid suffix when available).
  */
-export function resolveGatewayLockDir(tmpdir: () => string = os.tmpdir): string {
-  const base = tmpdir();
+export function resolveGatewayLockDir(
+  tmpdir: () => string = os.tmpdir,
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = envHomedir(env),
+): string {
+  const stateDir = resolveStateDir(env, homedir);
+  const base = path.join(stateDir, "tmp");
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
   const suffix = uid != null ? `openclaw-${uid}` : "openclaw";
   return path.join(base, suffix);

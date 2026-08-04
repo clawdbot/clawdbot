@@ -17,6 +17,7 @@ import {
   resolveConfigPathCandidate,
   resolveConfigPath,
   resolveGatewayPort,
+  resolveGatewayLockDir,
   resolveIncludeRoots,
   resolveOAuthDir,
   resolveStateDir,
@@ -576,5 +577,21 @@ describe("resolveIncludeRoots", () => {
       OPENCLAW_INCLUDE_ROOTS: ["", a, "  ", a].join(path.delimiter),
     });
     expect(resolveIncludeRoots(env, () => HOME)).toEqual([a]);
+  });
+});
+
+describe("resolveGatewayLockDir", () => {
+  const systemTmp = () => "/system/tmp";
+
+  it("derives the lock dir from OPENCLAW_STATE_DIR when overridden (#118371)", () => {
+    const dir = resolveGatewayLockDir(systemTmp, { OPENCLAW_STATE_DIR: "/sandbox/home" }, () => "/real/home");
+    expect(dir.startsWith(path.join("/sandbox/home", "tmp"))).toBe(true);
+    expect(dir).not.toContain("/system/tmp");
+    expect(dir).not.toContain("/real/home/.openclaw");
+  });
+
+  it("derives the lock dir from the default state dir when not overridden", () => {
+    const dir = resolveGatewayLockDir(systemTmp, {}, () => "/home/user");
+    expect(dir.startsWith(path.join("/home/user", ".openclaw", "tmp", "openclaw-"))).toBe(true);
   });
 });
