@@ -103,7 +103,10 @@ function registerDuplicateBootstrapFileHook() {
   });
 }
 
-function registerMemoryBootstrapFileHook(relativePath = "MEMORY.md", name = "MEMORY.md") {
+function registerNamedBootstrapFileHook(
+  relativePath = "MEMORY.md",
+  name: WorkspaceBootstrapFile["name"] = "MEMORY.md",
+) {
   registerInternalHook("agent:bootstrap", (event) => {
     const context = event.context as AgentBootstrapHookContext;
     context.bootstrapFiles = [
@@ -374,7 +377,7 @@ describe("resolveBootstrapFilesForRun", () => {
   );
 
   it("does not let hooks re-add MEMORY.md to shared sessions", async () => {
-    registerMemoryBootstrapFileHook();
+    registerNamedBootstrapFileHook();
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-hook-shared-");
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "private memory", "utf8");
 
@@ -387,7 +390,7 @@ describe("resolveBootstrapFilesForRun", () => {
   });
 
   it("does not let hooks relabel and re-add root MEMORY.md to shared sessions", async () => {
-    registerMemoryBootstrapFileHook("MEMORY.md", "PRIVATE.md");
+    registerNamedBootstrapFileHook("MEMORY.md", "SOUL.md");
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-hook-shared-alias-");
     const rootMemoryPath = path.join(workspaceDir, "MEMORY.md");
     await fs.writeFile(rootMemoryPath, "private memory", "utf8");
@@ -401,7 +404,7 @@ describe("resolveBootstrapFilesForRun", () => {
   });
 
   it("keeps hook-added nested MEMORY.md in shared sessions", async () => {
-    registerMemoryBootstrapFileHook(path.join("packages", "core", "MEMORY.md"));
+    registerNamedBootstrapFileHook(path.join("packages", "core", "MEMORY.md"));
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-hook-nested-memory-");
 
     const files = await resolveBootstrapFilesForRun({
@@ -415,6 +418,7 @@ describe("resolveBootstrapFilesForRun", () => {
   });
 
   it("keeps subagent sessions to AGENTS.md", async () => {
+    registerNamedBootstrapFileHook("SOUL.md", "SOUL.md");
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-subagent-");
     await Promise.all(
       [
@@ -443,6 +447,7 @@ describe("resolveBootstrapFilesForRun", () => {
   });
 
   it("keeps cron sessions on their existing minimal bootstrap files", async () => {
+    registerNamedBootstrapFileHook("BOOTSTRAP.md", "BOOTSTRAP.md");
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-cron-");
     await Promise.all(
       [

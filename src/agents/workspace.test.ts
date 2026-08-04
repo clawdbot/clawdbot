@@ -1180,7 +1180,7 @@ describe("filterBootstrapFilesForSession", () => {
 
   it("drops root memory path aliases while preserving nested memory in shared sessions", () => {
     const rootMemoryAlias = {
-      name: "PRIVATE.md",
+      name: "SOUL.md",
       path: "/w/private/../MEMORY.md",
       content: "",
       missing: false,
