@@ -783,7 +783,7 @@ export function stripGatewayServiceMarkerEnv(env: NodeJS.ProcessEnv): NodeJS.Pro
   return resolvedEnv;
 }
 
-export function resolveUpdatedInstallCommandEnv(params?: {
+function resolveUpdatedInstallCommandEnv(params?: {
   processEnv?: NodeJS.ProcessEnv;
   serviceEnv?: NodeJS.ProcessEnv;
   invocationCwd?: string;
@@ -802,6 +802,10 @@ export function resolveUpdatedInstallCommandEnv(params?: {
     ...serviceEnv,
   });
 }
+
+export const testing = {
+  resolveUpdatedInstallCommandEnv,
+};
 
 export function resolvePostInstallDoctorEnv(params?: {
   baseEnv?: NodeJS.ProcessEnv;
