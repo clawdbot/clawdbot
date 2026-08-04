@@ -8,7 +8,6 @@ import type {
   SessionSystemPromptReport,
 } from "../../config/sessions/types.js";
 import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
-import type { Usage } from "../../llm/types.js";
 import type { AcceptedSessionSpawn } from "../accepted-session-spawn.js";
 import type {
   MessagingToolSend,
@@ -283,7 +282,6 @@ export type EmbeddedAgentCompactResult = {
     tokensBefore: number;
     tokensAfter?: number;
     details?: unknown;
-    usage?: Usage;
     sessionId?: string;
     sessionFile?: string;
   };
