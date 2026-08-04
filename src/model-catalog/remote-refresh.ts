@@ -4,6 +4,7 @@ import {
 } from "@openclaw/model-catalog-core";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { compareOpenClawVersions } from "../config/version.js";
+import { withTimeout } from "../infra/fs-safe.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
 import {
   fetchConfiguredLocalOriginWithSsrFGuard,
@@ -125,6 +126,7 @@ export async function refreshRemoteModelCatalog(params: {
     } as const;
     const explicitOverride = Boolean(params.config.models?.catalogRefresh?.url);
     const localHttp = isExplicitLocalHttpUrl(params.config, url);
+    const requestDeadlineAtMs = Date.now() + REMOTE_MODEL_CATALOG_TIMEOUT_MS;
     let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
     if (explicitOverride) {
       const configuredOrigin = new URL(url).origin;
@@ -196,9 +198,18 @@ export async function refreshRemoteModelCatalog(params: {
       };
     } finally {
       // Guard release closes the dispatcher, not an unread response stream.
-      // Error pages leave the body unread; settle it before releasing.
+      // Error pages leave the body unread; settle it before releasing, but
+      // keep the settle inside the request deadline so a stream whose cancel
+      // never settles cannot retain the dispatcher.
       if (!guarded.response.bodyUsed) {
-        await guarded.response.body?.cancel().catch(() => undefined);
+        const cancellation = guarded.response.body?.cancel();
+        if (cancellation) {
+          await withTimeout(
+            cancellation,
+            Math.max(1, requestDeadlineAtMs - Date.now()),
+            "remote-catalog response cleanup",
+          ).catch(() => undefined);
+        }
       }
       await guarded.release();
     }

@@ -214,4 +214,30 @@ describe("guarded fetch cleanup", () => {
     ).resolves.toMatchObject({ status: "error" });
     expect(events).toContain("cancel");
   });
+
+  it("still finishes when body cancellation never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const stream = new ReadableStream({ cancel: () => new Promise<void>(() => {}) });
+      const fetchImpl = vi.fn<typeof fetch>(async () => new Response(stream, { status: 500 }));
+      let settled = false;
+      const run = refreshRemoteModelCatalog({
+        config: {},
+        fetchImpl,
+        databaseOptions: options(),
+        force: true,
+      }).then((result) => {
+        settled = true;
+        return result;
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(run).resolves.toMatchObject({ status: "error" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
