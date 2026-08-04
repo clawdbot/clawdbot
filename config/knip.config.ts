@@ -394,6 +394,9 @@ const config = {
     // asserted by the focused Beam mirror tests; production wires only the service.
     "extensions/beam/src/mirror.ts": ["exports", "types"],
     "src/infra/heartbeat-wake.ts": ["exports"],
+    // Focused redrive unit tests exercise candidate selection and deps through
+    // this pure-logic module; production wires only redriveSuspendedSubagentCompletions.
+    "src/agents/subagent-completion-redrive.ts": ["exports", "types"],
   },
   workspaces: {
     ".": {

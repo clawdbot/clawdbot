@@ -127,6 +127,10 @@ const config = {
   ignoreIssues: {
     // The memory-state compatibility facade must retain its pre-registry-bundle type export.
     "src/plugins/memory-state.ts": ["types"],
+    // The pure-logic compaction redrive module keeps its candidate selection
+    // and deps contract exported for the focused unit tests; production wires
+    // only redriveSuspendedSubagentCompletions through the runtime module.
+    "src/agents/subagent-completion-redrive.ts": ["exports", "types"],
     // Cache-busting dynamic imports are real consumers, but Knip cannot map
     // their query-suffixed module ids back to these named test-support exports.
     "test/helpers/config/bundled-channel-config-runtime.ts": ["exports"],
