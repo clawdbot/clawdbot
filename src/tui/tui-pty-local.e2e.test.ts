@@ -845,6 +845,62 @@ async function startGatewayModeTui(
   };
 }
 
+async function startIsolatedGatewayPty(params: {
+  gateway: OpenClawTestInstance;
+  registerCleanup: CleanupRegistrar;
+  sessionKey: string;
+  token: string;
+}) {
+  const { gateway, registerCleanup, sessionKey, token } = params;
+  const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-gateway-client-"));
+  const homeDir = path.join(tempDir, "home");
+  const stateDir = path.join(tempDir, "state");
+  const configPath = path.join(tempDir, "openclaw.json");
+  await mkdir(homeDir, { recursive: true });
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(configPath, "{}\n", "utf8");
+  const cliArgs = ["tui", "--url", gateway.url, "--token", token, "--session", sessionKey];
+  const run = startPty(process.execPath, buildTuiProcessArgs(cliArgs), {
+    cwd: process.cwd(),
+    env: {
+      ...gateway.env,
+      HOME: homeDir,
+      OPENCLAW_HOME: homeDir,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_AGENT_DIR: undefined,
+      OPENCLAW_GATEWAY_TOKEN: undefined,
+      OPENCLAW_GATEWAY_PASSWORD: undefined,
+      OPENCLAW_THEME: "dark",
+      NO_COLOR: undefined,
+    },
+    exitTimeoutMs: LOCAL_EXIT_TIMEOUT_MS,
+    outputTimeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+  });
+  const removeTempDir = () => rm(tempDir, { recursive: true, force: true });
+  const cleanup = createIdempotentCleanup(() => run.dispose().finally(removeTempDir));
+  registerCleanup(cleanup);
+  return { run, cleanup };
+}
+
+async function waitForSessionRow(
+  client: GatewayChatClient,
+  key: string,
+  accept: (
+    row: Awaited<ReturnType<GatewayChatClient["listSessions"]>>["sessions"][number],
+  ) => boolean,
+) {
+  const deadline = Date.now() + LOCAL_OUTPUT_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const row = (await client.listSessions({ limit: 100 })).sessions.find(
+      (candidate) => candidate.key === key,
+    );
+    if (row && accept(row)) return row;
+    await sleep(25);
+  }
+  throw new Error(`session ${key} did not reach the expected authoritative state`);
+}
+
 // Gateway cases share one real server and PTY but keep isolated models and sessions.
 // Per-case abort cleanup and serial order prevent active-run or queue state leaks.
 describe("TUI PTY real backends", () => {
@@ -1145,6 +1201,144 @@ describe("TUI PTY real backends", () => {
       it(name, run, timeoutMs);
     });
   }
+
+  registerGatewayTest(
+    "authenticates valid tokens and rejects invalid tokens through a real Gateway PTY",
+    async ({ onTestFinished }) => {
+      const shared = await requireSharedGatewayFixture();
+      const sessionKey = `agent:${SHARED_GATEWAY_AGENT_ID}:tui-pty-auth`;
+      const invalidToken = "T02_INVALID_TOKEN_MUST_NOT_LEAK";
+      await shared.controlClient.createSession({
+        key: sessionKey,
+        agentId: SHARED_GATEWAY_AGENT_ID,
+      });
+      const valid = await startIsolatedGatewayPty({
+        gateway: shared.gateway,
+        registerCleanup: onTestFinished,
+        sessionKey,
+        token: shared.gateway.gatewayToken,
+      });
+      const invalid = await startIsolatedGatewayPty({
+        gateway: shared.gateway,
+        registerCleanup: onTestFinished,
+        sessionKey,
+        token: invalidToken,
+      });
+      try {
+        await valid.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
+        await invalid.run.waitForOutput("gateway token mismatch", LOCAL_STARTUP_TIMEOUT_MS);
+        expect(
+          `${valid.run.output()}\n${invalid.run.output()}\n${shared.gateway.logs()}`,
+        ).not.toContain(invalidToken);
+      } finally {
+        await Promise.all([valid.cleanup(), invalid.cleanup()]);
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
+  registerGatewayTest(
+    "loads completed Gateway history on a fresh TUI attach before user input",
+    async ({ onTestFinished }) => {
+      const shared = await requireSharedGatewayFixture();
+      const sessionKey = `agent:${SHARED_GATEWAY_AGENT_ID}:tui-pty-history`;
+      const userMarker = "T02_HISTORY_USER";
+      const assistantMarker = GATEWAY_SCENARIOS.reconnect.replyText;
+      await shared.controlClient.createSession({
+        key: sessionKey,
+        agentId: SHARED_GATEWAY_AGENT_ID,
+      });
+      await shared.controlClient.patchSession({
+        key: sessionKey,
+        agentId: SHARED_GATEWAY_AGENT_ID,
+        model: `tui-pty-mock/${GATEWAY_SCENARIOS.reconnect.modelId}`,
+      });
+      await shared.controlClient.sendChat({ sessionKey, message: userMarker });
+      await waitFor({
+        timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+        read: async () => {
+          const history = JSON.stringify(
+            await shared.controlClient.loadHistory({ sessionKey, limit: 100 }),
+          );
+          return history.includes(userMarker) && history.includes(assistantMarker) ? true : null;
+        },
+        onTimeout: () => new Error("Gateway history did not contain the completed seeded turn"),
+      });
+
+      const attached = await startIsolatedGatewayPty({
+        gateway: shared.gateway,
+        registerCleanup: onTestFinished,
+        sessionKey,
+        token: shared.gateway.gatewayToken,
+      });
+      try {
+        await attached.run.waitForOutput(assistantMarker, LOCAL_STARTUP_TIMEOUT_MS);
+        const output = attached.run.visibleOutput();
+        expect(output.split(userMarker)).toHaveLength(2);
+        expect(output.split(assistantMarker)).toHaveLength(2);
+      } finally {
+        await attached.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
+  registerGatewayTest(
+    "executes Gateway status model new and reset RPCs through a real TUI PTY",
+    async ({ onTestFinished }) => {
+      const fixture = await startGatewayModeTui("crossClient", onTestFinished);
+      const { controlClient } = await requireSharedGatewayFixture();
+      try {
+        await fixture.run.write("/gateway-status\r", { delay: false });
+        await fixture.waitForOutput("Gateway status");
+
+        const alternateModel = `tui-pty-mock/${GATEWAY_SCENARIOS.reconnect.modelId}`;
+        await fixture.run.write(`/model ${alternateModel}\r`, { delay: false });
+        await fixture.waitForOutput(`model set to ${alternateModel}`);
+        await waitForSessionRow(
+          controlClient,
+          fixture.sessionKey,
+          (row) => `${row.modelProvider}/${row.model}` === alternateModel,
+        );
+
+        const newOffset = fixture.run.visibleOutput().length;
+        await fixture.run.write("/new\r", { delay: false });
+        await waitForOutputAfter(fixture.run, "new session: agent:", newOffset);
+        const createdKey = fixture.run
+          .visibleOutput()
+          .slice(newOffset)
+          .match(/new session: (agent:\S+)/)?.[1];
+        expect(createdKey).toMatch(/^agent:/);
+        fixture.trackSessionKey(createdKey!);
+        const created = await waitForSessionRow(
+          controlClient,
+          createdKey!,
+          (row) => typeof row.sessionId === "string",
+        );
+        await sleep(5);
+        await fixture.run.write("/reset\r", { delay: false });
+        await fixture.waitForOutput(`session ${createdKey} reset`);
+        const reset = await waitForSessionRow(
+          controlClient,
+          createdKey!,
+          (row) =>
+            typeof row.updatedAt === "number" &&
+            typeof created.updatedAt === "number" &&
+            row.updatedAt > created.updatedAt,
+        );
+        // Reset advances the durable transcript boundary without replacing its SQLite identity.
+        expect(reset.sessionId).toBe(created.sessionId);
+        const resetHistory = await controlClient.loadHistory({
+          sessionKey: createdKey!,
+          limit: 100,
+        });
+        expect(resetHistory.messages).toEqual([]);
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
 
   registerGatewayTest(
     "preserves a disconnected draft across a real Gateway restart",
