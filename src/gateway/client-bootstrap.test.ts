@@ -7,7 +7,12 @@ type AuthResolutionParams = Parameters<typeof resolveGatewayCredentialsWithSecre
 
 const mockState = vi.hoisted(() => ({
   buildGatewayConnectionDetails: vi.fn(),
+  loadGatewayTlsRuntime: vi.fn(),
   resolveGatewayCredentialsWithSecretInputs: vi.fn(),
+}));
+
+vi.mock("../infra/tls/gateway.js", () => ({
+  loadGatewayTlsRuntime: (...args: unknown[]) => mockState.loadGatewayTlsRuntime(...args),
 }));
 
 vi.mock("./connection-details.js", () => ({
@@ -38,6 +43,11 @@ function expectLastAuthResolutionParams(expected: {
 describe("resolveGatewayClientBootstrap", () => {
   beforeEach(() => {
     mockState.buildGatewayConnectionDetails.mockReset();
+    mockState.loadGatewayTlsRuntime.mockReset();
+    mockState.loadGatewayTlsRuntime.mockResolvedValue({
+      enabled: false,
+      required: false,
+    });
     mockState.resolveGatewayCredentialsWithSecretInputs.mockReset();
     mockState.resolveGatewayCredentialsWithSecretInputs.mockResolvedValue({
       token: undefined,
@@ -87,5 +97,114 @@ describe("resolveGatewayClientBootstrap", () => {
       urlOverride: undefined,
       urlOverrideSource: undefined,
     });
+  });
+
+  it("returns the local TLS fingerprint for config-derived WSS clients", async () => {
+    const tlsConfig = { enabled: true };
+    mockState.buildGatewayConnectionDetails.mockReturnValue({
+      url: "wss://127.0.0.1:18789",
+      urlSource: "local loopback",
+    });
+    mockState.loadGatewayTlsRuntime.mockResolvedValue({
+      enabled: true,
+      required: true,
+      fingerprintSha256: "sha256:local",
+    });
+
+    const result = await resolveGatewayClientBootstrap({
+      config: { gateway: { tls: tlsConfig } } as never,
+      env: process.env,
+    });
+
+    expect(result.tlsFingerprint).toBe("sha256:local");
+    expect(mockState.loadGatewayTlsRuntime).toHaveBeenCalledWith(tlsConfig);
+  });
+
+  it.each([
+    {
+      url: "wss://gateway.example/ws",
+      urlSource: "config gateway.remote.url",
+    },
+    {
+      url: "wss://override.example/ws",
+      urlSource: "env OPENCLAW_GATEWAY_URL",
+    },
+  ])("returns the configured remote pin for $urlSource", async ({ url, urlSource }) => {
+    mockState.buildGatewayConnectionDetails.mockReturnValue({ url, urlSource });
+
+    const result = await resolveGatewayClientBootstrap({
+      config: {
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "wss://gateway.example/ws",
+            tlsFingerprint: "sha256:remote",
+          },
+        },
+      } as never,
+      env: process.env,
+    });
+
+    expect(result.tlsFingerprint).toBe("sha256:remote");
+    expect(mockState.loadGatewayTlsRuntime).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "CLI URL overrides",
+      url: "wss://override.example/ws",
+      urlSource: "cli --url",
+    },
+    {
+      label: "plaintext remote URLs",
+      url: "ws://gateway.example/ws",
+      urlSource: "config gateway.remote.url",
+    },
+  ])("does not inherit the configured remote pin for $label", async ({ url, urlSource }) => {
+    mockState.buildGatewayConnectionDetails.mockReturnValue({ url, urlSource });
+
+    const result = await resolveGatewayClientBootstrap({
+      config: {
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "wss://gateway.example/ws",
+            tlsFingerprint: "sha256:remote",
+          },
+        },
+      } as never,
+      gatewayUrl: urlSource === "cli --url" ? url : undefined,
+      env: process.env,
+    });
+
+    expect(result.tlsFingerprint).toBeUndefined();
+    expect(mockState.loadGatewayTlsRuntime).not.toHaveBeenCalled();
+  });
+
+  it("uses the local pin when remote mode falls back to the configured local gateway", async () => {
+    const tlsConfig = { enabled: true };
+    mockState.buildGatewayConnectionDetails.mockReturnValue({
+      url: "wss://127.0.0.1:18789",
+      urlSource: "missing gateway.remote.url (fallback local)",
+    });
+    mockState.loadGatewayTlsRuntime.mockResolvedValue({
+      enabled: true,
+      required: true,
+      fingerprintSha256: "sha256:local",
+    });
+
+    const result = await resolveGatewayClientBootstrap({
+      config: {
+        gateway: {
+          mode: "remote",
+          tls: tlsConfig,
+          remote: { tlsFingerprint: "sha256:remote" },
+        },
+      } as never,
+      env: process.env,
+    });
+
+    expect(result.tlsFingerprint).toBe("sha256:local");
+    expect(mockState.loadGatewayTlsRuntime).toHaveBeenCalledWith(tlsConfig);
   });
 });
