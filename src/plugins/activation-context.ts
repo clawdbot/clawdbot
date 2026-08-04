@@ -67,6 +67,7 @@ export function withActivatedPluginIds(params: {
   pluginIds: readonly string[];
   overrideGlobalDisable?: boolean;
   overrideExplicitDisable?: boolean;
+  allowRestrictiveAllowlistBypass?: boolean;
 }): OpenClawConfig | undefined {
   if (params.pluginIds.length === 0) {
     return params.config;
@@ -83,7 +84,11 @@ export function withActivatedPluginIds(params: {
     if (!normalized) {
       continue;
     }
-    if (originalAllowSet && !originalAllowSet.has(normalized)) {
+    if (
+      originalAllowSet &&
+      !originalAllowSet.has(normalized) &&
+      params.allowRestrictiveAllowlistBypass !== true
+    ) {
       continue;
     }
     allow.add(normalized);

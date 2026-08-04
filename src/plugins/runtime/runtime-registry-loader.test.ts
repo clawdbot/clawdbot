@@ -9,6 +9,10 @@ const mocks = vi.hoisted(() => ({
     vi.fn<typeof import("../channel-plugin-ids.js").resolveChannelPluginIds>(),
   resolveEffectivePluginIds:
     vi.fn<typeof import("../effective-plugin-ids.js").resolveEffectivePluginIds>(),
+  collectConfiguredMemoryEmbeddingProviderIds:
+    vi.fn<
+      typeof import("../gateway-startup-plugin-ids.js").collectConfiguredMemoryEmbeddingProviderIds
+    >(),
   applyPluginAutoEnable:
     vi.fn<typeof import("../../config/plugin-auto-enable.js").applyPluginAutoEnable>(),
   resolvePluginMetadataSnapshot:
@@ -37,6 +41,12 @@ vi.mock("../channel-plugin-ids.js", () => ({
 vi.mock("../effective-plugin-ids.js", () => ({
   resolveEffectivePluginIds: (...args: Parameters<typeof mocks.resolveEffectivePluginIds>) =>
     mocks.resolveEffectivePluginIds(...args),
+}));
+
+vi.mock("../gateway-startup-plugin-ids.js", () => ({
+  collectConfiguredMemoryEmbeddingProviderIds: (
+    ...args: Parameters<typeof mocks.collectConfiguredMemoryEmbeddingProviderIds>
+  ) => mocks.collectConfiguredMemoryEmbeddingProviderIds(...args),
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
@@ -118,6 +128,74 @@ describe("ensurePluginRegistryLoaded", () => {
       expect.objectContaining({
         onlyPluginIds: ["demo", "memory-core"],
         throwOnLoadError: true,
+      }),
+    );
+  });
+
+  it("loads only the selected memory backend and embedding provider owners", () => {
+    const config = {
+      memory: { search: { provider: "openai" } },
+      plugins: {
+        allow: ["acpx", "memory-core"],
+        slots: { memory: "memory-core" },
+        entries: { unrelated: { enabled: true } },
+      },
+    };
+    mocks.collectConfiguredMemoryEmbeddingProviderIds.mockReturnValue(new Set(["openai"]));
+
+    ensurePluginRegistryLoaded({ scope: "memory", config });
+
+    expect(mocks.collectConfiguredMemoryEmbeddingProviderIds).toHaveBeenCalledWith(config);
+    expect(requireLoadOptions()).toEqual(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["acpx", "memory-core", "openai"],
+            entries: expect.objectContaining({
+              openai: { enabled: true },
+            }),
+          }),
+        }),
+        activationSourceConfig: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["acpx", "memory-core", "openai"],
+            entries: expect.objectContaining({
+              openai: { enabled: true },
+            }),
+          }),
+        }),
+        onlyPluginIds: ["memory-core", "openai"],
+        throwOnLoadError: true,
+      }),
+    );
+  });
+
+  it("keeps explicit memory provider disablement authoritative", () => {
+    const config = {
+      memory: { search: { provider: "openai" } },
+      plugins: {
+        allow: ["memory-core"],
+        deny: ["openai"],
+        entries: { openai: { enabled: false } },
+        slots: { memory: "memory-core" },
+      },
+    };
+    mocks.collectConfiguredMemoryEmbeddingProviderIds.mockReturnValue(new Set(["openai"]));
+
+    ensurePluginRegistryLoaded({ scope: "memory", config });
+
+    expect(requireLoadOptions()).toEqual(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["memory-core", "openai"],
+            deny: ["openai"],
+            entries: expect.objectContaining({
+              openai: { enabled: false },
+            }),
+          }),
+        }),
+        onlyPluginIds: ["memory-core", "openai"],
       }),
     );
   });

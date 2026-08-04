@@ -5,7 +5,9 @@ import {
   resolveChannelPluginIds,
   resolveConfiguredChannelPluginIds,
 } from "../channel-plugin-ids.js";
+import { normalizePluginsConfig } from "../config-state.js";
 import { resolveEffectivePluginIds } from "../effective-plugin-ids.js";
+import { collectConfiguredMemoryEmbeddingProviderIds } from "../gateway-startup-plugin-ids.js";
 import { loadOpenClawPlugins } from "../loader.js";
 import { hasNonEmptyPluginIdScope } from "../plugin-scope.js";
 import {
@@ -13,7 +15,20 @@ import {
   resolvePluginRuntimeLoadContext,
 } from "./load-context.js";
 
-export type PluginRegistryScope = "configured-channels" | "channels" | "all";
+export type PluginRegistryScope = "configured-channels" | "channels" | "memory" | "all";
+
+function resolveMemoryPluginIds(
+  context: ReturnType<typeof resolvePluginRuntimeLoadContext>,
+): string[] {
+  const pluginIds = new Set(
+    collectConfiguredMemoryEmbeddingProviderIds(context.activationSourceConfig),
+  );
+  const memoryPluginId = normalizePluginsConfig(context.config.plugins).slots.memory?.trim();
+  if (memoryPluginId) {
+    pluginIds.add(memoryPluginId);
+  }
+  return [...pluginIds].toSorted();
+}
 
 function resolveScopePluginIds(params: {
   scope: PluginRegistryScope;
@@ -34,6 +49,11 @@ function resolveScopePluginIds(params: {
       env: params.context.env,
     });
   }
+  if (params.scope === "memory") {
+    // Memory CLI commands must use the same backend and embedding adapters as
+    // Gateway, without activating unrelated explicitly enabled plugins.
+    return resolveMemoryPluginIds(params.context);
+  }
   return resolveEffectivePluginIds({
     config: params.context.rawConfig,
     workspaceDir: params.context.workspaceDir,
@@ -51,13 +71,20 @@ export function ensurePluginRegistryLoaded(options?: {
   const scope = options?.scope ?? "all";
   const context = resolvePluginRuntimeLoadContext(options);
   const pluginIds = resolveScopePluginIds({ scope, context });
-  const activateConfigured = scope === "configured-channels" && pluginIds.length > 0;
+  const activateConfigured =
+    (scope === "configured-channels" || scope === "memory") && pluginIds.length > 0;
+  const activationOptions = {
+    pluginIds,
+    ...(scope === "memory" ? { allowRestrictiveAllowlistBypass: true } : {}),
+  };
   const config = activateConfigured
-    ? (withActivatedPluginIds({ config: context.config, pluginIds }) ?? context.config)
+    ? (withActivatedPluginIds({ config: context.config, ...activationOptions }) ?? context.config)
     : context.config;
   const activationSourceConfig = activateConfigured
-    ? (withActivatedPluginIds({ config: context.activationSourceConfig, pluginIds }) ??
-      context.activationSourceConfig)
+    ? (withActivatedPluginIds({
+        config: context.activationSourceConfig,
+        ...activationOptions,
+      }) ?? context.activationSourceConfig)
     : context.activationSourceConfig;
   loadOpenClawPlugins(
     buildPluginRuntimeLoadOptionsFromValues(
@@ -65,6 +92,7 @@ export function ensurePluginRegistryLoaded(options?: {
       {
         throwOnLoadError: true,
         ...(scope === "configured-channels" ||
+        scope === "memory" ||
         scope === "all" ||
         hasNonEmptyPluginIdScope(pluginIds)
           ? { onlyPluginIds: pluginIds }

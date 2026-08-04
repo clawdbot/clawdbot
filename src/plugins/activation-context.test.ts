@@ -21,11 +21,44 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: applyPluginAutoEnableMock,
 }));
 
-import { resolveBundledPluginCompatibleActivationInputs } from "./activation-context.js";
+import {
+  resolveBundledPluginCompatibleActivationInputs,
+  withActivatedPluginIds,
+} from "./activation-context.js";
 
 afterEach(() => {
   clearCurrentPluginMetadataSnapshot();
   applyPluginAutoEnableMock.mockClear();
+});
+
+describe("withActivatedPluginIds", () => {
+  it("can activate configured owners through a restrictive allowlist", () => {
+    expect(
+      withActivatedPluginIds({
+        config: {
+          plugins: {
+            allow: ["memory-core"],
+            deny: ["blocked"],
+            entries: {
+              disabled: { enabled: false },
+            },
+          },
+        },
+        pluginIds: ["openai", "blocked", "disabled"],
+        allowRestrictiveAllowlistBypass: true,
+      }),
+    ).toEqual({
+      plugins: {
+        allow: ["memory-core", "openai", "blocked", "disabled"],
+        deny: ["blocked"],
+        entries: {
+          openai: { enabled: true },
+          blocked: { enabled: true },
+          disabled: { enabled: false },
+        },
+      },
+    });
+  });
 });
 
 describe("resolveBundledPluginCompatibleActivationInputs", () => {
