@@ -1204,7 +1204,8 @@ describe("handleTelegramAction", () => {
       name: "poll",
       params: {
         action: "poll",
-        to: "@testchannel",
+        to: "-100123:topic:271",
+        threadId: 404,
         question: "Ready?",
         answers: ["Yes", "No"],
       },
@@ -1214,17 +1215,18 @@ describe("handleTelegramAction", () => {
       name: "sticker",
       params: {
         action: "sendSticker",
-        to: "@testchannel",
+        to: "-100123:topic:271",
+        threadId: 404,
         fileId: "sticker-1",
       },
       cfg: telegramConfig({ actions: { sticker: true } }),
     },
-  ])("marks room-event delivery after successful $name actions", async ({ params, cfg }) => {
+  ])("marks room-event delivery after successful $name actions", async ({ name, params, cfg }) => {
     let count = 0;
     const end = telegramInboundEventDelivery.begin(
       "telegram-session",
       {
-        outboundTo: "@testchannel",
+        outboundTo: "-100123:topic:404",
         markInboundEventDelivered: () => {
           count += 1;
         },
@@ -1237,6 +1239,11 @@ describe("handleTelegramAction", () => {
       inboundEventKind: "room_event",
     });
 
+    const sent =
+      name === "poll"
+        ? mockCall(sendPollTelegram, 0, "room event topic poll")
+        : mockCall(sendStickerTelegram, 0, "room event topic sticker");
+    expect(requireRecord(sent[2], "room event topic options").messageThreadId).toBe(404);
     expect(count).toBe(1);
     end();
   });
