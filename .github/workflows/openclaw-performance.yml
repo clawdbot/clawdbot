@@ -75,8 +75,8 @@ env:
   OCM_VERSION: v0.2.29
   OCM_LINUX_X64_SHA256: d966098d6ba2bc10891be3c76e162a37b07f28c4f51da75d2eb509886eb7e1cf
   KOVA_REPOSITORY: openclaw/Kova
-  KOVA_CANONICAL_CONFIG_REF: 07fecb5262be09890312ffff686cb5571223fb5d
-  KOVA_LEGACY_LIST_CONFIG_REF: 07fecb5262be09890312ffff686cb5571223fb5d
+  KOVA_CANONICAL_CONFIG_REF: 2bd33f51c9e1b13fb037f03efe983beab2d897fc
+  KOVA_LEGACY_LIST_CONFIG_REF: 2bd33f51c9e1b13fb037f03efe983beab2d897fc
   PERFORMANCE_MODEL_ID: gpt-5.6-luna
   # Release matrices cold-build the candidate runtime before measurement.
   KOVA_SCENARIO_TIMEOUT_MS: ${{ inputs.profile == 'release' && '900000' || '300000' }}
@@ -92,6 +92,7 @@ jobs:
       tested_sha: ${{ steps.resolve.outputs.tested_sha }}
       kova_ref: ${{ steps.resolve.outputs.kova_ref }}
       kova_config_contract: ${{ steps.resolve.outputs.kova_config_contract }}
+      kova_ref_trusted_for_live: ${{ steps.resolve.outputs.kova_ref_trusted_for_live }}
     steps:
       - name: Resolve OpenClaw target ref
         id: resolve
@@ -171,6 +172,11 @@ jobs:
           echo "tested_sha=$resolved_sha" >> "$GITHUB_OUTPUT"
           echo "kova_ref=$kova_ref" >> "$GITHUB_OUTPUT"
           echo "kova_config_contract=$kova_config_contract" >> "$GITHUB_OUTPUT"
+          if [[ "$kova_ref" == "$KOVA_CANONICAL_CONFIG_REF" || "$kova_ref" == "$KOVA_LEGACY_LIST_CONFIG_REF" ]]; then
+            echo "kova_ref_trusted_for_live=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "kova_ref_trusted_for_live=false" >> "$GITHUB_OUTPUT"
+          fi
 
   kova:
     name: ${{ matrix.title }}
@@ -228,6 +234,7 @@ jobs:
       MATRIX_REPEAT: ${{ matrix.repeat }}
       MATRIX_DEEP_PROFILE: ${{ matrix.deep_profile }}
       MATRIX_LIVE: ${{ matrix.live }}
+      KOVA_REF_TRUSTED_FOR_LIVE: ${{ needs.resolve_target.outputs.kova_ref_trusted_for_live }}
     steps:
       - name: Decide lane
         id: lane
@@ -243,6 +250,10 @@ jobs:
           if [[ "$LANE_ID" == "live-openai-candidate" && "${{ github.event_name }}" != "schedule" && "${{ inputs.live_openai_candidate || 'false' }}" != "true" ]]; then
             run_lane=false
             reason="live_openai_candidate input is false"
+          fi
+          if [[ "$LANE_ID" == "live-openai-candidate" && "$run_lane" == "true" && "$KOVA_REF_TRUSTED_FOR_LIVE" != "true" ]]; then
+            echo "::error::The live OpenAI lane only executes a reviewed immutable Kova default. Omit kova_ref or update the pinned workflow defaults after review."
+            exit 1
           fi
           echo "run=$run_lane" >> "$GITHUB_OUTPUT"
           if [[ "$run_lane" != "true" ]]; then

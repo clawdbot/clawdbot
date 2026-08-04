@@ -84,8 +84,8 @@ describe("OpenClaw performance workflow", () => {
 
   it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const canonicalKovaRef = "07fecb5262be09890312ffff686cb5571223fb5d";
-    const legacyKovaRef = "07fecb5262be09890312ffff686cb5571223fb5d";
+    const canonicalKovaRef = "2bd33f51c9e1b13fb037f03efe983beab2d897fc";
+    const legacyKovaRef = "2bd33f51c9e1b13fb037f03efe983beab2d897fc";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
     const resolveTarget = findStep("Resolve OpenClaw target ref", "resolve_target");
@@ -99,6 +99,9 @@ describe("OpenClaw performance workflow", () => {
     );
     expect(readWorkflow().jobs?.resolve_target?.outputs?.kova_config_contract).toBe(
       "${{ steps.resolve.outputs.kova_config_contract }}",
+    );
+    expect(readWorkflow().jobs?.resolve_target?.outputs?.kova_ref_trusted_for_live).toBe(
+      "${{ steps.resolve.outputs.kova_ref_trusted_for_live }}",
     );
     expect(resolveTarget.env?.KOVA_REF_INPUT).toBe("${{ inputs.kova_ref }}");
     expect(resolveTarget.env?.KOVA_CONFIG_CONTRACT_INPUT).toBe(
@@ -124,11 +127,23 @@ describe("OpenClaw performance workflow", () => {
     expect(resolveTarget.run).toContain(
       'echo "kova_config_contract=$kova_config_contract" >> "$GITHUB_OUTPUT"',
     );
+    expect(resolveTarget.run).toContain(
+      'if [[ "$kova_ref" == "$KOVA_CANONICAL_CONFIG_REF" || "$kova_ref" == "$KOVA_LEGACY_LIST_CONFIG_REF" ]]; then',
+    );
+    expect(resolveTarget.run).toContain(
+      'echo "kova_ref_trusted_for_live=true" >> "$GITHUB_OUTPUT"',
+    );
+    expect(resolveTarget.run).toContain(
+      'echo "kova_ref_trusted_for_live=false" >> "$GITHUB_OUTPUT"',
+    );
     expect(readWorkflow().jobs?.kova?.env?.KOVA_REF).toBe(
       "${{ needs.resolve_target.outputs.kova_ref }}",
     );
     expect(readWorkflow().jobs?.kova?.env?.KOVA_OPENCLAW_CONFIG_CONTRACT).toBe(
       "${{ needs.resolve_target.outputs.kova_config_contract }}",
+    );
+    expect(readWorkflow().jobs?.kova?.env?.KOVA_REF_TRUSTED_FOR_LIVE).toBe(
+      "${{ needs.resolve_target.outputs.kova_ref_trusted_for_live }}",
     );
     expect(installRun).toContain(
       'npm --prefix "$KOVA_SRC" ci --ignore-scripts --no-audit --no-fund',
@@ -147,6 +162,67 @@ describe("OpenClaw performance workflow", () => {
       "KOVA_SCENARIO_TIMEOUT_MS: ${{ inputs.profile == 'release' && '900000' || '300000' }}",
     );
     expect(workflow).toContain("Kova live OpenAI GPT 5.6 agent turn");
+  });
+
+  it("keeps live credentials away from custom Kova refs", () => {
+    const decideLane = findStep("Decide lane");
+    const configureLiveAuth = findStep("Configure live OpenAI auth");
+    const runKova = findStep("Run Kova");
+    const root = mkdtempSync(join(realpathSync(tmpdir()), "openclaw-kova-live-ref-"));
+    const output = join(root, "output");
+    const decideLaneRun = (decideLane.run ?? "")
+      .replaceAll("${{ github.event_name }}", "workflow_dispatch")
+      .replaceAll("${{ inputs.deep_profile || 'false' }}", "false")
+      .replaceAll("${{ inputs.live_openai_candidate || 'false' }}", "true");
+
+    expect(decideLane.run).toContain(
+      'if [[ "$LANE_ID" == "live-openai-candidate" && "$run_lane" == "true" && "$KOVA_REF_TRUSTED_FOR_LIVE" != "true" ]]; then',
+    );
+    expect(decideLane.run).toContain(
+      "The live OpenAI lane only executes a reviewed immutable Kova default.",
+    );
+    expect(decideLane.run?.indexOf("KOVA_REF_TRUSTED_FOR_LIVE")).toBeLessThan(
+      decideLane.run?.indexOf('echo "run=$run_lane"') ?? -1,
+    );
+    expect(configureLiveAuth.if).toBe(
+      "${{ steps.lane.outputs.run == 'true' && matrix.live == 'true' }}",
+    );
+    expect(runKova.env?.OPENAI_API_KEY).toBe(
+      "${{ matrix.live == 'true' && secrets.OPENAI_API_KEY || '' }}",
+    );
+    expect(runKova.env?.OPENAI_BASE_URL).toBe(
+      "${{ matrix.live == 'true' && secrets.OPENAI_BASE_URL || '' }}",
+    );
+
+    try {
+      const rejected = spawnSync("bash", ["-c", decideLaneRun], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GITHUB_OUTPUT: output,
+          KOVA_REF_TRUSTED_FOR_LIVE: "false",
+          LANE_ID: "live-openai-candidate",
+        },
+      });
+      expect(rejected.status).toBe(1);
+      expect(rejected.stdout).toContain(
+        "The live OpenAI lane only executes a reviewed immutable Kova default.",
+      );
+
+      const accepted = spawnSync("bash", ["-c", decideLaneRun], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GITHUB_OUTPUT: output,
+          KOVA_REF_TRUSTED_FOR_LIVE: "true",
+          LANE_ID: "live-openai-candidate",
+        },
+      });
+      expect(accepted.status).toBe(0);
+      expect(readFileSync(output, "utf8")).toContain("run=true\n");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
   });
 
   it("pins the OCM release archive and checksum", () => {
