@@ -189,6 +189,15 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
     release?: () => void;
   };
   export function originMatches(remoteUrl: string): boolean;
+  export function formatUpdateFailure(error: unknown): {
+    schemaVersion: 1;
+    ok: false;
+    error: {
+      code: string;
+      message: string;
+      diagnostics: Record<string, unknown>;
+    };
+  };
   export function isOwnedGatewayEntrypoint(
     checkout: string,
     home: string,

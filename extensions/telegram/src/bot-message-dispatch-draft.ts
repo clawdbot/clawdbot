@@ -25,6 +25,7 @@ import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import { splitTelegramReasoningText } from "./reasoning-lane-coordinator.js";
 import { buildTelegramRichMarkdown, TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
+import { recordSentMessage } from "./sent-message-cache.js";
 
 const draftLogger = createSubsystemLogger("telegram/draft-stream");
 
@@ -145,6 +146,7 @@ export function createTelegramDraftController(params: {
             });
           },
           onProviderMessage: async (message) => {
+            recordSentMessage(params.chatId, message.message_id, params.cfg);
             await (
               params.telegramDeps.recordOutboundMessageForPromptContext ??
               recordOutboundMessageForPromptContext
