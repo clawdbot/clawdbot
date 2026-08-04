@@ -12,14 +12,40 @@ import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as yieldImmediate } from "node:timers/promises";
-import { Minimatch } from "minimatch";
+import { braceExpand, Minimatch } from "minimatch";
 import { isPathInside } from "../infra/path-guards.js";
 
 const EXTRA_BOOTSTRAP_GLOB_YIELD_INTERVAL = 256;
 
+// Minimatch options for the walk matcher. Keep the magic detector below in sync
+// with these so the routing gate and the matcher never disagree about which
+// patterns are globs.
+const EXTRA_BOOTSTRAP_MATCH_OPTIONS = {
+  nocomment: true,
+  nonegate: true,
+  windowsPathsNoEscape: true,
+} as const;
+
+// Magic-detection options: the match options plus `magicalBraces`, which makes
+// `Minimatch.hasMagic()` treat a brace alternation like `{a,b}` as magic. The
+// matcher already expands `{a,b}` into multiple concrete paths, but without this
+// flag `hasMagic()` reports a brace-only pattern as a literal, so the gate and
+// the matcher would disagree and the brace pattern would never reach the walker.
+const EXTRA_BOOTSTRAP_MAGIC_OPTIONS = {
+  ...EXTRA_BOOTSTRAP_MATCH_OPTIONS,
+  magicalBraces: true,
+} as const;
+
 export function hasGlobPattern(pattern: string): boolean {
-  // Keep square brackets literal here; workspace paths commonly contain them.
-  return /[?*{}]/u.test(pattern);
+  // Adopt Node glob grammar: a pattern is a glob when Minimatch — the same
+  // engine the walker matches with — reports magic. This covers `?*{}`, bracket
+  // classes (`[ab]`), and extglobs (`@(a|b)`, `+(x)`, `!(x)`, `?(a)`, `*(a)`),
+  // so the routing gate and the walk matcher agree on what resolves through the
+  // walker. A pattern Minimatch folds to a literal (a plain path, or a single
+  // metacharacter-free segment such as a collapsed single-char class) stays a
+  // literal file.
+  const normalized = normalizeWorkspacePatternPath(pattern);
+  return new Minimatch(normalized, EXTRA_BOOTSTRAP_MAGIC_OPTIONS).hasMagic();
 }
 
 function normalizeWorkspacePatternPath(value: string): string {
@@ -31,12 +57,49 @@ function normalizeWorkspacePatternPath(value: string): string {
 
 function resolveGlobWalkRoot(pattern: string): string {
   const normalized = normalizeWorkspacePatternPath(pattern);
-  const globIndex = normalized.search(/[?*{}]/u);
-  if (globIndex === -1) {
-    return normalized;
+  // Brace alternations can span "/" (`{a/b,c}/x`), so scanning the raw pattern
+  // segment-by-segment would miss the brace — `{a` and `b,c}` are each non-magic
+  // in isolation — and root the walk at a bogus literal path. The matcher expands
+  // the braces, so that walk would start below some matches and silently return
+  // nothing. Expand braces first (each expansion is brace-free, so its first
+  // magic segment is well defined), then walk from the common literal ancestor of
+  // every expansion so no possible match ever sits outside the walk root.
+  const roots = braceExpand(normalized, EXTRA_BOOTSTRAP_MAGIC_OPTIONS).map(expansionWalkRoot);
+  return commonAncestorDir(roots);
+}
+
+// Walk root for a single brace-free expansion: cut before the first magic
+// segment (bracket classes and extglobs included), using the same magic
+// definition as hasGlobPattern so the gate and the walk root agree. A pattern
+// with no magic keeps its whole literal path.
+function expansionWalkRoot(expansion: string): string {
+  const segments = expansion.split("/");
+  const firstMagicSegment = segments.findIndex((segment) => hasGlobPattern(segment));
+  if (firstMagicSegment === -1) {
+    return expansion;
   }
-  const slashIndex = normalized.lastIndexOf("/", globIndex);
-  return slashIndex === -1 ? "." : normalized.slice(0, slashIndex) || ".";
+  // Magic at the top level walks from the workspace root.
+  return segments.slice(0, firstMagicSegment).join("/") || ".";
+}
+
+// Deepest directory that is an ancestor of every brace expansion's walk root, so
+// a single walk covers all expansions. Falls back to "." once the roots diverge
+// at the top level (e.g. `{a/b,c}/x` -> roots `a/b`, `c`).
+function commonAncestorDir(roots: string[]): string {
+  const splitRoots = roots.map((root) => (root === "." ? [] : root.split("/")));
+  const [first, ...rest] = splitRoots;
+  if (!first) {
+    return ".";
+  }
+  const common: string[] = [];
+  for (let index = 0; index < first.length; index += 1) {
+    const segment = first[index]!;
+    if (!rest.every((segments) => segments[index] === segment)) {
+      break;
+    }
+    common.push(segment);
+  }
+  return common.join("/") || ".";
 }
 
 // Mirror Node fs.glob's default dot behavior while walking: `*` and `**` never
@@ -283,11 +346,7 @@ export async function resolveExtraBootstrapPatternPaths(
   }
 
   const normalizedPattern = normalizeWorkspacePatternPath(pattern);
-  const matcher = new Minimatch(normalizedPattern, {
-    nocomment: true,
-    nonegate: true,
-    windowsPathsNoEscape: true,
-  });
+  const matcher = new Minimatch(normalizedPattern, EXTRA_BOOTSTRAP_MATCH_OPTIONS);
   const matches: string[] = [];
   for await (const candidate of walkWorkspaceFiles(
     workspaceDir,

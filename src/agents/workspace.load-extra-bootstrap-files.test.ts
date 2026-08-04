@@ -303,6 +303,186 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     ]);
   });
 
+  it("resolves a bracket-class pattern through the glob walker", async () => {
+    // Node glob grammar: `[ab]` is a character class, so it must route through
+    // the walker and match sibling directories `a` and `b` but not `c`.
+    const workspaceDir = await createWorkspaceDir("bracket-class");
+    for (const name of ["a", "b", "c"]) {
+      const dir = path.join(workspaceDir, name);
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(path.join(dir, "AGENTS.md"), `${name} agents`, "utf-8");
+    }
+
+    const files = await loadExtraBootstrapFileList(workspaceDir, ["[ab]/AGENTS.md"]);
+
+    expect(files.map((file: { path: string }) => file.path).toSorted()).toStrictEqual(
+      [
+        path.join(workspaceDir, "a", "AGENTS.md"),
+        path.join(workspaceDir, "b", "AGENTS.md"),
+      ].toSorted(),
+    );
+  });
+
+  it("resolves an extglob alternation pattern through the glob walker", async () => {
+    // `@(pkg|app)` is an extglob exactly-one alternation; it must match `pkg` and
+    // `app` directories but not `lib`.
+    const workspaceDir = await createWorkspaceDir("extglob-alternation");
+    for (const name of ["pkg", "app", "lib"]) {
+      const dir = path.join(workspaceDir, name);
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(path.join(dir, "AGENTS.md"), `${name} agents`, "utf-8");
+    }
+
+    const files = await loadExtraBootstrapFileList(workspaceDir, ["@(pkg|app)/AGENTS.md"]);
+
+    expect(files.map((file: { path: string }) => file.path).toSorted()).toStrictEqual(
+      [
+        path.join(workspaceDir, "app", "AGENTS.md"),
+        path.join(workspaceDir, "pkg", "AGENTS.md"),
+      ].toSorted(),
+    );
+  });
+
+  it("resolves +(...) and !(...) extglob prefixes through the glob walker", async () => {
+    // `+(a)` matches one-or-more `a` (so `a` and `aa`); `!(skip)` matches any
+    // segment except `skip`. Both must route through the walker.
+    const workspaceDir = await createWorkspaceDir("extglob-plus-negate");
+    for (const name of ["a", "aa", "b", "skip"]) {
+      const dir = path.join(workspaceDir, name);
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(path.join(dir, "AGENTS.md"), `${name} agents`, "utf-8");
+    }
+
+    const plusFiles = await loadExtraBootstrapFileList(workspaceDir, ["+(a)/AGENTS.md"]);
+    expect(plusFiles.map((file: { path: string }) => file.path).toSorted()).toStrictEqual(
+      [
+        path.join(workspaceDir, "a", "AGENTS.md"),
+        path.join(workspaceDir, "aa", "AGENTS.md"),
+      ].toSorted(),
+    );
+
+    const negateFiles = await loadExtraBootstrapFileList(workspaceDir, ["!(skip)/AGENTS.md"]);
+    expect(negateFiles.map((file: { path: string }) => file.path).toSorted()).toStrictEqual(
+      [
+        path.join(workspaceDir, "a", "AGENTS.md"),
+        path.join(workspaceDir, "aa", "AGENTS.md"),
+        path.join(workspaceDir, "b", "AGENTS.md"),
+      ].toSorted(),
+    );
+  });
+
+  it("computes the walk root from the first magic segment for bracket/extglob patterns", async () => {
+    // Regression: the walk-root split must cut before the first magic segment
+    // using the same magic definition as the routing gate. A bracket class or
+    // extglob nested under literal prefixes (`packages/[ab]/*/AGENTS.md`,
+    // `src/@(a|b)/AGENTS.md`) must start the walk at the literal parent dir, not
+    // be misread as a literal path.
+    const workspaceDir = await createWorkspaceDir("walk-root-magic");
+    const bracketDir = path.join(workspaceDir, "packages", "a", "core");
+    const extglobDir = path.join(workspaceDir, "src", "b");
+    await fs.mkdir(bracketDir, { recursive: true });
+    await fs.mkdir(extglobDir, { recursive: true });
+    await fs.writeFile(path.join(bracketDir, "AGENTS.md"), "bracket agents", "utf-8");
+    await fs.writeFile(path.join(extglobDir, "AGENTS.md"), "extglob agents", "utf-8");
+
+    const bracketFiles = await loadExtraBootstrapFileList(workspaceDir, [
+      "packages/[ab]/*/AGENTS.md",
+    ]);
+    expect(bracketFiles).toStrictEqual([
+      {
+        name: "AGENTS.md",
+        path: path.join(bracketDir, "AGENTS.md"),
+        content: "bracket agents",
+        missing: false,
+      },
+    ]);
+
+    const extglobFiles = await loadExtraBootstrapFileList(workspaceDir, ["src/@(a|b)/AGENTS.md"]);
+    expect(extglobFiles).toStrictEqual([
+      {
+        name: "AGENTS.md",
+        path: path.join(extglobDir, "AGENTS.md"),
+        content: "extglob agents",
+        missing: false,
+      },
+    ]);
+  });
+
+  it("resolves a brace alternation that spans a slash through the glob walker", async () => {
+    // Regression: `{a/b,c}` is a brace alternation whose members contain "/".
+    // The routing gate reports it as a glob, so the walk root must be computed
+    // from the brace expansions (`a/b`, `c`) rather than the raw segments — a
+    // per-segment scan sees `{a` and `b,c}` as non-magic and would root the walk
+    // at the bogus literal path `{a/b,c}/AGENTS.md`, silently matching nothing.
+    const workspaceDir = await createWorkspaceDir("brace-slash");
+    const nestedDir = path.join(workspaceDir, "a", "b");
+    const topDir = path.join(workspaceDir, "c");
+    await fs.mkdir(nestedDir, { recursive: true });
+    await fs.mkdir(topDir, { recursive: true });
+    await fs.writeFile(path.join(nestedDir, "AGENTS.md"), "nested agents", "utf-8");
+    await fs.writeFile(path.join(topDir, "AGENTS.md"), "top agents", "utf-8");
+
+    const files = await loadExtraBootstrapFileList(workspaceDir, ["{a/b,c}/AGENTS.md"]);
+
+    expect(files.map((file: { path: string }) => file.path).toSorted()).toStrictEqual(
+      [path.join(nestedDir, "AGENTS.md"), path.join(topDir, "AGENTS.md")].toSorted(),
+    );
+  });
+
+  it("matches Node fs.glob for bracket-class and extglob patterns (parity)", async () => {
+    // Parity fixture: for the same patterns, the walker's match set must equal
+    // Node fs.glob's over the real tree. This pins the walker to Node glob
+    // grammar for bracket classes, extglobs, and slash-spanning brace
+    // alternations, not just the `?*{}` subset.
+    const workspaceDir = await createWorkspaceDir("glob-parity");
+    for (const name of ["a", "b", "c", "pkg", "app", "lib"]) {
+      const dir = path.join(workspaceDir, name);
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(path.join(dir, "AGENTS.md"), `${name} agents`, "utf-8");
+    }
+    const nestedDir = path.join(workspaceDir, "a", "deep");
+    await fs.mkdir(nestedDir, { recursive: true });
+    await fs.writeFile(path.join(nestedDir, "AGENTS.md"), "deep agents", "utf-8");
+
+    const parityPatterns = [
+      "[ab]/AGENTS.md",
+      "@(pkg|app)/AGENTS.md",
+      "!(lib)/AGENTS.md",
+      "{a/deep,c}/AGENTS.md",
+    ];
+    for (const pattern of parityPatterns) {
+      const walkerPaths = (await loadExtraBootstrapFileList(workspaceDir, [pattern]))
+        .map((file: { path: string }) => path.relative(workspaceDir, file.path))
+        .toSorted();
+      const nodeGlobPaths: string[] = [];
+      for await (const match of fs.glob(pattern, { cwd: workspaceDir })) {
+        nodeGlobPaths.push(match);
+      }
+      expect(walkerPaths).toStrictEqual(nodeGlobPaths.toSorted());
+    }
+  });
+
+  it("treats a truly-literal path with no magic as a literal file", async () => {
+    // A plain path with no glob metacharacters must be read as a literal file,
+    // never routed through the walker. Uses a nested literal path so it also
+    // proves the walk-root fallback returns the full literal path.
+    const workspaceDir = await createWorkspaceDir("literal-no-magic");
+    const dir = path.join(workspaceDir, "packages", "core");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "AGENTS.md"), "literal agents", "utf-8");
+
+    const files = await loadExtraBootstrapFileList(workspaceDir, ["packages/core/AGENTS.md"]);
+
+    expect(files).toStrictEqual([
+      {
+        name: "AGENTS.md",
+        path: path.join(dir, "AGENTS.md"),
+        content: "literal agents",
+        missing: false,
+      },
+    ]);
+  });
+
   it("loads bootstrap files from valid child directories beginning with two dots", async () => {
     const workspaceDir = await createWorkspaceDir("dotdot-name");
     const packageDir = path.join(workspaceDir, "..notes");
