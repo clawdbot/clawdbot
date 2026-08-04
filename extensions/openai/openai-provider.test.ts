@@ -7,6 +7,10 @@ import {
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  readProviderPromptAccountingContext,
+  withProviderPromptAccountingContext,
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENAI_API_BASE_URL, OPENAI_CODEX_RESPONSES_BASE_URL } from "./base-url.js";
 import { OPENAI_CODEX_DEFAULT_MODEL, OPENAI_DEFAULT_MODEL } from "./default-models.js";
@@ -2474,6 +2478,147 @@ describe("buildOpenAIProvider", () => {
 
     expect(disabled.payload.tools).toEqual([{ type: "function", name: "web_search" }]);
     expect(proxied.payload.tools).toEqual([{ type: "function", name: "web_search" }]);
+  });
+
+  it("projects the native web_search tool into admission accounting before the payload swap", () => {
+    const provider = buildOpenAIProvider();
+    const wrap = provider.wrapStreamFn;
+    expect(wrap).toBeTypeOf("function");
+    if (!wrap) {
+      throw new Error("expected OpenAI wrapper");
+    }
+
+    const managedWebSearchTool = {
+      type: "function",
+      name: "web_search",
+      description: `managed ${"schema ".repeat(80)}`,
+      parameters: { type: "object", properties: {} },
+    };
+    const readTool = {
+      type: "function",
+      name: "read",
+      description: "read a file",
+      parameters: { type: "object", properties: {} },
+    };
+    const payload: Record<string, unknown> = { tools: [managedWebSearchTool, readTool] };
+    let capturedOptions: SimpleStreamOptions | undefined;
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      capturedOptions = options;
+      options?.onPayload?.(payload, model);
+      return {} as ReturnType<StreamFn>;
+    };
+    const streamFn = wrap({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      config: { tools: { web: { search: { enabled: true } } } },
+      agentDir: "/tmp/openai-provider-test",
+      streamFn: baseStreamFn,
+    } as never);
+
+    const context = {
+      messages: [],
+      systemPrompt: "accounted system prompt",
+      tools: [managedWebSearchTool, readTool],
+    } as unknown as Context;
+    void streamFn?.(
+      {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+      context,
+      {},
+    );
+
+    expect(payload.tools).toEqual([readTool, { type: "web_search" }]);
+    const accounting = readProviderPromptAccountingContext(capturedOptions);
+    expect(accounting?.systemPrompt).toBe("accounted system prompt");
+    expect(accounting?.tools).toEqual([readTool, { type: "web_search" }]);
+  });
+
+  it("does not duplicate a native web_search tool already present in admission accounting", () => {
+    const provider = buildOpenAIProvider();
+    const wrap = provider.wrapStreamFn;
+    expect(wrap).toBeTypeOf("function");
+    if (!wrap) {
+      throw new Error("expected OpenAI wrapper");
+    }
+
+    const incomingOptions = withProviderPromptAccountingContext(
+      {},
+      {
+        systemPrompt: "outer system prompt",
+        tools: [{ type: "web_search" }],
+      },
+    );
+    let capturedOptions: SimpleStreamOptions | undefined;
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      capturedOptions = options;
+      options?.onPayload?.({ tools: [{ type: "web_search" }] }, model);
+      return {} as ReturnType<StreamFn>;
+    };
+    const streamFn = wrap({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      config: { tools: { web: { search: { enabled: true } } } },
+      agentDir: "/tmp/openai-provider-test",
+      streamFn: baseStreamFn,
+    } as never);
+
+    void streamFn?.(
+      {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+      { messages: [] } as Context,
+      incomingOptions,
+    );
+
+    const accounting = readProviderPromptAccountingContext(capturedOptions);
+    expect(accounting?.systemPrompt).toBe("outer system prompt");
+    expect(accounting?.tools).toEqual([{ type: "web_search" }]);
+  });
+
+  it("leaves admission accounting untouched when native web search is disabled", () => {
+    const provider = buildOpenAIProvider();
+    const wrap = provider.wrapStreamFn;
+    expect(wrap).toBeTypeOf("function");
+    if (!wrap) {
+      throw new Error("expected OpenAI wrapper");
+    }
+
+    let capturedOptions: SimpleStreamOptions | undefined;
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      capturedOptions = options;
+      return {} as ReturnType<StreamFn>;
+    };
+    const streamFn = wrap({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      config: { tools: { web: { search: { enabled: false } } } },
+      agentDir: "/tmp/openai-provider-test",
+      streamFn: baseStreamFn,
+    } as never);
+
+    void streamFn?.(
+      {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+      {
+        messages: [],
+        systemPrompt: "system",
+        tools: [{ type: "function", name: "web_search" }],
+      } as unknown as Context,
+      {},
+    );
+
+    expect(readProviderPromptAccountingContext(capturedOptions)).toBeUndefined();
   });
 
   it("keeps managed web_search when another search provider is configured", () => {

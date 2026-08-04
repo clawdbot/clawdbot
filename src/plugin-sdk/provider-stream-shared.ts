@@ -706,4 +706,9 @@ export {
   resolveMoonshotThinkingType,
 } from "../llm/providers/stream-wrappers/moonshot-thinking.js";
 export { streamWithPayloadPatch };
+export {
+  readProviderPromptAccountingContext,
+  withProviderPromptAccountingContext,
+  type ProviderPromptAccountingContext,
+} from "../llm/providers/stream-wrappers/provider-prompt-accounting.js";
 export { createToolStreamWrapper } from "../llm/providers/stream-wrappers/zai.js";

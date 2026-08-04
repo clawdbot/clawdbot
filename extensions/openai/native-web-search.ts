@@ -3,7 +3,12 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { streamSimple } from "openclaw/plugin-sdk/llm";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
-import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream-shared";
+import {
+  readProviderPromptAccountingContext,
+  streamWithPayloadPatch,
+  withProviderPromptAccountingContext,
+  type ProviderPromptAccountingContext,
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isOpenAIApiBaseUrl } from "./base-url.js";
 
@@ -83,6 +88,42 @@ function patchOpenAINativeWebSearchPayload(payload: unknown): OpenAINativeWebSea
   return "injected";
 }
 
+/** Mirrors the payload tool swap on the admission accounting surface. */
+function projectOpenAINativeWebSearchAccountingTools(tools: unknown): unknown[] | undefined {
+  if (!Array.isArray(tools)) {
+    return undefined;
+  }
+  const filteredTools = tools.filter((tool) => !isManagedWebSearchTool(tool));
+  if (filteredTools.some(isNativeWebSearchTool)) {
+    return filteredTools;
+  }
+  return [...filteredTools, OPENAI_WEB_SEARCH_TOOL];
+}
+
+/** Carries the post-patch provider tool surface to admission before the payload is rebuilt. */
+function withOpenAINativeWebSearchAccounting(
+  options: Parameters<StreamFn>[2],
+  context: Parameters<StreamFn>[1],
+): Parameters<StreamFn>[2] {
+  const incoming = readProviderPromptAccountingContext(options);
+  const contextTools = (context as { tools?: unknown } | undefined)?.tools;
+  const sourceTools = Array.isArray(incoming?.tools)
+    ? incoming.tools
+    : Array.isArray(contextTools)
+      ? contextTools
+      : undefined;
+  const accountingTools = projectOpenAINativeWebSearchAccountingTools(sourceTools);
+  if (!incoming && accountingTools === undefined) {
+    return options;
+  }
+  const accountingContext: ProviderPromptAccountingContext = {
+    systemPrompt:
+      incoming?.systemPrompt ?? (context as { systemPrompt?: string } | undefined)?.systemPrompt,
+    ...(accountingTools !== undefined ? { tools: accountingTools } : {}),
+  };
+  return withProviderPromptAccountingContext(options ?? {}, accountingContext);
+}
+
 export function createOpenAINativeWebSearchWrapper(
   baseStreamFn: StreamFn | undefined,
   params: {
@@ -99,7 +140,8 @@ export function createOpenAINativeWebSearchWrapper(
     if (params.nativeWebSearchAllowedByToolPolicy === false) {
       return underlying(model, context, options);
     }
-    return streamWithPayloadPatch(underlying, model, context, options, (payload) => {
+    const accountingOptions = withOpenAINativeWebSearchAccounting(options, context);
+    return streamWithPayloadPatch(underlying, model, context, accountingOptions, (payload) => {
       patchOpenAINativeWebSearchPayload(payload);
     });
   };
