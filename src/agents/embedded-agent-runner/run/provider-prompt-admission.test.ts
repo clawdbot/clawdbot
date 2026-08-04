@@ -64,6 +64,7 @@ describe("provider prompt admission", () => {
     expect(result.status).toBe("recovery_required");
     if (result.status === "recovery_required") {
       expect(result.request.route).toBe("compact_only");
+      expect(result.request).not.toHaveProperty("toolResultAggregateBudgetChars");
       expect(result.request.estimatedPromptTokens).toBeGreaterThan(
         result.request.promptBudgetBeforeReserve,
       );

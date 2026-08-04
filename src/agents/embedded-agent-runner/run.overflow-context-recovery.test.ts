@@ -289,6 +289,11 @@ describe("recoverEmbeddedRunOverflow", () => {
         terminal: { kind: "failed", source: "prompt", error: overflowError() },
         sessionIdUsed: "session-1",
         messagesSnapshot,
+        // Simulate an older in-flight request that still carries the provider-only budget.
+        preflightRecovery: {
+          route: "compact_then_truncate",
+          toolResultAggregateBudgetChars: 12_345,
+        } as never,
       },
       toolResultPromptProjectionState: projectionState,
     });
@@ -304,6 +309,12 @@ describe("recoverEmbeddedRunOverflow", () => {
           sessionKey: "agent:main:session-1",
         }),
       }),
+    );
+    expect(mocks.sessionLikelyHasOversizedToolResults.mock.calls[0]?.[0]).not.toHaveProperty(
+      "aggregateMaxCharsOverride",
+    );
+    expect(mocks.truncateOversizedToolResults.mock.calls[0]?.[0]).not.toHaveProperty(
+      "aggregateMaxCharsOverride",
     );
   });
 
@@ -381,7 +392,11 @@ describe("recoverEmbeddedRunOverflow", () => {
         terminal: { kind: "failed", source: "precheck", error: overflowError() },
         sessionIdUsed: "session-1",
         messagesSnapshot: [],
-        preflightRecovery: { route: "compact_then_truncate" },
+        // Simulate an older in-flight request that still carries the provider-only budget.
+        preflightRecovery: {
+          route: "compact_then_truncate",
+          toolResultAggregateBudgetChars: 12_345,
+        } as never,
       },
     });
 
@@ -391,6 +406,9 @@ describe("recoverEmbeddedRunOverflow", () => {
         projectionState: input.toolResultPromptProjectionState,
         protectTrailingToolResults: true,
       }),
+    );
+    expect(mocks.truncateOversizedToolResults.mock.calls[0]?.[0]).not.toHaveProperty(
+      "aggregateMaxCharsOverride",
     );
     expect(input.prepareCompactedTranscriptRetry).toHaveBeenCalledOnce();
   });

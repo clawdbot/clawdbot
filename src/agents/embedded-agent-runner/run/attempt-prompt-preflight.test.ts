@@ -1,6 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AgentMessage } from "../../runtime/index.js";
-import { SessionManager } from "../../sessions/index.js";
 import {
   handleEmbeddedAttemptMidTurnPrecheck,
   prepareEmbeddedAttemptPromptPreflight,
@@ -24,26 +22,8 @@ const request = {
   promptBudgetBeforeReserve: 100,
   overflowTokens: 50,
   toolResultReducibleChars: 0,
-  toolResultAggregateBudgetChars: 20_000,
   effectiveReserveTokens: 20,
 };
-
-function makeToolResultMessage(text: string): AgentMessage {
-  return {
-    role: "toolResult",
-    toolCallId: "call-1",
-    toolName: "read",
-    content: [{ type: "text", text }],
-    isError: false,
-    timestamp: 1,
-  } as AgentMessage;
-}
-
-function createSessionManagerWithMessage(message: AgentMessage): SessionManager {
-  const sessionManager = SessionManager.inMemory();
-  sessionManager.appendMessage(message as Parameters<typeof sessionManager.appendMessage>[0]);
-  return sessionManager;
-}
 
 describe("attempt prompt preflight", () => {
   it("routes a mid-turn compaction request with its measured budget", () => {
@@ -60,7 +40,6 @@ describe("attempt prompt preflight", () => {
         estimatedPromptTokens: 150,
         promptBudgetBeforeReserve: 100,
         overflowTokens: 50,
-        toolResultAggregateBudgetChars: 20_000,
       },
       promptError: expect.objectContaining({ message: PREEMPTIVE_OVERFLOW_ERROR_TEXT }),
     });

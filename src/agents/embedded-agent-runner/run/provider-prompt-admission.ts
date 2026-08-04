@@ -87,7 +87,6 @@ function toRecoveryRequest(
     promptBudgetBeforeReserve: result.promptBudgetBeforeReserve,
     overflowTokens: result.overflowTokens,
     toolResultReducibleChars: result.toolResultReducibleChars,
-    toolResultAggregateBudgetChars: result.toolResultAggregateBudgetChars,
     effectiveReserveTokens: result.effectiveReserveTokens,
   };
 }

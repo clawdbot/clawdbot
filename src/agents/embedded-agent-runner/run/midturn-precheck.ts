@@ -13,7 +13,6 @@ export type MidTurnPrecheckRequest = {
   promptBudgetBeforeReserve: number;
   overflowTokens: number;
   toolResultReducibleChars: number;
-  toolResultAggregateBudgetChars?: number;
   effectiveReserveTokens: number;
 };
 

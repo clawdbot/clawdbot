@@ -70,7 +70,6 @@ describe("handleEmbeddedAttemptPromptError", () => {
       promptBudgetBeforeReserve: 10,
       overflowTokens: 2,
       toolResultReducibleChars: 0,
-      toolResultAggregateBudgetChars: 20,
       effectiveReserveTokens: 1,
     } as const;
     const error = { request };
