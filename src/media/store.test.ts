@@ -1023,7 +1023,12 @@ describe("media store", () => {
       {
         name: "sanitizes unsafe characters in original filename",
         originalFilename: "my<file>:test.txt",
-        expectedIdPattern: /^my_file_test---[a-f0-9-]{36}\.txt$/,
+        expectedIdPattern: /^myfiletest---[a-f0-9-]{36}\.txt$/,
+      },
+      {
+        name: "underscores characters outside the portable charset",
+        originalFilename: "my file!.txt",
+        expectedIdPattern: /^my_file---[a-f0-9-]{36}\.txt$/,
       },
       {
         name: "truncates long original filenames",
