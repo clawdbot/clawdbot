@@ -17,6 +17,7 @@ import { resolveSourceCheckoutDependencyDiagnostic } from "./bundled-dir.js";
 import { buildLegacyBundledRootPath } from "./bundled-load-path-aliases.js";
 import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
+import { matchesInstalledPluginRecord } from "./installed-plugin-record-match.js";
 import { readLegacyNpmPluginDeclaration } from "./legacy-npm-declaration.js";
 import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
 import {
@@ -654,7 +655,15 @@ function isMaterializableInstalledPluginCandidate(params: {
   }
   const allowLegacyBareMinHostVersion =
     params.candidate.origin === "global" &&
-    Boolean(params.installRecords?.[resolvedManifest.manifest.id]);
+    Boolean(
+      params.installRecords &&
+      matchesInstalledPluginRecord({
+        pluginId: resolvedManifest.manifest.id,
+        candidate: params.candidate,
+        env: params.env,
+        installRecords: params.installRecords,
+      }),
+    );
   const minHostVersionCheck = checkMinHostVersion({
     currentVersion: resolveCompatibilityHostVersion(params.env),
     minHostVersion: params.candidate.packageManifest?.install?.minHostVersion,

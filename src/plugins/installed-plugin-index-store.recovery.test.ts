@@ -451,5 +451,87 @@ describe("installed plugin index policy recovery", () => {
         { level: "warn", message: "policy fast-path sentinel" },
       ]);
     });
+
+    it("requires the legacy minHostVersion record to match the candidate path", async () => {
+      const stateDir = makeTempDir();
+      const pluginDir = path.join(stateDir, "plugins", "stale-ledger-source");
+      const trackedByIdDir = path.join(stateDir, "plugins", "tracked-by-id");
+      fs.mkdirSync(pluginDir, { recursive: true });
+      fs.mkdirSync(trackedByIdDir, { recursive: true });
+      const env = {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      };
+      const discoverSpy = vi.fn(() => ({ candidates: [], diagnostics: [] }));
+      vi.resetModules();
+      vi.doMock("./discovery.js", async (importOriginal) => {
+        const actual = await importOriginal<typeof import("./discovery.js")>();
+        return { ...actual, discoverOpenClawPlugins: discoverSpy };
+      });
+      const store = await importFreshModule<typeof import("./installed-plugin-index-store.js")>(
+        import.meta.url,
+        "./installed-plugin-index-store.js?case=stale-legacy-min-host-record",
+      );
+      fs.writeFileSync(
+        path.join(pluginDir, "package.json"),
+        JSON.stringify({
+          name: "@vendor/stale-ledger-source",
+          openclaw: {
+            extensions: ["./index.ts"],
+            install: { minHostVersion: "2026.4.25" },
+          },
+        }),
+        "utf8",
+      );
+      fs.writeFileSync(path.join(pluginDir, "index.ts"), "export default {};", "utf8");
+      fs.writeFileSync(
+        path.join(pluginDir, "openclaw.plugin.json"),
+        JSON.stringify({ id: "tracked-by-id", configSchema: { type: "object" } }),
+        "utf8",
+      );
+      const installRecords = {
+        "stale-ledger-source": {
+          source: "npm" as const,
+          spec: "@vendor/stale-ledger-source@1.0.0",
+          installPath: pluginDir,
+        },
+        "tracked-by-id": {
+          source: "npm" as const,
+          spec: "@vendor/tracked-by-id@1.0.0",
+          installPath: trackedByIdDir,
+        },
+      };
+      await store.refreshPersistedInstalledPluginIndex({
+        reason: "manual",
+        stateDir,
+        candidates: [],
+        diagnostics: [{ level: "warn", message: "policy fast-path sentinel" }],
+        env,
+        installRecords,
+      });
+      discoverSpy.mockClear();
+      const refreshed = await store.refreshPersistedInstalledPluginIndex({
+        reason: "policy-changed",
+        stateDir,
+        env,
+        policyPluginIds: [],
+      });
+      expect(discoverSpy).not.toHaveBeenCalled();
+      expectPluginIds(refreshed, []);
+      expectInstallRecord(refreshed, "stale-ledger-source", {
+        source: "npm",
+        spec: "@vendor/stale-ledger-source@1.0.0",
+        installPath: pluginDir,
+      });
+      expectInstallRecord(refreshed, "tracked-by-id", {
+        source: "npm",
+        spec: "@vendor/tracked-by-id@1.0.0",
+        installPath: trackedByIdDir,
+      });
+      expect(refreshed.diagnostics).toEqual([
+        { level: "warn", message: "policy fast-path sentinel" },
+      ]);
+    });
   });
 });
