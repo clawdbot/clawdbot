@@ -116,6 +116,14 @@ The method requires `operator.read`. Requests are closed and select exactly one
 ambiguous run-discovery pages contain at most 50 candidate executions. Both use
 bounded cursors.
 
+Every client with `operator.read` in the same Gateway operator domain may
+receive this retained identity category. This is intentional: the scope already
+covers logs and session reads, collection is explicit opt-in, retained
+references are bounded and pseudonymized, and optional display labels are
+secret-redacted. `operator.read` is not a hostile multi-tenant isolation
+boundary; use separate Gateway trust domains when operators must not share this
+diagnostic data.
+
 ## Record families
 
 Run and tool events are recorded whenever auditing is enabled (the default).

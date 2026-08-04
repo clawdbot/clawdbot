@@ -637,6 +637,16 @@ describe("operator scope authorization", () => {
     expect(authorizeOperatorScopesForMethod(method, scopes)).toEqual(expected);
   });
 
+  it("authorizes execution identity inspection with operator.read and rejects unrelated scopes", () => {
+    expect(authorizeOperatorScopesForMethod("audit.run.inspect", ["operator.read"])).toEqual({
+      allowed: true,
+    });
+    expect(authorizeOperatorScopesForMethod("audit.run.inspect", ["operator.approvals"])).toEqual({
+      allowed: false,
+      missingScope: "operator.read",
+    });
+  });
+
   it("requires operator.write for write methods", () => {
     expect(authorizeOperatorScopesForMethod("send", ["operator.read"])).toEqual({
       allowed: false,

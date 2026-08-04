@@ -88,6 +88,11 @@ channels, outcomes, and stable HMAC references can correlate activity. Protect
 them with the same access controls and retention practices as other operator
 records.
 
+The Gateway intentionally exposes retained execution-identity diagnostics to
+every client with `operator.read` in its operator domain. That scope is a
+trusted read-only boundary, not hostile multi-tenant isolation. Use separate
+Gateway trust domains when operators must not share audit identity data.
+
 ## Discover and explain executions
 
 Every admitted outer turn receives an opaque `executionId`. `contextId`
