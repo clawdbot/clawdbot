@@ -723,7 +723,10 @@ describe("scripts/test-projects changed-target routing", () => {
       ],
       "scripts/e2e/lib/onboard/assert-config.mjs": ["test/scripts/onboard-config-fixtures.test.ts"],
       "scripts/e2e/lib/onboard/write-config.mjs": ["test/scripts/onboard-config-fixtures.test.ts"],
-      "scripts/e2e/lib/package-compat.mjs": ["test/scripts/docker-build-helper.test.ts"],
+      "scripts/e2e/lib/package-compat.mjs": [
+        "test/scripts/direct-run-entrypoints.test.ts",
+        "test/scripts/docker-build-helper.test.ts",
+      ],
       "scripts/e2e/agents-delete-shared-workspace-docker.sh": [
         "test/scripts/docker-e2e-plan.test.ts",
         "src/scripts/ci-changed-scope.test.ts",
@@ -1700,7 +1703,10 @@ describe("scripts/test-projects changed-target routing", () => {
         "src/plugins/recommended-tool-installs.test.ts",
         "test/release-check.test.ts",
       ],
-      "scripts/lib/direct-run.mjs": ["test/scripts/changed-lanes.test.ts"],
+      "scripts/lib/direct-run.mjs": [
+        "test/scripts/changed-lanes.test.ts",
+        "test/scripts/direct-run-entrypoints.test.ts",
+      ],
       "scripts/lib/npm-verify-exec.ts": ["test/scripts/npm-verify-exec.test.ts"],
       "scripts/lib/plugin-npm-runtime-build.mjs": [
         "test/scripts/plugin-npm-runtime-build-args.test.ts",
@@ -1921,6 +1927,7 @@ describe("scripts/test-projects changed-target routing", () => {
       ],
       "scripts/plan-release-workflow-matrix.mjs": [
         "test/scripts/release-workflow-matrix-plan.test.ts",
+        "test/scripts/direct-run-entrypoints.test.ts",
       ],
       "scripts/release-verify-beta.ts": ["test/scripts/release-wrapper-scripts.test.ts"],
       "scripts/validate-release-publish-approval.mjs": [

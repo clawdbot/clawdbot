@@ -10,7 +10,7 @@ type CliConfigGuardMode = "run" | "skip" | "when-suppressed";
 type CliConfigGuardPolicy =
   | CliConfigGuardMode
   | ((ctx: { argv: string[]; commandPath: string[] }) => CliConfigGuardMode);
-export type CliPluginRegistryScope = "all" | "channels" | "configured-channels";
+export type CliPluginRegistryScope = "all" | "channels" | "configured-channels" | "memory";
 export type CliPluginRegistryPolicy = {
   scope: CliPluginRegistryScope;
 };
@@ -608,9 +608,13 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { configGuard: "skip", loadPlugins: "never" },
   },
   {
+    commandPath: ["memory"],
+    policy: { loadPlugins: "always", pluginRegistry: { scope: "memory" } },
+  },
+  {
     commandPath: ["memory", "search"],
     exact: true,
-    policy: { configGuard: "skip", loadPlugins: "never" },
+    policy: { configGuard: "skip" },
   },
   {
     commandPath: ["memory", "status"],
@@ -618,7 +622,6 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: {
       configGuard: ({ argv }) =>
         hasFlag(argv, "--index") || hasFlag(argv, "--fix") ? "run" : "skip",
-      loadPlugins: "never",
     },
   },
   { commandPath: ["skills", "update"], exact: true },

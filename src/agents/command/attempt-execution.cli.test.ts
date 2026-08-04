@@ -758,6 +758,19 @@ describe("CLI attempt execution", () => {
     expect(onExecutionStarted).toHaveBeenCalledTimes(1);
   });
 
+  it("forwards authoritative channel type to embedded runs with opaque session keys", async () => {
+    const embedded = await runOpenClawEmbeddedAttemptForTest({
+      runId: "embedded-opaque-channel",
+      sessionKey: "agent:main:opaque:binding",
+      sessionEntry: { chatType: "channel" },
+    });
+
+    expect(embedded).toMatchObject({
+      sessionKey: "agent:main:opaque:binding",
+      chatType: "channel",
+    });
+  });
+
   async function runClaudeCliAttempt(params: {
     sessionKey: string;
     sessionEntry: SessionEntry;
@@ -822,6 +835,31 @@ describe("CLI attempt execution", () => {
     });
 
     expect(firstRunCliAgentArg().onExecutionStarted).toBe(onExecutionStarted);
+  });
+
+  it("forwards authoritative group type to CLI runs with opaque session keys", async () => {
+    const sessionKey = "agent:main:opaque:binding";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-cli-opaque-group",
+      updatedAt: Date.now(),
+      chatType: "group",
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("shared"));
+
+    await runClaudeCliAttempt({
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      body: "shared",
+      runId: "run-cli-opaque-group",
+    });
+
+    expect(firstRunCliAgentArg()).toMatchObject({
+      sessionKey,
+      chatType: "group",
+    });
   });
 
   async function writeClaudeCliAssistantTranscript(cliSessionId: string) {
