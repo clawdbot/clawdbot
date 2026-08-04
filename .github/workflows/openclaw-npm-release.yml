@@ -1101,11 +1101,17 @@ jobs:
             echo "Prepared preflight tarball digest mismatch." >&2
             exit 1
           fi
-          if ! jq -e '.corePackageTarballs | type == "array"' "$MANIFEST_FILE" >/dev/null; then
-            echo "Prepared core package metadata is missing." >&2
-            exit 1
+          # Older frozen candidates predate core subpackage publication. Only an
+          # absent field is an empty set; present malformed metadata still fails closed.
+          if jq -e 'has("corePackageTarballs")' "$MANIFEST_FILE" >/dev/null; then
+            if ! jq -e '.corePackageTarballs | type == "array"' "$MANIFEST_FILE" >/dev/null; then
+              echo "Prepared core package metadata is invalid." >&2
+              exit 1
+            fi
+            CORE_PACKAGE_TARBALL_COUNT="$(jq -r '.corePackageTarballs | length' "$MANIFEST_FILE")"
+          else
+            CORE_PACKAGE_TARBALL_COUNT=0
           fi
-          CORE_PACKAGE_TARBALL_COUNT="$(jq -r '.corePackageTarballs | length' "$MANIFEST_FILE")"
           if [[ "$CORE_PACKAGE_TARBALL_COUNT" -gt 0 ]]; then
             if [[ ! -f preflight-tarball/core-packages-SHA256SUMS ]]; then
               echo "Prepared core package checksums are missing." >&2
@@ -1149,7 +1155,7 @@ jobs:
               echo "Prepared ${package_name} tarball is missing or has a digest mismatch." >&2
               exit 1
             fi
-          done < <(jq -r '.corePackageTarballs[] | [.packageName, .packageVersion, .tarballName, .tarballSha256] | @tsv' "$MANIFEST_FILE")
+          done < <(jq -r '(.corePackageTarballs // [])[] | [.packageName, .packageVersion, .tarballName, .tarballSha256] | @tsv' "$MANIFEST_FILE")
           if node -e 'const pkg = require("./package.json"); process.exit(pkg.dependencies?.["@openclaw/ai"] ? 0 : 1)'; then
             if [[ "$SEEN_AI_TARBALL" != "true" ]] || ! jq -e '.dependencyTarballs[] | select(.packageName == "@openclaw/ai")' "$MANIFEST_FILE" >/dev/null; then
               echo "Prepared AI runtime dependency tarball is missing from the manifest." >&2
@@ -1164,7 +1170,7 @@ jobs:
               echo "Prepared @openclaw/gateway-protocol tarball is missing from the manifest." >&2
               exit 1
             fi
-          elif jq -e '.corePackageTarballs[] | select(.packageName == "@openclaw/gateway-protocol")' "$MANIFEST_FILE" >/dev/null || find preflight-tarball -maxdepth 1 -type f -name 'openclaw-gateway-protocol-*.tgz' -print -quit | grep -q .; then
+          elif jq -e '(.corePackageTarballs // [])[] | select(.packageName == "@openclaw/gateway-protocol")' "$MANIFEST_FILE" >/dev/null || find preflight-tarball -maxdepth 1 -type f -name 'openclaw-gateway-protocol-*.tgz' -print -quit | grep -q .; then
             echo "Frozen target without a publishable @openclaw/gateway-protocol package contains unexpected artifacts." >&2
             exit 1
           fi
@@ -1173,7 +1179,7 @@ jobs:
               echo "Prepared @openclaw/gateway-client tarball is missing from the manifest." >&2
               exit 1
             fi
-          elif jq -e '.corePackageTarballs[] | select(.packageName == "@openclaw/gateway-client")' "$MANIFEST_FILE" >/dev/null || find preflight-tarball -maxdepth 1 -type f -name 'openclaw-gateway-client-*.tgz' -print -quit | grep -q .; then
+          elif jq -e '(.corePackageTarballs // [])[] | select(.packageName == "@openclaw/gateway-client")' "$MANIFEST_FILE" >/dev/null || find preflight-tarball -maxdepth 1 -type f -name 'openclaw-gateway-client-*.tgz' -print -quit | grep -q .; then
             echo "Frozen target without a publishable @openclaw/gateway-client package contains unexpected artifacts." >&2
             exit 1
           fi
@@ -1253,7 +1259,7 @@ jobs:
           }
           while IFS=$'\t' read -r package_name tarball_name; do
             publish_if_missing "$package_name" "preflight-tarball/$tarball_name"
-          done < <(jq -r '.corePackageTarballs[] | [.packageName, .tarballName] | @tsv' preflight-tarball/preflight-manifest.json)
+          done < <(jq -r '(.corePackageTarballs // [])[] | [.packageName, .tarballName] | @tsv' preflight-tarball/preflight-manifest.json)
           bash scripts/openclaw-npm-publish.sh --publish "${publish_target}"
 
       - name: Verify extended-stable registry readback

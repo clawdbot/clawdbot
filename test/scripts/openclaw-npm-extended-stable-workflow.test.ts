@@ -311,6 +311,8 @@ describe("minimal npm extended-stable workflow", () => {
     expect(provenance.run).toContain(
       'ARTIFACT_TARBALL_PATH="preflight-tarball/$ARTIFACT_TARBALL_NAME"',
     );
+    expect(provenance.run).toContain('has("corePackageTarballs")');
+    expect(provenance.run).toContain("CORE_PACKAGE_TARBALL_COUNT=0");
     expect(provenance.run).toContain('echo "tarball_path=$ARTIFACT_TARBALL_PATH"');
     expect(publishStep.env?.PUBLISH_TARBALL_PATH).toBe(
       "${{ steps.preflight_provenance.outputs.tarball_path }}",
@@ -334,7 +336,7 @@ describe("minimal npm extended-stable workflow", () => {
       "packages/ai packages/gateway-protocol packages/gateway-client",
     );
     expect(readFileSync(workflowPath, "utf8")).toContain('packageName: "@openclaw/gateway-client"');
-    expect(publish.run).toContain(".corePackageTarballs[] | [.packageName, .tarballName] | @tsv");
+    expect(publish.run).toContain("(.corePackageTarballs // [])[]");
     expect(publish.run).toContain(
       'bash scripts/openclaw-npm-publish.sh --publish "${publish_target}"',
     );
