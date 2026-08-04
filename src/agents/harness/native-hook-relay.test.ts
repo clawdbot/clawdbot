@@ -677,7 +677,10 @@ describe("native hook relay registry", () => {
       level: "critical",
       detector: "known_poll_no_progress",
     });
-    const onCriticalToolLoop = vi.fn();
+    const lifecycle: string[] = [];
+    const onCriticalToolLoop = vi.fn(() => {
+      lifecycle.push("termination-requested");
+    });
     const relay = registerNativeHookRelay({
       provider: "codex",
       sessionId: "session-1",
@@ -686,11 +689,14 @@ describe("native hook relay registry", () => {
       config: { tools: { loopDetection } } as never,
       onCriticalToolLoop,
     });
+    await waitForNativeHookRelayBridgeRecord(relay.relayId);
     const invokePoll = (toolUseId: string) =>
-      invokeNativeHookRelay({
+      invokeNativeHookRelayBridge({
         provider: "codex",
         relayId: relay.relayId,
+        generation: relay.generation,
         event: "pre_tool_use",
+        timeoutMs: 2_000,
         rawPayload: {
           hook_event_name: "PreToolUse",
           tool_name: "process",
@@ -700,13 +706,15 @@ describe("native hook relay registry", () => {
       });
 
     const first = await invokePoll("critical-1");
+    lifecycle.push("relay-resolved");
     expect(JSON.parse(first.stdout)).toMatchObject({
       hookSpecificOutput: {
         permissionDecision: "deny",
         permissionDecisionReason: expect.stringContaining("Do not repeat this exact tool action"),
       },
     });
-    await vi.waitFor(() => expect(onCriticalToolLoop).toHaveBeenCalledTimes(1));
+    expect(lifecycle).toEqual(["termination-requested", "relay-resolved"]);
+    expect(onCriticalToolLoop).toHaveBeenCalledTimes(1);
     expect(onCriticalToolLoop).toHaveBeenCalledWith({
       toolName: "process",
       toolCallId: "critical-1",
@@ -714,9 +722,6 @@ describe("native hook relay registry", () => {
     });
 
     await invokePoll("critical-2");
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
     expect(onCriticalToolLoop).toHaveBeenCalledTimes(1);
   });
 

@@ -1057,6 +1057,8 @@ describe("runCodexAppServerAttempt native hook relay", () => {
 
     const result = await run;
     expect(readAttemptTerminal(result).aborted).toBe(true);
+    expect(harness.requests.filter((request) => request.method === "turn/start")).toHaveLength(1);
+    expect(harness.requests).toContainEqual(expect.objectContaining({ method: "turn/interrupt" }));
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 });

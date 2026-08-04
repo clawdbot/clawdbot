@@ -166,20 +166,18 @@ async function runNativeHookRelayPreToolUse(params: {
       !params.registration.criticalToolLoopTerminationRequested
     ) {
       params.registration.criticalToolLoopTerminationRequested = true;
-      // PreToolUse can deny an action but cannot terminate Codex's provider
-      // loop. Return the denial first, then ask the native run owner to abort.
-      const termination = setImmediate(() => {
-        try {
-          params.registration.onCriticalToolLoop?.({
-            toolName,
-            ...(params.invocation.toolUseId ? { toolCallId: params.invocation.toolUseId } : {}),
-            reason: outcome.reason,
-          });
-        } catch {
-          // The tool denial remains authoritative even if run cleanup fails.
-        }
-      });
-      termination.unref?.();
+      // Codex awaits the PreToolUse command before either executing the tool or
+      // returning its blocked result to the provider. Request run cancellation
+      // before resolving this relay invocation so neither path can race ahead.
+      try {
+        params.registration.onCriticalToolLoop?.({
+          toolName,
+          ...(params.invocation.toolUseId ? { toolCallId: params.invocation.toolUseId } : {}),
+          reason: outcome.reason,
+        });
+      } catch {
+        // The tool denial remains authoritative even if run cleanup fails.
+      }
     }
     return params.adapter.renderPreToolUseBlockResponse(
       reason,
