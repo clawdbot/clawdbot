@@ -39,7 +39,10 @@ afterEach(() => {
   pairingRead.release = null;
 });
 
-test("a terminal node result admitted before close wins over disconnect cleanup", async () => {
+test.each([
+  ["a terminal node result admitted before close wins over disconnect cleanup", false],
+  ["pairing removal still fences a terminal node result while close drains", true],
+] as const)("%s", async (_name, removePairingDuringDrain) => {
   const pairedNode = await pairDeviceIdentity({
     name: "node-result-before-close",
     role: "node",
@@ -165,22 +168,38 @@ test("a terminal node result admitted before close wins over disconnect cleanup"
     await stopped;
     node = undefined;
     await vi.waitFor(() => expect(drainSpy).toHaveBeenCalledOnce());
+    if (removePairingDuringDrain) {
+      await operator.request(
+        "node.pair.remove",
+        { nodeId: pairedNode.identity.deviceId },
+        { timeoutMs: 10_000 },
+      );
+    }
     pairingRead.release?.();
 
-    await expect(invoked).resolves.toMatchObject({
-      ok: true,
-      nodeId: pairedNode.identity.deviceId,
-      command: "camera.list",
-      payload: { completed: "before-close" },
-    });
+    if (removePairingDuringDrain) {
+      await expect(invoked).rejects.toThrow("node pairing changed while invocation was active");
+    } else {
+      await expect(invoked).resolves.toMatchObject({
+        ok: true,
+        nodeId: pairedNode.identity.deviceId,
+        command: "camera.list",
+        payload: { completed: "before-close" },
+      });
+    }
     await resultAck;
     await vi.waitFor(async () => {
       const listed = await operator?.request<{
         nodes?: Array<{ nodeId?: string; connected?: boolean }>;
       }>("node.list", {}, { timeoutMs: 10_000 });
-      expect(
-        listed?.nodes?.find((entry) => entry.nodeId === pairedNode.identity.deviceId)?.connected,
-      ).toBe(false);
+      const listedNode = listed?.nodes?.find(
+        (entry) => entry.nodeId === pairedNode.identity.deviceId,
+      );
+      if (removePairingDuringDrain) {
+        expect(listedNode).toBeUndefined();
+      } else {
+        expect(listedNode?.connected).toBe(false);
+      }
     });
   } finally {
     releaseBlockedPairingRead();

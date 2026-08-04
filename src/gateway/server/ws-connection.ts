@@ -362,6 +362,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     let pingTimer: ReturnType<typeof setInterval> | undefined;
     let cleanupWorkerConnection: (() => void) | undefined;
     let awaitingPong = false;
+    let retainClientUntilNodeDrain = false;
     const handshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs({
       configuredTimeoutMs: params.preauthHandshakeTimeoutMs,
     });
@@ -384,7 +385,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
     }, handshakeTimeoutMs);
 
-    const close = (code = 1000, reason?: string) => {
+    const retireTransport = (code = 1000, reason?: string) => {
       if (closed) {
         return;
       }
@@ -395,13 +396,17 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
       cleanupWorkerConnection?.();
       releasePreauthBudget();
-      if (client) {
-        clients.delete(client);
-      }
       try {
         socket.close(code, reason);
       } catch {
         /* ignore */
+      }
+    };
+
+    const close = (code = 1000, reason?: string) => {
+      retireTransport(code, reason);
+      if (client && !retainClientUntilNodeDrain) {
+        clients.delete(client);
       }
     };
 
@@ -570,19 +575,23 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         context.terminalSessions?.handleDisconnect(connId);
         let currentDisconnectedNodeId: string | null = null;
         if (client?.connect?.role === "node") {
-          // The transport is already gone, but an earlier result/progress frame can
-          // still own asynchronous pairing validation. Retire the socket now, then
-          // drain only that admitted chain before rejecting unresolved invokes.
-          close();
-          if (nodeLifecycleDispatch.hasActive()) {
-            const drained = await nodeLifecycleDispatch.drain();
-            if (!drained) {
-              logGateway.warn(
-                `node lifecycle dispatch drain timed out after ${NODE_LIFECYCLE_DISPATCH_DRAIN_TIMEOUT_MS}ms conn=${connId}`,
-              );
+          // Retire I/O immediately, but keep the client revocable until admitted
+          // lifecycle work drains; pairing/token removal must still fence it.
+          retainClientUntilNodeDrain = true;
+          retireTransport();
+          try {
+            if (nodeLifecycleDispatch.hasActive()) {
+              const drained = await nodeLifecycleDispatch.drain();
+              if (!drained) {
+                logGateway.warn(
+                  `node lifecycle dispatch drain timed out after ${NODE_LIFECYCLE_DISPATCH_DRAIN_TIMEOUT_MS}ms conn=${connId}`,
+                );
+              }
             }
+            currentDisconnectedNodeId = context.nodeRegistry.unregister(connId);
+          } finally {
+            retainClientUntilNodeDrain = false;
           }
-          currentDisconnectedNodeId = context.nodeRegistry.unregister(connId);
         }
         if (
           client?.presenceKey &&
